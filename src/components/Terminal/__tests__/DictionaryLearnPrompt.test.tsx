@@ -344,11 +344,66 @@ describe("DictionaryLearnPrompt", () => {
     expect(cut.tabIndex).toBe(0);
 
     act(() => cut.focus());
+
+    expect(document.activeElement).toBe(cut);
+    expect(screen.getByRole("tooltip").textContent).toBe(cut.textContent);
     act(() => {
       vi.advanceTimersByTime(30_000);
     });
-
     expect(screen.getByRole("status")).toBeTruthy();
+    expect(screen.getByRole("tooltip").textContent).toBe(cut.textContent);
+  });
+
+  it("reads a cut note about a left-out phrase in full on hover", async () => {
+    truncation.truncated = true;
+    acceptSuggestion.mockResolvedValueOnce(saved([{ phrase: "zoo stand", owner: "Zoostand" }]));
+    render(<DictionaryLearnPrompt terminalId="t1" />);
+    offer();
+    fireEvent.click(screen.getByText("Add"));
+    await settle();
+    const cut = words("Added");
+
+    hover(cut);
+
+    expect(screen.getByRole("tooltip").textContent).toBe(cut.textContent);
+    expect(cut.textContent).toBe(
+      "Added \u201cZustand\u201d, but \u201czoo stand\u201d already belongs to Zoostand"
+    );
+  });
+
+  it("keeps an offer that replaced another while the pointer stayed on the line or its tooltip", () => {
+    render(<DictionaryLearnPrompt terminalId="t1" />);
+    offer();
+    // React's enter and leave follow the component tree, so the tooltip that
+    // portals out of the line still counts as inside it; `:hover` does not.
+    fireEvent.pointerEnter(screen.getByRole("status"));
+    act(() => {
+      useDictionaryLearnPromptStore
+        .getState()
+        .offer("t1", { word: "Vitest", utterance: "vee test" });
+    });
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+    expect(screen.getByRole("status").textContent).toContain("Vitest");
+
+    fireEvent.pointerLeave(screen.getByRole("status"));
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("keeps the keyboard on the failed Add's button as it turns into Retry", async () => {
+    acceptSuggestion.mockRejectedValueOnce(new Error("disk full"));
+    render(<DictionaryLearnPrompt terminalId="t1" />);
+    offer();
+    const add = screen.getByRole("button", { name: "Add" });
+    act(() => add.focus());
+    fireEvent.click(add);
+    await settle();
+
+    expect(document.activeElement?.textContent).toBe("Retry");
   });
 
   it("adds neither a tooltip nor a tab stop to words that fit", () => {

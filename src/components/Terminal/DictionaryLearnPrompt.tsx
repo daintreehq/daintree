@@ -12,6 +12,7 @@ import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { HeardAsConflict } from "@shared/types";
 import { describeHeardAsConflicts } from "@/lib/heardAsConflictCopy";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { logWarn } from "@/utils/logger";
 
 const PROMPT_VISIBLE_MS = 8_000;
@@ -44,13 +45,15 @@ interface DictionaryLearnPromptProps {
   projectId?: string;
   /** Takes the keyboard back to the composer when the line goes while it had focus. */
   onReturnFocus?: () => void;
-  className?: string;
 }
+
+const ErrorGlyph = SEVERITY_GLYPH.error;
 
 /** The line's words: cut to fit a narrow pane, and read in full on hover or focus before answering. */
 function Message({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <TruncatedTooltip content={children} side="top" align="start">
+    // A dictionary term can be one long unbroken identifier, wider than the tooltip.
+    <TruncatedTooltip content={children} side="top" align="start" contentClassName="wrap-anywhere">
       <span className={cn("min-w-0 flex-1 truncate", className)}>{children}</span>
     </TruncatedTooltip>
   );
@@ -67,11 +70,11 @@ export function DictionaryLearnPrompt({
   terminalId,
   projectId,
   onReturnFocus,
-  className,
 }: DictionaryLearnPromptProps) {
   const prompt = useDictionaryLearnPromptStore((s) => s.prompts.get(terminalId));
   const hasDraft = useTerminalInputStore((s) => s.getDraftInput(terminalId, projectId) !== "");
   const rootRef = useRef<HTMLDivElement>(null);
+  const pointerInside = useRef(false);
   const [line, setLine] = useState<LineState>(() => idleFor(prompt));
   const current = line.offer === prompt ? line : idleFor(prompt);
   const saving = current.answer !== null && !current.failed;
@@ -90,9 +93,11 @@ export function DictionaryLearnPrompt({
   // The timer must not restart whenever the composer hands a new callback down.
   // It reads the pointer and focus off the DOM before letting go: an offer
   // that replaced another starts with neither, though both may still be here.
+  // The pointer can be on the words' tooltip, which portals out of the line's
+  // DOM, so the line's own pointer events count too.
   const expire = useEffectEvent((offer: LearnOffer) => {
     const root = rootRef.current;
-    const hovered = root?.matches(":hover") ?? false;
+    const hovered = pointerInside.current || (root?.matches(":hover") ?? false);
     const focused = root?.contains(document.activeElement) ?? false;
     if (hovered || focused) {
       adopt({ hovered, focused });
@@ -109,6 +114,12 @@ export function DictionaryLearnPrompt({
       useDictionaryLearnPromptStore.getState().clear(terminalId, prompt);
     }
   }, [prompt, hasDraft, answered, terminalId]);
+
+  // The line leaves the page without a pointer leave.
+  const shown = Boolean(prompt);
+  useEffect(() => {
+    if (!shown) pointerInside.current = false;
+  }, [shown]);
 
   const expires =
     Boolean(prompt) && current.answer === null && !current.hovered && !current.focused;
@@ -165,19 +176,28 @@ export function DictionaryLearnPrompt({
       aria-live="polite"
       // It sits on the composer's band, which takes the terminal's palette, so
       // it brings an app surface of its own for its app inks and controls to
-      // read on whatever the pair of themes, as the upload chips beside it do.
-      className={cn(
-        "flex min-w-0 cursor-default items-center gap-2 rounded-[var(--radius-md)] border border-border-default bg-surface-panel-elevated py-0.5 pl-2.5 pr-0.5 text-xs text-text-secondary",
-        className
-      )}
-      onPointerEnter={() => adopt({ hovered: true })}
-      onPointerLeave={() => adopt({ hovered: false })}
+      // read on whatever the pair of themes, as the upload chips do.
+      className="flex min-w-0 cursor-default items-center gap-2 rounded-[var(--radius-md)] border border-border-default bg-surface-panel-elevated py-0.5 pl-2.5 pr-0.5 text-xs text-text-secondary"
+      onPointerEnter={() => {
+        pointerInside.current = true;
+        adopt({ hovered: true });
+      }}
+      onPointerLeave={() => {
+        pointerInside.current = false;
+        adopt({ hovered: false });
+      }}
       onFocus={() => adopt({ focused: true })}
       onBlur={onBlur}
     >
+      {/* The glyph carries a failure and the words stay neutral: status-coloured
+          text has no contrast floor on this surface across the themes. A slot of
+          its own, so a failed Add keeps its button, and the focus on it, as Retry. */}
+      {failedAnswer ? (
+        <ErrorGlyph className="h-3.5 w-3.5 shrink-0 text-status-error" aria-hidden="true" />
+      ) : null}
       {failedAnswer ? (
         <>
-          <Message className="text-status-error">
+          <Message className="text-text-primary">
             Couldn&apos;t {failedAnswer === "acceptSuggestion" ? "add" : "dismiss"} &ldquo;
             {prompt.word}&rdquo;
           </Message>

@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 /**
- * The offer to learn a word sits on the composer's band with the other strips
- * above the draft, not over the pane's app canvas above the band, where the
- * canvas showed between the terminal and the composer (#17278).
+ * The offer to learn a word sits in a row painted as the composer's band, on
+ * its rail, not on the pane's app canvas, which showed between the terminal and
+ * the composer (#17278). The row stays outside the draft's typing root, whose
+ * keys (a voice wait's Enter, type-anywhere) are not the offer's buttons'.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { PtyPanelData } from "@shared/types/panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
@@ -15,6 +16,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useDictionaryLearnPromptStore } from "@/store/dictionaryLearnPromptStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
+import { hasUsefulFocus } from "@/lib/typeAnywhere";
 import { HybridInputBar } from "../HybridInputBar";
 import {
   _resetPendingUploadsForTests,
@@ -41,9 +43,12 @@ afterAll(() => {
 
 let acceptSuggestion: ReturnType<typeof vi.fn>;
 
+let worktreeStore: ReturnType<typeof createWorktreeStore>;
+
 beforeEach(() => {
   initBuiltInPanelKinds();
-  setCurrentViewStore(createWorktreeStore());
+  worktreeStore = createWorktreeStore();
+  setCurrentViewStore(worktreeStore);
   const panel = {
     id: "term-1",
     title: "claude",
@@ -95,7 +100,7 @@ afterEach(() => {
 async function mountWithOffer() {
   const result = render(
     <TooltipProvider>
-      <WorktreeStoreContext.Provider value={createWorktreeStore()}>
+      <WorktreeStoreContext.Provider value={worktreeStore}>
         <HybridInputBar
           terminalId="term-1"
           cwd={WT_ID}
@@ -106,42 +111,70 @@ async function mountWithOffer() {
     </TooltipProvider>
   );
   await act(async () => {});
+  const band = result.container.querySelector<HTMLElement>('[data-hybrid-input-root="term-1"]');
+  if (!band) throw new Error("the composer's band did not render");
+  const before = { bandTop: utility(band, "pt") };
   act(() => {
     useDictionaryLearnPromptStore
       .getState()
       .offer("term-1", { word: "Zustand", utterance: "zoo stand" });
   });
-  const band = result.container.querySelector<HTMLElement>('[data-hybrid-input-root="term-1"]');
-  if (!band) throw new Error("the composer's band did not render");
   const offer = screen.getByText(/Learn/).closest<HTMLElement>('[role="status"]');
   if (!offer) throw new Error("the offer did not render");
-  return { band, offer };
+  return { band, offer, row: offer.parentElement!, before };
+}
+
+/** The value of a spacing utility on `element`, such as `3.5` for `px-3.5`. */
+function utility(element: Element, prefix: string): string | undefined {
+  return new RegExp(`(?:^|\\s)${prefix}-([\\w.]+)(?=\\s|$)`).exec(element.className)?.[1];
 }
 
 describe("HybridInputBar learn-word offer", () => {
-  it("sits on the composer's band, with nothing of the pane between the terminal and the band", async () => {
-    const { band, offer } = await mountWithOffer();
+  it("paints its row as the band, with nothing of the pane between the terminal and the composer", async () => {
+    const { band, row } = await mountWithOffer();
 
-    expect(offer.parentElement).toBe(band);
+    expect(row.parentElement?.firstElementChild).toBe(row);
+    expect(row.nextElementSibling).toBe(band);
     expect(band.style.backgroundColor).not.toBe("");
-    expect(band.previousElementSibling).toBeNull();
+    expect(row.style.backgroundColor).toBe(band.style.backgroundColor);
   });
 
-  it("shares the band's rail with the held-back attachments above the draft", async () => {
+  it("holds the band's rail, and sits above the draft by the gap between strips", async () => {
     holdBackAttachments(composerUploadSurface("term-1"), [
       { type: "image", filePath: "/tmp/shot.png", thumbnailDataUrl: "data:x" },
     ]);
-    const { band, offer } = await mountWithOffer();
+    const { band, row, before } = await mountWithOffer();
     const heldBack = band.querySelector<HTMLElement>('[data-testid="held-back-attachments"]');
+    if (!heldBack) throw new Error("the held-back attachments did not render");
 
-    expect(heldBack?.parentElement).toBe(band);
-    expect(offer.parentElement).toBe(heldBack?.parentElement);
+    expect(utility(band, "px")).toBeDefined();
+    expect(utility(row, "px")).toBe(utility(band, "px"));
+    // The row takes over the band's top edge; what the band keeps is the gap
+    // the strips leave between one another.
+    expect(utility(row, "pt")).toBe(before.bandTop);
+    expect(utility(heldBack, "mb")).toBeDefined();
+    expect(utility(band, "pt")).toBe(utility(heldBack, "mb"));
   });
 
-  it("still takes its answer from inside the band", async () => {
+  it("brings an opaque app surface for its app inks to read on", async () => {
     const { offer } = await mountWithOffer();
 
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(offer.className).toMatch(/(?:^|\s)bg-surface-[\w-]+(?=\s|$)/);
+  });
+
+  it("keeps its buttons out of the draft's typing root", async () => {
+    const { offer } = await mountWithOffer();
+    const add = within(offer).getByRole("button", { name: "Add" });
+
+    expect(add.closest("[data-hybrid-input-root]")).toBeNull();
+    act(() => add.focus());
+    expect(hasUsefulFocus(document.activeElement)).toBe(false);
+  });
+
+  it("still takes its answer", async () => {
+    const { offer } = await mountWithOffer();
+
+    fireEvent.click(within(offer).getByRole("button", { name: "Add" }));
     await act(async () => {});
 
     expect(acceptSuggestion).toHaveBeenCalledWith({ word: "Zustand", utterance: "zoo stand" });
