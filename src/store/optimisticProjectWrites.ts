@@ -46,31 +46,60 @@ export function applyOptimisticProjectUpdate(
 }
 
 /**
- * Undoes only the fields `write` still owns on this row. A failed predecessor is
- * skipped (its value never saved), a pending one takes the field back, and a
- * saved one leaves its value in place. Returns the same object when nothing was
- * restored.
+ * Undoes only the fields `write` still owns on this row: a pending predecessor
+ * takes the field back, a saved one leaves its value in place. Fields a newer
+ * write owns stay, with `write` spliced out of their history so a later failure
+ * of that newer write restores past it. With `row` given (the list row for
+ * `currentProject`), owned fields follow that row instead, since a reload may
+ * have replaced it with Main's value while this copy kept its claims. Returns
+ * the same object when nothing was restored.
  */
 export function rollbackOptimisticProjectUpdate(
   project: Project,
-  write: OptimisticProjectWrite
+  write: OptimisticProjectWrite,
+  row?: Project
 ): Project {
   const claims = claimsByRow.get(project);
   if (!claims) return project;
+  const rowClaims = row ? claimsByRow.get(row) : undefined;
   let next: Record<string, unknown> | null = null;
   const remaining = new Map(claims);
   for (const [key, claim] of claims) {
-    if (claim.write !== write) continue;
-    let base = claim;
-    while (base.previous?.write.status === "failed") base = base.previous;
+    if (claim.write !== write) {
+      spliceOut(claim, write);
+      continue;
+    }
     next ??= { ...project };
-    if (base.hadPrior) next[key] = base.prior;
+    let hasValue: boolean;
+    let value: unknown;
+    let owner: FieldClaim | undefined;
+    if (row) {
+      hasValue = Object.hasOwn(row, key);
+      value = (row as unknown as Record<string, unknown>)[key];
+      owner = rowClaims?.get(key);
+    } else {
+      hasValue = claim.hadPrior;
+      value = claim.prior;
+      owner = claim.previous?.write.status === "pending" ? claim.previous : undefined;
+    }
+    if (hasValue) next[key] = value;
     else delete next[key];
-    if (base.previous?.write.status === "pending") remaining.set(key, base.previous);
+    if (owner) remaining.set(key, owner);
     else remaining.delete(key);
   }
   if (!next) return project;
-  const row = next as unknown as Project;
-  claimsByRow.set(row, remaining);
-  return row;
+  const restored = next as unknown as Project;
+  claimsByRow.set(restored, remaining);
+  return restored;
+}
+
+/** A failed write's value never saved, so whatever overwrote it inherits its baseline. */
+function spliceOut(claim: FieldClaim, write: OptimisticProjectWrite): void {
+  for (let c = claim; c.previous; c = c.previous) {
+    if (c.previous.write !== write) continue;
+    c.hadPrior = c.previous.hadPrior;
+    c.prior = c.previous.prior;
+    c.previous = c.previous.previous;
+    return;
+  }
 }

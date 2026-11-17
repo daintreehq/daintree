@@ -86,11 +86,9 @@ function project(id: string) {
   return useProjectStore.getState().projects.find((p) => p.id === id);
 }
 
-async function settle(promise: Promise<unknown>) {
-  await promise.then(
-    () => undefined,
-    () => undefined
-  );
+/** A rolled-back write still hands its own error to the caller. */
+async function failed(promise: Promise<unknown>) {
+  await expect(promise).rejects.toThrow("nope");
 }
 
 describe("projectStore.updateProject rollback", () => {
@@ -137,7 +135,7 @@ describe("projectStore.updateProject rollback", () => {
     }));
 
     calls[0]!.reject(new Error("nope"));
-    await settle(writeA);
+    await failed(writeA);
 
     expect(project("a")?.name).toBe("Alpha");
     expect(useProjectStore.getState().currentProject?.name).toBe("Alpha");
@@ -151,23 +149,26 @@ describe("projectStore.updateProject rollback", () => {
     useProjectStore.setState({ currentProject: { ...C } });
 
     calls[0]!.reject(new Error("nope"));
-    await settle(writeA);
+    await failed(writeA);
 
     expect(useProjectStore.getState().currentProject).toMatchObject({ id: "c", name: "Charlie" });
     expect(project("a")?.name).toBe("Alpha");
   });
 
-  it("leaves an unrelated operation's loading flag alone", async () => {
-    const calls = holdUpdates();
-    const writeA = useProjectStore.getState().updateProject("a", { name: "Alpha 2" });
+  it.each([true, false])(
+    "leaves an unrelated operation's loading flag at %s",
+    async (isLoading) => {
+      const calls = holdUpdates();
+      const writeA = useProjectStore.getState().updateProject("a", { name: "Alpha 2" });
 
-    useProjectStore.setState({ isLoading: true });
+      useProjectStore.setState({ isLoading });
 
-    calls[0]!.reject(new Error("nope"));
-    await settle(writeA);
+      calls[0]!.reject(new Error("nope"));
+      await failed(writeA);
 
-    expect(useProjectStore.getState().isLoading).toBe(true);
-  });
+      expect(useProjectStore.getState().isLoading).toBe(isLoading);
+    }
+  );
 
   it("keeps a still-pending edit to a different field of the same project", async () => {
     const calls = holdUpdates();
@@ -175,7 +176,7 @@ describe("projectStore.updateProject rollback", () => {
     const writeEmoji = useProjectStore.getState().updateProject("a", { emoji: "🚀" });
 
     calls[0]!.reject(new Error("nope"));
-    await settle(writeName);
+    await failed(writeName);
 
     expect(project("a")).toMatchObject({ name: "Alpha", emoji: "🚀" });
     expect(useProjectStore.getState().currentProject).toMatchObject({
@@ -188,18 +189,55 @@ describe("projectStore.updateProject rollback", () => {
     expect(project("a")).toMatchObject({ name: "Alpha", emoji: "🚀" });
   });
 
+  it("rolls back only the fields a failed write still owns when a newer write took some", async () => {
+    const calls = holdUpdates();
+    const both = useProjectStore.getState().updateProject("a", { name: "Alpha 2", emoji: "🚀" });
+    const emoji = useProjectStore.getState().updateProject("a", { emoji: "🔥" });
+
+    calls[0]!.reject(new Error("nope"));
+    await failed(both);
+
+    expect(project("a")).toMatchObject({ name: "Alpha", emoji: "🔥" });
+    expect(useProjectStore.getState().currentProject).toMatchObject({
+      name: "Alpha",
+      emoji: "🔥",
+    });
+
+    calls[1]!.reject(new Error("nope"));
+    await failed(emoji);
+    expect(project("a")).toMatchObject({ name: "Alpha", emoji: "🌲" });
+  });
+
   it("lets a newer edit to the same field win over an older write's failure", async () => {
     const calls = holdUpdates();
     const first = useProjectStore.getState().updateProject("a", { name: "Alpha 2" });
     const second = useProjectStore.getState().updateProject("a", { name: "Alpha 3" });
 
     calls[0]!.reject(new Error("nope"));
-    await settle(first);
+    await failed(first);
     expect(project("a")?.name).toBe("Alpha 3");
 
     calls[1]!.resolve();
     await second;
     expect(project("a")?.name).toBe("Alpha 3");
+  });
+
+  it("leaves the store untouched when a newer pending write set the same value", async () => {
+    const calls = holdUpdates();
+    const first = useProjectStore.getState().updateProject("a", { name: "Alpha 2" });
+    const second = useProjectStore.getState().updateProject("a", { name: "Alpha 2" });
+    const { projects: before, currentProject: currentBefore } = useProjectStore.getState();
+
+    calls[0]!.reject(new Error("nope"));
+    await failed(first);
+    expect(useProjectStore.getState().projects).toBe(before);
+    expect(useProjectStore.getState().currentProject).toBe(currentBefore);
+    expect(project("a")?.name).toBe("Alpha 2");
+
+    calls[1]!.reject(new Error("nope"));
+    await failed(second);
+    expect(project("a")?.name).toBe("Alpha");
+    expect(useProjectStore.getState().currentProject?.name).toBe("Alpha");
   });
 
   it("restores the saved value when two writes to one field both fail, oldest first", async () => {
@@ -208,12 +246,50 @@ describe("projectStore.updateProject rollback", () => {
     const second = useProjectStore.getState().updateProject("a", { name: "Alpha 3" });
 
     calls[0]!.reject(new Error("nope"));
-    await settle(first);
+    await failed(first);
     calls[1]!.reject(new Error("nope"));
-    await settle(second);
+    await failed(second);
 
     expect(project("a")?.name).toBe("Alpha");
     expect(useProjectStore.getState().currentProject?.name).toBe("Alpha");
+  });
+
+  it("restores the saved value when three writes to one field fail, oldest first", async () => {
+    const calls = holdUpdates();
+    const writes = ["Alpha 2", "Alpha 3", "Alpha 4"].map((name) =>
+      useProjectStore.getState().updateProject("a", { name })
+    );
+
+    calls[0]!.reject(new Error("nope"));
+    await failed(writes[0]!);
+    calls[1]!.reject(new Error("nope"));
+    await failed(writes[1]!);
+    expect(project("a")?.name).toBe("Alpha 4");
+
+    calls[2]!.reject(new Error("nope"));
+    await failed(writes[2]!);
+    expect(project("a")?.name).toBe("Alpha");
+    expect(useProjectStore.getState().currentProject?.name).toBe("Alpha");
+  });
+
+  it("keeps an older write's saved value when a newer write fails before the reload lands", async () => {
+    const calls = holdUpdates();
+    const reload = deferred<Project[]>();
+    projectClientMock.getAll.mockReturnValueOnce(reload.promise);
+    const first = useProjectStore.getState().updateProject("a", { name: "Alpha 2" });
+    const second = useProjectStore.getState().updateProject("a", { name: "Alpha 3" });
+
+    calls[0]!.resolve();
+    await vi.waitFor(() => expect(projectClientMock.getAll).toHaveBeenCalled());
+
+    calls[1]!.reject(new Error("nope"));
+    await failed(second);
+    expect(project("a")?.name).toBe("Alpha 2");
+    expect(useProjectStore.getState().currentProject?.name).toBe("Alpha 2");
+
+    reload.resolve([...server.values()]);
+    await first;
+    expect(project("a")?.name).toBe("Alpha 2");
   });
 
   it("hands the field back to a still-pending older write when the newer one fails", async () => {
@@ -222,12 +298,12 @@ describe("projectStore.updateProject rollback", () => {
     const second = useProjectStore.getState().updateProject("a", { name: "Alpha 3" });
 
     calls[1]!.reject(new Error("nope"));
-    await settle(second);
+    await failed(second);
     expect(project("a")?.name).toBe("Alpha 2");
     expect(useProjectStore.getState().currentProject?.name).toBe("Alpha 2");
 
     calls[0]!.reject(new Error("nope"));
-    await settle(first);
+    await failed(first);
     expect(project("a")?.name).toBe("Alpha");
     expect(useProjectStore.getState().currentProject?.name).toBe("Alpha");
   });
@@ -238,11 +314,14 @@ describe("projectStore.updateProject rollback", () => {
     const first = useProjectStore.getState().updateProject("a", { name: "Alpha 2" });
     const second = useProjectStore.getState().updateProject("a", { name: "Alpha 2" });
 
+    const optimistic = project("a");
+
     calls[1]!.resolve();
     await second;
+    expect(project("a")).not.toBe(optimistic);
 
     calls[0]!.reject(new Error("nope"));
-    await settle(first);
+    await failed(first);
     expect(project("a")?.name).toBe("Alpha 2");
   });
 
@@ -250,14 +329,37 @@ describe("projectStore.updateProject rollback", () => {
     const calls = holdUpdates();
     const write = useProjectStore.getState().updateProject("a", { name: "Alpha 2" });
 
-    // Another window saved the same name; Main's push replaces the row.
+    // Another window saved the same name; Main's push replaces the row and the
+    // current project, as the onUpdated listener does.
+    const pushed = { ...A, name: "Alpha 2" };
     useProjectStore.setState((state) => ({
-      projects: state.projects.map((p) => (p.id === "a" ? { ...A, name: "Alpha 2" } : p)),
+      projects: state.projects.map((p) => (p.id === "a" ? pushed : p)),
+      currentProject: pushed,
     }));
 
     calls[0]!.reject(new Error("nope"));
-    await settle(write);
-    expect(project("a")?.name).toBe("Alpha 2");
+    await failed(write);
+    expect(project("a")).toBe(pushed);
+    expect(useProjectStore.getState().currentProject).toBe(pushed);
+  });
+
+  it("moves the current project to Main's value when a reload replaced its row mid-write", async () => {
+    const calls = holdUpdates();
+    const write = useProjectStore.getState().updateProject("a", { name: "Alpha 2" });
+
+    // Another window renamed A; an unrelated reload brings the list row up to
+    // date but leaves currentProject as this write's optimistic copy.
+    server.set("a", { ...server.get("a")!, name: "Alpha Saved" });
+    await useProjectStore.getState().loadProjects();
+    expect(useProjectStore.getState().currentProject?.name).toBe("Alpha 2");
+
+    calls[0]!.reject(new Error("nope"));
+    await failed(write);
+    expect(project("a")?.name).toBe("Alpha Saved");
+    expect(useProjectStore.getState().currentProject).toMatchObject({
+      id: "a",
+      name: "Alpha Saved",
+    });
   });
 
   it("keeps a removed project removed when its write fails", async () => {
@@ -271,7 +373,7 @@ describe("projectStore.updateProject rollback", () => {
     const before = useProjectStore.getState().projects;
 
     calls[0]!.reject(new Error("nope"));
-    await settle(write);
+    await failed(write);
     expect(useProjectStore.getState().projects).toBe(before);
     expect(useProjectStore.getState().currentProject).toBeNull();
   });
@@ -286,7 +388,7 @@ describe("projectStore.updateProject rollback", () => {
     expect(project("a")).toHaveProperty("color", undefined);
 
     calls[0]!.reject(new Error("nope"));
-    await settle(write);
+    await failed(write);
     expect(project("a")?.color).toBe("#00ff00");
     expect(useProjectStore.getState().currentProject?.color).toBe("#00ff00");
   });
@@ -297,7 +399,7 @@ describe("projectStore.updateProject rollback", () => {
     expect(project("a")?.color).toBe("#ff0000");
 
     calls[0]!.reject(new Error("nope"));
-    await settle(write);
+    await failed(write);
 
     expect(project("a")).not.toHaveProperty("color");
     expect(useProjectStore.getState().currentProject).not.toHaveProperty("color");
