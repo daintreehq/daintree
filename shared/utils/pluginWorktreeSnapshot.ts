@@ -130,6 +130,8 @@ function projectGitOperation(state: RepoState | undefined): PluginWorktreeGitOpe
       return "cherry-pick";
     case "REVERTING":
       return "revert";
+    case "APPLYING_MAILBOX":
+      return "am";
     case "CLEAN":
     case "DIRTY":
     case undefined:

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { readdirSync } from "fs";
-import { readdir } from "fs/promises";
+import { existsSync, readdirSync } from "fs";
+import { access, readdir } from "fs/promises";
 import { join as pathJoin } from "path";
 import {
   OPERATION_SENTINEL_NAMES,
@@ -11,17 +11,22 @@ import {
 
 vi.mock("fs", () => ({
   readdirSync: vi.fn(),
+  existsSync: vi.fn(),
 }));
 
 vi.mock("fs/promises", () => ({
   readdir: vi.fn(),
+  access: vi.fn(),
 }));
 
 describe("gitRepoOperationState", () => {
   const gitDir = pathJoin("/repo", ".git");
+  const amMarker = pathJoin(gitDir, "rebase-apply", "applying");
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(existsSync).mockReturnValue(false);
+    vi.mocked(access).mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
   });
 
   it("exposes the expected sentinel names", () => {
@@ -81,6 +86,18 @@ describe("gitRepoOperationState", () => {
       expect(getRepoOperationStateSync(gitDir)).toBe(expected);
     });
 
+    it("classifies rebase-apply holding git am's applying marker as APPLYING_MAILBOX", () => {
+      vi.mocked(readdirSync).mockReturnValue(["HEAD", "rebase-apply"] as never);
+      vi.mocked(existsSync).mockImplementation((p) => p === amMarker);
+      expect(getRepoOperationStateSync(gitDir)).toBe("APPLYING_MAILBOX");
+    });
+
+    it("probes for the am marker only when rebase-apply exists", () => {
+      vi.mocked(readdirSync).mockReturnValue(["HEAD", "rebase-merge"] as never);
+      expect(getRepoOperationStateSync(gitDir)).toBe("REBASING");
+      expect(vi.mocked(existsSync)).not.toHaveBeenCalled();
+    });
+
     it("prioritizes rebase over merge when both sentinels are present", () => {
       // An interrupted rebase can leave MERGE_HEAD alongside rebase-merge;
       // classification order matches the async detectRepoOperationState.
@@ -100,6 +117,26 @@ describe("gitRepoOperationState", () => {
     it("returns undefined when no sentinel files exist", async () => {
       vi.mocked(readdir).mockResolvedValue(["HEAD", "config"] as never);
       await expect(getRepoOperationState(gitDir)).resolves.toBeUndefined();
+    });
+
+    it("classifies rebase-apply holding git am's applying marker as APPLYING_MAILBOX", async () => {
+      vi.mocked(readdir).mockResolvedValue(["HEAD", "rebase-apply"] as never);
+      vi.mocked(access).mockImplementation((p) =>
+        p === amMarker ? Promise.resolve() : Promise.reject(new Error("ENOENT"))
+      );
+      await expect(getRepoOperationState(gitDir)).resolves.toBe("APPLYING_MAILBOX");
+    });
+
+    it("keeps rebase-apply without the am marker as REBASING", async () => {
+      vi.mocked(readdir).mockResolvedValue(["HEAD", "rebase-apply"] as never);
+      await expect(getRepoOperationState(gitDir)).resolves.toBe("REBASING");
+      expect(vi.mocked(access)).toHaveBeenCalledWith(amMarker);
+    });
+
+    it("probes for the am marker only when rebase-apply exists", async () => {
+      vi.mocked(readdir).mockResolvedValue(["HEAD", "MERGE_HEAD"] as never);
+      await expect(getRepoOperationState(gitDir)).resolves.toBe("MERGING");
+      expect(vi.mocked(access)).not.toHaveBeenCalled();
     });
 
     it("joins an outstanding read instead of starting another", async () => {

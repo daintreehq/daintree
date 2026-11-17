@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import type { SimpleGit } from "simple-git";
 import type { RebaseSequence, RepoState } from "../../../shared/types/git.js";
-import { OPERATION_SENTINEL_NAMES } from "../../utils/gitRepoOperationState.js";
+import {
+  MAILBOX_APPLY_MARKER,
+  OPERATION_SENTINEL_NAMES,
+} from "../../utils/gitRepoOperationState.js";
 import { resolveGitDirFromFs } from "../../utils/gitUtils.js";
 import { readRebaseSequence } from "../../utils/parseRebaseTodo.js";
 
@@ -60,6 +63,16 @@ export async function detectRepoOperationState(
   const has = (name: (typeof OPERATION_SENTINEL_NAMES)[number]) =>
     results[OPERATION_SENTINEL_NAMES.indexOf(name)] ?? false;
 
+  // Checked before the rebase branch: an am session's `next`/`last` count
+  // patches, not commits being replayed, and Continue/Abort must run `git am`.
+  if (has("rebase-apply") && (await pathExists(path.join(gitDir, MAILBOX_APPLY_MARKER)))) {
+    return {
+      state: "APPLYING_MAILBOX",
+      rebaseStep: null,
+      rebaseTotalSteps: null,
+      rebaseSequence: null,
+    };
+  }
   if (has("rebase-merge") || has("rebase-apply")) {
     const backend: "merge" | "apply" = has("rebase-merge") ? "merge" : "apply";
     const [{ step, total }, sequence] = await Promise.all([

@@ -939,7 +939,7 @@ async function requireNoTrackedChanges(
 }
 
 /**
- * The merge, rebase, cherry-pick or revert halted in this worktree, or `null`
+ * The merge, rebase, cherry-pick, revert or `git am` halted in this worktree, or `null`
  * when none is. Read from the git dir's sentinels, which is what the write
  * refuses on and what the preview reports, so the two agree.
  */
@@ -958,6 +958,17 @@ async function readHaltedOperation(
   };
 }
 
+const HALTED_OPERATION_NAME: Record<
+  Extract<GitBaseIntegrationBlocker, { reason: "operation-in-progress" }>["operation"],
+  string
+> = {
+  MERGING: "merging",
+  REBASING: "rebasing",
+  CHERRY_PICKING: "cherry-picking",
+  REVERTING: "reverting",
+  APPLYING_MAILBOX: "applying patches with git am",
+};
+
 /**
  * Refuse to start a second operation on top of a halted one.
  *
@@ -973,8 +984,7 @@ async function requireNoOperationInProgress(
 ): Promise<void> {
   const halted = await readHaltedOperation(git, cwd);
   if (!halted) return;
-  const state = halted.operation;
-  const message = `This worktree is already mid-operation (${state.toLowerCase().replace("_", "-")}). Continue or abort it before starting another.`;
+  const message = `This worktree is already mid-operation (${HALTED_OPERATION_NAME[halted.operation]}). Continue or abort it before starting another.`;
   throw new GitOperationError(
     "conflict-unresolved",
     encodeGitOperationErrorMessage("conflict-unresolved", message),
@@ -2392,8 +2402,14 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       case "REVERTING":
         await git.raw(["revert", "--abort"]);
         return;
+      case "APPLYING_MAILBOX":
+        // `git rebase --abort` refuses an am session outright; `git am --abort`
+        // also declines to rewind when HEAD moved since the stop, which is
+        // git's call to make, not ours.
+        await git.raw(["am", "--abort"]);
+        return;
       default:
-        throw new Error("No merge, rebase, cherry-pick, or revert operation is in progress");
+        throw new Error("No repository operation is in progress");
     }
   };
   handlers.push(
@@ -2429,8 +2445,13 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       case "REVERTING":
         await git.raw(["revert", "--continue", "--no-edit"]);
         return;
+      case "APPLYING_MAILBOX":
+        // Commits the staged resolution with the patch's own message and
+        // author, so there is no message to edit.
+        await git.raw(["am", "--continue"]);
+        return;
       default:
-        throw new Error("No merge, rebase, cherry-pick, or revert operation is in progress");
+        throw new Error("No repository operation is in progress");
     }
   };
   handlers.push(

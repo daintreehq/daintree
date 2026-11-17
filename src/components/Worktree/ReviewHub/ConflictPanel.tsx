@@ -813,7 +813,11 @@ export function ConflictPanel({
       ? `${pluralize(conflictCount, "conflicted file")} — resolve each, then continue`
       : isRebaseMidSequence
         ? "Continue to replay the remaining commits"
-        : `Continue to finish the ${operationNoun}`;
+        : operationKey === "APPLYING_MAILBOX"
+          ? // `git am` keeps no progress Review Hub reads, and it applies the
+            // rest of the series on Continue, so "finish" could overpromise.
+            "Continue to commit this patch and apply any that remain"
+          : `Continue to finish the ${operationNoun}`;
 
   // What the hand-off sends is what the rows show: the same live list, kind
   // wording and scan answers.

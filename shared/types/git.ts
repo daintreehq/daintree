@@ -120,9 +120,18 @@ export interface StagingFileEntry {
  * In-progress repository operation state. `CLEAN` means no operation markers
  * and no unmerged entries; `DIRTY` means unmerged entries exist without an
  * operation marker (unusual). `MERGING`/`REBASING`/`CHERRY_PICKING`/`REVERTING`
- * correspond to the matching `.git/` state files.
+ * correspond to the matching `.git/` state files. `APPLYING_MAILBOX` is a
+ * halted `git am`, which shares `.git/rebase-apply` with the apply-backend
+ * rebase and is told apart by the `applying` file git writes inside it.
  */
-export type RepoState = "CLEAN" | "DIRTY" | "MERGING" | "REBASING" | "CHERRY_PICKING" | "REVERTING";
+export type RepoState =
+  | "CLEAN"
+  | "DIRTY"
+  | "MERGING"
+  | "REBASING"
+  | "CHERRY_PICKING"
+  | "REVERTING"
+  | "APPLYING_MAILBOX";
 
 /**
  * Why a worktree's git status read ended without an answer. `timed-out`: git
@@ -383,7 +392,8 @@ export type GitBaseIntegrationKind = "rebase-onto-base" | "merge-base";
  * confirm can say so before approval rather than closing into a failure. The
  * write still re-checks: the worktree can change after the preview.
  *
- * - `operation-in-progress`: a merge, rebase, cherry-pick or revert is halted.
+ * - `operation-in-progress`: a merge, rebase, cherry-pick, revert or `git am` is
+ *   halted.
  * - `base-checked-out`: the worktree is on the base branch itself, so
  *   integrating it would rewrite it.
  * - `conflicts`: unmerged paths stand with no operation halted (what a failed

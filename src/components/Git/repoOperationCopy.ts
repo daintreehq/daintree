@@ -12,7 +12,7 @@ import { pluralize } from "@/lib/pluralize";
  * has no way to know which one is accurate.
  */
 
-/** The four states in which an operation is genuinely mid-flight. */
+/** The states in which an operation is genuinely mid-flight. */
 export type RepoOperationState = Exclude<RepoState, "CLEAN" | "DIRTY">;
 
 export const OPERATION_LABEL: Record<RepoOperationState, string> = {
@@ -20,6 +20,7 @@ export const OPERATION_LABEL: Record<RepoOperationState, string> = {
   REBASING: "Rebase",
   CHERRY_PICKING: "Cherry-pick",
   REVERTING: "Revert",
+  APPLYING_MAILBOX: "Patch apply",
 };
 
 const ABORT_RESTORE_SUFFIX: Record<RepoOperationState, string> = {
@@ -27,6 +28,9 @@ const ABORT_RESTORE_SUFFIX: Record<RepoOperationState, string> = {
   REBASING: "returns HEAD to the original branch tip.",
   CHERRY_PICKING: "restores the working tree to the state before the operation started.",
   REVERTING: "restores the working tree to the state before the operation started.",
+  // `git am --abort` leaves HEAD alone when it moved after the stop, so the
+  // rewind is stated as conditional rather than promised.
+  APPLYING_MAILBOX: "returns the branch to its tip from before git am, unless HEAD moved since.",
 };
 
 /**

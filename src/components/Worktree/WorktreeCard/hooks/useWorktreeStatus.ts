@@ -3,6 +3,7 @@ import type { WorktreeState } from "@/types";
 import { getWorktreeBranchLabel, isMainWorktreeOnStandardBranch } from "@/lib/worktreeHeadline";
 import { MAIN_WORKTREE_NOTE_TTL_MS, deriveEffectiveNote } from "@/lib/worktreeAiNote";
 import { WAITING_FOR_DOWNLOAD_LABEL } from "@/utils/onlineOnlyFilesCopy";
+import { type RepoOperationState, toRepoOperationState } from "@/components/Git/repoOperationCopy";
 
 export type SpineState = "dirty" | "current" | "stale" | "idle";
 
@@ -50,7 +51,13 @@ export const LIFECYCLE_PHASE_LABELS: Record<string, string> = {
 };
 
 export type GitStateKind =
-  "conflicted" | "rebasing" | "merging" | "cherry-picking" | "reverting" | "detached";
+  | "conflicted"
+  | "rebasing"
+  | "merging"
+  | "cherry-picking"
+  | "reverting"
+  | "applying-patches"
+  | "detached";
 
 export interface GitStateIndicator {
   kind: GitStateKind;
@@ -58,11 +65,12 @@ export interface GitStateIndicator {
   tone: "error" | "warning";
 }
 
-const REPO_STATE_TO_KIND: Record<string, GitStateKind> = {
+const REPO_STATE_TO_KIND: Record<RepoOperationState, GitStateKind> = {
   REBASING: "rebasing",
   MERGING: "merging",
   CHERRY_PICKING: "cherry-picking",
   REVERTING: "reverting",
+  APPLYING_MAILBOX: "applying-patches",
 };
 
 const GIT_STATE_LABELS: Record<GitStateKind, string> = {
@@ -71,6 +79,7 @@ const GIT_STATE_LABELS: Record<GitStateKind, string> = {
   merging: "merging",
   "cherry-picking": "cherry-picking",
   reverting: "reverting",
+  "applying-patches": "applying patches",
   detached: "detached",
 };
 
@@ -213,11 +222,10 @@ export function useWorktreeStatus({
     if (worktree.worktreeChanges?.changes?.some((c) => c.status === "conflicted")) {
       return { kind: "conflicted", label: GIT_STATE_LABELS.conflicted, tone: "error" };
     }
-    if (worktree.repoState) {
-      const kind = REPO_STATE_TO_KIND[worktree.repoState];
-      if (kind) {
-        return { kind, label: GIT_STATE_LABELS[kind], tone: "warning" };
-      }
+    const operation = toRepoOperationState(worktree.repoState);
+    if (operation) {
+      const kind = REPO_STATE_TO_KIND[operation];
+      return { kind, label: GIT_STATE_LABELS[kind], tone: "warning" };
     }
     if (worktree.isDetached) {
       return { kind: "detached", label: GIT_STATE_LABELS.detached, tone: "warning" };

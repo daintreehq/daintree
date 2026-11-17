@@ -747,7 +747,7 @@ interface PluginWorktreeSnapshot {
   readonly setup: PluginWorktreeSetup | null;
 }
 
-type PluginWorktreeGitOperation = "merge" | "rebase" | "cherry-pick" | "revert";
+type PluginWorktreeGitOperation = "merge" | "rebase" | "cherry-pick" | "revert" | "am";
 
 interface PluginWorktreeSetup {
   readonly state: "pending" | "running" | "ready" | "failed" | "timed-out" | "needs-approval";
@@ -781,7 +781,7 @@ interface PluginWorktreeLinkedPR {
 
 `headOid` is the object id of the commit HEAD points at, read from the same status poll as `status`. It is the oid only, with no commit message, author or time. A new value means HEAD moved: a commit from the commit dialog, an agent or `git commit` in a terminal, or a checkout, reset or pull. Compare it across `onDidChangeWorktrees` deliveries to see that; a worktree whose HEAD differs from the previous delivery is in `change.changed`. It is a sample rather than a commit log. Deliveries are coalesced by default, so several commits in one window arrive as one change, and a HEAD that moves and comes back to the same oid between deliveries reads as unchanged. It is `null` before the first status poll and on a repository with no commits, and it holds its last value while a git operation is in progress, because the host pauses status polling then.
 
-`gitOperation` is the blocking git operation in progress (`merge`, `rebase`, `cherry-pick` or `revert`), read from the operation's marker files, or `null` when the host saw none. A plugin that publishes or syncs on change should hold off while it is set. Detection fails open, so `null` is what the host observed, not a guarantee git is idle.
+`gitOperation` is the blocking git operation in progress (`merge`, `rebase`, `cherry-pick`, `revert`, or `am` for a halted `git am`, which finishes with `git am --continue` rather than `git rebase --continue`), read from the operation's marker files, or `null` when the host saw none. A plugin that publishes or syncs on change should hold off while it is set. Detection fails open, so `null` is what the host observed, not a guarantee git is idle.
 
 `setup` is how far the worktree's post-create setup has got, with `stage` naming the stage running or the one that failed. `ready` means the recorded run finished without a failure; a retry reruns only the setup commands, so after one `ready` speaks for those alone. `needs-approval` means setup or provisioning commands from the repository are waiting for the user's approval and were skipped; the checkout exists, but its initialization may be incomplete. The workspace host holds this record in memory and writes it when it creates the worktree or retries its setup, so `setup` is `null` for a worktree made outside Daintree or one from before the workspace host last started, until its setup is retried. `null` means unknown, never ready.
 

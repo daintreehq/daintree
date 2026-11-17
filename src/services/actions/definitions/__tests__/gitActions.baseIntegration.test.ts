@@ -503,10 +503,10 @@ describe("git.continueRepositoryOperation", () => {
   it("rethrows a continue failure that is not a conflict", async () => {
     const { run, git } = setupActions();
     git.continueRepositoryOperation.mockRejectedValue(
-      new Error("No merge, rebase, cherry-pick, or revert operation is in progress")
+      new Error("No repository operation is in progress")
     );
     await expect(run("git.continueRepositoryOperation", { worktreeId: WT_ID })).rejects.toThrow(
-      /no merge, rebase/i
+      /no repository operation/i
     );
     expect(refresh).toHaveBeenCalledWith(WT_ID);
     expect(dispatch).not.toHaveBeenCalled();
