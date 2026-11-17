@@ -41,8 +41,9 @@ function getUserFriendlyError(technicalError: string): string | null {
   if (technicalError.includes("does not exist")) {
     return "The worktree path no longer exists";
   }
+  // "HEAD" is not a signal: the service answers an unborn HEAD with a valid
+  // empty pulse, so a "Failed to read git HEAD" throw is a genuine failure.
   const noCommitsSignals = [
-    "HEAD",
     "Repository has no commits",
     "does not have any commits yet",
     "no commits yet",

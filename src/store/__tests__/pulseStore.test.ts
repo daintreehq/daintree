@@ -90,7 +90,7 @@ describe("pulseStore", () => {
   it("treats empty repositories as non-errors and skips retries", async () => {
     dispatchMock.mockResolvedValueOnce({
       ok: false,
-      error: { message: "fatal: ambiguous argument 'HEAD'" },
+      error: { message: "your current branch 'main' does not have any commits yet" },
     });
 
     const result = await usePulseStore.getState().fetchPulse("wt-empty");
@@ -101,8 +101,20 @@ describe("pulseStore", () => {
     expect(usePulseStore.getState().retryTimers.has("wt-empty")).toBe(false);
   });
 
+  it("surfaces a retryable error for a genuine HEAD read failure", async () => {
+    dispatchMock.mockResolvedValueOnce({
+      ok: false,
+      error: { message: "Failed to read git HEAD: fatal: unable to read index" },
+    });
+
+    await usePulseStore.getState().fetchPulse("wt-headerr");
+
+    expect(usePulseStore.getState().getError("wt-headerr")).toBe("Unable to load activity data");
+    expect(usePulseStore.getState().getRetryCount("wt-headerr")).toBe(1);
+    expect(usePulseStore.getState().retryTimers.has("wt-headerr")).toBe(true);
+  });
+
   it.each([
-    ["HEAD keyword", "Failed to read git HEAD: something"],
     ["Repository has no commits", "Repository has no commits"],
     ["does not have any commits yet", "your current branch 'main' does not have any commits yet"],
     ["no commits yet", "error: no commits yet on branch 'main'"],
