@@ -250,7 +250,7 @@ describe("ProjectHostsGroup", () => {
   });
 
   describe("count column widths", () => {
-    const many = (make: (id: string) => ReturnType<typeof working>, n: number, tag: string) =>
+    const many = <T,>(make: (id: string) => T, n: number, tag: string): T[] =>
       Array.from({ length: n }, (_, i) => make(`${tag}${i}`));
 
     function hostsWith(runs: Record<string, HostWorktreeEntry["runs"]>) {
@@ -260,34 +260,61 @@ describe("ProjectHostsGroup", () => {
         lists[id] = [worktree(`${id}-p`, "develop", list)];
     }
 
+    const cellsOf = (row: HTMLElement) => [
+      ...row.querySelectorAll<HTMLElement>("[data-count-cell]"),
+    ];
     const digitsOf = (row: HTMLElement) =>
-      [...row.querySelectorAll<HTMLElement>("[data-count-cell]")].map(
-        (cell) => `${cell.dataset.countCell}:${cell.dataset.digits}`
-      );
+      cellsOf(row).map((cell) => `${cell.dataset.countCell}:${cell.dataset.digits}`);
+    const cell = (row: HTMLElement, band: string) =>
+      row.querySelector<HTMLElement>(`[data-count-cell="${band}"]`)!;
 
     it("gives a column room for its widest count on every row, so two digits never touch the next column", async () => {
       hostsWith({
-        h1: [...many(waiting, 3, "a"), ...many(working, 20, "w")],
-        h2: many(working, 4, "x"),
+        h1: [...many(waiting, 10, "a"), ...many(working, 20, "w")],
+        h2: [...many(waiting, 3, "b"), ...many(working, 4, "x")],
       });
       render(<ProjectHostsGroup projectId={PROJECT} />);
       await waitFor(() => expect(count(rowFor("h1"), "running")).toBe("20"));
-      // Working is two digits wherever it shows; asking, a single digit, keeps its narrow cell.
-      expect(digitsOf(rowFor("h1"))).toEqual(["asking:1", "running:2"]);
-      expect(digitsOf(rowFor("h2"))).toEqual(["running:2"]);
-      expect(digitsOf(rowFor("local"))).toEqual(["running:2"]);
-      const cell = rowFor("h1").querySelector<HTMLElement>('[data-count-cell="running"]');
-      expect(cell?.className).toContain("w-9");
-      expect(cell?.className).toContain("@[15rem]/hosts:w-9.5");
+      // Ten is the first two-digit count; every row's cell for a column is as wide as the widest.
+      for (const id of ["h1", "h2", "local"]) {
+        expect(digitsOf(rowFor(id)).filter((entry) => entry.startsWith("running"))).toEqual([
+          "running:2",
+        ]);
+      }
+      expect(digitsOf(rowFor("h1"))).toEqual(["asking:2", "running:2"]);
+      expect(digitsOf(rowFor("h2"))).toEqual(["asking:2", "running:2"]);
+      for (const band of ["asking", "running"]) {
+        expect(cell(rowFor("h2"), band).className).toBe(cell(rowFor("h1"), band).className);
+      }
+      const running = cell(rowFor("h1"), "running").classList;
+      expect(running.contains("w-9")).toBe(true);
+      expect(running.contains("@[15rem]/hosts:w-9.5")).toBe(true);
+      // Cells grow leftward, so the counts still end on the row's right edge.
+      expect(running.contains("justify-end")).toBe(true);
+      expect(cell(rowFor("local"), "running").className).toBe(
+        cell(rowFor("h1"), "running").className
+      );
     });
 
-    it("keeps single-digit columns at the narrow width", async () => {
+    it("sizes each column on its own, leaving a single-digit column at the narrow width", async () => {
+      hostsWith({ h1: [waiting("a"), ...many(working, 20, "w")] });
       render(<ProjectHostsGroup projectId={PROJECT} />);
-      await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
-      expect(digitsOf(rowFor("linux"))).toEqual(["asking:1", "running:1"]);
-      const cell = rowFor("linux").querySelector<HTMLElement>('[data-count-cell="running"]');
-      expect(cell?.className).toContain("w-7");
-      expect(cell?.className).not.toContain("w-9");
+      await waitFor(() => expect(count(rowFor("h1"), "running")).toBe("20"));
+      expect(digitsOf(rowFor("h1"))).toEqual(["asking:1", "running:2"]);
+      const asking = cell(rowFor("h1"), "asking").classList;
+      expect(asking.contains("w-7")).toBe(true);
+      expect(asking.contains("@[15rem]/hosts:w-7.5")).toBe(true);
+      expect(asking.contains("w-9")).toBe(false);
+    });
+
+    it("widens for three digits and stops there", async () => {
+      hostsWith({ h1: [...many(waiting, 100, "a"), ...many(working, 1000, "w")] });
+      render(<ProjectHostsGroup projectId={PROJECT} />);
+      await waitFor(() => expect(count(rowFor("h1"), "running")).toBe("1000"));
+      expect(digitsOf(rowFor("h1"))).toEqual(["asking:3", "running:3"]);
+      const classes = cell(rowFor("h1"), "running").classList;
+      expect(classes.contains("w-11")).toBe(true);
+      expect(classes.contains("@[15rem]/hosts:w-11.5")).toBe(true);
     });
 
     it("widens a column for the fold row's sum when no single host needs it", async () => {
@@ -304,10 +331,12 @@ describe("ProjectHostsGroup", () => {
       await waitFor(() => expect(count(more, "running")).toBe("12"));
       expect(digitsOf(more)).toEqual(["running:2"]);
       expect(digitsOf(rowFor("h2"))).toEqual(["running:2"]);
+      expect(cell(rowFor("h2"), "running").className).toBe(cell(more, "running").className);
 
       // Once the fold opens its sum is gone, and so is the width it asked for.
       fireEvent.click(more);
       expect(digitsOf(rowFor("h2"))).toEqual(["running:1"]);
+      expect(cell(rowFor("h2"), "running").classList.contains("w-7")).toBe(true);
     });
   });
 
