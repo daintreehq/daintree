@@ -1370,6 +1370,9 @@ describe("git-write commit and working diff", () => {
       ["<<<<<<<", "bare start"],
       [">>>>>>>\r", "bare end before a CRLF"],
       ["<<<<<<<\tHEAD", "start labelled after a tab"],
+      ["<<<<<<<< HEAD:b.txt", "eight-wide start from a rename/rename conflict"],
+      [">>>>>>>> theirs:c.txt", "eight-wide end from a rename/rename conflict"],
+      [">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> branch", "end widened by conflict-marker-size"],
     ])("throws for the %s marker line (%s)", async (markerLine) => {
       const git = makeFakeGit({
         diff: stagedDiff([{ path: "f.txt", content: `head\n${markerLine}\ntail\n` }]),
@@ -1377,11 +1380,12 @@ describe("git-write commit and working diff", () => {
       await expect(scan(git)).rejects.toThrow(/Unresolved conflict markers found in f\.txt/);
     });
 
-    it("blocks a marker on the last line with no trailing newline", async () => {
-      const git = makeFakeGit({
-        diff: stagedDiff([{ path: "f.txt", content: "head\n>>>>>>> branch" }]),
-      });
-      await expect(scan(git)).rejects.toThrow(/Unresolved conflict markers/);
+    it.each([
+      ["a labelled marker", "head\n>>>>>>> branch"],
+      ["a bare marker", "head\n>>>>>>>"],
+    ])("blocks %s on the last line with no trailing newline", async (_name, content) => {
+      const git = makeFakeGit({ diff: stagedDiff([{ path: "f.txt", content }]) });
+      await expect(scan(git)).rejects.toThrow(/found in f\.txt \(line 2\)/);
     });
 
     it("reports the line of the first marker in a full region", async () => {
@@ -1405,6 +1409,13 @@ describe("git-write commit and working diff", () => {
       await expect(scan(git)).rejects.toThrow(/found in f\.txt \(line 3\)/);
     });
 
+    it("counts only LF as a line break, as git does", async () => {
+      const git = makeFakeGit({
+        diff: stagedDiff([{ path: "f.txt", content: "one\rtwo\n<<<<<<< HEAD\n" }]),
+      });
+      await expect(scan(git)).rejects.toThrow(/found in f\.txt \(line 2\)/);
+    });
+
     it.each([
       ["a lone divider", "=======\n"],
       ["a Setext underline", "Release notes\n=============\n"],
@@ -1413,7 +1424,7 @@ describe("git-write commit and working diff", () => {
       ["an indented marker", "  <<<<<<< HEAD\n"],
       ["a mid-line marker", "inline >>>>>>> text\n"],
       ["a marker with text glued to it", "<<<<<<<HEAD\n"],
-      ["a run of eight", ">>>>>>>> branch\n"],
+      ["a run followed by a vertical tab", "<<<<<<<\vHEAD\n"],
       ["a run of six", "<<<<<< HEAD\n"],
     ])("does not block %s", async (_name, content) => {
       const git = makeFakeGit({ diff: stagedDiff([{ path: "doc.md", content }]) });
@@ -1514,7 +1525,9 @@ describe("git-write commit and working diff", () => {
           { path: "bom.txt", content: "\uFEFF<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> b\n" },
         ]),
       });
-      await expect(scan(git)).rejects.toThrow(/Unresolved conflict markers found in bom\.txt/);
+      await expect(scan(git)).rejects.toThrow(
+        /Unresolved conflict markers found in bom\.txt \(line 1\)/
+      );
     });
 
     it("blocks when content is exactly at the 1 MB byte cap", async () => {

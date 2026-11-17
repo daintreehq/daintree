@@ -10,7 +10,7 @@ const LF = 0x0a;
 const CR = 0x0d;
 const TAB = 0x09;
 const SPACE = 0x20;
-const MARKER_LENGTH = 7;
+const MIN_MARKER_LENGTH = 7;
 
 // Only the markers git writes at a region's edges: the opener, the diff3 base,
 // and the closer. The `=======` divider is left out on purpose: alone it is a
@@ -70,16 +70,18 @@ function parseBinaryPathsFromNumstat(raw: string): Set<string> {
   return binary;
 }
 
-// Git's own rule: exactly seven marker characters at the start of a line, then
-// whitespace or the end of the line. A longer run (`>>>>>>>>`) or text glued to
-// it (`<<<<<<<HEAD`) is not one.
+// A run of at least seven marker characters at the start of a line, then
+// whitespace or the end of the line. Git writes seven, but widens them for some
+// merges (eight for a rename/rename content conflict) and to any width a
+// `conflict-marker-size` attribute names, so the width is a floor. Text glued to
+// the run (`<<<<<<<HEAD`) is not one: git always separates its label.
 function isMarkerLineAt(blob: Buffer, start: number): boolean {
   const first = blob[start];
   if (!MARKER_BYTES.has(first)) return false;
-  for (let i = 1; i < MARKER_LENGTH; i++) {
-    if (blob[start + i] !== first) return false;
-  }
-  const after = blob[start + MARKER_LENGTH];
+  let end = start + 1;
+  while (blob[end] === first) end++;
+  if (end - start < MIN_MARKER_LENGTH) return false;
+  const after = blob[end];
   return after === undefined || after === SPACE || after === TAB || after === CR || after === LF;
 }
 
