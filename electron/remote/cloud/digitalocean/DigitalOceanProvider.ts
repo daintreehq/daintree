@@ -183,7 +183,10 @@ function sizeChoice(size: DigitalOceanSize): CloudMachineType {
   };
 }
 
-function imageChoice(image: DigitalOceanImage, regions: ReadonlySet<string>): CloudProvisioningChoice {
+function imageChoice(
+  image: DigitalOceanImage,
+  regions: ReadonlySet<string>
+): CloudProvisioningChoice {
   return {
     id: image.slug!,
     label: `${image.distribution} ${image.name}`,
@@ -524,7 +527,10 @@ export class DigitalOceanProvider implements CloudProvider {
   }
 
   /** The Droplet took the key with its create; this only reads where it answers. */
-  async sshAccess(credentials: ProviderCredentials, resourceId: string): Promise<ProviderSshAccess> {
+  async sshAccess(
+    credentials: ProviderCredentials,
+    resourceId: string
+  ): Promise<ProviderSshAccess> {
     const droplet = await this.clientFor(credentials.apiUrl).getDroplet(
       this.ctx(credentials),
       resourceId
@@ -573,7 +579,11 @@ export class DigitalOceanProvider implements CloudProvider {
           at,
         };
       case "payment-required":
-        return { code: "billing", message: `DigitalOcean needs a billing change first: ${said}`, at };
+        return {
+          code: "billing",
+          message: `DigitalOcean needs a billing change first: ${said}`,
+          at,
+        };
       case "rate-limited":
         return {
           code: "rate-limited",

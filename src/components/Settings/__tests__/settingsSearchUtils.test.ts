@@ -40,6 +40,8 @@ const GOLDEN_QUERIES = [
   { query: "github", expectedTopResults: ["forge-access-token", "tab-nav-code-forge"] },
   { query: "remote resources", expectedTopResults: ["tab-nav-project:environments"] },
   { query: "docker akash", expectedTopResults: ["tab-nav-project:environments"] },
+  { query: "droplet", expectedTopResults: ["hosts-cloud-providers"] },
+  { query: "digital ocean", expectedTopResults: ["hosts-cloud-providers"] },
 ] as const;
 
 describe("filterSettings", () => {

@@ -233,7 +233,9 @@ describe("DigitalOceanClient", () => {
     expect(droplets.map((d) => d.id)).toEqual([1, 2]);
     expect(calls.map((c) => c.url.host)).toEqual(["do.test", "do.test"]);
     expect(calls.map((c) => c.url.searchParams.get("page"))).toEqual(["1", "2"]);
-    expect(calls.every((c) => c.url.searchParams.get("tag_name") === "daintree-binding:cb_abcdefgh")).toBe(true);
+    expect(
+      calls.every((c) => c.url.searchParams.get("tag_name") === "daintree-binding:cb_abcdefgh")
+    ).toBe(true);
   });
 
   it("fails a tagged lookup on an entry it can't read, but skips one in an untagged list", async () => {
@@ -336,9 +338,7 @@ describe("dropletResource", () => {
   });
 
   it("reads an active Droplet with no public address yet as still starting", () => {
-    expect(dropletResource({ ...DROPLET, networks: { v4: [], v6: [] } }).machine).toBe(
-      "starting"
-    );
+    expect(dropletResource({ ...DROPLET, networks: { v4: [], v6: [] } }).machine).toBe("starting");
   });
 
   it("reads a shutdown under way as stopping, and a power-on under way as starting", () => {
@@ -370,7 +370,12 @@ describe("DigitalOceanProvider", () => {
     expect(capabilities).toMatchObject({
       lifetime: { kind: "none" },
       sshTrust: "confirm-on-first-connect",
-      provisioning: { location: "required", image: "required", network: "none", sshKey: "at-create" },
+      provisioning: {
+        location: "required",
+        image: "required",
+        network: "none",
+        sshKey: "at-create",
+      },
       deletion: true,
       persistence: { retentionDays: null, stoppedComputeBilled: true },
     });
@@ -484,7 +489,9 @@ describe("DigitalOceanProvider", () => {
     ]);
     const catalog = await provider.catalog(credentials);
     expect(catalog.canStart).toBe(false);
-    expect(catalog.machineTypes.map((type) => [type.id, type.memoryGB, type.hourlyDollars])).toEqual([
+    expect(
+      catalog.machineTypes.map((type) => [type.id, type.memoryGB, type.hourlyDollars])
+    ).toEqual([
       ["s-1vcpu-2gb", 2, 0.01786],
       ["s-2vcpu-4gb", 4, 0.03571],
     ]);
@@ -527,7 +534,7 @@ describe("DigitalOceanProvider", () => {
     ]);
     // The comment names this device's account: DigitalOcean gets the key alone.
     expect(calls[1]!.body).toEqual({
-      name: "Daintree d1:56:08",
+      name: "Daintree a8:d1:56:08",
       public_key: `ssh-ed25519 ${KEY_BLOB}`,
     });
     const body = calls[2]!.body as Record<string, unknown>;
@@ -647,9 +654,7 @@ describe("DigitalOceanProvider", () => {
         links: {},
       }),
     ]);
-    expect((await locked.provider.inspect(locked.credentials, "3164444")).machine).toBe(
-      "stopping"
-    );
+    expect((await locked.provider.inspect(locked.credentials, "3164444")).machine).toBe("stopping");
   });
 
   it("stops with a graceful shutdown, following it until DigitalOcean says it's done", async () => {

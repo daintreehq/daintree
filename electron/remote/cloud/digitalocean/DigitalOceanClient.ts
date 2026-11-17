@@ -159,9 +159,7 @@ export interface DigitalOceanCreateDropletBody {
 }
 
 export type DigitalOceanDropletActionBody =
-  | { type: "shutdown" }
-  | { type: "power_on" }
-  | { type: "rename"; name: string };
+  { type: "shutdown" } | { type: "power_on" } | { type: "rename"; name: string };
 
 type FetchFn = typeof fetch;
 
@@ -276,7 +274,10 @@ export class DigitalOceanClient {
    * tagged lookup is how a lost create is found again, so there an entry it
    * can't read fails the whole answer instead of passing for "none".
    */
-  async listDroplets(ctx: DigitalOceanRequestContext, tag?: string): Promise<DigitalOceanDroplet[]> {
+  async listDroplets(
+    ctx: DigitalOceanRequestContext,
+    tag?: string
+  ): Promise<DigitalOceanDroplet[]> {
     return this.listAll(
       ctx,
       "/droplets",
@@ -297,7 +298,10 @@ export class DigitalOceanClient {
     );
   }
 
-  async getDroplet(ctx: DigitalOceanRequestContext, dropletId: string): Promise<DigitalOceanDroplet> {
+  async getDroplet(
+    ctx: DigitalOceanRequestContext,
+    dropletId: string
+  ): Promise<DigitalOceanDroplet> {
     const result = await this.call(
       ctx,
       { method: "GET", path: `/droplets/${requireDropletId(dropletId)}`, retry: true },
@@ -382,7 +386,13 @@ export class DigitalOceanClient {
     fingerprint: string
   ): Promise<DigitalOceanSshKey | null> {
     if (!/^[0-9a-f]{2}(?::[0-9a-f]{2}){15}$/.test(fingerprint)) {
-      throw new DigitalOceanApiError("invalid-request", "Not an MD5 key fingerprint", null, null, null);
+      throw new DigitalOceanApiError(
+        "invalid-request",
+        "Not an MD5 key fingerprint",
+        null,
+        null,
+        null
+      );
     }
     try {
       const result = await this.call(

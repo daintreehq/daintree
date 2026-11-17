@@ -238,6 +238,20 @@ describe("AddCloudHostDialog lifetime", () => {
     expect(note).not.toContain("30 minutes");
   });
 
+  it("says an existing machine is reachable only if it took this account's key when it was made", async () => {
+    const old = { resourceId: "vm_1", name: "old", machine: "running", boundHostId: null };
+    client.listResources.mockResolvedValue([{ ...old, vcpu: 4, memoryGB: 8 }]);
+    const atCreate = provider({ kind: "none" });
+    atCreate.capabilities.provisioning.sshKey = "at-create";
+    cloud.snapshot = { providers: [atCreate], accounts: [ACCOUNT], hosts: [] };
+    await show();
+    fireEvent.click(screen.getByRole("radio", { name: "Existing machine" }));
+    fireEvent.click(await screen.findByRole("radio", { name: /^old/ }));
+    expect(screen.getByTestId("add-cloud-host-import-note").textContent).toBe(
+      "Adding it doesn't start it or change its auto-stop. Acme has no lifetime for its machines: it runs until you stop it. Acme takes an SSH key only when a machine is created, so Daintree can connect only to one it made with this account."
+    );
+  });
+
   it("says a provider sleeps idle machines even when it doesn't say after how long", async () => {
     await open({ kind: "idle-sleep", idleSeconds: null });
     expect(lifetimeChoice()).toBeNull();

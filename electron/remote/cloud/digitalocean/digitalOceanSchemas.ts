@@ -169,7 +169,9 @@ const items = z.array(z.unknown());
 export const digitalOceanRegionPageSchema = z
   .object({ regions: items, links: listLinksSchema })
   .loose();
-export const digitalOceanSizePageSchema = z.object({ sizes: items, links: listLinksSchema }).loose();
+export const digitalOceanSizePageSchema = z
+  .object({ sizes: items, links: listLinksSchema })
+  .loose();
 export const digitalOceanImagePageSchema = z
   .object({ images: items, links: listLinksSchema })
   .loose();
