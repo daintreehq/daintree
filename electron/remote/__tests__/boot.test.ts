@@ -50,12 +50,14 @@ const m = vi.hoisted(() => {
   const hostEntries: Array<{
     descriptor: { id: string; connection: { kind: "ssh"; target: string } };
   }> = [];
+  const retiringHosts = new Set<string>();
   const client = {
     client: {
       connect: vi.fn(),
       openHostForNotice: vi.fn(async (_window: unknown, _notice: unknown) => ({})),
       list: vi.fn(() => hostEntries),
       isDisconnectedByPerson: vi.fn((hostId: string) => hostId === "control-on"),
+      isHostRetiring: vi.fn((hostId: string) => retiringHosts.has(hostId)),
     },
     sessionFor: vi.fn((_hostId: string) => null as unknown),
     onEndpointOpened: vi.fn((l: (hostId: string, info: unknown) => void) => {
@@ -138,6 +140,7 @@ const m = vi.hoisted(() => {
     hostUploadsDispose: vi.fn(() => record("host uploads dispose")),
     attachHostUploads: vi.fn(),
     hostEntries,
+    retiringHosts,
     installPluginClient: vi.fn(),
     uninstallPluginClient: vi.fn(() => record("uninstall plugin client")),
     installPortForwardClient: vi.fn(),
@@ -645,6 +648,7 @@ beforeEach(() => {
   m.viewFilter.current = null;
   m.mcpResolver.current = null;
   m.hostEntries.length = 0;
+  m.retiringHosts.clear();
   vi.clearAllMocks();
   _resetRemoteServicesForTest();
 });
@@ -848,8 +852,13 @@ describe("startRemoteHosts", () => {
         session(hostId: string): Promise<unknown>;
         addUseCheck(check: (hostId: string) => boolean): () => void;
         hostName(hostId: string): string;
+        isRetiring(hostId: string): boolean;
       },
     ];
+    // A host being re-pointed is asked of the client, so no credential reaches its old machine (#17207).
+    m.retiringHosts.add("control-on");
+    expect(deps.isRetiring("control-on")).toBe(true);
+    expect(deps.isRetiring("studio-01")).toBe(false);
     // Relayed calls keep their host's link through the manager's own idle sweep.
     const check = () => true;
     deps.addUseCheck(check);
@@ -1007,6 +1016,10 @@ describe("startRemoteHosts", () => {
     });
     expect(deps.isKnownHost("studio-01")).toBe(true);
     expect(deps.isKnownHost("studio-02")).toBe(false);
+    // Being re-pointed, it is the old machine still: nothing is forwarded to it meanwhile (#17207).
+    m.retiringHosts.add("studio-01");
+    expect(deps.isKnownHost("studio-01")).toBe(false);
+    m.retiringHosts.delete("studio-01");
     const onSession = () => {};
     deps.onSessionOpened(onSession);
     expect(m.client.manager.onSessionOpened).toHaveBeenCalledWith(onSession);
