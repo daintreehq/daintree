@@ -953,6 +953,7 @@ export const CHANNELS = {
   VOICE_INPUT_IS_APP_REPLACED: "voice-input:is-app-replaced",
   VOICE_INPUT_RESTART_REPLACED_APP: "voice-input:restart-replaced-app",
   VOICE_DICTIONARY_ADD: "voice-dictionary:add",
+  VOICE_DICTIONARY_ADD_MANY: "voice-dictionary:add-many",
   VOICE_DICTIONARY_REMOVE: "voice-dictionary:remove",
   VOICE_DICTIONARY_UPDATE: "voice-dictionary:update",
   VOICE_DICTIONARY_ACCEPT_SUGGESTION: "voice-dictionary:accept-suggestion",

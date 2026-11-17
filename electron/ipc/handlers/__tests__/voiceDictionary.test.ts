@@ -100,7 +100,10 @@ vi.mock("../../../store.js", () => ({
 import { store } from "../../../store.js";
 import { registerVoiceDictionaryHandlers } from "../voiceDictionary.js";
 import { VOICE_DICTIONARY_METHOD_CHANNELS } from "../voiceDictionary.preload.js";
-import { MAX_DICTIONARY_HEARD_AS } from "../../../../shared/utils/voiceDictionary.js";
+import {
+  MAX_DICTIONARY_BATCH_TERMS,
+  MAX_DICTIONARY_HEARD_AS,
+} from "../../../../shared/utils/voiceDictionary.js";
 import { registerVoiceInputHandlers } from "../voiceInput.js";
 
 const sender = {
@@ -172,6 +175,97 @@ describe("voiceDictionary operations", () => {
   it("refuses an over-length term and writes nothing", async () => {
     await expect(op("add", { term: "x".repeat(101) })).rejects.toThrow();
     expect(storedTerms()).toEqual([]);
+  });
+
+  describe("a batched add", () => {
+    it("adds a paste's terms in order in one write, extending a term already there", async () => {
+      await op("add", { term: "Zustand" });
+      vi.mocked(store.set).mockClear();
+
+      const added = await op("addMany", {
+        entries: [
+          { term: " Daintree " },
+          { term: "zustand", heardAs: ["zoo stand"] },
+          { term: "Vite", heardAs: ["veet"] },
+        ],
+        source: "imported",
+        heardAsConflict: "skip",
+      });
+
+      expect(added.dictionary).toEqual([
+        { term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: NOW },
+        { term: "Daintree", heardAs: [], source: "imported", addedAt: NOW },
+        { term: "Vite", heardAs: ["veet"], source: "imported", addedAt: NOW },
+      ]);
+      expect(added.conflicts).toEqual([]);
+      expect(store.set).toHaveBeenCalledTimes(1);
+      expect(storedTerms()).toEqual(["Zustand", "Daintree", "Vite"]);
+    });
+
+    it("lets each term see the ones before it, reporting a phrase an earlier one took", async () => {
+      const added = await op("addMany", {
+        entries: [
+          { term: "Zustand", heardAs: ["zoo stand"] },
+          { term: "Zoostand", heardAs: ["Zoo Stand", "zoo-stand"] },
+        ],
+        source: "imported",
+        heardAsConflict: "skip",
+      });
+
+      expect(added.conflicts).toEqual([{ phrase: "Zoo Stand", owner: "Zustand" }]);
+      expect(added.dictionary.map(({ term, heardAs }) => ({ term, heardAs }))).toEqual([
+        { term: "Zustand", heardAs: ["zoo stand"] },
+        { term: "Zoostand", heardAs: ["zoo-stand"] },
+      ]);
+    });
+
+    it("applies a hand add's policy: refused by default, moved when asked", async () => {
+      await op("add", { term: "Zustand", heardAs: ["zoo stand"] });
+      vi.mocked(store.set).mockClear();
+
+      const refused = await op("addMany", {
+        entries: [{ term: "Zoostand", heardAs: ["zoo stand"] }],
+      });
+      expect(refused.conflicts).toEqual([{ phrase: "zoo stand", owner: "Zustand" }]);
+      expect(store.set).not.toHaveBeenCalled();
+
+      const moved = await op("addMany", {
+        entries: [{ term: "Zoostand", heardAs: ["zoo stand"] }],
+        heardAsConflict: "move",
+      });
+      expect(moved.conflicts).toEqual([]);
+      expect(moved.dictionary.map(({ term, heardAs, source }) => ({ term, heardAs, source }))).toEqual(
+        [
+          { term: "Zustand", heardAs: [], source: "manual" },
+          { term: "Zoostand", heardAs: ["zoo stand"], source: "manual" },
+        ]
+      );
+    });
+
+    it("writes nothing when one term is refused, or when every term is already there", async () => {
+      await expect(
+        op("addMany", { entries: [{ term: "Daintree" }, { term: "x".repeat(101) }] })
+      ).rejects.toThrow();
+      expect(storedTerms()).toEqual([]);
+
+      await op("add", { term: "Daintree" });
+      vi.mocked(store.set).mockClear();
+      const again = await op("addMany", { entries: [{ term: "daintree" }, { term: "DAINTREE" }] });
+      expect(again.dictionary.map((entry) => entry.term)).toEqual(["Daintree"]);
+      expect(store.set).not.toHaveBeenCalled();
+    });
+
+    it("refuses an empty batch or one past the paste cap", async () => {
+      await expect(op("addMany", { entries: [] })).rejects.toThrow();
+      const tooMany = Array.from({ length: MAX_DICTIONARY_BATCH_TERMS + 1 }, (_, i) => ({
+        term: `term${i}`,
+      }));
+      await expect(op("addMany", { entries: tooMany })).rejects.toThrow();
+      await expect(
+        op("addMany", { entries: tooMany.slice(0, MAX_DICTIONARY_BATCH_TERMS) })
+      ).resolves.toMatchObject({ conflicts: [] });
+      expect(storedTerms()).toHaveLength(MAX_DICTIONARY_BATCH_TERMS);
+    });
   });
 
   it("removes and updates single entries without touching the rest", async () => {

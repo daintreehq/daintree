@@ -4936,6 +4936,16 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: import("./api.js").VoiceDictionaryChange;
   };
+  "voice-dictionary:add-many": {
+    args: [
+      __0: {
+        entries: { term: string; heardAs?: string[] | undefined }[];
+        source?: "manual" | "learned" | "imported" | undefined;
+        heardAsConflict?: "skip" | "reject" | "move" | undefined;
+      },
+    ];
+    result: import("./api.js").VoiceDictionaryChange;
+  };
   "voice-dictionary:add-to-project": {
     args: [
       __0: {

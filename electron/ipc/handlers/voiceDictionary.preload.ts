@@ -2,6 +2,7 @@ import type { IpcInvokeMap } from "../../types/index.js";
 
 export const VOICE_DICTIONARY_METHOD_CHANNELS = {
   add: "voice-dictionary:add",
+  addMany: "voice-dictionary:add-many",
   remove: "voice-dictionary:remove",
   update: "voice-dictionary:update",
   acceptSuggestion: "voice-dictionary:accept-suggestion",

@@ -1356,6 +1356,7 @@ export const CHANNEL_LOCALITY = {
   "user-prompt-templates:open-folder": "shell",
   "voice-dictionary:accept-suggestion": "shell",
   "voice-dictionary:add": "shell",
+  "voice-dictionary:add-many": "shell",
   "voice-dictionary:add-to-project": "host",
   "voice-dictionary:dismiss-suggestion": "shell",
   "voice-dictionary:get-project": "host",

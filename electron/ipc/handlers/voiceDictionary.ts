@@ -19,6 +19,7 @@ import type {
 } from "../../../shared/types/ipc/api.js";
 import {
   DICTIONARY_CONTROL_CHARACTERS,
+  MAX_DICTIONARY_BATCH_TERMS,
   MAX_DICTIONARY_HEARD_AS,
   acceptSuggestion,
   addDictionaryEntry,
@@ -40,13 +41,23 @@ const heardAs = z.array(text).max(MAX_DICTIONARY_HEARD_AS);
 // What a heard-as phrase another entry has does to the change; refused by default.
 const heardAsConflict = z.enum(["reject", "skip", "move"]).optional();
 const editHeardAsConflict = z.enum(["reject", "move"]).optional();
+const source = z.enum(["manual", "learned", "imported"]).optional();
 
 const addSchema = z.object({
   term: text,
   heardAs: heardAs.optional(),
   // Source and time ride along only so an undone removal restores the entry as it was.
-  source: z.enum(["manual", "learned", "imported"]).optional(),
+  source,
   addedAt: z.number().finite().nonnegative().optional(),
+  heardAsConflict,
+});
+// One paste's terms, added in order under one policy and source, so the import is one write.
+const addManySchema = z.object({
+  entries: z
+    .array(z.object({ term: text, heardAs: heardAs.optional() }))
+    .min(1)
+    .max(MAX_DICTIONARY_BATCH_TERMS),
+  source,
   heardAsConflict,
 });
 const removeSchema = z.object({ term: existing });
@@ -161,6 +172,23 @@ export const voiceDictionaryNamespace = defineIpcNamespace({
           ...state,
           dictionary: addDictionaryEntry(state.dictionary, input, Date.now(), conflicts),
         }))
+    ),
+    // Each term sees the ones before it, as a run of adds would, but a term
+    // main refuses (an empty or over-long phrase) leaves the whole batch unwritten.
+    addMany: opValidated(
+      VOICE_DICTIONARY_METHOD_CHANNELS.addMany,
+      addManySchema,
+      async ({ entries, source, heardAsConflict }): Promise<VoiceDictionaryChange> => {
+        const now = Date.now();
+        return changeReporting((state, conflicts) => ({
+          ...state,
+          dictionary: entries.reduce(
+            (dictionary, entry) =>
+              addDictionaryEntry(dictionary, { ...entry, source, heardAsConflict }, now, conflicts),
+            state.dictionary
+          ),
+        }));
+      }
     ),
     remove: opValidated(
       VOICE_DICTIONARY_METHOD_CHANNELS.remove,
