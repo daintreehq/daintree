@@ -904,6 +904,8 @@ export function DiffPane({
       ? settledContent.content
       : undefined);
   const notesRenderInline =
+    Boolean(subject) &&
+    !sinceReviewNotice?.replacesBody &&
     !isImageMode &&
     !isMediaMode &&
     !isPdfMode &&

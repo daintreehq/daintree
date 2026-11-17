@@ -435,6 +435,45 @@ describe("DiffPane — unsaved note drafts (#16899)", () => {
   });
 });
 
+describe("DiffPane — pending notes with no diff table (#17198)", () => {
+  function addNote(filePath: string): void {
+    useDiffNotesStore.setState({ notes: {}, editingIds: {} });
+    useDiffNotesStore.getState().addNote({
+      worktreePath: WORKTREE_PATH,
+      filePath,
+      anchor: { kind: "file" },
+      body: "Still pending",
+    });
+  }
+
+  it("lists the file's notes when a base-branch panel has no base ref", () => {
+    addNote("a.ts");
+    useDiffContentMock.mockReturnValue({ content: undefined, stale: false, retry: vi.fn() });
+    seedPanel({ filePath: "a.ts", fileStatus: "modified", diffSource: "base-branch" });
+    renderPane();
+
+    expect(screen.queryByTestId("diff-viewer-mock")).toBeNull();
+    expect(screen.getByTestId("diff-pending-file-notes")).toBeTruthy();
+  });
+
+  it("lists the file's notes when the since-review notice replaces the body", () => {
+    // The cache normally turns these outcomes into a sentinel patch; this pins the
+    // predicate itself so a replaced body never hides notes if a patch survives.
+    addNote("a.ts");
+    useDiffContentMock.mockReturnValue({
+      content: "diff --git a/a.ts b/a.ts",
+      sinceReview: { status: "none" },
+      stale: false,
+      retry: vi.fn(),
+    });
+    seedPanel({ filePath: "a.ts", fileStatus: "modified", diffSource: "since-review" });
+    renderPane();
+
+    expect(screen.queryByTestId("diff-viewer-mock")).toBeNull();
+    expect(screen.getByTestId("diff-pending-file-notes")).toBeTruthy();
+  });
+});
+
 describe("DiffPane — current-file resolution", () => {
   it("matches on path AND status so a duplicated path resolves to the right entry", () => {
     const changeSet = [entry("a.ts", "modified"), entry("a.ts", "added"), entry("b.ts")];
