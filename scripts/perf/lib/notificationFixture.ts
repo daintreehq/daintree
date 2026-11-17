@@ -1334,11 +1334,23 @@ export function buildIdleCorpus(
   };
 }
 
-/** The `PtyClient` surface the idle sweep reads: one call, one list. */
+/** The `PtyClient` surface the idle sweep reads: one complete snapshot (#17222). */
 export function idlePtyClientStub(rows: readonly IdleTerminalRow[]): {
-  getAllTerminalsAsync: () => Promise<readonly IdleTerminalRow[]>;
+  getAllTerminalsWithCompletenessAsync: () => Promise<{
+    terminals: readonly IdleTerminalRow[];
+    degraded: boolean;
+    shardsTotal: number;
+    shardsFailed: number;
+  }>;
 } {
-  return { getAllTerminalsAsync: async () => rows };
+  return {
+    getAllTerminalsWithCompletenessAsync: async () => ({
+      terminals: rows,
+      degraded: false,
+      shardsTotal: 1,
+      shardsFailed: 0,
+    }),
+  };
 }
 
 /** A `ProjectViewManagersProvider` over a fixed set of foreground projects. */

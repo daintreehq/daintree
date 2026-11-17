@@ -1265,8 +1265,14 @@ export const notificationScenarios: PerfScenario[] = [
         modules.store.set("idleTerminalNotifiedAt", {});
 
         service.stop();
+        // The sweep skips a degraded read (#17222), so every shard answers here.
         service.setPtyClient({
-          getAllTerminalsAsync: async () => rows.current,
+          getAllTerminalsWithCompletenessAsync: async () => ({
+            terminals: rows.current,
+            degraded: false,
+            shardsTotal: 1,
+            shardsFailed: 0,
+          }),
         } as unknown as Parameters<typeof service.setPtyClient>[0]);
         service.setProjectViewManagersProvider(onScreenProvider(corpus.onScreenProjectIds));
         service.start();

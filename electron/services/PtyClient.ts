@@ -2809,6 +2809,12 @@ export class PtyClient extends EventEmitter {
     shardsFailed: number;
   }> {
     const shards = this.fanOutShards();
+    // A host mid-restart is not fanned out to, but its terminals are still
+    // missing from the answer — it counts as a failure, not as nothing.
+    const unreachable = Math.max(
+      0,
+      [...this.shards.values()].filter((shard) => !shard.retired).length - shards.length
+    );
     const results = await Promise.all(
       shards.map((shard) => {
         const promise = sendPtyHostRpc<TerminalInfoResponse[]>(
@@ -2822,11 +2828,11 @@ export class PtyClient extends EventEmitter {
         );
       })
     );
-    const shardsFailed = results.filter((r) => !r.ok).length;
+    const shardsFailed = results.filter((r) => !r.ok).length + unreachable;
     return {
       terminals: results.flatMap((r) => r.terminals),
       degraded: shardsFailed > 0,
-      shardsTotal: shards.length,
+      shardsTotal: shards.length + unreachable,
       shardsFailed,
     };
   }
