@@ -220,7 +220,7 @@ describe("AuditRingStore", () => {
     it.each<[string, (r: Nested) => void]>([
       ["a changed value", (r) => (r.v = "changed")],
       ["an added key", (r) => (r.extra = 1)],
-      ["a deleted trailing key", (r) => delete r.auth],
+      ["a deleted trailing key", (r) => Reflect.deleteProperty(r, "auth")],
       [
         "a reordered key",
         (r) => {
@@ -254,13 +254,14 @@ describe("AuditRingStore", () => {
       expect(storedRecord("mcpAuditLog", "a")).toBe(JSON.stringify(record));
     });
 
-    it.each<[string, (record: Record<string, unknown>) => () => unknown]>([
+    it.each<[string, (record: Record<string, unknown>) => () => unknown, string[]]>([
       [
         "settles on a new value after its first read",
         (record) => () => {
           Object.defineProperty(record, "v", { value: "settled", enumerable: true });
           return "first";
         },
+        ["first", "settled"],
       ],
       [
         "differs only on its second read",
@@ -268,10 +269,11 @@ describe("AuditRingStore", () => {
           let reads = 0;
           return () => (++reads === 2 ? "second" : "first");
         },
+        ["first", "first"],
       ],
     ])(
       "never pairs a cached string with a different read of an accessor that %s",
-      async (_name, getter) => {
+      async (_name, getter, stored) => {
         store.writeAll("mcpAuditLog", [rec("b")], 10);
         await settle();
         const record = { id: "a" } as Record<string, unknown>;
@@ -281,11 +283,14 @@ describe("AuditRingStore", () => {
           get: getter(record),
         });
 
-        store.writeAll("mcpAuditLog", [rec("b"), record], 10);
-        await settle();
-        store.writeAll("mcpAuditLog", [rec("b"), record], 10);
-        await settle();
+        const persisted: unknown[] = [];
+        for (let flush = 0; flush < 2; flush++) {
+          store.writeAll("mcpAuditLog", [rec("b"), record], 10);
+          await settle();
+          persisted.push(JSON.parse(storedRecord("mcpAuditLog", "a")!).v);
+        }
 
+        expect(persisted).toEqual(stored);
         expect(storedRecord("mcpAuditLog", "a")).toBe(JSON.stringify(record));
       }
     );
