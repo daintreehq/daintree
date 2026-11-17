@@ -46,6 +46,11 @@ function fieldTestId(field: CloudCredentialField): string {
   return field.id === "apiKey" ? "cloud-account-api-key" : `cloud-account-credential-${field.id}`;
 }
 
+/** A field's entry in one of the dialog's records, never a name every object already has. */
+function own(record: Record<string, string>, id: string): string | undefined {
+  return Object.hasOwn(record, id) ? record[id] : undefined;
+}
+
 /** What is sent for a field: one-line values trimmed, as main keeps them; blanks left out. */
 function enteredValues(
   fields: readonly CloudCredentialField[],
@@ -53,7 +58,7 @@ function enteredValues(
 ): CloudCredentialValues {
   const entered: CloudCredentialValues = {};
   for (const field of fields) {
-    const raw = values[field.id] ?? "";
+    const raw = own(values, field.id) ?? "";
     const value = field.input === "single-line" ? raw.trim() : raw;
     if (value.trim().length > 0) entered[field.id] = value;
   }
@@ -63,6 +68,8 @@ function enteredValues(
 interface KeyFileControlProps {
   field: CloudCredentialField;
   fileName: string | null;
+  /** A file was chosen and couldn't be used, so there is something to clear. */
+  failed: boolean;
   reading: boolean;
   disabled: boolean;
   onChoose: (file: File) => void;
@@ -73,13 +80,17 @@ interface KeyFileControlProps {
 function KeyFileControl({
   field,
   fileName,
+  failed,
   reading,
   disabled,
   onChoose,
   onClear,
 }: KeyFileControlProps) {
   const input = useRef<HTMLInputElement>(null);
-  const { controlProps } = useFieldControl({});
+  const action = fileName ? "Choose another file" : "Choose file";
+  // Named by what it does and for which field; the field's own label alone would hide the action.
+  const name = `${action} for ${field.label}`;
+  const { controlProps } = useFieldControl({ "aria-label": name });
   return (
     <div className="flex flex-wrap items-center gap-2">
       <input
@@ -103,15 +114,18 @@ function KeyFileControl({
         disabled={disabled}
         loading={reading}
         {...controlProps}
+        aria-label={name}
         onClick={() => input.current?.click()}
       >
-        {fileName ? "Choose another file…" : "Choose file…"}
+        {`${action}…`}
       </Button>
-      {fileName && (
+      {(fileName || failed) && (
         <>
-          <span className="min-w-0 truncate text-sm text-text-primary" title={fileName}>
-            {fileName}
-          </span>
+          {fileName && (
+            <span className="min-w-0 truncate text-sm text-text-primary" title={fileName}>
+              {fileName}
+            </span>
+          )}
           <Button
             type="button"
             variant="ghost"
@@ -161,9 +175,11 @@ export function ConnectCloudAccountDialog({
   const [error, setError] = useState<string | null>(null);
 
   const entered = enteredValues(fields, values);
+  // A file that couldn't be used is cleared or replaced before anything is sent without it.
   const complete =
     reading.size === 0 &&
-    fields.every((field) => !field.required || entered[field.id] !== undefined);
+    Object.keys(fieldErrors).length === 0 &&
+    fields.every((field) => !field.required || own(entered, field.id) !== undefined);
   const reviewed = !replacing && checked !== null && checkedEdits === edits;
 
   const edited = () => {
@@ -366,7 +382,7 @@ export function ConnectCloudAccountDialog({
           </div>
           {fields.map((field) => {
             const description = field.help ?? (fields.length === 1 ? keptNote : null);
-            const fieldError = fieldErrors[field.id];
+            const fieldError = own(fieldErrors, field.id);
             return (
               <Field key={field.id}>
                 <FieldLabel>
@@ -376,7 +392,8 @@ export function ConnectCloudAccountDialog({
                 {field.input === "key-file" ? (
                   <KeyFileControl
                     field={field}
-                    fileName={fileNames[field.id] ?? null}
+                    fileName={own(fileNames, field.id) ?? null}
+                    failed={fieldError !== undefined}
                     reading={reading.has(field.id)}
                     disabled={busy !== null}
                     onChoose={(file) => chooseFile(field, file)}
@@ -384,7 +401,7 @@ export function ConnectCloudAccountDialog({
                   />
                 ) : field.input === "multi-line" ? (
                   <Textarea
-                    value={values[field.id] ?? ""}
+                    value={own(values, field.id) ?? ""}
                     disabled={busy !== null}
                     rows={5}
                     variant="code"
@@ -399,7 +416,7 @@ export function ConnectCloudAccountDialog({
                 ) : (
                   <Input
                     type={field.secret ? "password" : "text"}
-                    value={values[field.id] ?? ""}
+                    value={own(values, field.id) ?? ""}
                     disabled={busy !== null}
                     autoComplete="off"
                     spellCheck={false}

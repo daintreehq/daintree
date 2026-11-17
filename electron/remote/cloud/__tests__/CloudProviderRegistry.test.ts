@@ -210,6 +210,8 @@ describe("CloudProviderRegistry", () => {
       [[], /no credential fields/],
       [[apiKey, { ...apiKey }], /twice/],
       [[{ ...apiKey, id: "__proto__" }], /invalid id/],
+      [[{ ...apiKey, id: "constructor", required: false }], /invalid id/],
+      [[{ ...apiKey, id: "toString" }], /invalid id/],
       [[{ ...apiKey, input: "dropdown" }], /unknown input/],
       [[{ ...apiKey, label: " " }], /without a label/],
       [[{ ...apiKey, secret: "yes" }], /secret and required/],

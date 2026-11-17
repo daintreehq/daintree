@@ -99,9 +99,9 @@ describe("openCloudCredentials", () => {
   it("never takes a set it can't read for a bare key", () => {
     expect(openCloudCredentials(undefined)).toBeNull();
     expect(openCloudCredentials("")).toBeNull();
-    expect(openCloudCredentials("daintree-cloud-credentials/2\n{}")).toBeNull();
+    expect(openCloudCredentials('daintree-cloud-credentials/2\n{"apiKey":"sentinel"}')).toBeNull();
     expect(openCloudCredentials("daintree-cloud-credentials/1\n{not json")).toBeNull();
-    expect(openCloudCredentials("daintree-cloud-credentials/1\n[]")).toBeNull();
+    expect(openCloudCredentials('daintree-cloud-credentials/1\n["sentinel"]')).toBeNull();
     expect(openCloudCredentials('daintree-cloud-credentials/1\n{"apiKey":7}')).toBeNull();
   });
 });

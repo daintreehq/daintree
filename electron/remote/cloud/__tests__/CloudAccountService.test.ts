@@ -392,6 +392,11 @@ describe("CloudAccountService with declared credential sets", () => {
       credentials: first,
       scopeId: "personal",
     });
+    expect(provider.checkCredentials).toHaveBeenCalledTimes(2);
+    expect(provider.checkCredentials).toHaveBeenLastCalledWith(
+      { ...first, accessKeyId: "AKIAEXAMPLE0001" },
+      "https://boat.dev/api/v1"
+    );
     expect(vault.sets.get(added.id)).toEqual({ ...first, accessKeyId: "AKIAEXAMPLE0001" });
     expect(added.keyHint).toBe("ret1");
 
@@ -401,6 +406,8 @@ describe("CloudAccountService with declared credential sets", () => {
       region: "eu-west-1",
     };
     const replaced = await accounts.replaceCredentials(added.id, second);
+    expect(provider.checkCredentials).toHaveBeenCalledTimes(3);
+    expect(provider.checkCredentials).toHaveBeenLastCalledWith(second, "https://boat.dev/api/v1");
     // The whole set: the session token the new set leaves out is gone.
     expect(vault.sets.get(added.id)).toEqual(second);
     expect(replaced.keyHint).toBe("ret2");
@@ -427,11 +434,14 @@ describe("CloudAccountService with declared credential sets", () => {
       credentials: first,
       scopeId: "team_1",
     });
+    expect(provider.checkCredentials).toHaveBeenCalledTimes(2);
+    expect(provider.checkCredentials).toHaveBeenLastCalledWith(first, "https://boat.dev/api/v1");
     expect(vault.sets.get(added.id)).toEqual(first);
     expect(added.keyHint).toBeNull();
 
     const second = { keyFile: serviceAccountKey("key-two"), project: "acme-build" };
     const replaced = await accounts.replaceCredentials(added.id, second);
+    expect(provider.checkCredentials).toHaveBeenLastCalledWith(second, "https://boat.dev/api/v1");
     expect(vault.sets.get(added.id)).toEqual(second);
     expectNoSecret(
       [added, replaced, accounts.summaries(), backend.value],
@@ -474,6 +484,79 @@ describe("CloudAccountService with declared credential sets", () => {
       /credentials/
     );
     expect(provider.checkCredentials).not.toHaveBeenCalled();
+
+    // A provider whose every field is optional still gets a set with something in it.
+    const optional = fieldsProvider("acme.clouds.do", [
+      field("token", "single-line", { required: false }),
+    ]);
+    const { accounts: others } = service({ provider: optional });
+    await expect(others.checkCredentials("acme.clouds.do", { token: "  " })).rejects.toThrow(
+      /Fill in the account's credentials/
+    );
+    expect(optional.checkCredentials).not.toHaveBeenCalled();
+  });
+
+  it("leaves the set and the account as they were when the provider refuses a replacement", async () => {
+    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE);
+    const { accounts, vault, store } = service({ provider });
+    const first = { keyFile: serviceAccountKey("key-one"), project: "acme-build" };
+    const added = await accounts.addAccount({
+      providerId: "acme.clouds.gce",
+      credentials: first,
+      scopeId: "personal",
+    });
+    const before = store.account(added.id);
+    vi.mocked(provider.checkCredentials).mockRejectedValueOnce(
+      Object.assign(new Error("invalid_grant"), { code: "401" })
+    );
+    await expect(
+      accounts.replaceCredentials(added.id, {
+        keyFile: serviceAccountKey("key-two"),
+        project: "acme-build",
+      })
+    ).rejects.toBeInstanceOf(AppError);
+    expect(vault.sets.get(added.id)).toEqual(first);
+    expect(store.account(added.id)).toEqual(before);
+  });
+
+  it("puts the old set back when the account can't be written after the new one was sealed", async () => {
+    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE);
+    const { accounts, vault, store } = service({ provider });
+    const first = { keyFile: serviceAccountKey("key-one"), project: "acme-build" };
+    const added = await accounts.addAccount({
+      providerId: "acme.clouds.gce",
+      credentials: first,
+      scopeId: "personal",
+    });
+    const before = store.account(added.id);
+    vi.spyOn(store, "putAccount").mockImplementationOnce(() => {
+      throw new Error("ENOSPC");
+    });
+    await expect(
+      accounts.replaceCredentials(added.id, {
+        keyFile: serviceAccountKey("key-two"),
+        project: "acme-build",
+      })
+    ).rejects.toThrow("ENOSPC");
+    expect(vault.sets.get(added.id)).toEqual(first);
+    expect(store.account(added.id)).toEqual(before);
+  });
+
+  it("leaves nothing sealed when a new account can't be written", async () => {
+    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE);
+    const { accounts, vault, store } = service({ provider });
+    vi.spyOn(store, "putAccount").mockImplementationOnce(() => {
+      throw new Error("ENOSPC");
+    });
+    await expect(
+      accounts.addAccount({
+        providerId: "acme.clouds.gce",
+        credentials: { keyFile: serviceAccountKey("key-one"), project: "acme-build" },
+        scopeId: "personal",
+      })
+    ).rejects.toThrow("ENOSPC");
+    expect(vault.sets.size).toBe(0);
+    expect(accounts.summaries()).toEqual([]);
   });
 
   it("hands on only the declared shape of a check, whatever else the provider returned", async () => {
@@ -522,6 +605,50 @@ describe("CloudAccountService with declared credential sets", () => {
     });
     refuse(Object.assign(new Error("revoked"), { code: "401" }));
     expect(await checking).toBeInstanceOf(AppError);
+    expect(accounts.summaries()[0]!.validation).toMatchObject({ status: "valid" });
+  });
+
+  it("doesn't take a successful answer about the set before a replacement for the new one", async () => {
+    let answer: (value: { identity: string }) => void = () => {};
+    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE, {
+      validate: vi.fn(() => new Promise<{ identity: string }>((resolve) => (answer = resolve))),
+    });
+    const { accounts, store } = service({ provider });
+    const added = await accounts.addAccount({
+      providerId: "acme.clouds.gce",
+      credentials: { keyFile: serviceAccountKey("key-one"), project: "acme-build" },
+      scopeId: "personal",
+    });
+    const checking = accounts.validate(added.id);
+    await vi.waitFor(() => expect(provider.validate).toHaveBeenCalled());
+    await accounts.replaceCredentials(added.id, {
+      keyFile: serviceAccountKey("key-two"),
+      project: "acme-build",
+    });
+    const replaced = store.account(added.id);
+    answer({ identity: "old-key@acme.iam" });
+    await checking;
+    expect(store.account(added.id)).toEqual(replaced);
+  });
+
+  it("doesn't mark replaced credentials refused when a listing with the old set is refused", async () => {
+    let refuse: (error: Error) => void = () => {};
+    const list = vi.fn(() => new Promise<never>((_resolve, reject) => (refuse = reject)));
+    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE, { list });
+    const { accounts } = service({ provider });
+    const added = await accounts.addAccount({
+      providerId: "acme.clouds.gce",
+      credentials: { keyFile: serviceAccountKey("key-one"), project: "acme-build" },
+      scopeId: "personal",
+    });
+    const listing = accounts.listResources(added.id).catch((e: unknown) => e);
+    await vi.waitFor(() => expect(list).toHaveBeenCalled());
+    await accounts.replaceCredentials(added.id, {
+      keyFile: serviceAccountKey("key-two"),
+      project: "acme-build",
+    });
+    refuse(Object.assign(new Error("revoked"), { code: "401" }));
+    expect(await listing).toBeInstanceOf(AppError);
     expect(accounts.summaries()[0]!.validation).toMatchObject({ status: "valid" });
   });
 
@@ -602,19 +729,85 @@ describe("CloudAccountService with declared credential sets", () => {
     expect(accounts.summaries()).toEqual([]);
   });
 
+  it("holds a remove until a replacement already sealing has finished, so no set outlives its account", async () => {
+    const provider = fieldsProvider("acme.clouds.ec2", TWO_SECRETS);
+    const { accounts, vault } = service({ provider });
+    const added = await accounts.addAccount({
+      providerId: "acme.clouds.ec2",
+      credentials: {
+        accessKeyId: "AKIAEXAMPLE0001",
+        secretAccessKey: "secret-access-key-one",
+        region: "us-east-1",
+      },
+      scopeId: "personal",
+    });
+    let release: () => void = () => {};
+    const sealing = new Promise<void>((resolve) => (release = resolve));
+    const put = vault.put.bind(vault);
+    const putSpy = vi.spyOn(vault, "put").mockImplementationOnce(async (id, values) => {
+      await sealing;
+      await put(id, values);
+    });
+    const deleteSpy = vi.spyOn(vault, "delete");
+    const replacing = accounts.replaceCredentials(added.id, {
+      accessKeyId: "AKIAEXAMPLE0002",
+      secretAccessKey: "secret-access-key-two",
+      region: "us-east-1",
+    });
+    await vi.waitFor(() => expect(putSpy).toHaveBeenCalled());
+    const removing = accounts.removeAccount(added.id);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(deleteSpy).not.toHaveBeenCalled();
+    release();
+    await expect(replacing).resolves.toMatchObject({ id: added.id });
+    await removing;
+    expect(vault.sets.size).toBe(0);
+    expect(accounts.summaries()).toEqual([]);
+  });
+
+  it("lets the next commit run after one that failed, and gives each caller its own answer", async () => {
+    const provider = fieldsProvider("acme.clouds.ec2", TWO_SECRETS);
+    const { accounts, vault } = service({ provider });
+    const added = await accounts.addAccount({
+      providerId: "acme.clouds.ec2",
+      credentials: {
+        accessKeyId: "AKIAEXAMPLE0001",
+        secretAccessKey: "secret-access-key-one",
+        region: "us-east-1",
+      },
+      scopeId: "personal",
+    });
+    vi.spyOn(vault, "put").mockRejectedValueOnce(new Error("keychain locked"));
+    const second = {
+      accessKeyId: "AKIAEXAMPLE0002",
+      secretAccessKey: "secret-access-key-two",
+      region: "us-east-1",
+    };
+    const results = await Promise.allSettled([
+      accounts.replaceCredentials(added.id, second),
+      accounts.replaceCredentials(added.id, second),
+    ]);
+    expect(results[0]).toMatchObject({
+      status: "rejected",
+      reason: { message: "keychain locked" },
+    });
+    expect(results[1]).toMatchObject({ status: "fulfilled" });
+    expect(vault.sets.get(added.id)).toEqual(second);
+  });
+
   it("keeps working with an account whose bare key was sealed before sets", async () => {
     const { accounts, store, vault } = service();
     store.putAccount({
       id: "ca_abcdefgh",
       providerId: "boat",
       displayName: "Personal",
-      identity: "octocat",
       scope: { kind: "personal", id: "personal", name: "Personal" },
       apiUrl: "https://boat.dev/api/v1",
+      identity: "old-login",
       keyHint: "abcd",
       credentialRevision: null,
       addedAt: 1,
-      validation: { status: "valid", checkedAt: 1 },
+      validation: { status: "unknown", checkedAt: null, detail: null },
     });
     await vault.put("ca_abcdefgh", { apiKey: "boat_live_0123456789abcd" });
     expect(await accounts.credentials(store.account("ca_abcdefgh")!)).toMatchObject({
@@ -623,8 +816,9 @@ describe("CloudAccountService with declared credential sets", () => {
     });
     await accounts.validate("ca_abcdefgh");
     expect(accounts.summaries()[0]).toMatchObject({
+      identity: "octocat",
       keyHint: "abcd",
-      validation: { status: "valid" },
+      validation: { status: "valid", checkedAt: 1000 },
     });
   });
 });

@@ -368,14 +368,15 @@ export class CloudAccountService {
       lastProvisioning: null,
     };
     await this.deps.vault.put(id, credentials);
-    // Another connect may have finished while the credentials were being sealed.
     try {
+      // Another connect may have finished while the credentials were being sealed.
       refuseDuplicate();
+      this.deps.store.putAccount(account);
     } catch (error) {
+      // No account will ever name this set: it isn't left sealed with nothing able to remove it.
       await this.deps.vault.delete(id).catch(() => {});
       throw error;
     }
-    this.deps.store.putAccount(account);
     return this.summaries().find((summary) => summary.id === id)!;
   }
 
@@ -402,14 +403,23 @@ export class CloudAccountService {
       // Removed while the check was out: nothing is sealed for an account that's gone.
       const before = this.requireAccount(account.id);
       this.requireCurrentOrigin(before);
+      const previous = await this.deps.vault.get(account.id).catch(() => null);
       await this.deps.vault.put(account.id, credentials);
-      const current = this.requireAccount(account.id);
-      this.deps.store.putAccount({
-        ...current,
-        keyHint: this.hint(provider, credentials),
-        credentialRevision: newCredentialRevision(),
-        validation: { status: "valid", checkedAt: this.now() },
-      });
+      try {
+        this.deps.store.putAccount({
+          ...this.requireAccount(account.id),
+          keyHint: this.hint(provider, credentials),
+          credentialRevision: newCredentialRevision(),
+          validation: { status: "valid", checkedAt: this.now() },
+        });
+      } catch (error) {
+        // The account still names the set it had, so the vault goes back to holding it.
+        const kept = previous && this.deps.store.account(account.id);
+        await (
+          kept ? this.deps.vault.put(account.id, previous) : this.deps.vault.delete(account.id)
+        ).catch(() => {});
+        throw error;
+      }
       this.catalogs.delete(account.id);
       return this.requireSummary(account.id);
     });

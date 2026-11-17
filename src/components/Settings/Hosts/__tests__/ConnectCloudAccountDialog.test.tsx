@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type {
   CloudAccountCheckResult,
   CloudAccountSummary,
@@ -137,46 +137,68 @@ describe("ConnectCloudAccountDialog", () => {
     expect(screen.getByText("Only for SSO")).toBeTruthy();
   });
 
-  it("checks only once every required value is in, and sends the set without blank ones", async () => {
+  it("checks only once every required value is in, and connects with the scopes of the set it checked last", async () => {
     render(<ConnectCloudAccountDialog isOpen onClose={() => {}} provider={EC2} />);
     expect(isDisabled(button("Check credentials"))).toBe(true);
     type("cloud-account-credential-accessKeyId", "  AKIAEXAMPLE0001 ");
     expect(isDisabled(button("Check credentials"))).toBe(true);
     type("cloud-account-credential-secretAccessKey", "secret-access-key");
+    type("cloud-account-credential-sessionToken", "  \n ");
     fireEvent.click(button("Check credentials"));
     await screen.findByRole("radio", { name: /Personal/ });
-    expect(cloudClient.checkAccountCredentials).toHaveBeenCalledWith("acme.clouds.ec2", {
+    // One-line values trimmed; an optional value that's only whitespace left out.
+    expect(cloudClient.checkAccountCredentials).toHaveBeenLastCalledWith("acme.clouds.ec2", {
       accessKeyId: "AKIAEXAMPLE0001",
       secretAccessKey: "secret-access-key",
     });
 
-    const token = "line one\nline two";
+    cloudClient.checkAccountCredentials.mockResolvedValueOnce({
+      identity: "octocat",
+      scopes: [{ scope: { kind: "organization", id: "team_1", name: "Acme" }, active: true }],
+    });
+    const token = "  line one\nline two\n";
     type("cloud-account-credential-sessionToken", token);
     // An edit after the check voids it: the set must be checked again before it can connect.
     expect(screen.queryByRole("radio", { name: /Personal/ })).toBeNull();
     fireEvent.click(button("Check credentials"));
-    fireEvent.click(await screen.findByRole("button", { name: "Connect account" }));
+    await screen.findByRole("radio", { name: /Acme/ });
+    expect(screen.queryByRole("radio", { name: /Personal/ })).toBeNull();
+    const latest = {
+      accessKeyId: "AKIAEXAMPLE0001",
+      secretAccessKey: "secret-access-key",
+      // Text over several lines goes as it was typed.
+      sessionToken: token,
+    };
+    expect(cloudClient.checkAccountCredentials).toHaveBeenLastCalledWith("acme.clouds.ec2", latest);
+    fireEvent.click(button("Connect account"));
     await waitFor(() => expect(cloudClient.addAccount).toHaveBeenCalled());
     expect(cloudClient.addAccount.mock.calls[0]![0]).toEqual({
       providerId: "acme.clouds.ec2",
-      credentials: {
-        accessKeyId: "AKIAEXAMPLE0001",
-        secretAccessKey: "secret-access-key",
-        sessionToken: token,
-      },
-      scopeId: "personal",
+      credentials: latest,
+      scopeId: "team_1",
       displayName: undefined,
     });
   });
 
   it("sends a chosen key file exactly as read and shows only its name", async () => {
     render(<ConnectCloudAccountDialog isOpen onClose={() => {}} provider={GCE} />);
+    expect(button("Choose file for Service account key")).toBeTruthy();
     chooseFile(
       "cloud-account-credential-keyFile",
       new File([KEY_FILE_TEXT], "build-key.json", { type: "application/json" })
     );
     await screen.findByText("build-key.json");
-    expect(screen.getByRole("dialog").textContent).not.toContain("PRIVATE KEY");
+    expect(button("Choose another file for Service account key")).toBeTruthy();
+    const dialog = screen.getByRole("dialog");
+    const shown = [
+      dialog.textContent ?? "",
+      ...[...dialog.querySelectorAll("input, textarea")].map((control) =>
+        control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement
+          ? control.value
+          : ""
+      ),
+    ].join("\n");
+    expect(shown).not.toContain("PRIVATE KEY");
     type("cloud-account-credential-project", "acme-build");
     fireEvent.click(button("Check credentials"));
     await screen.findByRole("radio", { name: /Personal/ });
@@ -198,19 +220,26 @@ describe("ConnectCloudAccountDialog", () => {
     expect(isDisabled(button("Check credentials"))).toBe(true);
   });
 
-  it("ignores a check that comes back after the set was edited", async () => {
-    let answer: (result: CloudAccountCheckResult) => void = () => {};
-    cloudClient.checkAccountCredentials.mockImplementationOnce(
-      () => new Promise((resolve) => (answer = resolve))
-    );
-    render(<ConnectCloudAccountDialog isOpen onClose={() => {}} provider={EC2} />);
-    type("cloud-account-credential-accessKeyId", "AKIAEXAMPLE0001");
-    type("cloud-account-credential-secretAccessKey", "secret-one");
+  it("sends nothing without an optional file that couldn't be used until it's cleared", async () => {
+    const optionalFile = provider("acme.clouds.gce", [
+      field("project", "Project", "single-line", { secret: false }),
+      field("keyFile", "Service account key", "key-file", { required: false }),
+    ]);
+    render(<ConnectCloudAccountDialog isOpen onClose={() => {}} provider={optionalFile} />);
+    type("cloud-account-credential-project", "acme-build");
+    expect(isDisabled(button("Check credentials"))).toBe(false);
+    chooseFile("cloud-account-credential-keyFile", new File(["  \n"], "blank.json"));
+    expect((await screen.findByRole("alert")).textContent).toMatch(/empty/);
+    expect(isDisabled(button("Check credentials"))).toBe(true);
+    fireEvent.keyDown(screen.getByTestId("cloud-account-credential-project"), { key: "Enter" });
+    expect(cloudClient.checkAccountCredentials).not.toHaveBeenCalled();
+    fireEvent.click(button("Clear Service account key"));
+    expect(screen.queryByRole("alert")).toBeNull();
     fireEvent.click(button("Check credentials"));
-    type("cloud-account-credential-secretAccessKey", "secret-two");
-    await act(async () => answer(CHECKED));
-    expect(screen.queryByRole("radio", { name: /Personal/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Connect account" })).toBeNull();
+    await screen.findByRole("radio", { name: /Personal/ });
+    expect(cloudClient.checkAccountCredentials).toHaveBeenCalledWith("acme.clouds.gce", {
+      project: "acme-build",
+    });
   });
 
   it("replaces an account's whole set", async () => {
@@ -230,13 +259,27 @@ describe("ConnectCloudAccountDialog", () => {
     });
   });
 
-  it("keeps a one-key provider's form as it was", async () => {
+  it("keeps a one-key provider's form as it was, refusal and all", async () => {
+    cloudClient.checkAccountCredentials.mockRejectedValueOnce(
+      Object.assign(new Error("refused"), {
+        name: "AppError",
+        code: "PERMISSION",
+        userMessage: "Boat didn't accept this account's API key.",
+      })
+    );
     render(<ConnectCloudAccountDialog isOpen onClose={() => {}} provider={BOAT} />);
-    type("cloud-account-api-key", " boat_live_0123456789abcd ");
+    type("cloud-account-api-key", "boat_e2e_wrong_key");
     fireEvent.click(button("Check key"));
-    await screen.findByRole("radio", { name: /Personal/ });
-    expect(cloudClient.checkAccountCredentials).toHaveBeenCalledWith("boat", {
-      apiKey: "boat_live_0123456789abcd",
+    expect((await screen.findByRole("alert")).textContent).toContain("didn't accept");
+    type("cloud-account-api-key", " boat_live_0123456789abcd ");
+    expect(screen.queryByRole("alert")).toBeNull();
+    fireEvent.click(button("Check key"));
+    fireEvent.click(await screen.findByRole("button", { name: "Connect account" }));
+    await waitFor(() => expect(cloudClient.addAccount).toHaveBeenCalled());
+    expect(cloudClient.addAccount.mock.calls[0]![0]).toMatchObject({
+      providerId: "boat",
+      credentials: { apiKey: "boat_live_0123456789abcd" },
+      scopeId: "personal",
     });
   });
 });

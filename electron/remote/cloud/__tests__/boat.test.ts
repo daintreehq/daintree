@@ -375,6 +375,24 @@ describe("BoatProvider", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("signs every request with the API key from the account's own set", async () => {
+    const { provider: p, calls } = provider([
+      jsonResponse(200, { ok: true, user: { login: "octocat" } }),
+      jsonResponse(200, { ok: true, orgs: [] }),
+      jsonResponse(200, { ok: true, sandboxes: [] }),
+      jsonResponse(200, { ok: true, sandboxes: [] }),
+    ]);
+    await p.checkCredentials({ apiKey: "boat_live_checkedcheckedchecked" }, credentials.apiUrl);
+    await p.list({ ...credentials, values: { apiKey: "boat_live_storedstoredstored" } });
+    const signed = calls.map((call) => (call.init.headers as Record<string, string>).Authorization);
+    expect(signed).toEqual([
+      "Bearer boat_live_checkedcheckedchecked",
+      "Bearer boat_live_checkedcheckedchecked",
+      "Bearer boat_live_checkedcheckedchecked",
+      "Bearer boat_live_storedstoredstored",
+    ]);
+  });
+
   it("sends no request for an account whose set holds no API key", async () => {
     const { provider: p, calls } = provider([]);
     await expect(p.list({ ...credentials, values: {} })).rejects.toMatchObject({

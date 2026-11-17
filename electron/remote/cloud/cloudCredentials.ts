@@ -35,7 +35,13 @@ export function credentialFieldsProblem(fields: unknown): string | null {
   const ids = new Set<string>();
   for (const raw of fields) {
     const field = raw as Partial<CloudCredentialField> | null;
-    if (!field || typeof field.id !== "string" || !FIELD_ID.test(field.id)) {
+    // A name every object already has would read through to Object.prototype wherever it's looked up.
+    if (
+      !field ||
+      typeof field.id !== "string" ||
+      !FIELD_ID.test(field.id) ||
+      field.id in Object.prototype
+    ) {
       return `declares a credential field with an invalid id ${JSON.stringify(field?.id)}`;
     }
     if (ids.has(field.id)) return `declares the credential field ${field.id} twice`;
@@ -116,6 +122,7 @@ export function normalizeCloudCredentials(
     bytes += Buffer.byteLength(normalized, "utf8");
     values[field.id] = normalized;
   }
+  if (Object.keys(values).length === 0) throw invalid("Fill in the account's credentials.");
   if (bytes > MAX_SET_BYTES) throw invalid("Those credentials are too large to keep.");
   return values;
 }
@@ -127,8 +134,8 @@ export function cloudCredentialHint(
 ): string | null {
   for (const field of fields) {
     if (!field.secret || field.input !== "single-line") continue;
-    const value = values[field.id];
-    const chars = value ? [...value] : [];
+    const value = Object.hasOwn(values, field.id) ? values[field.id] : undefined;
+    const chars = typeof value === "string" ? [...value] : [];
     if (chars.length >= MIN_HINTED_LENGTH) return chars.slice(-4).join("");
   }
   return null;
