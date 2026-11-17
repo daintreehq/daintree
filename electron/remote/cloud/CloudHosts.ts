@@ -101,15 +101,16 @@ export class CloudHosts {
     return this.lifecycle.trustHostKey(hostId, fingerprint);
   }
 
-  prepareWorktreeCleanup(worktree: unknown, machines: unknown): void {
-    this.lifecycle.prepareWorktreeCleanup(worktree, machines);
+  prepareWorktreeCleanup(worktree: unknown, machines: unknown, mutationId: unknown): void {
+    this.lifecycle.prepareWorktreeCleanup(worktree, machines, mutationId);
   }
 
   settleWorktreeCleanup(
     worktree: unknown,
-    deleted: unknown
+    deleted: unknown,
+    mutationId: unknown
   ): Promise<CloudWorktreeCleanupOutcome[]> {
-    return this.lifecycle.settleWorktreeCleanup(worktree, deleted);
+    return this.lifecycle.settleWorktreeCleanup(worktree, deleted, mutationId);
   }
 
   retryWorktreeCleanup(hostId: unknown): Promise<void> {

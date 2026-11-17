@@ -225,13 +225,22 @@ export function deleteRetryNeedsReview(options: WorktreeDeleteOptions, error: st
  * the host went away mid-call and may have finished it.
  */
 function worktreeRemovedBy(message: string, reachedDelete: boolean): boolean | null {
-  if (message.includes(WORKTREE_REMOVED_PREFIX)) return true;
+  if (startsWithWorktreeRemoved(message)) return true;
   if (!reachedDelete) return false;
-  return isConnectivityError(message) ? null : false;
+  // A request that ran out of time may still finish on the host.
+  return isConnectivityError(message) || message.includes(BROKER_TIMEOUT) ? null : false;
 }
 
-/** How WorkspaceService.deleteWorktree starts a failure that came after the worktree went. */
+/**
+ * How WorkspaceService.deleteWorktree starts a failure that came after the
+ * worktree went. Only at the start: a refusal can quote a path holding the words.
+ */
 const WORKTREE_REMOVED_PREFIX = "Worktree removed.";
+const BROKER_TIMEOUT = "[BrokerError|TIMEOUT]";
+
+function startsWithWorktreeRemoved(message: string): boolean {
+  return message.trimStart().startsWith(WORKTREE_REMOVED_PREFIX);
+}
 
 function isConnectivityError(message: string): boolean {
   return (
@@ -492,7 +501,7 @@ export async function runDeleteAsync(
   try {
     // First, so a choice that can't be written down closes nothing (#17360).
     if (cloudCleanup) {
-      await prepareWorktreeCloudCleanup(cloudCleanup);
+      await prepareWorktreeCloudCleanup(cloudCleanup, mutationId);
       cloudPrepared = true;
     }
     // A rapid retry after a prior attempt's restore must not start closing
@@ -561,7 +570,7 @@ export async function runDeleteAsync(
     // path). Either way, no post-success bookkeeping is owned here.
     dropDeleteRestore(mutationId);
     pruneOutboxEntry(get, set, mutationId);
-    if (cloudCleanup) settleWorktreeCloudCleanup(cloudCleanup, true);
+    if (cloudCleanup) settleWorktreeCloudCleanup(cloudCleanup, true, mutationId);
   } catch (err) {
     const message = formatErrorMessage(err, "Failed to delete worktree");
     // Logged once here, before the routing split below, so the partial-success
@@ -601,7 +610,8 @@ export async function runDeleteAsync(
         // The card went, but only a branch failure says the worktree did too.
         settleWorktreeCloudCleanup(
           cloudCleanup,
-          message.includes(WORKTREE_REMOVED_PREFIX) ? true : null
+          startsWithWorktreeRemoved(message) ? true : null,
+          mutationId
         );
       }
       if (isBranchKeptError(message)) {
@@ -630,7 +640,11 @@ export async function runDeleteAsync(
     }
     // Main looks for itself whether a worktree on this device went anyway.
     if (cloudCleanup && cloudPrepared) {
-      settleWorktreeCloudCleanup(cloudCleanup, worktreeRemovedBy(message, reachedDelete));
+      settleWorktreeCloudCleanup(
+        cloudCleanup,
+        worktreeRemovedBy(message, reachedDelete),
+        mutationId
+      );
     }
     handleDeleteFailure(get, set, worktreeId, options, mutationId, message);
   }

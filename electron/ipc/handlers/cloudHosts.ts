@@ -157,10 +157,12 @@ export const cloudHostsNamespace = defineIpcNamespace({
       async (payload: {
         worktree: CloudWorktreeRef;
         machines: CloudWorktreeCleanupRequest[];
+        mutationId: string | null;
       }): Promise<void> =>
         requireRemoteService("cloudHosts").prepareWorktreeCleanup(
           field(payload, "worktree"),
-          field(payload, "machines")
+          field(payload, "machines"),
+          field(payload, "mutationId")
         )
     ),
     settleWorktreeCleanup: op(
@@ -168,10 +170,12 @@ export const cloudHostsNamespace = defineIpcNamespace({
       async (payload: {
         worktree: CloudWorktreeRef;
         deleted: boolean | null;
+        mutationId: string | null;
       }): Promise<CloudWorktreeCleanupOutcome[]> =>
         requireRemoteService("cloudHosts").settleWorktreeCleanup(
           field(payload, "worktree"),
-          field(payload, "deleted")
+          field(payload, "deleted"),
+          field(payload, "mutationId")
         )
     ),
     retryWorktreeCleanup: op(

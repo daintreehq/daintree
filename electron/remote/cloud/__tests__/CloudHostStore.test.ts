@@ -209,6 +209,7 @@ describe("CloudHostStore worktree marks", () => {
 describe("CloudHostStore worktree cleanup (#17360)", () => {
   const CLEANUP = {
     attemptId: "attempt-1",
+    mutationId: "mutation-1",
     choice: "delete" as const,
     resourceId: "bx_23456789",
     worktree: { hostId: null, projectId: LOCAL_MARK.projectId, worktreeId: LOCAL_MARK.worktreeId },

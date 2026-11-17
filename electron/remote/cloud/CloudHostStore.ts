@@ -70,6 +70,8 @@ export interface StoredCreationIntent {
  */
 export interface StoredWorktreeCleanup {
   attemptId: string;
+  /** The worktree delete it came with, as its view named it; only that delete's answer settles it. */
+  mutationId: string | null;
   choice: "stop" | "delete";
   resourceId: string;
   worktree: CloudWorktreeRef;
@@ -434,6 +436,7 @@ function readWorktreeCleanup(
   }
   return {
     attemptId,
+    mutationId: nonEmpty(value.mutationId),
     choice,
     resourceId: cleanupResourceId,
     worktree: {

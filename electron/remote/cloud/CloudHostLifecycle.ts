@@ -437,6 +437,15 @@ function checkedWorktreeRef(raw: unknown): CloudWorktreeRef {
   return { hostId, projectId, worktreeId };
 }
 
+/** The view's id for one worktree delete, or null when it named none. */
+function checkedMutationId(raw: unknown): string | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== "string" || raw.length === 0 || raw.length > 128) {
+    throw invalid("The worktree delete this belongs to isn't named properly.");
+  }
+  return raw;
+}
+
 function sameWorktree(a: CloudWorktreeRef, b: CloudWorktreeRef): boolean {
   return a.hostId === b.hostId && a.projectId === b.projectId && a.worktreeId === b.worktreeId;
 }
@@ -1363,8 +1372,9 @@ export class CloudHostLifecycle {
    * a choice an earlier attempt wrote for it is dropped. Each write is a new
    * attempt, so an answer about an earlier one never changes it.
    */
-  prepareWorktreeCleanup(worktree: unknown, machines: unknown): void {
+  prepareWorktreeCleanup(worktree: unknown, machines: unknown, mutationId?: unknown): void {
     const ref = checkedWorktreeRef(worktree);
+    const mutation = checkedMutationId(mutationId);
     if (!Array.isArray(machines)) throw invalid("Choose what happens to each machine.");
     const planned = new Map<string, StoredWorktreeCleanup>();
     for (const raw of machines as Array<Partial<CloudWorktreeCleanupRequest> | null>) {
@@ -1395,6 +1405,7 @@ export class CloudHostLifecycle {
       }
       planned.set(binding.id, {
         attemptId: crypto.randomUUID(),
+        mutationId: mutation,
         choice,
         resourceId: binding.resourceId,
         worktree: ref,
@@ -1437,11 +1448,18 @@ export class CloudHostLifecycle {
    */
   async settleWorktreeCleanup(
     worktree: unknown,
-    deleted: unknown
+    deleted: unknown,
+    mutationId?: unknown
   ): Promise<CloudWorktreeCleanupOutcome[]> {
     const ref = checkedWorktreeRef(worktree);
+    const mutation = checkedMutationId(mutationId);
     const reported = deleted === true ? true : deleted === false ? false : null;
-    const targets = this.cleanupsFor(ref);
+    // Only the choices that delete came with: a late answer never settles a later delete's.
+    const targets = new Map(
+      [...this.cleanupsFor(ref)].filter(
+        ([, cleanup]) => mutation === null || cleanup.mutationId === mutation
+      )
+    );
     if (targets.size === 0) return [];
     const waiting = new Map([...targets].filter(([, cleanup]) => cleanup.phase === "waiting"));
     if (waiting.size > 0) {
@@ -1476,24 +1494,30 @@ export class CloudHostLifecycle {
         "Daintree can't tell whether its worktree was deleted, so it leaves the machine as it is. Stop or remove it here if the worktree is gone."
       );
     }
+    let from: ReadonlyArray<StoredWorktreeCleanup["phase"]> = ["due", "failed"];
     if (cleanup.phase === "waiting") {
       if (cleanup.worktree.hostId !== null) {
         throw invalid("Its worktree's host hasn't said yet whether the worktree was deleted.");
       }
+      // A look, never a verdict on the delete: one still running may yet remove it.
       const gone = await this.worktreeIsGone(cleanup.worktree, null);
       if (gone === false) {
-        this.disarmCleanup(binding.id, cleanup.attemptId);
-        return;
+        throw invalid(
+          "Its worktree is still there, so the machine is left as it is until the worktree is deleted."
+        );
       }
       if (gone === null) {
         throw invalid("Daintree couldn't tell whether the worktree is still there. Try again.");
       }
+      from = ["waiting"];
     }
-    const outcome = await this.carryOutCleanup(
-      binding.id,
-      ["waiting", "due", "failed"],
-      cleanup.attemptId
-    );
+    const outcome = await this.carryOutCleanup(binding.id, from, cleanup.attemptId);
+    // Moved on while it looked (the removal was heard and its stop or delete failed): say so.
+    const after = this.deps.store.binding(binding.id)?.worktreeCleanup;
+    if (outcome === null && after?.attemptId === cleanup.attemptId && after.phase === "failed") {
+      const message = after.error?.message ?? "It didn't finish.";
+      throw new AppError({ code: "OUTCOME_UNKNOWN", message, userMessage: message });
+    }
     if (outcome?.error) {
       throw new AppError({
         code: "OUTCOME_UNKNOWN",
@@ -1736,6 +1760,16 @@ export class CloudHostLifecycle {
       return outcome(null);
     } catch (error) {
       if (this.disposed) return outcome("Daintree quit before it finished.");
+      // Its provider left partway: nothing was settled, so it waits for the provider like a start would.
+      const left = this.deps.accounts.providerUnavailable(binding.providerId);
+      if (left) {
+        this.setCleanupError(bindingId, cleanup.attemptId, "due", {
+          code: "unsupported",
+          message: left,
+          at: this.now(),
+        });
+        return outcome(left);
+      }
       const recorded = this.deps.store.binding(bindingId)?.lastError;
       const thrown =
         error instanceof AppError && error.userMessage

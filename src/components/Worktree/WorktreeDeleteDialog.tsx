@@ -142,27 +142,57 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const cloudMachines = worktreeRef ? machinesMarkedFor(cloud.snapshot, worktreeRef) : [];
   // A choice holds for the machine it was made for: a different machine under
   // the host, or an offer withdrawn since, has to be chosen again.
+  // Once one stops holding it stays "stale": an offer coming back doesn't revive it.
   const [machineChoices, setMachineChoices] = useState<
-    Record<HostId, { choice: CloudWorktreeCleanupChoice; resourceId: string | null }>
+    Record<HostId, { choice: CloudWorktreeCleanupChoice | "stale"; resourceId: string | null }>
   >({});
   const machineSelections: Record<HostId, CloudWorktreeCleanupChoice | null> = {};
   const chosenCleanups: Array<{
     machine: (typeof cloudMachines)[number];
     choice: "stop" | "delete";
   }> = [];
+  const newlyStale: HostId[] = [];
   for (const machine of cloudMachines) {
-    const recorded = machineChoices[machine.status.hostId];
+    const hostId = machine.status.hostId;
+    const recorded = machineChoices[hostId];
     if (!recorded) continue;
+    const choice = recorded.choice;
+    if (choice === "stale") {
+      machineSelections[hostId] = null;
+      continue;
+    }
     const holds =
-      recorded.choice === "keep" ||
+      choice === "keep" ||
       (recorded.resourceId === machine.status.resourceId &&
         machine.status.resourceId !== null &&
-        machine.choices.includes(recorded.choice));
-    machineSelections[machine.status.hostId] = holds ? recorded.choice : null;
-    if (holds && recorded.choice !== "keep")
-      chosenCleanups.push({ machine, choice: recorded.choice });
+        machine.choices.includes(choice));
+    if (!holds) {
+      machineSelections[hostId] = null;
+      newlyStale.push(hostId);
+      continue;
+    }
+    machineSelections[hostId] = choice;
+    if (choice !== "keep") chosenCleanups.push({ machine, choice });
   }
   const machineChoiceStale = Object.values(machineSelections).some((choice) => choice === null);
+  const newlyStaleKey = newlyStale.join("\n");
+  useEffect(() => {
+    if (!newlyStaleKey) return;
+    const ids = newlyStaleKey.split("\n");
+    setMachineChoices((current) => {
+      const next = { ...current };
+      for (const id of ids) {
+        const was = current[id];
+        if (was) next[id] = { choice: "stale", resourceId: was.resourceId };
+      }
+      return next;
+    });
+  }, [newlyStaleKey]);
+  // What a force delete's re-check dispatches once it lands: the choices as they stand then.
+  const machineStateRef = useRef({ stale: machineChoiceStale, cleanups: chosenCleanups });
+  useEffect(() => {
+    machineStateRef.current = { stale: machineChoiceStale, cleanups: chosenCleanups };
+  });
   const machineDeletes = chosenCleanups.filter(({ choice }) => choice === "delete");
 
   // Preview + tier derive from the FRESH fetch when available, else the prop
@@ -550,9 +580,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     }
   }, [canDeleteBranch, deleteBranch]);
 
-  const dispatchDelete = () => {
+  const dispatchDelete = (cleanups: typeof chosenCleanups) => {
     const effectiveDeleteBranch = deleteBranch && canDeleteBranch;
-    const machines: CloudWorktreeCleanupRequest[] = chosenCleanups.map(({ machine, choice }) => ({
+    const machines: CloudWorktreeCleanupRequest[] = cleanups.map(({ machine, choice }) => ({
       hostId: machine.status.hostId,
       resourceId: machine.status.resourceId!,
       choice,
@@ -634,7 +664,13 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       setIsDeleting(false);
       return;
     }
-    dispatchDelete();
+    // A machine's offer that changed during the check is chosen again first.
+    const machinesNow = machineStateRef.current;
+    if (machinesNow.stale) {
+      setIsDeleting(false);
+      return;
+    }
+    dispatchDelete(machinesNow.cleanups);
   };
 
   const handleDelete = () => {
@@ -645,7 +681,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     // read the footer button's disabled state.
     if (isDeleting || isBlocked || previewPending) return;
     if (!force) {
-      dispatchDelete();
+      dispatchDelete(chosenCleanups);
       return;
     }
     void revalidateThenDelete();

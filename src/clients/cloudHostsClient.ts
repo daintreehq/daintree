@@ -58,14 +58,17 @@ export const cloudHostsClient = {
   /** Before a worktree's delete is sent: what to do with each machine made for it. */
   prepareWorktreeCleanup: (
     worktree: CloudWorktreeRef,
-    machines: CloudWorktreeCleanupRequest[]
-  ): Promise<void> => window.electron.cloudHosts.prepareWorktreeCleanup({ worktree, machines }),
+    machines: CloudWorktreeCleanupRequest[],
+    mutationId: string | null
+  ): Promise<void> =>
+    window.electron.cloudHosts.prepareWorktreeCleanup({ worktree, machines, mutationId }),
   /** Once an attempt ends (null: its answer was lost); resolves when the stops and deletes are done. */
   settleWorktreeCleanup: (
     worktree: CloudWorktreeRef,
-    deleted: boolean | null
+    deleted: boolean | null,
+    mutationId: string | null
   ): Promise<CloudWorktreeCleanupOutcome[]> =>
-    window.electron.cloudHosts.settleWorktreeCleanup({ worktree, deleted }),
+    window.electron.cloudHosts.settleWorktreeCleanup({ worktree, deleted, mutationId }),
   retryWorktreeCleanup: (hostId: string): Promise<void> =>
     window.electron.cloudHosts.retryWorktreeCleanup({ hostId }),
   dismissWorktreeCleanup: (hostId: string): Promise<void> =>

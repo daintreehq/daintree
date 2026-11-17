@@ -35,9 +35,12 @@ function errorText(error: unknown, fallback: string): string {
  * reconnect replay carry the same choice. A failure stops the delete before
  * anything else happens: the person confirmed the delete with that choice.
  */
-export async function prepareWorktreeCloudCleanup(cleanup: WorktreeCloudCleanup): Promise<void> {
+export async function prepareWorktreeCloudCleanup(
+  cleanup: WorktreeCloudCleanup,
+  mutationId: string
+): Promise<void> {
   try {
-    await cloudHostsClient.prepareWorktreeCleanup(cleanup.worktree, cleanup.machines);
+    await cloudHostsClient.prepareWorktreeCleanup(cleanup.worktree, cleanup.machines, mutationId);
   } catch (error) {
     throw new Error(`${CLOUD_CLEANUP_REFUSED}: ${errorText(error, "Cloud hosts didn't answer")}`, {
       cause: error,
@@ -54,9 +57,10 @@ export async function prepareWorktreeCloudCleanup(cleanup: WorktreeCloudCleanup)
  */
 export function settleWorktreeCloudCleanup(
   cleanup: WorktreeCloudCleanup,
-  deleted: boolean | null
+  deleted: boolean | null,
+  mutationId: string
 ): void {
-  void cloudHostsClient.settleWorktreeCleanup(cleanup.worktree, deleted).then(
+  void cloudHostsClient.settleWorktreeCleanup(cleanup.worktree, deleted, mutationId).then(
     (outcomes) => {
       for (const outcome of outcomes) if (outcome.error !== null) notifyCleanupFailed(outcome);
     },

@@ -898,7 +898,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
           changed = true;
           // The host says it went: its machines' choices are due (#17360).
           if (entry.type === "delete-worktree" && entry.options.cloudCleanup) {
-            settleWorktreeCloudCleanup(entry.options.cloudCleanup, true);
+            settleWorktreeCloudCleanup(entry.options.cloudCleanup, true, entry.mutationId);
           }
           // The success path normally clears `deletingIds` via `applyRemove`
           // (driven by the `worktree-removed` event). But if the host crashed
@@ -1085,8 +1085,9 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
           // "Worktree not found" and surface a spurious error).
           nextOutbox.delete(entry.mutationId);
           outboxChanged = true;
+          // Absent from the list proves only that its monitor went: unknown, for main to look at.
           if (entry.type === "delete-worktree" && entry.options.cloudCleanup) {
-            settleWorktreeCloudCleanup(entry.options.cloudCleanup, true);
+            settleWorktreeCloudCleanup(entry.options.cloudCleanup, null, entry.mutationId);
           }
           if (nextDeletingIds.delete(entry.worktreeId)) deletingChanged = true;
           if (nextIssueMutatingIds.delete(entry.worktreeId)) issueMutatingChanged = true;

@@ -69,11 +69,13 @@ export function WorktreeCloudMachineChoice({
               : null;
           return (
             <div key={hostId} className="space-y-2" data-testid="delete-worktree-cloud-machine">
-              {machine.keptBecause !== null ? (
+              {machine.keptBecause !== null && chosen !== null ? (
                 <p className="text-sm text-text-secondary">
                   {machine.keptBecause} {cleanupChoiceCopy(machine, "keep", now).description}
                 </p>
               ) : (
+                // A choice that stopped holding is chosen again here, Keep included,
+                // even when Keep is all that's left.
                 <RadioChoiceGroup
                   legend={`'${machine.name}' on ${machine.providerName} (${machine.status.accountName})`}
                 >
@@ -81,6 +83,9 @@ export function WorktreeCloudMachineChoice({
                     <p className="text-sm font-medium text-text-primary" role="status">
                       What can be done with it changed. Choose again.
                     </p>
+                  )}
+                  {machine.keptBecause !== null && (
+                    <p className="text-sm text-text-secondary">{machine.keptBecause}</p>
                   )}
                   {machine.choices.map((choice) => {
                     const copy = cleanupChoiceCopy(machine, choice, now);

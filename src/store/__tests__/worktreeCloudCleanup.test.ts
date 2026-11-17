@@ -21,7 +21,7 @@ const {
       calls.push("close-terminals");
     }),
     notifyMock: vi.fn(),
-    prepareMock: vi.fn(async () => {
+    prepareMock: vi.fn(async (..._args: unknown[]) => {
       calls.push("prepare");
     }),
     settleMock: vi.fn(async (..._args: unknown[]): Promise<CloudWorktreeCleanupOutcome[]> => {
@@ -116,9 +116,13 @@ describe("a worktree delete with its cloud machines (#17360)", () => {
     store.getState().startDelete("wt-1", { closeTerminals: true, cloudCleanup: CLEANUP });
     await flush();
     expect(calls).toEqual(["prepare", "close-terminals", "delete", "settle"]);
-    expect(prepareMock).toHaveBeenCalledWith(CLEANUP.worktree, CLEANUP.machines);
+    expect(prepareMock).toHaveBeenCalledWith(
+      CLEANUP.worktree,
+      CLEANUP.machines,
+      expect.any(String)
+    );
     expect(settleMock).toHaveBeenCalledTimes(1);
-    expect(settleMock).toHaveBeenCalledWith(CLEANUP.worktree, true);
+    expect(settleMock).toHaveBeenCalledWith(CLEANUP.worktree, true, expect.any(String));
   });
 
   it("stops the delete when the choice can't be written down, and asks for review on Retry", async () => {
@@ -131,6 +135,8 @@ describe("a worktree delete with its cloud machines (#17360)", () => {
     expect(worktreeClientDeleteMock).not.toHaveBeenCalled();
     expect(settleMock).not.toHaveBeenCalled();
     expect(store.getState().deleteErrors.get("wt-1")).toContain(CLOUD_CLEANUP_REFUSED);
+    // Never replayed by itself on a reconnect.
+    expect([...store.getState().mutationOutbox.values()][0]?.status).toBe("failed");
     // What was on offer may have changed: the dialog asks again rather than resending it.
     expect(store.getState().retryDelete("wt-1")).toBe("needs-review");
     await flush();
@@ -146,14 +152,18 @@ describe("a worktree delete with its cloud machines (#17360)", () => {
     store.getState().startDelete("wt-1", { cloudCleanup: CLEANUP });
     await flush();
     expect(calls).toEqual(["prepare", "delete", "settle"]);
-    expect(settleMock).toHaveBeenCalledWith(CLEANUP.worktree, false);
+    expect(settleMock).toHaveBeenCalledWith(CLEANUP.worktree, false, expect.any(String));
 
     calls.length = 0;
     expect(store.getState().retryDelete("wt-1")).toBe("dispatched");
     await flush();
     expect(calls).toEqual(["prepare", "delete", "settle"]);
-    expect(prepareMock).toHaveBeenLastCalledWith(CLEANUP.worktree, CLEANUP.machines);
-    expect(settleMock).toHaveBeenLastCalledWith(CLEANUP.worktree, true);
+    expect(prepareMock).toHaveBeenLastCalledWith(
+      CLEANUP.worktree,
+      CLEANUP.machines,
+      prepareMock.mock.calls[0]![2]
+    );
+    expect(settleMock).toHaveBeenLastCalledWith(CLEANUP.worktree, true, expect.any(String));
   });
 
   it("leaves the outcome unknown when the host went away mid-delete", async () => {
@@ -161,7 +171,7 @@ describe("a worktree delete with its cloud machines (#17360)", () => {
     const store = storeWithWorktree();
     store.getState().startDelete("wt-1", { cloudCleanup: CLEANUP });
     await flush();
-    expect(settleMock).toHaveBeenCalledWith(CLEANUP.worktree, null);
+    expect(settleMock).toHaveBeenCalledWith(CLEANUP.worktree, null, expect.any(String));
   });
 
   it("settles as deleted when only the branch step failed after the worktree went", async () => {
@@ -176,7 +186,7 @@ describe("a worktree delete with its cloud machines (#17360)", () => {
     fail(new Error("Worktree removed. Couldn't delete branch 'feature/login': locked ref"));
     await flush();
     expect(settleMock).toHaveBeenCalledTimes(1);
-    expect(settleMock).toHaveBeenCalledWith(CLEANUP.worktree, true);
+    expect(settleMock).toHaveBeenCalledWith(CLEANUP.worktree, true, expect.any(String));
   });
 
   it("settles as unknown when the card went but the failure doesn't say the worktree did", async () => {
@@ -190,7 +200,43 @@ describe("a worktree delete with its cloud machines (#17360)", () => {
     store.getState().applyRemove("wt-1", { epoch: "e", seq: 2 });
     fail(new Error("git error: unmerged paths"));
     await flush();
-    expect(settleMock).toHaveBeenCalledWith(CLEANUP.worktree, null);
+    expect(settleMock).toHaveBeenCalledWith(CLEANUP.worktree, null, expect.any(String));
+  });
+
+  it("leaves the outcome unknown when the request ran out of time", async () => {
+    worktreeClientDeleteMock.mockRejectedValueOnce(
+      new Error("[BrokerError|TIMEOUT] Request timed out after 30000ms")
+    );
+    const store = storeWithWorktree();
+    store.getState().startDelete("wt-1", { cloudCleanup: CLEANUP });
+    await flush();
+    expect(settleMock).toHaveBeenCalledWith(CLEANUP.worktree, null, expect.any(String));
+  });
+
+  it("takes 'Worktree removed.' only at the start of a failure as the worktree going", async () => {
+    worktreeClientDeleteMock.mockRejectedValueOnce(
+      new Error("Refusing: '/repo/Worktree removed. old/nested' is a nested worktree")
+    );
+    const store = storeWithWorktree();
+    store.getState().startDelete("wt-1", { cloudCleanup: CLEANUP });
+    await flush();
+    expect(settleMock).toHaveBeenCalledWith(CLEANUP.worktree, false, expect.any(String));
+  });
+
+  it("settles a parked delete whose worktree is missing after a reconnect as unknown", async () => {
+    worktreeClientDeleteMock.mockRejectedValueOnce(new Error("HOST_EXITED: workspace host exited"));
+    const store = storeWithWorktree();
+    store.getState().startDelete("wt-1", { cloudCleanup: CLEANUP });
+    await flush();
+    const [entry] = [...store.getState().mutationOutbox.values()];
+    expect(entry?.status).toBe("pending");
+    settleMock.mockClear();
+    // The reconnect's list no longer has it: only its monitor is known to be gone.
+    store.getState().applySnapshot([], { epoch: "e", seq: 3 });
+    store.getState().replayOutboxAfterReconnect();
+    expect(settleMock).toHaveBeenCalledTimes(1);
+    expect(settleMock).toHaveBeenCalledWith(CLEANUP.worktree, null, entry!.mutationId);
+    expect(worktreeClientDeleteMock).toHaveBeenCalledTimes(1);
   });
 
   it("settles a delete the host acknowledged after the renderer lost its answer", async () => {
@@ -201,7 +247,8 @@ describe("a worktree delete with its cloud machines (#17360)", () => {
     const [entry] = [...store.getState().mutationOutbox.values()];
     settleMock.mockClear();
     store.getState().pruneAcknowledgedMutations([entry!.mutationId]);
-    expect(settleMock).toHaveBeenCalledWith(CLEANUP.worktree, true);
+    expect(settleMock).toHaveBeenCalledTimes(1);
+    expect(settleMock).toHaveBeenCalledWith(CLEANUP.worktree, true, entry!.mutationId);
   });
 
   it("says once that a machine's delete failed, with Retry", async () => {

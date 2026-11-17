@@ -2616,6 +2616,59 @@ describe("WorktreeDeleteDialog — its cloud machine (#17360)", () => {
     );
   });
 
+  it("gives a machine whose provider left a Keep to choose again, and never revives the old choice", async () => {
+    const view = (hosts: ReturnType<typeof machine>[], providers = [BOAT]) => {
+      cloudSnapshotMock.value = { providers, accounts: [], hosts };
+      return (
+        <WorktreeDeleteDialog
+          isOpen={true}
+          onClose={vi.fn()}
+          worktree={makeWorktree(makeChanges([]))}
+        />
+      );
+    };
+    const { rerender } = render(view([machine()]));
+    await settlePreview();
+    fireEvent.click(choice("delete"));
+    rerender(view([machine({ providerUnavailable: "Its plugin is disabled" })], []));
+    expect(screen.getByText("What can be done with it changed. Choose again.")).toBeDefined();
+    expect(screen.queryByTestId("delete-worktree-machine-delete")).toBeNull();
+    expect((screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement).disabled).toBe(
+      true
+    );
+
+    // The provider comes back: what was chosen before stays to be chosen again.
+    rerender(view([machine()]));
+    expect(choice("delete").checked).toBe(false);
+    expect((screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement).disabled).toBe(
+      true
+    );
+
+    rerender(view([machine({ providerUnavailable: "Its plugin is disabled" })], []));
+    fireEvent.click(choice("keep"));
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+    expect(startDeleteMock).toHaveBeenCalledWith("wt-1", {
+      force: false,
+      deleteBranch: false,
+      cloudCleanup: { worktree: REF, machines: [] },
+    });
+  });
+
+  it("names only the machine in a gate its delete alone raised", async () => {
+    // The tree couldn't be checked, but without Force the worktree's own tier stays below D3.
+    buildPreviewMock.mockRejectedValue(new Error("refresh timeout"));
+    await open();
+    await waitFor(() =>
+      expect(screen.getByText(/Couldn't check this worktree for uncommitted work/)).toBeDefined()
+    );
+    fireEvent.click(choice("delete"));
+    // One preamble, and it holds the machine's sentence alone.
+    const preamble = screen.getByText(/everything on its disk will be deleted for good/);
+    expect(preamble.textContent).toBe(
+      "'login-box' and everything on its disk will be deleted for good."
+    );
+  });
+
   it("waits for the cloud read before offering the delete, and says when it failed", async () => {
     cloudStateMock.pending = true;
     cloudSnapshotMock.value = { providers: [], accounts: [], hosts: [] };

@@ -698,6 +698,7 @@ export interface GeneratedIpcInvokeMap {
       payload: {
         worktree: import("../cloudHosts.js").CloudWorktreeRef;
         machines: import("../cloudHosts.js").CloudWorktreeCleanupRequest[];
+        mutationId: string | null;
       },
     ];
     result: void;
@@ -734,7 +735,11 @@ export interface GeneratedIpcInvokeMap {
   };
   "cloud-hosts:settle-worktree-cleanup": {
     args: [
-      payload: { worktree: import("../cloudHosts.js").CloudWorktreeRef; deleted: boolean | null },
+      payload: {
+        worktree: import("../cloudHosts.js").CloudWorktreeRef;
+        deleted: boolean | null;
+        mutationId: string | null;
+      },
     ];
     result: import("../cloudHosts.js").CloudWorktreeCleanupOutcome[];
   };

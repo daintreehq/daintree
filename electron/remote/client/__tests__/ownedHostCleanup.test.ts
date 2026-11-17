@@ -248,29 +248,38 @@ describe("watchOwnedHostCleanup", () => {
 
 describe("worktreeRootGone (#17360)", () => {
   const ROOT = "/Volumes/Work/app-worktrees/feature-login";
-  const answers = (byPath: Record<string, "exists" | "missing" | "denied">) =>
-    vi.fn(async (target: string) => {
-      const answer = byPath[target];
-      if (answer === "exists") return {};
-      throw Object.assign(new Error(answer ?? "missing"), {
-        code: answer === "denied" ? "EACCES" : "ENOENT",
-      });
-    });
-
-  it("is gone only when the root is missing and the folder it sat in reads", async () => {
-    expect(await worktreeRootGone(ROOT, answers({ "/Volumes/Work/app-worktrees": "exists" }))).toBe(
-      true
+  const PARENT = "/Volumes/Work/app-worktrees";
+  const fail = (code: string) => Promise.reject(Object.assign(new Error(code), { code }));
+  const root = (answer: "exists" | "missing" | "denied") =>
+    vi.fn(async (_target: string) =>
+      answer === "exists" ? {} : fail(answer === "denied" ? "EACCES" : "ENOENT")
     );
-    expect(await worktreeRootGone(ROOT, answers({ [ROOT]: "exists" }))).toBe(false);
+  const parent = (answer: "directory" | "file" | "missing") =>
+    vi.fn(async (_target: string) =>
+      answer === "missing" ? fail("ENOENT") : { isDirectory: () => answer === "directory" }
+    );
+
+  it("is gone only when the root is missing and the folder it sat in is a directory", async () => {
+    const parentProbe = parent("directory");
+    expect(await worktreeRootGone(ROOT, { root: root("missing"), parent: parentProbe })).toBe(true);
+    expect(parentProbe).toHaveBeenCalledWith(PARENT);
+    expect(
+      await worktreeRootGone(ROOT, { root: root("exists"), parent: parent("directory") })
+    ).toBe(false);
   });
 
-  it("proves nothing when the whole path is missing, as on an unmounted drive", async () => {
-    const probe = answers({});
-    expect(await worktreeRootGone(ROOT, probe)).toBeNull();
-    expect(probe).toHaveBeenCalledWith("/Volumes/Work/app-worktrees");
+  it("proves nothing when the parent doesn't read, as through a link into an unmounted drive", async () => {
+    expect(
+      await worktreeRootGone(ROOT, { root: root("missing"), parent: parent("missing") })
+    ).toBeNull();
+    expect(
+      await worktreeRootGone(ROOT, { root: root("missing"), parent: parent("file") })
+    ).toBeNull();
   });
 
   it("proves nothing when the root can't be read", async () => {
-    expect(await worktreeRootGone(ROOT, answers({ [ROOT]: "denied" }))).toBeNull();
+    const parentProbe = parent("directory");
+    expect(await worktreeRootGone(ROOT, { root: root("denied"), parent: parentProbe })).toBeNull();
+    expect(parentProbe).not.toHaveBeenCalled();
   });
 });

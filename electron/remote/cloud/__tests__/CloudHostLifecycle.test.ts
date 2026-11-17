@@ -3709,6 +3709,10 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
       worktreeHostId: null,
     });
     await expect(lifecycle.retryWorktreeCleanup("build")).rejects.toThrow(/couldn't tell/);
+    // A look while its delete may still be running never drops the choice.
+    gone.value = false;
+    await expect(lifecycle.retryWorktreeCleanup("build")).rejects.toThrow(/still there/);
+    expect(cleanupOf(store)).toMatchObject({ phase: "waiting" });
     expect(provider.stop).not.toHaveBeenCalled();
 
     gone.value = true;
@@ -3731,6 +3735,77 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
     expect(await settling).toEqual([]);
     expect(cleanupOf(store)).toMatchObject({ phase: "waiting", attemptId: retried });
     expect(provider.delete).not.toHaveBeenCalled();
+  });
+
+  it("never lets a stale 'gone' run a later attempt's choice", async () => {
+    const { lifecycle, provider, store, worktreeGone } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    const probe = deferred<boolean | null>();
+    worktreeGone.mockImplementationOnce(() => probe.promise);
+    const settling = lifecycle.settleWorktreeCleanup(WORKTREE, true);
+    await vi.waitFor(() => expect(worktreeGone).toHaveBeenCalledTimes(1));
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    probe.resolve(true);
+    expect(await settling).toEqual([]);
+    expect(cleanupOf(store)).toMatchObject({ phase: "waiting" });
+    expect(provider.delete).not.toHaveBeenCalled();
+  });
+
+  it("settles only the delete an answer belongs to", async () => {
+    const { lifecycle, provider, store } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"), "mutation-b");
+    // A late answer from an earlier delete of a worktree at the same path.
+    expect(await lifecycle.settleWorktreeCleanup(WORKTREE, true, "mutation-a")).toEqual([]);
+    expect(cleanupOf(store)).toMatchObject({ phase: "waiting", mutationId: "mutation-b" });
+    expect(provider.delete).not.toHaveBeenCalled();
+    const [outcome] = await lifecycle.settleWorktreeCleanup(WORKTREE, true, "mutation-b");
+    expect(outcome).toMatchObject({ choice: "delete", error: null });
+  });
+
+  it("waits for a provider that leaves partway, rather than failing", async () => {
+    const { lifecycle, provider, store, accounts, disconnect } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    const unavailable = vi.spyOn(accounts, "providerUnavailable");
+    const supported = vi.spyOn(accounts, "requireSupported");
+    // Gone while the link is let go, before the delete is sent.
+    disconnect.mockImplementationOnce(async () => {
+      unavailable.mockReturnValue("Its plugin is disabled");
+      supported.mockImplementation(() => {
+        throw new Error("Unknown cloud provider boat");
+      });
+    });
+    const [outcome] = await lifecycle.settleWorktreeCleanup(WORKTREE, true);
+    expect(outcome?.error).toBe("Its plugin is disabled");
+    expect(provider.delete).not.toHaveBeenCalled();
+    expect(cleanupOf(store)).toMatchObject({
+      phase: "due",
+      error: { message: "Its plugin is disabled" },
+    });
+    unavailable.mockRestore();
+    supported.mockRestore();
+    lifecycle.providersChanged();
+    await vi.waitFor(() => expect(provider.delete).toHaveBeenCalledTimes(1));
+  });
+
+  it("ends a start under way before its stop, so the machine doesn't come back up", async () => {
+    const { lifecycle, provider, store, state } = await marked();
+    state.machine = resource({ machine: "stopped", rawState: "archived" });
+    await lifecycle.refresh("build");
+    const started = deferred<ProviderResource | null>();
+    vi.mocked(provider.start).mockImplementationOnce(() => started.promise);
+    const starting = lifecycle.startMachine("build");
+    await vi.waitFor(() => expect(provider.start).toHaveBeenCalledTimes(1));
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("stop"));
+    const settling = lifecycle.settleWorktreeCleanup(WORKTREE, true);
+    // The start lands after it was superseded: the stop still follows.
+    state.machine = resource({ machine: "running" });
+    started.resolve(resource({ machine: "starting", rawState: "provisioning" }));
+    await starting.catch(() => {});
+    const [outcome] = await settling;
+    expect(outcome).toMatchObject({ error: null });
+    expect(provider.stop).toHaveBeenCalledTimes(1);
+    expect(store.bindings()[0]?.intent).toBe("stop");
+    expect(lifecycle.statuses()[0]).toMatchObject({ machine: "stopped", worktreeCleanup: null });
   });
 
   it("runs a delete once when a removal is heard while its delete settles, keeping a failure", async () => {
