@@ -1359,7 +1359,11 @@ describe("Decisions entry", () => {
         terminalId: "pane-host",
         questionId: "0190f0aa11112222333344445555bb01",
       };
-      const OWN = { ...ON_HOST, hostId: RELAY.hostId, questionId: "0190f0aa11112222333344445555aa09" };
+      const OWN = {
+        ...ON_HOST,
+        hostId: RELAY.hostId,
+        questionId: "0190f0aa11112222333344445555aa09",
+      };
 
       function publishHostPort(over: Partial<DecisionsHostsPort>): () => void {
         return setDecisionsHostsPort({
@@ -1435,12 +1439,15 @@ describe("Decisions entry", () => {
         await running(null);
         let outcome: HostCallOutcome<unknown> = { ok: false, failure: "disconnected" };
         const withdraw = publishHostPort({
-          readHostQuestion: (() => Promise.resolve(outcome)) as DecisionsHostsPort["readHostQuestion"],
+          readHostQuestion: (() =>
+            Promise.resolve(outcome)) as DecisionsHostsPort["readHostQuestion"],
           cancelHostQuestion: () =>
             Promise.resolve(outcome as HostCallOutcome<DecisionQuestionCancelResult>),
         });
         try {
-          await expect(getDecisionQuestionContentByReference({ reference: ON_HOST })).resolves.toEqual({
+          await expect(
+            getDecisionQuestionContentByReference({ reference: ON_HOST })
+          ).resolves.toEqual({
             result: "host-not-connected",
           });
           await expect(cancelDecisionQuestionByReference({ reference: ON_HOST })).resolves.toEqual({
@@ -1470,21 +1477,20 @@ describe("Decisions entry", () => {
         await running({ questionSummaries });
         const second = { ...ON_HOST, questionId: "0190f0aa11112222333344445555bb02" };
         let connected = true;
-        const readHostQuestion = vi.fn(
-          (_questionHostId: string, read: DecisionsHostQuestionRead) =>
-            Promise.resolve(
-              connected && read.read === "summaries"
-                ? {
-                    ok: true as const,
-                    value: {
-                      result: "read" as const,
-                      summaries: [
-                        { questionId: ON_HOST.questionId, result: "read" as const, line: "There?" },
-                      ],
-                    },
-                  }
-                : { ok: false as const, failure: "disconnected" as const }
-            )
+        const readHostQuestion = vi.fn((_questionHostId: string, read: DecisionsHostQuestionRead) =>
+          Promise.resolve(
+            connected && read.read === "summaries"
+              ? {
+                  ok: true as const,
+                  value: {
+                    result: "read" as const,
+                    summaries: [
+                      { questionId: ON_HOST.questionId, result: "read" as const, line: "There?" },
+                    ],
+                  },
+                }
+              : { ok: false as const, failure: "disconnected" as const }
+          )
         );
         const withdraw = publishHostPort({
           readHostQuestion: readHostQuestion as unknown as DecisionsHostsPort["readHostQuestion"],

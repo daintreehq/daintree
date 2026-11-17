@@ -822,7 +822,9 @@ describe("DecisionsService question list (#17229)", () => {
     await vi.waitFor(() => expect(hostLists.at(-1)?.questions).toHaveLength(1));
     expect(hostLists.at(-1)).toEqual({
       hostId: "host_1",
-      questions: [expect.objectContaining({ reference: expect.objectContaining({ hostId: "host_1" }) })],
+      questions: [
+        expect.objectContaining({ reference: expect.objectContaining({ hostId: "host_1" }) }),
+      ],
     });
 
     setRows([

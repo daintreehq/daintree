@@ -1148,7 +1148,9 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
     serveQuestions(host, decisions);
     const shell = shellOf([STUDIO]);
     shell.open(HOST, client);
-    await vi.waitFor(() => expect(shell.client.runtimeOf(HOST)?.runtime.state).toBe("not-enrolled"));
+    await vi.waitFor(() =>
+      expect(shell.client.runtimeOf(HOST)?.runtime.state).toBe("not-enrolled")
+    );
     const pushes = vi.spyOn(host, "call");
 
     decisions.set({ hostId: QHOST, questions: [item(1), item(2)] });
@@ -1231,7 +1233,9 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
       ok: true,
       value: {
         result: "read",
-        summaries: [{ questionId: reference.questionId, result: "read", line: "Ship the migration?" }],
+        summaries: [
+          { questionId: reference.questionId, result: "read", line: "Ship the migration?" },
+        ],
       },
     });
     expect(await shell.client.readHostQuestion(QHOST, { read: "content", reference })).toEqual({
@@ -1293,7 +1297,12 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
     expect(shell.client.hostQuestions()).toHaveLength(1);
 
     await host.call(DecisionsLinkMethod.HOST_RUNTIME, {
-      runtime: { state: "revoked", deviceId: RUNNING.deviceId, since: 1_000, credentialsRemoved: true },
+      runtime: {
+        state: "revoked",
+        deviceId: RUNNING.deviceId,
+        since: 1_000,
+        credentialsRemoved: true,
+      },
     });
     expect(shell.client.hostQuestions()).toEqual([]);
   });
@@ -1320,7 +1329,9 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    expect(calls.mock.calls.filter(([method]) => method === DecisionsLinkMethod.QUESTIONS)).toHaveLength(1);
+    expect(
+      calls.mock.calls.filter(([method]) => method === DecisionsLinkMethod.QUESTIONS)
+    ).toHaveLength(1);
     expect(shell.client.hostQuestions()).toEqual([]);
   });
 });

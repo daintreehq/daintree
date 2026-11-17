@@ -146,9 +146,7 @@ const ThreadEntrySchema = z.discriminatedUnion("type", [
       onComputer: z.boolean(),
       correction: z.boolean(),
       confirmsModel: z.boolean(),
-      choices: z
-        .array(z.object({ id: Id, label: Words.nullable() }).strict())
-        .max(64),
+      choices: z.array(z.object({ id: Id, label: Words.nullable() }).strict()).max(64),
       text: Words.nullable(),
       reason: Words.nullable(),
       images: z.array(ThreadImageSchema).max(32),

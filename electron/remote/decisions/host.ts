@@ -101,7 +101,9 @@ export interface DecisionsHostLifetime {
   readQuestion(
     read: DecisionsHostQuestionRead
   ): Promise<
-    DecisionQuestionContentResult | DecisionQuestionImagePartResult | DecisionQuestionSummariesResult
+    | DecisionQuestionContentResult
+    | DecisionQuestionImagePartResult
+    | DecisionQuestionSummariesResult
   >;
   /** The person withdrawing one of this Host's own questions by reference. */
   cancelQuestion(reference: DecisionQuestionReference): Promise<DecisionQuestionCancelResult>;
