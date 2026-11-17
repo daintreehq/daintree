@@ -1,9 +1,9 @@
 {
   "name": "daintree.jira",
   "version": "0.1.0",
-  "displayName": "Jira Cloud",
-  "description": "First-party Jira Cloud issues provider — pick Jira issues for worktrees and use branch names that carry the issue key, while your code forge keeps pull requests and CI.",
-  "tagline": "Jira Cloud issues for your worktrees, alongside your code forge",
+  "displayName": "Jira",
+  "description": "First-party Jira issues provider for Jira Cloud and Jira Server or Data Center 8.14+ — pick Jira issues for worktrees and use branch names that carry the issue key, while your code forge keeps pull requests and CI.",
+  "tagline": "Jira issues for your worktrees, alongside your code forge",
   "category": "forge",
   "main": "main/index.js",
   "engines": {
@@ -15,15 +15,15 @@
       {
         "id": "siteUrl",
         "type": "string",
-        "label": "Jira Cloud site URL",
-        "description": "Your Jira Cloud address, like https://acme.atlassian.net. Set it with your email and API token in Settings → Code forge, which checks all three.",
+        "label": "Jira site URL",
+        "description": "Your Jira Cloud address, like https://acme.atlassian.net, or your Jira Server or Data Center address, like https://jira.example.com. Set it with its token in Settings → Code forge, which checks them together.",
         "scope": "user"
       },
       {
         "id": "email",
         "type": "string",
         "label": "Atlassian account email",
-        "description": "The email address of the Atlassian account the API token belongs to. Set it with your site URL and API token in Settings → Code forge, which checks all three.",
+        "description": "Jira Cloud only: the email address of the Atlassian account the API token belongs to. Set it with your site URL and API token in Settings → Code forge, which checks all three.",
         "scope": "user"
       },
       {
@@ -37,7 +37,7 @@
     "forgeProviders": [
       {
         "id": "jira",
-        "name": "Jira Cloud",
+        "name": "Jira",
         "matches": [],
         "roles": ["issues"],
         "capabilities": ["issues", "assignees", "identity"],
@@ -46,8 +46,7 @@
             "id": "token",
             "label": "API token",
             "type": "password",
-            "placeholder": "ATATT…",
-            "helpText": "Create under Atlassian account → Security → API tokens."
+            "helpText": "Jira Cloud: an API token from Atlassian account → Security → API tokens. Jira Server or Data Center: a personal access token from your Jira profile."
           }
         ],
         "settingsScopeRef": "projectKey",

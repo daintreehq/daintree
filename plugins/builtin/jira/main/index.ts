@@ -11,7 +11,47 @@ import {
   setConnectionSettingsReader,
   setProjectKeyReader,
 } from "./forgeProvider.js";
-import { setMemoryToken } from "./JiraClient.js";
+import { setMemoryToken, setProvenanceAccessors, type CredentialProvenance } from "./JiraAuth.js";
+
+/**
+ * Plugin-storage key of the stored token's {@link CredentialProvenance}: where it
+ * was proven to belong, and a digest of it, never the token.
+ */
+const CREDENTIAL_PROVENANCE_KEY = "credentialProvenance";
+
+function isProvenance(value: unknown): value is CredentialProvenance {
+  if (!value || typeof value !== "object") return false;
+  const { binding, tokenDigest } = value as Record<string, unknown>;
+  return typeof binding === "string" && binding !== "" && typeof tokenDigest === "string";
+}
+
+/**
+ * Wires the token's durable provenance. Loaded before registration, because the
+ * host replays the stored token into `setCredentials` as part of it, and a token
+ * read before its record would have nowhere it may go.
+ */
+async function wireProvenance(host: PluginHostApi): Promise<void> {
+  let provenance: CredentialProvenance | null | "unreadable";
+  try {
+    const stored = await host.storage.get<unknown>(CREDENTIAL_PROVENANCE_KEY);
+    provenance =
+      stored === undefined || stored === null ? null : isProvenance(stored) ? stored : "unreadable";
+  } catch {
+    // Withholds the token rather than guessing where it belongs.
+    provenance = "unreadable";
+  }
+  setProvenanceAccessors(
+    () => provenance,
+    (record) => {
+      provenance = record;
+      void (
+        record === null
+          ? host.storage.delete(CREDENTIAL_PROVENANCE_KEY)
+          : host.storage.set(CREDENTIAL_PROVENANCE_KEY, record)
+      ).catch(() => undefined);
+    }
+  );
+}
 
 /**
  * Read the project-scoped `projectKey` for one project. `host.settings.get`
@@ -56,8 +96,9 @@ async function refreshBranchClaims(): Promise<void> {
  * Plugin activation entry point. Registers the issues-only `jira` provider. The
  * API token lives in the host's `forgeCredentials` store and is replayed into
  * `setCredentials` during registration; the site and email it authenticates with
- * are the plugin's user settings, and the Jira project a project's issues come
- * from is its `projectKey` project setting.
+ * are the plugin's user settings, where it may go is the plugin's own storage,
+ * and the Jira project a project's issues come from is its `projectKey` project
+ * setting.
  */
 export async function activate(host: PluginHostApi): Promise<() => void> {
   setConnectionSettingsReader(async () => {
@@ -68,6 +109,7 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
     return { siteUrl, email };
   });
   setProjectKeyReader(readProjectKey);
+  await wireProvenance(host);
   const disposeSettings = await Promise.all(
     [PROJECT_KEY_SETTING, SITE_URL_SETTING].map((key) =>
       host.settings.onDidChange(key, () => void refreshBranchClaims()).catch(() => () => undefined)
@@ -79,6 +121,9 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
     for (const dispose of disposeSettings) dispose();
     setConnectionSettingsReader(null);
     setProjectKeyReader(null);
+    // Detached first: clearing the token with the writer still wired would
+    // delete the record, and re-enabling would then find nowhere it may go.
+    setProvenanceAccessors(null, null);
     // Re-enable replays the durable credential via setCredentials.
     setMemoryToken(null);
     clearJiraCaches();
