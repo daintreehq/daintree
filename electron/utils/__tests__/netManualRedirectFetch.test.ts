@@ -192,6 +192,55 @@ describe("createManualRedirectFetch", () => {
     expect(net.requests).toHaveLength(0);
   });
 
+  it.each(["manual", "error"] as const)(
+    "sends a string body when redirects are %s, and never on to a redirect's target",
+    async (redirect) => {
+      const net = new FakeElectronNet({ [START]: { redirect: ASSET, status: 307 } });
+
+      const pending = createManualRedirectFetch(net.request)(START, {
+        method: "POST",
+        body: '{"jql":"ünïcode"}',
+        redirect,
+      });
+
+      if (redirect === "manual") expect((await pending).status).toBe(307);
+      else await expect(pending).rejects.toThrow("redirect policy was 'error'");
+      expect(net.requests).toHaveLength(1);
+      expect(net.requests[0]!.options.method).toBe("POST");
+      expect(net.requests[0]!.body).toBe('{"jql":"ünïcode"}');
+      expect(net.connected).toEqual([START]);
+    }
+  );
+
+  it.each(["manual", "error", "follow"] as const)(
+    "refuses a body that isn't a string when redirects are %s",
+    async (redirect) => {
+      const net = new FakeElectronNet({ [START]: { status: 200 } });
+
+      await expect(
+        createManualRedirectFetch(net.request)(START, {
+          method: "POST",
+          body: new Uint8Array([1]),
+          redirect,
+        })
+      ).rejects.toThrow(TypeError);
+      expect(net.requests).toHaveLength(0);
+    }
+  );
+
+  it("refuses even a string body when Electron may follow a redirect with it", async () => {
+    const net = new FakeElectronNet({ [START]: { status: 200 } });
+
+    await expect(
+      createManualRedirectFetch(net.request)(START, {
+        method: "POST",
+        body: "x",
+        redirect: "follow",
+      })
+    ).rejects.toThrow(TypeError);
+    expect(net.requests).toHaveLength(0);
+  });
+
   it("aborts the request and rejects when the response can't be built", async () => {
     const net = new FakeElectronNet({ [START]: { status: 101 } });
 

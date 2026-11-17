@@ -15,16 +15,21 @@ import type {
   RepoStatsSnapshot,
 } from "../../../../shared/types/forge.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
-import { normalizeEmail, normalizeSiteUrl, siteHostOf } from "../shared/connection.js";
 import {
-  JiraApiError,
-  clearJiraCooldown,
+  deploymentOf,
+  normalizeEmail,
+  normalizeSiteUrl,
+  siteHostOf,
+  siteIdOf,
+} from "../shared/connection.js";
+import {
   getToken,
   getTokenVersion,
-  jiraRequest,
+  recordProvenValidation,
   setMemoryToken,
-  type JiraConnection,
-} from "./JiraClient.js";
+  tokenMayGoTo,
+} from "./JiraAuth.js";
+import { JiraApiError, clearJiraCooldown, jiraRequest, type JiraConnection } from "./JiraClient.js";
 import { buildIssueJql, issueFilterJql, issueKeyInSearch, textSearchClause } from "./jql.js";
 import {
   ISSUE_FIELDS,
@@ -32,6 +37,7 @@ import {
   mapComment,
   mapIssue,
   mapUser,
+  userIdOf,
   type JiraCommentNode,
   type JiraIssueNode,
   type JiraUserNode,
@@ -46,8 +52,11 @@ const MAX_COMMENTS_PAGE_SIZE = 100;
 /** Jira project keys: letters and digits, starting with a letter. */
 const PROJECT_KEY_PATTERN = /^[A-Z][A-Z0-9_]{0,15}$/;
 const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9_]*-\d+$/;
-/** What `stableIssueId` hands out: `acme.atlassian.net/10042`. */
-const STABLE_ISSUE_ID_PATTERN = /^([a-z0-9.-]+)\/(\d+)$/;
+/** What `stableIssueId` hands out: `acme.atlassian.net/10042`, `example.com/jira/10042`. */
+const STABLE_ISSUE_ID_PATTERN = /^(.+)\/(\d+)$/;
+
+/** Personal access tokens, and so this provider's Server and Data Center support, start here. */
+const MIN_DATA_CENTER_VERSION = [8, 14] as const;
 
 /**
  * The host polls stats every 30s while visible, against a rate limit shared with
@@ -56,8 +65,12 @@ const STABLE_ISSUE_ID_PATTERN = /^([a-z0-9.-]+)\/(\d+)$/;
  */
 const STATS_CACHE_TTL_MS = 5 * 60_000;
 
+// Both keep "isn't connected. Add your … API token", which is how the host
+// tells a tracker waiting for credentials from one that failed.
 const NOT_CONNECTED_MESSAGE =
-  "Jira isn't connected. Add your site, email and API token in Settings → Code forge.";
+  "Jira isn't connected. Add your site and API token in Settings → Code forge.";
+const OTHER_SITE_MESSAGE =
+  "Jira isn't connected. Add your API token again in Settings → Code forge, since the saved one belongs to another site.";
 
 interface ConnectionSettings {
   siteUrl?: unknown;
@@ -100,29 +113,53 @@ async function readConnectionSettings(): Promise<{
   return { siteUrl: normalizeSiteUrl(settings.siteUrl), email: normalizeEmail(settings.email) };
 }
 
-/** `null` until a token, site and email are all set. */
-async function connectedOp(): Promise<Op | null> {
+function connectionFor(
+  siteUrl: string,
+  email: string | null,
+  token: string
+): JiraConnection | null {
+  if (deploymentOf(siteUrl) === "dataCenter") return { deployment: "dataCenter", siteUrl, token };
+  return email ? { deployment: "cloud", siteUrl, email, token } : null;
+}
+
+/**
+ * The stored token's connection, or why there isn't one. The settings are read
+ * first and the token after, with nothing awaited in between, so the token, its
+ * version and where it may go are one snapshot. A token goes only to the site it
+ * was proven against: the settings tab writes a new site before the token that
+ * goes with it, and a poll landing in between must not send the old token there.
+ */
+async function storedConnection(): Promise<
+  { connection: JiraConnection; scope: string } | { error: string }
+> {
+  const { siteUrl, email } = await readConnectionSettings();
   const token = getToken();
   const version = getTokenVersion();
-  const { siteUrl, email } = await readConnectionSettings();
-  if (!token || !siteUrl || !email) return null;
-  return {
-    connection: { siteUrl, email, token },
-    scope: `${version}\u0000${siteUrl}\u0000${email}`,
-  };
+  if (!token || !siteUrl) return { error: NOT_CONNECTED_MESSAGE };
+  if (!tokenMayGoTo(siteUrl)) return { error: OTHER_SITE_MESSAGE };
+  const connection = connectionFor(siteUrl, email, token);
+  if (!connection) return { error: NOT_CONNECTED_MESSAGE };
+  return { connection, scope: `${version}\u0000${siteUrl}\u0000${email ?? ""}` };
+}
+
+/** `null` until a token, and the site and email it may be used with, are all set. */
+async function connectedOp(): Promise<Op | null> {
+  const stored = await storedConnection();
+  return "error" in stored ? null : stored;
 }
 
 async function beginOp(): Promise<Op> {
-  const op = await connectedOp();
-  if (!op) throw new JiraApiError(NOT_CONNECTED_MESSAGE);
-  return op;
+  const stored = await storedConnection();
+  if ("error" in stored) throw new JiraApiError(stored.error);
+  return stored;
 }
 
 const statsCache = new Map<string, { at: number; issueCount: number | null }>();
 let statsCacheScope: string | null = null;
 
+/** `id` is what Jira assigns the account by: see {@link userIdOf}. */
 interface Viewer {
-  accountId: string;
+  id: string;
   user: ForgeUser;
 }
 
@@ -130,7 +167,7 @@ interface Viewer {
 let cachedViewer: { scope: string; viewer: Viewer } | null = null;
 
 /** Who an issue was assigned to before "Assign to me": `null` when nobody was. */
-type PreviousAssignee = { accountId: string; user: ForgeUser } | null;
+type PreviousAssignee = { id: string; user: ForgeUser } | null;
 
 /** What a run of assignments in a row found, and how many of their Undos are left. */
 interface PreviousAssigneeRun {
@@ -163,8 +200,9 @@ export function clearJiraCaches(): void {
 async function getViewer(op: Op): Promise<Viewer> {
   if (cachedViewer?.scope === op.scope) return cachedViewer.viewer;
   const node = await jiraRequest<JiraUserNode>(op.connection, "/myself");
-  if (!node.accountId) throw new JiraApiError("Jira didn't recognize this account");
-  const viewer = { accountId: node.accountId, user: mapUser(node) };
+  const id = userIdOf(node);
+  if (!id) throw new JiraApiError("Jira didn't recognize this account");
+  const viewer = { id, user: mapUser(node) };
   cachedViewer = { scope: op.scope, viewer };
   return viewer;
 }
@@ -176,7 +214,7 @@ async function getViewer(op: Op): Promise<Viewer> {
  */
 async function requireViewerFor(username: string, op: Op): Promise<Viewer> {
   const viewer = await getViewer(op);
-  if (username !== viewer.user.login.trim() && username !== viewer.accountId) {
+  if (username !== viewer.user.login.trim() && username !== viewer.id) {
     throw new Error("Jira issues can only be assigned to you from Daintree");
   }
   return viewer;
@@ -189,7 +227,7 @@ function previousAssigneeKey(op: Op, issueId: string): string {
 function rememberPreviousAssignee(key: string, previous: PreviousAssignee): void {
   const runs = previousAssignees.get(key) ?? [];
   const latest = runs.at(-1);
-  if (latest && (latest.previous?.accountId ?? null) === (previous?.accountId ?? null)) {
+  if (latest && (latest.previous?.id ?? null) === (previous?.id ?? null)) {
     // The same account; its newest name and avatar are what an Undo hands back.
     latest.previous = previous;
     latest.count++;
@@ -301,10 +339,11 @@ async function requireIssueNode(
   return node;
 }
 
-async function setAssignee(issueId: string, accountId: string | null, op: Op): Promise<void> {
+/** `null` unassigns. Cloud assigns by account id, Server and Data Center by username. */
+async function setAssignee(issueId: string, userId: string | null, op: Op): Promise<void> {
   await jiraRequest<void>(op.connection, `/issue/${encodeURIComponent(issueId)}/assignee`, {
     method: "PUT",
-    body: { accountId },
+    body: op.connection.deployment === "cloud" ? { accountId: userId } : { name: userId },
     noContent: true,
   });
 }
@@ -320,6 +359,69 @@ interface JiraSearchResponse {
   isLast?: boolean;
 }
 
+/** What Jira's offset-paged lists (Server and Data Center search, comments) answer with. */
+interface JiraOffsetPage {
+  startAt?: number;
+  maxResults?: number;
+  total?: number;
+}
+
+/** An offset cursor is the position of the page's first item, as this hands it out. */
+function offsetOf(cursor: string | null | undefined, list: string): number {
+  if (!cursor) return 0;
+  const offset = /^\d+$/.test(cursor) ? Number(cursor) : NaN;
+  if (!Number.isSafeInteger(offset)) throw new Error(`Invalid Jira ${list} cursor`);
+  return offset;
+}
+
+/**
+ * Where an offset-paged list goes next. Jira may serve fewer than were asked
+ * for, and says how many it meant to. An empty page, or one that doesn't move
+ * forward, ends the list whatever the total says, or a total that drifted up
+ * would hand out the same cursor forever.
+ */
+function nextOffset(
+  startAt: number,
+  count: number,
+  data: JiraOffsetPage,
+  requested: number
+): { nextCursor: string | null; total: number | null } {
+  const next = (typeof data.startAt === "number" ? data.startAt : startAt) + count;
+  const total = typeof data.total === "number" ? data.total : null;
+  const pageSize =
+    typeof data.maxResults === "number" && data.maxResults > 0 ? data.maxResults : requested;
+  const hasMore =
+    count > 0 && next > startAt && (total === null ? count >= pageSize : next < total);
+  return { nextCursor: hasMore ? String(next) : null, total };
+}
+
+function searchPageSize(perPage: number | undefined): number {
+  return Math.min(Math.max(perPage ?? DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
+}
+
+/**
+ * Server and Data Center keep the offset-paged `POST /search`, with a `total`;
+ * Cloud retired it for `/search/jql`.
+ */
+async function searchIssuesByOffset(jql: string, opts: ListOptions, op: Op): Promise<Page<Issue>> {
+  const startAt = offsetOf(opts.cursor, "issues");
+  const maxResults = searchPageSize(opts.perPage);
+  const data = await jiraRequest<JiraOffsetPage & { issues?: JiraIssueNode[] }>(
+    op.connection,
+    "/search",
+    { method: "POST", body: { jql, startAt, maxResults, fields: ISSUE_FIELDS } }
+  );
+  const issues = data.issues ?? [];
+  // No total for the host: a search naming a key adds that issue to the page,
+  // and Cloud's search has none either.
+  const { nextCursor } = nextOffset(startAt, issues.length, data, maxResults);
+  return {
+    items: issues.map((node) => mapIssue(node, op.connection.siteUrl)),
+    nextCursor,
+    hasMore: nextCursor !== null,
+  };
+}
+
 /**
  * `POST /search/jql`, the replacement for the retired `/search`. It has no
  * `total` and no offsets: its `nextPageToken` is the only way forward, and it
@@ -327,7 +429,8 @@ interface JiraSearchResponse {
  * sends a cursor back with the same options.
  */
 async function searchIssues(jql: string, opts: ListOptions, op: Op): Promise<Page<Issue>> {
-  const maxResults = Math.min(Math.max(opts.perPage ?? DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
+  if (op.connection.deployment === "dataCenter") return searchIssuesByOffset(jql, opts, op);
+  const maxResults = searchPageSize(opts.perPage);
   const data = await jiraRequest<JiraSearchResponse>(op.connection, "/search/jql", {
     method: "POST",
     body: {
@@ -345,31 +448,141 @@ async function searchIssues(jql: string, opts: ListOptions, op: Op): Promise<Pag
   };
 }
 
+/**
+ * The site a reference was resolved against, which keeps a Data Center
+ * instance's port and context path. Only links are built from it.
+ */
+function siteUrlOf(repo: RepoRef): string {
+  const raw = (repo.rawData as { siteUrl?: unknown } | null | undefined)?.siteUrl;
+  return normalizeSiteUrl(raw) ?? `https://${repo.host}`;
+}
+
 function matchesState(issue: Issue, state: ListOptions["state"]): boolean {
   if (state === "all") return true;
   return issue.state === (state === "closed" ? "closed" : "open");
 }
 
-async function validateWithToken(token: string): Promise<AuthValidation> {
+interface JiraServerInfo {
+  version?: unknown;
+  versionNumbers?: unknown;
+  deploymentType?: unknown;
+}
+
+function versionParts(parts: unknown): number[] | null {
+  if (!Array.isArray(parts) || parts.length < 2) return null;
+  return parts.every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0)
+    ? (parts as number[])
+    : null;
+}
+
+/** `[8, 14, 0]` from `serverInfo`, or `null` when it doesn't say. */
+function serverVersionOf(info: JiraServerInfo): number[] | null {
+  return (
+    versionParts(info.versionNumbers) ??
+    (typeof info.version === "string" && /^\d+(?:\.\d+)+$/.test(info.version)
+      ? versionParts(info.version.split(".").map(Number))
+      : null)
+  );
+}
+
+function isOlderThan(version: number[], floor: readonly number[]): boolean {
+  for (let i = 0; i < floor.length; i++) {
+    const part = version[i] ?? 0;
+    if (part !== floor[i]) return part < floor[i];
+  }
+  return false;
+}
+
+const SERVER_DEPLOYMENTS: readonly unknown[] = ["Server", "DataCenter"];
+
+/**
+ * What the site is, asked before it's trusted with the token. `serverInfo` is
+ * open to anyone, and Jira Cloud always answers it, so a custom domain in front
+ * of Cloud says `Cloud` here without the token ever reaching it. A Server or
+ * Data Center instance says which and what version; one too old for personal
+ * access tokens is named rather than left to read as a rejected token. An
+ * instance that keeps even `serverInfo` from anonymous callers isn't Cloud's
+ * open answer, so it's asked again with the token, which `/myself` would carry
+ * there next anyway.
+ */
+async function checkDataCenter(connection: JiraConnection): Promise<string | null> {
+  let info: JiraServerInfo;
+  try {
+    info = await jiraRequest<JiraServerInfo>(connection, "/serverInfo", {
+      ignoreCooldown: true,
+      anonymous: true,
+      metadata: true,
+    });
+  } catch (err) {
+    if (!(err instanceof JiraApiError) || (err.status !== 401 && err.status !== 403)) throw err;
+    info = await jiraRequest<JiraServerInfo>(connection, "/serverInfo", {
+      ignoreCooldown: true,
+      metadata: true,
+    });
+  }
+  if (info.deploymentType === "Cloud") {
+    return "That address is a Jira Cloud site. Choose Jira Cloud and use its atlassian.net address.";
+  }
+  if (!SERVER_DEPLOYMENTS.includes(info.deploymentType)) {
+    return "That address didn't answer as Jira Server or Data Center. Check the site URL.";
+  }
+  const version = serverVersionOf(info);
+  if (!version) {
+    return "Jira didn't say which version it is. Daintree needs Jira 8.14 or later.";
+  }
+  if (isOlderThan(version, MIN_DATA_CENTER_VERSION)) {
+    return `Jira ${version.join(".")} doesn't have personal access tokens. Daintree needs Jira 8.14 or later.`;
+  }
+  return null;
+}
+
+/**
+ * Check a token against a connection. Only a `candidate`, a token the person
+ * just entered for these settings, is recorded as proven there, which is what
+ * lets the save that follows bind it to this site.
+ */
+async function validateConnection(
+  connection: JiraConnection,
+  candidate: boolean
+): Promise<AuthValidation> {
+  try {
+    if (connection.deployment === "dataCenter") {
+      const refusal = await checkDataCenter(connection);
+      if (refusal) return { valid: false, error: refusal };
+    }
+    const me = await jiraRequest<JiraUserNode>(connection, "/myself", { ignoreCooldown: true });
+    // Each deployment's own kind of id: a Cloud-shaped account behind a Data
+    // Center address couldn't be assigned anything there.
+    const id = connection.deployment === "cloud" ? me.accountId : me.name;
+    if (!id) return { valid: false, error: "Jira didn't recognize this account" };
+    if (candidate) recordProvenValidation(connection.token, connection.siteUrl);
+    return { valid: true, account: me.displayName || me.emailAddress || id };
+  } catch (err) {
+    return { valid: false, error: formatErrorMessage(err, "Couldn't validate the Jira API token") };
+  }
+}
+
+/** A token the person just entered, checked against the site and email in the settings. */
+async function validateCandidate(token: string): Promise<AuthValidation> {
   try {
     const { siteUrl, email } = await readConnectionSettings();
     if (!siteUrl) {
       return {
         valid: false,
-        error: "Add your Jira Cloud site URL, like https://acme.atlassian.net",
+        error:
+          "Add your Jira site URL: an atlassian.net address for Cloud, or your Server or Data Center address",
       };
     }
-    if (!email) return { valid: false, error: "Add your Atlassian account email" };
-    const me = await jiraRequest<{
-      accountId?: string;
-      displayName?: string;
-      emailAddress?: string;
-    }>({ siteUrl, email, token }, "/myself", { ignoreCooldown: true });
-    if (!me.accountId) return { valid: false, error: "Jira didn't recognize this account" };
-    return { valid: true, account: me.displayName || me.emailAddress || me.accountId };
+    const connection = connectionFor(siteUrl, email, token);
+    if (!connection) return { valid: false, error: "Add your Atlassian account email" };
+    return await validateConnection(connection, true);
   } catch (err) {
     return { valid: false, error: formatErrorMessage(err, "Couldn't validate the Jira API token") };
   }
+}
+
+function numberOrNull(value: unknown): number | null {
+  return typeof value === "number" ? value : null;
 }
 
 /**
@@ -401,12 +614,26 @@ const repoStatsCapability: RepoStatsCapability = {
         source: "memory-cache",
       };
     }
-    const data = await jiraRequest<{ count?: unknown }>(
-      op.connection,
-      "/search/approximate-count",
-      { method: "POST", body: { jql: issueFilterJql(repo.repo, "open") } }
-    );
-    const issueCount = typeof data.count === "number" ? data.count : null;
+    const jql = issueFilterJql(repo.repo, "open");
+    // Server and Data Center count with an empty page of the offset search.
+    const issueCount =
+      op.connection.deployment === "cloud"
+        ? numberOrNull(
+            (
+              await jiraRequest<{ count?: unknown }>(op.connection, "/search/approximate-count", {
+                method: "POST",
+                body: { jql },
+              })
+            ).count
+          )
+        : numberOrNull(
+            (
+              await jiraRequest<{ total?: unknown }>(op.connection, "/search", {
+                method: "POST",
+                body: { jql, maxResults: 0 },
+              })
+            ).total
+          );
     statsCache.set(key, { at: now, issueCount });
     return {
       counts: { issueCount, prCount: null, lastUpdated: now, issueCountRefreshedAt: now },
@@ -433,18 +660,7 @@ function pageSizeOf(perPage: number | undefined): number {
   return Math.min(Math.max(Math.trunc(perPage), 1), MAX_COMMENTS_PAGE_SIZE);
 }
 
-/** A comment cursor is the offset of the page's first comment, as this hands it out. */
-function offsetOf(cursor: string | null | undefined): number {
-  if (!cursor) return 0;
-  const offset = /^\d+$/.test(cursor) ? Number(cursor) : NaN;
-  if (!Number.isSafeInteger(offset)) throw new Error("Invalid Jira comments cursor");
-  return offset;
-}
-
-interface JiraCommentsResponse {
-  startAt?: number;
-  maxResults?: number;
-  total?: number;
+interface JiraCommentsResponse extends JiraOffsetPage {
   comments?: JiraCommentNode[];
 }
 
@@ -460,7 +676,7 @@ const issueCommentCapability: IssueCommentCapability = {
     issueNumber: number,
     opts: ListOptions
   ): Promise<Page<IssueComment>> {
-    const startAt = offsetOf(opts.cursor);
+    const startAt = offsetOf(opts.cursor, "comments");
     const maxResults = pageSizeOf(opts.perPage);
     const op = await beginOp();
     const issue = await requireIssueNode(repo, issueNumber, ["summary"], op);
@@ -474,19 +690,11 @@ const issueCommentCapability: IssueCommentCapability = {
       `/issue/${encodeURIComponent(issue.id)}/comment?${query}`
     );
     const comments = data.comments ?? [];
-    const next = (typeof data.startAt === "number" ? data.startAt : startAt) + comments.length;
-    const total = typeof data.total === "number" ? data.total : null;
-    // Jira may serve fewer than were asked for, and says how many it meant to.
-    const pageSize =
-      typeof data.maxResults === "number" && data.maxResults > 0 ? data.maxResults : maxResults;
-    // An empty page ends the thread whatever the total says, or a total that
-    // drifted up would hand out the same cursor forever.
-    const hasMore =
-      comments.length > 0 && (total === null ? comments.length >= pageSize : next < total);
+    const { nextCursor, total } = nextOffset(startAt, comments.length, data, maxResults);
     return {
       items: comments.map((node) => mapComment(node, op.connection.siteUrl, issue.key)),
-      nextCursor: hasMore ? String(next) : null,
-      hasMore,
+      nextCursor,
+      hasMore: nextCursor !== null,
       ...(total === null ? {} : { totalCount: total }),
     };
   },
@@ -504,19 +712,29 @@ export const jiraForgeProvider: ForgeIssueProviderImpl = {
     if (getTokenVersion() !== before) clearJiraCaches();
   },
 
+  /** The stored token, checked only where it may go: never proof for a new binding. */
   async validateCredentials(): Promise<AuthValidation> {
-    const token = getToken();
-    if (!token) return { valid: false, error: "No Jira API token configured" };
-    return validateWithToken(token);
+    if (!getToken()) return { valid: false, error: "No Jira API token configured" };
+    try {
+      const stored = await storedConnection();
+      if ("error" in stored) return { valid: false, error: stored.error };
+      return await validateConnection(stored.connection, false);
+    } catch (err) {
+      return {
+        valid: false,
+        error: formatErrorMessage(err, "Couldn't validate the Jira API token"),
+      };
+    }
   },
 
   /**
    * The host hands over the token alone, so the site and email it's checked with
-   * are the plugin's own settings. The settings tab writes those first.
+   * are the plugin's own settings. The settings tab writes those first, and a
+   * token that checks out here is bound to that site when the host saves it.
    */
   async validateToken(token: string): Promise<AuthValidation> {
     if (!token || !token.trim()) return { valid: false, error: "API token is required" };
-    return validateWithToken(token.trim());
+    return validateCandidate(token.trim());
   },
 
   /**
@@ -531,7 +749,9 @@ export const jiraForgeProvider: ForgeIssueProviderImpl = {
     const { siteUrl } = await readConnectionSettings();
     if (!siteUrl) throw new JiraApiError(NOT_CONNECTED_MESSAGE);
     const host = siteHostOf(siteUrl);
-    return { host, owner: host.split(".")[0], repo: projectKey, rawData: null };
+    // The base rides along for the URL builders: a Data Center instance's
+    // context path isn't in its host.
+    return { host, owner: host.split(".")[0], repo: projectKey, rawData: { siteUrl } };
   },
 
   async listIssues(repo: RepoRef, opts: ListOptions): Promise<Page<Issue>> {
@@ -566,7 +786,7 @@ export const jiraForgeProvider: ForgeIssueProviderImpl = {
     const stable = STABLE_ISSUE_ID_PATTERN.exec(trimmed);
     if (stable) {
       const op = await beginOp();
-      return stable[1] === siteHostOf(op.connection.siteUrl) ? fetchIssue(stable[2], op) : null;
+      return stable[1] === siteIdOf(op.connection.siteUrl) ? fetchIssue(stable[2], op) : null;
     }
     const key = trimmed.toUpperCase();
     return ISSUE_KEY_PATTERN.test(key) ? fetchIssue(key, await beginOp()) : null;
@@ -577,7 +797,7 @@ export const jiraForgeProvider: ForgeIssueProviderImpl = {
   },
 
   buildIssueUrl(repo: RepoRef, number: number): string {
-    return `https://${repo.host}/browse/${repo.repo}-${number}`;
+    return `${siteUrlOf(repo)}/browse/${repo.repo}-${number}`;
   },
 
   buildIssuesUrl(repo: RepoRef, options?: { query?: string; state?: string }): string {
@@ -585,7 +805,7 @@ export const jiraForgeProvider: ForgeIssueProviderImpl = {
     const filter = issueFilterJql(repo.repo, state);
     const text = options?.query ? textSearchClause(options.query) : null;
     const jql = text ? `${filter} AND ${text}` : filter;
-    return `https://${repo.host}/issues/?jql=${encodeURIComponent(jql)}`;
+    return `${siteUrlOf(repo)}/issues/?jql=${encodeURIComponent(jql)}`;
   },
 
   async assignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]> {
@@ -595,14 +815,15 @@ export const jiraForgeProvider: ForgeIssueProviderImpl = {
       const issue = await requireIssueNode(repo, issueNumber, ["assignee"], op);
       const before = issue.fields?.assignee ?? null;
       const key = previousAssigneeKey(op, issue.id);
-      if (before?.accountId === viewer.accountId) {
+      const beforeId = userIdOf(before);
+      if (beforeId === viewer.id) {
         rememberPreviousAssignee(key, viewer);
         return assigneesOf(issue);
       }
-      await setAssignee(issue.id, viewer.accountId, op);
+      await setAssignee(issue.id, viewer.id, op);
       rememberPreviousAssignee(
         key,
-        before?.accountId ? { accountId: before.accountId, user: mapUser(before) } : null
+        before && beforeId ? { id: beforeId, user: mapUser(before) } : null
       );
       return [viewer.user];
     });
@@ -618,7 +839,7 @@ export const jiraForgeProvider: ForgeIssueProviderImpl = {
       const previous = latestPreviousAssignee(key);
       // Someone else has picked the issue up since: this Undo has nothing of
       // ours left to undo, and its record goes with it.
-      if (issue.fields?.assignee?.accountId !== viewer.accountId) {
+      if (userIdOf(issue.fields?.assignee) !== viewer.id) {
         forgetLatestPreviousAssignee(key);
         return assigneesOf(issue);
       }
@@ -629,13 +850,13 @@ export const jiraForgeProvider: ForgeIssueProviderImpl = {
         return [];
       }
       // That assignment found the issue already the viewer's.
-      if (previous?.accountId === viewer.accountId) {
+      if (previous?.id === viewer.id) {
         forgetLatestPreviousAssignee(key);
         return assigneesOf(issue);
       }
       // Hand it back to whoever "Assign to me" took it from. A failure keeps
       // the record, so trying again still knows who that was.
-      await setAssignee(issue.id, previous?.accountId ?? null, op);
+      await setAssignee(issue.id, previous?.id ?? null, op);
       forgetLatestPreviousAssignee(key);
       return previous ? [previous.user] : [];
     });
