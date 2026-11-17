@@ -237,14 +237,13 @@ function cloneArgsForReplay(args: unknown): unknown {
 }
 
 /**
- * Whether a dispatch carries someone's approval past a confirmation: the
+ * Whether a dispatch's args carry someone's approval past a confirmation: the
  * `{ confirmed: true }` a runtime-escalated action's own prompt re-dispatches
- * with, or the host's `options.confirmed`. Recorded for `action.repeatLast`, it
- * would apply that approval to whatever the action targets when it's replayed,
- * without asking again (#17205).
+ * with. Recorded for `action.repeatLast`, it would apply that approval to
+ * whatever the action targets when it's replayed, without asking again
+ * (#17205). `options.confirmed` needs no check: a replay carries args only.
  */
-function carriesConfirmation(args: unknown, options: ActionDispatchOptions | undefined): boolean {
-  if (options?.confirmed === true) return true;
+function argsCarryConfirmation(args: unknown): boolean {
   return (
     typeof args === "object" &&
     args !== null &&
@@ -747,7 +746,7 @@ export class ActionService {
 
     // Read before `run()`: args an action doesn't validate are the caller's
     // object, which the run could change.
-    const confirmedDispatch = carriesConfirmation(validatedArgs, options);
+    const confirmedDispatch = argsCarryConfirmation(validatedArgs);
 
     try {
       // Derive (don't mutate — `context` may be a shared object from the

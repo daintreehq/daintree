@@ -2225,10 +2225,10 @@ describe("ActionService", () => {
   });
 
   describe("lastAction tracking", () => {
-    const makeAction = (
+    const makeAction = <S extends z.ZodTypeAny | undefined = undefined>(
       id: string,
-      overrides: Partial<ActionDefinition> = {}
-    ): ActionDefinition => ({
+      overrides: Partial<ActionDefinition<S>> = {}
+    ): ActionDefinition<S> => ({
       id: id as ActionId,
       title: "Test",
       description: "Test action",
@@ -2385,17 +2385,7 @@ describe("ActionService", () => {
       expect(service.getLastAction()).toBeNull();
     });
 
-    it("does not capture a dispatch the host marked confirmed (#17205)", async () => {
-      service.register(makeAction("test.hostConfirmed"));
-
-      await service.dispatch("test.hostConfirmed" as ActionId, undefined, {
-        source: "user",
-        confirmed: true,
-      });
-      expect(service.getLastAction()).toBeNull();
-    });
-
-    it("still captures a dispatch whose confirmed flag is false or absent", async () => {
+    it("still captures a dispatch whose args don't carry a confirmation", async () => {
       const schema = z.object({ confirmed: z.boolean().optional() }).optional();
       service.register(makeAction("test.escalating", { argsSchema: schema }));
 
@@ -2409,9 +2399,11 @@ describe("ActionService", () => {
         args: { confirmed: false },
       });
 
+      // Quick Create passes `options.confirmed`. A replay carries args only, so
+      // that approval can't ride along and the action stays repeatable.
       await service.dispatch("test.escalating" as ActionId, undefined, {
         source: "keybinding",
-        confirmed: false,
+        confirmed: true,
       });
       expect(service.getLastAction()).toEqual({ actionId: "test.escalating", args: undefined });
     });
