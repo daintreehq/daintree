@@ -75,7 +75,7 @@ export const TOUR_CHAPTERS: readonly TourChapter[] = [
     summary:
       "Copy context copies the whole worktree in one go, ready to paste into a web chat with a bigger allowance.",
     narration:
-      "Web chats like ChatGPT or Claude often come with bigger allowances, so sometimes you'll want them to see your whole codebase. [[copy]] Copy context in the toolbar copies the entire worktree to your clipboard in one go. [[portal]] Open the Portal in the side panel, [[paste]] and paste it into any web chat there.",
+      "Web chats like ChatGPT or Claude often come with bigger allowances, so sometimes you'll want them to see your whole codebase. [[copy]] Copy context in the toolbar copies the entire worktree to your clipboard in one go. [[switch]] Then switch to wherever you want it, like a chat in your browser or a desktop app, [[paste]] and paste it in.",
   },
   {
     id: "preview",
