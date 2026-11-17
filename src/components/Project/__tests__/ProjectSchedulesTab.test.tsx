@@ -48,8 +48,14 @@ vi.mock("@/hooks/useResumeAgentSession", () => ({ useResumeAgentSession: () => r
 vi.mock("@/components/Worktree/hooks/useFirstAgentOptions", () => ({
   useFirstAgentOptions: () => [{ id: "claude", name: "Claude", iconId: "claude" }],
 }));
+const launchPresetStatus = vi.hoisted(() => ({ current: "missing" as "missing" | "loading" }));
 vi.mock("@/components/Schedules/useScheduleLaunchOptions", () => ({
-  useScheduleLaunchOptions: () => ({ presets: [], preset: undefined, stopsAtPrompts: false }),
+  useScheduleLaunchOptions: (_agentId: string, presetId: string | null) => ({
+    presets: [],
+    preset: undefined,
+    presetStatus: presetId === null ? "none" : launchPresetStatus.current,
+    stopsAtPrompts: false,
+  }),
 }));
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -129,6 +135,7 @@ beforeEach(() => {
   });
   // Reset, not only re-answered, so a one-off answer a failed test left queued
   // never reaches the next one.
+  launchPresetStatus.current = "missing";
   client.list.mockReset();
   client.list.mockResolvedValue(snapshot([NIGHTLY, WEEKLY]));
   client.update.mockReset();
@@ -395,6 +402,31 @@ describe("ProjectSchedulesTab — the project's switches (#16168)", () => {
 
     expect(await screen.findByText("Schedules off")).toBeTruthy();
     expect(await screen.findByText(/Schedules are off for this project/)).toBeTruthy();
+  });
+});
+
+describe("ProjectSchedulesTab — a saved preset (#17210)", () => {
+  const withPreset = {
+    ...NIGHTLY,
+    launch: { ...NIGHTLY.launch, presetId: "team" },
+  };
+
+  it("doesn't call the preset missing while the stores that could hold it are loading", async () => {
+    launchPresetStatus.current = "loading";
+    client.list.mockResolvedValue(snapshot([withPreset]));
+    renderTab();
+    fireEvent.click(await screen.findByRole("button", { name: "Run history of Nightly audit" }));
+
+    expect(await screen.findByRole("button", { name: "Edit schedule" })).toBeTruthy();
+    expect(screen.queryByText("Missing preset")).toBeNull();
+  });
+
+  it("calls it missing once its absence is settled", async () => {
+    client.list.mockResolvedValue(snapshot([withPreset]));
+    renderTab();
+    fireEvent.click(await screen.findByRole("button", { name: "Run history of Nightly audit" }));
+
+    expect(await screen.findByText("Missing preset")).toBeTruthy();
   });
 });
 

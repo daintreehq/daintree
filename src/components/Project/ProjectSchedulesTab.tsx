@@ -208,13 +208,13 @@ export function ProjectSchedulesTab({ isOpen, isActive, onClose }: ProjectSchedu
     )
   );
   const liveTerminalIds = useMemo(() => new Set(liveTerminalIdList), [liveTerminalIdList]);
-  const { preset: shownPreset, stopsAtPrompts: shownSettingsRead } = useScheduleLaunchOptions(
+  const { preset: shownPreset, presetStatus: shownPresetStatus } = useScheduleLaunchOptions(
     shown?.launch.agentId ?? "",
     shown?.launch.presetId ?? null
   );
-  // Claimed missing only once agent settings have been read, so a cold open never flashes it.
-  const presetMissing =
-    shown?.launch.presetId != null && shownSettingsRead !== null && shownPreset === undefined;
+  // Claimed missing only once every store that could hold it has been read, so
+  // a cold open or a project switch never flashes it.
+  const presetMissing = shown?.launch.presetId != null && shownPresetStatus === "missing";
   const resumeSession = useResumeAgentSession();
 
   useEffect(() => {

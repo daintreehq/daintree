@@ -116,6 +116,52 @@ describe("useScheduleLaunchOptions", () => {
     expect(result.current.presetStatus).toBe("missing");
   });
 
+  it("settles a non-CCR id without waiting on the CCR routes", () => {
+    setProject("a");
+    useProjectPresetsStore.getState().setPresetsByAgent("a", {});
+    useCcrPresetsStore.setState({ ccrPresetsByAgent: {}, isInitialized: false });
+    const { result } = renderHook(() => useScheduleLaunchOptions("claude", "gone"));
+    expect(result.current.presetStatus).toBe("missing");
+  });
+
+  it("reads the snapshot as this project's once its owner changes, even with the same bucket", () => {
+    setProject("b");
+    const byAgent = { claude: [TEAM] };
+    useProjectPresetsStore.setState({ presetsByAgent: byAgent, hydratedProjectId: "a" });
+    const { result } = renderHook(() => useScheduleLaunchOptions("claude", "team"));
+    expect(result.current.presetStatus).toBe("loading");
+
+    act(() => useProjectPresetsStore.setState({ hydratedProjectId: "b" }));
+    expect(result.current.presetStatus).toBe("found");
+  });
+
+  it("gives a scratch workspace no project presets, and settles absence there", () => {
+    useScratchStore.setState({ currentScratch: { id: "s" } } as never);
+    useProjectPresetsStore.getState().setPresetsByAgent("a", { claude: [TEAM] });
+    const { result } = renderHook(() => useScheduleLaunchOptions("claude", "team"));
+    expect(result.current.presets.map((p) => p.id)).not.toContain("team");
+    expect(result.current.presetStatus).toBe("missing");
+  });
+
+  it("can't settle absence in a view that has resolved neither a project nor a scratch", () => {
+    useProjectPresetsStore.getState().setPresetsByAgent("a", { claude: [TEAM] });
+    const { result } = renderHook(() => useScheduleLaunchOptions("claude", "team"));
+    expect(result.current.presets.map((p) => p.id)).not.toContain("team");
+    expect(result.current.presetStatus).toBe("loading");
+  });
+
+  it("calls a custom preset missing once loaded settings don't hold it", () => {
+    setProject("a");
+    useProjectPresetsStore.getState().setPresetsByAgent("a", {});
+    useAgentSettingsStore.setState({ settings: null } as never);
+    const { result } = renderHook(() => useScheduleLaunchOptions("claude", "user-gone"));
+    expect(result.current.presetStatus).toBe("loading");
+
+    act(() => useAgentSettingsStore.setState({ settings: LOADED_SETTINGS } as never));
+    expect(result.current.presetStatus).toBe("missing");
+    expect(result.current.stopsAtPrompts).not.toBeNull();
+  });
+
   it("holds the permission-prompt reading while the chosen preset is still loading", () => {
     setProject("a");
     const { result } = renderHook(() => useScheduleLaunchOptions("claude", "team"));
