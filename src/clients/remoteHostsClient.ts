@@ -9,6 +9,7 @@ import type {
 import type {
   AddHostPayload,
   DiscoveredHost,
+  HostAgentForwardingCheck,
   HostInstallPlan,
   HostProbeResult,
   InstallHostPayload,
@@ -100,6 +101,8 @@ export const remoteHostsClient = {
     window.electron.remoteHosts.startHostMode({ connection }),
   listClipboardGrants: (hostId: string): Promise<HostPluginClipboardGrant[]> =>
     window.electron.remoteHosts.listClipboardGrants({ hostId }),
+  checkAgentForwarding: (hostId: string): Promise<HostAgentForwardingCheck> =>
+    window.electron.remoteHosts.checkAgentForwarding({ hostId }),
   resetClipboardGrants: (hostId: string, pluginId?: string): Promise<void> =>
     window.electron.remoteHosts.resetClipboardGrants(
       pluginId === undefined ? { hostId } : { hostId, pluginId }

@@ -401,6 +401,13 @@ export interface HostDescriptor {
    */
   assistantControlEnabled: boolean;
   /**
+   * Whether new terminals in this host's projects reach this computer's
+   * ssh-agent while this Shell drives them (#17432). Off unless the person
+   * turned it on; turned off again when the host is pointed at another
+   * machine. Absent reads as off.
+   */
+  forwardSshAgent?: boolean;
+  /**
    * The worktree (by path) whose resource environment named this host, when
    * it was added for that worktree's box: removed with the worktree, or when
    * its resource is torn down. Absent for every host the user added.

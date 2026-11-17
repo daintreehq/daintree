@@ -3963,6 +3963,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./remoteHosts.js").CancelPendingSwitchPayload];
     result: boolean;
   };
+  "remote-hosts:check-agent-forwarding": {
+    args: [payload: { hostId: string }];
+    result: import("./remoteHosts.js").HostAgentForwardingCheck;
+  };
   "remote-hosts:connect": {
     args: [payload: { hostId: string; restart?: boolean | undefined }];
     result: import("../remoteHosts.js").HostConnectionState;

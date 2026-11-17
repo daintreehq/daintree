@@ -22,6 +22,7 @@ import {
 import type {
   AddHostPayload,
   DiscoveredHost,
+  HostAgentForwardingCheck,
   HostInstallPlan,
   HostProbeResult,
   HostSetupTarget,
@@ -331,6 +332,12 @@ export const remoteHostsNamespace = defineIpcNamespace({
         return false;
       },
       { withContext: true }
+    ),
+    // What the agent forwarding switch shows: this computer's agent, and the host's IdentityAgent.
+    checkAgentForwarding: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.checkAgentForwarding,
+      async (payload: { hostId: string }): Promise<HostAgentForwardingCheck> =>
+        requireRemoteService("agentForwardingClient").check(requireHostId(payload))
     ),
     isInUse: op(REMOTE_HOSTS_METHOD_CHANNELS.isInUse, (): boolean => remoteHostsInUse()),
     getLocalHandshake: op(REMOTE_HOSTS_METHOD_CHANNELS.getLocalHandshake, (): HostHandshakeInfo =>

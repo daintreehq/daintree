@@ -149,6 +149,10 @@ const m = vi.hoisted(() => {
     uninstallHostSwitchService: vi.fn(() => record("uninstall host switch service")),
     installHostPortService: vi.fn(),
     uninstallHostPortService: vi.fn(() => record("uninstall host port service")),
+    installHostAgentForwarding: vi.fn(),
+    disposeHostAgentForwarding: vi.fn(async () => record("dispose host agent forwarding")),
+    installAgentForwardingClient: vi.fn(),
+    disposeAgentForwardingClient: vi.fn(() => record("dispose agent forwarding client")),
     installProjectsHost: vi.fn(),
     uninstallProjectsHost: vi.fn(() => record("uninstall projects host")),
     installPluginHost: vi.fn(),
@@ -423,6 +427,18 @@ vi.mock("../ports/clientInstall.js", () => ({
   installPortForwardClient: vi.fn((deps: unknown) => {
     m.installPortForwardClient(deps);
     return m.uninstallPortForwardClient;
+  }),
+}));
+vi.mock("../agentForwarding/hostForwarder.js", () => ({
+  installHostAgentForwarding: vi.fn((deps: { server: unknown }) => {
+    m.installHostAgentForwarding(deps);
+    return { socketForSpawn: async () => null, dispose: m.disposeHostAgentForwarding };
+  }),
+}));
+vi.mock("../agentForwarding/clientInstall.js", () => ({
+  installAgentForwardingClient: vi.fn((deps: unknown) => {
+    m.installAgentForwardingClient(deps);
+    return { check: async () => ({ localAgent: false }), dispose: m.disposeAgentForwardingClient };
   }),
 }));
 vi.mock("../ports/hostPorts.js", () => ({
@@ -1319,6 +1335,8 @@ describe("startRemoteHosts", () => {
   it("serves ports, project moves and plugins only while listening, on the server's sessions", async () => {
     await startRemoteHosts({ hostMode: false });
     expect(m.installHostPortService).not.toHaveBeenCalled();
+    expect(m.installHostAgentForwarding).not.toHaveBeenCalled();
+    expect(getRemoteService("agentForwardingHost")).toBeUndefined();
     expect(m.installProjectsHost).not.toHaveBeenCalled();
     expect(m.installPluginHost).not.toHaveBeenCalled();
     expect(m.installPluginParityHost).not.toHaveBeenCalled();
@@ -1326,12 +1344,18 @@ describe("startRemoteHosts", () => {
     const hostMode = getRemoteService("hostMode")!;
     await hostMode.startListening();
     expect(m.installHostPortService).toHaveBeenCalledWith(m.server);
+    expect(m.installHostAgentForwarding).toHaveBeenCalledWith(
+      expect.objectContaining({ server: m.server })
+    );
+    expect(getRemoteService("agentForwardingHost")).toBeDefined();
     expect(m.installProjectsHost).toHaveBeenCalledWith(m.server);
     expect(m.installPluginHost).toHaveBeenCalledTimes(1);
     expect(m.installPluginParityHost).toHaveBeenCalledWith(m.server);
 
     await hostMode.stopListening();
     expect(m.uninstallHostPortService).toHaveBeenCalledTimes(1);
+    expect(m.disposeHostAgentForwarding).toHaveBeenCalledTimes(1);
+    expect(getRemoteService("agentForwardingHost")).toBeUndefined();
     expect(m.uninstallProjectsHost).toHaveBeenCalledTimes(1);
     expect(m.uninstallPluginHost).toHaveBeenCalledTimes(1);
     expect(m.uninstallPluginParityHost).toHaveBeenCalledTimes(1);
@@ -1671,12 +1695,14 @@ describe("stopRemoteHosts", () => {
       "uninstall settings copy host",
       "uninstall plugin parity host",
       "uninstall projects host",
+      "dispose host agent forwarding",
       "uninstall host port service",
       "host uploads dispose",
       "host files dispose",
       "disposeAllTerminalBridges",
       "host.dispose",
       "server.close",
+      "dispose agent forwarding client",
       "uninstall port forward client",
       "uninstall settings control client",
       "uninstall settings copy client",
