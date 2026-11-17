@@ -229,10 +229,18 @@ export class ThreadNotifier implements QuestionNotifications {
   }
 
   private async present(event: ThreadEvent): Promise<void> {
-    const saved = new Set(await this.record.savedOf(event.claims));
+    // Until a saved snapshot holds what it still owns: a later one may save what an earlier one failed to.
+    let writes: Promise<void>;
+    do {
+      writes = this.record.settled();
+      await writes;
+    } while (
+      this.ownedBy(event).some((key) => !this.record.isSaved(key)) &&
+      writes !== this.record.settled()
+    );
     if (this.stopped) return;
     // Shown unsaved, a restart would show it again; the list's next change claims it afresh.
-    const unsaved = this.ownedBy(event).filter((key) => !saved.has(key));
+    const unsaved = this.ownedBy(event).filter((key) => !this.record.isSaved(key));
     const claimed = this.claimed;
     if (unsaved.length > 0 && claimed !== null) {
       for (const key of unsaved) {

@@ -76,20 +76,11 @@ export class NotificationClaims {
   }
 
   /**
-   * Whether a saved record holds `key`, once the writes made so far land:
-   * a later one may save what an earlier one failed to.
+   * Whether the record as last saved holds `key`. A caller waits on
+   * `settled()` until it does or no write is queued after the one it awaited:
+   * a later write may save what an earlier one failed to.
    */
-  async holds(key: string): Promise<boolean> {
-    return (await this.savedOf([key])).length > 0;
-  }
-
-  /** Those of `keys` a saved record holds, once the writes made so far land. */
-  async savedOf(keys: readonly string[]): Promise<string[]> {
-    let writes: Promise<void>;
-    do {
-      writes = this.writing;
-      await writes;
-    } while (keys.some((key) => !this.saved.has(key)) && writes !== this.writing);
-    return keys.filter((key) => this.saved.has(key));
+  isSaved(key: string): boolean {
+    return this.saved.has(key);
   }
 }
