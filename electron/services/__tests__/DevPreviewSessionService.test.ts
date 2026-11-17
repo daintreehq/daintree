@@ -2256,6 +2256,37 @@ describe("DevPreviewSessionService — cross-worktree snapshot", () => {
     expect(sessions[0]?.status).toBe("starting");
   });
 
+  it("restart starts a restore placeholder by its own key, leaving a sibling in that worktree alone", async () => {
+    service.dispose();
+    ptyClient = createPtyClientMock();
+    service = new DevPreviewSessionService(
+      ptyClient as unknown as PtyClient,
+      onStateChanged,
+      [
+        manifestEntry({ panelId: "panel-app", worktreeId: "wt-1", cwd: "/repo/app" }),
+        manifestEntry({ panelId: "panel-storybook", worktreeId: "wt-1", cwd: "/repo/sb" }),
+      ],
+      () => {},
+      onAllSessionsChanged
+    );
+
+    const state = await service.restart({ panelId: "panel-storybook", projectId: "project-1" });
+
+    expect(state.panelId).toBe("panel-storybook");
+    expect(state.status).toBe("starting");
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    expect(ptyClient.spawn.mock.calls[0]?.[1]).toMatchObject({ cwd: "/repo/sb" });
+    const byPanel = new Map(service.getAllSessions().map((s) => [s.panelId, s.status]));
+    expect(byPanel.get("panel-storybook")).toBe("starting");
+    expect(byPanel.get("panel-app")).toBe("restored-stopped");
+  });
+
+  it("restart of a key with neither a session nor a placeholder spawns nothing", async () => {
+    const state = await service.restart({ panelId: "nobody", projectId: "project-1" });
+    expect(state.status).toBe("stopped");
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+  });
+
   it("restartByWorktree returns a stopped placeholder for an unknown worktree", async () => {
     const state = await service.restartByWorktree("does-not-exist");
     expect(state.status).toBe("stopped");
