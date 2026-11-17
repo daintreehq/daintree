@@ -149,9 +149,10 @@ export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
           return;
         }
       }
-      const terminals = msg.terminalIds
-        ? msg.terminalIds.map((id) => ptyManager.getTerminal(id))
-        : ptyManager.getAll();
+      const scope: string[] | undefined = Array.isArray(msg.terminalIds)
+        ? msg.terminalIds
+        : undefined;
+      const terminals = scope ? scope.map((id) => ptyManager.getTerminal(id)) : ptyManager.getAll();
       for (const t of terminals) {
         if (!t) continue;
         const buffer = t.semanticBuffer;

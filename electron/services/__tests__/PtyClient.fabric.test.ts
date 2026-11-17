@@ -1631,15 +1631,30 @@ describe("PtyClient fabric", () => {
     it("splits a scope that spans projects into one request per owning shard", async () => {
       const { client, shardA, shardB } = twoProjects();
 
-      void client.searchSemanticBuffersAsync("done", false, ["b1", "a3"]);
+      const promise = client.searchSemanticBuffersAsync("done", false, ["b1", "a3"]);
 
-      expect(messagesOfType(shardA.child, "search-semantic-buffers")).toEqual([
-        expect.objectContaining({ terminalIds: ["a3"] }),
-      ]);
-      expect(messagesOfType(shardB.child, "search-semantic-buffers")).toEqual([
-        expect.objectContaining({ terminalIds: ["b1"] }),
-      ]);
+      const [requestA] = messagesOfType(shardA.child, "search-semantic-buffers");
+      const [requestB] = messagesOfType(shardB.child, "search-semantic-buffers");
+      expect(requestA).toEqual(expect.objectContaining({ terminalIds: ["a3"] }));
+      expect(requestB).toEqual(expect.objectContaining({ terminalIds: ["b1"] }));
       expect(messagesOfType(defaultShard().child, "search-semantic-buffers")).toHaveLength(0);
+
+      const fromA = { terminalId: "a3", line: "a done", matchStart: 2, matchEnd: 6 };
+      const fromB = { terminalId: "b1", line: "b done", matchStart: 2, matchEnd: 6 };
+      shardA.child.emit("message", {
+        type: "semantic-search-result",
+        requestId: requestA.requestId,
+        matches: [fromA],
+      });
+      shardB.child.emit("message", {
+        type: "semantic-search-result",
+        requestId: requestB.requestId,
+        matches: [fromB],
+      });
+      const { matches: merged, complete } = await promise;
+      expect(merged).toHaveLength(2);
+      expect(merged).toEqual(expect.arrayContaining([fromA, fromB]));
+      expect(complete).toBe(true);
       client.dispose();
     });
 

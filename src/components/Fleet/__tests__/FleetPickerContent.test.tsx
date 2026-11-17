@@ -526,7 +526,6 @@ describe("FleetPickerContent + useFleetPicker", () => {
       vi.useFakeTimers();
       search = vi.fn().mockResolvedValue({ matches: [], complete: true });
       Object.assign(window, { electron: { terminal: { searchSemanticBuffers: search } } });
-      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
     });
 
     afterEach(() => {
@@ -558,7 +557,7 @@ describe("FleetPickerContent + useFleetPicker", () => {
         makeTerminal("t3", { worktreeId: "wt-2" }),
         makeTerminal("t1", { worktreeId: "wt-1" }),
         makeTerminal("t2", { worktreeId: "wt-1" }),
-        makeTerminal("browser", { kind: "browser", hasPty: false } as Partial<PtyPanelData>),
+        makeTerminal("exited", { worktreeId: "wt-2", runtimeStatus: "exited" }),
       ]);
       useFleetArmingStore.getState().armId("t1");
       search.mockResolvedValue({
@@ -596,6 +595,72 @@ describe("FleetPickerContent + useFleetPicker", () => {
       expect(search.mock.calls.at(-1)).toEqual(["deploy", false, ["t0", "t1", "t2"]]);
     });
 
+    it("ignores a reply for a scope that changed, and clears hits when the scope empties", async () => {
+      let resolveFirst!: (matches: unknown) => void;
+      search.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          })
+      );
+      seedTerminals([makeTerminal("t1"), makeTerminal("t2")]);
+      const captured = await openAndType("cold-start", "deploy");
+
+      await act(async () => {
+        seedTerminals([makeTerminal("t1"), makeTerminal("t3")]);
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(300);
+      });
+      expect(search.mock.calls.map((c) => c[2])).toEqual([
+        ["t1", "t2"],
+        ["t1", "t3"],
+      ]);
+
+      await act(async () => {
+        resolveFirst({
+          matches: [{ terminalId: "t1", line: "deploy old", matchStart: 0, matchEnd: 6 }],
+          complete: true,
+        });
+      });
+      expect(captured.picker?.snippetMap.size).toBe(0);
+
+      await act(async () => {
+        seedTerminals([]);
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(300);
+      });
+      expect(search).toHaveBeenCalledTimes(2);
+      expect(captured.picker?.visibleTerminals).toEqual([]);
+    });
+
+    it("drops a hit when its pane leaves, so a restart doesn't inherit it", async () => {
+      search.mockResolvedValue({
+        matches: [{ terminalId: "t1", line: "deploy finished", matchStart: 0, matchEnd: 6 }],
+        complete: true,
+      });
+      seedTerminals([makeTerminal("t1"), makeTerminal("t2")]);
+      const captured = await openAndType("cold-start", "deploy");
+      expect(captured.picker?.visibleTerminals.map((t) => t.id)).toEqual(["t1"]);
+
+      search.mockResolvedValue({ matches: [], complete: true });
+      await act(async () => {
+        seedTerminals([makeTerminal("t1", { runtimeStatus: "exited" }), makeTerminal("t2")]);
+      });
+      await act(async () => {
+        seedTerminals([makeTerminal("t1"), makeTerminal("t2")]);
+      });
+      // Back in scope, but its search hasn't answered yet.
+      expect(captured.picker?.snippetMap.has("t1")).toBe(false);
+      expect(captured.picker?.visibleTerminals).toEqual([]);
+
+      await act(async () => {
+        vi.advanceTimersByTime(300);
+      });
+      expect(search.mock.calls.at(-1)).toEqual(["deploy", false, ["t1", "t2"]]);
+    });
+
     it("skips the search when no pane is eligible", async () => {
       seedTerminals([makeTerminal("t1")]);
       useFleetArmingStore.getState().armId("t1");
@@ -606,12 +671,17 @@ describe("FleetPickerContent + useFleetPicker", () => {
       expect(captured.picker?.visibleTerminals).toEqual([]);
     });
 
-    it("falls back to an unscoped search past the id cap", async () => {
-      seedTerminals(Array.from({ length: 257 }, (_, i) => makeTerminal(`t${i}`)));
+    it.each([
+      [256, "scoped"],
+      [257, "unscoped"],
+    ])("sends %i panes %s", async (count, kind) => {
+      const panes = Array.from({ length: count }, (_, i) => makeTerminal(`t${i}`));
+      seedTerminals(panes);
 
       await openAndType("cold-start", "deploy");
 
-      expect(search.mock.calls).toEqual([["deploy", false, undefined]]);
+      const expected = kind === "scoped" ? panes.map((t) => t.id).sort() : undefined;
+      expect(search.mock.calls).toEqual([["deploy", false, expected]]);
     });
   });
 

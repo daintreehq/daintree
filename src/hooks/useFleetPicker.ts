@@ -51,6 +51,12 @@ function issueSearchRequestId(): number {
   return nextSearchRequestId;
 }
 
+// The terminal ids a `searchScopeKey` (a sorted JSON list) names.
+function readSearchScope(key: string): string[] {
+  const scope: unknown = JSON.parse(key);
+  return Array.isArray(scope) ? scope.filter((id): id is string => typeof id === "string") : [];
+}
+
 // A host on an older build answers with the bare match array it always sent,
 // and nothing about it says otherwise, so it reads as complete as it always did.
 function readOutputSearchResult(
@@ -360,15 +366,18 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     return s;
   }, [eligibleTerminals]);
 
-  // Sorted and NUL-joined so an agent-state change or a reorder among the same
+  // A sorted JSON list, so an agent-state change or a reorder among the same
   // panes is value-equal and neither restarts the debounce nor re-searches,
-  // while a pane joining or leaving the eligible set searches again.
+  // while a pane joining or leaving the eligible set searches again. An empty
+  // id can't be searched and would fail the whole request, so it stays out.
   const searchScopeKey = useMemo(
     () =>
-      eligibleTerminals
-        .map((t) => t.id)
-        .sort()
-        .join("\x00"),
+      JSON.stringify(
+        eligibleTerminals
+          .map((t) => t.id)
+          .filter((id) => id !== "")
+          .sort()
+      ),
     [eligibleTerminals]
   );
 
@@ -418,7 +427,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
       return;
     }
     const trimmed = deferredQuery.trim();
-    const terminalIds = searchScopeKey === "" ? [] : searchScopeKey.split("\x00");
+    const terminalIds = readSearchScope(searchScopeKey);
     if (trimmed === "" || terminalIds.length === 0) {
       setSnippetMap(new Map());
       setSnippetQuery(trimmed);
@@ -427,6 +436,18 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
       currentRequestRef.current = issueSearchRequestId();
       return;
     }
+
+    // A pane that left the scope drops its hit, so one that rejoins (a restart
+    // under the same id) waits for the search that covers it instead of showing
+    // its previous process's line.
+    setSnippetMap((prev) => {
+      const kept = new Map<string, SemanticSearchMatch>();
+      for (const id of terminalIds) {
+        const hit = prev.get(id);
+        if (hit) kept.set(id, hit);
+      }
+      return kept.size === prev.size ? prev : kept;
+    });
 
     const issueId = issueSearchRequestId();
     currentRequestRef.current = issueId;
@@ -442,7 +463,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
 
   const retryOutputSearch = useCallback(() => {
     const trimmed = deferredQuery.trim();
-    const terminalIds = searchScopeKey === "" ? [] : searchScopeKey.split("\x00");
+    const terminalIds = readSearchScope(searchScopeKey);
     if (!isOpen || !acquired || trimmed === "" || terminalIds.length === 0) return;
     const issueId = issueSearchRequestId();
     currentRequestRef.current = issueId;

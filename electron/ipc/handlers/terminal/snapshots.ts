@@ -407,8 +407,11 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
           `Invalid terminal IDs: maximum ${SEMANTIC_SEARCH_TERMINAL_IDS_MAX} IDs allowed`
         );
       }
-      if (!terminalIds.every((id) => typeof id === "string" && id.length > 0)) {
-        throw new Error("Invalid terminal IDs: each must be a non-empty string");
+      // for…of, not every(): a sparse array's holes must fail too.
+      for (const id of terminalIds) {
+        if (typeof id !== "string" || id.length === 0) {
+          throw new Error("Invalid terminal IDs: each must be a non-empty string");
+        }
       }
     }
     // Cap query length so a pathological regex can't lock up the pty-host
@@ -438,9 +441,13 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
         isRegex,
         scope && [...scope]
       );
-      // The view may have rebound to another project while the shards scanned.
-      // Only the old project's terminals were asked, so the new one's went unsearched.
-      if (remoteProjectId !== undefined && endpoint?.projectId !== remoteProjectId) {
+      // The view may have rebound to another project, or closed, while the shards
+      // scanned. Only the old project's terminals were asked, so the new one's
+      // went unsearched.
+      if (
+        remoteProjectId !== undefined &&
+        (endpoint?.projectId !== remoteProjectId || endpoint.isClosed())
+      ) {
         return { matches: [], complete: false };
       }
       return {
