@@ -360,7 +360,7 @@ function GroupHeader({
         <ChevronRight
           aria-hidden="true"
           data-testid="pilot-group-drill"
-          className="h-3 w-3 shrink-0 text-text-muted"
+          className="h-3 w-3 shrink-0 text-text-secondary"
         />
       )}
     </div>
@@ -396,7 +396,7 @@ function WorktreeGroupHeader({
       data-testid="pilot-worktree-header"
       className="flex w-full items-center gap-2 py-1 pr-3 pl-3 select-none"
     >
-      <div className={cn(TILE_BASE, "bg-tint/[0.04] text-muted-foreground")}>
+      <div className={cn(TILE_BASE, "bg-tint/[0.04] text-text-secondary")}>
         <Glyph className="h-2.5 w-2.5" aria-hidden="true" />
       </div>
 

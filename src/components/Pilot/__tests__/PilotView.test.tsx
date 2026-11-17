@@ -2489,6 +2489,19 @@ describe("PilotView worktree scope", () => {
   });
 
   describe("drilling in", () => {
+    it("inks the drill chevron and worktree header tile with the icon-contrast token", () => {
+      seedSpread();
+      render(<PilotView />);
+      const chevron = screen.getByTestId("pilot-group-drill");
+      expect(chevron.getAttribute("class")).toContain("text-text-secondary");
+      expect(chevron.getAttribute("class")).not.toContain("text-text-muted");
+
+      fireEvent.click(drillHeader());
+      const tile = screen.getAllByTestId("pilot-worktree-header")[0]!.firstElementChild!;
+      expect(tile.getAttribute("class")).toContain("text-text-secondary");
+      expect(tile.getAttribute("class")).not.toContain("text-muted-foreground");
+    });
+
     it("regroups one project's runs by worktree when its header is clicked", () => {
       seedSpread();
       render(<PilotView />);
