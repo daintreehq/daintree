@@ -747,6 +747,7 @@ describe("useRecipeRunner — retry after the recipe changes (#17446)", () => {
       hook.result.current.handleRun("local");
     });
     await flush();
+    expect(hook.result.current.canRetryFailed).toBe(true);
 
     act(() => {
       hook.result.current.handleRetryFailed();
@@ -766,6 +767,8 @@ describe("useRecipeRunner — retry after the recipe changes (#17446)", () => {
         },
       }
     );
+
+    expect(hook.result.current.canRetryFailed).toBe(true);
 
     // Renamed out from under the team recipe, the row launches itself again:
     // the same steps, but not the recipe that ran.

@@ -113,49 +113,50 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
   );
 
   // Mounted at the same place in both branches, so deleting the last recipe
-  // keeps the failure report, and the banner keeps focus when Retry leaves.
+  // keeps the failure report. Unwrapped: a banner hands focus to what's left
+  // of its parent when dismissed, and a wrapper would leave with it.
   const banners = (
     <>
       {runner.spawnFailureSummary && (
-        <div className="mb-3" data-testid="recipe-spawn-failure-banner">
-          <InlineStatusBanner
-            icon={XCircle}
-            title={formatFailureTitle(runner.spawnFailureSummary)}
-            description={
-              runner.canRetryFailed
-                ? runner.spawnFailureSummary.failures[0]?.error
-                : STALE_RETRY_DESCRIPTION
-            }
-            severity="error"
-            action={
-              runner.canRetryFailed
-                ? {
-                    id: "retry-failed",
-                    label: "Retry failed",
-                    icon: RefreshCw,
-                    variant: "primary",
-                    onClick: runner.handleRetryFailed,
-                    title: "Retry the terminals that failed to start",
-                    ariaLabel: "Retry failed terminals",
-                    loading: runner.isRetryingFailed,
-                  }
-                : undefined
-            }
-            onClose={runner.dismissSpawnFailures}
-          />
-        </div>
+        <InlineStatusBanner
+          className="mb-3"
+          data-testid="recipe-spawn-failure-banner"
+          icon={XCircle}
+          title={formatFailureTitle(runner.spawnFailureSummary)}
+          description={
+            runner.canRetryFailed
+              ? runner.spawnFailureSummary.failures[0]?.error
+              : STALE_RETRY_DESCRIPTION
+          }
+          severity="error"
+          action={
+            runner.canRetryFailed
+              ? {
+                  id: "retry-failed",
+                  label: "Retry failed",
+                  icon: RefreshCw,
+                  variant: "primary",
+                  onClick: runner.handleRetryFailed,
+                  title: "Retry the terminals that failed to start",
+                  ariaLabel: "Retry failed terminals",
+                  loading: runner.isRetryingFailed,
+                }
+              : undefined
+          }
+          onClose={runner.dismissSpawnFailures}
+        />
       )}
       {runner.unresolvedVars.length > 0 && (
-        <div className="mb-3" data-testid="recipe-unresolved-vars-banner">
-          <InlineStatusBanner
-            title={formatUnresolvedVarsTitle(runner.unresolvedVars)}
-            description="Plugin variables only get values when their plugin runs the recipe, so these launched empty."
-            severity="warning"
-            role="status"
-            actions={[]}
-            onClose={runner.dismissUnresolvedVars}
-          />
-        </div>
+        <InlineStatusBanner
+          className="mb-3"
+          data-testid="recipe-unresolved-vars-banner"
+          title={formatUnresolvedVarsTitle(runner.unresolvedVars)}
+          description="Plugin variables only get values when their plugin runs the recipe, so these launched empty."
+          severity="warning"
+          role="status"
+          actions={[]}
+          onClose={runner.dismissUnresolvedVars}
+        />
       )}
     </>
   );
