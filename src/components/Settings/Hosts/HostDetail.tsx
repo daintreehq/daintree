@@ -30,6 +30,7 @@ import { HostPluginViewConsents } from "./HostPluginViewConsents";
 import { CloudMachineSection } from "./CloudMachineSection";
 import { RemoveCloudHostDialog } from "./RemoveCloudHostDialog";
 import { cloudStatusFor, useCloudHosts } from "@/components/Hosts/cloud/cloudHostsState";
+import { canDeleteMachines, cloudProviderFor } from "@/components/Hosts/cloud/cloudHostLabels";
 import { HostWakeSetup } from "./HostWakeSetup";
 import { bringBackMessage, canBringBack, useHostBringBacks } from "./hostBringBack";
 import {
@@ -135,6 +136,7 @@ export function HostDetail({
   const [confirmRemove, setConfirmRemove] = useState(false);
   const cloudSnapshot = useCloudHosts().snapshot;
   const cloud = cloudStatusFor(cloudSnapshot, entry.descriptor.id);
+  const cloudProvider = cloudProviderFor(cloudSnapshot.providers, cloud);
   const isCloud = entry.descriptor.connection.kind === "cloud";
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
@@ -592,7 +594,9 @@ export function HostDetail({
             label={isCloud ? "Remove host" : removeOutcome.label}
             description={
               isCloud
-                ? "Choose whether its machine stays in your cloud account or is deleted with it"
+                ? cloudProvider && !canDeleteMachines(cloudProvider)
+                  ? `Its machine stays in your ${cloudProvider.name} account until you delete it in ${cloudProvider.name}'s console`
+                  : "Choose whether its machine stays in your cloud account or is deleted with it"
                 : "Its connection here closes, windows attached to it return to this machine, and it leaves your host list"
             }
             error={removeError ?? undefined}
@@ -610,10 +614,8 @@ export function HostDetail({
           hostId={descriptor.id}
           name={hostName}
           status={cloud}
-          providerName={
-            cloudSnapshot.providers.find((provider) => provider.id === cloud?.providerId)?.name ??
-            "the provider"
-          }
+          providerName={cloudProvider?.name ?? "the provider"}
+          provider={cloudProvider}
           onClose={() => setConfirmRemove(false)}
           onRemoved={() => onBack(false)}
         />

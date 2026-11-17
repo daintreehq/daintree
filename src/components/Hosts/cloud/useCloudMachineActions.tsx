@@ -10,9 +10,11 @@ import type { HostId } from "@shared/types/remoteHosts";
 import { cloudStatusFor, useCloudHosts } from "./cloudHostsState";
 import {
   clockTime,
+  cloudProviderFor,
   isObservationStale,
   lifetimeSentence,
   stopKeepsSentence,
+  stoppedBillingSentence,
 } from "./cloudHostLabels";
 
 function errorText(err: unknown, fallback: string): string {
@@ -168,9 +170,10 @@ export function useCloudMachineActions(): {
 
   const startStatus = startAsk ? cloudStatusFor(snapshot, startAsk.hostId) : null;
   const stopStatus = stopAsk ? cloudStatusFor(snapshot, stopAsk.hostId) : null;
-  const stopProvider = stopStatus
-    ? (snapshot.providers.find((provider) => provider.id === stopStatus.providerId) ?? null)
-    : null;
+  const stopProvider = cloudProviderFor(snapshot.providers, stopStatus);
+  // A provider that bills a stopped machine says so, and how to stop paying, where the stop is decided.
+  const stopBilling = stoppedBillingSentence(stopProvider);
+  const startBilling = stoppedBillingSentence(cloudProviderFor(snapshot.providers, startStatus));
   const stopBusy = stopAsk !== null && pending.has(stopAsk.hostId);
   const startBusy = startAsk !== null && pending.has(startAsk.hostId);
 
@@ -189,7 +192,7 @@ export function useCloudMachineActions(): {
         description={
           stopBusy
             ? undefined
-            : `Terminals, agents and anything else running on it end, and billing for the machine stops.${stopProvider ? ` ${stopKeepsSentence(stopProvider.capabilities.persistence)}` : ""}`
+            : `Terminals, agents and anything else running on it end${stopBilling ? `. ${stopBilling}` : ", and billing for the machine stops."}${stopProvider ? ` ${stopKeepsSentence(stopProvider.capabilities.persistence)}` : ""}`
         }
         confirmLabel={stopBusy ? "Stopping…" : "Stop machine"}
         confirmDisabled={stopBusy}
@@ -229,7 +232,10 @@ export function useCloudMachineActions(): {
           startBusy
             ? undefined
             : startStatus && startAsk
-              ? `${notRunningSentence(startAsk.name, startStatus, startAsk.askedAt ?? 0)} Starting it bills ${startStatus.accountName} ${hourlyClause(startStatus)} while it runs. ${lifetimeSentence(startStatus.lifetimeSeconds)}`
+              ? startBilling && startStatus.machine === "stopped"
+                ? // Starting doesn't start the billing here: the stopped machine is billed already.
+                  `${notRunningSentence(startAsk.name, startStatus, startAsk.askedAt ?? 0)} It bills ${startStatus.accountName} ${hourlyClause(startStatus)} while it runs. ${startBilling} ${lifetimeSentence(startStatus.lifetimeSeconds)}`
+                : `${notRunningSentence(startAsk.name, startStatus, startAsk.askedAt ?? 0)} Starting it bills ${startStatus.accountName} ${hourlyClause(startStatus)} while it runs. ${lifetimeSentence(startStatus.lifetimeSeconds)}`
               : "Reading the machine's state…"
         }
         confirmLabel={startBusy ? "Starting…" : "Start machine"}

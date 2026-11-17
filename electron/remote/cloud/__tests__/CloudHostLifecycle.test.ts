@@ -1183,3 +1183,54 @@ describe("CloudHostLifecycle provisioning", () => {
     expect(lifecycle.statuses()[0]?.lastError?.message).toMatch(/never named/);
   });
 });
+
+describe("CloudHostLifecycle.deleteMachine by the provider's declaration (#17346)", () => {
+  function withoutDeletion(provider: CloudProvider): void {
+    const declared = provider.info.bind(provider);
+    provider.info = (platform) => {
+      const info = declared(platform);
+      return { ...info, capabilities: { ...info.capabilities, deletion: false } };
+    };
+  }
+
+  it("refuses a confirmed machine before touching the link, the provider or the host", async () => {
+    const { lifecycle, provider, store, hosts, disconnect } = await setup();
+    await lifecycle.importMachine({
+      accountId: store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    withoutDeletion(provider);
+    disconnect.mockClear();
+    await expect(lifecycle.deleteMachine("build", "bx_23456789")).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+      userMessage: "Daintree can't delete machines on Boat. Delete it in Boat's console.",
+    });
+    expect(provider.delete).not.toHaveBeenCalled();
+    expect(disconnect).not.toHaveBeenCalled();
+    expect(hosts.map((host) => host.id)).toEqual(["build"]);
+    expect(store.bindings()[0]!.resourceId).toBe("bx_23456789");
+  });
+
+  it("refuses an unanswered create's host without looking for its machine", async () => {
+    const { lifecycle, provider, store, hosts } = await setup();
+    vi.mocked(provider.create).mockRejectedValueOnce(
+      new BoatApiError("timeout", "slow", null, null, null)
+    );
+    await lifecycle.create({
+      accountId: store.accounts()[0]!.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: 2,
+    });
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    withoutDeletion(provider);
+    vi.mocked(provider.list).mockClear();
+    await expect(lifecycle.deleteMachine("build", null)).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+    expect(provider.list).not.toHaveBeenCalled();
+    expect(provider.delete).not.toHaveBeenCalled();
+    expect(hosts.map((host) => host.id)).toEqual(["build"]);
+  });
+});

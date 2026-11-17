@@ -31,6 +31,7 @@ import {
   canStartMachine,
   canStopMachine,
   cloudCostFacts,
+  cloudProviderFor,
   cloudStatusLabel,
   isObservationStale,
   machineSpecLabel,
@@ -345,7 +346,10 @@ export default function HostsSettingsTab() {
                                 [
                                   cloudStatusLabel(cloud, stale),
                                   machineDown ? null : connectionLabel(connection),
-                                  ...cloudCostFacts(cloud),
+                                  ...cloudCostFacts(
+                                    cloud,
+                                    cloudProviderFor(cloudSnapshot.providers, cloud)
+                                  ),
                                 ]
                                   .filter((fact): fact is string => fact !== null)
                                   .map((fact, index) => (
@@ -518,6 +522,10 @@ export default function HostsSettingsTab() {
           name={removeCloud.name}
           status={cloudStatusFor(cloudSnapshot, removeCloud.hostId)}
           providerName={providerName(cloudStatusFor(cloudSnapshot, removeCloud.hostId)?.providerId)}
+          provider={cloudProviderFor(
+            cloudSnapshot.providers,
+            cloudStatusFor(cloudSnapshot, removeCloud.hostId)
+          )}
           onClose={() => setRemoveCloud(null)}
         />
       )}

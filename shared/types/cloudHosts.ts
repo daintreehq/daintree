@@ -507,14 +507,21 @@ export const CLOUD_LIFETIME_CHOICES: readonly (number | null)[] = [1, 2, 4, 8, 2
 
 export const DEFAULT_CLOUD_LIFETIME_HOURS = 2;
 
-/** Whether the machine is billing compute right now, as far as was observed. */
-export function cloudMachineIsBilling(machine: CloudMachineState): boolean | null {
+/**
+ * Whether the machine is billing compute right now, as far as was observed. A
+ * stopped one bills when its provider declares that it does.
+ */
+export function cloudMachineIsBilling(
+  machine: CloudMachineState,
+  persistence: Pick<CloudProviderPersistence, "stoppedComputeBilled">
+): boolean | null {
   switch (machine) {
     case "starting":
     case "running":
     case "stopping":
       return true;
     case "stopped":
+      return persistence.stoppedComputeBilled;
     case "not-created":
     case "deleted":
       return false;

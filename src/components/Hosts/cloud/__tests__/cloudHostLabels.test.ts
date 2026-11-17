@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { CloudHostStatus } from "@shared/types/cloudHosts";
 import {
   canCheckMachine,
+  canDeleteMachines,
   canStartMachine,
   canStopMachine,
   cloudChipStatus,
+  cloudCostFacts,
   cloudStatusLabel,
   clockTime,
   idleClockSentence,
@@ -13,8 +15,10 @@ import {
   formatHourly,
   lifetimeSentence,
   stopKeepsSentence,
+  stoppedBillingSentence,
   machineSpecLabel,
 } from "../cloudHostLabels";
+import { BOAT_PROVIDER, provider } from "./cloudProviderFixtures";
 
 function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
   return {
@@ -140,13 +144,14 @@ describe("cloud host labels", () => {
     expect(canStopMachine(unknown)).toBe(false);
     expect(canCheckMachine(unknown, 0)).toBe(true);
     // The chip never truncates its status, so the long ones have short forms.
-    expect(cloudChipStatus(unknown)).toBe("state unknown");
+    expect(cloudChipStatus(unknown, BOAT_PROVIDER)).toBe("state unknown");
     expect(
       cloudChipStatus(
         status({
           operation: { id: "o", kind: "stopping", startedAt: 0, stage: "" },
           stop: { status: "failing", error: "disk" },
-        })
+        }),
+        BOAT_PROVIDER
       )
     ).toBe("machine stopping");
   });
@@ -213,5 +218,53 @@ describe("idleClockSentence (#17357)", () => {
     expect(idleClockSentence(idle, base + 30 * 60_000)).toBe(
       `Idle since ${at(base)}. Its idle time ended ${at(base + 30 * 60_000)}.`
     );
+  });
+});
+
+describe("what stopping and deleting mean for each provider (#17346)", () => {
+  const stopped = status({ machine: "stopped" });
+
+  it("leaves Boat's stop copy, facts and chip exactly as they were", () => {
+    expect(stoppedBillingSentence(BOAT_PROVIDER)).toBeNull();
+    expect(stopKeepsSentence(BOAT_PROVIDER.capabilities.persistence)).toBe(
+      "Files in its home folder are kept for at least 14 days while it's stopped, and may be deleted after that; /tmp, caches and memory aren't."
+    );
+    expect(cloudCostFacts(stopped, BOAT_PROVIDER)).toEqual(["$0.036/h when started"]);
+    expect(cloudChipStatus(stopped, BOAT_PROVIDER)).toBe("machine stopped");
+    expect(canDeleteMachines(BOAT_PROVIDER)).toBe(true);
+  });
+
+  it("says a stopped machine still bills, and that deleting it is how to stop paying", () => {
+    const billed = provider({ stoppedComputeBilled: true, deletion: true });
+    expect(stoppedBillingSentence(billed)).toBe(
+      "Acme keeps billing a stopped machine for compute until it's deleted. To stop paying for it, remove the host and delete its machine."
+    );
+    // The running rate is no longer what a start costs: the stop never ended the bill.
+    expect(cloudCostFacts(stopped, billed)).toEqual(["still billing"]);
+    expect(cloudChipStatus(stopped, billed)).toBe("stopped, still billing");
+    // A running machine's facts are the same either way.
+    expect(cloudCostFacts(status(), billed)).toEqual(cloudCostFacts(status(), BOAT_PROVIDER));
+  });
+
+  it("points to the provider's console when Daintree can't delete there", () => {
+    const consoleOnly = provider({ stoppedComputeBilled: true, deletion: false });
+    expect(stoppedBillingSentence(consoleOnly)).toBe(
+      "Acme keeps billing a stopped machine for compute until it's deleted. To stop paying for it, delete the machine in Acme's console."
+    );
+    expect(canDeleteMachines(consoleOnly)).toBe(false);
+  });
+
+  it("reads the two declarations independently", () => {
+    const noDelete = provider({ stoppedComputeBilled: false, deletion: false });
+    expect(stoppedBillingSentence(noDelete)).toBeNull();
+    expect(cloudCostFacts(stopped, noDelete)).toEqual(["$0.036/h when started"]);
+    expect(canDeleteMachines(noDelete)).toBe(false);
+  });
+
+  it("claims nothing for a provider that isn't registered", () => {
+    expect(stoppedBillingSentence(null)).toBeNull();
+    expect(cloudCostFacts(stopped, null)).toEqual(["$0.036/h when started"]);
+    // A delete through it is refused in main with the reason it's unavailable.
+    expect(canDeleteMachines(null)).toBe(true);
   });
 });

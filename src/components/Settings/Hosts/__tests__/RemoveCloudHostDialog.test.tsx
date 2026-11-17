@@ -1,16 +1,26 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { CloudHostCreatedFor, CloudHostStatus } from "@shared/types/cloudHosts";
+import type {
+  CloudHostCreatedFor,
+  CloudHostStatus,
+  CloudProviderInfo,
+} from "@shared/types/cloudHosts";
 
-const { cloudClient, remoteClient } = vi.hoisted(() => ({
+const { cloudClient, remoteClient, system } = vi.hoisted(() => ({
   cloudClient: { deleteMachine: vi.fn() },
   remoteClient: { forget: vi.fn() },
+  system: { openExternal: vi.fn() },
 }));
 vi.mock("@/clients/cloudHostsClient", () => ({ cloudHostsClient: cloudClient }));
 vi.mock("@/clients/remoteHostsClient", () => ({ remoteHostsClient: remoteClient }));
+vi.mock("@/clients/systemClient", () => ({ systemClient: system }));
 
 import { RemoveCloudHostDialog } from "../RemoveCloudHostDialog";
+import {
+  BOAT_PROVIDER,
+  provider as providerWith,
+} from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
 
 const MARK: CloudHostCreatedFor = {
   hostId: null,
@@ -55,13 +65,14 @@ function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
   };
 }
 
-function open(current: CloudHostStatus) {
+function open(current: CloudHostStatus, provider: CloudProviderInfo = BOAT_PROVIDER) {
   return render(
     <RemoveCloudHostDialog
       hostId="build"
       name="Login box"
       status={current}
-      providerName="Boat"
+      providerName={provider.name}
+      provider={provider}
       onClose={() => {}}
     />
   );
@@ -72,6 +83,7 @@ const dialogText = () => screen.getByRole("alertdialog").textContent ?? "";
 beforeEach(() => {
   cloudClient.deleteMachine.mockResolvedValue(undefined);
   remoteClient.forget.mockResolvedValue(undefined);
+  system.openExternal.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -140,5 +152,87 @@ describe("RemoveCloudHostDialog for any other machine", () => {
     open(status({ resourceId: null, machine: "not-created" }));
     expect(dialogText()).toContain("No machine was created for it.");
     expect(dialogText()).not.toContain("still exists");
+  });
+});
+
+describe("RemoveCloudHostDialog by what the provider declares (#17346)", () => {
+  const typedName = () => screen.queryByRole("textbox");
+
+  it("keeps Boat's keep and delete choices and their words", () => {
+    open(status({ createdFor: null }));
+    expect(screen.getByRole("radio", { name: /Keep it on Boat/ })).toBeTruthy();
+    expect(dialogText()).toContain("It stays stopped in your account. You can add it back from Add host.");
+    fireEvent.click(screen.getByRole("radio", { name: /Delete the machine too/ }));
+    expect(screen.getByRole("button", { name: "Delete machine" })).toBeTruthy();
+    expect(typedName()).not.toBeNull();
+    expect(screen.queryByTestId("remove-cloud-host-console")).toBeNull();
+  });
+
+  it("says a kept machine keeps billing until it's deleted when its provider bills it stopped", () => {
+    const billed = providerWith({ stoppedComputeBilled: true, deletion: true });
+    open(status({ createdFor: null }), billed);
+    expect(dialogText()).toContain(
+      "It stays stopped in your account and keeps billing Personal until it's deleted."
+    );
+    cleanup();
+    open(status({ createdFor: null, machine: "running" }), billed);
+    expect(dialogText()).toContain(
+      "It's running and keeps billing Personal until it's deleted, even once it stops."
+    );
+    expect(screen.getByRole("radio", { name: /Delete the machine too/ })).toBeTruthy();
+  });
+
+  it("offers no Delete for a provider that can't delete, and only forgets the host", async () => {
+    const consoleOnly = providerWith({ stoppedComputeBilled: true, deletion: false });
+    open(status({ createdFor: null }), consoleOnly);
+    expect(screen.queryByRole("radio")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete machine" })).toBeNull();
+    expect(typedName()).toBeNull();
+    expect(dialogText()).toContain("Remove 'Login box'?");
+    expect(dialogText()).not.toContain("Delete 'Login box'?");
+    expect(dialogText()).toContain("its machine stays in your Acme account");
+    expect(dialogText()).toContain("keeps billing Personal until it's deleted");
+    expect(dialogText()).toContain(
+      "Daintree can't delete machines on Acme. To delete it and stop paying for it, use Acme's console."
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open Acme console" }));
+    expect(system.openExternal).toHaveBeenCalledWith(consoleOnly.dashboardUrl);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove host" }));
+    await waitFor(() => expect(remoteClient.forget).toHaveBeenCalledWith("build"));
+    expect(cloudClient.deleteMachine).not.toHaveBeenCalled();
+  });
+
+  it("forgets a host whose create never answered, pointing to the console instead", async () => {
+    const consoleOnly = providerWith({ stoppedComputeBilled: false, deletion: false });
+    open(
+      status({
+        resourceId: null,
+        machine: "not-created",
+        lastError: { code: "outcome-unknown", message: "No answer", at: 0 },
+      }),
+      consoleOnly
+    );
+    expect(typedName()).toBeNull();
+    expect(dialogText()).toContain(
+      "Acme hasn't confirmed whether it made a machine for it, and removing the host doesn't delete one."
+    );
+    expect(screen.getByRole("button", { name: "Open Acme console" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Remove host" }));
+    await waitFor(() => expect(remoteClient.forget).toHaveBeenCalledWith("build"));
+    expect(cloudClient.deleteMachine).not.toHaveBeenCalled();
+  });
+
+  it("needs no console for a host that never had a machine", async () => {
+    open(
+      status({ resourceId: null, machine: "not-created" }),
+      providerWith({ deletion: false })
+    );
+    expect(dialogText()).toContain("No machine was created for it.");
+    expect(screen.queryByTestId("remove-cloud-host-console")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Remove host" }));
+    await waitFor(() => expect(remoteClient.forget).toHaveBeenCalledWith("build"));
+    expect(cloudClient.deleteMachine).not.toHaveBeenCalled();
   });
 });

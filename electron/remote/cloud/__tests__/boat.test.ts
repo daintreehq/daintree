@@ -401,6 +401,17 @@ describe("BoatProvider", () => {
     }
   });
 
+  // The renderer's Boat fixture (cloudProviderFixtures.ts) mirrors this: a
+  // stop ends compute billing and Daintree can delete, so Boat's Stop and
+  // Remove copy carries no billing caveat and keeps its Delete (#17346).
+  it("declares that a stopped machine stops billing and that Daintree can delete it", () => {
+    const { capabilities } = new BoatProvider(() => {
+      throw new Error("unused");
+    }).info("darwin");
+    expect(capabilities.persistence.stoppedComputeBilled).toBe(false);
+    expect(capabilities.deletion).toBe(true);
+  });
+
   it("describes errors in terms a person can act on", () => {
     const p = new BoatProvider(() => {
       throw new Error("unused");

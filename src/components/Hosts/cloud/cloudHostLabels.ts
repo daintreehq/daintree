@@ -2,9 +2,57 @@ import { pluralize } from "@/lib/pluralize";
 import {
   cloudMachineLabel,
   type CloudHostStatus,
+  type CloudProviderInfo,
   type CloudProviderPersistence,
 } from "@shared/types/cloudHosts";
 import type { HostIdleObservation } from "@shared/types/hostIdle";
+
+/** The parts of a provider's declaration that decide what stopping and deleting mean. */
+export type CloudProviderTerms = Pick<CloudProviderInfo, "name" | "capabilities">;
+
+/** The provider a host's machine runs on, or null while it isn't registered. */
+export function cloudProviderFor<P extends { id: string }>(
+  providers: readonly P[],
+  status: Pick<CloudHostStatus, "providerId"> | null
+): P | null {
+  if (!status) return null;
+  return providers.find((provider) => provider.id === status.providerId) ?? null;
+}
+
+/** Whether a stopped machine on this provider still bills for compute; false when it isn't known. */
+export function billsWhileStopped(provider: CloudProviderTerms | null): boolean {
+  return provider?.capabilities.persistence.stoppedComputeBilled === true;
+}
+
+/**
+ * Daintree removes machines from a provider only when its declaration says it
+ * can. An unregistered provider keeps today's choice: a delete through it is
+ * refused with the reason it's unavailable.
+ */
+export function canDeleteMachines(provider: CloudProviderTerms | null): boolean {
+  return provider === null || provider.capabilities.deletion;
+}
+
+/**
+ * For a provider that bills a stopped machine, that it does and the way to
+ * stop paying: Delete when Daintree can, the provider's console otherwise.
+ * Null for one where stopping ends compute billing, which needs no warning.
+ */
+export function stoppedBillingSentence(provider: CloudProviderTerms | null): string | null {
+  if (!provider || !billsWhileStopped(provider)) return null;
+  const stopPaying = provider.capabilities.deletion
+    ? "remove the host and delete its machine"
+    : `delete the machine in ${provider.name}'s console`;
+  return `${provider.name} keeps billing a stopped machine for compute until it's deleted. To stop paying for it, ${stopPaying}.`;
+}
+
+/** That a stopped machine on this provider is still billing, for a line of short facts. */
+export function stoppedBillingFact(
+  status: Pick<CloudHostStatus, "machine">,
+  provider: CloudProviderTerms | null
+): string | null {
+  return status.machine === "stopped" && billsWhileStopped(provider) ? "still billing" : null;
+}
 
 /** "4 vCPU · 8 GB", or what is known of it. */
 export function machineSpecLabel(vcpu: number | null, memoryGB: number | null): string {
@@ -138,9 +186,15 @@ export function cloudStatusLabel(status: CloudHostStatus, stale = false): string
  * The toolbar chip's few words, beside a name it must never squeeze: never
  * truncated there, so the long states have short forms.
  */
-export function cloudChipStatus(status: CloudHostStatus): string {
+export function cloudChipStatus(
+  status: CloudHostStatus,
+  provider: CloudProviderTerms | null
+): string {
   if (status.operation === null && status.machine === "unknown") return "state unknown";
   if (status.operation?.kind === "stopping") return "machine stopping";
+  if (status.operation === null && stoppedBillingFact(status, provider)) {
+    return "stopped, still billing";
+  }
   return cloudStatusLabel(status).toLowerCase();
 }
 
@@ -170,18 +224,25 @@ export function canCheckMachine(status: CloudHostStatus, now: number): boolean {
 
 /**
  * The facts that decide what a machine costs now: its rate while it bills,
- * and when it stops by itself. A stopped machine's rate is what a start costs.
+ * and when it stops by itself. A stopped machine's rate is what a start
+ * costs, unless its provider bills it while stopped too: then that is the fact.
  */
-export function cloudCostFacts(status: CloudHostStatus): string[] {
+export function cloudCostFacts(
+  status: CloudHostStatus,
+  provider: CloudProviderTerms | null
+): string[] {
   const rate = hourlyShort(status.hourlyDollars);
   const running = status.machine === "running" || status.machine === "starting";
   const facts: string[] = [];
+  const stoppedBilling = stoppedBillingFact(status, provider);
   if (running) {
     if (rate) facts.push(rate);
     const stop = clockTime(status.autoStopAt);
     if (status.machine === "running") {
       facts.push(stop ? `stops by itself ${stop}` : "no auto-stop");
     }
+  } else if (stoppedBilling) {
+    facts.push(stoppedBilling);
   } else if (rate && canStartMachine(status)) {
     facts.push(`${rate} when started`);
   }

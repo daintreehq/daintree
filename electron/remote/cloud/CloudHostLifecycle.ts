@@ -16,6 +16,7 @@ import {
   type CloudMachineState,
   type CloudOperation,
   type CloudOperationKind,
+  type CloudProviderId,
   type CloudProvisioningSelection,
 } from "../../../shared/types/cloudHosts.js";
 import {
@@ -858,6 +859,9 @@ export class CloudHostLifecycle {
    */
   async deleteMachine(hostId: unknown, confirmResourceId: unknown): Promise<void> {
     const confirmed = this.requireBindingForHost(hostId);
+    // Before anything is aborted, looked up or forgotten: a provider that can't
+    // delete from Daintree leaves its machine to its own console.
+    this.requireDeletion(confirmed.providerId);
     if (confirmed.resourceId && confirmResourceId !== confirmed.resourceId) {
       throw invalid("The machine to delete changed since you confirmed. Check it and try again.");
     }
@@ -891,6 +895,8 @@ export class CloudHostLifecycle {
       await this.deps.hosts.disconnect(confirmed.hostId).catch(() => {});
       await this.operate(binding.id, "deleting", async (signal) => {
         const { provider, credentials } = await this.context(binding, signal);
+        // The provider may have been replaced while the operation waited.
+        this.requireDeletion(binding.providerId);
         this.stage(binding.id, "Deleting the machine");
         try {
           await provider.delete(credentials, resourceId);
@@ -904,6 +910,18 @@ export class CloudHostLifecycle {
       });
     }
     await this.deps.hosts.forget(confirmed.hostId);
+  }
+
+  /**
+   * Refuses a delete through a registered provider that declares it can't.
+   * An unregistered one is refused later, with the reason it's unavailable.
+   */
+  private requireDeletion(providerId: CloudProviderId): void {
+    if (this.deps.accounts.providerUnavailable(providerId) !== null) return;
+    const info = this.deps.accounts.provider(providerId).info(process.platform);
+    if (info.capabilities.deletion) return;
+    const message = `Daintree can't delete machines on ${info.name}. Delete it in ${info.name}'s console.`;
+    throw new AppError({ code: "UNSUPPORTED", message, userMessage: message });
   }
 
   /** Reads the machine's state now, for a person's refresh. Never starts anything. */

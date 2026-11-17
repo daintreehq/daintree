@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { cloudProviderNamespace, isCloudProviderId, pluginCloudProviderId } from "../cloudHosts.js";
+import {
+  cloudMachineIsBilling,
+  cloudProviderNamespace,
+  isCloudProviderId,
+  pluginCloudProviderId,
+} from "../cloudHosts.js";
 
 describe("cloud provider ids", () => {
   it("reads a bare name as a built-in, registered or not", () => {
@@ -72,5 +77,18 @@ describe("cloud provider ids", () => {
     expect(pluginCloudProviderId("acme.clouds", "")).toBeNull();
     expect(pluginCloudProviderId("acme.clouds", "EC2")).toBeNull();
     expect(pluginCloudProviderId("acme.clouds.extra", "ec2")).toBeNull();
+  });
+});
+
+describe("cloudMachineIsBilling (#17346)", () => {
+  it("bills a stopped machine only where the provider declares it does", () => {
+    expect(cloudMachineIsBilling("stopped", { stoppedComputeBilled: false })).toBe(false);
+    expect(cloudMachineIsBilling("stopped", { stoppedComputeBilled: true })).toBe(true);
+    for (const declared of [false, true]) {
+      const persistence = { stoppedComputeBilled: declared };
+      expect(cloudMachineIsBilling("running", persistence)).toBe(true);
+      expect(cloudMachineIsBilling("deleted", persistence)).toBe(false);
+      expect(cloudMachineIsBilling("unknown", persistence)).toBeNull();
+    }
   });
 });
