@@ -515,6 +515,7 @@ import type {
 import {
   getDecisionQuestionList,
   onDecisionQuestionsChanged,
+  setDecisionQuestions,
 } from "../../decisionsQuestionList.js";
 import { RetiredAttemptError } from "../relayTransport.js";
 
@@ -674,6 +675,8 @@ describe("Decisions entry", () => {
       expect(listPushes()).toHaveLength(1);
     } finally {
       off();
+      // The list outlives the entry's reset: leave none for the tests after.
+      setDecisionQuestions([]);
     }
   });
 

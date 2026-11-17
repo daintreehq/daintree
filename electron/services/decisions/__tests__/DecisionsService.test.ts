@@ -587,6 +587,7 @@ describe("DecisionsService pane state", () => {
 describe("DecisionsService question list (#17229)", () => {
   function listed(options: { handled?: Record<string, number> } = {}) {
     let rows: QuestionRow[] = [];
+    let reads = 0;
     let handled = options.handled ?? null;
     // Set to hold the next read until the test lets it land.
     let gate: Promise<void> | null = null;
@@ -598,6 +599,7 @@ describe("DecisionsService question list (#17229)", () => {
         return () => listeners.delete(listener);
       },
       listQuestions: async () => {
+        reads += 1;
         const read = rows;
         if (gate !== null) await gate;
         return read;
@@ -625,6 +627,7 @@ describe("DecisionsService question list (#17229)", () => {
       panes,
       commit,
       setRows: (next: QuestionRow[]) => (rows = next),
+      reads: () => reads,
       setHandled: (next: Record<string, number>) => (handled = next),
       fireCommit: () => {
         for (const listener of listeners) listener();
@@ -724,7 +727,7 @@ describe("DecisionsService question list (#17229)", () => {
   });
 
   it("lists again when this machine's host id is forgotten or set, with no write to the store", async () => {
-    const { service, lists, setRows } = listed();
+    const { service, lists, setRows, reads } = listed();
     setRows([row(1)]);
     await service.start(on(HOST));
     expect(lists.at(-1)).toHaveLength(1);
@@ -740,6 +743,12 @@ describe("DecisionsService question list (#17229)", () => {
     await vi.waitFor(() => expect(lists.at(-1)).toEqual([]));
     await service.start(on(HOST));
     await vi.waitFor(() => expect(lists.at(-1)).toHaveLength(1));
+    // An unchanged host id reads nothing again.
+    const before = reads();
+    await service.start(on(HOST));
+    service.updateSettings(on(HOST));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(reads()).toBe(before);
     await service.stop();
   });
 
