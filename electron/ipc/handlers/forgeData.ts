@@ -489,8 +489,8 @@ export function registerForgeDataHandlers(): () => void {
       const cwd = requireCwd(payload.cwd);
       // The viewer this answers for is the one "Assign to me" then assigns, so
       // it must be the issues provider's account, not the code forge's.
-      const { impl } = await resolveForCwd(cwd, "issues");
-      return impl.identity ? impl.identity.getCurrentUser() : null;
+      const { impl, repoRef } = await resolveForCwd(cwd, "issues");
+      return impl.identity ? impl.identity.getCurrentUser(repoRef) : null;
     })
   );
 

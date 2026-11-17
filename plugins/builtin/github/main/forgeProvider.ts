@@ -33,7 +33,12 @@ import { validateGitHubToken } from "./GitHubToken.js";
 import { parseGitHubRepoUrl } from "./GitHubRepoContext.js";
 import { gitHubRateLimitService, rateLimitServiceForHost } from "./GitHubRateLimitService.js";
 import { cacheOwner, clearPRCaches, repoEventsETagCache } from "./GitHubCaches.js";
-import { getEnterpriseHost, githubWebBase } from "./GitHubHost.js";
+import {
+  GITHUB_COM_HOST,
+  getEnterpriseHost,
+  githubWebBase,
+  isServedGitHubHost,
+} from "./GitHubHost.js";
 import { missingTokenMessage } from "./queryInfra.js";
 import type { RepoContext } from "./types.js";
 import {
@@ -127,8 +132,12 @@ const deploymentsCapability: DeploymentsCapability = {
 // expects a `ForgeUser`, so the GitHub `{ login, avatarUrl }` shape is
 // projected and the raw `GitHubTokenConfig` stays inside the auth module.
 const identityCapability: IdentityCapability = {
-  async getCurrentUser(): Promise<ForgeUser | null> {
-    const config = await GitHubAuth.getConfigAsync();
+  // Each host has its own account: on an Enterprise Server repository the
+  // viewer is that server's login, never github.com's.
+  async getCurrentUser(repo?: RepoRef): Promise<ForgeUser | null> {
+    const host = repo?.host ?? GITHUB_COM_HOST;
+    if (!isServedGitHubHost(host)) return null;
+    const config = await GitHubAuth.getConfigAsync(host);
     if (!config.username) return null;
     return {
       login: config.username,

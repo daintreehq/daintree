@@ -1007,7 +1007,8 @@ describe("registerForgeDataHandlers", () => {
 
     const result = await findHandler("forge:get-current-user")(null, { cwd: "/repo" });
 
-    expect(implWithIdentity.identity.getCurrentUser).toHaveBeenCalledTimes(1);
+    // The viewer is asked for this repository: a provider can hold an account per host.
+    expect(implWithIdentity.identity.getCurrentUser).toHaveBeenCalledWith(repoRef);
     expect(result).toEqual(user);
   });
 

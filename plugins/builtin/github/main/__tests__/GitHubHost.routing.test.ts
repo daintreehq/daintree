@@ -149,6 +149,18 @@ describe("GitHub requests by repository host (#17324)", () => {
     });
   });
 
+  it("names each host's own account as the viewer", async () => {
+    GitHubAuth.setValidatedUserInfo("octocat", undefined, ["repo"], undefined);
+    GitHubAuth.setValidatedUserInfo("mona", undefined, ["repo"], undefined, GHES);
+
+    await expect(githubForgeProvider.identity!.getCurrentUser(GHES_REPO)).resolves.toMatchObject({
+      login: "mona",
+    });
+    await expect(
+      githubForgeProvider.identity!.getCurrentUser(GITHUB_COM_REPO)
+    ).resolves.toMatchObject({ login: "octocat" });
+  });
+
   it("builds web URLs on the repository's host", () => {
     expect(githubForgeProvider.buildPRUrl(GHES_REPO, 5)).toBe(`https://${GHES}/team/app/pull/5`);
     expect(githubForgeProvider.buildPRUrl(GITHUB_COM_REPO, 5)).toBe(

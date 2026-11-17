@@ -1107,7 +1107,11 @@ export interface BatchLookupCapability {
  * self-assignment" rather than an error.
  */
 export interface IdentityCapability {
-  getCurrentUser(): Promise<ForgeUser | null>;
+  /**
+   * `repo` is the repository the viewer is wanted for, for a provider whose
+   * account differs per host (a self-hosted instance beside the public one).
+   */
+  getCurrentUser(repo?: RepoRef): Promise<ForgeUser | null>;
 }
 
 /**
