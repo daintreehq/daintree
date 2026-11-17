@@ -189,6 +189,19 @@ describe("MachineKeeper", () => {
     }
   });
 
+  it("leaves a pass that never settles behind, and the next one renews", async () => {
+    vi.useFakeTimers({ now: Date.parse("2026-11-18T09:00:00Z") });
+    const h = setup();
+    const keeper = new MachineKeeper({ idle: h.tracker, driverFor: () => h.driver });
+    await keeper.arm(h.request());
+    h.driver.inspect.mockImplementationOnce(() => new Promise<ProviderResource>(() => {}));
+    h.machine.deadline = Date.now() + 20 * MINUTE;
+    await vi.advanceTimersByTimeAsync(15 * MINUTE);
+    expect(h.driver.renew).toHaveBeenCalled();
+    keeper.dispose();
+    vi.useRealTimers();
+  });
+
   it("renews by the lifetime set on the machine now, not the one it was given", async () => {
     const h = setup();
     await h.arm();

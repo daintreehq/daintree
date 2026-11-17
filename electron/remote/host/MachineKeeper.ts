@@ -47,6 +47,7 @@ const RETRY_MAX_MS = 10 * 60_000;
 /** A stop this machine sent shows as under way at once; still running and not stopping after this, it was overtaken. */
 const STOP_SETTLE_MS = 60_000;
 const VERIFY_TIMEOUT_MS = 10_000;
+const STEP_DEADLINE_MS = 3 * 60_000;
 /** A key whose turn comes later than this after it arrived is turned away: its sender has stopped waiting. */
 const ARM_WAIT_MS = 20_000;
 
@@ -201,7 +202,18 @@ export class MachineKeeper {
   /** One pass; a pass already under way is shared. Exposed for tests. */
   tick(): Promise<void> {
     if (this.disposed || !this.held) return Promise.resolve();
-    this.running ??= this.step().finally(() => {
+    if (this.running) return this.running;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // A pass that never settles is left behind, and nothing it finds later counts.
+    const abandoned = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        this.generation += 1;
+        this.controller?.abort();
+        resolve();
+      }, STEP_DEADLINE_MS);
+    });
+    this.running = Promise.race([this.step(), abandoned]).finally(() => {
+      clearTimeout(timer);
       this.running = null;
     });
     return this.running;
