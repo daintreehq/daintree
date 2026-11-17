@@ -1415,6 +1415,7 @@ describe("useRecipeRunner — a confirmed recipe that changed before it started 
     });
     await answer(true);
     expect(result.current.canRetryFailed).toBe(true);
+    const ranDigest = recipeApprovalDigest(recipes[0]!.terminals);
 
     refuseChangedRecipes();
     act(() => {
@@ -1433,6 +1434,16 @@ describe("useRecipeRunner — a confirmed recipe that changed before it started 
     await answer(true);
     rerender();
 
+    // The approval reached the store pinned to the steps that ran, and was refused.
+    expect(runRecipeWithResultsMock).toHaveBeenCalledTimes(2);
+    expect(runRecipeWithResultsMock.mock.calls[1]?.[4]).toMatchObject({
+      terminalIndices: [1],
+      expectedRecipe: { id: "r1", terminalsDigest: ranDigest },
+    });
+    expect(logErrorMock).toHaveBeenCalledWith(
+      "Recipe retry failed",
+      expect.any(RecipeChangedSinceShownError)
+    );
     // One explanation, not two: the failures still happened and say why Retry went.
     expect(result.current.changedRecipe).toBeNull();
     expect(result.current.spawnFailureSummary?.recipeName).toBe("Pair");
