@@ -1229,7 +1229,15 @@ describe("CloudHostLifecycle review fixes", () => {
       lifetimeHours: 2,
     });
     await vi.waitFor(() => expect(store.bindings()[0]?.resourceId).toBe("bx_23456789"));
+    await vi.waitFor(() => expect(provider.inspect).toHaveBeenCalled());
     vi.mocked(provider.inspect).mockImplementation(async () => state.machine);
+    // A Start the create refuses changes nothing it records.
+    const writes = vi.spyOn(store, "updateBinding");
+    await expect(lifecycle.startMachine("build")).rejects.toThrow(
+      /creating operation is under way/
+    );
+    expect(writes).not.toHaveBeenCalled();
+    writes.mockRestore();
     const stopping = lifecycle.stopMachine("build");
     release();
     await stopping;
@@ -1712,7 +1720,10 @@ describe("CloudHostLifecycle lifetime keeper", () => {
   });
 
   it("lets a Stop asked for during a renewal win", async () => {
-    const { lifecycle, provider } = await keeper({ connected: true, busy: true, shown: false }, 10);
+    const { lifecycle, provider, disconnect } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
     let release: () => void = () => {};
     vi.mocked(provider.renewLifetime).mockImplementationOnce(async () => {
       await new Promise<void>((resolve) => (release = resolve));
@@ -1721,6 +1732,14 @@ describe("CloudHostLifecycle lifetime keeper", () => {
     const renewing = lifecycle.renewDue();
     await vi.waitFor(() => expect(provider.renewLifetime).toHaveBeenCalled());
     const stopping = lifecycle.stopMachine("build");
+    // The stop holds the machine while the renewal settles, and lets go of nothing until it has.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(lifecycle.statuses()[0]!.operation?.kind).toBe("stopping");
+    await expect(lifecycle.startMachine("build")).rejects.toThrow(
+      /stopping operation is under way/
+    );
+    expect(disconnect).not.toHaveBeenCalled();
+    expect(provider.stop).not.toHaveBeenCalled();
     release();
     await Promise.all([renewing, stopping]);
     expect(lifecycle.statuses()[0]!.machine).toBe("stopped");
@@ -1743,6 +1762,232 @@ describe("CloudHostLifecycle lifetime keeper", () => {
     await Promise.all([renewing, changing]);
     const sent = vi.mocked(provider.renewLifetime).mock.calls.map((call) => call[2]);
     expect(sent).toEqual([7200, 3600]);
+  });
+
+  it("keeps a Stop's intent when a Start it refused arrives while the stop fails (#17549)", async () => {
+    const { lifecycle, provider, store } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    let fail: (error: Error) => void = () => {};
+    vi.mocked(provider.stop).mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (fail = reject))
+    );
+    const stopping = lifecycle.stopMachine("build");
+    await vi.waitFor(() => expect(provider.stop).toHaveBeenCalled());
+    await expect(lifecycle.startMachine("build")).rejects.toThrow(
+      /stopping operation is under way/
+    );
+    fail(new BoatApiError("server", "down", 500, null, null));
+    await expect(stopping).rejects.toThrow();
+    expect(store.bindings()[0]!.intent).toBe("stop");
+    // The provider still reports it running after the failed stop: the keeper leaves it to stop.
+    await lifecycle.renewDue();
+    expect(provider.renewLifetime).not.toHaveBeenCalled();
+    expect(provider.start).not.toHaveBeenCalled();
+  });
+
+  it("keeps a Stop's intent when a Start it refused arrives while the stop runs out of time (#17549)", async () => {
+    const { lifecycle, provider, store, state, clock } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    // The provider takes the stop, but the machine never gets there.
+    vi.mocked(provider.stop).mockImplementationOnce(async () =>
+      resource({ machine: "stopping", rawState: "archiving" })
+    );
+    let release: () => void = () => {};
+    vi.mocked(provider.inspect).mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return state.machine;
+    });
+    const inspected = vi.mocked(provider.inspect).mock.calls.length;
+    const stopping = lifecycle.stopMachine("build");
+    await vi.waitFor(() => expect(provider.inspect).toHaveBeenCalledTimes(inspected + 1));
+    await expect(lifecycle.startMachine("build")).rejects.toThrow(
+      /stopping operation is under way/
+    );
+    clock.now = NOW + 16 * 60_000;
+    release();
+    await expect(stopping).rejects.toThrow(/hasn't finished stopping/);
+    expect(lifecycle.statuses()[0]!.machine).toBe("running");
+    expect(store.bindings()[0]!.intent).toBe("stop");
+    await lifecycle.renewDue();
+    expect(provider.renewLifetime).not.toHaveBeenCalled();
+  });
+
+  it("holds the machine for a Stop while it lets go of the link, and shares it with a second Stop", async () => {
+    const { lifecycle, provider, store, disconnect } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    let release: () => void = () => {};
+    disconnect.mockImplementationOnce(() => new Promise<void>((resolve) => (release = resolve)));
+    let fail: (error: Error) => void = () => {};
+    vi.mocked(provider.stop).mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (fail = reject))
+    );
+    const first = lifecycle.stopMachine("build");
+    await vi.waitFor(() => expect(disconnect).toHaveBeenCalled());
+    expect(lifecycle.statuses()[0]!.operation?.kind).toBe("stopping");
+    await expect(lifecycle.startMachine("build")).rejects.toThrow(
+      /stopping operation is under way/
+    );
+    const writes = vi.spyOn(store, "updateBinding");
+    const second = lifecycle.stopMachine("build");
+    expect(writes).not.toHaveBeenCalled();
+    writes.mockRestore();
+    expect(provider.stop).not.toHaveBeenCalled();
+    release();
+    await vi.waitFor(() => expect(provider.stop).toHaveBeenCalled());
+    fail(new BoatApiError("server", "down", 500, null, null));
+    const [one, two] = await Promise.allSettled([first, second]);
+    expect(one.status).toBe("rejected");
+    expect(two.status).toBe("rejected");
+    expect((two as PromiseRejectedResult).reason).toBe((one as PromiseRejectedResult).reason);
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(provider.stop).toHaveBeenCalledTimes(1);
+    expect(store.bindings()[0]!.intent).toBe("stop");
+  });
+
+  it("lets a Delete cancel a Stop still letting go of the link, before the provider hears of it", async () => {
+    const { lifecycle, provider, disconnect, hosts } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    let release: () => void = () => {};
+    disconnect.mockImplementationOnce(() => new Promise<void>((resolve) => (release = resolve)));
+    const stopping = lifecycle.stopMachine("build");
+    await vi.waitFor(() => expect(disconnect).toHaveBeenCalled());
+    const deleting = lifecycle.deleteMachine("build", "bx_23456789");
+    release();
+    await expect(stopping).rejects.toThrow(/Cancelled/);
+    await deleting;
+    expect(provider.stop).not.toHaveBeenCalled();
+    expect(provider.delete).toHaveBeenCalledTimes(1);
+    expect(hosts).toHaveLength(0);
+  });
+
+  it("ends a Stop as cancelled when its host goes while it lets go of the link", async () => {
+    const { lifecycle, provider, store, hosts, disconnect } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    let release: () => void = () => {};
+    disconnect.mockImplementationOnce(() => new Promise<void>((resolve) => (release = resolve)));
+    const stopping = lifecycle.stopMachine("build");
+    await vi.waitFor(() => expect(disconnect).toHaveBeenCalled());
+    hosts.splice(0, 1);
+    lifecycle.start();
+    try {
+      await vi.waitFor(() => expect(store.bindings()).toHaveLength(0));
+      release();
+      await expect(stopping).rejects.toThrow(/Cancelled/);
+      expect(provider.stop).not.toHaveBeenCalled();
+    } finally {
+      lifecycle.dispose();
+    }
+  });
+
+  it("never sends a Stop that a shutdown cancelled while its key was read", async () => {
+    const { lifecycle, provider, accounts } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    const read = accounts.credentials.bind(accounts);
+    let release: () => void = () => {};
+    const credentials = vi
+      .spyOn(accounts, "credentials")
+      .mockImplementationOnce(async (account, signal) => {
+        await new Promise<void>((resolve) => (release = resolve));
+        return read(account, signal);
+      });
+    const stopping = lifecycle.stopMachine("build");
+    await vi.waitFor(() => expect(credentials).toHaveBeenCalled());
+    lifecycle.dispose();
+    release();
+    await expect(stopping).rejects.toThrow(/Cancelled/);
+    expect(provider.stop).not.toHaveBeenCalled();
+    expect(lifecycle.statuses()[0]!.lastError).toBeNull();
+  });
+
+  it("deletes a machine whose Stop claimed it first after both superseded a Start", async () => {
+    const { lifecycle, provider, hosts } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10,
+      { machine: "stopped", rawState: "archived" }
+    );
+    let release: () => void = () => {};
+    vi.mocked(provider.start).mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return resource({ machine: "starting", rawState: "provisioning" });
+    });
+    const starting = lifecycle.startMachine("build");
+    await vi.waitFor(() => expect(provider.start).toHaveBeenCalled());
+    const stopping = lifecycle.stopMachine("build");
+    const deleting = lifecycle.deleteMachine("build", "bx_23456789");
+    release();
+    await expect(starting).rejects.toThrow(/Cancelled/);
+    await expect(stopping).rejects.toThrow(/Cancelled/);
+    await deleting;
+    expect(provider.stop).not.toHaveBeenCalled();
+    expect(provider.delete).toHaveBeenCalledTimes(1);
+    expect(hosts).toHaveLength(0);
+  });
+
+  it("deletes a machine a Start claimed while the delete let go of the link", async () => {
+    const { lifecycle, provider, hosts, disconnect, state } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10,
+      { machine: "stopped", rawState: "archived" }
+    );
+    let linkDropped: () => void = () => {};
+    disconnect.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (linkDropped = resolve))
+    );
+    let started: () => void = () => {};
+    vi.mocked(provider.start).mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => (started = resolve));
+      state.machine = resource({ machine: "running" });
+      return resource({ machine: "starting", rawState: "provisioning" });
+    });
+    const deleting = lifecycle.deleteMachine("build", "bx_23456789");
+    await vi.waitFor(() => expect(disconnect).toHaveBeenCalled());
+    const starting = lifecycle.startMachine("build");
+    await vi.waitFor(() => expect(provider.start).toHaveBeenCalled());
+    linkDropped();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // A Stop asked for now waits on the same Start, behind the delete: it can't take the machine.
+    const stopping = lifecycle.stopMachine("build");
+    started();
+    await expect(starting).rejects.toThrow(/Cancelled/);
+    await expect(stopping).rejects.toThrow(/deleting operation is under way/);
+    await deleting;
+    expect(provider.stop).not.toHaveBeenCalled();
+    expect(provider.delete).toHaveBeenCalledTimes(1);
+    expect(hosts).toHaveLength(0);
+  });
+
+  it("leaves the intent and the link alone when a delete under way refuses a Stop", async () => {
+    const { lifecycle, provider, store, disconnect } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    await lifecycle.startMachine("build");
+    expect(store.bindings()[0]!.intent).toBe("run");
+    let fail: (error: Error) => void = () => {};
+    vi.mocked(provider.delete).mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (fail = reject))
+    );
+    const deleting = lifecycle.deleteMachine("build", "bx_23456789");
+    await vi.waitFor(() => expect(provider.delete).toHaveBeenCalled());
+    const linksDropped = disconnect.mock.calls.length;
+    await expect(lifecycle.stopMachine("build")).rejects.toThrow(/deleting operation is under way/);
+    expect(disconnect).toHaveBeenCalledTimes(linksDropped);
+    fail(new BoatApiError("server", "down", 500, null, null));
+    await expect(deleting).rejects.toThrow();
+    expect(store.bindings()[0]!.intent).toBe("run");
+    expect(provider.stop).not.toHaveBeenCalled();
   });
 });
 

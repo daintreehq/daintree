@@ -1021,8 +1021,12 @@ export class CloudHostLifecycle {
       if (binding.creation) return this.retryCreate(hostId);
       throw invalid("This host has no machine yet.");
     }
-    this.deps.store.updateBinding(binding.id, (current) => ({ ...current, intent: "run" }));
-    await this.operate(binding.id, "starting", (signal) => this.runStart(binding.id, signal));
+    await this.operate(
+      binding.id,
+      "starting",
+      (signal) => this.runStart(binding.id, signal),
+      () => this.deps.store.updateBinding(binding.id, (current) => ({ ...current, intent: "run" }))
+    );
   }
 
   private async runStart(bindingId: string, signal: AbortSignal): Promise<void> {
@@ -1088,16 +1092,26 @@ export class CloudHostLifecycle {
       running.controller.abort();
       await running.promise.catch(() => {});
     }
-    this.deps.store.updateBinding(binding.id, (current) => ({ ...current, intent: "stop" }));
-    await this.settleRenewal(binding.id);
-    await this.deps.hosts.disconnect(binding.hostId).catch(() => {});
-    await this.operate(binding.id, "stopping", (signal) => this.runStop(binding.id, signal));
+    // The stop holds the machine before it waits on anything, so a Start meanwhile is refused.
+    await this.operate(
+      binding.id,
+      "stopping",
+      async (signal) => {
+        await this.settleRenewal(binding.id);
+        await this.deps.hosts.disconnect(binding.hostId).catch(() => {});
+        if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+        await this.runStop(binding.id, signal);
+      },
+      () => this.deps.store.updateBinding(binding.id, (current) => ({ ...current, intent: "stop" }))
+    );
   }
 
   private async runStop(bindingId: string, signal: AbortSignal): Promise<void> {
     const binding = this.deps.store.binding(bindingId);
     if (!binding?.resourceId) return;
     const { provider, credentials } = await this.context(binding, signal);
+    // A delete or shutdown that took over meanwhile: the provider never hears of this stop.
+    if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
     this.stage(bindingId, "Saving the disk and stopping");
     try {
       const stopping = await provider.stop(credentials, binding.resourceId);
@@ -1160,7 +1174,8 @@ export class CloudHostLifecycle {
     }
     if (resourceId) {
       await this.deps.hosts.disconnect(confirmed.hostId).catch(() => {});
-      await this.operate(binding.id, "deleting", async (signal) => {
+      // A Stop or Start that claimed the machine while this waited gives way too.
+      await this.operateOver(binding.id, "deleting", async (signal) => {
         const { provider, credentials } = await this.context(binding, signal);
         // The provider may have been replaced while the operation waited.
         this.requireDeletion(binding.providerId);
@@ -1177,6 +1192,26 @@ export class CloudHostLifecycle {
       });
     }
     await this.deps.hosts.forget(confirmed.hostId);
+  }
+
+  /**
+   * Runs `work` as the machine's operation once every other one on it is
+   * aborted and finished, including any that claimed it while the last wound
+   * down. It claims the machine in the same turn as its last look, so a caller
+   * queued behind the aborted operation can't get in first.
+   */
+  private async operateOver(
+    bindingId: string,
+    kind: CloudOperationKind,
+    work: (signal: AbortSignal) => Promise<void>
+  ): Promise<void> {
+    let running = this.operations.get(bindingId);
+    while (running && running.kind !== kind) {
+      running.controller.abort();
+      await running.promise.catch(() => {});
+      running = this.operations.get(bindingId);
+    }
+    return this.operate(bindingId, kind, work);
   }
 
   /**
@@ -1693,10 +1728,16 @@ export class CloudHostLifecycle {
 
   // --- Operations and observation ----------------------------------------
 
+  /**
+   * Runs `work` as the machine's one operation, or joins the same kind under
+   * way. `accepted` runs only when a new operation is admitted, before any of
+   * its work: a refused or joining caller changes nothing it records.
+   */
   private operate(
     bindingId: string,
     kind: CloudOperationKind,
-    work: (signal: AbortSignal) => Promise<void>
+    work: (signal: AbortSignal) => Promise<void>,
+    accepted?: () => void
   ): Promise<void> {
     const running = this.operations.get(bindingId);
     if (running) {
@@ -1709,6 +1750,7 @@ export class CloudHostLifecycle {
     }
     if (this.disposed)
       return Promise.reject(new AppError({ code: "CANCELLED", message: "Stopping" }));
+    accepted?.();
     const controller = new AbortController();
     const operation = {
       id: crypto.randomUUID(),
