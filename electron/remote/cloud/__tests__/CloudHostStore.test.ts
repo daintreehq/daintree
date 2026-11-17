@@ -51,6 +51,8 @@ function binding(overrides: Partial<StoredCloudBinding> = {}): StoredCloudBindin
     intent: "run",
     observation: null,
     access: null,
+    trustedHostKey: null,
+    offeredHostKey: null,
     lastError: null,
     createdAt: 1,
     ...overrides,
@@ -230,5 +232,48 @@ describe("CloudHostStore provisioning", () => {
     expect(read(undefined)).toBeNull();
     expect(read({ ...last, image: 7 })).toBeNull();
     expect(read({ location: "eu-west-1" })).toBeNull();
+  });
+});
+
+describe("CloudHostStore host keys", () => {
+  const KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl";
+  const OTHER = `ssh-ed25519 ${Buffer.alloc(51, 7).toString("base64")}`;
+
+  it("keeps a trusted key and an offered one across a restart", () => {
+    const backend = disk();
+    new CloudHostStore(backend).putBinding(
+      binding({ trustedHostKey: { key: KEY, at: 5 }, offeredHostKey: { key: OTHER, at: 9 } })
+    );
+    const read = new CloudHostStore(backend).bindings()[0]!;
+    expect(read.trustedHostKey).toEqual({ key: KEY, at: 5 });
+    expect(read.offeredHostKey).toEqual({ key: OTHER, at: 9 });
+  });
+
+  it("reads a binding saved before host keys were confirmed as trusting none", () => {
+    const backend = disk();
+    const { trustedHostKey: _t, offeredHostKey: _o, ...legacy } = binding();
+    backend.write({ version: 1, accounts: [], bindings: [legacy] });
+    const read = new CloudHostStore(backend).bindings()[0]!;
+    expect(read.trustedHostKey).toBeNull();
+    expect(read.offeredHostKey).toBeNull();
+  });
+
+  it("drops a hand-edited key that isn't one, keeping the binding", () => {
+    const backend = disk();
+    backend.write({
+      version: 1,
+      accounts: [],
+      bindings: [
+        {
+          ...binding(),
+          trustedHostKey: { key: "ssh-ed25519 AAAA", at: 1 },
+          offeredHostKey: "ssh-ed25519",
+        },
+      ],
+    });
+    const read = new CloudHostStore(backend).bindings()[0]!;
+    expect(read.id).toBe("cb_abcdefgh12");
+    expect(read.trustedHostKey).toBeNull();
+    expect(read.offeredHostKey).toBeNull();
   });
 });
