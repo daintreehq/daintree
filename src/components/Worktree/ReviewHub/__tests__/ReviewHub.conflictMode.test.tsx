@@ -1842,6 +1842,23 @@ describe("ReviewHub", () => {
       expect(stageFileMock).not.toHaveBeenCalled();
     });
 
+    it("asks before staging a deleted-side conflict when the marker re-read fails", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeMergingStatus({
+          conflictedFiles: [{ path: "src/app.ts", xy: "DU", label: "deleted by us" }],
+        })
+      );
+      scanConflictMarkersMock.mockRejectedValue(new Error("Reads under the worktree are stalled"));
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Mark src\/app\.ts as resolved/i })
+      );
+      await screen.findByRole("alertdialog");
+      expect(stageFileMock).not.toHaveBeenCalled();
+    });
+
     it("asks before staging when the re-read returns nothing for the file", async () => {
       getStagingStatusMock.mockResolvedValue(makeMergingStatus());
       scanConflictMarkersMock.mockResolvedValue([]);

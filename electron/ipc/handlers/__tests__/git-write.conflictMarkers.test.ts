@@ -154,9 +154,7 @@ describe("git-write conflict marker scan", () => {
     write("one.ts", conflicted(2, 1));
     const files = trackOpenFiles();
 
-    const largeScan = scan(large);
-    const single = await scan(["one.ts"]);
-    const largeResults = await largeScan;
+    const [largeResults, single] = await Promise.all([scan(large), scan(["one.ts"])]);
 
     expect(single).toEqual([{ path: "one.ts", hunkCount: 1, firstMarkerLine: 3 }]);
     expect(largeResults).toEqual(large.map(expectedEntry));
@@ -174,9 +172,12 @@ describe("git-write conflict marker scan", () => {
 
       // A call that never returns until released, as on a dead network mount.
       let releaseStuck: () => Promise<void> = async () => {};
+      let enterStuck: () => void = () => {};
+      const stuckEntered = new Promise<void>((resolve) => (enterStuck = resolve));
       const real = fs.promises[call].bind(fs.promises) as (...args: unknown[]) => Promise<unknown>;
       vi.spyOn(fs.promises, call).mockImplementation(((...args: unknown[]) => {
         if (relative(args[0]) !== "stuck.ts") return real(...args);
+        enterStuck();
         return new Promise((resolve) => {
           releaseStuck = async () => {
             resolve(await real(...args));
@@ -197,6 +198,7 @@ describe("git-write conflict marker scan", () => {
         { path: "one.ts", hunkCount: 1, firstMarkerLine: 3 },
       ]);
       expect(stalledSettled).toBe(false);
+      await stuckEntered;
 
       // Past the read deadline the scan fails rather than answering with
       // skipped entries the renderer could take for a deletion's missing file.
