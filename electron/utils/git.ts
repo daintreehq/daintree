@@ -149,19 +149,20 @@ export interface DiffStat {
   deletions: number | null;
 }
 
-// Budget for pathspec characters per `git diff` spawn. Windows caps the whole
+// Budget for pathspec characters per git spawn. Windows caps the whole
 // command line at 32,767 chars, and the hardened `-c` config plus the binary
 // path take a few KB of that.
-const NUMSTAT_ARGV_CHAR_BUDGET = 16_000;
+const PATHSPEC_ARGV_CHAR_BUDGET = 16_000;
 
-function batchPathsForArgv(paths: string[]): string[][] {
+/** Split `paths` into runs whose pathspec arguments fit one git command line. */
+export function batchPathsForArgv(paths: readonly string[]): string[][] {
   const batches: string[][] = [];
   let current: string[] = [];
   let chars = 0;
   for (const path of paths) {
     // +3: separating space plus quotes Windows may add around the argument.
     const cost = path.length + 3;
-    if (current.length > 0 && chars + cost > NUMSTAT_ARGV_CHAR_BUDGET) {
+    if (current.length > 0 && chars + cost > PATHSPEC_ARGV_CHAR_BUDGET) {
       batches.push(current);
       current = [];
       chars = 0;

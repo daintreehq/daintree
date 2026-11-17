@@ -46,6 +46,7 @@ import {
   createStrictExitGit,
 } from "../../utils/hardenedGit.js";
 import {
+  batchPathsForArgv,
   getPerFileDiffStats,
   invalidateStagingDiffStatCache,
   resolveHeadOidFromGitDir,
@@ -1545,11 +1546,39 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       throw new Error("filePaths must be a non-empty array");
     }
     for (const p of filePaths) {
-      if (typeof p !== "string" || !p) {
+      // A NUL would fail the spawn, possibly after earlier batches had landed.
+      if (typeof p !== "string" || !p || p.includes("\0")) {
         throw new Error("Invalid file path in filePaths");
       }
     }
     return filePaths as string[];
+  };
+
+  /**
+   * One git write per batch of pathspecs, so a large selection never overflows
+   * the OS command line. Batches run in order and stop at the first failure.
+   * The batches before it have landed, so the error names how many paths git
+   * confirmed. A failure before any batch landed passes through unchanged.
+   */
+  const writeInBatches = async (
+    paths: string[],
+    verb: "Staged" | "Unstaged",
+    write: (batch: string[]) => Promise<unknown>
+  ): Promise<void> => {
+    let confirmed = 0;
+    for (const batch of batchPathsForArgv(paths)) {
+      try {
+        await write(batch);
+      } catch (err) {
+        if (confirmed === 0) throw err;
+        const reason = formatErrorMessage(err, "Git failed without a message");
+        throw new Error(
+          `${verb} ${confirmed} of ${paths.length} files before Git stopped: ${reason}`,
+          { cause: err }
+        );
+      }
+      confirmed += batch.length;
+    }
   };
 
   const handleStageFiles = async (payload: { cwd: string; filePaths: string[] }): Promise<void> => {
@@ -1557,9 +1586,13 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     validateCwd(payload?.cwd);
     const paths = validateFilePaths(payload?.filePaths);
 
-    const git = await createHardenedGit(payload.cwd);
-    await git.add(["--", ...paths]);
-    invalidateStagingDiffStatCache(payload.cwd);
+    // Strict exit: a batch only counts as confirmed when git exits 0.
+    const git = await createStrictExitGit(payload.cwd);
+    try {
+      await writeInBatches(paths, "Staged", (batch) => git.add(["--", ...batch]));
+    } finally {
+      invalidateStagingDiffStatCache(payload.cwd);
+    }
   };
   handlers.push(typedHandle(CHANNELS.GIT_STAGE_FILES, handleStageFiles));
 
@@ -1571,14 +1604,20 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     validateCwd(payload?.cwd);
     const paths = validateFilePaths(payload?.filePaths);
 
-    const git = await createHardenedGit(payload.cwd);
+    const git = await createStrictExitGit(payload.cwd);
 
-    if (await hasHeadCommit(git, payload.cwd)) {
-      await git.reset(["HEAD", "--", ...(await withStagedRenamePartners(payload.cwd, paths))]);
-    } else {
-      await git.raw(["rm", "--cached", "--", ...paths]);
+    const hasHead = await hasHeadCommit(git, payload.cwd);
+    // Both forms replay cleanly over paths an earlier, partly failed run
+    // already unstaged: `reset` matches nothing silently, and `rm` is told to.
+    const write = hasHead
+      ? (batch: string[]) => git.reset(["HEAD", "--", ...batch])
+      : (batch: string[]) => git.raw(["rm", "--cached", "--ignore-unmatch", "-q", "--", ...batch]);
+    try {
+      const targets = hasHead ? await withStagedRenamePartners(payload.cwd, paths) : paths;
+      await writeInBatches(targets, "Unstaged", write);
+    } finally {
+      invalidateStagingDiffStatCache(payload.cwd);
     }
-    invalidateStagingDiffStatCache(payload.cwd);
   };
   handlers.push(typedHandle(CHANNELS.GIT_UNSTAGE_FILES, handleUnstageFiles));
 
