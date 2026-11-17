@@ -50,6 +50,7 @@ vi.mock("@/clients/systemClient", () => ({ systemClient: { openExternal } }));
 import { CloudMachineSection } from "../CloudMachineSection";
 import { BOAT_PROVIDER, provider } from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
 import { clockTime } from "@/components/Hosts/cloud/cloudHostLabels";
+import { ClientAppError } from "@/utils/clientAppError";
 
 function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
   return {
@@ -559,6 +560,7 @@ describe("CloudMachineSection with its worktree's delete (#17360)", () => {
         worktreeCleanup: {
           choice: "delete",
           phase: "failed",
+          worktreeHostId: null,
           error: { code: "failed", message: "Boat didn't answer.", at: 1 },
         },
       }),
@@ -577,7 +579,7 @@ describe("CloudMachineSection with its worktree's delete (#17360)", () => {
 
   it("says a failed Retry in place", async () => {
     retryWorktreeCleanup.mockRejectedValueOnce(
-      Object.assign(new Error("x"), { userMessage: "Boat refused it." })
+      new ClientAppError("OUTCOME_UNKNOWN", "refused", "Boat refused it.")
     );
     show(
       status({
@@ -588,6 +590,7 @@ describe("CloudMachineSection with its worktree's delete (#17360)", () => {
         worktreeCleanup: {
           choice: "stop",
           phase: "failed",
+          worktreeHostId: null,
           error: { code: "failed", message: "Boat didn't answer.", at: 1 },
         },
       }),
@@ -596,7 +599,82 @@ describe("CloudMachineSection with its worktree's delete (#17360)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await act(async () => {});
     expect(notice()?.textContent).toMatch(/Couldn't stop/);
+    expect(notice()?.textContent).toContain("Boat refused it.");
     expect(notice()?.textContent).not.toContain("Boat didn't answer.");
+  });
+
+  it("offers no Retry for a worktree elsewhere it never heard back about", () => {
+    show(
+      status({
+        resourceId: "bx_23456789",
+        machine: "running",
+        operation: null,
+        createdFor: { ...MARK, hostId: "devbox", hostName: "devbox" },
+        worktreeCleanup: {
+          choice: "delete",
+          phase: "unconfirmed",
+          worktreeHostId: "devbox",
+          error: {
+            code: "outcome-unknown",
+            message: "Daintree quit before it heard whether the worktree was deleted.",
+            at: 1,
+          },
+        },
+      }),
+      [BOAT_PROVIDER]
+    );
+    expect(notice()?.textContent).toContain("Not deleted with 'feature/login'");
+    expect(notice()?.textContent).toContain("If it was, delete the machine here.");
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Keep machine" }));
+    expect(dismissWorktreeCleanup).toHaveBeenCalledWith("build");
+  });
+
+  it("checks again only for a worktree on this device, and says when a provider holds it up", () => {
+    const base = {
+      resourceId: "bx_23456789",
+      machine: "running" as const,
+      operation: null,
+      createdFor: MARK,
+    };
+    show(
+      status({
+        ...base,
+        worktreeCleanup: { choice: "stop", phase: "waiting", worktreeHostId: null, error: null },
+      }),
+      [BOAT_PROVIDER]
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    expect(retryWorktreeCleanup).toHaveBeenCalledWith("build");
+    cleanup();
+    show(
+      status({
+        ...base,
+        worktreeCleanup: {
+          choice: "stop",
+          phase: "waiting",
+          worktreeHostId: "devbox",
+          error: null,
+        },
+      }),
+      [BOAT_PROVIDER]
+    );
+    expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+    cleanup();
+    show(
+      status({
+        ...base,
+        worktreeCleanup: {
+          choice: "delete",
+          phase: "running",
+          worktreeHostId: null,
+          error: { code: "unsupported", message: "Its plugin is disabled", at: 1 },
+        },
+      }),
+      [BOAT_PROVIDER]
+    );
+    expect(notice()?.textContent).toBe("It will be deleted once Boat is available again.");
   });
 
   it("says what's still to come while it waits or runs, and nothing for a machine with none", () => {
@@ -605,18 +683,18 @@ describe("CloudMachineSection with its worktree's delete (#17360)", () => {
       status({
         ...base,
         createdFor: MARK,
-        worktreeCleanup: { choice: "stop", phase: "waiting", error: null },
+        worktreeCleanup: { choice: "stop", phase: "waiting", worktreeHostId: null, error: null },
       }),
       [BOAT_PROVIDER]
     );
-    expect(notice()?.textContent).toBe("It will be stopped once 'feature/login' is deleted.");
+    expect(notice()?.textContent).toContain("It will be stopped once 'feature/login' is deleted.");
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     cleanup();
     show(
       status({
         ...base,
         createdFor: MARK,
-        worktreeCleanup: { choice: "delete", phase: "running", error: null },
+        worktreeCleanup: { choice: "delete", phase: "running", worktreeHostId: null, error: null },
       }),
       [BOAT_PROVIDER]
     );

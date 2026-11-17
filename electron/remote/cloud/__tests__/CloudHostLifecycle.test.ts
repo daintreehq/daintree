@@ -3562,6 +3562,9 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
     machineType: "default",
     lifetimeHours: 2,
   });
+  const choose = (choice: "stop" | "delete") => [
+    { hostId: "build", resourceId: "bx_23456789", choice },
+  ];
 
   /** A machine made for the worktree (or, with null, from Settings), up and running. */
   async function marked(
@@ -3569,7 +3572,7 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
     options: Parameters<typeof setup>[1] = {}
   ) {
     const gone = { value: true as boolean | null };
-    const worktreeGone = vi.fn(async () => gone.value);
+    const worktreeGone = vi.fn(async (_path: string): Promise<boolean | null> => gone.value);
     const ctx = await setup({}, { worktreeGone, ...options });
     await ctx.lifecycle.create(request(ctx.account.id), mark);
     await vi.waitFor(() =>
@@ -3578,13 +3581,21 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
     return { ...ctx, gone, worktreeGone };
   }
 
+  function deferred<T>() {
+    let resolve: (value: T) => void = () => {};
+    let reject: (reason: unknown) => void = () => {};
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
   const cleanupOf = (store: CloudHostStore) => store.bindings()[0]?.worktreeCleanup ?? null;
 
   it("stops the machine once its worktree is gone, keeping the host and saying it's stopped", async () => {
     const { lifecycle, provider, store, hosts, worktreeGone } = await marked();
-    lifecycle.prepareWorktreeCleanup(WORKTREE, [
-      { hostId: "build", resourceId: "bx_23456789", choice: "stop" },
-    ]);
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("stop"));
     expect(cleanupOf(store)).toMatchObject({ choice: "stop", phase: "waiting" });
     expect(provider.stop).not.toHaveBeenCalled();
 
@@ -3602,9 +3613,7 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
 
   it("deletes the machine once its worktree is gone, and the host with it", async () => {
     const { lifecycle, provider, store, hosts } = await marked();
-    lifecycle.prepareWorktreeCleanup(WORKTREE, [
-      { hostId: "build", resourceId: "bx_23456789", choice: "delete" },
-    ]);
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
     const outcomes = await lifecycle.settleWorktreeCleanup(WORKTREE, true);
     expect(outcomes).toEqual([
       { hostId: "build", machineName: "build", choice: "delete", error: null },
@@ -3619,9 +3628,7 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
 
   it("keeps a machine left out of the choices, dropping what an earlier attempt chose", async () => {
     const { lifecycle, provider, store, hosts } = await marked();
-    lifecycle.prepareWorktreeCleanup(WORKTREE, [
-      { hostId: "build", resourceId: "bx_23456789", choice: "delete" },
-    ]);
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
     // The person deletes again and keeps it this time.
     lifecycle.prepareWorktreeCleanup(WORKTREE, []);
     expect(cleanupOf(store)).toBeNull();
@@ -3631,34 +3638,33 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
     expect(hosts.map((host) => host.id)).toEqual(["build"]);
   });
 
-  it("never touches a machine that isn't marked for the worktree being deleted", async () => {
-    const settings = await marked(null);
-    expect(() =>
-      settings.lifecycle.prepareWorktreeCleanup(WORKTREE, [
-        { hostId: "build", resourceId: "bx_23456789", choice: "delete" },
-      ])
-    ).toThrow(/wasn't created for this worktree/);
-
-    const other = await marked({ ...MARK, worktreeId: `${ROOT}-2` });
-    expect(() =>
-      other.lifecycle.prepareWorktreeCleanup(WORKTREE, [
-        { hostId: "build", resourceId: "bx_23456789", choice: "stop" },
-      ])
-    ).toThrow(/wasn't created for this worktree/);
-    // Same path on another host is another worktree.
-    expect(() =>
-      other.lifecycle.prepareWorktreeCleanup({ ...WORKTREE, hostId: "devbox" }, [
-        { hostId: "build", resourceId: "bx_23456789", choice: "stop" },
-      ])
-    ).toThrow(/wasn't created for this worktree/);
-
-    for (const { lifecycle, provider, store, hosts } of [settings, other]) {
+  it("never touches a machine unless its mark names exactly the worktree being deleted", async () => {
+    const others: Array<CloudHostCreatedFor | null> = [
+      null,
+      { ...MARK, worktreeId: `${ROOT}-2` },
+      { ...MARK, projectId: "aaaaaaaa" },
+      { ...MARK, hostId: "devbox", hostName: "devbox" },
+    ];
+    for (const mark of others) {
+      const { lifecycle, provider, store, hosts } = await marked(mark);
+      expect(() => lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"))).toThrow(
+        /wasn't created for this worktree/
+      );
       expect(await lifecycle.settleWorktreeCleanup(WORKTREE, true)).toEqual([]);
       expect(cleanupOf(store)).toBeNull();
       expect(provider.stop).not.toHaveBeenCalled();
       expect(provider.delete).not.toHaveBeenCalled();
       expect(hosts.map((host) => host.id)).toEqual(["build"]);
     }
+  });
+
+  it("leaves another worktree's choice alone when this one settles", async () => {
+    const { lifecycle, provider, store } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    const sibling = { ...WORKTREE, worktreeId: `${ROOT}-2` };
+    expect(await lifecycle.settleWorktreeCleanup(sibling, true)).toEqual([]);
+    expect(cleanupOf(store)).toMatchObject({ phase: "waiting" });
+    expect(provider.delete).not.toHaveBeenCalled();
   });
 
   it("refuses a machine that changed since it was confirmed, writing nothing", async () => {
@@ -3676,9 +3682,7 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
 
   it("leaves the machine and drops the choice when the worktree is still there", async () => {
     const { lifecycle, provider, store, gone } = await marked();
-    lifecycle.prepareWorktreeCleanup(WORKTREE, [
-      { hostId: "build", resourceId: "bx_23456789", choice: "delete" },
-    ]);
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
     gone.value = false;
     // Even a delete reported as done: only the missing root counts on this device.
     expect(await lifecycle.settleWorktreeCleanup(WORKTREE, true)).toEqual([]);
@@ -3686,28 +3690,84 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
     expect(provider.delete).not.toHaveBeenCalled();
   });
 
-  it("carries out a failed delete whose worktree went anyway, and waits when nothing can tell", async () => {
-    const { lifecycle, provider, store, gone } = await marked();
-    lifecycle.prepareWorktreeCleanup(WORKTREE, [
-      { hostId: "build", resourceId: "bx_23456789", choice: "stop" },
-    ]);
-    gone.value = null;
-    expect(await lifecycle.settleWorktreeCleanup(WORKTREE, false)).toEqual([]);
-    expect(cleanupOf(store)).toMatchObject({ phase: "waiting" });
-    expect(provider.stop).not.toHaveBeenCalled();
-
-    // The answer was lost, but the root is gone: the delete happened.
-    gone.value = true;
-    const outcomes = await lifecycle.settleWorktreeCleanup(WORKTREE, false);
+  it("carries out a choice whose worktree went though its delete's answer was lost", async () => {
+    const { lifecycle, provider } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("stop"));
+    const outcomes = await lifecycle.settleWorktreeCleanup(WORKTREE, null);
     expect(outcomes[0]).toMatchObject({ choice: "stop", error: null });
     expect(provider.stop).toHaveBeenCalledTimes(1);
   });
 
+  it("waits when nothing can tell, until the person checks again", async () => {
+    const { lifecycle, provider, store, gone } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("stop"));
+    gone.value = null;
+    expect(await lifecycle.settleWorktreeCleanup(WORKTREE, false)).toEqual([]);
+    expect(cleanupOf(store)).toMatchObject({ phase: "waiting" });
+    expect(lifecycle.statuses()[0]?.worktreeCleanup).toMatchObject({
+      phase: "waiting",
+      worktreeHostId: null,
+    });
+    await expect(lifecycle.retryWorktreeCleanup("build")).rejects.toThrow(/couldn't tell/);
+    expect(provider.stop).not.toHaveBeenCalled();
+
+    gone.value = true;
+    await lifecycle.retryWorktreeCleanup("build");
+    expect(provider.stop).toHaveBeenCalledTimes(1);
+    expect(cleanupOf(store)).toBeNull();
+  });
+
+  it("never lets an answer about an earlier attempt change a later one", async () => {
+    const { lifecycle, provider, store, worktreeGone } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    const probe = deferred<boolean | null>();
+    worktreeGone.mockImplementationOnce(() => probe.promise);
+    const settling = lifecycle.settleWorktreeCleanup(WORKTREE, false);
+    await vi.waitFor(() => expect(worktreeGone).toHaveBeenCalledTimes(1));
+    // The card's Retry writes the choice again before the first answer lands.
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    const retried = cleanupOf(store)!.attemptId;
+    probe.resolve(false);
+    expect(await settling).toEqual([]);
+    expect(cleanupOf(store)).toMatchObject({ phase: "waiting", attemptId: retried });
+    expect(provider.delete).not.toHaveBeenCalled();
+  });
+
+  it("runs a delete once when a removal is heard while its delete settles, keeping a failure", async () => {
+    let heard: (worktreeId: string) => void = () => {};
+    const { lifecycle, provider, store, worktreeGone } = await marked(MARK, {
+      onWorktreeRemoved: (listener) => {
+        heard = listener;
+        return () => {};
+      },
+    });
+    lifecycle.start();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    const first = deferred<boolean | null>();
+    const second = deferred<boolean | null>();
+    worktreeGone
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    heard(ROOT);
+    const settling = lifecycle.settleWorktreeCleanup(WORKTREE, true);
+    await vi.waitFor(() => expect(worktreeGone).toHaveBeenCalledTimes(2));
+    vi.mocked(provider.delete).mockRejectedValueOnce(
+      new BoatApiError("server", "Upstream exploded", 500, null, null)
+    );
+    first.resolve(true);
+    await vi.waitFor(() => expect(cleanupOf(store)).toMatchObject({ phase: "failed" }));
+    // The second look lands after the failure: it never sends the delete again.
+    second.resolve(true);
+    const [outcome] = await settling;
+    expect(provider.delete).toHaveBeenCalledTimes(1);
+    expect(outcome?.error).toContain("Upstream exploded");
+    expect(cleanupOf(store)).toMatchObject({ phase: "failed" });
+    lifecycle.dispose();
+  });
+
   it("runs a choice waiting when Daintree quit once the worktree is found gone", async () => {
     const { lifecycle, provider, store, hosts, restart } = await marked();
-    lifecycle.prepareWorktreeCleanup(WORKTREE, [
-      { hostId: "build", resourceId: "bx_23456789", choice: "delete" },
-    ]);
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
     const next = restart(lifecycle);
     await vi.waitFor(() => expect(hosts).toEqual([]));
     expect(provider.delete).toHaveBeenCalledTimes(1);
@@ -3718,9 +3778,7 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
 
   it("drops a choice waiting when Daintree quit if the worktree is still there", async () => {
     const { lifecycle, provider, gone, restart, hosts } = await marked();
-    lifecycle.prepareWorktreeCleanup(WORKTREE, [
-      { hostId: "build", resourceId: "bx_23456789", choice: "delete" },
-    ]);
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
     gone.value = false;
     const next = restart(lifecycle);
     await vi.waitFor(() => expect(cleanupOf(next.store)).toBeNull());
@@ -3729,75 +3787,92 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
     next.lifecycle.dispose();
   });
 
-  it("runs a delete again after a restart partway, counting a machine already gone as deleted", async () => {
+  it("runs a delete again after a quit partway, and the quitting run leaves it due", async () => {
     const { lifecycle, provider, store, hosts, restart } = await marked();
-    lifecycle.prepareWorktreeCleanup(WORKTREE, [
-      { hostId: "build", resourceId: "bx_23456789", choice: "delete" },
-    ]);
-    // The delete went out and Daintree quit before its answer came back.
-    vi.mocked(provider.delete).mockImplementationOnce(() => new Promise<void>(() => {}));
-    void lifecycle.settleWorktreeCleanup(WORKTREE, true);
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    const sent = deferred<void>();
+    const resent = deferred<void>();
+    vi.mocked(provider.delete)
+      .mockImplementationOnce(() => sent.promise)
+      .mockImplementationOnce(() => resent.promise);
+    const quitting = lifecycle.settleWorktreeCleanup(WORKTREE, true);
     await vi.waitFor(() => expect(provider.delete).toHaveBeenCalledTimes(1));
     expect(cleanupOf(store)).toMatchObject({ phase: "due" });
-    expect(hosts.map((host) => host.id)).toEqual(["build"]);
 
-    vi.mocked(provider.delete).mockRejectedValueOnce(
-      new BoatApiError("not-found", "No such sandbox", 404, "sandbox_not_found", null)
-    );
     const next = restart(lifecycle);
+    await vi.waitFor(() => expect(provider.delete).toHaveBeenCalledTimes(2));
+    // The old run's call fails as the process goes: it never records a failure.
+    sent.reject(new BoatApiError("cancelled", "Cancelled", null, null, null));
+    await quitting;
+    expect(cleanupOf(next.store)).toMatchObject({ phase: "due", error: null });
+
+    // Already gone at the provider by the time it's asked again.
+    resent.reject(new BoatApiError("not-found", "No such sandbox", 404, "sandbox_not_found", null));
     await vi.waitFor(() => expect(hosts).toEqual([]));
-    expect(provider.delete).toHaveBeenCalledTimes(2);
     expect(vi.mocked(provider.delete).mock.calls[1]?.[1]).toBe("bx_23456789");
     next.lifecycle.dispose();
   });
 
   it("finishes a stop that was under way when Daintree quit without asking for another", async () => {
     const { lifecycle, provider, store, state, restart } = await marked();
-    lifecycle.prepareWorktreeCleanup(WORKTREE, [
-      { hostId: "build", resourceId: "bx_23456789", choice: "stop" },
-    ]);
-    store.updateBinding(store.bindings()[0]!.id, (current) => ({
-      ...current,
-      worktreeCleanup: { ...current.worktreeCleanup!, phase: "due" },
-    }));
-    // The stop went out before the quit: the machine is saving its disk.
-    state.machine = resource({ machine: "stopping", rawState: "archiving" });
-    let reads = 0;
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("stop"));
+    // The stop goes out; Daintree quits before its answer comes back.
+    vi.mocked(provider.stop).mockImplementationOnce(() => {
+      state.machine = resource({ machine: "stopping", rawState: "archiving" });
+      return new Promise(() => {});
+    });
+    void lifecycle.settleWorktreeCleanup(WORKTREE, true);
+    await vi.waitFor(() => expect(provider.stop).toHaveBeenCalledTimes(1));
+    expect(cleanupOf(store)).toMatchObject({ phase: "due" });
+
+    let stoppingReads = 0;
     vi.mocked(provider.inspect).mockImplementation(async () => {
-      reads += 1;
-      if (reads > 1) state.machine = resource({ machine: "stopped", rawState: "archived" });
+      if (state.machine.machine === "stopping" && ++stoppingReads > 1) {
+        state.machine = resource({ machine: "stopped", rawState: "archived" });
+      }
       return state.machine;
     });
     const next = restart(lifecycle);
     await vi.waitFor(() => expect(cleanupOf(next.store)).toBeNull());
-    expect(provider.stop).not.toHaveBeenCalled();
+    expect(provider.stop).toHaveBeenCalledTimes(1);
     expect(next.lifecycle.statuses()[0]).toMatchObject({ machine: "stopped" });
     expect(next.store.bindings()[0]?.intent).toBe("stop");
     next.lifecycle.dispose();
   });
 
+  it("asks for no stop of a machine its provider reports deleted", async () => {
+    const { lifecycle, provider, store, state } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("stop"));
+    state.machine = resource({ machine: "deleted", rawState: "deleted" });
+    const [outcome] = await lifecycle.settleWorktreeCleanup(WORKTREE, true);
+    expect(outcome).toMatchObject({ error: null });
+    expect(provider.stop).not.toHaveBeenCalled();
+    expect(cleanupOf(store)).toBeNull();
+  });
+
   it("keeps a failed delete with its error for Retry, never retrying by itself", async () => {
     const { lifecycle, provider, store, hosts, restart } = await marked();
-    lifecycle.prepareWorktreeCleanup(WORKTREE, [
-      { hostId: "build", resourceId: "bx_23456789", choice: "delete" },
-    ]);
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
     vi.mocked(provider.delete).mockRejectedValueOnce(
       new BoatApiError("server", "Upstream exploded", 500, null, null)
     );
     const [outcome] = await lifecycle.settleWorktreeCleanup(WORKTREE, true);
     expect(outcome).toMatchObject({ choice: "delete" });
-    expect(outcome?.error).toBeTruthy();
+    expect(outcome?.error).toContain("Upstream exploded");
     expect(lifecycle.statuses()[0]?.worktreeCleanup).toMatchObject({
       choice: "delete",
       phase: "failed",
-      error: { message: outcome!.error },
+      error: { code: "provider-unreachable", message: outcome!.error },
     });
     expect(hosts.map((host) => host.id)).toEqual(["build"]);
 
     const next = restart(lifecycle);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(provider.delete).toHaveBeenCalledTimes(1);
-    expect(cleanupOf(next.store)).toMatchObject({ phase: "failed" });
+    expect(cleanupOf(next.store)).toMatchObject({
+      phase: "failed",
+      error: { message: expect.stringContaining("Upstream exploded") },
+    });
 
     await next.lifecycle.retryWorktreeCleanup("build");
     expect(provider.delete).toHaveBeenCalledTimes(2);
@@ -3808,9 +3883,7 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
 
   it("lets the person keep a machine whose stop failed", async () => {
     const { lifecycle, provider, store } = await marked();
-    lifecycle.prepareWorktreeCleanup(WORKTREE, [
-      { hostId: "build", resourceId: "bx_23456789", choice: "stop" },
-    ]);
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("stop"));
     vi.mocked(provider.stop).mockRejectedValueOnce(
       new BoatApiError("server", "Upstream exploded", 500, null, null)
     );
@@ -3821,31 +3894,45 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
     await expect(lifecycle.retryWorktreeCleanup("build")).rejects.toThrow(/nothing left to do/);
   });
 
-  it("takes a worktree on another host as gone on its host's answer, and asks after a restart", async () => {
+  it("takes a worktree on another host from its host's answer, and never on a guess", async () => {
     const remote = { ...MARK, hostId: "devbox", hostName: "devbox" };
     const ref = { ...WORKTREE, hostId: "devbox" };
-    const first = await marked(remote);
-    first.lifecycle.prepareWorktreeCleanup(ref, [
-      { hostId: "build", resourceId: "bx_23456789", choice: "stop" },
-    ]);
-    const outcomes = await first.lifecycle.settleWorktreeCleanup(ref, true);
-    expect(outcomes[0]).toMatchObject({ error: null });
-    expect(first.worktreeGone).not.toHaveBeenCalled();
-    expect(first.provider.stop).toHaveBeenCalledTimes(1);
+    const { lifecycle, provider, store, worktreeGone } = await marked(remote);
 
-    const second = await marked(remote);
-    second.lifecycle.prepareWorktreeCleanup(ref, [
-      { hostId: "build", resourceId: "bx_23456789", choice: "delete" },
-    ]);
-    const next = second.restart(second.lifecycle);
+    lifecycle.prepareWorktreeCleanup(ref, choose("delete"));
+    expect(await lifecycle.settleWorktreeCleanup(ref, null)).toEqual([]);
+    expect(cleanupOf(store)).toMatchObject({ phase: "waiting" });
+    expect(await lifecycle.settleWorktreeCleanup(ref, false)).toEqual([]);
+    expect(cleanupOf(store)).toBeNull();
+    expect(provider.delete).not.toHaveBeenCalled();
+
+    lifecycle.prepareWorktreeCleanup(ref, choose("stop"));
+    const outcomes = await lifecycle.settleWorktreeCleanup(ref, true);
+    expect(outcomes[0]).toMatchObject({ error: null });
+    expect(provider.stop).toHaveBeenCalledTimes(1);
+    expect(worktreeGone).not.toHaveBeenCalled();
+  });
+
+  it("leaves a worktree on another host unconfirmed after a quit, with no Retry that acts", async () => {
+    const remote = { ...MARK, hostId: "devbox", hostName: "devbox" };
+    const ref = { ...WORKTREE, hostId: "devbox" };
+    const { lifecycle, provider, worktreeGone, restart } = await marked(remote);
+    lifecycle.prepareWorktreeCleanup(ref, choose("delete"));
+    const next = restart(lifecycle);
     await vi.waitFor(() =>
       expect(next.lifecycle.statuses()[0]?.worktreeCleanup).toMatchObject({
-        phase: "failed",
+        phase: "unconfirmed",
+        worktreeHostId: "devbox",
         error: { message: expect.stringMatching(/quit before it heard/) },
       })
     );
-    expect(second.provider.delete).not.toHaveBeenCalled();
-    expect(second.worktreeGone).not.toHaveBeenCalled();
+    await expect(next.lifecycle.retryWorktreeCleanup("build")).rejects.toThrow(/can't tell/);
+    // A later answer from the host doesn't run it either: the worktree is deleted again to ask.
+    expect(await next.lifecycle.settleWorktreeCleanup(ref, true)).toEqual([]);
+    expect(provider.delete).not.toHaveBeenCalled();
+    expect(worktreeGone).not.toHaveBeenCalled();
+    next.lifecycle.prepareWorktreeCleanup(ref, []);
+    expect(cleanupOf(next.store)).toBeNull();
     next.lifecycle.dispose();
   });
 
@@ -3860,9 +3947,7 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
     });
     gone.value = false;
     lifecycle.start();
-    lifecycle.prepareWorktreeCleanup(WORKTREE, [
-      { hostId: "build", resourceId: "bx_23456789", choice: "delete" },
-    ]);
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
     // A monitor pruned while the folder is still there proves nothing.
     heard(ROOT);
     await new Promise((resolve) => setTimeout(resolve, 0));

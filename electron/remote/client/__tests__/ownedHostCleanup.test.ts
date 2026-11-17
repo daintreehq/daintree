@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostDescriptor } from "../../../../shared/types/remoteHosts.js";
 import { events } from "../../../services/events.js";
-import { watchOwnedHostCleanup } from "../ownedHostCleanup.js";
+import { watchOwnedHostCleanup, worktreeRootGone } from "../ownedHostCleanup.js";
 
 function waiting(id: string, worktreeId: string, ownerWorktreeId?: string): HostDescriptor {
   return {
@@ -243,5 +243,34 @@ describe("watchOwnedHostCleanup", () => {
     removeWorktree("/wt/a");
 
     expect(probe).not.toHaveBeenCalled();
+  });
+});
+
+describe("worktreeRootGone (#17360)", () => {
+  const ROOT = "/Volumes/Work/app-worktrees/feature-login";
+  const answers = (byPath: Record<string, "exists" | "missing" | "denied">) =>
+    vi.fn(async (target: string) => {
+      const answer = byPath[target];
+      if (answer === "exists") return {};
+      throw Object.assign(new Error(answer ?? "missing"), {
+        code: answer === "denied" ? "EACCES" : "ENOENT",
+      });
+    });
+
+  it("is gone only when the root is missing and the folder it sat in reads", async () => {
+    expect(await worktreeRootGone(ROOT, answers({ "/Volumes/Work/app-worktrees": "exists" }))).toBe(
+      true
+    );
+    expect(await worktreeRootGone(ROOT, answers({ [ROOT]: "exists" }))).toBe(false);
+  });
+
+  it("proves nothing when the whole path is missing, as on an unmounted drive", async () => {
+    const probe = answers({});
+    expect(await worktreeRootGone(ROOT, probe)).toBeNull();
+    expect(probe).toHaveBeenCalledWith("/Volumes/Work/app-worktrees");
+  });
+
+  it("proves nothing when the root can't be read", async () => {
+    expect(await worktreeRootGone(ROOT, answers({ [ROOT]: "denied" }))).toBeNull();
   });
 });

@@ -167,7 +167,7 @@ export const cloudHostsNamespace = defineIpcNamespace({
       CLOUD_HOSTS_METHOD_CHANNELS.settleWorktreeCleanup,
       async (payload: {
         worktree: CloudWorktreeRef;
-        deleted: boolean;
+        deleted: boolean | null;
       }): Promise<CloudWorktreeCleanupOutcome[]> =>
         requireRemoteService("cloudHosts").settleWorktreeCleanup(
           field(payload, "worktree"),

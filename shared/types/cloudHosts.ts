@@ -492,12 +492,16 @@ export interface CloudWorktreeCleanupRequest {
 /**
  * A stop or delete the person chose with a worktree's delete, until it is
  * done. `waiting`: the worktree isn't known to be gone yet. `running`: it is,
- * and the stop or delete is under way or will resume. `failed`: it didn't
- * finish, and waits for Retry.
+ * and the stop or delete is under way or will resume (with `error` saying why
+ * it can't yet, when its provider isn't available). `failed`: it didn't
+ * finish, and waits for Retry. `unconfirmed`: Daintree never heard whether a
+ * worktree on another host went, so nothing is done until the person decides.
  */
 export interface CloudWorktreeCleanupStatus {
   choice: Exclude<CloudWorktreeCleanupChoice, "keep">;
-  phase: "waiting" | "running" | "failed";
+  phase: "waiting" | "running" | "failed" | "unconfirmed";
+  /** Where the worktree lives: null for this device, whose worktree Daintree can look at itself. */
+  worktreeHostId: HostId | null;
   error: CloudHostError | null;
 }
 

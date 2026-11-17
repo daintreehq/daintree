@@ -24,7 +24,10 @@ const {
     prepareMock: vi.fn(async () => {
       calls.push("prepare");
     }),
-    settleMock: vi.fn(async (): Promise<CloudWorktreeCleanupOutcome[]> => []),
+    settleMock: vi.fn(async (..._args: unknown[]): Promise<CloudWorktreeCleanupOutcome[]> => {
+      calls.push("settle");
+      return [];
+    }),
     retryMock: vi.fn(async () => {}),
   };
 });
@@ -66,6 +69,7 @@ vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 vi.mock("@/store/devPreviewResumeSignal", () => ({ resumeDevPreviews: vi.fn(async () => {}) }));
 
 import { createWorktreeStore } from "@/store/createWorktreeStore";
+import { CLOUD_CLEANUP_REFUSED } from "@/store/worktreeCloudCleanup";
 
 const CLEANUP = {
   worktree: { hostId: null, projectId: "0f1e2d3c", worktreeId: "wt-1" },
@@ -111,35 +115,93 @@ describe("a worktree delete with its cloud machines (#17360)", () => {
     const store = storeWithWorktree();
     store.getState().startDelete("wt-1", { closeTerminals: true, cloudCleanup: CLEANUP });
     await flush();
-    expect(calls).toEqual(["prepare", "close-terminals", "delete"]);
+    expect(calls).toEqual(["prepare", "close-terminals", "delete", "settle"]);
     expect(prepareMock).toHaveBeenCalledWith(CLEANUP.worktree, CLEANUP.machines);
+    expect(settleMock).toHaveBeenCalledTimes(1);
     expect(settleMock).toHaveBeenCalledWith(CLEANUP.worktree, true);
   });
 
-  it("stops the delete when the choice can't be written down", async () => {
-    prepareMock.mockRejectedValueOnce(new Error("Cloud hosts aren't ready yet."));
+  it("stops the delete when the choice can't be written down, and asks for review on Retry", async () => {
+    prepareMock.mockRejectedValueOnce(new Error("The machine changed since you confirmed."));
     const store = storeWithWorktree();
     store.getState().startDelete("wt-1", { closeTerminals: true, cloudCleanup: CLEANUP });
     await flush();
+    expect(calls).toEqual([]);
     expect(closeTerminalsForWorktreeMock).not.toHaveBeenCalled();
     expect(worktreeClientDeleteMock).not.toHaveBeenCalled();
     expect(settleMock).not.toHaveBeenCalled();
-    expect(store.getState().deleteErrors.get("wt-1")).toContain(
-      "Couldn't record what happens to its cloud machine"
-    );
+    expect(store.getState().deleteErrors.get("wt-1")).toContain(CLOUD_CLEANUP_REFUSED);
+    // What was on offer may have changed: the dialog asks again rather than resending it.
+    expect(store.getState().retryDelete("wt-1")).toBe("needs-review");
+    await flush();
+    expect(prepareMock).toHaveBeenCalledTimes(1);
   });
 
-  it("settles a failed delete as not deleted, and writes the choice again on Retry", async () => {
-    worktreeClientDeleteMock.mockRejectedValueOnce(new Error("git error: unmerged paths"));
+  it("settles a refused delete as not deleted, and writes the same choice again on Retry", async () => {
+    worktreeClientDeleteMock.mockImplementationOnce(async () => {
+      calls.push("delete");
+      throw new Error("git error: unmerged paths");
+    });
     const store = storeWithWorktree();
     store.getState().startDelete("wt-1", { cloudCleanup: CLEANUP });
     await flush();
+    expect(calls).toEqual(["prepare", "delete", "settle"]);
     expect(settleMock).toHaveBeenCalledWith(CLEANUP.worktree, false);
 
-    store.getState().retryDelete("wt-1");
+    calls.length = 0;
+    expect(store.getState().retryDelete("wt-1")).toBe("dispatched");
     await flush();
-    expect(prepareMock).toHaveBeenCalledTimes(2);
+    expect(calls).toEqual(["prepare", "delete", "settle"]);
+    expect(prepareMock).toHaveBeenLastCalledWith(CLEANUP.worktree, CLEANUP.machines);
     expect(settleMock).toHaveBeenLastCalledWith(CLEANUP.worktree, true);
+  });
+
+  it("leaves the outcome unknown when the host went away mid-delete", async () => {
+    worktreeClientDeleteMock.mockRejectedValueOnce(new Error("HOST_EXITED: workspace host exited"));
+    const store = storeWithWorktree();
+    store.getState().startDelete("wt-1", { cloudCleanup: CLEANUP });
+    await flush();
+    expect(settleMock).toHaveBeenCalledWith(CLEANUP.worktree, null);
+  });
+
+  it("settles as deleted when only the branch step failed after the worktree went", async () => {
+    let fail: (reason: unknown) => void = () => {};
+    worktreeClientDeleteMock.mockImplementationOnce(
+      () => new Promise<void>((_resolve, reject) => (fail = reject))
+    );
+    const store = storeWithWorktree();
+    store.getState().startDelete("wt-1", { cloudCleanup: CLEANUP });
+    await flush();
+    store.getState().applyRemove("wt-1", { epoch: "e", seq: 2 });
+    fail(new Error("Worktree removed. Couldn't delete branch 'feature/login': locked ref"));
+    await flush();
+    expect(settleMock).toHaveBeenCalledTimes(1);
+    expect(settleMock).toHaveBeenCalledWith(CLEANUP.worktree, true);
+  });
+
+  it("settles as unknown when the card went but the failure doesn't say the worktree did", async () => {
+    let fail: (reason: unknown) => void = () => {};
+    worktreeClientDeleteMock.mockImplementationOnce(
+      () => new Promise<void>((_resolve, reject) => (fail = reject))
+    );
+    const store = storeWithWorktree();
+    store.getState().startDelete("wt-1", { cloudCleanup: CLEANUP });
+    await flush();
+    store.getState().applyRemove("wt-1", { epoch: "e", seq: 2 });
+    fail(new Error("git error: unmerged paths"));
+    await flush();
+    expect(settleMock).toHaveBeenCalledWith(CLEANUP.worktree, null);
+  });
+
+  it("settles a delete the host acknowledged after the renderer lost its answer", async () => {
+    worktreeClientDeleteMock.mockRejectedValueOnce(new Error("HOST_EXITED: workspace host exited"));
+    const store = storeWithWorktree();
+    store.getState().startDelete("wt-1", { cloudCleanup: CLEANUP });
+    await flush();
+    const [entry] = [...store.getState().mutationOutbox.values()];
+    settleMock.mockClear();
+    store.getState().pruneAcknowledgedMutations([entry!.mutationId]);
+    expect(settleMock).toHaveBeenCalledWith(CLEANUP.worktree, true);
   });
 
   it("says once that a machine's delete failed, with Retry", async () => {

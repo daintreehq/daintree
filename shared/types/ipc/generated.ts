@@ -733,7 +733,9 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "cloud-hosts:settle-worktree-cleanup": {
-    args: [payload: { worktree: import("../cloudHosts.js").CloudWorktreeRef; deleted: boolean }];
+    args: [
+      payload: { worktree: import("../cloudHosts.js").CloudWorktreeRef; deleted: boolean | null },
+    ];
     result: import("../cloudHosts.js").CloudWorktreeCleanupOutcome[];
   };
   "cloud-hosts:start-host": {

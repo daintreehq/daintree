@@ -208,6 +208,7 @@ describe("CloudHostStore worktree marks", () => {
 
 describe("CloudHostStore worktree cleanup (#17360)", () => {
   const CLEANUP = {
+    attemptId: "attempt-1",
     choice: "delete" as const,
     resourceId: "bx_23456789",
     worktree: { hostId: null, projectId: LOCAL_MARK.projectId, worktreeId: LOCAL_MARK.worktreeId },
@@ -256,6 +257,11 @@ describe("CloudHostStore worktree cleanup (#17360)", () => {
         ...exists,
         worktreeCleanup: { ...CLEANUP, worktree: { ...CLEANUP.worktree, hostId: "studio" } },
       },
+      {
+        ...exists,
+        worktreeCleanup: { ...CLEANUP, worktree: { ...CLEANUP.worktree, projectId: "aaaaaaaa" } },
+      },
+      { ...exists, worktreeCleanup: { ...CLEANUP, attemptId: "" } },
       { ...exists, createdFor: null, worktreeCleanup: CLEANUP },
       { ...exists, ownership: "imported", worktreeCleanup: CLEANUP },
       { ...exists, worktreeCleanup: { ...CLEANUP, choice: "keep" as never } },

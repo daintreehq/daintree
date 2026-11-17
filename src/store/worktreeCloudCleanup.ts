@@ -17,6 +17,13 @@ export interface WorktreeCloudCleanup {
   machines: CloudWorktreeCleanupRequest[];
 }
 
+/**
+ * Starts the message of a delete stopped because its machine choice couldn't
+ * be written down. Not retried by itself, and the card's Retry goes back
+ * through the confirmation: what was on offer may have changed.
+ */
+export const CLOUD_CLEANUP_REFUSED = "Couldn't record what happens to its cloud machine";
+
 function errorText(error: unknown, fallback: string): string {
   return isClientAppError(error) && error.userMessage
     ? error.userMessage
@@ -32,18 +39,23 @@ export async function prepareWorktreeCloudCleanup(cleanup: WorktreeCloudCleanup)
   try {
     await cloudHostsClient.prepareWorktreeCleanup(cleanup.worktree, cleanup.machines);
   } catch (error) {
-    throw new Error(
-      `Couldn't record what happens to its cloud machine: ${errorText(error, "Cloud hosts didn't answer")}`
-    );
+    throw new Error(`${CLOUD_CLEANUP_REFUSED}: ${errorText(error, "Cloud hosts didn't answer")}`, {
+      cause: error,
+    });
   }
 }
 
 /**
- * The delete settled: main carries out each machine's stop or delete once the
- * worktree is known to be gone, and drops them when it is still there. A
- * failure is kept on the machine in Settings → Hosts; this says so once.
+ * An attempt at the delete ended: `deleted` true when the host said the
+ * worktree went, false when it refused, null when the answer was lost. Main
+ * carries out each machine's stop or delete once the worktree is known to be
+ * gone, and drops them when it is still there. A failure is kept on the
+ * machine in Settings → Hosts; this says so once.
  */
-export function settleWorktreeCloudCleanup(cleanup: WorktreeCloudCleanup, deleted: boolean): void {
+export function settleWorktreeCloudCleanup(
+  cleanup: WorktreeCloudCleanup,
+  deleted: boolean | null
+): void {
   void cloudHostsClient.settleWorktreeCleanup(cleanup.worktree, deleted).then(
     (outcomes) => {
       for (const outcome of outcomes) if (outcome.error !== null) notifyCleanupFailed(outcome);

@@ -81,11 +81,12 @@ describe("machinesMarkedFor", () => {
     expect(found.map((machine) => machine.status.hostId)).toEqual(["mine"]);
   });
 
-  it("offers stop and delete on a provider that does both, and no stop once it's stopped", () => {
+  it("offers stop and delete on a provider that does both, even for a machine last seen stopped", () => {
     const [running] = machinesMarkedFor(snapshot([status()]), WORKTREE);
     expect(running).toMatchObject({ choices: ["keep", "stop", "delete"], keptBecause: null });
+    // That reading may be old; a stop finds a stopped machine and leaves it.
     const [stopped] = machinesMarkedFor(snapshot([status({ machine: "stopped" })]), WORKTREE);
-    expect(stopped?.choices).toEqual(["keep", "delete"]);
+    expect(stopped?.choices).toEqual(["keep", "stop", "delete"]);
   });
 
   it("offers no delete through a provider that can't delete machines from Daintree", () => {
@@ -96,19 +97,37 @@ describe("machinesMarkedFor", () => {
     expect(machine).toMatchObject({ choices: ["keep", "stop"], providerName: "Acme" });
   });
 
-  it("only keeps a machine still being created, or one whose provider isn't available", () => {
+  it("only keeps a machine without one yet, saying whether its create is still going", () => {
+    const notCreated = { resourceId: null, machine: "not-created" as const };
     const [creating] = machinesMarkedFor(
-      snapshot([status({ resourceId: null, machine: "not-created" })]),
+      snapshot([
+        status({
+          ...notCreated,
+          operation: { id: "op", kind: "creating", startedAt: 0, stage: "Asking Boat" },
+        }),
+      ]),
       WORKTREE
     );
     expect(creating?.choices).toEqual(["keep"]);
     expect(creating?.keptBecause).toMatch(/still being created/);
+    const [unfinished] = machinesMarkedFor(snapshot([status(notCreated)]), WORKTREE);
+    expect(unfinished?.choices).toEqual(["keep"]);
+    expect(unfinished?.keptBecause).toMatch(/wasn't finished being set up/);
+  });
+
+  it("only keeps a machine whose provider isn't available, without guessing what it costs", () => {
     const [unavailable] = machinesMarkedFor(
       snapshot([status({ providerUnavailable: "Its plugin is disabled" })]),
       WORKTREE
     );
     expect(unavailable?.choices).toEqual(["keep"]);
     expect(unavailable?.keptBecause).toMatch(/Boat isn't available/);
+    // Its declaration gone from the snapshot entirely.
+    const [undeclared] = machinesMarkedFor(snapshot([status()], []), WORKTREE);
+    expect(undeclared).toMatchObject({ choices: ["keep"], provider: null, providerName: "boat" });
+    expect(cleanupChoiceCopy(undeclared!, "keep", NOW).description).toBe(
+      "It stays in your boat account as it is. Daintree can't say what it costs while boat isn't available."
+    );
   });
 });
 

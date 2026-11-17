@@ -64,16 +64,16 @@ export function machinesMarkedFor(
         status.providerUnavailable !== null || provider === null
           ? `${providerName} isn't available right now, so '${name}' is kept.`
           : status.resourceId === null
-            ? `'${name}' is still being created, so it's kept. Remove it from Settings → Hosts once it's up.`
+            ? status.operation?.kind === "creating"
+              ? `'${name}' is still being created, so it's kept. Remove it from Settings → Hosts once it's up.`
+              : `'${name}' wasn't finished being set up, so it's kept. Retry or remove it from Settings → Hosts.`
             : null;
+      // Stop is offered even for a machine last seen stopped: that reading may be old,
+      // and a stop finds a stopped machine and leaves it.
       const choices: CloudWorktreeCleanupChoice[] =
         keptBecause !== null
           ? ["keep"]
-          : [
-              "keep",
-              ...(status.machine === "stopped" ? [] : (["stop"] as const)),
-              ...(canDeleteMachines(provider) ? (["delete"] as const) : []),
-            ];
+          : ["keep", "stop", ...(canDeleteMachines(provider) ? (["delete"] as const) : [])];
       return { status, provider, providerName, name, choices, keptBecause };
     });
 }
@@ -91,14 +91,10 @@ export function cleanupChoiceCopy(
     case "keep":
       return {
         label: `Keep it on ${providerName}`,
-        description: keepMachineDescription(
-          status,
-          providerName,
-          billedStopped,
-          storageBilled,
-          now,
-          false
-        ),
+        // Without its provider's declaration nothing here can say what keeping it costs.
+        description: provider
+          ? keepMachineDescription(status, providerName, billedStopped, storageBilled, now, false)
+          : `It stays in your ${providerName} account as it is. Daintree can't say what it costs while ${providerName} isn't available.`,
       };
     case "stop": {
       const kept = provider ? ` ${stopKeepsSentence(provider.capabilities.persistence)}` : "";

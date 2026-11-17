@@ -63,13 +63,17 @@ export interface StoredCreationIntent {
  * confirmed: a binding whose machine or mark has changed since never acts on it.
  * `waiting`: the worktree isn't known to be gone. `due`: it is, so the stop or
  * delete runs (again, after a restart). `failed`: it didn't finish and waits
- * for Retry; a restart never retries it by itself.
+ * for Retry; a restart never retries it by itself. `unconfirmed`: Daintree
+ * quit before hearing whether a worktree on another host went, so nothing is
+ * done until the person settles it. Each attempt at the delete writes a new
+ * `attemptId`, so an answer about an earlier attempt never changes a later one.
  */
 export interface StoredWorktreeCleanup {
+  attemptId: string;
   choice: "stop" | "delete";
   resourceId: string;
   worktree: CloudWorktreeRef;
-  phase: "waiting" | "due" | "failed";
+  phase: "waiting" | "due" | "failed" | "unconfirmed";
   error: CloudHostError | null;
   requestedAt: number;
 }
@@ -409,12 +413,17 @@ function readWorktreeCleanup(
   if (!value || typeof value !== "object" || !createdFor) return null;
   const choice = value.choice === "stop" || value.choice === "delete" ? value.choice : null;
   const phase =
-    value.phase === "waiting" || value.phase === "due" || value.phase === "failed"
+    value.phase === "waiting" ||
+    value.phase === "due" ||
+    value.phase === "failed" ||
+    value.phase === "unconfirmed"
       ? value.phase
       : null;
+  const attemptId = nonEmpty(value.attemptId);
   const cleanupResourceId = nonEmpty(value.resourceId);
   const worktree = value.worktree as Record<string, unknown> | null;
-  if (!choice || !phase || !cleanupResourceId || cleanupResourceId !== resourceId) return null;
+  if (!attemptId || !choice || !phase) return null;
+  if (!cleanupResourceId || cleanupResourceId !== resourceId) return null;
   if (!worktree || typeof worktree !== "object") return null;
   if (
     worktree.hostId !== createdFor.hostId ||
@@ -424,6 +433,7 @@ function readWorktreeCleanup(
     return null;
   }
   return {
+    attemptId,
     choice,
     resourceId: cleanupResourceId,
     worktree: {
