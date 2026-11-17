@@ -899,15 +899,19 @@ describe("git:list-base-integration-commits — blockers the write would refuse 
       { cwd: CWD, baseBranch: BASE }
     );
 
-    await expect(
-      registeredHandlers().get(CHANNELS.GIT_LIST_BASE_INTEGRATION_COMMITS)!(
-        {},
-        { cwd: CWD, baseBranch: BASE, kind: "merge-base" }
-      )
-    ).rejects.toThrow(/already running/);
-
-    factory.resolve(gitDouble());
-    await running;
+    try {
+      await expect(
+        registeredHandlers().get(CHANNELS.GIT_LIST_BASE_INTEGRATION_COMMITS)!(
+          {},
+          { cwd: CWD, baseBranch: BASE, kind: "merge-base" }
+        )
+      ).rejects.toThrow(/already running/);
+    } finally {
+      // Settled even when the assertion fails, so the claim on the worktree
+      // never outlives this test.
+      factory.resolve(gitDouble());
+      await running;
+    }
     // Released once the write settles, so the next read measures normally.
     createHardenedGitMock.mockResolvedValue(gitDouble());
     const after = (await registeredHandlers().get(CHANNELS.GIT_LIST_BASE_INTEGRATION_COMMITS)!(
