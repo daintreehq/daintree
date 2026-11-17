@@ -320,6 +320,24 @@ describe("importDictionaryEntries", () => {
     expect(batch).toEqual(one);
   });
 
+  it("keeps a phrase's first owner when a later entry listing it gains another phrase", () => {
+    const stored = [
+      entry("Owner", { heardAs: ["shared"] }),
+      entry("Changed", { heardAs: ["shared"] }),
+    ];
+    const conflicts: HeardAsConflict[] = [];
+    importDictionaryEntries(
+      stored,
+      [
+        { term: "Changed", heardAs: ["fresh"] },
+        { term: "Other", heardAs: ["shared"] },
+      ],
+      T1,
+      conflicts
+    );
+    expect(conflicts).toEqual([{ phrase: "shared", owner: "Owner" }]);
+  });
+
   it("returns the same array when every term is already there", () => {
     const stored = [entry("Daintree", { heardAs: ["dane tree"] })];
     expect(
