@@ -2302,7 +2302,8 @@ function buildElectronApi(): ElectronAPI {
         filePath?: string,
         useMergeBase?: boolean,
         ignoreWhitespace?: boolean,
-        contextLines?: number
+        contextLines?: number,
+        oldPath?: string
       ) =>
         _unwrappingInvoke(CHANNELS.GIT_COMPARE_WORKTREES, {
           cwd,
@@ -2312,6 +2313,7 @@ function buildElectronApi(): ElectronAPI {
           useMergeBase,
           ignoreWhitespace,
           contextLines,
+          oldPath,
         }),
 
       getUsername: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_GET_USERNAME, cwd),

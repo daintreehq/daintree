@@ -124,9 +124,21 @@ describe.skipIf(process.platform === "win32")(
         status: "R",
         path: QUOTE,
         oldPath: "rename me.txt",
-        insertions: 6,
-        deletions: 5,
+        insertions: 1,
+        deletions: 0,
       });
+      const diff = await service.compareWorktrees(
+        "main",
+        "other",
+        files[0].path,
+        undefined,
+        undefined,
+        undefined,
+        files[0].oldPath
+      );
+      expect(diff).toContain("+six");
+      expect(diff).not.toContain("+one");
+      expect(diff).not.toContain("new file mode");
     });
   }
 );
