@@ -383,6 +383,93 @@ describe("git-write staging handlers (real git)", () => {
     });
   });
 
+  describe("a selection longer than the Windows command line", () => {
+    // Windows caps a whole command line at 32,767 characters.
+    const WINDOWS_COMMAND_LINE_MAX = 32_767;
+    // Glob, magic, option and quoting lookalikes, each a literal filename here.
+    const unusual = [
+      "é space.txt",
+      "[...slug].tsx",
+      "-leading-dash.txt",
+      ":leading-colon.txt",
+      "star*.txt",
+      ...(process.platform === "win32" ? [] : ["new\nline.txt", 'quote".txt']),
+    ];
+    // Unselected files a glob or prefix reading of the selection would catch.
+    const decoys = ["s.tsx", "star-decoy.txt", "leading-colon.txt"];
+
+    function longSelection(): string[] {
+      const dir = `nested/${"d".repeat(40)}`;
+      const names = Array.from(
+        { length: 420 },
+        (_, i) => `${dir}/${"f".repeat(40)}-${String(i).padStart(4, "0")}.txt`
+      );
+      return [...names, ...unusual];
+    }
+
+    function writeAll(names: readonly string[], content: string): void {
+      for (const name of names) {
+        fs.mkdirSync(path.dirname(path.join(repo, name)), { recursive: true });
+        fs.writeFileSync(path.join(repo, name), content);
+      }
+    }
+
+    function indexed(...args: string[]): string[] {
+      return git(repo, ...args, "-z")
+        .split("\0")
+        .filter(Boolean)
+        .sort();
+    }
+
+    function expectEveryCommandLineFits(commands: string[][]): void {
+      expect(commands.length).toBeGreaterThan(0);
+      for (const args of commands) {
+        expect(args.join(" ").length).toBeLessThan(WINDOWS_COMMAND_LINE_MAX);
+      }
+    }
+
+    it("stages exactly the selected paths", async () => {
+      commitFiles({ "keep.txt": "base\n" });
+      const selection = longSelection();
+      expect(selection.join(" ").length).toBeGreaterThan(WINDOWS_COMMAND_LINE_MAX);
+      writeAll([...selection, ...decoys], "new\n");
+
+      const mark = spawned.length;
+      await handler(CHANNELS.GIT_STAGE_FILES)(null, { cwd: repo, filePaths: selection });
+
+      expect(indexed("diff", "--cached", "--name-only")).toEqual([...selection].sort());
+      expectEveryCommandLineFits(spawnedSince(mark));
+    });
+
+    it("unstages exactly the selected paths", async () => {
+      const selection = longSelection();
+      writeAll([...selection, ...decoys], "base\n");
+      git(repo, "add", ".");
+      git(repo, "commit", "-q", "-m", "base");
+      writeAll([...selection, ...decoys], "changed\n");
+      git(repo, "add", ".");
+
+      const mark = spawned.length;
+      await handler(CHANNELS.GIT_UNSTAGE_FILES)(null, { cwd: repo, filePaths: selection });
+
+      expect(indexed("diff", "--cached", "--name-only")).toEqual([...decoys].sort());
+      expectEveryCommandLineFits(spawnedSince(mark));
+    });
+
+    it("unstages exactly the selected paths on an unborn branch", async () => {
+      const selection = longSelection();
+      writeAll([...selection, ...decoys], "new\n");
+      git(repo, "add", ".");
+
+      const mark = spawned.length;
+      await handler(CHANNELS.GIT_UNSTAGE_FILES)(null, { cwd: repo, filePaths: selection });
+
+      expect(indexed("ls-files")).toEqual([...decoys].sort());
+      expect(fs.existsSync(path.join(repo, selection[0]!))).toBe(true);
+      expectEveryCommandLineFits(spawnedSince(mark));
+    });
+  });
+
   it("reads churn by exact path, with no root probe and no config read", async () => {
     commitFiles({ "é space.txt": "a\nb\n", "sub/ünïcode.txt": "x\n" });
     git(repo, "remote", "add", "origin", path.join(tmp, "origin.git"));
