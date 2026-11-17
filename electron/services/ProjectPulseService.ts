@@ -13,6 +13,15 @@ import type {
   GetProjectPulseOptions,
 } from "../../shared/types/pulse.js";
 
+interface ComputedPulse {
+  pulse: ProjectPulse;
+  headSha: string | null;
+  headBranch: string | undefined;
+  // False when a supplementary read failed and the pulse carries a fallback
+  // for it: caching would pin that fallback until HEAD moves or the TTL ends.
+  cacheable: boolean;
+}
+
 interface CacheEntry {
   pulse: ProjectPulse;
   timestamp: number;
@@ -178,8 +187,11 @@ export class ProjectPulseService {
 
     const promise = (async () => {
       try {
-        const { pulse, headSha, headBranch } = await this.computePulse(options, controller!.signal);
-        if (!controller!.signal.aborted) {
+        const { pulse, headSha, headBranch, cacheable } = await this.computePulse(
+          options,
+          controller!.signal
+        );
+        if (cacheable && !controller!.signal.aborted) {
           this.cache.set(cacheKey, {
             pulse,
             timestamp: Date.now(),
@@ -254,7 +266,7 @@ export class ProjectPulseService {
   private async computePulse(
     options: GetProjectPulseOptions,
     signal?: AbortSignal
-  ): Promise<{ pulse: ProjectPulse; headSha: string | null; headBranch: string | undefined }> {
+  ): Promise<ComputedPulse> {
     const {
       worktreePath,
       worktreeId,
@@ -284,7 +296,12 @@ export class ProjectPulseService {
       const errorMessage = formatErrorMessage(error, "Failed to read git HEAD");
       if (isNoCommitsError(errorMessage)) {
         logProjectPulseDebug("Repository has no commits, returning empty pulse", { worktreeId });
-        return { pulse: this.createEmptyPulse(options), headSha: null, headBranch: undefined };
+        return {
+          pulse: this.createEmptyPulse(options),
+          headSha: null,
+          headBranch: undefined,
+          cacheable: true,
+        };
       }
       logError("Failed to get HEAD revision", {
         error: errorMessage,
@@ -317,16 +334,51 @@ export class ProjectPulseService {
         this.calculateFullStreak(git),
       ]);
 
-    const heatmap =
-      heatmapResult.status === "fulfilled"
-        ? heatmapResult.value
-        : this.createEmptyHeatmap(rangeDays);
-    const recentCommits =
-      recentCommitsResult.status === "fulfilled" ? recentCommitsResult.value : [];
+    // HEAD resolved, so this repository has history: a failed read of it is a
+    // failure, never zero activity. The heatmap backs the commit total, the
+    // active days and the coach line, so without it there is no pulse to show.
+    if (heatmapResult.status === "rejected") {
+      throw new Error(
+        `Failed to read commit history: ${formatErrorMessage(heatmapResult.reason, "git log failed")}`,
+        { cause: heatmapResult.reason }
+      );
+    }
+    // Only asked for by callers that read the list; an empty one would claim
+    // there are no commits.
+    if (recentCommitsResult.status === "rejected") {
+      throw new Error(
+        `Failed to read recent commits: ${formatErrorMessage(recentCommitsResult.reason, "git log failed")}`,
+        { cause: recentCommitsResult.reason }
+      );
+    }
+    const heatmap = heatmapResult.value;
+    const recentCommits = recentCommitsResult.value;
     const deltaToMain = deltaResult.status === "fulfilled" ? deltaResult.value : undefined;
-    const firstCommitDate =
-      firstCommitResult.status === "fulfilled" ? firstCommitResult.value : null;
-    const fullStreak = fullStreakResult.status === "fulfilled" ? fullStreakResult.value : 0;
+
+    let cacheable = true;
+    // A failed root read keeps the full-window denominator and skips the
+    // before-project marking, as a shallow clone does, but isn't cached.
+    let firstCommitDate: Date | null = null;
+    if (firstCommitResult.status === "fulfilled") {
+      firstCommitDate = firstCommitResult.value;
+    } else {
+      cacheable = false;
+      logError("Failed to get first commit date", {
+        error: formatErrorMessage(firstCommitResult.reason, "git rev-list failed"),
+        worktreeId,
+      });
+    }
+    // Unknown, not zero: the streak is optional, so consumers leave it out.
+    let currentStreakDays: number | undefined;
+    if (fullStreakResult.status === "fulfilled") {
+      currentStreakDays = fullStreakResult.value;
+    } else {
+      cacheable = false;
+      logError("Failed to get commit timestamps for full streak", {
+        error: formatErrorMessage(fullStreakResult.reason, "git log failed"),
+        worktreeId,
+      });
+    }
 
     // Mark cells before project start and calculate project age
     let projectAgeDays: number = rangeDays;
@@ -347,7 +399,6 @@ export class ProjectPulseService {
     // Calculate summary stats
     const commitsInRange = heatmap.reduce((sum, cell) => sum + cell.count, 0);
     const activeDays = heatmap.filter((cell) => cell.count > 0).length;
-    const currentStreakDays = fullStreak;
 
     const pulse: ProjectPulse = {
       worktreeId,
@@ -372,7 +423,7 @@ export class ProjectPulseService {
       durationMs: Date.now() - startTime,
     });
 
-    return { pulse, headSha, headBranch: branch };
+    return { pulse, headSha, headBranch: branch, cacheable };
   }
 
   private async computeHeatmap(git: SimpleGit, rangeDays: PulseRangeDays): Promise<HeatCell[]> {
@@ -393,13 +444,7 @@ export class ProjectPulseService {
     // the window's real volume cut the oldest days out of the grid and the totals
     // while they still read as exact (#17455). One %ct line is 11 bytes, so a
     // window of 100,000 commits prints about 1MB.
-    let output: string;
-    try {
-      output = await git.raw(["log", `--since=${sinceEpochSeconds}`, "--pretty=format:%ct"]);
-    } catch (error) {
-      logError("Failed to get commit timestamps for heatmap", { error: (error as Error).message });
-      return this.createEmptyHeatmap(rangeDays);
-    }
+    const output = await git.raw(["log", `--since=${sinceEpochSeconds}`, "--pretty=format:%ct"]);
 
     // Walked in place rather than split, so a busy window never holds an array of
     // every timestamp string at once.
@@ -489,38 +534,33 @@ export class ProjectPulseService {
   }
 
   private async getRecentCommits(git: SimpleGit, count: number): Promise<CommitItem[]> {
-    try {
-      const output = await git.raw([
-        "log",
-        `-n`,
-        `${count}`,
-        "--pretty=format:%H\x1f%ct\x1f%an\x1f%s\x1e",
-      ]);
+    const output = await git.raw([
+      "log",
+      `-n`,
+      `${count}`,
+      "--pretty=format:%H\x1f%ct\x1f%an\x1f%s\x1e",
+    ]);
 
-      if (!output.trim()) {
-        return [];
-      }
-
-      const commits: CommitItem[] = [];
-      const records = output.split("\x1e").filter(Boolean);
-
-      for (const record of records) {
-        const parts = record.split("\x1f");
-        if (parts.length < 4) continue;
-        const [sha, timestamp, authorName, subject] = parts;
-        commits.push({
-          sha: sha.trim(),
-          subject: subject.trim(),
-          authorName: authorName.trim() || undefined,
-          timestamp: parseInt(timestamp, 10) * 1000,
-        });
-      }
-
-      return commits;
-    } catch (error) {
-      logError("Failed to get recent commits", { error: (error as Error).message });
+    if (!output.trim()) {
       return [];
     }
+
+    const commits: CommitItem[] = [];
+    const records = output.split("\x1e").filter(Boolean);
+
+    for (const record of records) {
+      const parts = record.split("\x1f");
+      if (parts.length < 4) continue;
+      const [sha, timestamp, authorName, subject] = parts;
+      commits.push({
+        sha: sha.trim(),
+        subject: subject.trim(),
+        authorName: authorName.trim() || undefined,
+        timestamp: parseInt(timestamp, 10) * 1000,
+      });
+    }
+
+    return commits;
   }
 
   private async getBranchDelta(
@@ -624,19 +664,11 @@ export class ProjectPulseService {
   private async calculateFullStreak(git: SimpleGit): Promise<number> {
     const MAX_COMMITS_FOR_STREAK = 50_000;
 
-    let output: string;
-    try {
-      output = await git.raw([
-        "log",
-        `--max-count=${MAX_COMMITS_FOR_STREAK}`,
-        "--pretty=format:%ct",
-      ]);
-    } catch (error) {
-      logError("Failed to get commit timestamps for full streak", {
-        error: (error as Error).message,
-      });
-      return 0;
-    }
+    const output = await git.raw([
+      "log",
+      `--max-count=${MAX_COMMITS_FOR_STREAK}`,
+      "--pretty=format:%ct",
+    ]);
 
     if (!output.trim()) {
       return 0;
@@ -690,34 +722,29 @@ export class ProjectPulseService {
   }
 
   private async getFirstCommitDate(git: SimpleGit): Promise<Date | null> {
-    try {
-      // Shallow clones graft the boundary commit as a parent-less root, which would
-      // make rev-list --max-parents=0 return the boundary SHA (often only days old)
-      // instead of the historical root. Bail so the caller skips isBeforeProject culling.
-      const shallowOut = await git.raw(["rev-parse", "--is-shallow-repository"]);
-      if (shallowOut.trim() === "true") {
-        return null;
-      }
-
-      // Merging unrelated histories leaves several reachable roots, and rev-list prints
-      // them newest first, so the project's start is the earliest root timestamp rather
-      // than whichever line comes first. Each line is "<committer timestamp> <sha>".
-      const rootsOut = await git.raw(["rev-list", "--max-parents=0", "--timestamp", "HEAD"]);
-
-      let earliest: number | null = null;
-      for (const line of rootsOut.split("\n")) {
-        const timestamp = parseInt(line.trim().split(/\s+/)[0] ?? "", 10);
-        if (isNaN(timestamp)) continue;
-        if (earliest === null || timestamp < earliest) {
-          earliest = timestamp;
-        }
-      }
-
-      return earliest === null ? null : new Date(earliest * 1000);
-    } catch (error) {
-      logError("Failed to get first commit date", { error: (error as Error).message });
+    // Shallow clones graft the boundary commit as a parent-less root, which would
+    // make rev-list --max-parents=0 return the boundary SHA (often only days old)
+    // instead of the historical root. Bail so the caller skips isBeforeProject culling.
+    const shallowOut = await git.raw(["rev-parse", "--is-shallow-repository"]);
+    if (shallowOut.trim() === "true") {
       return null;
     }
+
+    // Merging unrelated histories leaves several reachable roots, and rev-list prints
+    // them newest first, so the project's start is the earliest root timestamp rather
+    // than whichever line comes first. Each line is "<committer timestamp> <sha>".
+    const rootsOut = await git.raw(["rev-list", "--max-parents=0", "--timestamp", "HEAD"]);
+
+    let earliest: number | null = null;
+    for (const line of rootsOut.split("\n")) {
+      const timestamp = parseInt(line.trim().split(/\s+/)[0] ?? "", 10);
+      if (isNaN(timestamp)) continue;
+      if (earliest === null || timestamp < earliest) {
+        earliest = timestamp;
+      }
+    }
+
+    return earliest === null ? null : new Date(earliest * 1000);
   }
 }
 

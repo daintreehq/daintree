@@ -476,12 +476,14 @@ describe("ProjectPulseService", () => {
     expect(pulse.currentStreakDays).toBe(3);
   });
 
-  it("returns empty heatmap on git log error", async () => {
+  // The zero a failed read used to fabricate stays reserved for a read that
+  // succeeded and found nothing in range (failures: historyFailure.test.ts).
+  it("reports zero activity when the log succeeds with no commits in range", async () => {
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
-      if (cmd === "rev-parse" && args[1] === "HEAD") throw new Error("no commits");
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return "deadbeef\n";
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "HEAD\n";
-      if (cmd === "log") throw new Error("fatal");
+      if (cmd === "log") return "";
       return "";
     });
 
@@ -502,7 +504,10 @@ describe("ProjectPulseService", () => {
     });
 
     expect(pulse.heatmap).toHaveLength(60);
+    expect(pulse.heatmap.every((cell) => cell.count === 0)).toBe(true);
     expect(pulse.commitsInRange).toBe(0);
+    expect(pulse.activeDays).toBe(0);
+    expect(pulse.currentStreakDays).toBe(0);
     expect(pulse.branch).toBeUndefined();
   });
 
@@ -1393,10 +1398,8 @@ describe("ProjectPulseService", () => {
 
     expect(capturedSignal!.aborted).toBe(true);
 
-    // allSettled absorbs the abort, so the promise resolves with fallback values.
-    // The cache guard must prevent writing the fallback result.
-    const pulse = await pulsePromise;
-    expect(pulse.commitsInRange).toBe(0);
+    // The aborted heatmap read is a failed history read, never zero commits.
+    await expect(pulsePromise).rejects.toThrow(/Failed to read commit history/);
 
     const cache = (svc as any).cache as Map<string, unknown>;
     expect(cache.size).toBe(0);

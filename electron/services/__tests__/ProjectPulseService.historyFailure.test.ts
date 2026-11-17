@@ -133,4 +133,70 @@ describe("ProjectPulseService history read failures", () => {
     const recovered = await svc.getPulse(OPTS);
     expect(recovered.currentStreakDays).toBe(3);
   });
+
+  it("fails instead of listing no commits when requested recent commits can't be read", async () => {
+    const raw = vi.fn(async (args: string[]) => {
+      if (args[0] === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") {
+        return "deadbeef\n";
+      }
+      if (args[0] === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
+      if (args[0] === "log" && args[1] === "-n") throw new Error("fatal: bad object HEAD");
+      if (args[0] === "log") return HISTORY;
+      return "";
+    });
+    const svc = await loadService(raw);
+
+    await expect(svc.getPulse({ ...OPTS, includeRecentCommits: true })).rejects.toThrow(
+      /recent commits/i
+    );
+    // A caller that doesn't read the list never runs the failing query.
+    expect((await svc.getPulse(OPTS)).commitsInRange).toBe(3);
+  });
+
+  it("keeps the full-window age when the root read fails, and reads it again next time", async () => {
+    let rootsFail = true;
+    const raw = vi.fn(async (args: string[]) => {
+      if (args[0] === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") {
+        return "deadbeef\n";
+      }
+      if (args[0] === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
+      if (args[0] === "rev-parse" && args[1] === "--is-shallow-repository") return "false\n";
+      if (args[0] === "rev-list") {
+        if (rootsFail) throw new Error("fatal: unable to read 1234abcd");
+        return `${daysAgoSeconds(3)} rootsha\n`;
+      }
+      if (args[0] === "log") return HISTORY;
+      return "";
+    });
+    const svc = await loadService(raw);
+
+    const partial = await svc.getPulse(OPTS);
+    expect(partial.commitsInRange).toBe(3);
+    expect(partial.projectAgeDays).toBe(60);
+    expect(partial.heatmap.some((cell) => cell.isBeforeProject)).toBe(false);
+
+    rootsFail = false;
+    const recovered = await svc.getPulse(OPTS);
+    expect(recovered.projectAgeDays).toBe(4);
+    expect(recovered.heatmap.some((cell) => cell.isBeforeProject)).toBe(true);
+  });
+
+  it("caches a shallow clone's missing first-commit date like any complete pulse", async () => {
+    const raw = vi.fn(async (args: string[]) => {
+      if (args[0] === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") {
+        return "deadbeef\n";
+      }
+      if (args[0] === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
+      if (args[0] === "rev-parse" && args[1] === "--is-shallow-repository") return "true\n";
+      if (args[0] === "log") return HISTORY;
+      return "";
+    });
+    const svc = await loadService(raw);
+
+    await svc.getPulse(OPTS);
+    const heatmapReads = raw.mock.calls.filter(([args]) => isHeatmapLog(args)).length;
+    const cached = await svc.getPulse(OPTS);
+    expect(cached.projectAgeDays).toBe(60);
+    expect(raw.mock.calls.filter(([args]) => isHeatmapLog(args)).length).toBe(heatmapReads);
+  });
 });
