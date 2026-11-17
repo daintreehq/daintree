@@ -14,8 +14,17 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 const submitFleet = vi.fn();
-let hadElectron = false;
-let previousHostMetrics: unknown;
+
+function resetArming() {
+  useFleetArmingStore.setState({
+    armedIds: new Set<string>(),
+    armOrder: [],
+    armOrderById: {},
+    lastArmedId: null,
+    previewArmedIds: new Set<string>(),
+    crossHostTargets: [],
+  });
+}
 
 function armRemote(terminalId: string) {
   useFleetArmingStore.getState().armCrossHostTarget({
@@ -37,43 +46,52 @@ function typeDraft(text: string) {
   fireEvent.change(el, { target: { value: text } });
 }
 
+/**
+ * Renders the field under a spy standing in for the ribbon around it. The
+ * field keeps its text past a remount, so each case starts by emptying it.
+ */
+function renderComposer() {
+  const above = vi.fn();
+  render(
+    <div onKeyDown={above}>
+      <FleetHostComposer />
+    </div>
+  );
+  typeDraft("");
+  expect(field().value).toBe("");
+  return above;
+}
+
 const IME_SIGNALS = [
   { signal: "isComposing", init: { isComposing: true } },
   { signal: "keyCode 229", init: { keyCode: 229 } },
 ];
 
 describe("FleetHostComposer — an IME's Enter and Escape (#17450)", () => {
+  let electronBefore: PropertyDescriptor | undefined;
+
   beforeEach(() => {
-    useFleetArmingStore.setState({
-      armedIds: new Set<string>(),
-      armOrder: [],
-      armOrderById: {},
-      lastArmedId: null,
-      previewArmedIds: new Set<string>(),
-      crossHostTargets: [],
-    });
+    resetArming();
     submitFleet.mockReset().mockResolvedValue(undefined);
-    const electron = (window as unknown as { electron?: Record<string, unknown> }).electron;
-    hadElectron = electron !== undefined;
-    previousHostMetrics = electron?.hostMetrics;
-    if (electron) {
-      electron.hostMetrics = { submitFleet };
-    } else {
-      (window as unknown as { electron: unknown }).electron = { hostMetrics: { submitFleet } };
-    }
+    electronBefore = Object.getOwnPropertyDescriptor(window, "electron");
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: { hostMetrics: { submitFleet } },
+    });
     armRemote("t1");
   });
 
   afterEach(() => {
-    const electron = (window as unknown as { electron?: Record<string, unknown> }).electron;
-    if (hadElectron && electron) electron.hostMetrics = previousHostMetrics;
-    else delete (window as unknown as { electron?: unknown }).electron;
+    if (electronBefore) Object.defineProperty(window, "electron", electronBefore);
+    else Reflect.deleteProperty(window, "electron");
+    resetArming();
   });
 
   it.each(IME_SIGNALS)(
     "keeps the draft and sends nothing when an IME's Enter confirms a candidate ($signal)",
     async ({ init }) => {
-      render(<FleetHostComposer />);
+      renderComposer();
       typeDraft("ni hao");
 
       let notPrevented = false;
@@ -92,12 +110,7 @@ describe("FleetHostComposer — an IME's Enter and Escape (#17450)", () => {
   it.each(IME_SIGNALS)(
     "keeps the draft, and the fleet, when an IME's Escape dismisses its candidates ($signal)",
     ({ init }) => {
-      const above = vi.fn();
-      render(
-        <div onKeyDown={above}>
-          <FleetHostComposer />
-        </div>
-      );
+      const above = renderComposer();
       typeDraft("ni hao");
 
       const notPrevented = fireEvent.keyDown(field(), { key: "Escape", ...init });
@@ -110,44 +123,49 @@ describe("FleetHostComposer — an IME's Enter and Escape (#17450)", () => {
     }
   );
 
-  it("keeps an IME's Escape from the ribbon even when nothing is typed yet", () => {
-    const above = vi.fn();
-    render(
-      <div onKeyDown={above}>
-        <FleetHostComposer />
-      </div>
-    );
-    field().focus();
+  it.each(IME_SIGNALS)(
+    "keeps an IME's Escape from the ribbon even when nothing is typed yet ($signal)",
+    ({ init }) => {
+      const above = renderComposer();
+      field().focus();
 
-    fireEvent.keyDown(field(), { key: "Escape", isComposing: true });
+      const notPrevented = fireEvent.keyDown(field(), { key: "Escape", ...init });
 
-    expect(above).not.toHaveBeenCalled();
-  });
+      expect(notPrevented).toBe(true);
+      expect(field().value).toBe("");
+      expect(document.activeElement).toBe(field());
+      expect(above).not.toHaveBeenCalled();
+    }
+  );
 
   it("still sends on a plain Enter", async () => {
-    render(<FleetHostComposer />);
+    renderComposer();
     typeDraft("ls");
 
     await act(async () => {
-      fireEvent.keyDown(field(), { key: "Enter" });
+      fireEvent.keyDown(field(), { key: "Enter", keyCode: 13 });
     });
 
     expect(submitFleet).toHaveBeenCalledWith(expect.objectContaining({ text: "ls" }));
   });
 
   it("still clears a typed draft on a plain Escape, before the ribbon sees it", () => {
-    const above = vi.fn();
-    render(
-      <div onKeyDown={above}>
-        <FleetHostComposer />
-      </div>
-    );
+    const above = renderComposer();
     typeDraft("ls");
 
-    const notPrevented = fireEvent.keyDown(field(), { key: "Escape" });
+    const notPrevented = fireEvent.keyDown(field(), { key: "Escape", keyCode: 27 });
 
     expect(notPrevented).toBe(false);
     expect(field().value).toBe("");
     expect(above).not.toHaveBeenCalled();
+  });
+
+  it("lets a plain Escape on an empty field reach the ribbon, which exits the fleet", () => {
+    const above = renderComposer();
+    field().focus();
+
+    fireEvent.keyDown(field(), { key: "Escape", keyCode: 27 });
+
+    expect(above).toHaveBeenCalledTimes(1);
   });
 });

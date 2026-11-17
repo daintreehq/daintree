@@ -430,66 +430,103 @@ describe("FleetDraftingPill — per-target edit and skip (#8691)", () => {
   });
 
   describe("an IME's Enter and Escape in an override field (#17450)", () => {
-    function editedField(): HTMLTextAreaElement {
-      const textarea = screen.getAllByTestId(
-        "fleet-resolution-row-textarea"
-      )[1] as HTMLTextAreaElement;
-      textarea.focus();
-      fireEvent.change(textarea, { target: { value: "ni hao" } });
-      return textarea;
-    }
-
-    it.each([
+    const IME_SIGNALS = [
       { signal: "isComposing", init: { isComposing: true } },
       { signal: "keyCode 229", init: { keyCode: 229 } },
-    ])("leaves the edit, the focus and the popover alone for $signal", ({ init }) => {
-      render(<FleetDraftingPill />);
-      const textarea = editedField();
-      expect(useFleetResolutionPreviewStore.getState().open).toBe(true);
+    ];
 
-      // The IME still gets the key to commit its candidate.
-      expect(fireEvent.keyDown(textarea, { key: "Enter", ...init })).toBe(true);
-      // Escape is cancelled by the popover's own guard, which is what keeps Radix from dismissing.
-      fireEvent.keyDown(textarea, { key: "Escape", ...init });
-
-      expect(useFleetTargetOverridesStore.getState().payloadOverrides["t-2"]).toBe("ni hao");
-      expect(document.activeElement).toBe(textarea);
-      expect(useFleetResolutionPreviewStore.getState().open).toBe(true);
-    });
-
-    it("keeps an IME's Enter and Escape from the panes behind the popover", () => {
+    // The spy stands in for the pane's input bar behind the popover, which
+    // broadcasts the fleet on an Enter that reaches it.
+    function renderBehind() {
       const behind = vi.fn();
       render(
         <div onKeyDown={behind}>
           <FleetDraftingPill />
         </div>
       );
+      return behind;
+    }
+
+    function editedField(): HTMLTextAreaElement {
+      const textarea = screen.getAllByTestId<HTMLTextAreaElement>(
+        "fleet-resolution-row-textarea"
+      )[1]!;
+      textarea.focus();
+      fireEvent.change(textarea, { target: { value: "ni hao" } });
+      expect(useFleetResolutionPreviewStore.getState().open).toBe(true);
+      return textarea;
+    }
+
+    function expectEditKept(textarea: HTMLTextAreaElement) {
+      expect(textarea.value).toBe("ni hao");
+      expect(useFleetTargetOverridesStore.getState().payloadOverrides["t-2"]).toBe("ni hao");
+      expect(document.activeElement).toBe(textarea);
+      expect(useFleetResolutionPreviewStore.getState().open).toBe(true);
+    }
+
+    it.each(IME_SIGNALS)(
+      "keeps the edit, the focus and the popover when an IME's Enter confirms a candidate ($signal)",
+      ({ init }) => {
+        const behind = renderBehind();
+        const textarea = editedField();
+
+        // The IME still gets the key to commit its candidate.
+        expect(fireEvent.keyDown(textarea, { key: "Enter", ...init })).toBe(true);
+
+        expectEditKept(textarea);
+        expect(behind).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each(IME_SIGNALS)(
+      "keeps the edit, the focus and the popover when an IME's Escape dismisses its candidates ($signal)",
+      ({ init }) => {
+        const behind = renderBehind();
+        const textarea = editedField();
+
+        // The popover's own guard cancels this event, which is what keeps Radix from dismissing.
+        fireEvent.keyDown(textarea, { key: "Escape", ...init });
+
+        expectEditKept(textarea);
+        expect(behind).not.toHaveBeenCalled();
+      }
+    );
+
+    it("lets a key the IME is still processing through to the panes behind", () => {
+      const behind = renderBehind();
       const textarea = editedField();
 
-      fireEvent.keyDown(textarea, { key: "Enter", isComposing: true });
-      fireEvent.keyDown(textarea, { key: "Escape", isComposing: true });
+      fireEvent.keyDown(textarea, { key: "a", isComposing: true });
 
+      expect(behind).toHaveBeenCalledTimes(1);
+    });
+
+    it("still reverts the edit and blurs on a plain Escape, with the popover open", () => {
+      const behind = renderBehind();
+      const textarea = editedField();
+      const resolved = useFleetResolutionPreviewStore
+        .getState()
+        .previews.find((p) => p.terminalId === "t-2")!.resolvedPayload;
+
+      expect(fireEvent.keyDown(textarea, { key: "Escape", keyCode: 27 })).toBe(false);
+
+      expect(useFleetTargetOverridesStore.getState().payloadOverrides["t-2"]).toBeUndefined();
+      expect(textarea.value).toBe(resolved);
+      expect(document.activeElement).not.toBe(textarea);
+      expect(useFleetResolutionPreviewStore.getState().open).toBe(true);
       expect(behind).not.toHaveBeenCalled();
     });
 
-    it("still reverts the edit and blurs on a plain Escape", () => {
-      render(<FleetDraftingPill />);
-      const textarea = editedField();
-
-      expect(fireEvent.keyDown(textarea, { key: "Escape" })).toBe(false);
-
-      expect(useFleetTargetOverridesStore.getState().payloadOverrides["t-2"]).toBeUndefined();
-      expect(document.activeElement).not.toBe(textarea);
-    });
-
     it("still commits the edit and blurs on a plain Enter", () => {
-      render(<FleetDraftingPill />);
+      const behind = renderBehind();
       const textarea = editedField();
 
-      expect(fireEvent.keyDown(textarea, { key: "Enter" })).toBe(false);
+      expect(fireEvent.keyDown(textarea, { key: "Enter", keyCode: 13 })).toBe(false);
 
       expect(useFleetTargetOverridesStore.getState().payloadOverrides["t-2"]).toBe("ni hao");
       expect(document.activeElement).not.toBe(textarea);
+      expect(useFleetResolutionPreviewStore.getState().open).toBe(true);
+      expect(behind).not.toHaveBeenCalled();
     });
   });
 
