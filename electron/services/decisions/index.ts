@@ -90,8 +90,11 @@ import type {
   ReassignDecisionsAnswerPayload,
 } from "../../../shared/types/decisionsAttention.js";
 import type {
+  AnswerDecisionQuestionPayload,
   CancelDecisionQuestionByReferencePayload,
   CancelDecisionQuestionPayload,
+  DecisionAnswerResultRead,
+  DecisionQuestionAnswerResult,
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
   DecisionQuestionImagePartResult,
@@ -105,6 +108,7 @@ import type {
   GetDecisionQuestionPayload,
   GetDecisionQuestionSummariesByReferencePayload,
   GetDecisionQuestionSummariesPayload,
+  GetDecisionAnswerResultPayload,
 } from "../../../shared/types/decisionsQuestion.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -977,6 +981,42 @@ async function cancelling(
     if (error instanceof BridgeError && error.code === "not_found") {
       return { result: "refused", reason: "not-found" };
     }
+    const ended =
+      (error instanceof BridgeError && error.code === "forbidden") ||
+      (error instanceof Error && error.name === "RetiredAttemptError");
+    if (ended) return { result: "not-running" };
+    throw error;
+  }
+}
+
+/**
+ * The person's answer from Daintree's own view (#17101), signed by this
+ * computer when it is the owner's. Never makes or starts the service. A
+ * connection that ended, or a store that stopped, under it answers as not
+ * running: an answer it committed stays committed, and the same answer id
+ * submitted again finds it.
+ */
+export function answerDecisionQuestion(
+  payload: AnswerDecisionQuestionPayload
+): Promise<DecisionQuestionAnswerResult> {
+  return whileRunning((running) => running.answerQuestion(payload));
+}
+
+/** Where a person's answer stands, by its id (#17101). Never makes or starts the service. */
+export function getDecisionAnswerResult(
+  payload: GetDecisionAnswerResultPayload
+): Promise<DecisionAnswerResultRead> {
+  return whileRunning((running) => running.getAnswerResult(payload.answerId));
+}
+
+async function whileRunning<T>(
+  call: (running: DecisionsService) => Promise<T | { result: "not-running" }>
+): Promise<T | { result: "not-running" }> {
+  const running = service;
+  if (running === null) return { result: "not-running" };
+  try {
+    return await call(running);
+  } catch (error) {
     const ended =
       (error instanceof BridgeError && error.code === "forbidden") ||
       (error instanceof Error && error.name === "RetiredAttemptError");

@@ -5,7 +5,12 @@ import {
   type PaneAuthenticator,
 } from "@daintreehq/decisions-client";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import type { DecisionQuestionCancelResult } from "../../../shared/types/decisionsQuestion.js";
+import type {
+  AnswerDecisionQuestionPayload,
+  DecisionAnswerResultRead,
+  DecisionQuestionAnswerResult,
+  DecisionQuestionCancelResult,
+} from "../../../shared/types/decisionsQuestion.js";
 import type { ListenerRoute } from "../mcp-server/listenerHold.js";
 import { createPaneAccess, type PaneAccessSources } from "./paneAccess.js";
 import { QuestionBridge } from "./questionBridge.js";
@@ -127,6 +132,17 @@ export interface DecisionsQuestions {
     questionId: string,
     scope: QuestionReadScope
   ): Promise<DecisionQuestionCancelResult>;
+  /**
+   * The person's answer from Daintree's own view (#17101), signed with this
+   * computer's key on the bridge agents ask on, which itself refuses an
+   * agent's: `hostId` is this computer's.
+   */
+  answerForPerson(
+    payload: AnswerDecisionQuestionPayload,
+    hostId: string | null
+  ): Promise<DecisionQuestionAnswerResult>;
+  /** Where a person's answer stands, by its id. */
+  answerResultForPerson(answerId: string): Promise<DecisionAnswerResultRead>;
   close(): Promise<void>;
 }
 
@@ -150,6 +166,8 @@ export function openDecisionsMcpRoute(
   return {
     listenerPort: () => route.listenerPort(),
     cancelForPerson: (questionId, scope) => bridge.cancelForPerson(questionId, scope),
+    answerForPerson: (payload, hostId) => bridge.answerForPerson(payload, hostId),
+    answerResultForPerson: (answerId) => bridge.answerResultForPerson(answerId),
     close: () => route.close(),
   };
 }

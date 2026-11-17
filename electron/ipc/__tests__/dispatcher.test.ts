@@ -309,6 +309,9 @@ describe("invokeForEndpoint", () => {
     UNCLASSIFIED_CHANNEL,
     "user-prompt-templates:list",
     "user-prompt-templates:open-folder",
+    // A Host can never have its owner sign the person's answer (#17101).
+    "decisions:answer-question",
+    "decisions:get-answer-result",
   ])("refuses %s over a link even with a context handler", async (channel) => {
     const handler = vi.fn(() => "ran");
     getIpcDispatcher().registerInvoke(channel, handler);
@@ -450,22 +453,26 @@ describe("remote router", () => {
   });
 
   // A person's prompt templates are this machine's, even in a window on a host
-  // (#16398), while the plugin templates beside them come from that host.
-  it.each(["user-prompt-templates:list", "user-prompt-templates:open-folder"])(
-    "answers %s from this machine for a window driving a host",
-    async (channel) => {
-      const router = installRouter();
-      const handler = vi.fn(() => "from-this-machine");
-      cleanups.push(typedHandle(channel as never, handler as never));
+  // (#16398), while the plugin templates beside them come from that host. The
+  // person's Decisions answer is signed by this computer's owner key, even for
+  // a question a Host asked, whose own key never signs one (#17101).
+  it.each([
+    "user-prompt-templates:list",
+    "user-prompt-templates:open-folder",
+    "decisions:answer-question",
+    "decisions:get-answer-result",
+  ])("answers %s from this machine for a window driving a host", async (channel) => {
+    const router = installRouter();
+    const handler = vi.fn(() => "from-this-machine");
+    cleanups.push(typedHandle(channel as never, handler as never));
 
-      await expect(invokeLocal(channel, makeEvent())).resolves.toEqual(
-        wrapSuccess("from-this-machine")
-      );
+    await expect(invokeLocal(channel, makeEvent())).resolves.toEqual(
+      wrapSuccess("from-this-machine")
+    );
 
-      expect(handler).toHaveBeenCalledTimes(1);
-      expect(router.forwardInvoke).not.toHaveBeenCalled();
-    }
-  );
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(router.forwardInvoke).not.toHaveBeenCalled();
+  });
 
   it("sends a window driving a host to that host for its plugins, templates included", async () => {
     const router = installRouter();

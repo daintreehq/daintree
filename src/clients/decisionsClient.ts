@@ -5,6 +5,9 @@ import type {
   DecisionsAttentionList,
 } from "@shared/types/decisionsAttention";
 import type {
+  AnswerDecisionQuestionPayload,
+  DecisionAnswerResultRead,
+  DecisionQuestionAnswerResult,
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
   DecisionQuestionImagePart,
@@ -259,6 +262,18 @@ export const decisionsClient = {
     reference: DecisionQuestionReference
   ): Promise<DecisionQuestionCancelResult> =>
     window.electron.decisions.cancelQuestionByReference({ reference }),
+
+  /**
+   * The person's answer to a question (#17101), signed by this computer,
+   * named by the reference and revision its content was read with. Send the
+   * same `answerId` again with the same answer when a result is lost.
+   */
+  answerQuestion: (payload: AnswerDecisionQuestionPayload): Promise<DecisionQuestionAnswerResult> =>
+    window.electron.decisions.answerQuestion(payload),
+
+  /** Where an answer stands, by the id it was submitted with: a queued one settles later. */
+  getAnswerResult: (answerId: string): Promise<DecisionAnswerResultRead> =>
+    window.electron.decisions.getAnswerResult({ answerId }),
 
   /** Every pane's state changes for this project. Callers filter by `terminalId`. */
   onPaneState: (callback: (state: PaneDecisionState) => void): (() => void) =>

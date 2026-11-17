@@ -1,4 +1,5 @@
 import {
+  answeredOn,
   formatAnswerNotice,
   formatFollowupNotice,
   noticeChunk,
@@ -206,6 +207,7 @@ export function copiedAnswerText(
       alias: row.alias,
       revision: entry.revision,
       source: entry.source === "proxy" ? "proxy" : "human",
+      ...(answeredOn(entry) === "computer" ? { onComputer: true } : {}),
       choices: entry.choices,
       comment: entry.text,
       correction: entry.correction,

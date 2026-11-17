@@ -1,5 +1,6 @@
 import { net, powerMonitor } from "electron";
 import type {
+  DecisionsBridge,
   InjectResult,
   InjectionIntent,
   LocalStore,
@@ -10,6 +11,25 @@ import type {
   WebSocketLike,
 } from "@daintreehq/decisions-client";
 import { targetOf } from "@daintreehq/decisions-client";
+
+export type BridgeLock = DecisionsBridge["ctx"]["lock"];
+
+/**
+ * A lock whose turns run one at a time, in arrival order, as the library's
+ * own mutex does: it doesn't export one, and its bridges only ever call `run`.
+ * One per connection lifetime, shared by every bridge over its store.
+ */
+export function newBridgeLock(): BridgeLock {
+  let tail: Promise<unknown> = Promise.resolve();
+  const lock = {
+    run<T>(fn: () => Promise<T>): Promise<T> {
+      const turn = tail.then(fn);
+      tail = turn.catch(() => {});
+      return turn;
+    },
+  };
+  return lock as unknown as BridgeLock;
+}
 
 /**
  * The relay socket through Chromium's network stack, as the relay's HTTP

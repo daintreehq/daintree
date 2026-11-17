@@ -87,6 +87,11 @@ export interface DecisionThreadAnswer {
   entryId: string;
   revision: number;
   from: "person" | "model";
+  /**
+   * A person's answer given on their computer (#17101), signed by the owner
+   * desktop; false for a phone's or tablet's, and for the model's.
+   */
+  onComputer: boolean;
   /** Replaces an earlier answer. */
   correction: boolean;
   /** A person confirming the model's answer. */
@@ -134,6 +139,14 @@ export interface DecisionQuestionContent {
   questionId: string;
   alias: number;
   terminalId: string;
+  /**
+   * The question named by the machine, project and terminal that asked it,
+   * as that machine's store records it: what an answer from this computer
+   * names it by (#17101), whichever machine the content was read from.
+   */
+  reference: DecisionQuestionReference;
+  /** The question's revision as it was read: an answer is signed against it, never a later one. */
+  revision: number;
   question: string;
   /** The notes the agent gave with the question. */
   context: string | null;
@@ -332,3 +345,88 @@ export interface GetDecisionQuestionSummariesByReferencePayload {
 export interface CancelDecisionQuestionByReferencePayload {
   reference: DecisionQuestionReference;
 }
+
+/**
+ * The person's answer to a question, given in Daintree's own view on the
+ * owner computer, which signs it (#17101). The question is named by the
+ * reference its content was read with, and answered at the revision the
+ * person read. `answerId` is minted by the view for this answer, and sent
+ * again with the same answer when a submission's result is lost, so a retry
+ * is the same answer and never a second one. The digests are those of the
+ * images the view showed the person, as the question's content lists them.
+ */
+export interface AnswerDecisionQuestionPayload {
+  reference: DecisionQuestionReference;
+  answerId: string;
+  expectedRevision: number;
+  selectedOptionIds: string[];
+  text?: string;
+  explicitApproval?: boolean;
+  reason?: string;
+  reviewedAttachmentDigests: string[];
+}
+
+/**
+ * Where a person's answer stands, as the Decisions library reports it:
+ * - `queued`: committed here and not settled yet (the relay is out of reach,
+ *   or the answer waits behind its question's unsent create); it keeps being
+ *   sent, and `getAnswerResult` reads its outcome;
+ * - `sent`: the relay took it, and it is typed into the asking terminal as
+ *   a phone's answer would be;
+ * - `already-answered`: another answer (a phone's, the model's or this
+ *   computer's) was taken first;
+ * - `changed`: the question is open at a revision other than the one read;
+ *   read it again;
+ * - `closed`: it expired, was cancelled or declined, or the relay holds no
+ *   such question;
+ * - `unsupported`: the relay, or the computer that asked (a Remote Host),
+ *   doesn't take answers made on a computer yet and needs updating;
+ * - `rejected`: any other refusal, with the relay's code.
+ */
+export type DecisionAnswerOutcome =
+  | { status: "queued" }
+  | { status: "sent" }
+  | { status: "already-answered" }
+  | { status: "changed" }
+  | { status: "closed"; reason: "expired" | "cancelled" | "not-found" }
+  | { status: "unsupported"; by: "relay" | "asking-desktop" }
+  | { status: "rejected"; code: string };
+
+/**
+ * Why an answer wasn't taken here at all, before anything was signed:
+ * `not-found`, the reference names no question this computer can answer;
+ * `not-owner`, this computer is a Remote Host, whose key never signs a
+ * person's answer; `unreadable`, the question is this computer's own but its
+ * content can't be opened to check the answer against; `invalid`, the
+ * answer breaks the question's rules or reuses an answer id for another
+ * answer, as `detail` says.
+ */
+export type DecisionAnswerRefusal =
+  | { result: "refused"; reason: "not-found" | "not-owner" | "unreadable" }
+  | { result: "refused"; reason: "invalid"; detail: string };
+
+/**
+ * A person's answer, submitted. `off` and `not-running` as for a read: off
+ * here, or no relay connection runs to sign with.
+ */
+export type DecisionQuestionAnswerResult =
+  | { result: "submitted"; answerId: string; outcome: DecisionAnswerOutcome }
+  | DecisionAnswerRefusal
+  | { result: "off" }
+  | { result: "not-running" };
+
+/** Where a submitted answer stands, by the id it was submitted with. */
+export interface GetDecisionAnswerResultPayload {
+  answerId: string;
+}
+
+/**
+ * A submitted answer's standing. `not-found`: no answer was ever committed
+ * here under that id, or a crash kept it from being queued: submit it again
+ * with the same id.
+ */
+export type DecisionAnswerResultRead =
+  | { result: "read"; questionId: string; expectedRevision: number; outcome: DecisionAnswerOutcome }
+  | { result: "not-found" }
+  | { result: "off" }
+  | { result: "not-running" };

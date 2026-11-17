@@ -1221,7 +1221,10 @@ describe("RelayConnection", () => {
       bridges.push(this);
       return start.apply(this, args);
     });
-    const h = await harness({ overrides: { delivery: deliveryDeps().deps } });
+    let source: QuestionSource | null = null;
+    const h = await harness({
+      overrides: { delivery: deliveryDeps().deps, onQuestionsReady: (ready) => (source = ready) },
+    });
 
     h.connection.start();
     const first = await connectLive(h);
@@ -1232,6 +1235,9 @@ describe("RelayConnection", () => {
 
     expect(bridges).toHaveLength(2);
     expect(bridges[0].ctx.lock).toBe(bridges[1].ctx.lock);
+    // The same lock delivery holds, handed to agents' questions before either ran (#17101).
+    expect(h.connection.getDelivery()!.lock).toBe(bridges[0].ctx.lock);
+    expect((source as unknown as QuestionSource).lock).toBe(bridges[0].ctx.lock);
     expect(bridges.every((bridge) => bridge.delivery.stopped)).toBe(true);
     await h.connection.stop();
   });

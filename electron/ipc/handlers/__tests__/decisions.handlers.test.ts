@@ -29,7 +29,11 @@ import type {
   EnrollDecisionsHostPayload,
 } from "../../../../shared/types/decisionsHosts.js";
 import type {
+  AnswerDecisionQuestionPayload,
   CancelDecisionQuestionByReferencePayload,
+  DecisionAnswerResultRead,
+  DecisionQuestionAnswerResult,
+  GetDecisionAnswerResultPayload,
   CancelDecisionQuestionPayload,
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
@@ -104,6 +108,18 @@ const decisionsEntry = vi.hoisted(() => ({
     async (
       _payload: CancelDecisionQuestionByReferencePayload
     ): Promise<DecisionQuestionCancelResult> => ({ result: "cancelling" })
+  ),
+  answerDecisionQuestion: vi.fn(
+    async (_payload: AnswerDecisionQuestionPayload): Promise<DecisionQuestionAnswerResult> => ({
+      result: "submitted",
+      answerId: "0190f0aa-1111-4222-8333-444455556666",
+      outcome: { status: "sent" },
+    })
+  ),
+  getDecisionAnswerResult: vi.fn(
+    async (_payload: GetDecisionAnswerResultPayload): Promise<DecisionAnswerResultRead> => ({
+      result: "not-found",
+    })
   ),
   setDecisionsEnabled: vi.fn(async (enabled: boolean): Promise<DecisionsStatus> => ({
     state: enabled ? "not-connected" : "off",
@@ -272,6 +288,8 @@ vi.mock("../../../services/decisions/index.js", () => {
     getDecisionQuestionImageByReference: decisionsEntry.getDecisionQuestionImageByReference,
     getDecisionQuestionSummariesByReference: decisionsEntry.getDecisionQuestionSummariesByReference,
     cancelDecisionQuestionByReference: decisionsEntry.cancelDecisionQuestionByReference,
+    answerDecisionQuestion: decisionsEntry.answerDecisionQuestion,
+    getDecisionAnswerResult: decisionsEntry.getDecisionAnswerResult,
     setDecisionsEnabled: decisionsEntry.setDecisionsEnabled,
     checkRelay: decisionsEntry.checkRelay,
     claimRelay: decisionsEntry.claimRelay,
@@ -370,6 +388,12 @@ const cancelQuestionByReference = decisionsNamespace.ops.cancelQuestionByReferen
   .handler as unknown as (
   payload: CancelDecisionQuestionByReferencePayload
 ) => Promise<DecisionQuestionCancelResult>;
+const answerQuestion = decisionsNamespace.ops.answerQuestion.handler as unknown as (
+  payload: AnswerDecisionQuestionPayload
+) => Promise<DecisionQuestionAnswerResult>;
+const getAnswerResult = decisionsNamespace.ops.getAnswerResult.handler as unknown as (
+  payload: GetDecisionAnswerResultPayload
+) => Promise<DecisionAnswerResultRead>;
 const setEnabled = decisionsNamespace.ops.setEnabled.handler as unknown as (
   payload: SetDecisionsEnabledPayload
 ) => Promise<DecisionsStatus>;
@@ -476,6 +500,21 @@ type SafeParse = { safeParse(value: unknown): { success: boolean } };
 const QUESTION_ID = "0190f0aa11112222333344445555aa01";
 const ATTACHMENT_ID = "attach_0001";
 
+/** A person's answer to a Remote Host's question, as the view submits it (#17101). */
+const ANSWER: AnswerDecisionQuestionPayload = {
+  reference: {
+    hostId: "host_studio",
+    projectId: "project-b",
+    terminalId: "pane-1",
+    questionId: "0190f0aa11112222333344445555aa01",
+  },
+  answerId: "0190f0aa-1111-4222-8333-444455556666",
+  expectedRevision: 0,
+  selectedOptionIds: ["approve"],
+  explicitApproval: true,
+  reviewedAttachmentDigests: ["a".repeat(64)],
+};
+
 const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_GET_STATUS,
   CHANNELS.DECISIONS_GET_PANE_STATE,
@@ -487,6 +526,8 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_GET_QUESTION_IMAGE_BY_REFERENCE,
   CHANNELS.DECISIONS_GET_QUESTION_SUMMARIES_BY_REFERENCE,
   CHANNELS.DECISIONS_CANCEL_QUESTION_BY_REFERENCE,
+  CHANNELS.DECISIONS_ANSWER_QUESTION,
+  CHANNELS.DECISIONS_GET_ANSWER_RESULT,
   CHANNELS.DECISIONS_SET_ENABLED,
   CHANNELS.DECISIONS_CHECK_RELAY,
   CHANNELS.DECISIONS_CLAIM_RELAY,
@@ -533,6 +574,8 @@ describe("decisions IPC", () => {
     decisionsEntry.getDecisionQuestionImageByReference.mockClear();
     decisionsEntry.getDecisionQuestionSummariesByReference.mockClear();
     decisionsEntry.cancelDecisionQuestionByReference.mockClear();
+    decisionsEntry.answerDecisionQuestion.mockClear();
+    decisionsEntry.getDecisionAnswerResult.mockClear();
     decisionsEntry.setDecisionsEnabled.mockClear();
     decisionsEntry.checkRelay.mockClear();
     decisionsEntry.claimRelay.mockClear();
@@ -746,6 +789,37 @@ describe("decisions IPC", () => {
       cancelQuestion({ projectId: "project-1" }, { terminalId: "pane-a", questionId: QUESTION_ID })
     ).resolves.toEqual({ result: "not-running" });
 
+    expect(decisionsEntry.evaluated).toBe(0);
+  });
+
+  it.each([
+    ["absent", undefined],
+    ["off", { enabled: false }],
+  ])(
+    "signs and reads no person's answer with the setting %s, saying it's off, loading none of Decisions (#17101)",
+    async (_label, value) => {
+      saved.value = value;
+      // An enrolled Host's own Decisions never signs the person's answer.
+      saved.host = { deviceId: "dev_host_1", ownerOffAt: null, revokedAt: null };
+
+      await expect(answerQuestion(ANSWER)).resolves.toEqual({ result: "off" });
+      await expect(getAnswerResult({ answerId: ANSWER.answerId })).resolves.toEqual({
+        result: "off",
+      });
+
+      expect(decisionsEntry.evaluated).toBe(0);
+      expect(decisionsEntry.libraries).toBe(0);
+    }
+  );
+
+  it("signs no person's answer once quit has sealed the loader, without loading it (#17101)", async () => {
+    saved.value = { enabled: true };
+    sealDecisionsModule();
+
+    await expect(answerQuestion(ANSWER)).resolves.toEqual({ result: "not-running" });
+    await expect(getAnswerResult({ answerId: ANSWER.answerId })).resolves.toEqual({
+      result: "not-running",
+    });
     expect(decisionsEntry.evaluated).toBe(0);
   });
 
@@ -1316,6 +1390,75 @@ describe("decisions IPC", () => {
       ).toBe(false);
       expect(summaries.safeParse({ references: Array(64).fill(REFERENCE) }).success).toBe(true);
       expect(summaries.safeParse({ references: Array(65).fill(REFERENCE) }).success).toBe(false);
+    });
+  });
+
+  describe("the person's answer (#17101)", () => {
+    it("passes the answer to Decisions once on, and hands back what it says", async () => {
+      saved.value = { enabled: true };
+      const refused: DecisionQuestionAnswerResult = { result: "refused", reason: "not-owner" };
+      const read: DecisionAnswerResultRead = {
+        result: "read",
+        questionId: QUESTION_ID,
+        expectedRevision: 0,
+        outcome: { status: "unsupported", by: "relay" },
+      };
+      decisionsEntry.answerDecisionQuestion.mockResolvedValueOnce(refused);
+      decisionsEntry.getDecisionAnswerResult.mockResolvedValueOnce(read);
+
+      await expect(answerQuestion(ANSWER)).resolves.toBe(refused);
+      await expect(getAnswerResult({ answerId: ANSWER.answerId })).resolves.toBe(read);
+
+      expect(decisionsEntry.answerDecisionQuestion).toHaveBeenCalledExactlyOnceWith(ANSWER);
+      expect(decisionsEntry.getDecisionAnswerResult).toHaveBeenCalledExactlyOnceWith({
+        answerId: ANSWER.answerId,
+      });
+    });
+
+    it("takes a whole reference, an answer id and the answer's fields within the protocol's bounds, and nothing else", () => {
+      const answer = decisionsNamespace.ops.answerQuestion.schema as SafeParse;
+      const result = decisionsNamespace.ops.getAnswerResult.schema as SafeParse;
+      expect(answer.safeParse(ANSWER).success).toBe(true);
+      expect(
+        answer.safeParse({
+          ...ANSWER,
+          answerId: "a".repeat(64),
+          expectedRevision: Number.MAX_SAFE_INTEGER,
+          selectedOptionIds: Array(12).fill("x".repeat(64)),
+          text: "x".repeat(16 * 1024),
+          reason: "x".repeat(2_000),
+          reviewedAttachmentDigests: Array(8).fill("a".repeat(64)),
+        }).success
+      ).toBe(true);
+      expect(answer.safeParse({ ...ANSWER, selectedOptionIds: [] }).success).toBe(true);
+      for (const bad of [
+        {},
+        { ...ANSWER, reference: undefined },
+        { ...ANSWER, reference: { ...ANSWER.reference, questionId: "../q" } },
+        { ...ANSWER, reference: { ...ANSWER.reference, hostId: "" } },
+        { ...ANSWER, answerId: undefined },
+        { ...ANSWER, answerId: "short" },
+        { ...ANSWER, answerId: "a".repeat(65) },
+        { ...ANSWER, expectedRevision: Number.MAX_SAFE_INTEGER + 1 },
+        { ...ANSWER, selectedOptionIds: [""] },
+        { ...ANSWER, answerId: "has spaces in it" },
+        { ...ANSWER, expectedRevision: -1 },
+        { ...ANSWER, expectedRevision: 1.5 },
+        { ...ANSWER, selectedOptionIds: Array(13).fill("a") },
+        { ...ANSWER, selectedOptionIds: ["x".repeat(65)] },
+        { ...ANSWER, text: "x".repeat(16 * 1024 + 1) },
+        { ...ANSWER, reason: "x".repeat(2_001) },
+        { ...ANSWER, reviewedAttachmentDigests: ["A".repeat(64)] },
+        { ...ANSWER, reviewedAttachmentDigests: Array(9).fill("a".repeat(64)) },
+        { ...ANSWER, source: "person" },
+        { ...ANSWER, provenance: "human-desktop" },
+      ]) {
+        expect(answer.safeParse(bad).success, JSON.stringify(bad).slice(0, 120)).toBe(false);
+      }
+      expect(result.safeParse({ answerId: ANSWER.answerId }).success).toBe(true);
+      for (const bad of [{}, { answerId: "../x" }, { answerId: ANSWER.answerId, extra: 1 }]) {
+        expect(result.safeParse(bad).success).toBe(false);
+      }
     });
   });
 

@@ -798,6 +798,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./copyTreeHistory.js").CopyTreeHistoryRecord[];
   };
+  "decisions:answer-question": {
+    args: [payload: import("../decisionsQuestion.js").AnswerDecisionQuestionPayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionAnswerResult;
+  };
   "decisions:approve-pairing": {
     args: [payload: import("../decisions.js").ApproveDecisionsPairingPayload];
     result: import("../decisions.js").DecisionsPairingApproveResult;
@@ -869,6 +873,10 @@ export interface GeneratedIpcInvokeMap {
   "decisions:export-recovery-kit": {
     args: [payload: import("../decisions.js").ExportDecisionsRecoveryKitPayload];
     result: import("../decisions.js").DecisionsKitExportResult;
+  };
+  "decisions:get-answer-result": {
+    args: [payload: import("../decisionsQuestion.js").GetDecisionAnswerResultPayload];
+    result: import("../decisionsQuestion.js").DecisionAnswerResultRead;
   };
   "decisions:get-model": {
     args: [];

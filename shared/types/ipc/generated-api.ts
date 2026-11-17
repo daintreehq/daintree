@@ -442,6 +442,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["copy-tree-history:get-records"]["result"]>;
   };
   decisions: {
+    answerQuestion(
+      ...args: IpcInvokeMap["decisions:answer-question"]["args"]
+    ): Promise<IpcInvokeMap["decisions:answer-question"]["result"]>;
     approvePairing(
       ...args: IpcInvokeMap["decisions:approve-pairing"]["args"]
     ): Promise<IpcInvokeMap["decisions:approve-pairing"]["result"]>;
@@ -496,6 +499,9 @@ export interface GeneratedElectronAPI {
     exportRecoveryKit(
       ...args: IpcInvokeMap["decisions:export-recovery-kit"]["args"]
     ): Promise<IpcInvokeMap["decisions:export-recovery-kit"]["result"]>;
+    getAnswerResult(
+      ...args: IpcInvokeMap["decisions:get-answer-result"]["args"]
+    ): Promise<IpcInvokeMap["decisions:get-answer-result"]["result"]>;
     getModel(
       ...args: IpcInvokeMap["decisions:get-model"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-model"]["result"]>;

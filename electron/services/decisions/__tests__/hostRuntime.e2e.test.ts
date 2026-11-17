@@ -7,9 +7,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import {
+  DecisionsBridge,
   FOLLOWUP_BLOCK_END,
   MemoryKeyStore,
+  MemoryLocalStore,
   MemoryPendingHostStore,
+  PolicyRegistry,
+  type KeyStore,
   acceptHostEnrollment,
   createHostRequest,
   enrollHost,
@@ -33,6 +37,7 @@ import {
 } from "@daintreehq/decisions-crypto";
 import { execFileSync } from "node:child_process";
 import {
+  CREATOR_MISSING_FEATURE,
   EventData,
   MESSAGE_RECORD_TYPE,
   type DeviceCert,
@@ -63,10 +68,15 @@ import { DecisionsService } from "../DecisionsService.js";
 import { DECISION_FOLLOWUP_START, DECISION_THREAD_PREFACE } from "../answerNotice.js";
 import { DaintreeLocalStore } from "../daintreeLocalStore.js";
 import type { DecisionSinkPtyClient } from "../daintreeTerminalSink.js";
+import type { DecisionsSettings } from "../../../../shared/types/decisions.js";
+import { defaultDecisionsSettings } from "../decisionsSettings.js";
 import { hostLifetimeSettings } from "../hostRecord.js";
 import { DECISIONS_MCP_PATH, openDecisionsMcpRoute } from "../mcpRoute.js";
 import type { PaneTerminalInfo, PaneTerminalReader } from "../paneAccess.js";
+import { QuestionBridge } from "../questionBridge.js";
 import { RelayConnection } from "../relayConnection.js";
+import { DaintreeRelayClient } from "../relayFeatures.js";
+import { holdingTerminalSink } from "../relayTransport.js";
 import { makeOwner } from "../../../remote/decisions/__tests__/ownerFixture.js";
 
 /**
@@ -166,7 +176,7 @@ class FakeSocket implements WebSocketLike {
       t: "hello",
       protocol_version: 1,
       device_id: this.relay.hostDeviceId,
-      role: "desktop-host",
+      role: this.relay.helloRole,
       key_epoch: 1,
       high_water: this.relay.highWater(),
       server_time: new Date().toISOString(),
@@ -202,7 +212,13 @@ class FakeRelay {
   preference: InvolvementRecord | null | undefined = undefined;
   /** While true, the socket isn't reachable: tickets fail and nothing connects. */
   down = false;
+  /** The device the socket greets: the Host's, or the owner's when the owner itself connects. */
   hostDeviceId = "";
+  helloRole: "desktop-host" | "owner-desktop" = "desktop-host";
+  /** What `/info` advertises; a relay from before 0.7.0 doesn't commit answers made on the computer. */
+  features: string[] = ["thread-messages-v1"];
+  /** What each device declared on its socket tickets, by device id. */
+  readonly declared = new Map<string, string[]>();
 
   constructor(readonly devices: FakeDevice[]) {}
 
@@ -241,7 +257,53 @@ class FakeRelay {
     if (this.down) throw new TypeError("fetch failed");
     // A 0.4.0 relay advertises threads; nothing is sent to a desktop that doesn't declare them.
     if (method === "GET" && pathname === "/api/v1/info") {
-      return json(200, { features: ["thread-messages-v1"] });
+      return json(200, { features: this.features });
+    }
+    // The owner desktop's answer for the person (#17101), committed as the relay does: only from
+    // the owner, and only to a question whose asking desktop declared it takes one.
+    const answered = /^\/api\/v1\/questions\/([^/]+)\/answer$/.exec(pathname);
+    if (method === "POST" && answered !== null) {
+      const questionId = answered[1]!;
+      const { action } = body as {
+        action: { record: Record<string, unknown>; envelope: Record<string, unknown> };
+      };
+      const question = this.questions.get(questionId);
+      if (question === undefined) return json(404, { code: "not_found", message: "no question" });
+      const signer = this.devices.find((d) => d.device_id === action.record.signer_device_id);
+      if (signer?.role !== "owner-desktop") {
+        return json(403, { code: "forbidden", message: "not the owner desktop" });
+      }
+      const creator = this.declared.get(question.signer_device_id) ?? [];
+      if (!creator.includes("owner-desktop-answers-v1")) {
+        return json(409, {
+          code: "invalid_state",
+          message: "the asking desktop doesn't take answers made on the computer",
+          details: { reason: CREATOR_MISSING_FEATURE },
+        });
+      }
+      const revision = Number(action.record.expected_revision) + 1;
+      const event = this.append({
+        event_type: "decision.answer.committed",
+        question_id: questionId,
+        question_revision: revision,
+        origin_device_id: String(action.record.signer_device_id),
+        data: EventData.action.parse({
+          action: "answer",
+          record: action.record,
+          envelope: action.envelope,
+          provenance: "human-desktop",
+          status: "human-answered",
+          revision,
+          target_host_id: question.target_host_id,
+          deliverable: true,
+        }) as Record<string, unknown>,
+      });
+      return json(201, {
+        question_id: questionId,
+        revision,
+        status: "human-answered",
+        event_seq: event.seq,
+      });
     }
     const thread = /^\/api\/v1\/questions\/([^/]+)\/messages$/.exec(pathname);
     if (method === "POST" && thread !== null) {
@@ -265,6 +327,8 @@ class FakeRelay {
       });
     }
     if (method === "POST" && pathname === "/api/v1/socket-ticket") {
+      const declared = (body as { features?: string[] } | null)?.features ?? [];
+      this.declared.set(this.requests.at(-1)!.deviceId ?? "", declared);
       return json(200, {
         ticket: `ticket-${this.requests.length}`,
         expires_at: new Date(Date.now() + 30_000).toISOString(),
@@ -625,6 +689,45 @@ function typedChoices(text: string): string[] {
   return [...text.matchAll(/^choice: (.+)$/gm)].map((match) => match[1]!);
 }
 
+/**
+ * The owner computer answering for the person in its own view (#17101):
+ * Daintree's answer path, on a live attempt's bridge of the owner's own,
+ * signing with the owner's key and sending to `relay`. Nothing of the Host's
+ * is in it.
+ */
+function ownerAnswerPath(owner: Awaited<ReturnType<typeof makeOwner>>, relay: FakeRelay) {
+  const store = new MemoryLocalStore();
+  const live = new DecisionsBridge({
+    identity: owner.identity,
+    store,
+    sink: holdingTerminalSink,
+    client: new DaintreeRelayClient({
+      identity: owner.identity,
+      fetch: relay.fetch as unknown as typeof fetch,
+      maxRetries: 0,
+    }),
+    pumpIntervalMs: 0,
+  });
+  return new QuestionBridge({
+    source: {
+      identity: () => owner.identity,
+      live: () => live,
+      store,
+      policy: new PolicyRegistry(),
+    },
+    isCurrent: () => false,
+  });
+}
+
+/** The Host's question as the owner's view read it: the reference and revision an answer names. */
+async function readOnHost(service: DecisionsService, terminalId: string, questionId: string) {
+  const read = await service
+    .getAnswerDelivery()!
+    .questionContent({ projectId: "project-1", terminalId }, questionId);
+  if (read.result !== "read") throw new Error(read.result);
+  return read.question;
+}
+
 let dir: string;
 let sqlite: Database.Database;
 const cleanups: Array<() => Promise<void> | void> = [];
@@ -687,7 +790,31 @@ async function startHost() {
   ]);
   relay.hostDeviceId = host.config.deviceId;
 
-  // The Host's own terminals, panes and listener.
+  const record = {
+    relayOrigin: host.config.relayOrigin,
+    installationId: host.config.installationId,
+    deviceId: host.config.deviceId,
+    ownerDeviceId: host.owner.deviceId,
+    hostId: "host_studio_0001",
+    ownerOffAt: null,
+    revokedAt: null,
+    credentialsRemovedAt: null,
+    ownerTerminalSnapshots: false,
+  };
+  const runtime = await runDecisions(relay, hostKeys, hostLifetimeSettings(record), "host");
+  return { owner, phone, relay, host, record, ...runtime };
+}
+
+/**
+ * Decisions running on this machine as `role` against `relay`, with its own
+ * terminals, panes and listener: two agent panes at their prompts, in one project.
+ */
+async function runDecisions(
+  relay: FakeRelay,
+  keys: KeyStore,
+  settings: DecisionsSettings,
+  role: "owner" | "host"
+) {
   const terminals = new HostTerminals();
   terminals.add("pane-1");
   terminals.add("pane-2");
@@ -712,17 +839,6 @@ async function startHost() {
     publish: () => {},
   });
 
-  const record = {
-    relayOrigin: host.config.relayOrigin,
-    installationId: host.config.installationId,
-    deviceId: host.config.deviceId,
-    ownerDeviceId: host.owner.deviceId,
-    hostId: "host_studio_0001",
-    ownerOffAt: null,
-    revokedAt: null,
-    credentialsRemovedAt: null,
-    ownerTerminalSnapshots: false,
-  };
   const service: DecisionsService = new DecisionsService({
     openStore: async () => new DaintreeLocalStore(sqlite),
     keyFilePath: () => path.join(dir, "keys.bin"),
@@ -751,11 +867,11 @@ async function startHost() {
       },
       watchPanes: () => () => {},
     },
-    // The Host's sealed keys stand in for its keychain; the relay is the fake one.
+    // The machine's sealed keys stand in for its keychain; the relay is the fake one.
     connect: (options) =>
       new RelayConnection({
         ...options,
-        keys: hostKeys,
+        keys,
         rotations: undefined,
         webSocket: relay.webSocket,
         fetchImpl: relay.fetch,
@@ -767,7 +883,7 @@ async function startHost() {
   });
   cleanups.push(() => service.dispose());
 
-  await service.start(hostLifetimeSettings(record), "host");
+  await service.start(settings, role);
   await vi.waitFor(() => expect(service.getStatus().state).toBe("connected"), {
     timeout: 15_000,
   });
@@ -786,8 +902,97 @@ async function startHost() {
       }
     }
   };
-  return { owner, phone, relay, host, terminals, listener, record, service, turnEnds };
+  return { terminals, listener, service, turnEnds };
 }
+
+/** The owner computer's own Decisions connected to the fake relay, asking from its own panes. */
+async function startOwner() {
+  const owner = await makeOwner();
+  const relay = new FakeRelay(owner.devices);
+  relay.hostDeviceId = owner.deviceId;
+  relay.helloRole = "owner-desktop";
+  relay.features = ["thread-messages-v1", "owner-desktop-answers-v1"];
+  const keys = new MemoryKeyStore();
+  await keys.save(owner.stored);
+  const settings: DecisionsSettings = {
+    ...defaultDecisionsSettings(),
+    enabled: true,
+    relayOrigin: owner.stored.config.relayOrigin,
+    installationId: owner.installationId,
+    deviceId: owner.deviceId,
+    hostId: "host_owner_mac",
+  };
+  const runtime = await runDecisions(relay, keys, settings, "owner");
+  return { owner, relay, ...runtime };
+}
+
+describe("Answers the person makes on the owner computer (#17101)", () => {
+  it("types the person's answer to the owner's own question into the pane that asked, through Daintree's view path", async () => {
+    const { owner, relay, terminals, listener, service } = await startOwner();
+    const asked = await askHuman(listener.port, "token-pane-2", "Which way for the lexer?");
+    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    expect(relay.declared.get(owner.deviceId)).toContain("owner-desktop-answers-v1");
+    const question = await readOnHost(service, "pane-2", asked);
+    expect(question.reference).toEqual({
+      hostId: "host_owner_mac",
+      projectId: "project-1",
+      terminalId: "pane-2",
+      questionId: asked,
+    });
+    const answer = {
+      reference: question.reference,
+      answerId: "0190f0aa-1111-4222-8333-444455559999",
+      expectedRevision: question.revision,
+      selectedOptionIds: ["a"],
+      reviewedAttachmentDigests: [],
+    };
+
+    // A reference naming another of this computer's panes names nothing.
+    await expect(
+      service.answerQuestion({
+        ...answer,
+        reference: { ...answer.reference, terminalId: "pane-1" },
+      })
+    ).resolves.toEqual({ result: "refused", reason: "not-found" });
+
+    await expect(service.answerQuestion(answer)).resolves.toEqual({
+      result: "submitted",
+      answerId: answer.answerId,
+      outcome: { status: "sent" },
+    });
+    await expect(service.getAnswerResult(answer.answerId)).resolves.toEqual({
+      result: "read",
+      questionId: asked,
+      expectedRevision: question.revision,
+      outcome: { status: "sent" },
+    });
+
+    await vi.waitFor(() => expect(terminals.submitted).toHaveLength(1), { timeout: 15_000 });
+    const typed = terminals.submitted[0]!;
+    expect(typed.id).toBe("pane-2");
+    expect(typedChoices(typed.text)).toEqual(["a"]);
+    expect(typed.text).toContain("source: human\nanswered_on: computer\n");
+    await vi.waitFor(
+      async () =>
+        expect(await new DaintreeLocalStore(sqlite).getQuestion(asked)).toMatchObject({
+          local_status: "human-answered",
+          delivery_status: "terminal-delivered",
+        }),
+      { timeout: 15_000 }
+    );
+
+    // Sent once, by the owner's own device: a retry of the same answer sends nothing more.
+    await expect(service.answerQuestion(answer)).resolves.toMatchObject({
+      result: "submitted",
+      outcome: { status: "sent" },
+    });
+    expect(
+      relay.requests
+        .filter((r) => r.path === `/api/v1/questions/${asked}/answer`)
+        .map((r) => r.deviceId)
+    ).toEqual([owner.deviceId]);
+  }, 60_000);
+});
 
 describe("Decisions on an enrolled Remote Host, with its owner's computer gone (#16022)", () => {
   it("asks from the Host's pane, and types the phone's answer into it, live and after being away", async () => {
@@ -948,6 +1153,7 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     for (const ticket of tickets) {
       expect(ticket.body).toHaveProperty("features", [
         "involvement-v1",
+        "owner-desktop-answers-v1",
         "phone-images-v1",
         "thread-messages-v1",
       ]);
@@ -1192,5 +1398,149 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
         .map((request) => request.deviceId)
     );
     expect(signers).toEqual(new Set([host.config.deviceId]));
+  }, 60_000);
+  it("types the person's answer made on the owner computer into the Host pane that asked, signed by the owner and never the Host (#17101)", async () => {
+    const { owner, relay, host, terminals, listener, service } = await startHost();
+    relay.features = ["thread-messages-v1", "owner-desktop-answers-v1"];
+    const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
+    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    // The Host told the relay it takes answers made on the computer.
+    expect(relay.declared.get(host.config.deviceId)).toContain("owner-desktop-answers-v1");
+
+    // The view in the Host's window read the question from the Host.
+    const question = await readOnHost(service, "pane-1", asked);
+    expect(question.reference).toEqual({
+      hostId: "host_studio_0001",
+      projectId: "project-1",
+      terminalId: "pane-1",
+      questionId: asked,
+    });
+    const answer = {
+      reference: question.reference,
+      answerId: "0190f0aa-1111-4222-8333-444455556666",
+      expectedRevision: question.revision,
+      selectedOptionIds: ["b"],
+      text: "The second parser.",
+      reviewedAttachmentDigests: [],
+    };
+
+    // The Host's own Decisions never signs the person's answer.
+    await expect(service.answerQuestion(answer)).resolves.toEqual({
+      result: "refused",
+      reason: "not-owner",
+    });
+
+    // The owner computer signs it, and the relay commits it.
+    await expect(
+      ownerAnswerPath(owner, relay).answerForPerson(answer, "host_owner_mac")
+    ).resolves.toEqual({
+      result: "submitted",
+      answerId: answer.answerId,
+      outcome: { status: "sent" },
+    });
+
+    // The Host types it into the pane that asked, as the person's own answer made on the computer.
+    await vi.waitFor(() => expect(terminals.submitted).toHaveLength(1), { timeout: 15_000 });
+    const typed = terminals.submitted[0]!;
+    expect(typed.id).toBe("pane-1");
+    expect(typedChoices(typed.text)).toEqual(["b"]);
+    expect(typed.text).toContain(
+      "source: human\nanswered_on: computer\nnote: The person answered this themselves, on their computer"
+    );
+    expect(typed.text).toContain("comment: The second parser.");
+    expect(typed.text).not.toContain("decision model answered this");
+    await vi.waitFor(
+      async () =>
+        expect(await new DaintreeLocalStore(sqlite).getQuestion(asked)).toMatchObject({
+          local_status: "human-answered",
+          delivery_status: "terminal-delivered",
+        }),
+      { timeout: 15_000 }
+    );
+    const shown = await readOnHost(service, "pane-1", asked);
+    expect(shown.thread).toMatchObject([{ type: "answer", from: "person", onComputer: true }]);
+
+    // The relay was sent it by the owner's device, under the owner's key and not the Host's.
+    const sent = relay.requests.filter((r) => r.path === `/api/v1/questions/${asked}/answer`);
+    expect(sent.map((r) => r.deviceId)).toEqual([owner.deviceId]);
+    const { action } = sent[0]!.body as {
+      action: { record: Record<string, unknown>; envelope: Record<string, unknown> };
+    };
+    expect(
+      await verifyRecordAndEnvelope(
+        action.record,
+        action.envelope as never,
+        owner.identity.keys.signing.publicKey
+      )
+    ).toBe(true);
+    expect(
+      await verifyRecordAndEnvelope(
+        action.record,
+        action.envelope as never,
+        host.keys.signing.publicKey
+      )
+    ).toBe(false);
+  }, 60_000);
+
+  it("reports a relay too old for answers made on the computer, sending it nothing and typing nothing (#17101)", async () => {
+    const { owner, relay, terminals, listener, service } = await startHost();
+    const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
+    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    const question = await readOnHost(service, "pane-1", asked);
+    const owners = ownerAnswerPath(owner, relay);
+    const answer = {
+      reference: question.reference,
+      answerId: "0190f0aa-1111-4222-8333-444455557777",
+      expectedRevision: question.revision,
+      selectedOptionIds: ["a"],
+      reviewedAttachmentDigests: [],
+    };
+
+    await expect(owners.answerForPerson(answer, "host_owner_mac")).resolves.toEqual({
+      result: "submitted",
+      answerId: answer.answerId,
+      outcome: { status: "unsupported", by: "relay" },
+    });
+    // The outcome stays, for a view that asks again.
+    await expect(owners.answerResultForPerson(answer.answerId)).resolves.toMatchObject({
+      result: "read",
+      outcome: { status: "unsupported", by: "relay" },
+    });
+    expect(relay.requests.some((r) => r.path.endsWith("/answer"))).toBe(false);
+    // Nothing was committed for the question, so the Host has nothing to type.
+    expect(relay.events.filter((e) => e.question_id === asked).map((e) => e.event_type)).toEqual([
+      "decision.created",
+    ]);
+    expect(terminals.submitted).toHaveLength(0);
+  }, 60_000);
+
+  it("reports a Host too old for answers made on the computer, as the relay refuses it (#17101)", async () => {
+    const { owner, relay, host, terminals, listener, service } = await startHost();
+    relay.features = ["thread-messages-v1", "owner-desktop-answers-v1"];
+    const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
+    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    const question = await readOnHost(service, "pane-1", asked);
+    // As a Host from before #17101 would have declared.
+    relay.declared.set(
+      host.config.deviceId,
+      relay.declared.get(host.config.deviceId)!.filter((f) => f !== "owner-desktop-answers-v1")
+    );
+
+    await expect(
+      ownerAnswerPath(owner, relay).answerForPerson(
+        {
+          reference: question.reference,
+          answerId: "0190f0aa-1111-4222-8333-444455558888",
+          expectedRevision: question.revision,
+          selectedOptionIds: ["a"],
+          reviewedAttachmentDigests: [],
+        },
+        "host_owner_mac"
+      )
+    ).resolves.toMatchObject({ outcome: { status: "unsupported", by: "asking-desktop" } });
+    expect(relay.events.filter((e) => e.question_id === asked).map((e) => e.event_type)).toEqual([
+      "decision.created",
+    ]);
+    expect(terminals.submitted).toHaveLength(0);
   }, 60_000);
 });

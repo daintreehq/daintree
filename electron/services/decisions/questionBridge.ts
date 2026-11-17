@@ -3,7 +3,9 @@ import {
   DecisionsBridge,
   paneIdentityOf,
   type DecisionView,
+  type AnswerQuestionInput,
   type InvolvementView,
+  type OwnerAnswerResult,
   type PaneIdentity,
   type PostMessageResult,
   type QuestionOrigin,
@@ -11,6 +13,10 @@ import {
   type RegisterResult,
 } from "@daintreehq/decisions-client";
 import type {
+  AnswerDecisionQuestionPayload,
+  DecisionAnswerOutcome,
+  DecisionAnswerResultRead,
+  DecisionQuestionAnswerResult,
   DecisionQuestionCancelRefusal,
   DecisionQuestionCancelResult,
 } from "../../../shared/types/decisionsQuestion.js";
@@ -43,6 +49,20 @@ function cancelRefusal(status: QuestionRow["local_status"]): DecisionQuestionCan
       return "expired";
     case "publish-failed":
       return "publish-failed";
+  }
+}
+
+/** The library's outcome, without the ids the result carries alongside it. */
+function answerOutcome(result: OwnerAnswerResult): DecisionAnswerOutcome {
+  switch (result.status) {
+    case "closed":
+      return { status: "closed", reason: result.reason };
+    case "unsupported":
+      return { status: "unsupported", by: result.by };
+    case "rejected":
+      return { status: "rejected", code: result.code };
+    default:
+      return { status: result.status };
   }
 }
 
@@ -87,6 +107,10 @@ export class QuestionBridge extends DecisionsBridge {
       ...(attachments ? { resolver: attachments.resolver, spool: attachments.spool } : {}),
     });
     this.question = options;
+    // The library reserves, settles and reads a person's answer under its
+    // bridge's lock: what this bridge commits between attempts takes its turn
+    // with a live attempt's flush, never beside it.
+    if (options.source.lock) this.ctx.lock = options.source.lock;
     // Synchronous for a bridge that never started; from here `pump` does nothing.
     void super.stop();
   }
@@ -167,6 +191,127 @@ export class QuestionBridge extends DecisionsBridge {
     const run = this.posts.then(cancel);
     this.posts = run.catch(() => {});
     return run;
+  }
+
+  /**
+   * Never for an agent: the bridge agents ask on can't sign the person's
+   * answer, whatever reaches it. The person's own answer goes through
+   * `answerForPerson`, from Daintree's view (#17101).
+   */
+  override answerQuestion(_input: AnswerQuestionInput): Promise<OwnerAnswerResult> {
+    return Promise.reject(new BridgeError("forbidden", "an agent can't answer for the person"));
+  }
+
+  override getAnswerResult(_answerId: string): Promise<OwnerAnswerResult | null> {
+    return Promise.reject(new BridgeError("forbidden", "an agent can't read the person's answers"));
+  }
+
+  /**
+   * The person's answer from Daintree's own view on the owner computer
+   * (#17101), never reachable from an agent, signed with this computer's key
+   * and published through the outbox. A question this computer holds must be
+   * the one the reference names: asked here, in that project and terminal.
+   * One it doesn't hold is a Remote Host's, named by the content the Host
+   * served the view, and is answered without a local copy: the relay holds
+   * it to its own record of the question, and the Host checks what it is
+   * sent. A reference naming this computer for a question it doesn't hold
+   * names nothing. Answered on the live attempt when there is one, so it is
+   * sent at once; between attempts it is committed here and the next
+   * attempt sends it.
+   */
+  async answerForPerson(
+    payload: AnswerDecisionQuestionPayload,
+    hostId: string | null
+  ): Promise<DecisionQuestionAnswerResult> {
+    const identity = this.question.source.identity();
+    if (identity === null) return { result: "not-running" };
+    if (identity.role !== "owner-desktop") return { result: "refused", reason: "not-owner" };
+    const { reference } = payload;
+    const row = await this.question.source.store.getQuestion(reference.questionId);
+    if (row !== null && !row.history_only) {
+      const scope = { hostId, projectId: reference.projectId, terminalId: reference.terminalId };
+      if (reference.hostId !== hostId || !inScope(row, scope)) {
+        return { result: "refused", reason: "not-found" };
+      }
+    } else if (hostId === null || reference.hostId === hostId) {
+      return { result: "refused", reason: "not-found" };
+    }
+    const input: AnswerQuestionInput = {
+      questionId: reference.questionId,
+      expectedRevision: payload.expectedRevision,
+      selectedOptionIds: payload.selectedOptionIds,
+      reviewedAttachmentDigests: payload.reviewedAttachmentDigests,
+      answerId: payload.answerId,
+      ...(payload.text !== undefined ? { text: payload.text } : {}),
+      ...(payload.explicitApproval !== undefined
+        ? { explicitApproval: payload.explicitApproval }
+        : {}),
+      ...(payload.reason !== undefined ? { reason: payload.reason } : {}),
+    };
+    try {
+      const result = await this.signForPerson(input);
+      return { result: "submitted", answerId: result.answerId, outcome: answerOutcome(result) };
+    } catch (error) {
+      if (!(error instanceof BridgeError)) throw error;
+      switch (error.code) {
+        case "validation_error":
+          return { result: "refused", reason: "invalid", detail: error.message };
+        case "invalid_state":
+          return { result: "refused", reason: "unreadable" };
+        // Revoked, or the connection ended, after the role was read.
+        case "forbidden":
+          return { result: "not-running" };
+        default:
+          throw error;
+      }
+    }
+  }
+
+  /** Where the person's answer stands, by the id it was submitted with (#17101). */
+  async answerResultForPerson(answerId: string): Promise<DecisionAnswerResultRead> {
+    let result: OwnerAnswerResult | null;
+    try {
+      result = await this.readForPerson(answerId);
+    } catch (error) {
+      if (error instanceof BridgeError && error.code === "forbidden") {
+        return { result: "not-running" };
+      }
+      throw error;
+    }
+    if (result === null) return { result: "not-found" };
+    return {
+      result: "read",
+      questionId: result.questionId,
+      expectedRevision: result.expectedRevision,
+      outcome: answerOutcome(result),
+    };
+  }
+
+  /**
+   * On the live attempt, or committed here between attempts. The answer id
+   * makes a second try the same answer, so one an attempt retired partway
+   * through goes again to whichever bridge answers now.
+   */
+  private async signForPerson(input: AnswerQuestionInput): Promise<OwnerAnswerResult> {
+    const live = this.connected();
+    if (live === null) return super.answerQuestion(input);
+    try {
+      return await live.answerQuestion(input);
+    } catch (error) {
+      if (!(error instanceof RetiredAttemptError)) throw error;
+      return this.signForPerson(input);
+    }
+  }
+
+  private async readForPerson(answerId: string): Promise<OwnerAnswerResult | null> {
+    const live = this.connected();
+    if (live === null) return super.getAnswerResult(answerId);
+    try {
+      return await live.getAnswerResult(answerId);
+    } catch (error) {
+      if (!(error instanceof RetiredAttemptError)) throw error;
+      return this.readForPerson(answerId);
+    }
   }
 
   /**

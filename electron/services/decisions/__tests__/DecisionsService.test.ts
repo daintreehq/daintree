@@ -28,6 +28,7 @@ import type { DecisionsRows } from "../localData.js";
 import type { QuestionSource, RelayConnectionOptions } from "../relayConnection.js";
 import type { QuestionReadScope } from "../questionContent.js";
 import type {
+  AnswerDecisionQuestionPayload,
   DecisionQuestionCancelResult,
   DecisionQuestionListItem,
 } from "../../../../shared/types/decisionsQuestion.js";
@@ -1175,6 +1176,8 @@ describe("DecisionsService relay connection", () => {
       release: () => void;
     }> = [];
     const cancels: Array<{ route: number; questionId: string; scope: QuestionReadScope }> = [];
+    const answers: Array<{ route: number; payload: unknown; hostId: string | null }> = [];
+    const results: Array<{ route: number; answerId: string }> = [];
     const openQuestions = (source: QuestionSource, previous: Promise<void>) => {
       let release!: () => void;
       const released = new Promise<void>((resolve) => {
@@ -1194,6 +1197,19 @@ describe("DecisionsService relay connection", () => {
           // Each route answers differently, so a result can be traced to the route that gave it.
           return route === 1 ? { result: "cancelling" } : { result: "refused", reason: "answered" };
         },
+        answerForPerson: async (payload: AnswerDecisionQuestionPayload, hostId: string | null) => {
+          const route = opened.indexOf(record) + 1;
+          answers.push({ route, payload, hostId });
+          return {
+            result: "submitted" as const,
+            answerId: payload.answerId,
+            outcome: { status: "queued" as const },
+          };
+        },
+        answerResultForPerson: async (answerId: string) => {
+          results.push({ route: opened.indexOf(record) + 1, answerId });
+          return { result: "not-found" as const };
+        },
         close: () => {
           record.closed += 1;
           events.push(`questions closed ${opened.indexOf(record) + 1}`);
@@ -1203,7 +1219,7 @@ describe("DecisionsService relay connection", () => {
         },
       };
     };
-    return { opened, openQuestions, cancels };
+    return { opened, openQuestions, cancels, answers, results };
   }
 
   const SOURCE: QuestionSource = {
@@ -1304,6 +1320,46 @@ describe("DecisionsService relay connection", () => {
 
     for (const route of routes.opened) route.release();
     await service.stop();
+  });
+
+  it("hands the person's answer to the current route with this computer's host id (#17101)", async () => {
+    const routes = questionRoutes();
+    const { service, made } = connected(undefined, routes.openQuestions);
+    const payload: AnswerDecisionQuestionPayload = {
+      reference: {
+        hostId: "host_studio",
+        projectId: "project-b",
+        terminalId: "pane-1",
+        questionId: "q_0123456789",
+      },
+      answerId: "0190f0aa-1111-4222-8333-444455556666",
+      expectedRevision: 0,
+      selectedOptionIds: ["approve"],
+      reviewedAttachmentDigests: [],
+    };
+    await service.start(on({ ...RELAY, hostId: "host_aaaaaaaa" }));
+    await expect(service.answerQuestion(payload)).resolves.toEqual({ result: "not-running" });
+    await expect(service.getAnswerResult(payload.answerId)).resolves.toEqual({
+      result: "not-running",
+    });
+
+    made[0]!.options.onQuestionsReady!(SOURCE);
+    await expect(service.answerQuestion(payload)).resolves.toEqual({
+      result: "submitted",
+      answerId: payload.answerId,
+      outcome: { status: "queued" },
+    });
+    await expect(service.getAnswerResult(payload.answerId)).resolves.toEqual({
+      result: "not-found",
+    });
+    expect(routes.answers).toEqual([{ route: 1, payload, hostId: "host_aaaaaaaa" }]);
+    expect(routes.results).toEqual([{ route: 1, answerId: payload.answerId }]);
+
+    // Stopped, the route is gone and nothing is asked of it.
+    for (const route of routes.opened) route.release();
+    await service.stop();
+    await expect(service.answerQuestion(payload)).resolves.toEqual({ result: "not-running" });
+    expect(routes.answers).toHaveLength(1);
   });
 
   it("hands a launch the route's port once the connection opens it, waiting while its identity loads", async () => {
