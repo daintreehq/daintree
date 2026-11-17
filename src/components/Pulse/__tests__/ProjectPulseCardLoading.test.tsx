@@ -23,8 +23,12 @@ vi.mock("@/hooks/useProjectHealth", () => ({
 }));
 vi.mock("@/hooks/useGlobalMinuteTicker", () => ({ useGlobalMinuteTicker: () => 0 }));
 vi.mock("../PulseHeatmap", () => ({
-  PulseHeatmap: ({ rangeDays }: { rangeDays: number }) => (
-    <div data-testid="pulse-heatmap" data-range={rangeDays} />
+  PulseHeatmap: ({ rangeDays, cells }: { rangeDays: number; cells: { count: number }[] }) => (
+    <div
+      data-testid="pulse-heatmap"
+      data-range={rangeDays}
+      data-total={cells.reduce((sum, cell) => sum + cell.count, 0)}
+    />
   ),
   getPulseHeatLevelBackground: () => "transparent",
 }));
@@ -263,6 +267,15 @@ describe("ProjectPulseCard first load", () => {
     // The alert speaks for it; the card's own region adds nothing.
     expect(liveRegionText()).toBe("");
 
+    // A manual retry that fails schedules nothing, so only the snapshot guard
+    // keeps the region quiet here.
+    const failedRetry = nextRequest();
+    fireEvent.click(screen.getByRole("button", { name: "Retry now" }));
+    await fail(failedRetry);
+    expect(usePulseStore.getState().getRetryCount("wt1")).toBe(0);
+    expect(screen.getByRole("alert").textContent).toContain("Unable to load activity data");
+    expect(liveRegionText()).toBe("");
+
     const retry = nextRequest();
     fireEvent.click(screen.getByRole("button", { name: "Retry now" }));
     await answer(retry, makePulse(60, { commitsInRange: 7 }));
@@ -455,8 +468,11 @@ describe("ProjectPulseCard background refresh", () => {
       expect.objectContaining({ worktreeId: "wt1", forceRefresh: true }),
       { source: "user" }
     );
-    // Same element while the retry runs: focus never drops to the page.
+    // Same element while the retry runs, busy but never natively disabled:
+    // focus never drops to the page.
     expect(screen.getByTestId("pulse-last-updated")).toBe(footer);
+    expect(footer.getAttribute("aria-disabled")).toBe("true");
+    expect((footer as HTMLButtonElement).disabled).toBe(false);
     expect(document.activeElement).toBe(footer);
 
     await answer(
@@ -471,6 +487,7 @@ describe("ProjectPulseCard background refresh", () => {
       })
     );
     expect(summaryText()).toBe("5");
+    expect(screen.getByTestId("pulse-heatmap").getAttribute("data-total")).toBe("5");
     expect(footer.textContent).toContain("Updated");
     expect(footer.textContent).not.toContain("Couldn't refresh");
     expect(liveRegionText()).toBe("Pulse data updated");

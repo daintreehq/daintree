@@ -1,7 +1,7 @@
 import type { SimpleGit } from "simple-git";
 import { createStrictExitGit } from "../utils/hardenedGit.js";
 import { existsSync } from "fs";
-import { logDebug, logError } from "../utils/logger.js";
+import { logDebug, logError, logLocalOnly } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import type {
   ProjectPulse,
@@ -61,9 +61,20 @@ function isNoCommitsError(errorMessage: string): boolean {
   return NO_COMMITS_PATTERNS.some((p) => lower.includes(p));
 }
 
-// The public message is fixed: git's own text can quote partial output, and
-// the renderer reads "no commits yet" in an error as an unborn repository.
-// The reason stays in the cause and the local log.
+// simple-git folds whatever git printed before failing into the error, and a
+// log's output carries commit subjects and author names: git's own text stays
+// in this machine's log, and only the fixed message travels.
+function logReadFailure(message: string, reason: unknown, worktreeId: string): void {
+  logError(message, undefined, { worktreeId });
+  logLocalOnly(
+    "error",
+    `[ProjectPulse] ${message} (${worktreeId}): ${formatErrorMessage(reason, "git failed")}`
+  );
+}
+
+// The public message is fixed for the same reason, and because the renderer
+// reads "no commits yet" in an error as an unborn repository and stops
+// retrying. The reason stays in the cause.
 function historyReadError(
   what: string,
   reason: unknown,
@@ -73,7 +84,7 @@ function historyReadError(
   if (signal?.aborted) {
     return new Error("Project pulse read was cancelled", { cause: reason });
   }
-  logError(`Failed to read ${what}`, reason, { worktreeId });
+  logReadFailure(`Failed to read ${what}`, reason, worktreeId);
   return new Error(`Failed to read ${what}`, { cause: reason });
 }
 
@@ -264,7 +275,9 @@ export class ProjectPulseService {
         const trimmed = branchOut.trim();
         branch = trimmed === "HEAD" ? undefined : trimmed;
       } catch {
-        branch = undefined;
+        // `undefined` is a detached HEAD; a failed read must not match a
+        // cached detached snapshot at the same SHA, so recompute instead.
+        return { sha: PROBE_ERROR_SENTINEL, branch: undefined };
       }
       return { sha, branch };
     } catch (error) {
@@ -375,7 +388,7 @@ export class ProjectPulseService {
       firstCommitDate = firstCommitResult.value;
     } else {
       cacheable = false;
-      logError("Failed to get first commit date", firstCommitResult.reason, { worktreeId });
+      logReadFailure("Failed to get first commit date", firstCommitResult.reason, worktreeId);
     }
     // Unknown, not zero: the streak is optional, so consumers leave it out.
     let currentStreakDays: number | undefined;
@@ -383,9 +396,11 @@ export class ProjectPulseService {
       currentStreakDays = fullStreakResult.value;
     } else {
       cacheable = false;
-      logError("Failed to get commit timestamps for full streak", fullStreakResult.reason, {
-        worktreeId,
-      });
+      logReadFailure(
+        "Failed to get commit timestamps for full streak",
+        fullStreakResult.reason,
+        worktreeId
+      );
     }
 
     // Mark cells before project start and calculate project age

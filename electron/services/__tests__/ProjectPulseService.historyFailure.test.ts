@@ -4,6 +4,13 @@ vi.mock("fs", () => ({
   existsSync: vi.fn(() => true),
 }));
 
+const logger = vi.hoisted(() => ({
+  logDebug: vi.fn(),
+  logError: vi.fn(),
+  logLocalOnly: vi.fn(),
+}));
+vi.mock("../../utils/logger.js", () => logger);
+
 const NOW = new Date("2025-01-15T12:00:00.000Z");
 
 function daysAgoSeconds(days: number): number {
@@ -151,9 +158,12 @@ describe("ProjectPulseService history read failures", () => {
     const svc = await loadService(raw);
     const withRecent = { ...OPTS, includeRecentCommits: true };
 
-    await expect(svc.getPulse(withRecent)).rejects.toThrow("Failed to read recent commits");
+    await expect(svc.getPulse(withRecent)).rejects.toThrow(/^Failed to read recent commits$/);
     // A caller that doesn't read the list never runs the failing query.
+    const recentReads = () => raw.mock.calls.filter(([args]) => args[1] === "-n").length;
+    const readsBefore = recentReads();
     expect((await svc.getPulse(OPTS)).commitsInRange).toBe(3);
+    expect(recentReads()).toBe(readsBefore);
 
     recentFails = false;
     const recovered = await svc.getPulse(withRecent);
@@ -181,6 +191,57 @@ describe("ProjectPulseService history read failures", () => {
     );
     expect(error?.message).toBe("Failed to read commit history");
     expect((error?.cause as Error | undefined)?.message).toMatch(/does not have any commits yet/);
+  });
+
+  it("keeps git's output in the local log only", async () => {
+    const subject = "Rotate the staging credentials";
+    const raw = vi.fn(async (args: string[]) => {
+      if (args[0] === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") {
+        return "deadbeef\n";
+      }
+      if (args[0] === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
+      // simple-git folds what git printed before dying into the error.
+      if (args[0] === "log" && args[1] === "-n")
+        throw new Error(`abc123 ${subject}\nfatal: bad object`);
+      if (isStreakLog(args)) throw new Error(`${subject}\nfatal: bad object`);
+      if (args[0] === "log") return HISTORY;
+      return "";
+    });
+    const svc = await loadService(raw);
+
+    await expect(svc.getPulse({ ...OPTS, includeRecentCommits: true })).rejects.toThrow();
+    // Without the list, the pulse survives and logs the streak failure.
+    expect((await svc.getPulse(OPTS)).currentStreakDays).toBeUndefined();
+
+    const shared = JSON.stringify(logger.logError.mock.calls);
+    expect(shared).toContain("Failed to read recent commits");
+    expect(shared).toContain("Failed to get commit timestamps for full streak");
+    expect(shared).not.toContain(subject);
+    const local = logger.logLocalOnly.mock.calls.map(([, message]) => message as string);
+    expect(local.some((m) => m.includes("recent commits") && m.includes(subject))).toBe(true);
+  });
+
+  it("recomputes when the branch probe fails at the cached SHA instead of reading it as detached", async () => {
+    let branchFails = false;
+    const raw = vi.fn(async (args: string[]) => {
+      if (args[0] === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") {
+        return "deadbeef\n";
+      }
+      if (args[0] === "rev-parse" && args.includes("--abbrev-ref")) {
+        if (branchFails) throw new Error("git exited with null and no error output");
+        return "HEAD\n";
+      }
+      if (args[0] === "log") return HISTORY;
+      return "";
+    });
+    const svc = await loadService(raw);
+
+    expect((await svc.getPulse(OPTS)).branch).toBeUndefined();
+    const heatmapReads = raw.mock.calls.filter(([args]) => isHeatmapLog(args)).length;
+
+    branchFails = true;
+    await svc.getPulse(OPTS);
+    expect(raw.mock.calls.filter(([args]) => isHeatmapLog(args)).length).toBe(heatmapReads + 1);
   });
 
   it("keeps the full-window age when the root read fails, and reads it again next time", async () => {
