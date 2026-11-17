@@ -6,6 +6,8 @@ import type { RecipeSpawnResults } from "@/store/recipeStore";
 import { PANEL_LIMIT_DECLINED_REASON } from "@/services/actions/definitions/panelLimitError";
 
 const recipes: TerminalRecipe[] = [];
+const duplicateRecipeMock = vi.fn<(id: string) => Promise<void>>();
+const notifyMock = vi.fn();
 const runRecipeWithResultsMock =
   vi.fn<
     (
@@ -28,7 +30,7 @@ const recipeStoreState = {
   ) => runRecipeWithResultsMock(recipeId, worktreePath, worktreeId, context, options),
   updateRecipe: vi.fn(),
   deleteRecipe: vi.fn(),
-  createRecipe: vi.fn(),
+  duplicateRecipe: (id: string) => duplicateRecipeMock(id),
   getRecipeById: (id: string) => recipes.find((r) => r.id === id),
 };
 
@@ -88,6 +90,8 @@ vi.mock("@/config/agents", () => ({
   },
 }));
 
+vi.mock("@/lib/notify", () => ({ notify: (payload: unknown) => notifyMock(payload) }));
+
 const logErrorMock = vi.fn();
 vi.mock("@/utils/logger", () => ({
   logError: (...args: unknown[]) => logErrorMock(...args),
@@ -124,6 +128,8 @@ beforeEach(() => {
   addPanelMock.mockReset();
   addPanelMock.mockResolvedValue("panel-1");
   logErrorMock.mockReset();
+  duplicateRecipeMock.mockReset().mockResolvedValue(undefined);
+  notifyMock.mockReset();
   dispatchMock.mockReset();
   dispatchMock.mockResolvedValue({ ok: true, result: undefined });
   cancelRecipeRunConfirmations();
@@ -1760,5 +1766,88 @@ describe("useRecipeRunner — create (#16906)", () => {
       { worktreeId: "wt-1" },
       { source: "user" }
     );
+  });
+});
+
+describe("useRecipeRunner — duplicating a recipe (#17200)", () => {
+  const renderRunner = () =>
+    renderHook(() => useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" }));
+
+  it("copies the row it was asked about, not the team recipe that shadows it", () => {
+    recipes.push(
+      makeRecipe({ id: "local-1", name: "Shared", projectId: "proj", shadowedBy: "Shared" }),
+      makeRecipe({ id: "inrepo-shared", name: "Shared", scope: "inrepo" })
+    );
+    const { result } = renderRunner();
+
+    act(() => {
+      result.current.handleDuplicate("local-1");
+    });
+
+    expect(duplicateRecipeMock).toHaveBeenCalledExactlyOnceWith("local-1");
+  });
+
+  it("does nothing for a recipe that is no longer listed", () => {
+    const { result } = renderRunner();
+
+    act(() => {
+      result.current.handleDuplicate("gone");
+    });
+
+    expect(duplicateRecipeMock).not.toHaveBeenCalled();
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a recipe that needs its plugin without asking the store to copy it", () => {
+    recipes.push(
+      makeRecipe({
+        id: "plug-1",
+        name: "Plugin recipe",
+        terminals: [{ type: "terminal", env: {}, systemPrompt: "be terse" }],
+      })
+    );
+    const { result } = renderRunner();
+
+    act(() => {
+      result.current.handleDuplicate("plug-1");
+    });
+
+    expect(duplicateRecipeMock).not.toHaveBeenCalled();
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "warning", title: "Can't duplicate recipe" })
+    );
+  });
+
+  it("surfaces a failed copy with one Retry that tries the same recipe again", async () => {
+    recipes.push(makeRecipe({ id: "team-1", name: "Team", scope: "inrepo" }));
+    duplicateRecipeMock.mockRejectedValueOnce(new Error("disk full"));
+    const { result } = renderRunner();
+
+    act(() => {
+      result.current.handleDuplicate("team-1");
+    });
+    await flush();
+
+    expect(logErrorMock).toHaveBeenCalledWith("Failed to duplicate recipe", expect.any(Error));
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    const toast = notifyMock.mock.calls[0]![0] as {
+      type: string;
+      title: string;
+      message: string;
+      action: { label: string; onClick: () => void };
+    };
+    expect(toast.type).toBe("error");
+    expect(toast.title).toBe("Couldn't duplicate recipe");
+    expect(toast.message).toContain("disk full");
+    expect(toast.action.label).toBe("Retry");
+
+    act(() => {
+      toast.action.onClick();
+    });
+    await flush();
+
+    expect(duplicateRecipeMock).toHaveBeenCalledTimes(2);
+    expect(duplicateRecipeMock).toHaveBeenLastCalledWith("team-1");
+    expect(notifyMock).toHaveBeenCalledTimes(1);
   });
 });

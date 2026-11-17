@@ -25,7 +25,6 @@ import { PANEL_LIMIT_DECLINED_REASON } from "@/services/actions/definitions/pane
 import {
   buildRecipeSections,
   rankSearchResults,
-  nextDuplicateName,
   type RecipeSections,
   type RankedRecipe,
 } from "./recipeRunnerUtils";
@@ -116,7 +115,7 @@ export function useRecipeRunner({
   const allRecipes = useRecipeStore((s) => s.recipes);
   const runRecipeWithResults = useRecipeStore((s) => s.runRecipeWithResults);
   const updateRecipe = useRecipeStore((s) => s.updateRecipe);
-  const createRecipe = useRecipeStore((s) => s.createRecipe);
+  const duplicateRecipe = useRecipeStore((s) => s.duplicateRecipe);
   const getRecipeById = useRecipeStore((s) => s.getRecipeById);
 
   const allDetectedRunners = useProjectSettingsStore((s) => s.allDetectedRunners);
@@ -469,7 +468,9 @@ export function useRecipeRunner({
 
   const handleDuplicate = useCallback(
     (recipeId: string) => {
-      const recipe = getRecipeById(recipeId);
+      // The row's own recipe, not `getRecipeById`'s: a row badged as overridden
+      // by a team recipe copies itself, not the team recipe (#17200).
+      const recipe = allRecipes.find((r) => r.id === recipeId);
       if (!recipe) return;
       // A plugin's panel steps and variables only work in its own recipe (#13797).
       if (recipeUsesPluginOnlyFeatures(recipe)) {
@@ -483,21 +484,25 @@ export function useRecipeRunner({
         });
         return;
       }
-      // Pick a name that doesn't collide with any existing recipe name —
-      // otherwise duplicating a recipe twice produces two same-named copies
-      // that slug to the same on-disk filename and overwrite each other.
-      const existingNames = new Set(allRecipes.map((r) => r.name));
-      const copyName = nextDuplicateName(recipe.name, existingNames);
-      void createRecipe(
-        recipe.projectId,
-        copyName,
-        recipe.worktreeId,
-        recipe.terminals,
-        false,
-        recipe.autoAssign
-      );
+      // The store picks a name no existing recipe has — otherwise duplicating a
+      // recipe twice produces two same-named copies that slug to the same
+      // on-disk filename and overwrite each other — and the copy's tier.
+      const duplicate = () => {
+        duplicateRecipe(recipe.id).catch((err: unknown) => {
+          logError("Failed to duplicate recipe", err);
+          notify({
+            type: "error",
+            title: "Couldn't duplicate recipe",
+            message: `The copy couldn't be saved: ${formatErrorMessage(err, "unknown error")}`,
+            priority: "high",
+            action: { label: "Retry", onClick: duplicate },
+            context: { eventKind: "uiFeedback" },
+          });
+        });
+      };
+      duplicate();
     },
-    [getRecipeById, createRecipe, allRecipes]
+    [allRecipes, duplicateRecipe]
   );
 
   const handlePin = useCallback(

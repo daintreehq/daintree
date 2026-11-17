@@ -68,8 +68,14 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenuSeparator: () => <hr />,
 }));
 
+const notifyMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/notify", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/notify")>()),
+  notify: notifyMock,
+}));
+
 import { RecipeManager } from "../RecipeManager";
-import { projectClient } from "@/clients";
+import { globalRecipesClient, projectClient } from "@/clients";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
 import type { Project, TerminalRecipe } from "@/types";
@@ -137,6 +143,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  notifyMock.mockReset();
   useProjectStore.setState({
     currentProject: { id: "proj", name: "proj", path: "/p", emoji: "🌲", lastOpened: 0 } as Project,
   });
@@ -616,5 +623,200 @@ describe("RecipeManager — importing a recipe file", () => {
     const { importRecipe } = await importFromFile({ status: "cancelled" }, { global: GLOBAL });
     expect(importRecipe).not.toHaveBeenCalled();
     expect(importDialogOpen()).toBe(false);
+  });
+});
+
+describe("RecipeManager — copying and exporting team and overridden recipes (#17200)", () => {
+  // A team recipe has no projectId of its own; the fixtures above that give it
+  // one would hide exactly this.
+  const TEAM_ROW = recipe("inrepo-shared", "Shared recipe", {
+    scope: "inrepo",
+    terminals: [{ type: "terminal", command: "team-only", env: {} }],
+  });
+  const LOCAL_ROW = recipe("recipe-local", "Shared recipe", {
+    projectId: "proj",
+    terminals: [{ type: "terminal", command: "local-only", env: {} }],
+  });
+
+  const rowById = (id: string) =>
+    document.querySelector<HTMLElement>(`[data-recipe-id="${CSS.escape(id)}"]`)!;
+  const item = (row: HTMLElement, name: RegExp) => within(row).getByRole("menuitem", { name });
+  const activate = async (el: HTMLElement) => {
+    await act(async () => {
+      el.click();
+    });
+  };
+  const writeText = vi.fn();
+
+  beforeEach(() => {
+    writeText.mockReset().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    useRecipeStore.setState({ currentProjectId: "proj" });
+  });
+
+  describe("duplicating", () => {
+    it("copies a team recipe into the open project, not into Global", async () => {
+      const updateInRepo = vi
+        .spyOn(projectClient, "updateInRepoRecipe")
+        .mockResolvedValue(undefined as never);
+      const addGlobal = vi
+        .spyOn(globalRecipesClient, "addRecipe")
+        .mockResolvedValue(undefined as never);
+      seed({ team: [TEAM_ROW] });
+      renderManager();
+
+      await activate(item(rowById("inrepo-shared"), /Duplicate recipe/));
+
+      expect(addGlobal).not.toHaveBeenCalled();
+      expect(updateInRepo).toHaveBeenCalledTimes(1);
+      expect(updateInRepo.mock.calls[0]![0]).toBe("proj");
+      const copy = rows().find((r) => r.dataset.recipeRow === "Shared recipe (Copy)")!;
+      expect(copy.closest("section")?.getAttribute("aria-labelledby")).toBe("recipe-section-team");
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("copies the overridden local row, not the team recipe that overrides it", async () => {
+      const updateInRepo = vi
+        .spyOn(projectClient, "updateInRepoRecipe")
+        .mockResolvedValue(undefined as never);
+      seed({ project: [LOCAL_ROW], team: [TEAM_ROW] });
+      renderManager();
+
+      await activate(item(rowById("recipe-local"), /Duplicate recipe/));
+
+      expect(updateInRepo.mock.calls[0]![1].terminals[0].command).toBe("local-only");
+    });
+
+    it("says why a copy failed and offers one Retry that tries again", async () => {
+      const updateInRepo = vi
+        .spyOn(projectClient, "updateInRepoRecipe")
+        .mockRejectedValueOnce(new Error("EACCES"))
+        .mockResolvedValue(undefined as never);
+      seed({ team: [TEAM_ROW] });
+      renderManager();
+
+      await activate(item(rowById("inrepo-shared"), /Duplicate recipe/));
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      const toast = notifyMock.mock.calls[0]![0];
+      expect(toast).toMatchObject({ type: "error", title: "Couldn't duplicate recipe" });
+      expect(toast.message).toContain("EACCES");
+      expect(toast.action.label).toBe("Retry");
+
+      await act(async () => {
+        toast.action.onClick();
+      });
+
+      expect(updateInRepo).toHaveBeenCalledTimes(2);
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("says a team recipe can't be copied with no project open", async () => {
+      const updateInRepo = vi.spyOn(projectClient, "updateInRepoRecipe");
+      const addGlobal = vi.spyOn(globalRecipesClient, "addRecipe");
+      useRecipeStore.setState({ currentProjectId: null });
+      seed({ team: [TEAM_ROW] });
+      renderManager();
+
+      await activate(item(rowById("inrepo-shared"), /Duplicate recipe/));
+
+      expect(updateInRepo).not.toHaveBeenCalled();
+      expect(addGlobal).not.toHaveBeenCalled();
+      expect(notifyMock.mock.calls[0]![0].message).toContain("Open a project");
+    });
+  });
+
+  describe("exporting a row an override badge sits on", () => {
+    it("copies that row's JSON, not the team recipe's", async () => {
+      seed({ project: [LOCAL_ROW], team: [TEAM_ROW] });
+      renderManager();
+      expect(rowById("recipe-local").textContent).toContain("Overridden by team recipe");
+
+      await activate(item(rowById("recipe-local"), /Copy as JSON/));
+
+      expect(writeText).toHaveBeenCalledTimes(1);
+      const copied = JSON.parse(writeText.mock.calls[0]![0]);
+      expect(copied.id).toBe("recipe-local");
+      expect(copied.terminals[0].command).toBe("local-only");
+    });
+
+    it("writes that row to the file, not the team recipe", async () => {
+      const exportToFile = vi.spyOn(projectClient, "exportRecipeToFile").mockResolvedValue(true);
+      seed({ project: [LOCAL_ROW], team: [TEAM_ROW] });
+      renderManager();
+
+      await activate(item(rowById("recipe-local"), /Export to file/));
+
+      expect(exportToFile).toHaveBeenCalledTimes(1);
+      const written = JSON.parse(exportToFile.mock.calls[0]![1]);
+      expect(written.id).toBe("recipe-local");
+      expect(written.terminals[0].command).toBe("local-only");
+    });
+
+    it("says when the file couldn't be written and offers one way to try again", async () => {
+      const exportToFile = vi
+        .spyOn(projectClient, "exportRecipeToFile")
+        .mockRejectedValueOnce(new Error("ENOSPC"))
+        .mockResolvedValue(true);
+      seed({ team: [TEAM_ROW] });
+      renderManager();
+
+      await activate(item(rowById("inrepo-shared"), /Export to file/));
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      const toast = notifyMock.mock.calls[0]![0];
+      expect(toast).toMatchObject({ type: "error", title: "Couldn't export recipe" });
+      expect(toast.message).toContain("ENOSPC");
+      expect(toast.action.label).toBe("Choose another file");
+
+      await act(async () => {
+        toast.action.onClick();
+      });
+
+      expect(exportToFile).toHaveBeenCalledTimes(2);
+    });
+
+    it("stays quiet when the picker is cancelled", async () => {
+      vi.spyOn(projectClient, "exportRecipeToFile").mockResolvedValue(false);
+      seed({ team: [TEAM_ROW] });
+      renderManager();
+
+      await activate(item(rowById("inrepo-shared"), /Export to file/));
+
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("pinning", () => {
+    it("says when the pin couldn't be saved and retries the same change", async () => {
+      const updateRecipe = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("EBUSY"))
+        .mockResolvedValue("saved");
+      useRecipeStore.setState({ updateRecipe });
+      seed({ global: [recipe("g1", "Review")] });
+      renderManager();
+
+      await activate(
+        within(rowById("g1")).getByRole("menuitemcheckbox", { name: /Pin to canvas/ })
+      );
+
+      expect(updateRecipe).toHaveBeenCalledWith("g1", { showInEmptyState: true });
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      const toast = notifyMock.mock.calls[0]![0];
+      expect(toast).toMatchObject({ type: "error", title: "Couldn't update recipe pin" });
+      expect(toast.message).toContain("EBUSY");
+      expect(toast.action.label).toBe("Retry");
+
+      await act(async () => {
+        toast.action.onClick();
+      });
+
+      expect(updateRecipe).toHaveBeenCalledTimes(2);
+      expect(updateRecipe).toHaveBeenLastCalledWith("g1", { showInEmptyState: true });
+    });
   });
 });
