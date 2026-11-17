@@ -103,7 +103,7 @@ describe("notificationSoundImport", () => {
       });
       Object.defineProperty(URL, "revokeObjectURL", { value: vi.fn(), configurable: true });
       const realCreate = document.createElement.bind(document);
-      vi.spyOn(document, "createElement").mockImplementation((tag: string) => {
+      const createElement = (tag: string): HTMLElement => {
         if (tag !== "audio") return realCreate(tag);
         const audio = {
           preload: "",
@@ -123,7 +123,10 @@ describe("notificationSoundImport", () => {
           },
         };
         return audio as unknown as HTMLElement;
-      });
+      };
+      vi.spyOn(document, "createElement").mockImplementation(
+        createElement as typeof document.createElement
+      );
     });
 
     afterEach(() => {
