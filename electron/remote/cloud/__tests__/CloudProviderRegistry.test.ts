@@ -189,6 +189,27 @@ describe("CloudProviderRegistry", () => {
     expect(registry.has(PLUGIN_PROVIDER)).toBe(true);
   });
 
+  it("refuses a provider that says its lifetime renews but can't renew it", () => {
+    const registry = new CloudProviderRegistry();
+    const owner = { kind: "plugin" as const, pluginId: "acme.clouds" };
+    const broken = fakeProvider(PLUGIN_PROVIDER, () => resource());
+    delete broken.renewLifetime;
+    expect(() => registry.register(broken, { owner, apiUrl: "" })).toThrow(/renewable lifetime/);
+    // One whose machines have no lifetime needs no renewal.
+    const plain = fakeProvider(PLUGIN_PROVIDER, () => resource());
+    const info = plain.info;
+    plain.info = (platform) => {
+      const described = info(platform);
+      return {
+        ...described,
+        capabilities: { ...described.capabilities, lifetime: { kind: "none" } },
+      };
+    };
+    delete plain.renewLifetime;
+    registry.register(plain, { owner, apiUrl: "" });
+    expect(registry.get(PLUGIN_PROVIDER)).toBe(plain);
+  });
+
   it("lets an old registration's remover leave a newer one in place", () => {
     const registry = new CloudProviderRegistry();
     const owner = { kind: "plugin" as const, pluginId: "acme.clouds" };
