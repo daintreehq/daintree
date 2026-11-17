@@ -25,6 +25,19 @@ export interface MemoryLeakTerminalRead {
   isTrashed?: boolean;
 }
 
+/**
+ * What a restart on the host rechecks. A restart already under way finishes its
+ * respawn even when the decision no longer holds: stopping between the kill and
+ * the respawn would leave the terminal dead, so `stillWanted` is read only up to
+ * the first change, and `isCurrent` throughout.
+ */
+export interface MemoryLeakHostRestartGuards {
+  /** Whether the terminal still runs the launch the decision was taken on. */
+  isCurrent: () => boolean;
+  /** Whether the decision still holds against the policy and the newest sample. */
+  stillWanted: () => boolean;
+}
+
 export interface MemoryLeakAutoRestartDeps {
   onMetrics(listener: (metrics: TerminalResourceBatchPayload) => void): () => void;
   onExit(listener: (terminalId: string) => void): () => void;
@@ -33,7 +46,11 @@ export interface MemoryLeakAutoRestartDeps {
   generationOf(terminalId: string): number | undefined;
   readTerminal(terminalId: string): Promise<MemoryLeakTerminalRead | null>;
   pickTarget(projectId: string): MemoryLeakRestartTarget;
-  restartOnHost(projectId: string, terminalId: string, isCurrent: () => boolean): Promise<string>;
+  restartOnHost(
+    projectId: string,
+    terminalId: string,
+    guards: MemoryLeakHostRestartGuards
+  ): Promise<string>;
   now(): number;
 }
 
@@ -43,6 +60,10 @@ export const AUTO_RESTART_RETRY_MS = 60_000;
 interface TerminalTrack {
   generation: number | undefined;
   samples: number;
+  /** The newest sample, which a decision still waiting to run is held against. */
+  memoryKb: number;
+  /** The decision waiting to run, until a newer one replaces it or it is dropped. */
+  decision: object | null;
   lastAttemptAt: number | null;
   inFlight: boolean;
 }
@@ -72,6 +93,33 @@ export class MemoryLeakAutoRestartService {
     ];
   }
 
+  /**
+   * The policy was written. Every decision it no longer backs is dropped now
+   * rather than at its next check, which might find the change already undone:
+   * a policy turned off and on, or a threshold raised and lowered again, before
+   * a pending lookup or thaw settles. A policy that can't be read drops them
+   * all, without failing the settings write that called this.
+   */
+  policyChanged(): void {
+    if (this.disposed) return;
+    try {
+      const policy = this.deps.readPolicy();
+      if (policy.enabled) {
+        const thresholdKb = policy.thresholdMb * 1024;
+        for (const track of this.tracks.values()) {
+          if (track.memoryKb <= thresholdKb) track.decision = null;
+        }
+        return;
+      }
+    } catch (err) {
+      console.warn(
+        "[MemoryLeak] Dropped pending auto-restarts: policy unreadable:",
+        formatErrorMessage(err, "unknown")
+      );
+    }
+    this.tracks.clear();
+  }
+
   private handleBatch(metrics: TerminalResourceBatchPayload): void {
     if (this.disposed) return;
     const policy = this.deps.readPolicy();
@@ -88,13 +136,26 @@ export class MemoryLeakAutoRestartService {
       const generation = this.deps.generationOf(terminalId);
       let track = this.tracks.get(terminalId);
       if (!track || track.generation !== generation) {
-        track = { generation, samples: 0, lastAttemptAt: null, inFlight: false };
+        track = {
+          generation,
+          samples: 0,
+          memoryKb: 0,
+          decision: null,
+          lastAttemptAt: null,
+          inFlight: false,
+        };
         this.tracks.set(terminalId, track);
       }
       track.samples++;
+      track.memoryKb = metric.memoryKb;
 
+      if (metric.memoryKb <= thresholdKb) {
+        // A decision still waiting to run is dropped for good, even if a later
+        // sample climbs back over: that one waits out the retry interval.
+        track.decision = null;
+        continue;
+      }
       if (track.samples < AUTO_RESTART_STARTUP_SAMPLES) continue;
-      if (metric.memoryKb <= thresholdKb) continue;
       if (track.inFlight) continue;
       if (track.lastAttemptAt !== null && now - track.lastAttemptAt < AUTO_RESTART_RETRY_MS) {
         continue;
@@ -102,38 +163,73 @@ export class MemoryLeakAutoRestartService {
 
       track.inFlight = true;
       track.lastAttemptAt = now;
+      const decision = {};
+      track.decision = decision;
       const settled = track;
-      void this.attempt(terminalId, generation, policy.thresholdMb).finally(() => {
+      void this.attempt(terminalId, track, decision, policy.thresholdMb).finally(() => {
         settled.inFlight = false;
       });
     }
   }
 
+  /**
+   * Whether `decision` still holds. The policy and the samples move on while it
+   * waits for its lookup and its delivery: the policy turned off (which also
+   * forgets every track, so turning it on again doesn't revive it), a threshold
+   * raised past the newest sample, or a newer sample back under it drops it. The
+   * policy is read here rather than left to the next batch, which never comes
+   * once resource monitoring is off. Once dropped, it stays dropped, and a
+   * policy that can't be read drops it too: a deferred send calls this outside
+   * any handler.
+   */
+  private stillWanted(terminalId: string, track: TerminalTrack, decision: object): boolean {
+    if (this.tracks.get(terminalId) !== track || track.decision !== decision) return false;
+    try {
+      const policy = this.deps.readPolicy();
+      if (policy.enabled && track.memoryKb > policy.thresholdMb * 1024) return true;
+    } catch (err) {
+      console.warn(
+        `[MemoryLeak] Dropped the auto-restart of terminal ${terminalId.slice(0, 8)}: policy unreadable:`,
+        formatErrorMessage(err, "unknown")
+      );
+    }
+    track.decision = null;
+    return false;
+  }
+
   private async attempt(
     terminalId: string,
-    generation: number | undefined,
+    track: TerminalTrack,
+    decision: object,
     thresholdMb: number
   ): Promise<void> {
     try {
       const info = await this.deps.readTerminal(terminalId);
-      if (this.disposed || !info || info.isExited === true || info.isTrashed === true) return;
       // A restart while the read was out replaced the process these samples
       // measured; its successor gets its own startup grace.
-      if (this.deps.generationOf(terminalId) !== generation) return;
+      const isCurrent = () =>
+        !this.disposed && this.deps.generationOf(terminalId) === track.generation;
+      const stillWanted = () => this.stillWanted(terminalId, track, decision);
+      if (!isCurrent() || !stillWanted()) return;
+      if (!info || info.isExited === true || info.isTrashed === true) return;
       const projectId = info.projectId;
       if (!projectId) return;
       if (info.agentState === "waiting") return;
 
-      const isCurrent = () => !this.disposed && this.deps.generationOf(terminalId) === generation;
       const target = this.deps.pickTarget(projectId);
       switch (target.kind) {
         case "wait":
           return;
         case "view":
-          target.deliver({ terminalId, thresholdMb }, isCurrent);
+          // The view takes the restart when it is sent, so the decision has to
+          // hold until then, past a thaw that defers the send.
+          target.deliver({ terminalId, thresholdMb }, () => isCurrent() && stillWanted());
           return;
         case "host": {
-          const outcome = await this.deps.restartOnHost(projectId, terminalId, isCurrent);
+          const outcome = await this.deps.restartOnHost(projectId, terminalId, {
+            isCurrent,
+            stillWanted,
+          });
           if (outcome === "restarted") {
             console.log(
               `[MemoryLeak] Auto-restarted terminal ${terminalId.slice(0, 8)}: RSS exceeded ${thresholdMb} MB`

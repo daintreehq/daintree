@@ -49,13 +49,22 @@ const DEFAULT_LEAK_RESTART_THRESHOLD_MB = 8192;
  * pays nothing.
  */
 export async function loadHostSettingsLeaves(): Promise<HostSettingsLeaves> {
-  const [canopy, defaults, idle, idleBackground, { store }, { getPtyClient }] = await Promise.all([
+  const [
+    canopy,
+    defaults,
+    idle,
+    idleBackground,
+    { store },
+    { getPtyClient },
+    { getActiveMemoryLeakAutoRestart },
+  ] = await Promise.all([
     import("../../ipc/handlers/canopy.js"),
     import("../../services/agentDefaults.js"),
     import("../../services/IdleTerminalNotificationService.js"),
     import("../../services/IdleBackgroundAutoCloseService.js"),
     import("../../store.js"),
     import("../../window/serviceRefs.js"),
+    import("../../services/MemoryLeakAutoRestartService.js"),
   ]);
   const idleService = idle.getIdleTerminalNotificationService();
   const idleBackgroundService = idleBackground.getIdleBackgroundAutoCloseService();
@@ -181,6 +190,9 @@ export async function loadHostSettingsLeaves(): Promise<HostSettingsLeaves> {
       if (leakThreshold !== undefined) {
         store.set("terminalConfig.memoryLeakAutoRestartThresholdMb", leakThreshold);
         storeChanged = true;
+      }
+      if (monitoring !== undefined || leak !== undefined || leakThreshold !== undefined) {
+        getActiveMemoryLeakAutoRestart()?.policyChanged();
       }
       const restore = patch["sessionRestore.enabled"];
       if (restore !== undefined) {
