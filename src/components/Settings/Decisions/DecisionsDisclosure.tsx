@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
  * learning's own consent. Terminal snapshots are #16228's, under their own
  * consent, which shows `TerminalSnapshotsDisclosure` too. Phone photos are
  * #16233's: stored in the asking pane's folder so its agent can open them.
+ * Presence is #17240's: a yes or no the relay reads, so it isn't encrypted.
  */
 export function DecisionsDisclosure({ className }: { className?: string }) {
   return (
@@ -47,6 +48,16 @@ export function DecisionsDisclosure({ className }: { className?: string }) {
         <span className="font-medium text-text-primary">Push endpoints.</span> Each phone you pair
         registers one with the relay. A push says only that a question needs you, never the
         question.
+      </li>
+      <li>
+        <span className="font-medium text-text-primary">
+          Whether you&apos;re at this computer.
+        </span>{" "}
+        While desktop notifications are on, this computer tells your relay whether you&apos;re
+        here, so it can wait up to two minutes before notifying your phone of a new question, and
+        not notify it at all if the question is answered first. It&apos;s only a yes or no, which
+        the relay can read. Remote Hosts never send it. It&apos;s on unless you turn it off under
+        Questions.
       </li>
       <li>
         <span className="font-medium text-text-primary">

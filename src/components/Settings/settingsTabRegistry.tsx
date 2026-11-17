@@ -2315,6 +2315,27 @@ export const SETTINGS_REGISTRY = [
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
       {
+        id: "decisions-hold-phone-pushes",
+        section: "Questions",
+        title: "Hold phone notifications while I'm at this computer",
+        description:
+          "While desktop notifications are on, tells your relay whether you're here, so it waits up to two minutes before notifying your phone of a new question",
+        keywords: [
+          "presence",
+          "present",
+          "away",
+          "idle",
+          "phone",
+          "push",
+          "notification",
+          "hold",
+          "delay",
+          "desktop",
+          "privacy",
+        ],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
         id: "decisions-policy",
         section: "Policy",
         title: "Workflow gates",
