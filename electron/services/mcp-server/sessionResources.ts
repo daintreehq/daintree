@@ -254,13 +254,20 @@ function listResourceTemplates(
   return templates;
 }
 
-// The heatmap is chronological, so its oldest days go first; recent commits are
-// newest first and keep their head. Issue rows keep the page's own sort order.
+// The heatmap is chronological, so it keeps its newest days, and it gives way
+// before the newest-first recent commits. Issue rows keep the page's own order,
+// and the cursor still points past the whole page, rows dropped here included.
 const PULSE_RESOURCE_TRIMS: readonly JsonArrayTrim[] = [
   { key: "heatmap", keep: "tail" },
   { key: "recentCommits", keep: "head" },
 ];
-const ISSUES_RESOURCE_TRIMS: readonly JsonArrayTrim[] = [{ key: "items", keep: "head" }];
+const ISSUES_RESOURCE_TRIMS: readonly JsonArrayTrim[] = [
+  {
+    key: "items",
+    keep: "head",
+    note: "Rows were dropped from the end of this page; nextCursor and hasMore describe the whole page.",
+  },
+];
 
 async function readResourceContents(
   uri: string,
