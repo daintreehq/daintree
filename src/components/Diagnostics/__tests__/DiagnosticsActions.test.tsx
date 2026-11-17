@@ -47,8 +47,6 @@ vi.mock("@/store", () => ({
   useErrorStore: () => ({ errors: [] }),
   usePortalStore: () => ({ isOpen: false, width: 0 }),
 }));
-vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
-
 vi.mock("@/store/telemetryPreviewStore", () => ({
   useTelemetryPreviewStore: () => ({ active: false, events: [] }),
 }));

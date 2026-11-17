@@ -81,7 +81,14 @@ const DEFAULT_PREFERENCES: ToolbarPreferences = {
   },
 };
 
-const FIXED_BUTTON_IDS: ToolbarButtonId[] = ["sidebar-toggle", "assistant-toggle", "portal-toggle"];
+const FIXED_BUTTON_IDS: ToolbarButtonId[] = ["sidebar-toggle", "assistant-toggle"];
+
+/**
+ * Built-in buttons that no longer exist. A saved layout may still name one, so
+ * every hydration drops it rather than leaving a gap where it stood: the
+ * Portal's toggle went with the dock (#17256).
+ */
+const RETIRED_BUTTON_IDS: ReadonlySet<string> = new Set(["portal-toggle"]);
 
 /**
  * Home side lookup, used *only* to pick the survivor when an id sits on both
@@ -104,7 +111,9 @@ const LEFT_HOME_BUTTON_IDS: ToolbarButtonId[] = [
 const DEFAULT_LEFT_BUTTON_SET = new Set<AnyToolbarButtonId>(LEFT_HOME_BUTTON_IDS);
 
 function sanitizeButtonList(buttons: AnyToolbarButtonId[]): AnyToolbarButtonId[] {
-  const filtered = buttons.filter((id) => !FIXED_BUTTON_IDS.includes(id as ToolbarButtonId));
+  const filtered = buttons.filter(
+    (id) => !FIXED_BUTTON_IDS.includes(id as ToolbarButtonId) && !RETIRED_BUTTON_IDS.has(id)
+  );
   // Dedupe by first occurrence. A persisted list can accumulate repeated ids —
   // chiefly duplicate `forge-stats` when the v10 `renameForgeStats` migration
   // collapses `github-stats` onto a list that already held `forge-stats`,
@@ -278,7 +287,7 @@ function normalizePinnedButtons(value: unknown): ToolbarPinnedState {
   // is assignable to it, so no per-key assertion is needed.
   const result: Record<string, boolean> = {};
   for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry === "boolean") result[key] = entry;
+    if (typeof entry === "boolean" && !RETIRED_BUTTON_IDS.has(key)) result[key] = entry;
   }
   return result;
 }

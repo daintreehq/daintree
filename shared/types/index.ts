@@ -554,12 +554,8 @@ export type {
   SpawnErrorCode,
 } from "./pty-host.js";
 
-// Portal types - browser dock
+// Portal types: main's PortalManager and its IPC contract (#17257)
 export type {
-  PortalLinkType,
-  PortalLink,
-  LinkTemplate,
-  PortalTab,
   PortalBounds,
   PortalNavEvent,
   PortalTabHistory,
@@ -578,16 +574,6 @@ export type {
   ProjectLinksChangePayload,
   ProjectLinksChangeResult,
 } from "./projectLinks.js";
-
-export {
-  LINK_TEMPLATES,
-  DEFAULT_SYSTEM_LINKS,
-  DEFAULT_PORTAL_TABS,
-  PORTAL_MIN_WIDTH,
-  PORTAL_MAX_WIDTH,
-  PORTAL_DEFAULT_WIDTH,
-  PORTAL_MIN_EDITOR_WIDTH,
-} from "./portal.js";
 
 // Voice types - canonical phase model for voice session and transcript lifecycle
 export type {

@@ -76,7 +76,10 @@ describe("globalLinksStore", () => {
         portalLink("system-mistral", "user"),
         portalLink("user-ci", "user", { title: "CI", enabled: false, order: 2 }),
       ]);
-      const backing = installLocalStorage({ [PORTAL_KEY]: original });
+      const backing = installLocalStorage({
+        [PORTAL_KEY]: original,
+        [`${PORTAL_KEY}.__bak`]: original,
+      });
 
       const { useGlobalLinksStore } = await loadStore();
 
@@ -102,8 +105,26 @@ describe("globalLinksStore", () => {
         state: { links: useGlobalLinksStore.getState().links },
         version: 0,
       });
-      // The Portal's own copy stays for the dock until it is removed.
-      expect(backing.get(PORTAL_KEY)).toBe(original);
+      // Read once the move is on disk, the dock's payload and its backup go.
+      expect(backing.has(PORTAL_KEY)).toBe(false);
+      expect(backing.has(`${PORTAL_KEY}.__bak`)).toBe(false);
+    });
+
+    it("removes the Portal's payload on a launch after an earlier release already moved the links", async () => {
+      const moved = JSON.stringify({
+        state: { links: [{ ...portalLink("user-a", "user"), type: undefined }] },
+        version: 0,
+      });
+      const backing = installLocalStorage({
+        [KEY]: moved,
+        [PORTAL_KEY]: portalPayload([portalLink("user-a", "user"), portalLink("user-b", "user")]),
+      });
+
+      const { useGlobalLinksStore } = await loadStore();
+
+      expect(useGlobalLinksStore.getState().links.map((l) => l.id)).toEqual(["user-a"]);
+      expect(backing.has(PORTAL_KEY)).toBe(false);
+      expect(stored(backing)).toMatchObject({ state: { links: [{ id: "user-a" }] } });
     });
 
     it("moves links once: a second launch neither duplicates them nor brings back a removed one", async () => {
@@ -172,12 +193,13 @@ describe("globalLinksStore", () => {
     });
 
     it("reads the Portal's backup when its live payload is corrupt", async () => {
-      installLocalStorage({
+      const backing = installLocalStorage({
         [PORTAL_KEY]: "{not json",
         [`${PORTAL_KEY}.__bak`]: portalPayload([portalLink("user-saved", "user")]),
       });
       const { useGlobalLinksStore } = await loadStore();
       expect(useGlobalLinksStore.getState().links.map((l) => l.id)).toEqual(["user-saved"]);
+      expect(backing.has(`${PORTAL_KEY}.__bak`)).toBe(false);
     });
 
     it("comes up empty, and records the move, when the payload and its backup are both corrupt", async () => {
@@ -203,11 +225,14 @@ describe("globalLinksStore", () => {
       const { useGlobalLinksStore } = await loadStore();
       expect(useGlobalLinksStore.getState().links.map((l) => l.id)).toEqual(["user-a"]);
       expect(backing.has(KEY)).toBe(false);
+      // The move isn't on disk, so the only copy of the links stays.
+      expect(backing.has(PORTAL_KEY)).toBe(true);
 
       vi.restoreAllMocks();
       const nextLaunch = await loadStore();
       expect(nextLaunch.useGlobalLinksStore.getState().links.map((l) => l.id)).toEqual(["user-a"]);
       expect(backing.has(KEY)).toBe(true);
+      expect(backing.has(PORTAL_KEY)).toBe(false);
     });
 
     it("leaves the move for a later launch when storage can't be read", async () => {
@@ -223,6 +248,7 @@ describe("globalLinksStore", () => {
       const first = await loadStore();
       expect(first.migrateLegacyGlobalLinks()).toBeNull();
       expect(backing.has(KEY)).toBe(false);
+      expect(backing.has(PORTAL_KEY)).toBe(true);
 
       vi.restoreAllMocks();
       const nextLaunch = await loadStore();

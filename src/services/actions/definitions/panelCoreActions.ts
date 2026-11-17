@@ -2,7 +2,6 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { useErrorStore } from "@/store/errorStore";
-import { usePortalStore } from "@/store/portalStore";
 import { usePanelStore } from "@/store/panelStore";
 import { usePanelDialogStore, findPanelDialogsOfKind } from "@/store/panelDialogStore";
 import { usePluginPanelOpenRequestStore } from "@/store/pluginPanelOpenRequestStore";
@@ -109,11 +108,6 @@ export function registerPanelCoreActions(
         })
       ),
       dock: z.object({ panelCount: z.number() }),
-      portal: z.object({
-        isOpen: z.boolean(),
-        tabCount: z.number(),
-        activeTabId: z.string().nullable(),
-      }),
       focusedPanelId: z.string().nullable(),
       maximizedPanelId: z.string().nullable(),
     }),
@@ -137,8 +131,6 @@ export function registerPanelCoreActions(
         panels = panels.filter((p) => p.location !== "trash" && p.location !== "background");
       }
 
-      const portalState = usePortalStore.getState();
-
       return {
         panels: panels.map((p) => ({
           id: p.id,
@@ -152,11 +144,6 @@ export function registerPanelCoreActions(
         })),
         dock: {
           panelCount: panels.filter((p) => p.location === "dock").length,
-        },
-        portal: {
-          isOpen: portalState.isOpen,
-          tabCount: portalState.tabs.length,
-          activeTabId: portalState.activeTabId,
         },
         focusedPanelId: state.focusedId ?? null,
         maximizedPanelId: state.maximizedId ?? null,
@@ -490,20 +477,6 @@ export function registerPanelCoreActions(
     run: async () => {
       useDiagnosticsStore.getState().openDock("problems");
       useErrorStore.getState().promoteErrors();
-    },
-  }));
-
-  actions.set("panel.togglePortal", () => ({
-    id: "panel.togglePortal",
-    title: "Toggle portal",
-    description: "Toggle the portal panel",
-    category: "panel",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    keywords: ["web", "embed", "browser", "dock"],
-    run: async () => {
-      window.dispatchEvent(new CustomEvent("daintree:toggle-portal"));
     },
   }));
 }

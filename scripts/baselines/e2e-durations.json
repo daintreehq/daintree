@@ -19,13 +19,13 @@
     {
       "platform": "darwin",
       "project": "full-panels",
-      "specs": 21,
-      "tests": 230,
-      "durationMs": 117063,
-      "durationWithRetriesMs": 117063,
+      "specs": 20,
+      "tests": 219,
+      "durationMs": 113775,
+      "durationWithRetriesMs": 113775,
       "retries": 0,
       "status": {
-        "passed": 226,
+        "passed": 215,
         "failed": 0,
         "flaky": 0,
         "skipped": 4
@@ -343,21 +343,6 @@
       "retries": 0,
       "status": {
         "passed": 14,
-        "failed": 0,
-        "flaky": 0,
-        "skipped": 0
-      }
-    },
-    {
-      "platform": "darwin",
-      "project": "full-panels",
-      "file": "e2e/full/panels/core-portal.spec.ts",
-      "tests": 11,
-      "durationMs": 3288,
-      "durationWithRetriesMs": 3288,
-      "retries": 0,
-      "status": {
-        "passed": 11,
         "failed": 0,
         "flaky": 0,
         "skipped": 0

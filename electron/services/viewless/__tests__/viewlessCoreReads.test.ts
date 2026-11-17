@@ -98,8 +98,6 @@ describe("core reads with no frontend", () => {
           activeWorktreePath: FEATURE.path,
           activeWorktreeBranch: "feature",
           activeWorktreeIsMain: false,
-          portalOpen: false,
-          portalActiveTabId: null,
           // The saved panel and the live one; the trashed one holds no slot.
           terminalCount: 2,
           worktreeCount: 2,

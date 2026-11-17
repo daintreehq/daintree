@@ -47,8 +47,6 @@ vi.mock("@/hooks/useAnimatedPresence", () => ({
 vi.mock("@/store", () => ({
   usePortalStore: () => ({ isOpen: false, width: 0 }),
 }));
-vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
-
 vi.mock("@/store/paletteStore", () => {
   const usePaletteStore = (selector?: (s: { activePaletteId: null }) => unknown) =>
     selector ? selector({ activePaletteId: null }) : { activePaletteId: null };

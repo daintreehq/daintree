@@ -172,20 +172,39 @@ function isStored(key: string): boolean | null {
 }
 
 /**
+ * Drops the Portal's persisted state, and its backup, once this store's key is
+ * on disk: the key's presence records that the links came over, and nothing
+ * else reads the Portal's payload since the dock went (#17256).
+ */
+function retireLegacyPortalStorage(): void {
+  if (isStored(GLOBAL_LINKS_STORAGE_KEY) !== true) return;
+  if (isStored(LEGACY_PORTAL_STORAGE_KEY) !== true) return;
+  createSafeJSONStorage<unknown>().removeItem(LEGACY_PORTAL_STORAGE_KEY);
+}
+
+/**
  * Carries the links a person added to the Portal into this store, once: only
  * while the key has never been written, and writing it even when nothing came
  * over, so its presence is the record that the move happened. The Portal's
- * payload is read with the same backup recovery its own hydration has, and is
- * left in place. Returns what it moved, or null when there was nothing to do
- * or storage couldn't be read, which leaves the move for a later launch.
+ * payload is read with the same backup recovery its own hydration had, and is
+ * removed only once the move is on disk, whichever launch made it. Returns
+ * what it moved, or null when there was nothing to do or storage couldn't be
+ * read, which leaves the move for a later launch.
  */
 export function migrateLegacyGlobalLinks(): GlobalLink[] | null {
-  if (isStored(GLOBAL_LINKS_STORAGE_KEY) !== false) return null;
+  const migrated = isStored(GLOBAL_LINKS_STORAGE_KEY);
+  if (migrated !== false) {
+    if (migrated) retireLegacyPortalStorage();
+    return null;
+  }
   // A read that failed is not an empty Portal list: leave the move for later.
   if (isStored(LEGACY_PORTAL_STORAGE_KEY) === null) return null;
   const legacy = createSafeJSONStorage<unknown>().getItem(LEGACY_PORTAL_STORAGE_KEY);
   const links = readLegacyUserLinks(legacy instanceof Promise ? null : legacy);
   storage.setItem(GLOBAL_LINKS_STORAGE_KEY, { state: { links }, version: PERSIST_VERSION });
+  // A write storage refused (quota, or the in-memory fallback) leaves the
+  // Portal's copy for the launch that does get the move onto disk.
+  retireLegacyPortalStorage();
   return links;
 }
 

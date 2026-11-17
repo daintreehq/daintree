@@ -221,7 +221,6 @@ export function groupByCategory(entries: readonly ShortcutEntry[]): ShortcutGrou
 }
 
 const SCOPE_LABELS: Record<string, string> = {
-  portal: "In the portal",
   worktreeGrid: "In the worktree grid",
   "dev-preview": "In dev preview",
 };

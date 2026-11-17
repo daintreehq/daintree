@@ -465,11 +465,11 @@ describe("useShortcutHintHover", () => {
     getEffectiveComboMock.mockReturnValue("Cmd+B");
     shortcutHintStore.getState().hydrateCounts({
       "nav.toggleSidebar": 0,
-      "panel.togglePortal": 0,
+      "panel.toggleDiagnostics": 0,
     });
 
     const { result: a } = renderHook(() => useShortcutHintHover("nav.toggleSidebar"));
-    const { result: b } = renderHook(() => useShortcutHintHover("panel.togglePortal"));
+    const { result: b } = renderHook(() => useShortcutHintHover("panel.toggleDiagnostics"));
 
     act(() => {
       vi.advanceTimersByTime(10);
@@ -483,15 +483,15 @@ describe("useShortcutHintHover", () => {
     act(() => {
       shortcutHintStore
         .getState()
-        .show("panel.togglePortal", "Cmd+P", { x: 9, y: 9, origin: "hover" });
+        .show("panel.toggleDiagnostics", "Cmd+P", { x: 9, y: 9, origin: "hover" });
     });
-    expect(shortcutHintStore.getState().activeHint!.actionId).toBe("panel.togglePortal");
+    expect(shortcutHintStore.getState().activeHint!.actionId).toBe("panel.toggleDiagnostics");
 
     // A blurs — must NOT clear B's hint.
     act(() => {
       a.current.onBlur();
     });
-    expect(shortcutHintStore.getState().activeHint!.actionId).toBe("panel.togglePortal");
+    expect(shortcutHintStore.getState().activeHint!.actionId).toBe("panel.toggleDiagnostics");
 
     // B blurring its own hint does clear it.
     act(() => {

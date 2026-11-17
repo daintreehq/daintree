@@ -18,7 +18,6 @@ vi.mock("../useElectron", () => ({
 }));
 
 import { useMenuActions } from "../useMenuActions";
-import { keybindingService } from "@/services/KeybindingService";
 
 describe("useMenuActions", () => {
   beforeEach(() => {
@@ -62,29 +61,7 @@ describe("useMenuActions", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
-  it("hands the terminal-cycle key to the portal's tabs while the portal has focus", async () => {
-    const { handler } = setup();
-    keybindingService.setScope("portal");
-    try {
-      await handler?.({ actionId: "terminal.focusNext", portalActionId: "portal.nextTab" });
-      await handler?.({ actionId: "terminal.focusPrevious", portalActionId: "portal.prevTab" });
-      // A key main did not find on the portal's own bindings stays the terminal's.
-      await handler?.({ actionId: "terminal.focusNext" });
-    } finally {
-      keybindingService.restoreScope("portal");
-    }
-    expect(dispatchMock).toHaveBeenNthCalledWith(1, "portal.nextTab", undefined, {
-      source: "menu",
-    });
-    expect(dispatchMock).toHaveBeenNthCalledWith(2, "portal.prevTab", undefined, {
-      source: "menu",
-    });
-    expect(dispatchMock).toHaveBeenNthCalledWith(3, "terminal.focusNext", undefined, {
-      source: "menu",
-    });
-  });
-
-  it("keeps the terminal-cycle action outside the portal", async () => {
+  it("dispatches the terminal-cycle action even when main names a portal one", async () => {
     const { handler } = setup();
     await handler?.({ actionId: "terminal.focusNext", portalActionId: "portal.nextTab" });
     expect(dispatchMock).toHaveBeenCalledWith("terminal.focusNext", undefined, { source: "menu" });

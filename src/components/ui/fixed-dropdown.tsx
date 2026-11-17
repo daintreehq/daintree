@@ -140,7 +140,7 @@ export function FixedDropdown({
     const top = rect.bottom + sideOffset;
     const next = {
       top,
-      right: `max(${buttonRightGap}px, calc(var(--portal-right-offset, 0px) + 8px))`,
+      right: `${buttonRightGap}px`,
       // The room left between the anchor and the bottom of the viewport, minus
       // the same gutter used on the other edges. Published as a custom property
       // so content can cap itself against the space it actually has instead of

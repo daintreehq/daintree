@@ -10,7 +10,6 @@ const IN_USE = [
   "HelpPanel",
   "DiagnosticsDock",
   "ThemeBrowser",
-  "PortalDock",
   "ContentDock",
   "ReviewPane",
   "FilePane",

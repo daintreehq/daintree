@@ -113,8 +113,6 @@ export async function runActionsGetContext(
       activeWorktreePath: activeWorktree?.path,
       activeWorktreeBranch: activeWorktree?.branch,
       activeWorktreeIsMain: activeWorktree?.isMainWorktree,
-      portalOpen: false,
-      portalActiveTabId: null,
       terminalCount,
       worktreeCount: worktrees.length,
     });

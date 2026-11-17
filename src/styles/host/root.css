@@ -15,13 +15,12 @@
    *
    * Tier 30: The scrim behind a panel-tier sheet (the Theme Browser shield)
    * Tier 40: Fixed panels (dock, sidebars)
-   * Tier 50: Portal overlay
    * Tier 55: Maximized content (terminals)
    * Tier 56: Ambient overlays — the window visual bell (the all-clear flash)
    *          and the panel move ghost — so they stay under every modal scrim,
    *          popover and toast
-   * Tier 58: The top toolbar. Above the Portal and Theme Browser sheets,
-   *          which start below it, and under every modal scrim; it used to
+   * Tier 58: The top toolbar. Above the Theme Browser sheet, which starts
+   *          below it, and under every modal scrim; it used to
    *          share 60 with modals, which left DOM order to decide
    * Tier 60: Modal dialogs (full-screen overlays)
    * Tier 70: Popovers, dropdowns, tooltips (can appear above modals)
@@ -33,7 +32,6 @@
    */
   --z-panel-scrim: 30;
   --z-panel: 40;
-  --z-portal: 50;
   --z-maximized: 55;
   --z-visual-bell: 56;
   --z-toolbar: 58;

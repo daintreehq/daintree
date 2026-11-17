@@ -3,7 +3,6 @@ import { useShallow } from "zustand/react/shallow";
 import {
   useFocusStore,
   useDiagnosticsStore,
-  usePortalStore,
   useHelpPanelStore,
   useErrorStore,
   usePerformanceModeStore,
@@ -28,10 +27,6 @@ export interface LayoutState {
   diagnosticsOpen: boolean;
   setDiagnosticsOpen: (open: boolean) => void;
   openDiagnosticsDock: (tab: DiagnosticsTab) => void;
-
-  portalOpen: boolean;
-  portalWidth: number;
-  togglePortal: () => void;
 
   helpPanelOpen: boolean;
   helpPanelWidth: number;
@@ -64,14 +59,6 @@ export function useLayoutState(): LayoutState {
     }))
   );
 
-  const portalState = usePortalStore(
-    useShallow((state) => ({
-      portalOpen: state.isOpen,
-      portalWidth: state.width,
-      togglePortal: state.toggle,
-    }))
-  );
-
   const helpPanelState = useHelpPanelStore(
     useShallow((state) => ({
       helpPanelOpen: state.isOpen,
@@ -88,11 +75,10 @@ export function useLayoutState(): LayoutState {
     () => ({
       ...focusState,
       ...diagnosticsState,
-      ...portalState,
       ...helpPanelState,
       performanceMode,
       errorCount,
     }),
-    [focusState, diagnosticsState, portalState, helpPanelState, performanceMode, errorCount]
+    [focusState, diagnosticsState, helpPanelState, performanceMode, errorCount]
   );
 }

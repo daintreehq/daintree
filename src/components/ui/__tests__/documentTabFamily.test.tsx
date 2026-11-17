@@ -2,10 +2,8 @@
 import type { ReactElement } from "react";
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PortalTab } from "@shared/types";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TabButton } from "@/components/Panel/TabButton";
-import { PortalToolbar } from "@/components/Portal/PortalToolbar";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { documentTabClassName } from "../document-tab";
 
@@ -23,17 +21,12 @@ vi.mock("@/hooks", async (importOriginal) => ({
 }));
 
 /**
- * The document tab family: grid and dock (TabButton) and portal strips.
+ * The document tab family: the grid and dock strips (TabButton).
  *
  * What is pinned is the rule that they are ONE control — every host draws its tabs from
  * the shared module and honours the same keyboard contract — not the tokens the module
  * happens to use today, which are expected to move.
  */
-
-const PORTAL_TABS: PortalTab[] = [
-  { id: "a", url: "https://claude.ai/", title: "Claude", icon: "claude" },
-  { id: "b", url: "https://chatgpt.com/", title: "ChatGPT", icon: "codex" },
-];
 
 const withTooltips = (ui: ReactElement) => render(<TooltipProvider>{ui}</TooltipProvider>);
 
@@ -58,22 +51,6 @@ const STRIPS: Array<[string, () => HTMLElement]> = [
           ))}
         </div>
       ).container,
-  ],
-  [
-    "portal",
-    () =>
-      withTooltips(
-        <PortalToolbar
-          tabs={PORTAL_TABS}
-          activeTabId="a"
-          onTabClick={vi.fn()}
-          onTabClose={vi.fn()}
-          onNewTab={vi.fn()}
-          defaultNewTabUrl={null}
-          onClose={vi.fn()}
-          enabledLinks={[]}
-        />
-      ).container.querySelector<HTMLElement>('[role="tablist"]')!,
   ],
 ];
 

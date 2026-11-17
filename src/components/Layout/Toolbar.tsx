@@ -130,7 +130,6 @@ import { ToolbarProblemsButton } from "./ToolbarProblemsButton";
 import { HostMemoryPauseIndicator } from "./HostMemoryPauseIndicator";
 import { BulkWorktreeRunIndicator } from "./BulkWorktreeRunIndicator";
 import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
-import { ToolbarPortalButton } from "./ToolbarPortalButton";
 import { ToolbarAssistantButton } from "./ToolbarAssistantButton";
 import { type OverflowBadgeSeverity } from "./useOverflowBadgeSeverity";
 import { CopyTreeMenuContent } from "@/components/CopyTree/CopyTreeRecentsPanel";
@@ -1240,10 +1239,6 @@ export function Toolbar({
         render: () => <ToolbarAssistantButton key="assistant-toggle" data-toolbar-item="" />,
         isAvailable: true,
       },
-      "portal-toggle": {
-        render: () => <ToolbarPortalButton key="portal-toggle" data-toolbar-item="" />,
-        isAvailable: true,
-      },
       "plugin-tray": {
         render: () => (
           <PluginTrayButton key="plugin-tray" configs={pluginConfigs} data-toolbar-item="" />
@@ -2001,7 +1996,6 @@ export function Toolbar({
 
               <div className="app-no-drag flex items-center gap-0.5">
                 {buttonRegistry["assistant-toggle"]!.render()}
-                {buttonRegistry["portal-toggle"]!.render()}
               </div>
 
               {isWindows() && (

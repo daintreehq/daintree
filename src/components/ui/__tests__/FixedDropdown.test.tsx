@@ -667,27 +667,24 @@ describe("FixedDropdown right-edge anchor (issue #6800)", () => {
 
   afterEach(() => {
     _resetForTests();
-    document.documentElement.style.removeProperty("--portal-right-offset");
     document.documentElement.style.removeProperty("--right-obstruction-offset");
   });
 
-  it("anchors right edge to --portal-right-offset, not --right-obstruction-offset", () => {
+  it("anchors its right edge under the button, not past the Assistant", () => {
     // Toolbar dropdowns sit above the main flex row. The Assistant is a flex
-    // sibling of <main>, not an overlay — it doesn't cover the toolbar. Only
-    // the body-portaled Portal (web chat) needs to push toolbar dropdowns
-    // left. Using --right-obstruction-offset would shift dropdowns left by
-    // Assistant width too, which is the bug from #6800.
+    // sibling of <main>, not an overlay — it doesn't cover the toolbar, so
+    // --right-obstruction-offset would shift dropdowns left by its width for
+    // nothing, which is the bug from #6800.
+    document.documentElement.style.setProperty("--right-obstruction-offset", "400px");
     render(
       <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
         <div data-testid="dropdown-body">Content</div>
       </FixedDropdown>
     );
 
-    const portal = document.querySelector('[data-testid="dropdown-body"]')?.parentElement;
-    expect(portal).not.toBeNull();
-    const rightStyle = portal?.style.right ?? "";
-    expect(rightStyle).toContain("var(--portal-right-offset");
-    expect(rightStyle).not.toContain("--right-obstruction-offset");
+    const panel = document.querySelector('[data-testid="dropdown-body"]')?.parentElement;
+    expect(panel).not.toBeNull();
+    expect(panel?.style.right).toBe(`${window.innerWidth - 100}px`);
   });
 });
 

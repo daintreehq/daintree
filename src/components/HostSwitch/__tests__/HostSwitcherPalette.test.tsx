@@ -36,7 +36,6 @@ vi.mock("@/hooks/useAnimatedPresence", () => ({
   }),
 }));
 vi.mock("@/store", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
-vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
 vi.mock("@/components/Hosts/hostList", () => ({
   useHostList: () => hostList.value,
   useHostFigures: () => hostList.value,
