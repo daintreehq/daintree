@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type {
@@ -385,4 +386,134 @@ describe("DecisionsAttentionDialog: Choose destination (#17560)", () => {
       expect(destinationsMenu()!.textContent).not.toContain("The relay went away");
     }
   );
+});
+
+describe("DecisionsAttentionDialog: an opening for a pane (#17562)", () => {
+  /** Reads held until the test lets them land, oldest first. */
+  let held: Array<() => void> = [];
+
+  function holdReads() {
+    listAttention.mockImplementation(() => {
+      const snapshot = listed;
+      return new Promise((resolve) => {
+        held.push(() => resolve({ result: "listed", items: snapshot }));
+      });
+    });
+  }
+
+  async function landReads() {
+    await act(async () => {
+      const pending = held;
+      held = [];
+      for (const land of pending) land();
+    });
+  }
+
+  function openFor(terminalId: string) {
+    act(() => useDecisionsAttentionStore.getState().open(terminalId));
+  }
+
+  /** The dialog's own surface, where its initial focus goes while a read is out. */
+  function surface(): Element | null {
+    return screen.getByTestId("decisions-attention-dialog").firstElementChild;
+  }
+
+  /** The list's own place in the dialog, holding its description. */
+  function listPlace(): Element | null {
+    const id = screen.getByTestId("decisions-attention-dialog").getAttribute("aria-describedby");
+    return id === null ? null : (document.getElementById(id)?.parentElement ?? null);
+  }
+
+  /** Opened for pane 3 alone, settled on its answer, then closed with the list kept. */
+  async function closeAfterFirstOpening(rerender: (ui: ReactElement) => void) {
+    listed = [makeItem(3)];
+    openFor("pane-3");
+    rerender(tree(true));
+    await listedRows(1);
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(3)));
+
+    act(() => useDecisionsAttentionStore.getState().close());
+    rerender(tree(false));
+    await waitFor(() => expect(screen.queryByTestId("decisions-attention-dialog")).toBeNull());
+  }
+
+  /** Reopened for pane 4 with its read held: the last opening's list shows meanwhile. */
+  async function reopenForPane4(rerender: (ui: ReactElement) => void) {
+    listed = [makeItem(3), makeItem(4)];
+    holdReads();
+    openFor("pane-4");
+    rerender(tree(true));
+    await listedRows(1);
+    await waitFor(() => expect(document.activeElement).toBe(surface()));
+  }
+
+  beforeEach(() => {
+    listed = [];
+    held = [];
+    listAttention.mockReset();
+    markAnswerHandled.mockReset();
+    listAttention.mockImplementation(async () => ({ result: "listed", items: listed }));
+    Object.defineProperty(window, "electron", {
+      value: {
+        decisions: { listAttention, markAnswerHandled },
+        terminal: { onDecisionState: () => () => {} },
+      },
+      configurable: true,
+      writable: true,
+    });
+    useDecisionsAttentionStore.setState({
+      isOpen: false,
+      request: { terminalId: null, returnFocusTo: null, seq: 0 },
+    });
+  });
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("lands on the opening pane's answer from the first read", async () => {
+    listed = [makeItem(3), makeItem(4)];
+    const { rerender } = render(tree(false));
+    openFor("pane-4");
+    rerender(tree(true));
+
+    await listedRows(2);
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
+  });
+
+  it("reopened for a pane whose answer arrived while it was closed, lands on that answer once it is read", async () => {
+    const { rerender } = render(tree(false));
+    await closeAfterFirstOpening(rerender);
+    await reopenForPane4(rerender);
+
+    await landReads();
+    await listedRows(2);
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
+  });
+
+  it("leaves focus where the person moved it while the opening's read was out", async () => {
+    const { rerender } = render(tree(false));
+    await closeAfterFirstOpening(rerender);
+    await reopenForPane4(rerender);
+
+    const chosen = markButton(3);
+    act(() => chosen.focus());
+    await landReads();
+    await listedRows(2);
+
+    expect(document.activeElement).toBe(chosen);
+  });
+
+  it("holds focus in the list's place, not a stale row, when the opening's read fails", async () => {
+    const { rerender } = render(tree(false));
+    await closeAfterFirstOpening(rerender);
+
+    listAttention.mockImplementation(() => Promise.reject(new Error("The relay went away")));
+    openFor("pane-3");
+    rerender(tree(true));
+
+    await waitFor(() => expect(screen.getByText("The relay went away")).toBeTruthy());
+    // The last opening's row for the pane is still on show beside the error.
+    await listedRows(1);
+    await waitFor(() => expect(document.activeElement).toBe(listPlace()));
+  });
 });

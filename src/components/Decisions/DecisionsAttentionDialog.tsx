@@ -517,12 +517,20 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
   /** The place in the list of an item whose action may take it off, for focus to land after. */
   const focusAfter = useRef<{ questionId: string; index: number } | null>(null);
   const reading = useRef(0);
+  /** The opening reads are launched for now. */
+  const opening = useRef(0);
+  /**
+   * The opening the shown list or error was read in. The host keeps the last
+   * opening's list mounted, so a reopening shows it until its own read lands.
+   */
+  const [readFor, setReadFor] = useState(0);
   const showSkeleton = useSkeletonGate(isOpen && list === null && loadError === null);
 
   const items = useMemo(() => (list?.result === "listed" ? list.items : []), [list]);
 
   const refresh = useCallback(async () => {
     const ticket = ++reading.current;
+    const launchedFor = opening.current;
     try {
       const next = await decisionsClient.listAttention();
       if (ticket !== reading.current) return;
@@ -532,10 +540,12 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
       if (ticket !== reading.current) return;
       setLoadError(formatErrorMessage(error, "Couldn't read the answers"));
     }
+    setReadFor(launchedFor);
   }, []);
 
   useEffect(() => {
     if (!isOpen) return;
+    opening.current = request.seq;
     setOutcome(null);
     void refresh();
   }, [isOpen, request.seq, refresh]);
@@ -568,24 +578,43 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
   }, [isOpen, refresh]);
 
   // Opened for a pane — from its chip, or from its run in Canopy: its first
-  // answer's first action takes the focus once listed, ringed when the
-  // keyboard brought the person here. With none listed for that pane, the
+  // answer's first action takes the focus once this opening's own read is
+  // listed, ringed when the keyboard brought the person here. A reopening
+  // still shows the last opening's list until then, which may not have the
+  // pane's answer yet. With none listed for that pane, or no list read, the
   // list itself holds it.
   const focusedFor = useRef(0);
+  /** The opening during whose read the person moved focus, which then stays theirs. */
+  const focusMovedFor = useRef(0);
   useEffect(() => {
     if (!isOpen || request.terminalId === null || focusedFor.current === request.seq) return;
-    if (list === null && loadError === null) return;
-    focusedFor.current = request.seq;
-    const target = listRef.current?.querySelector<HTMLElement>(
-      `[data-terminal-id="${CSS.escape(request.terminalId)}"] ${ITEM_ACTIONS}`
-    );
+    const seq = request.seq;
+    if (readFor !== seq) {
+      // The dialog's own surface taking focus as it opens, or the list's
+      // place taking it from a click on no control, is not a move.
+      const onFocusIn = (event: FocusEvent) => {
+        const body = bodyRef.current;
+        if (event.target instanceof Node && body !== null && event.target.contains(body)) return;
+        focusMovedFor.current = seq;
+      };
+      document.addEventListener("focusin", onFocusIn, true);
+      return () => document.removeEventListener("focusin", onFocusIn, true);
+    }
+    focusedFor.current = seq;
+    if (focusMovedFor.current === seq) return;
+    const target =
+      loadError === null
+        ? listRef.current?.querySelector<HTMLElement>(
+            `[data-terminal-id="${CSS.escape(request.terminalId)}"] ${ITEM_ACTIONS}`
+          )
+        : null;
     if (target) {
       target.focus({ preventScroll: true });
       // The whole answer comes into view, padding included: scrolled only as
       // far as its action, the last answer's focus ring sat under the footer.
       target.closest<HTMLElement>("[data-question-id]")?.scrollIntoView({ block: "nearest" });
     } else bodyRef.current?.focus({ focusVisible: false } as FocusOptions);
-  }, [isOpen, list, loadError, request]);
+  }, [isOpen, loadError, readFor, request]);
 
   // An item that left took the focus with it: the next one's first action
   // gets it, else the one before, else the list's own place in the dialog.
