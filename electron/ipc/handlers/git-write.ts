@@ -23,6 +23,7 @@ import { readRemoteBranchTip } from "../../utils/remoteBranchTip.js";
 import type { GitPushPayload, PushProgressEvent } from "../../../shared/types/ipc/gitPush.js";
 import type {
   ConflictedFileEntry,
+  GitBaseIntegrationBlocker,
   GitBaseIntegrationCommitPreview,
   GitBaseIntegrationKind,
   GitCommitResult,
@@ -855,6 +856,28 @@ async function requireBaseTarget(
 }
 
 /**
+ * What `git status` holds that a base integration refuses to start over, or
+ * `null` when the tree is clean. The single predicate behind both the write's
+ * refusal and the preview's blocker, so the two cannot drift apart.
+ *
+ * `isClean()` can be true while unmerged paths stand, so the conflicted list is
+ * checked on its own rather than trusted to fold into it. Conflicts come first:
+ * "commit or stash" can't be followed until they are resolved. Every other
+ * entry is counted once, untracked included, rather than summing staged and
+ * unstaged rows that can both name one path.
+ */
+async function readTreeBlocker(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "status">
+): Promise<Extract<GitBaseIntegrationBlocker, { reason: "conflicts" | "uncommitted-changes" }> | null> {
+  const status = await git.status();
+  if (status.conflicted.length > 0) {
+    return { reason: "conflicts", count: status.conflicted.length };
+  }
+  if (status.isClean()) return null;
+  return { reason: "uncommitted-changes", count: status.files.length };
+}
+
+/**
  * Refuse to start on a tree that has anything in it.
  *
  * git would refuse most of this on its own, but not all of it and not legibly:
@@ -874,8 +897,7 @@ async function requireCleanTree(
   cwd: string,
   op: string
 ): Promise<void> {
-  const status = await git.status();
-  if (status.isClean() && status.conflicted.length === 0) return;
+  if ((await readTreeBlocker(git)) === null) return;
   const message =
     "This worktree has uncommitted changes. Commit or stash them before integrating the base branch.";
   throw new GitOperationError(
@@ -908,6 +930,26 @@ async function requireNoTrackedChanges(
 }
 
 /**
+ * The merge, rebase, cherry-pick or revert halted in this worktree, or `null`
+ * when none is. Read from the git dir's sentinels, which is what the write
+ * refuses on and what the preview reports, so the two agree.
+ */
+async function readHaltedOperation(
+  git: Awaited<ReturnType<typeof createHardenedGit>>,
+  cwd: string
+): Promise<Extract<GitBaseIntegrationBlocker, { reason: "operation-in-progress" }> | null> {
+  const gitDir = await resolveGitDir(git, cwd);
+  const detected = await detectRepoOperationState(gitDir, false);
+  if (detected.state === "CLEAN" || detected.state === "DIRTY") return null;
+  return {
+    reason: "operation-in-progress",
+    operation: detected.state,
+    rebaseStep: detected.rebaseStep ?? null,
+    rebaseTotalSteps: detected.rebaseTotalSteps ?? null,
+  };
+}
+
+/**
  * Refuse to start a second operation on top of a halted one.
  *
  * Starting a rebase mid-rebase is refused by git anyway, but the message is
@@ -920,9 +962,9 @@ async function requireNoOperationInProgress(
   cwd: string,
   op: string
 ): Promise<void> {
-  const gitDir = await resolveGitDir(git, cwd);
-  const { state } = await detectRepoOperationState(gitDir, false);
-  if (state === "CLEAN" || state === "DIRTY") return;
+  const halted = await readHaltedOperation(git, cwd);
+  if (!halted) return;
+  const state = halted.operation;
   const message = `This worktree is already mid-operation (${state.toLowerCase().replace("_", "-")}). Continue or abort it before starting another.`;
   throw new GitOperationError(
     "conflict-unresolved",
@@ -1113,6 +1155,9 @@ async function runBaseIntegration(
   baseIntegratingCwds.add(payload.cwd);
   try {
     const git = await createHardenedGit(payload.cwd);
+    // First, because a halted rebase detaches HEAD: checked after the branch,
+    // it was refused as "no branch checked out", which names the wrong fix.
+    await requireNoOperationInProgress(git, payload.cwd, op);
     const branch = await requireCheckedOutBranch(git);
     // THE invariant, enforced rather than assumed. Everything else in this file
     // arranges for the operation to read the base ref and write only this
@@ -1128,7 +1173,6 @@ async function runBaseIntegration(
         { cwd: payload.cwd, op, rawMessage: message, branchName: branch }
       );
     }
-    await requireNoOperationInProgress(git, payload.cwd, op);
     await requireCleanTree(git, payload.cwd, op);
     const target = await requireBaseTarget(git, baseBranch, payload.cwd);
     await requireUnmovedSince(git, payload, branch, target, op);
@@ -1234,7 +1278,35 @@ const gitBaseIntegrationNamespace = defineIpcNamespace({
 
         const git = await createHardenedGit(payload.cwd);
         try {
+          // The write's own refusals, read in the order that names the right
+          // fix (#17189). Without them the confirm offered an approval the
+          // write was certain to refuse, and only said so in a toast after it
+          // had closed. A halted operation and a checked-out base stop the
+          // read: there is no meaningful range to measure from either.
+          const unmeasured = {
+            kind,
+            baseBranch,
+            compareRef: null,
+            remote: null,
+            headOid: null,
+            baseOid: null,
+            commits: [],
+            total: null,
+            behind: null,
+          };
+          // Before the branch: a halted rebase detaches HEAD, and reading the
+          // branch first fails as "no branch checked out".
+          const halted = await readHaltedOperation(git, payload.cwd);
+          if (halted) return { ...unmeasured, branch: null, blocker: halted };
+
           const branchName = await requireCheckedOutBranch(git);
+          if (branchName === baseBranch) {
+            return { ...unmeasured, branch: branchName, blocker: { reason: "base-checked-out" } };
+          }
+          // Measured anyway: what the operation WOULD do is worth seeing while
+          // deciding whether to commit first.
+          const treeBlocker = await readTreeBlocker(git);
+
           const target = await requireBaseTarget(git, baseBranch, payload.cwd);
           const localRef = `refs/heads/${branchName}`;
 
@@ -1274,6 +1346,7 @@ const gitBaseIntegrationNamespace = defineIpcNamespace({
             kind,
             branch: branchName,
             baseBranch,
+            blocker: treeBlocker,
             compareRef: target.compareRef,
             remote: target.remote,
             headOid,

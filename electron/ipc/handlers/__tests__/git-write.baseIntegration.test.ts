@@ -732,6 +732,83 @@ describe("git:list-base-integration-commits — blockers the write would refuse 
     expect(git.log).not.toHaveBeenCalled();
   });
 
+  it.each(["MERGING", "CHERRY_PICKING", "REVERTING"] as const)(
+    "flags a halted %s without progress it doesn't have",
+    async (state) => {
+      detectRepoOperationStateMock.mockResolvedValue({ state });
+      const git = gitDouble();
+      const result = await readPreview(git, "merge-base");
+
+      expect(result.blocker).toEqual({
+        reason: "operation-in-progress",
+        operation: state,
+        rebaseStep: null,
+        rebaseTotalSteps: null,
+      });
+      expect(git.log).not.toHaveBeenCalled();
+    }
+  );
+
+  it("flags conflicts even when the status otherwise reads clean", async () => {
+    const result = await readPreview(
+      gitDouble({ status: { isClean: () => true, conflicted: ["a.ts"], files: [] } })
+    );
+    expect(result.blocker).toEqual({ reason: "conflicts", count: 1 });
+  });
+
+  it("leaves a checked-out base unmeasured rather than reporting zero to integrate", async () => {
+    const git = gitDouble({ branch: BASE });
+    const result = (await readPreview(git)) as unknown as {
+      branch: string | null;
+      compareRef: string | null;
+      total: number | null;
+      behind: number | null;
+    };
+
+    expect(result.branch).toBe(BASE);
+    expect(result.compareRef).toBeNull();
+    expect(result.total).toBeNull();
+    expect(result.behind).toBeNull();
+    expect(git.log).not.toHaveBeenCalled();
+  });
+
+  it("still measures a dirty tree, so the commits stay visible while blocked", async () => {
+    const result = (await readPreview(gitDouble({ status: statusOf(["a.ts"]) }))) as unknown as {
+      blocker: unknown;
+      commits: unknown[];
+      behind: number | null;
+    };
+    expect(result.blocker).toEqual({ reason: "uncommitted-changes", count: 1 });
+    expect(result.commits).toHaveLength(1);
+    expect(result.behind).toBe(3);
+  });
+
+  it("fails the read when the status can't be read, never reporting no blocker", async () => {
+    const git = gitDouble();
+    git.status.mockRejectedValue(new Error("fatal: index file corrupt"));
+    createHardenedGitMock.mockResolvedValue(git);
+    registerGitWriteHandlers({} as never);
+
+    await expect(
+      registeredHandlers().get(CHANNELS.GIT_LIST_BASE_INTEGRATION_COMMITS)!(
+        {},
+        { cwd: CWD, baseBranch: BASE, kind: "rebase-onto-base" }
+      )
+    ).rejects.toThrow(/index file corrupt/);
+  });
+
+  it("refuses the write over a halted rebase as mid-operation, not as a detached HEAD", async () => {
+    detectRepoOperationStateMock.mockResolvedValue({ state: "REBASING" });
+    const git = gitDouble({ branch: "HEAD" });
+    createHardenedGitMock.mockResolvedValue(git);
+    registerGitWriteHandlers({} as never);
+
+    await expect(
+      registeredHandlers().get(CHANNELS.GIT_REBASE_ONTO_BASE)!({}, { cwd: CWD, baseBranch: BASE })
+    ).rejects.toThrow(/mid-operation/);
+    expect(callsTo(git, "rebase")).toEqual([]);
+  });
+
   it.each([
     ["uncommitted changes", { status: statusOf(["a.ts"]) }, null],
     ["unresolved conflicts", { status: statusOf(["a.ts"], ["a.ts"]) }, null],
