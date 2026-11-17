@@ -83,11 +83,18 @@ vi.mock("../DiffViewer", () => ({
  * jsdom measures nothing, so the scrolls the shelf asks of the virtualizer are
  * only observable through `VirtuosoMockContext`'s synthetic sizes. This wraps
  * the REAL `GroupedVirtuoso`, records the index each reveal asks for, and keeps
- * the real handle so a test can scroll the window the way a user would.
+ * the real handle so a test can scroll the window the way a user would. The
+ * mock sizes items at once, so a test that needs the unmeasured first pass a
+ * real layout has holds the virtualizer's own reports and plays its own.
  */
+type RenderedItems = { index: number; offset: number; size: number }[];
 const { scrollIntoViewMock, virtuoso } = vi.hoisted(() => ({
   scrollIntoViewMock: vi.fn<(location: { index: number; behavior?: string }) => void>(),
-  virtuoso: { handle: null as GroupedVirtuosoHandle | null },
+  virtuoso: {
+    handle: null as GroupedVirtuosoHandle | null,
+    holdItemsRendered: false,
+    itemsRendered: null as ((items: RenderedItems) => void) | null,
+  },
 }));
 
 vi.mock("react-virtuoso", async (importOriginal) => {
@@ -111,8 +118,13 @@ vi.mock("react-virtuoso", async (importOriginal) => {
         scrollToIndex: (location: Parameters<GroupedVirtuosoHandle["scrollToIndex"]>[0]) =>
           inner.current?.scrollToIndex(location),
       }));
+      const itemsRendered = props.itemsRendered as ((items: RenderedItems) => void) | undefined;
+      virtuoso.itemsRendered = itemsRendered ?? null;
       return createElement(Actual, {
         ...props,
+        itemsRendered: (items: RenderedItems) => {
+          if (!virtuoso.holdItemsRendered) itemsRendered?.(items);
+        },
         ref: (handle: GroupedVirtuosoHandle | null) => {
           inner.current = handle;
           virtuoso.handle = handle;
@@ -129,6 +141,8 @@ beforeEach(() => {
   mockCompareWorktrees.mockReset();
   scrollIntoViewMock.mockClear();
   virtuoso.handle = null;
+  virtuoso.holdItemsRendered = false;
+  virtuoso.itemsRendered = null;
   Object.defineProperty(window, "electron", {
     value: { git: { compareWorktrees: mockCompareWorktrees } },
     configurable: true,
@@ -380,6 +394,33 @@ describe("CrossWorktreeDiff shelf with a large comparison (#17461)", () => {
     // A new virtualizer opens at the top; the open file's row only comes back
     // once it has measured and been asked for again.
     await waitFor(() => expect(currentRow()?.dataset.filePath).toBe(open));
+  });
+
+  it("asks again for the open file once a reopened list has measured, not before", async () => {
+    const original = comparison(4, 50);
+    const open = drawnOrder(original)[0]!;
+    const { refresh } = renderComparison(original);
+    await waitFor(() => expect(currentRow()?.dataset.filePath).toBe(open));
+    refresh([...comparison(290, 10, "lib/pkg"), ...original], "two");
+    await waitFor(() => expect(currentRow()?.dataset.filePath).toBe(open));
+
+    fireEvent.click(screen.getByRole("button", { name: "Toggle file list" }));
+    await waitFor(() => expect(screen.queryByTestId("cross-worktree-file-shelf")).toBeNull());
+    virtuoso.holdItemsRendered = true;
+    fireEvent.click(screen.getByRole("button", { name: "Toggle file list" }));
+    await waitFor(() => expect(virtuoso.handle).not.toBeNull());
+    await act(async () => {});
+
+    // A real layout's first pass is an unmeasured probe, which a scroll can't
+    // land on; the reveal waits for an item with a size.
+    scrollIntoViewMock.mockClear();
+    act(() => virtuoso.itemsRendered!([{ index: 0, offset: 0, size: 0 }]));
+    expect(scrollIntoViewMock).not.toHaveBeenCalled();
+    act(() => virtuoso.itemsRendered!([{ index: 0, offset: 0, size: 24 }]));
+    expect(scrollIntoViewMock).toHaveBeenCalledTimes(1);
+    expect(scrollIntoViewMock).toHaveBeenLastCalledWith(expect.objectContaining({ index: 2900 }));
+    act(() => virtuoso.itemsRendered!([{ index: 1, offset: 24, size: 24 }]));
+    expect(scrollIntoViewMock).toHaveBeenCalledTimes(1);
   });
 
   it("leaves the list where the keyboard took it when a refresh changes nothing", async () => {
