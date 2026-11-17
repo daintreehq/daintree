@@ -5,7 +5,6 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import type { ProjectLink } from "@shared/types";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 import type { ForgeCheckRun } from "@shared/types/ipc/forge";
-import type { ForgePullRequestTerm } from "@shared/types/forge";
 import type { LauncherPullRequest } from "@/hooks/useLinksLauncher";
 import type { GlobalLink } from "@/store/globalLinksStore";
 import { primeRadix } from "@/components/ui/radix-loader";
@@ -26,7 +25,6 @@ const h = vi.hoisted(() => ({
     fetchError: false,
   },
   pullRequest: null as LauncherPullRequest | null,
-  prTerm: "pull-request" as ForgePullRequestTerm,
   getChecks: vi.fn<(cwd: string, prNumber: number) => Promise<{ checks: ForgeCheckRun[] } | null>>(
     () => Promise.resolve({ checks: [] })
   ),
@@ -111,7 +109,8 @@ vi.mock("@/clients/forgeClient", () => ({
   },
 }));
 vi.mock("@/components/Worktree/ReviewHub/usePullRequestTerm", () => ({
-  usePullRequestTerm: () => h.prTerm,
+  usePullRequestTerm: (providerId: string | null) =>
+    providerId === "gitlab.gitlab" ? "merge-request" : "pull-request",
 }));
 vi.mock("@/store/allDevSessionsStore", async () => {
   const { useSyncExternalStore } = await import("react");
@@ -197,7 +196,6 @@ beforeEach(() => {
   h.links = { projectLinks: [STAGING, LOCAL], globalLinks: [DOCS] };
   h.devSessions = { sessions: [], hydrated: true, fetchError: false };
   h.pullRequest = null;
-  h.prTerm = "pull-request";
   h.getChecks.mockReset();
   h.getChecks.mockImplementation(() => Promise.resolve({ checks: [] }));
   Reflect.set(window, "electron", { devPreview: { restart: h.restart, stop: h.stop } });
@@ -633,7 +631,7 @@ describe("the active worktree's pull request in the launcher", () => {
     expect(h.getChecks).toHaveBeenCalledTimes(1);
   });
 
-  it("switches with the active worktree, dropping a read made for the one before", async () => {
+  it("switches with the active worktree, keeping a late read for the one before off it", async () => {
     const first = deferred<{ checks: ForgeCheckRun[] } | null>();
     const second = deferred<{ checks: ForgeCheckRun[] } | null>();
     h.getChecks.mockImplementationOnce(() => first.promise);
@@ -650,12 +648,6 @@ describe("the active worktree's pull request in the launcher", () => {
     expect(headings()).toEqual(["Pull request feature/signup"]);
 
     await act(async () => {
-      first.resolve({ checks: CHECKS });
-    });
-    await flush();
-    expect(rows().map((row) => describeRow(row).name)).toEqual(["Add signup"]);
-
-    await act(async () => {
       second.resolve({
         checks: [
           {
@@ -668,27 +660,100 @@ describe("the active worktree's pull request in the launcher", () => {
       });
     });
     await flush();
-    expect(rows().map(describeRow)).toEqual([
+    const signupRows = [
       { name: "Add signup", description: "PR #43 · Open" },
       { name: "lint", description: "Timed out" },
-    ]);
+    ];
+    expect(rows().map(describeRow)).toEqual(signupRows);
+
+    await act(async () => {
+      first.resolve({ checks: CHECKS });
+    });
+    await flush();
+    expect(rows().map(describeRow)).toEqual(signupRows);
   });
 
-  it("drops a late failure made for the pull request before", async () => {
+  it("stops showing the checks of the one before as soon as another is selected", async () => {
+    h.getChecks.mockResolvedValueOnce({ checks: CHECKS });
+    h.getChecks.mockImplementation(() => new Promise(() => {}));
+    h.links = { projectLinks: [], globalLinks: [] };
+    h.pullRequest = PR;
+    await openLauncher();
+    expect(rows().map((row) => describeRow(row).name)).toEqual(["Fix login", "unit", "e2e"]);
+
+    await act(async () => {
+      setPullRequest(OTHER_PR);
+    });
+    expect(rows().map((row) => describeRow(row).name)).toEqual(["Add signup"]);
+  });
+
+  it("reads again for a pull request selected a second time, showing nothing of the first read", async () => {
+    const third = deferred<{ checks: ForgeCheckRun[] } | null>();
+    h.getChecks.mockResolvedValueOnce({ checks: CHECKS });
+    h.getChecks.mockImplementationOnce(() => new Promise(() => {}));
+    h.getChecks.mockImplementationOnce(() => third.promise);
+    h.links = { projectLinks: [], globalLinks: [] };
+    h.pullRequest = PR;
+    await openLauncher();
+    expect(rows().map((row) => describeRow(row).name)).toEqual(["Fix login", "unit", "e2e"]);
+
+    await act(async () => {
+      setPullRequest(OTHER_PR);
+    });
+    await flush();
+    await act(async () => {
+      setPullRequest(PR);
+    });
+    await flush();
+    expect(h.getChecks).toHaveBeenCalledTimes(3);
+    expect(rows().map((row) => describeRow(row).name)).toEqual(["Fix login"]);
+
+    await act(async () => {
+      third.resolve({
+        checks: [
+          {
+            name: "lint",
+            status: "completed",
+            conclusion: "timed_out",
+            detailsUrl: "https://ci.example.com/lint",
+          },
+        ],
+      });
+    });
+    await flush();
+    expect(rows().map((row) => describeRow(row).name)).toEqual(["Fix login", "lint"]);
+  });
+
+  it("keeps a late failure for the pull request before off the new one", async () => {
     const first = deferred<{ checks: ForgeCheckRun[] } | null>();
     h.getChecks.mockImplementationOnce(() => first.promise);
-    h.getChecks.mockImplementationOnce(() => Promise.resolve({ checks: [] }));
+    h.getChecks.mockImplementationOnce(() =>
+      Promise.resolve({
+        checks: [
+          {
+            name: "lint",
+            status: "completed",
+            conclusion: "timed_out",
+            detailsUrl: "https://ci.example.com/lint",
+          },
+        ],
+      })
+    );
+    h.links = { projectLinks: [], globalLinks: [] };
     h.pullRequest = PR;
     await openLauncher();
     await act(async () => {
       setPullRequest(OTHER_PR);
     });
     await flush();
+    expect(rows().map((row) => describeRow(row).name)).toEqual(["Add signup", "lint"]);
+
     await act(async () => {
       first.reject(new Error("rate limited"));
     });
     await flush();
     expect(within(launcher()!).queryByText("Couldn't load checks")).toBeNull();
+    expect(rows().map((row) => describeRow(row).name)).toEqual(["Add signup", "lint"]);
   });
 
   it("keeps the keyboard in the list when the check it was on goes away", async () => {
@@ -721,16 +786,14 @@ describe("the active worktree's pull request in the launcher", () => {
     ).toEqual(["Fix login"]);
   });
 
-  it("lists no checks when the forge has no such pull request", async () => {
+  it("leaves the pull request out once the forge says it doesn't exist", async () => {
+    h.links = { projectLinks: [], globalLinks: [] };
     h.pullRequest = PR;
     h.getChecks.mockResolvedValue(null);
     await openLauncher();
-    expect(
-      rows()
-        .slice(3)
-        .map((row) => describeRow(row).name)
-    ).toEqual(["Fix login"]);
-    expect(within(launcher()!).queryByText("Couldn't load checks")).toBeNull();
+    expect(headings()).toEqual([]);
+    expect(rows()).toEqual([]);
+    expect(within(launcher()!).getByRole("button", { name: "Add a project link" })).toBeTruthy();
   });
 
   it("shows it alone, with no prompt to add a link, when there is nothing else", async () => {
@@ -741,18 +804,27 @@ describe("the active worktree's pull request in the launcher", () => {
     expect(within(launcher()!).queryByRole("button", { name: "Add a project link" })).toBeNull();
   });
 
-  it("leaves the section out once the worktree has no pull request", async () => {
+  it("leaves the section out once the worktree has no pull request, keeping the keyboard", async () => {
     h.pullRequest = PR;
     await openLauncher();
+    const prRow = rows()[3]!;
+    act(() => prRow.focus());
     await act(async () => {
       setPullRequest(null);
     });
     expect(headings()).toEqual(["Project links", "Your links"]);
+    expect(prRow.isConnected).toBe(false);
+    expect(document.activeElement).toBe(rows()[0]);
   });
 
   it("uses the forge's own word for a merge request", async () => {
-    h.prTerm = "merge-request";
-    h.pullRequest = { ...PR, title: undefined, state: "merged" };
+    h.pullRequest = {
+      ...PR,
+      providerId: "gitlab.gitlab",
+      url: "https://gitlab.example.com/acme/app/-/merge_requests/42",
+      title: undefined,
+      state: "merged",
+    };
     await openLauncher();
     expect(headings()).toContain("Merge request feature/login");
     expect(describeRow(rows()[3]!)).toEqual({

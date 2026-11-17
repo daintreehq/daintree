@@ -7,7 +7,7 @@ export function registerLinksActions(actions: ActionRegistry): void {
     id: "links.open",
     title: "Open links",
     description:
-      "Show this project's links, your own links, the active worktree's pull request and its failing or running checks, and dev servers across worktrees beside the toolbar.",
+      "Show this project's links, your own, the active worktree's pull request, and dev servers.",
     category: "ui",
     kind: "command",
     danger: "safe",

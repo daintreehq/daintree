@@ -11,6 +11,7 @@ import { GitPullRequest, Link, ListChecks } from "@/components/icons";
 import { linkHost } from "@shared/utils/projectLinks";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { FactRun } from "@/components/ui/FactSeparator";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import {
   DropdownMenuGroup,
@@ -51,7 +52,9 @@ import {
 } from "./LinksLauncherDevServers";
 import {
   LinksLauncherPullRequest,
-  pullRequestMenuWords,
+  pullRequestFacts,
+  pullRequestTitle,
+  showsPullRequest,
   useLauncherPullRequestChecks,
   type LauncherChecks,
 } from "./LinksLauncherPullRequest";
@@ -177,12 +180,13 @@ export function LinksLauncherList({
 }) {
   const baseId = useId();
   const { projectLinks, globalLinks } = links;
-  if (!hasLauncherLinks(links) && pullRequest === null && !hasDevServersSection(devSessions)) {
+  const shownPullRequest = showsPullRequest(pullRequest, checks) ? pullRequest : null;
+  if (!hasLauncherLinks(links) && shownPullRequest === null && !hasDevServersSection(devSessions)) {
     return (
       <div className="flex flex-col items-start gap-2 p-3">
         <p className="text-xs text-text-secondary">
-          Links you or the Assistant save for this project, the active worktree's pull request, and
-          dev servers running in any worktree show here.
+          Links you or the Assistant save for this project, and dev servers running in any worktree,
+          show here.
         </p>
         <Button type="button" variant="outline" size="sm" onClick={onManage}>
           Add a project link
@@ -220,11 +224,11 @@ export function LinksLauncherList({
           ))}
         </LinkSection>
       )}
-      {pullRequest !== null && (
+      {shownPullRequest !== null && (
         <LinksLauncherPullRequest
           // A section per pull request: nothing one painted carries over to another.
-          key={`${pullRequest.worktreeId}:${pullRequest.number}`}
-          pullRequest={pullRequest}
+          key={`${shownPullRequest.worktreeId}:${shownPullRequest.number}`}
+          pullRequest={shownPullRequest}
           checks={checks}
           sectionId={`${baseId}-pull-request`}
           onOpen={onOpen}
@@ -448,7 +452,6 @@ export function LinksLauncherOverflowItems({ side }: { side: "left" | "right" })
   const links = useLinksLauncherLinks();
   const pullRequest = useLinksLauncherPullRequest();
   const prWords = pullRequestWords(usePullRequestTerm(pullRequest?.providerId ?? null));
-  const prMenu = pullRequest !== null ? pullRequestMenuWords(pullRequest, prWords) : null;
   const { sessions } = useAllDevSessions();
   const listedServers = listedDevSessions(sessions);
   const focusRestore = useOverlayFocusRestore();
@@ -496,13 +499,18 @@ export function LinksLauncherOverflowItems({ side }: { side: "left" | "right" })
           ))}
         </DropdownMenuGroup>
       )}
-      {pullRequest !== null && prMenu !== null && (
+      {pullRequest !== null && (
         <DropdownMenuGroup>
           <DropdownMenuLabel>{prWords.title}</DropdownMenuLabel>
           <DropdownMenuItem onClick={() => select(pullRequest.url)}>
             <GitPullRequest className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-            <span className="min-w-0 flex-1 truncate">{prMenu.title}</span>
-            <DropdownMenuMeta aria-hidden={false}>{prMenu.detail}</DropdownMenuMeta>
+            {/* Capped: a pull request's title can be long, and the menu sizes to its widest row. */}
+            <span className="min-w-0 max-w-64 flex-1 truncate">
+              {pullRequestTitle(pullRequest, prWords)}
+            </span>
+            <DropdownMenuMeta aria-hidden={false}>
+              <FactRun facts={pullRequestFacts(pullRequest, prWords)} />
+            </DropdownMenuMeta>
           </DropdownMenuItem>
           <DropdownMenuItem
             onSelect={() => useLinksLauncherStore.getState().deferFromOverflow(side)}

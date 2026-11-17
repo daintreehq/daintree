@@ -63,9 +63,10 @@ export interface LauncherPullRequest {
 /**
  * The pull request of this view's active worktree, or `null` when there is
  * none to show. Only a provider-attributed record counts, and only while that
- * provider is still this project's code forge: a worktree keeps its last
- * record through a forge being removed, and a PR seeded before any provider
- * resolved carries no attribution at all. A selection naming a worktree this
+ * provider is still this project's code forge and the worktree still has a
+ * remote: a worktree keeps its last record through a forge or its remote
+ * being removed, and a PR seeded before any provider resolved carries no
+ * attribution at all. A selection naming a worktree this
  * view doesn't hold (a restored id, another project's) shows nothing.
  */
 export function useLinksLauncherPullRequest(): LauncherPullRequest | null {
@@ -76,7 +77,9 @@ export function useLinksLauncherPullRequest(): LauncherPullRequest | null {
       const worktree = activeWorktreeId ? state.worktrees.get(activeWorktreeId) : undefined;
       const linked = worktree?.linked;
       const pr = linked?.pr;
-      if (!worktree || !linked || !pr) return null;
+      // A worktree whose remotes are gone keeps its last record; there is no
+      // repository left to read it from.
+      if (!worktree || !linked || !pr || worktree.hasRemote === false) return null;
       const url = safeDetailsUrl(pr.url);
       const number = pr.ref.number;
       if (!url || !Number.isSafeInteger(number) || number <= 0) return null;
@@ -84,7 +87,9 @@ export function useLinksLauncherPullRequest(): LauncherPullRequest | null {
         worktreeId: worktree.id,
         worktreePath: worktree.path,
         worktreeLabel: getWorktreeBranchLabel(worktree),
-        providerId: linked.providerId,
+        // The pull request's own provider: an issue detected by another forge
+        // rebuilds `linked` under its id and carries the old pull request over.
+        providerId: pr.ref.providerId,
         number,
         url,
         title: pr.title?.trim() || undefined,

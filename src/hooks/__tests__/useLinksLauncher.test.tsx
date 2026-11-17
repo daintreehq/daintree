@@ -305,6 +305,7 @@ describe("useLinksLauncherPullRequest", () => {
     h.activeWorktreeId = "wt-1";
     const { result, rerender } = renderHook(() => useLinksLauncherPullRequest());
     const first = result.current;
+    expect(first?.number).toBe(42);
     h.worktrees = new Map([["wt-1", worktree("wt-1", { modifiedCount: 3 })]]);
     rerender();
     expect(result.current).toBe(first);
@@ -367,6 +368,34 @@ describe("useLinksLauncherPullRequest", () => {
     h.worktrees = new Map([["wt-1", worktree("wt-1", {}, { title: "   " })]]);
     h.activeWorktreeId = "wt-1";
     const { result } = renderHook(() => useLinksLauncherPullRequest());
+    expect(result.current?.number).toBe(42);
     expect(result.current?.title).toBeUndefined();
+  });
+
+  it("goes by the pull request's own provider, not the record's", () => {
+    // An issue another forge detected rebuilds `linked` under its id and
+    // carries the old pull request over.
+    const carried = worktree("wt-1");
+    carried.linked = { ...carried.linked!, providerId: "gitlab.gitlab" };
+    h.worktrees = new Map([["wt-1", carried]]);
+    h.activeWorktreeId = "wt-1";
+    h.codeProviderId = "gitlab.gitlab";
+    const { result, rerender } = renderHook(() => useLinksLauncherPullRequest());
+    expect(result.current).toBeNull();
+
+    h.codeProviderId = "github.github";
+    rerender();
+    expect(result.current?.providerId).toBe("github.github");
+  });
+
+  it("shows nothing once the worktree has no remote", () => {
+    h.worktrees = new Map([["wt-1", worktree("wt-1", { hasRemote: false })]]);
+    h.activeWorktreeId = "wt-1";
+    const { result, rerender } = renderHook(() => useLinksLauncherPullRequest());
+    expect(result.current).toBeNull();
+
+    h.worktrees = new Map([["wt-1", worktree("wt-1", { hasRemote: true })]]);
+    rerender();
+    expect(result.current?.number).toBe(42);
   });
 });

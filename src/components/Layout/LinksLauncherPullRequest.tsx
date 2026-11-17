@@ -3,6 +3,7 @@ import { GitPullRequest } from "@/components/icons";
 import type { NormalizedPRState } from "@shared/types/forge";
 import type { ForgeCheckRun } from "@shared/types/ipc/forge";
 import { forgeClient } from "@/clients/forgeClient";
+import { FactRun } from "@/components/ui/FactSeparator";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import {
@@ -18,17 +19,24 @@ import type { LauncherPullRequest } from "@/hooks/useLinksLauncher";
 import { cn } from "@/lib/utils";
 import { LinksLauncherRow } from "./LinksLauncherRow";
 
-/** What the launcher knows of the pull request's checks for this opening. */
+/**
+ * What the launcher knows of the pull request's checks for this opening.
+ * `no-pr` is the forge answering that the pull request doesn't exist, which
+ * outranks the worktree's record of it until the host catches up.
+ */
 export type LauncherChecks =
   | { kind: "idle" }
   | { kind: "loading" }
   | { kind: "loaded"; rows: PrCheckRow[] }
+  | { kind: "no-pr" }
   | { kind: "error" };
 
 const IDLE: LauncherChecks = { kind: "idle" };
 const LOADING: LauncherChecks = { kind: "loading" };
+const NO_PR: LauncherChecks = { kind: "no-pr" };
+const ERROR: LauncherChecks = { kind: "error" };
 
-export const PR_STATE_LABEL: Record<NormalizedPRState, string> = {
+const PR_STATE_LABEL: Record<NormalizedPRState, string> = {
   open: "Open",
   merged: "Merged",
   closed: "Closed",
@@ -50,7 +58,8 @@ export function launcherCheckRows(checks: readonly ForgeCheckRun[]): PrCheckRow[
  * Reads the pull request's checks once per opening of the launcher (`seq`),
  * the way Review Hub's checks popover reads them once per click: nothing
  * polls, and a read made for one opening or pull request never paints under
- * another. `seq` is `null` while this host's launcher is closed.
+ * another, nor under the same one selected again. `seq` is `null` while this
+ * host's launcher is closed.
  */
 export function useLauncherPullRequestChecks(
   pullRequest: LauncherPullRequest | null,
@@ -61,8 +70,17 @@ export function useLauncherPullRequestChecks(
   const key =
     seq === null || pullRequest === null
       ? null
-      : [seq, pullRequest.providerId, pullRequest.worktreeId, path, prNumber].join("\u0000");
+      : [seq, pullRequest.providerId, pullRequest.worktreeId, path, prNumber, pullRequest.url].join(
+          "\u0000"
+        );
   const [result, setResult] = useState<{ key: string; checks: LauncherChecks } | null>(null);
+  // Dropped whenever the key moves, so coming back to a pull request within
+  // one opening waits for its new read instead of repainting the old one.
+  const [readFor, setReadFor] = useState(key);
+  if (readFor !== key) {
+    setReadFor(key);
+    setResult(null);
+  }
 
   useEffect(() => {
     if (key === null || path === null || prNumber === null) return;
@@ -74,13 +92,16 @@ export function useLauncherPullRequestChecks(
       forgeClient.getChecks(path, prNumber).then(
         (response) => {
           if (!live) return;
-          // `null` is the forge saying it has no such pull request: nothing to
-          // list, and the worktree's own record is the host's to clear.
-          const rows = response === null ? [] : launcherCheckRows(response.checks);
-          setResult({ key, checks: { kind: "loaded", rows } });
+          setResult({
+            key,
+            checks:
+              response === null
+                ? NO_PR
+                : { kind: "loaded", rows: launcherCheckRows(response.checks) },
+          });
         },
         () => {
-          if (live) setResult({ key, checks: { kind: "error" } });
+          if (live) setResult({ key, checks: ERROR });
         }
       );
     });
@@ -93,12 +114,28 @@ export function useLauncherPullRequestChecks(
   return result?.key === key ? result.checks : LOADING;
 }
 
-function pullRequestTitle(pullRequest: LauncherPullRequest, words: PullRequestWords): string {
+/** The section shows unless the forge has just said the pull request doesn't exist. */
+export function showsPullRequest(
+  pullRequest: LauncherPullRequest | null,
+  checks: LauncherChecks
+): pullRequest is LauncherPullRequest {
+  return pullRequest !== null && checks.kind !== "no-pr";
+}
+
+/** What the pull request's row is named by: its title, else the forge's noun and number. */
+export function pullRequestTitle(
+  pullRequest: LauncherPullRequest,
+  words: PullRequestWords
+): string {
   return pullRequest.title ?? `${words.title} ${words.ref(pullRequest.number)}`;
 }
 
-function pullRequestDetail(pullRequest: LauncherPullRequest, words: PullRequestWords): string {
-  return `${words.short} ${words.ref(pullRequest.number)} · ${PR_STATE_LABEL[pullRequest.state]}`;
+/** The facts under the title: its reference ("PR #42") and its state. */
+export function pullRequestFacts(
+  pullRequest: LauncherPullRequest,
+  words: PullRequestWords
+): [string, string] {
+  return [`${words.short} ${words.ref(pullRequest.number)}`, PR_STATE_LABEL[pullRequest.state]];
 }
 
 /**
@@ -134,7 +171,7 @@ export function LinksLauncherPullRequest({
             <GitPullRequest className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden="true" />
           }
           title={pullRequestTitle(pullRequest, words)}
-          detail={pullRequestDetail(pullRequest, words)}
+          detail={<FactRun facts={pullRequestFacts(pullRequest, words)} />}
           url={pullRequest.url}
           onOpen={onOpen}
         />
@@ -165,20 +202,12 @@ export function LinksLauncherPullRequest({
           </div>
         </Skeleton>
       )}
-      {checks.kind === "error" && !showSkeleton && (
-        <p className="px-3 pb-2 text-xs text-text-secondary">Couldn't load checks</p>
-      )}
+      {/* Mounted with the section, so a failure landing after the skeleton is announced. */}
+      <div role="status" aria-live="polite">
+        {checks.kind === "error" && !showSkeleton && (
+          <p className="px-3 pb-2 text-xs text-text-secondary">Couldn't load checks</p>
+        )}
+      </div>
     </section>
   );
-}
-
-/** The menu row's words for the pull request, for the `…` menu's inlined launcher. */
-export function pullRequestMenuWords(
-  pullRequest: LauncherPullRequest,
-  words: PullRequestWords
-): { title: string; detail: string } {
-  return {
-    title: pullRequestTitle(pullRequest, words),
-    detail: pullRequestDetail(pullRequest, words),
-  };
 }
