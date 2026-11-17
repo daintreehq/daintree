@@ -234,8 +234,9 @@ describe("minimum memory gate", () => {
     run.grow(STARTUP_SKIP_SAMPLES, 0);
     run.state.consecutiveIncreases = 7;
 
-    // Rising, so only the floor can be what clears it.
-    expect(run.step(300)).toBe(false);
+    // A rise that is large enough to clear the plateau gate too, so only the
+    // floor can be what clears the streak.
+    expect(run.step(800)).toBe(false);
     expect(run.state.consecutiveIncreases).toBe(0);
   });
 });
