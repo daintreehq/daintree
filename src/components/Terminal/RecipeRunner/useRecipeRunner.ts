@@ -505,19 +505,30 @@ export function useRecipeRunner({
     [allRecipes, duplicateRecipe]
   );
 
-  const handlePin = useCallback(
-    (recipeId: string) => {
-      void updateRecipe(recipeId, { showInEmptyState: true });
+  // The store rolls the row back when the write rejects, so without a toast the
+  // recipe just jumps back to where it was with no explanation.
+  const setPinned = useCallback(
+    (recipeId: string, pinned: boolean) => {
+      const name = allRecipes.find((r) => r.id === recipeId)?.name ?? "this recipe";
+      updateRecipe(recipeId, { showInEmptyState: pinned }).catch((err: unknown) => {
+        logError("Failed to update recipe pin", err);
+        notify({
+          type: "error",
+          title: "Couldn't update recipe pin",
+          message: `The pin change for “${name}” couldn't be saved: ${formatErrorMessage(err, "unknown error")}`,
+          // The click did nothing else, so it stays a toast rather than inbox-only.
+          priority: "high",
+          action: { label: "Retry", onClick: () => setPinned(recipeId, pinned) },
+          context: { eventKind: "uiFeedback" },
+        });
+      });
     },
-    [updateRecipe]
+    [allRecipes, updateRecipe]
   );
 
-  const handleUnpin = useCallback(
-    (recipeId: string) => {
-      void updateRecipe(recipeId, { showInEmptyState: false });
-    },
-    [updateRecipe]
-  );
+  const handlePin = useCallback((recipeId: string) => setPinned(recipeId, true), [setPinned]);
+
+  const handleUnpin = useCallback((recipeId: string) => setPinned(recipeId, false), [setPinned]);
 
   // Route deletes through the `recipe.delete` action (danger:"confirm") behind
   // a ConfirmDialog rendered in RecipeRunner.tsx, matching RecipeManager and
