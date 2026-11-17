@@ -99,6 +99,10 @@ export function SearchProvidersSection({
   // to an earlier request never replaces a later one's.
   const sentRef = useRef(0);
   const appliedRef = useRef(0);
+  // Each row's latest write: only it may raise or clear the row's save error,
+  // so an earlier write's late failure can't offer a Retry that undoes a later
+  // choice.
+  const latestWriteRef = useRef<Map<string, number> | null>(null);
 
   useEffect(() => {
     const bridge = window.electron?.plugin;
@@ -116,8 +120,10 @@ export function SearchProvidersSection({
       })
       .catch((error: unknown) => {
         if (!live) return;
-        setLoadFailed(true);
         logError("Failed to read search providers", error);
+        // A later answer already stands; this read failing changes nothing.
+        if (request < appliedRef.current) return;
+        setLoadFailed(true);
       });
     return () => {
       live = false;
@@ -134,6 +140,9 @@ export function SearchProvidersSection({
     const bridge = window.electron?.plugin;
     if (typeof bridge?.setSearchProviderShown !== "function") return;
     const request = ++sentRef.current;
+    latestWriteRef.current ??= new Map();
+    const latestWrite = latestWriteRef.current;
+    latestWrite.set(key, request);
     setPending((prev) => new Map(prev).set(key, { shown, request }));
     bridge
       .setSearchProviderShown(key, shown)
@@ -141,13 +150,17 @@ export function SearchProvidersSection({
         if (request > appliedRef.current) {
           appliedRef.current = request;
           setCatalog(list);
+          setLoadFailed(false);
         }
         setPending((prev) => settlePending(prev, key, request));
-        setSaveError((prev) => (prev?.key === key ? null : prev));
+        if (latestWrite.get(key) === request) {
+          setSaveError((prev) => (prev?.key === key ? null : prev));
+        }
       })
       .catch((error: unknown) => {
         logError("Failed to save a search provider choice", error);
         setPending((prev) => settlePending(prev, key, request));
+        if (latestWrite.get(key) !== request) return;
         setSaveError({ key, shown });
         setLoadSeq((seq) => seq + 1);
       });

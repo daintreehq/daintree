@@ -186,22 +186,67 @@ describe("SearchProvidersSection", () => {
     expect(row.textContent).not.toContain("takes it back");
   });
 
-  it("keeps the latest switch position while an earlier write is answered", async () => {
+  it("keeps the latest switch position while earlier writes are answered", async () => {
     getSearchProviders.mockResolvedValue([provider()]);
-    const off = deferred<PluginSearchProviderInfo[]>();
-    const on = deferred<PluginSearchProviderInfo[]>();
-    setSearchProviderShown.mockReturnValueOnce(off.promise).mockReturnValueOnce(on.promise);
+    const writes = [0, 1, 2].map(() => deferred<PluginSearchProviderInfo[]>());
+    for (const write of writes) setSearchProviderShown.mockReturnValueOnce(write.promise);
+    const { rerender } = render(
+      <SearchProvidersSection pluginId="acme.tools" scope="installed" refreshKey="shown" />
+    );
+    const toggle = await screen.findByTestId("search-provider-switch-acme.tools.issues");
+
+    // Off, on, off: the earlier answers say off and on, the user's last ask is off.
+    fireEvent.click(toggle);
+    fireEvent.click(toggle);
+    fireEvent.click(toggle);
+    await act(async () => writes[0]!.resolve([provider({ shown: false })]));
+    await act(async () => writes[1]!.resolve([provider()]));
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    await act(async () => writes[2]!.resolve([provider({ shown: false })]));
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+
+    // Nothing is left pending: main's word decides the switch again.
+    rerender(
+      <SearchProvidersSection pluginId="acme.tools" scope="installed" refreshKey="reloaded" />
+    );
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("true"));
+  });
+
+  it("offers Retry only for a row's latest choice", async () => {
+    getSearchProviders.mockResolvedValue([provider()]);
+    let rejectOff!: (error: Error) => void;
+    setSearchProviderShown
+      .mockReturnValueOnce(
+        new Promise((_resolve, reject) => {
+          rejectOff = reject;
+        })
+      )
+      .mockResolvedValueOnce([provider()]);
     render(<SearchProvidersSection pluginId="acme.tools" scope="installed" refreshKey="shown" />);
     const toggle = await screen.findByTestId("search-provider-switch-acme.tools.issues");
 
     fireEvent.click(toggle);
     fireEvent.click(toggle);
+    await waitFor(() => expect(setSearchProviderShown).toHaveBeenCalledTimes(2));
+    await act(async () => rejectOff(new Error("store locked")));
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     expect(toggle.getAttribute("aria-checked")).toBe("true");
+  });
 
+  it("keeps a later choice's failure when an earlier one succeeds after it", async () => {
+    getSearchProviders.mockResolvedValue([provider()]);
+    const off = deferred<PluginSearchProviderInfo[]>();
+    setSearchProviderShown
+      .mockReturnValueOnce(off.promise)
+      .mockRejectedValueOnce(new Error("store locked"));
+    render(<SearchProvidersSection pluginId="acme.tools" scope="installed" refreshKey="shown" />);
+    const toggle = await screen.findByTestId("search-provider-switch-acme.tools.issues");
+
+    fireEvent.click(toggle);
+    fireEvent.click(toggle);
+    await screen.findByRole("button", { name: "Retry" });
     await act(async () => off.resolve([provider({ shown: false })]));
-    expect(toggle.getAttribute("aria-checked")).toBe("true");
-    await act(async () => on.resolve([provider()]));
-    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeNull();
   });
 
   it("never lets an answer to an earlier write or read replace a later one", async () => {

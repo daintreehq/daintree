@@ -883,7 +883,7 @@ export class PluginContributionRegistrar {
           refused,
           provider.pluginId,
           "warn",
-          `Search provider "${provider.providerId}" keyword "${provider.keyword}" was claimed first by ${takenBy.pluginName}. The quick switcher gives a keyword to the earliest provider the user leaves shown, so this one is left out wherever ${takenBy.pluginName}'s is shown too. Choose a different keyword.`
+          `Search provider "${provider.providerId}" shares keyword "${provider.keyword}" with ${takenBy.pluginName}, whose provider comes first, so the quick switcher leaves this one out wherever ${takenBy.pluginName}'s is shown too. Choose a different keyword.`
         );
       }
     }
