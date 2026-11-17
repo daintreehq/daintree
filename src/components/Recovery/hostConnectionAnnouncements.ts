@@ -137,8 +137,9 @@ function blockerIn(state: ReturnType<typeof useHostConnectionStore.getState>) {
  * refusal (a cloud account) to the next (a host key to confirm) is news.
  */
 function episodeNote(episode: HostLinkEpisode, blocker: HostConnectionBlocker | null) {
+  // Compared as it is said, so the same words padded differently aren't news.
   return episode === "connection-unavailable" && blocker?.kind === "unusable"
-    ? blocker.message
+    ? asSentence(blocker.message) || null
     : null;
 }
 

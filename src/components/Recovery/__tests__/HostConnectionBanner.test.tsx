@@ -362,8 +362,31 @@ describe("HostConnectionBanner", () => {
   ] as const)("opens the host's details from %s", (_what, blocker) => {
     seed({ status: "unreachable", lastSeenAt: null, detail: null, stoppedRetrying: true, blocker });
     render(<HostConnectionBanner />);
-    fireEvent.click(screen.getByRole("button", { name: "Host details…" }));
+    const opened = vi.fn();
+    window.addEventListener("daintree:open-settings-tab", opened);
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Host details…" }));
+    } finally {
+      window.removeEventListener("daintree:open-settings-tab", opened);
+    }
     expect(takePendingHostSettings()).toEqual({ kind: "detail", hostId: "studio-01" });
+    const event: unknown = opened.mock.calls[0]?.[0];
+    expect(event instanceof CustomEvent && event.detail).toEqual({ tab: "hosts" });
+  });
+
+  it("says only that retries stopped when an unusable connection gave no words", () => {
+    const copy = getHostConnectionBannerCopy(
+      "connection-unavailable",
+      "studio-01",
+      null,
+      0,
+      null,
+      null,
+      { kind: "unusable", message: "   " }
+    );
+    expect(copy.description).toBe(
+      "Automatic retries have stopped. Terminals are read-only until it connects."
+    );
   });
 
   it("says a connection that can't be used in the transport's words", () => {

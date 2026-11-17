@@ -127,7 +127,7 @@ describe("connectionLabel", () => {
     expect(unusable("WSL isn't available on this PC", "spawn wsl.exe ENOENT")).toBe(
       "WSL isn't available on this PC · never seen · not retrying until you connect · spawn wsl.exe ENOENT"
     );
-    expect(unusable("The cloud machine was deleted.", "The cloud machine was deleted.")).toBe(
+    expect(unusable("The cloud machine was deleted", " The cloud machine was deleted.\n")).toBe(
       "The cloud machine was deleted · never seen · not retrying until you connect"
     );
   });

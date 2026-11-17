@@ -110,7 +110,7 @@ export function connectionLabel(state: HostConnectionState, now: number = Date.n
       // A build that differs but connected is the Build row's to say, not the link's.
       return state.rttMs === null ? "Connected" : `Connected · ${Math.round(state.rttMs)} ms`;
     }
-    case "unreachable":
+    case "unreachable": {
       if (state.restarting) return "Restarting…";
       // The host menus' word for the same state.
       if (state.hostModeOff) return `Not listening · ${formatSeen(state.lastSeenAt, now)}`;
@@ -123,6 +123,7 @@ export function connectionLabel(state: HostConnectionState, now: number = Date.n
         // A transport that said the same thing twice (cloud hosts do) is said once.
         ...(state.detail && withoutStop(state.detail) !== lead ? [state.detail] : []),
       ].join(" · ");
+    }
     case "version-mismatch":
       // Exact builds are the Build row's; here, what it means for connecting.
       return "Can't connect · needs a compatible build";

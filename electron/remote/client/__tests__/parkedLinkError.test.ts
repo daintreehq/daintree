@@ -27,6 +27,12 @@ describe("parkedLinkError", () => {
   it("says an unusable connection in the transport's words, as one sentence", () => {
     const unusable = (message: string) =>
       parkedLinkError("Dev", { kind: "unusable", message }, null).userMessage;
+    expect(parkedLinkError("Dev", { kind: "unusable", message: "x" }, null).code).toBe(
+      "HOST_CONNECTION_UNUSABLE"
+    );
+    expect(unusable("  The provider is still checking…  ")).toBe(
+      "Couldn't connect to Dev. The provider is still checking…"
+    );
     expect(unusable("WSL isn't available on this PC")).toBe(
       "Couldn't connect to Dev. WSL isn't available on this PC."
     );

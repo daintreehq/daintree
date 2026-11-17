@@ -248,6 +248,23 @@ describe("watchHostConnectionAnnouncements", () => {
     ]);
   });
 
+  it("says nothing again when the watcher remounts while a Retry is dialling", () => {
+    stop = watchHostConnectionAnnouncements("studio-01");
+    link({
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: null,
+      stoppedRetrying: true,
+      blocker: { kind: "unusable", message: "WSL isn't available on this PC" },
+    });
+    vi.advanceTimersByTime(400);
+    link({ status: "connecting", attempt: 1 });
+    stop();
+    stop = watchHostConnectionAnnouncements("studio-01");
+    vi.advanceTimersByTime(1_000);
+    expect(spoken()).toEqual(["Couldn't connect to studio-01. WSL isn't available on this PC."]);
+  });
+
   it("says each settled refusal once as it changes: ssh, distribution, unusable", () => {
     stop = watchHostConnectionAnnouncements("studio-01");
     const parked = {
@@ -262,8 +279,11 @@ describe("watchHostConnectionAnnouncements", () => {
     vi.advanceTimersByTime(400);
     link({ ...parked, blocker: { kind: "unusable", message: "The cloud account can't be used" } });
     vi.advanceTimersByTime(400);
-    // The same refusal again is not news; a different one is.
-    link({ ...parked, blocker: { kind: "unusable", message: "The cloud account can't be used" } });
+    // The same refusal again, however it's padded, is not news; a different one is.
+    link({
+      ...parked,
+      blocker: { kind: "unusable", message: "The cloud account can't be used. " },
+    });
     vi.advanceTimersByTime(400);
     link({
       ...parked,

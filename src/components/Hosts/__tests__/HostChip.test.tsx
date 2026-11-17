@@ -227,6 +227,7 @@ describe("HostChip", () => {
   ] as const)(
     "marks a parked WSL link as trouble without a word about ssh",
     async (blocker, label) => {
+      const shown = label.slice(label.lastIndexOf(", ") + 2);
       connectionKind.value = "wsl";
       mac.value = false;
       window.__DAINTREE_HOST_ID__ = { id: "h1" };
@@ -245,6 +246,7 @@ describe("HostChip", () => {
         const { container } = await renderWithHosts([host("h1", "Ubuntu")]);
         const chip = container.querySelector<HTMLElement>("[data-testid='host-chip']")!;
         expect(chip.getAttribute("aria-label")).toBe(label);
+        expect(container.querySelector("[data-link-trouble]")?.textContent).toBe(shown);
         expect(container.querySelector("[data-link-trouble] svg")).not.toBeNull();
         expect(chip.textContent?.toLowerCase()).not.toContain("log in");
       } finally {
