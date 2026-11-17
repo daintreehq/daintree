@@ -4,8 +4,32 @@ import type { RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { UnsavedPanelsCallout } from "./UnsavedPanelsCallout";
 import type {
   PendingProjectPluginUnload,
+  ProjectPluginUnload,
   ProjectPluginUnsavedGuard,
 } from "./useProjectPluginUnsavedGuard";
+
+function copyFor(unload: ProjectPluginUnload | undefined): { title: string; description: string } {
+  switch (unload?.kind) {
+    case "mute":
+      return {
+        title: `Turn off '${unload.displayName}'?`,
+        description:
+          "It unloads straight away and its open panels close. The project's other plugins keep running.",
+      };
+    case "instanceOff":
+      return {
+        title: `Turn off '${unload.displayName}' in this project?`,
+        description:
+          "This project's copy unloads straight away and its open panels close. Copies running in other projects aren't affected.",
+      };
+    default:
+      return {
+        title: "Turn off this project's plugins?",
+        description:
+          "Every plugin this project ships unloads straight away, and their open panels close.",
+      };
+  }
+}
 
 /**
  * The Discard changes / Cancel prompt for a project plugin unload that would
@@ -24,18 +48,14 @@ export function ProjectPluginUnsavedDialog({
   if (pending !== null && pending !== shown) setShown(pending);
   const unload = (pending ?? shown)?.unload;
   const panels = (pending ?? shown)?.panels ?? [];
-  const mute = unload?.kind === "mute" ? unload : null;
+  const { title, description } = copyFor(unload);
 
   return (
     <ConfirmDialog
       isOpen={pending !== null}
       onClose={guard.cancel}
-      title={mute ? `Turn off '${mute.displayName}'?` : "Turn off this project's plugins?"}
-      description={
-        mute
-          ? "It unloads straight away and its open panels close. The project's other plugins keep running."
-          : "Every plugin this project ships unloads straight away, and their open panels close."
-      }
+      title={title}
+      description={description}
       confirmLabel="Discard changes"
       cancelLabel="Cancel"
       onConfirm={() => void guard.confirm()}
@@ -43,7 +63,12 @@ export function ProjectPluginUnsavedDialog({
       zIndex="nested"
       restoreFocusTo={restoreFocusTo}
     >
-      <UnsavedPanelsCallout verb={mute ? "Turning it off" : "Turning them off"} panels={panels} />
+      <UnsavedPanelsCallout
+        verb={
+          unload === undefined || unload.kind === "trustOff" ? "Turning them off" : "Turning it off"
+        }
+        panels={panels}
+      />
     </ConfirmDialog>
   );
 }

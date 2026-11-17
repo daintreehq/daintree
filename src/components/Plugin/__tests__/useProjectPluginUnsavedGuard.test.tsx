@@ -19,6 +19,8 @@ const key = (id: string) => `project__${PROJECT}__${id}`;
 const setProjectPluginTrust = vi.fn<(decision: string) => Promise<void>>();
 const setProjectPluginMuted = vi.fn<(pluginId: string, muted: boolean) => Promise<void>>();
 const getUnsavedPanels = vi.fn<(pluginId: string) => Promise<PluginUnsavedPanel[]>>();
+const setProjectInstanceEnabled = vi.fn<(pluginId: string, enabled: boolean) => Promise<void>>();
+const list = vi.fn<() => Promise<unknown[]>>();
 
 function plugin(id: string, state: ProjectPluginState): ProjectPluginInfo {
   return {
@@ -63,9 +65,19 @@ beforeEach(() => {
   setProjectPluginTrust.mockReset().mockResolvedValue(undefined);
   setProjectPluginMuted.mockReset().mockResolvedValue(undefined);
   getUnsavedPanels.mockReset().mockResolvedValue([]);
+  setProjectInstanceEnabled.mockReset().mockResolvedValue(undefined);
+  list.mockReset().mockResolvedValue([]);
   Object.defineProperty(window, "electron", {
     configurable: true,
-    value: { plugin: { setProjectPluginTrust, setProjectPluginMuted, getUnsavedPanels } },
+    value: {
+      plugin: {
+        setProjectPluginTrust,
+        setProjectPluginMuted,
+        getUnsavedPanels,
+        setProjectInstanceEnabled,
+        list,
+      },
+    },
   });
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -367,5 +379,157 @@ describe("useProjectPluginUnsavedGuard — switching one plugin off", () => {
     const { error, errorSource } = useProjectPluginStore.getState();
     expect(error).toBe(UNSAVED_READ_FAILED);
     expect(errorSource).toMatchObject({ action: "mute", pluginId: "a.one", muted: true });
+  });
+});
+
+describe("useProjectPluginUnsavedGuard — turning a per-project package off (#17215)", () => {
+  const INSTALLED_KEY = `project__${PROJECT}__installed__acme.tools`;
+
+  /** The view is named, but no repository snapshot has arrived: the package runs anyway. */
+  function nameView(projectId: string = PROJECT) {
+    act(() => useProjectPluginStore.getState().setViewProjectId(projectId));
+  }
+
+  it("reads this project's instance key, prompts with the package's name, and Discard reads again", async () => {
+    nameView();
+    panelsByKey({ [INSTALLED_KEY]: [dirty("panel-1")], "acme.tools": [dirty("elsewhere")] });
+    const { result } = renderHook(() => useProjectPluginUnsavedGuard());
+
+    await act(() => result.current.setInstanceEnabled("acme.tools", false, "Acme Tools"));
+
+    expect(getUnsavedPanels.mock.calls).toEqual([[INSTALLED_KEY]]);
+    expect(setProjectInstanceEnabled).not.toHaveBeenCalled();
+    expect(result.current.pending).toMatchObject({
+      unload: {
+        kind: "instanceOff",
+        pluginId: "acme.tools",
+        displayName: "Acme Tools",
+        projectId: PROJECT,
+      },
+      projectId: PROJECT,
+    });
+    expect(result.current.pending?.panels.map((p) => p.panelId)).toEqual(["panel-1"]);
+
+    getUnsavedPanels.mockClear();
+    await act(() => result.current.confirm());
+    expect(getUnsavedPanels.mock.calls).toEqual([[INSTALLED_KEY]]);
+    expect(setProjectInstanceEnabled.mock.calls).toEqual([["acme.tools", false]]);
+    expect(result.current.pending).toBeNull();
+  });
+
+  it("turns it off straight away when its panels are clean", async () => {
+    nameView();
+    const { result } = renderHook(() => useProjectPluginUnsavedGuard());
+
+    await act(() => result.current.setInstanceEnabled("acme.tools", false, "Acme Tools"));
+
+    expect(getUnsavedPanels).toHaveBeenCalledWith(INSTALLED_KEY);
+    expect(setProjectInstanceEnabled).toHaveBeenCalledWith("acme.tools", false);
+    expect(result.current.pending).toBeNull();
+  });
+
+  it("turns it on without reading", async () => {
+    nameView();
+    getUnsavedPanels.mockResolvedValue([dirty("panel-1")]);
+    const { result } = renderHook(() => useProjectPluginUnsavedGuard());
+
+    await act(() => result.current.setInstanceEnabled("acme.tools", true, "Acme Tools"));
+
+    expect(getUnsavedPanels).not.toHaveBeenCalled();
+    expect(setProjectInstanceEnabled).toHaveBeenCalledWith("acme.tools", true);
+  });
+
+  it("stops with the package's turn-off error when the read fails", async () => {
+    nameView();
+    panelsByKey({ [INSTALLED_KEY]: new Error("boom") });
+    const { result } = renderHook(() => useProjectPluginUnsavedGuard());
+
+    await act(() => result.current.setInstanceEnabled("acme.tools", false, "Acme Tools"));
+
+    expect(getUnsavedPanels.mock.calls).toEqual([[INSTALLED_KEY]]);
+    expect(setProjectInstanceEnabled).not.toHaveBeenCalled();
+    expect(result.current.pending).toBeNull();
+    const { error, errorSource } = useProjectPluginStore.getState();
+    expect(error).toBe(UNSAVED_READ_FAILED);
+    expect(errorSource).toMatchObject({
+      action: "instanceEnabled",
+      pluginId: "acme.tools",
+      enabled: false,
+    });
+  });
+
+  it("refuses rather than turning it off unread when no project is known", async () => {
+    const { result } = renderHook(() => useProjectPluginUnsavedGuard());
+
+    await act(() => result.current.setInstanceEnabled("acme.tools", false, "Acme Tools"));
+
+    expect(getUnsavedPanels).not.toHaveBeenCalled();
+    expect(setProjectInstanceEnabled).not.toHaveBeenCalled();
+    expect(result.current.pending).toBeNull();
+    expect(useProjectPluginStore.getState().error).toBe(UNSAVED_READ_FAILED);
+    expect(useProjectPluginStore.getState().errorSource).toMatchObject({
+      action: "instanceEnabled",
+      pluginId: "acme.tools",
+      enabled: false,
+    });
+  });
+
+  it("drops the click when the view moves to another project while main answers", async () => {
+    nameView();
+    getUnsavedPanels.mockImplementation(async () => {
+      useProjectPluginStore.getState().setViewProjectId("q".repeat(64));
+      return [];
+    });
+    const { result } = renderHook(() => useProjectPluginUnsavedGuard());
+
+    await act(() => result.current.setInstanceEnabled("acme.tools", false, "Acme Tools"));
+
+    expect(getUnsavedPanels.mock.calls).toEqual([[INSTALLED_KEY]]);
+    expect(setProjectInstanceEnabled).not.toHaveBeenCalled();
+    expect(result.current.pending).toBeNull();
+  });
+
+  it("goes ahead when the repository snapshot names the same project while main answers", async () => {
+    nameView();
+    getUnsavedPanels.mockImplementation(async () => {
+      useProjectPluginStore.getState().applySnapshot({
+        projectId: PROJECT,
+        plugins: [],
+        trust: { projectId: PROJECT, decision: "enabled", enabled: true, persisted: true },
+      });
+      return [];
+    });
+    const { result } = renderHook(() => useProjectPluginUnsavedGuard());
+
+    await act(() => result.current.setInstanceEnabled("acme.tools", false, "Acme Tools"));
+
+    expect(getUnsavedPanels.mock.calls).toEqual([[INSTALLED_KEY]]);
+    expect(setProjectInstanceEnabled).toHaveBeenCalledWith("acme.tools", false);
+  });
+
+  it("drops the prompt when the view moves to another project before Discard", async () => {
+    nameView();
+    panelsByKey({ [INSTALLED_KEY]: [dirty("panel-1")] });
+    const { result } = renderHook(() => useProjectPluginUnsavedGuard());
+    await act(() => result.current.setInstanceEnabled("acme.tools", false, "Acme Tools"));
+    expect(result.current.pending?.projectId).toBe(PROJECT);
+    expect(result.current.pending?.panels.map((p) => p.panelId)).toEqual(["panel-1"]);
+
+    nameView("q".repeat(64));
+    await act(() => result.current.confirm());
+
+    expect(setProjectInstanceEnabled).not.toHaveBeenCalled();
+    expect(result.current.pending).toBeNull();
+  });
+
+  it("ignores a turn-off while the same package's last toggle is still out", async () => {
+    nameView();
+    act(() => useProjectPluginStore.setState({ instanceToggling: new Set(["acme.tools"]) }));
+    const { result } = renderHook(() => useProjectPluginUnsavedGuard());
+
+    await act(() => result.current.setInstanceEnabled("acme.tools", false, "Acme Tools"));
+
+    expect(getUnsavedPanels).not.toHaveBeenCalled();
+    expect(setProjectInstanceEnabled).not.toHaveBeenCalled();
   });
 });
