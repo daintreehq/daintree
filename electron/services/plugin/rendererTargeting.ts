@@ -1,8 +1,11 @@
 import { getWindowRegistry, getProjectViewManager } from "../../window/windowRef.js";
 import {
+  getProjectForWebContents,
   getWebContentsForProject,
   isCachedViewWebContents,
 } from "../../window/webContentsRegistry.js";
+import { getRemoteService } from "../../remote/runtime.js";
+import { isLocalHostId, parseHostScopedKey } from "../../../shared/types/remoteHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
 
 /**
@@ -11,6 +14,29 @@ import { AppError } from "../../utils/errorTypes.js";
  * (installed/builtin) and the ambient focused view is the target.
  */
 export type PluginTargetProjectId = string | null | undefined;
+
+/**
+ * Whether a view shows a Remote Host's work, so what happens in it happens on
+ * that host. A project view's host is in its key, which outlives Remote Hosts
+ * stopping at quit; a view with no project follows its window's binding.
+ */
+export function isRemoteHostView(webContentsId: number): boolean {
+  const key = getProjectForWebContents(webContentsId);
+  const hostId =
+    key !== null
+      ? parseHostScopedKey(key).hostId
+      : getRemoteService("windowHosts")?.viewHost(webContentsId);
+  return !isLocalHostId(hostId);
+}
+
+export interface AmbientWebContentsOptions {
+  /**
+   * Also accept a view of a Remote Host's project. Only for a read that names
+   * the host it answered from, or a check that a window is open at all;
+   * anything that acts or asks stays on this machine's views.
+   */
+  includeRemoteHostViews?: boolean;
+}
 
 /**
  * The focused project view, then any live window's, then the process-wide
@@ -22,29 +48,34 @@ export type PluginTargetProjectId = string | null | undefined;
  * consulted first — otherwise every call lands in the oldest window's view.
  * A project-bound plugin must never reach this function; see
  * {@link resolveTargetWebContents}.
+ *
+ * A view of a Remote Host's project is passed over (#17214): a plugin running
+ * on this machine acting or asking there would read as the host doing it.
  */
-export function resolveAmbientWebContents(): Electron.WebContents | null {
+export function resolveAmbientWebContents(
+  options: AmbientWebContentsOptions = {}
+): Electron.WebContents | null {
+  const usable = (
+    webContents: Electron.WebContents | undefined
+  ): webContents is Electron.WebContents =>
+    webContents !== undefined &&
+    !webContents.isDestroyed() &&
+    (options.includeRemoteHostViews === true || !isRemoteHostView(webContents.id));
   const registry = getWindowRegistry();
   if (registry) {
     const primary = registry.getPrimary();
     if (primary && !primary.browserWindow.isDestroyed()) {
       const primaryWc = primary.services.projectViewManager?.getActiveView()?.webContents;
-      if (primaryWc && !primaryWc.isDestroyed()) {
-        return primaryWc;
-      }
+      if (usable(primaryWc)) return primaryWc;
     }
     for (const ctx of registry.all()) {
       if (ctx.browserWindow.isDestroyed()) continue;
       const webContents = ctx.services.projectViewManager?.getActiveView()?.webContents;
-      if (webContents && !webContents.isDestroyed()) {
-        return webContents;
-      }
+      if (usable(webContents)) return webContents;
     }
   }
   const fallback = getProjectViewManager()?.getActiveView()?.webContents;
-  if (fallback && !fallback.isDestroyed()) {
-    return fallback;
-  }
+  if (usable(fallback)) return fallback;
   return null;
 }
 
