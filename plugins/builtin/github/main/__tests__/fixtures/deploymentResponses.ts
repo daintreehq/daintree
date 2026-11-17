@@ -11,6 +11,7 @@ export const PR_ACTIVE_AND_INACTIVE = {
   repository: {
     pullRequest: {
       headRefName: "feature/verbose-setup",
+      isCrossRepository: false,
       commits: {
         nodes: [
           {
@@ -86,6 +87,7 @@ export const PR_FAILED_ACROSS_PUSHES = {
   repository: {
     pullRequest: {
       headRefName: "dependabot/npm_and_yarn/deps-9ea22ff7bb",
+      isCrossRepository: false,
       commits: {
         nodes: [
           {

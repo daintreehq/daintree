@@ -1330,8 +1330,11 @@ export const PR_CI_STATUS_QUERY = `
   }
 `;
 
-/** Deployments one source of a deployment read returns, newest first. */
-export const DEPLOYMENTS_PER_SOURCE = 20;
+/**
+ * Deployments one source of a deployment read returns, newest first: GitHub's
+ * page maximum, so the window a read covers is as wide as one request allows.
+ */
+export const DEPLOYMENTS_PER_SOURCE = 100;
 
 const DEPLOYMENT_FIELDS = `
   id
@@ -1389,6 +1392,7 @@ export const PR_DEPLOYMENTS_QUERY = `
     repository(owner: $owner, name: $repo) {
       pullRequest(number: $number) {
         headRefName
+        isCrossRepository
         commits(last: 1) {
           nodes {
             commit {

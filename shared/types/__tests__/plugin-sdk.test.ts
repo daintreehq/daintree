@@ -249,14 +249,20 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf<ReturnType<DeploymentsCapability["getDeployments"]>>().toEqualTypeOf<
         Promise<{ deployments: Deployment[] } | null>
       >();
-      expectTypeOf<{ kind: "branch"; branch: string }>().toMatchTypeOf<DeploymentTarget>();
-      expectTypeOf<{ kind: "pullRequest"; prNumber: number }>().toMatchTypeOf<DeploymentTarget>();
+      expectTypeOf<DeploymentTarget>().toEqualTypeOf<
+        { kind: "branch"; branch: string } | { kind: "pullRequest"; prNumber: number }
+      >();
       expectTypeOf<DeploymentState>().toEqualTypeOf<
         "pending" | "in_progress" | "success" | "failure" | "inactive" | "unknown"
       >();
       expectTypeOf<ForgeProviderImpl["deployments"]>().toEqualTypeOf<
         DeploymentsCapability | undefined
       >();
+      // Optional, not merely `| undefined`: an existing provider that never
+      // heard of deployments must still type-check.
+      expectTypeOf<Pick<ForgeProviderImpl, "deployments">>().toEqualTypeOf<{
+        deployments?: DeploymentsCapability;
+      }>();
     });
 
     it("exports the optional credential-import capability and its result shapes", () => {

@@ -45,6 +45,7 @@ import {
   clearGitHubCaches,
   forgeQueryCache,
 } from "../GitHubCaches.js";
+import { BRANCH_DEPLOYMENTS_QUERY, PR_DEPLOYMENTS_QUERY } from "../GitHubQueries.js";
 import type { DeploymentTarget, RepoRef } from "../../../../../shared/types/forge.js";
 
 const repo: RepoRef = { host: "github.com", owner: "owner", repo: "repo", rawData: null };
@@ -74,6 +75,24 @@ function branchWithNodes(nodes: unknown[]) {
 }
 
 const recordedTipNode = BRANCH_FAILED.repository.ref.target.deployments.nodes[0]!;
+
+/** The recorded PR response with its head commit's deployments replaced and timeline rows appended. */
+function prWith(options: { head?: unknown[]; timeline?: unknown[]; isCrossRepository?: boolean }) {
+  const recorded = structuredClone(PR_FAILED_ACROSS_PUSHES);
+  const pr = recorded.repository.pullRequest;
+  if (options.head) pr.commits.nodes[0]!.commit.deployments.nodes = options.head as never;
+  for (const deployment of options.timeline ?? []) {
+    pr.timelineItems.nodes.push({ deployment: deployment as never });
+  }
+  if (options.isCrossRepository !== undefined) pr.isCrossRepository = options.isCrossRepository;
+  return recorded;
+}
+
+const withRef = (id: string, prefix: string, name: string) => ({
+  ...recordedTipNode,
+  id,
+  ref: { prefix, name },
+});
 
 beforeEach(() => {
   mockGraphQLClient.mockReset();
@@ -198,11 +217,44 @@ describe("deployments.getDeployments (branch)", () => {
     expect(result?.deployments.map((d) => d.state)).toEqual(["inactive", "unknown"]);
   });
 
+  it("falls back to the latest status for state and takes its later time", async () => {
+    const waiting = {
+      ...recordedTipNode,
+      state: null,
+      updatedAt: "2026-11-17T09:03:58Z",
+      latestStatus: {
+        ...recordedTipNode.latestStatus,
+        state: "WAITING",
+        environmentUrl: null,
+        updatedAt: "2026-11-17T09:20:00Z",
+      },
+    };
+    mockGraphQLClient.mockResolvedValueOnce(branchWithNodes([waiting]));
+
+    const [deployment] = (await getDeployments(branch("main")))?.deployments ?? [];
+
+    expect(deployment).toMatchObject({
+      state: "pending",
+      updatedAt: Date.parse("2026-11-17T09:20:00Z"),
+    });
+    expect(deployment).not.toHaveProperty("url");
+  });
+
   it("rejects rather than dropping a deployment it can't read", async () => {
     mockGraphQLClient.mockResolvedValueOnce(
       branchWithNodes([recordedTipNode, { ...recordedTipNode, environment: null }])
     );
     await expect(getDeployments(branch("main"))).rejects.toThrow(/unreadable deployment/);
+  });
+
+  it("selects the ref and status URL the mapper reads, in both queries", () => {
+    // The recorded responses were captured with these documents; dropping a
+    // selection would leave the fixtures green while live reads lose the field.
+    for (const query of [BRANCH_DEPLOYMENTS_QUERY, PR_DEPLOYMENTS_QUERY]) {
+      expect(query).toMatch(/\bref\s*\{\s*prefix\s+name\s*\}/);
+      expect(query).toMatch(/latestStatus\s*\{[^}]*\benvironmentUrl\b/);
+    }
+    expect(PR_DEPLOYMENTS_QUERY).toMatch(/\bisCrossRepository\b/);
   });
 });
 
@@ -268,6 +320,69 @@ describe("deployments.getDeployments (pull request)", () => {
     expect(result?.deployments).toHaveLength(3);
   });
 
+  it("keeps the head commit's deployments for this PR's refs only", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      prWith({
+        head: [
+          withRef("pr-12-head", "refs/pull/", "12/head"),
+          withRef("pr-123-head", "refs/pull/", "123/head"),
+          withRef("own-branch", "refs/heads/", "dependabot/npm_and_yarn/deps-9ea22ff7bb"),
+          withRef("other-branch", "refs/heads/", "main"),
+        ],
+      })
+    );
+
+    const result = await getDeployments(pullRequest(12));
+
+    expect(result?.deployments.map((d) => d.id).sort()).toEqual([
+      "DE_kwDOIuCgE88AAAAB09I9GQ",
+      "DE_kwDOIuCgE88AAAABzY13lQ",
+      "own-branch",
+      "pr-12-head",
+    ]);
+  });
+
+  it("keeps a timeline deployment whatever ref it names, since GitHub tied it to the PR", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      prWith({ head: [], timeline: [withRef("timeline-only", "refs/heads/", "release")] })
+    );
+
+    const result = await getDeployments(pullRequest(12692));
+
+    expect(result?.deployments.map((d) => d.id)).toContain("timeline-only");
+  });
+
+  it("doesn't credit a fork PR with this repository's same-named branch", async () => {
+    const sameName = withRef(
+      "upstream-branch",
+      "refs/heads/",
+      "dependabot/npm_and_yarn/deps-9ea22ff7bb"
+    );
+    mockGraphQLClient.mockResolvedValueOnce(prWith({ head: [sameName], isCrossRepository: true }));
+    expect((await getDeployments(pullRequest(12692)))?.deployments.map((d) => d.id)).not.toContain(
+      "upstream-branch"
+    );
+
+    mockGraphQLClient.mockResolvedValueOnce(prWith({ head: [sameName], isCrossRepository: false }));
+    expect((await getDeployments(pullRequest(12692)))?.deployments.map((d) => d.id)).toContain(
+      "upstream-branch"
+    );
+  });
+
+  it("reads only the timeline for a PR with no head commits, but rejects a missing commit list", async () => {
+    const noCommits = structuredClone(PR_FAILED_ACROSS_PUSHES);
+    noCommits.repository.pullRequest.commits.nodes = [];
+    mockGraphQLClient.mockResolvedValueOnce(noCommits);
+    expect((await getDeployments(pullRequest(12692)))?.deployments).toHaveLength(2);
+
+    const unreadable = structuredClone(PR_FAILED_ACROSS_PUSHES) as {
+      repository: { pullRequest: { commits?: unknown } };
+    };
+    delete unreadable.repository.pullRequest.commits;
+    mockGraphQLClient.mockResolvedValueOnce(unreadable);
+    await expect(getDeployments(pullRequest(12692))).rejects.toThrow(/head commit list/);
+  });
+
   it("returns null for a PR number that doesn't exist", async () => {
     mockGraphQLClient.mockRejectedValueOnce(responseError(PR_MISSING_ENVELOPE));
     expect(await getDeployments(pullRequest(99999999))).toBeNull();
@@ -281,6 +396,22 @@ describe("deployments.getDeployments (pull request)", () => {
           { type: "NOT_FOUND", path: ["repository"], message: "Could not resolve to a Repository" },
         ],
       })
+    );
+    await expect(getDeployments(pullRequest(7))).rejects.toThrow();
+  });
+
+  it.each([
+    ["a FORBIDDEN error at the PR", [{ type: "FORBIDDEN", path: ["repository", "pullRequest"] }]],
+    [
+      "a NOT_FOUND beside a FORBIDDEN",
+      [
+        { type: "NOT_FOUND", path: ["repository", "pullRequest"] },
+        { type: "FORBIDDEN", path: ["repository", "pullRequest"] },
+      ],
+    ],
+  ])("rejects %s rather than reporting no such PR", async (_label, errors) => {
+    mockGraphQLClient.mockRejectedValueOnce(
+      responseError({ data: PR_MISSING_ENVELOPE.data, errors })
     );
     await expect(getDeployments(pullRequest(7))).rejects.toThrow();
   });
@@ -301,6 +432,23 @@ describe("deployments.getDeployments (requests)", () => {
 
     await getDeployments(branch("main"));
     expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows a PR's rollout moving between two reads instead of a cached state", async () => {
+    const rolledOut = structuredClone(PR_ACTIVE_AND_INACTIVE);
+    for (const node of rolledOut.repository.pullRequest.timelineItems.nodes) {
+      node.deployment.state = "ACTIVE";
+    }
+    mockGraphQLClient
+      .mockResolvedValueOnce(PR_ACTIVE_AND_INACTIVE)
+      .mockResolvedValueOnce(rolledOut);
+
+    const before = await getDeployments(pullRequest(15015));
+    const after = await getDeployments(pullRequest(15015));
+
+    expect(before?.deployments.map((d) => d.state)).toEqual(["inactive", "success"]);
+    expect(after?.deployments.map((d) => d.state)).toEqual(["success", "success"]);
+    expect(forgeQueryCache.size()).toBe(0);
   });
 
   it("doesn't share a request across targets or a credential switch", async () => {

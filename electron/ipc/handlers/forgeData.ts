@@ -1169,7 +1169,6 @@ const DEPLOYMENT_STATES: ReadonlySet<string> = new Set([
 
 /** A branch name past this is no branch anyone pushed; refusing it bounds the request. */
 const MAX_DEPLOYMENT_BRANCH_LENGTH = 1024;
-const MAX_DEPLOYMENT_URL_LENGTH = 2048;
 
 function requireDeploymentTarget(value: unknown): DeploymentTarget {
   const target = value as { kind?: unknown; branch?: unknown; prNumber?: unknown } | null;
@@ -1198,7 +1197,7 @@ function requireDeploymentTarget(value: unknown): DeploymentTarget {
  * the provider is plugin-supplied, and this link goes to the system browser.
  */
 function openableDeploymentUrl(value: unknown): string | undefined {
-  if (typeof value !== "string" || value.length > MAX_DEPLOYMENT_URL_LENGTH) return undefined;
+  if (typeof value !== "string") return undefined;
   let parsed: URL;
   try {
     parsed = new URL(value.trim());
@@ -1214,14 +1213,17 @@ function openableDeploymentUrl(value: unknown): string | undefined {
  * Narrow a provider's deployment list to well-formed rows, throwing otherwise,
  * as {@link requireValidChecks} does for checks. Strips `rawData` and any
  * unnamed field. An unusable `url` drops only the link: the deployment and its
- * state are still a fact worth showing.
+ * state are still a fact worth showing. Sorted newest first here rather than
+ * trusted to the provider, since the renderer contract promises that order.
  */
 function requireValidDeployments(value: unknown): ForgeDeployment[] {
   const raw = (value as { deployments?: unknown } | null | undefined)?.deployments;
   if (!Array.isArray(raw)) {
     throw new Error("Forge provider returned a malformed deployment list");
   }
-  return raw.map((entry) => {
+  // `Array.from` turns a sparse array's holes into `undefined`, which fails
+  // validation below; `map` would skip them and forward the holes.
+  const rows: ForgeDeployment[] = Array.from(raw, (entry) => {
     const d = entry as Partial<Deployment> | null | undefined;
     if (
       !d ||
@@ -1253,6 +1255,7 @@ function requireValidDeployments(value: unknown): ForgeDeployment[] {
       ...(d.ref ? { ref: d.ref } : {}),
     };
   });
+  return rows.sort((a, b) => b.createdAt - a.createdAt);
 }
 
 /** Single-flight for the deployment read, keyed like {@link checksSingleFlight}. */

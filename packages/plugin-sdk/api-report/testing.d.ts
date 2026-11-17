@@ -241,8 +241,9 @@ type DeploymentState = "pending" | "in_progress" | "success" | "failure" | "inac
 /**
  * What {@link DeploymentsCapability.getDeployments} reports on: a branch by its
  * short name (`feature/login`, not `refs/heads/feature/login`), or a pull
- * request by number. A pull request also reaches deployments made from its
- * merge ref and from earlier pushes, which its branch's tip doesn't carry.
+ * request by number. Ask by pull request when there is one: a forge can tie
+ * deployments to a pull request, such as one made from its merge ref, that its
+ * branch alone doesn't reach.
  */
 type DeploymentTarget = {
     kind: "branch";
@@ -277,17 +278,14 @@ interface Deployment {
 }
 /**
  * Optional read of where a branch or pull request is deployed, from the
- * deployments the forge itself recorded (#17248). Nothing is read until a
- * caller asks, so a project that never looks pays nothing.
+ * deployments the forge itself recorded for it (#17248). Nothing is read until
+ * a caller asks, so a project that never looks pays nothing.
  *
- * Returns the most recent deployments for the target, newest first by creation
- * time. A provider may bound the list, so it can omit older records, but it
- * keeps every environment's newest deployment it found, including one that
- * failed or went inactive. Several deployments to one environment can appear:
- * a rollout still in progress doesn't hide the deployment it is replacing.
- * A branch is read at its tip commit, so deployments of its earlier commits
- * appear only through its pull request. A deployment recorded against a commit
- * rather than a named ref is reported for every target at that commit.
+ * Returns the deployments the forge associates with the target, newest first
+ * by creation time, failed and inactive ones included. A provider may read only
+ * a recent window of a busy target's history, so the list can be incomplete,
+ * and one environment can appear more than once: a rollout still in progress
+ * doesn't hide the deployment it is replacing.
  *
  * `null` means the branch or pull request doesn't exist on the forge; one with
  * nothing deployed returns `{ deployments: [] }`. A provider that can't read

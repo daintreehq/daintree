@@ -1291,11 +1291,13 @@ function readDeploymentNodes(
  * read for. One recorded against the bare commit (Vercel, Cloudflare Pages)
  * does; one GitHub recorded against a different branch or a tag at the same
  * commit — main's production rollout on a branch just cut from main — doesn't.
+ * `branch` is null for a fork PR's head: its branch lives in the fork, so a
+ * same-named branch in this repository is a different branch.
  */
-function isRecordedFor(deployment: Deployment, branch: string, prNumber?: number): boolean {
+function isRecordedFor(deployment: Deployment, branch: string | null, prNumber?: number): boolean {
   const { ref } = deployment;
   if (ref === undefined) return true;
-  if (ref === `refs/heads/${branch}`) return true;
+  if (branch !== null && ref === `refs/heads/${branch}`) return true;
   return prNumber !== undefined && ref.startsWith(`refs/pull/${prNumber}/`);
 }
 
@@ -1353,20 +1355,26 @@ async function readPRDeployments(
   const pr = repository.pullRequest as
     | {
         headRefName?: unknown;
-        commits?: { nodes?: Array<{ commit?: { deployments?: unknown } } | null> };
+        isCrossRepository?: unknown;
+        commits?: { nodes?: unknown };
         timelineItems?: { nodes?: unknown };
       }
     | undefined;
-  if (!pr || typeof pr.headRefName !== "string") {
+  if (!pr || typeof pr.headRefName !== "string" || typeof pr.isCrossRepository !== "boolean") {
     throw incomplete("the provider returned no head branch");
   }
-  const headRefName = pr.headRefName;
+  const headBranch = pr.isCrossRepository ? null : pr.headRefName;
 
+  // An empty commit list is a PR with nothing on its head yet; a missing one is
+  // a response we can't read, and skipping it would drop the head's deployments.
+  const commits = pr.commits?.nodes;
+  if (!Array.isArray(commits)) throw incomplete("the provider returned no head commit list");
   const byId = new Map<string, Deployment>();
-  const headCommit = pr.commits?.nodes?.[0]?.commit;
-  if (headCommit) {
+  if (commits.length > 0) {
+    const headCommit = (commits[0] as { commit?: { deployments?: unknown } } | null)?.commit;
+    if (!headCommit) throw incomplete("the provider returned an unreadable head commit");
     for (const deployment of readDeploymentNodes(headCommit.deployments, incomplete)) {
-      if (isRecordedFor(deployment, headRefName, prNumber)) byId.set(deployment.id, deployment);
+      if (isRecordedFor(deployment, headBranch, prNumber)) byId.set(deployment.id, deployment);
     }
   }
   // GitHub ties a deployed event to this PR itself, which is what reaches a
@@ -1383,10 +1391,15 @@ async function readPRDeployments(
 
 /**
  * Where a branch or pull request is deployed, from GitHub's deployment records
- * (#17248): one GraphQL request per call, never served from or written to the
- * response cache, so a launcher reopened mid-rollout sees the rollout move.
- * Concurrent identical reads share one request; the key carries the token
- * version so a credential switch never answers from the previous account.
+ * (#17248). A branch is read at its tip commit, so its earlier commits'
+ * deployments are reached only through its PR, whose deployed events GitHub
+ * keeps; a deployment recorded against the bare commit is reported for every
+ * branch at that commit. Each source is its newest `DEPLOYMENTS_PER_SOURCE`.
+ *
+ * One GraphQL request per call, never served from or written to the response
+ * cache, so a launcher reopened mid-rollout sees the rollout move. Concurrent
+ * identical reads share one request; the key carries the token version so a
+ * credential switch never answers from the previous account.
  */
 export async function getDeploymentsImpl(
   repo: RepoRef,
