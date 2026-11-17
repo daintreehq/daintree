@@ -211,17 +211,20 @@ describe("markdownEditorExtensions (#12323)", () => {
         (m: ReturnType<typeof mount>) => m.view.dispatch({ selection: { anchor: 2 } }),
       ]) {
         const m = mount(TWO_RISKS);
-        m.view.focus();
-        const dispatch = vi.spyOn(m.view, "dispatch");
+        try {
+          m.view.focus();
+          const dispatch = vi.spyOn(m.view, "dispatch");
 
-        const pending = followHeadingLink(m.view, "#risks");
-        moveOn(m);
-        dispatch.mockClear();
-        await pending;
+          const pending = followHeadingLink(m.view, "#risks");
+          moveOn(m);
+          dispatch.mockClear();
+          await pending;
 
-        expect(dispatch).not.toHaveBeenCalled();
-        m.view.destroy();
-        m.host.remove();
+          expect(dispatch).not.toHaveBeenCalled();
+        } finally {
+          m.view.destroy();
+          m.host.remove();
+        }
       }
     } finally {
       outside.remove();
