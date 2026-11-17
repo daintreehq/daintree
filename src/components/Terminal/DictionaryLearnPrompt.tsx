@@ -49,11 +49,44 @@ interface DictionaryLearnPromptProps {
 
 const ErrorGlyph = SEVERITY_GLYPH.error;
 
+/**
+ * The words inside their tooltip, which tell the line while they show. The
+ * tooltip portals out of the line's DOM, so `:hover` on the line misses a
+ * pointer reading it, and it can go from under the pointer without a leave.
+ */
+function TooltipWords({
+  children,
+  onShowing,
+}: {
+  children: ReactNode;
+  onShowing: (delta: 1 | -1) => void;
+}) {
+  const report = useEffectEvent(onShowing);
+  useEffect(() => {
+    report(1);
+    return () => report(-1);
+  }, []);
+  return children;
+}
+
 /** The line's words: cut to fit a narrow pane, and read in full on hover or focus before answering. */
-function Message({ children, className }: { children: ReactNode; className?: string }) {
+function Message({
+  children,
+  className,
+  onTooltipShowing,
+}: {
+  children: ReactNode;
+  className?: string;
+  onTooltipShowing: (delta: 1 | -1) => void;
+}) {
   return (
-    // A dictionary term can be one long unbroken identifier, wider than the tooltip.
-    <TruncatedTooltip content={children} side="top" align="start" contentClassName="wrap-anywhere">
+    <TruncatedTooltip
+      content={<TooltipWords onShowing={onTooltipShowing}>{children}</TooltipWords>}
+      side="top"
+      align="start"
+      // A dictionary term can be one long unbroken identifier, wider than the tooltip.
+      contentClassName="wrap-anywhere"
+    >
       <span className={cn("min-w-0 flex-1 truncate", className)}>{children}</span>
     </TruncatedTooltip>
   );
@@ -74,7 +107,7 @@ export function DictionaryLearnPrompt({
   const prompt = useDictionaryLearnPromptStore((s) => s.prompts.get(terminalId));
   const hasDraft = useTerminalInputStore((s) => s.getDraftInput(terminalId, projectId) !== "");
   const rootRef = useRef<HTMLDivElement>(null);
-  const pointerInside = useRef(false);
+  const tooltipsShowing = useRef(0);
   const [line, setLine] = useState<LineState>(() => idleFor(prompt));
   const current = line.offer === prompt ? line : idleFor(prompt);
   const saving = current.answer !== null && !current.failed;
@@ -93,11 +126,10 @@ export function DictionaryLearnPrompt({
   // The timer must not restart whenever the composer hands a new callback down.
   // It reads the pointer and focus off the DOM before letting go: an offer
   // that replaced another starts with neither, though both may still be here.
-  // The pointer can be on the words' tooltip, which portals out of the line's
-  // DOM, so the line's own pointer events count too.
+  // A tooltip still showing the words is being read, wherever the pointer is.
   const expire = useEffectEvent((offer: LearnOffer) => {
     const root = rootRef.current;
-    const hovered = pointerInside.current || (root?.matches(":hover") ?? false);
+    const hovered = tooltipsShowing.current > 0 || (root?.matches(":hover") ?? false);
     const focused = root?.contains(document.activeElement) ?? false;
     if (hovered || focused) {
       adopt({ hovered, focused });
@@ -115,11 +147,13 @@ export function DictionaryLearnPrompt({
     }
   }, [prompt, hasDraft, answered, terminalId]);
 
-  // The line leaves the page without a pointer leave.
-  const shown = Boolean(prompt);
-  useEffect(() => {
-    if (!shown) pointerInside.current = false;
-  }, [shown]);
+  // A tooltip that goes from under the pointer takes no pointer leave with it.
+  const onTooltipShowing = (delta: 1 | -1) => {
+    tooltipsShowing.current += delta;
+    if (tooltipsShowing.current === 0) {
+      adopt({ hovered: rootRef.current?.matches(":hover") ?? false });
+    }
+  };
 
   const expires =
     Boolean(prompt) && current.answer === null && !current.hovered && !current.focused;
@@ -178,14 +212,8 @@ export function DictionaryLearnPrompt({
       // it brings an app surface of its own for its app inks and controls to
       // read on whatever the pair of themes, as the upload chips do.
       className="flex min-w-0 cursor-default items-center gap-2 rounded-[var(--radius-md)] border border-border-default bg-surface-panel-elevated py-0.5 pl-2.5 pr-0.5 text-xs text-text-secondary"
-      onPointerEnter={() => {
-        pointerInside.current = true;
-        adopt({ hovered: true });
-      }}
-      onPointerLeave={() => {
-        pointerInside.current = false;
-        adopt({ hovered: false });
-      }}
+      onPointerEnter={() => adopt({ hovered: true })}
+      onPointerLeave={() => adopt({ hovered: false })}
       onFocus={() => adopt({ focused: true })}
       onBlur={onBlur}
     >
@@ -197,7 +225,7 @@ export function DictionaryLearnPrompt({
       ) : null}
       {failedAnswer ? (
         <>
-          <Message className="text-text-primary">
+          <Message className="text-text-primary" onTooltipShowing={onTooltipShowing}>
             Couldn&apos;t {failedAnswer === "acceptSuggestion" ? "add" : "dismiss"} &ldquo;
             {prompt.word}&rdquo;
           </Message>
@@ -211,7 +239,7 @@ export function DictionaryLearnPrompt({
         </>
       ) : current.leftOut.length > 0 ? (
         <>
-          <Message>
+          <Message onTooltipShowing={onTooltipShowing}>
             Added &ldquo;{prompt.word}&rdquo;, but {describeHeardAsConflicts(current.leftOut)}
           </Message>
           <DismissButton
@@ -221,7 +249,7 @@ export function DictionaryLearnPrompt({
         </>
       ) : (
         <>
-          <Message>
+          <Message onTooltipShowing={onTooltipShowing}>
             Learn &ldquo;{prompt.word}&rdquo;
             {prompt.utterance ? <> for &ldquo;{prompt.utterance}&rdquo;</> : null}?
           </Message>

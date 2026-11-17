@@ -371,12 +371,11 @@ describe("DictionaryLearnPrompt", () => {
     );
   });
 
-  it("keeps an offer that replaced another while the pointer stayed on the line or its tooltip", () => {
+  it("keeps an offer that replaced another while its tooltip is being read", () => {
+    truncation.truncated = true;
     render(<DictionaryLearnPrompt terminalId="t1" />);
     offer();
-    // React's enter and leave follow the component tree, so the tooltip that
-    // portals out of the line still counts as inside it; `:hover` does not.
-    fireEvent.pointerEnter(screen.getByRole("status"));
+    hover(words("Learn"));
     act(() => {
       useDictionaryLearnPromptStore
         .getState()
@@ -385,9 +384,27 @@ describe("DictionaryLearnPrompt", () => {
     act(() => {
       vi.advanceTimersByTime(30_000);
     });
-    expect(screen.getByRole("status").textContent).toContain("Vitest");
 
-    fireEvent.pointerLeave(screen.getByRole("status"));
+    expect(screen.getByRole("status").textContent).toContain("Vitest");
+    expect(screen.getByRole("tooltip").textContent).toContain("Vitest");
+  });
+
+  it("lets a replacement whose words fit go on time, though the tooltip it took away was under the pointer", () => {
+    truncation.truncated = true;
+    render(<DictionaryLearnPrompt terminalId="t1" />);
+    offer();
+    // In along the line, onto its words, and on into the tooltip they open,
+    // which leaves no pointer leave behind when it goes.
+    fireEvent.pointerEnter(screen.getByRole("status"));
+    hover(words("Learn"));
+    truncation.truncated = false;
+    act(() => {
+      useDictionaryLearnPromptStore
+        .getState()
+        .offer("t1", { word: "Vitest", utterance: "vee test" });
+    });
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
     act(() => {
       vi.advanceTimersByTime(10_000);
     });
