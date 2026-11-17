@@ -464,7 +464,7 @@ describe("HostConnectionBanner on a stopped cloud machine (#17546)", () => {
   // the first's dial under way and leaves it to finish (LinkClient.retryNow).
   const ASKED_WITHOUT_RESTART = [[{ hostId: "studio-01" }], [{ hostId: "studio-01" }]];
 
-  it("never dials over its own dial when the running push lands before the start's reply", async () => {
+  it("asks for the link from both, never starting it over, when the running push lands before the start's reply", async () => {
     render(<HostConnectionBanner />);
     const reply = pressStart();
     observeRunning();
@@ -475,7 +475,7 @@ describe("HostConnectionBanner on a stopped cloud machine (#17546)", () => {
     expect(connect.mock.calls).toEqual(ASKED_WITHOUT_RESTART);
   });
 
-  it("never dials over its own dial when the start's reply lands before the running push", async () => {
+  it("asks for the link from both, never starting it over, when the start's reply lands before the running push", async () => {
     render(<HostConnectionBanner />);
     const reply = pressStart();
     await reply();
