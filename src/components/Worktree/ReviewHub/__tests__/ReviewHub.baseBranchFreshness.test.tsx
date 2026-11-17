@@ -98,7 +98,13 @@ function setWorktrees({
   baseHead = "base1",
   head = "head1",
   branch = "feature/test",
-}: { baseHead?: string; head?: string; branch?: string } = {}) {
+  extra = [],
+}: {
+  baseHead?: string;
+  head?: string;
+  branch?: string;
+  extra?: Array<[string, Partial<WorktreeState>]>;
+} = {}) {
   const changes = (headOid: string, rootPath: string) => ({
     worktreeId: rootPath,
     rootPath,
@@ -131,6 +137,7 @@ function setWorktrees({
         worktreeChanges: changes(head, WORKTREE_PATH),
       },
     ],
+    ...extra,
   ]);
 }
 
@@ -230,7 +237,8 @@ describe("ReviewHub base-branch freshness (#17196)", () => {
 
     compareWorktreesMock.mockResolvedValue(comparison(["other.ts"]));
     getStagingStatusMock.mockResolvedValue(makeStatus({ currentBranch: "feature/other" }));
-    setWorktrees({ branch: "feature/other", head: "other1" });
+    // Created from the same commit, so only the branch name says it moved.
+    setWorktrees({ branch: "feature/other" });
     // The worktree's own event is what reads the new branch into the hub.
     const onWorktreeUpdate = onUpdateMock.mock.calls.find(
       ([type]) => type === "worktree-update"
@@ -248,6 +256,31 @@ describe("ReviewHub base-branch freshness (#17196)", () => {
       undefined,
       true
     );
+  });
+
+  it("goes back to the working tree when HEAD detaches", async () => {
+    const { rerender } = render(hub());
+    await waitFor(() => screen.getByText("index.ts"));
+    await openVsMain();
+
+    getStagingStatusMock.mockResolvedValue(
+      makeStatus({ currentBranch: null, isDetachedHead: true })
+    );
+    const onWorktreeUpdate = onUpdateMock.mock.calls.find(
+      ([type]) => type === "worktree-update"
+    )?.[1] as (data: unknown) => void;
+    await act(async () => {
+      onWorktreeUpdate({ worktree: { path: WORKTREE_PATH } });
+    });
+    rerender(hub());
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("radio", { name: /working tree/i }).getAttribute("aria-checked")
+      ).toBe("true")
+    );
+    expect(baseRows()).toEqual([]);
+    expect(compareWorktreesMock).toHaveBeenCalledTimes(1);
   });
 
   it("refreshes in place when a commit lands elsewhere while vs main is on screen", async () => {
@@ -281,6 +314,45 @@ describe("ReviewHub base-branch freshness (#17196)", () => {
 
     compareWorktreesMock.mockResolvedValue(comparison([]));
     setWorktrees({ baseHead: "base2" });
+    rerender(hub());
+
+    await waitFor(() => screen.getByText("No changes vs main"));
+    expect(compareWorktreesMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("follows the base branch where it is checked out, not a detached main worktree", async () => {
+    const linkedMain = (headOid: string): [string, Partial<WorktreeState>] => [
+      "linked-main",
+      {
+        id: "linked-main",
+        path: "/home/user/project-main",
+        name: "main",
+        branch: "main",
+        isMainWorktree: false,
+        worktreeId: "linked-main",
+        worktreeChanges: {
+          worktreeId: "linked-main",
+          rootPath: "/home/user/project-main",
+          changes: [],
+          changedFileCount: 0,
+          headOid,
+        },
+      },
+    ];
+    // The main worktree detached, keeping its old branch name on the snapshot.
+    const detachMain = () => {
+      const main = worktreeStoreData.current.get("main-wt")!;
+      worktreeStoreData.current.set("main-wt", { ...main, isDetached: true });
+    };
+    setWorktrees({ extra: [linkedMain("base1")] });
+    detachMain();
+    const { rerender } = render(hub());
+    await waitFor(() => screen.getByText("index.ts"));
+    await openVsMain();
+
+    compareWorktreesMock.mockResolvedValue(comparison([]));
+    setWorktrees({ extra: [linkedMain("base2")] });
+    detachMain();
     rerender(hub());
 
     await waitFor(() => screen.getByText("No changes vs main"));

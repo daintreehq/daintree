@@ -122,7 +122,12 @@ export function useReviewHubBaseBranch({
   }, []);
 
   const sync = useEffectEvent(() => {
-    if (!comparable) return;
+    if (!comparable) {
+      // Detached or on the base itself: what is held, or still out, describes
+      // a branch no longer checked out.
+      if (askedForRef.current) invalidate();
+      return;
+    }
     const asked = askedForRef.current;
     const sameComparison = asked?.comparison === comparison;
     const current = sameComparison && asked?.heads === headsKey;

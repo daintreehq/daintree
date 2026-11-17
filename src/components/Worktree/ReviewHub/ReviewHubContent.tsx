@@ -343,11 +343,12 @@ export function ReviewHubContent({
       Array.from(state.worktrees.values()).find((wt) => wt.isMainWorktree)?.branch ?? "main"
   );
   // The comparison reads the two branch tips, never the working tree, so only
-  // a commit moving either one makes it stale.
+  // a commit moving either one makes it stale. The base tip is read where that
+  // branch is checked out; a detached worktree keeps its old `branch` name.
   const baseBranchHeads = useWorktreeStore((state) => {
     let baseHead: string | undefined;
     for (const wt of state.worktrees.values()) {
-      if (wt.isMainWorktree) {
+      if (wt.branch === mainBranch && !wt.isDetached) {
         baseHead = wt.worktreeChanges?.headOid;
         break;
       }
@@ -1292,13 +1293,17 @@ export function ReviewHubContent({
     }
   }, [diffMode, marksLoaded, hasReviewMark]);
 
+  // Undefined until a status is read; null once it says HEAD is detached.
+  const statusBranch = status ? status.currentBranch : undefined;
   useEffect(() => {
-    if (diffMode === "base-branch" && status?.currentBranch === mainBranch) {
+    // On the base itself or detached there is nothing to compare, and the
+    // `vs` option is disabled for both.
+    if (diffMode === "base-branch" && (statusBranch === null || statusBranch === mainBranch)) {
       invalidateBaseBranch();
       setDiffMode("working-tree");
       setSelectedBaseBranchFile(null);
     }
-  }, [status?.currentBranch, mainBranch, diffMode, invalidateBaseBranch]);
+  }, [statusBranch, mainBranch, diffMode, invalidateBaseBranch]);
   const handleAbortOperation = useCallback(async () => {
     setActionError(null);
     debouncedBgRefreshRef.current?.cancel();

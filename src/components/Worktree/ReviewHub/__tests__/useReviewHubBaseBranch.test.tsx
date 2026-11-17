@@ -122,6 +122,33 @@ describe("useReviewHubBaseBranch", () => {
     expect(compareWorktreesMock).toHaveBeenCalledTimes(1);
   });
 
+  it("doesn't ask again on coming back while the first answer is still out", async () => {
+    const pending = deferred<CrossWorktreeDiffResult>();
+    compareWorktreesMock.mockReturnValueOnce(pending.promise);
+    const { result: hook, update } = setup({ active: true });
+    act(() => update({ active: false }));
+    act(() => update({ active: true }));
+    expect(compareWorktreesMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      pending.resolve(result(["a.ts"]));
+      await pending.promise;
+    });
+    expect(paths(hook.current.baseBranchFiles)).toEqual(["a.ts"]);
+  });
+
+  it("asks again after an invalidation even though no tip moved", async () => {
+    compareWorktreesMock.mockResolvedValue(result(["a.ts"]));
+    const { result: hook, update } = setup({ active: true });
+    await act(async () => {});
+    await act(async () => update({ active: false }));
+    act(() => hook.current.invalidate());
+
+    await act(async () => update({ active: true }));
+    expect(compareWorktreesMock).toHaveBeenCalledTimes(2);
+    expect(paths(hook.current.baseBranchFiles)).toEqual(["a.ts"]);
+  });
+
   it("refreshes behind the list when a tip moves while it is on screen", async () => {
     compareWorktreesMock.mockResolvedValueOnce(result(["a.ts"]));
     const { result: hook, update } = setup({ active: true });
@@ -147,6 +174,28 @@ describe("useReviewHubBaseBranch", () => {
     expect(setSelectedBaseBranchFile).not.toHaveBeenCalled();
   });
 
+  it("clears the refreshing flag when invalidated during a background refresh", async () => {
+    compareWorktreesMock.mockResolvedValueOnce(result(["a.ts"]));
+    const { result: hook, update } = setup({ active: true });
+    await act(async () => {});
+
+    const refresh = deferred<CrossWorktreeDiffResult>();
+    compareWorktreesMock.mockReturnValueOnce(refresh.promise);
+    act(() => update({ heads: "base1..head2" }));
+    expect(hook.current.baseBranchRefreshing).toBe(true);
+
+    act(() => hook.current.invalidate());
+    expect(hook.current.baseBranchRefreshing).toBe(false);
+    expect(hook.current.baseBranchLoading).toBe(false);
+    expect(hook.current.baseBranchFiles).toBeNull();
+
+    await act(async () => {
+      refresh.resolve(result(["stale.ts"]));
+      await refresh.promise;
+    });
+    expect(hook.current.baseBranchFiles).toBeNull();
+  });
+
   it("refreshes when the base branch's tip moves too", async () => {
     compareWorktreesMock.mockResolvedValueOnce(result(["a.ts"]));
     const { result: hook, update } = setup({ active: true });
@@ -159,25 +208,36 @@ describe("useReviewHubBaseBranch", () => {
     expect(paths(hook.current.baseBranchFiles)).toEqual([]);
   });
 
-  it("drops a refresh that a later tip move superseded", async () => {
+  it("drops refreshes that a later tip move superseded", async () => {
     compareWorktreesMock.mockResolvedValueOnce(result(["a.ts"]));
     const { result: hook, update } = setup({ active: true });
     await act(async () => {});
 
+    const oldest = deferred<CrossWorktreeDiffResult>();
     const older = deferred<CrossWorktreeDiffResult>();
     const newer = deferred<CrossWorktreeDiffResult>();
-    compareWorktreesMock.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    compareWorktreesMock
+      .mockReturnValueOnce(oldest.promise)
+      .mockReturnValueOnce(older.promise)
+      .mockReturnValueOnce(newer.promise);
     act(() => update({ heads: "base1..head2" }));
     act(() => update({ heads: "base1..head3" }));
-    expect(compareWorktreesMock).toHaveBeenCalledTimes(3);
+    act(() => update({ heads: "base1..head4" }));
+    expect(compareWorktreesMock).toHaveBeenCalledTimes(4);
+
+    // Superseded answers, good or bad, land while the newest is still out.
+    await act(async () => {
+      oldest.resolve(result(["b.ts"]));
+      older.reject(new Error("bad object"));
+      await Promise.allSettled([oldest.promise, older.promise]);
+    });
+    expect(hook.current.baseBranchRefreshing).toBe(true);
+    expect(hook.current.baseBranchError).toBeNull();
+    expect(paths(hook.current.baseBranchFiles)).toEqual(["a.ts"]);
 
     await act(async () => {
       newer.resolve(result(["c.ts"]));
       await newer.promise;
-    });
-    await act(async () => {
-      older.resolve(result(["b.ts"]));
-      await older.promise;
     });
     expect(paths(hook.current.baseBranchFiles)).toEqual(["c.ts"]);
     expect(hook.current.baseBranchRefreshing).toBe(false);
@@ -229,11 +289,14 @@ describe("useReviewHubBaseBranch", () => {
   });
 
   it("asks from scratch when the base branch changes", async () => {
-    compareWorktreesMock.mockResolvedValue(result(["a.ts"]));
-    const { update } = setup({ active: true });
+    compareWorktreesMock.mockResolvedValueOnce(result(["a.ts"]));
+    const { result: hook, update } = setup({ active: true });
     await act(async () => {});
+    setSelectedBaseBranchFile.mockClear();
 
-    await act(async () => update({ mainBranch: "develop" }));
+    const rebased = deferred<CrossWorktreeDiffResult>();
+    compareWorktreesMock.mockReturnValueOnce(rebased.promise);
+    act(() => update({ mainBranch: "develop" }));
     expect(compareWorktreesMock).toHaveBeenLastCalledWith(
       "/repo/wt",
       "develop",
@@ -241,7 +304,16 @@ describe("useReviewHubBaseBranch", () => {
       undefined,
       true
     );
+    expect(hook.current.baseBranchFiles).toBeNull();
+    expect(hook.current.baseBranchLoading).toBe(true);
+    expect(hook.current.baseBranchRefreshing).toBe(false);
     expect(setSelectedBaseBranchFile).toHaveBeenCalledWith(null);
+
+    await act(async () => {
+      rebased.resolve(result(["d.ts"]));
+      await rebased.promise;
+    });
+    expect(paths(hook.current.baseBranchFiles)).toEqual(["d.ts"]);
   });
 
   it("refreshes for the hub's own commit before the store hears of it", async () => {
@@ -256,6 +328,28 @@ describe("useReviewHubBaseBranch", () => {
     await act(async () => hook.current.notifyHeadMoved("/repo/wt"));
     expect(compareWorktreesMock).toHaveBeenCalledTimes(2);
     expect(paths(hook.current.baseBranchFiles)).toEqual(["a.ts", "b.ts"]);
+  });
+
+  it("ignores a commit that finishes in the worktree the hub moved away from", async () => {
+    compareWorktreesMock.mockResolvedValue(result(["a.ts"]));
+    const { result: hook, update } = setup({ active: true });
+    await act(async () => {});
+    const notify = hook.current.notifyHeadMoved;
+
+    await act(async () => update({ worktreePath: "/repo/wt2" }));
+    expect(compareWorktreesMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => notify("/repo/wt"));
+    expect(compareWorktreesMock).toHaveBeenCalledTimes(2);
+    await act(async () => notify("/repo/wt2"));
+    expect(compareWorktreesMock).toHaveBeenCalledTimes(3);
+    expect(compareWorktreesMock).toHaveBeenLastCalledWith(
+      "/repo/wt2",
+      "main",
+      "feature/x",
+      undefined,
+      true
+    );
   });
 
   it("doesn't retry a failure on its own, but does on coming back", async () => {
@@ -281,5 +375,24 @@ describe("useReviewHubBaseBranch", () => {
     setup({ active: true, currentBranch: "main" });
     await act(async () => {});
     expect(compareWorktreesMock).not.toHaveBeenCalled();
+  });
+
+  it("drops the comparison when HEAD detaches, including an answer still out", async () => {
+    compareWorktreesMock.mockResolvedValueOnce(result(["a.ts"]));
+    const { result: hook, update } = setup({ active: true });
+    await act(async () => {});
+
+    const refresh = deferred<CrossWorktreeDiffResult>();
+    compareWorktreesMock.mockReturnValueOnce(refresh.promise);
+    act(() => update({ heads: "base1..head2" }));
+    act(() => update({ currentBranch: null }));
+    expect(hook.current.baseBranchFiles).toBeNull();
+    expect(hook.current.baseBranchRefreshing).toBe(false);
+
+    await act(async () => {
+      refresh.resolve(result(["a.ts", "b.ts"]));
+      await refresh.promise;
+    });
+    expect(hook.current.baseBranchFiles).toBeNull();
   });
 });
