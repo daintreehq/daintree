@@ -77,6 +77,18 @@ describe("readDeclaredProjectLinks when the disk misbehaves (#17252)", () => {
     expect(fsMock.open).not.toHaveBeenCalled();
   });
 
+  it("opens without blocking and reads nothing from a FIFO swapped in after the check", async () => {
+    const { constants } = await import("node:fs");
+    const read = vi.fn();
+    const close = vi.fn(() => Promise.resolve());
+    fsMock.open.mockResolvedValue({ stat: async () => ({ isFile: () => false }), read, close });
+
+    await expect(readDeclaredProjectLinks(freshRoot())).resolves.toEqual([]);
+    expect(fsMock.open.mock.calls[0]![1] & constants.O_NONBLOCK).toBe(constants.O_NONBLOCK);
+    expect(read).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it("closes a descriptor whose open landed after the gate gave up on it", async () => {
     const close = vi.fn(() => Promise.resolve());
     let land: (handle: unknown) => void = () => {};
