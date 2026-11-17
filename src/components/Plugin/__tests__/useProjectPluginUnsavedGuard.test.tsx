@@ -446,7 +446,9 @@ describe("useProjectPluginUnsavedGuard — turning a per-project package off (#1
 
     await act(() => result.current.setInstanceEnabled("acme.tools", false, "Acme Tools"));
 
+    expect(getUnsavedPanels.mock.calls).toEqual([[INSTALLED_KEY]]);
     expect(setProjectInstanceEnabled).not.toHaveBeenCalled();
+    expect(result.current.pending).toBeNull();
     const { error, errorSource } = useProjectPluginStore.getState();
     expect(error).toBe(UNSAVED_READ_FAILED);
     expect(errorSource).toMatchObject({
@@ -463,6 +465,8 @@ describe("useProjectPluginUnsavedGuard — turning a per-project package off (#1
 
     expect(getUnsavedPanels).not.toHaveBeenCalled();
     expect(setProjectInstanceEnabled).not.toHaveBeenCalled();
+    expect(result.current.pending).toBeNull();
+    expect(useProjectPluginStore.getState().error).toBe(UNSAVED_READ_FAILED);
     expect(useProjectPluginStore.getState().errorSource).toMatchObject({
       action: "instanceEnabled",
       pluginId: "acme.tools",
@@ -480,8 +484,27 @@ describe("useProjectPluginUnsavedGuard — turning a per-project package off (#1
 
     await act(() => result.current.setInstanceEnabled("acme.tools", false, "Acme Tools"));
 
+    expect(getUnsavedPanels.mock.calls).toEqual([[INSTALLED_KEY]]);
     expect(setProjectInstanceEnabled).not.toHaveBeenCalled();
     expect(result.current.pending).toBeNull();
+  });
+
+  it("goes ahead when the repository snapshot names the same project while main answers", async () => {
+    nameView();
+    getUnsavedPanels.mockImplementation(async () => {
+      useProjectPluginStore.getState().applySnapshot({
+        projectId: PROJECT,
+        plugins: [],
+        trust: { projectId: PROJECT, decision: "enabled", enabled: true, persisted: true },
+      });
+      return [];
+    });
+    const { result } = renderHook(() => useProjectPluginUnsavedGuard());
+
+    await act(() => result.current.setInstanceEnabled("acme.tools", false, "Acme Tools"));
+
+    expect(getUnsavedPanels.mock.calls).toEqual([[INSTALLED_KEY]]);
+    expect(setProjectInstanceEnabled).toHaveBeenCalledWith("acme.tools", false);
   });
 
   it("drops the prompt when the view moves to another project before Discard", async () => {
@@ -489,6 +512,8 @@ describe("useProjectPluginUnsavedGuard — turning a per-project package off (#1
     panelsByKey({ [INSTALLED_KEY]: [dirty("panel-1")] });
     const { result } = renderHook(() => useProjectPluginUnsavedGuard());
     await act(() => result.current.setInstanceEnabled("acme.tools", false, "Acme Tools"));
+    expect(result.current.pending?.projectId).toBe(PROJECT);
+    expect(result.current.pending?.panels.map((p) => p.panelId)).toEqual(["panel-1"]);
 
     nameView("q".repeat(64));
     await act(() => result.current.confirm());
