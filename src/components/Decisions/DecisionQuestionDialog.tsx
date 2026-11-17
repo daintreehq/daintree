@@ -452,7 +452,11 @@ export function DecisionQuestionDialog() {
   } | null>(null);
   const shownRead = tagged !== null && tagged.key === key ? tagged : null;
   useEffect(() => {
-    if (!isOpen || request?.threadMessageId === undefined) return;
+    // Content is never kept past the close, nor once it has been scrolled to.
+    if (!isOpen || request?.threadMessageId === undefined) {
+      threadScroll.current = null;
+      return;
+    }
     let pending = threadScroll.current;
     if (pending?.request !== request) {
       pending = { request, stale: shownRead, done: false };
@@ -462,7 +466,7 @@ export function DecisionQuestionDialog() {
     const body = bodyRef.current;
     const entry = body?.querySelector(`[data-message-id="${CSS.escape(request.threadMessageId)}"]`);
     if (entry == null && shownRead === pending.stale) return;
-    pending.done = true;
+    threadScroll.current = { request, stale: null, done: true };
     (entry ?? body?.querySelector('[data-testid="decision-question-thread"]'))?.scrollIntoView({
       block: "nearest",
     });

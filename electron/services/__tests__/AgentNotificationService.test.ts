@@ -4925,7 +4925,8 @@ describe("Decisions questions (#17232)", () => {
       projectStoreMock.getProjectById.mockReturnValue(null);
       agentNotificationService.notifyDecisionStall(
         question("term-1", Date.now(), {
-          agentKind: "not-an-agent",
+          // Shaped like any other kind, but only Object's own.
+          agentKind: "constructor",
           projectLabel: null,
           standing: { kind: "needs-attention", deliveryStatus: "delivery-uncertain" },
           stall: { answerRevision: null, followUpIds: ["m-1", "m-2"], reason: "inject_rejected" },

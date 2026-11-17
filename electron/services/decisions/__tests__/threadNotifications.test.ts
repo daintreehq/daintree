@@ -336,9 +336,8 @@ describe("ThreadNotifier", () => {
   it("shows only the latest attempt when a stall ends and comes back while the first is read", async () => {
     const store = recorded();
     const list = questionList();
-    let release!: () => void;
-    const released = new Promise<void>((resolve) => (release = resolve));
-    const prepare = vi.fn(() => released);
+    const releases: (() => void)[] = [];
+    const prepare = vi.fn(() => new Promise<void>((resolve) => releases.push(resolve)));
     const { notifier: made, showStall } = notifier(store, list, { prepare });
     await made.start();
 
@@ -347,10 +346,32 @@ describe("ThreadNotifier", () => {
     list.publish([question("q-1", {}, { standing: { kind: "to-type" } })]);
     list.publish([stalled("q-1", { reason: "resume_failed" })]);
     await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(2));
-    release();
+
+    // The first attempt's delivery finishing shows nothing: the stall is the second's now.
+    releases[0]!();
+    await settle(made);
+    expect(showStall).not.toHaveBeenCalled();
+    releases[1]!();
     await settle(made);
     expect(showStall).toHaveBeenCalledTimes(1);
-    expect(showStall.mock.calls[0]![0].stall?.reason).toBe("resume_failed");
+  });
+
+  it("shows a grouped stall once what is still held of it is saved, though the first write failed", async () => {
+    const store = recorded();
+    store.setMeta.mockRejectedValueOnce(new Error("disk full"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const list = questionList();
+    const { notifier: made, showStall } = notifier(store, list);
+    await made.start();
+
+    list.publish([stalled("q-1", { followUpIds: ["held-1"] })]);
+    // Handled before the failed write settles; the follow-up's claim saves on the next one.
+    list.publish([stalled("q-1", { answerRevision: null, followUpIds: ["held-1"] })]);
+    await settle(made);
+    expect(showStall).toHaveBeenCalledTimes(1);
+    expect(showStall.mock.calls[0]![0].stall?.answerRevision).toBeNull();
+    expect(JSON.parse(store.meta.get(NOTIFIED_THREAD_EVENTS_META_KEY)!)).toHaveLength(1);
+    warn.mockRestore();
   });
 
   it("closes a reply's banner once it is replied to, and a stall's once nothing on it is held", async () => {

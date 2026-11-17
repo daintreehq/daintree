@@ -134,6 +134,7 @@ export class ThreadNotifier implements QuestionNotifications {
     this.stopped = true;
     this.off?.();
     this.off = null;
+    this.owners.clear();
   }
 
   /** Resolves once every claim made so far has been written, or failed to be. */
@@ -218,20 +219,29 @@ export class ThreadNotifier implements QuestionNotifications {
   }
 
   private async deliver(event: ThreadEvent): Promise<void> {
-    const saved = await this.record.holds(event.claims[0]!);
+    try {
+      await this.present(event);
+    } finally {
+      for (const key of event.claims) {
+        if (this.owners.get(key) === event) this.owners.delete(key);
+      }
+    }
+  }
+
+  private async present(event: ThreadEvent): Promise<void> {
+    const saved = new Set(await this.record.savedOf(event.claims));
     if (this.stopped) return;
-    if (!saved) {
-      // Shown unsaved, a restart would show it again; the list's next change claims it afresh.
-      const claimed = this.claimed;
-      const owned = this.ownedBy(event);
-      if (claimed === null || owned.length === 0) return;
-      for (const key of owned) {
+    // Shown unsaved, a restart would show it again; the list's next change claims it afresh.
+    const unsaved = this.ownedBy(event).filter((key) => !saved.has(key));
+    const claimed = this.claimed;
+    if (unsaved.length > 0 && claimed !== null) {
+      for (const key of unsaved) {
         claimed.delete(key);
         this.owners.delete(key);
       }
       this.record.save(claimed);
-      return;
     }
+    if (this.ownedBy(event).length === 0) return;
     const { reference } = event.question;
     let line: string | null = null;
     try {
@@ -247,9 +257,6 @@ export class ThreadNotifier implements QuestionNotifications {
     // Replied to from the phone, handled or delivered while it was being read: nothing to say.
     const current = this.stillHolds(event);
     if (current === null) return;
-    for (const key of event.claims) {
-      if (this.owners.get(key) === event) this.owners.delete(key);
-    }
     if (!this.o.notificationsOn(current.reference.projectId)) return;
     this.shown.add(event.banner);
     if (event.kind === "reply") this.o.showReply(current, line, event.banner);

@@ -80,11 +80,16 @@ export class NotificationClaims {
    * a later one may save what an earlier one failed to.
    */
   async holds(key: string): Promise<boolean> {
+    return (await this.savedOf([key])).length > 0;
+  }
+
+  /** Those of `keys` a saved record holds, once the writes made so far land. */
+  async savedOf(keys: readonly string[]): Promise<string[]> {
     let writes: Promise<void>;
     do {
       writes = this.writing;
       await writes;
-    } while (!this.saved.has(key) && writes !== this.writing);
-    return this.saved.has(key);
+    } while (keys.some((key) => !this.saved.has(key)) && writes !== this.writing);
+    return keys.filter((key) => this.saved.has(key));
   }
 }
