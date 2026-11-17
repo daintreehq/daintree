@@ -1038,4 +1038,106 @@ describe("useFindInPage against Electron's find sessions", () => {
     expect(result.current.activeMatch).toBe(1);
     expect(result.current.matchCount).toBe(4);
   });
+
+  it("holds a query's count back until the page has answered that query", () => {
+    const { webview, flush } = createSessionWebview((text) => (text === "FIND" ? 3 : 0));
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("FIND"));
+    // Asked but not answered: neither a miss nor a count yet.
+    expect(result.current.matchCount).toBe(0);
+    expect(result.current.isPending).toBe(true);
+    flush();
+    expect(result.current.isPending).toBe(false);
+    expect(result.current.matchCount).toBe(3);
+
+    act(() => result.current.setQuery("OTHER"));
+    // The last query's count says nothing about this one.
+    expect(result.current.matchCount).toBe(0);
+    expect(result.current.activeMatch).toBe(0);
+    expect(result.current.isPending).toBe(true);
+    flush();
+    expect(result.current.isPending).toBe(false);
+    expect(result.current.matchCount).toBe(0);
+  });
+
+  it("holds the count back after a reopen until the page answers again", () => {
+    const { webview, flush } = createSessionWebview(() => 3);
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("FIND"));
+    flush();
+    act(() => result.current.close());
+    act(() => result.current.open());
+
+    expect(result.current.matchCount).toBe(0);
+    expect(result.current.isPending).toBe(true);
+    flush();
+    expect(result.current.isPending).toBe(false);
+    expect(result.current.matchCount).toBe(3);
+  });
+
+  it("holds the count back after a match case toggle until the page answers it", () => {
+    const { webview, flush } = createSessionWebview((_text, matchCase) => (matchCase ? 1 : 4));
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("Find"));
+    flush();
+    expect(result.current.matchCount).toBe(4);
+
+    act(() => result.current.toggleMatchCase());
+    expect(result.current.matchCount).toBe(0);
+    expect(result.current.isPending).toBe(true);
+    flush();
+    expect(result.current.isPending).toBe(false);
+    expect(result.current.matchCount).toBe(1);
+  });
+
+  it("holds the count back while an IME composition edits the query", () => {
+    const { webview, flush } = createSessionWebview(() => 3);
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("FIND"));
+    flush();
+    webview.findInPage.mockClear();
+
+    result.current.isComposingRef.current = true;
+    act(() => result.current.setQuery("FINDか"));
+
+    expect(webview.findInPage).not.toHaveBeenCalled();
+    expect(result.current.matchCount).toBe(0);
+    expect(result.current.isPending).toBe(true);
+  });
+
+  it("drops a late reply to the last query when the page could not be asked the new one", () => {
+    const { webview, flush } = createSessionWebview(() => 3);
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("FIND"));
+    webview.findInPage.mockImplementationOnce(() => {
+      throw new Error("webview detached");
+    });
+    act(() => result.current.setQuery("OTHER"));
+    flush();
+
+    expect(result.current.matchCount).toBe(0);
+    expect(result.current.isPending).toBe(true);
+  });
+
+  it("is not pending once the query is emptied", () => {
+    const { webview } = createSessionWebview(() => 3);
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("FIND"));
+    expect(result.current.isPending).toBe(true);
+
+    act(() => result.current.setQuery(""));
+    expect(result.current.isPending).toBe(false);
+  });
 });

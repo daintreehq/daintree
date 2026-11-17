@@ -16,6 +16,7 @@ function makeFindState(overrides: Partial<FindInPageState> = {}): FindInPageStat
     query: "",
     activeMatch: 0,
     matchCount: 0,
+    isPending: false,
     inputRef: { current: null },
     isComposingRef: { current: false },
     open: vi.fn(),
@@ -63,6 +64,37 @@ describe("FindBar accessibility", () => {
     render(<FindBar find={makeFindState({ toggleMatchCase: toggleFn })} />);
     screen.getByLabelText("Match case").click();
     expect(toggleFn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("FindBar count", () => {
+  function counterText(container: HTMLElement): string {
+    const input = container.querySelector('input[aria-label="Find in page"]') as HTMLInputElement;
+    return container.querySelector(`[id="${input.getAttribute("aria-describedby")}"]`)!
+      .textContent!;
+  }
+
+  it("says nothing while the page hasn't answered the query", () => {
+    const { container } = render(
+      <FindBar find={makeFindState({ query: "foo", matchCount: 0, isPending: true })} />
+    );
+    expect(counterText(container)).toBe("");
+  });
+
+  it("reports no matches once the page has answered with none", () => {
+    const { container } = render(
+      <FindBar find={makeFindState({ query: "foo", matchCount: 0, isPending: false })} />
+    );
+    expect(counterText(container)).toBe("No matches");
+  });
+
+  it("reports the count once the page has answered", () => {
+    const { container } = render(
+      <FindBar
+        find={makeFindState({ query: "foo", activeMatch: 2, matchCount: 5, isPending: false })}
+      />
+    );
+    expect(counterText(container)).toBe("2 of 5");
   });
 });
 

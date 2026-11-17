@@ -52,6 +52,7 @@ const findInPage: FindInPageState = {
   query: "",
   activeMatch: 0,
   matchCount: 0,
+  isPending: false,
   matchCase: false,
   inputRef: { current: null },
   isComposingRef: { current: false },

@@ -21,6 +21,7 @@ export function FindBar({ find }: FindBarProps) {
     query,
     activeMatch,
     matchCount,
+    isPending,
     matchCase,
     inputRef,
     isComposingRef,
@@ -56,12 +57,11 @@ export function FindBar({ find }: FindBarProps) {
   };
 
   const hasQuery = query.length > 0;
-  const noResults = hasQuery && matchCount === 0;
-  const countText = !hasQuery
-    ? ""
-    : matchCount > 0
-      ? `${activeMatch} of ${matchCount}`
-      : "No matches";
+  // Until the page answers this query there is nothing to report: a count
+  // would be another search's, and "No matches" a guess.
+  const noResults = hasQuery && !isPending && matchCount === 0;
+  const countText =
+    !hasQuery || isPending ? "" : matchCount > 0 ? `${activeMatch} of ${matchCount}` : "No matches";
 
   return (
     // `z-40`: above a dev preview tool drawer floating over the page (`z-30`),

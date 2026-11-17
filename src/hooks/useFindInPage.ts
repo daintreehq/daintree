@@ -7,6 +7,11 @@ export interface FindInPageState {
   query: string;
   activeMatch: number;
   matchCount: number;
+  /**
+   * A query is showing that the page hasn't answered yet. Its counts read 0
+   * until then, which is not a miss.
+   */
+  isPending: boolean;
   matchCase: boolean;
   inputRef: React.RefObject<HTMLInputElement | null>;
   isComposingRef: React.RefObject<boolean>;
@@ -16,6 +21,11 @@ export interface FindInPageState {
   goNext: () => void;
   goPrev: () => void;
   toggleMatchCase: () => void;
+}
+
+interface FindAnswer {
+  activeMatch: number;
+  matchCount: number;
 }
 
 function publishFindOpen(panelId: string, open: boolean): void {
@@ -34,8 +44,9 @@ export function useFindInPage(
 ): FindInPageState {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQueryState] = useState("");
-  const [activeMatch, setActiveMatch] = useState(0);
-  const [matchCount, setMatchCount] = useState(0);
+  // The final reply to the latest request, or null while that request is
+  // unanswered: zero counts alone can't tell a miss from a question in flight.
+  const [answer, setAnswer] = useState<FindAnswer | null>(null);
   const [matchCase, setMatchCase] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const isComposingRef = useRef(false);
@@ -49,8 +60,7 @@ export function useFindInPage(
     setOwnerPanelId(panelId);
     setIsOpen(false);
     setQueryState("");
-    setActiveMatch(0);
-    setMatchCount(0);
+    setAnswer(null);
     setMatchCase(false);
   }
   useEffect(() => {
@@ -77,6 +87,14 @@ export function useFindInPage(
     },
     [webviewElement, isWebviewReady, matchCase]
   );
+
+  // Every new question (another query, match case, a reopen, a new page) drops
+  // the counts on screen: they answered something else, and a late reply to
+  // that request must not land on this one.
+  const forgetAnswer = useCallback(() => {
+    latestRequestIdRef.current = null;
+    setAnswer(null);
+  }, []);
 
   const safeStopFind = useCallback(() => {
     if (!webviewElement) return;
@@ -105,9 +123,7 @@ export function useFindInPage(
     // can no longer end on its own.
     isComposingRef.current = false;
     setIsOpen(false);
-    setActiveMatch(0);
-    setMatchCount(0);
-    latestRequestIdRef.current = null;
+    forgetAnswer();
     safeStopFind();
     // Said now, not when the effect below catches up: the keyboard goes back to
     // the page next, and its very next Escape must reach it.
@@ -117,15 +133,14 @@ export function useFindInPage(
     // that keyboard stays where it went.
     if (pane && active && active !== document.body && !pane.contains(active)) return;
     if (!focusWebviewPage(webviewElement)) pane?.focus({ preventScroll: true });
-  }, [panelId, safeStopFind, webviewElement]);
+  }, [panelId, forgetAnswer, safeStopFind, webviewElement]);
 
   const setQuery = useCallback(
     (q: string) => {
       setQueryState(q);
+      // A composition edits the query too; its text is searched once it ends.
+      forgetAnswer();
       if (!q) {
-        setActiveMatch(0);
-        setMatchCount(0);
-        latestRequestIdRef.current = null;
         safeStopFind();
         return;
       }
@@ -133,7 +148,7 @@ export function useFindInPage(
         safeFind(q, { findNext: true });
       }
     },
-    [safeFind, safeStopFind]
+    [forgetAnswer, safeFind, safeStopFind]
   );
 
   // A step is only meaningful inside an open session; the kept query would
@@ -150,9 +165,10 @@ export function useFindInPage(
     const next = !matchCase;
     setMatchCase(next);
     if (query && isOpen) {
+      forgetAnswer();
       safeFind(query, { findNext: true, matchCase: next });
     }
-  }, [query, isOpen, matchCase, safeFind]);
+  }, [query, isOpen, matchCase, forgetAnswer, safeFind]);
 
   // Listen for found-in-page events
   useEffect(() => {
@@ -162,8 +178,7 @@ export function useFindInPage(
       const { result } = event;
       if (result.requestId !== latestRequestIdRef.current) return;
       if (!result.finalUpdate) return;
-      setActiveMatch(result.activeMatchOrdinal);
-      setMatchCount(result.matches);
+      setAnswer({ activeMatch: result.activeMatchOrdinal, matchCount: result.matches });
     };
 
     webviewElement.addEventListener("found-in-page", handler);
@@ -178,6 +193,7 @@ export function useFindInPage(
 
     const handler = (event: Electron.DidNavigateInPageEvent) => {
       if (!event.isMainFrame) return;
+      forgetAnswer();
       safeFind(query, { findNext: true });
     };
 
@@ -188,7 +204,7 @@ export function useFindInPage(
         handler as unknown as EventListener
       );
     };
-  }, [webviewElement, isOpen, query, safeFind]);
+  }, [webviewElement, isOpen, query, forgetAnswer, safeFind]);
 
   // Resume an open search when the webview becomes ready or is replaced, or when
   // the bar reopens: close ended the page's find session, and the kept query would
@@ -203,11 +219,9 @@ export function useFindInPage(
     const reopened = isOpen && !prev.isOpen;
     resumeTargetRef.current = { webviewElement, isWebviewReady, isOpen };
     if (!isOpen || (!targetChanged && !reopened)) return;
-    latestRequestIdRef.current = null;
-    setActiveMatch(0);
-    setMatchCount(0);
+    forgetAnswer();
     if (query && !isComposingRef.current) safeFind(query, { findNext: true });
-  }, [webviewElement, isWebviewReady, isOpen, query, safeFind]);
+  }, [webviewElement, isWebviewReady, isOpen, query, forgetAnswer, safeFind]);
 
   // Listen for daintree:find-in-panel (Cmd+F from keybinding when renderer has focus)
   useEffect(() => {
@@ -273,8 +287,9 @@ export function useFindInPage(
   return {
     isOpen,
     query,
-    activeMatch,
-    matchCount,
+    activeMatch: answer?.activeMatch ?? 0,
+    matchCount: answer?.matchCount ?? 0,
+    isPending: query !== "" && answer === null,
     matchCase,
     inputRef,
     isComposingRef,

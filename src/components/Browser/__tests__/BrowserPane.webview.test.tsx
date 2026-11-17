@@ -157,6 +157,7 @@ vi.mock("@/hooks/useFindInPage", () => ({
     query: "",
     activeMatch: 0,
     matchCount: 0,
+    isPending: false,
     inputRef: { current: null },
     isComposingRef: { current: false },
     open: vi.fn(),
