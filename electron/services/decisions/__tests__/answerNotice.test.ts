@@ -748,9 +748,18 @@ describe("parseDecisionNotice, follow-ups (#16231)", () => {
     const fromComputer = noticeChunk([answer(), followUp({ onComputer: true })]);
     expect(fromComputer).toContain("source: human\nsent_from: computer\n");
     expect(parseDecisionNotice(fromComputer)).toBeNull();
-    expect(parseDecisionNotice(noticeChunk([answer(), followUp({ onComputer: false })]))).toEqual(
-      thread(noticeChunk([answer(), followUp()]))
-    );
+    const [, fromPhone] = thread(noticeChunk([answer(), followUp({ onComputer: false })]));
+    expect(fromPhone).toEqual({
+      kind: "followup",
+      questionId: Q1,
+      alias: 4,
+      messageId: M1,
+      injectionId: I2,
+      question: "Which sidebar should ship? Compact or classic.",
+      answered: true,
+      text: "Keep the old icons, though.",
+      images: [],
+    });
   });
 
   it("takes two messages of one question, and follow-ups to different questions", () => {

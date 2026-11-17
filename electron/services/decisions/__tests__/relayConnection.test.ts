@@ -1743,7 +1743,16 @@ describe("get_involvement over a connection (#17228)", () => {
         const { pathname } = new URL(url);
         requests.push(`${init.method ?? "GET"} ${pathname}`);
         if (pathname === "/api/v1/info" && advertised !== null) {
-          return json({ features: advertised });
+          return json({
+            name: "daintree-decisions",
+            protocol_min: 1,
+            protocol_max: 1,
+            worker_version: "0.7.0",
+            claimed: true,
+            claim_configured: true,
+            voice: { xai: false, anthropic: false, openai: false },
+            features: advertised,
+          });
         }
         if (pathname === "/api/v1/devices") return json(devices);
         if (pathname === "/api/v1/involvement" && (init.method ?? "GET") === "GET") {
@@ -1958,6 +1967,10 @@ describe("get_involvement over a connection (#17228)", () => {
       "person-declines-v1",
     ];
     relay.advertise(releasedBy070);
+    // 0.8.0's host APIs, on every bridge the connection makes: none of them is Daintree's to call yet.
+    const hostApis = (
+      ["reportPresence", "setInvolvementPreference", "declineQuestion", "sendFollowUp"] as const
+    ).map((name) => vi.spyOn(DecisionsBridge.prototype, name));
     const until = new Date(Date.now() + 60 * 60_000).toISOString();
     const record = await signedOn070Phone(relay.phone, 4, { mode: "involve-early", until });
     await expect(readOn070Phone(relay.phone, record)).resolves.toMatchObject({
@@ -2009,6 +2022,7 @@ describe("get_involvement over a connection (#17228)", () => {
         expect(releasedBy070).toContain(feature);
       }
     }
+    for (const api of hostApis) expect(api).not.toHaveBeenCalled();
     expect(relay.requests).not.toContain("PUT /api/v1/presence");
     expect(relay.requests).not.toContain("PUT /api/v1/involvement");
   });
