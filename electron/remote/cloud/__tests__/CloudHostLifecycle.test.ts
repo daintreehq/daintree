@@ -1020,10 +1020,8 @@ describe("CloudHostLifecycle start, stop, import and removal", () => {
   });
 
   // What was last found about starting Daintree there went with the reboot (#17546).
-  it("says once that a machine it started came up, before the start answers", async () => {
-    let answered = false;
-    const answeredWhenTold: boolean[] = [];
-    const onMachineStarted = vi.fn(() => answeredWhenTold.push(answered));
+  it("says once that a machine it started came up, before any view hears it is running", async () => {
+    const onMachineStarted = vi.fn();
     const { lifecycle, store } = await setup({ machine: "stopped" }, { onMachineStarted });
     await lifecycle.importMachine({
       accountId: store.accounts()[0]!.id,
@@ -1032,11 +1030,35 @@ describe("CloudHostLifecycle start, stop, import and removal", () => {
     });
     await lifecycle.refresh("build");
     expect(onMachineStarted).not.toHaveBeenCalled();
-    await lifecycle.startMachine("build").then(() => (answered = true));
+    // As CloudHosts.changed() tells the views: a microtask after the store changes.
+    const toldWhenViewsHeard: boolean[] = [];
+    store.onChange(() =>
+      queueMicrotask(() => {
+        if (store.bindings()[0]!.observation?.machine === "running") {
+          toldWhenViewsHeard.push(onMachineStarted.mock.calls.length > 0);
+        }
+      })
+    );
+    await lifecycle.startMachine("build");
     expect(onMachineStarted).toHaveBeenCalledExactlyOnceWith("build");
-    expect(answeredWhenTold).toEqual([false]);
+    expect(toldWhenViewsHeard[0]).toBe(true);
     await lifecycle.refresh("build");
     expect(onMachineStarted).toHaveBeenCalledOnce();
+  });
+
+  it("doesn't take a first look at a running machine for one coming up", async () => {
+    const onMachineStarted = vi.fn();
+    const { lifecycle, store, state } = await setup({}, { onMachineStarted });
+    await lifecycle.importMachine({
+      accountId: store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    // A binding kept without an observation: its next look is its first.
+    store.updateBinding(store.bindings()[0]!.id, (current) => ({ ...current, observation: null }));
+    state.machine = resource({ machine: "running", stoppedAt: "2026-11-14T10:00:00Z" });
+    await lifecycle.refresh("build");
+    expect(onMachineStarted).not.toHaveBeenCalled();
   });
 
   it("says a machine came up when a stop and start were only observed, and not for one that never stopped", async () => {
@@ -1316,6 +1338,30 @@ describe("CloudHostLifecycle review fixes", () => {
     await lifecycle.refresh("build");
     await lifecycle.ensureAccess(bindingId);
     expect(provider.authorizeSsh).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets a dial reading the account across a start reach the machine, not the stop it read first", async () => {
+    const { lifecycle, accounts, provider, store, state } = await setup({ machine: "stopped" });
+    await lifecycle.importMachine({
+      accountId: store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    await lifecycle.refresh("build");
+    const bindingId = store.bindings()[0]!.id;
+    let release: () => void = () => {};
+    const credentials = accounts.credentials.bind(accounts);
+    vi.spyOn(accounts, "credentials").mockImplementationOnce(async (...args) => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return credentials(...args);
+    });
+    const dial = lifecycle.ensureAccess(bindingId);
+    await vi.waitFor(() => expect(accounts.credentials).toHaveBeenCalled());
+    state.machine = resource({ machine: "running" });
+    await lifecycle.refresh("build");
+    release();
+    await expect(dial).resolves.toMatchObject({ target: `dtc-${bindingId}` });
+    expect(provider.authorizeSsh).toHaveBeenCalledTimes(1);
   });
 
   it("lets one caller give up without failing the others waiting on the same access", async () => {

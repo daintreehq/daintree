@@ -172,9 +172,10 @@ export interface CloudHostLifecycleDeps {
    */
   activity?(hostId: HostId): { connected: boolean; busy: boolean; shown: boolean } | null;
   /**
-   * The host's machine was seen running again after a stop: it rebooted, so
-   * whatever was last found about starting Daintree there no longer stands.
-   * Called before the change reaches any view, ahead of the dials it prompts.
+   * The host's machine was seen running where the last look saw it otherwise,
+   * or stopped since: it may have restarted, so what was last found about
+   * starting Daintree there is worth checking again. Called before the change
+   * reaches any view, ahead of the dials it prompts.
    */
   onMachineStarted?(hostId: HostId): void;
   now?: () => number;
@@ -1416,6 +1417,9 @@ export class CloudHostLifecycle {
           : "The cloud account can't be used";
       throw new UnusableConnectionError(said, said);
     }
+    // A start may have seen the machine running meanwhile: a dial left to finish
+    // across it must not be refused on the stop it read first (#17546).
+    binding = this.deps.store.binding(bindingId) ?? binding;
     const { provider, credentials } = context;
     const fresh =
       binding.observation && this.now() - binding.observation.observedAt < DIAL_OBSERVATION_MS;
@@ -1843,7 +1847,7 @@ export class CloudHostLifecycle {
         (before !== null && before.machine !== "running") ||
         (before?.stoppedAt ?? null) !== resource.stoppedAt;
       if (restarted) this.renewals.delete(bindingId);
-      started = restarted && resource.machine === "running";
+      started = before !== null && restarted && resource.machine === "running";
       const next: StoredCloudBinding = {
         ...current,
         access: restarted ? null : current.access,
