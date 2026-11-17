@@ -8,6 +8,8 @@ import { restoreFindHighlights, stubFindHighlights } from "./findHighlightStub";
 afterEach(() => {
   try {
     cleanup();
+    // `close()` selects the last match.
+    window.getSelection()?.removeAllRanges();
     document.body.innerHTML = "";
   } finally {
     restoreFindHighlights();
@@ -27,7 +29,8 @@ describe("useRenderedFind", () => {
     const { result } = renderHook(() => {
       const find = useRenderedFind(root);
       useLayoutEffect(() => {
-        if (closeOnCommit.armed && find.isOpen) {
+        // Only the refresh commit, the one that sees the appended match.
+        if (closeOnCommit.armed && find.isOpen && find.matchCount === 3) {
           closeOnCommit.armed = false;
           find.close();
         }
