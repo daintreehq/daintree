@@ -976,6 +976,19 @@ async function requireNoOperationInProgress(
   );
 }
 
+/** A base-integration preview whose branch or base tip no longer names a commit. */
+function basePreviewUnresolvedError(
+  message: string,
+  cwd: string,
+  branchName: string
+): GitOperationError {
+  return new GitOperationError(
+    "pathspec-invalid",
+    encodeGitOperationErrorMessage("pathspec-invalid", message, { branchName }),
+    { cwd, op: "list-base-integration-commits", rawMessage: message, branchName }
+  );
+}
+
 /** Classify anything a base-integration read or write throws, once. */
 function asBaseIntegrationError(error: unknown, cwd: string, op: string): unknown {
   // An already-classified, already-encoded refusal — re-wrapping would
@@ -1321,7 +1334,29 @@ const gitBaseIntegrationNamespace = defineIpcNamespace({
           const treeBlocker = await readTreeBlocker(git);
 
           const target = await requireBaseTarget(git, baseBranch, payload.cwd);
-          const localRef = `refs/heads/${branchName}`;
+
+          // Read FIRST and measured from, as the push and pull-rebase previews
+          // do (#17188). These two are what the write is held to, so every row
+          // and count below has to describe them: read last, a commit landing
+          // mid-measurement on either side was pinned without ever having been
+          // listed (#17583). Unresolvable, there is nothing to approve the rows
+          // under, so the read fails rather than offering an unpinned approval.
+          const headOid = await readOid(git, `refs/heads/${branchName}`);
+          if (!headOid) {
+            throw basePreviewUnresolvedError(
+              `Branch '${branchName}' does not resolve to a commit, so there is nothing to preview.`,
+              payload.cwd,
+              branchName
+            );
+          }
+          const baseOid = await readOid(git, target.fullRef);
+          if (!baseOid) {
+            throw basePreviewUnresolvedError(
+              `Base ref '${target.compareRef}' does not resolve to a commit. Try the preview again.`,
+              payload.cwd,
+              branchName
+            );
+          }
 
           // Rebase and merge describe OPPOSITE ranges, so each gets the range
           // git itself would use rather than one shared approximation.
@@ -1334,10 +1369,11 @@ const gitBaseIntegrationNamespace = defineIpcNamespace({
           //
           // Merge brings in `<local>..<base>` and KEEPS merges: a merge commit
           // on the base is genuinely one of the commits that arrives.
+          const incomingRange = `${headOid}..${baseOid}`;
           const revArgs =
             kind === "rebase-onto-base"
-              ? ["--no-merges", "--cherry-pick", "--right-only", `${target.fullRef}...${localRef}`]
-              : [`${localRef}..${target.fullRef}`];
+              ? ["--no-merges", "--cherry-pick", "--right-only", `${baseOid}...${headOid}`]
+              : [incomingRange];
 
           const log = await git.log([`--max-count=${limit}`, ...revArgs]);
           const total = await countCommitsInRange(git, revArgs);
@@ -1346,14 +1382,7 @@ const gitBaseIntegrationNamespace = defineIpcNamespace({
           // the base and by one purely behind it, and only the second is moved
           // by the operation; for a merge this IS the incoming count, and
           // restating it costs one cheap local rev-list.
-          const behind = await countCommitsInRange(git, [`${localRef}..${target.fullRef}`]);
-          // Read LAST, so they describe the repository at the end of the
-          // measurement rather than the start. The rows above are still a
-          // best-effort snapshot across several invocations, but these two are
-          // what the write is held to — so anything that moved mid-read shows
-          // up as a refusal on submit instead of an unnoticed substitution.
-          const headOid = await readOid(git, localRef);
-          const baseOid = await readOid(git, target.fullRef);
+          const behind = await countCommitsInRange(git, [incomingRange]);
 
           return {
             kind,

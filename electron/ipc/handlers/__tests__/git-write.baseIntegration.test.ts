@@ -63,6 +63,8 @@ const BRANCH = "feature/topic";
 const REMOTE = "team/fork";
 const BASE = "develop";
 const BASE_TRACKING_REF = `refs/remotes/${REMOTE}/${BASE}`;
+const HEAD_OID = "1111111111111111111111111111111111111111";
+const BASE_OID = "2222222222222222222222222222222222222222";
 
 type Handlers = Map<string, (...args: unknown[]) => unknown>;
 
@@ -122,7 +124,9 @@ function gitDouble(options: GitDoubleOptions = {}) {
     }
     if (args[0] === "rev-parse" && args[1] === "--verify") {
       const ref = (args[3] ?? "").replace(/\^\{commit\}$/, "");
-      if (existingRefs.includes(ref)) return "0123456789abcdef\n";
+      // A checked-out branch always names a commit; the base refs each name one.
+      if (ref === "HEAD" || ref === `refs/heads/${branch}`) return `${HEAD_OID}\n`;
+      if (existingRefs.includes(ref)) return `${BASE_OID}\n`;
       throw new Error("fatal: needed a single revision");
     }
     if (args[0] === "for-each-ref") {
@@ -449,9 +453,6 @@ describe("git:rebase-onto-base — the base ref is never written", () => {
 });
 
 describe("git:rebase-onto-base — bound to what was previewed", () => {
-  const HEAD_OID = "1111111111111111111111111111111111111111";
-  const BASE_OID = "2222222222222222222222222222222222222222";
-
   /** A double whose `rev-parse --verify` reports per-ref OIDs. */
   function gitWithOids(oids: Record<string, string>) {
     const git = gitDouble();
@@ -604,13 +605,9 @@ describe("git:list-base-integration-commits", () => {
       { cwd: CWD, baseBranch: BASE, kind: "rebase-onto-base" }
     )) as { kind: string; compareRef: string; remote: string | null; behind: number };
 
-    expect(git.log).toHaveBeenCalledWith([
-      "--max-count=20",
-      "--no-merges",
-      "--cherry-pick",
-      "--right-only",
-      `${BASE_TRACKING_REF}...refs/heads/${BRANCH}`,
-    ]);
+    const replaySet = ["--no-merges", "--cherry-pick", "--right-only", `${BASE_OID}...${HEAD_OID}`];
+    expect(git.log).toHaveBeenCalledWith(["--max-count=20", ...replaySet]);
+    expect(callsTo(git, "rev-list")).toContainEqual(["rev-list", "--count", ...replaySet]);
     expect(result.kind).toBe("rebase-onto-base");
     expect(result.compareRef).toBe(`${REMOTE}/${BASE}`);
     expect(result.remote).toBe(REMOTE);
@@ -626,9 +623,11 @@ describe("git:list-base-integration-commits", () => {
       { cwd: CWD, baseBranch: BASE, kind: "merge-base" }
     );
 
-    expect(git.log).toHaveBeenCalledWith([
-      "--max-count=20",
-      `refs/heads/${BRANCH}..${BASE_TRACKING_REF}`,
+    expect(git.log).toHaveBeenCalledWith(["--max-count=20", `${HEAD_OID}..${BASE_OID}`]);
+    expect(callsTo(git, "rev-list")).toContainEqual([
+      "rev-list",
+      "--count",
+      `${HEAD_OID}..${BASE_OID}`,
     ]);
   });
 
@@ -642,12 +641,11 @@ describe("git:list-base-integration-commits", () => {
       { cwd: CWD, baseBranch: BASE, kind: "rebase-onto-base" }
     );
 
-    const revLists = git.raw.mock.calls
-      .map((c) => c[0] as string[])
-      .filter((args) => args[0] === "rev-list");
-    expect(
-      revLists.some((args) => args.includes(`refs/heads/${BRANCH}..${BASE_TRACKING_REF}`))
-    ).toBe(true);
+    expect(callsTo(git, "rev-list")).toContainEqual([
+      "rev-list",
+      "--count",
+      `${HEAD_OID}..${BASE_OID}`,
+    ]);
   });
 
   it("rejects an unknown integration kind", async () => {
@@ -677,6 +675,165 @@ describe("git:list-base-integration-commits", () => {
       )
     ).rejects.toMatchObject({ reason: "config-missing" });
   });
+});
+
+describe("git:list-base-integration-commits — measured from the commits it pins (#17583)", () => {
+  const MOVED_OID = "3333333333333333333333333333333333333333";
+  const LOCAL_REF = `refs/heads/${BRANCH}`;
+
+  /**
+   * A repository whose refs are live: `rev-parse` answers from `refs`, which
+   * `onLog` may change while the preview's `git log` is running — an agent
+   * committing, or background fetch advancing the base, mid-measurement.
+   */
+  function liveRefsDouble(onLog: (refs: Record<string, string>) => void) {
+    const git = gitDouble();
+    const inner = git.raw;
+    const refs: Record<string, string> = {
+      HEAD: HEAD_OID,
+      [LOCAL_REF]: HEAD_OID,
+      [BASE_TRACKING_REF]: BASE_OID,
+    };
+    git.raw = vi.fn(async (args: string[]) => {
+      if (args[0] === "rev-parse" && args[1] === "--verify") {
+        const ref = (args[3] ?? "").replace(/\^\{commit\}$/, "");
+        if (ref in refs) return `${refs[ref]}\n`;
+      }
+      return inner(args);
+    });
+    const log = git.log;
+    git.log = vi.fn(async (...args: Parameters<typeof log>) => {
+      const rows = await log(...args);
+      onLog(refs);
+      return rows;
+    });
+    return git;
+  }
+
+  /** Every rev spec the preview measured: the log's and each `rev-list`'s. */
+  function measuredRanges(git: ReturnType<typeof gitDouble>): string[] {
+    const logArgs = git.log.mock.calls.flatMap((c) => c[0] as unknown as string[]);
+    const revListArgs = git.raw.mock.calls
+      .map((c) => c[0] as string[])
+      .filter((args) => args[0] === "rev-list")
+      .flat();
+    return [...logArgs, ...revListArgs].filter((arg) => arg.includes(".."));
+  }
+
+  it.each([
+    {
+      label: "the base advances",
+      kind: "rebase-onto-base",
+      channel: CHANNELS.GIT_REBASE_ONTO_BASE,
+      subcommand: "rebase",
+      move: (refs: Record<string, string>) => {
+        refs[BASE_TRACKING_REF] = MOVED_OID;
+      },
+    },
+    {
+      label: "the base advances",
+      kind: "merge-base",
+      channel: CHANNELS.GIT_MERGE_BASE_INTO_BRANCH,
+      subcommand: "merge",
+      move: (refs: Record<string, string>) => {
+        refs[BASE_TRACKING_REF] = MOVED_OID;
+      },
+    },
+    {
+      label: "the branch gains a commit",
+      kind: "rebase-onto-base",
+      channel: CHANNELS.GIT_REBASE_ONTO_BASE,
+      subcommand: "rebase",
+      move: (refs: Record<string, string>) => {
+        refs[LOCAL_REF] = MOVED_OID;
+        refs.HEAD = MOVED_OID;
+      },
+    },
+    {
+      label: "the branch gains a commit",
+      kind: "merge-base",
+      channel: CHANNELS.GIT_MERGE_BASE_INTO_BRANCH,
+      subcommand: "merge",
+      move: (refs: Record<string, string>) => {
+        refs[LOCAL_REF] = MOVED_OID;
+        refs.HEAD = MOVED_OID;
+      },
+    },
+  ] as const)(
+    "$kind: $label mid-read, and the approval is refused as stale",
+    async ({ kind, channel, subcommand, move }) => {
+      const git = liveRefsDouble(move);
+      createHardenedGitMock.mockResolvedValue(git);
+      registerGitWriteHandlers({} as never);
+
+      const preview = (await registeredHandlers().get(CHANNELS.GIT_LIST_BASE_INTEGRATION_COMMITS)!(
+        {},
+        { cwd: CWD, baseBranch: BASE, kind }
+      )) as { branch: string; headOid: string; baseOid: string };
+
+      // The pins are the commits the rows were measured from, not whatever the
+      // refs named once the log had finished.
+      expect(preview.headOid).toBe(HEAD_OID);
+      expect(preview.baseOid).toBe(BASE_OID);
+      const ranges = measuredRanges(git);
+      expect(ranges.length).toBeGreaterThan(0);
+      for (const range of ranges) {
+        expect(range).toContain(HEAD_OID);
+        expect(range).toContain(BASE_OID);
+      }
+
+      // Approving that preview is refused: the commit that moved was never listed.
+      await expect(
+        registeredHandlers().get(channel)!(
+          {},
+          {
+            cwd: CWD,
+            baseBranch: BASE,
+            expectedBranch: preview.branch,
+            expectedHeadOid: preview.headOid,
+            expectedBaseOid: preview.baseOid,
+          }
+        )
+      ).rejects.toMatchObject({ reason: "conflict-unresolved" });
+      expect(callsTo(git, subcommand)).toEqual([]);
+    }
+  );
+
+  it.each([
+    { label: "the branch", unresolved: LOCAL_REF, message: /Branch 'feature\/topic'/ },
+    { label: "the base", unresolved: BASE_TRACKING_REF, message: /Base ref 'team\/fork\/develop'/ },
+  ])(
+    "fails the read when $label stops resolving, never offering an unpinned approval",
+    async ({ unresolved, message }) => {
+      // The base passed the resolver's existence probe and was then deleted (or
+      // the branch's tip vanished) before its commit was captured. A preview
+      // with a null pin would hand the write nothing to hold it to.
+      const git = gitDouble();
+      const inner = git.raw;
+      let probes = 0;
+      git.raw = vi.fn(async (args: string[]) => {
+        if (args[0] === "rev-parse" && args[1] === "--verify" && args[3]?.startsWith(unresolved)) {
+          // The base's first probe is the resolver's; only the capture misses.
+          probes += 1;
+          if (unresolved === LOCAL_REF || probes > 1) {
+            throw new Error("fatal: needed a single revision");
+          }
+        }
+        return inner(args);
+      });
+      createHardenedGitMock.mockResolvedValue(git);
+      registerGitWriteHandlers({} as never);
+
+      await expect(
+        registeredHandlers().get(CHANNELS.GIT_LIST_BASE_INTEGRATION_COMMITS)!(
+          {},
+          { cwd: CWD, baseBranch: BASE, kind: "rebase-onto-base" }
+        )
+      ).rejects.toMatchObject({ reason: "pathspec-invalid", message: expect.stringMatching(message) });
+      expect(git.log).not.toHaveBeenCalled();
+      expect(callsTo(git, "rev-list")).toEqual([]);
+    }
+  );
 });
 
 describe("git:list-base-integration-commits — blockers the write would refuse (#17189)", () => {

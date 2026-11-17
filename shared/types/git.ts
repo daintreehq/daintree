@@ -433,8 +433,10 @@ export interface GitBaseIntegrationCommitPreview {
    * either has moved. Daintree runs many agents in parallel across worktrees,
    * so a commit landing while the dialog is open is ordinary rather than a
    * race to shrug at — without these the user could approve one replay set and
-   * get another. `null` when the ref did not resolve, which the caller treats
-   * as "nothing to pin" rather than as a match.
+   * get another. Captured before the range is measured, and every row and
+   * count describes them (#17583). Both are present whenever the range was
+   * measured, and both are `null` when a blocker stopped the read first; a tip
+   * that does not resolve fails the preview instead.
    */
   headOid: string | null;
   baseOid: string | null;
