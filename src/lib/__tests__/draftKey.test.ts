@@ -45,7 +45,15 @@ describe("hasDraftText", () => {
     const drafts = new Map([
       [OTHER_HOST_KEY, "a reply to the other host"],
       [makeDraftKey("term-1", "project-a"), "  \n"],
+      [makeDraftKey("term-2", "project-a"), "another pane's draft"],
     ]);
     expect(hasDraftText(drafts, "term-1")).toBe(false);
+  });
+
+  it("finds a colon-holding id's own isolated draft, never another host's", () => {
+    const remote = new Map([[makeDraftKey("agent:1", isolatedComposerScope("host-b")), "reply"]]);
+    expect(hasDraftText(remote, "agent:1")).toBe(false);
+    remote.set(makeDraftKey("agent:1", isolatedComposerScope()), "here");
+    expect(hasDraftText(remote, "agent:1")).toBe(true);
   });
 });

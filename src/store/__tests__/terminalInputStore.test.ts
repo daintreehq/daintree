@@ -745,16 +745,45 @@ describe("terminalInputStore", () => {
       store.stashEditorState("term-1", makeState("stashed for host-b"), otherHost);
       store.addToHistory("term-1", "sent to host-b", otherHost);
       store.addToHistory("term-1", "sent here", "project-a");
+      store.navigateHistory("term-1", "up", "half a reply", otherHost);
+      store.navigateHistory("term-1", "up", "half a prompt", "project-a");
+      const remoteKey = `${otherHost}:term-1`;
+      const snapshot = {
+        draft: "reply to host-b",
+        images: [],
+        files: [],
+        selection: { anchor: 0, head: 0 },
+        caretPublished: false,
+      };
+      keepComposerSnapshot(remoteKey, snapshot);
+      keepComposerSnapshot("project-a:term-1", { ...snapshot, draft: "local" });
 
       useTerminalInputStore.getState().clearTerminalState("term-1");
 
       const after = useTerminalInputStore.getState();
-      const remoteKey = `${otherHost}:term-1`;
       expect([...after.draftInputs.keys()]).toEqual([remoteKey]);
       expect(after.getDraftInput("term-1", otherHost)).toBe("reply to host-b");
       expect([...after.pendingDrafts.keys()]).toEqual([remoteKey]);
       expect(after.hasStashedEditorState("term-1", otherHost)).toBe(true);
       expect([...after.commandHistory.keys()]).toEqual([remoteKey]);
+      expect([...after.historyIndex.keys()]).toEqual([remoteKey]);
+      expect(after.tempDraft.get(remoteKey)).toBe("half a reply");
+      expect(after.tempDraft.size).toBe(1);
+      expect(takeComposerSnapshot(remoteKey, "reply to host-b")).not.toBeNull();
+      expect(takeComposerSnapshot("project-a:term-1", "local")).toBeNull();
+    });
+
+    it("clears a colon-holding id's own isolated draft and leaves another host's", () => {
+      const store = useTerminalInputStore.getState();
+      store.setDraftInput("agent:1", "local isolated", isolatedComposerScope());
+      store.setDraftInput("agent:1", "local", "project-a");
+      store.setDraftInput("agent:1", "reply to host-b", isolatedComposerScope("host-b"));
+
+      useTerminalInputStore.getState().clearTerminalState("agent:1");
+
+      expect([...useTerminalInputStore.getState().draftInputs.keys()]).toEqual([
+        `${isolatedComposerScope("host-b")}:agent:1`,
+      ]);
     });
 
     it("leaves the store alone when only another host holds the id", () => {

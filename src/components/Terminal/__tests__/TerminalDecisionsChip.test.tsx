@@ -221,20 +221,69 @@ describe("TerminalDecisionsChip", () => {
     );
     render(<TerminalDecisionsChip terminalId="t1" />);
     const chip = await screen.findByTestId("terminal-decisions-chip");
-    const heldForDraft = "once the draft here is sent or cleared";
-    expect(chip.getAttribute("aria-label")).not.toContain(heldForDraft);
+    const label = () => chip.getAttribute("aria-label");
+    const noDraft = label();
 
     const remoteReply: [string, string] = ["isolated-composer:host-b:t1", "a reply over there"];
     typeInAComposer([remoteReply]);
-    expect(chip.getAttribute("aria-label")).not.toContain(heldForDraft);
+    expect(label()).toBe(noDraft);
 
-    typeInAComposer([remoteReply, ["project-a:t1", "a draft here"]]);
-    expect(chip.getAttribute("aria-label")).toContain(heldForDraft);
+    const drafts = typeInAComposer([remoteReply, ["project-a:t1", "a draft here"]]);
+    expect(drafts.reads).toBeGreaterThan(0);
+    expect(label()).not.toBe(noDraft);
+
+    typeInAComposer([remoteReply, ["project-a:t1", "  "]]);
+    expect(label()).toBe(noDraft);
 
     // Once the answer is typed in, nothing the pane shows waits on a draft.
     act(() => paneListeners[0]!(paneState({ openQuestions: [], revision: 2 })));
     expect(screen.queryByTestId("terminal-decisions-chip")).toBeNull();
     expect(typeInAComposer([["project-a:t1", "a longer draft"]]).reads).toBe(0);
+  });
+
+  it("says an open question waits on a draft written before it was asked", async () => {
+    getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+    getPaneState.mockResolvedValue(null);
+    render(<TerminalDecisionsChip terminalId="t1" />);
+    await waitFor(() => expect(paneListeners).toHaveLength(1));
+    await act(async () => {});
+    const draft: [string, string] = ["project-a:t1", "written before the question"];
+    expect(typeInAComposer([draft]).reads).toBe(0);
+
+    // The question arrives with no keystroke after it: the drafts are read as it does.
+    act(() => paneListeners[0]!(paneState({ revision: 2 })));
+    fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+    await waitFor(() =>
+      expect(screen.getAllByTestId("terminal-decisions-row-line")).toHaveLength(1)
+    );
+    const popover = () => screen.getByTestId("popover-content").textContent;
+    const withDraft = popover();
+
+    typeInAComposer([]);
+    expect(popover()).not.toBe(withDraft);
+    typeInAComposer([draft]);
+    expect(popover()).toBe(withDraft);
+  });
+
+  it("reads no drafts for a pane whose only answers need a person", async () => {
+    getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+    getPaneState.mockResolvedValue(
+      paneState({
+        openQuestions: [],
+        needsAttention: [
+          {
+            questionId: "q41",
+            alias: 41,
+            deliveryStatus: "needs-attention",
+            reason: "relaunched",
+          },
+        ],
+      })
+    );
+    render(<TerminalDecisionsChip terminalId="t1" />);
+    await screen.findByTestId("terminal-decisions-chip");
+
+    expect(typeInAComposer([["project-a:t1", "a draft here"]]).reads).toBe(0);
   });
 
   it("shares one status watch between every pane in the view", async () => {

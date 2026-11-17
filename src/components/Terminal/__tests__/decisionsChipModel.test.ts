@@ -128,7 +128,7 @@ describe("readsPaneWait", () => {
     const said = (["draft", "composer", "prompt"] as const).map((wait) => {
       const items = decisionItems(state, wait);
       return JSON.stringify([
-        items.map((item) => [item.status, item.waitsFor]),
+        items.map((item) => [item.status, itemSentence(item)]),
         chipSummary(items),
         deliveryNotes(items, wait),
       ]);
