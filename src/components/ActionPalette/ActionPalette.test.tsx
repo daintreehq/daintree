@@ -340,7 +340,7 @@ describe("ActionPalette", () => {
     expect(usePaletteStore.getState().activePaletteId).toBe("prompt-history");
   });
 
-  it("types ':' like any other character when no composer hosts prompt history", () => {
+  it("leaves ':' unprevented, to be typed, when no composer hosts prompt history", () => {
     render(<ActionPalette {...baseProps} />);
     const requestsBefore = usePaletteStore.getState().openRequestId;
 
@@ -352,17 +352,28 @@ describe("ActionPalette", () => {
     expect(usePaletteStore.getState().openRequestId).toBe(requestsBefore);
   });
 
-  it("stops routing ':' once the last prompt-history host is gone", () => {
+  it("routes ':' while any host remains, and stops once the last is gone", () => {
     const first = usePaletteStore.getState().registerPromptHistoryHost();
     const second = usePaletteStore.getState().registerPromptHistoryHost();
     render(<ActionPalette {...baseProps} />);
+    const backToAction = () => act(() => usePaletteStore.getState().openPalette("action"));
 
-    first();
-    // A disposer that runs twice must not take the other host's count with it.
-    first();
+    // Two composers at once, as when history moves between them.
+    expect(fireKey(":")).toBe(true);
+    expect(usePaletteStore.getState().activePaletteId).toBe("prompt-history");
+    backToAction();
+
+    act(() => {
+      first();
+      // A disposer that runs twice must not take the other host's count with it.
+      first();
+    });
     expect(usePaletteStore.getState().promptHistoryHosts).toBe(1);
+    expect(fireKey(":")).toBe(true);
+    expect(usePaletteStore.getState().activePaletteId).toBe("prompt-history");
+    backToAction();
 
-    second();
+    act(() => second());
     expect(fireKey(":")).toBe(false);
     expect(usePaletteStore.getState().activePaletteId).toBe("action");
   });
