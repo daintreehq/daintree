@@ -770,7 +770,19 @@ function collect(stream: Readable | null, cap: number, keepTail: boolean): () =>
     const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
     chunks.push(buf);
     size += buf.byteLength;
-    while (keepTail && size > cap && chunks.length > 1) size -= chunks.shift()!.byteLength;
+    // The oldest bytes go first, never more than the excess: a refusal near the
+    // end of a long chunk survives the short lines that follow it.
+    while (keepTail && size > cap && chunks.length > 1) {
+      const excess = size - cap;
+      const oldest = chunks[0]!;
+      if (oldest.byteLength <= excess) {
+        chunks.shift();
+        size -= oldest.byteLength;
+      } else {
+        chunks[0] = oldest.subarray(excess);
+        size -= excess;
+      }
+    }
     if (!keepTail && size > cap) stream.destroy();
   });
   return () => {
@@ -855,7 +867,11 @@ export class SshTransport implements LinkTransport {
    * longer takes is the link's to notice (`remembered` on the connection).
    */
   private known: KnownHost | null = null;
-  /** When the hops were last asked why a dial through them closed early. */
+  /**
+   * When the hops were last asked why a dial through them closed early and
+   * had no refusal to report. Cleared by a refusal, a dial that got through,
+   * and a fresh dial, so only a proxy that is simply down is asked less often.
+   */
   private lastHopDiagnosis: number | null = null;
 
   constructor(private readonly options: SshTransportOptions) {
@@ -886,6 +902,7 @@ export class SshTransport implements LinkTransport {
     if (options?.fresh) {
       this.known = null;
       this.streamLocal = "unverified";
+      this.lastHopDiagnosis = null;
     }
     let known = this.known;
     if (known && known.configStamp !== (await this.configStamp())) {
@@ -964,6 +981,7 @@ export class SshTransport implements LinkTransport {
       throw new TransportError("Unrecognised reply from the host", probe.stdout.trim() || null);
     }
     onReached();
+    this.lastHopDiagnosis = null;
     const location = remoteHostSocketLocation({
       ...remote,
       macAppDirName: this.options.macAppDirName,
@@ -1003,13 +1021,15 @@ export class SshTransport implements LinkTransport {
     if (this.lastHopDiagnosis !== null && now - this.lastHopDiagnosis < HOP_DIAGNOSIS_INTERVAL_MS) {
       return null;
     }
-    this.lastHopDiagnosis = now;
+    let refusal: string | null = null;
     try {
       await this.run(buildHopDiagnosisArgs(this.options.target), signal);
-      return null;
     } catch (error) {
-      return error instanceof SshExitError ? hopRefusalFrom(error.code, error.detail ?? "") : null;
+      refusal =
+        error instanceof SshExitError ? hopRefusalFrom(error.code, error.detail ?? "") : null;
     }
+    this.lastHopDiagnosis = refusal === null ? now : null;
+    return refusal;
   }
 
   private configStamp(): Promise<string> {

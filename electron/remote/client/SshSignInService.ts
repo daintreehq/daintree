@@ -294,7 +294,17 @@ function collectTail(stream: Readable | null, cap: number): () => string {
     const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
     chunks.push(buf);
     size += buf.byteLength;
-    while (size > cap && chunks.length > 1) size -= chunks.shift()!.byteLength;
+    while (size > cap && chunks.length > 1) {
+      const excess = size - cap;
+      const oldest = chunks[0]!;
+      if (oldest.byteLength <= excess) {
+        chunks.shift();
+        size -= oldest.byteLength;
+      } else {
+        chunks[0] = oldest.subarray(excess);
+        size -= excess;
+      }
+    }
   });
   return () => {
     const all = Buffer.concat(chunks);

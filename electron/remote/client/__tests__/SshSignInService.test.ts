@@ -250,7 +250,8 @@ describe.skipIf(process.platform === "win32")("SshSignInService", () => {
   it("never takes a command's words on the diagnosis run for a jump host's refusal", async () => {
     const { service, spawned } = setup((args) =>
       args.includes("ControlPath=none")
-        ? result({ code: 1, stderr: "Permission denied (restricted command)\n" })
+        ? // Worded as ssh would, but the status is a command's, not ssh's.
+          result({ code: 1, stderr: "greg@bastion: Permission denied (publickey).\n" })
         : result({ code: 255, stderr: "Connection closed by UNKNOWN port 65535\n" })
     );
     await expect(
@@ -439,16 +440,28 @@ describe.skipIf(process.platform === "win32")("SshSignInService", () => {
       expect(fs.existsSync(pidFile) && fs.readFileSync(pidFile, "utf8")).toBeTruthy()
     );
     const proxyPid = Number(fs.readFileSync(pidFile, "utf8").trim());
-    service.cancel(owner.id, { attemptId: "attempt-0001" });
-    await expect(done).resolves.toEqual({ status: "cancelled" });
-    // Gone, not just a zombie waiting to be reaped.
+    // Gone, not just a zombie waiting to be reaped. ps prints no line once it's gone.
     const alive = () => {
-      const stat = spawnSync("ps", ["-o", "stat=", "-p", String(proxyPid)])
-        .stdout.toString()
-        .trim();
+      const ps = spawnSync("ps", ["-o", "stat=", "-p", String(proxyPid)]);
+      if (ps.error) throw ps.error;
+      const stat = ps.stdout.toString().trim();
       return stat.length > 0 && !stat.startsWith("Z");
     };
+    expect(alive()).toBe(true);
+    service.cancel(owner.id, { attemptId: "attempt-0001" });
+    await expect(done).resolves.toEqual({ status: "cancelled" });
     await vi.waitFor(() => expect(alive()).toBe(false), { timeout: 5_000 });
+  });
+
+  it("still sends SIGKILL to the group when Cancel lands as ssh exits", async () => {
+    const { service, spawned } = setup(result({ code: 255, stderr: REFUSED }));
+    const { owner } = fakeOwner();
+    const done = service.start(owner, { attemptId: "attempt-0001", connection: SSH });
+    await vi.waitFor(() => expect(spawned).toHaveLength(1));
+    spawned[0]!.emit("exit", 0, null);
+    service.cancel(owner.id, { attemptId: "attempt-0001" });
+    await expect(done).resolves.toEqual({ status: "cancelled" });
+    expect(spawned[0]!.signals).toContain("SIGKILL");
   });
 
   it("stops when the view that asked goes away", async () => {

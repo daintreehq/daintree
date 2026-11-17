@@ -510,10 +510,71 @@ describe("SshTransport with an injected ssh", () => {
       clientDir: path.join(root, "c"),
       spawn: spawner,
     });
-    await transport.open(new AbortController().signal).catch(() => {});
-    await transport.open(new AbortController().signal).catch(() => {});
-    expect(calls.filter((args) => args.includes("ControlPath=none"))).toHaveLength(1);
-    expect(calls).toHaveLength(3);
+    const diagnoses = () => calls.filter((args) => args.includes("ControlPath=none")).length;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      await transport.open(new AbortController().signal).catch(() => {});
+      await transport.open(new AbortController().signal).catch(() => {});
+      expect(diagnoses()).toBe(1);
+      expect(calls).toHaveLength(3);
+      // A person's fresh dial asks again, and so does any dial once the interval has passed.
+      await transport.open(new AbortController().signal, { fresh: true }).catch(() => {});
+      expect(diagnoses()).toBe(2);
+      vi.setSystemTime(Date.now() + 5 * 60_000 + 1);
+      await transport.open(new AbortController().signal).catch(() => {});
+      expect(diagnoses()).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("asks again every time while a jump host keeps refusing, so the link stays parked on it", async () => {
+    const calls: string[][] = [];
+    const spawner: SshSpawner = (args) => {
+      calls.push(args);
+      const child = new FakeChild();
+      child.finish(
+        255,
+        "",
+        args.includes("ControlPath=none")
+          ? "greg@bastion: Permission denied (publickey).\nConnection closed by UNKNOWN port 65535\n"
+          : "Connection closed by UNKNOWN port 65535\n"
+      );
+      return child;
+    };
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: spawner,
+    });
+    for (let i = 0; i < 2; i++) {
+      const error = await transport.open(new AbortController().signal).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(SshAccessError);
+    }
+  });
+
+  it("keeps a refusal that ends a long stretch of stderr, past what follows it", async () => {
+    const spawner: SshSpawner = () => {
+      const child = new FakeChild();
+      setImmediate(() => {
+        child.stderr.write(
+          `${"banner line\n".repeat(800)}greg@studio: Permission denied (publickey).\n`
+        );
+        setImmediate(() => {
+          child.stderr.end("Connection closed by 10.0.0.2 port 22\n");
+          child.stdout.end();
+          child.emit("exit", 255, null);
+        });
+      });
+      return child;
+    };
+    const transport = new SshTransport({
+      target: "greg@studio",
+      clientDir: path.join(root, "c"),
+      spawn: spawner,
+    });
+    const error = await transport.open(new AbortController().signal).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(SshAccessError);
   });
 
   it("keeps retrying a host behind a jump host that didn't refuse the login", async () => {
