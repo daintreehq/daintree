@@ -242,6 +242,25 @@ describe("ProjectPulseCard shell", () => {
 });
 
 describe("ProjectPulseCard first load", () => {
+  it("shows the retry state when the first read fails, then the counts once a retry succeeds", async () => {
+    seed(null);
+    const first = nextRequest();
+    render(<ProjectPulseCard worktreeId="wt1" />);
+
+    await fail(first);
+    expect(screen.getByRole("alert").textContent).toContain("Unable to load activity data");
+    expect(screen.queryByTestId("pulse-heatmap")).toBeNull();
+    expect(screen.queryByText(/new repository/i)).toBeNull();
+
+    const retry = nextRequest();
+    fireEvent.click(screen.getByRole("button", { name: "Retry now" }));
+    await answer(retry, makePulse(60, { commitsInRange: 7 }));
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByTestId("pulse-heatmap")).toBeTruthy();
+    expect(usePulseStore.getState().getPulse("wt1")?.commitsInRange).toBe(7);
+  });
+
   it("renders the header at once and holds the body empty until the skeleton gate", () => {
     seed(null);
     render(<ProjectPulseCard worktreeId="wt1" />);
@@ -353,7 +372,7 @@ describe("ProjectPulseCard background refresh", () => {
     expect(liveRegionText()).toBe("");
   });
 
-  it("clears the refreshing announcement when the refresh fails", async () => {
+  it("keeps the last snapshot but says the refresh failed when a refresh fails", async () => {
     const request = nextRequest();
     render(<ProjectPulseCard worktreeId="wt1" />);
 
@@ -363,7 +382,37 @@ describe("ProjectPulseCard background refresh", () => {
 
     await fail(request);
     expect(screen.getByTestId("pulse-heatmap")).toBeTruthy();
-    expect(liveRegionText()).toBe("");
+    expect(liveRegionText()).toBe("Couldn't refresh pulse data");
+    const footer = screen.getByTestId("pulse-last-updated");
+    expect(footer.textContent).toContain("Couldn't refresh");
+    expect(footer.getAttribute("aria-label")).toMatch(/^Retry — couldn't refresh/);
+  });
+
+  it("retries a failed refresh from the same footer button and restores the counts", async () => {
+    const failed = nextRequest();
+    render(<ProjectPulseCard worktreeId="wt1" />);
+    focusProbe();
+    await fail(failed);
+
+    const footer = screen.getByTestId("pulse-last-updated");
+    footer.focus();
+    const retry = nextRequest();
+    fireEvent.click(footer);
+    expect(dispatchMock).toHaveBeenLastCalledWith(
+      "git.getProjectPulse",
+      expect.objectContaining({ worktreeId: "wt1", forceRefresh: true }),
+      { source: "user" }
+    );
+    // Same element while the retry runs: focus never drops to the page.
+    expect(screen.getByTestId("pulse-last-updated")).toBe(footer);
+    expect(document.activeElement).toBe(footer);
+
+    await answer(retry, makePulse(60, { commitsInRange: 5, activeDays: 2 }));
+    expect(usePulseStore.getState().getPulse("wt1")?.commitsInRange).toBe(5);
+    expect(footer.textContent).toContain("Updated");
+    expect(footer.textContent).not.toContain("Couldn't refresh");
+    expect(liveRegionText()).toBe("Pulse data updated");
+    expect(document.activeElement).toBe(footer);
   });
 
   it("announces an update when the refreshed totals changed", async () => {
