@@ -257,6 +257,244 @@ describe("WindowsStoreNotifierService", () => {
     });
   });
 
+  describe("fetch deadline and overlapping checks", () => {
+    type FetchInit = { headers: Record<string, string>; signal?: AbortSignal };
+
+    function pendingFetch(): {
+      resolve: (value: unknown) => void;
+      reject: (err: unknown) => void;
+      init: () => FetchInit;
+    } {
+      let resolve!: (value: unknown) => void;
+      let reject!: (err: unknown) => void;
+      let captured: FetchInit | undefined;
+      netMock.fetch.mockImplementationOnce((_url: string, init: FetchInit) => {
+        captured = init;
+        return new Promise((res, rej) => {
+          resolve = res;
+          reject = rej;
+        });
+      });
+      return {
+        resolve: (value) => resolve(value),
+        reject: (err) => reject(err),
+        init: () => {
+          if (!captured) throw new Error("fetch was not called");
+          return captured;
+        },
+      };
+    }
+
+    function trackSettled(promise: Promise<void>): () => boolean {
+      let settled = false;
+      void promise.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        }
+      );
+      return () => settled;
+    }
+
+    it("shares a pending check with a later trigger instead of sending a second request", async () => {
+      const fetch = pendingFetch();
+      const first = windowsStoreNotifierService._checkNowForTest();
+      const second = windowsStoreNotifierService._checkNowForTest();
+      expect(netMock.fetch).toHaveBeenCalledTimes(1);
+
+      fetch.resolve(makeResponse({ body: "version: 1.2.0\n", etag: null }));
+      await Promise.all([first, second]);
+      expect(broadcastMock).toHaveBeenCalledTimes(1);
+      expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.STORE_UPDATE_AVAILABLE, {
+        version: "1.2.0",
+        storeUrl: MS_STORE_FALLBACK_URL,
+      });
+    });
+
+    it("times out a request that never answers and aborts it", async () => {
+      const fetch = pendingFetch();
+      const settled = trackSettled(windowsStoreNotifierService._checkNowForTest());
+      expect(fetch.init().signal?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(settled()).toBe(true);
+      expect(fetch.init().signal?.aborted).toBe(true);
+      expect(broadcastMock).not.toHaveBeenCalled();
+    });
+
+    it("times out a stalled response body", async () => {
+      netMock.fetch.mockResolvedValueOnce({
+        ...makeResponse({ etag: '"stalled"' }),
+        text: () => new Promise<string>(() => {}),
+      });
+      const settled = trackSettled(windowsStoreNotifierService._checkNowForTest());
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(settled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(settled()).toBe(true);
+      expect(broadcastMock).not.toHaveBeenCalled();
+    });
+
+    it("treats a body Chromium ends as a plain abort at the deadline as a timeout", async () => {
+      netMock.fetch.mockImplementationOnce(async (_url: string, init: FetchInit) => ({
+        ...makeResponse({ etag: null }),
+        text: () =>
+          new Promise<string>((_resolve, reject) => {
+            init.signal?.addEventListener("abort", () =>
+              reject(new DOMException("The operation was aborted.", "AbortError"))
+            );
+          }),
+      }));
+      void windowsStoreNotifierService._checkNowForTest();
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // A timeout is transient, so the retry ladder sends a fresh request.
+      netMock.fetch.mockResolvedValueOnce(makeResponse({ status: 304 }));
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(netMock.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("retries after a timeout with a fresh request", async () => {
+      const stalled = pendingFetch();
+      netMock.fetch.mockResolvedValueOnce(makeResponse({ body: "version: 1.3.0\n", etag: null }));
+      void windowsStoreNotifierService._checkNowForTest();
+
+      // The first request never answers, so only the deadline plus the first
+      // retry (base 30s, up to 1.2x jitter) can send the second.
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
+      expect(stalled.init().signal?.aborted).toBe(true);
+      expect(netMock.fetch).toHaveBeenCalledTimes(2);
+      expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.STORE_UPDATE_AVAILABLE, {
+        version: "1.3.0",
+        storeUrl: MS_STORE_FALLBACK_URL,
+      });
+    });
+
+    it("dispose cancels a pending check so its late response neither broadcasts nor caches", async () => {
+      const fetch = pendingFetch();
+      windowsStoreNotifierService.initialize();
+      const check = windowsStoreNotifierService._checkNowForTest();
+
+      windowsStoreNotifierService.dispose();
+      expect(fetch.init().signal?.aborted).toBe(true);
+
+      // The cancelled check settles without waiting for the request.
+      await check;
+      expect(vi.getTimerCount()).toBe(0);
+
+      fetch.resolve(makeResponse({ body: "version: 9.9.9\n", etag: '"late"' }));
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(broadcastMock).not.toHaveBeenCalled();
+      expect(windowsStoreNotifierService.getLastDetectedUpdate()).toBeNull();
+      expect(netMock.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("suspend cancels a pending check and wake sends a fresh request", async () => {
+      windowsStoreNotifierService.initialize();
+      const onSuspend = (systemSleepMock.onSuspend.mock.calls[0] as unknown[])[0] as () => void;
+      const onWake = (systemSleepMock.onWake.mock.calls[0] as unknown[])[0] as () => void;
+      const held = pendingFetch();
+      const check = windowsStoreNotifierService._checkNowForTest();
+
+      onSuspend();
+      expect(held.init().signal?.aborted).toBe(true);
+      held.reject(new Error("net::ERR_NETWORK_CHANGED"));
+      await check;
+
+      netMock.fetch.mockResolvedValueOnce(makeResponse({ body: "version: 1.6.0\n", etag: null }));
+      onWake();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(netMock.fetch).toHaveBeenCalledTimes(2);
+      expect(broadcastMock).toHaveBeenCalledTimes(1);
+      expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.STORE_UPDATE_AVAILABLE, {
+        version: "1.6.0",
+        storeUrl: MS_STORE_FALLBACK_URL,
+      });
+    });
+
+    it("turning notifications off cancels a pending check", async () => {
+      windowsStoreNotifierService.initialize();
+      const setCall = ipcMainMock.handle.mock.calls.find(
+        ([ch]) => ch === CHANNELS.STORE_UPDATE_SET_SETTINGS
+      );
+      const fetch = pendingFetch();
+      const check = windowsStoreNotifierService._checkNowForTest();
+
+      setCall![1]({ senderFrame: { url: "app://daintree/index.html" } }, false);
+      expect(fetch.init().signal?.aborted).toBe(true);
+      fetch.resolve(makeResponse({ body: "version: 9.9.9\n", etag: null }));
+      await check;
+      expect(broadcastMock).not.toHaveBeenCalled();
+      expect(windowsStoreNotifierService.getLastDetectedUpdate()).toBeNull();
+    });
+
+    it("a trigger after a channel switch supersedes the pending check for the old feed", async () => {
+      let channel = "stable" as "stable" | "nightly";
+      storeMock.get.mockImplementation((key: string) => {
+        if (key === "updateChannel") return channel;
+        return undefined;
+      });
+      const stable = pendingFetch();
+      const stableCheck = windowsStoreNotifierService._checkNowForTest();
+
+      channel = "nightly";
+      const nightly = pendingFetch();
+      const nightlyCheck = windowsStoreNotifierService._checkNowForTest();
+      expect(netMock.fetch).toHaveBeenCalledTimes(2);
+      expect(netMock.fetch.mock.calls[1][0]).toContain("/nightly/");
+      expect(stable.init().signal?.aborted).toBe(true);
+      expect(storeMock.delete).toHaveBeenCalledWith("storeNotifierEtag");
+
+      stable.resolve(makeResponse({ body: "version: 3.0.0\n", etag: '"stable"' }));
+      nightly.resolve(makeResponse({ body: "version: 3.1.0-nightly.1\n", etag: null }));
+      await Promise.all([stableCheck, nightlyCheck]);
+      expect(broadcastMock).toHaveBeenCalledTimes(1);
+      expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.STORE_UPDATE_AVAILABLE, {
+        version: "3.1.0-nightly.1",
+        storeUrl: MS_STORE_FALLBACK_URL,
+      });
+    });
+
+    it("dispose suppresses the retry a late transient failure would schedule", async () => {
+      const fetch = pendingFetch();
+      const check = windowsStoreNotifierService._checkNowForTest();
+
+      windowsStoreNotifierService.dispose();
+      fetch.reject(new Error("net::ERR_NETWORK_CHANGED"));
+      await check;
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(netMock.fetch).toHaveBeenCalledTimes(1);
+      expect(console.error).not.toHaveBeenCalled();
+    });
+
+    it("a check after dispose sends its own request and the cancelled one can't release it", async () => {
+      const cancelled = pendingFetch();
+      const staleCheck = windowsStoreNotifierService._checkNowForTest();
+      windowsStoreNotifierService.dispose();
+
+      const current = pendingFetch();
+      const freshCheck = windowsStoreNotifierService._checkNowForTest();
+      expect(netMock.fetch).toHaveBeenCalledTimes(2);
+
+      cancelled.resolve(makeResponse({ body: "version: 5.0.0\n", etag: null }));
+      await staleCheck;
+      // The fresh check is still the one in flight, so a new trigger joins it.
+      const joined = windowsStoreNotifierService._checkNowForTest();
+      expect(netMock.fetch).toHaveBeenCalledTimes(2);
+
+      current.resolve(makeResponse({ body: "version: 1.4.0\n", etag: null }));
+      await Promise.all([freshCheck, joined]);
+      expect(broadcastMock).toHaveBeenCalledTimes(1);
+      expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.STORE_UPDATE_AVAILABLE, {
+        version: "1.4.0",
+        storeUrl: MS_STORE_FALLBACK_URL,
+      });
+    });
+  });
+
   describe("dismiss handler", () => {
     it("persists lastNotifiedStoreVersion for a valid semver from a trusted sender", () => {
       windowsStoreNotifierService.initialize();

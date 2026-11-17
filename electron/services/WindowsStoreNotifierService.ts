@@ -7,6 +7,8 @@ import { getSystemSleepService } from "./SystemSleepService.js";
 import { store } from "../store.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
 import { isWindowsStoreBuild } from "../../shared/config/distribution.js";
+import { raceAbort } from "../utils/raceAbort.js";
+import { TimeoutError, timeoutSignal } from "../utils/withTimeout.js";
 
 // Store handles installs every ~8 hours, so polling more often than the OS does
 // makes us look noisy without surfacing anything sooner.
@@ -15,6 +17,9 @@ const RETRY_BASE_DELAYS_MS = [30_000, 120_000, 480_000] as const;
 const MAX_RETRIES = RETRY_BASE_DELAYS_MS.length;
 const STARTUP_JITTER_MAX_MS = 60_000;
 const RESUME_CHECK_DELAY_MS = 7_000;
+// Covers the request and the body read together; a stalled CDN response would
+// otherwise hold the check open until the next wake or 8-hour tick.
+const FETCH_TIMEOUT_MS = 30_000;
 const VERSION_MAX_LEN = 64;
 // Same canonical-form gate as AutoUpdaterService — strict numeric leading
 // digit prevents `v1.2.3`/`=1.2.3` from round-tripping through the store.
@@ -57,6 +62,28 @@ export interface DetectedStoreUpdate {
   storeUrl: string;
 }
 
+interface ManifestVersion {
+  version: string;
+  etag: string | null;
+}
+
+interface InflightCheck {
+  feedUrl: string;
+  controller: AbortController;
+  promise: Promise<void>;
+}
+
+const ABORTED = Symbol("aborted");
+
+// Rejects with the deadline's own reason once it fires, even when the work
+// ignores the signal: Chromium can end an aborted body as a plain abort, and
+// a mocked or wedged read may never settle at all.
+async function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  const result = await raceAbort(work, signal, ABORTED);
+  if (result === ABORTED) throw signal.reason;
+  return result;
+}
+
 function buildStoreUrl(): string {
   const productId = process.env.DAINTREE_MICROSOFT_STORE_PRODUCT_ID;
   if (typeof productId !== "string") return MS_STORE_FALLBACK_URL;
@@ -78,6 +105,8 @@ function manifestUrl(feedUrl: string): string {
   return `${feedUrl}latest.yml`;
 }
 
+type CheckContext = "Initial" | "Periodic" | "Retry" | "Resume";
+
 class WindowsStoreNotifierService {
   private checkInterval: NodeJS.Timeout | null = null;
   private startupJitterTimeout: NodeJS.Timeout | null = null;
@@ -96,6 +125,9 @@ class WindowsStoreNotifierService {
   // the ETag eagerly would let a future 304 silently suppress the version
   // forever (no broadcast, no lastNotifiedStoreVersion write).
   private pendingEtag: { version: string; etag: string } | null = null;
+  // At most one manifest request runs at a time; triggers that land while it
+  // is pending share it, so an older response can't overwrite a newer one.
+  private inflightCheck: InflightCheck | null = null;
 
   private clearRetryTimeout(): void {
     if (this.retryTimeout) {
@@ -113,6 +145,8 @@ class WindowsStoreNotifierService {
   // catalogued transient signals retry. Anything else (404, cert error,
   // unknown net::ERR_) waits for the next 8-hour tick.
   private isTransientError(err: unknown): boolean {
+    // Our own deadline — the same signal as net::ERR_TIMED_OUT.
+    if (err instanceof TimeoutError) return true;
     let current: unknown = err;
     let foundTransient = false;
     for (let depth = 0; depth < 5 && current && typeof current === "object"; depth++) {
@@ -148,9 +182,11 @@ class WindowsStoreNotifierService {
     }, delay);
   }
 
-  private getActiveFeedUrl(): string {
-    const channel = store.get("updateChannel") ?? "stable";
-    const feedUrl = feedUrlForChannel(channel);
+  private configuredFeedUrl(): string {
+    return feedUrlForChannel(store.get("updateChannel") ?? "stable");
+  }
+
+  private setActiveFeedUrl(feedUrl: string): void {
     // Channel switched between polls — drop the prior ETag so we don't send
     // a stable-feed validator to the nightly feed (or vice versa).
     if (this.activeFeedUrl && this.activeFeedUrl !== feedUrl) {
@@ -161,39 +197,44 @@ class WindowsStoreNotifierService {
       }
     }
     this.activeFeedUrl = feedUrl;
-    return feedUrl;
   }
 
-  private async fetchLatestVersion(feedUrl: string): Promise<string | null> {
+  private async fetchLatestVersion(
+    feedUrl: string,
+    cancelSignal: AbortSignal
+  ): Promise<ManifestVersion | null> {
     const storedEtag = store.get("storeNotifierEtag");
     const headers: Record<string, string> = {};
     if (typeof storedEtag === "string" && storedEtag.length > 0) {
       headers["If-None-Match"] = storedEtag;
     }
-    const res = await net.fetch(manifestUrl(feedUrl), { headers });
-    if (res.status === 304) return null;
-    if (!res.ok) {
-      const err: Error & { statusCode?: number } = new Error(
-        `Manifest fetch failed: HTTP ${res.status}`
+    const deadline = timeoutSignal(FETCH_TIMEOUT_MS, cancelSignal);
+    try {
+      const res = await untilAborted(
+        net.fetch(manifestUrl(feedUrl), { headers, signal: deadline.signal }),
+        deadline.signal
       );
-      err.statusCode = res.status;
-      throw err;
+      if (res.status === 304) return null;
+      if (!res.ok) {
+        const err: Error & { statusCode?: number } = new Error(
+          `Manifest fetch failed: HTTP ${res.status}`
+        );
+        err.statusCode = res.status;
+        throw err;
+      }
+      const text = await untilAborted(res.text(), deadline.signal);
+      const parsed = parseYaml(text);
+      if (typeof parsed !== "object" || parsed === null) return null;
+      const version = (parsed as { version?: unknown }).version;
+      if (typeof version !== "string") return null;
+      const trimmed = version.trim();
+      if (trimmed.length === 0 || trimmed.length > VERSION_MAX_LEN) return null;
+      if (!VERSION_ALLOWLIST.test(trimmed)) return null;
+      if (!semver.valid(trimmed)) return null;
+      return { version: trimmed, etag: res.headers.get("etag") };
+    } finally {
+      deadline.dispose();
     }
-    const text = await res.text();
-    const parsed = parseYaml(text);
-    if (typeof parsed !== "object" || parsed === null) return null;
-    const version = (parsed as { version?: unknown }).version;
-    if (typeof version !== "string") return null;
-    const trimmed = version.trim();
-    if (trimmed.length === 0 || trimmed.length > VERSION_MAX_LEN) return null;
-    if (!VERSION_ALLOWLIST.test(trimmed)) return null;
-    if (!semver.valid(trimmed)) return null;
-    const etag = res.headers.get("etag");
-    // Don't persist the ETag yet — see `pendingEtag` field comment. We pair
-    // the version + ETag in memory so the DISMISS handler can commit them
-    // together after the user has actually been shown the notification.
-    this.pendingEtag = etag ? { version: trimmed, etag } : null;
-    return trimmed;
   }
 
   private shouldNotify(remoteVersion: string): boolean {
@@ -211,14 +252,56 @@ class WindowsStoreNotifierService {
     return true;
   }
 
-  private async runCheck(context: "Initial" | "Periodic" | "Retry" | "Resume"): Promise<void> {
+  private runCheck(context: CheckContext): Promise<void> {
+    let feedUrl: string;
+    try {
+      feedUrl = this.configuredFeedUrl();
+    } catch (err) {
+      console.error(`[MAIN] ${context} Store update check failed:`, err);
+      return Promise.resolve();
+    }
+    const inflight = this.inflightCheck;
+    if (inflight) {
+      if (inflight.feedUrl === feedUrl) return inflight.promise;
+      // The channel switched while that request was out: its answer (and its
+      // ETag) belong to the old feed, so it must not land.
+      this.cancelInflightCheck();
+    }
+    const controller = new AbortController();
+    const promise = this.performCheck(context, feedUrl, controller.signal).finally(() => {
+      if (this.inflightCheck?.controller === controller) this.inflightCheck = null;
+    });
+    this.inflightCheck = { feedUrl, controller, promise };
+    return promise;
+  }
+
+  private cancelInflightCheck(): void {
+    const inflight = this.inflightCheck;
+    if (!inflight) return;
+    this.inflightCheck = null;
+    inflight.controller.abort();
+  }
+
+  private async performCheck(
+    context: CheckContext,
+    feedUrl: string,
+    signal: AbortSignal
+  ): Promise<void> {
     try {
       const enabled = store.get("storeUpdateNotificationsEnabled") ?? true;
       if (!enabled) return;
-      const feedUrl = this.getActiveFeedUrl();
-      const remoteVersion = await this.fetchLatestVersion(feedUrl);
+      this.setActiveFeedUrl(feedUrl);
+      const manifest = await this.fetchLatestVersion(feedUrl, signal);
+      // Cancelled by dispose, suspend, the toggle, or a channel switch: the
+      // canceller owns the timers and cached state now.
+      if (signal.aborted) return;
       this.resetRetryState();
-      if (remoteVersion === null) return;
+      if (manifest === null) return;
+      // Don't persist the ETag yet — see `pendingEtag` field comment. We pair
+      // the version + ETag in memory so the DISMISS handler can commit them
+      // together after the user has actually been shown the notification.
+      this.pendingEtag = manifest.etag ? { version: manifest.version, etag: manifest.etag } : null;
+      const remoteVersion = manifest.version;
       if (!this.shouldNotify(remoteVersion)) return;
       // Re-check the toggle after the fetch resolves — a user who flipped the
       // switch off during the network round-trip shouldn't still see a toast.
@@ -234,6 +317,7 @@ class WindowsStoreNotifierService {
       this.lastDetected = detected;
       broadcastToRenderer(CHANNELS.STORE_UPDATE_AVAILABLE, detected);
     } catch (err) {
+      if (signal.aborted) return;
       console.error(`[MAIN] ${context} Store update check failed:`, err);
       if (!this.isTransientError(err)) {
         this.resetRetryState();
@@ -248,8 +332,8 @@ class WindowsStoreNotifierService {
   }
 
   /** Test-only seam: trigger a manual check (bypasses the jitter timer). */
-  async _checkNowForTest(): Promise<void> {
-    await this.runCheck("Initial");
+  _checkNowForTest(): Promise<void> {
+    return this.runCheck("Initial");
   }
 
   getLastDetectedUpdate(): DetectedStoreUpdate | null {
@@ -278,6 +362,7 @@ class WindowsStoreNotifierService {
         if (!validated) {
           // Stop polling and drop the cached detection so a re-enable doesn't
           // immediately fire a stale notification.
+          this.cancelInflightCheck();
           this.resetRetryState();
           this.lastDetected = null;
           this.pendingEtag = null;
@@ -351,6 +436,9 @@ class WindowsStoreNotifierService {
             clearTimeout(this.resumeTimeout);
             this.resumeTimeout = null;
           }
+          // A request held across sleep fails on wake and would schedule a
+          // retry beside the resume check; wake starts a fresh one instead.
+          this.cancelInflightCheck();
           this.resetRetryState();
         });
         this.removeWakeListener = getSystemSleepService().onWake(() => {
@@ -378,6 +466,7 @@ class WindowsStoreNotifierService {
   }
 
   dispose(): void {
+    this.cancelInflightCheck();
     if (this.checkInterval) {
       clearInterval(this.checkInterval);
       this.checkInterval = null;
