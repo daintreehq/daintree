@@ -28,6 +28,7 @@ vi.mock("electron", () => ({
 }));
 
 import { QuestionBridge } from "../questionBridge.js";
+import { RetiredAttemptError } from "../relayTransport.js";
 import type { QuestionSource } from "../relayConnection.js";
 
 const ORIGIN: QuestionOrigin = {
@@ -692,6 +693,29 @@ describe("QuestionBridge", () => {
       // The next attempt's word replaces it as soon as it is live.
       live = liveBridge();
       await expect(b.getInvolvement()).resolves.toMatchObject({ revision: 3, stale: false });
+    });
+
+    it("reads again from what answers now when the live attempt retires partway through a read", async () => {
+      const b = bridge();
+      await verifiedCopy(Date.parse("2026-11-17T08:30:00.000Z"));
+      const retiring = liveBridge();
+      retiring.getInvolvement.mockImplementation(async () => {
+        live = null;
+        throw new RetiredAttemptError();
+      });
+      live = retiring;
+
+      await expect(b.getInvolvement()).resolves.toMatchObject({
+        status: "available",
+        revision: 2,
+        stale: true,
+      });
+      expect(retiring.getInvolvement).toHaveBeenCalledTimes(1);
+
+      const failing = liveBridge();
+      failing.getInvolvement.mockRejectedValue(new Error("store is full"));
+      live = failing;
+      await expect(b.getInvolvement()).rejects.toThrow("store is full");
     });
 
     it("never falls back to itself once the connection has ended", async () => {

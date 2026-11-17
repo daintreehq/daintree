@@ -1660,6 +1660,12 @@ describe("RelayConnection", () => {
 
 describe("get_involvement over a connection (#17228)", () => {
   const PHONE = "dev_phone_1234";
+  /** Runs whether or not the test got that far: held reads released, connections stopped. */
+  const teardown: Array<() => unknown> = [];
+
+  afterEach(async () => {
+    for (const step of teardown.splice(0)) await step();
+  });
 
   function deviceInfo(cert: DeviceCert) {
     return {
@@ -1788,6 +1794,7 @@ describe("get_involvement over a connection (#17228)", () => {
       wrapFetch: relay.wrapFetch,
       overrides: { onQuestionsReady: (ready) => (source = ready) },
     });
+    teardown.push(release, () => h.connection.stop());
     h.connection.start();
     await vi.waitFor(() => expect(source).not.toBeNull());
     // One bridge for the agent's whole run, as the route holds it.
@@ -1839,13 +1846,13 @@ describe("get_involvement over a connection (#17228)", () => {
       revision: 2,
       stale: true,
     });
-    h.connection.stop();
   });
 
   it("keeps a 0.6.0 relay's connection, which serves no preference, and says so", async () => {
     // The stock fake relay answers `/involvement` with a 404, as a relay from before 0.7.0 does.
     let source: QuestionSource | null = null;
     const h = await harness({ overrides: { onQuestionsReady: (ready) => (source = ready) } });
+    teardown.push(() => h.connection.stop());
     h.connection.start();
     await connectLive(h);
     const bridge = new QuestionBridge({
@@ -1867,6 +1874,5 @@ describe("get_involvement over a connection (#17228)", () => {
     });
     await vi.waitFor(() => expect(h.relay.questions).toHaveLength(1));
     expect(asked.status).toBe("queued");
-    h.connection.stop();
   });
 });
