@@ -1950,9 +1950,10 @@ export class WorkspaceService {
             // but none is its own. Setup, actions and teardown resolve the
             // environment by its exact key, so another one's commands are not
             // published here: its Connect would reach a box this worktree
-            // doesn't own.
+            // doesn't own. Applying an empty block also drops the commands a
+            // refresh finds left over from an environment since renamed away.
             if (monitor.resourceEnvironmentEpoch !== environmentEpoch) return;
-            monitor.setHasResourceConfig(true);
+            applyResourceConfigToMonitor(monitor, {}, (cmd) => cmd, false);
             if (monitor.isRunning && monitor.hasInitialStatus) this.emitUpdate(monitor);
             return;
           }

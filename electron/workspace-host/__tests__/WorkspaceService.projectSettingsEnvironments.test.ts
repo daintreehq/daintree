@@ -237,6 +237,26 @@ describe("WorkspaceService — resource environments saved in Project settings (
     }
   );
 
+  it("drops the commands of an environment renamed away on the next refresh", async () => {
+    await host()["initResourceConfigAsync"](monitor, worktreePath);
+    expect(monitor.resourceConnectCommand).toBe("ssh cloud.example");
+
+    const { ProjectSettingsManager } = await import("../../services/ProjectSettingsManager.js");
+    await new ProjectSettingsManager(path.join(userData, "projects"), {
+      get: vi.fn(),
+    } as never).saveProjectSettings(projectId, {
+      runCommands: [],
+      resourceEnvironments: { staging: ENVIRONMENT },
+    });
+    await host()["initResourceConfigAsync"](monitor, worktreePath);
+
+    expect(monitor.hasResourceConfig).toBe(true);
+    expect(monitor.resourceConnectCommand).toBeUndefined();
+    expect(monitor.hasStatusCommand).toBe(false);
+    expect(monitor.hasPauseCommand).toBe(false);
+    expect(monitor.hasTeardownCommand).toBe(false);
+  });
+
   it("tears the environment down when the worktree is deleted", async () => {
     await host()["initResourceConfigAsync"](monitor, worktreePath);
     await host()["runLifecycleTeardown"](worktreePath, monitor, false);
