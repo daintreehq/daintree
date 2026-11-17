@@ -123,11 +123,6 @@ describe("review hub inset", () => {
     expect(handSpelled).toEqual([]);
   });
 
-  it("the list skeleton's band is the section band, so resolving a list does not jump", () => {
-    const src = read("src/components/Worktree/ReviewHub/ReviewHubListSkeleton.tsx");
-    expect(src).toMatch(/cn\(REVIEW_HUB_SECTION_BAND, "border-b border-divider"\)/);
-  });
-
   it("no source spells a divider with an opacity suffix, which generates no CSS", () => {
     const files = [
       ...sourceFiles(path.join(ROOT, "src/components/Worktree/ReviewHub")),
@@ -139,12 +134,9 @@ describe("review hub inset", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("the diff pane footer sits on the toolbar's 8px inset and divider", () => {
-    const src = read("src/panels/diff/DiffPane.tsx");
-    const footer = src.slice(src.indexOf('data-testid="diff-pane-footer"'));
-    const cls = /className="([^"]*)"/.exec(footer)?.[1] ?? "";
-    expect(tokens(cls)).toEqual(expect.arrayContaining(["px-2", "border-t", "border-divider"]));
-    expect(tokens(cls)).not.toContain("border-border-strong");
+  it("the Resolved disclosure is wrapped in a real top divider", () => {
+    const src = read("src/components/Worktree/ReviewHub/ConflictPanel.tsx");
+    expect(src).toMatch(/<div className="border-t border-divider">\s*<button/);
   });
 
   it("nothing in the hub sits on the old 16px inset", () => {

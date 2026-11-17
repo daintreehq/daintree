@@ -14,9 +14,17 @@ export function ReviewHubListSkeleton({ label, onRetry }: { label: string; onRet
   return (
     <>
       <Skeleton label={label}>
-        <div className={cn(REVIEW_HUB_SECTION_BAND, "border-b border-divider")}>
-          <SkeletonBone immediate className="h-4 w-32" />
-          <SkeletonBone immediate className="h-4 w-12" />
+        {/* The loaded band's label is `text-2xs` on the inherited 1.5 leading, so
+            its line is 16.5px, not a whole 16: bones take one line height so the
+            list below doesn't shift when the real band lands. */}
+        <div
+          data-testid="review-hub-list-skeleton-band"
+          className={cn(REVIEW_HUB_SECTION_BAND, "border-b border-divider text-2xs")}
+        >
+          <div className="flex items-center gap-1.5">
+            <SkeletonBone immediate className="h-[1lh] w-32" />
+            <SkeletonBone immediate className="h-[1lh] w-8" />
+          </div>
         </div>
         <div className="px-2 py-1 flex flex-col gap-0.5">
           {ROW_WIDTHS.map((width) => (
