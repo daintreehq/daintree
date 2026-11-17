@@ -32,6 +32,7 @@ import { RemoveCloudHostDialog } from "./RemoveCloudHostDialog";
 import { cloudStatusFor, useCloudHosts } from "@/components/Hosts/cloud/cloudHostsState";
 import { canDeleteMachines, cloudProviderFor } from "@/components/Hosts/cloud/cloudHostLabels";
 import { HostWakeSetup } from "./HostWakeSetup";
+import { HostAgentForwardingRow } from "./HostAgentForwardingRow";
 import { bringBackMessage, canBringBack, useHostBringBacks } from "./hostBringBack";
 import {
   buildLabel,
@@ -495,6 +496,14 @@ export function HostDetail({
                   aria-describedby={descriptionId}
                 />
               )}
+            />
+          )}
+          {/* macOS and Linux Shells only for now (#17432). */}
+          {!isWindows() && (
+            <HostAgentForwardingRow
+              descriptor={descriptor}
+              hostName={hostName}
+              connected={connected}
             />
           )}
         </SettingsGroup>

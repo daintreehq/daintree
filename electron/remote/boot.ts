@@ -25,7 +25,7 @@ import { installDecisionsHostsClient } from "./decisions/clientInstall.js";
 import { installVoicePaneHostsClient } from "./voice/clientInstall.js";
 import { installHostControl, installHostControlLinkClient } from "./assistant/install.js";
 import { installHostPluginControlClient } from "./pluginControl/install.js";
-import { getRemoteService, requireRemoteService } from "./runtime.js";
+import { getRemoteService, registerRemoteService, requireRemoteService } from "./runtime.js";
 import {
   acceptLocalPushForRemoteView,
   installHybridSplits,
@@ -40,6 +40,7 @@ import { installPluginInstallSplits, installPluginParityClient } from "./plugins
 import { installSettingsCopyClient } from "./settingsCopy/install.js";
 import { installSettingsControlClient } from "./settingsControl/install.js";
 import { installPortForwardClient } from "./ports/clientInstall.js";
+import { installAgentForwardingClient } from "./agentForwarding/clientInstall.js";
 import { installHostSwitchService } from "./projects/clientInstall.js";
 import type { HostDescriptor, HostId } from "../../shared/types/remoteHosts.js";
 import type { LinkTransport } from "./client/transport.js";
@@ -309,6 +310,14 @@ function startClient(options: StartRemoteHostsOptions): void {
   );
   // This machine's alert choices, sent to every host it opens a session to (#14701).
   teardowns.push(installNotificationPolicyPush(client.manager));
+  // This computer's ssh-agent for a host's terminals, where its switch is on (#17432).
+  const agentForwarding = installAgentForwardingClient({
+    manager: client.manager,
+    registry: client.registry,
+    sessionFor: client.sessionFor,
+  });
+  teardowns.push(() => agentForwarding.dispose());
+  teardowns.push(registerRemoteService("agentForwardingClient", agentForwarding));
   // Host summaries and notifications: dials only hosts whose notifications are on.
   teardowns.push(
     installHostMetricsClient({

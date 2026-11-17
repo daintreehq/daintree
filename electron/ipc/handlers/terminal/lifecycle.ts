@@ -17,6 +17,7 @@ import {
   type PanePluginServer,
 } from "../../../services/McpPaneConfigService.js";
 import { loadedHelpSessionService } from "../../../services/helpSessionRuntime.js";
+import { getRemoteService } from "../../../remote/runtime.js";
 import { peekDriveLeaseService } from "../../../services/DriveLeaseService.js";
 import { isAssistantTerminalRecord } from "../../../services/assistantTerminal.js";
 import {
@@ -625,7 +626,13 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // an await between those bindings and the spawn lets a competing provision
     // revoke them against a PTY that does not exist yet, leaving the spawn to
     // proceed untracked.
+    // The project's driver's ssh-agent, when it forwards one here (#17432).
+    // Settled beside the ownership claim, for the same reason.
+    const forwardedAgentSocket = projectId
+      ? (getRemoteService("agentForwardingHost")?.socketForSpawn(projectId) ?? null)
+      : null;
     let spawnWorktreeId = validatedOptions.worktreeId;
+    const agentSocketPath = await forwardedAgentSocket;
     if ((await worktreeOwnership) === false) {
       console.warn(
         `[TerminalSpawn] Dropping worktreeId ${spawnWorktreeId} for terminal ${id.slice(0, 8)}: ` +
@@ -1390,6 +1397,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         ? getEffectiveAgentConfig(launchAgentId)?.capabilities?.inlineModeEnv
         : undefined;
     if (inlineModeEnv) spawnEnv = mergeLaunchEnv(spawnEnv ?? {}, inlineModeEnv);
+    // The person turned forwarding on for this host, so it outranks an
+    // SSH_AUTH_SOCK a preset or project env names.
+    if (agentSocketPath) {
+      spawnEnv = mergeLaunchEnv(spawnEnv ?? {}, { SSH_AUTH_SOCK: agentSocketPath });
+    }
 
     // Resolved again only if what it depends on moved since: a settings
     // template that named the executable itself, or a PATH adopted mid-spawn.

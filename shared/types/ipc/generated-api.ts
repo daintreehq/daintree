@@ -1942,6 +1942,9 @@ export interface GeneratedElectronAPI {
     cancelPendingSwitch(
       ...args: IpcInvokeMap["remote-hosts:cancel-pending-switch"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:cancel-pending-switch"]["result"]>;
+    checkAgentForwarding(
+      ...args: IpcInvokeMap["remote-hosts:check-agent-forwarding"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:check-agent-forwarding"]["result"]>;
     connect(
       ...args: IpcInvokeMap["remote-hosts:connect"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:connect"]["result"]>;

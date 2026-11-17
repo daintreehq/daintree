@@ -171,6 +171,7 @@ function sanitize(raw: unknown): HostDescriptor[] {
       // A field the record never had reads as an SSH host's default, on. Its
       // retired messaging switches were folded into it at migration (#13496).
       assistantControlEnabled: storedSwitch(host.assistantControlEnabled, connection),
+      ...(host.forwardSshAgent === true ? { forwardSshAgent: true } : {}),
       ...(typeof host.ownerWorktreeId === "string" && host.ownerWorktreeId
         ? { ownerWorktreeId: host.ownerWorktreeId }
         : {}),
@@ -311,6 +312,8 @@ export class HostRegistry {
         delete next.wake;
         // Nor was the worktree waiting on its setup meant for this machine.
         delete next.pendingPlacement;
+        // Nor is this computer's agent offered to a machine it wasn't offered to.
+        delete next.forwardSshAgent;
       }
     }
     if (payload.wake !== undefined) {
@@ -343,6 +346,18 @@ export class HostRegistry {
         throw invalid("assistantControlEnabled must be true or false.");
       }
       next.assistantControlEnabled = payload.assistantControlEnabled;
+    }
+    if (payload.forwardSshAgent !== undefined) {
+      if (typeof payload.forwardSshAgent !== "boolean") {
+        throw invalid("forwardSshAgent must be true or false.");
+      }
+      // Turned on for the machine it reaches now; a change of target in the
+      // same update drops it, even when this asks for it.
+      const retargeted =
+        payload.connection !== undefined &&
+        !sameHostConnection(next.connection, current.connection);
+      if (payload.forwardSshAgent && !retargeted) next.forwardSshAgent = true;
+      else delete next.forwardSshAgent;
     }
     return next;
   }

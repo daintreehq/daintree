@@ -1763,6 +1763,7 @@ export const CHANNELS = {
   REMOTE_HOSTS_LIST_PLUGIN_VIEW_CONSENTS: "remote-hosts:list-plugin-view-consents",
   REMOTE_HOSTS_RESET_PLUGIN_VIEW_CONSENT: "remote-hosts:reset-plugin-view-consent",
   REMOTE_HOSTS_PREPARE_PLUGIN_VIEW: "remote-hosts:prepare-plugin-view",
+  REMOTE_HOSTS_CHECK_AGENT_FORWARDING: "remote-hosts:check-agent-forwarding",
   REMOTE_HOSTS_EVENT: "remote-hosts:event",
   CLOUD_HOSTS_GET_SNAPSHOT: "cloud-hosts:get-snapshot",
   CLOUD_HOSTS_CHECK_ACCOUNT_KEY: "cloud-hosts:check-account-key",

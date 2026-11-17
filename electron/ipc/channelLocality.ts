@@ -1136,6 +1136,7 @@ export const CHANNEL_LOCALITY = {
   "remote-hosts:list-plugin-view-consents": "shell",
   "remote-hosts:reset-plugin-view-consent": "shell",
   "remote-hosts:prepare-plugin-view": "shell",
+  "remote-hosts:check-agent-forwarding": "shell",
   "review-marks:capture": "host",
   "review-marks:changed": "host",
   "review-marks:clear": "host",

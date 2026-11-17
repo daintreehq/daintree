@@ -1,4 +1,5 @@
 import os from "node:os";
+import path from "node:path";
 import { app } from "electron";
 import { BUILD_COMMIT } from "../buildGate.js";
 import {
@@ -25,6 +26,7 @@ import { installPluginParityHost } from "../plugins/parity/install.js";
 import { installSettingsCopyHost } from "../settingsCopy/install.js";
 import { installSettingsControlHost } from "../settingsControl/install.js";
 import { installHostPortService } from "../ports/hostPorts.js";
+import { installHostAgentForwarding } from "../agentForwarding/hostForwarder.js";
 import { installProjectsHost } from "../projects/hostInstall.js";
 import { getRemoteService, registerRemoteService } from "../runtime.js";
 import {
@@ -265,6 +267,14 @@ async function buildHostListener(
   teardowns.push(() => uploads.dispose());
   // Port forwards and project moves are per session, not per endpoint.
   teardowns.push(installHostPortService(server));
+  // A socket per project carrying ssh-agent requests to the Shell driving it (#17432).
+  const agentForwarding = installHostAgentForwarding({
+    server,
+    lease: getDriveLeaseService(),
+    socketDir: path.join(location.dir, "agent"),
+  });
+  teardowns.push(() => agentForwarding.dispose());
+  teardowns.push(registerRemoteService("agentForwardingHost", agentForwarding));
   // A Shell's assistant bringing a project here asks under the same setting (#14140).
   teardowns.push(
     installProjectsHost(server, undefined, () => getHelpAssistantSettings().acceptRemoteControl)

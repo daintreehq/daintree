@@ -1,0 +1,388 @@
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import net from "node:net";
+import path from "node:path";
+import { z } from "zod";
+import type { DriveTarget } from "../../services/DriveLeaseService.js";
+import { createLogger } from "../../utils/logger.js";
+import { clearStaleSocket, prepareOwnerOnlyDir } from "../host/HostServer.js";
+import { assertSocketPathFits } from "../host/hostSocketPath.js";
+import type { LinkSession } from "../link/session.js";
+import { parseIdentityAgent, readSshConfig, type SshConfigReader } from "./identityAgent.js";
+import {
+  AgentConfigurePayloadSchema,
+  AgentForwardMethod,
+  AgentReplySchema,
+  INSPECTED_SSH_DESTINATION,
+  type AgentInspectResult,
+} from "./linkMethods.js";
+import {
+  AGENT_FAILURE_BODY,
+  AgentFramingError,
+  AgentMessageReader,
+  frameAgentMessage,
+} from "./protocol.js";
+
+const logger = createLogger("main:HostAgentForwarding");
+
+declare module "../runtime.js" {
+  interface RemoteServices {
+    agentForwardingHost: HostAgentForwarding;
+  }
+}
+
+/**
+ * Host side of agent forwarding (#17432): one Unix socket per project, at a
+ * path that never changes, handed to new terminals as `SSH_AUTH_SOCK` while
+ * the project's driver has forwarding on. Each connection to it is carried
+ * over the link to the Shell driving the project when it was opened, and
+ * closes if that Shell stops driving. With no driver to carry it, it answers
+ * every request with an agent failure, so ssh moves on instead of hanging.
+ */
+
+export interface HostAgentSessionContext {
+  sessionId: string;
+  session: LinkSession;
+}
+
+export interface HostAgentForwardingDeps {
+  server: {
+    readonly sessions: ReadonlyArray<HostAgentSessionContext>;
+    onSession(listener: (ctx: HostAgentSessionContext) => void): () => void;
+  };
+  lease: {
+    getDriveTarget(projectId: string): DriveTarget;
+    onChange(listener: (state: { projectId: string }) => void): () => void;
+  };
+  /** Created owner-only; the project sockets live here. */
+  socketDir: string;
+  readSshConfig?: SshConfigReader;
+  /** How long a forwarded request may wait for the Shell's answer. */
+  replyTimeoutMs?: number;
+  /** A connection with nothing asked for this long is closed. */
+  idleTimeoutMs?: number;
+  maxConnectionsPerProject?: number;
+}
+
+export interface HostAgentForwarding {
+  /**
+   * The socket a terminal spawned in the project now should get, or null
+   * when its driver isn't a Shell with forwarding on.
+   */
+  socketForSpawn(projectId: string): Promise<string | null>;
+  dispose(): Promise<void>;
+}
+
+/** Past the Shell's own two-minute wait, so the Shell gives up first and says why. */
+const DEFAULT_REPLY_TIMEOUT_MS = 130_000;
+const DEFAULT_IDLE_TIMEOUT_MS = 10 * 60_000;
+const DEFAULT_MAX_CONNECTIONS_PER_PROJECT = 32;
+/** ssh asks one thing at a time; a client queueing more than this is broken. */
+const MAX_QUEUED_REQUESTS = 4;
+const INSPECT_CACHE_MS = 30_000;
+const MAX_CONNECTION_ID = 0xffffffff;
+
+/**
+ * Projects whose terminals were handed a socket in this process. A Host mode
+ * restart listens on them again at once, so terminals still running get an
+ * answer rather than a missing socket.
+ */
+const issuedProjects = new Set<string>();
+
+export function _resetIssuedAgentSocketsForTest(): void {
+  issuedProjects.clear();
+}
+
+export function agentSocketName(projectId: string): string {
+  return `${crypto.createHash("sha256").update(projectId).digest("hex").slice(0, 24)}.sock`;
+}
+
+const FAILURE_FRAME = frameAgentMessage(AGENT_FAILURE_BODY);
+
+export function installHostAgentForwarding(deps: HostAgentForwardingDeps): HostAgentForwarding {
+  const replyTimeoutMs = deps.replyTimeoutMs ?? DEFAULT_REPLY_TIMEOUT_MS;
+  const idleTimeoutMs = deps.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
+  const maxPerProject = deps.maxConnectionsPerProject ?? DEFAULT_MAX_CONNECTIONS_PER_PROJECT;
+  const readConfig = deps.readSshConfig ?? readSshConfig;
+
+  const consent = new WeakMap<LinkSession, boolean>();
+  const wired = new WeakSet<LinkSession>();
+  const listeners = new Map<string, Promise<string>>();
+  const servers = new Map<string, net.Server>();
+  const pathOwners = new Map<string, string>();
+  const connections = new Set<AgentConnection>();
+  const disposers: Array<() => void> = [];
+  let nextConnectionId = 1;
+  let inspected: { at: number; result: Promise<AgentInspectResult> } | null = null;
+  let disposed = false;
+
+  /** The link the project's driver is on, when it has forwarding on. */
+  const liveRoute = (projectId: string): LinkSession | null => {
+    const target = deps.lease.getDriveTarget(projectId);
+    if (target.kind !== "live" || target.endpoint.kind !== "remote-view") return null;
+    const sessionId = target.endpoint.linkSessionId;
+    if (!sessionId) return null;
+    const session = deps.server.sessions.find((ctx) => ctx.sessionId === sessionId)?.session;
+    return session && session.isOpen && consent.get(session) === true ? session : null;
+  };
+
+  /** Drop every connection that no longer reaches its project's driver. */
+  const recheck = (filter: (connection: AgentConnection) => boolean): void => {
+    for (const connection of [...connections]) {
+      if (!filter(connection) || connection.route === null) continue;
+      if (liveRoute(connection.projectId) !== connection.route) connection.close();
+    }
+  };
+
+  const inspect = (): Promise<AgentInspectResult> => {
+    const now = Date.now();
+    if (inspected && now - inspected.at < INSPECT_CACHE_MS) return inspected.result;
+    const result = readConfig(INSPECTED_SSH_DESTINATION).then(
+      (dump) => ({ identityAgent: parseIdentityAgent(dump) }),
+      () => ({ identityAgent: null })
+    );
+    inspected = { at: now, result };
+    return result;
+  };
+
+  const wire = ({ session }: HostAgentSessionContext): void => {
+    if (wired.has(session) || session.isClosed) return;
+    wired.add(session);
+    // A new link starts with forwarding off, a resumed session included: the
+    // Shell says again on every link whether its switch is on.
+    session.registerCallHandler(
+      AgentForwardMethod.CONFIGURE,
+      AgentConfigurePayloadSchema,
+      ({ enabled }) => {
+        consent.set(session, enabled);
+        if (!enabled) recheck((connection) => connection.route === session);
+        return null;
+      }
+    );
+    session.registerCallHandler(AgentForwardMethod.INSPECT, z.null(), () => inspect());
+    session.onClose(() => recheck((connection) => connection.route === session));
+  };
+
+  const listen = async (projectId: string): Promise<string> => {
+    await prepareOwnerOnlyDir(deps.socketDir);
+    const socketPath = path.join(deps.socketDir, agentSocketName(projectId));
+    const owner = pathOwners.get(socketPath);
+    if (owner !== undefined && owner !== projectId) {
+      throw new Error("Two projects map to one agent socket");
+    }
+    assertSocketPathFits(socketPath);
+    await clearStaleSocket(socketPath);
+    if (disposed) throw new Error("Agent forwarding stopped");
+    const server = net.createServer((socket) => accept(projectId, socket));
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+    server.on("error", () => {});
+    try {
+      await fs.chmod(socketPath, 0o600);
+      if (disposed) throw new Error("Agent forwarding stopped");
+    } catch (error) {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      throw error;
+    }
+    servers.set(projectId, server);
+    pathOwners.set(socketPath, projectId);
+    issuedProjects.add(projectId);
+    return socketPath;
+  };
+
+  const ensureListener = (projectId: string): Promise<string> => {
+    let ready = listeners.get(projectId);
+    if (!ready) {
+      ready = listen(projectId);
+      listeners.set(projectId, ready);
+      const settled = ready;
+      settled.catch(() => {
+        if (listeners.get(projectId) === settled) listeners.delete(projectId);
+      });
+    }
+    return ready;
+  };
+
+  const accept = (projectId: string, socket: net.Socket): void => {
+    if (disposed) {
+      socket.destroy();
+      return;
+    }
+    let open = 0;
+    for (const connection of connections) if (connection.projectId === projectId) open++;
+    if (open >= maxPerProject || nextConnectionId > MAX_CONNECTION_ID) {
+      socket.destroy();
+      return;
+    }
+    const connection = new AgentConnection(
+      nextConnectionId++,
+      projectId,
+      socket,
+      liveRoute(projectId),
+      {
+        stillRoutes: (c) => liveRoute(c.projectId) === c.route,
+        replyTimeoutMs,
+        idleTimeoutMs,
+        onClosed: (c) => connections.delete(c),
+      }
+    );
+    connections.add(connection);
+  };
+
+  for (const ctx of deps.server.sessions) wire(ctx);
+  disposers.push(deps.server.onSession(wire));
+  disposers.push(
+    deps.lease.onChange(({ projectId }) =>
+      recheck((connection) => connection.projectId === projectId)
+    )
+  );
+  for (const projectId of issuedProjects) {
+    ensureListener(projectId).catch((error: unknown) => {
+      logger.warn("Couldn't listen for agent requests again", { error });
+    });
+  }
+
+  return {
+    async socketForSpawn(projectId) {
+      if (disposed || liveRoute(projectId) === null) return null;
+      try {
+        return await ensureListener(projectId);
+      } catch (error) {
+        logger.warn("Couldn't open a project's agent socket", { error });
+        return null;
+      }
+    },
+    async dispose() {
+      if (disposed) return;
+      disposed = true;
+      for (const dispose of disposers.splice(0)) dispose();
+      for (const connection of [...connections]) connection.close();
+      const closing = [...servers.values()].map(
+        (server) => new Promise<void>((resolve) => server.close(() => resolve()))
+      );
+      servers.clear();
+      listeners.clear();
+      // Closing a pipe server unlinks its socket file.
+      await Promise.all(closing);
+    },
+  };
+}
+
+interface AgentConnectionHooks {
+  stillRoutes(connection: AgentConnection): boolean;
+  replyTimeoutMs: number;
+  idleTimeoutMs: number;
+  onClosed(connection: AgentConnection): void;
+}
+
+class AgentConnection {
+  private readonly reader = new AgentMessageReader();
+  private readonly queue: Uint8Array[] = [];
+  private inFlight = false;
+  /** A request reached the Shell, which may hold an agent connection for it. */
+  private relayed = false;
+  private closed = false;
+  private idle: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(
+    readonly id: number,
+    readonly projectId: string,
+    private readonly socket: net.Socket,
+    /** The driver's link when the connection opened; null answers every request with a failure. */
+    readonly route: LinkSession | null,
+    private readonly hooks: AgentConnectionHooks
+  ) {
+    socket.on("data", (chunk: Buffer) => this.receive(chunk));
+    socket.on("error", () => {
+      // "close" follows.
+    });
+    socket.once("close", () => this.close());
+    this.armIdle();
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    if (this.idle) clearTimeout(this.idle);
+    this.idle = null;
+    this.socket.destroy();
+    if (this.relayed && this.route?.isOpen) {
+      // No deadline: a notice that settles unsent is dropped, and the Shell's
+      // agent connection goes with its link anyway.
+      void this.route
+        .call(AgentForwardMethod.CLOSE, { connectionId: this.id }, { timeoutMs: 0 })
+        .catch(() => {});
+    }
+    this.hooks.onClosed(this);
+  }
+
+  private armIdle(): void {
+    if (this.idle) clearTimeout(this.idle);
+    this.idle = this.inFlight ? null : setTimeout(() => this.close(), this.hooks.idleTimeoutMs);
+  }
+
+  private receive(chunk: Buffer): void {
+    if (this.closed) return;
+    let messages: Uint8Array[];
+    try {
+      messages = this.reader.push(chunk);
+    } catch (error) {
+      if (!(error instanceof AgentFramingError)) throw error;
+      this.close();
+      return;
+    }
+    this.queue.push(...messages);
+    if (this.queue.length > MAX_QUEUED_REQUESTS) {
+      this.close();
+      return;
+    }
+    this.armIdle();
+    this.pump();
+  }
+
+  private pump(): void {
+    if (this.closed || this.inFlight) return;
+    const message = this.queue.shift();
+    if (!message) return;
+    if (this.route === null) {
+      this.socket.write(FAILURE_FRAME);
+      this.pump();
+      return;
+    }
+    // The driver moved on, turned forwarding off or lost its link since the
+    // connection opened: it never reaches anyone else's agent.
+    if (!this.hooks.stillRoutes(this)) {
+      this.close();
+      return;
+    }
+    this.inFlight = true;
+    this.relayed = true;
+    this.armIdle();
+    this.route
+      .call(
+        AgentForwardMethod.REQUEST,
+        { connectionId: this.id, message },
+        { timeoutMs: this.hooks.replyTimeoutMs }
+      )
+      .then(
+        (result) => {
+          const reply = AgentReplySchema.safeParse(result);
+          if (this.closed) return;
+          if (!reply.success) {
+            this.close();
+            return;
+          }
+          this.inFlight = false;
+          this.socket.write(frameAgentMessage(reply.data.message));
+          this.armIdle();
+          this.pump();
+        },
+        () => this.close()
+      );
+  }
+}

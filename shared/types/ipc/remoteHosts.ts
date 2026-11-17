@@ -31,6 +31,7 @@ export interface UpdateHostPayload {
   connection?: HostConnection;
   notificationsEnabled?: boolean;
   assistantControlEnabled?: boolean;
+  forwardSshAgent?: boolean;
   /** The host's wake setup (#16170); null removes it. */
   wake?: HostWakeSetup | null;
   /**
@@ -39,6 +40,18 @@ export interface UpdateHostPayload {
    * `requestedAt`): a cancelled or replaced one is left as it is.
    */
   pendingPlacement?: PendingHostPlacement | null;
+}
+
+/** What Settings shows beside a host's agent forwarding switch (#17432). */
+export interface HostAgentForwardingCheck {
+  /** Whether the agent this computer's ssh uses for the host is running. */
+  localAgent: boolean;
+  /**
+   * The `IdentityAgent` the host's ssh config sets for github.com, which takes
+   * the place of the forwarded agent there; null when it sets none. Absent
+   * while the host isn't connected, or when its build can't say.
+   */
+  hostIdentityAgent?: string | null;
 }
 
 export interface WindowHostInfo {
