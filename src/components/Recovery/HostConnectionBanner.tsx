@@ -143,11 +143,8 @@ export function HostConnectionBanner() {
       setStartingMachine(true);
       setMachineError(null);
       cloudHostsClient.startHost(hostId).then(
-        // The running push dials when it lands; this covers a reply that beats it here.
-        () => {
-          const seen = lastMachine.current;
-          if (seen.hostId !== hostId || seen.machine !== "running") nudgeHostReconnect(hostId);
-        },
+        // Beside the running push's own ask: Main keeps whichever dial is under way.
+        () => nudgeHostReconnect(hostId),
         (err: unknown) => {
           setStartingMachine(false);
           failed(err, "Couldn't start the machine", false);

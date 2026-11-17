@@ -460,7 +460,11 @@ describe("HostConnectionBanner on a stopped cloud machine (#17546)", () => {
     cloud.snapshot = machine();
   });
 
-  it("dials once, and never over that dial, when the running push lands before the start's reply", async () => {
+  // Each asks for the link once and neither starts it over: the second finds
+  // the first's dial under way and leaves it to finish (LinkClient.retryNow).
+  const ASKED_WITHOUT_RESTART = [[{ hostId: "studio-01" }], [{ hostId: "studio-01" }]];
+
+  it("never dials over its own dial when the running push lands before the start's reply", async () => {
     render(<HostConnectionBanner />);
     const reply = pressStart();
     observeRunning();
@@ -468,7 +472,7 @@ describe("HostConnectionBanner on a stopped cloud machine (#17546)", () => {
     dialUnderWay();
     await reply();
     act(() => cloud.push(machine({ machine: "running" })));
-    expect(connect).toHaveBeenCalledOnce();
+    expect(connect.mock.calls).toEqual(ASKED_WITHOUT_RESTART);
   });
 
   it("never dials over its own dial when the start's reply lands before the running push", async () => {
@@ -479,8 +483,7 @@ describe("HostConnectionBanner on a stopped cloud machine (#17546)", () => {
     dialUnderWay();
     observeRunning();
     act(() => cloud.push(machine({ machine: "running" })));
-    // The push asks again, without starting over: Main leaves the reply's dial to finish.
-    expect(connect.mock.calls).toEqual([[{ hostId: "studio-01" }], [{ hostId: "studio-01" }]]);
+    expect(connect.mock.calls).toEqual(ASKED_WITHOUT_RESTART);
   });
 
   it("dials a window waiting on a machine started elsewhere, without abandoning a dial under way", () => {

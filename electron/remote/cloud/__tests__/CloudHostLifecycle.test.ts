@@ -21,6 +21,7 @@ import { BoatProvider } from "../boat/BoatProvider.js";
 import { CloudAccountService } from "../CloudAccountService.js";
 import { MemoryCloudCredentialVault } from "../CloudCredentialVault.js";
 import { CloudHostLifecycle } from "../CloudHostLifecycle.js";
+import { CloudHosts } from "../CloudHosts.js";
 import { CloudHostStore, type CloudHostsValue } from "../CloudHostStore.js";
 import { CloudSshFiles } from "../CloudSshFiles.js";
 import type {
@@ -1022,7 +1023,10 @@ describe("CloudHostLifecycle start, stop, import and removal", () => {
   // What was last found about starting Daintree there went with the reboot (#17546).
   it("says once that a machine it started came up, before any view hears it is running", async () => {
     const onMachineStarted = vi.fn();
-    const { lifecycle, store } = await setup({ machine: "stopped" }, { onMachineStarted });
+    const { lifecycle, accounts, store } = await setup(
+      { machine: "stopped" },
+      { onMachineStarted }
+    );
     await lifecycle.importMachine({
       accountId: store.accounts()[0]!.id,
       resourceId: "bx_23456789",
@@ -1030,20 +1034,26 @@ describe("CloudHostLifecycle start, stop, import and removal", () => {
     });
     await lifecycle.refresh("build");
     expect(onMachineStarted).not.toHaveBeenCalled();
-    // As CloudHosts.changed() tells the views: a microtask after the store changes.
     const toldWhenViewsHeard: boolean[] = [];
-    store.onChange(() =>
-      queueMicrotask(() => {
-        if (store.bindings()[0]!.observation?.machine === "running") {
+    const views = new CloudHosts({
+      accounts,
+      store,
+      emit: (snapshot) => {
+        if (snapshot.hosts[0]?.machine === "running") {
           toldWhenViewsHeard.push(onMachineStarted.mock.calls.length > 0);
         }
-      })
-    );
-    await lifecycle.startMachine("build");
-    expect(onMachineStarted).toHaveBeenCalledExactlyOnceWith("build");
-    expect(toldWhenViewsHeard[0]).toBe(true);
-    await lifecycle.refresh("build");
-    expect(onMachineStarted).toHaveBeenCalledOnce();
+      },
+    });
+    views.attachLifecycle(lifecycle);
+    try {
+      await lifecycle.startMachine("build");
+      expect(onMachineStarted).toHaveBeenCalledExactlyOnceWith("build");
+      expect(toldWhenViewsHeard[0]).toBe(true);
+      await lifecycle.refresh("build");
+      expect(onMachineStarted).toHaveBeenCalledOnce();
+    } finally {
+      views.dispose();
+    }
   });
 
   it("doesn't take a first look at a running machine for one coming up", async () => {
@@ -1340,7 +1350,7 @@ describe("CloudHostLifecycle review fixes", () => {
     expect(provider.authorizeSsh).toHaveBeenCalledTimes(2);
   });
 
-  it("lets a dial reading the account across a start reach the machine, not the stop it read first", async () => {
+  it("lets a dial reading the account across a running observation reach the machine, not the stop it read first", async () => {
     const { lifecycle, accounts, provider, store, state } = await setup({ machine: "stopped" });
     await lifecycle.importMachine({
       accountId: store.accounts()[0]!.id,
@@ -1362,6 +1372,28 @@ describe("CloudHostLifecycle review fixes", () => {
     release();
     await expect(dial).resolves.toMatchObject({ target: `dtc-${bindingId}` });
     expect(provider.authorizeSsh).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves no access for a host removed while a dial read the account", async () => {
+    const { lifecycle, accounts, provider, store } = await setup();
+    await lifecycle.importMachine({
+      accountId: store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    const bindingId = store.bindings()[0]!.id;
+    let release: () => void = () => {};
+    const credentials = accounts.credentials.bind(accounts);
+    vi.spyOn(accounts, "credentials").mockImplementationOnce(async (...args) => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return credentials(...args);
+    });
+    const dial = lifecycle.ensureAccess(bindingId);
+    await vi.waitFor(() => expect(accounts.credentials).toHaveBeenCalled());
+    store.removeBinding(bindingId);
+    release();
+    await expect(dial).rejects.toBeInstanceOf(UnusableConnectionError);
+    expect(provider.authorizeSsh).not.toHaveBeenCalled();
   });
 
   it("lets one caller give up without failing the others waiting on the same access", async () => {

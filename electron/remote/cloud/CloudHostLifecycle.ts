@@ -173,9 +173,9 @@ export interface CloudHostLifecycleDeps {
   activity?(hostId: HostId): { connected: boolean; busy: boolean; shown: boolean } | null;
   /**
    * The host's machine was seen running where the last look saw it otherwise,
-   * or stopped since: it may have restarted, so what was last found about
-   * starting Daintree there is worth checking again. Called before the change
-   * reaches any view, ahead of the dials it prompts.
+   * or with a different reported stop time: it may have restarted, so what was
+   * last found about starting Daintree there is worth checking again. Called
+   * before the change reaches any view, ahead of the dials it prompts.
    */
   onMachineStarted?(hostId: HostId): void;
   now?: () => number;
@@ -1397,10 +1397,15 @@ export class CloudHostLifecycle {
   }
 
   private async resolveAccess(bindingId: string): Promise<CloudSshRoute> {
-    let binding = this.deps.store.binding(bindingId);
-    if (!binding) {
-      throw new UnusableConnectionError("This cloud host isn't set up on this device", null);
-    }
+    // Read again past each await: a removal there must not have its access resolved after all.
+    const current = (): StoredCloudBinding => {
+      const found = this.deps.store.binding(bindingId);
+      if (!found) {
+        throw new UnusableConnectionError("This cloud host isn't set up on this device", null);
+      }
+      return found;
+    };
+    let binding = current();
     if (!binding.resourceId) {
       throw new UnusableConnectionError(
         "The cloud machine hasn't been created yet",
@@ -1419,7 +1424,7 @@ export class CloudHostLifecycle {
     }
     // A start may have seen the machine running meanwhile: a dial left to finish
     // across it must not be refused on the stop it read first (#17546).
-    binding = this.deps.store.binding(bindingId) ?? binding;
+    binding = current();
     const { provider, credentials } = context;
     const fresh =
       binding.observation && this.now() - binding.observation.observedAt < DIAL_OBSERVATION_MS;
@@ -1436,10 +1441,7 @@ export class CloudHostLifecycle {
         }
         throw new UnusableConnectionError(described.message, described.message);
       }
-      binding = this.deps.store.binding(bindingId);
-      if (!binding) {
-        throw new UnusableConnectionError("This cloud host isn't set up on this device", null);
-      }
+      binding = current();
     }
     const machine = machineOf(binding);
     if (machine === "starting") {
