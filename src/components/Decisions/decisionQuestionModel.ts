@@ -49,6 +49,9 @@ export function threadEntryHeading(entry: DecisionThreadEntry): string {
     case "answer":
       if (entry.from === "model") return "Decision model's answer";
       if (entry.confirmsModel) return "Confirmed the decision model's answer";
+      if (entry.onComputer) {
+        return entry.correction ? "Correction from your computer" : "Answer from your computer";
+      }
       return entry.correction ? "Correction from your phone" : "Answer from your phone";
   }
 }
