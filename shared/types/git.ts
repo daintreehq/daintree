@@ -150,6 +150,16 @@ export interface ConflictedFileEntry {
 }
 
 /**
+ * How a whole-file conflict resolution takes a side. A side that no longer has
+ * the file (a modify/delete conflict) is taken by deleting it; `both` is the
+ * one deletion offered when neither side has it. Main refuses a choice the
+ * index no longer agrees with, so what was confirmed is what runs.
+ */
+export type ConflictSideChoice =
+  | { resolution: "checkout"; side: "ours" | "theirs" }
+  | { resolution: "delete"; side: "ours" | "theirs" | "both" };
+
+/**
  * Normalized rebase-todo action. Aliases (`p`/`pick`, `s`/`squash`, etc.) collapse
  * onto the long form. Structural lines (`exec`, `break`, `label`, `reset`, `merge`,
  * `update-ref`) fold into `other` so the renderer can de-emphasize them uniformly.

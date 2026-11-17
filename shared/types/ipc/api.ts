@@ -1361,7 +1361,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       cwd: string,
       filePaths: string[]
     ): Promise<import("./git.js").ConflictMarkerScanEntry[]>;
-    checkoutOursTheirs(cwd: string, filePath: string, side: "ours" | "theirs"): Promise<void>;
+    checkoutOursTheirs(
+      cwd: string,
+      filePath: string,
+      choice: import("../git.js").ConflictSideChoice
+    ): Promise<void>;
     compareWorktrees(
       cwd: string,
       branch1: string,
