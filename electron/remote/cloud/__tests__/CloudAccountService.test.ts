@@ -633,6 +633,20 @@ describe("CloudAccountService with declared credential sets", () => {
     expect(store.account(added.id)?.identity).toBe("alice@acme.iam");
   });
 
+  it("keeps a known sign-in when a check of the account answers with a blank one", async () => {
+    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE, {
+      validate: vi.fn(async () => ({ identity: "" })),
+    });
+    const { accounts, store } = service({ provider });
+    const added = await accounts.addAccount({
+      providerId: "acme.clouds.gce",
+      credentials: { keyFile: serviceAccountKey("key-one"), project: "acme-build" },
+      scopeId: "personal",
+    });
+    await accounts.validate(added.id);
+    expect(store.account(added.id)?.identity).toBe("octocat");
+  });
+
   it("won't make an account a second copy of one already connected for that sign-in and wallet", async () => {
     const provider = fieldsProvider("acme.clouds.gce", KEY_FILE);
     vi.mocked(provider.checkCredentials)

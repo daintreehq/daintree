@@ -428,6 +428,17 @@ export class CloudAccountService {
       const previous = await this.deps.vault.get(account.id);
       await this.deps.vault.put(account.id, credentials);
       try {
+        // A connect may have finished while the set was sealed.
+        const raced =
+          identity &&
+          this.findDuplicate(
+            before.providerId,
+            identity,
+            before.scope.id,
+            before.apiUrl,
+            before.id
+          );
+        if (raced) throw invalid(`${raced.displayName} is already connected as ${identity}.`);
         const latest = this.deps.store.account(account.id) ?? before;
         this.deps.store.putAccount({
           ...latest,
@@ -495,7 +506,7 @@ export class CloudAccountService {
       if (current && sameCredentials(current, account)) {
         this.deps.store.putAccount({
           ...current,
-          identity: identity ?? current.identity,
+          identity: identity?.trim() ? identity : current.identity,
           validation: { status: "valid", checkedAt: this.now() },
         });
       }
