@@ -1401,4 +1401,141 @@ describe("ProjectPulseService", () => {
     const cache = (svc as any).cache as Map<string, unknown>;
     expect(cache.size).toBe(0);
   });
+
+  describe("project age across DST changes (#17454)", () => {
+    type Moment = [year: number, monthIndex: number, day: number, hour: number, minute: number];
+    const at = ([y, m, d, h, min]: Moment) => new Date(y, m, d, h, min, 0, 0);
+    const midnightOf = ([y, m, d]: Moment) => new Date(y, m, d, 0, 0, 0, 0);
+
+    let originalTz: string | undefined;
+    let resolvedZone: string | undefined;
+
+    beforeEach(() => {
+      originalTz = process.env.TZ;
+      resolvedZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    });
+
+    afterEach(() => {
+      // Deleting an unset TZ does not reset the zone on every platform, so fall back to the resolved name.
+      const restore = originalTz ?? resolvedZone;
+      if (restore === undefined) delete process.env.TZ;
+      else process.env.TZ = restore;
+    });
+
+    async function pulseFor(first: Moment, commits: Moment[], today: Moment) {
+      vi.setSystemTime(at(today));
+      const firstTs = Math.floor(at(first).getTime() / 1000);
+      const commitOutput = commits.map((m) => Math.floor(at(m).getTime() / 1000)).join("\n");
+
+      const raw = vi.fn(async (args: string[]) => {
+        const cmd = args[0];
+        if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
+        if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
+        if (cmd === "rev-parse" && args.includes("--is-shallow-repository")) return "false\n";
+        if (cmd === "rev-list") return `${firstTs} rootsha\n`;
+        if (cmd === "log") return commitOutput;
+        return "";
+      });
+
+      vi.doMock("../../utils/hardenedGit.js", () => ({
+        createHardenedGit: () => createGitStub(raw),
+      }));
+
+      const { ProjectPulseService } = await import("../ProjectPulseService.js");
+      return new ProjectPulseService().getPulse({
+        worktreePath: "/repo",
+        worktreeId: "wt-dst",
+        mainBranch: "main",
+        rangeDays: 60 as const,
+        includeDelta: false,
+        includeRecentCommits: false,
+      });
+    }
+
+    // In every case an endpoint sits on a different UTC date than its local date (the New York
+    // first commits land a UTC day late, Sydney's today a UTC day early), so counting UTC dates
+    // instead of local ones comes up short.
+    const cases: Array<{
+      name: string;
+      zone: string;
+      first: Moment;
+      commits: Moment[];
+      today: Moment;
+      midnightGapHours: number;
+      ageDays: number;
+    }> = [
+      {
+        name: "spring forward in America/New_York, a commit on each of three dates",
+        zone: "America/New_York",
+        first: [2026, 2, 7, 20, 30],
+        commits: [
+          [2026, 2, 7, 20, 30],
+          [2026, 2, 8, 12, 0],
+          [2026, 2, 9, 10, 0],
+        ],
+        today: [2026, 2, 9, 10, 0],
+        midnightGapHours: 47,
+        ageDays: 3,
+      },
+      {
+        name: "fall back in America/New_York, a commit on each of three dates",
+        zone: "America/New_York",
+        first: [2026, 9, 31, 20, 30],
+        commits: [
+          [2026, 9, 31, 20, 30],
+          [2026, 10, 1, 12, 0],
+          [2026, 10, 2, 10, 0],
+        ],
+        today: [2026, 10, 2, 10, 0],
+        midnightGapHours: 49,
+        ageDays: 3,
+      },
+      {
+        name: "a span that crosses the spring change but starts days before it",
+        zone: "America/New_York",
+        first: [2026, 2, 1, 20, 30],
+        commits: [
+          [2026, 2, 1, 20, 30],
+          [2026, 2, 20, 10, 0],
+        ],
+        today: [2026, 2, 20, 10, 0],
+        midnightGapHours: 19 * 24 - 1,
+        ageDays: 20,
+      },
+      {
+        name: "spring forward in a southern-hemisphere zone (Australia/Sydney, October)",
+        zone: "Australia/Sydney",
+        first: [2026, 9, 3, 10, 30],
+        commits: [
+          [2026, 9, 3, 10, 30],
+          [2026, 9, 4, 12, 0],
+          [2026, 9, 5, 10, 30],
+        ],
+        today: [2026, 9, 5, 10, 30],
+        midnightGapHours: 47,
+        ageDays: 3,
+      },
+    ];
+
+    it.each(cases)(
+      "counts calendar dates, not elapsed hours: $name",
+      async ({ zone, first, commits, today, midnightGapHours, ageDays }) => {
+        process.env.TZ = zone;
+        // Guards the premise: the zone took effect and the midnights are not 24h multiples.
+        const gapMs = midnightOf(today).getTime() - midnightOf(first).getTime();
+        expect(gapMs / (60 * 60 * 1000)).toBe(midnightGapHours);
+
+        const pulse = await pulseFor(first, commits, today);
+
+        expect(pulse.projectAgeDays).toBe(ageDays);
+        expect(pulse.activeDays).toBe(new Set(commits.map(([y, m, d]) => `${y}-${m}-${d}`)).size);
+        // The strip and summary render activeDays/projectAgeDays, so the numerator can never exceed it.
+        expect(pulse.activeDays).toBeLessThanOrEqual(pulse.projectAgeDays);
+        // Cells the heatmap greys out agree with the age: exactly the last `ageDays` cells are live.
+        const live = pulse.heatmap.filter((cell) => !cell.isBeforeProject);
+        expect(live).toHaveLength(ageDays);
+        expect(live.every((cell) => pulse.heatmap.indexOf(cell) >= 60 - ageDays)).toBe(true);
+      }
+    );
+  });
 });
