@@ -259,7 +259,8 @@ function groupByHost<T>(items: readonly T[], keyOf: (item: T) => string) {
  * and the receipt it gave. A host keeps its receipt for TRASH_TTL_MS from its
  * trash, which came before its answer reached here: one held here longer is
  * an Undo the host would refuse, so it is let go rather than kept for as long
- * as the panel stays open.
+ * as the panel stays open. Timed on the monotonic clock: a wall clock set
+ * forward must not end an Undo the host still keeps.
  */
 export function createTrashReceipts() {
   let last = 0;
@@ -267,7 +268,7 @@ export function createTrashReceipts() {
   const lapsed = (at: number, now: number) => now - at > TRASH_TTL_MS;
   return {
     issue(hostId: HostId, receipt: number): number {
-      const now = Date.now();
+      const now = performance.now();
       for (const [mine, entry] of held) if (lapsed(entry.at, now)) held.delete(mine);
       const mine = ++last;
       held.set(mine, { hostId, receipt, at: now });
@@ -278,7 +279,7 @@ export function createTrashReceipts() {
       const entry = held.get(mine);
       if (!entry) return null;
       held.delete(mine);
-      return lapsed(entry.at, Date.now()) ? null : entry;
+      return lapsed(entry.at, performance.now()) ? null : entry;
     },
     get size() {
       return held.size;

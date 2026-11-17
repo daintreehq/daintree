@@ -423,7 +423,7 @@ describe("createAllHostsRoute", () => {
 
   describe("trash receipts on a route left open", () => {
     beforeEach(() => {
-      vi.useFakeTimers({ toFake: ["Date"], now: 1_000_000 });
+      vi.useFakeTimers({ toFake: ["performance"] });
     });
     afterEach(() => {
       vi.useRealTimers();
@@ -448,7 +448,7 @@ describe("createAllHostsRoute", () => {
       const [bulk] = await api.trashBatch([{ runId: allHostsKey("remote", "r2"), spawnedAt: 2 }]);
       if (single === null || !bulk || !("receipt" in bulk)) throw new Error("expected trashed");
 
-      vi.setSystemTime(Date.now() + TRASH_TTL_MS);
+      vi.advanceTimersByTime(TRASH_TTL_MS);
       await api.untrash(single);
       expect(invoke).toHaveBeenCalledWith("remote", "canopy:untrash", 21);
       expect(await api.untrashBatch([bulk.receipt!])).toEqual([{ receipt: bulk.receipt }]);
@@ -461,13 +461,30 @@ describe("createAllHostsRoute", () => {
       const [bulk] = await api.trashBatch([{ runId: allHostsKey("own", "o2"), spawnedAt: 2 }]);
       if (single === null || !bulk || !("receipt" in bulk)) throw new Error("expected trashed");
 
-      vi.setSystemTime(Date.now() + TRASH_TTL_MS + 1);
+      vi.advanceTimersByTime(TRASH_TTL_MS + 1);
       await expect(api.untrash(single)).rejects.toThrow("That terminal has left the trash.");
       expect(await api.untrashBatch([bulk.receipt!])).toEqual([
         { receipt: bulk.receipt, error: "That terminal has left the trash." },
       ]);
       expect(ownCalls.untrash).not.toHaveBeenCalled();
       expect(ownCalls.untrashBatch).not.toHaveBeenCalled();
+    });
+
+    it("puts back what a bulk Undo still can when some of it has lapsed", async () => {
+      const { api } = createAllHostsRoute("own", ["own"]);
+      const [old] = await api.trashBatch([{ runId: allHostsKey("own", "o1"), spawnedAt: 1 }]);
+      vi.advanceTimersByTime(TRASH_TTL_MS);
+      const [fresh] = await api.trashBatch([{ runId: allHostsKey("own", "o2"), spawnedAt: 2 }]);
+      if (!old || !fresh || !("receipt" in old) || !("receipt" in fresh)) {
+        throw new Error("expected trashed");
+      }
+      vi.advanceTimersByTime(1);
+      const undone = await api.untrashBatch([old.receipt!, fresh.receipt!]);
+      expect(ownCalls.untrashBatch).toHaveBeenCalledWith([11]);
+      expect(undone).toEqual([
+        { receipt: old.receipt, error: "That terminal has left the trash." },
+        { receipt: fresh.receipt },
+      ]);
     });
 
     it("keeps only the trashes still undoable across many trashes never undone", async () => {
@@ -480,7 +497,7 @@ describe("createAllHostsRoute", () => {
         if (mine === null || !bulk || !("receipt" in bulk)) throw new Error("expected trashed");
         singles.push(mine);
         bulks.push(bulk.receipt!);
-        vi.setSystemTime(Date.now() + 5_000);
+        vi.advanceTimersByTime(5_000);
       }
       // The newest are still the host's to take back; the first lapsed long ago.
       await api.untrash(singles.at(-1)!);
@@ -502,7 +519,7 @@ describe("createAllHostsRoute", () => {
       for (let i = 0; i < 200; i += 1) {
         issued.push(book.issue(i % 2 === 0 ? "own" : "remote", i));
         expect(book.size).toBeLessThanOrEqual(Math.floor(TRASH_TTL_MS / step) + 1);
-        vi.setSystemTime(Date.now() + step);
+        vi.advanceTimersByTime(step);
       }
       // Two hosts numbering alike still get receipts of their own.
       expect(new Set(issued).size).toBe(issued.length);
