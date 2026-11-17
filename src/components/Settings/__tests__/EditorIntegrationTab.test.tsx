@@ -17,7 +17,7 @@
 import { useContext, type ContextType } from "react";
 import type React from "react";
 import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EditorIntegrationTab } from "../EditorIntegrationTab";
 import { SettingsFlushContext, SettingsFlushProvider } from "../SettingsFlushRegistry";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -207,6 +207,43 @@ describe("EditorIntegrationTab", () => {
         projectId: "proj-1",
       });
     });
+  });
+
+  it("tells WebStorm and IntelliJ IDEA apart, and keeps the saved one selected on reload", async () => {
+    const jetbrains = [
+      { id: "webstorm", available: true, executablePath: "/opt/jetbrains/webstorm" },
+      { id: "intellij-idea", available: true, executablePath: "/opt/jetbrains/idea" },
+    ];
+    getConfigMock.mockResolvedValue({
+      preferredEditor: { id: "webstorm" },
+      discoveredEditors: jetbrains,
+    });
+    const saveButton = await renderLoadedTab();
+    const select = screen.getByLabelText("Editor") as HTMLSelectElement;
+    const optionText = (id: string) =>
+      Array.from(select.options).find((option) => option.value === id)?.textContent;
+    expect(optionText("webstorm")).toBe("WebStorm");
+    expect(optionText("intellij-idea")).toBe("IntelliJ IDEA");
+
+    selectEditor("intellij-idea");
+    fireEvent.click(saveButton);
+    await waitFor(() => {
+      expect(setConfigMock).toHaveBeenCalledWith({
+        editor: { id: "intellij-idea", customCommand: undefined, customTemplate: undefined },
+        projectId: "proj-1",
+      });
+    });
+
+    cleanup();
+    getConfigMock.mockResolvedValue({
+      preferredEditor: { id: "intellij-idea" },
+      discoveredEditors: jetbrains,
+    });
+    await renderLoadedTab();
+
+    expect((screen.getByLabelText("Editor") as HTMLSelectElement).value).toBe("intellij-idea");
+    const selected = document.querySelector('[data-editor-entry="intellij-idea"]');
+    expect(selected?.textContent).toContain("/opt/jetbrains/idea");
   });
 
   it("keeps Save disabled until the draft differs from the saved preference", async () => {

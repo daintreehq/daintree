@@ -124,21 +124,21 @@ describe("EditorService.discover", () => {
 
     const discover = await loadDiscover();
     const results = await discover();
-    const webstorm = results.find((e) => e.id === "webstorm");
+    const idea = results.find((e) => e.id === "intellij-idea");
 
-    expect(webstorm).toBeDefined();
-    expect(webstorm!.available).toBe(true);
-    expect(webstorm!.executablePath).toBe(
+    expect(idea).toBeDefined();
+    expect(idea!.available).toBe(true);
+    expect(idea!.executablePath).toBe(
       "/Users/testuser/Applications/IntelliJ IDEA.app/Contents/MacOS/idea"
     );
   });
 
   // Probes run concurrently, so completion order is arbitrary; the pick must
   // still be the one a sequential walk makes.
-  it("keeps binary-then-directory precedence when a lower-priority probe settles first", async () => {
+  it("keeps directory precedence when a lower-priority probe settles first", async () => {
     Object.defineProperty(process, "platform", { value: "linux" });
     process.env.PATH = "/slow/bin:/fast/bin";
-    const present = new Set(["/slow/bin/idea", "/fast/bin/idea", "/fast/bin/webstorm"]);
+    const present = new Set(["/slow/bin/idea", "/fast/bin/idea"]);
     fsMock.promises.stat.mockImplementation(async (filePath: string) => {
       if (filePath.startsWith("/slow/")) await new Promise((r) => setTimeout(r, 20));
       if (present.has(filePath)) return { isFile: () => true };
@@ -149,11 +149,11 @@ describe("EditorService.discover", () => {
     const discover = await loadDiscover();
     const results = await discover();
 
-    expect(results.find((e) => e.id === "webstorm")!.executablePath).toBe("/fast/bin/webstorm");
+    expect(results.find((e) => e.id === "intellij-idea")!.executablePath).toBe("/slow/bin/idea");
 
-    present.delete("/fast/bin/webstorm");
+    present.delete("/slow/bin/idea");
     const second = await discover();
-    expect(second.find((e) => e.id === "webstorm")!.executablePath).toBe("/slow/bin/idea");
+    expect(second.find((e) => e.id === "intellij-idea")!.executablePath).toBe("/fast/bin/idea");
   });
 
   it("skips a directory match and a non-executable file for the next candidate", async () => {
@@ -1311,5 +1311,154 @@ describe("EditorService terminal-only editors", () => {
 
     await expect(openFile("/abs/file.ts", 12, 5, { id: "vscode" })).resolves.toBeUndefined();
     expect(launchedBinaries()).toEqual(["/usr/local/bin/code"]);
+  });
+});
+
+describe("EditorService JetBrains products", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    originalPATH = process.env.PATH;
+    originalVISUAL = process.env.VISUAL;
+    originalEDITOR = process.env.EDITOR;
+    process.env.PATH = "";
+    delete process.env.VISUAL;
+    delete process.env.EDITOR;
+    setPlatform("darwin");
+    mockExistingFiles([]);
+    shellMock.openPath.mockResolvedValue("");
+    mockExecaChildren(execaMock.execa, ["spawned"]);
+  });
+
+  afterEach(() => {
+    setPlatform(originalPlatform);
+    process.env.PATH = originalPATH;
+    if (originalVISUAL === undefined) delete process.env.VISUAL;
+    else process.env.VISUAL = originalVISUAL;
+    if (originalEDITOR === undefined) delete process.env.EDITOR;
+    else process.env.EDITOR = originalEDITOR;
+  });
+
+  const WEBSTORM = "/Applications/WebStorm.app/Contents/MacOS/webstorm";
+  const IDEA = "/Applications/IntelliJ IDEA.app/Contents/MacOS/idea";
+  const VSCODE = "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code";
+  const WORKTREE = "/abs/worktrees/feature-x";
+
+  function launchedPrograms(): string[] {
+    return execaMock.execa.mock.calls.map(([program]) => program as string);
+  }
+
+  it("discovers WebStorm and IntelliJ IDEA as separate editors when both are installed", async () => {
+    mockExistingFiles([WEBSTORM, IDEA]);
+    const { discover } = await loadModule();
+
+    const results = await discover();
+
+    expect(results.find((e) => e.id === "webstorm")?.executablePath).toBe(WEBSTORM);
+    expect(results.find((e) => e.id === "intellij-idea")?.executablePath).toBe(IDEA);
+  });
+
+  it("reports WebStorm as not found when only IntelliJ IDEA is installed", async () => {
+    mockExistingFiles([IDEA]);
+    const { discover } = await loadModule();
+
+    const results = await discover();
+
+    expect(results.find((e) => e.id === "webstorm")?.available).toBe(false);
+    expect(results.find((e) => e.id === "intellij-idea")?.executablePath).toBe(IDEA);
+  });
+
+  it("finds each product's own Toolbox script and community-edition bundle", async () => {
+    const toolbox = "/Users/testuser/Library/Application Support/JetBrains/Toolbox/scripts";
+    mockExistingFiles([
+      `${toolbox}/goland`,
+      "/Users/testuser/Applications/PyCharm CE.app/Contents/MacOS/pycharm",
+      "/Applications/IntelliJ IDEA CE.app/Contents/MacOS/idea",
+    ]);
+    const { discover } = await loadModule();
+
+    const found = Object.fromEntries(
+      (await discover()).filter((e) => e.available).map((e) => [e.id, e.executablePath])
+    );
+
+    expect(found).toEqual({
+      goland: `${toolbox}/goland`,
+      pycharm: "/Users/testuser/Applications/PyCharm CE.app/Contents/MacOS/pycharm",
+      "intellij-idea": "/Applications/IntelliJ IDEA CE.app/Contents/MacOS/idea",
+    });
+  });
+
+  it.each([
+    { id: "webstorm", expected: WEBSTORM },
+    { id: "intellij-idea", expected: IDEA },
+  ] as const)("opens a file at its line in the chosen $id", async ({ id, expected }) => {
+    mockExistingFiles([WEBSTORM, IDEA]);
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/src/Main.java", 12, 4, { id });
+
+    expect(execaMock.execa.mock.calls).toEqual([
+      [
+        expected,
+        ["--line", "12", "/abs/src/Main.java"],
+        expect.objectContaining({ detached: true }),
+      ],
+    ]);
+  });
+
+  it.each([
+    { id: "webstorm", expected: WEBSTORM },
+    { id: "intellij-idea", expected: IDEA },
+  ] as const)("opens a worktree folder in the chosen $id", async ({ id, expected }) => {
+    mockExistingFiles([WEBSTORM, IDEA]);
+    const { openFile } = await loadModule();
+
+    await openFile(WORKTREE, undefined, undefined, { id }, true);
+
+    expect(execaMock.execa.mock.calls).toEqual([
+      [expected, [WORKTREE], expect.objectContaining({ detached: true })],
+    ]);
+    expect(shellMock.openPath).not.toHaveBeenCalled();
+  });
+
+  // A saved `webstorm` predates the split, when it meant whichever JetBrains IDE
+  // came first; it keeps opening that IDE rather than leaving for VS Code.
+  it("keeps a saved webstorm choice opening another JetBrains IDE when WebStorm is absent", async () => {
+    mockExistingFiles([IDEA, VSCODE]);
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/src/Main.java", 3, undefined, { id: "webstorm" });
+
+    expect(launchedPrograms()).toEqual([IDEA]);
+  });
+
+  it("searches a saved webstorm choice binary first, then directory, as it always did", async () => {
+    setPlatform("linux");
+    process.env.PATH = "/early/bin:/late/bin";
+    mockExistingFiles(["/early/bin/idea", "/late/bin/webstorm"]);
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/src/Main.java", undefined, undefined, { id: "webstorm" });
+
+    expect(launchedPrograms()).toEqual(["/late/bin/webstorm"]);
+  });
+
+  it("never swaps a chosen product for a different JetBrains IDE", async () => {
+    mockExistingFiles([WEBSTORM, VSCODE]);
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/src/Main.java", 3, undefined, { id: "intellij-idea" });
+
+    expect(launchedPrograms()).toEqual([VSCODE]);
+  });
+
+  it("keeps the automatic pick in the old JetBrains order", async () => {
+    const SUBLIME = "/Applications/Sublime Text.app/Contents/SharedSupport/bin/subl";
+    mockExistingFiles(["/Applications/Rider.app/Contents/MacOS/rider", IDEA, SUBLIME]);
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/src/Main.java", undefined, undefined, null);
+
+    expect(launchedPrograms()).toEqual([IDEA]);
   });
 });

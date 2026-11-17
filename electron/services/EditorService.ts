@@ -30,6 +30,75 @@ interface EditorDefinition {
   buildArgs(filePath: string, line?: number, col?: number, isDirectory?: boolean): string[];
 }
 
+interface JetBrainsProduct {
+  id: KnownEditorId;
+  name: string;
+  /** The launcher name, both for a Toolbox script and inside the app bundle */
+  binary: string;
+  /** macOS app bundle names, the community edition after the paid one */
+  bundles: string[];
+}
+
+/**
+ * One entry per IDE, so each is its own choice. Listed in the order their
+ * binaries were searched when they shared a single entry, which keeps the
+ * automatic pick in `openFile` landing on the same IDE it always did.
+ */
+const JETBRAINS_PRODUCTS: JetBrainsProduct[] = [
+  { id: "webstorm", name: "WebStorm", binary: "webstorm", bundles: ["WebStorm"] },
+  {
+    id: "intellij-idea",
+    name: "IntelliJ IDEA",
+    binary: "idea",
+    bundles: ["IntelliJ IDEA", "IntelliJ IDEA CE"],
+  },
+  { id: "phpstorm", name: "PhpStorm", binary: "phpstorm", bundles: ["PhpStorm"] },
+  { id: "pycharm", name: "PyCharm", binary: "pycharm", bundles: ["PyCharm", "PyCharm CE"] },
+  { id: "goland", name: "GoLand", binary: "goland", bundles: ["GoLand"] },
+  { id: "rider", name: "Rider", binary: "rider", bundles: ["Rider"] },
+  { id: "clion", name: "CLion", binary: "clion", bundles: ["CLion"] },
+  { id: "datagrip", name: "DataGrip", binary: "datagrip", bundles: ["DataGrip"] },
+  { id: "rubymine", name: "RubyMine", binary: "rubymine", bundles: ["RubyMine"] },
+];
+
+function jetbrainsBuildArgs(filePath: string, line?: number): string[] {
+  if (line !== undefined) {
+    return ["--line", String(line), filePath];
+  }
+  return [filePath];
+}
+
+function jetbrainsEditor(product: JetBrainsProduct): EditorDefinition {
+  return {
+    id: product.id,
+    name: product.name,
+    binaries: [product.binary],
+    extraDirs: () => [
+      ...jetbrainsToolboxScriptDirs(),
+      ...macAppBundleDirs(product.bundles.map((name) => ({ name }))),
+    ],
+    buildArgs: jetbrainsBuildArgs,
+  };
+}
+
+/**
+ * What a saved `webstorm` meant before each IDE had its own entry: whichever
+ * JetBrains IDE is found first. A config saved then keeps opening the same IDE
+ * when WebStorm itself isn't installed, instead of leaving JetBrains entirely.
+ */
+const LEGACY_JETBRAINS: EditorDefinition = {
+  id: "webstorm",
+  name: "WebStorm",
+  binaries: JETBRAINS_PRODUCTS.map((product) => product.binary),
+  extraDirs: () => [
+    ...jetbrainsToolboxScriptDirs(),
+    ...macAppBundleDirs(
+      JETBRAINS_PRODUCTS.flatMap((product) => product.bundles).map((name) => ({ name }))
+    ),
+  ],
+  buildArgs: jetbrainsBuildArgs,
+};
+
 const KNOWN_EDITORS: EditorDefinition[] = [
   {
     id: "vscode",
@@ -107,43 +176,7 @@ const KNOWN_EDITORS: EditorDefinition[] = [
       return [filePath];
     },
   },
-  {
-    id: "webstorm",
-    name: "WebStorm / IntelliJ",
-    binaries: [
-      "webstorm",
-      "idea",
-      "phpstorm",
-      "pycharm",
-      "goland",
-      "rider",
-      "clion",
-      "datagrip",
-      "rubymine",
-    ],
-    extraDirs: () => [
-      ...jetbrainsToolboxScriptDirs(),
-      ...macAppBundleDirs([
-        { name: "WebStorm" },
-        { name: "IntelliJ IDEA" },
-        { name: "IntelliJ IDEA CE" },
-        { name: "PhpStorm" },
-        { name: "PyCharm" },
-        { name: "PyCharm CE" },
-        { name: "GoLand" },
-        { name: "Rider" },
-        { name: "CLion" },
-        { name: "DataGrip" },
-        { name: "RubyMine" },
-      ]),
-    ],
-    buildArgs(filePath, line) {
-      if (line !== undefined) {
-        return ["--line", String(line), filePath];
-      }
-      return [filePath];
-    },
-  },
+  ...JETBRAINS_PRODUCTS.map(jetbrainsEditor),
   {
     id: "sublime",
     name: "Sublime Text",
@@ -549,7 +582,7 @@ export async function openFile(
         if (launched) return;
       }
     } else {
-      const def = resolveEditorDef(config.id);
+      const def = config.id === "webstorm" ? LEGACY_JETBRAINS : resolveEditorDef(config.id);
       const terminalCommand = def && terminalOnlyEditorCommand(def.id);
       if (def && terminalCommand) {
         return { outcome: "needs-terminal", editorName: def.name, command: terminalCommand };
