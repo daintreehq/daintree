@@ -743,6 +743,16 @@ describe("parseDecisionNotice, follow-ups (#16231)", () => {
     expect(parse(text)).toBeNull();
   });
 
+  // Daintree types every follow-up as sent from the phone, so one from the computer is refused whole until #17238.
+  it("refuses a follow-up the person sent from their computer rather than type it as a phone's", () => {
+    const fromComputer = noticeChunk([answer(), followUp({ onComputer: true })]);
+    expect(fromComputer).toContain("source: human\nsent_from: computer\n");
+    expect(parseDecisionNotice(fromComputer)).toBeNull();
+    expect(parseDecisionNotice(noticeChunk([answer(), followUp({ onComputer: false })]))).toEqual(
+      thread(noticeChunk([answer(), followUp()]))
+    );
+  });
+
   it("takes two messages of one question, and follow-ups to different questions", () => {
     const blocks = thread(
       noticeChunk([

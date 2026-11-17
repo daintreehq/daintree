@@ -1125,6 +1125,18 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     const [message] = parseMessages((await store.getQuestion(asked))!.messages_json);
     expect(typed.text).toContain(`message_id: ${message!.message_id}\n`);
     expect(typed.text).toContain(`[decision-injection ${message!.delivery!.injection_id}]`);
+    // The agent reads it in get_decision's thread as the person's, sent from the phone (#17433).
+    const shown = await callTool(listener.port, "token-pane-1", "get_decision", {
+      question_id: asked,
+    });
+    expect(shown.structuredContent.thread).toContainEqual(
+      expect.objectContaining({
+        kind: "message",
+        message_id: message!.message_id,
+        side: "human",
+        sent_from: "phone",
+      })
+    );
     await vi.waitFor(
       () =>
         expect(
@@ -1217,6 +1229,20 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
         }),
       { timeout: 15_000 }
     );
+    // Every field agents read before 0.8.0, and nothing of where the person set it (#17433).
+    expect(await read()).toEqual({
+      status: "available",
+      mode: "recommend",
+      normal_mode: "recommend",
+      consult_count: 3,
+      revision: 2,
+      override_active: false,
+      until: null,
+      set_at: expect.any(String),
+      last_synced_at: expect.any(String),
+      stale: false,
+      reason: null,
+    });
   }, 60_000);
 
   // A photo from the phone is stored on the Host, in the asking pane's directory, and typed as its path (#16233).
