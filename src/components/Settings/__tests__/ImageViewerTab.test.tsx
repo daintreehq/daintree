@@ -61,7 +61,8 @@ beforeEach(() => {
     runCommands: [],
     devServerCommand: "npm run dev",
   } as ProjectSettings);
-  vi.mocked(projectClient.saveSettings).mockResolvedValue(undefined);
+  // A reset, not a clear: a held Save a failed test never reached must not carry over.
+  vi.mocked(projectClient.saveSettings).mockReset().mockResolvedValue(undefined);
 });
 
 /** Settings seeded into the cache, with a sentinel a bad write would disturb. */
@@ -272,6 +273,72 @@ describe("ImageViewerTab flushed by a close", () => {
         { mode: "custom", customCommand: "feh" },
       ]);
       expect(screen.getByText("Custom (feh)")).toBeTruthy();
+    });
+
+    it("writes what the field holds when the Save lands, though it changed after the close began", async () => {
+      const firstSave = holdFirstSave();
+      const flush = await renderFlushable();
+      await saveThenEdit("gimp", "feh");
+
+      const flushing = flush();
+      fireEvent.change(screen.getByRole("textbox", { name: "Command" }), {
+        target: { value: "krita" },
+      });
+      await act(async () => firstSave().resolve());
+
+      await expect(flushing).resolves.toEqual([]);
+      expect(savedCommands()).toEqual([
+        { mode: "custom", customCommand: "gimp" },
+        { mode: "custom", customCommand: "krita" },
+      ]);
+    });
+
+    it("keeps waiting when the field changes after a close joined a Save of the same command", async () => {
+      const firstSave = holdFirstSave();
+      const flush = await renderFlushable();
+      await saveThenEdit("gimp");
+
+      const flushing = flush();
+      fireEvent.change(screen.getByRole("textbox", { name: "Command" }), {
+        target: { value: "feh" },
+      });
+      await act(async () => firstSave().resolve());
+
+      await expect(flushing).resolves.toEqual([]);
+      expect(savedCommands()).toEqual([
+        { mode: "custom", customCommand: "gimp" },
+        { mode: "custom", customCommand: "feh" },
+      ]);
+    });
+
+    it("writes the OS default chosen while a custom Save runs", async () => {
+      const firstSave = holdFirstSave();
+      const flush = await renderFlushable();
+      await saveThenEdit("gimp");
+      fireEvent.click(screen.getByRole("radio", { name: /Use OS default/i }));
+
+      const flushing = flush();
+      await act(async () => firstSave().resolve());
+
+      await expect(flushing).resolves.toEqual([]);
+      expect(savedCommands()).toEqual([
+        { mode: "custom", customCommand: "gimp" },
+        { mode: "os", customCommand: undefined },
+      ]);
+    });
+
+    it("lands on the command field when a custom choice with none follows a Save of the suggestion", async () => {
+      const firstSave = holdFirstSave();
+      const flush = await renderFlushable();
+      fireEvent.click(screen.getByRole("button", { name: /save/i }));
+      await waitFor(() => expect(projectClient.saveSettings).toHaveBeenCalledTimes(1));
+      fireEvent.click(screen.getByRole("radio", { name: /Custom command/i }));
+
+      const flushing = flush();
+      await act(async () => firstSave().resolve());
+
+      expect((await flushing)[0]?.landOn).toBe("image-viewer-command");
+      expect(savedCommands()).toEqual([{ mode: "os", customCommand: undefined }]);
     });
 
     it("saves once when the edit comes back to what the running Save writes", async () => {

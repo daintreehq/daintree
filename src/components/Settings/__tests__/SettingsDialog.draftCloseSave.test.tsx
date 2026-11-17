@@ -163,7 +163,7 @@ async function hideWindow() {
 async function openOnIntegrations() {
   const onClose = vi.fn();
   render(<SettingsDialog isOpen onClose={onClose} defaultTab="integrations" />);
-  await screen.findByText(/^Saved:/, {}, { timeout: 5_000 });
+  await screen.findAllByText(/^Saved:/, {}, { timeout: 5_000 });
   const osRadio = await screen.findByRole("radio", { name: /Use OS default/i });
   await waitFor(() => expect((osRadio as HTMLInputElement).disabled).toBe(false));
   return onClose;
@@ -221,31 +221,80 @@ describe("SettingsDialog closed over an Integrations draft", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("waits for a Save still running, then saves the command edited since", async () => {
-    let finishFirstSave!: () => void;
-    saveSettings.mockImplementationOnce(
-      async (_projectId: string, next: Record<string, unknown>) => {
-        await new Promise<void>((resolve) => (finishFirstSave = resolve));
+  describe("while an image viewer Save is still running", () => {
+    /** Holds each write until the test settles it, in the order they arrive. */
+    function holdSaves() {
+      const held: Array<{ resolve: () => void; reject: (reason: Error) => void }> = [];
+      saveSettings.mockImplementation(async (_projectId: string, next: Record<string, unknown>) => {
+        await new Promise<void>((resolve, reject) => held.push({ resolve, reject }));
         settingsFile = next;
-      }
-    );
-    const onClose = await openOnIntegrations();
-    chooseCustomViewer("gimp");
-    const viewerSection = document.getElementById("image-viewer")!;
-    fireEvent.click(within(viewerSection).getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(1));
-    fireEvent.change(screen.getByRole("textbox", { name: "Command" }), {
-      target: { value: "feh" },
+      });
+      return held;
+    }
+
+    async function saveViewerThenEdit(first: string, next?: string) {
+      chooseCustomViewer(first);
+      const viewerSection = document.getElementById("image-viewer")!;
+      fireEvent.click(within(viewerSection).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(1));
+      if (next === undefined) return;
+      fireEvent.change(screen.getByRole("textbox", { name: "Command" }), {
+        target: { value: next },
+      });
+    }
+
+    it("closes only once the command edited since is saved too", async () => {
+      const held = holdSaves();
+      const onClose = await openOnIntegrations();
+      await saveViewerThenEdit("gimp", "feh");
+
+      await pressEscape();
+      await act(async () => held[0]!.resolve());
+      await waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(2));
+      expect(onClose).not.toHaveBeenCalled();
+
+      await act(async () => held[1]!.resolve());
+
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(settingsFile.preferredImageViewer).toEqual({ mode: "custom", customCommand: "feh" });
     });
 
-    await pressEscape();
-    expect(onClose).not.toHaveBeenCalled();
+    it("stays open on the command edited since when its own save fails", async () => {
+      const held = holdSaves();
+      const onClose = await openOnIntegrations();
+      await saveViewerThenEdit("gimp", "feh");
 
-    await act(async () => finishFirstSave());
+      await pressEscape();
+      await act(async () => held[0]!.resolve());
+      await waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(2));
+      await act(async () => held[1]!.reject(new Error("Read-only file system")));
 
-    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
-    expect(saveSettings).toHaveBeenCalledTimes(2);
-    expect(settingsFile.preferredImageViewer).toEqual({ mode: "custom", customCommand: "feh" });
+      expect(await screen.findByText(/Read-only file system/)).toBeTruthy();
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Command" }).value).toBe("feh");
+    });
+
+    it("saves a return to the saved command made while a hide waits on the Save", async () => {
+      settingsFile = {
+        ...settingsFile,
+        preferredImageViewer: { mode: "custom", customCommand: "feh" },
+      };
+      const held = holdSaves();
+      const onClose = await openOnIntegrations();
+      await saveViewerThenEdit("gimp");
+
+      await hideWindow();
+      fireEvent.change(screen.getByRole("textbox", { name: "Command" }), {
+        target: { value: "feh" },
+      });
+      await pressEscape();
+      await act(async () => held[0]!.resolve());
+      await waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(2));
+      await act(async () => held[1]!.resolve());
+
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(settingsFile.preferredImageViewer).toEqual({ mode: "custom", customCommand: "feh" });
+    });
   });
 
   it("keeps both drafts when the editor and the image viewer are pending together", async () => {
