@@ -94,26 +94,38 @@ describe("CloudProviderRegistry", () => {
     const plugin = { kind: "plugin" as const, pluginId: "acme.clouds" };
     // A plugin can't take a built-in's bare id, or another plugin's.
     expect(() =>
-      registry.register(fakeProvider("boat", () => resource()), { owner: plugin, apiUrl: "" })
+      registry.register(
+        fakeProvider("boat", () => resource()),
+        { owner: plugin, apiUrl: "" }
+      )
     ).toThrow(/namespace/);
     expect(() =>
-      registry.register(fakeProvider("other.clouds.ec2", () => resource()), {
-        owner: plugin,
-        apiUrl: "",
-      })
+      registry.register(
+        fakeProvider("other.clouds.ec2", () => resource()),
+        {
+          owner: plugin,
+          apiUrl: "",
+        }
+      )
     ).toThrow(/namespace/);
     // Nor can a built-in take a plugin-shaped id.
     expect(() =>
-      registry.register(fakeProvider(PLUGIN_PROVIDER, () => resource()), {
-        owner: { kind: "built-in" },
-        apiUrl: "",
-      })
+      registry.register(
+        fakeProvider(PLUGIN_PROVIDER, () => resource()),
+        {
+          owner: { kind: "built-in" },
+          apiUrl: "",
+        }
+      )
     ).toThrow(/bare name/);
     expect(() =>
-      registry.register(fakeProvider("Not An Id", () => resource()), {
-        owner: { kind: "built-in" },
-        apiUrl: "",
-      })
+      registry.register(
+        fakeProvider("Not An Id", () => resource()),
+        {
+          owner: { kind: "built-in" },
+          apiUrl: "",
+        }
+      )
     ).toThrow(/Invalid/);
     expect([...registry.values()]).toEqual([]);
   });
@@ -136,10 +148,13 @@ describe("CloudProviderRegistry", () => {
     const owner = { kind: "plugin" as const, pluginId: "acme.clouds" };
     const changes = vi.fn();
     const stopWatching = registry.onChange(changes);
-    const first = registry.register(fakeProvider(PLUGIN_PROVIDER, () => resource()), {
-      owner,
-      apiUrl: "one",
-    });
+    const first = registry.register(
+      fakeProvider(PLUGIN_PROVIDER, () => resource()),
+      {
+        owner,
+        apiUrl: "one",
+      }
+    );
     first();
     expect(registry.get(PLUGIN_PROVIDER)).toBeUndefined();
     expect(registry.apiUrlFor(PLUGIN_PROVIDER)).toBeNull();

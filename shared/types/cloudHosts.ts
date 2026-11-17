@@ -48,7 +48,10 @@ export function isCloudProviderId(value: unknown): value is CloudProviderId {
 }
 
 /** The id a plugin's provider is registered under, or null when either part isn't valid. */
-export function pluginCloudProviderId(pluginId: string, providerName: string): CloudProviderId | null {
+export function pluginCloudProviderId(
+  pluginId: string,
+  providerName: string
+): CloudProviderId | null {
   const id = `${pluginId}.${providerName}`;
   const namespace = cloudProviderNamespace(id);
   return namespace?.kind === "plugin" && namespace.pluginId === pluginId ? id : null;

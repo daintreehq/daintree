@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  cloudProviderNamespace,
-  isCloudProviderId,
-  pluginCloudProviderId,
-} from "../cloudHosts.js";
+import { cloudProviderNamespace, isCloudProviderId, pluginCloudProviderId } from "../cloudHosts.js";
 
 describe("cloud provider ids", () => {
   it("reads a bare name as a built-in, registered or not", () => {
