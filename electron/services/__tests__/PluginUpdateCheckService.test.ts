@@ -281,6 +281,7 @@ describe("PluginUpdateCheckService", () => {
       const waits: number[] = [];
       for (let pass = 0; pass < 8; pass++) waits.push(await nextPassDelay(svc));
 
+      expect(waits[0]).toBeGreaterThan(0);
       for (let i = 1; i < 4; i++) expect(waits[i]).toBe(waits[i - 1] * 2);
       const ceiling = waits[waits.length - 1];
       expect(ceiling).toBeGreaterThanOrEqual(waits[3]);
@@ -345,11 +346,10 @@ describe("PluginUpdateCheckService", () => {
       });
 
       await svc.maybeRunDue("Periodic");
+      expect(pluginServiceMock.checkForUpdate).toHaveBeenCalledWith("pub.a");
       expect(storeState.value.lastCheckedAt).toBe(START - 2 * DAY);
 
-      pluginServiceMock.checkForUpdate.mockClear();
-      await svc.maybeRunDue("Periodic");
-      expect(pluginServiceMock.checkForUpdate).not.toHaveBeenCalled();
+      expect(await nextPassDelay(svc)).toBeGreaterThan(0);
     });
 
     it("counts a pass with nothing to check as conclusive", async () => {
