@@ -344,6 +344,20 @@ describe("Resource error envelope (integration through sessionServer)", () => {
         recentCommits: recentCommits.length - keptCommits,
         ...(keptDays < heatmap.length ? { heatmap: heatmap.length - keptDays } : {}),
       });
+      // Commits were placed against an empty heatmap, and no further one fits there.
+      const oneMoreCommit = JSON.stringify({
+        ...parsed,
+        truncated: {
+          ...parsed.truncated,
+          omitted: {
+            recentCommits: recentCommits.length - keptCommits - 1,
+            heatmap: heatmap.length,
+          },
+        },
+        heatmap: [],
+        recentCommits: recentCommits.slice(0, keptCommits + 1),
+      });
+      expect(Buffer.byteLength(oneMoreCommit, "utf8")).toBeGreaterThan(RESOURCE_TEXT_MAX_BYTES);
     });
   });
 });
