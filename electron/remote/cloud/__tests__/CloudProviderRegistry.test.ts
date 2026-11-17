@@ -10,7 +10,11 @@ import { CloudAccountService } from "../CloudAccountService.js";
 import { MemoryCloudCredentialVault } from "../CloudCredentialVault.js";
 import { CloudHostLifecycle } from "../CloudHostLifecycle.js";
 import { CloudHosts } from "../CloudHosts.js";
-import { CloudHostStore, type CloudHostsValue } from "../CloudHostStore.js";
+import {
+  CloudHostStore,
+  type CloudHostsValue,
+  type StoredCloudBinding,
+} from "../CloudHostStore.js";
 import { CloudProviderRegistry } from "../CloudProviderRegistry.js";
 import { CloudSshFiles } from "../CloudSshFiles.js";
 import type { CloudProvider, ProviderResource } from "../provider.js";
@@ -205,6 +209,7 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
       now: () => clock.now,
     });
     const hosts: HostDescriptor[] = [];
+    const disconnect = vi.fn(async () => {});
     const files = new CloudSshFiles(path.join(root, "cloud"), (async () => ({
       code: 0,
       stdout: "",
@@ -226,7 +231,7 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
         get: (id) => hosts.find((host) => host.id === id) ?? null,
         list: () => hosts,
         forget: async () => {},
-        disconnect: async () => {},
+        disconnect,
         onChange: () => () => {},
       },
       changed: () => {},
@@ -238,7 +243,18 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
     const cloudHosts = new CloudHosts({ accounts, store, emit: (s) => emitted.push(s) });
     cloudHosts.attachLifecycle(lifecycle);
     registry.onChange(() => cloudHosts.providersChanged());
-    return { store, registry, vault, accounts, lifecycle, cloudHosts, hosts, emitted, clock };
+    return {
+      store,
+      registry,
+      vault,
+      accounts,
+      lifecycle,
+      cloudHosts,
+      hosts,
+      emitted,
+      clock,
+      disconnect,
+    };
   }
 
   const pluginOwner = { kind: "plugin" as const, pluginId: "acme.clouds" };
@@ -307,22 +323,46 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
 
   it("refuses a person's start, stop or lifetime change before anything here changes", async () => {
     const env = await importedHost();
-    env.store.updateBinding(env.store.bindings()[0]!.id, (current) => ({
-      ...current,
-      intent: "stop",
-    }));
+    const id = env.store.bindings()[0]!.id;
+    const set = (change: Partial<StoredCloudBinding>) =>
+      env.store.updateBinding(id, (current) => ({ ...current, ...change }));
     env.unregister();
-    const before = JSON.stringify(env.store.bindings());
     const refused = {
       code: "UNSUPPORTED",
       userMessage: expect.stringContaining("acme.clouds"),
     };
+
+    set({ intent: "stop" });
     await expect(env.lifecycle.startMachine(env.hostId)).rejects.toMatchObject(refused);
+    expect(env.store.binding(id)!.intent).toBe("stop");
+
+    set({ intent: "run" });
     await expect(env.lifecycle.stopMachine(env.hostId)).rejects.toMatchObject(refused);
+    expect(env.store.binding(id)!.intent).toBe("run");
+    expect(env.disconnect).not.toHaveBeenCalled();
+
+    // A stopped machine's lifetime is otherwise only kept here, with no provider call to refuse it.
+    set({ observation: { ...env.store.binding(id)!.observation!, machine: "stopped" } });
+    expect(env.store.binding(id)!.lifetimeSeconds).toBe(7200);
     await expect(env.lifecycle.setLifetime(env.hostId, null)).rejects.toMatchObject(refused);
-    expect(JSON.stringify(env.store.bindings())).toBe(before);
+    expect(env.store.binding(id)!.lifetimeSeconds).toBe(7200);
     expect(env.provider.start).not.toHaveBeenCalled();
     expect(env.provider.stop).not.toHaveBeenCalled();
+  });
+
+  it("drops a renewal whose provider was replaced while its key was read", async () => {
+    const env = await importedHost();
+    const replacement = fakeProvider(PLUGIN_PROVIDER, () => resource());
+    const read = env.vault.get.bind(env.vault);
+    vi.spyOn(env.vault, "get").mockImplementationOnce(async (accountId) => {
+      env.unregister();
+      env.registry.register(replacement, { owner: pluginOwner, apiUrl: "https://api.acme.test" });
+      return read(accountId);
+    });
+    await env.lifecycle.renewDue();
+    expect(env.provider.renewLifetime).not.toHaveBeenCalled();
+    expect(replacement.renewLifetime).not.toHaveBeenCalled();
+    expect(env.store.bindings()[0]!.lastError).toBeNull();
   });
 
   it("polls again as soon as its provider is back, not after the time it was gone", async () => {
@@ -577,6 +617,34 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
       await vi.waitFor(() =>
         expect(env.store.binding("cb_abcdefgh12")?.resourceId).toBe("i-0123456789")
       );
+    } finally {
+      env.lifecycle.dispose();
+    }
+  });
+
+  it("looks again when its provider came back before the old lookup failed", async () => {
+    const env = await pendingCreateEnv();
+    const created = resource({ labels: { "daintree-binding": "cb_abcdefgh12" } });
+    const provider = fakeProvider(PLUGIN_PROVIDER, () => created);
+    let fail!: (error: Error) => void;
+    vi.mocked(provider.list).mockImplementationOnce(
+      () => new Promise<ProviderResource[]>((_resolve, reject) => (fail = reject))
+    );
+    env.lifecycle.start();
+    try {
+      await vi.waitFor(() => expect(env.store.binding("cb_abcdefgh12")).not.toBeNull());
+      const unregister = env.registry.register(provider, {
+        owner: pluginOwner,
+        apiUrl: "https://api.acme.test",
+      });
+      await vi.waitFor(() => expect(provider.list).toHaveBeenCalledTimes(1));
+      unregister();
+      env.registry.register(provider, { owner: pluginOwner, apiUrl: "https://api.acme.test" });
+      fail(new Error("worker stopped"));
+      await vi.waitFor(() =>
+        expect(env.store.binding("cb_abcdefgh12")?.resourceId).toBe("i-0123456789")
+      );
+      expect(provider.list).toHaveBeenCalledTimes(2);
     } finally {
       env.lifecycle.dispose();
     }

@@ -183,6 +183,8 @@ export class CloudHostLifecycle {
   private readonly awaitingProvider = new Set<string>();
   /** Creates being looked for right now, so two passes never ask about one at once. */
   private readonly reconciling = new Set<string>();
+  /** Lookups a provider change overtook: a failure may be the old provider's, not the machine's. */
+  private readonly reconcileOvertaken = new Set<string>();
   private renewingAll = false;
   private stopWatchingHosts: (() => void) | null = null;
   private disposed = false;
@@ -199,7 +201,9 @@ export class CloudHostLifecycle {
 
   /** A provider registered or left: a create left unreconciled for want of its provider is looked for now. */
   providersChanged(): void {
-    if (this.disposed || this.awaitingProvider.size === 0) return;
+    if (this.disposed) return;
+    for (const bindingId of this.reconciling) this.reconcileOvertaken.add(bindingId);
+    if (this.awaitingProvider.size === 0) return;
     void this.reconcileUnfinishedCreates(new Set(this.awaitingProvider));
   }
 
@@ -488,6 +492,7 @@ export class CloudHostLifecycle {
    * setup didn't finish and offers Retry; nothing is created on its own.
    */
   private async reconcileUnfinishedCreates(only?: ReadonlySet<string>): Promise<void> {
+    const again = new Set<string>();
     for (const binding of this.deps.store.bindings()) {
       if (only && !only.has(binding.id)) continue;
       if (binding.resourceId || !binding.creation?.sentAt || !binding.hostId) continue;
@@ -524,14 +529,19 @@ export class CloudHostLifecycle {
         }
       } catch {
         // The provider can't be asked now; the host keeps saying setup is incomplete.
-        // One that left while it was asked looks again when it's back.
+        // One that left while it was asked looks again when it's back, and one
+        // that came back meanwhile is asked again now.
         if (this.deps.accounts.providerUnavailable(binding.providerId)) {
           this.awaitingProvider.add(binding.id);
+        } else if (this.reconcileOvertaken.has(binding.id)) {
+          again.add(binding.id);
         }
       } finally {
         this.reconciling.delete(binding.id);
+        this.reconcileOvertaken.delete(binding.id);
       }
     }
+    if (again.size > 0 && !this.disposed) void this.reconcileUnfinishedCreates(again);
   }
 
   /** Adds an existing machine as a host. Importing never starts it, and never changes its lifetime. */
