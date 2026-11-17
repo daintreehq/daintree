@@ -178,6 +178,127 @@ describe("AuditRingStore", () => {
     });
   });
 
+  it("persists in-place changes to nested data and to the key set of a reused record", async () => {
+    const tools = ["read"];
+    const auth = { tier: "workbench" as string, grantId: "g1" as string | undefined };
+    const records: Record<string, unknown>[] = [
+      { id: "a", tools, auth },
+      { id: "b", v: "b" },
+      { id: "c", v: "c" },
+    ];
+    store.writeAll("mcpAuditLog", records, 10);
+    await settle();
+    opCounts();
+
+    tools.push("write");
+    auth.tier = "full";
+    delete auth.grantId;
+    records[1]!.extra = 1;
+    delete records[2]!.v;
+    store.writeAll("mcpAuditLog", records, 10);
+    await settle();
+
+    expect(opCounts()).toEqual({ update: 3 });
+    expect(store.readAll("mcpAuditLog")).toEqual([
+      { id: "a", tools: ["read", "write"], auth: { tier: "full" } },
+      { id: "b", v: "b", extra: 1 },
+      { id: "c" },
+    ]);
+  });
+
+  it("re-serializes records whose JSON depends on more than plain data on every flush", async () => {
+    const at = new Date(1000);
+    const records = [{ id: "a", at }, rec("b")];
+    store.writeAll("mcpAuditLog", records, 10);
+    await settle();
+    opCounts();
+
+    at.setTime(2000);
+    const stringify = vi.spyOn(JSON, "stringify");
+    store.writeAll("mcpAuditLog", records, 10);
+    const serialized = stringify.mock.calls.length;
+    stringify.mockRestore();
+    await settle();
+
+    expect(serialized).toBe(1);
+    expect(opCounts()).toEqual({ update: 1 });
+    expect(store.readAll<{ at: string }>("mcpAuditLog")[0]!.at).toBe(new Date(2000).toJSON());
+  });
+
+  it("re-serializes every record on a sync write, then lets later background flushes reuse them", async () => {
+    const records = [rec("a"), rec("b"), rec("c")];
+    store.writeAll("mcpAuditLog", records, 10);
+    await settle();
+
+    const stringify = vi.spyOn(JSON, "stringify");
+    store.writeAll("mcpAuditLog", records, 10, { sync: true });
+    const syncSerialized = stringify.mock.calls.length;
+    stringify.mockClear();
+    store.writeAll("mcpAuditLog", [...records, rec("d")], 10);
+    const backgroundSerialized = stringify.mock.calls.length;
+    stringify.mockRestore();
+    await settle();
+
+    expect(syncSerialized).toBe(3);
+    expect(backgroundSerialized).toBe(1);
+    expect(sentOps().at(-1)).toMatchObject({ op: "ringApply", upserts: [{ recordId: "d" }] });
+    expect(store.readAll<Rec>("mcpAuditLog").map((r) => r.id)).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("updates every ring holding a shared record that changed in place", async () => {
+    const shared = rec("s");
+    store.writeAll("mcpAuditLog", [shared], 10);
+    store.writeAll("forgeAuditLog", [rec("f"), shared], 10);
+    await settle();
+
+    shared.v = "changed";
+    store.writeAll("mcpAuditLog", [shared], 10);
+    store.writeAll("forgeAuditLog", [rec("f"), shared], 10);
+    await settle();
+
+    expect(store.readAll<Rec>("mcpAuditLog").map((r) => r.v)).toEqual(["changed"]);
+    expect(store.readAll<Rec>("forgeAuditLog").map((r) => r.v)).toEqual(["f", "changed"]);
+  });
+
+  it("stores one object listed twice as two unkeyed rows, then resumes deltas once it is unique", async () => {
+    const twice = rec("t");
+    store.writeAll("mcpAuditLog", [twice, twice], 10);
+    await settle();
+    expect(store.readAll<Rec>("mcpAuditLog").map((r) => r.id)).toEqual(["t", "t"]);
+
+    store.writeAll("mcpAuditLog", [twice], 10);
+    await settle();
+    store.writeAll("mcpAuditLog", [twice, rec("u")], 10);
+    await settle();
+
+    expect(sentOps().map((op) => op.op)).toEqual(["ringWriteAll", "ringWriteAll", "ringApply"]);
+    expect(sentOps()[2]).toMatchObject({ upserts: [{ recordId: "u" }], deletes: [] });
+    expect(store.readAll<Rec>("mcpAuditLog").map((r) => r.id)).toEqual(["t", "u"]);
+  });
+
+  it("keeps a queued snapshot when a cached record turns circular, and recovers once it is repaired", async () => {
+    const held = holdWorker();
+    const b: Rec & { self?: unknown } = rec("b");
+    store.writeAll("mcpAuditLog", [rec("a")], 10);
+    store.writeAll("mcpAuditLog", [rec("a"), b], 10);
+
+    b.self = b;
+    store.writeAll("mcpAuditLog", [rec("a"), b], 10);
+    held.shift()!.resolve(workerExecutes(sentOps()[0]!));
+    await settle();
+    held.shift()!.resolve(workerExecutes(sentOps()[1]!));
+    await settle();
+    expect(sentOps()[1]).toMatchObject({ op: "ringApply", upserts: [{ recordId: "b" }] });
+    expect(store.readAll<Rec>("mcpAuditLog")).toEqual([rec("a"), rec("b")]);
+
+    delete b.self;
+    b.v = "repaired";
+    store.writeAll("mcpAuditLog", [rec("a"), b], 10);
+    held.shift()!.resolve(workerExecutes(sentOps()[2]!));
+    await settle();
+    expect(store.readAll<Rec>("mcpAuditLog").map((r) => r.v)).toEqual(["a", "repaired"]);
+  });
+
   it("persists an in-place update as a single row update that keeps the record's position", async () => {
     const records = [rec("a"), rec("b"), rec("c")];
     store.writeAll("mcpAuditLog", records, 10);
