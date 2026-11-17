@@ -1,12 +1,11 @@
-import type {
-  CloudCredentialField,
-  CloudCredentialValues,
+import {
+  MAX_CLOUD_CREDENTIAL_LINE_BYTES,
+  MAX_CLOUD_CREDENTIAL_TEXT_BYTES,
+  type CloudCredentialField,
+  type CloudCredentialValues,
 } from "../../../shared/types/cloudHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
 
-/** Per value, in UTF-8 bytes: one line, then text over several lines or a key file. */
-export const MAX_CLOUD_CREDENTIAL_LINE_BYTES = 4096;
-export const MAX_CLOUD_CREDENTIAL_TEXT_BYTES = 64 * 1024;
 const MAX_SET_BYTES = 256 * 1024;
 const MAX_FIELDS = 16;
 const FIELD_ID = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;

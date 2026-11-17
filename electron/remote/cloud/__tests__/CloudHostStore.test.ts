@@ -232,6 +232,38 @@ describe("CloudHostStore provisioning", () => {
     expect(read(undefined)).toBeNull();
     expect(read({ ...last, image: 7 })).toBeNull();
     expect(read({ location: "eu-west-1" })).toBeNull();
+
+describe("CloudHostStore accounts", () => {
+  const account = {
+    id: "ca_0123456789",
+    providerId: "boat",
+    displayName: "Personal",
+    identity: "octocat",
+    scope: { kind: "personal" as const, id: "personal", name: "Personal" },
+    apiUrl: "https://boat.dev/api/v1",
+    keyHint: "abcd",
+    addedAt: 1,
+    validation: { status: "valid" as const, checkedAt: 1 },
+  };
+
+  it("keeps the credential revision across a restart and unrelated writes", () => {
+    const backend = disk();
+    const store = new CloudHostStore(backend);
+    store.putAccount({ ...account, credentialRevision: "0011223344556677" });
+    store.putBinding(binding({ accountId: account.id }));
+    store.removeBinding("cb_abcdefgh12");
+    expect(new CloudHostStore(backend).account(account.id)?.credentialRevision).toBe(
+      "0011223344556677"
+    );
+  });
+
+  it("reads an account saved before revisions existed as having none", () => {
+    const backend = disk();
+    backend.write({ version: 1, accounts: [account], bindings: [] });
+    expect(new CloudHostStore(backend).account(account.id)).toMatchObject({
+      keyHint: "abcd",
+      credentialRevision: null,
+    });
   });
 });
 

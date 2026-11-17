@@ -109,6 +109,16 @@ export function diskSentence(persistence: CloudProviderPersistence): string {
 }
 
 /** A provider's reason as a sentence start: providers write theirs lowercase. */
+/**
+ * What a provider's credentials are called in buttons and copy: a key when it
+ * asks for one value, credentials when it asks for several or isn't registered.
+ */
+export function credentialsNoun(
+  provider: CloudProviderInfo | null | undefined
+): "key" | "credentials" {
+  return provider?.credentialFields.length === 1 ? "key" : "credentials";
+}
+
 export function sentenceCase(text: string): string {
   return text.length > 0 ? `${text[0]!.toUpperCase()}${text.slice(1)}` : text;
 }

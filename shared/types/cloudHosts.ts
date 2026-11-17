@@ -187,6 +187,10 @@ export interface CloudCredentialField {
  */
 export type CloudCredentialValues = Record<string, string>;
 
+/** The most one entered value may hold, in UTF-8 bytes: one line, then text over several lines or a key file. */
+export const MAX_CLOUD_CREDENTIAL_LINE_BYTES = 4096;
+export const MAX_CLOUD_CREDENTIAL_TEXT_BYTES = 64 * 1024;
+
 export interface CloudProviderInfo {
   id: CloudProviderId;
   name: string;

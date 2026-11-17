@@ -13,6 +13,7 @@ import { TimeAgo } from "@/components/ui/TimeAgo";
 import { InlineError } from "@/components/ui/field";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cloudHostsClient } from "@/clients/cloudHostsClient";
+import { credentialsNoun, sentenceCase } from "@/components/Hosts/cloud/cloudHostLabels";
 import { useCloudHosts } from "@/components/Hosts/cloud/cloudHostsState";
 import { pluralize } from "@/lib/pluralize";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
@@ -27,6 +28,14 @@ function errorText(err: unknown, fallback: string): string {
     : clientErrorText(err, fallback);
 }
 
+/** What removing an account does, in its provider's terms. */
+function removeDescription(provider: CloudProviderInfo | null): string {
+  const where = provider?.name ?? "the provider";
+  return credentialsNoun(provider) === "key"
+    ? `Its API key is deleted from this device. Nothing changes on ${where}: the key keeps working there until you revoke it.`
+    : `Its credentials are deleted from this device. Nothing changes on ${where}: they keep working there until you revoke them.`;
+}
+
 function scopeLabel(account: CloudAccountSummary): string {
   return account.billingScope.kind === "personal" ? "Personal" : account.billingScope.name;
 }
@@ -34,7 +43,7 @@ function scopeLabel(account: CloudAccountSummary): string {
 /**
  * Settings → Hosts → Cloud providers: the provider accounts that let Daintree
  * create, start and stop machines as hosts. Removing one here only forgets
- * its key on this device; nothing changes at the provider.
+ * its credentials on this device; nothing changes at the provider.
  */
 export function CloudProvidersSection() {
   const { snapshot, loaded, loadError, refresh } = useCloudHosts();
@@ -163,6 +172,8 @@ export function CloudProvidersSection() {
         ) : (
           accounts.map((account) => {
             const provider = providerFor(account);
+            const noun = credentialsNoun(provider);
+            const Noun = sentenceCase(noun);
             const validation = account.validation;
             const rowError =
               rowErrors[account.id] ??
@@ -192,11 +203,14 @@ export function CloudProvidersSection() {
                       </>
                     )}{" "}
                     <FactSeparator />{" "}
-                    {/* When the key last worked, as observed; never a guess that it still does. */}
+                    {/* When the credentials last worked, as observed; never a guess that they still do. */}
                     {account.validation.status === "valid" ? (
-                      <TimeAgo prefix="Key worked " timestamp={account.validation.checkedAt} />
+                      <TimeAgo
+                        prefix={`${Noun} worked `}
+                        timestamp={account.validation.checkedAt}
+                      />
                     ) : account.validation.status === "invalid" ? (
-                      "Key refused"
+                      `${Noun} refused`
                     ) : account.validation.checkedAt !== null ? (
                       <TimeAgo prefix="Couldn't check " timestamp={account.validation.checkedAt} />
                     ) : (
@@ -220,10 +234,10 @@ export function CloudProvidersSection() {
                       <Button
                         variant="outline"
                         size="sm"
-                        aria-label={`Replace the key for ${account.displayName}`}
+                        aria-label={`Replace the ${noun} for ${account.displayName}`}
                         onClick={() => setConnecting({ provider, replacing: account })}
                       >
-                        Replace key
+                        Replace {noun}
                       </Button>
                     )}
                     <Tooltip>
@@ -263,7 +277,7 @@ export function CloudProvidersSection() {
         onClose={() => setRemoveTarget(null)}
         variant="destructive"
         title={`Remove '${removeTarget?.displayName ?? "account"}' from this device?`}
-        description={`Its API key is deleted from this device. Nothing changes on ${removeTarget ? (providerFor(removeTarget)?.name ?? "the provider") : "the provider"}: the key keeps working there until you revoke it.`}
+        description={removeDescription(removeTarget ? providerFor(removeTarget) : null)}
         confirmLabel="Remove account"
         onConfirm={confirmRemove}
         isConfirmLoading={removing}

@@ -110,7 +110,7 @@ function fakeProvider(
       };
     },
     describeError: (error) => real.describeError(error),
-    checkKey: vi.fn(async () => ({
+    checkCredentials: vi.fn(async () => ({
       identity: "octocat",
       scopes: [
         { scope: { kind: "personal" as const, id: "personal", name: "Personal" }, active: true },
@@ -288,7 +288,7 @@ async function setup(
   const { store, accounts, lifecycle } = build();
   const account = await accounts.addAccount({
     providerId: "boat",
-    apiKey: "boat_live_x",
+    credentials: { apiKey: "boat_live_x" },
     scopeId: "personal",
   });
   /** Ends this run and starts the next over the same settings, keychain and hosts. */
