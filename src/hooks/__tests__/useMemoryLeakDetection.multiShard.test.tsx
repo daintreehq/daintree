@@ -142,14 +142,15 @@ describe("useMemoryLeakDetection across PTY shards (#17194)", () => {
     // 128 KB/s is 450 MB/hour and 80 KB/s is 281 MB/hour, however often the
     // census polled.
     const cases = [
-      ["2.5s polling", [2_500], 128, "450 MB/hr"],
-      ["15s polling", [15_000], 128, "450 MB/hr"],
-      ["irregular polling", [2_500, 15_000, 4_000, 9_000], 128, "450 MB/hr"],
-      ["15s polling, slower growth", [15_000], 80, "281 MB/hr"],
+      ["128 KB/s polled every 2.5s", [2_500], 128, "450 MB/hr"],
+      ["128 KB/s polled every 15s", [15_000], 128, "450 MB/hr"],
+      ["128 KB/s polled irregularly", [2_500, 15_000, 4_000, 9_000], 128, "450 MB/hr"],
+      ["80 KB/s polled every 2.5s", [2_500], 80, "281 MB/hr"],
+      ["80 KB/s polled every 15s", [15_000], 80, "281 MB/hr"],
     ] as const;
 
     it.each(cases)(
-      "reports the rate for identical growth per minute at %s",
+      "reports the same rate in the toast and the inbox for %s",
       (_name, intervals, kbPerSecond, expected) => {
         const update = useResourceMonitoringStore.getState().updateMetrics;
         let elapsedMs = 0;

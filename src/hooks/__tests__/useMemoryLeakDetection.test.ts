@@ -229,13 +229,13 @@ describe("minimum memory gate", () => {
     expect(run.grow(STARTUP_SKIP_SAMPLES + CONSECUTIVE_REQUIRED + 5, 200)).toBe(false);
   });
 
-  it("drops an established streak when memory falls below the floor", () => {
-    const run = new Run();
+  it("drops an established streak on a rising reading that is still below the floor", () => {
+    const run = new Run(MIN_MEMORY_KB - 100_000);
     run.grow(STARTUP_SKIP_SAMPLES, 0);
-    run.grow(10, 300);
-    expect(run.state.consecutiveIncreases).toBeGreaterThan(0);
+    run.state.consecutiveIncreases = 7;
 
-    run.step(MIN_MEMORY_KB - 1 - run.kb);
+    // Rising, so only the floor can be what clears it.
+    expect(run.step(300)).toBe(false);
     expect(run.state.consecutiveIncreases).toBe(0);
   });
 });
