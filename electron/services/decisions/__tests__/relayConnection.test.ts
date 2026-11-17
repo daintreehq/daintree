@@ -1997,7 +1997,10 @@ describe("get_involvement over a connection (#17228)", () => {
       stale: false,
     });
 
-    await bridge.registerQuestion({ origin: QUESTION_ORIGIN, input: { question: "Still asking?" } });
+    await bridge.registerQuestion({
+      origin: QUESTION_ORIGIN,
+      input: { question: "Still asking?" },
+    });
     await vi.waitFor(() => expect(h.relay.questions).toHaveLength(1));
     expect(h.statuses.at(-1)?.state).toBe("connected");
     expect(relay.declared.length).toBeGreaterThan(0);
