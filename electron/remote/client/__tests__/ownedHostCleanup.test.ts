@@ -3,6 +3,19 @@ import type { HostDescriptor } from "../../../../shared/types/remoteHosts.js";
 import { events } from "../../../services/events.js";
 import { watchOwnedHostCleanup } from "../ownedHostCleanup.js";
 
+function waiting(id: string, worktreeId: string, ownerWorktreeId?: string): HostDescriptor {
+  return {
+    ...host(id, ownerWorktreeId),
+    pendingPlacement: {
+      projectId: "proj-1",
+      worktreeId,
+      worktreePath: worktreeId,
+      label: "feature",
+      requestedAt: 1,
+    },
+  };
+}
+
 function host(id: string, ownerWorktreeId?: string): HostDescriptor {
   return {
     id,
@@ -48,6 +61,44 @@ describe("watchOwnedHostCleanup", () => {
 
     await vi.waitFor(() => expect(forget).toHaveBeenCalledTimes(1));
     expect(forget).toHaveBeenCalledWith("box-a");
+  });
+
+  it("drops a deleted worktree's placement from the user's own host, leaving the host", async () => {
+    const forget = vi.fn(async () => {});
+    const clearPlacement = vi.fn(async () => {});
+    stop = watchOwnedHostCleanup({
+      list: () => [waiting("studio", "/wt/a"), waiting("mini", "/wt/b"), waiting("box", "/wt/a", "/wt/a")],
+      forget,
+      clearPlacement,
+      probe: enoent,
+    });
+
+    removeWorktree("/wt/a");
+
+    await vi.waitFor(() => expect(forget).toHaveBeenCalledWith("box"));
+    // The owned host goes whole; only the user's own host needs its placement dropped.
+    expect(clearPlacement).toHaveBeenCalledTimes(1);
+    expect(clearPlacement).toHaveBeenCalledWith("studio");
+    expect(forget).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a placement while the worktree's folder is still there, and drops it on teardown", async () => {
+    const clearPlacement = vi.fn(async () => {});
+    const probe = vi.fn(async () => ({}));
+    stop = watchOwnedHostCleanup({
+      list: () => [waiting("studio", "/wt/a")],
+      forget: vi.fn(async () => {}),
+      clearPlacement,
+      probe,
+    });
+
+    removeWorktree("/wt/a");
+    await vi.waitFor(() => expect(probe).toHaveBeenCalledWith("/wt/a"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(clearPlacement).not.toHaveBeenCalled();
+
+    finishTeardown("/wt/a");
+    await vi.waitFor(() => expect(clearPlacement).toHaveBeenCalledWith("studio"));
   });
 
   it("keeps the host while the worktree's folder is still there", async () => {

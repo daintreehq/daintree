@@ -180,3 +180,18 @@ describe("useSettingsDialog — a host's plugins", () => {
     expect(result.current.settingsSectionId).toBe(target.sectionId);
   });
 });
+
+describe("useSettingsDialog — closing from outside", () => {
+  it("closes when a flow that started in Settings carries on in its own dialog", () => {
+    const { result } = renderHook(() => useSettingsDialog());
+    act(() => {
+      window.dispatchEvent(new CustomEvent("daintree:open-settings-tab", { detail: "hosts" }));
+    });
+    expect(result.current.isSettingsOpen).toBe(true);
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent("daintree:close-settings"));
+    });
+    expect(result.current.isSettingsOpen).toBe(false);
+  });
+});

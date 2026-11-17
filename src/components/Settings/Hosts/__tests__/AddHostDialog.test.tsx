@@ -823,6 +823,95 @@ describe("AddHostDialog", () => {
     }
   });
 
+  describe("with a worktree waiting on the setup (#17355)", () => {
+    const EXISTING = {
+      hostId: "studio",
+      name: "studio",
+      connection: { kind: "ssh" as const, target: "greg@studio" },
+      intent: "setup" as const,
+    };
+    const PLACEMENT = {
+      projectId: "proj-1",
+      worktreeId: "/repo/wt/feature-x",
+      worktreePath: "/repo/wt/feature-x",
+      label: "feature-x",
+      requestedAt: 1_000,
+    };
+
+    beforeEach(() => {
+      const entry = known("studio", "studio", "greg@studio");
+      entry.descriptor.pendingPlacement = PLACEMENT;
+      useRemoteHostsStore.getState().setHosts([entry]);
+      remoteHosts.update = vi.fn(async () => ({}));
+      remoteHosts.probe!.mockResolvedValue(probeResult({ hostModeListening: false }));
+    });
+
+    it("names the worktree, and finishing connects so it can be placed", async () => {
+      const onClose = vi.fn();
+      render(<AddHostDialog isOpen onClose={onClose} existing={EXISTING} />);
+      expect(screen.getByText("When setup finishes, feature-x opens on studio.")).toBeTruthy();
+
+      fireEvent.click(await screen.findByRole("button", { name: "Set up Host mode…" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Turn on Host mode" }));
+      const done = await screen.findByRole("button", { name: "Done" });
+      await waitFor(() => expect(done.getAttribute("aria-disabled")).toBeNull());
+      fireEvent.click(done);
+
+      await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+      expect(remoteHosts.connect).toHaveBeenCalledWith({ hostId: "studio" });
+      expect(remoteHosts.update).not.toHaveBeenCalled();
+    });
+
+    it("connects from a host already set up, where it would otherwise only close", async () => {
+      remoteHosts.probe!.mockResolvedValue(probeResult());
+      const onClose = vi.fn();
+      render(<AddHostDialog isOpen onClose={onClose} existing={EXISTING} />);
+      fireEvent.click(await screen.findByRole("button", { name: "Connect" }));
+      await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+      expect(remoteHosts.connect).toHaveBeenCalledWith({ hostId: "studio" });
+    });
+
+    it("records why setup stopped on the waiting worktree, once", async () => {
+      remoteHosts.startHostMode!.mockRejectedValue(new Error("systemd refused the unit"));
+      render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
+
+      fireEvent.click(await screen.findByRole("button", { name: "Set up Host mode…" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Turn on Host mode" }));
+
+      await waitFor(() => expect(remoteHosts.update).toHaveBeenCalledOnce());
+      expect(remoteHosts.update).toHaveBeenCalledWith({
+        hostId: "studio",
+        pendingPlacement: {
+          ...PLACEMENT,
+          failure: { message: expect.stringContaining("systemd refused"), at: expect.any(Number) },
+        },
+      });
+      // The list now carries the failure: nothing is written again for the same stop.
+      const entry = known("studio", "studio", "greg@studio");
+      entry.descriptor.pendingPlacement = {
+        ...PLACEMENT,
+        failure: { message: "systemd refused the unit", at: 2 },
+      };
+      act(() => useRemoteHostsStore.getState().setHosts([entry]));
+      expect(remoteHosts.update).toHaveBeenCalledOnce();
+    });
+
+    it("records a check that couldn't reach the host", async () => {
+      remoteHosts.probe!.mockResolvedValue(
+        probeResult({ reachable: false, sshError: "Connection timed out" })
+      );
+      render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
+      await waitFor(() =>
+        expect(remoteHosts.update).toHaveBeenCalledWith({
+          hostId: "studio",
+          pendingPlacement: expect.objectContaining({
+            failure: { message: "Connection timed out", at: expect.any(Number) },
+          }),
+        })
+      );
+    });
+  });
+
   describe("a host on another release", () => {
     const EXISTING = {
       hostId: "studio",

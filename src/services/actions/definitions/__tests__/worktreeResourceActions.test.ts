@@ -152,6 +152,8 @@ describe("worktree resource action definitions", () => {
     mockWorktrees.set("/box", {
       id: "/box",
       path: "/box",
+      name: "box",
+      branch: "feature/x",
       resourceStatus: { lastStatus: "ready", ssh: "dt-feature-x" },
     });
     mockOpenResourceBoxOnHost.mockResolvedValue({ status: "placing", hostId: "dt-feature-x" });
@@ -164,6 +166,7 @@ describe("worktree resource action definitions", () => {
       worktreePath: "/box",
       projectId: "proj-1",
       sshTarget: "dt-feature-x",
+      label: "feature/x",
       askFirst: false,
       isCurrent: expect.any(Function),
     });
