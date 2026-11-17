@@ -15,7 +15,9 @@ export interface ResolveUnknownOutcomeOptions {
   signal?: AbortSignal;
   /**
    * How long to follow an operation the Host still reports as running before
-   * handing back that running outcome.
+   * handing back that running outcome. Spent only by the waits between polls
+   * once the Host has answered, so time offline — waiting for the link, or a
+   * machine asleep mid-wait — never uses it up.
    */
   settleTimeoutMs?: number;
   pollIntervalMs?: number;
@@ -40,7 +42,8 @@ function abortError(): Error {
 /**
  * Asks the Host what became of an operation whose invoke never answered.
  * Waits for the link to come back, then reads the Host's record; an operation
- * still running is followed until it settles or `settleTimeoutMs` passes.
+ * still running is followed until it settles or `settleTimeoutMs` of polling
+ * passes, however long the link took to come back.
  * `unknown` means the Host has no record — the request never arrived, or its
  * retention window passed — and is itself an answer, not an error.
  */
@@ -53,8 +56,9 @@ export async function resolveUnknownOutcome(
   if (!options.client && !isRemoteShellSupported()) return { status: "unknown" };
   const client = options.client ?? operationsClient;
   const { signal } = options;
-  const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
-  const deadline = Date.now() + (options.settleTimeoutMs ?? DEFAULT_SETTLE_TIMEOUT_MS);
+  // At least 1ms, so every wait spends some of the window and it runs out.
+  const pollIntervalMs = Math.max(1, options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS);
+  let remainingMs = options.settleTimeoutMs ?? DEFAULT_SETTLE_TIMEOUT_MS;
 
   // Held in an object: the event callback writes it, and a plain `let` would
   // be narrowed to its initial null at every read in the loop.
@@ -96,15 +100,21 @@ export async function resolveUnknownOutcome(
       if (signal?.aborted) throw abortError();
       if (state.settled) return state.settled;
       if (outcome.status !== "running") return outcome;
-      if (Date.now() >= deadline) return outcome;
+      if (remainingMs <= 0) return outcome;
 
+      // A wait is charged its scheduled length when its timer fires, not the
+      // wall time that passed: a timer firing late after a sleep costs no more.
+      const delayMs = Math.min(pollIntervalMs, remainingMs);
       await new Promise<void>((resolve) => {
         const done = () => {
           clearTimeout(timer);
           state.wake = null;
           resolve();
         };
-        const timer = setTimeout(done, Math.min(pollIntervalMs, deadline - Date.now()));
+        const timer = setTimeout(() => {
+          remainingMs -= delayMs;
+          done();
+        }, delayMs);
         state.wake = done;
       });
     }

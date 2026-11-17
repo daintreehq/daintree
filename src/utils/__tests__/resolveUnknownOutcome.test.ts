@@ -286,6 +286,9 @@ describe("resolveUnknownOutcome", () => {
   });
 
   describe("after a long offline gap", () => {
+    const running: OperationOutcome = { status: "running", progress: null };
+    const SIX_MINUTES = 6 * 60_000;
+
     beforeEach(() => {
       vi.useFakeTimers();
     });
@@ -293,30 +296,97 @@ describe("resolveUnknownOutcome", () => {
       vi.useRealTimers();
     });
 
-    it("gives an operation still running at reconnection its full follow-up window", async () => {
-      const running: OperationOutcome = { status: "running", progress: null };
-      const { client } = fakeClient([running, running, succeeded]);
-      let reconnect!: () => void;
+    /** A link that stays down until the test brings it back after a gap. */
+    function heldLink() {
+      let reconnect: (() => void) | null = null;
       const waitForConnected = vi.fn(
         () =>
           new Promise<void>((resolve) => {
             reconnect = resolve;
           })
       );
+      return {
+        waitForConnected,
+        reconnectAfter: async (gapMs: number) => {
+          expect(reconnect).not.toBeNull();
+          vi.setSystemTime(Date.now() + gapMs);
+          const up = reconnect!;
+          reconnect = null;
+          up();
+          await vi.advanceTimersByTimeAsync(0);
+        },
+      };
+    }
+
+    it("gives an operation still running at reconnection its full follow-up window", async () => {
+      const { client } = fakeClient([running, running, succeeded]);
+      const link = heldLink();
 
       const pending = resolveUnknownOutcome("op-1", {
-        waitForConnected,
+        waitForConnected: link.waitForConnected,
         client,
         pollIntervalMs: 2_000,
         settleTimeoutMs: 5 * 60_000,
       });
-      vi.setSystemTime(Date.now() + 6 * 60_000);
-      reconnect();
+      await link.reconnectAfter(SIX_MINUTES);
       await vi.advanceTimersByTimeAsync(4_000);
 
       await expect(pending).resolves.toEqual(succeeded);
       expect(client.getStatus).toHaveBeenCalledTimes(3);
-      expect(waitForConnected).toHaveBeenCalledOnce();
+      expect(link.waitForConnected).toHaveBeenCalledOnce();
+    });
+
+    it("doesn't spend the window while the machine sleeps between polls", async () => {
+      const { client } = fakeClient([running, running, succeeded]);
+
+      const pending = resolveUnknownOutcome("op-1", {
+        waitForConnected: async () => {},
+        client,
+        pollIntervalMs: 2_000,
+        settleTimeoutMs: 5 * 60_000,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.getStatus).toHaveBeenCalledOnce();
+      vi.setSystemTime(Date.now() + SIX_MINUTES);
+      await vi.advanceTimersByTimeAsync(4_000);
+
+      await expect(pending).resolves.toEqual(succeeded);
+    });
+
+    it("keeps what is left of the window across later drops, without refilling it", async () => {
+      const { client } = fakeClient([
+        running,
+        appError("HOST_DISCONNECTED"),
+        running,
+        appError("OUTCOME_UNKNOWN"),
+        running,
+        running,
+      ]);
+      const link = heldLink();
+      let result: OperationOutcome | undefined;
+
+      const pending = resolveUnknownOutcome("op-1", {
+        waitForConnected: link.waitForConnected,
+        client,
+        pollIntervalMs: 2_000,
+        settleTimeoutMs: 5_000,
+      }).then((outcome) => {
+        result = outcome;
+      });
+      await link.reconnectAfter(SIX_MINUTES);
+      // 2s spent; the next read finds the link down.
+      await vi.advanceTimersByTimeAsync(2_000);
+      await link.reconnectAfter(SIX_MINUTES);
+      // 4s spent; down again.
+      await vi.advanceTimersByTimeAsync(2_000);
+      await link.reconnectAfter(SIX_MINUTES);
+      expect(result).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await pending;
+
+      expect(result).toEqual(running);
+      expect(client.getStatus).toHaveBeenCalledTimes(6);
+      expect(link.waitForConnected).toHaveBeenCalledTimes(3);
     });
   });
 
