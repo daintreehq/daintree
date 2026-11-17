@@ -104,6 +104,8 @@ async function startFakeAgent(socketPath: string): Promise<FakeAgent> {
     const connection = nextConnection++;
     fake.open.add(socket);
     socket.on("close", () => fake.open.delete(socket));
+    // A reply the relay stopped waiting for lands on a closed socket.
+    socket.on("error", () => {});
     const reader = new AgentMessageReader();
     socket.on("data", async (chunk) => {
       for (const body of reader.push(chunk)) {
@@ -130,8 +132,8 @@ function installShell(
         listener(HOST_ID, session);
         return () => {};
       },
-      hasViews: () => views,
     },
+    windowShowing: () => views,
     registry: {
       get: (hostId) =>
         hostId === HOST_ID
@@ -439,7 +441,7 @@ describe("agent forwarding over a link", () => {
     await waitFor(() => agent.open.size === 0);
   });
 
-  it("drops the answer to a request the driver's takeover overtook, and the connection with it", async () => {
+  it("closes a connection the moment its driver's lease is only reserved, before the agent answers", async () => {
     const ssh = await connectAgentClient(await projectSocket());
     let releaseSign!: () => void;
     signDelay = new Promise((resolve) => (releaseSign = resolve));
@@ -447,11 +449,13 @@ describe("agent forwarding over a link", () => {
     await waitFor(() => agent.saw.length === 1);
 
     // The driver's view left: its lease is reserved, with no holder change to say so.
-    target = { kind: "reserved", holder: (liveTarget() as { holder: never }).holder };
+    const live = liveTarget() as Extract<DriveTarget, { kind: "live" }>;
+    target = { kind: "reserved", holder: live.holder };
     for (const listener of routeListeners) listener();
-    releaseSign();
 
     await waitFor(() => ssh.isClosed());
+    releaseSign();
+    await new Promise((resolve) => setTimeout(resolve, 20));
     expect(ssh.replies).toEqual([]);
   });
 

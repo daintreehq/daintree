@@ -34,9 +34,13 @@ const AGENT_PROBE_TIMEOUT_MS = 2_000;
 export interface AgentForwardingClientDeps {
   manager: {
     onSessionOpened(listener: (hostId: HostId, session: LinkSession) => void): () => void;
-    /** Whether a window here has a view on the host: a link with none signs nothing. */
-    hasViews(hostId: HostId): boolean;
   };
+  /**
+   * Whether a window here is bound to the host now, by its live binding: a
+   * link with none (kept for notifications, or a view of it only cached)
+   * signs nothing.
+   */
+  windowShowing(hostId: HostId): boolean;
   registry: {
     get(hostId: HostId): HostDescriptor | null;
     onChange(listener: () => void): () => void;
@@ -137,7 +141,7 @@ export function installAgentForwardingClient(
     const relay = new ShellAgentRelay(session, {
       // The host's word that this Shell drives can't be checked from here,
       // but a window of this Shell on it can.
-      isEnabled: () => enabledFor(hostId) && deps.manager.hasViews(hostId),
+      isEnabled: () => enabledFor(hostId) && deps.windowShowing(hostId),
       agentSocket: () => agentSocket(hostId),
     });
     const delivery: Delivery = { hostId, relay, sent: null, retry: null };

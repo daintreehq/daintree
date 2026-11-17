@@ -313,6 +313,7 @@ function startClient(options: StartRemoteHostsOptions): void {
   // This computer's ssh-agent for a host's terminals, where its switch is on (#17432).
   const agentForwarding = installAgentForwardingClient({
     manager: client.manager,
+    windowShowing: (hostId) => client.windowsOn(hostId).length > 0,
     registry: client.registry,
     sessionFor: client.sessionFor,
   });

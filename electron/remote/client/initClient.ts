@@ -825,6 +825,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   router: RemoteRouterImpl;
   /** The host's open session, whether or not a local view has an endpoint on it. */
   sessionFor(hostId: HostId): LinkSession | null;
+  /** The windows on this machine bound to the host now, by their live binding. */
+  windowsOn(hostId: HostId): number[];
   /** Per-host links and the host list, for session-level services such as host summaries. */
   manager: RemoteHostManager;
   /** Sends a Remote Hosts event to every view on this machine. */
@@ -1127,6 +1129,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     hostForView,
     router: remoteRouter,
     sessionFor: (hostId) => manager.get(hostId)?.currentSession ?? null,
+    windowsOn: (hostId) => bindings.windowsOn(hostId),
     manager,
     emitLocal: broadcastLocal,
     registry,

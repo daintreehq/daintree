@@ -122,6 +122,8 @@ export function installHostAgentForwarding(deps: HostAgentForwardingDeps): HostA
 
   const consent = new WeakMap<LinkSession, boolean>();
   const wired = new WeakSet<LinkSession>();
+  /** What each live link registered here, let go when it closes or this stops. */
+  const sessionCleanups = new Map<LinkSession, () => void>();
   const listeners = new Map<string, Promise<string>>();
   const servers = new Map<string, net.Server>();
   const pathOwners = new Map<string, string>();
@@ -165,7 +167,7 @@ export function installHostAgentForwarding(deps: HostAgentForwardingDeps): HostA
     wired.add(session);
     // A new link starts with forwarding off, a resumed session included: the
     // Shell says again on every link whether its switch is on.
-    disposers.push(
+    const offs = [
       session.registerCallHandler(
         AgentForwardMethod.CONFIGURE,
         AgentConfigurePayloadSchema,
@@ -176,13 +178,31 @@ export function installHostAgentForwarding(deps: HostAgentForwardingDeps): HostA
         }
       ),
       session.registerCallHandler(AgentForwardMethod.INSPECT, z.null(), () => inspect()),
-      session.onClose(() => recheck((connection) => connection.route === session))
+    ];
+    const cleanup = (): void => {
+      sessionCleanups.delete(session);
+      for (const off of offs) off();
+    };
+    sessionCleanups.set(session, cleanup);
+    offs.push(
+      session.onClose(() => {
+        recheck((connection) => connection.route === session);
+        cleanup();
+      })
     );
   };
 
+  // Named for this profile's own folder, so two profiles of one user never share it.
   const fallbackDir =
     deps.fallbackSocketDir ??
-    path.join(os.tmpdir(), `daintree-agent-${process.getuid?.() ?? "user"}`);
+    path.join(
+      os.tmpdir(),
+      `daintree-agent-${process.getuid?.() ?? "user"}-${crypto
+        .createHash("sha256")
+        .update(deps.socketDir)
+        .digest("hex")
+        .slice(0, 8)}`
+    );
 
   const listen = async (projectId: string): Promise<string> => {
     const name = agentSocketName(projectId);
@@ -289,6 +309,7 @@ export function installHostAgentForwarding(deps: HostAgentForwardingDeps): HostA
       if (disposed) return;
       disposed = true;
       for (const dispose of disposers.splice(0)) dispose();
+      for (const cleanup of [...sessionCleanups.values()]) cleanup();
       for (const connection of [...connections]) connection.close();
       // A listen still under way sees `disposed` and closes its own server.
       await Promise.allSettled([...listeners.values()]);

@@ -138,6 +138,8 @@ export class ShellAgentRelay {
   closeAll(): void {
     for (const id of [...this.upstreams.keys()]) this.retire(id);
     for (const [id, open] of this.opening) {
+      // One the Host already let go of has no request coming to be refused.
+      if (open.cancelled) continue;
       open.cancelled = true;
       this.markRetired(id);
     }
@@ -291,11 +293,9 @@ export class ShellAgentRelay {
 
   /** The Host is done with the connection: forget it entirely. */
   private release(connectionId: number): void {
+    // Still counted against the cap until its lookup or connect settles.
     const open = this.opening.get(connectionId);
-    if (open) {
-      open.cancelled = true;
-      this.opening.delete(connectionId);
-    }
+    if (open) open.cancelled = true;
     this.destroyUpstream(connectionId);
     this.retired.delete(connectionId);
   }
