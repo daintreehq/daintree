@@ -737,6 +737,8 @@ describe("NotificationCenterEntry diagnostics affordances", () => {
   });
 
   afterEach(() => {
+    useAnnouncerStore.setState({ announce: originalAnnounce });
+    notifyMock.mockReset();
     delete (window as unknown as { electron?: unknown }).electron;
     if (originalElectron.electron !== undefined) {
       (window as unknown as { electron: unknown }).electron = originalElectron.electron;
@@ -842,7 +844,6 @@ describe("NotificationCenterEntry diagnostics affordances", () => {
     expect(announce).toHaveBeenCalledTimes(1);
     expect(announce).toHaveBeenCalledWith("Correlation ID copied", "polite");
     expect(getCopyFlash()).not.toBeNull();
-    useAnnouncerStore.setState({ announce: originalAnnounce });
   });
 
   it("reports a refused correlation ID copy as an error toast whose Retry copies again", async () => {

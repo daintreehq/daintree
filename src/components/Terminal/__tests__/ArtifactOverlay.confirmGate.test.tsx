@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { render, screen, fireEvent, act, within } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { ReactNode } from "react";
 import type { Artifact } from "@shared/types";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -266,6 +266,10 @@ describe("ArtifactOverlay keeps keyboard focus through its own actions", () => {
 });
 
 describe("ArtifactOverlay Copy confirmation", () => {
+  afterEach(() => {
+    useAnnouncerStore.setState({ announce: originalAnnounce });
+  });
+
   const sizerLabels = (button: HTMLElement) =>
     Array.from(button.querySelectorAll("[data-label]")).map((el) => el.getAttribute("data-label"));
 
@@ -290,7 +294,6 @@ describe("ArtifactOverlay Copy confirmation", () => {
     expect(within(rowFor("patch-a.diff")).queryByText("Copied to clipboard")).toBeNull();
     expect(announce).toHaveBeenCalledTimes(1);
     expect(announce).toHaveBeenCalledWith("Copied", "polite");
-    useAnnouncerStore.setState({ announce: originalAnnounce });
   });
 
   it("states a refused copy once, in the row, and clears it when a retry lands", async () => {
@@ -316,7 +319,6 @@ describe("ArtifactOverlay Copy confirmation", () => {
 
     expect(within(rowFor("patch-a.diff")).queryByText(/Couldn't copy to the clipboard/)).toBeNull();
     expect(copy.textContent).toContain("Copied");
-    useAnnouncerStore.setState({ announce: originalAnnounce });
   });
 
   it("keeps the refusal when the row is collapsed while the copy is in flight", async () => {
