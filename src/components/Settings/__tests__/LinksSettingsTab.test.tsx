@@ -245,8 +245,11 @@ describe("LinksSettingsTab editing a link", () => {
       fireEvent.change(screen.getByRole("textbox", { name: "Link name" }), {
         target: { value: "Notes" },
       });
-      fireEvent.keyDown(screen.getByRole("textbox", { name: "Link name" }), { key: "Escape" });
+      const notPrevented = fireEvent.keyDown(screen.getByRole("textbox", { name: "Link name" }), {
+        key: "Escape",
+      });
 
+      expect(notPrevented).toBe(false);
       expect(screen.queryByRole("textbox", { name: "Link name" })).toBeNull();
       expect(outside).not.toHaveBeenCalled();
       expect(titles()).toEqual(["Team docs", "Wiki", "CI"]);
@@ -265,10 +268,12 @@ describe("LinksSettingsTab editing a link", () => {
     try {
       renderTab();
       fireEvent.click(button("Edit Wiki"));
-      fireEvent.keyDown(screen.getByRole("textbox", { name: "Link name" }), {
+      const notPrevented = fireEvent.keyDown(screen.getByRole("textbox", { name: "Link name" }), {
         key: "Escape",
         ...init,
       });
+      // The IME still gets the key to dismiss its candidates.
+      expect(notPrevented).toBe(true);
       expect(screen.getByRole("textbox", { name: "Link name" })).toBeTruthy();
       expect(outside).not.toHaveBeenCalled();
     } finally {
