@@ -2834,9 +2834,9 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
 
   it("renders PR list with branch names in idle state", () => {
     mockListBranches.mockResolvedValue([
-      { name: "origin/feature/pr-10", current: false, remote: true },
-      { name: "origin/feature/pr-20", current: false, remote: true },
-      { name: "origin/feature/pr-30", current: false, remote: true },
+      { name: "origin/feature/pr-10", current: false, remote: "origin" },
+      { name: "origin/feature/pr-20", current: false, remote: "origin" },
+      { name: "origin/feature/pr-30", current: false, remote: "origin" },
     ]);
 
     render(<BulkCreateWorktreeDialog {...prProps} />);
@@ -2850,9 +2850,9 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
   it("creates worktrees from remote PR branches", async () => {
     mockListBranches.mockResolvedValue([
       { name: "main", current: true, remote: false },
-      { name: "origin/feature/pr-10", current: false, remote: true },
-      { name: "origin/feature/pr-20", current: false, remote: true },
-      { name: "origin/feature/pr-30", current: false, remote: true },
+      { name: "origin/feature/pr-10", current: false, remote: "origin" },
+      { name: "origin/feature/pr-20", current: false, remote: "origin" },
+      { name: "origin/feature/pr-30", current: false, remote: "origin" },
     ]);
 
     render(<BulkCreateWorktreeDialog {...prProps} />);
@@ -2918,9 +2918,9 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
   it("calls listBranches once per batch, not once per PR", async () => {
     mockListBranches.mockResolvedValue([
       { name: "main", current: true, remote: false },
-      { name: "origin/feature/pr-10", current: false, remote: true },
-      { name: "origin/feature/pr-20", current: false, remote: true },
-      { name: "origin/feature/pr-30", current: false, remote: true },
+      { name: "origin/feature/pr-10", current: false, remote: "origin" },
+      { name: "origin/feature/pr-20", current: false, remote: "origin" },
+      { name: "origin/feature/pr-30", current: false, remote: "origin" },
     ]);
 
     render(<BulkCreateWorktreeDialog {...prProps} />);
@@ -3593,8 +3593,8 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
   it("fails only the PR still needing a worktree when the retry can't list branches", async () => {
     mockSelectedRecipeId = "test-recipe";
     mockListBranches.mockResolvedValue([
-      { name: "origin/feature/pr-1", current: false, remote: true },
-      { name: "origin/feature/pr-2", current: false, remote: true },
+      { name: "origin/feature/pr-1", current: false, remote: "origin" },
+      { name: "origin/feature/pr-2", current: false, remote: "origin" },
     ]);
     mockWorktreeCreate.mockImplementation((opts: { newBranch: string }) =>
       opts.newBranch === "feature/pr-2"
@@ -3642,7 +3642,7 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
   it("retries a PR's terminals without listing branches for a worktree it already has", async () => {
     mockSelectedRecipeId = "test-recipe";
     mockListBranches.mockResolvedValue([
-      { name: "origin/feature/pr-1", current: false, remote: true },
+      { name: "origin/feature/pr-1", current: false, remote: "origin" },
     ]);
     mockRunRecipeWithResults
       .mockResolvedValueOnce({ spawned: [], failed: [{ index: 0, error: "spawn failed" }] })
