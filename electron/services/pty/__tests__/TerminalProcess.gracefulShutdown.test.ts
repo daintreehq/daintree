@@ -435,6 +435,11 @@ describe("TerminalProcess.gracefulShutdown — input-clear prelude", () => {
 
     await expect(terminal.gracefulShutdown()).resolves.toBeNull();
     expect(handles.writeMock).not.toHaveBeenCalled();
+    // Nothing was killed here (the caller's fallback kill does that), so the
+    // closing mark must not outlive the attempt (#17193).
+    await Promise.resolve();
+    expect(terminal.getInfo().wasKilled).toBeFalsy();
+    expect(terminal.getInfo().gracefullyClosing).toBe(false);
   });
 
   it("skips the quit write when the agent demotes during the clear-delay window", async () => {

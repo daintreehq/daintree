@@ -68,7 +68,7 @@ vi.mock("../../../../services/DriveLeaseService.js", () => ({
   peekDriveLeaseService: () => ({ notifyPanelsChanged }),
 }));
 const runAttentionRef = vi.hoisted(() => ({
-  current: null as { handleTerminalExit: ReturnType<typeof vi.fn> } | null,
+  current: null as { handleTerminalExit: (id: string) => void } | null,
 }));
 vi.mock("../../../../window/serviceRefs.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../../window/serviceRefs.js")>()),
@@ -79,6 +79,8 @@ vi.mock("../../../../window/serviceRefs.js", async (importOriginal) => ({
 import { CHANNELS } from "../../../channels.js";
 import { events, type DaintreeEventMap } from "../../../../services/events.js";
 import { registerTerminalEventHandlers } from "../events.js";
+import { RunAttentionService } from "../../../../services/RunAttentionService.js";
+import { bridgePtyEvent } from "../../../../services/pty/PtyEventsBridge.js";
 import { SPAWN_CONFIRMATION_TIMEOUT_MS, armSpawnConfirmation } from "../spawnConfirmation.js";
 import {
   clearPortHolderWebContents,
@@ -818,6 +820,79 @@ describe("terminal exit forwarding during restart", () => {
     ptyClient.emit("exit", "t3", 0);
     expect(attention.handleTerminalExit).toHaveBeenCalledTimes(2);
     dispose = () => {};
+  });
+});
+
+describe("runs parked on a gate that is killed without going through trash (#17193)", () => {
+  // The real service, Main bus, bridge and exit handler; only the PTY client is
+  // fake, standing in for the host's wire.
+  let ptyClient: EventEmitter & { consumeRestartExitSuppression: ReturnType<typeof vi.fn> };
+  let dispose: () => void;
+  let service: RunAttentionService;
+  let released: Array<{ id: string; reason: string }>;
+  let stopListening: () => void;
+
+  function gateEdge(previousState: string, state: string, extra: Record<string, unknown> = {}) {
+    bridgePtyEvent({
+      type: "agent-state",
+      id: "gate",
+      state,
+      previousState,
+      timestamp: 2_000,
+      trigger: "exit",
+      confidence: 1,
+      ...extra,
+    } as never);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ptyClient = Object.assign(new EventEmitter(), {
+      consumeRestartExitSuppression: vi.fn().mockReturnValue(false),
+    });
+    dispose = registerTerminalEventHandlers({ ptyClient } as unknown as HandlerDependencies);
+    service = new RunAttentionService({ load: () => ({}), save: () => {} }, { now: () => 1_000 });
+    runAttentionRef.current = service;
+    released = [];
+    stopListening = events.on("terminal:park-released", (payload) => {
+      released.push({ id: payload.id, reason: payload.reason });
+    });
+    service.park("run", { gateRunId: "gate" });
+  });
+
+  afterEach(() => {
+    stopListening();
+    service.dispose();
+    dispose();
+  });
+
+  it.each(["waiting", "idle"])("releases them as gate-closed when a %s gate dies", () => {
+    ptyClient.emit("exit", "gate", 0);
+
+    expect(released).toEqual([{ id: "run", reason: "gate-closed" }]);
+  });
+
+  it.each(["working", "directing"])(
+    "releases them as gate-closed, not gate-ready, when a %s gate is killed",
+    (busyState) => {
+      gateEdge(busyState, "idle", { terminalClosing: true });
+      expect(released).toEqual([]);
+
+      ptyClient.emit("exit", "gate", 0);
+
+      expect(released).toEqual([{ id: "run", reason: "gate-closed" }]);
+    }
+  );
+
+  it("keeps them across a restart until the new process comes free", () => {
+    gateEdge("working", "idle", { terminalClosing: true });
+    ptyClient.consumeRestartExitSuppression.mockReturnValueOnce(true);
+    ptyClient.emit("exit", "gate", 0);
+    expect(released).toEqual([]);
+
+    gateEdge("working", "waiting", { trigger: "activity", timestamp: 3_000 });
+
+    expect(released).toEqual([{ id: "run", reason: "gate-ready" }]);
   });
 });
 

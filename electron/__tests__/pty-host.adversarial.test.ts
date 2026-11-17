@@ -829,6 +829,28 @@ describe("pty-host adversarial", () => {
     process.setMaxListeners(originalMaxListeners);
   });
 
+  it("FORWARDS_THE_TERMINAL_CLOSING_MARK_TO_MAIN_ONLY_WHEN_SET (#17193)", async () => {
+    const parentPort = await loadHost();
+    const { events } = await import("../services/events.js");
+    const edge = {
+      terminalId: "gate",
+      state: "idle",
+      previousState: "working",
+      timestamp: 1_000,
+      trigger: "exit",
+      confidence: 1,
+    } as const;
+
+    events.emit("agent:state-changed", { ...edge, terminalClosing: true });
+    events.emit("agent:state-changed", edge);
+
+    const forwarded = parentPort.postMessage.mock.calls
+      .map((call: unknown[]) => call[0] as { type?: string; terminalClosing?: unknown })
+      .filter((payload) => payload?.type === "agent-state");
+    expect(forwarded.map((payload) => payload.terminalClosing)).toEqual([true, undefined]);
+    expect("terminalClosing" in forwarded[1]!).toBe(false);
+  });
+
   it("DISPOSE_FINISHES_TEARDOWN_THEN_EXITS (#13167)", async () => {
     const parentPort = await loadHost();
     const manager = hostState.currentPtyManager as MiniEmitter & { dispose: TestMock };

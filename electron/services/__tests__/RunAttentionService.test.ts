@@ -344,31 +344,64 @@ describe("RunAttentionService", () => {
     service.dispose();
   });
 
-  it("releases a gate once whether trash or its exit arrives first", () => {
+  it.each([
+    ["trash then exit", ["trash", "exit"]],
+    ["exit then trash", ["exit", "trash"]],
+    ["a repeated exit", ["exit", "exit"]],
+  ] as const)("releases a gate exactly once on %s", (_label, signals) => {
     const persistence = makePersistence();
     const service = makeService(persistence);
     service.park("t1", { gateRunId: "gate" });
+    persistence.save.mockClear();
+    eventEmitter.emitted.length = 0;
 
-    eventEmitter.emit("terminal:trashed", { id: "gate", expiresAt: NOW + 1000 });
-    service.handleTerminalExit("gate");
+    for (const signal of signals) {
+      if (signal === "trash") {
+        eventEmitter.emit("terminal:trashed", { id: "gate", expiresAt: NOW + 1000 });
+      } else {
+        service.handleTerminalExit("gate");
+      }
+    }
 
-    expect(emittedOf("terminal:park-released")).toHaveLength(1);
-    expect(persistence.save).toHaveBeenLastCalledWith({});
+    expect(persistence.save.mock.calls).toEqual([[{}]]);
+    expect(emittedOf("terminal:park-released")).toEqual([
+      { id: "t1", gateRunId: "gate", reason: "gate-closed", timestamp: NOW },
+    ]);
+    expect(emittedOf("terminal:park-changed")).toEqual([
+      { id: "t1", parked: false, timestamp: NOW },
+    ]);
     service.dispose();
   });
 
-  it("keeps the park when a gate exit cannot be persisted", () => {
+  it("keeps every park when a gate exit cannot be persisted", () => {
     const persistence = makePersistence();
     const service = makeService(persistence);
-    service.park("t1", { gateRunId: "gate" });
+    service.park("t1", { note: "first", gateRunId: "gate" });
+    service.park("t2", { note: "second", gateRunId: "gate" });
+    service.park("t3", { gateRunId: "elsewhere" });
+    persistence.save.mockClear();
     persistence.save.mockImplementation(() => {
       throw new Error("disk full");
     });
+    eventEmitter.emitted.length = 0;
 
     service.handleTerminalExit("gate");
 
-    expect(service.getParkRecord("t1")).toBeDefined();
-    expect(emittedOf("terminal:park-released")).toEqual([]);
+    // The release was attempted, then rolled back in full.
+    expect(persistence.save.mock.calls).toEqual([
+      [{ t3: { parkedAt: NOW, gateRunId: "elsewhere" } }],
+    ]);
+    expect(service.getParkRecord("t1")).toEqual({
+      parkedAt: NOW,
+      note: "first",
+      gateRunId: "gate",
+    });
+    expect(service.getParkRecord("t2")).toEqual({
+      parkedAt: NOW,
+      note: "second",
+      gateRunId: "gate",
+    });
+    expect(eventEmitter.emitted).toEqual([]);
     service.dispose();
   });
 
