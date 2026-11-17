@@ -181,6 +181,8 @@ export class CloudHostLifecycle {
   private readonly renewInFlight = new Map<string, Promise<void>>();
   /** Creates sent before a restart whose provider wasn't registered to look for them yet. */
   private readonly awaitingProvider = new Set<string>();
+  /** Creates being looked for right now, so two passes never ask about one at once. */
+  private readonly reconciling = new Set<string>();
   private renewingAll = false;
   private stopWatchingHosts: (() => void) | null = null;
   private disposed = false;
@@ -489,15 +491,28 @@ export class CloudHostLifecycle {
     for (const binding of this.deps.store.bindings()) {
       if (only && !only.has(binding.id)) continue;
       if (binding.resourceId || !binding.creation?.sentAt || !binding.hostId) continue;
-      if (this.operations.has(binding.id)) continue;
+      if (this.operations.has(binding.id) || this.reconciling.has(binding.id)) continue;
       if (this.deps.accounts.providerUnavailable(binding.providerId)) {
         this.awaitingProvider.add(binding.id);
         continue;
       }
       this.awaitingProvider.delete(binding.id);
+      this.reconciling.add(binding.id);
+      const key = binding.creation.idempotencyKey;
       try {
         const { provider, credentials } = await this.context(binding);
         const resource = await this.findCreated(binding.id, provider, credentials);
+        // A Retry, a delete or dispose while the provider was asked: its answer is about the past.
+        const current = this.deps.store.binding(binding.id);
+        if (
+          this.disposed ||
+          !current ||
+          current.resourceId ||
+          current.creation?.idempotencyKey !== key ||
+          this.operations.has(binding.id)
+        ) {
+          continue;
+        }
         if (resource) {
           this.bindCreated(binding.id, resource);
         } else {
@@ -509,6 +524,12 @@ export class CloudHostLifecycle {
         }
       } catch {
         // The provider can't be asked now; the host keeps saying setup is incomplete.
+        // One that left while it was asked looks again when it's back.
+        if (this.deps.accounts.providerUnavailable(binding.providerId)) {
+          this.awaitingProvider.add(binding.id);
+        }
+      } finally {
+        this.reconciling.delete(binding.id);
       }
     }
   }
@@ -599,6 +620,8 @@ export class CloudHostLifecycle {
   /** A person's Start: resumes a stopped machine and waits until it runs. Joins one under way. */
   async startMachine(hostId: unknown): Promise<void> {
     const binding = this.requireBindingForHost(hostId);
+    // Refused while its provider isn't registered, before the intent changes.
+    this.deps.accounts.provider(binding.providerId);
     if (!binding.resourceId) {
       if (binding.creation) return this.retryCreate(hostId);
       throw invalid("This host has no machine yet.");
@@ -658,6 +681,8 @@ export class CloudHostLifecycle {
    */
   async stopMachine(hostId: unknown): Promise<void> {
     const binding = this.requireBindingForHost(hostId);
+    // Refused while its provider isn't registered, before the intent changes.
+    this.deps.accounts.provider(binding.providerId);
     if (!binding.resourceId) throw invalid("This host has no machine to stop.");
     const running = this.operations.get(binding.id);
     // A start, or a create whose machine exists and is still coming up, is
@@ -771,6 +796,8 @@ export class CloudHostLifecycle {
    */
   async setLifetime(hostId: unknown, lifetimeHours: unknown): Promise<void> {
     const binding = this.requireBindingForHost(hostId);
+    // Refused while its provider isn't registered, before anything here changes.
+    this.deps.accounts.provider(binding.providerId);
     if (!CLOUD_LIFETIME_CHOICES.includes(lifetimeHours as number | null)) {
       throw invalid("Choose how long the machine may run before it stops by itself.");
     }
@@ -1181,8 +1208,14 @@ export class CloudHostLifecycle {
     const provider = this.deps.accounts.provider(binding.providerId);
     try {
       const { credentials } = await this.context(binding);
-      // A stop, a start or a new lifetime while the key was read: that wins.
-      if (!this.renewalDue(bindingId)) return;
+      // A stop, a start or a new lifetime while the key was read: that wins. So
+      // does the provider leaving, or another registering in its place.
+      if (
+        !this.renewalDue(bindingId) ||
+        this.deps.accounts.provider(binding.providerId) !== provider
+      ) {
+        return;
+      }
       const renewed = await provider.renewLifetime(
         credentials,
         binding.resourceId!,

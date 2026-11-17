@@ -280,15 +280,38 @@ describe("CloudAccountService", () => {
 
 describe("CloudHostStore", () => {
   it("skips records it can't read without failing the rest", () => {
+    const account = {
+      id: "ca_ijklmnop",
+      providerId: "agent37",
+      displayName: "Agent 37",
+      identity: null,
+      scope: { kind: "personal", id: "personal", name: "Personal" },
+      apiUrl: "https://api.agent37.test",
+      keyHint: null,
+      addedAt: 1,
+      validation: { status: "valid", checkedAt: 1 },
+    };
+    const binding = {
+      id: "cb_ijklmnop34",
+      accountId: "ca_ijklmnop",
+      providerId: "acme.clouds.ec2",
+    };
     const store = new CloudHostStore(
       memoryBackend({
         version: 1,
-        accounts: [{ id: "nope" }, null],
-        // "agent37" would read (a provider this build may not have is still kept); this id has neither shape.
-        bindings: [{ id: "cb_abcdefgh12", accountId: "ca_abcdefgh", providerId: "Agent 37" }],
+        accounts: [{ id: "nope" }, null, account],
+        // "agent37" reads (a provider this build may not have is still kept); "Agent 37" has neither shape.
+        bindings: [
+          { id: "cb_abcdefgh12", accountId: "ca_abcdefgh", providerId: "Agent 37" },
+          binding,
+        ],
       })
     );
-    expect(store.accounts()).toEqual([]);
-    expect(store.bindings()).toEqual([]);
+    expect(store.accounts().map((entry) => [entry.id, entry.providerId])).toEqual([
+      ["ca_ijklmnop", "agent37"],
+    ]);
+    expect(store.bindings().map((entry) => [entry.id, entry.providerId])).toEqual([
+      ["cb_ijklmnop34", "acme.clouds.ec2"],
+    ]);
   });
 });

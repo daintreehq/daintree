@@ -38,6 +38,7 @@ describe("cloud provider ids", () => {
       "acme:clouds:ec2",
       "acme/clouds/ec2",
       "x".repeat(33),
+      `acme.clouds.${"x".repeat(33)}`,
       `${"a".repeat(31)}.${"b".repeat(32)}.${"c".repeat(33)}`,
       `${"a".repeat(32)}.${"b".repeat(32)}.ec2`,
       null,
@@ -66,6 +67,8 @@ describe("cloud provider ids", () => {
 
   it("refuses a provider name that would reach into another namespace", () => {
     expect(pluginCloudProviderId("acme.clouds", "other.ec2")).toBeNull();
+    // A well-formed id, but inside acme.clouds rather than the acme it was asked for.
+    expect(pluginCloudProviderId("acme", "clouds.ec2")).toBeNull();
     expect(pluginCloudProviderId("acme.clouds", "")).toBeNull();
     expect(pluginCloudProviderId("acme.clouds", "EC2")).toBeNull();
     expect(pluginCloudProviderId("acme.clouds.extra", "ec2")).toBeNull();
