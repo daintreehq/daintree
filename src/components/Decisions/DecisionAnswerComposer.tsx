@@ -178,6 +178,12 @@ export function DecisionAnswerComposer({ question, target, onMoved }: DecisionAn
     if (phaseKind === "settled" || phaseKind === "refused") onMoved();
   }, [phaseKind, outcomeStatus, answerId, onMoved]);
 
+  // A Send or Retry that found the question closed or changed shows it as it is now.
+  const holdReason = record.hold;
+  useEffect(() => {
+    if (holdReason !== null) onMoved();
+  }, [holdReason, onMoved]);
+
   const progress =
     mode === "progress" && submission !== null
       ? progressText(submission.phase, question, submission.answerId)

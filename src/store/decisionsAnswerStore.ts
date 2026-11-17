@@ -22,8 +22,7 @@ export type AnswerPhase =
   | { kind: "lost" }
   | { kind: "refused"; reason: AnswerRefusal };
 
-export type AnswerRefusal =
-  "not-found" | "not-owner" | "unreadable" | "invalid" | "off" | "not-running";
+export type AnswerRefusal = "not-found" | "not-owner" | "unreadable" | "invalid" | "off";
 
 export interface AnswerSubmission {
   answerId: string;

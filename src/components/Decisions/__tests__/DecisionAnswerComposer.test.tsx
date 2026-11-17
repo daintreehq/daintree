@@ -502,7 +502,6 @@ describe("answering a question from the view (#17102)", () => {
       { result: "refused", reason: "not-found" },
       /can't be answered from this computer/,
     ],
-    ["not-running", { result: "not-running" }, /isn't connected/],
   ] as const)("says nothing was sent when main refuses it: %s", async (_name, refusal, words) => {
     answerQuestion.mockResolvedValue(refusal as DecisionQuestionAnswerResult);
     await openOn("q1");
@@ -626,6 +625,37 @@ describe("answering a question from the view (#17102)", () => {
     expect(notice.textContent).toMatch(/nothing reached the relay/);
     expect(answerQuestion).toHaveBeenCalledTimes(2);
     expect(option("Ship it").checked).toBe(true);
+
+    // Sent anew: the same choice, under a new id.
+    answerQuestion.mockImplementation(async (sent) => ({
+      result: "submitted",
+      answerId: sent.answerId,
+      outcome: { status: "sent" },
+    }));
+    await act(async () => fireEvent.click(send()));
+    await waitFor(() => expect(answerQuestion).toHaveBeenCalledTimes(3));
+    const [first, , third] = answerQuestion.mock.calls.map(([sent]) => sent);
+    expect(third!.selectedOptionIds).toEqual(["yes"]);
+    expect(third!.answerId).not.toBe(first!.answerId);
+    await waitFor(() => expect(status()).toMatch(/sent/i));
+  });
+
+  it("keeps following an answer when main's connection ends under it, since it may be committed", async () => {
+    answerQuestion.mockResolvedValue({ result: "not-running" });
+    getAnswerResult.mockImplementation(async () => ({
+      result: "read",
+      questionId: "q1",
+      expectedRevision: 1,
+      outcome: { status: "sent" },
+    }));
+    await openOn("q1");
+    fireEvent.click(option("Ship it"));
+    await act(async () => fireEvent.click(send()));
+    await waitFor(() => expect(status()).toMatch(/^Answer sent$/));
+    expect(answerQuestion).toHaveBeenCalledOnce();
+    expect(getAnswerResult).toHaveBeenCalledWith({
+      answerId: answerQuestion.mock.calls[0]![0].answerId,
+    });
   });
 
   it("doesn't send a lost answer again once the question has closed", async () => {

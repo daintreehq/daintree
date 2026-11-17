@@ -25,6 +25,7 @@ function queued(record: AnswerRecord): AnswerRecord {
     submission: {
       answerId: "answer-1",
       payload: PAYLOAD,
+      target: { scope: "pane", terminalId: "t", questionId: "q" },
       phase: { kind: "settled", outcome: { status: "queued" } },
       resubmitted: false,
     },

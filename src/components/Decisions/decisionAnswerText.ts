@@ -60,8 +60,6 @@ const REFUSALS: Record<AnswerRefusal, string> = {
   unreadable: `This question couldn't be opened on this computer, so nothing was sent. ${PHONE}`,
   invalid: "The answer doesn't fit what the question allows, so nothing was sent.",
   off: "Decisions is off, so nothing was sent.",
-  "not-running":
-    "Decisions isn't connected to its relay right now, so nothing was sent. Reconnect it in Settings → Decisions.",
 };
 
 export function refusalText(reason: AnswerRefusal): string {

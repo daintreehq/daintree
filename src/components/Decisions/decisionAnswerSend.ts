@@ -94,33 +94,56 @@ function hold(key: string, generation: number, reason: AnswerHold): void {
   change(key, generation, (record) => ({ ...record, preparing: false, hold: reason }));
 }
 
-function phaseOf(result: DecisionQuestionAnswerResult): AnswerPhase {
-  switch (result.result) {
-    case "submitted":
-      return { kind: "settled", outcome: result.outcome };
-    case "refused":
-      return { kind: "refused", reason: result.reason };
-    default:
-      return { kind: "refused", reason: result.result };
+/**
+ * How long one call to main may take before its answer is treated as lost:
+ * past the relay's own send timeout, after which main queues it instead.
+ */
+const MAIN_DEADLINE_MS = 30_000;
+
+class DeadlineError extends Error {
+  constructor() {
+    super("Decisions didn't reply in time");
+    this.name = "DeadlineError";
   }
+}
+
+/** `call`, or a rejection once the deadline passes; a reply after that is ignored. */
+function withDeadline<T>(call: () => Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new DeadlineError()), MAIN_DEADLINE_MS);
+  });
+  return Promise.race([call(), deadline]).finally(() => clearTimeout(timer));
 }
 
 /**
  * Hands the claimed submission to main to sign, as it was built: same answer,
- * same id. Resolves `lost` when the reply never came back, so its standing
- * has to be read by its id.
+ * same id. Resolves `lost` when the reply never came back, or when main's
+ * connection ended under it, which can leave it committed: either way its
+ * standing has to be read by its id.
  */
 async function submitOnce(key: string, claim: Claim): Promise<"replied" | "lost" | "gone"> {
   const submission = claimed(key, claim);
   if (submission === null) return "gone";
   let result: DecisionQuestionAnswerResult;
   try {
-    result = await decisionsClient.answerQuestion(submission.payload);
+    result = await withDeadline(() => decisionsClient.answerQuestion(submission.payload));
   } catch {
     return "lost";
   }
-  setPhase(key, claim, phaseOf(result));
-  return "replied";
+  switch (result.result) {
+    case "submitted":
+      setPhase(key, claim, { kind: "settled", outcome: result.outcome });
+      return "replied";
+    case "refused":
+      setPhase(key, claim, { kind: "refused", reason: result.reason });
+      return "replied";
+    case "off":
+      setPhase(key, claim, { kind: "refused", reason: "off" });
+      return "replied";
+    case "not-running":
+      return "lost";
+  }
 }
 
 /** Answers being followed now, by question and id, so two reads of one never race each other. */
@@ -141,7 +164,7 @@ async function follow(key: string, claim: Claim): Promise<void> {
     if (claimed(key, claim)?.phase.kind === "lost") setPhase(key, claim, { kind: "checking" });
     let read;
     try {
-      read = await decisionsClient.getAnswerResult(claim.answerId);
+      read = await withDeadline(() => decisionsClient.getAnswerResult(claim.answerId));
     } catch {
       setPhase(key, claim, { kind: "lost" });
       return;
@@ -167,13 +190,19 @@ async function follow(key: string, claim: Claim): Promise<void> {
     }
     let fresh;
     try {
-      fresh = await readTargetContent(submission.target);
+      fresh = await withDeadline(() => readTargetContent(submission.target));
     } catch {
       fresh = null;
     }
     if (claimed(key, claim) === null) return;
-    if (fresh === null || fresh.result !== "read") {
+    // Nothing was committed under its id, so a question that is gone or can't
+    // be opened lets it go; one that couldn't be read just now leaves Retry.
+    if (fresh === null || fresh.result === "not-running") {
       setPhase(key, claim, { kind: "lost" });
+      return;
+    }
+    if (fresh.result !== "read") {
+      drop(key, claim, fresh.result === "unreadable" ? "unreadable" : "closed");
       return;
     }
     if (!isAnswerable(fresh.question, Date.now())) {
@@ -221,7 +250,7 @@ export async function sendAnswer(
 
   let read;
   try {
-    read = await readTargetContent(target);
+    read = await withDeadline(() => readTargetContent(target));
   } catch {
     hold(key, generation, "failed");
     return;
