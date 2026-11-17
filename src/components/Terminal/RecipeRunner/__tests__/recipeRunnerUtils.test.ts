@@ -112,6 +112,13 @@ describe("rankSearchResults", () => {
     expect(results[0]!.recipe.id).toBe("2");
   });
 
+  it("returns every match beyond 50", () => {
+    const recipes = Array.from({ length: 80 }, (_, i) =>
+      makeRecipe({ id: `r${i}`, name: `deploy ${i}` })
+    );
+    expect(rankSearchResults(recipes, "deploy", Date.now())).toHaveLength(80);
+  });
+
   it("returns empty for empty recipe array", () => {
     const results = rankSearchResults([], "query", Date.now());
     expect(results).toHaveLength(0);
