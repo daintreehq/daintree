@@ -797,8 +797,9 @@ export function CommitPanel({
   } else if (hasRemote && isUnbornBranch) {
     // Not the missing-destination warning below: nothing is misconfigured, the
     // branch just has no commit for git to name a destination by yet.
-    statusContent = `${stagedSummary} · first commit · push is reviewed once it's made`;
-    statusTooltip = statusContent;
+    const firstCommitLine = `${stagedSummary} · first commit · review the push next`;
+    statusContent = firstCommitLine;
+    statusTooltip = firstCommitLine;
   } else if (hasRemote) {
     // A push with nowhere to go will be refused, so it carries the warning mark
     // the other blockers on this line do.

@@ -78,6 +78,16 @@ export function useReviewHubCommitAndPush({
   const [isPushing, setIsPushing] = useState(false);
   const [pullRebasing, setPullRebasing] = useState(false);
   const isPullRebasingRef = useRef(false);
+  // Bumped whenever this hub stops owning a push review it has yet to ask for:
+  // on reset (close), on a move to another worktree, and on unmount. The push
+  // confirm holds one request app-wide, so a late one would cancel whatever
+  // review is open by then.
+  const reviewOwnerRef = useRef(0);
+  useEffect(() => {
+    return () => {
+      reviewOwnerRef.current++;
+    };
+  }, [worktreePath]);
 
   useEffect(() => {
     setShowPushDetails(false);
@@ -319,8 +329,12 @@ export function useReviewHubCommitAndPush({
       setPushError(null);
       debouncedBgRefreshRef.current?.cancel();
       setIsCommitPushInFlight(true);
+      const owner = reviewOwnerRef.current;
       try {
         await commitForPush(message);
+        // Closed or moved on while the commit ran: the commit stays, and its
+        // push is reviewed whenever someone next asks for one.
+        if (reviewOwnerRef.current !== owner) return;
         await handlePushClean();
       } finally {
         setIsCommitPushInFlight(false);
@@ -416,6 +430,7 @@ export function useReviewHubCommitAndPush({
   const clearPushError = useCallback(() => setPushError(null), []);
 
   const reset = useCallback(() => {
+    reviewOwnerRef.current++;
     setPushError(null);
     lastPushReviewRef.current = null;
     setPullRebasing(false);

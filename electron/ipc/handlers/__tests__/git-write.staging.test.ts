@@ -706,6 +706,18 @@ describe("git-write staging handlers (real git)", () => {
     expect(probes).toEqual([]);
   });
 
+  // rev-parse echoes a pathname back when the revision doesn't resolve, so an
+  // unborn branch tracking a file named `HEAD` "reads" a HEAD of `HEAD`.
+  it("reports an unborn branch as unborn even with a tracked file named HEAD", async () => {
+    fs.writeFileSync(path.join(repo, "HEAD"), "not a ref\n");
+    git(repo, "add", "HEAD");
+
+    const status = await stagingStatus();
+
+    expect(status.staged.map((entry) => entry.path)).toEqual(["HEAD"]);
+    expect(status.isUnbornBranch).toBe(true);
+  });
+
   it("reports an orphan branch as unborn, and a detached HEAD never", async () => {
     commitFiles({ "a.txt": "a\n" });
     git(repo, "checkout", "-q", "--orphan", "fresh");

@@ -116,12 +116,18 @@ describe("CommitPanel — first commit on a branch with a remote (#17588)", () =
     let finish!: () => void;
     const onCommitThenReviewPush = vi.fn(() => new Promise<void>((resolve) => (finish = resolve)));
     const { clickPrimary } = renderUnborn({ onCommitThenReviewPush });
+    const message = () => screen.getByLabelText("Commit message") as HTMLTextAreaElement;
 
     await clickPrimary();
+    expect(message().disabled).toBe(true);
+    expect(screen.getByTestId("review-hub-commit-primary").getAttribute("aria-disabled")).toBe(
+      "true"
+    );
     await clickPrimary();
     expect(onCommitThenReviewPush).toHaveBeenCalledTimes(1);
 
     await act(async () => finish());
+    expect(message().disabled).toBe(false);
     await clickPrimary();
     expect(onCommitThenReviewPush).toHaveBeenCalledTimes(2);
   });
@@ -132,14 +138,18 @@ describe("CommitPanel — first commit on a branch with a remote (#17588)", () =
     const line = statusText();
     expect(line).toContain("1 file staged");
     expect(line).toContain("first commit");
+    expect(line).toContain("review the push next");
     expect(line).not.toContain("no push destination");
-    expect(document.querySelector("[data-severity-glyph]")).toBeNull();
+    const status = screen.getByTestId("review-hub-commit-status");
+    expect(status.querySelector("[data-severity-glyph]")).toBeNull();
   });
 
   it("still names the missing destination when the branch already has commits", async () => {
     const { props, clickPrimary } = renderUnborn({ isUnbornBranch: false });
 
     expect(statusText()).toContain("no push destination");
+    const status = screen.getByTestId("review-hub-commit-status");
+    expect(status.querySelector("[data-severity-glyph]")).not.toBeNull();
     await clickPrimary();
 
     expect(screen.getByRole("alertdialog")).toBeDefined();

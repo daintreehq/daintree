@@ -708,8 +708,7 @@ describe("first commit, then its reviewed push (#17588)", () => {
     expect(shown.rangeBasis).toBe("unverified");
     const error = await rejection(approvedPush(repo, "main", shown));
 
-    expect(error).not.toBeNull();
-    expect(error).not.toMatch(/push-review-stale/);
+    expect(error).toMatch(/\[GitError\|push-rejected-outdated\|/);
     expect(remoteTip(bare, "refs/heads/main")).toBe(existing);
   });
 });
