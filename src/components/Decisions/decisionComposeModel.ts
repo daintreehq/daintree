@@ -3,6 +3,7 @@ import type {
   DecisionQuestionContent,
 } from "@shared/types/decisionsQuestion";
 import type { ReviewedImages } from "@/store/decisionsImageReviewStore";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * What an answer to one question needs, and whether a draft can be sent
@@ -60,12 +61,19 @@ export function reviewedDigests(
     .map((attachment) => attachment.sha256);
 }
 
-export interface ComposeInput {
-  shape: ComposeShape;
+export interface AnswerDraft {
+  /** The revision the person read when they started this answer: what it is signed against. */
+  revision: number;
   /** The chosen option's id, or null. */
   selected: string | null;
   text: string;
-  attachments: DecisionQuestionContent["attachments"];
+}
+
+type ComposedQuestion = ShapedQuestion & Pick<DecisionQuestionContent, "attachments">;
+
+export interface ComposeInput {
+  question: ComposedQuestion;
+  draft: AnswerDraft;
   reviewed: ReviewedImages;
   /** The question moved past the revision this draft was written against. */
   stale: boolean;
@@ -79,29 +87,37 @@ export interface ComposeVerdict {
   hint: string | null;
   /** Bytes over the protocol's answer limit; 0 within it. */
   textOver: number;
-  /** Images still to be opened before an approval can be sent. */
+  /** Images still to be opened before an approval can be decided. */
   remainingImages: number;
 }
 
+/** The draft's choice, while it is still one of the question's options. */
+export function chosenOption(question: ShapedQuestion, draft: AnswerDraft): string | null {
+  if (draft.selected === null || !composeShape(question).hasOptions) return null;
+  return question.options.some((option) => option.id === draft.selected) ? draft.selected : null;
+}
+
 export function composeVerdict(input: ComposeInput): ComposeVerdict {
-  const { shape } = input;
-  const textOver = Math.max(0, textBytes(input.text) - ANSWER_TEXT_BYTES);
-  const hasChoice = shape.hasOptions && input.selected !== null;
-  const hasText = shape.textAllowed && input.text.trim().length > 0;
+  const { question, draft } = input;
+  const shape = composeShape(question);
+  const textOver = Math.max(0, textBytes(draft.text) - ANSWER_TEXT_BYTES);
+  const hasChoice = chosenOption(question, draft) !== null;
+  const hasText = shape.textAllowed && draft.text.trim().length > 0;
   const hasAnswer = shape.hasOptions ? hasChoice || (shape.mixed && hasText) : hasText;
   // An approval decides on the images it was asked with, so each is seen first, as on the phone.
   const remainingImages = shape.approval
-    ? input.attachments.length - reviewedDigests(input.attachments, input.reviewed).length
+    ? question.attachments.length - reviewedDigests(question.attachments, input.reviewed).length
     : 0;
 
   let hint: string | null = null;
   if (input.closed) hint = null;
   else if (input.stale) hint = "Review the updated question";
+  // Before the choice: its options stay unavailable until then.
   else if (remainingImages > 0)
     hint =
       remainingImages === 1
-        ? "Open the remaining image"
-        : `Open the remaining ${remainingImages.toLocaleString()} images`;
+        ? "Open the remaining image to decide"
+        : `Open the remaining ${pluralize(remainingImages, "image")} to decide`;
   else if (!hasAnswer)
     hint = shape.mixed
       ? "Choose an option or write an answer"
@@ -115,16 +131,20 @@ export function composeVerdict(input: ComposeInput): ComposeVerdict {
   return { canSend, hint, textOver, remainingImages };
 }
 
+/** Whether the question still takes an answer: waiting, and not past its expiry. */
+export function isAnswerable(
+  question: Pick<DecisionQuestionContent, "status" | "expiresAt">,
+  nowMs: number
+): boolean {
+  if (question.status !== "open" && question.status !== "queued") return false;
+  if (question.expiresAt === null) return true;
+  const expires = Date.parse(question.expiresAt);
+  return Number.isNaN(expires) || expires > nowMs;
+}
+
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n.toLocaleString()} ${n === 1 ? "byte" : "bytes"}`;
   return `${(n / 1024).toFixed(1)} KB`;
-}
-
-export interface AnswerDraft {
-  /** The revision the person read when they started this answer: what it is signed against. */
-  revision: number;
-  selected: string | null;
-  text: string;
 }
 
 /** What goes to main for this computer to sign: what the person chose and wrote, as the phone sends it. */
@@ -136,11 +156,12 @@ export function answerPayload(
 ): AnswerDecisionQuestionPayload {
   const shape = composeShape(question);
   const text = shape.textAllowed && draft.text.trim().length > 0 ? draft.text : undefined;
+  const chosen = chosenOption(question, draft);
   return {
     reference: question.reference,
     answerId,
     expectedRevision: draft.revision,
-    selectedOptionIds: shape.hasOptions && draft.selected !== null ? [draft.selected] : [],
+    selectedOptionIds: chosen !== null ? [chosen] : [],
     ...(text !== undefined ? { text } : {}),
     ...(shape.approval ? { explicitApproval: true } : {}),
     reviewedAttachmentDigests: reviewedDigests(question.attachments, reviewed),

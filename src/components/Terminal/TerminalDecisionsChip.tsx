@@ -35,6 +35,7 @@ import type { DecisionCancelTarget } from "@/components/Decisions/decisionCancel
 import { paneQuestion, questionOf } from "@/components/Decisions/decisionQuestionTarget";
 import type { PaneDecisionState } from "@shared/types/decisions";
 import {
+  answerNote,
   cancelNote,
   chipLabel,
   chipSummary,
@@ -312,7 +313,8 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
   const attention = needsAttention(items);
   const summary = chipSummary(items);
   const label = chipLabel(items);
-  const notes = deliveryNotes(items, wait);
+  const answerable = answerNote(items);
+  const notes = [...(answerable !== null ? [answerable] : []), ...deliveryNotes(items, wait)];
   const unavailable = cancelNote(items);
   if (unavailable !== null) notes.push(unavailable);
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { LIMITS } from "@daintreehq/decisions-protocol";
 import type {
   DecisionQuestionAttachment,
   DecisionQuestionContent,
@@ -8,6 +9,7 @@ import {
   answerPayload,
   composeShape,
   composeVerdict,
+  isAnswerable,
   reviewedDigests,
   type ComposeInput,
 } from "../decisionComposeModel";
@@ -51,16 +53,20 @@ function question(over: Partial<DecisionQuestionContent> = {}): DecisionQuestion
   };
 }
 
-function input(content: DecisionQuestionContent, over: Partial<ComposeInput> = {}): ComposeInput {
+type Over = Partial<Omit<ComposeInput, "question" | "draft">> & {
+  selected?: string | null;
+  text?: string;
+};
+
+function input(content: DecisionQuestionContent, over: Over = {}): ComposeInput {
+  const { selected = null, text = "", ...rest } = over;
   return {
-    shape: composeShape(content),
-    selected: null,
-    text: "",
-    attachments: content.attachments,
+    question: content,
+    draft: { revision: content.revision, selected, text },
     reviewed: {},
     stale: false,
     closed: false,
-    ...over,
+    ...rest,
   };
 }
 
@@ -148,6 +154,11 @@ describe("composeVerdict", () => {
     });
   });
 
+  it("holds text to the protocol's own answer limit", () => {
+    // Mirrored rather than imported, so the renderer doesn't take in the protocol's schemas.
+    expect(ANSWER_TEXT_BYTES).toBe(LIMITS.answerTextBytes);
+  });
+
   it("refuses text over the protocol's limit, counted in UTF-8 bytes", () => {
     const content = question({ kind: "text", options: [], allowText: true });
     // Three bytes each: fits in characters, not in bytes.
@@ -161,6 +172,20 @@ describe("composeVerdict", () => {
     );
   });
 
+  it("takes a choice only while it is still one of the question's options", () => {
+    const content = question();
+    expect(composeVerdict(input(content, { selected: "gone" })).canSend).toBe(false);
+    const payload = answerPayload(content, { revision: 3, selected: "gone", text: "" }, {}, "x1");
+    expect(payload.selectedOptionIds).toEqual([]);
+  });
+
+  it("names the remaining images before the missing choice, since the choice waits on them", () => {
+    const content = question({ kind: "approval", attachments: [image("x")] });
+    const verdict = composeVerdict(input(content));
+    expect(verdict.remainingImages).toBe(1);
+    expect(verdict.hint).not.toBe(composeVerdict(input(question({ kind: "approval" }))).hint);
+  });
+
   it("never sends a stale or closed draft, and says nothing to do when closed", () => {
     const content = question();
     const stale = composeVerdict(input(content, { selected: "a", stale: true }));
@@ -168,6 +193,28 @@ describe("composeVerdict", () => {
     expect(stale.hint).not.toBeNull();
     const closed = composeVerdict(input(content, { selected: "a", closed: true, stale: true }));
     expect(closed).toMatchObject({ canSend: false, hint: null });
+  });
+});
+
+describe("isAnswerable", () => {
+  it("answers only a waiting question that hasn't expired", () => {
+    const now = Date.parse("2026-11-02T12:00:00.000Z");
+    expect(isAnswerable({ status: "open", expiresAt: null }, now)).toBe(true);
+    expect(isAnswerable({ status: "queued", expiresAt: null }, now)).toBe(true);
+    expect(isAnswerable({ status: "open", expiresAt: "2026-11-02T12:00:01.000Z" }, now)).toBe(true);
+    // Expired by the clock before the store has recorded it.
+    expect(isAnswerable({ status: "open", expiresAt: "2026-11-02T12:00:00.000Z" }, now)).toBe(
+      false
+    );
+    for (const status of [
+      "human-answered",
+      "proxy-answered",
+      "cancelled",
+      "expired",
+      "publish-failed",
+    ] as const) {
+      expect(isAnswerable({ status, expiresAt: null }, now)).toBe(false);
+    }
   });
 });
 

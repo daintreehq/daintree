@@ -182,11 +182,12 @@ export function decisionItems(
       questionId: question.questionId,
       label: aliasLabel(question.alias),
       kind: withdrawn ? "cancelling" : queued ? "queued" : "open",
+      // Answered from the question's view as well as on a phone (#17102).
       status: withdrawn
         ? "Cancelling, waiting for the relay to confirm"
         : queued
-          ? "Queued to send"
-          : "Waiting for an answer",
+          ? "Queued to send; you can answer it here"
+          : "Waiting for an answer, here or on your phone",
       reason: null,
       waitsFor: null,
       askedAt: epoch(question.askedAt),
@@ -293,13 +294,18 @@ export function deliveryNotes(
   return notes;
 }
 
+/** How to answer, while any question still waits for one: its row opens the composer. */
+export function answerNote(items: readonly DecisionItem[]): string | null {
+  return items.some(isCancellable) ? "Open a question to answer it here" : null;
+}
+
 /** One item's whole sentence, naming the question: what the tooltip and the button's name say. */
 export function itemSentence(item: DecisionItem): string {
   switch (item.kind) {
     case "open":
-      return `Question ${item.label} is waiting for an answer`;
+      return `Question ${item.label} is waiting for an answer, here or on your phone`;
     case "queued":
-      return `Question ${item.label} is queued to send`;
+      return `Question ${item.label} is queued to send; you can answer it here`;
     case "cancelling":
       return `Question ${item.label} is being cancelled, waiting for the relay to confirm`;
     case "answer":
