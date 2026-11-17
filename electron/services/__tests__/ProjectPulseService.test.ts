@@ -499,13 +499,14 @@ describe("ProjectPulseService", () => {
     // must short-circuit before we ever call rev-list.
     const recentDate = new Date(baseTime);
     recentDate.setDate(recentDate.getDate() - 5);
+    const boundaryTimestamp = Math.floor(recentDate.getTime() / 1000);
 
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
       if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
       if (cmd === "rev-parse" && args.includes("--is-shallow-repository")) return "true\n";
-      if (cmd === "rev-list") return "shallowboundary\n";
+      if (cmd === "rev-list") return `${boundaryTimestamp} shallowboundary\n`;
       if (cmd === "log") return "";
       return "";
     });
@@ -549,13 +550,15 @@ describe("ProjectPulseService", () => {
       commitTimestamps.push(Math.floor(date.getTime() / 1000));
     }
     const commitOutput = commitTimestamps.join("\n");
+    // A boundary only days old would mark most cells isBeforeProject if the guard were gone.
+    const boundaryTimestamp = commitTimestamps[4] as number;
 
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
       if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
       if (cmd === "rev-parse" && args.includes("--is-shallow-repository")) return "true\n";
-      if (cmd === "rev-list") return "shallowboundary\n";
+      if (cmd === "rev-list") return `${boundaryTimestamp} shallowboundary\n`;
       if (cmd === "log") return commitOutput;
       return "";
     });

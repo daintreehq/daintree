@@ -16,8 +16,8 @@ const MERGE = "2025-01-12T12:00:00Z";
 let root: string;
 let home: string;
 
-function git(cwd: string, date: string | null, ...args: string[]): void {
-  execFileSync("git", args, {
+function git(cwd: string, date: string | null, ...args: string[]): string {
+  return execFileSync("git", args, {
     cwd,
     env: {
       PATH: process.env.PATH ?? "",
@@ -30,7 +30,8 @@ function git(cwd: string, date: string | null, ...args: string[]): void {
       GIT_COMMITTER_EMAIL: "t@example.com",
       ...(date ? { GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date } : {}),
     },
-    stdio: "ignore",
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
   });
 }
 
@@ -41,6 +42,17 @@ function commitRoot(repo: string, branch: string, file: string, date: string): v
   fs.writeFileSync(path.join(repo, file), `${file}\n`);
   git(repo, null, "add", file);
   git(repo, date, "commit", "-q", "-m", `root ${file}`);
+}
+
+// Two unrelated roots joined by a merge: the first parent is the root dated firstParentDate.
+function buildMergedRepo(firstParentDate: string, mergedDate: string): string {
+  const repo = path.join(root, "repo");
+  fs.mkdirSync(repo);
+  git(repo, null, "init", "-q", "-b", "main");
+  commitRoot(repo, "side", "side.txt", mergedDate);
+  commitRoot(repo, "main", "main.txt", firstParentDate);
+  git(repo, MERGE, "merge", "-q", "--allow-unrelated-histories", "--no-ff", "-m", "merge", "side");
+  return repo;
 }
 
 function localDay(date: string): string {
@@ -54,7 +66,7 @@ function pulseOf(worktreePath: string) {
     worktreePath,
     worktreeId: "wt-real",
     mainBranch: "main",
-    rangeDays: 30 as const,
+    rangeDays: 60 as const,
     includeDelta: false,
     includeRecentCommits: false,
   });
@@ -84,29 +96,9 @@ describe("Project Pulse age across unrelated histories (#17509)", () => {
     { name: "older root first parent", firstParentDate: OLD_ROOT, mergedDate: NEW_ROOT },
     { name: "newer root first parent", firstParentDate: NEW_ROOT, mergedDate: OLD_ROOT },
   ])("uses the earliest root when the $name", async ({ firstParentDate, mergedDate }) => {
-    const repo = path.join(root, "repo");
-    fs.mkdirSync(repo);
-    git(repo, null, "init", "-q", "-b", "main");
-    commitRoot(repo, "side", "side.txt", mergedDate);
-    commitRoot(repo, "main", "main.txt", firstParentDate);
-    git(
-      repo,
-      MERGE,
-      "merge",
-      "-q",
-      "--allow-unrelated-histories",
-      "--no-ff",
-      "-m",
-      "merge",
-      "side"
-    );
+    const repo = buildMergedRepo(firstParentDate, mergedDate);
 
-    const roots = execFileSync("git", ["rev-list", "--max-parents=0", "HEAD"], {
-      cwd: repo,
-      encoding: "utf8",
-    })
-      .trim()
-      .split("\n");
+    const roots = git(repo, null, "rev-list", "--max-parents=0", "HEAD").trim().split("\n");
     expect(roots).toHaveLength(2);
 
     const pulse = await pulseOf(repo);
@@ -125,29 +117,17 @@ describe("Project Pulse age across unrelated histories (#17509)", () => {
   });
 
   it("still skips age culling for a shallow clone of the merged repository", async () => {
-    const repo = path.join(root, "repo");
-    fs.mkdirSync(repo);
-    git(repo, null, "init", "-q", "-b", "main");
-    commitRoot(repo, "side", "side.txt", NEW_ROOT);
-    commitRoot(repo, "main", "main.txt", OLD_ROOT);
-    git(
-      repo,
-      MERGE,
-      "merge",
-      "-q",
-      "--allow-unrelated-histories",
-      "--no-ff",
-      "-m",
-      "merge",
-      "side"
-    );
+    const repo = buildMergedRepo(OLD_ROOT, NEW_ROOT);
 
+    // --no-local forces the transport that honours --depth, and a plain path avoids
+    // percent-decoding or drive-letter surprises a file:// URL brings on Windows.
     const clone = path.join(root, "clone");
-    git(root, null, "clone", "-q", "--depth", "1", `file://${repo}`, clone);
+    git(root, null, "clone", "-q", "--no-local", "--depth", "1", repo, clone);
+    expect(git(clone, null, "rev-parse", "--is-shallow-repository").trim()).toBe("true");
 
     const pulse = await pulseOf(clone);
 
-    expect(pulse.projectAgeDays).toBe(30);
+    expect(pulse.projectAgeDays).toBe(60);
     expect(pulse.heatmap.every((cell) => !cell.isBeforeProject)).toBe(true);
   });
 });
