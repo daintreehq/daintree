@@ -25,6 +25,13 @@ export interface ReviewHubActionFailure {
 
 interface UseReviewHubStagingActionsArgs {
   worktreePath: string;
+  /**
+   * Whether the hub is still on `path`. A grid hub moves between worktrees
+   * while mounted, so a write that settles after a move answers for a
+   * worktree no longer on screen: its failure, Retry, and selection clearing
+   * would all land on the new one.
+   */
+  isOpenPath: (path: string) => boolean;
   refresh: () => Promise<void>;
   derivedStaged: StagingFileEntry[];
   derivedUnstaged: StagingFileEntry[];
@@ -54,6 +61,7 @@ export interface UseReviewHubStagingActionsReturn {
 
 export function useReviewHubStagingActions({
   worktreePath,
+  isOpenPath,
   refresh,
   derivedStaged,
   derivedUnstaged,
@@ -66,7 +74,9 @@ export function useReviewHubStagingActions({
   selectionAnchorRef,
   debouncedBgRefreshRef,
 }: UseReviewHubStagingActionsArgs): UseReviewHubStagingActionsReturn {
-  const isBulkStagingRef = useRef(false);
+  // Per worktree: a selection write still pending on one the hub has left must
+  // not refuse the next worktree's.
+  const bulkStagingPathsRef = useRef(new Set<string>());
   const getView = useLatestGetter({ worktreePath, unstaged });
   const writeIdRef = useRef(0);
 
@@ -77,8 +87,15 @@ export function useReviewHubStagingActions({
     return ++writeIdRef.current;
   }, [setActionError, debouncedBgRefreshRef]);
 
-  /** Whether the hub still shows `cwd`; reads and failures there are no longer this view's. */
-  const isShowing = useCallback((cwd: string) => getView().worktreePath === cwd, [getView]);
+  /**
+   * Whether the hub still shows `cwd`; reads and failures there are no longer
+   * this view's. `isOpenPath` moves in a layout effect, so an answer that lands
+   * between a switch's commit and its passive effects already sees the move.
+   */
+  const isShowing = useCallback(
+    (cwd: string) => isOpenPath(cwd) && getView().worktreePath === cwd,
+    [isOpenPath, getView]
+  );
 
   /** Whether write `id`'s failure may still be reported: no newer write has started since. */
   const mayReport = useCallback(
@@ -117,6 +134,8 @@ export function useReviewHubStagingActions({
     ): Promise<void> => {
       const cwd = worktreePath;
       const attempt = async (attemptScope: string[]): Promise<void> => {
+        // A Retry kept from a worktree the hub has left writes nothing.
+        if (!isOpenPath(cwd)) return;
         const id = beginWrite();
         let error: { cause: unknown } | null = null;
         try {
@@ -139,12 +158,22 @@ export function useReviewHubStagingActions({
       };
       await attempt(scope);
     },
-    [worktreePath, refresh, setActionError, beginWrite, isShowing, mayReport, stillUnstaged]
+    [
+      worktreePath,
+      isOpenPath,
+      refresh,
+      setActionError,
+      beginWrite,
+      isShowing,
+      mayReport,
+      stillUnstaged,
+    ]
   );
 
   const handleStageFile = useCallback(
     async (filePath: string) => {
       const attempt = async (): Promise<void> => {
+        if (!isOpenPath(worktreePath)) return;
         const id = beginWrite();
         try {
           await window.electron.git.stageFile(worktreePath, filePath);
@@ -160,12 +189,13 @@ export function useReviewHubStagingActions({
       };
       await attempt();
     },
-    [worktreePath, refresh, setActionError, beginWrite, mayReport]
+    [worktreePath, isOpenPath, refresh, setActionError, beginWrite, mayReport]
   );
 
   const handleUnstageFile = useCallback(
     async (filePath: string) => {
       const attempt = async (): Promise<void> => {
+        if (!isOpenPath(worktreePath)) return;
         const id = beginWrite();
         try {
           await window.electron.git.unstageFile(worktreePath, filePath);
@@ -181,11 +211,12 @@ export function useReviewHubStagingActions({
       };
       await attempt();
     },
-    [worktreePath, refresh, setActionError, beginWrite, mayReport]
+    [worktreePath, isOpenPath, refresh, setActionError, beginWrite, mayReport]
   );
 
   const handleStageAll = useCallback(async () => {
     const attempt = async (): Promise<void> => {
+      if (!isOpenPath(worktreePath)) return;
       const id = beginWrite();
       try {
         await window.electron.git.stageAll(worktreePath);
@@ -200,10 +231,11 @@ export function useReviewHubStagingActions({
       }
     };
     await attempt();
-  }, [worktreePath, refresh, setActionError, beginWrite, mayReport]);
+  }, [worktreePath, isOpenPath, refresh, setActionError, beginWrite, mayReport]);
 
   const handleUnstageAll = useCallback(async () => {
     const attempt = async (): Promise<void> => {
+      if (!isOpenPath(worktreePath)) return;
       const id = beginWrite();
       try {
         await window.electron.git.unstageAll(worktreePath);
@@ -218,7 +250,7 @@ export function useReviewHubStagingActions({
       }
     };
     await attempt();
-  }, [worktreePath, refresh, setActionError, beginWrite, mayReport]);
+  }, [worktreePath, isOpenPath, refresh, setActionError, beginWrite, mayReport]);
 
   const handleStageFiltered = useCallback(async () => {
     const paths = derivedUnstaged.map((f) => f.path);
@@ -239,14 +271,16 @@ export function useReviewHubStagingActions({
   }, [derivedStaged, writePaths]);
 
   const handleStageSelection = useCallback(async () => {
-    if (isBulkStagingRef.current) return;
+    if (bulkStagingPathsRef.current.has(worktreePath)) return;
     if (selectionSection !== "unstaged" || selectedPaths.size === 0) return;
-    isBulkStagingRef.current = true;
-    const paths = Array.from(selectedPaths);
     const cwd = worktreePath;
+    bulkStagingPathsRef.current.add(cwd);
+    const paths = Array.from(selectedPaths);
     const id = beginWrite();
     try {
       await window.electron.git.stageFiles(cwd, paths);
+      // The selection on screen now is another worktree's.
+      if (!isOpenPath(cwd)) return;
       setSelectedPaths(new Set());
       setSelectionSection(null);
       selectionAnchorRef.current = null;
@@ -268,10 +302,11 @@ export function useReviewHubStagingActions({
           }),
       });
     } finally {
-      isBulkStagingRef.current = false;
+      bulkStagingPathsRef.current.delete(cwd);
     }
   }, [
     worktreePath,
+    isOpenPath,
     refresh,
     selectedPaths,
     selectionSection,
@@ -287,14 +322,16 @@ export function useReviewHubStagingActions({
   ]);
 
   const handleUnstageSelection = useCallback(async () => {
-    if (isBulkStagingRef.current) return;
+    if (bulkStagingPathsRef.current.has(worktreePath)) return;
     if (selectionSection !== "staged" || selectedPaths.size === 0) return;
-    isBulkStagingRef.current = true;
-    const paths = Array.from(selectedPaths);
     const cwd = worktreePath;
+    bulkStagingPathsRef.current.add(cwd);
+    const paths = Array.from(selectedPaths);
     const id = beginWrite();
     try {
       await window.electron.git.unstageFiles(cwd, paths);
+      // The selection on screen now is another worktree's.
+      if (!isOpenPath(cwd)) return;
       setSelectedPaths(new Set());
       setSelectionSection(null);
       selectionAnchorRef.current = null;
@@ -316,10 +353,11 @@ export function useReviewHubStagingActions({
           }),
       });
     } finally {
-      isBulkStagingRef.current = false;
+      bulkStagingPathsRef.current.delete(cwd);
     }
   }, [
     worktreePath,
+    isOpenPath,
     refresh,
     selectedPaths,
     selectionSection,

@@ -768,6 +768,48 @@ describe("ReviewHub", () => {
       });
       expect(stageAllMock).not.toHaveBeenCalled();
     });
+
+    it("keeps a failure that lands after a move to another worktree off that worktree (#17584)", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({
+          staged: [],
+          unstaged: [{ path: "src/a.ts", status: "modified", insertions: 1, deletions: 0 }],
+        })
+      );
+      let rejectStage: (reason: unknown) => void = () => {};
+      stageAllMock.mockImplementationOnce(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            rejectStage = reject;
+          })
+      );
+      const { rerender } = render(
+        <ReviewHubContent
+          isOpen={true}
+          worktreePath={WORKTREE_PATH}
+          onClose={vi.fn()}
+          autoStageOnOpen={true}
+        />
+      );
+      await waitFor(() => expect(stageAllMock).toHaveBeenCalledWith(WORKTREE_PATH));
+
+      rerender(
+        <ReviewHubContent
+          isOpen={true}
+          worktreePath="/home/user/other"
+          onClose={vi.fn()}
+          autoStageOnOpen={true}
+        />
+      );
+      await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalledWith("/home/user/other"));
+      await act(async () => {
+        rejectStage(new Error("index.lock exists"));
+      });
+
+      expect(screen.queryByText("Couldn't stage all files")).toBeNull();
+      expect(screen.queryByRole("button", { name: /^Retry$/ })).toBeNull();
+      expect(stageAllMock).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("initialCommitMessage (issue #7886)", () => {

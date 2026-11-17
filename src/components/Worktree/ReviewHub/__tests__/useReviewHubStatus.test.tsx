@@ -356,3 +356,51 @@ describe("useReviewHubStatus failed reads", () => {
     expect(result.current.loading).toBe(false);
   });
 });
+
+describe("useReviewHubStatus after a worktree switch", () => {
+  const OTHER = "/repo/other";
+
+  it("ignores a refresh held from the previous worktree, so the new one's read still lands", async () => {
+    marks.available = false;
+    const { result, rerender } = renderHook(
+      ({ path }: { path: string }) =>
+        useReviewHubStatus({ isOpen: true, worktreePath: path, worktreeId: "wt-1" }),
+      { initialProps: { path: WT } }
+    );
+    await advance(0);
+    // What a staging write started on the first worktree calls once it settles.
+    const heldRefresh = result.current.refresh;
+
+    const otherRead = deferred<StagingStatus>();
+    getStagingStatus.mockReturnValueOnce(otherRead.promise);
+    rerender({ path: OTHER });
+    act(() => result.current.beginOpen());
+    expect(getStagingStatus).toHaveBeenLastCalledWith(OTHER);
+    getStagingStatus.mockClear();
+
+    await act(async () => {
+      await heldRefresh();
+    });
+    expect(getStagingStatus).not.toHaveBeenCalled();
+
+    await act(async () => otherRead.resolve({ ...status, currentBranch: "other" }));
+    expect(result.current.status?.currentBranch).toBe("other");
+    expect(result.current.statusIsFresh).toBe(true);
+    expect(result.current.loading).toBe(false);
+  });
+
+  it("answers whether a path is the worktree open now", () => {
+    marks.available = false;
+    const { result, rerender } = renderHook(
+      ({ path }: { path: string }) =>
+        useReviewHubStatus({ isOpen: true, worktreePath: path, worktreeId: "wt-1" }),
+      { initialProps: { path: WT } }
+    );
+    expect(result.current.isOpenPath(WT)).toBe(true);
+
+    rerender({ path: OTHER });
+
+    expect(result.current.isOpenPath(WT)).toBe(false);
+    expect(result.current.isOpenPath(OTHER)).toBe(true);
+  });
+});

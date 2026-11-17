@@ -1628,6 +1628,8 @@ describe("ReviewHub", () => {
         // row stays resolved and Continue waits on the stage still in flight.
         expect(screen.queryByRole("button", { name: /Mark src\/app\.ts as resolved/i })).toBeNull();
         expect(screen.getByTestId("conflict-continue").getAttribute("aria-disabled")).toBe("true");
+        // Nor does the old worktree's failure banner (#17584).
+        expect(screen.queryByText("Couldn't mark file resolved")).toBeNull();
 
         await act(async () => {
           newStage.resolve();

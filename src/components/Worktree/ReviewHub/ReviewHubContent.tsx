@@ -268,6 +268,7 @@ export function ReviewHubContent({
     readWithCapture,
     refreshWithCapture,
     debouncedBgRefreshRef,
+    isOpenPath,
     beginOpen: beginStatusOpen,
     reset: resetStatus,
   } = useReviewHubStatus({ isOpen, worktreePath, worktreeId });
@@ -1171,6 +1172,7 @@ export function ReviewHubContent({
     handleToggleUnstaged,
   } = useReviewHubStagingActions({
     worktreePath,
+    isOpenPath,
     refresh,
     derivedStaged,
     derivedUnstaged,
@@ -1297,6 +1299,8 @@ export function ReviewHubContent({
         await window.electron.git.stageAll(worktreePath);
         await refresh();
       } catch (err) {
+        // Its Retry would stage the worktree the hub has since moved off.
+        if (!isOpenPath(worktreePath)) return;
         hasAutoStagedRef.current = false;
         setActionError({
           title: "Couldn't stage all files",
@@ -1313,6 +1317,7 @@ export function ReviewHubContent({
     isOperationState,
     refresh,
     worktreePath,
+    isOpenPath,
     handleStageAll,
     debouncedBgRefreshRef,
   ]);
@@ -1476,14 +1481,17 @@ export function ReviewHubContent({
         await window.electron.git.stageFile(worktreePath, filePath);
         await refresh();
       } catch (err) {
-        setActionError({
-          title: "Couldn't mark file resolved",
-          detail: formatErrorMessage(err, "Failed to mark file resolved"),
-        });
+        // Still thrown for the panel's rollback, which owns its own move guard.
+        if (isOpenPath(worktreePath)) {
+          setActionError({
+            title: "Couldn't mark file resolved",
+            detail: formatErrorMessage(err, "Failed to mark file resolved"),
+          });
+        }
         throw err;
       }
     },
-    [worktreePath, refresh, debouncedBgRefreshRef]
+    [worktreePath, isOpenPath, refresh, debouncedBgRefreshRef]
   );
 
   const handleFocusBlocker = useCallback(
