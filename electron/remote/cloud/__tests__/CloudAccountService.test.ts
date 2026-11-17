@@ -568,7 +568,7 @@ describe("CloudAccountService with declared credential sets", () => {
     expect(vault.sets.has(added.id)).toBe(false);
   });
 
-  it("records who the new set signs in as, not what a check of the old one wrote while it was sealed", async () => {
+  it("refuses a replacement for someone else when the old set turns out to be another's while it seals", async () => {
     const provider = fieldsProvider("acme.clouds.gce", KEY_FILE, {
       validate: vi.fn(async () => ({ identity: "alice@acme.iam" })),
     });
@@ -596,8 +596,8 @@ describe("CloudAccountService with declared credential sets", () => {
     await accounts.validate(added.id);
     expect(store.account(added.id)?.identity).toBe("alice@acme.iam");
     release();
-    await replacing;
-    expect(store.account(added.id)?.identity).toBe("bob@acme.iam");
+    await expect(replacing).rejects.toThrow(/sign in as bob@acme\.iam, not alice@acme\.iam/);
+    expect(vault.sets.get(added.id)?.keyFile).toContain("key-one");
   });
 
   it("keeps the sign-in known at commit when the new set's check names none", async () => {

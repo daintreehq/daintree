@@ -440,6 +440,8 @@ export class CloudAccountService {
           );
         if (raced) throw invalid(`${raced.displayName} is already connected as ${identity}.`);
         const latest = this.deps.store.account(account.id) ?? before;
+        // A check of the old set may have learned whose account this is while the new one was sealed.
+        refuseOtherIdentity(latest);
         this.deps.store.putAccount({
           ...latest,
           // Who the new set signs in as, never what a check of the old one wrote while it was sealed.
