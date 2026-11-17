@@ -585,8 +585,8 @@ interface NotificationHistoryState {
   clearSnooze: (correlationId: string) => void;
   /**
    * Drop every snooze whose expiry has passed. Called by the view-lifetime
-   * `useNotificationSnoozeExpiry` at each expiry and on wake. No-op when
-   * nothing has expired so the persist write doesn't fire on every tick.
+   * `useNotificationSnoozeExpiry` at each expiry and on wake, and when the
+   * inbox opens. Writes nothing when nothing has expired.
    */
   clearExpiredSnoozes: (now?: number) => void;
 }
@@ -920,7 +920,10 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
           };
         });
       },
-      clearExpiredSnoozes: (now = Date.now()) =>
+      clearExpiredSnoozes: (now = Date.now()) => {
+        // Persist queues a storage write on every `set`, even one that returns
+        // the same state, and this runs on each window focus.
+        if (!Object.values(get().snoozedThreads).some((until) => until <= now)) return;
         set((state) => {
           let mutated = false;
           const next: Record<string, number> = {};
@@ -936,7 +939,8 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
             snoozedThreads: next,
             unreadCount: computeUnreadCount(state.entries, next, now),
           };
-        }),
+        });
+      },
     }),
     {
       name: NOTIFICATION_HISTORY_STORAGE_KEY,

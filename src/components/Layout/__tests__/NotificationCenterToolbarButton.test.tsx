@@ -127,6 +127,7 @@ function resetStores() {
     entries: [],
     unreadCount: 0,
     evictedToInboxCount: 0,
+    snoozedThreads: {},
   });
   useNotificationSettingsStore.setState({
     enabled: true,
@@ -274,7 +275,6 @@ describe("NotificationCenterToolbarButton — DND state surface", () => {
       vi.useFakeTimers();
       const start = new Date(2024, 0, 3, 12, 0).getTime();
       vi.setSystemTime(start);
-      useNotificationHistoryStore.setState({ snoozedThreads: {} });
       useNotificationHistoryStore
         .getState()
         .addEntry({ type: "info", message: "Build failed", correlationId: "thread-a" });
@@ -291,7 +291,9 @@ describe("NotificationCenterToolbarButton — DND state surface", () => {
       );
       expect(dot.getAttribute("data-visible")).toBe("false");
 
-      act(() => vi.advanceTimersByTime(10 * 60_000));
+      act(() => {
+        vi.advanceTimersByTime(10 * 60_000);
+      });
       // Nothing rendered the inbox: the bell came back on the snooze's own end.
       expect(queryByTestId("notification-center")).toBeNull();
       expect(dot.getAttribute("data-visible")).toBe("true");

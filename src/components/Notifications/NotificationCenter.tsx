@@ -111,6 +111,12 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   const clearAll = useNotificationHistoryStore((s) => s.clearAll);
   const dismissEntry = useNotificationHistoryStore((s) => s.dismissEntry);
   const dismissByCorrelationId = useNotificationHistoryStore((s) => s.dismissByCorrelationId);
+  // The rows read the clock, and a clock that jumped with the window focused
+  // leaves the view-lifetime snooze timer running late, so opening squares the
+  // stored unread count with what the rows show.
+  useEffect(() => {
+    if (open) useNotificationHistoryStore.getState().clearExpiredSnoozes();
+  }, [open]);
 
   const {
     notificationsEnabled,

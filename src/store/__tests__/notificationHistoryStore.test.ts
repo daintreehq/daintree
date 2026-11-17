@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   useNotificationHistoryStore,
   getEntriesByCorrelationId,
@@ -1219,6 +1219,19 @@ describe("notificationHistorySlice", () => {
       const before = getState();
       getState().clearExpiredSnoozes(Date.now());
       expect(getState()).toBe(before);
+    });
+
+    it("clearExpiredSnoozes queues no persist write when nothing has expired", () => {
+      getState().snoozeThread("future", Date.now() + 60_000);
+      const storage = useNotificationHistoryStore.persist.getOptions().storage;
+      if (!storage) throw new Error("notification history has no persist storage");
+      const setItem = vi.spyOn(storage, "setItem");
+      try {
+        getState().clearExpiredSnoozes(Date.now());
+        expect(setItem).not.toHaveBeenCalled();
+      } finally {
+        setItem.mockRestore();
+      }
     });
 
     it("unreadCount excludes snoozed correlationIds", () => {
