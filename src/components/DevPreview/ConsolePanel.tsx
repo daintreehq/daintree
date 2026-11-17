@@ -550,6 +550,33 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
     ? `No ${noun} match “${truncateQuery(trimmedSearch)}”`
     : `No ${noun}`;
 
+  const copyVisibleButton = (
+    <button
+      type="button"
+      onClick={() => void handleCopyVisible()}
+      disabled={filtered.length === 0}
+      className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
+      aria-label="Copy visible console messages"
+    >
+      {allCopied ? (
+        <Check aria-hidden="true" className={PANE_TOOLBAR_ICON_CLASS} />
+      ) : (
+        <Copy aria-hidden="true" className={PANE_TOOLBAR_ICON_CLASS} />
+      )}
+    </button>
+  );
+  const clearButton = (
+    <button
+      type="button"
+      onClick={handleClear}
+      disabled={allMessages.length === 0}
+      className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
+      aria-label="Clear console"
+    >
+      <Trash2 aria-hidden="true" className={PANE_TOOLBAR_ICON_CLASS} />
+    </button>
+  );
+
   return (
     <div className="flex h-full flex-col bg-surface-canvas">
       {/* Toolbar. In a narrow pane the filter field and the actions wrap
@@ -585,34 +612,22 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
 
             <Tooltip>
               <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={() => void handleCopyVisible()}
-                  disabled={filtered.length === 0}
-                  className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
-                  aria-label="Copy visible console messages"
-                >
-                  {allCopied ? (
-                    <Check aria-hidden="true" className={PANE_TOOLBAR_ICON_CLASS} />
-                  ) : (
-                    <Copy aria-hidden="true" className={PANE_TOOLBAR_ICON_CLASS} />
-                  )}
-                </button>
+                {filtered.length > 0 ? (
+                  copyVisibleButton
+                ) : (
+                  <span className="inline-flex">{copyVisibleButton}</span>
+                )}
               </TooltipTrigger>
               <TooltipContent side="bottom">Copy visible messages</TooltipContent>
             </Tooltip>
 
             <Tooltip>
               <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={handleClear}
-                  disabled={allMessages.length === 0}
-                  className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
-                  aria-label="Clear console"
-                >
-                  <Trash2 aria-hidden="true" className={PANE_TOOLBAR_ICON_CLASS} />
-                </button>
+                {allMessages.length > 0 ? (
+                  clearButton
+                ) : (
+                  <span className="inline-flex">{clearButton}</span>
+                )}
               </TooltipTrigger>
               <TooltipContent side="bottom">Clear console</TooltipContent>
             </Tooltip>

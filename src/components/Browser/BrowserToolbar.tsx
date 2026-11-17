@@ -1,3 +1,5 @@
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
 import {
   useState,
   useCallback,
@@ -104,7 +106,6 @@ const ANCHORED_EXIT_STYLE = {
 
 const LONG_PRESS_MS = 400;
 const COMPACT_ROW_WIDTH = 640;
-const COPIED_FEEDBACK_RESET_MS = 2000;
 // The list's 8px drop from the field plus 8px clear of the pane's bottom edge.
 const LIST_PANE_INSET = 16;
 const LIST_MIN_HEIGHT = 96;
@@ -245,6 +246,7 @@ export function BrowserToolbar({
   const selectOnFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [screenshotCopied, setScreenshotCopied] = useState(false);
   const screenshotCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const screenshotMountedRef = useRef(true);
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   // Set by the Escape that puts the address back, so the restored address does not
@@ -308,7 +310,9 @@ export function BrowserToolbar({
   // that outlives the mount sets state on a gone tree, and under vitest it can
   // fire after the jsdom environment is torn down ("window is not defined").
   useEffect(() => {
+    screenshotMountedRef.current = true;
     return () => {
+      screenshotMountedRef.current = false;
       if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
       if (screenshotCopiedTimerRef.current) clearTimeout(screenshotCopiedTimerRef.current);
       if (selectOnFocusTimerRef.current) clearTimeout(selectOnFocusTimerRef.current);
@@ -660,15 +664,17 @@ export function BrowserToolbar({
     } catch (err) {
       logError("Failed to capture screenshot", err);
     }
+    if (!screenshotMountedRef.current) return;
     if (screenshotCopiedTimerRef.current) clearTimeout(screenshotCopiedTimerRef.current);
     if (!success) {
       setScreenshotCopied(false);
       return;
     }
     setScreenshotCopied(true);
+    useAnnouncerStore.getState().announce("Screenshot copied to clipboard", "polite");
     screenshotCopiedTimerRef.current = setTimeout(
       () => setScreenshotCopied(false),
-      COPIED_FEEDBACK_RESET_MS
+      UI_ACTION_SUCCESS_DWELL_MS
     );
   }, [onCaptureScreenshot]);
 
@@ -759,6 +765,21 @@ export function BrowserToolbar({
       aria-pressed={isConsoleShown}
     >
       <SquareTerminal className={PANE_TOOLBAR_ICON_CLASS} />
+    </button>
+  );
+  const screenshotButton = (
+    <button
+      type="button"
+      onClick={handleCaptureScreenshot}
+      disabled={!isWebviewReady}
+      className={buttonClass}
+      aria-label="Copy screenshot to clipboard"
+    >
+      {screenshotCopied ? (
+        <Check className={PANE_TOOLBAR_ICON_CLASS} />
+      ) : (
+        <Camera className={PANE_TOOLBAR_ICON_CLASS} />
+      )}
     </button>
   );
   const openExternalButton = (
@@ -862,8 +883,10 @@ export function BrowserToolbar({
               className="flex-col items-start gap-0.5"
               onSelect={() => onGoToHistoryIndex?.(entry.index)}
             >
-              <span className="w-full truncate">{entry.title || entry.url}</span>
-              <span className="w-full truncate text-2xs text-text-secondary">{entry.url}</span>
+              <span className="w-full truncate">{entry.title || addressOf(entry.url)}</span>
+              <span className="w-full truncate text-2xs text-text-secondary">
+                {addressOf(entry.url)}
+              </span>
             </DropdownMenuItem>
           ))}
         </DropdownMenuContent>
@@ -970,9 +993,6 @@ export function BrowserToolbar({
     <div data-testid="browser-toolbar" className="bg-surface border-b border-overlay">
       <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
         {historyAnnouncement}
-      </span>
-      <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
-        {screenshotCopied ? "Screenshot copied to clipboard" : ""}
       </span>
       {/* The remove control is a pointer-only span (an option may hold no
           control), so each row names its keyboard route instead. */}
@@ -1403,19 +1423,11 @@ export function BrowserToolbar({
           {onCaptureScreenshot && (
             <Tooltip>
               <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={handleCaptureScreenshot}
-                  disabled={!isWebviewReady}
-                  className={buttonClass}
-                  aria-label="Copy screenshot to clipboard"
-                >
-                  {screenshotCopied ? (
-                    <Check className={PANE_TOOLBAR_ICON_CLASS} />
-                  ) : (
-                    <Camera className={PANE_TOOLBAR_ICON_CLASS} />
-                  )}
-                </button>
+                {isWebviewReady ? (
+                  screenshotButton
+                ) : (
+                  <span className="inline-flex">{screenshotButton}</span>
+                )}
               </TooltipTrigger>
               <TooltipContent side="bottom">Copy screenshot to clipboard</TooltipContent>
             </Tooltip>
