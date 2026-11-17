@@ -181,6 +181,10 @@ describe("link messages", () => {
       ...idle,
       stopsWhenIdle: true,
     });
+    expect(hostSummary({ idle: { ...idle, stopsWhenIdle: false } }).idle).toEqual({
+      ...idle,
+      stopsWhenIdle: false,
+    });
     expect(() => hostSummary({ idle: { ...idle, stopsWhenIdle: "yes" } })).toThrow();
     for (const bad of [
       { ...idle, idleAfterMinutes: 0 },

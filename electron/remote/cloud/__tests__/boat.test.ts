@@ -8,7 +8,8 @@ import {
 } from "../boat/BoatClient.js";
 import { BoatProvider, boatResource } from "../boat/BoatProvider.js";
 import { boatMachineState } from "../boat/boatState.js";
-import { boatMachineKeyFailure } from "../boat/boatMachineDriver.js";
+import { boatMachineDriver, boatMachineKeyFailure } from "../boat/boatMachineDriver.js";
+import { UnusableMachineKeyError } from "../provider.js";
 
 const SANDBOX = {
   id: "bx_23456789",
@@ -484,10 +485,10 @@ describe("machine keys (#17361)", () => {
     apiUrl: "https://boat.test/api/v1",
   };
   const expiresAt = "2026-12-18T09:00:00Z";
-  const created = (scope: Record<string, unknown>) =>
+  const created = (scope: Record<string, unknown> | undefined) =>
     jsonResponse(201, {
       ok: true,
-      apiKey: { id: "sak_42", name: "daintree-mk_1", expiresAt, scope },
+      apiKey: { id: "sak_42", name: "daintree-mk_1", expiresAt, ...(scope ? { scope } : {}) },
       secret: "boat_live_machinesecretvalue",
       apiKeys: [],
     });
@@ -530,26 +531,43 @@ describe("machine keys (#17361)", () => {
     expect(lost.fetch).toHaveBeenCalledTimes(1);
   });
 
-  it("revokes and refuses a key broader than the one asked for", async () => {
+  it("refuses a key whose answer doesn't show exactly this machine and these actions", async () => {
+    const asked = ["sandbox.read", "sandbox.update", "sandbox.stop"];
     for (const scope of [
       { actions: ["*"], sandboxes: ["bx_23456789"] },
-      { actions: ["sandbox.read"], sandboxes: "*" },
-      { actions: ["sandbox.read"], sandboxes: ["bx_23456789", "bx_otherother"] },
-      { actions: ["sandbox.read"], sandboxes: ["bx_23456789"], environments: ["env_1"] },
+      { actions: asked, sandboxes: "*" },
+      { actions: asked, sandboxes: ["bx_23456789", "bx_otherother"] },
+      { actions: asked, sandboxes: ["bx_otherother"] },
+      { actions: asked, sandboxes: ["bx_23456789"], environments: ["env_1"] },
+      // One that can't renew or stop would leave the machine looking kept.
+      { actions: ["sandbox.read"], sandboxes: ["bx_23456789"] },
+      // No evidence at all of what it reaches.
+      { actions: asked },
+      undefined,
     ]) {
-      const { client, calls } = clientWith([
-        created(scope),
-        jsonResponse(200, { ok: true, apiKeys: [] }),
-      ]);
-      await expect(
-        new BoatProvider(() => client).machineKeys.issue(credentials, "bx_23456789", {
-          name: "daintree-mk_1",
-          ttlDays: 30,
-        })
-      ).rejects.toMatchObject({ kind: "bad-response" });
-      expect(calls[1].url).toBe("https://boat.test/api/v1/api-keys/sak_42");
-      expect(calls[1].init.method).toBe("DELETE");
+      const { client, calls } = clientWith([created(scope as Record<string, unknown>)]);
+      const refused = await new BoatProvider(() => client).machineKeys
+        .issue(credentials, "bx_23456789", { name: "daintree-mk_1", ttlDays: 30 })
+        .catch((error: unknown) => error);
+      // Revoked by the caller, through its record, by this id.
+      expect(refused).toBeInstanceOf(UnusableMachineKeyError);
+      expect((refused as UnusableMachineKeyError).keyId).toBe("sak_42");
+      expect(calls).toHaveLength(1);
     }
+  });
+
+  it("tells key creation switched off apart from a machine shortage", () => {
+    const provider = new BoatProvider(() => {
+      throw new Error("unused");
+    });
+    expect(
+      provider.describeError(
+        new BoatApiError("no-capacity", "off", 503, "scoped_api_key_creation_disabled", null)
+      )
+    ).toMatchObject({ code: "unsupported", message: expect.stringMatching(/isn't issuing/) });
+    expect(
+      provider.describeError(new BoatApiError("no-capacity", "busy", 503, null, null)).code
+    ).toBe("capacity");
   });
 
   it("reads a bare error code, such as key creation being switched off", async () => {
@@ -593,10 +611,32 @@ describe("machine keys (#17361)", () => {
 
   it("sends the machine's own stop once, where a person's stop retries", async () => {
     const once = clientWith([jsonResponse(500, { message: "oops" })]);
-    await expect(once.client.stopSandbox(ctx, "bx_23456789", { once: true })).rejects.toMatchObject(
-      { kind: "server" }
+    const driver = boatMachineDriver(
+      {
+        grantId: "mk_1",
+        provider: "boat",
+        apiUrl: "https://boat.test/api/v1",
+        scope: "personal",
+        resourceId: "bx_23456789",
+        secret: "boat_live_machinesecretvalue",
+        expiresAt: Date.parse(expiresAt),
+      },
+      once.client
     );
+    await expect(driver.stop(new AbortController().signal)).rejects.toMatchObject({
+      kind: "server",
+    });
     expect(once.fetch).toHaveBeenCalledTimes(1);
+    expect((once.calls[0].init.headers as Record<string, string>).Authorization).toBe(
+      "Bearer boat_live_machinesecretvalue"
+    );
+
+    const person = clientWith([
+      jsonResponse(500, { message: "oops" }),
+      jsonResponse(202, { ok: true, sandbox: { ...SANDBOX, state: "archiving" } }),
+    ]);
+    await person.client.stopSandbox(ctx, "bx_23456789");
+    expect(person.fetch).toHaveBeenCalledTimes(2);
   });
 
   it("drops the machine's key on a refusal, and retries anything that may pass", () => {
@@ -606,6 +646,11 @@ describe("machine keys (#17361)", () => {
     expect(
       boatMachineKeyFailure(new BoatApiError("forbidden", "no", 403, "api_key_expired", null))
     ).toMatchObject({ kind: "lost", problem: expect.stringMatching(/expired/) });
+    expect(
+      boatMachineKeyFailure(
+        new BoatApiError("forbidden", "no", 403, "api_key_sandbox_forbidden", null)
+      )
+    ).toMatchObject({ kind: "lost", problem: expect.not.stringMatching(/expired/) });
     expect(boatMachineKeyFailure(new BoatApiError("not-found", "gone", 404, null, null)).kind).toBe(
       "lost"
     );

@@ -294,7 +294,7 @@ export function CloudMachineSection({
               ? status.lifetimeSeconds === null
                 ? `This run stops by itself ${autoStop}. A change applies from now.`
                 : `This run stops by itself ${autoStop}${status.keptRunningAt !== null ? `, pushed back ${clockTime(new Date(status.keptRunningAt).toISOString())}` : ""}. Daintree pushes it back while a window here shows it or its agents are working; a change applies from now.`
-              : "This run doesn't stop by itself. A change applies from now."
+              : "This run has no lifetime limit. A change applies from now."
             : "Counted from each start, and pushed back while a window here shows it or its agents are working. A guard against a machine left running, not a spending limit.")
         }
         value={lifetimeValue}

@@ -20,13 +20,16 @@ export interface MachineDriver {
 export interface MachineKeeperDeps {
   idle: {
     observation(): HostIdleObservation;
-    check(): Promise<void>;
+    /** A check whose read starts now, after any already under way. */
+    checkFresh(): Promise<void>;
     noteWork(): void;
   };
   /** The driver for a key, or why this host can't use it. */
   driverFor(request: MachineKeeperArmRequest): MachineDriver | string;
   now?: () => number;
   tickMs?: number;
+  /** How long a new key's first read may take before it is taken on trust. */
+  verifyTimeoutMs?: number;
 }
 
 interface HeldKey {
@@ -43,6 +46,12 @@ const RETRY_BASE_MS = 30_000;
 const RETRY_MAX_MS = 10 * 60_000;
 /** A stop this machine sent shows as under way at once; still running and not stopping after this, it was overtaken. */
 const STOP_SETTLE_MS = 60_000;
+const VERIFY_TIMEOUT_MS = 10_000;
+
+/** What changes when the machine is stopped, so a stop and start between two looks still shows. */
+function stopMarker(resource: ProviderResource): string {
+  return `${resource.stop?.id ?? ""}|${resource.stoppedAt ?? ""}`;
+}
 
 /**
  * The machine's own keeper (#17361): with the key a Shell handed it, it moves
@@ -53,8 +62,9 @@ const STOP_SETTLE_MS = 60_000;
  *
  * Both keepers act on what the provider says now, never on what they last
  * did: a deadline someone else moved is read before renewing, and a stop
- * someone else started, or a start that overtook this machine's own stop,
- * is seen and followed.
+ * anyone started is followed until the machine runs again, which counts as
+ * use, so an idle time that ended before it never stops a machine someone
+ * just started.
  */
 export class MachineKeeper {
   private held: HeldKey | null = null;
@@ -66,8 +76,9 @@ export class MachineKeeper {
   private reading: { resource: ProviderResource; at: number } | null = null;
   private retryAt = 0;
   private failures = 0;
-  /** When this machine's own stop was accepted, until it is seen through or overtaken. */
-  private stopSentAt: number | null = null;
+  /** A stop seen under way, or this machine's own sent (its outcome perhaps unknown), until it runs again. */
+  private stopping: { since: number; own: boolean } | null = null;
+  private marker: string | null = null;
   private disposed = false;
 
   constructor(private readonly deps: MachineKeeperDeps) {}
@@ -86,13 +97,22 @@ export class MachineKeeper {
     };
   }
 
-  /** Whether this host will stop its machine once its idle time ends. */
-  stopsWhenIdle(): boolean {
-    return this.held !== null && this.now() < this.held.expiresAt;
+  /**
+   * Whether this host will stop its machine once its idle time ends at `at`
+   * (now, when absent): it holds a key that still works then, for a machine
+   * whose disk a stop saves.
+   */
+  stopsWhenIdle(at?: number | null): boolean {
+    const held = this.held;
+    if (!held || this.reading?.resource.snapshotsDisabled) return false;
+    return Math.max(at ?? 0, this.now()) < held.expiresAt;
   }
 
-  /** Holds this key in place of any other. Refused, the key it held stays. */
-  arm(request: MachineKeeperArmRequest): MachineKeeperStatus {
+  /**
+   * Holds this key in place of any other, once a first read through it shows
+   * it works for the machine it names. Refused, the key it held stays.
+   */
+  async arm(request: MachineKeeperArmRequest): Promise<MachineKeeperStatus> {
     if (this.disposed) {
       throw new AppError({ code: "UNSUPPORTED", message: "This host is shutting down" });
     }
@@ -103,13 +123,42 @@ export class MachineKeeper {
     if (typeof driver === "string") {
       throw new AppError({ code: "VALIDATION", message: driver, userMessage: driver });
     }
-    this.replace({
-      grantId: request.grantId,
-      resourceId: request.resourceId,
-      expiresAt: request.expiresAt,
-      driver,
-    });
+    let first: ProviderResource | null = null;
+    const check = new AbortController();
+    const timer = setTimeout(() => check.abort(), this.deps.verifyTimeoutMs ?? VERIFY_TIMEOUT_MS);
+    try {
+      first = await driver.inspect(check.signal);
+    } catch (error) {
+      const failure = driver.failure(error);
+      if (failure.kind === "lost") {
+        throw new AppError({
+          code: "VALIDATION",
+          message: failure.problem,
+          userMessage: failure.problem,
+        });
+      }
+      // Unreachable for now: taken on trust, and its first pass says whether it works.
+    } finally {
+      clearTimeout(timer);
+    }
+    if (this.disposed) {
+      throw new AppError({ code: "UNSUPPORTED", message: "This host is shutting down" });
+    }
+    const sameMachine = this.held?.resourceId === request.resourceId;
+    this.replace(
+      {
+        grantId: request.grantId,
+        resourceId: request.resourceId,
+        expiresAt: request.expiresAt,
+        driver,
+      },
+      sameMachine
+    );
     this.problem = null;
+    if (first) {
+      this.reading = { resource: first, at: this.now() };
+      this.notice(first);
+    }
     this.timer ??= setInterval(() => void this.tick(), this.deps.tickMs ?? TICK_MS);
     this.timer.unref?.();
     void this.tick();
@@ -127,12 +176,16 @@ export class MachineKeeper {
 
   dispose(): void {
     this.disposed = true;
-    this.replace(null);
+    this.replace(null, false);
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
   }
 
-  private replace(next: HeldKey | null): void {
+  /**
+   * A new key, or none. A request already sent under the old one can't be
+   * recalled: for the same machine, a stop seen or sent is still followed.
+   */
+  private replace(next: HeldKey | null, sameMachine: boolean): void {
     this.generation += 1;
     this.controller?.abort();
     this.controller = null;
@@ -140,14 +193,40 @@ export class MachineKeeper {
     this.reading = null;
     this.retryAt = 0;
     this.failures = 0;
-    this.stopSentAt = null;
+    if (!sameMachine) {
+      this.stopping = null;
+      this.marker = null;
+    }
   }
 
   private drop(problem: string): void {
-    this.replace(null);
+    this.replace(null, false);
     this.problem = problem;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+  }
+
+  /**
+   * What a reading says about stops: one under way is followed; running again
+   * afterwards, or stopped and started again since the last look, is use.
+   */
+  private notice(resource: ProviderResource): void {
+    const now = this.now();
+    const marker = stopMarker(resource);
+    const restartedBetweenLooks = this.marker !== null && marker !== this.marker;
+    this.marker = marker;
+    if (resource.machine !== "running" || stopUnderWay(resource.stop)) {
+      this.stopping ??= { since: now, own: false };
+      return;
+    }
+    if (this.stopping) {
+      // Its own stop may not show yet; past that, running means the stop was overtaken.
+      if (this.stopping.own && now - this.stopping.since < STOP_SETTLE_MS) return;
+      this.stopping = null;
+      this.deps.idle.noteWork();
+      return;
+    }
+    if (restartedBetweenLooks) this.deps.idle.noteWork();
   }
 
   private async step(): Promise<void> {
@@ -167,13 +246,17 @@ export class MachineKeeper {
     const signal = controller.signal;
     const read = async (): Promise<ProviderResource> => {
       const resource = await held.driver.inspect(signal);
-      if (current()) this.reading = { resource, at: this.now() };
+      if (current()) {
+        this.reading = { resource, at: this.now() };
+        this.notice(resource);
+      }
       return resource;
     };
     try {
       const idle = this.deps.idle.observation();
-      if (this.stopSentAt !== null) {
-        await this.followStop(read, current);
+      if (this.stopping !== null) {
+        // Followed until it runs again; nothing else is done to it meanwhile.
+        await read();
       } else if (idle.busy) {
         await this.keepRunning(held, read, current, signal);
       } else if (idle.idleEndsAt !== null && idle.idleEndsAt <= this.now()) {
@@ -191,8 +274,8 @@ export class MachineKeeper {
         return;
       }
       this.failures += 1;
-      const delay = Math.min(RETRY_BASE_MS * 2 ** (this.failures - 1), RETRY_MAX_MS);
-      this.retryAt = this.now() + delay * (0.8 + Math.random() * 0.4);
+      const delay = RETRY_BASE_MS * 2 ** (this.failures - 1) * (0.8 + Math.random() * 0.4);
+      this.retryAt = this.now() + Math.min(delay, RETRY_MAX_MS);
     } finally {
       if (this.controller === controller) this.controller = null;
     }
@@ -210,7 +293,7 @@ export class MachineKeeper {
     if (fresh && !this.renewalDue(cached.resource)) return;
     // Read before writing: the desktop, or the person, may have moved it since.
     const resource = await read();
-    if (!current() || !this.renewalDue(resource)) return;
+    if (!current() || this.stopping !== null || !this.renewalDue(resource)) return;
     const renewed = await held.driver.renew(resource.lifetimeSeconds!, signal);
     if (current()) this.reading = { resource: renewed, at: this.now() };
   }
@@ -226,8 +309,8 @@ export class MachineKeeper {
 
   /**
    * Idle past its idle time: stop the machine, once the provider confirms it
-   * is still running with no stop under way and the host, asked again after
-   * the last request came back, still sees no work.
+   * is still running with no stop under way and a check of the host started
+   * after that answer still sees no work.
    */
   private async stopIdle(
     held: HeldKey,
@@ -236,34 +319,15 @@ export class MachineKeeper {
     signal: AbortSignal
   ): Promise<void> {
     const resource = await read();
-    if (!current() || resource.machine !== "running" || stopUnderWay(resource.stop)) return;
+    if (!current() || this.stopping !== null) return;
     // A stop would erase a disk nothing saves; Daintree never makes or takes such a machine.
     if (resource.snapshotsDisabled) return;
-    await this.deps.idle.check();
+    await this.deps.idle.checkFresh();
     const idle = this.deps.idle.observation();
     if (!current() || idle.busy || idle.idleEndsAt === null || idle.idleEndsAt > this.now()) return;
+    // Recorded before it goes: an answer lost on the way back still leaves it followed, never sent twice.
+    this.stopping = { since: this.now(), own: true };
     const stopping = await held.driver.stop(signal);
-    if (!current()) return;
-    this.stopSentAt = this.now();
-    if (stopping) this.reading = { resource: stopping, at: this.now() };
-  }
-
-  /**
-   * After this machine's own stop: wait for it to go through. Running again
-   * with no stop under way means someone started it, or their start overtook
-   * the stop: that is use, so the idle time starts over.
-   */
-  private async followStop(
-    read: () => Promise<ProviderResource>,
-    current: () => boolean
-  ): Promise<void> {
-    const sentAt = this.stopSentAt!;
-    const resource = await read();
-    if (!current()) return;
-    if (resource.machine === "running" && !stopUnderWay(resource.stop)) {
-      if (this.now() - sentAt < STOP_SETTLE_MS) return;
-      this.stopSentAt = null;
-      this.deps.idle.noteWork();
-    }
+    if (current() && stopping) this.reading = { resource: stopping, at: this.now() };
   }
 }

@@ -2038,20 +2038,30 @@ export class CloudHostLifecycle {
     if (this.deps.accounts.providerUnavailable(binding.providerId)) return;
     const provider = this.deps.accounts.provider(binding.providerId);
     if (!canRenewLifetime(provider)) return;
-    let credentials: ProviderCredentials | null = null;
+    let credentials: ProviderCredentials;
     try {
       ({ credentials } = await this.context(binding));
-      // A stop, a start or a new lifetime while the key was read: that wins. So
-      // does the provider leaving, or another registering in its place.
-      if (!this.renewalDue(bindingId) || !this.stillRegistered(binding.providerId, provider)) {
-        return;
-      }
       // What the provider says now, not what was last seen: the machine's own
       // keeper may have moved the deadline, or begun stopping it (#17361).
-      await this.inspectInto(bindingId, provider, credentials);
+      // A read that fails isn't a failed renewal: nothing was sent, and its
+      // own error (a machine not found) stays as the read recorded it.
       if (!this.renewalDue(bindingId) || !this.stillRegistered(binding.providerId, provider)) {
         return;
       }
+      await this.inspectInto(bindingId, provider, credentials);
+    } catch {
+      if (!this.disposed) this.renewals.set(bindingId, { at: this.now(), ok: false });
+      return;
+    }
+    // A stop, a start or a new lifetime meanwhile wins. So does the provider
+    // leaving, another registering in its place, or this run ending.
+    if (this.disposed || !this.stillRegistered(binding.providerId, provider)) return;
+    if (!this.renewalDue(bindingId)) {
+      // Moved, or stopped, by someone else: an earlier failure to move it is no longer news.
+      if (this.renewalSettled(bindingId)) this.clearRenewalError(bindingId);
+      return;
+    }
+    try {
       const ticket = this.ticket();
       const renewed = await provider.renewLifetime(
         credentials,
@@ -2065,16 +2075,14 @@ export class CloudHostLifecycle {
       this.observe(bindingId, renewed, ticket);
       this.renewals.set(bindingId, { at: this.now(), ok: true });
       // A renewal that failed earlier and now went through is no longer news.
-      this.deps.store.updateBinding(bindingId, (latest) =>
-        latest.lastError?.code === "lifetime-renewal" ? { ...latest, lastError: null } : latest
-      );
+      this.clearRenewalError(bindingId);
       this.deps.changed();
     } catch (error) {
       if (this.disposed || this.deps.store.binding(bindingId)?.intent === "stop") return;
       if (!this.stillRegistered(binding.providerId, provider)) return;
       this.renewals.set(bindingId, { at: this.now(), ok: false });
       // Refused because the machine had begun stopping by itself: that is no failure to report.
-      if (credentials && (await this.stoppedMeanwhile(bindingId, provider, credentials))) return;
+      if (await this.stoppedMeanwhile(bindingId, provider, credentials)) return;
       const described = provider.describeError(error);
       this.recordError(bindingId, {
         code: "lifetime-renewal",
@@ -2084,7 +2092,30 @@ export class CloudHostLifecycle {
     }
   }
 
-  /** After a failed renewal: whether the machine is now stopping or stopped, as the provider says. */
+  /** The provider last said the machine isn't running, is stopping, or has its deadline well off. */
+  private renewalSettled(bindingId: string): boolean {
+    const binding = this.deps.store.binding(bindingId);
+    const observation = binding?.observation;
+    if (!binding || !observation) return false;
+    if (machineOf(binding) !== "running" || stopUnderWay(observation.stop)) return true;
+    const deadline = Date.parse(observation.autoStopAt ?? "");
+    return (
+      binding.lifetimeSeconds !== null &&
+      Number.isFinite(deadline) &&
+      !lifetimeRenewalDue(this.now(), deadline, binding.lifetimeSeconds)
+    );
+  }
+
+  private clearRenewalError(bindingId: string): void {
+    const binding = this.deps.store.binding(bindingId);
+    if (binding?.lastError?.code !== "lifetime-renewal") return;
+    this.deps.store.updateBinding(bindingId, (latest) =>
+      latest.lastError?.code === "lifetime-renewal" ? { ...latest, lastError: null } : latest
+    );
+    this.deps.changed();
+  }
+
+  /** After a failed renewal: whether the provider now says the machine is stopping or stopped. */
   private async stoppedMeanwhile(
     bindingId: string,
     provider: CloudProvider,
@@ -2095,7 +2126,11 @@ export class CloudHostLifecycle {
       // An answer a newer one overtook leaves that newer one in the binding to judge by.
       const observation = this.deps.store.binding(bindingId)?.observation;
       if (!observation) return false;
-      return observation.machine !== "running" || stopUnderWay(observation.stop);
+      return (
+        observation.machine === "stopping" ||
+        observation.machine === "stopped" ||
+        stopUnderWay(observation.stop)
+      );
     } catch {
       return false;
     }

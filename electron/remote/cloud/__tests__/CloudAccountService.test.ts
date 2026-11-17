@@ -88,7 +88,12 @@ function fakeProvider(overrides: Partial<CloudProvider> = {}): CloudProvider {
 }
 
 function service(
-  options: { provider?: CloudProvider; platform?: NodeJS.Platform; apiUrl?: string } = {}
+  options: {
+    provider?: CloudProvider;
+    platform?: NodeJS.Platform;
+    apiUrl?: string;
+    beforeAccountRemoved?: (accountId: string) => Promise<void>;
+  } = {}
 ) {
   const backend = memoryBackend();
   const store = new CloudHostStore(backend);
@@ -102,6 +107,7 @@ function service(
     apiUrlFor: () => apiUrl,
     platform: options.platform ?? "darwin",
     now: () => 1000,
+    beforeAccountRemoved: options.beforeAccountRemoved,
   });
   return { accounts, store, vault, backend, provider, setApiUrl: (url: string) => (apiUrl = url) };
 }
@@ -273,6 +279,29 @@ describe("CloudAccountService", () => {
     vi.spyOn(vault, "delete").mockRejectedValueOnce(new Error("ENOSPC"));
     await expect(accounts.removeAccount(summary.id)).rejects.toThrow("ENOSPC");
     expect(accounts.summaries().map((a) => a.id)).toEqual([summary.id]);
+    await accounts.removeAccount(summary.id);
+    expect(accounts.summaries()).toEqual([]);
+  });
+
+  it("keeps the account and its key while a key its machines were given can't be revoked (#17361)", async () => {
+    const settle = vi.fn(async (): Promise<void> => {
+      throw new AppError({ code: "OUTCOME_UNKNOWN", message: "couldn't revoke yet" });
+    });
+    const { accounts, vault } = service({ beforeAccountRemoved: settle });
+    const summary = await accounts.addAccount({
+      providerId: "boat",
+      apiKey: "boat_live_x",
+      scopeId: "personal",
+    });
+    await expect(accounts.removeAccount(summary.id)).rejects.toThrow("couldn't revoke yet");
+    expect(settle).toHaveBeenCalledWith(summary.id);
+    expect(accounts.summaries().map((a) => a.id)).toEqual([summary.id]);
+    expect(await vault.get(summary.id)).toBe("boat_live_x");
+
+    // Revoked first, while the key is still there to do it.
+    settle.mockImplementationOnce(async () => {
+      expect(await vault.get(summary.id)).toBe("boat_live_x");
+    });
     await accounts.removeAccount(summary.id);
     expect(accounts.summaries()).toEqual([]);
   });

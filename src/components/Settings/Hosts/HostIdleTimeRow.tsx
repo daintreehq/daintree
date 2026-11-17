@@ -127,11 +127,16 @@ export function HostIdleTimeRow({
     void load();
   };
 
+  // Said only while the host doesn't say it holds a key: one it holds settles it.
+  const problem = selfStopProblem && !idle?.stopsWhenIdle ? selfStopProblem : null;
+  const withProblem = (text: string) =>
+    problem ? `${/[.!?]$/.test(text) ? text : `${text}.`} ${problem}` : text;
+
   if (setting?.unavailable) {
     return (
       <SettingsRow
         label={LABEL}
-        description={IDLE_TIME_COUNTED}
+        description={withProblem(IDLE_TIME_COUNTED)}
         disabled
         disabledReason={`Needs a newer Daintree on ${hostName}`}
       />
@@ -145,9 +150,9 @@ export function HostIdleTimeRow({
     return (
       <SettingsRow
         label={LABEL}
-        description={
+        description={withProblem(
           connected ? IDLE_TIME_COUNTED : `Kept on ${hostName}. Connect to see or change it`
-        }
+        )}
         error={loadError ? <span role="alert">{loadError}</span> : undefined}
         control={
           connected && loadError ? (
@@ -238,15 +243,11 @@ export function HostIdleTimeRow({
   return (
     <SettingsSelect
       label={LABEL}
-      description={
-        (connected
+      description={withProblem(
+        connected
           ? idleClockSentence(idle, sampledAt)
-          : `Kept on ${hostName}, as last read. Connect to change it`) +
-        // Said only while the host doesn't hold a key: one it holds settles it.
-        (selfStopProblem && !idle?.stopsWhenIdle
-          ? `${connected && idle ? "" : "."} ${selfStopProblem}`
-          : "")
-      }
+          : `Kept on ${hostName}, as last read. Connect to change it`
+      )}
       value={String(leaf.minutes)}
       onValueChange={save}
       options={options}

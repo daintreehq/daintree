@@ -108,6 +108,15 @@ export class HostIdleTracker {
     return this.reading;
   }
 
+  /**
+   * A check whose read starts now: one already under way may have looked
+   * before the latest work. For whatever acts on idleness, just before it does.
+   */
+  async checkFresh(): Promise<void> {
+    await this.reading;
+    return this.check();
+  }
+
   observation(): HostIdleObservation {
     const idleAfterMinutes = this.deps.idleAfterMinutes();
     const lastWorkAt = this.lastWork.wall;

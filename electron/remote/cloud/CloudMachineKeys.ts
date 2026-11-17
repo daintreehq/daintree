@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { CloudHostError } from "../../../shared/types/cloudHosts.js";
 import type { HostDescriptor, HostId } from "../../../shared/types/remoteHosts.js";
+import { AppError } from "../../utils/errorTypes.js";
 import type { LinkSession } from "../link/session.js";
 import type { CloudAccountService } from "./CloudAccountService.js";
 import type { CloudHostStore, StoredMachineKey } from "./CloudHostStore.js";
@@ -10,6 +11,7 @@ import {
   type MachineKeeperArmRequest,
   type MachineKeeperStatus,
 } from "./machineKeeperLink.js";
+import { UnusableMachineKeyError, type ProviderCredentials } from "./provider.js";
 
 /** How long a machine's key works before the provider turns it off by itself. */
 export const MACHINE_KEY_TTL_DAYS = 30;
@@ -22,6 +24,10 @@ const REFUSED_RETRY_MS = 60 * 60_000;
 const RETRY_MS = 5 * 60_000;
 /** An issue left behind by an earlier run: its key, if one was made, is looked for by name. */
 const ISSUING_ABANDONED_MS = 10 * 60_000;
+/** A key looked for by name and not found yet (its create may still land) is looked for again this much later. */
+const LOOKUP_RETRY_MS = 60 * 60_000;
+/** How often a linked machine is asked what it holds: a key it lost, or another device's that lapsed. */
+const CHECK_EVERY_MS = 30 * 60_000;
 const CALL_TIMEOUT_MS = 30_000;
 
 /** Provider refusals: nothing was made, so there is nothing to look for. */
@@ -29,6 +35,7 @@ const REFUSED: ReadonlySet<CloudHostError["code"]> = new Set([
   "credential-invalid",
   "permission",
   "billing",
+  "unsupported",
 ]);
 
 /** The host's own answer to an arm: the key was refused, never lost. */
@@ -59,7 +66,10 @@ function errorCode(error: unknown): string | null {
  * asked for it, so none is lost track of across a crash.
  */
 export class CloudMachineKeys {
-  private readonly arming = new Map<string, Promise<void>>();
+  /** The attempt under way for each binding, with the link it runs on. */
+  private readonly arming = new Map<string, { session: LinkSession; promise: Promise<void> }>();
+  /** A link that came up while another's attempt ran: tried once that one settles. */
+  private readonly queued = new Map<string, { hostId: HostId; session: LinkSession }>();
   /** Records whose create is out right now: never looked for or revoked meanwhile. */
   private readonly issuing = new Set<string>();
   /** Why a machine can't stop itself, by binding, with the account key it was found with. */
@@ -67,7 +77,11 @@ export class CloudMachineKeys {
     string,
     { message: string; at: number; keyHint: string | null; retry: boolean }
   >();
+  /** When a linked machine was last asked what it holds. */
+  private readonly checkedAt = new Map<string, number>();
   private readonly armRetryAt = new Map<string, number>();
+  /** No new key is asked for before this, after one that failed in a way that may pass. */
+  private readonly issueNotBefore = new Map<string, number>();
   private readonly revokeRetryAt = new Map<string, number>();
   private revokeTail: Promise<void> = Promise.resolve();
   private disposed = false;
@@ -88,7 +102,11 @@ export class CloudMachineKeys {
     void this.arm(hostId, session);
   }
 
-  /** Background pass: replace keys near expiry on machines linked now, retry what may pass, revoke what's left. */
+  /**
+   * Background pass: asks each linked machine what it holds now and then (a
+   * key near expiry is replaced, one it lost is given again, a refusal is
+   * asked about again an hour on), retries what may pass, and revokes what's left.
+   */
   async tick(): Promise<void> {
     if (this.disposed) return;
     const now = this.now();
@@ -97,16 +115,12 @@ export class CloudMachineKeys {
       const session = this.deps.sessionFor(binding.hostId);
       if (!session?.isOpen) continue;
       const retryAt = this.armRetryAt.get(binding.id);
-      const expiring = this.deps.store
-        .machineKeys()
-        .some(
-          (key) =>
-            key.bindingId === binding.id &&
-            key.state === "active" &&
-            key.expiresAt !== null &&
-            key.expiresAt - now <= REPLACE_BEFORE_MS
-        );
-      if (expiring || (retryAt !== undefined && retryAt <= now)) {
+      const checked = this.checkedAt.get(binding.id);
+      if (
+        (retryAt !== undefined && retryAt <= now) ||
+        checked === undefined ||
+        now - checked >= CHECK_EVERY_MS
+      ) {
         await this.arm(binding.hostId, session);
       }
     }
@@ -124,25 +138,56 @@ export class CloudMachineKeys {
     return pass;
   }
 
+  /**
+   * Before an account's key leaves this device: revoke every key its machines
+   * were given, and refuse while one may still work, since nothing else here
+   * could turn it off afterwards.
+   */
+  async settleAccount(accountId: string): Promise<void> {
+    await this.revokePending(accountId);
+    const now = this.now();
+    const live = this.deps.store
+      .machineKeys()
+      .filter(
+        (key) =>
+          key.accountId === accountId &&
+          (key.expiresAt ?? key.createdAt + MACHINE_KEY_TTL_DAYS * DAY_MS) > now
+      );
+    if (live.length === 0) return;
+    const message = `Daintree couldn't yet revoke the ${live.length === 1 ? "key it gave a machine" : `keys it gave ${live.length} machines`} on this account. Try again once the provider can be reached; each such key expires by itself within ${MACHINE_KEY_TTL_DAYS} days.`;
+    throw new AppError({ code: "OUTCOME_UNKNOWN", message, userMessage: message });
+  }
+
   dispose(): void {
     this.disposed = true;
+    this.queued.clear();
   }
 
   arm(hostId: HostId, session: LinkSession): Promise<void> {
     const binding = this.deps.store.bindingForHost(hostId);
     if (this.disposed || !binding?.resourceId) return Promise.resolve();
-    const running = this.arming.get(binding.id);
-    if (running) return running;
-    const attempt = this.armOnce(binding.id, hostId, session)
+    const bindingId = binding.id;
+    const running = this.arming.get(bindingId);
+    if (running) {
+      // Another link's attempt can't deliver over this one: this one goes next.
+      if (running.session !== session) this.queued.set(bindingId, { hostId, session });
+      return running.promise;
+    }
+    const promise = this.armOnce(bindingId, hostId, session)
       .catch(() => {
         // A failure that may pass is retried by tick().
-        this.armRetryAt.set(binding.id, this.now() + RETRY_MS);
+        this.armRetryAt.set(bindingId, this.now() + RETRY_MS);
       })
       .finally(() => {
-        if (this.arming.get(binding.id) === attempt) this.arming.delete(binding.id);
+        if (this.arming.get(bindingId)?.promise === promise) this.arming.delete(bindingId);
+        const next = this.queued.get(bindingId);
+        this.queued.delete(bindingId);
+        if (next && next.session.isOpen && this.deps.sessionFor(next.hostId) === next.session) {
+          void this.arm(next.hostId, next.session);
+        }
       });
-    this.arming.set(binding.id, attempt);
-    return attempt;
+    this.arming.set(bindingId, { session, promise });
+    return promise;
   }
 
   /** The session still reaches this binding's machine: the one the host is bound to, and open. */
@@ -167,12 +212,16 @@ export class CloudMachineKeys {
   ): void {
     const before = this.problems.get(bindingId)?.message;
     this.problems.set(bindingId, { message, at: this.now(), keyHint, retry });
-    if (retry) this.armRetryAt.set(bindingId, this.now() + RETRY_MS);
+    if (retry) {
+      this.armRetryAt.set(bindingId, this.now() + RETRY_MS);
+      this.issueNotBefore.set(bindingId, this.now() + RETRY_MS);
+    }
     if (before !== message) this.deps.changed();
   }
 
   private clearProblem(bindingId: string): void {
     this.armRetryAt.delete(bindingId);
+    this.issueNotBefore.delete(bindingId);
     if (this.problems.delete(bindingId)) this.deps.changed();
   }
 
@@ -194,6 +243,7 @@ export class CloudMachineKeys {
       );
     } catch (error) {
       if (errorCode(error) === "UNSUPPORTED") {
+        this.checkedAt.set(bindingId, this.now());
         this.setProblem(
           bindingId,
           "The Daintree on this machine is too old to stop it by itself. Update it to let it.",
@@ -204,6 +254,8 @@ export class CloudMachineKeys {
       }
       throw error;
     }
+    if (!this.reaches(hostId, bindingId, resourceId, session)) return;
+    this.checkedAt.set(bindingId, this.now());
 
     // What the host holds settles every key this device sent it: that one is in use, the rest aren't.
     for (const key of this.deps.store.machineKeys()) {
@@ -241,6 +293,12 @@ export class CloudMachineKeys {
     ) {
       return;
     }
+    // A failure that may pass waits out its pause, however often the link comes back.
+    const notBefore = this.issueNotBefore.get(bindingId) ?? 0;
+    if (notBefore > now) {
+      this.armRetryAt.set(bindingId, notBefore);
+      return;
+    }
     await this.issueAndDeliver(bindingId, hostId, resourceId, session);
     void this.revokePending();
   }
@@ -256,6 +314,9 @@ export class CloudMachineKeys {
     if (!binding || !account) return;
     const provider = this.deps.accounts.provider(binding.providerId);
     const issuer = provider.machineKeys!;
+    const credentials: ProviderCredentials = await this.deps.accounts.credentials(account);
+    // Nothing is asked for a link that went, or a run that ended, while the key was read.
+    if (!this.reaches(hostId, bindingId, resourceId, session)) return;
     const id = `mk_${crypto.randomBytes(8).toString("hex")}`;
     const record: StoredMachineKey = {
       id,
@@ -271,10 +332,8 @@ export class CloudMachineKeys {
     };
     this.deps.store.putMachineKey(record);
     this.issuing.add(id);
-    let credentials: Awaited<ReturnType<CloudAccountService["credentials"]>>;
-    let issued: Awaited<ReturnType<NonNullable<typeof provider.machineKeys>["issue"]>>;
+    let issued: Awaited<ReturnType<typeof issuer.issue>>;
     try {
-      credentials = await this.deps.accounts.credentials(account);
       issued = await issuer.issue(credentials, resourceId, {
         name: record.name,
         ttlDays: MACHINE_KEY_TTL_DAYS,
@@ -282,6 +341,21 @@ export class CloudMachineKeys {
     } catch (error) {
       this.issuing.delete(id);
       const described = provider.describeError(error);
+      if (error instanceof UnusableMachineKeyError) {
+        // Made, but not as asked: never delivered, and revoked by its id.
+        this.deps.store.updateMachineKey(id, (current) => ({
+          ...current,
+          keyId: error.keyId,
+          state: "revoke",
+        }));
+        this.setProblem(
+          bindingId,
+          `This machine can't stop itself when idle: ${described.message}`,
+          account.keyHint,
+          false
+        );
+        return;
+      }
       if (REFUSED.has(described.code)) {
         this.deps.store.removeMachineKey(id);
         this.setProblem(
@@ -310,7 +384,7 @@ export class CloudMachineKeys {
       expiresAt: issued.expiresAt,
       state: current.state === "issuing" ? "delivering" : current.state,
     }));
-    // Removed, or moved to another machine, while it was being made.
+    // Removed, moved to another machine, or its link gone, while it was being made.
     if (recorded?.state !== "delivering" || !this.reaches(hostId, bindingId, resourceId, session)) {
       this.deps.store.updateMachineKey(id, (current) => ({ ...current, state: "revoke" }));
       return;
@@ -364,9 +438,11 @@ export class CloudMachineKeys {
   }
 
   private async revokeOnce(accountId?: string): Promise<void> {
-    for (const key of this.deps.store.machineKeys()) {
+    for (const { id } of this.deps.store.machineKeys()) {
       if (this.disposed) return;
-      if (accountId !== undefined && key.accountId !== accountId) continue;
+      // As it stands now: an earlier revoke's wait may have seen it issued, delivered or gone.
+      const key = this.deps.store.machineKey(id);
+      if (!key || (accountId !== undefined && key.accountId !== accountId)) continue;
       const now = this.now();
       const abandoned =
         key.state === "issuing" &&
@@ -386,9 +462,19 @@ export class CloudMachineKeys {
       if (!issuer) continue;
       try {
         const credentials = await this.deps.accounts.credentials(account);
-        const ids = key.keyId ? [key.keyId] : await issuer.findByName(credentials, key.name);
+        if (key.keyId) {
+          await issuer.revoke(credentials, key.keyId);
+          this.forget(key.id);
+          continue;
+        }
+        const ids = await issuer.findByName(credentials, key.name);
         for (const keyId of ids) await issuer.revoke(credentials, keyId);
-        this.forget(key.id);
+        if (ids.length > 0) {
+          this.forget(key.id);
+        } else {
+          // Not listed (yet, or to this key at all): kept, and looked for again until it would have expired.
+          this.revokeRetryAt.set(key.id, this.now() + LOOKUP_RETRY_MS);
+        }
       } catch {
         this.revokeRetryAt.set(key.id, this.now() + RETRY_MS);
       }

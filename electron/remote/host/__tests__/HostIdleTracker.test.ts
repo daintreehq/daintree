@@ -303,3 +303,24 @@ describe("HostIdleTracker (#17357)", () => {
     expect(h.tracker.observation()).toMatchObject({ busy: true, idleEndsAt: null });
   });
 });
+
+describe("HostIdleTracker.checkFresh (#17361)", () => {
+  it("reads again after a read already under way, so it can't answer with one taken before", async () => {
+    let release: () => void = () => {};
+    let reads = 0;
+    const h = harness({
+      read: async () => {
+        reads += 1;
+        if (reads === 1) await new Promise<void>((resolve) => (release = resolve));
+        return { agents: { active: 0, unreadable: 0 }, shellViews: reads > 1 };
+      },
+    });
+    const early = h.tracker.check();
+    const fresh = h.tracker.checkFresh();
+    release();
+    await Promise.all([early, fresh]);
+    expect(reads).toBe(2);
+    expect(h.tracker.observation().busy).toBe(true);
+    h.tracker.dispose();
+  });
+});

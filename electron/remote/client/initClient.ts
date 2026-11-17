@@ -861,7 +861,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     backend: store as unknown as CloudHostsStoreBackend,
     emit: broadcastLocal,
     onAccountRemoved: (accountId) => cloudFiles.forgetAccount(accountId),
-    beforeAccountRemoved: async (accountId) => machineKeys?.revokePending(accountId),
+    beforeAccountRemoved: async (accountId) => machineKeys?.settleAccount(accountId),
   });
   // Bound once the host list and links exist (below).
   let machineKeys: CloudMachineKeys | null = null;

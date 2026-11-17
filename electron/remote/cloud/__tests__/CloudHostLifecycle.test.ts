@@ -1921,6 +1921,50 @@ describe("CloudHostLifecycle lifetime keeper", () => {
     expect(provider.start).not.toHaveBeenCalled();
   });
 
+  it("records no failed renewal when only its read before writing failed", async () => {
+    const { lifecycle, provider } = await keeper({ connected: true, busy: true, shown: false }, 10);
+    vi.mocked(provider.inspect).mockRejectedValueOnce(
+      new BoatApiError("not-found", "gone", 404, null, null)
+    );
+    await lifecycle.renewDue();
+    expect(provider.renewLifetime).not.toHaveBeenCalled();
+    // The read's own finding stays, not a renewal that was never sent.
+    expect(lifecycle.statuses()[0]!.lastError?.code).toBe("not-found");
+  });
+
+  it("clears an earlier failed renewal once the machine's own keeper moved the deadline", async () => {
+    const { lifecycle, provider, state, clock } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    vi.mocked(provider.renewLifetime).mockRejectedValueOnce(
+      new BoatApiError("server", "down", 500, null, null)
+    );
+    await lifecycle.renewDue();
+    expect(lifecycle.statuses()[0]!.lastError?.code).toBe("lifetime-renewal");
+    state.machine = resource({
+      machine: "running",
+      autoStopAt: new Date(NOW + 7_200_000).toISOString(),
+    });
+    clock.now = NOW + 3 * 60_000;
+    await lifecycle.renewDue();
+    expect(provider.renewLifetime).toHaveBeenCalledTimes(1);
+    expect(lifecycle.statuses()[0]!.lastError).toBeNull();
+  });
+
+  it("still reports a failed renewal when the machine is in error rather than stopping", async () => {
+    const { lifecycle, provider, state } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    vi.mocked(provider.renewLifetime).mockImplementationOnce(async () => {
+      state.machine = resource({ machine: "error", rawState: "error" });
+      throw new BoatApiError("server", "down", 500, null, null);
+    });
+    await lifecycle.renewDue();
+    expect(lifecycle.statuses()[0]!.lastError?.code).toBe("lifetime-renewal");
+  });
+
   it("sends a new lifetime after a renewal under way, never before it", async () => {
     const { lifecycle, provider } = await keeper({ connected: true, busy: true, shown: false }, 10);
     let release: () => void = () => {};

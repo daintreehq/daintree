@@ -5,15 +5,16 @@ import type {
   CloudMachineType,
   CloudProviderInfo,
 } from "../../../../shared/types/cloudHosts.js";
-import type {
-  CloudProvider,
-  IssuedMachineKey,
-  MachineKeyIssuer,
-  ProviderCatalog,
-  ProviderCreateRequest,
-  ProviderCredentials,
-  ProviderResource,
-  ProviderSshAccess,
+import {
+  UnusableMachineKeyError,
+  type CloudProvider,
+  type IssuedMachineKey,
+  type MachineKeyIssuer,
+  type ProviderCatalog,
+  type ProviderCreateRequest,
+  type ProviderCredentials,
+  type ProviderResource,
+  type ProviderSshAccess,
 } from "../provider.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
@@ -127,28 +128,25 @@ export const BOAT_MACHINE_KEY_ACTIONS: readonly string[] = [
 ];
 
 /**
- * Whether the key Boat issued is no broader than the one asked for. A scope
- * Boat leaves out of its answer is taken as the one the request named: the
- * create refuses unknown fields, so it can't have read the request wrongly.
+ * Whether Boat's answer shows the key reaches exactly this machine, with
+ * exactly the actions asked for and no environment: positive evidence, since
+ * Boat grants by sandbox or by environment, and a key that can't renew or stop
+ * would leave the machine looking kept when it isn't.
  */
 function scopedToMachine(key: BoatApiKey, resourceId: string): boolean {
   const scope = key.scope;
-  if (!scope) return true;
+  if (!scope?.actions || !Array.isArray(scope.sandboxes)) return false;
+  const actions = new Set(scope.actions);
   if (
-    scope.actions !== undefined &&
-    !scope.actions.every((action) => BOAT_MACHINE_KEY_ACTIONS.includes(action))
+    actions.size !== BOAT_MACHINE_KEY_ACTIONS.length ||
+    !BOAT_MACHINE_KEY_ACTIONS.every((action) => actions.has(action))
   ) {
     return false;
   }
-  if (
-    scope.sandboxes !== undefined &&
-    (scope.sandboxes === "*" || scope.sandboxes.length !== 1 || scope.sandboxes[0] !== resourceId)
-  ) {
-    return false;
-  }
+  if (scope.sandboxes.length !== 1 || scope.sandboxes[0] !== resourceId) return false;
   return (
     scope.environments === undefined ||
-    (scope.environments !== "*" && scope.environments.length === 0)
+    (Array.isArray(scope.environments) && scope.environments.length === 0)
   );
 }
 
@@ -172,14 +170,10 @@ class BoatMachineKeys implements MachineKeyIssuer {
     });
     const expiresAt = Date.parse(created.apiKey.expiresAt ?? "");
     if (!Number.isFinite(expiresAt) || !scopedToMachine(created.apiKey, resourceId)) {
-      // Never handed to the machine: a key that never expires, or reaches more than it, is turned off.
-      await client.revokeKey(this.ctx(credentials), created.apiKey.id).catch(() => {});
-      throw new BoatApiError(
-        "bad-response",
-        "Boat issued a key broader than the one asked for, so it wasn't used",
-        null,
-        null,
-        null
+      // Never handed to the machine; revoked by its id like any other key nothing should hold.
+      throw new UnusableMachineKeyError(
+        created.apiKey.id,
+        "Boat issued a key other than the one asked for, so it wasn't used."
       );
     }
     return { keyId: created.apiKey.id, secret: created.secret, expiresAt };
@@ -477,6 +471,14 @@ export class BoatProvider implements CloudProvider {
       };
     }
     const said = error.message;
+    // A refusal while Boat rolls its keys out: nothing was made, and it passes.
+    if (error.code === "scoped_api_key_creation_disabled") {
+      return {
+        code: "unsupported",
+        message: "Boat isn't issuing API keys right now. Daintree asks again later.",
+        at,
+      };
+    }
     switch (error.kind) {
       case "unauthorized":
         return {

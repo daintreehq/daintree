@@ -325,7 +325,8 @@ export function createHostSampleSources(now: () => number = Date.now): HostSampl
     // Looked up on every sample: the loop can outlive one listener and predate the next.
     idle: () => {
       const observation = getRemoteService("hostIdle")?.observation() ?? null;
-      if (!observation || getRemoteService("machineKeeper")?.stopsWhenIdle() !== true) {
+      const keeper = getRemoteService("machineKeeper");
+      if (!observation || keeper?.stopsWhenIdle(observation.idleEndsAt) !== true) {
         return observation;
       }
       return { ...observation, stopsWhenIdle: true };

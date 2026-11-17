@@ -10,7 +10,8 @@ import { BoatProvider } from "../boat/BoatProvider.js";
 import { CloudHostStore, type CloudHostsValue } from "../CloudHostStore.js";
 import { CloudMachineKeys, MACHINE_KEY_TTL_DAYS } from "../CloudMachineKeys.js";
 import { MachineKeeperLinkMethod, MachineKeeperArmSchema } from "../machineKeeperLink.js";
-import type { CloudProvider, IssuedMachineKey } from "../provider.js";
+import type { Mock } from "vitest";
+import { UnusableMachineKeyError, type CloudProvider, type MachineKeyIssuer } from "../provider.js";
 
 const DAY = 24 * 60 * 60_000;
 const ACCOUNT = "ca_abcdefgh";
@@ -18,7 +19,7 @@ const BINDING = "cb_abcdefgh";
 const HOST = "build";
 const SANDBOX = "bx_23456789";
 
-let disposers: Array<() => void> = [];
+const disposers: Array<() => void> = [];
 afterEach(() => {
   for (const dispose of disposers.splice(0)) dispose();
 });
@@ -67,7 +68,7 @@ function setup() {
 
   let issued = 0;
   const machineKeys = {
-    issue: vi.fn(async (): Promise<IssuedMachineKey> => {
+    issue: vi.fn<MachineKeyIssuer["issue"]>(async () => {
       issued += 1;
       return {
         keyId: `sak_${issued}`,
@@ -75,8 +76,8 @@ function setup() {
         expiresAt: clock.now + MACHINE_KEY_TTL_DAYS * DAY,
       };
     }),
-    revoke: vi.fn(async () => {}),
-    findByName: vi.fn(async (): Promise<string[]> => []),
+    revoke: vi.fn<MachineKeyIssuer["revoke"]>(async () => {}),
+    findByName: vi.fn<MachineKeyIssuer["findByName"]>(async () => []),
   };
   const real = new BoatProvider(() => {
     throw new Error("unused");
@@ -121,18 +122,18 @@ function setup() {
     tracker.dispose();
   });
   const delivered: unknown[] = [];
-  const makeSession = () =>
-    ({
-      isOpen: true,
-      call: vi.fn(async (method: string, payload: unknown) => {
-        if (method === MachineKeeperLinkMethod.STATUS) return keeper.status();
-        if (method === MachineKeeperLinkMethod.ARM) {
-          delivered.push(payload);
-          return keeper.arm(MachineKeeperArmSchema.parse(payload));
-        }
-        throw new AppError({ code: "UNSUPPORTED", message: `Unknown method: ${method}` });
-      }),
-    }) as unknown as LinkSession & { call: ReturnType<typeof vi.fn> };
+  const answer = async (method: string, payload: unknown): Promise<unknown> => {
+    if (method === MachineKeeperLinkMethod.STATUS) return keeper.status();
+    if (method === MachineKeeperLinkMethod.ARM) {
+      delivered.push(payload);
+      return keeper.arm(MachineKeeperArmSchema.parse(payload));
+    }
+    throw new AppError({ code: "UNSUPPORTED", message: `Unknown method: ${method}` });
+  };
+  const makeSession = () => {
+    const call: Mock<(method: string, payload: unknown) => Promise<unknown>> = vi.fn(answer);
+    return { link: { isOpen: true, call } as unknown as LinkSession, call };
+  };
   let session = makeSession();
   const hosts = {
     get: (hostId: string) =>
@@ -149,7 +150,7 @@ function setup() {
     store,
     accounts: accounts as never,
     hosts,
-    sessionFor: (hostId) => (hostId === HOST ? session : null),
+    sessionFor: (hostId) => (hostId === HOST ? session.link : null),
     changed,
     now: () => clock.now,
   });
@@ -163,12 +164,16 @@ function setup() {
     clock,
     delivered,
     changed,
+    answer,
     get session() {
-      return session;
+      return session.link;
+    },
+    get call() {
+      return session.call;
     },
     newSession() {
       session = makeSession();
-      return session;
+      return session.link;
     },
     raw: () => JSON.stringify(backendValue),
   };
@@ -188,16 +193,28 @@ describe("CloudMachineKeys", () => {
         expiresAt: env.clock.now + 30 * DAY,
       };
     });
+    let atDelivery: unknown = null;
+    env.call.mockImplementation(async (method: string, payload: unknown) => {
+      if (method === MachineKeeperLinkMethod.ARM) atDelivery = env.store.machineKeys()[0];
+      return env.answer(method, payload);
+    });
     await env.keys.arm(HOST, env.session);
 
-    // Written down before Boat was asked, under the name it is created with.
+    // Written down before Boat was asked, under the name it is created with,
+    // and its id kept before the secret went anywhere.
+    expect(atDelivery).toMatchObject({ state: "delivering", keyId: "sak_1" });
     expect(recordedFirst).toMatchObject({ state: "issuing", keyId: null, resourceId: SANDBOX });
     const [record] = env.store.machineKeys();
     expect(record).toMatchObject({ state: "active", keyId: "sak_1", bindingId: BINDING });
     expect(env.machineKeys.issue.mock.calls[0]![2].name).toBe(record!.name);
     expect(env.keeper.status()).toMatchObject({ grantId: record!.id, resourceId: SANDBOX });
     expect(env.delivered).toEqual([
-      expect.objectContaining({ resourceId: SANDBOX, scope: "personal", provider: "boat" }),
+      expect.objectContaining({
+        resourceId: SANDBOX,
+        scope: "personal",
+        provider: "boat",
+        secret: "boat_live_machinesecret",
+      }),
     ]);
     expect(env.raw()).not.toContain("boat_live_machinesecret");
     expect(env.keys.problemFor(BINDING)).toBeNull();
@@ -213,7 +230,7 @@ describe("CloudMachineKeys", () => {
 
   it("leaves a host too old to take a key as it was, and says so", async () => {
     const env = setup();
-    env.session.call.mockRejectedValueOnce(
+    env.call.mockRejectedValueOnce(
       new AppError({ code: "UNSUPPORTED", message: "Unknown method: machine-keeper.status" })
     );
     await env.keys.arm(HOST, env.session);
@@ -233,12 +250,34 @@ describe("CloudMachineKeys", () => {
 
     await env.keys.arm(HOST, env.newSession());
     expect(env.machineKeys.issue).toHaveBeenCalledTimes(1);
+
+    // Asked again an hour on, on the same link.
+    env.clock.now += 61 * 60_000;
+    await env.keys.tick();
+    expect(env.machineKeys.issue).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits out a failure that may pass, however often the link comes back", async () => {
+    const env = setup();
+    env.machineKeys.issue.mockRejectedValueOnce(new BoatApiError("server", "x", 500, null, null));
+    await env.keys.arm(HOST, env.session);
+    await env.keys.arm(HOST, env.newSession());
+    await env.keys.arm(HOST, env.newSession());
+    expect(env.machineKeys.issue).toHaveBeenCalledTimes(1);
+    env.clock.now += 6 * 60_000;
+    await env.keys.tick();
+    expect(env.machineKeys.issue).toHaveBeenCalledTimes(2);
+    expect(env.keeper.status().grantId).not.toBeNull();
   });
 
   it("replaces a key near its expiry while linked, then revokes the old one", async () => {
     const env = setup();
     await env.keys.arm(HOST, env.session);
     const first = env.store.machineKeys()[0]!;
+    // Asked what it holds now and then; a key with time left stays.
+    env.clock.now += 31 * 60_000;
+    await env.keys.tick();
+    expect(env.machineKeys.issue).toHaveBeenCalledTimes(1);
     env.clock.now += (MACHINE_KEY_TTL_DAYS - 5) * DAY;
     await env.keys.tick();
     expect(env.machineKeys.issue).toHaveBeenCalledTimes(2);
@@ -284,11 +323,17 @@ describe("CloudMachineKeys", () => {
       new BoatApiError("timeout", "slow", null, null, null)
     );
     let looked: unknown = null;
+    // Not listed yet: its create may still land, so it is kept and looked for again.
+    env.machineKeys.findByName.mockResolvedValueOnce([]);
     env.machineKeys.findByName.mockImplementationOnce(async (_credentials, name) => {
       looked = env.store.machineKeys().find((key) => key.name === name);
       return ["sak_lost"];
     });
     await env.keys.arm(HOST, env.session);
+    await env.keys.revokePending();
+    expect(env.machineKeys.findByName).toHaveBeenCalledTimes(1);
+    expect(env.store.machineKeys()).toHaveLength(1);
+    env.clock.now += 61 * 60_000;
     await env.keys.revokePending();
     expect(looked).toMatchObject({ state: "revoke", keyId: null });
     expect(env.machineKeys.revoke).toHaveBeenCalledWith(expect.anything(), "sak_lost");
@@ -317,7 +362,7 @@ describe("CloudMachineKeys", () => {
 
   it("leaves a key another device gave the machine alone", async () => {
     const env = setup();
-    env.keeper.arm({
+    await env.keeper.arm({
       grantId: "mk_otherdevice",
       provider: "boat",
       apiUrl: "https://boat.test/api/v1",
@@ -333,9 +378,8 @@ describe("CloudMachineKeys", () => {
 
   it("settles an arm whose answer was lost by what the machine says it holds next time", async () => {
     const env = setup();
-    const call = env.session.call.getMockImplementation()!;
-    env.session.call.mockImplementation(async (method: string, payload: unknown) => {
-      const answer = await call(method, payload);
+    env.call.mockImplementation(async (method: string, payload: unknown) => {
+      const answer = await env.answer(method, payload);
       if (method === MachineKeeperLinkMethod.ARM) {
         throw new AppError({ code: "OUTCOME_UNKNOWN", message: "link dropped" });
       }
@@ -349,15 +393,79 @@ describe("CloudMachineKeys", () => {
     expect(env.machineKeys.issue).toHaveBeenCalledTimes(1);
   });
 
-  it("revokes what a removed account's machines still hold before its key goes", async () => {
+  it("revokes what a removed account's machines hold before its key goes, and refuses while one may still work", async () => {
     const env = setup();
     await env.keys.arm(HOST, env.session);
     env.store.removeBinding(BINDING);
-    env.machineKeys.revoke.mockRejectedValueOnce(new BoatApiError("server", "x", 500, null, null));
+    env.machineKeys.revoke.mockRejectedValue(new BoatApiError("server", "x", 500, null, null));
     await env.keys.revokePending();
-    // Backing off, yet the account's removal tries once more at once.
-    await env.keys.revokePending(ACCOUNT);
+    // Backing off, yet the account's removal tries again at once, and says it couldn't.
+    await expect(env.keys.settleAccount(ACCOUNT)).rejects.toMatchObject({
+      userMessage: expect.stringMatching(/couldn't yet revoke/),
+    });
     expect(env.machineKeys.revoke).toHaveBeenCalledTimes(2);
+    expect(env.store.machineKeys()).toHaveLength(1);
+
+    env.machineKeys.revoke.mockResolvedValue(undefined);
+    await expect(env.keys.settleAccount(ACCOUNT)).resolves.toBeUndefined();
+    expect(env.store.machineKeys()).toEqual([]);
+  });
+
+  it("arms a link that came up while another link's attempt was under way", async () => {
+    const env = setup();
+    let finish: () => void = () => {};
+    env.machineKeys.issue.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = () =>
+            resolve({
+              keyId: "sak_old",
+              secret: "boat_live_oldsecret",
+              expiresAt: env.clock.now + 30 * DAY,
+            });
+        })
+    );
+    const first = env.keys.arm(HOST, env.session);
+    await vi.waitFor(() => expect(env.machineKeys.issue).toHaveBeenCalledTimes(1));
+    const second = env.newSession();
+    env.keys.sessionOpened(HOST, second);
+    finish();
+    await first;
+    await vi.waitFor(() => expect(env.keeper.status().grantId).not.toBeNull());
+    expect(env.delivered).toHaveLength(1);
+    expect(env.delivered[0]).toMatchObject({ secret: "boat_live_machinesecret1" });
+    await vi.waitFor(() =>
+      expect(env.machineKeys.revoke).toHaveBeenCalledWith(expect.anything(), "sak_old")
+    );
+  });
+
+  it("takes Boat switching key creation off as a refusal, with nothing to look for", async () => {
+    const env = setup();
+    env.machineKeys.issue.mockRejectedValueOnce(
+      new BoatApiError(
+        "no-capacity",
+        "Scoped keys aren't on yet",
+        503,
+        "scoped_api_key_creation_disabled",
+        null
+      )
+    );
+    await env.keys.arm(HOST, env.session);
+    await env.keys.revokePending();
+    expect(env.store.machineKeys()).toEqual([]);
+    expect(env.machineKeys.findByName).not.toHaveBeenCalled();
+    expect(env.keys.problemFor(BINDING)).toMatch(/isn't issuing API keys/);
+  });
+
+  it("revokes a key Boat made other than asked, by its id", async () => {
+    const env = setup();
+    env.machineKeys.issue.mockRejectedValueOnce(
+      new UnusableMachineKeyError("sak_broad", "Boat issued a key other than the one asked for.")
+    );
+    await env.keys.arm(HOST, env.session);
+    await env.keys.revokePending();
+    expect(env.delivered).toEqual([]);
+    expect(env.machineKeys.revoke).toHaveBeenCalledWith(expect.anything(), "sak_broad");
     expect(env.store.machineKeys()).toEqual([]);
   });
 });

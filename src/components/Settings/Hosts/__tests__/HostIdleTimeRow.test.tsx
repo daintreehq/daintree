@@ -182,6 +182,11 @@ describe("HostIdleTimeRow (#17357)", () => {
     });
     expect(document.body.textContent).toContain("if it stays idle.");
     expect(document.body.textContent).not.toContain(problem);
+
+    // Opened while disconnected: nothing read from the host, the reason still said.
+    cleanup();
+    await renderRow({ connected: false, selfStopProblem: problem });
+    expect(document.body.textContent).toContain(`Connect to see or change it. ${problem}`);
   });
 
   it("names the update a host from before the setting needs, from the refusal such a host gives", async () => {

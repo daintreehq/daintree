@@ -106,6 +106,17 @@ export interface IssuedMachineKey {
   expiresAt: number;
 }
 
+/** A key the provider issued but not as asked: never delivered, and revoked by its id. */
+export class UnusableMachineKeyError extends Error {
+  constructor(
+    readonly keyId: string,
+    message: string
+  ) {
+    super(message);
+    this.name = "UnusableMachineKeyError";
+  }
+}
+
 /**
  * Keys a machine uses to keep itself running while its host sees work and to
  * stop itself once idle: limited to that one machine, to reading it, moving

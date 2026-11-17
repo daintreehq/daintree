@@ -282,14 +282,20 @@ describe("createHostSampleSources", () => {
       observation: () => observation,
     } as never);
     let holds = false;
+    const asked: Array<number | null | undefined> = [];
     const offKeeper = registerRemoteService("machineKeeper", {
-      stopsWhenIdle: () => holds,
+      stopsWhenIdle: (at?: number | null) => {
+        asked.push(at);
+        return holds;
+      },
     } as never);
     try {
       const sources = createHostSampleSources();
-      expect(sources.idle()).toEqual(observation);
+      expect(sources.idle?.()).toEqual(observation);
       holds = true;
-      expect(sources.idle()).toEqual({ ...observation, stopsWhenIdle: true });
+      expect(sources.idle?.()).toEqual({ ...observation, stopsWhenIdle: true });
+      // Asked whether its key still works when the idle time ends, not just now.
+      expect(asked).toEqual([observation.idleEndsAt, observation.idleEndsAt]);
     } finally {
       offKeeper();
       offIdle();
