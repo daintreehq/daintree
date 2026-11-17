@@ -226,6 +226,12 @@ const decisionsEntry = vi.hoisted(() => ({
         ? { state: "connected", terminalSnapshots: true, revision: 1 }
         : { state: "connected", revision: 1 }
   ),
+  setDecisionsHoldPhonePushes: vi.fn(
+    async (enabled: boolean): Promise<DecisionsStatus> =>
+      enabled
+        ? { state: "connected", revision: 1 }
+        : { state: "connected", holdPhonePushes: false, revision: 1 }
+  ),
   // Asks for a path as the real entry does, and answers with what it was given.
   exportRecoveryKit: vi.fn(
     async (
@@ -324,6 +330,7 @@ vi.mock("../../../services/decisions/index.js", () => {
     setDecisionsDefaultQuestionExpiry: decisionsEntry.setDecisionsDefaultQuestionExpiry,
     setDecisionsAgentAskHuman: decisionsEntry.setDecisionsAgentAskHuman,
     setDecisionsTerminalSnapshots: decisionsEntry.setDecisionsTerminalSnapshots,
+    setDecisionsHoldPhonePushes: decisionsEntry.setDecisionsHoldPhonePushes,
     exportRecoveryKit: decisionsEntry.exportRecoveryKit,
     verifyRecoveryKit: decisionsEntry.verifyRecoveryKit,
     revokeDevice: decisionsEntry.revokeDevice,
@@ -456,6 +463,9 @@ const setAgentAskHuman = decisionsNamespace.ops.setAgentAskHuman.handler as unkn
 const setTerminalSnapshots = decisionsNamespace.ops.setTerminalSnapshots.handler as unknown as (
   payload: SetDecisionsTerminalSnapshotsPayload
 ) => Promise<DecisionsStatus>;
+const setHoldPhonePushes = decisionsNamespace.ops.setHoldPhonePushes.handler as unknown as (
+  enabled: boolean
+) => Promise<DecisionsStatus>;
 
 const listHosts = decisionsNamespace.ops.listHosts
   .handler as unknown as () => Promise<DecisionsHostsResult>;
@@ -576,6 +586,7 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_SET_PROXY_ALLOWLISTED,
   CHANNELS.DECISIONS_SET_DEFAULT_QUESTION_EXPIRY,
   CHANNELS.DECISIONS_SET_TERMINAL_SNAPSHOTS,
+  CHANNELS.DECISIONS_SET_HOLD_PHONE_PUSHES,
   CHANNELS.DECISIONS_EXPORT_RECOVERY_KIT,
   CHANNELS.DECISIONS_VERIFY_RECOVERY_KIT,
   CHANNELS.DECISIONS_LIST_HOSTS,
@@ -631,6 +642,7 @@ describe("decisions IPC", () => {
     decisionsEntry.setDecisionsProxyAllowlisted.mockClear();
     decisionsEntry.setDecisionsDefaultQuestionExpiry.mockClear();
     decisionsEntry.setDecisionsTerminalSnapshots.mockClear();
+    decisionsEntry.setDecisionsHoldPhonePushes.mockClear();
     decisionsEntry.revokeDevice.mockClear();
     decisionsEntry.rotateKeys.mockClear();
     decisionsEntry.startSetupCheck.mockClear();
@@ -1056,6 +1068,7 @@ describe("decisions IPC", () => {
       await expect(setTerminalSnapshots({ enabled: true, consent: true })).rejects.toMatchObject({
         code: "PERMISSION",
       });
+      await expect(setHoldPhonePushes(false)).rejects.toMatchObject({ code: "PERMISSION" });
     }
 
     expect(decisionsEntry.evaluated).toBe(0);
@@ -1921,6 +1934,22 @@ describe("decisions IPC", () => {
       [{ enabled: false }],
     ]);
     expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("changes holding phone pushes through Decisions itself once on, and takes only a boolean (#17240)", async () => {
+    saved.value = { enabled: true };
+
+    await expect(setHoldPhonePushes(false)).resolves.toMatchObject({ holdPhonePushes: false });
+    await expect(setHoldPhonePushes(true)).resolves.not.toHaveProperty("holdPhonePushes");
+    expect(decisionsEntry.setDecisionsHoldPhonePushes.mock.calls).toEqual([[false], [true]]);
+    expect(store.set).not.toHaveBeenCalled();
+
+    const schema = decisionsNamespace.ops.setHoldPhonePushes.schema as SafeParse;
+    expect(schema.safeParse(true).success).toBe(true);
+    expect(schema.safeParse(false).success).toBe(true);
+    for (const value of [undefined, "false", 0, { enabled: false }]) {
+      expect(schema.safeParse(value).success).toBe(false);
+    }
   });
 
   it("takes the switch and an agreement for terminal snapshots, never a time of its own", () => {

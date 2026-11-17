@@ -143,6 +143,7 @@ vi.mock("../../schemas/customSchemes.js", async (importOriginal) => {
 });
 
 const { ConfigBundleService } = await import("../ConfigBundleService.js");
+const { onNotificationSettingsWritten } = await import("../../utils/notificationSettingsPatch.js");
 
 function agent(id: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -312,6 +313,34 @@ describe("ConfigBundleService.apply", () => {
     expect(mockStore.get("worktreeConfig.pathPattern")).toBe(
       "{parent-dir}/{repo-name}-worktrees/{branch-slug}"
     );
+  });
+
+  it("tells the notification settings' followers after an import writes them, and after its rollback (#17240)", async () => {
+    const enabled: unknown[] = [];
+    const off = onNotificationSettingsWritten(() =>
+      enabled.push(mockStore.get("notificationSettings.enabled"))
+    );
+    try {
+      const { service } = makeService();
+      await service.apply({ notificationSettings: { completedSoundFile: "chime.wav" } });
+      // Nothing changed, so nothing was written.
+      expect(enabled).toEqual([]);
+
+      await service.apply({ notificationSettings: { enabled: false } });
+      expect(enabled).toEqual([false]);
+
+      mockProjectStore.addGlobalRecipe.mockRejectedValue(new Error("recipes.json is read-only"));
+      const report = await service.apply({
+        notificationSettings: { enabled: true },
+        globalRecipes: [{ id: "r1", name: "Fleet", terminals: [] }],
+      });
+      expect(report.rolledBack).toBe(true);
+      // Written by the import, then put back by its rollback: heard both times.
+      expect(enabled).toHaveLength(3);
+      expect(enabled[1]).toBe(true);
+    } finally {
+      off();
+    }
   });
 
   it("rolls earlier sections back when a later one throws", async () => {

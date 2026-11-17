@@ -16,6 +16,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 const saved = vi.hoisted(() => ({ value: undefined as unknown }));
 // An enrolled Host's record (#16022), the store's `decisionsHost`.
 const savedHost = vi.hoisted(() => ({ value: undefined as unknown }));
+// The store's `notificationSettings`: desktop notifications on, as they are by default.
+const savedNotifications = vi.hoisted(() => ({ value: { enabled: true } as unknown }));
 const loads = vi.hoisted(() => ({
   constructed: 0,
   failNextConstruct: false,
@@ -293,6 +295,7 @@ const connections = vi.hoisted(
       started: number;
       stopped: number;
       snapshotsChanged: number;
+      presenceChanged: number;
       keyFileAtStop?: boolean;
     }>
 );
@@ -317,7 +320,13 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 vi.mock("../../../store.js", () => ({
   store: {
     get: vi.fn((key: string) =>
-      key === "decisions" ? saved.value : key === "decisionsHost" ? savedHost.value : undefined
+      key === "decisions"
+        ? saved.value
+        : key === "decisionsHost"
+          ? savedHost.value
+          : key === "notificationSettings"
+            ? savedNotifications.value
+            : undefined
     ),
     set: vi.fn((key: string, value: unknown) => {
       if (key === "decisions") saved.value = value;
@@ -390,6 +399,7 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
             started: 0,
             stopped: 0,
             snapshotsChanged: 0,
+            presenceChanged: 0,
           };
           connections.push(made);
           return {
@@ -398,6 +408,9 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
             },
             snapshotsChanged: () => {
               made.snapshotsChanged += 1;
+            },
+            presenceChanged: () => {
+              made.presenceChanged += 1;
             },
             stop: () => {
               made.stopped += 1;
@@ -441,6 +454,7 @@ import type {
   DecisionsHostsPort,
   HostCallOutcome,
 } from "../../../types/decisionsHosts.js";
+import { notificationSettingsWritten } from "../../../utils/notificationSettingsPatch.js";
 
 /** An entry status: what it observed, and the revision it was read at. */
 function withRevision<T extends object>(status: T): T & { revision: number } {
@@ -507,6 +521,7 @@ import {
   setDecisionsDefaultQuestionExpiry,
   setDecisionsAgentAskHuman,
   setDecisionsTerminalSnapshots,
+  setDecisionsHoldPhonePushes,
   startDecisionsModelEvaluation,
   startRelayRemoval,
   startDecisionsIfEnabled,
@@ -563,6 +578,7 @@ describe("Decisions entry", () => {
     statGate.started = 0;
     saved.value = undefined;
     savedHost.value = undefined;
+    savedNotifications.value = { enabled: true };
     loads.failNextConstruct = false;
     loads.failNextOpen = false;
     loads.closing = null;
@@ -1797,6 +1813,97 @@ describe("Decisions entry", () => {
       expect(terminalSnapshotsAllowed()).toBe(true);
       await stopDecisions();
       expect(terminalSnapshotsAllowed()).toBe(false);
+    });
+  });
+
+  describe("holding phone pushes (#17240)", () => {
+    afterEach(async () => {
+      await peekDecisionsService()?.stop();
+    });
+
+    it("reports presence only while Decisions, the switch and desktop notifications are on, telling the connection of each turn", async () => {
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      const connection = connections.at(-1)!;
+      const presence = connection.options.presence!;
+      // On by default, and with nothing new to agree to.
+      expect(presence.allowed()).toBe(true);
+      expect((await getDecisionsStatus()).holdPhonePushes).toBeUndefined();
+
+      savedNotifications.value = { enabled: false };
+      notificationSettingsWritten();
+      expect(connection.presenceChanged).toBe(1);
+      expect(presence.allowed()).toBe(false);
+
+      savedNotifications.value = { enabled: true };
+      notificationSettingsWritten();
+      expect(connection.presenceChanged).toBe(2);
+      expect(presence.allowed()).toBe(true);
+
+      // Off reaches the connection before the queue gets to it.
+      const off = setDecisionsHoldPhonePushes(false);
+      expect(presence.allowed()).toBe(false);
+      expect(connection.presenceChanged).toBe(3);
+      expect((await off).holdPhonePushes).toBe(false);
+      expect(saved.value).toEqual({
+        ...defaultDecisionsSettings(),
+        enabled: true,
+        ...RELAY,
+        consentedAt: 5,
+        holdPhonePushes: false,
+      });
+      expect(peekDecisionsService()!.getSettings()!.holdPhonePushes).toBe(false);
+      await vi.waitFor(() =>
+        expect(pushedStatuses().at(-1)).toMatchObject({ holdPhonePushes: false })
+      );
+      // Notifications turning on doesn't override the switch.
+      notificationSettingsWritten();
+      expect(presence.allowed()).toBe(false);
+
+      const on = await setDecisionsHoldPhonePushes(true);
+      expect(on.holdPhonePushes).toBeUndefined();
+      expect(presence.allowed()).toBe(true);
+      expect(peekDecisionsService()!.getSettings()!.holdPhonePushes).toBe(true);
+
+      await stopDecisions();
+      expect(presence.allowed()).toBe(false);
+    });
+
+    it("lets a turn off stand over a turn on queued before it", async () => {
+      saved.value = { enabled: true, consentedAt: 5, holdPhonePushes: false };
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      // A stop still closing the store holds the queue behind a switch-on.
+      let closed!: () => void;
+      loads.closing = new Promise<void>((resolve) => (closed = resolve));
+      const stopping = service.stop();
+      const enabling = setDecisionsEnabled(true);
+      await vi.waitFor(() => expect(store.set).toHaveBeenCalledTimes(1));
+
+      const turningOn = setDecisionsHoldPhonePushes(true);
+      const turningOff = setDecisionsHoldPhonePushes(false);
+      closed();
+      const [, , on, off] = await Promise.all([stopping, enabling, turningOn, turningOff]);
+
+      const wroteOn = vi
+        .mocked(store.set)
+        .mock.calls.some(
+          (call) =>
+            ((call as unknown[])[1] as { holdPhonePushes?: boolean } | undefined)
+              ?.holdPhonePushes === true
+        );
+      expect(wroteOn).toBe(false);
+      expect(on.holdPhonePushes).toBe(false);
+      expect(off.holdPhonePushes).toBe(false);
+      expect(saved.value).toMatchObject({ holdPhonePushes: false });
+    });
+
+    it("refuses to turn on while Decisions is off, without loading it", async () => {
+      saved.value = { enabled: false, holdPhonePushes: false };
+      const constructed = loads.constructed;
+      await expect(setDecisionsHoldPhonePushes(true)).rejects.toMatchObject(CANCELLED);
+      expect(store.set).not.toHaveBeenCalled();
+      expect(loads.constructed).toBe(constructed);
     });
   });
 

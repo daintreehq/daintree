@@ -118,7 +118,7 @@ describe("DaintreeRelayClient (#16229)", () => {
 
   it("declares nothing for a feature a later bridge asks for that Daintree doesn't handle", async () => {
     const { sent, daintree } = await clients();
-    // Presence waits for #17240; the voice note is one no release has.
+    // Presence is the relay's to advertise, never a desktop's (#17240); the voice note is one no release has.
     const later: ProtocolFeature[] = ["presence-v1", "voice-notes-v1" as ProtocolFeature];
 
     await daintree.events(5, 10, later);

@@ -66,6 +66,7 @@ import { registerNotificationHandlers, setNotificationHostRelay } from "../notif
 import { getIpcDispatcher } from "../../dispatcher.js";
 import { CHANNELS } from "../../channels.js";
 import type { HandlerDependencies } from "../../types.js";
+import { onNotificationSettingsWritten } from "../../../utils/notificationSettingsPatch.js";
 
 function getHandler(channel: string): InvokeHandler {
   const fn = ipcHandlers.get(channel);
@@ -145,6 +146,24 @@ describe("notifications IPC adversarial", () => {
 
     // Nothing in the patch survives validation, so nothing is written at all.
     expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("settingsSet tells the settings' followers after a write, and not when nothing was written (#17240)", async () => {
+    const heard = vi.fn(() => storeMock.set.mock.calls.length);
+    const off = onNotificationSettingsWritten(heard);
+    try {
+      await getHandler(CHANNELS.NOTIFICATION_SETTINGS_SET)(fakeEvent(), {
+        completedSoundFile: "../../secret.wav",
+      });
+      expect(heard).not.toHaveBeenCalled();
+
+      await getHandler(CHANNELS.NOTIFICATION_SETTINGS_SET)(fakeEvent(), { enabled: false });
+      // Heard once the write is in the store, so a follower reads the new value.
+      expect(heard).toHaveBeenCalledTimes(1);
+      expect(heard.mock.results[0]!.value).toBe(1);
+    } finally {
+      off();
+    }
   });
 
   it("settingsSet accepts allowed sound file names", async () => {

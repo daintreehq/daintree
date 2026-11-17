@@ -26,6 +26,8 @@ import {
   type DeviceKeys,
 } from "@daintreehq/decisions-crypto";
 import { pendingRotationOf } from "../keyRotation.js";
+import { PRESENCE_TICK_MS, type PresenceWatchers } from "../desktopPresence.js";
+import type { UserPresence } from "../../userPresence.js";
 import {
   bytesToBase64Url,
   type DeviceCert,
@@ -2076,5 +2078,153 @@ describe("get_involvement over a connection (#17228)", () => {
       )
     );
     await expect(bridge.getInvolvement()).resolves.toMatchObject(fromCopy);
+  });
+});
+
+describe("presence over a connection (#17240)", () => {
+  const teardown: Array<() => unknown> = [];
+
+  afterEach(async () => {
+    for (const step of teardown.splice(0)) await step();
+  });
+
+  const json = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+  /** A relay advertising `features` in `/info`, keeping each presence report Daintree sends. */
+  function presenceRelay(features: string[]) {
+    const reports: boolean[] = [];
+    const requests: string[] = [];
+    const wrapFetch =
+      (fetchImpl: RelayFetch): RelayFetch =>
+      async (url, init) => {
+        const { pathname } = new URL(url);
+        requests.push(`${init.method ?? "GET"} ${pathname}`);
+        if (pathname === "/api/v1/info") {
+          return json({
+            name: "daintree-decisions",
+            protocol_min: 1,
+            protocol_max: 1,
+            worker_version: "0.8.0",
+            claimed: true,
+            claim_configured: true,
+            voice: { xai: false, anthropic: false, openai: false },
+            features,
+          });
+        }
+        if (pathname === "/api/v1/presence" && init.method === "PUT") {
+          const { present } = JSON.parse(String(init.body)) as { present: boolean };
+          reports.push(present);
+          return json({
+            present,
+            until: present ? new Date(Date.now() + 60_000).toISOString() : null,
+          });
+        }
+        return fetchImpl(url, init);
+      };
+    return { wrapFetch, reports, requests };
+  }
+
+  /** What the owner's presence reads, and whether it may be reported; no Electron watchers. */
+  function presenceState() {
+    const state = { presence: "present" as UserPresence, allowed: true };
+    const watch: PresenceWatchers = {
+      onSuspend: () => () => {},
+      onResume: () => () => {},
+      onChange: () => () => {},
+    };
+    return {
+      state,
+      presence: { read: () => state.presence, allowed: () => state.allowed, watch },
+    };
+  }
+
+  async function connected(
+    relay: ReturnType<typeof presenceRelay>,
+    presence: ReturnType<typeof presenceState>["presence"]
+  ): Promise<Harness> {
+    const h = await harness({ wrapFetch: relay.wrapFetch, overrides: { presence } });
+    teardown.push(() => h.connection.stop());
+    h.connection.start();
+    await connectLive(h);
+    return h;
+  }
+
+  it("tells the relay while the person is here, and that they left once they're away", async () => {
+    const relay = presenceRelay(["presence-v1"]);
+    const { state, presence } = presenceState();
+    const h = await connected(relay, presence);
+    await vi.waitFor(() => expect(relay.reports).toEqual([true]));
+
+    state.presence = "away";
+    h.connection.presenceChanged();
+    await vi.waitFor(() => expect(relay.reports).toEqual([true, false]));
+  });
+
+  it("tells the relay nothing while presence isn't allowed, and starts and ends as that changes", async () => {
+    const report = vi.spyOn(DecisionsBridge.prototype, "reportPresence");
+    const relay = presenceRelay(["presence-v1"]);
+    const { state, presence } = presenceState();
+    state.allowed = false;
+    const h = await connected(relay, presence);
+    await vi.advanceTimersByTimeAsync(PRESENCE_TICK_MS * 2);
+    expect(report).not.toHaveBeenCalled();
+    expect(relay.requests).not.toContain("PUT /api/v1/presence");
+
+    state.allowed = true;
+    h.connection.presenceChanged();
+    await vi.waitFor(() => expect(relay.reports).toEqual([true]));
+
+    state.allowed = false;
+    h.connection.presenceChanged();
+    await vi.waitFor(() => expect(relay.reports).toEqual([true, false]));
+    expect(report.mock.calls.map(([present]) => present)).toEqual([true, false]);
+  });
+
+  it("counts unknown presence as away: nothing is reported", async () => {
+    const report = vi.spyOn(DecisionsBridge.prototype, "reportPresence");
+    const relay = presenceRelay(["presence-v1"]);
+    const { state, presence } = presenceState();
+    state.presence = "unknown";
+    await connected(relay, presence);
+    await vi.advanceTimersByTimeAsync(PRESENCE_TICK_MS * 2);
+    expect(report).not.toHaveBeenCalled();
+    expect(relay.requests).not.toContain("PUT /api/v1/presence");
+  });
+
+  it("tells each new attempt's bridge at once, not a tick later", async () => {
+    const relay = presenceRelay(["presence-v1"]);
+    const { presence } = presenceState();
+    const h = await connected(relay, presence);
+    await vi.waitFor(() => expect(relay.reports).toEqual([true]));
+
+    expect(h.connection.refresh()).toBe(true);
+    await connectLive(h, 1);
+    await vi.waitFor(() => expect(relay.reports).toEqual([true, true]));
+  });
+
+  it("sends a relay that doesn't serve presence nothing for it", async () => {
+    const relay = presenceRelay(["thread-messages-v1", "involvement-v1"]);
+    const { presence } = presenceState();
+    await connected(relay, presence);
+    await vi.waitFor(() => expect(relay.requests).toContain("GET /api/v1/info"));
+    await vi.advanceTimersByTimeAsync(PRESENCE_TICK_MS * 2);
+    expect(relay.requests).not.toContain("PUT /api/v1/presence");
+  });
+
+  it("stops following presence when the connection stops", async () => {
+    const relay = presenceRelay(["presence-v1"]);
+    const read = vi.fn<() => UserPresence>(() => "present");
+    const { presence } = presenceState();
+    const h = await connected(relay, { ...presence, read });
+    await vi.waitFor(() => expect(relay.reports).toEqual([true]));
+    await h.connection.stop();
+    const reads = read.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(PRESENCE_TICK_MS * 3);
+    h.connection.presenceChanged();
+    expect(read).toHaveBeenCalledTimes(reads);
   });
 });

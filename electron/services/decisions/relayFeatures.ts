@@ -21,9 +21,11 @@ import type { EventsPage, ProtocolFeature } from "@daintreehq/decisions-protocol
  * decline this computer's questions, and each Remote Host's once that Host
  * runs this Daintree. From 0.8.0 the library also asks for
  * `owner-desktop-messages-v1` with follow-ups: it stays cut here until the
- * person's follow-ups from this computer (#17238), and `presence-v1` until
- * presence (#17240). Setting the involvement preference from this computer
- * (#17237) has no token of its own: it rides `involvement-v1`.
+ * person's follow-ups from this computer (#17238). `presence-v1` is a relay's
+ * to advertise in `/info`, never a desktop's to declare: presence (#17240) is
+ * reported only to a relay that lists it. Setting the involvement preference
+ * from this computer (#17237) has no token of its own: it rides
+ * `involvement-v1`.
  */
 export const DAINTREE_PROTOCOL_FEATURES: readonly ProtocolFeature[] = [
   "thread-messages-v1",

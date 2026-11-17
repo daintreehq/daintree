@@ -823,11 +823,15 @@ function presenceAllowed(): boolean {
     !shutDown &&
     settings.enabled &&
     settings.holdPhonePushes &&
-    store.get("notificationSettings").enabled !== false
+    store.get("notificationSettings")?.enabled !== false
   );
 }
 
 const presenceDeps: DecisionsPresenceDeps = { allowed: presenceAllowed };
+
+// Turning desktop notifications off ends presence at once, and on starts it.
+// This module loads only once Decisions is on, so vanilla Daintree never listens.
+onNotificationSettingsWritten(() => service?.presenceChanged());
 
 function serialize<T>(step: () => Promise<T>): Promise<T> {
   const run = transitions.then(step);
@@ -865,8 +869,6 @@ export function getDecisionsService(): Promise<DecisionsService> {
         checkDiskSpace,
         onStoreReplacing: cancelSetupCheckForStore,
       });
-      // Turning desktop notifications off ends presence at once, and on starts it.
-      onNotificationSettingsWritten(() => next.presenceChanged());
       next.onStatusChanged((event) => {
         // A Host enrolls no Hosts: only an owner's lifetime does.
         hostEnrollerFollows(next.getRole() === "host" ? "off" : event.status.state);

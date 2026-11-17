@@ -2335,6 +2335,65 @@ describe("DecisionsService terminal snapshots (#16230)", () => {
   });
 });
 
+describe("DecisionsService presence (#17240)", () => {
+  const RELAY = {
+    relayOrigin: "https://relay.example.com",
+    installationId: "inst_12345678",
+    deviceId: "dev_12345678",
+    hostId: "host_12345678",
+  };
+
+  function reporting() {
+    const made: Array<{ options: RelayConnectionOptions; changed: number }> = [];
+    const allowed = vi.fn(() => true);
+    const service = new DecisionsService({
+      openStore: async () => fakeStore(),
+      keyFilePath: () => ABSENT_KEY_FILE,
+      presence: { allowed },
+      connect: (options) => {
+        const record = { options, changed: 0 };
+        made.push(record);
+        return {
+          start: () => {},
+          stop: () => {},
+          presenceChanged: () => {
+            record.changed += 1;
+          },
+        };
+      },
+    });
+    return { service, made, allowed };
+  }
+
+  it("gives the owner's connection presence to report, and a Remote Host's none", async () => {
+    const { service, made, allowed } = reporting();
+
+    await service.start(on(RELAY));
+    expect(made[0]!.options.role).toBe("owner-desktop");
+    expect(made[0]!.options.presence?.allowed()).toBe(true);
+    expect(allowed).toHaveBeenCalledTimes(1);
+
+    await service.start(on(RELAY), "host");
+    expect(made[1]!.options.role).toBe("desktop-host");
+    expect(made[1]!.options.presence).toBeUndefined();
+    await service.stop();
+  });
+
+  it("passes each change of what presence depends on to the running connection only", async () => {
+    const { service, made } = reporting();
+    service.presenceChanged();
+    expect(made).toHaveLength(0);
+
+    await service.start(on(RELAY));
+    service.presenceChanged();
+    expect(made[0]!.changed).toBe(1);
+
+    await service.dispose();
+    service.presenceChanged();
+    expect(made[0]!.changed).toBe(1);
+  });
+});
+
 describe("DecisionsService removing a revoked Host's keys (#16022)", () => {
   it("refuses while a lifetime runs, and reads the file in its own turn when stopped", async () => {
     const service = new DecisionsService({

@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { sanitizeNotificationSettingsPatch } from "../notificationSettingsPatch.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  notificationSettingsWritten,
+  onNotificationSettingsWritten,
+  sanitizeNotificationSettingsPatch,
+} from "../notificationSettingsPatch.js";
 
 const ALLOWED = new Set(["chime.wav", "ping.wav"]);
 
@@ -104,5 +108,30 @@ describe("sanitizeNotificationSettingsPatch", () => {
 
     const dropped = Object.keys(requested).filter((key) => !(key in result));
     expect(dropped).toEqual(["completedSoundFile"]);
+  });
+});
+
+describe("notification settings writes (#17240)", () => {
+  it("tells each listener of a write until it unsubscribes, past one that throws", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const heard = vi.fn();
+    const off = onNotificationSettingsWritten(heard);
+    const offThrowing = onNotificationSettingsWritten(() => {
+      throw new Error("listener broke");
+    });
+    const after = vi.fn();
+    const offAfter = onNotificationSettingsWritten(after);
+
+    notificationSettingsWritten();
+    expect(heard).toHaveBeenCalledTimes(1);
+    expect(after).toHaveBeenCalledTimes(1);
+
+    off();
+    offThrowing();
+    offAfter();
+    notificationSettingsWritten();
+    expect(heard).toHaveBeenCalledTimes(1);
+    expect(after).toHaveBeenCalledTimes(1);
+    error.mockRestore();
   });
 });
