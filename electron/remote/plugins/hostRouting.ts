@@ -40,7 +40,12 @@ export function createPluginFrontendRouter(deps: PluginHostRoutingDeps = {}): Pl
   const registry = deps.registry ?? getEndpointRegistry();
   const hasLocalProjectView =
     deps.hasLocalProjectView ?? ((projectId) => resolveProjectWebContents(projectId) !== null);
-  const hasLocalView = deps.hasLocalView ?? (() => resolveAmbientWebContents() !== null);
+  // Whether any window here could take the work, a Remote Host's included:
+  // what may act or ask in it is each call's own target choice (#17214), and
+  // an ambient agents.list read answers from it, naming the host (#16845).
+  const hasLocalView =
+    deps.hasLocalView ??
+    (() => resolveAmbientWebContents({ includeRemoteHostViews: true }) !== null);
 
   const forProject = (projectId: string): PluginFrontend => {
     const target = lease.getDriveTarget(projectId);

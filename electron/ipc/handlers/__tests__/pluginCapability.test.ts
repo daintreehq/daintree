@@ -129,6 +129,7 @@ import {
   registerAppView,
   registerCachedViewWebContents,
   registerProjectView,
+  registerWebContents,
   unregisterAppView,
   unregisterProjectView,
 } from "../../../window/webContentsRegistry.js";
@@ -191,6 +192,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  liveWebContents.clear();
   _resetCapabilityConsentBridgeForTest();
   _resetPluginCapabilityServicesForTest();
   if (harness) unregisterAppView(harness.win as never);
@@ -771,15 +773,53 @@ describe("pluginCapability consent bridge — where a local plugin's prompt may 
 
   it("prefers the focused window when the project is open in more than one", async () => {
     const dispose = registerPluginCapabilityHandlers();
-    const first = openWindow("proj-a");
-    const second = openWindow("proj-a");
-    focusedInstead = second.win;
+    const focused = openWindow("proj-a");
+    showInPrimary("proj-a");
+    const other = openWindow("proj-a");
+    focusedInstead = focused.win;
 
     const settled = startProjectGatedCall("proj-a");
 
-    expect(first.appWebContents.send).not.toHaveBeenCalled();
-    expect(second.appWebContents.send).toHaveBeenCalledTimes(1);
-    await approveIn(second.appWebContents);
+    expect(harness!.appWebContents.send).not.toHaveBeenCalled();
+    expect(other.appWebContents.send).not.toHaveBeenCalled();
+    expect(focused.appWebContents.send).toHaveBeenCalledTimes(1);
+    await approveIn(focused.appWebContents);
+    await expect(settled).resolves.toEqual({ ok: true });
+    dispose();
+  });
+
+  it("then the primary window, when the focused one shows something else", async () => {
+    const dispose = registerPluginCapabilityHandlers();
+    const before = openWindow("proj-a");
+    showInPrimary("proj-a");
+    const after = openWindow("proj-a");
+    focusedInstead = openWindow("proj-b").win;
+
+    const settled = startProjectGatedCall("proj-a");
+
+    expect(before.appWebContents.send).not.toHaveBeenCalled();
+    expect(after.appWebContents.send).not.toHaveBeenCalled();
+    expect(harness!.appWebContents.send).toHaveBeenCalledTimes(1);
+    await approveIn(harness!.appWebContents);
+    await expect(settled).resolves.toEqual({ ok: true });
+    dispose();
+  });
+
+  it("asks in the project's view a window still shows while it switches away", async () => {
+    const dispose = registerPluginCapabilityHandlers();
+    // The window's app view is already the incoming project's, while the
+    // outgoing one stays on screen, not yet cached, until the incoming paints.
+    const switching = openWindow("proj-b");
+    const outgoing = makeWebContents();
+    looseViews.push(outgoing);
+    registerWebContents(outgoing as never, switching.win as never);
+    registerProjectView("proj-a", outgoing as never);
+
+    const settled = startProjectGatedCall("proj-a");
+
+    expect(switching.appWebContents.send).not.toHaveBeenCalled();
+    expect(outgoing.send).toHaveBeenCalledTimes(1);
+    await approveIn(outgoing);
     await expect(settled).resolves.toEqual({ ok: true });
     dispose();
   });
@@ -796,13 +836,11 @@ describe("pluginCapability consent bridge — where a local plugin's prompt may 
   it("settles undeliverable when the project's only view is cached out of sight", async () => {
     const dispose = registerPluginCapabilityHandlers();
     showInPrimary("proj-b");
-    const cached = makeWebContents();
-    looseViews.push(cached);
-    registerProjectView("proj-a", cached as never);
-    registerCachedViewWebContents(cached as never);
+    const projectA = openWindow("proj-a");
+    registerCachedViewWebContents(projectA.appWebContents as never);
 
     expectUndeliverable(await startProjectGatedCall("proj-a"));
-    expect(cached.send).not.toHaveBeenCalled();
+    expect(projectA.appWebContents.send).not.toHaveBeenCalled();
     expect(harness!.appWebContents.send).not.toHaveBeenCalled();
     dispose();
   });
@@ -839,6 +877,31 @@ describe("pluginCapability consent bridge — where a local plugin's prompt may 
     expect(projectA.appWebContents.send).toHaveBeenCalledTimes(1);
     await approveIn(projectA.appWebContents);
     await expect(settled).resolves.toEqual({ ok: true });
+    dispose();
+  });
+
+  it("asks an app-global plugin's question in the focused window ahead of the primary one", async () => {
+    const dispose = registerPluginCapabilityHandlers();
+    showInPrimary("proj-b");
+    const focused = openWindow("proj-a");
+    focusedInstead = focused.win;
+
+    const settled = startGatedCall();
+
+    expect(harness!.appWebContents.send).not.toHaveBeenCalled();
+    expect(focused.appWebContents.send).toHaveBeenCalledTimes(1);
+    await approveIn(focused.appWebContents);
+    await expect(settled).resolves.toEqual({ ok: true });
+    dispose();
+  });
+
+  it("refuses a Remote Host's view even when a project id names that host", async () => {
+    const dispose = registerPluginCapabilityHandlers();
+    const remote = openWindow(`${REMOTE_HOST}:proj-a`);
+    focusedInstead = remote.win;
+
+    expectUndeliverable(await startProjectGatedCall(`${REMOTE_HOST}:proj-a`));
+    expect(remote.appWebContents.send).not.toHaveBeenCalled();
     dispose();
   });
 

@@ -32,8 +32,8 @@ export function isRemoteHostView(webContentsId: number): boolean {
 export interface AmbientWebContentsOptions {
   /**
    * Also accept a view of a Remote Host's project. Only for a read that names
-   * the host it answered from; anything that acts or asks stays on this
-   * machine's views.
+   * the host it answered from, or a check that a window is open at all;
+   * anything that acts or asks stays on this machine's views.
    */
   includeRemoteHostViews?: boolean;
 }

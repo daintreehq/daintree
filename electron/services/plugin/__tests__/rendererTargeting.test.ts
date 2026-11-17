@@ -44,9 +44,14 @@ function windowShowing(active: FakeView) {
   };
 }
 
-function useRegistry(primary: FakeView | null, others: FakeView[]): void {
+/** A registry whose `all()` lists `before`, then the primary window, then `others`. */
+function useRegistry(primary: FakeView | null, others: FakeView[], before: FakeView[] = []): void {
   const primaryCtx = primary ? windowShowing(primary) : undefined;
-  const all = [...(primaryCtx ? [primaryCtx] : []), ...others.map(windowShowing)];
+  const all = [
+    ...before.map(windowShowing),
+    ...(primaryCtx ? [primaryCtx] : []),
+    ...others.map(windowShowing),
+  ];
   state.registry = { getPrimary: () => primaryCtx, all: () => all };
 }
 
@@ -89,6 +94,12 @@ describe("isRemoteHostView", () => {
 });
 
 describe("resolveAmbientWebContents (#17214)", () => {
+  it("asks the primary window first, wherever the registry lists it", () => {
+    const primary = view("proj-primary");
+    useRegistry(primary, [], [view("proj-listed-first")]);
+    expect(resolveAmbientWebContents()).toBe(primary.webContents);
+  });
+
   it("passes over a primary window showing a Remote Host's project for a local one", () => {
     const remote = view("staging-server:proj-r");
     const local = view("proj-local");
@@ -112,6 +123,13 @@ describe("resolveAmbientWebContents (#17214)", () => {
     expect(resolveAmbientWebContents()).toBe(local.webContents);
   });
 
+  it("reaches the process-wide view manager when every registered window is on a Remote Host", () => {
+    const local = view("proj-local");
+    useRegistry(view("staging-server:proj-r"), [view("other-host:proj-s")]);
+    state.singletonView = local;
+    expect(resolveAmbientWebContents()).toBe(local.webContents);
+  });
+
   it("applies the same rule to the process-wide view manager's fallback", () => {
     const local = view("proj-local");
     state.singletonView = view("staging-server:proj-r");
@@ -124,5 +142,18 @@ describe("resolveAmbientWebContents (#17214)", () => {
     const remote = view("staging-server:proj-r");
     useRegistry(remote, [view("proj-local")]);
     expect(resolveAmbientWebContents({ includeRemoteHostViews: true })).toBe(remote.webContents);
+  });
+
+  it("lets that read reach a Remote Host's view anywhere down the chain", () => {
+    const listed = view("staging-server:proj-r");
+    useRegistry(null, [listed]);
+    expect(resolveAmbientWebContents()).toBeNull();
+    expect(resolveAmbientWebContents({ includeRemoteHostViews: true })).toBe(listed.webContents);
+
+    state.registry = null;
+    const singleton = view("staging-server:proj-s");
+    state.singletonView = singleton;
+    expect(resolveAmbientWebContents()).toBeNull();
+    expect(resolveAmbientWebContents({ includeRemoteHostViews: true })).toBe(singleton.webContents);
   });
 });
