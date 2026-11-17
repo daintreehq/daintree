@@ -1295,6 +1295,119 @@ describe("ReviewHub", () => {
       });
     });
 
+    describe("a selection that fails partway (#17568)", () => {
+      const modified = (path: string) => ({
+        path,
+        status: "modified" as const,
+        insertions: 1,
+        deletions: 0,
+      });
+      const stagedSection = () => screen.getByTestId("review-hub-file-section-staged");
+      const unstagedSection = () => screen.getByTestId("review-hub-file-section-unstaged");
+
+      it("shows what landed, and its Retry stages only the paths still unstaged", async () => {
+        await renderHub();
+        fireEvent.click(screen.getByTestId("file-stage-row-src/x.ts"), { metaKey: true });
+        fireEvent.click(screen.getByTestId("file-stage-row-src/z.ts"), { shiftKey: true });
+        await waitFor(() => {
+          expect(screen.getByTestId("review-hub-stage-section-button").textContent).toMatch(
+            /Stage selection \(3\)/i
+          );
+        });
+
+        // The first batch staged x before git stopped; the next read shows it.
+        stageFilesMock.mockRejectedValueOnce(
+          new Error("Staged 1 of 3 files before Git stopped: index.lock exists")
+        );
+        getStagingStatusMock.mockResolvedValue(
+          makeStatus({
+            staged: [modified("src/a.ts"), modified("src/x.ts")],
+            unstaged: [modified("src/y.ts"), modified("src/z.ts")],
+          })
+        );
+        fireEvent.click(screen.getByTestId("review-hub-stage-section-button"));
+
+        await screen.findByText("Couldn't stage selected files");
+        expect(screen.getByText(/Staged 1 of 3 files before Git stopped/)).toBeTruthy();
+        await waitFor(() =>
+          expect(within(stagedSection()).queryByTestId("file-stage-row-src/x.ts")).not.toBeNull()
+        );
+        expect(within(unstagedSection()).queryByTestId("file-stage-row-src/x.ts")).toBeNull();
+
+        await act(async () => {
+          fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+        });
+
+        await waitFor(() => expect(stageFilesMock).toHaveBeenCalledTimes(2));
+        expect(stageFilesMock).toHaveBeenNthCalledWith(1, WORKTREE_PATH, [
+          "src/x.ts",
+          "src/y.ts",
+          "src/z.ts",
+        ]);
+        expect(stageFilesMock).toHaveBeenNthCalledWith(2, WORKTREE_PATH, ["src/y.ts", "src/z.ts"]);
+        await waitFor(() => expect(screen.queryByText("Couldn't stage selected files")).toBeNull());
+      });
+
+      it("clears the failure without calling git when a Retry finds nothing left to stage", async () => {
+        await renderHub();
+        fireEvent.click(screen.getByTestId("file-stage-row-src/x.ts"), { metaKey: true });
+        await waitFor(() => {
+          expect(screen.getByTestId("review-hub-stage-section-button").textContent).toMatch(
+            /Stage selection \(1\)/i
+          );
+        });
+
+        stageFilesMock.mockRejectedValueOnce(new Error("index.lock exists"));
+        // Staged meanwhile, by another tool.
+        getStagingStatusMock.mockResolvedValue(
+          makeStatus({
+            staged: [modified("src/x.ts")],
+            unstaged: [modified("src/y.ts"), modified("src/z.ts")],
+          })
+        );
+        fireEvent.click(screen.getByTestId("review-hub-stage-section-button"));
+        await screen.findByText("Couldn't stage selected files");
+        await waitFor(() =>
+          expect(within(stagedSection()).queryByTestId("file-stage-row-src/x.ts")).not.toBeNull()
+        );
+
+        await act(async () => {
+          fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+        });
+
+        await waitFor(() => expect(screen.queryByText("Couldn't stage selected files")).toBeNull());
+        expect(stageFilesMock).toHaveBeenCalledTimes(1);
+      });
+
+      it("shows what landed when an unstage selection fails partway", async () => {
+        await renderHub();
+        fireEvent.click(screen.getByTestId("file-stage-row-src/a.ts"), { metaKey: true });
+        fireEvent.click(screen.getByTestId("file-stage-row-src/b.ts"), { metaKey: true });
+        await waitFor(() => {
+          expect(screen.getByTestId("review-hub-unstage-section-button").textContent).toMatch(
+            /Unstage selection \(2\)/i
+          );
+        });
+
+        unstageFilesMock.mockRejectedValueOnce(
+          new Error("Unstaged 1 of 2 files before Git stopped: index.lock exists")
+        );
+        getStagingStatusMock.mockResolvedValue(
+          makeStatus({
+            staged: [modified("src/b.ts"), modified("src/c.ts")],
+            unstaged: [modified("src/a.ts"), modified("src/x.ts")],
+          })
+        );
+        fireEvent.click(screen.getByTestId("review-hub-unstage-section-button"));
+
+        await screen.findByText("Couldn't unstage selected files");
+        await waitFor(() =>
+          expect(within(unstagedSection()).queryByTestId("file-stage-row-src/a.ts")).not.toBeNull()
+        );
+        expect(within(stagedSection()).queryByTestId("file-stage-row-src/a.ts")).toBeNull();
+      });
+    });
+
     it("guards against rapid double-clicks — only one IPC call is issued", async () => {
       // Hold the resolution of stageFiles so a second click can land before it completes.
       let resolveStageFiles!: () => void;

@@ -3,6 +3,7 @@ import type { Dispatch, RefObject, SetStateAction } from "react";
 import type { StagingFileEntry } from "@shared/types";
 import type { debounce } from "@/utils/debounce";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { useLatestGetter } from "@/hooks/useLatestGetter";
 import type { FileStageRowSection } from "./FileStageRow";
 
 /**
@@ -27,6 +28,8 @@ interface UseReviewHubStagingActionsArgs {
   refresh: () => Promise<void>;
   derivedStaged: StagingFileEntry[];
   derivedUnstaged: StagingFileEntry[];
+  /** Every unstaged row as last read, before any filter. */
+  unstaged: readonly StagingFileEntry[];
   selectedPaths: Set<string>;
   selectionSection: FileStageRowSection | null;
   setActionError: (failure: ReviewHubActionFailure | null) => void;
@@ -54,6 +57,7 @@ export function useReviewHubStagingActions({
   refresh,
   derivedStaged,
   derivedUnstaged,
+  unstaged,
   selectedPaths,
   selectionSection,
   setActionError,
@@ -63,6 +67,19 @@ export function useReviewHubStagingActions({
   debouncedBgRefreshRef,
 }: UseReviewHubStagingActionsArgs): UseReviewHubStagingActionsReturn {
   const isBulkStagingRef = useRef(false);
+  const getUnstaged = useLatestGetter(unstaged);
+
+  // A large stage runs in batches, so one that failed partway has already
+  // staged some paths. Its Retry sends only the paths still unstaged: git
+  // refuses to add a deletion it has already staged, so a replay of the whole
+  // list would fail on it every time.
+  const stillUnstaged = useCallback(
+    (paths: readonly string[]): string[] => {
+      const live = new Set(getUnstaged().map((file) => file.path));
+      return paths.filter((path) => live.has(path));
+    },
+    [getUnstaged]
+  );
 
   const handleStageFile = useCallback(
     async (filePath: string) => {
@@ -145,23 +162,30 @@ export function useReviewHubStagingActions({
   const handleStageFiltered = useCallback(async () => {
     const paths = derivedUnstaged.map((f) => f.path);
     if (paths.length === 0) return;
-    const attempt = async (): Promise<void> => {
+    const attempt = async (scope: string[]): Promise<void> => {
       setActionError(null);
       debouncedBgRefreshRef.current?.cancel();
       try {
-        await window.electron.git.stageFiles(worktreePath, paths);
+        if (scope.length > 0) await window.electron.git.stageFiles(worktreePath, scope);
       } catch (err) {
         setActionError({
           title: "Couldn't stage files",
           detail: formatErrorMessage(err, "Failed to stage files"),
-          retry: () => void attempt(),
+          retry: () => void attempt(stillUnstaged(paths)),
         });
       } finally {
         await refresh();
       }
     };
-    await attempt();
-  }, [worktreePath, refresh, derivedUnstaged, setActionError, debouncedBgRefreshRef]);
+    await attempt(paths);
+  }, [
+    worktreePath,
+    refresh,
+    derivedUnstaged,
+    setActionError,
+    debouncedBgRefreshRef,
+    stillUnstaged,
+  ]);
 
   const handleUnstageFiltered = useCallback(async () => {
     const paths = derivedStaged.map((f) => f.path);
@@ -202,8 +226,9 @@ export function useReviewHubStagingActions({
       // is pressed the selection may have moved on.
       const retry = async (): Promise<void> => {
         setActionError(null);
+        const scope = stillUnstaged(paths);
         try {
-          await window.electron.git.stageFiles(worktreePath, paths);
+          if (scope.length > 0) await window.electron.git.stageFiles(worktreePath, scope);
         } catch (retryErr) {
           setActionError({
             title: "Couldn't stage files",
@@ -219,6 +244,8 @@ export function useReviewHubStagingActions({
         detail: formatErrorMessage(err, "Failed to stage selected files"),
         retry: () => void retry(),
       });
+      // Part of a large selection may have landed before the failure.
+      await refresh();
     } finally {
       isBulkStagingRef.current = false;
     }
@@ -232,6 +259,7 @@ export function useReviewHubStagingActions({
     setSelectionSection,
     selectionAnchorRef,
     debouncedBgRefreshRef,
+    stillUnstaged,
   ]);
 
   const handleUnstageSelection = useCallback(async () => {
@@ -269,6 +297,8 @@ export function useReviewHubStagingActions({
         detail: formatErrorMessage(err, "Failed to unstage selected files"),
         retry: () => void retry(),
       });
+      // Part of a large selection may have landed before the failure.
+      await refresh();
     } finally {
       isBulkStagingRef.current = false;
     }
