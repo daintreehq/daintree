@@ -2,6 +2,7 @@ import net from "node:net";
 import type {
   CloudAccountCheckResult,
   CloudBillingScope,
+  CloudCredentialValues,
   CloudHostError,
   CloudMachineType,
   CloudProviderInfo,
@@ -37,6 +38,27 @@ import {
   parsePublicKey,
   type ParsedPublicKey,
 } from "./digitalOceanUserData.js";
+
+const MAX_TOKEN_LENGTH = 4096;
+
+function invalidToken(message: string): AppError {
+  return new AppError({ code: "VALIDATION", message, userMessage: message });
+}
+
+/** The personal access token from an entered set: one line of printable ASCII, as DigitalOcean issues them. */
+export function digitalOceanToken(values: Readonly<CloudCredentialValues>): string {
+  const token = values.apiKey;
+  if (typeof token !== "string" || token.length === 0) {
+    throw invalidToken("Paste a personal access token.");
+  }
+  if (/PRIVATE KEY/.test(token)) throw invalidToken("That's a private key, not an access token.");
+  if (token.length > MAX_TOKEN_LENGTH || !/^[\x21-\x7e]+$/.test(token)) {
+    throw invalidToken(
+      "That doesn't look like an access token: it should be one line of letters, digits and symbols."
+    );
+  }
+  return token;
+}
 
 /** DigitalOcean's tag alphabet; a label is kept as the tag `key:value`. */
 const TAG = /^[A-Za-z0-9_:-]{1,255}$/;
@@ -261,16 +283,19 @@ export class DigitalOceanProvider implements CloudProvider {
   }
 
   private ctx(credentials: ProviderCredentials): DigitalOceanRequestContext {
-    return { token: credentials.apiKey, signal: credentials.signal };
+    const token = credentials.values.apiKey;
+    // Never sent without one: an empty bearer would only come back as DigitalOcean's refusal.
+    if (!token) throw new DigitalOceanApiError("unauthorized", "No token", null, null, null);
+    return { token, signal: credentials.signal };
   }
 
-  async checkKey(
-    apiKey: string,
+  async checkCredentials(
+    values: Readonly<CloudCredentialValues>,
     apiUrl: string,
     signal?: AbortSignal
   ): Promise<CloudAccountCheckResult> {
     const client = this.clientFor(apiUrl);
-    const ctx = { token: apiKey, signal };
+    const ctx = { token: digitalOceanToken(values), signal };
     const account = await client.account(ctx);
     // Signing in isn't enough: the token must be allowed to see Droplets.
     await client.probeDroplets(ctx);

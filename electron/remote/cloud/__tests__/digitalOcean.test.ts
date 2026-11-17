@@ -100,7 +100,7 @@ function providerWith(responses: Responder[]) {
     async () => {}
   );
   const credentials: ProviderCredentials = {
-    apiKey: TOKEN,
+    values: { apiKey: TOKEN },
     scopeId: "team-uuid",
     apiUrl: "https://do.test/v2",
   };
@@ -400,6 +400,19 @@ describe("dropletResource", () => {
 });
 
 describe("DigitalOceanProvider", () => {
+  it("refuses a token of the wrong shape before asking DigitalOcean", async () => {
+    const { provider, fetch } = providerWith([]);
+    for (const apiKey of ["", "two words", "-----BEGIN OPENSSH PRIVATE KEY-----"]) {
+      await expect(
+        provider.checkCredentials({ apiKey }, "https://do.test/v2")
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+    }
+    await expect(
+      provider.validate({ values: {}, scopeId: "team-uuid", apiUrl: "https://do.test/v2" })
+    ).rejects.toMatchObject({ kind: "unauthorized" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("meets the registry's contract as a built-in", () => {
     const { provider } = providerWith([]);
     const registry = new CloudProviderRegistry();
@@ -428,7 +441,7 @@ describe("DigitalOceanProvider", () => {
       jsonResponse(200, ACCOUNT),
       jsonResponse(200, { droplets: [], links: {} }),
     ]);
-    expect(await provider.checkKey(TOKEN, "https://do.test/v2")).toEqual({
+    expect(await provider.checkCredentials({ apiKey: TOKEN }, "https://do.test/v2")).toEqual({
       identity: "person@example.com",
       scopes: [
         { scope: { kind: "organization", id: "team-uuid", name: "Web team" }, active: true },
@@ -442,7 +455,7 @@ describe("DigitalOceanProvider", () => {
       jsonResponse(200, { account: { ...ACCOUNT.account, team: undefined } }),
       jsonResponse(200, { droplets: [], links: {} }),
     ]);
-    const checked = await provider.checkKey(TOKEN, "https://do.test/v2");
+    const checked = await provider.checkCredentials({ apiKey: TOKEN }, "https://do.test/v2");
     expect(checked.scopes[0]!.scope).toEqual({
       kind: "personal",
       id: "acct-uuid",
@@ -455,7 +468,9 @@ describe("DigitalOceanProvider", () => {
       jsonResponse(200, ACCOUNT),
       jsonResponse(403, { id: "forbidden", message: "You are not authorized" }),
     ]);
-    const error = await provider.checkKey(TOKEN, "https://do.test/v2").catch((e: unknown) => e);
+    const error = await provider
+      .checkCredentials({ apiKey: TOKEN }, "https://do.test/v2")
+      .catch((e: unknown) => e);
     expect(provider.describeError(error).code).toBe("permission");
   });
 
@@ -875,7 +890,7 @@ describe("DigitalOceanProvider", () => {
       () => clock
     );
     const resource = await provider.stop(
-      { apiKey: TOKEN, scopeId: "team-uuid", apiUrl: "https://do.test/v2" },
+      { values: { apiKey: TOKEN }, scopeId: "team-uuid", apiUrl: "https://do.test/v2" },
       "3164444"
     );
     expect(new Set(reads.map((at, i) => at - (reads[i - 1] ?? 0)))).toEqual(new Set([3000]));
