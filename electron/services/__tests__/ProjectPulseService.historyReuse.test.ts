@@ -55,6 +55,7 @@ function createRepo(state: RepoState) {
       return `${state.headSha}\n`;
     }
     if (isBranchLookup(args)) return `${state.branch}\n`;
+    if (args[0] === "rev-parse" && args.includes("--quiet")) return "basesha\n";
     if (isShallowCheck(args)) return state.shallow ? "true\n" : "false\n";
     if (isRootWalk(args)) {
       if (state.failRootWalk) throw new Error("fatal: unable to read tree");
@@ -103,19 +104,6 @@ async function loadService(raw: (args: string[], signal?: AbortSignal) => Promis
   }));
   const { ProjectPulseService } = await import("../ProjectPulseService.js");
   return new ProjectPulseService();
-}
-
-function localDate(zone: string, at: Date): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(at);
-}
-
-// Another zone on the same local date, so a cache miss can only come from the zone itself.
-function otherZoneOnSameDay(at: Date): string {
-  const current = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const candidates = ["Europe/Paris", "Europe/London", "Africa/Cairo", "Asia/Dubai", "UTC"];
-  const zone = candidates.find((z) => z !== current && localDate(z, at) === localDate(current, at));
-  if (!zone) throw new Error(`no same-day zone for ${current}`);
-  return zone;
 }
 
 describe("ProjectPulseService range-independent history reuse", () => {
@@ -209,8 +197,14 @@ describe("ProjectPulseService range-independent history reuse", () => {
 
   it("answers for the day a compute started in when midnight lands mid-compute", async () => {
     vi.setSystemTime(new Date(2025, 0, 15, 23, 59, 50));
-    const gate = deferred();
-    state.gate = (args) => (isStreakLog(args) ? gate.promise : undefined);
+    const walk = deferred();
+    const firstHeatmap = deferred();
+    let heatmapLogs = 0;
+    state.gate = (args) => {
+      if (isStreakLog(args)) return walk.promise;
+      if (isHeatmapLog(args) && heatmapLogs++ === 0) return firstHeatmap.promise;
+      return undefined;
+    };
     const { raw, count } = createRepo(state);
     const svc = await loadService(raw);
 
@@ -222,12 +216,20 @@ describe("ProjectPulseService range-independent history reuse", () => {
     expect(count(isHeatmapLog)).toBe(2);
     expect(count(isStreakLog)).toBe(1);
 
-    gate.resolve();
-    const [first, second] = await Promise.all([started, afterMidnight]);
-    expect(first.heatmap.at(-1)).toMatchObject({ date: "2025-01-15", isToday: true });
-    expect(first.currentStreakDays).toBe(2);
+    walk.resolve();
+    const second = await afterMidnight;
     expect(second.heatmap.at(-1)).toMatchObject({ date: "2025-01-16", isToday: true });
     expect(second.currentStreakDays).toBe(0);
+
+    // The pre-midnight compute settles last, still answering for Jan 15, and must not replace
+    // the Jan 16 entry.
+    firstHeatmap.resolve();
+    const first = await started;
+    expect(first.heatmap.at(-1)).toMatchObject({ date: "2025-01-15", isToday: true });
+    expect(first.currentStreakDays).toBe(2);
+
+    expect(await svc.getPulse(pulseOptions(180))).toBe(second);
+    expect(count(isHeatmapLog)).toBe(2);
   });
 
   it("walks again when HEAD moves but not when only the branch name changes", async () => {
@@ -245,14 +247,17 @@ describe("ProjectPulseService range-independent history reuse", () => {
 
     state.headSha = "cafef00d";
     state.commitTimestamps = [localNoon(2025, 0, 15), ...state.commitTimestamps];
-    const moved = await svc.getPulse(pulseOptions(120));
+    const moved = await svc.getPulse(pulseOptions(120, { includeDelta: true }));
     expect(count(isRootWalk)).toBe(2);
     expect(count(isStreakLog)).toBe(2);
     expect(moved.currentStreakDays).toBe(3);
-    // Every walk starts from the resolved SHA rather than whatever HEAD is by then.
+    // Every read starts from the resolved SHA rather than whatever HEAD is by then.
     for (const isWalk of [isRootWalk, isStreakLog, isHeatmapLog]) {
       expect(count((args) => isWalk(args) && args.includes("cafef00d"))).toBe(1);
     }
+    expect(moved.deltaToMain).toMatchObject({ baseBranch: "main", headBranch: "feature" });
+    expect(count((args) => args.includes("basesha...cafef00d"))).toBe(2);
+    expect(count((args) => args.some((a) => a.endsWith("...HEAD")))).toBe(0);
   });
 
   it("starts a separate walk for a new HEAD while the old HEAD's walk is still running", async () => {
@@ -273,6 +278,11 @@ describe("ProjectPulseService range-independent history reuse", () => {
 
     gate.resolve();
     expect((await old).currentStreakDays).toBe(2);
+
+    // The old HEAD's walk finished last; the new HEAD's history must still be the one kept.
+    const next = await svc.getPulse(pulseOptions(180));
+    expect(count(isStreakLog)).toBe(2);
+    expect(next.currentStreakDays).toBe(3);
   });
 
   it("drops reused history on invalidate, for that worktree only", async () => {
@@ -335,6 +345,27 @@ describe("ProjectPulseService range-independent history reuse", () => {
     const next = await svc.getPulse(pulseOptions(180));
     expect(count(isStreakLog)).toBe(2);
     expect(next.currentStreakDays).toBe(3);
+  });
+
+  it("does not let a forced refresh join a same-range compute already running", async () => {
+    const gate = deferred();
+    let streakLogs = 0;
+    state.gate = (args) => (isStreakLog(args) && streakLogs++ === 0 ? gate.promise : undefined);
+    const { raw, count } = createRepo(state);
+    const svc = await loadService(raw);
+
+    const ordinary = svc.getPulse(pulseOptions(60));
+    await vi.advanceTimersByTimeAsync(0);
+
+    state.commitTimestamps = [localNoon(2025, 0, 15), ...state.commitTimestamps];
+    const forced = await svc.getPulse(pulseOptions(60, { forceRefresh: true }));
+    expect(count(isHeatmapLog)).toBe(2);
+    expect(forced.currentStreakDays).toBe(3);
+
+    gate.resolve();
+    expect((await ordinary).currentStreakDays).toBe(2);
+    // The overtaken compute settled last but must not replace the forced result.
+    expect(await svc.getPulse(pulseOptions(60))).toBe(forced);
   });
 
   it("expires a Pulse built on reused history when that history expires", async () => {
@@ -500,11 +531,12 @@ describe("ProjectPulseService range-independent history reuse", () => {
     const { raw, count } = createRepo(state);
     const svc = await loadService(raw);
 
-    await svc.getPulse(pulseOptions(60));
-
+    // Two names for the same January offset, so the day matches and only the zone differs.
     const machineZone = process.env.TZ;
-    process.env.TZ = otherZoneOnSameDay(new Date());
     try {
+      process.env.TZ = "UTC";
+      await svc.getPulse(pulseOptions(60));
+      process.env.TZ = "Europe/London";
       await svc.getPulse(pulseOptions(60));
     } finally {
       if (machineZone === undefined) delete process.env.TZ;

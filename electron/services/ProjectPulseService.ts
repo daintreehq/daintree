@@ -55,6 +55,8 @@ interface HistoryEntry {
   facts: HistoryFacts;
   // When the walks started: the age a Pulse built on these facts inherits.
   timestamp: number;
+  // Start order of the load, so a slower walk of an older HEAD can't evict a newer one.
+  seq: number;
 }
 
 interface HistoryResult {
@@ -204,6 +206,7 @@ export class ProjectPulseService {
   private controllerUsers = new WeakMap<AbortController, number>();
   private historyCache = new Map<string, HistoryEntry>();
   private historyInFlight = new Map<string, Promise<HistoryResult>>();
+  private historyLoadSeq = 0;
 
   private getHistoryKey(worktreeId: string, worktreePath: string): string {
     return `${worktreeId}:${worktreePath}`;
@@ -290,11 +293,12 @@ export class ProjectPulseService {
       });
     }
 
-    // A request after midnight or a zone change must not join a compute answering for the old one.
+    // A request after midnight or a zone change must not join a compute answering for the old one,
+    // and a forced refresh must not join one that may be serving reused history.
     const calendar = readLocalCalendar();
     const flightKey = `${cacheKey}:${calendar.day}:${calendar.timeZone}`;
     const existing = this.inFlight.get(flightKey);
-    if (existing) {
+    if (existing && !options.forceRefresh) {
       return existing;
     }
 
@@ -303,14 +307,24 @@ export class ProjectPulseService {
     this.abortControllers.set(worktreeId, controller);
     this.controllerUsers.set(controller, (this.controllerUsers.get(controller) ?? 0) + 1);
 
-    const promise = (async () => {
+    const run = async (): Promise<ProjectPulse> => {
       try {
         const { pulse, headSha, headBranch, historyLoadedAt, cacheable } = await this.computePulse(
           options,
           calendar,
           controller.signal
         );
-        if (cacheable && !controller.signal.aborted) {
+        // Only the current flight publishes, and only while its day and zone still hold: an
+        // aborted, invalidated or overtaken compute, or one answering for a day already over,
+        // would otherwise replace a fresher entry.
+        const now = readLocalCalendar();
+        if (
+          cacheable &&
+          !controller.signal.aborted &&
+          this.inFlight.get(flightKey) === promise &&
+          now.day === calendar.day &&
+          now.timeZone === calendar.timeZone
+        ) {
           this.cache.set(cacheKey, {
             pulse,
             // A Pulse built on reused history expires with that history, so switching ranges
@@ -346,7 +360,8 @@ export class ProjectPulseService {
           }
         }
       }
-    })();
+    };
+    const promise = run();
 
     this.inFlight.set(flightKey, promise);
 
@@ -471,7 +486,7 @@ export class ProjectPulseService {
         this.computeHeatmap(git, rangeDays, todayMidnight, rev),
         includeRecentCommits ? this.getRecentCommits(git, 8, rev) : Promise.resolve([]),
         includeDelta && branch
-          ? this.getBranchDelta(git, mainBranch, branch)
+          ? this.getBranchDelta(git, mainBranch, branch, rev)
           : Promise.resolve(null),
         this.getHistoryFacts(git, options, headSha, calendar.timeZone, signal),
       ]);
@@ -709,7 +724,8 @@ export class ProjectPulseService {
   private async getBranchDelta(
     git: SimpleGit,
     mainBranch: string,
-    headBranch: string
+    headBranch: string,
+    rev: string
   ): Promise<BranchDeltaToMain | null> {
     const resolveRef = async (ref: string): Promise<string | null> => {
       // `--` after --verify turns the ref into a path and always fails, so the ref
@@ -744,7 +760,7 @@ export class ProjectPulseService {
         "rev-list",
         "--left-right",
         "--count",
-        `${baseSha}...HEAD`,
+        `${baseSha}...${rev}`,
       ]);
 
       const [behindStr, aheadStr] = revListOutput.trim().split(/\s+/);
@@ -760,7 +776,7 @@ export class ProjectPulseService {
           "diff",
           "--no-ext-diff",
           "--shortstat",
-          `${baseSha}...HEAD`,
+          `${baseSha}...${rev}`,
         ]);
 
         // Parse: "3 files changed, 45 insertions(+), 12 deletions(-)"
@@ -778,7 +794,7 @@ export class ProjectPulseService {
             "diff",
             "--no-ext-diff",
             "--name-only",
-            `${baseSha}...HEAD`,
+            `${baseSha}...${rev}`,
           ]);
           filesChanged = nameOnlyOutput.split("\n").filter(Boolean).length;
         } catch {
@@ -842,18 +858,21 @@ export class ProjectPulseService {
     }
 
     const loadedAt = Date.now();
+    const seq = ++this.historyLoadSeq;
     const load = async (): Promise<HistoryResult> => {
       const { facts, complete } = await this.loadHistoryFacts(git, headSha, options.worktreeId);
       // invalidate() aborts the signal and drops this flight, so an aborted or superseded load
       // never lands in the cache, nor do days formatted after a zone change; a partial load is
       // served once and walked again next time.
+      const latest = this.historyCache.get(key);
       if (
         complete &&
         !signal?.aborted &&
         this.historyInFlight.get(inFlightKey) === promise &&
-        getLocalTimeZone() === timeZone
+        getLocalTimeZone() === timeZone &&
+        (!latest || latest.seq < seq)
       ) {
-        this.historyCache.set(key, { headSha, timeZone, facts, timestamp: loadedAt });
+        this.historyCache.set(key, { headSha, timeZone, facts, timestamp: loadedAt, seq });
         this.pruneHistoryCache();
       }
       return { facts, loadedAt, complete };
