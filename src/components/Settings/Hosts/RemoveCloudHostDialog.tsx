@@ -86,6 +86,12 @@ export function RemoveCloudHostDialog({
     (status.operation?.kind === "creating" || status.lastError?.code === "outcome-unknown");
   const deleting = (created && choice === "delete") || mayHaveMachine;
   const ready = status !== null && openedFor !== null;
+  // A machine made for a worktree is expected to go with it; removing the host
+  // by hand leaves it in the account, so the dialog names what stays.
+  const keptMachine =
+    ready && created && !deleting && status.createdFor !== null && status.machine !== "deleted"
+      ? (status.machineName ?? openedFor.resourceId)
+      : null;
 
   const confirm = () => {
     if (!ready || openedFor === null) return;
@@ -121,7 +127,9 @@ export function RemoveCloudHostDialog({
       description={`${
         deleting && created
           ? `Its machine and everything on its disk are deleted from ${providerName}, and the host leaves your list.`
-          : "The host leaves your list."
+          : keptMachine !== null && status
+            ? `The host leaves your list, but its machine '${keptMachine}' still exists in your ${providerName} account (${status.accountName}).`
+            : "The host leaves your list."
       } Windows on it return to this machine, and its plugin permissions, history and browser data on this device are cleared.`}
       confirmLabel={deleting ? "Delete machine" : "Remove host"}
       onConfirm={confirm}

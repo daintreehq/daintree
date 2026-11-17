@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostConnection, HostDescriptor } from "../../../../shared/types/remoteHosts.js";
-import type { CloudProviderId } from "../../../../shared/types/cloudHosts.js";
+import type {
+  CloudHostCreatedFor,
+  CloudHostCreateRequest,
+  CloudHostImportRequest,
+  CloudProviderId,
+} from "../../../../shared/types/cloudHosts.js";
 import { TransportError, UnusableConnectionError } from "../../client/transport.js";
 import { BoatApiError } from "../boat/BoatClient.js";
 import { BoatProvider } from "../boat/BoatProvider.js";
@@ -126,24 +131,14 @@ async function setup(
   const state = { machine: resource(initial) };
   const provider = fakeProvider(state);
   let backendValue: unknown;
-  const store = new CloudHostStore({
+  const backend = {
     get: () => backendValue,
     set: (_key: "cloudHosts", value: CloudHostsValue) => {
       backendValue = JSON.parse(JSON.stringify(value));
     },
-  });
-  const accounts = new CloudAccountService({
-    store,
-    vault: new MemoryCloudCredentialVault(),
-    providers: new Map<CloudProviderId, CloudProvider>([["boat", provider]]),
-    apiUrlFor: () => "https://boat.dev/api/v1",
-    platform: "darwin",
-  });
-  const account = await accounts.addAccount({
-    providerId: "boat",
-    apiKey: "boat_live_x",
-    scopeId: "personal",
-  });
+  };
+  // What outlives a restart: the settings file, the keychain and the host list.
+  const vault = new MemoryCloudCredentialVault();
   const hosts: HostDescriptor[] = [];
   const listeners = new Set<() => void>();
   const disconnect = vi.fn(async () => {});
@@ -154,39 +149,63 @@ async function setup(
     return { code: 0, stdout: "", stderr: "", spawnError: null, timedOut: false };
   });
   const files = new CloudSshFiles(path.join(root, "cloud"), run as unknown as CommandRunner);
-  const lifecycle = new CloudHostLifecycle({
-    store,
-    accounts,
-    files,
-    clientDir: root,
-    hosts: {
-      add: (name: string, connection: HostConnection) => {
-        const descriptor = { id: name, name, connection } as HostDescriptor;
-        hosts.push(descriptor);
-        for (const listener of listeners) listener();
-        return descriptor;
+  const build = () => {
+    const store = new CloudHostStore(backend);
+    const accounts = new CloudAccountService({
+      store,
+      vault,
+      providers: new Map<CloudProviderId, CloudProvider>([["boat", provider]]),
+      apiUrlFor: () => "https://boat.dev/api/v1",
+      platform: "darwin",
+    });
+    const lifecycle = new CloudHostLifecycle({
+      store,
+      accounts,
+      files,
+      clientDir: root,
+      hosts: {
+        add: (name: string, connection: HostConnection) => {
+          const descriptor = { id: name, name, connection } as HostDescriptor;
+          hosts.push(descriptor);
+          for (const listener of listeners) listener();
+          return descriptor;
+        },
+        get: (id) => hosts.find((host) => host.id === id) ?? null,
+        list: () => hosts,
+        forget: async (id) => {
+          hosts.splice(
+            hosts.findIndex((host) => host.id === id),
+            1
+          );
+          for (const listener of listeners) listener();
+        },
+        disconnect,
+        onChange: (listener) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
       },
-      get: (id) => hosts.find((host) => host.id === id) ?? null,
-      list: () => hosts,
-      forget: async (id) => {
-        hosts.splice(
-          hosts.findIndex((host) => host.id === id),
-          1
-        );
-        for (const listener of listeners) listener();
-      },
-      disconnect,
-      onChange: (listener) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-    },
-    changed: () => {},
-    sleep: async () => {},
-    activity: options.activity,
-    now: options.now,
+      changed: () => {},
+      sleep: async () => {},
+      activity: options.activity,
+      now: options.now,
+    });
+    return { store, accounts, lifecycle };
+  };
+  const { store, accounts, lifecycle } = build();
+  const account = await accounts.addAccount({
+    providerId: "boat",
+    apiKey: "boat_live_x",
+    scopeId: "personal",
   });
-  return { lifecycle, provider, store, state, account, hosts, disconnect, files, run };
+  /** Ends this run and starts the next over the same settings, keychain and hosts. */
+  const restart = (current: CloudHostLifecycle) => {
+    current.dispose();
+    const next = build();
+    next.lifecycle.start();
+    return next;
+  };
+  return { lifecycle, provider, store, state, account, hosts, disconnect, files, run, restart };
 }
 
 describe("CloudHostLifecycle.create", () => {
@@ -770,5 +789,145 @@ describe("CloudHostLifecycle lifetime keeper", () => {
     await Promise.all([renewing, changing]);
     const sent = vi.mocked(provider.renewLifetime).mock.calls.map((call) => call[2]);
     expect(sent).toEqual([7200, 3600]);
+  });
+});
+
+describe("CloudHostLifecycle worktree marks", () => {
+  const MARK: CloudHostCreatedFor = {
+    hostId: null,
+    projectId: "0f1e2d3c",
+    worktreeId: "/Users/me/code/app-worktrees/feature-login",
+    projectName: "app",
+    worktreeName: "feature/login",
+    hostName: null,
+  };
+  const request = (accountId: string): CloudHostCreateRequest => ({
+    accountId,
+    name: "build",
+    machineType: "default",
+    lifetimeHours: 2,
+  });
+  /** A lost answer to a create the provider did act on, when `made`. */
+  const loseAnswer = (provider: CloudProvider, state: { machine: ProviderResource }, made: boolean) =>
+    vi.mocked(provider.create).mockImplementationOnce(async (_c, sent) => {
+      if (made) state.machine = resource({ name: "build-box", labels: sent.labels });
+      throw new BoatApiError("network", "lost", null, null, null);
+    });
+
+  it("writes the mark with the create, before the host is added or the provider asked", async () => {
+    const { lifecycle, provider, store, state, account } = await setup();
+    const put = vi.spyOn(store, "putBinding");
+    let markedWhenSent: unknown = null;
+    vi.mocked(provider.create).mockImplementationOnce(async (_c, sent) => {
+      markedWhenSent = store.bindings()[0]?.createdFor;
+      state.machine = resource({ name: "build-box", labels: sent.labels });
+      return resource({ name: "build-box", machine: "starting", rawState: "provisioning" });
+    });
+    await lifecycle.create(request(account.id), MARK);
+    expect(put.mock.calls[0]?.[0]).toMatchObject({ hostId: null, createdFor: MARK });
+    await vi.waitFor(() => expect(provider.create).toHaveBeenCalled());
+    expect(markedWhenSent).toEqual(MARK);
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.resourceId).toBe("bx_23456789"));
+    expect(store.bindings()[0]?.creation).toBeNull();
+    expect(lifecycle.statuses()[0]).toMatchObject({ createdFor: MARK, machineName: "build-box" });
+  });
+
+  it("keeps the mark through a restart mid-create when the machine turns up", async () => {
+    const { lifecycle, provider, state, account, restart } = await setup();
+    loseAnswer(provider, state, true);
+    await lifecycle.create(request(account.id), MARK);
+    await vi.waitFor(() =>
+      expect(lifecycle.statuses()[0]).toMatchObject({
+        operation: null,
+        lastError: { code: "outcome-unknown" },
+      })
+    );
+    const next = restart(lifecycle);
+    await vi.waitFor(() =>
+      expect(next.lifecycle.statuses()[0]?.resourceId).toBe("bx_23456789")
+    );
+    expect(next.lifecycle.statuses()[0]).toMatchObject({
+      createdFor: MARK,
+      machineName: "build-box",
+    });
+    next.lifecycle.dispose();
+  });
+
+  it("keeps the mark through a restart mid-create, and the retry that follows", async () => {
+    const { lifecycle, provider, state, account, restart } = await setup();
+    loseAnswer(provider, state, false);
+    await lifecycle.create(request(account.id), MARK);
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    const next = restart(lifecycle);
+    await vi.waitFor(() =>
+      expect(next.lifecycle.statuses()[0]?.lastError?.message).toMatch(/Setup didn't finish/)
+    );
+    // Before the machine exists, the name it was asked for stands in.
+    expect(next.lifecycle.statuses()[0]).toMatchObject({
+      resourceId: null,
+      createdFor: MARK,
+      machineName: "build",
+    });
+    await next.lifecycle.retryCreate("build");
+    expect(next.lifecycle.statuses()[0]).toMatchObject({
+      resourceId: "bx_23456789",
+      createdFor: MARK,
+    });
+    next.lifecycle.dispose();
+  });
+
+  it("keeps the mark through a restart after the machine exists", async () => {
+    const { lifecycle, account, restart } = await setup();
+    await lifecycle.create(request(account.id), MARK);
+    await vi.waitFor(() =>
+      expect(lifecycle.statuses()[0]).toMatchObject({ machine: "running", operation: null })
+    );
+    const next = restart(lifecycle);
+    expect(next.store.bindings()[0]?.creation).toBeNull();
+    expect(next.lifecycle.statuses()[0]?.createdFor).toEqual(MARK);
+    next.lifecycle.dispose();
+  });
+
+  it("never marks a machine created from Settings or imported, even with a mark in the request", async () => {
+    const { lifecycle, store, account } = await setup();
+    await lifecycle.create({ ...request(account.id), createdFor: MARK } as CloudHostCreateRequest);
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    expect(store.bindings()[0]?.createdFor).toBeNull();
+    expect(lifecycle.statuses()[0]?.createdFor).toBeNull();
+
+    const other = await setup();
+    await other.lifecycle.importMachine({
+      accountId: other.account.id,
+      resourceId: "bx_23456789",
+      name: "imported",
+      createdFor: MARK,
+    } as CloudHostImportRequest);
+    expect(other.store.bindings()[0]).toMatchObject({ ownership: "imported", createdFor: null });
+    expect(other.lifecycle.statuses()[0]?.createdFor).toBeNull();
+  });
+
+  it("refuses a mark missing the worktree's identity, and takes 'local' as this device", async () => {
+    const { lifecycle, provider, store, account } = await setup();
+    await expect(
+      lifecycle.create(request(account.id), { ...MARK, worktreeId: "" })
+    ).rejects.toThrow(/missing its project or path/);
+    expect(store.bindings()).toEqual([]);
+    expect(provider.create).not.toHaveBeenCalled();
+
+    await lifecycle.create(request(account.id), { ...MARK, hostId: "local", hostName: "Local" });
+    expect(store.bindings()[0]?.createdFor).toEqual(MARK);
+  });
+
+  it("drops a marked machine's binding with its host, leaving the machine alone", async () => {
+    const { lifecycle, provider, store, hosts, account } = await setup();
+    lifecycle.start();
+    await lifecycle.create(request(account.id), MARK);
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    hosts.splice(0, 1);
+    await (lifecycle as unknown as { dropOrphanBindings(): Promise<void> }).dropOrphanBindings();
+    expect(store.bindings()).toEqual([]);
+    expect(provider.stop).not.toHaveBeenCalled();
+    expect(provider.delete).not.toHaveBeenCalled();
+    lifecycle.dispose();
   });
 });

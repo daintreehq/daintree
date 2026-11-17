@@ -20,7 +20,7 @@ import {
   machineSpecLabel,
 } from "@/components/Hosts/cloud/cloudHostLabels";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
-import { CLOUD_LIFETIME_CHOICES } from "@shared/types/cloudHosts";
+import { CLOUD_LIFETIME_CHOICES, type CloudHostCreatedFor } from "@shared/types/cloudHosts";
 import type { HostId } from "@shared/types/remoteHosts";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsGroup, SettingsRow } from "../SettingsGroup";
@@ -30,6 +30,12 @@ function errorText(err: unknown, fallback: string): string {
   return isClientAppError(err) && err.userMessage
     ? err.userMessage
     : clientErrorText(err, fallback);
+}
+
+/** The worktree as it was named when the machine was made for it; it may since be gone. */
+function createdForLabel(mark: CloudHostCreatedFor): string {
+  const where = `${mark.worktreeName} in ${mark.projectName}`;
+  return mark.hostName === null ? where : `${where} on ${mark.hostName}`;
 }
 
 const LIFETIME_VALUES = CLOUD_LIFETIME_CHOICES.map((hours) =>
@@ -202,6 +208,16 @@ export function CloudMachineSection({ hostId, hostName }: { hostId: HostId; host
           label="Account"
           description={`${providerName} · ${status.accountName}${status.ownership === "imported" ? " · Added from the account" : ""}`}
         />
+        {status.createdFor && (
+          <SettingsRow
+            label="Created for"
+            description={
+              <span data-testid="cloud-machine-created-for">
+                {createdForLabel(status.createdFor)}
+              </span>
+            }
+          />
+        )}
         <SettingsRow
           label="Size"
           description={`${status.machineType ? `${status.machineType[0]!.toUpperCase()}${status.machineType.slice(1)} · ` : ""}${machineSpecLabel(status.vcpu, status.memoryGB)} · ${formatHourly(status.hourlyDollars)}`}
