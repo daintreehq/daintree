@@ -173,6 +173,12 @@ function reporting(id: string, sampledAt: number): HostListEntry {
   return { ...connectedHost(id), summary: summary(id, sampledAt) };
 }
 
+const DOWN: HostConnectionState = { status: "disconnected" };
+
+function named(entry: HostListEntry, name: string): HostListEntry {
+  return { ...entry, descriptor: { ...entry.descriptor, name } };
+}
+
 function summary(hostId: string, sampledAt: number): HostMetricsSummary {
   return {
     hostId,
@@ -489,41 +495,107 @@ describe("host status and host figures", () => {
   });
 
   it("keeps a link lost while a remounted subscriber's read was in flight over the older answer", async () => {
-    list.mockResolvedValue([reporting("studio-01", 3), connectedHost("studio-02")]);
+    list.mockResolvedValue([
+      connectedHost("studio-01"),
+      connectedHost("studio-02"),
+      connectedHost("studio-04"),
+    ]);
     const first = renderHook(() => useHostFigures());
     await settle();
-    expect(first.result.current.hosts[0]?.summary?.sampledAt).toBe(3);
     first.unmount();
 
     const pending = deferred<HostListEntry[]>();
     list.mockReturnValueOnce(pending.promise);
     const figures = renderHook(() => useHostFigures());
-    expect(ids(figures.result.current.hosts)).toEqual(["studio-01", "studio-02"]);
+    await settle();
+    expect(ids(figures.result.current.hosts)).toEqual(["studio-01", "studio-02", "studio-04"]);
+    act(() => emitMetrics({ type: "summary", summary: summary("studio-01", 5) }));
+    expect(figures.result.current.hosts[0]?.summary?.sampledAt).toBe(5);
 
-    act(() =>
-      emit?.({
-        type: "connection-changed",
-        hostId: "studio-01",
-        connection: { status: "disconnected" },
-      })
-    );
-    expect(figures.result.current.hosts[0]?.connection.status).toBe("disconnected");
+    act(() => emit?.({ type: "connection-changed", hostId: "studio-01", connection: DOWN }));
+    expect(figures.result.current.hosts[0]).toMatchObject({ connection: DOWN, summary: null });
 
-    const renamed = { ...connectedHost("studio-02") };
-    renamed.descriptor = { ...renamed.descriptor, name: "Studio two" };
-    const lostDescriptor = { ...reporting("studio-01", 3) };
-    lostDescriptor.descriptor = { ...lostDescriptor.descriptor, name: "Studio one" };
     await act(async () => {
-      pending.resolve([lostDescriptor, renamed, connectedHost("studio-03")]);
+      pending.resolve([
+        named(reporting("studio-01", 3), "Studio one"),
+        named(connectedHost("studio-02"), "Studio two"),
+        connectedHost("studio-03"),
+      ]);
       await pending.promise;
     });
     const hosts = figures.result.current.hosts;
     expect(ids(hosts)).toEqual(["studio-01", "studio-02", "studio-03"]);
-    expect(hosts[0]?.connection.status).toBe("disconnected");
-    expect(hosts[0]?.summary).toBeNull();
-    expect(hosts[0]?.descriptor.name).toBe("Studio one");
-    expect(hosts[1]?.descriptor.name).toBe("Studio two");
+    expect(hosts.map((h) => h.descriptor.name)).toEqual(["Studio one", "Studio two", "studio-03"]);
+    expect(hosts[0]).toMatchObject({ connection: DOWN, summary: null });
     expect(hosts[1]?.connection.status).toBe("connected");
+  });
+
+  it("lets only the latest read answer, keeping the links heard since it was asked for", async () => {
+    list.mockResolvedValue([connectedHost("studio-01"), connectedHost("studio-02")]);
+    const first = renderHook(() => useHostList());
+    await settle();
+    first.unmount();
+    list.mockClear();
+
+    const older = deferred<HostListEntry[]>();
+    const newer = deferred<HostListEntry[]>();
+    list.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    const view = renderHook(() => useHostList());
+    act(() => emit?.({ type: "connection-changed", hostId: "studio-01", connection: DOWN }));
+    // A host this list doesn't have yet means the list is behind: read again.
+    act(() =>
+      emit?.({ type: "connection-changed", hostId: "studio-03", connection: connected(5, 1) })
+    );
+    expect(list).toHaveBeenCalledTimes(2);
+    act(() => emit?.({ type: "connection-changed", hostId: "studio-02", connection: DOWN }));
+
+    const links = () =>
+      view.result.current.hosts.map((h) => `${h.descriptor.id}:${h.connection.status}`);
+    await act(async () => {
+      newer.resolve([connectedHost("studio-01"), connectedHost("studio-02"), connectedHost("studio-03")]);
+      await newer.promise;
+    });
+    // studio-01 dropped before the newer read was asked for, so its answer stands.
+    expect(links()).toEqual(["studio-01:connected", "studio-02:disconnected", "studio-03:connected"]);
+
+    await act(async () => {
+      older.resolve([connectedHost("studio-01")]);
+      await older.promise;
+    });
+    expect(links()).toEqual(["studio-01:connected", "studio-02:disconnected", "studio-03:connected"]);
+  });
+
+  it("keeps only the summary heard for a link that dropped and came back during a read", async () => {
+    const all = ["studio-01", "studio-02", "studio-03"];
+    list.mockResolvedValue(all.map(connectedHost));
+    const first = renderHook(() => useHostFigures());
+    await settle();
+    first.unmount();
+
+    const pending = deferred<HostListEntry[]>();
+    list.mockReturnValueOnce(pending.promise);
+    const figures = renderHook(() => useHostFigures());
+    const status = counted(() => useHostList());
+    await settle();
+    act(() => {
+      for (const hostId of all) emit?.({ type: "connection-changed", hostId, connection: DOWN });
+      emit?.({ type: "connection-changed", hostId: "studio-01", connection: connected(7, 2) });
+      emit?.({ type: "connection-changed", hostId: "studio-02", connection: connected(7, 2) });
+      emitMetrics({ type: "summary", summary: summary("studio-01", 6) });
+      // Still down: a summary that lands now says nothing about the link.
+      emitMetrics({ type: "summary", summary: summary("studio-03", 6) });
+    });
+    const before = status.count.renders;
+
+    await act(async () => {
+      pending.resolve(all.map((id) => reporting(id, 3)));
+      await pending.promise;
+    });
+    const hosts = figures.result.current.hosts;
+    expect(hosts.map((h) => h.connection.status)).toEqual(["connected", "connected", "disconnected"]);
+    expect(hosts[0]?.connection).toMatchObject({ rttMs: 7 });
+    expect(hosts.map((h) => h.summary?.sampledAt ?? null)).toEqual([6, null, null]);
+    expect(status.count.renders).toBe(before);
   });
 
   it("stops following while main has the view cached, though the page still reads visible", async () => {

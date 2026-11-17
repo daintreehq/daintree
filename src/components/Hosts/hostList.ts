@@ -280,14 +280,17 @@ function acquireFigures(): () => void {
 
 /**
  * A read's answer, except that a host whose link was heard since it was asked
- * for keeps the link it now has, and the summary that goes with it.
+ * for keeps the link it now has. Its summary is the one held for that link,
+ * never the answer's, which may predate a drop.
  */
 function keepLinksHeard(hosts: HostListEntry[], heard: ReadonlySet<HostId>): HostListEntry[] {
   if (heard.size === 0) return hosts;
   return hosts.map((entry) => {
     if (!heard.has(entry.descriptor.id)) return entry;
     const held = snapshot.hosts.find((h) => h.descriptor.id === entry.descriptor.id);
-    return held ? { ...entry, connection: held.connection, summary: held.summary } : entry;
+    if (!held) return entry;
+    const up = held.connection.status === "connected";
+    return { ...entry, connection: held.connection, summary: up ? held.summary : null };
   });
 }
 
