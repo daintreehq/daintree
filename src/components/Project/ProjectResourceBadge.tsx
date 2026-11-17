@@ -658,8 +658,7 @@ export function ProjectResourceBadge({
   // looking fresh, and a failed read freshens nothing. The workload sweep's own
   // age stays with its note: the pty-host backs off when idle, so dating the
   // heading by it would call a healthy reading old.
-  const infoSampledAt =
-    systemAvailableMB !== null ? (popoverData.diagnosticsInfoAt ?? null) : null;
+  const infoSampledAt = systemAvailableMB !== null ? (popoverData.diagnosticsInfoAt ?? null) : null;
   const memoryReadAt =
     popoverSampledAt !== null && infoSampledAt !== null
       ? Math.min(popoverSampledAt, infoSampledAt)

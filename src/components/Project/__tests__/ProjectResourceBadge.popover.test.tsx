@@ -738,9 +738,11 @@ describe("ProjectResourceBadge — popover poll ordering (#17574)", () => {
   }
 
   function terminalProgramsValue(container: HTMLElement): string | undefined {
-    return Array.from(container.querySelectorAll("div")).find(
-      (el) => el.children.length === 2 && el.children[0]?.textContent === "Terminal programs"
-    )?.children[1]?.textContent ?? undefined;
+    return (
+      Array.from(container.querySelectorAll("div")).find(
+        (el) => el.children.length === 2 && el.children[0]?.textContent === "Terminal programs"
+      )?.children[1]?.textContent ?? undefined
+    );
   }
 
   it("keeps a slow collector to one read at a time while the others keep landing", async () => {
