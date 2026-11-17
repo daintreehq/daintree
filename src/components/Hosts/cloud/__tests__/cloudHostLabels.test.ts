@@ -154,6 +154,10 @@ describe("cloud host labels", () => {
       "It sleeps by itself after 30 minutes without activity."
     );
     expect(lifetimeSentence({ kind: "idle-sleep", idleSeconds: 45 }, null)).toContain("45 seconds");
+    // Never rounded: 90 seconds isn't "2 minutes".
+    expect(lifetimeSentence({ kind: "idle-sleep", idleSeconds: 90 }, null)).toContain(
+      "after 90 seconds without"
+    );
     expect(lifetimeSentence({ kind: "idle-sleep", idleSeconds: null }, null)).toContain(
       "once it's been idle"
     );
@@ -178,6 +182,14 @@ describe("cloud host labels", () => {
     expect(idle).toContain("sleeps when idle");
     expect(idle).not.toContain("no auto-stop");
     expect(cloudCostFacts(status({ lifetime: null }))).toEqual(["$0.036/h"]);
+    // A fixed limit whose deadline wasn't reported is unknown, not none.
+    const fixed = { kind: "fixed-at-create", canChangeWhileStopped: false } as const;
+    expect(cloudCostFacts(status({ lifetime: fixed, lifetimeSeconds: 7200 }))).toEqual([
+      "$0.036/h",
+    ]);
+    expect(cloudCostFacts(status({ lifetime: fixed, lifetimeSeconds: null }))).toContain(
+      "no auto-stop"
+    );
     const deadline = new Date(Date.UTC(2026, 10, 14, 12)).toISOString();
     expect(
       cloudCostFacts(

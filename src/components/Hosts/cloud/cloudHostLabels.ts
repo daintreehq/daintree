@@ -84,7 +84,7 @@ export function lifetimeLabel(hours: number | null): string {
 /** "2 hours", "30 minutes", "90 minutes": exact, since an imported machine's lifetime needn't be whole hours. */
 export function durationLabel(seconds: number): string {
   if (seconds % 3600 === 0) return lifetimeLabel(seconds / 3600);
-  if (seconds < 60) return pluralize(seconds, "second");
+  if (seconds % 60 !== 0) return pluralize(seconds, "second");
   const minutes = Math.round(seconds / 60);
   return pluralize(minutes, "minute");
 }
@@ -242,10 +242,13 @@ export function cloudCostFacts(
     if (rate) facts.push(rate);
     const stop = clockTime(status.autoStopAt);
     if (status.machine === "running") {
-      // No deadline is "no auto-stop" only where the provider's model says so.
+      // No deadline is "no auto-stop" only where the provider's model says so:
+      // a fixed limit with no deadline reported is unknown, not none.
+      const unreportedLimit =
+        status.lifetime?.kind === "fixed-at-create" && status.lifetimeSeconds !== null;
       if (stop) facts.push(`stops by itself ${stop}`);
       else if (status.lifetime?.kind === "idle-sleep") facts.push("sleeps when idle");
-      else if (status.lifetime !== null) facts.push("no auto-stop");
+      else if (status.lifetime !== null && !unreportedLimit) facts.push("no auto-stop");
     }
   } else if (stoppedBilling) {
     facts.push(stoppedBilling);

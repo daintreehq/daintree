@@ -39,6 +39,7 @@ vi.mock("@/clients/systemClient", () => ({ systemClient: { openExternal } }));
 
 import { CloudMachineSection } from "../CloudMachineSection";
 import { BOAT_PROVIDER, provider } from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
+import { clockTime } from "@/components/Hosts/cloud/cloudHostLabels";
 
 function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
   return {
@@ -476,15 +477,25 @@ describe("CloudMachineSection lifetime row", () => {
   it("shows a fixed limit's deadline, and that it can't be extended while it runs", () => {
     show(machine({ kind: "fixed-at-create", canChangeWhileStopped: false }));
     const text = lifetimeText();
-    expect(text).toMatch(/^2 hours\. This run stops by itself /);
+    expect(text).toContain(`2 hours. This run stops by itself ${clockTime(DEADLINE)}.`);
     expect(text).toContain("can't extend or change it");
     expect(text).not.toContain("pushed back");
     expect(lifetimeChoice()).toBeNull();
   });
 
+  it("lets a reported deadline speak for a fixed limit none was asked for", () => {
+    const fixed = { kind: "fixed-at-create", canChangeWhileStopped: false } as const;
+    show(machine(fixed, { lifetimeSeconds: null }));
+    expect(lifetimeText()).toMatch(/^This run stops by itself /);
+    expect(lifetimeText()).not.toContain("Never");
+    cleanup();
+    show(machine(fixed, { lifetimeSeconds: 7200, autoStopAt: null }));
+    expect(lifetimeText()).toContain("hasn't said when this run stops");
+  });
+
   it("lets a fixed limit change only while the machine is stopped, where the provider allows", () => {
     show(machine({ kind: "fixed-at-create", canChangeWhileStopped: true }));
-    expect(lifetimeText()).toContain("This run stops by itself");
+    expect(lifetimeText()).toContain(`This run stops by itself ${clockTime(DEADLINE)}.`);
     expect(lifetimeText()).toContain("can't extend it while the machine runs");
     expect(lifetimeChoice()?.hasAttribute("disabled")).toBe(true);
     cleanup();

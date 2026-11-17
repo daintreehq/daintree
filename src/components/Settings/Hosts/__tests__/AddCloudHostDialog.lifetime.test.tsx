@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type {
   CloudAccountSummary,
   CloudCatalog,
@@ -95,6 +95,10 @@ const CATALOG: CloudCatalog = {
 
 async function open(lifetime: CloudLifetimeModel) {
   cloud.snapshot = { providers: [provider(lifetime)], accounts: [ACCOUNT], hosts: [] };
+  return show();
+}
+
+async function show() {
   render(<AddCloudHostDialog isOpen onClose={() => {}} onReady={() => {}} />);
   // The review appears once the sizes are read and one is chosen.
   return (await screen.findByTestId("add-cloud-host-review")).textContent ?? "";
@@ -108,6 +112,18 @@ async function createAndSend(): Promise<number | null> {
   return client.createHost.mock.calls[0]![0].lifetimeHours;
 }
 
+/** Opens a Radix select from the keyboard and picks one of its options. */
+async function choose(trigger: HTMLElement, option: string | RegExp) {
+  await act(async () => {
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  });
+  const item = await screen.findByRole("option", { name: option });
+  await act(async () => {
+    fireEvent.click(item);
+  });
+}
+
+const review = () => screen.getByTestId("add-cloud-host-review").textContent ?? "";
 const lifetimeNote = () =>
   screen.queryByTestId("add-cloud-host-lifetime-note")?.textContent ?? null;
 const lifetimeChoice = () => screen.queryByTestId("add-cloud-host-lifetime");
@@ -125,40 +141,70 @@ afterEach(() => {
 
 describe("AddCloudHostDialog lifetime", () => {
   it("offers a renewable lifetime that's pushed back while the machine is in use", async () => {
-    const review = await open({ kind: "renewable" });
+    const initial = await open({ kind: "renewable" });
     expect(lifetimeChoice()).not.toBeNull();
     expect(lifetimeNote()).toBeNull();
     expect(screen.getByText(/pushed back while a window here shows it/)).toBeTruthy();
-    expect(review).toContain("It stops by itself 2 hours after starting unless it's in use here.");
-    expect(await createAndSend()).toBe(2);
+    expect(initial).toContain("It stops by itself 2 hours after starting unless it's in use here.");
+    await choose(lifetimeChoice()!, "4 hours");
+    expect(review()).toContain(
+      "It stops by itself 4 hours after starting unless it's in use here."
+    );
+    expect(await createAndSend()).toBe(4);
   });
 
   it("offers a fixed limit at create, and says it can't be extended while it runs", async () => {
-    const review = await open({ kind: "fixed-at-create", canChangeWhileStopped: false });
+    const initial = await open({ kind: "fixed-at-create", canChangeWhileStopped: false });
     expect(lifetimeChoice()).not.toBeNull();
     expect(screen.getByText(/Acme can't extend it while the machine runs/)).toBeTruthy();
-    expect(review).toContain("2 hours after starting, and that can't be extended while it runs");
-    expect(review).not.toContain("unless it's in use here");
-    expect(await createAndSend()).toBe(2);
+    expect(initial).toContain("2 hours after starting, and that can't be extended while it runs");
+    expect(initial).not.toContain("unless it's in use here");
+    await choose(lifetimeChoice()!, "Never");
+    expect(review()).toContain("It runs until you stop it.");
+    expect(screen.queryByText(/it stops then even if/)).toBeNull();
+    expect(screen.getByText(/with none, it runs until you stop it/)).toBeTruthy();
+    expect(await createAndSend()).toBeNull();
+  });
+
+  it("sends no lifetime once the account switches to a provider without one", async () => {
+    cloud.snapshot = {
+      providers: [
+        { ...provider({ kind: "renewable" }), id: "acme.clouds.renew", name: "Renewing" },
+        provider({ kind: "none" }),
+      ],
+      accounts: [
+        { ...ACCOUNT, id: "ca_renewing0001", displayName: "Work", providerId: "acme.clouds.renew" },
+        ACCOUNT,
+      ],
+      hosts: [],
+    };
+    await show();
+    await choose(lifetimeChoice()!, "8 hours");
+    // The account select comes first in the form; the dialog's selects carry no accessible name.
+    await choose(screen.getAllByRole("combobox")[0]!, /^Personal/);
+    await screen.findByTestId("add-cloud-host-lifetime-note");
+    expect(lifetimeChoice()).toBeNull();
+    expect(await createAndSend()).toBeNull();
+    expect(client.createHost.mock.calls[0]![0].accountId).toBe(ACCOUNT.id);
   });
 
   it("offers no lifetime on a provider without one, and sends none", async () => {
-    const review = await open({ kind: "none" });
+    const initial = await open({ kind: "none" });
     expect(lifetimeChoice()).toBeNull();
     expect(lifetimeNote()).toBe(
       "Acme has no lifetime for its machines: it runs until you stop it."
     );
-    expect(review).toContain("It runs until you stop it.");
+    expect(initial).toContain("It runs until you stop it.");
     expect(await createAndSend()).toBeNull();
   });
 
   it("says a provider sleeps idle machines, with its idle time, and sends no lifetime", async () => {
-    const review = await open({ kind: "idle-sleep", idleSeconds: 1800 });
+    const initial = await open({ kind: "idle-sleep", idleSeconds: 1800 });
     expect(lifetimeChoice()).toBeNull();
     expect(lifetimeNote()).toBe(
       "Acme puts it to sleep by itself after 30 minutes without activity."
     );
-    expect(review).toContain("It sleeps by itself after 30 minutes without activity.");
+    expect(initial).toContain("It sleeps by itself after 30 minutes without activity.");
     expect(await createAndSend()).toBeNull();
   });
 

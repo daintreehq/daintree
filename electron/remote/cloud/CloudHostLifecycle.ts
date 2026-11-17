@@ -661,6 +661,12 @@ export class CloudHostLifecycle {
         return;
       }
     }
+    // A limit asked for under a model the provider has since dropped is refused, never sent as none.
+    if (binding.lifetimeSeconds !== null && !cloudLifetimeIsChosen(lifetimeModelOf(provider))) {
+      const message = `${nameOf(provider)} no longer takes a lifetime for its machines, so nothing was created. Remove the host and add it again.`;
+      this.recordError(bindingId, { code: "unsupported", message, at: this.now() });
+      throw invalid(message);
+    }
     const provisioning = this.sendableProvisioning(binding, provider);
     this.stage(bindingId, `Asking ${nameOf(provider)} for a machine`);
     // Written before the request: a lost answer is then found again, never sent blind.
@@ -676,9 +682,7 @@ export class CloudHostLifecycle {
       resource = await provider.create(credentials, {
         name: creation.name,
         machineType: creation.machineType,
-        lifetimeSeconds: cloudLifetimeIsChosen(lifetimeModelOf(provider))
-          ? binding.lifetimeSeconds
-          : null,
+        lifetimeSeconds: binding.lifetimeSeconds,
         provisioning,
         labels: {
           [LABEL_MARKER]: "1",
@@ -1141,6 +1145,10 @@ export class CloudHostLifecycle {
       throw invalid(`${nameOf(owner)} doesn't take a lifetime for its machines.`);
     }
     await this.settleRenewal(binding.id);
+    // A provider that left or was replaced while the renewal settled may not take this at all.
+    if (!this.stillRegistered(binding.providerId, owner)) {
+      throw invalid(`${nameOf(owner)} changed while this was being saved. Try again.`);
+    }
     this.renewals.delete(binding.id);
     const keep = () =>
       this.deps.store.updateBinding(binding.id, (current) => ({ ...current, lifetimeSeconds }));
@@ -1789,10 +1797,7 @@ export class CloudHostLifecycle {
       const { credentials } = await this.context(binding);
       // A stop, a start or a new lifetime while the key was read: that wins. So
       // does the provider leaving, or another registering in its place.
-      if (
-        !this.renewalDue(bindingId) ||
-        this.deps.accounts.provider(binding.providerId) !== provider
-      ) {
+      if (!this.renewalDue(bindingId) || !this.stillRegistered(binding.providerId, provider)) {
         return;
       }
       const renewed = await provider.renewLifetime(
@@ -1800,6 +1805,8 @@ export class CloudHostLifecycle {
         binding.resourceId!,
         lifetimeSeconds
       );
+      // The answer of a provider that left or was replaced meanwhile is about a machine it no longer speaks for.
+      if (!this.stillRegistered(binding.providerId, provider)) return;
       const current = this.deps.store.binding(bindingId);
       if (!current || current.intent === "stop" || this.operations.has(bindingId)) return;
       this.observe(bindingId, renewed);
@@ -1811,6 +1818,7 @@ export class CloudHostLifecycle {
       this.deps.changed();
     } catch (error) {
       if (this.disposed || this.deps.store.binding(bindingId)?.intent === "stop") return;
+      if (!this.stillRegistered(binding.providerId, provider)) return;
       this.renewals.set(bindingId, { at: this.now(), ok: false });
       const described = provider.describeError(error);
       this.recordError(bindingId, {
@@ -1819,6 +1827,14 @@ export class CloudHostLifecycle {
         at: described.at,
       });
     }
+  }
+
+  /** The provider is still the one registered under its id: not gone, and not replaced. */
+  private stillRegistered(providerId: string, provider: CloudProvider): boolean {
+    return (
+      !this.deps.accounts.providerUnavailable(providerId) &&
+      this.deps.accounts.provider(providerId) === provider
+    );
   }
 
   /** Lets a renewal under way for the machine finish first, so it can't land after this. */

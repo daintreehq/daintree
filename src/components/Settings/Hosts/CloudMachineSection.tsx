@@ -218,8 +218,6 @@ export function CloudMachineSection({
   };
 
   const asReported = stale && running && checkedAt ? `As last reported ${checkedAt}: ` : "";
-  const lifetimeOf = (seconds: number | null) =>
-    seconds === null ? "Never" : durationLabel(seconds);
 
   // When it stops by itself, in its provider's terms: only a renewable or fixed limit is chosen here.
   const lifetime = status.lifetime;
@@ -260,6 +258,13 @@ export function CloudMachineSection({
     const rule = lifetime.canChangeWhileStopped
       ? `${providerName} can't extend it while the machine runs; a change made while it's stopped applies from its next start.`
       : `${providerName} set it when the machine was created, and can't extend or change it.`;
+    // The limit asked for; with none asked for, a deadline the provider reports anyway speaks for itself.
+    const limit =
+      status.lifetimeSeconds !== null
+        ? `${durationLabel(status.lifetimeSeconds)}. `
+        : running && autoStop
+          ? ""
+          : "Never. ";
     lifetimeRow = lifetime.canChangeWhileStopped ? (
       <SettingsSelect
         label="Stops by itself after"
@@ -274,9 +279,7 @@ export function CloudMachineSection({
       <SettingsRow
         label="Stops by itself after"
         description={
-          <span data-testid="cloud-machine-lifetime">
-            {`${lifetimeOf(status.lifetimeSeconds)}. ${thisRun}${rule}`}
-          </span>
+          <span data-testid="cloud-machine-lifetime">{`${limit}${thisRun}${rule}`}</span>
         }
       />
     );

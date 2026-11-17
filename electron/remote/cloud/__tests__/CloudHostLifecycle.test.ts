@@ -1314,6 +1314,30 @@ describe("CloudHostLifecycle lifetime models", () => {
     }
   });
 
+  it("refuses to retry a create whose limit its provider no longer takes, rather than drop it", async () => {
+    const { lifecycle, provider, store } = await setup();
+    vi.mocked(provider.create).mockRejectedValueOnce(
+      new BoatApiError("network", "lost", null, null, null)
+    );
+    await lifecycle.create({
+      accountId: store.accounts()[0]!.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: 2,
+    });
+    await vi.waitFor(() =>
+      expect(lifecycle.statuses()[0]?.lastError?.code).toBe("outcome-unknown")
+    );
+    const info = provider.info;
+    provider.info = (platform) => {
+      const described = info(platform);
+      return { ...described, capabilities: { ...described.capabilities, lifetime: NONE } };
+    };
+    await expect(lifecycle.retryCreate("build")).rejects.toThrow(/no longer takes a lifetime/);
+    expect(provider.create).toHaveBeenCalledTimes(1);
+    expect(lifecycle.statuses()[0]!.lastError?.code).toBe("unsupported");
+  });
+
   it("creates a machine with a fixed runtime limit from the same choices", async () => {
     const { created, provider } = await createWith(FIXED_FOR_GOOD, 8);
     await created;
@@ -1471,16 +1495,13 @@ describe("CloudHostLifecycle lifetime keeper", () => {
     }
   });
 
-  it("skips a provider that has no renewal method at all", async () => {
-    const { lifecycle, provider } = await keeper(
-      { connected: true, busy: true, shown: true },
-      5,
-      {},
-      { kind: "none" }
-    );
-    (provider as { renewLifetime?: unknown }).renewLifetime = undefined;
+  it("skips a provider that says its lifetime renews but has no renewal method", async () => {
+    // Boat's own model is renewable: only the missing method stands between it and a renewal.
+    const { lifecycle, provider } = await keeper({ connected: true, busy: true, shown: true }, 5);
+    delete (provider as { renewLifetime?: unknown }).renewLifetime;
     await expect(lifecycle.renewDue()).resolves.toBeUndefined();
     expect(lifecycle.statuses()[0]!.lastError).toBeNull();
+    expect(lifecycle.statuses()[0]!.keptRunningAt).toBeNull();
   });
 
   it("never renews a stopped machine, even one with a deadline still set", async () => {

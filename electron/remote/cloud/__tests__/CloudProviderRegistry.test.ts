@@ -427,6 +427,59 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
     expect(env.store.bindings()[0]!.lastError).toBeNull();
   });
 
+  it("drops a renewal's answer, or its failure, once its provider was replaced", async () => {
+    for (const outcome of ["answer", "failure"] as const) {
+      const env = await importedHost();
+      const before = env.lifecycle.statuses()[0]!.autoStopAt;
+      const replacement = fakeProvider(PLUGIN_PROVIDER, () => resource());
+      vi.mocked(env.provider.renewLifetime!).mockImplementationOnce(async () => {
+        env.unregister();
+        env.registry.register(replacement, { owner: pluginOwner, apiUrl: "https://api.acme.test" });
+        if (outcome === "failure") throw new Error("down");
+        return resource({ autoStopAt: new Date(NOW + 120 * 60_000).toISOString() });
+      });
+      await env.lifecycle.renewDue();
+      expect(env.provider.renewLifetime).toHaveBeenCalledTimes(1);
+      const status = env.lifecycle.statuses()[0]!;
+      expect(status.autoStopAt).toBe(before);
+      expect(status.keptRunningAt).toBeNull();
+      expect(status.lastError).toBeNull();
+    }
+  });
+
+  it("refuses a lifetime change whose provider was replaced while a renewal settled", async () => {
+    const env = await importedHost();
+    let release: () => void = () => {};
+    vi.mocked(env.provider.renewLifetime!).mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return resource();
+    });
+    const renewing = env.lifecycle.renewDue();
+    await vi.waitFor(() => expect(env.provider.renewLifetime).toHaveBeenCalledTimes(1));
+    const changing = env.lifecycle.setLifetime(env.hostId, 4);
+    // Its replacement fixes a machine's limit at create: a change saved now would never be sent.
+    const replacement = fakeProvider(PLUGIN_PROVIDER, () => resource());
+    const info = replacement.info;
+    replacement.info = (platform) => {
+      const described = info(platform);
+      return {
+        ...described,
+        capabilities: {
+          ...described.capabilities,
+          lifetime: { kind: "fixed-at-create", canChangeWhileStopped: false },
+        },
+      };
+    };
+    env.unregister();
+    env.registry.register(replacement, { owner: pluginOwner, apiUrl: "https://api.acme.test" });
+    release();
+    await renewing;
+    await expect(changing).rejects.toThrow(/changed while this was being saved/);
+    expect(env.store.bindings()[0]!.lifetimeSeconds).toBe(7200);
+    expect(env.provider.renewLifetime).toHaveBeenCalledTimes(1);
+    expect(replacement.renewLifetime).not.toHaveBeenCalled();
+  });
+
   it("polls again as soon as its provider is back, not after the time it was gone", async () => {
     const env = await importedHost();
     const poll = () => (env.lifecycle as unknown as { pollDue(): Promise<void> }).pollDue();
