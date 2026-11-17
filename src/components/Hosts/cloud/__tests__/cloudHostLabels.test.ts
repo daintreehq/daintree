@@ -177,25 +177,33 @@ describe("cloud host labels", () => {
   });
 
   it("says no auto-stop only where the provider's model has none", () => {
-    expect(cloudCostFacts(status({ lifetime: { kind: "none" } }))).toContain("no auto-stop");
-    const idle = cloudCostFacts(status({ lifetime: { kind: "idle-sleep", idleSeconds: 1800 } }));
-    expect(idle).toContain("sleeps when idle");
-    expect(idle).not.toContain("no auto-stop");
-    expect(cloudCostFacts(status({ lifetime: null }))).toEqual(["$0.036/h"]);
-    // A fixed limit whose deadline wasn't reported is unknown, not none.
-    const fixed = { kind: "fixed-at-create", canChangeWhileStopped: false } as const;
-    expect(cloudCostFacts(status({ lifetime: fixed, lifetimeSeconds: 7200 }))).toEqual([
-      "$0.036/h",
-    ]);
-    expect(cloudCostFacts(status({ lifetime: fixed, lifetimeSeconds: null }))).toContain(
+    expect(cloudCostFacts(status({ lifetime: { kind: "none" } }), BOAT_PROVIDER)).toContain(
       "no auto-stop"
     );
+    const idle = cloudCostFacts(
+      status({ lifetime: { kind: "idle-sleep", idleSeconds: 1800 } }),
+      BOAT_PROVIDER
+    );
+    expect(idle).toContain("sleeps when idle");
+    expect(idle).not.toContain("no auto-stop");
+    expect(cloudCostFacts(status({ lifetime: null }), BOAT_PROVIDER)).toEqual(["$0.036/h"]);
+    // A fixed limit whose deadline wasn't reported is unknown, not none.
+    const fixed = { kind: "fixed-at-create", canChangeWhileStopped: false } as const;
+    expect(
+      cloudCostFacts(status({ lifetime: fixed, lifetimeSeconds: 7200 }), BOAT_PROVIDER)
+    ).toEqual(["$0.036/h"]);
+    expect(
+      cloudCostFacts(status({ lifetime: fixed, lifetimeSeconds: null }), BOAT_PROVIDER)
+    ).toContain("no auto-stop");
     // Boat's renewable lifetime says what it always said with no deadline reported.
-    expect(cloudCostFacts(status({ lifetimeSeconds: 7200 }))).toContain("no auto-stop");
+    expect(cloudCostFacts(status({ lifetimeSeconds: 7200 }), BOAT_PROVIDER)).toContain(
+      "no auto-stop"
+    );
     const deadline = new Date(Date.UTC(2026, 10, 14, 12)).toISOString();
     expect(
       cloudCostFacts(
-        status({ lifetime: { kind: "idle-sleep", idleSeconds: 60 }, autoStopAt: deadline })
+        status({ lifetime: { kind: "idle-sleep", idleSeconds: 60 }, autoStopAt: deadline }),
+        BOAT_PROVIDER
       ).some((fact) => fact.startsWith("stops by itself"))
     ).toBe(true);
   });
