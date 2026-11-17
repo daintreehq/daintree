@@ -10,7 +10,10 @@ function bytes(text: string): number {
 }
 
 function rows(count: number, label: string, pad = 200) {
-  return Array.from({ length: count }, (_, i) => ({ id: i, text: `${label}-${i}-${"é".repeat(pad)}` }));
+  return Array.from({ length: count }, (_, i) => ({
+    id: i,
+    text: `${label}-${i}-${"é".repeat(pad)}`,
+  }));
 }
 
 describe("fitJsonResource (#17490)", () => {
@@ -119,7 +122,10 @@ describe("fitJsonResource (#17490)", () => {
   });
 
   it("keeps the page envelope with no rows when even the first row is too large", () => {
-    const items = [{ id: 1, text: "x".repeat(LIMIT) }, { id: 2, text: "small" }];
+    const items = [
+      { id: 1, text: "x".repeat(LIMIT) },
+      { id: 2, text: "small" },
+    ];
     const value = { items, nextCursor: null, hasMore: false };
 
     const text = fitJsonResource(value, ITEMS);
@@ -135,7 +141,10 @@ describe("fitJsonResource (#17490)", () => {
   it.each([
     ["an oversized root array", rows(400, "row")],
     ["an oversized field no trim names", { items: [], blob: "x".repeat(LIMIT) }],
-    ["a payload that already carries a truncated field", { truncated: false, items: rows(400, "r") }],
+    [
+      "a payload that already carries a truncated field",
+      { truncated: false, items: rows(400, "r") },
+    ],
     ["an oversized string", "y".repeat(LIMIT + 1)],
   ])("replaces %s with metadata alone", (_label, value) => {
     const text = fitJsonResource(value, ITEMS);
