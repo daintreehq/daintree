@@ -83,10 +83,8 @@ function diffBlobIds(diff: string): [string, string] | null {
  * the same file read separately. Each read resolves the branches on its own,
  * so a commit landing between them leaves the two describing different blobs,
  * and that source would reveal lines the patch never compared: the viewer's
- * hunk check only sees the lines both share. Null when they disagree. Ids are
- * compared exactly: a newer blob can extend an older one's abbreviation, but
- * a later read can only print the same abbreviation for the same blob, so a
- * length that differs costs the expanders rather than trusting a prefix.
+ * hunk check only sees the lines both share. Null when they disagree; both
+ * reads print full ids, and an abbreviation is never trusted as a prefix.
  */
 export function committedSourceForPatch(fullDiff: string | null, patch: string): string | null {
   if (fullDiff === null) return null;

@@ -703,6 +703,9 @@ export class GitService {
             // would otherwise replace the patch with a commit summary or with the
             // submodule's own files (#12309).
             "--submodule=short",
+            // Full blob ids let the renderer tell whether a separate whole-file
+            // read of this file saw the same blobs as the patch.
+            "--full-index",
             ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
             ...(contextLines !== undefined ? [`--unified=${contextLines}`] : []),
             "--end-of-options",
