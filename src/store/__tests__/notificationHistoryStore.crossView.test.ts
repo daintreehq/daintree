@@ -434,6 +434,54 @@ describe("notificationHistoryStore cross-view write merge (#15534)", () => {
     expect(entryById(backing, "target")?.seenAsToast).toBe(false);
   });
 
+  it("drops a sibling's snooze when this view prunes the thread's last row", async () => {
+    const rows = Array.from({ length: 200 }, (_, i) =>
+      makeEntry({
+        id: `old-${i}`,
+        timestamp: NOW - DAY - i * 1000,
+        correlationId: i === 199 ? "thread" : undefined,
+      })
+    );
+    const backing = installLocalStorage(seed(rows));
+
+    const viewA = await openView();
+    const viewB = await openView();
+
+    viewB.getState().snoozeThread("thread", NOW + HOUR);
+    flush();
+    expect(readBlob(backing).state.snoozedThreads).toEqual({ thread: NOW + HOUR });
+
+    viewA.getState().addEntry({ type: "info", message: "from A" });
+    flush();
+
+    const written = readBlob(backing).state;
+    expect(written.entries.some((e) => e.correlationId === "thread")).toBe(false);
+    expect(written.snoozedThreads).toEqual({});
+  });
+
+  it("keeps a sibling's snooze when the thread has a row this view never held", async () => {
+    const rows = Array.from({ length: 200 }, (_, i) =>
+      makeEntry({
+        id: `old-${i}`,
+        timestamp: NOW - DAY - i * 1000,
+        correlationId: i === 199 ? "thread" : undefined,
+      })
+    );
+    const backing = installLocalStorage(seed(rows));
+
+    const viewA = await openView();
+    const viewB = await openView();
+
+    viewB.getState().addEntry({ type: "error", message: "newer", correlationId: "thread" });
+    viewB.getState().snoozeThread("thread", NOW + HOUR);
+    flush();
+
+    viewA.getState().addEntry({ type: "info", message: "from A" });
+    flush();
+
+    expect(readBlob(backing).state.snoozedThreads).toEqual({ thread: NOW + HOUR });
+  });
+
   it("holds the 200-entry cap, keeping both views' new entries", async () => {
     const old = Array.from({ length: 200 }, (_, i) =>
       makeEntry({ id: `old-${i}`, timestamp: NOW - DAY - i * 1000 })
@@ -530,6 +578,37 @@ describe("notificationHistoryStore cross-view write merge (#15534)", () => {
       expect(ids.filter((id) => id === "run-1")).toHaveLength(1);
       expect(ids).toContain("existing");
     });
+  });
+});
+
+describe("notificationHistoryStore hydration of snoozed threads", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    restoreLocalStorage();
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  it("drops the snooze of a thread whose only rows retention removed on load", async () => {
+    const stale = makeEntry({
+      id: "stale",
+      seenAsToast: true,
+      timestamp: NOW - 8 * DAY,
+      correlationId: "gone",
+    });
+    const live = makeEntry({ id: "live", correlationId: "kept" });
+    const until = NOW + HOUR;
+    installLocalStorage(seed([live, stale], { gone: until, kept: until, early: until }));
+
+    const view = await openView();
+
+    expect(view.getState().entries.map((e) => e.id)).toEqual(["live"]);
+    expect(view.getState().snoozedThreads).toEqual({ kept: until, early: until });
   });
 });
 
