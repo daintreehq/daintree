@@ -124,16 +124,16 @@ export class CloudHosts {
     this.changed();
   }
 
-  checkAccountKey(providerId: unknown, apiKey: unknown): Promise<CloudAccountCheckResult> {
-    return this.deps.accounts.checkKey(providerId, apiKey);
+  checkAccountCredentials(providerId: unknown, values: unknown): Promise<CloudAccountCheckResult> {
+    return this.deps.accounts.checkCredentials(providerId, values);
   }
 
   addAccount(request: CloudAccountAddRequest): Promise<CloudAccountSummary> {
     return this.deps.accounts.addAccount(request);
   }
 
-  replaceAccountKey(accountId: unknown, apiKey: unknown): Promise<CloudAccountSummary> {
-    return this.deps.accounts.replaceKey(accountId, apiKey);
+  replaceAccountCredentials(accountId: unknown, values: unknown): Promise<CloudAccountSummary> {
+    return this.deps.accounts.replaceCredentials(accountId, values);
   }
 
   renameAccount(accountId: unknown, displayName: unknown): CloudAccountSummary {

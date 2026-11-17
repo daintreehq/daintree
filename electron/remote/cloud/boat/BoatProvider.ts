@@ -1,5 +1,6 @@
 import type {
   CloudAccountCheckResult,
+  CloudCredentialValues,
   CloudHostError,
   CloudMachineType,
   CloudProviderInfo,
@@ -21,6 +22,24 @@ import { BOAT_SIZE_MULTIPLIERS, BOAT_SIZE_SPECS, boatMachineState } from "./boat
 
 const SIZE_ORDER = ["small", "default", "large", "xlarge"];
 const MAX_SCOPE_PROBES = 12;
+const MAX_KEY_LENGTH = 4096;
+
+function invalidKey(message: string): AppError {
+  return new AppError({ code: "VALIDATION", message, userMessage: message });
+}
+
+/** Boat's API key from an entered set: one line of printable ASCII, the only shape Boat issues. */
+export function boatApiKey(values: Readonly<CloudCredentialValues>): string {
+  const key = values.apiKey;
+  if (typeof key !== "string" || key.length === 0) throw invalidKey("Paste an API key.");
+  if (/PRIVATE KEY/.test(key)) throw invalidKey("That's a private key, not an API key.");
+  if (key.length > MAX_KEY_LENGTH || !/^[\x21-\x7e]+$/.test(key)) {
+    throw invalidKey(
+      "That doesn't look like an API key: it should be one line of letters, digits and symbols."
+    );
+  }
+  return key;
+}
 
 function stopStatus(
   status: string
@@ -132,14 +151,18 @@ export class BoatProvider implements CloudProvider {
   }
 
   private ctx(credentials: ProviderCredentials): BoatRequestContext {
-    return { apiKey: credentials.apiKey, org: credentials.scopeId, signal: credentials.signal };
+    const apiKey = credentials.values.apiKey;
+    // Never sent without one: an empty bearer would only come back as Boat's refusal.
+    if (!apiKey) throw new BoatApiError("unauthorized", "No API key", null, null, null);
+    return { apiKey, org: credentials.scopeId, signal: credentials.signal };
   }
 
-  async checkKey(
-    apiKey: string,
+  async checkCredentials(
+    values: Readonly<CloudCredentialValues>,
     apiUrl: string,
     signal?: AbortSignal
   ): Promise<CloudAccountCheckResult> {
+    const apiKey = boatApiKey(values);
     const client = this.clientFor(apiUrl);
     const me = await client.me({ apiKey, org: "", signal });
     let orgs: Awaited<ReturnType<BoatClient["orgs"]>> = [];

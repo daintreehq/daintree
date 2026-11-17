@@ -1,5 +1,6 @@
 import type {
   CloudAccountCheckResult,
+  CloudCredentialValues,
   CloudHostError,
   CloudMachineState,
   CloudMachineType,
@@ -14,7 +15,8 @@ import type { SshEndpoint } from "./sshEndpoint.js";
 
 /** What a provider call needs to act for one account. Lives in main only. */
 export interface ProviderCredentials {
-  apiKey: string;
+  /** The account's whole credential set, keyed by the provider's declared field ids. */
+  values: Readonly<CloudCredentialValues>;
   /** The billing scope every request names. */
   scopeId: string;
   /** The API origin the account was connected against. */
@@ -103,8 +105,16 @@ export interface ProviderCreateRequest {
 export interface CloudProvider {
   readonly id: CloudProviderId;
   info(platform: NodeJS.Platform): CloudProviderInfo;
-  /** Checks a key the person pasted and lists the scopes it may bill. */
-  checkKey(apiKey: string, apiUrl: string, signal?: AbortSignal): Promise<CloudAccountCheckResult>;
+  /**
+   * Checks credentials the person entered, already normalised against the
+   * declared fields, and lists the scopes they may bill. Runs before anything
+   * is kept, for a new account and for a replacement alike.
+   */
+  checkCredentials(
+    values: Readonly<CloudCredentialValues>,
+    apiUrl: string,
+    signal?: AbortSignal
+  ): Promise<CloudAccountCheckResult>;
   validate(credentials: ProviderCredentials): Promise<{ identity: string | null }>;
   catalog(credentials: ProviderCredentials): Promise<ProviderCatalog>;
   /** Every machine in the scope; with `label`, only those carrying that `key=value`. */

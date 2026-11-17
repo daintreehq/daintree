@@ -20,7 +20,7 @@ import { normalizeHostKey } from "./sshEndpoint.js";
  * key is absent from the store defaults, so a settings file is untouched until
  * someone connects an account.
  *
- * An account's key is never here: CloudCredentialVault holds it. A binding keeps
+ * An account's credentials are never here: CloudCredentialVault holds them. A binding keeps
  * the machine's identity (its provider id), never its address: the address is
  * resolved again on every start and kept only as a diagnostic.
  */
@@ -31,9 +31,15 @@ export interface StoredCloudAccount {
   displayName: string;
   identity: string | null;
   scope: CloudBillingScope;
-  /** The API base URL the key was checked against; it is never sent anywhere else. */
+  /** The API base URL the credentials were checked against; they are never sent anywhere else. */
   apiUrl: string;
   keyHint: string | null;
+  /**
+   * Changes every time the credentials are connected or replaced, so an answer
+   * about an earlier set is never taken for one about these. Null on accounts
+   * connected before it was kept, until their credentials are next replaced.
+   */
+  credentialRevision: string | null;
   addedAt: number;
   validation: CloudAccountValidation;
   /** What this account's last create named, offered first next time; null before its first. */
@@ -222,6 +228,7 @@ function readAccount(raw: unknown): StoredCloudAccount | null {
     scope,
     apiUrl,
     keyHint: str(value.keyHint),
+    credentialRevision: str(value.credentialRevision),
     addedAt: num(value.addedAt) ?? 0,
     validation: readValidation(value.validation),
     lastProvisioning: readProvisioningSelection(value.lastProvisioning),

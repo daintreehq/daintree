@@ -245,7 +245,7 @@ describe("boatMachineState", () => {
 
 describe("BoatProvider", () => {
   const credentials = {
-    apiKey: ctx.apiKey,
+    values: { apiKey: ctx.apiKey },
     scopeId: "personal",
     apiUrl: "https://boat.test/api/v1",
   };
@@ -334,7 +334,7 @@ describe("BoatProvider", () => {
       jsonResponse(403, { ok: false, code: "missing_scope", message: "account.read" }),
       jsonResponse(200, { ok: true, sandboxes: [] }),
     ]);
-    const checked = await p.checkKey(ctx.apiKey, credentials.apiUrl);
+    const checked = await p.checkCredentials(credentials.values, credentials.apiUrl);
     expect(checked).toEqual({
       identity: "octocat",
       scopes: [{ scope: { kind: "personal", id: "personal", name: "Personal" }, active: false }],
@@ -354,10 +354,51 @@ describe("BoatProvider", () => {
       jsonResponse(403, { ok: false, code: "api_key_org_mismatch", message: "org key" }),
       jsonResponse(200, { ok: true, sandboxes: [] }),
     ]);
-    const checked = await p.checkKey(ctx.apiKey, credentials.apiUrl);
+    const checked = await p.checkCredentials(credentials.values, credentials.apiUrl);
     expect(checked.scopes.map((choice) => choice.scope.id)).toEqual(["team_1"]);
     expect((calls[2].init.headers as Record<string, string>)["X-Boat-Org"]).toBe("personal");
     expect((calls[3].init.headers as Record<string, string>)["X-Boat-Org"]).toBe("team_1");
+  });
+
+  it("refuses what isn't a Boat key before asking Boat anything", async () => {
+    const { provider: p, calls } = provider([]);
+    for (const [values, refusal] of [
+      [{}, /Paste an API key/],
+      [{ apiKey: "-----BEGIN OPENSSH PRIVATE KEY-----" }, /private key/],
+      [{ apiKey: "boat live key" }, /one line of letters/],
+    ] as const) {
+      await expect(p.checkCredentials(values, credentials.apiUrl)).rejects.toMatchObject({
+        code: "VALIDATION",
+        userMessage: expect.stringMatching(refusal),
+      });
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("signs every request with the API key from the account's own set", async () => {
+    const { provider: p, calls } = provider([
+      jsonResponse(200, { ok: true, user: { login: "octocat" } }),
+      jsonResponse(200, { ok: true, orgs: [] }),
+      jsonResponse(200, { ok: true, sandboxes: [] }),
+      jsonResponse(200, { ok: true, sandboxes: [] }),
+    ]);
+    await p.checkCredentials({ apiKey: "boat_live_checkedcheckedchecked" }, credentials.apiUrl);
+    await p.list({ ...credentials, values: { apiKey: "boat_live_storedstoredstored" } });
+    const signed = calls.map((call) => (call.init.headers as Record<string, string>).Authorization);
+    expect(signed).toEqual([
+      "Bearer boat_live_checkedcheckedchecked",
+      "Bearer boat_live_checkedcheckedchecked",
+      "Bearer boat_live_checkedcheckedchecked",
+      "Bearer boat_live_storedstoredstored",
+    ]);
+  });
+
+  it("sends no request for an account whose set holds no API key", async () => {
+    const { provider: p, calls } = provider([]);
+    await expect(p.list({ ...credentials, values: {} })).rejects.toMatchObject({
+      kind: "unauthorized",
+    });
+    expect(calls).toHaveLength(0);
   });
 
   it("refuses a key that can use no wallet at all", async () => {
@@ -366,7 +407,7 @@ describe("BoatProvider", () => {
       jsonResponse(403, { ok: false, code: "missing_scope", message: "account.read" }),
       jsonResponse(403, { ok: false, code: "api_key_org_mismatch", message: "org key" }),
     ]);
-    await expect(p.checkKey(ctx.apiKey, credentials.apiUrl)).rejects.toMatchObject({
+    await expect(p.checkCredentials(credentials.values, credentials.apiUrl)).rejects.toMatchObject({
       kind: "forbidden",
       code: "api_key_org_mismatch",
     });

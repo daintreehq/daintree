@@ -180,6 +180,17 @@ export interface CloudCredentialField {
   help: string | null;
 }
 
+/**
+ * What a person entered for an account's credentials, keyed by the provider's
+ * declared field ids. It travels to main once, when credentials are checked,
+ * connected or replaced, and never comes back.
+ */
+export type CloudCredentialValues = Record<string, string>;
+
+/** The most one entered value may hold, in UTF-8 bytes: one line, then text over several lines or a key file. */
+export const MAX_CLOUD_CREDENTIAL_LINE_BYTES = 4096;
+export const MAX_CLOUD_CREDENTIAL_TEXT_BYTES = 64 * 1024;
+
 export interface CloudProviderInfo {
   id: CloudProviderId;
   name: string;
@@ -222,7 +233,10 @@ export interface CloudAccountSummary {
   /** Cloud hosts bound to this account. */
   hostCount: number;
   addedAt: number;
-  /** The last four characters of the key, so two keys can be told apart. */
+  /**
+   * The last four characters of the first one-line secret, so two sets can be
+   * told apart; null when the set has none long enough to hint at.
+   */
   keyHint: string | null;
 }
 
@@ -543,8 +557,8 @@ export interface CloudHostImportRequest {
 
 export interface CloudAccountAddRequest {
   providerId: CloudProviderId;
-  /** Read once in main, encrypted, and never returned. */
-  apiKey: string;
+  /** Read once in main, sealed in the keychain as one set, and never returned. */
+  credentials: CloudCredentialValues;
   scopeId: string;
   displayName?: string;
 }
