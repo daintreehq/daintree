@@ -77,24 +77,46 @@ describe("LogEntry", () => {
       expect(region.textContent).toContain('"requestId": "b"');
     });
 
-    it("copies every member's context", async () => {
+    // b first, so a sort by request ID can't pass for first-seen order.
+    const burst: LogEntryType[] = [
+      { ...second, id: "h1", timestamp: first.timestamp },
+      { ...first, id: "h2", timestamp: first.timestamp + 5000 },
+      { ...first, id: "h3", timestamp: first.timestamp + 9000 },
+      { ...first, id: "h4", timestamp: first.timestamp + 12000, context: {} },
+    ];
+    const iso = (ms: number) => new Date(ms).toISOString();
+
+    const copyPayload = async (members: LogEntryType[]) => {
       const writeText = vi.fn().mockResolvedValue(undefined);
       Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
       renderRow(
         <LogEntry
-          entry={first}
-          members={[first, second]}
-          count={2}
+          entry={members[0]!}
+          members={members}
+          count={members.length}
           isExpanded={false}
           onToggle={vi.fn()}
         />
       );
       fireEvent.click(screen.getByRole("button", { name: "Copy log entry" }));
       await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-      const payload = String(writeText.mock.calls[0]?.[0]);
-      expect(payload).toContain('"requestId": "a"');
-      expect(payload).toContain('"requestId": "b"');
-      expect(payload).toContain(new Date(second.timestamp).toISOString());
+      return String(writeText.mock.calls[0]?.[0]);
+    };
+
+    it("copies each distinct context once, in first-seen order, with its repeats", async () => {
+      const payload = await copyPayload(burst);
+      const b = payload.indexOf('"requestId": "b"');
+      const aHeading = payload.indexOf(`[${iso(burst[1]!.timestamp)}] (2 times)`);
+      const a = payload.indexOf('"requestId": "a"');
+      const none = payload.indexOf("(no context)");
+      expect(payload).toContain("(repeated 4 times)");
+      expect(payload).toContain(`[${iso(burst[0]!.timestamp)}]\n`);
+      expect(b).toBeGreaterThan(-1);
+      expect(aHeading).toBeGreaterThan(b);
+      expect(a).toBeGreaterThan(aHeading);
+      expect(none).toBeGreaterThan(a);
+      expect(payload.split('"requestId": "a"')).toHaveLength(2);
+      expect(payload).not.toContain(iso(burst[2]!.timestamp));
     });
 
     it("offers the disclosure when only a later member has context", () => {
@@ -114,14 +136,12 @@ describe("LogEntry", () => {
       );
     });
 
-    it("lists distinct contexts in first-seen order with their repeats", () => {
-      const repeatOfFirst = { ...first, id: "g3", timestamp: first.timestamp + 9000 };
-      const bare = { ...first, id: "g4", timestamp: first.timestamp + 12000, context: {} };
+    it("lists distinct contexts in first-seen order with when each first appeared", () => {
       renderRow(
         <LogEntry
-          entry={first}
-          members={[first, second, repeatOfFirst, bare]}
-          count={4}
+          entry={burst[0]!}
+          members={burst}
+          count={burst.length}
           isExpanded={true}
           onToggle={vi.fn()}
         />
@@ -129,15 +149,19 @@ describe("LogEntry", () => {
       const items = within(screen.getByRole("region", { name: /context/i })).getAllByRole(
         "listitem"
       );
-      expect(items.map((item) => item.textContent)).toEqual([
-        expect.stringMatching(/repeated 2 times.*"requestId": "a"/s),
-        expect.not.stringMatching(/repeated/),
-        expect.stringContaining("No context"),
-      ]);
-      expect(items[1]?.textContent).toContain('"requestId": "b"');
+      expect(items).toHaveLength(3);
+      expect(items[0]?.textContent).toContain('"requestId": "b"');
+      expect(items[0]?.textContent).not.toMatch(/repeated|×/);
+      expect(items[1]?.textContent).toContain('"requestId": "a"');
+      expect(items[1]?.textContent).toContain("×2");
+      expect(items[1]?.textContent).toContain("repeated 2 times");
+      expect(items[1]?.querySelector("time")?.getAttribute("datetime")).toBe(
+        iso(burst[1]!.timestamp)
+      );
+      expect(items[2]?.textContent).toContain("No context");
     });
 
-    it("shows a shared context once", () => {
+    it("shows and copies a shared context once, without a list", async () => {
       const twin = { ...second, context: { requestId: "a" } };
       renderRow(
         <LogEntry
@@ -149,8 +173,29 @@ describe("LogEntry", () => {
         />
       );
       const region = screen.getByRole("region", { name: /context/i });
+      expect(within(region).queryAllByRole("listitem")).toHaveLength(0);
       expect(region.textContent?.split('"requestId": "a"')).toHaveLength(2);
+
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      fireEvent.click(screen.getByRole("button", { name: "Copy log entry" }));
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+      const payload = String(writeText.mock.calls[0]?.[0]);
+      expect(payload.split('"requestId": "a"')).toHaveLength(2);
+      expect(payload).not.toContain(iso(twin.timestamp));
     });
+  });
+
+  it("renders no disclosure for a context whose every field is undefined", () => {
+    // An error logged without details arrives as `{ error: undefined }`.
+    renderRow(
+      <LogEntry
+        entry={{ ...entry, context: { error: undefined } }}
+        isExpanded={false}
+        onToggle={vi.fn()}
+      />
+    );
+    expect(screen.queryByRole("button", { expanded: false })).toBeNull();
   });
 
   it("renders no disclosure for an entry without context", () => {

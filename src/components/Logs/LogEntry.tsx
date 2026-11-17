@@ -59,8 +59,23 @@ interface ContextVariant {
   text: string | null;
 }
 
+// An error logged without details arrives as `{ error: undefined }`, which
+// serializes to `{}` and has nothing to show.
 function hasContextValue(entry: LogEntryType): boolean {
-  return !!entry.context && Object.keys(entry.context).length > 0;
+  return !!entry.context && Object.values(entry.context).some((value) => value !== undefined);
+}
+
+// Entries are immutable once logged, and an expanded group re-renders with every
+// live repeat, so each context is serialized once rather than per render.
+const serializedContexts = new WeakMap<LogEntryType, string | null>();
+
+function serializeContext(entry: LogEntryType): string | null {
+  let text = serializedContexts.get(entry);
+  if (text === undefined) {
+    text = hasContextValue(entry) ? safeStringify(entry.context, 2) : null;
+    serializedContexts.set(entry, text);
+  }
+  return text;
 }
 
 // A collapsed row groups on level, message and source, so its members can each
@@ -69,7 +84,7 @@ function hasContextValue(entry: LogEntryType): boolean {
 function collectContexts(members: readonly LogEntryType[]): ContextVariant[] {
   const variants = new Map<string | null, ContextVariant>();
   for (const member of members) {
-    const text = hasContextValue(member) ? safeStringify(member.context, 2) : null;
+    const text = serializeContext(member);
     const existing = variants.get(text);
     if (existing) existing.count++;
     else variants.set(text, { firstId: member.id, timestamp: member.timestamp, count: 1, text });
@@ -258,7 +273,7 @@ export function LogEntry({
                       {formatTimestamp(variant.timestamp)}
                     </time>
                     {variant.count > 1 && (
-                      <CountBadge label={`repeated ${variant.count} times`}>
+                      <CountBadge label={`repeated ${pluralize(variant.count, "time")}`}>
                         ×{variant.count}
                       </CountBadge>
                     )}

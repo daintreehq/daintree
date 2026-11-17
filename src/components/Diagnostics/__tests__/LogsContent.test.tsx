@@ -477,24 +477,11 @@ describe("LogsContent — collapsed groups", () => {
   });
 
   it("keeps every request's context reachable from one collapsed row", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
-    mockGetAll.mockResolvedValue([
-      makeLog("r1", {
-        timestamp: 1000,
-        source: "s1",
-        message: "same",
-        context: { requestId: "a" },
-      }),
-      makeLog("r2", {
-        timestamp: 1001,
-        source: "s1",
-        message: "same",
-        context: { requestId: "b" },
-      }),
-    ]);
+    const request = (id: string, timestamp: number, requestId: string) =>
+      makeLog(id, { timestamp, source: "s1", message: "same", context: { requestId } });
+    mockGetAll.mockResolvedValue([request("r1", 1000, "a"), request("r2", 1001, "b")]);
 
-    const { findByTestId, getByRole, getAllByRole } = render(
+    const { findByTestId, getByRole, queryByRole } = render(
       <TooltipProvider>
         <LogsContent />
       </TooltipProvider>
@@ -503,18 +490,37 @@ describe("LogsContent — collapsed groups", () => {
       expect((await findByTestId("virtuoso")).getAttribute("data-count")).toBe("1")
     );
 
-    fireEvent.click(getByRole("button", { name: "Copy log entry" }));
-    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-    const payload = String(writeText.mock.calls[0]?.[0]);
-    expect(payload).toContain('"requestId": "a"');
-    expect(payload).toContain('"requestId": "b"');
+    const copyPayload = async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      fireEvent.click(getByRole("button", { name: "Copy log entry" }));
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+      return String(writeText.mock.calls[0]?.[0]);
+    };
 
-    const disclosure = getAllByRole("button").find((b) => b.getAttribute("aria-expanded"))!;
+    const copied = await copyPayload();
+    expect(copied).toContain('"requestId": "a"');
+    expect(copied).toContain('"requestId": "b"');
+
+    const disclosure = getByRole("button", { expanded: false });
+    expect(disclosure.getAttribute("aria-label")).toContain("repeated 2 times");
+    const panelId = disclosure.getAttribute("aria-controls") ?? "";
+    expect(document.getElementById(panelId)).toBeNull();
     await act(async () => {
       fireEvent.click(disclosure);
     });
-    const region = document.getElementById(disclosure.getAttribute("aria-controls") ?? "");
-    expect(region?.textContent).toContain('"requestId": "a"');
-    expect(region?.textContent).toContain('"requestId": "b"');
+    expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+    expect(document.getElementById(panelId)?.textContent).toMatch(
+      /"requestId": "a".*"requestId": "b"/s
+    );
+
+    // A repeat arriving while the group is open joins it without closing it.
+    await act(async () => {
+      useLogsStore.getState().addLogs([request("r3", 1002, "c")]);
+    });
+    expect(queryByRole("button", { expanded: true })).toBe(disclosure);
+    expect(disclosure.getAttribute("aria-label")).toContain("repeated 3 times");
+    expect(document.getElementById(panelId)?.textContent).toContain('"requestId": "c"');
+    expect(await copyPayload()).toContain('"requestId": "c"');
   });
 });
