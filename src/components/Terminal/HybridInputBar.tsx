@@ -75,6 +75,7 @@ import { VoiceInputButton } from "./VoiceInputButton";
 import { DictationCancelConfirmOverlay, useDictationCancelConfirm } from "./DictationCancelConfirm";
 import { DICTATION_CANCEL_CONFIRM_PROMPT } from "@/lib/pressAgain";
 import { DictionaryLearnPrompt } from "./DictionaryLearnPrompt";
+import { useDictionaryLearnPromptStore } from "@/store/dictionaryLearnPromptStore";
 import { Archive, X } from "lucide-react";
 import { Paperclip } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -536,6 +537,10 @@ const PROMPT_HISTORY_SHORTCUT = "Cmd+R";
 /** The `❯` and trailing controls of an unavailable composer: inactive, one family. */
 const DISABLED_CONTROL_MIX = "45%";
 const DISABLED_CONTROL_INK = "color-mix(in oklab, var(--ib-fg) 45%, var(--ib-bg))";
+
+/** The band's side inset, which the shell and every strip above it share. */
+const COMPOSER_BAND_RAIL = "px-3.5";
+
 const SPOKEN_SEND_TOO_SHORT_CAPTION = "Too short to send by voice · Enter to send";
 const NO_DIFF_NOTES_CAPTION = "Not sent · No notes to send";
 const NO_DIFF_NOTES_STATUS = "Not sent: there are no diff notes to send. The draft is still here.";
@@ -642,6 +647,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // a reply's by its own id, which names the same draft with no project.
     const voiceId = voiceTarget?.panelId ?? terminalId;
     const voiceProjectId = voiceTarget ? voiceTarget.projectId : projectId;
+    const learnPromptShown = useDictionaryLearnPromptStore((s) => s.prompts.has(voiceId));
     const draftKeyRef = useRef(draftKey);
     // Before the editor factory's layout effect, which builds a tab's editor
     // over the draft this names.
@@ -2838,7 +2844,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     const barContent = (
       <div
-        className="relative group cursor-text px-3.5 pb-2.5 pt-2.5"
+        className={cn(
+          "relative group cursor-text pb-2.5",
+          COMPOSER_BAND_RAIL,
+          // The learn offer's row above already holds the band's top edge.
+          learnPromptShown ? "pt-1.5" : "pt-2.5"
+        )}
         // Anchors the type-anywhere rescue (#11134): marks this subtree as a
         // real typing surface, and lets the rescue verify focus actually landed
         // here rather than trusting a handle's boolean return.
@@ -3283,11 +3294,22 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             focusEditor();
           }}
         >
-          <DictionaryLearnPrompt
-            terminalId={voiceId}
-            projectId={voiceProjectId}
-            onReturnFocus={focusEditor}
-          />
+          {/* Painted as the band, on its rail, so no app canvas shows between
+              the terminal and the composer (#17278). Outside the typing root:
+              the offer's buttons are not the draft's, and inside it a voice
+              wait would take Enter on Retry as a send. */}
+          {learnPromptShown && (
+            <div
+              className={cn(COMPOSER_BAND_RAIL, "pt-2.5")}
+              style={{ backgroundColor: inputBarColors.background }}
+            >
+              <DictionaryLearnPrompt
+                terminalId={voiceId}
+                projectId={voiceProjectId}
+                onReturnFocus={focusEditor}
+              />
+            </div>
+          )}
           {barContent}
         </div>
         {activeTemplate && (
