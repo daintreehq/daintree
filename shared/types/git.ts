@@ -485,8 +485,9 @@ export interface StagingStatus {
    * git merged cleanly, which never conflicted and never appear here, so this
    * is what tells a resolution from the rest of the staged list.
    *
-   * Only the legacy `resolve` merge strategy also records the text merges it
-   * does by itself, which then read as resolutions here.
+   * A merge strategy other than `ort` (`resolve`, or `recursive` before git
+   * made it an alias of `ort`) may also record the text merges it does by
+   * itself, which then read as resolutions here.
    *
    * Read only while an operation is stopped with something staged. Absent when
    * it was not read or the read failed, which says nothing about any path; `[]`
