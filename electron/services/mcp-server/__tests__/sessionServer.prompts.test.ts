@@ -8,6 +8,7 @@ vi.mock("electron", () => ({
 }));
 
 import { createSessionServer } from "../sessionServer.js";
+import type { DispatchEnvelope } from "../shared.js";
 import {
   fakeDeps,
   makeMockTransport,
@@ -118,16 +119,17 @@ describe("sessionServer prompt handler", () => {
   });
 
   it("asks for the named terminal's output while worktree.getCurrent is still pending (#17492)", async () => {
-    type Envelope = { result: { ok: true; result: unknown } };
-    let resolveWorktree!: (value: Envelope) => void;
-    let resolveOutput!: (value: Envelope) => void;
-    const worktree = new Promise<Envelope>((resolve) => (resolveWorktree = resolve));
-    const output = new Promise<Envelope>((resolve) => (resolveOutput = resolve));
-    const dispatchAction = vi.fn((actionId: string) => {
-      if (actionId === "worktree.getCurrent") return worktree;
-      if (actionId === "terminal.getOutput") return output;
-      return Promise.resolve({ result: { ok: true, result: null } });
-    });
+    let resolveWorktree!: (value: DispatchEnvelope) => void;
+    let resolveOutput!: (value: DispatchEnvelope) => void;
+    const worktree = new Promise<DispatchEnvelope>((resolve) => (resolveWorktree = resolve));
+    const output = new Promise<DispatchEnvelope>((resolve) => (resolveOutput = resolve));
+    const dispatchAction = vi.fn<(actionId: string, args?: unknown) => Promise<DispatchEnvelope>>(
+      (actionId) => {
+        if (actionId === "worktree.getCurrent") return worktree;
+        if (actionId === "terminal.getOutput") return output;
+        return Promise.resolve({ result: { ok: true, result: null } });
+      }
+    );
     const deps = fakeDeps({ dispatchAction });
     const server = createSessionServer("s_triage_failed_concurrent", deps);
     await server.connect(makeMockTransport());
@@ -142,7 +144,10 @@ describe("sessionServer prompt handler", () => {
       "worktree.getCurrent",
       "terminal.getOutput",
     ]);
-    expect(dispatchAction.mock.calls[1][1]).toMatchObject({ terminalId: "t-failed" });
+    expect(dispatchAction).toHaveBeenLastCalledWith(
+      "terminal.getOutput",
+      expect.objectContaining({ terminalId: "t-failed" })
+    );
 
     resolveOutput({ result: { ok: true, result: { content: "panic: boom" } } });
     resolveWorktree({ result: { ok: true, result: { path: "/repo/wt", branch: "fix/boom" } } });
@@ -154,12 +159,12 @@ describe("sessionServer prompt handler", () => {
   });
 
   it("still renders the terminal output when worktree.getCurrent fails (#17492)", async () => {
-    const dispatchAction = vi.fn((actionId: string) => {
-      if (actionId === "worktree.getCurrent") return Promise.reject(new Error("renderer gone"));
+    const dispatchAction = vi.fn(async (actionId: string): Promise<DispatchEnvelope> => {
+      if (actionId === "worktree.getCurrent") throw new Error("renderer gone");
       if (actionId === "terminal.getOutput") {
-        return Promise.resolve({ result: { ok: true, result: { content: "panic: boom" } } });
+        return { result: { ok: true, result: { content: "panic: boom" } } };
       }
-      return Promise.resolve({ result: { ok: true, result: null } });
+      return { result: { ok: true, result: null } };
     });
     const deps = fakeDeps({ dispatchAction });
     const server = createSessionServer("s_triage_failed_worktree_down", deps);

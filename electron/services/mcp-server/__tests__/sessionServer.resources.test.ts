@@ -16,7 +16,12 @@ import {
   makeMockTransport,
   callHandler,
 } from "./helpers/sessionServerFixture.js";
-import { RESOURCE_TEXT_MAX_BYTES, SESSION_BINDING_GONE } from "../shared.js";
+import {
+  RESOURCE_TEXT_MAX_BYTES,
+  SESSION_BINDING_GONE,
+  WORKSPACE_BINDING_RESOURCE_URI,
+  type DispatchEnvelope,
+} from "../shared.js";
 import { SessionBindingError } from "../rendererBridge.js";
 
 describe("Resource error envelope (integration through sessionServer)", () => {
@@ -369,7 +374,8 @@ describe("Resource error envelope (integration through sessionServer)", () => {
 });
 
 describe("resources/list reads its independent categories together (#17492)", () => {
-  type Envelope = { result: { ok: true; result: unknown } };
+  type Dispatch = (actionId: string, args?: unknown) => Promise<DispatchEnvelope>;
+  const ok = (result: unknown): DispatchEnvelope => ({ result: { ok: true, result } });
   function deferred<T>() {
     let resolve!: (value: T) => void;
     let reject!: (reason: unknown) => void;
@@ -383,7 +389,7 @@ describe("resources/list reads its independent categories together (#17492)", ()
   // first real wait, so "not dispatched yet" means it is waiting, not late.
   const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-  async function listingServer(dispatchAction: ReturnType<typeof vi.fn>) {
+  async function listingServer(dispatchAction: Dispatch) {
     const deps = fakeDeps({ sessionStore: fakeSessionStore("full"), dispatchAction });
     const server = createSessionServer("s_list_concurrent", deps);
     await server.connect(makeMockTransport());
@@ -391,12 +397,12 @@ describe("resources/list reads its independent categories together (#17492)", ()
   }
 
   it("starts terminal.list while worktree.list is still pending, keeping the listing order", async () => {
-    const worktrees = deferred<Envelope>();
-    const terminals = deferred<Envelope>();
-    const dispatchAction = vi.fn((actionId: string) => {
+    const worktrees = deferred<DispatchEnvelope>();
+    const terminals = deferred<DispatchEnvelope>();
+    const dispatchAction = vi.fn<Dispatch>((actionId) => {
       if (actionId === "worktree.list") return worktrees.promise;
       if (actionId === "terminal.list") return terminals.promise;
-      return Promise.resolve({ result: { ok: true, result: null } });
+      return Promise.resolve(ok(null));
     });
     const server = await listingServer(dispatchAction);
 
@@ -409,29 +415,27 @@ describe("resources/list reads its independent categories together (#17492)", ()
 
     // Settled in the reverse of listing order, so an order that followed
     // arrival would put the terminal entries first.
-    terminals.resolve({
-      result: { ok: true, result: [{ id: "t-1", title: "Shell", agentId: "claude" }] },
-    });
+    terminals.resolve(ok([{ id: "t-1", title: "Shell", agentId: "claude" }]));
     await settle();
-    worktrees.resolve({ result: { ok: true, result: [{ id: "wt-1", branch: "main" }] } });
+    worktrees.resolve(ok([{ id: "wt-1", branch: "main" }]));
 
-    const uris = (await listing).resources.map((r) => r.uri);
-    const pulse = "daintree://worktree/wt-1/pulse";
-    expect(uris.slice(uris.indexOf(pulse))).toEqual([
-      pulse,
+    expect((await listing).resources.map((r) => r.uri)).toEqual([
+      WORKSPACE_BINDING_RESOURCE_URI,
+      "daintree://project/current/issues",
+      "daintree://worktree/wt-1/pulse",
       "daintree://terminal/t-1/scrollback",
       "daintree://agent/claude/state",
     ]);
   });
 
   it("keeps each read's own failure handling: a failed worktree read drops only its entries", async () => {
-    const worktrees = deferred<Envelope>();
-    const dispatchAction = vi.fn((actionId: string) => {
+    const worktrees = deferred<DispatchEnvelope>();
+    const dispatchAction = vi.fn<Dispatch>((actionId) => {
       if (actionId === "worktree.list") return worktrees.promise;
       if (actionId === "terminal.list") {
-        return Promise.resolve({ result: { ok: true, result: [{ id: "t-1", title: "Shell" }] } });
+        return Promise.resolve(ok([{ id: "t-1", title: "Shell" }]));
       }
-      return Promise.resolve({ result: { ok: true, result: null } });
+      return Promise.resolve(ok(null));
     });
     const server = await listingServer(dispatchAction);
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -452,11 +456,11 @@ describe("resources/list reads its independent categories together (#17492)", ()
   });
 
   it("refuses for a dead pin on worktree.list without waiting on a slow terminal.list", async () => {
-    const terminals = deferred<Envelope>();
-    const dispatchAction = vi.fn((actionId: string) => {
+    const terminals = deferred<DispatchEnvelope>();
+    const dispatchAction = vi.fn<Dispatch>((actionId) => {
       if (actionId === "worktree.list") return Promise.reject(new SessionBindingError(1234));
       if (actionId === "terminal.list") return terminals.promise;
-      return Promise.resolve({ result: { ok: true, result: null } });
+      return Promise.resolve(ok(null));
     });
     const server = await listingServer(dispatchAction);
 
@@ -472,11 +476,11 @@ describe("resources/list reads its independent categories together (#17492)", ()
   });
 
   it("surfaces the worktree read's refusal when both reads refuse, whichever settles first", async () => {
-    const worktrees = deferred<Envelope>();
-    const dispatchAction = vi.fn((actionId: string) => {
+    const worktrees = deferred<DispatchEnvelope>();
+    const dispatchAction = vi.fn<Dispatch>((actionId) => {
       if (actionId === "worktree.list") return worktrees.promise;
       if (actionId === "terminal.list") return Promise.reject(new SessionBindingError(2));
-      return Promise.resolve({ result: { ok: true, result: null } });
+      return Promise.resolve(ok(null));
     });
     const server = await listingServer(dispatchAction);
 
@@ -492,5 +496,18 @@ describe("resources/list reads its independent categories together (#17492)", ()
     expect(err?.data?.code).toBe(SESSION_BINDING_GONE);
     // McpError prefixes its own code; the dead pin's id is what tells them apart.
     expect(err?.message).toContain(new SessionBindingError(1).message);
+  });
+
+  it("still refuses for a dead pin on terminal.list after worktree.list succeeds", async () => {
+    const dispatchAction = vi.fn<Dispatch>((actionId) => {
+      if (actionId === "worktree.list") return Promise.resolve(ok([{ id: "wt-1" }]));
+      if (actionId === "terminal.list") return Promise.reject(new SessionBindingError(7));
+      return Promise.resolve(ok(null));
+    });
+    const server = await listingServer(dispatchAction);
+
+    await expect(callHandler(server, "resources/list", {})).rejects.toMatchObject({
+      data: { code: SESSION_BINDING_GONE },
+    });
   });
 });
