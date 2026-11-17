@@ -213,6 +213,7 @@ vi.mock("../../channels.js", () => ({
     VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",
     VOICE_INPUT_FILE_TOKEN_RESOLVED: "voice-input:file-token-resolved",
     VOICE_INPUT_SESSION_ENDED: "voice-input:session-ended",
+    VOICE_INPUT_SESSION_VOCABULARY: "voice-input:session-vocabulary",
   },
 }));
 

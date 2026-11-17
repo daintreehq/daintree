@@ -100,6 +100,7 @@ vi.mock("../../../store.js", () => ({
 import { store } from "../../../store.js";
 import { registerVoiceDictionaryHandlers } from "../voiceDictionary.js";
 import { VOICE_DICTIONARY_METHOD_CHANNELS } from "../voiceDictionary.preload.js";
+import { MAX_DICTIONARY_HEARD_AS } from "../../../../shared/utils/voiceDictionary.js";
 import { registerVoiceInputHandlers } from "../voiceInput.js";
 
 const sender = {
@@ -593,6 +594,35 @@ describe("project vocabulary operations", () => {
     }
     expect(projects.local.get("local")).toBe(daintree);
     expect(projects.repo.get("/repos/shared")).toBe(daintree);
+  });
+
+  it("holds a project term to the global dictionary's count of heard-as phrases", async () => {
+    const forms = (count: number) => Array.from({ length: count }, (_, i) => `form ${i}`);
+    for (const projectId of ["local", "shared"]) {
+      await expect(
+        projectOp("addToProject", {
+          projectId,
+          term: "Over",
+          heardAs: forms(MAX_DICTIONARY_HEARD_AS + 1),
+        })
+      ).rejects.toThrow();
+      await projectOp("addToProject", { projectId, term: "Daintree" });
+      await expect(
+        projectOp("updateInProject", {
+          projectId,
+          term: "Daintree",
+          changes: { heardAs: forms(MAX_DICTIONARY_HEARD_AS + 1) },
+        })
+      ).rejects.toThrow();
+      const updated = (await projectOp("updateInProject", {
+        projectId,
+        term: "Daintree",
+        changes: { heardAs: forms(MAX_DICTIONARY_HEARD_AS) },
+      })) as unknown as ProjectVoiceDictionaryChange;
+      expect(updated.dictionary).toEqual([
+        expect.objectContaining({ term: "Daintree", heardAs: forms(MAX_DICTIONARY_HEARD_AS) }),
+      ]);
+    }
   });
 
   it("refuses an unknown project and an over-length term, writing nothing", async () => {
