@@ -479,6 +479,18 @@ export interface StagingStatus {
   conflicted: string[];
   /** Per-file conflict entries parsed from `git status --porcelain=v2` u-lines. */
   conflictedFiles: ConflictedFileEntry[];
+  /**
+   * Distinct worktree-relative paths whose conflict the index remembers
+   * resolving (`git ls-files --resolve-undo`). `staged` also holds the paths
+   * git merged cleanly, which never conflicted and never appear here, so this
+   * is what tells a resolution from the rest of the staged list.
+   *
+   * Read only while an operation is stopped with something staged. Absent when
+   * it was not read or the read failed, which says nothing about any path; `[]`
+   * is a successful read that found none. Matched against `staged` by exact
+   * path, and a path here that is no longer staged is not a staged resolution.
+   */
+  resolveUndoPaths?: string[];
   isDetachedHead: boolean;
   currentBranch: string | null;
   hasRemote: boolean;

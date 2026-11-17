@@ -176,6 +176,7 @@ describe("ConflictPanel path tooltips", () => {
       unstaged: [],
       conflicted: [CONFLICTED],
       conflictedFiles: [{ path: CONFLICTED, xy: "UU", label: "both modified" }],
+      resolveUndoPaths: [RESOLVED],
       isDetachedHead: false,
       currentBranch: "feature/x",
       hasRemote: true,

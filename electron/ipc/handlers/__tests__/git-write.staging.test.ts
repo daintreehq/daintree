@@ -411,4 +411,73 @@ describe("git-write staging handlers (real git)", () => {
     expect(commands.filter((args) => args.includes("--show-toplevel"))).toEqual([]);
     expect(commands.filter((args) => subcommand(args) === "config")).toEqual([]);
   });
+
+  describe("staged paths during a stopped operation", () => {
+    /** A merge that git stages `clean.txt` for itself and stops on `conf.txt`. */
+    function mergeWithOneCleanAndOneConflict(): void {
+      commitFiles({ "conf.txt": "a\nb\nc\n", "clean.txt": "base\n" });
+      git(repo, "checkout", "-q", "-b", "topic");
+      fs.writeFileSync(path.join(repo, "conf.txt"), "a\ntopic\nc\n");
+      fs.writeFileSync(path.join(repo, "clean.txt"), "topic\n");
+      git(repo, "commit", "-qam", "topic");
+      git(repo, "checkout", "-q", "main");
+      fs.writeFileSync(path.join(repo, "conf.txt"), "a\nmain\nc\n");
+      git(repo, "commit", "-qam", "main");
+      expect(() => git(repo, "merge", "topic")).toThrow();
+    }
+
+    const resolveUndoReads = (mark: number) =>
+      spawnedSince(mark).filter((args) => subcommand(args) === "ls-files");
+
+    it("tells a resolved conflict from a path git merged cleanly, before and after resolving", async () => {
+      mergeWithOneCleanAndOneConflict();
+
+      let mark = spawned.length;
+      const before = await stagingStatus();
+      expect(before.repoState).toBe("MERGING");
+      expect(before.staged.map((f) => f.path)).toEqual(["clean.txt"]);
+      expect(before.conflictedFiles.map((f) => f.path)).toEqual(["conf.txt"]);
+      expect(before.resolveUndoPaths).toEqual([]);
+      expect(resolveUndoReads(mark)).toHaveLength(1);
+
+      fs.writeFileSync(path.join(repo, "conf.txt"), "a\nboth\nc\n");
+      await stage("conf.txt");
+
+      mark = spawned.length;
+      const after = await stagingStatus();
+      expect(after.conflictedFiles).toEqual([]);
+      expect(after.staged.map((f) => f.path).sort()).toEqual(["clean.txt", "conf.txt"]);
+      expect(after.resolveUndoPaths).toEqual(["conf.txt"]);
+      expect(resolveUndoReads(mark)).toHaveLength(1);
+    });
+
+    it("reads nothing when nothing is staged or no operation is stopped", async () => {
+      commitFiles({ "a.txt": "one\n" });
+      fs.writeFileSync(path.join(repo, "a.txt"), "two\n");
+      await stage("a.txt");
+
+      let mark = spawned.length;
+      const ordinary = await stagingStatus();
+      expect(ordinary.staged.map((f) => f.path)).toEqual(["a.txt"]);
+      expect("resolveUndoPaths" in ordinary).toBe(false);
+      expect(resolveUndoReads(mark)).toEqual([]);
+
+      git(repo, "reset", "-q");
+      git(repo, "checkout", "-q", "--", "a.txt");
+      git(repo, "checkout", "-q", "-b", "topic");
+      fs.writeFileSync(path.join(repo, "a.txt"), "topic\n");
+      git(repo, "commit", "-qam", "topic");
+      git(repo, "checkout", "-q", "main");
+      fs.writeFileSync(path.join(repo, "a.txt"), "main\n");
+      git(repo, "commit", "-qam", "main");
+      expect(() => git(repo, "merge", "topic")).toThrow();
+
+      mark = spawned.length;
+      const conflictOnly = await stagingStatus();
+      expect(conflictOnly.repoState).toBe("MERGING");
+      expect(conflictOnly.staged).toEqual([]);
+      expect("resolveUndoPaths" in conflictOnly).toBe(false);
+      expect(resolveUndoReads(mark)).toEqual([]);
+    });
+  });
 });

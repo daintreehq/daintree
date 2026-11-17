@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { ConflictSideChoice, RebaseAction, RebaseEntry, StagingStatus } from "@shared/types";
+import type {
+  ConflictSideChoice,
+  RebaseAction,
+  RebaseEntry,
+  StagingFileEntry,
+  StagingStatus,
+} from "@shared/types";
 import type { ConflictMarkerScanEntry } from "@shared/types/ipc/git";
 import { cn } from "@/lib/utils";
 import { PathTail } from "@/components/ui/PathTail";
@@ -285,7 +291,7 @@ function ConflictedFileLabel({
   );
 }
 
-function ResolvedFileLabel({ path }: { path: string }) {
+function StagedFileLabel({ path }: { path: string }) {
   const { ref: dirRef, isTruncated: dirTruncated } = useTruncationDetection();
   const { ref: baseRef, isTruncated: baseTruncated } = useTruncationDetection();
   const { dir, base } = splitPath(path);
@@ -305,6 +311,78 @@ function ResolvedFileLabel({ path }: { path: string }) {
         </span>
       </div>
     </TruncatedTooltip>
+  );
+}
+
+/**
+ * A collapsed-by-default list of staged paths. Git stages what it merged
+ * cleanly beside what a person resolved, so the two are told apart by their own
+ * disclosures instead of one claiming all of them as resolutions.
+ */
+function StagedDisclosure({
+  files,
+  label,
+  listLabel,
+  testIdPrefix,
+  resolved,
+}: {
+  files: StagingFileEntry[];
+  label: string;
+  listLabel: string;
+  testIdPrefix: "conflict-resolved" | "conflict-staged";
+  resolved: boolean;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const listId = useId();
+  return (
+    <div className="border-t border-divider">
+      <button
+        type="button"
+        onClick={() => setIsOpen((v) => !v)}
+        className={cn(
+          SECTION_LABEL_CLASS,
+          "w-full flex items-center gap-1.5 px-3 py-1.5 hover:text-text-primary hover:bg-overlay-subtle transition-colors"
+        )}
+        aria-expanded={isOpen}
+        aria-controls={listId}
+        data-testid={`${testIdPrefix}-toggle`}
+      >
+        <ChevronRight
+          data-animated-chevron
+          className={cn(
+            "w-3 h-3 transition-transform duration-150 ease-out",
+            isOpen && "rotate-90"
+          )}
+          aria-hidden
+        />
+        {label}
+        <span className={cn(REVIEW_HUB_COUNT_CHIP, "ml-0")}>{files.length}</span>
+      </button>
+      {/* Kept mounted while collapsed so `aria-controls` always names a real
+          element. */}
+      <ul
+        id={listId}
+        hidden={!isOpen}
+        className="px-2 pb-1 flex flex-col gap-0.5"
+        role="list"
+        aria-label={listLabel}
+        data-testid={`${testIdPrefix}-list`}
+      >
+        {files.map((file) => (
+          <li
+            key={`staged-${file.path}`}
+            className="flex items-center gap-2 pl-2 pr-1 py-1 text-xs"
+          >
+            {resolved ? (
+              <Check className="w-3 h-3 shrink-0 text-text-secondary" aria-hidden />
+            ) : (
+              <span className="w-3 shrink-0" aria-hidden />
+            )}
+            <StagedFileLabel path={file.path} />
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -393,7 +471,6 @@ export function ConflictPanel({
   const [isContinuing, setIsContinuing] = useState(false);
   const [busyFile, setBusyFile] = useState<string | null>(null);
   const [optimisticResolved, setOptimisticResolved] = useState<Set<string>>(() => new Set());
-  const [showResolved, setShowResolved] = useState(false);
   const [scan, setScan] = useState<ScanResults | null>(null);
   const [scanNonce, setScanNonce] = useState(0);
   const rowRefs = useRef(new Map<string, HTMLLIElement>());
@@ -402,7 +479,6 @@ export function ConflictPanel({
   // `null` means Continue; `undefined` means nothing is pending.
   const pendingFocusRef = useRef<{ path: string | null } | undefined>(undefined);
   const focusRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const resolvedListId = useId();
   const summaryId = useId();
 
   // A review pane moved between two worktrees that are both mid-operation keeps
@@ -513,7 +589,18 @@ export function ConflictPanel({
 
   const conflictCount = liveConflicts.length;
   const canContinue = conflictCount === 0;
-  const hasStagedResolutions = status.staged.length > 0;
+  // Git stages what it merged cleanly beside what a person resolved, so only
+  // the paths its index remembers resolving are resolutions. Without that
+  // record every staged path is named for what it is, not for how it got there.
+  const { resolvedStaged, otherStaged } = useMemo(() => {
+    const resolvedPaths = new Set(status.resolveUndoPaths);
+    const resolved: StagingFileEntry[] = [];
+    const other: StagingFileEntry[] = [];
+    for (const file of status.staged) {
+      (resolvedPaths.has(file.path) ? resolved : other).push(file);
+    }
+    return { resolvedStaged: resolved, otherStaged: other };
+  }, [status.staged, status.resolveUndoPaths]);
   const continueBlocked = !canContinue || isAborting || isContinuing || busyFile !== null;
 
   // Scan for hunk counts + first-marker line on every status read that lands,
@@ -924,52 +1011,26 @@ export function ConflictPanel({
           <EmptyState variant="user-cleared" scale="sidebar" title="All conflicts resolved" />
         )}
 
-        {/* Resolved disclosure — recedes when conflicts remain, collapsed by default. */}
-        {!isWorklist && hasStagedResolutions && (
-          <div className="border-t border-divider">
-            <button
-              type="button"
-              onClick={() => setShowResolved((v) => !v)}
-              className={cn(
-                SECTION_LABEL_CLASS,
-                "w-full flex items-center gap-1.5 px-3 py-1.5 hover:text-text-primary hover:bg-overlay-subtle transition-colors"
-              )}
-              aria-expanded={showResolved}
-              aria-controls={resolvedListId}
-              data-testid="conflict-resolved-toggle"
-            >
-              <ChevronRight
-                data-animated-chevron
-                className={cn(
-                  "w-3 h-3 transition-transform duration-150 ease-out",
-                  showResolved && "rotate-90"
-                )}
-                aria-hidden
-              />
-              Resolved
-              <span className={cn(REVIEW_HUB_COUNT_CHIP, "ml-0")}>{status.staged.length}</span>
-            </button>
-            {/* Kept mounted while collapsed so `aria-controls` always names a
-                real element. */}
-            <ul
-              id={resolvedListId}
-              hidden={!showResolved}
-              className="px-2 pb-1 flex flex-col gap-0.5"
-              role="list"
-              aria-label="Resolved files"
-              data-testid="conflict-resolved-list"
-            >
-              {status.staged.map((file) => (
-                <li
-                  key={`resolved-${file.path}`}
-                  className="flex items-center gap-2 pl-2 pr-1 py-1 text-xs"
-                >
-                  <Check className="w-3 h-3 shrink-0 text-text-secondary" aria-hidden />
-                  <ResolvedFileLabel path={file.path} />
-                </li>
-              ))}
-            </ul>
-          </div>
+        {/* Staged disclosures — recede when conflicts remain, collapsed by default. */}
+        {!isWorklist && resolvedStaged.length > 0 && (
+          <StagedDisclosure
+            key="resolved"
+            files={resolvedStaged}
+            label="Resolved"
+            listLabel="Resolved files"
+            testIdPrefix="conflict-resolved"
+            resolved
+          />
+        )}
+        {!isWorklist && otherStaged.length > 0 && (
+          <StagedDisclosure
+            key="staged"
+            files={otherStaged}
+            label={resolvedStaged.length > 0 ? "Other staged changes" : "Staged changes"}
+            listLabel={resolvedStaged.length > 0 ? "Other staged files" : "Staged files"}
+            testIdPrefix="conflict-staged"
+            resolved={false}
+          />
         )}
       </div>
 
