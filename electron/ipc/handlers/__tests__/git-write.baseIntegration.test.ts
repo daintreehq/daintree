@@ -829,7 +829,10 @@ describe("git:list-base-integration-commits — measured from the commits it pin
           {},
           { cwd: CWD, baseBranch: BASE, kind: "rebase-onto-base" }
         )
-      ).rejects.toMatchObject({ reason: "pathspec-invalid", message: expect.stringMatching(message) });
+      ).rejects.toMatchObject({
+        reason: "pathspec-invalid",
+        message: expect.stringMatching(message),
+      });
       expect(git.log).not.toHaveBeenCalled();
       expect(callsTo(git, "rev-list")).toEqual([]);
     }
