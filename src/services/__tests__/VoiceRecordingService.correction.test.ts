@@ -101,7 +101,15 @@ const callbacks: {
   boundary: ((payload: { rawText: string | null }) => void) | null;
   fileToken: ((payload: FileTokenPayload) => void) | null;
   progress: ((payload: { streamId: string; text: string }) => void) | null;
-} = { delta: null, complete: null, boundary: null, fileToken: null, progress: null };
+  vocabulary: ((payload: { sessionId: string; vocabulary: VoiceDictionaryEntry[] }) => void) | null;
+} = {
+  delta: null,
+  complete: null,
+  boundary: null,
+  fileToken: null,
+  progress: null,
+  vocabulary: null,
+};
 
 const correct =
   vi.fn<
@@ -150,6 +158,12 @@ function stubElectron() {
       onRevealRequested: vi.fn(() => () => {}),
       onLiveLevel: vi.fn(() => () => {}),
       onPauseRequested: vi.fn(() => () => {}),
+      onSessionVocabulary: vi.fn(
+        (cb: (payload: { sessionId: string; vocabulary: VoiceDictionaryEntry[] }) => void) => {
+          callbacks.vocabulary = cb;
+          return () => {};
+        }
+      ),
       publishDetails: vi.fn().mockResolvedValue(undefined),
       setPausedLive: vi.fn().mockResolvedValue(true),
       getLiveSession: vi.fn().mockResolvedValue({ revision: 0, session: null }),
@@ -1155,6 +1169,83 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     });
   });
 
+  // The project vocabulary main read at the session's start (#17217).
+  describe("a session's project vocabulary", () => {
+    const complete = (payload: Omit<CompletePayload, "willCorrect">) => {
+      if (payload.text)
+        callbacks.delta!({ text: payload.heard ?? payload.text, itemId: payload.itemId });
+      callbacks.complete!({ willCorrect: false, ...payload });
+    };
+    const entry = (term: string, ...heardAs: string[]): VoiceDictionaryEntry => ({
+      term,
+      heardAs,
+      source: "manual",
+      addedAt: 0,
+    });
+    // The project's PtyClient is heard as "patty client" and dropped the
+    // user's own "pity client"; the user's Zustand rule still runs.
+    const GLOBAL = [entry("ptyclient", "pity client"), entry("Zustand", "zoo stand")];
+    const PROJECT = [entry("PtyClient", "patty client")];
+
+    it("catches a project phrase split between utterances, and leaves the global form it shadows", async () => {
+      dictionary = GLOBAL;
+      const { service, voiceStore, draft } = await setup();
+      correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+      voiceStore.getState().beginSession({ panelId: "panel-1" }, "session-a");
+      callbacks.vocabulary!({ sessionId: "session-a", vocabulary: PROJECT });
+      complete({ text: "fix patty", itemId: "a" });
+      complete({ text: "client and pity", itemId: "b" });
+      complete({ text: "client in zoo", itemId: "c" });
+      complete({ text: "stand", itemId: "d" });
+      await service.stop();
+
+      expect(draft("panel-1")).toBe("fix PtyClient and pity client in Zustand");
+      expect(correct.mock.lastCall?.[0]).toMatchObject({
+        rawText: "fix PtyClient and pity client in Zustand",
+      });
+    });
+
+    it("puts back the words a shadowed global rule wrote before the vocabulary was read", async () => {
+      dictionary = GLOBAL;
+      const { service, voiceStore, draft } = await setup();
+      correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+      voiceStore.getState().beginSession({ panelId: "panel-1" }, "session-a");
+      complete({ text: "fix ptyclient", heard: "fix pity client", itemId: "a" });
+      callbacks.vocabulary!({ sessionId: "session-a", vocabulary: PROJECT });
+      complete({ text: "and PtyClient", heard: "and patty client", itemId: "b" });
+      await service.stop();
+
+      expect(draft("panel-1")).toBe("fix pity client and PtyClient");
+    });
+
+    it("runs another session's vocabulary for that session alone, over the dictionary as last read", async () => {
+      dictionary = GLOBAL;
+      const { service, voiceStore, draft } = await setup();
+      correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+      callbacks.vocabulary!({ sessionId: "session-other", vocabulary: PROJECT });
+      voiceStore.getState().beginSession({ panelId: "panel-1" }, "session-a");
+      complete({ text: "fix patty", itemId: "a" });
+      complete({ text: "client and pity", itemId: "b" });
+      complete({ text: "client", itemId: "c" });
+      await service.stop();
+      expect(draft("panel-1")).toBe("fix patty client and ptyclient");
+
+      // A rule added to the user's dictionary mid-session joins the project's.
+      voiceStore.getState().beginSession({ panelId: "panel-2" }, "session-b");
+      callbacks.vocabulary!({ sessionId: "session-b", vocabulary: PROJECT });
+      complete({ text: "fix patty", itemId: "d" });
+      complete({ text: "client in joe", itemId: "e" });
+      dictionary = [...GLOBAL, entry("Jotai", "joe tie")];
+      await service.refreshConfiguration();
+      complete({ text: "tie", itemId: "f" });
+      await service.stop();
+      expect(draft("panel-2")).toBe("fix PtyClient in Jotai");
+    });
+  });
+
   // Where the speaker paused (#14897), as main sends it on each completion.
   describe("the speaker's pauses", () => {
     const complete = (payload: Omit<CompletePayload, "willCorrect">) => {
@@ -1439,6 +1530,31 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
 
         expect(draft("panel-1")).toBe("Zustand: @src/router.ts and Zustand now");
         expect(cleanups()).toEqual(["Zustand: @src/router.ts and Zustand now"]);
+      });
+
+      it("keeps the link with the session's project rules, and catches their phrase split around it", async () => {
+        dictionary = [rule("ptyclient", "pity client")];
+        const { service, voiceStore, dictate, say, resolveFiles, draft } = await setup();
+        correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+        dictate(
+          "panel-1",
+          "PtyClient: link to the router",
+          "patty client: link to the router",
+          "t1"
+        );
+        callbacks.vocabulary!({
+          sessionId: voiceStore.getState().panelBuffers["panel-1"]!.dictationSessionId!,
+          vocabulary: [rule("PtyClient", "patty client")],
+        });
+        say("and patty");
+        say("client now");
+        resolveFiles("panel-1", "t1", router);
+        expect(draft("panel-1")).toBe("PtyClient: @src/router.ts and patty client now");
+        await service.stop();
+
+        expect(draft("panel-1")).toBe("PtyClient: @src/router.ts and PtyClient now");
+        expect(cleanups()).toEqual(["PtyClient: @src/router.ts and PtyClient now"]);
       });
 
       it("never rewrites a term the rules already wrote in the same utterance", async () => {

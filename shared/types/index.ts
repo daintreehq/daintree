@@ -306,6 +306,7 @@ export type {
   VoiceDictionaryEntry,
   VoiceDictionarySource,
   VoiceDictionaryState,
+  VoiceSessionVocabulary,
   VoiceDictionaryChange,
   ProjectVoiceDictionaryChange,
   HeardAsConflict,

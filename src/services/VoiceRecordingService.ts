@@ -75,6 +75,7 @@ import {
   VOICE_STOP_AUDIO_LOST_CODE,
   type VoiceCleanupFailure,
   type VoiceCorrectionModel,
+  type VoiceDictionaryEntry,
   type VoiceInputSettings,
   type VoiceInputStatus,
   type VoiceRecordingMode,
@@ -163,6 +164,7 @@ import {
 import {
   collectHeardAsRules,
   createHeardAsRewriter,
+  sessionHeardAsRules,
   type HeardAsRewriter,
 } from "@shared/utils/voiceHeardAs";
 import { stripHesitations } from "@shared/utils/voiceHesitations";
@@ -840,6 +842,14 @@ class VoiceRecordingService {
   private sessionId: string | null = null;
   // The dictionary's heard-as rules as last read; every start reads them.
   private heardAsRules: HeardAsRewriter | null = null;
+  private globalDictionary: readonly VoiceDictionaryEntry[] = [];
+  // The project vocabulary each recent session runs with, as main read it at
+  // its start, and its rules over the dictionary as last read once compiled.
+  private sessionVocabularies = new Map<
+    string,
+    { vocabulary: VoiceDictionaryEntry[]; rules: HeardAsRewriter | null }
+  >();
+  private static readonly SESSION_VOCABULARY_MEMORY = 8;
   // Main drops hesitations from every completion; this covers the preview a
   // stop commits without one. English only: "um" is a word in other languages.
   // Main reads the language once per session, so the session keeps the value
@@ -1324,7 +1334,7 @@ class VoiceRecordingService {
                 .expectDraftChange(panelId, projectId, draft, next, draftChanges(draft, edits));
               this.writeShiftedDraft(panelId, next, projectId);
             },
-            planHeardSwaps(record, edits, draft, this.heardAsRules)
+            planHeardSwaps(record, edits, draft, this.heardAsRulesFor(sessionId))
           );
           inputStore.bumpExternalDraftRevision({ keepsSelection: true });
         } finally {
@@ -1582,6 +1592,20 @@ class VoiceRecordingService {
       })
     );
     this.unsubscribers.push(
+      voiceInput.onSessionVocabulary(({ sessionId, vocabulary }) => {
+        if (this.discardedSessionIds.has(sessionId)) return;
+        this.sessionVocabularies.delete(sessionId);
+        this.sessionVocabularies.set(sessionId, { vocabulary, rules: null });
+        // A session's reruns are done soon after its stop, so the newest few cover them.
+        for (const id of this.sessionVocabularies.keys()) {
+          if (this.sessionVocabularies.size <= VoiceRecordingService.SESSION_VOCABULARY_MEMORY) {
+            break;
+          }
+          this.sessionVocabularies.delete(id);
+        }
+      })
+    );
+    this.unsubscribers.push(
       voiceInput.onPauseRequested(({ sessionId, paused }) => {
         if (sessionId !== this.sessionId) return;
         if (paused) this.pause();
@@ -1753,7 +1777,9 @@ class VoiceRecordingService {
     this.cleanupKeyIssuer = cleanupKeyIssuer(settings.correctionProvider);
     this.cleanupModel = settings.correctionModel;
     this.transcriptionProvider = settings.transcriptionProvider;
-    this.heardAsRules = createHeardAsRewriter(collectHeardAsRules(settings.dictionary ?? []));
+    this.globalDictionary = settings.dictionary ?? [];
+    this.heardAsRules = createHeardAsRewriter(collectHeardAsRules(this.globalDictionary));
+    for (const held of this.sessionVocabularies.values()) held.rules = null;
     this.dropHesitations = normalizeVoiceLanguage(settings.language) === "en";
     logDebug(`${LOG_PREFIX} refreshConfiguration`, {
       enabled: settings.enabled,
@@ -3529,10 +3555,11 @@ class VoiceRecordingService {
       // stop that keeps the text gets this, whether or not correction runs.
       // A rewrite's instruction goes to the model as spoken. A chunk had its
       // own rerun before its cleanup, which nothing reruns over.
-      if (stoppedTarget && !stoppedTarget.rewrite && this.heardAsRules && !detached) {
+      const stoppedRules = this.heardAsRulesFor(stoppedSessionId);
+      if (stoppedTarget && !stoppedTarget.rewrite && stoppedRules && !detached) {
         const rewrites = [
           ...(cleanup?.rewrites ?? []),
-          ...this.applyHeardAsRules(stoppedTarget, stoppedSessionId, this.heardAsRules, unclaimed),
+          ...this.applyHeardAsRules(stoppedTarget, stoppedSessionId, stoppedRules, unclaimed),
         ];
         // The history holds what landed, and a cleanup only counts for it when
         // it covered the same words.
@@ -3584,6 +3611,21 @@ class VoiceRecordingService {
       // Set ahead of the capture teardown, so a throw there must not strand it.
       this.isStoppingSession = false;
     }
+  }
+
+  /**
+   * A session's heard-as rules: the dictionary as last read, under the project
+   * vocabulary main read at its start, so a project term shadows the user's
+   * own entry for it. Null until the settings are read.
+   */
+  private heardAsRulesFor(sessionId: string | null): HeardAsRewriter | null {
+    if (!this.heardAsRules) return null;
+    const held = sessionId ? this.sessionVocabularies.get(sessionId) : undefined;
+    if (!held) return this.heardAsRules;
+    held.rules ??= createHeardAsRewriter(
+      sessionHeardAsRules(this.globalDictionary, held.vocabulary)
+    );
+    return held.rules;
   }
 
   /**
@@ -4031,10 +4073,9 @@ class VoiceRecordingService {
 
     const owner = cleanup ?? this.openCleanup(target, at.sessionId);
     // As at stop, a phrase split between two of its utterances is caught first.
-    if (this.heardAsRules) {
-      owner.rewrites.push(
-        ...this.applyHeardAsRules(target, at.sessionId, this.heardAsRules, include, true)
-      );
+    const rules = this.heardAsRulesFor(at.sessionId);
+    if (rules) {
+      owner.rewrites.push(...this.applyHeardAsRules(target, at.sessionId, rules, include, true));
     }
     const current = findDictation(target, at.sessionId);
     const chunk = current ? collectCorrectionPassages(current, draft(), include) : [];
@@ -6661,6 +6702,7 @@ class VoiceRecordingService {
     if (getLoadedVoiceRecordingService() === this) setInitializedVoiceRecordingService(null);
     this.discardedSessionIds.clear();
     this.discardedSessionPanels.clear();
+    this.sessionVocabularies.clear();
     for (const unsub of this.unsubscribers) {
       unsub();
     }

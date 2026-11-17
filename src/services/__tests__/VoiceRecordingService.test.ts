@@ -273,6 +273,7 @@ function buildElectronStub() {
       onRevealRequested: vi.fn((_callback: (payload: VoiceRevealRequest) => void) => () => {}),
       onLiveLevel: vi.fn((_callback: (payload: VoiceLiveLevel) => void) => () => {}),
       onPauseRequested: vi.fn((_callback: (payload: VoicePauseRequest) => void) => () => {}),
+      onSessionVocabulary: vi.fn(() => () => {}),
       publishDetails: vi.fn().mockResolvedValue(undefined),
       setPausedLive: vi.fn().mockResolvedValue(true),
       getLiveSession: vi.fn().mockResolvedValue({ revision: 0, session: null }),

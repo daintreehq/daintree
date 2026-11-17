@@ -972,6 +972,7 @@ export const CHANNELS = {
   VOICE_INPUT_LIVE_LEVEL: "voice-input:live-level",
   VOICE_INPUT_SET_PAUSED_LIVE: "voice-input:set-paused-live",
   VOICE_INPUT_PAUSE_REQUESTED: "voice-input:pause-requested",
+  VOICE_INPUT_SESSION_VOCABULARY: "voice-input:session-vocabulary",
   RECENT_DICTATIONS_RECORD: "recent-dictations:record",
   RECENT_DICTATIONS_SET_CORRECTED_TEXT: "recent-dictations:set-corrected-text",
   RECENT_DICTATIONS_LIST: "recent-dictations:list",

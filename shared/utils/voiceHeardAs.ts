@@ -1,5 +1,5 @@
 import type { VoiceDictionaryEntry } from "../types/ipc/api.js";
-import { heardAsKey, heardAsRule } from "./voiceDictionary.js";
+import { heardAsKey, heardAsRule, sessionDictionary } from "./voiceDictionary.js";
 import { findProtectedRanges } from "./voiceProtectedSpans.js";
 import type { VoiceTextEdit } from "./voiceUncertainWords.js";
 
@@ -43,14 +43,11 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/**
- * Every heard-as pair, oldest entry first. A heard form claimed by two
- * entries belongs to the first, as `heardAsOwners` reports, and a form
- * `heardAsRule` refuses never becomes a rule.
- */
-export function collectHeardAsRules(entries: readonly VoiceDictionaryEntry[]): HeardAsRule[] {
+function collectRules(
+  entries: readonly VoiceDictionaryEntry[],
+  claimed: Set<string>
+): HeardAsRule[] {
   const rules: HeardAsRule[] = [];
-  const claimed = new Set<string>();
   for (const { term, heardAs } of entries) {
     for (const raw of heardAs) {
       const rule = heardAsRule(term, raw);
@@ -59,7 +56,34 @@ export function collectHeardAsRules(entries: readonly VoiceDictionaryEntry[]): H
       rules.push({ heard: rule.heard, term });
     }
   }
-  return rules.slice(-MAX_HEARD_AS_RULES);
+  return rules;
+}
+
+/**
+ * Every heard-as pair, oldest entry first. A heard form claimed by two
+ * entries belongs to the first, as `heardAsOwners` reports, and a form
+ * `heardAsRule` refuses never becomes a rule.
+ */
+export function collectHeardAsRules(entries: readonly VoiceDictionaryEntry[]): HeardAsRule[] {
+  return collectRules(entries, new Set()).slice(-MAX_HEARD_AS_RULES);
+}
+
+/**
+ * The rules one dictation runs: the target project's vocabulary over the
+ * user's own dictionary, so a project term that dropped a heard form also
+ * drops the global entry's. The project's rules come first, in the cap too:
+ * the user's own fill what they leave.
+ */
+export function sessionHeardAsRules(
+  global: readonly VoiceDictionaryEntry[],
+  project: readonly VoiceDictionaryEntry[]
+): HeardAsRule[] {
+  const claimed = new Set<string>();
+  const own = collectRules(project, claimed).slice(-MAX_HEARD_AS_RULES);
+  const room = MAX_HEARD_AS_RULES - own.length;
+  if (room === 0) return own;
+  const rest = collectRules(sessionDictionary(global, project).slice(project.length), claimed);
+  return [...own, ...rest.slice(-room)];
 }
 
 interface CompiledRule extends HeardAsRule {

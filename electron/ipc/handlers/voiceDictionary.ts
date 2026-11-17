@@ -66,7 +66,7 @@ const projectText = text.refine(
   (value) => !DICTIONARY_CONTROL_CHARACTERS.test(value.trim()),
   "A dictionary phrase can't hold a line break or control character"
 );
-const projectHeardAs = z.array(projectText).max(LIST_MAX);
+const projectHeardAs = z.array(projectText).max(MAX_DICTIONARY_HEARD_AS);
 const projectSchema = z.object({ projectId });
 const projectAddSchema = addSchema.extend({
   projectId,

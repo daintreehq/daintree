@@ -8,7 +8,12 @@ import {
   mergeSuggestions,
   updateDictionaryEntry,
 } from "../voiceDictionary.js";
-import { MAX_HEARD_AS_RULES, collectHeardAsRules, createHeardAsRewriter } from "../voiceHeardAs.js";
+import {
+  MAX_HEARD_AS_RULES,
+  collectHeardAsRules,
+  createHeardAsRewriter,
+  sessionHeardAsRules,
+} from "../voiceHeardAs.js";
 
 function entry(term: string, heardAs: string[] = []): VoiceDictionaryEntry {
   return { term, heardAs, source: "manual", addedAt: 0 };
@@ -103,6 +108,52 @@ describe("collectHeardAsRules", () => {
 
   it("has no rules for terms without heard-as forms", () => {
     expect(collectHeardAsRules([entry("React"), entry("Go")])).toEqual([]);
+  });
+});
+
+describe("sessionHeardAsRules", () => {
+  it("runs the project's forms first and drops the global forms of a term the project has", () => {
+    const global = [
+      entry("ptyclient", ["pity client", "petty client"]),
+      entry("Zustand", ["zoo stand"]),
+    ];
+    const project = [entry("PtyClient", ["patty client"])];
+
+    expect(sessionHeardAsRules(global, project)).toEqual([
+      { heard: "patty client", term: "PtyClient" },
+      { heard: "zoo stand", term: "Zustand" },
+    ]);
+  });
+
+  it("lets a project term with no heard forms silence the global entry's", () => {
+    expect(sessionHeardAsRules([entry("Zustand", ["zoo stand"])], [entry("zustand")])).toEqual([]);
+  });
+
+  it("gives a form both claim for different terms to the project's", () => {
+    const rewrite = createHeardAsRewriter(
+      sessionHeardAsRules([entry("Jest", ["just"])], [entry("JustFile", ["just"])])
+    );
+    expect(rewrite("run just now")).toBe("run JustFile now");
+  });
+
+  it("keeps the project's rules within the cap, and the newest global ones in what is left", () => {
+    const global = Array.from({ length: MAX_HEARD_AS_RULES }, (_, i) =>
+      entry(`Term${i}`, [`form ${i}`])
+    );
+    const rules = sessionHeardAsRules(global, [entry("PtyClient", ["patty client"])]);
+
+    expect(rules).toHaveLength(MAX_HEARD_AS_RULES);
+    expect(rules[0]).toEqual({ heard: "patty client", term: "PtyClient" });
+    expect(rules[1]).toEqual({ heard: "form 1", term: "Term1" });
+    expect(rules.at(-1)).toEqual({
+      heard: `form ${MAX_HEARD_AS_RULES - 1}`,
+      term: `Term${MAX_HEARD_AS_RULES - 1}`,
+    });
+  });
+
+  it("is the global rules alone with no project vocabulary", () => {
+    const global = [entry("Zustand", ["zoo stand"])];
+    expect(sessionHeardAsRules(global, [])).toEqual(collectHeardAsRules(global));
   });
 });
 

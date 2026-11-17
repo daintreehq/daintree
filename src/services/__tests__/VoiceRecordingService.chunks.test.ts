@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { VoiceCorrectionPace } from "@shared/types/ipc/api";
+import type { VoiceCorrectionPace, VoiceDictionaryEntry } from "@shared/types/ipc/api";
 
 // Drives the real voice, draft and dictation-range stores through the IPC
 // callbacks to prove a long dictation is cleaned up in chunks while it runs
@@ -87,6 +87,7 @@ const prefetchCorrections =
 const recordHistory = vi.fn();
 const setHistoryCorrection = vi.fn();
 let clock = 1_000;
+let dictionary: VoiceDictionaryEntry[] = [];
 
 function stubElectron() {
   const on = (name: string) =>
@@ -110,6 +111,7 @@ function stubElectron() {
         onRevealRequested: vi.fn(() => () => {}),
         onLiveLevel: vi.fn(() => () => {}),
         onPauseRequested: vi.fn(() => () => {}),
+        onSessionVocabulary: on("vocabulary"),
         publishDetails: vi.fn().mockResolvedValue(undefined),
         setPausedLive: vi.fn().mockResolvedValue(true),
         getLiveSession: vi.fn().mockResolvedValue({ revision: 0, session: null }),
@@ -118,7 +120,7 @@ function stubElectron() {
           openaiApiKey: "sk-key",
           correctionEnabled: true,
           correctionModel: "claude-haiku-5-5",
-          dictionary: [],
+          dictionary,
         })),
         stop: vi.fn().mockResolvedValue(undefined),
         cancel: vi.fn().mockResolvedValue(undefined),
@@ -215,6 +217,7 @@ beforeEach(() => {
   recordHistory.mockReset();
   setHistoryCorrection.mockReset();
   clock = 1_000;
+  dictionary = [];
   vi.spyOn(performance, "now").mockImplementation(() => clock);
 });
 
@@ -288,6 +291,44 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
       "The deploy pipeline has been unreliable all week because the integration tests time out whenever the staging database is busy."
     );
     expect(service.hasPendingCorrection(PANEL)).toBe(false);
+  });
+
+  it("runs the session's project vocabulary over a chunk, and the dictionary as last read after it (#17217)", async () => {
+    const entry = (term: string, heard: string): VoiceDictionaryEntry => ({
+      term,
+      heardAs: [heard],
+      source: "manual",
+      addedAt: 0,
+    });
+    // The project's PtyClient dropped the user's own "pity client".
+    dictionary = [entry("ptyclient", "pity client")];
+    const { service, sessionId, say, pause, flush } = await setup();
+    correct.mockImplementation(async ({ rawText }) => ({
+      action: "no_change",
+      correctedText: rawText,
+    }));
+    emit("vocabulary", { sessionId, vocabulary: [entry("PtyClient", "patty client")] });
+
+    for (const sentence of OPENING) say(sentence);
+    say("The patty");
+    say("client and the pity");
+    say("client both need a look.");
+    pause();
+    say("The last one is to add joe");
+
+    expect(correct).toHaveBeenCalledTimes(1);
+    expect(correct.mock.lastCall?.[0].rawText).toBe(
+      `${OPENING_TEXT} The PtyClient and the pity client both need a look.`
+    );
+    await flush();
+
+    // A rule the user adds mid-dictation joins the project's for the rest.
+    dictionary = [...dictionary, entry("Jotai", "joe tie")];
+    await service.refreshConfiguration();
+    say("tie too.");
+    await service.stop();
+    expect(correct).toHaveBeenCalledTimes(2);
+    expect(correct.mock.lastCall?.[0].rawText).toBe("The last one is to add Jotai too.");
   });
 
   it("keeps a short dictation to the one pass at stop", async () => {

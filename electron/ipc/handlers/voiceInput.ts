@@ -19,6 +19,7 @@ import type {
   VoiceDictionaryEntry,
   VoiceInputSettings,
   VoiceInputSettingsPatch,
+  VoiceSessionVocabulary,
   VoiceTranscriptionProvider,
 } from "../../../shared/types/ipc/api.js";
 import {
@@ -98,7 +99,11 @@ import {
   readHostPaneStart,
   type HostPane,
 } from "../../services/voice/hostPaneContext.js";
-import { collectHeardAsRules, createHeardAsRewriter } from "../../../shared/utils/voiceHeardAs.js";
+import {
+  collectHeardAsRules,
+  createHeardAsRewriter,
+  sessionHeardAsRules,
+} from "../../../shared/utils/voiceHeardAs.js";
 import { stripHesitations } from "../../../shared/utils/voiceHesitations.js";
 import {
   carrySpansThroughEdits,
@@ -295,6 +300,9 @@ interface VoiceSession {
   warmTimer: ReturnType<typeof setInterval> | null;
   // Its cleanup context, when cleanup was on at its start.
   correctionPrep: CorrectionPrep | null;
+  // Settles once its project vocabulary is read and in use, or can't be; a
+  // stop waits on it until `by` (performance.now()).
+  vocabularyRead: { settled: Promise<void>; by: number } | null;
   // Main's share of the session summary, sent with its ended notice. Kept
   // apart from the buffers above, which are released as the session goes.
   readonly stats: Pick<
@@ -600,6 +608,11 @@ const CODE_NAME_READ_BUDGET_MS = 300;
 // The worktree's diff is read as the dictation starts and wanted only at its
 // cleanup, so it has longer than the start's other reads.
 const DIFF_NAMES_READ_BUDGET_MS = 800;
+// A dictation can stop before its project vocabulary is read: the keyterms
+// stop waiting for it well before the read's own limit, the project I/O gate's
+// 2s. A stop waits for it, beside the provider's drain, until this long after
+// the read began, so the owner's rerun has it.
+const VOCABULARY_READ_DEADLINE_MS = 2_500;
 
 // A pause's prefetch covers the passage so far, so a session's dictation pays
 // for its opening again at each one. Past these a stop just sends its own.
@@ -1154,9 +1167,8 @@ function correctionSettingsFor(
     knownNames: names,
     ...(repositoryNames.length > 0 ? { repositoryNames } : {}),
     ...(worktree ? { worktree } : {}),
-    // Global rules only, matching the live rewriter. Project heard-as forms
-    // belong in both places, through sessionDictionary.
-    heardAs: collectHeardAsRules(settings.dictionary),
+    // The live rewriter's rules: the project's over the user's own.
+    heardAs: sessionHeardAsRules(settings.dictionary, vocabulary),
     customInstructions: settings.correctionCustomInstructions,
     language: normalizeVoiceLanguage(settings.language),
     ...(transcriber ? { transcriber } : {}),
@@ -1414,8 +1426,20 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       try {
         // Drain the transcription service first (waits for pending
         // transcriptions, fires remaining complete events) — the subscription
-        // stays up until it has.
-        await service?.stopGracefully();
+        // stays up until it has. A stop also waits a little for a project
+        // vocabulary still being read, so its rules reach the owner before
+        // the end; a newer start never waits on that.
+        await Promise.all([
+          service?.stopGracefully(),
+          reason === "stopped" && session.vocabularyRead
+            ? withinBudget(
+                session.vocabularyRead.settled,
+                undefined,
+                "Vocabulary read",
+                Math.max(0, session.vocabularyRead.by - performance.now())
+              )
+            : undefined,
+        ]);
       } catch (error) {
         releaseHeldSend(session, "strip");
         session.flushUtterance?.("literal");
@@ -1536,6 +1560,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       flushUtterance: null,
       warmTimer: null,
       correctionPrep: null,
+      vocabularyRead: null,
       stats: {
         provider: null,
         biasTermCount: null,
@@ -1676,8 +1701,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // Correction settings are read live from store per-event so mid-session changes apply.
     const settings = getVoiceSettings();
     session.stats.provider = settings.transcriptionProvider;
-    // Like the keyterms, the rules are the dictionary as it was at the start.
-    const rewriteHeardAs = createHeardAsRewriter(collectHeardAsRules(settings.dictionary));
+    // Like the keyterms, the rules are the dictionary as it was at the start:
+    // the user's own until the project's vocabulary is read, then both.
+    let rewriteHeardAs = createHeardAsRewriter(collectHeardAsRules(settings.dictionary));
 
     // Kick off keyterm assembly concurrently with the subscription/provider
     // setup below so leading speech isn't delayed waiting on git/terminal reads.
@@ -1707,6 +1733,24 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             ? null
             : resolveVocabularyProject(session.projectId, terminalId, deps.ptyClient)
         );
+    // Read before the keyterms, which wait on it, so a provider that waits on
+    // those transcribes nothing before the project's rules are in place. The
+    // owner gets the vocabulary too: its reruns over the whole dictation, which
+    // put right a completion that landed first, take the same rules.
+    const vocabularyReadBy = performance.now() + VOCABULARY_READ_DEADLINE_MS;
+    session.vocabularyRead = {
+      settled: vocabulary.then(
+        (entries) => {
+          if (entries.length === 0) return;
+          rewriteHeardAs = createHeardAsRewriter(sessionHeardAsRules(settings.dictionary, entries));
+          if (session.sender.isDestroyed()) return;
+          const update: VoiceSessionVocabulary = { sessionId: session.id, vocabulary: entries };
+          session.sender.send(CHANNELS.VOICE_INPUT_SESSION_VOCABULARY, update);
+        },
+        () => {}
+      ),
+      by: vocabularyReadBy,
+    };
     const projectDictionary = vocabulary.then(dictionaryTerms);
     // The names and the worktree come from one read, bounded here by the
     // keyterms' own budget so the keyterms and cleanup get the same answer. A
