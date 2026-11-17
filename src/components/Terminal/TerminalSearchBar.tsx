@@ -268,23 +268,24 @@ export function TerminalSearchBar({
         e.preventDefault();
         e.stopPropagation();
 
-        if (debounceRef.current) {
-          clearTimeout(debounceRef.current);
-          debounceRef.current = null;
-        }
+        // A key that leaves the field as it is must leave a search still queued
+        // from typing queued too: nothing else would run it.
+        const atEnd =
+          e.key === "ArrowUp"
+            ? historyIndexRef.current >= history.length - 1
+            : historyIndexRef.current < 0;
+        if (atEnd) return;
+        cancelPendingSearch();
 
         if (e.key === "ArrowUp") {
           if (historyIndexRef.current < 0) {
             draftBeforeHistoryRef.current = searchTerm;
           }
-          if (historyIndexRef.current < history.length - 1) {
-            historyIndexRef.current++;
-            const term = history[historyIndexRef.current]!;
-            setSearchTerm(term);
-            performSearch(term, "next");
-          }
+          historyIndexRef.current++;
+          const term = history[historyIndexRef.current]!;
+          setSearchTerm(term);
+          performSearch(term, "next");
         } else {
-          if (historyIndexRef.current < 0) return;
           historyIndexRef.current--;
           if (historyIndexRef.current < 0) {
             const draft = draftBeforeHistoryRef.current;
@@ -382,13 +383,15 @@ export function TerminalSearchBar({
   }, [performSearch]);
 
   // A terminal replaced under the open bar (Canopy's, reopened) holds none of
-  // the last one's matches: search it for what the field says now.
+  // the last one's matches, nor its "No matches": search it for what the field
+  // says now, showing nothing until that search lands.
   const searchedTargetRef = useRef(target);
   useEffect(() => {
     if (searchedTargetRef.current === target) return;
     searchedTargetRef.current = target;
     cancelPendingSearch();
     setMatchResults(null);
+    setSearchStatus("idle");
     performSearch(searchTerm, "next");
   }, [target, searchTerm, performSearch, cancelPendingSearch]);
 
