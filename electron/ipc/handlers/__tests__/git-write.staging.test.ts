@@ -231,6 +231,47 @@ describe("git-write staging handlers (real git)", () => {
     expect(fs.readFileSync(path.join(repo, "first.txt"), "utf8")).toBe("first\n");
   });
 
+  describe("a staged rename", () => {
+    function stageRename(from: string, to: string): void {
+      git(repo, "mv", from, to);
+      expect(git(repo, "diff", "--cached", "--name-status", "-M").split("\n")).toContain(
+        `R100\t${from}\t${to}`
+      );
+    }
+
+    function expectRenameUnstaged(from: string, to: string, content: string): void {
+      expect(git(repo, "diff", "--cached", "--name-only")).toBe("");
+      expect(fs.readFileSync(path.join(repo, to), "utf8")).toBe(content);
+      expect(fs.existsSync(path.join(repo, from))).toBe(false);
+    }
+
+    it("unstages both halves when the single-file unstage names the destination", async () => {
+      commitFiles({ "original.txt": "keep\n" });
+      stageRename("original.txt", "renamed.txt");
+
+      await unstage("renamed.txt");
+
+      expectRenameUnstaged("original.txt", "renamed.txt", "keep\n");
+    });
+
+    it("unstages both halves of each rename in a multi-file unstage", async () => {
+      commitFiles({ "one.txt": "1\n", "sub/two.txt": "2\n", "plain.txt": "a\n" });
+      stageRename("one.txt", "uno.txt");
+      stageRename("sub/two.txt", "dos.txt");
+      fs.writeFileSync(path.join(repo, "plain.txt"), "b\n");
+      git(repo, "add", "plain.txt");
+
+      await handler(CHANNELS.GIT_UNSTAGE_FILES)(null, {
+        cwd: repo,
+        filePaths: ["uno.txt", "dos.txt", "plain.txt"],
+      });
+
+      expectRenameUnstaged("one.txt", "uno.txt", "1\n");
+      expectRenameUnstaged("sub/two.txt", "dos.txt", "2\n");
+      expect(fs.readFileSync(path.join(repo, "plain.txt"), "utf8")).toBe("b\n");
+    });
+  });
+
   it("reads churn by exact path, with no root probe and no config read", async () => {
     commitFiles({ "é space.txt": "a\nb\n", "sub/ünïcode.txt": "x\n" });
     git(repo, "remote", "add", "origin", path.join(tmp, "origin.git"));
