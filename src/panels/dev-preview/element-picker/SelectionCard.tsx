@@ -154,10 +154,10 @@ export function SelectionIdentity({
         )}
       </div>
 
-      {/* Row 3, 20px: how it was reached. The header names the selection, so
+      {/* Row 3, 24px: how it was reached. The header names the selection, so
           the trail shows the route and carries the identity for assistive
           technology rather than repeating it visibly. */}
-      <div className="flex h-5 min-w-0 items-center gap-1 text-2xs text-text-secondary">
+      <div className="flex h-6 min-w-0 items-center gap-1 text-2xs text-text-secondary">
         {crumbs.length > 0 ? (
           <>
             <span className="shrink-0">in</span>

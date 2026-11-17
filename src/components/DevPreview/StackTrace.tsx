@@ -96,10 +96,10 @@ function LibraryRun({
         onClick={onToggle}
         aria-expanded={isOpen}
         aria-controls={listId}
-        className={DISCLOSURE_TOGGLE_CLASS}
+        className={cn(DISCLOSURE_TOGGLE_CLASS, "min-h-6")}
       >
         <DisclosureChevron expanded={isOpen} />
-        {frames.length} library frames
+        {pluralize(frames.length, "library frame")}
       </button>
       <ol id={listId} hidden={!isOpen}>
         {frames.map((frame, i) => (
