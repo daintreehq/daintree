@@ -30,6 +30,7 @@ const settingsMock = vi.hoisted(() => ({
     name: string;
     command: string;
     preferredLocation?: "dock" | "grid";
+    preferredAutoRestart?: boolean;
   }>,
 }));
 
@@ -1062,11 +1063,15 @@ describe("QuickRun", () => {
     let setItem: MockInstance<Storage["setItem"]>;
 
     beforeEach(() => {
+      // One-shot results survive `vi.clearAllMocks()`, so an unspent success
+      // would otherwise answer the next test's refusal.
+      mockAddTerminal.mockReset();
       setItem = vi.spyOn(localStorage, "setItem");
     });
 
     afterEach(() => {
       setItem.mockRestore();
+      mockAddTerminal.mockReset();
       settingsMock.runCommands = [];
     });
 
@@ -1080,26 +1085,46 @@ describe("QuickRun", () => {
       return commandOptions().map((o) => o.getAttribute("data-command"));
     }
 
+    function openField(): HTMLInputElement {
+      const input = openPanel();
+      if (!(input instanceof HTMLInputElement))
+        throw new Error("Quick Run's field is not an input");
+      return input;
+    }
+
     async function enter(input: HTMLElement) {
       await act(async () => {
         fireEvent.keyDown(input, { key: "Enter" });
       });
     }
 
-    it("gives the draft back and leaves Recent as it was", async () => {
+    /** Nothing recorded and no inline failure: the registry has already said why. */
+    function expectRefusedQuietly() {
+      expect(historyWrites()).toEqual([]);
+      expect(screen.queryByRole("alert")).toBeNull();
+    }
+
+    function expectStartedOnce(input: HTMLInputElement) {
+      expect(input.value).toBe("");
+      expect(historyWrites()).toHaveLength(1);
+      expect(screen.queryByRole("alert")).toBeNull();
+    }
+
+    it("gives the draft back as typed and leaves Recent as it was", async () => {
       seedHistory("ls -la");
       setItem.mockClear();
       mockAddTerminal.mockResolvedValueOnce(null);
       render(<Footer projectId="test-project" />);
-      const input = openPanel() as HTMLInputElement;
-      fireEvent.change(input, { target: { value: "cargo run" } });
+      const input = openField();
+      fireEvent.change(input, { target: { value: "cargo run " } });
       await enter(input);
 
       expect(mockAddTerminal).toHaveBeenCalledTimes(1);
-      expect(input.value).toBe("cargo run");
-      // The registry has already said why, and a Retry would meet the same limit.
-      expect(screen.queryByRole("alert")).toBeNull();
-      expect(historyWrites()).toEqual([]);
+      expect(mockAddTerminal).toHaveBeenCalledWith(
+        expect.objectContaining({ command: "cargo run" })
+      );
+      expect(input.value).toBe("cargo run ");
+      expectRefusedQuietly();
       expect(recentCommands(input)).toEqual(["ls -la"]);
     });
 
@@ -1108,40 +1133,51 @@ describe("QuickRun", () => {
       setItem.mockClear();
       mockAddTerminal.mockResolvedValueOnce(null).mockResolvedValueOnce("terminal-1");
       render(<Footer projectId="test-project" />);
-      const input = openPanel() as HTMLInputElement;
+      const input = openField();
       fireEvent.change(input, { target: { value: "cargo run" } });
       await enter(input);
-      await enter(input);
+      expect(input.value).toBe("cargo run");
+      expectRefusedQuietly();
 
+      await enter(input);
       expect(mockAddTerminal).toHaveBeenCalledTimes(2);
-      expect(input.value).toBe("");
-      expect(historyWrites()).toHaveLength(1);
+      expectStartedOnce(input);
       expect(recentCommands(input)).toEqual(["cargo run", "ls -la"]);
     });
 
-    it("keeps a pinned command's one-off override and the toggles for the next try", async () => {
+    it("keeps a pinned command's one-off overrides for the next try, and only that try", async () => {
       settingsMock.runCommands = [
-        { id: "s", name: "Docs", command: "npx serve docs", preferredLocation: "dock" },
+        {
+          id: "s",
+          name: "Docs",
+          command: "npx serve docs",
+          preferredLocation: "dock",
+          preferredAutoRestart: false,
+        },
       ];
       mockAddTerminal.mockResolvedValueOnce(null).mockResolvedValueOnce("terminal-1");
       render(<Footer projectId="test-project" />);
-      const input = openPanel() as HTMLInputElement;
+      const input = openField();
       const dockToggle = screen.getByRole("button", { name: /run in the dock/i });
       const restartToggle = screen.getByRole("button", { name: "Auto-restart" });
+      const pressed = () => [
+        dockToggle.getAttribute("aria-pressed"),
+        restartToggle.getAttribute("aria-pressed"),
+      ];
       fireEvent.keyDown(input, { key: "ArrowDown" });
+      expect(pressed()).toEqual(["true", "false"]);
       fireEvent.click(dockToggle);
       fireEvent.click(restartToggle);
-      expect(dockToggle.getAttribute("aria-pressed")).toBe("false");
-      expect(restartToggle.getAttribute("aria-pressed")).toBe("true");
+      expect(pressed()).toEqual(["false", "true"]);
 
       await enter(input);
       expect(input.value).toBe("npx serve docs");
-      expect(dockToggle.getAttribute("aria-pressed")).toBe("false");
-      expect(restartToggle.getAttribute("aria-pressed")).toBe("true");
+      expect(pressed()).toEqual(["false", "true"]);
+      expectRefusedQuietly();
 
       await enter(input);
       expect(mockAddTerminal).toHaveBeenCalledTimes(2);
-      const [[refused], [started]] = mockAddTerminal.mock.calls;
+      const [refused, started] = mockAddTerminal.mock.calls.map(([options]) => options);
       expect(refused).toEqual(
         expect.objectContaining({
           command: "npx serve docs",
@@ -1150,25 +1186,36 @@ describe("QuickRun", () => {
         })
       );
       expect(started).toEqual(refused);
+      expectStartedOnce(input);
+
+      // The overrides were for that launch; the pinned command keeps its own.
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      expect(pressed()).toEqual(["true", "false"]);
     });
 
     it("gives back a clicked row's whole command, not the filter that found it", async () => {
       seedHistory("npm test", "npm run lint");
+      setItem.mockClear();
       mockAddTerminal.mockResolvedValueOnce(null).mockResolvedValueOnce("terminal-1");
       render(<Footer projectId="test-project" />);
-      const input = openPanel() as HTMLInputElement;
+      const input = openField();
       fireEvent.change(input, { target: { value: "lint" } });
       const row = commandOptions().find((o) => o.getAttribute("data-command") === "npm run lint");
       await act(async () => {
         fireEvent.click(row!);
       });
+      expect(mockAddTerminal).toHaveBeenLastCalledWith(
+        expect.objectContaining({ command: "npm run lint" })
+      );
       expect(input.value).toBe("npm run lint");
+      expectRefusedQuietly();
 
       await enter(input);
       expect(mockAddTerminal).toHaveBeenCalledTimes(2);
       expect(mockAddTerminal).toHaveBeenLastCalledWith(
         expect.objectContaining({ command: "npm run lint" })
       );
+      expectStartedOnce(input);
     });
   });
 

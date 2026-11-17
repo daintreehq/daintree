@@ -455,9 +455,11 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
 
     // Give the command back rather than leaving an empty field and no task —
     // unless something new has been typed since — and the options it was
-    // launched with, so the next try runs the same thing.
+    // launched with, so the next try runs the same thing. Typed text comes back
+    // as typed, trailing space included, so the user can carry on writing it.
+    const draft = item.type === "typed" && input.trim() === cmd ? input : cmd;
     const giveBack = () => {
-      setInput((current) => (current === "" ? cmd : current));
+      setInput((current) => (current === "" ? draft : current));
       if (intent === intentRef.current) setLaunchOverride((current) => current ?? override);
     };
 
