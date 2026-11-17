@@ -116,11 +116,33 @@ export class CloudSshFiles {
     const keyPath = this.keyPathFor(accountId);
     try {
       return (await fs.readFile(`${keyPath}.pub`, "utf8")).trim();
-    } catch {
-      // Not made yet.
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    // Machines that took the key at create can't be given another: a private key
+    // whose public half went missing gets it back instead of being replaced.
+    const hasPrivate = await fs.access(keyPath).then(
+      () => true,
+      () => false
+    );
+    if (hasPrivate) {
+      // ssh-keygen refuses a key others can read; one that can't be made ours is kept as it is.
+      await fs.chmod(keyPath, 0o600);
+      const derived = await this.run("ssh-keygen", ["-y", "-P", "", "-f", keyPath], {
+        timeoutMs: 20_000,
+      });
+      const publicKey = derived.code === 0 ? derived.stdout.trim() : "";
+      if (publicKey) {
+        await writeAtomic(`${keyPath}.pub`, `${publicKey}\n`, 0o644);
+        return publicKey;
+      }
+      // Only a key ssh-keygen read and rejected is replaced; one it couldn't be asked about is kept.
+      if (derived.code === null || derived.code === 0 || derived.spawnError || derived.timedOut) {
+        throw new Error(derived.spawnError ?? "ssh-keygen didn't answer");
+      }
     }
     await fs.mkdir(path.dirname(keyPath), { recursive: true, mode: 0o700 });
-    // A private key without its public half (an interrupted run) would make ssh-keygen prompt.
+    // A private key it can't read back (an interrupted run) would make ssh-keygen prompt.
     await fs.rm(keyPath, { force: true });
     const made = await this.run(
       "ssh-keygen",
@@ -321,6 +343,8 @@ export class CloudSshFiles {
   /** Removes an account's key once nothing uses it. */
   async forgetAccount(accountId: string): Promise<void> {
     const keyPath = this.keyPathFor(accountId);
+    // A key still being made or recovered would otherwise be written after it was removed.
+    await this.generating.get(accountId)?.catch(() => {});
     await fs.rm(keyPath, { force: true }).catch(() => {});
     await fs.rm(`${keyPath}.pub`, { force: true }).catch(() => {});
   }

@@ -3,7 +3,7 @@ import {
   type CloudProviderId,
   type CloudProviderNamespace,
 } from "../../../shared/types/cloudHosts.js";
-import type { CloudProvider } from "./provider.js";
+import { sshKeyContractProblem, type CloudProvider } from "./provider.js";
 import { sshDeclarationProblem } from "./sshTunnel.js";
 
 /** Who registers a provider, and so which ids it may take. */
@@ -59,6 +59,8 @@ export class CloudProviderRegistry {
     // Its tunnel runs on this device, and its trust decides whether a key is pinned.
     const sshProblem = sshDeclarationProblem(info.capabilities);
     if (sshProblem) throw new Error(`Cloud provider ${id}: ${sshProblem}`);
+    const sshKeyProblem = sshKeyContractProblem(provider, info.capabilities.provisioning.sshKey);
+    if (sshKeyProblem) throw new Error(`Cloud provider ${id} ${sshKeyProblem}`);
     if (this.entries.has(id)) throw new Error(`Cloud provider ${id} is already registered`);
     const registration: Registration = { provider, apiUrl: options.apiUrl, owner };
     this.entries.set(id, registration);

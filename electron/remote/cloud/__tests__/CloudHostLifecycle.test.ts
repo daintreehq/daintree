@@ -29,7 +29,7 @@ import type {
   ProviderResource,
   RenewingCloudProvider,
 } from "../provider.js";
-import type { CommandRunner } from "../../client/commandRunner.js";
+import type { CommandResult, CommandRunner } from "../../client/commandRunner.js";
 
 const pathLookup = vi.hoisted(() => ({ timesOut: false }));
 vi.mock("../../../utils/findOnPath.js", async (importOriginal) => {
@@ -70,30 +70,42 @@ function resource(overrides: Partial<ProviderResource> = {}): ProviderResource {
   };
 }
 
+/** Carries both SSH methods; its declared timing says which one the lifecycle may call. */
+type FakeProvider = RenewingCloudProvider &
+  Required<Pick<CloudProvider, "authorizeSsh" | "sshAccess">>;
+
 function fakeProvider(
   state: { machine: ProviderResource },
   sshTrust?: CloudSshTrust,
   transport?: CloudSshTransport,
-  lifetime?: CloudLifetimeModel
-): RenewingCloudProvider {
+  lifetime?: CloudLifetimeModel,
+  sshKey: "at-create" | "after-create" = "after-create"
+): FakeProvider {
   const real = new BoatProvider(() => {
     throw new Error("unused");
   });
+  const access = {
+    user: "user",
+    endpoint: { host: "203.0.113.10", port: 22001 },
+    hostKey: sshTrust === "confirm-on-first-connect" ? null : HOST_KEY,
+  };
   return {
     id: "boat",
     info: (platform) => {
       const info = real.info(platform);
+      const { capabilities } = info;
       return {
         ...info,
         capabilities: {
-          ...info.capabilities,
-          sshTrust: sshTrust ?? info.capabilities.sshTrust,
-          transport: transport ?? info.capabilities.transport,
+          ...capabilities,
+          sshTrust: sshTrust ?? capabilities.sshTrust,
+          transport: transport ?? capabilities.transport,
           tunnel:
             transport === "provider-command"
               ? { command: "acme", args: ["tunnel", "%h"], installUrl: "https://example.com/acme" }
-              : info.capabilities.tunnel,
-          lifetime: lifetime ?? info.capabilities.lifetime,
+              : capabilities.tunnel,
+          lifetime: lifetime ?? capabilities.lifetime,
+          provisioning: { ...capabilities.provisioning, sshKey },
         },
       };
     },
@@ -148,12 +160,9 @@ function fakeProvider(
     renewLifetime: vi.fn(),
     rename: vi.fn(),
     delete: vi.fn(async () => {}),
-    authorizeSsh: vi.fn(async () => ({
-      user: "user",
-      endpoint: { host: "203.0.113.10", port: 22001 },
-      hostKey: sshTrust === "confirm-on-first-connect" ? null : HOST_KEY,
-    })),
-  } as RenewingCloudProvider;
+    authorizeSsh: vi.fn(async () => access),
+    sshAccess: vi.fn(async () => access),
+  } as FakeProvider;
 }
 
 let root: string;
@@ -178,10 +187,17 @@ async function setup(
     transport?: CloudSshTransport;
     findCommand?: (command: string) => Promise<string | null>;
     lifetime?: CloudLifetimeModel;
+    sshKey?: "at-create" | "after-create";
   } = {}
 ) {
   const state = { machine: resource(initial) };
-  const provider = fakeProvider(state, options.sshTrust, options.transport, options.lifetime);
+  const provider = fakeProvider(
+    state,
+    options.sshTrust,
+    options.transport,
+    options.lifetime,
+    options.sshKey
+  );
   options.adapt?.(provider);
   /** What ssh-keyscan prints for the machine; `byTypes` answers a scan of named algorithms. */
   const scan: { output: string; byTypes: Record<string, string> } = {
@@ -200,7 +216,9 @@ async function setup(
   const hosts: HostDescriptor[] = [];
   const listeners = new Set<() => void>();
   const disconnect = vi.fn(async () => {});
-  const run = vi.fn(async (cmd: string, args: string[]) => {
+  // Every key it makes is new, and its private half holds its public one, which `-y` prints.
+  let generated = 0;
+  const run = vi.fn(async (cmd: string, args: string[]): Promise<CommandResult> => {
     if (path.basename(cmd).startsWith("ssh-keyscan")) {
       const types = args[args.indexOf("-t") + 1]!;
       const stdout = scan.byTypes[types] ?? scan.output;
@@ -211,9 +229,16 @@ async function setup(
       return { code: 0, stdout: "", stderr: "", spawnError: null, timedOut: false };
     }
     const keyPath = args[args.length - 1]!;
-    await fs.writeFile(keyPath, "PRIVATE");
-    await fs.writeFile(`${keyPath}.pub`, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIClient daintree");
-    return { code: 0, stdout: "", stderr: "", spawnError: null, timedOut: false };
+    const ok = { code: 0, stdout: "", stderr: "", spawnError: null, timedOut: false };
+    if (args.includes("-y")) {
+      if ((await fs.stat(keyPath)).mode & 0o077) return { ...ok, code: 255 };
+      return { ...ok, stdout: `${await fs.readFile(keyPath, "utf8")}\n` };
+    }
+    generated += 1;
+    const made = `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIClient${generated} ${path.basename(keyPath)}`;
+    await fs.writeFile(keyPath, made);
+    await fs.writeFile(`${keyPath}.pub`, made);
+    return ok;
   });
   const files = new CloudSshFiles(path.join(root, "cloud"), run as unknown as CommandRunner);
   const build = () => {
@@ -1272,6 +1297,46 @@ describe("CloudHostLifecycle review fixes", () => {
     expect(a).toBe(b);
     expect(run).toHaveBeenCalledTimes(1);
   });
+
+  it("gets a missing public half back from the account's private key instead of replacing it", async () => {
+    const { files, run, account } = await setup();
+    const key = await files.publicKey(account.id);
+    const pub = path.join(root, "cloud", "keys", `${account.id}_ed25519.pub`);
+    await fs.rm(pub);
+    await fs.chmod(pub.slice(0, -".pub".length), 0o644);
+    expect(await files.publicKey(account.id)).toBe(key);
+    expect((await fs.readFile(pub, "utf8")).trim()).toBe(key);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[1]![1]).toContain("-y");
+
+    // An ssh-keygen that can't be asked leaves the private key in place.
+    await fs.rm(pub);
+    run.mockResolvedValueOnce({
+      code: null,
+      stdout: "",
+      stderr: "",
+      spawnError: "spawn ssh-keygen ENOENT",
+      timedOut: false,
+    });
+    await expect(files.publicKey(account.id)).rejects.toThrow("ENOENT");
+    await expect(fs.access(pub.slice(0, -".pub".length))).resolves.toBeUndefined();
+  });
+
+  it("removes an account's key only once the key being made for it is written", async () => {
+    const { files, run, account } = await setup();
+    const make = run.getMockImplementation()!;
+    let release: () => void = () => {};
+    run.mockImplementationOnce(async (...args) => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return make(...args);
+    });
+    const made = files.publicKey(account.id);
+    await vi.waitFor(() => expect(run).toHaveBeenCalled());
+    const forgotten = files.forgetAccount(account.id);
+    release();
+    await Promise.all([made, forgotten]);
+    expect(await fs.readdir(path.join(root, "cloud", "keys"))).toEqual([]);
+  });
 });
 
 describe("CloudHostLifecycle lifetime models", () => {
@@ -1930,6 +1995,8 @@ describe("CloudHostLifecycle provisioning", () => {
     expect(cached.lastChoice).toEqual(IRELAND);
     expect(cached.provisioning.location?.defaultId).toBe("us-east-1");
     expect((await accounts.catalog(account.id, { refresh: true })).lastChoice).toEqual(IRELAND);
+    // The create goes on in the background, making the account's SSH key.
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
   });
 
   it("refuses a missing region, an unavailable one, or an image from another region before anything is sent", async () => {
@@ -2143,5 +2210,220 @@ describe("CloudHostLifecycle.deleteMachine by the provider's declaration (#17346
     expect(provider.list).not.toHaveBeenCalled();
     expect(provider.delete).not.toHaveBeenCalled();
     expect(hosts.map((host) => host.id)).toEqual(["build"]);
+  });
+});
+
+describe("CloudHostLifecycle SSH key at create", () => {
+  const request = (accountId: string): CloudHostCreateRequest => ({
+    accountId,
+    name: "build",
+    machineType: "default",
+    lifetimeHours: 2,
+  });
+
+  it("hands a create-time-key provider the account's key with every create, a retry included", async () => {
+    const { lifecycle, provider, files, account } = await setup({}, { sshKey: "at-create" });
+    vi.mocked(provider.create)
+      .mockRejectedValueOnce(new BoatApiError("timeout", "slow", null, null, null))
+      .mockRejectedValueOnce(new BoatApiError("payment-required", "pay", 402, null, null));
+    await lifecycle.create(request(account.id));
+    await vi.waitFor(() => expect(provider.create).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    await lifecycle.retryCreate("build").catch(() => {});
+    await lifecycle.retryCreate("build");
+    const accountKey = await files.publicKey(account.id);
+    expect(accountKey).toMatch(/^ssh-ed25519 /);
+    const sent = vi.mocked(provider.create).mock.calls.map(([, sentRequest]) => sentRequest);
+    expect(sent).toHaveLength(3);
+    for (const each of sent) expect(each.publicKey).toBe(accountKey);
+    // The lost create's retry is the same request; the refused one's gets a fresh idempotency key only.
+    expect(sent[1]!.idempotencyKey).toBe(sent[0]!.idempotencyKey);
+    expect(sent[2]!.idempotencyKey).not.toBe(sent[1]!.idempotencyKey);
+  });
+
+  it("reaches a machine that took its key at create without authorizing a key", async () => {
+    const { lifecycle, provider, store, files, account } = await setup({}, { sshKey: "at-create" });
+    await lifecycle.create(request(account.id));
+    await vi.waitFor(() =>
+      expect(lifecycle.statuses()[0]).toMatchObject({ machine: "running", operation: null })
+    );
+    const bindingId = store.bindings()[0]!.id;
+    const readKey = vi.spyOn(files, "publicKey");
+    const route = await lifecycle.ensureAccess(bindingId);
+    const config = await fs.readFile(route.configPath, "utf8");
+    expect(config).toContain("HostName 203.0.113.10");
+    expect(provider.sshAccess).toHaveBeenCalledWith(expect.anything(), "bx_23456789");
+    expect(provider.authorizeSsh).not.toHaveBeenCalled();
+    expect(readKey).not.toHaveBeenCalled();
+    // The identity the route dials with is the key the create handed over.
+    const identity = /IdentityFile "(.+)"/.exec(config)![1]!;
+    expect((await fs.readFile(`${identity}.pub`, "utf8")).trim()).toBe(
+      vi.mocked(provider.create).mock.calls[0]![1].publicKey
+    );
+  });
+
+  it("sends nothing when the account's key can't be made, and says why", async () => {
+    const { lifecycle, provider, store, run, account } = await setup({}, { sshKey: "at-create" });
+    run.mockResolvedValueOnce({
+      code: 1,
+      stdout: "",
+      stderr: "ssh-keygen: not found",
+      spawnError: null,
+      timedOut: false,
+    });
+    await lifecycle.create(request(account.id));
+    const idempotencyKey = store.bindings()[0]!.creation!.idempotencyKey;
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.lastError).not.toBeNull());
+    expect(provider.create).not.toHaveBeenCalled();
+    expect(store.bindings()[0]!.creation).toMatchObject({ sentAt: null, idempotencyKey });
+    expect(lifecycle.statuses()[0]?.lastError).toMatchObject({
+      code: "ssh-authorization",
+      message: expect.stringContaining("ssh-keygen: not found"),
+    });
+
+    // Once the key can be made, Retry sends the create it never sent, under the same idempotency key.
+    await lifecycle.retryCreate("build");
+    expect(vi.mocked(provider.create).mock.calls[0]![1]).toMatchObject({
+      idempotencyKey,
+      publicKey: expect.stringMatching(/^ssh-ed25519 /),
+    });
+    expect(lifecycle.statuses()[0]).toMatchObject({ resourceId: "bx_23456789", lastError: null });
+  });
+
+  it("leaves an after-create provider's create keyless and authorizes the key once the machine exists", async () => {
+    const { lifecycle, provider, store, files, run, account } = await setup();
+    await lifecycle.create(request(account.id));
+    await vi.waitFor(() =>
+      expect(lifecycle.statuses()[0]).toMatchObject({ machine: "running", operation: null })
+    );
+    expect(vi.mocked(provider.create).mock.calls[0]![1].publicKey).toBeNull();
+    expect(run).not.toHaveBeenCalled();
+    expect(provider.authorizeSsh).not.toHaveBeenCalled();
+    await lifecycle.ensureAccess(store.bindings()[0]!.id);
+    expect(provider.authorizeSsh).toHaveBeenCalledWith(
+      expect.anything(),
+      "bx_23456789",
+      await files.publicKey(account.id)
+    );
+    expect(provider.sshAccess).not.toHaveBeenCalled();
+  });
+
+  it("keeps an earlier unanswered create in doubt when the key can't be made for its retry", async () => {
+    const { lifecycle, provider, store, files, account } = await setup({}, { sshKey: "at-create" });
+    vi.mocked(provider.create).mockRejectedValueOnce(
+      new BoatApiError("timeout", "slow", null, null, null)
+    );
+    await lifecycle.create(request(account.id));
+    await vi.waitFor(() =>
+      expect(lifecycle.statuses()[0]).toMatchObject({
+        operation: null,
+        lastError: { code: "outcome-unknown" },
+      })
+    );
+    const sent = store.bindings()[0]!.creation!;
+    vi.spyOn(files, "publicKey").mockRejectedValueOnce(new Error("disk full"));
+    await expect(lifecycle.retryCreate("build")).rejects.toThrow("disk full");
+    expect(provider.list).toHaveBeenCalled();
+    expect(provider.create).toHaveBeenCalledTimes(1);
+    expect(store.bindings()[0]!.creation).toEqual(sent);
+    expect(lifecycle.statuses()[0]?.lastError).toMatchObject({
+      code: "outcome-unknown",
+      message: expect.stringContaining("earlier request"),
+    });
+  });
+
+  it("asks nobody for a machine when the provider was replaced while the key was made", async () => {
+    const { lifecycle, provider, accounts, files, account } = await setup(
+      {},
+      { sshKey: "at-create" }
+    );
+    const make = files.publicKey.bind(files);
+    vi.spyOn(files, "publicKey").mockImplementationOnce(async (accountId) => {
+      vi.spyOn(accounts, "provider").mockReturnValue({ ...provider });
+      return make(accountId);
+    });
+    await lifecycle.create(request(account.id));
+    await vi.waitFor(() =>
+      expect(lifecycle.statuses()[0]?.lastError).toMatchObject({
+        code: "unsupported",
+        message: expect.stringContaining("replaced"),
+      })
+    );
+    expect(provider.create).not.toHaveBeenCalled();
+  });
+
+  it("keeps an earlier unanswered create in doubt when the provider is replaced during its retry", async () => {
+    const { lifecycle, provider, store, accounts, files, account } = await setup(
+      {},
+      { sshKey: "at-create" }
+    );
+    vi.mocked(provider.create).mockRejectedValueOnce(
+      new BoatApiError("timeout", "slow", null, null, null)
+    );
+    await lifecycle.create(request(account.id));
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    const sent = store.bindings()[0]!.creation!;
+    const make = files.publicKey.bind(files);
+    vi.spyOn(files, "publicKey").mockImplementationOnce(async (accountId) => {
+      vi.spyOn(accounts, "provider").mockReturnValue({ ...provider });
+      return make(accountId);
+    });
+    await expect(lifecycle.retryCreate("build")).rejects.toThrow("replaced");
+    expect(provider.create).toHaveBeenCalledTimes(1);
+    expect(store.bindings()[0]!.creation).toEqual(sent);
+    expect(lifecycle.statuses()[0]?.lastError?.code).toBe("outcome-unknown");
+  });
+
+  it("offers Retry for a create Daintree quit before sending", async () => {
+    const { lifecycle, provider, files, account, restart } = await setup(
+      {},
+      { sshKey: "at-create" }
+    );
+    vi.spyOn(files, "publicKey").mockReturnValueOnce(new Promise<string>(() => {}));
+    await lifecycle.create(request(account.id));
+    await vi.waitFor(() => expect(files.publicKey).toHaveBeenCalled());
+    const next = restart(lifecycle);
+    expect(next.lifecycle.statuses()[0]).toMatchObject({
+      resourceId: null,
+      operation: null,
+      lastError: { code: "failed" },
+    });
+    await next.lifecycle.retryCreate("build");
+    expect(provider.create).toHaveBeenCalledTimes(1);
+    expect(next.lifecycle.statuses()[0]).toMatchObject({ resourceId: "bx_23456789" });
+    next.lifecycle.dispose();
+  });
+
+  it("says to recreate a host Daintree quit before sending whose choices can't be read back", async () => {
+    const { lifecycle, store, files, account, restart } = await setup({}, { sshKey: "at-create" });
+    vi.spyOn(files, "publicKey").mockReturnValueOnce(new Promise<string>(() => {}));
+    await lifecycle.create(request(account.id));
+    await vi.waitFor(() => expect(files.publicKey).toHaveBeenCalled());
+    store.putBinding({ ...store.bindings()[0]!, provisioning: { location: 5 } as never });
+    const next = restart(lifecycle);
+    expect(next.lifecycle.statuses()[0]?.lastError).toMatchObject({
+      code: "failed",
+      message: expect.stringContaining("Remove the host and create it again"),
+    });
+    next.lifecycle.dispose();
+  });
+
+  it("refuses access when the provider declares a key timing it doesn't know", async () => {
+    const { lifecycle, provider, store, account } = await setup(
+      {},
+      {
+        sshKey: "on-boot" as "at-create",
+      }
+    );
+    await lifecycle.create(request(account.id));
+    await vi.waitFor(() =>
+      expect(lifecycle.statuses()[0]).toMatchObject({ machine: "running", operation: null })
+    );
+    await expect(lifecycle.ensureAccess(store.bindings()[0]!.id)).rejects.toBeInstanceOf(
+      UnusableConnectionError
+    );
+    expect(lifecycle.statuses()[0]?.lastError?.message).toContain("unknown SSH key timing");
+    expect(provider.authorizeSsh).not.toHaveBeenCalled();
+    expect(provider.sshAccess).not.toHaveBeenCalled();
   });
 });

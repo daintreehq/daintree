@@ -30,8 +30,8 @@ import {
   type HostDescriptor,
   type HostId,
 } from "../../../shared/types/remoteHosts.js";
-import { AppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { AppError } from "../../utils/errorTypes.js";
 import { TransportError, UnusableConnectionError } from "../client/transport.js";
 import type { CloudAccountService } from "./CloudAccountService.js";
 import {
@@ -60,6 +60,8 @@ import {
 import { sshDeclarationProblem } from "./sshTunnel.js";
 import {
   canRenewLifetime,
+  sshKeyContractProblem,
+  sshKeyTiming,
   type CloudProvider,
   type ProviderCredentials,
   type ProviderResource,
@@ -432,7 +434,27 @@ export class CloudHostLifecycle {
     this.pollTimer.unref?.();
     this.keeperTimer = setInterval(() => void this.renewDue(), KEEPER_INTERVAL_MS);
     this.keeperTimer.unref?.();
+    this.markInterruptedCreates();
     void this.reconcileUnfinishedCreates();
+  }
+
+  /**
+   * A create Daintree quit before sending (while it read the key or made the
+   * SSH key) left nothing to look for, and no error to offer Retry with.
+   */
+  private markInterruptedCreates(): void {
+    for (const binding of this.deps.store.bindings()) {
+      if (binding.resourceId || !binding.hostId || binding.creation?.sentAt !== null) continue;
+      if (binding.lastError || this.operations.has(binding.id)) continue;
+      this.recordError(binding.id, {
+        code: "failed",
+        message:
+          binding.provisioning === "unreadable"
+            ? "Setup stopped before a machine was asked for, and where it was meant to run can't be read back. Remove the host and create it again."
+            : "Setup stopped before a machine was asked for. Retry to create it.",
+        at: this.now(),
+      });
+    }
   }
 
   dispose(): void {
@@ -694,6 +716,33 @@ export class CloudHostLifecycle {
       throw invalid(message);
     }
     const provisioning = this.sendableProvisioning(binding, provider);
+    // A provider that only takes the key at create gets this account's own key with every attempt.
+    let publicKey: string | null = null;
+    if (sshKeyTiming(provider) === "at-create") {
+      try {
+        publicKey = await this.deps.files.publicKey(binding.accountId);
+      } catch (error) {
+        const detail = formatErrorMessage(error, "ssh-keygen failed");
+        this.recordUnsentCreate(bindingId, creation.sentAt !== null, {
+          code: "ssh-authorization",
+          reason: `This account's SSH key couldn't be made (${detail})`,
+        });
+        throw error;
+      }
+      if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+      // The provider leaving, or another registering in its place, while the key was made: ask nobody.
+      const registered = this.deps.accounts.providerUnavailable(binding.providerId)
+        ? null
+        : this.deps.accounts.provider(binding.providerId);
+      if (registered !== provider) {
+        const reason = `${nameOf(provider)} was ${registered ? "replaced" : "removed"} while the SSH key was made`;
+        this.recordUnsentCreate(bindingId, creation.sentAt !== null, {
+          code: "unsupported",
+          reason,
+        });
+        throw new AppError({ code: "UNSUPPORTED", message: reason, userMessage: reason });
+      }
+    }
     this.stage(bindingId, `Asking ${nameOf(provider)} for a machine`);
     // Written before the request: a lost answer is then found again, never sent blind.
     binding = this.deps.store.updateBinding(bindingId, (current) => ({
@@ -715,6 +764,7 @@ export class CloudHostLifecycle {
           [LABEL_BINDING]: bindingId,
         },
         idempotencyKey: creation.idempotencyKey,
+        publicKey,
       });
     } catch (error) {
       const described = provider.describeError(error);
@@ -772,6 +822,25 @@ export class CloudHostLifecycle {
       }
     }
     return selectionOf(picks);
+  }
+
+  /**
+   * A create stopped before this attempt was sent. When an earlier attempt was
+   * sent, that one may still have made the machine, so it stays a create whose
+   * outcome is unknown.
+   */
+  private recordUnsentCreate(
+    bindingId: string,
+    sentBefore: boolean,
+    { code, reason }: { code: CloudHostErrorCode; reason: string }
+  ): void {
+    this.recordError(bindingId, {
+      code: sentBefore ? "outcome-unknown" : code,
+      message: sentBefore
+        ? `${reason}, so the create wasn't sent again. Retry looks for a machine from the earlier request first.`
+        : `${reason}, so no machine was asked for. Retry to create it.`,
+      at: this.now(),
+    });
   }
 
   /** The machine a create for this binding made, found by its label; null when there is none. */
@@ -1358,8 +1427,7 @@ export class CloudHostLifecycle {
     }
     let resolved: ProviderSshAccess;
     try {
-      const publicKey = await this.deps.files.publicKey(binding.accountId);
-      resolved = await provider.authorizeSsh(credentials, binding.resourceId!, publicKey);
+      resolved = await this.sshAccessFor(provider, credentials, binding);
     } catch (error) {
       const described = provider.describeError(error);
       if (described.code === "provider-unreachable") {
@@ -1589,6 +1657,23 @@ export class CloudHostLifecycle {
       throw new UnusableConnectionError(said, said);
     }
     return { trust: capabilities.sshTrust, tunnel: { commandPath, args: [...args] } };
+  }
+
+  /**
+   * A machine that took the account's key at create is only asked how to reach
+   * it; any other has the key authorized on it first.
+   */
+  private async sshAccessFor(
+    provider: CloudProvider,
+    credentials: ProviderCredentials,
+    binding: StoredCloudBinding
+  ): Promise<ProviderSshAccess> {
+    const timing = sshKeyTiming(provider);
+    const problem = sshKeyContractProblem(provider, timing);
+    if (problem) throw new Error(`${nameOf(provider)} ${problem}`);
+    if (timing === "at-create") return provider.sshAccess!(credentials, binding.resourceId!);
+    const publicKey = await this.deps.files.publicKey(binding.accountId);
+    return provider.authorizeSsh!(credentials, binding.resourceId!, publicKey);
   }
 
   /** A stable key for one resolution of access: a new one means a new transport. */
