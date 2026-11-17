@@ -337,6 +337,45 @@ describe("agentActions adversarial", () => {
     );
   });
 
+  it.each(["browser", "dev-preview"])(
+    "agent.launch hands a %s launch the caller's panel options, refusing a used id (#17221)",
+    async (agentId) => {
+      const callbacks = makeCallbacks();
+      const actions = setupActions(callbacks);
+      panelStoreMock.getState.mockReturnValue({ panelsById: { taken: { id: "taken" } } });
+
+      await expect(
+        callAction(actions, "agent.launch", { agentId, requestedId: "taken" })
+      ).rejects.toThrow(/already exists/);
+      expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+
+      await callAction(
+        actions,
+        "agent.launch",
+        {
+          agentId,
+          requestedId: "fresh-id",
+          name: "Staging",
+          focusPolicy: "preserve",
+          excludeFromPersistence: true,
+          removeOnExit: true,
+        },
+        { dispatchSource: "plugin", callerPluginId: "acme.orchestrator" }
+      );
+      expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
+        agentId,
+        expect.objectContaining({
+          requestedId: "fresh-id",
+          name: "Staging",
+          focusPolicy: "preserve",
+          excludeFromPersistence: true,
+          removeOnExit: true,
+          launchedByPluginId: "acme.orchestrator",
+        })
+      );
+    }
+  );
+
   // #12431: one agent-neutral field, mapped per CLI by the registry.
   it("agent.launch maps systemPrompt onto the agent's own append arguments", async () => {
     const callbacks = makeCallbacks();
