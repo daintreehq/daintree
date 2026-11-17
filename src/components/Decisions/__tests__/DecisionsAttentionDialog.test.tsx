@@ -17,7 +17,8 @@ vi.mock("@/hooks/useWorktrees", () => ({ useWorktrees: () => ({ worktrees: [] })
 const listAttention = vi.fn<() => Promise<DecisionsAttentionList>>();
 const markAnswerHandled =
   vi.fn<(payload: { questionId: string }) => Promise<DecisionsAnswerOutcome>>();
-const listAnswerDestinations = vi.fn<(questionId: string) => Promise<DecisionsAnswerDestinations>>();
+const listAnswerDestinations =
+  vi.fn<(questionId: string) => Promise<DecisionsAnswerDestinations>>();
 
 /** The list as main would read it now; actions change it before the next read. */
 let listed: DecisionsAttentionItem[] = [];
@@ -354,9 +355,7 @@ describe("DecisionsAttentionDialog: Choose destination (#17560)", () => {
     async ({ settle }) => {
       const older = settleable<DecisionsAnswerDestinations>();
       const newer = settleable<DecisionsAnswerDestinations>();
-      listAnswerDestinations
-        .mockReturnValueOnce(older.promise)
-        .mockReturnValueOnce(newer.promise);
+      listAnswerDestinations.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
       render(tree(true));
       await listedRows(1);
 
