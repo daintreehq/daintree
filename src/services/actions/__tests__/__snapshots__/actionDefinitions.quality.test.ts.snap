@@ -1403,7 +1403,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "devServer",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Switch the Element Picker on or off in a dev preview of the active worktree — the focused one, else the first open one — opening a dev preview when the worktree has none. The picker lets the user select an element on the page and send it to an agent. Returns the panel it acted on and whether the picker is now on.",
+    "description": "Switch the Element Picker on or off in the focused browser panel showing a local page, else in a dev preview of the active worktree (the focused one, else the first open one), opening one when it has none. The picker lets the user select an element on the page and send it to an agent. Returns the panel it acted on and whether the picker is now on.",
     "examples": undefined,
     "id": "devPreview.toggleElementPicker",
     "keywords": [
@@ -1413,6 +1413,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
       "inspect",
       "inspector",
       "preview",
+      "browser",
       "agent",
     ],
     "kind": "command",
