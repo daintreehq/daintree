@@ -102,7 +102,7 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh", () => {
     async (exported) => {
       const { argv, root } = await runCli("my project", {
         cwd: workspace,
-        env: exported ? { CDPATH: workspace } : {},
+        env: exported ? { CDPATH: workspace } : { CDPATH: "" },
       });
       roots.push(root);
       expect(argv).toEqual([

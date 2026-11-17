@@ -8,13 +8,13 @@ resolve_script_path() {
 
   while [[ -h "$source" ]]; do
     local dir=""
-    dir="$(cd -P "$(dirname "$source")" >/dev/null 2>&1 && pwd)"
+    dir="$(CDPATH= cd -P "$(dirname "$source")" >/dev/null 2>&1 && pwd)"
     source="$(readlink "$source")"
     [[ "$source" != /* ]] && source="$dir/$source"
   done
 
   local source_dir=""
-  source_dir="$(cd -P "$(dirname "$source")" >/dev/null 2>&1 && pwd)"
+  source_dir="$(CDPATH= cd -P "$(dirname "$source")" >/dev/null 2>&1 && pwd)"
   printf "%s/%s\n" "$source_dir" "$(basename "$source")"
 }
 
