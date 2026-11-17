@@ -572,8 +572,23 @@ function parseDiffFiles(diff: string): ReturnType<typeof parseDiff> {
 
 function expandFullFile(hunks: HunkData[], oldSource: string[]): HunkData[] | null {
   try {
+    // One range per gap, each ending where the next hunk starts. A range that
+    // reaches into a hunk is stretched over its leading context, which is read
+    // from the source (blank inside hunks here), and one that covers a whole
+    // hunk keeps the plain lines and drops that hunk's changes.
+    let expanded = hunks;
+    let start = 1;
+    for (const hunk of hunks) {
+      if (hunk.oldStart > start) {
+        expanded = expandFromRawCode(expanded, oldSource, start, hunk.oldStart);
+      }
+      start = Math.max(start, hunk.oldStart + hunk.oldLines);
+    }
     // `end` is exclusive, so the last line needs length + 1.
-    return expandFromRawCode(hunks, oldSource, 1, oldSource.length + 1);
+    if (start <= oldSource.length) {
+      expanded = expandFromRawCode(expanded, oldSource, start, oldSource.length + 1);
+    }
+    return expanded;
   } catch {
     return null;
   }

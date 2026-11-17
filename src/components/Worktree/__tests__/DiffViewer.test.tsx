@@ -156,6 +156,18 @@ index 000..111 100644
     expect(screen.getByText("No changes detected")).toBeTruthy();
   });
 
+  it("offers the way back when a whitespace-ignoring read comes back empty", () => {
+    const onShowWhitespaceChanges = vi.fn();
+    render(
+      wrap(<DiffViewer diff="NO_CHANGES" onShowWhitespaceChanges={onShowWhitespaceChanges} />)
+    );
+
+    expect(screen.queryByText("No changes detected")).toBeNull();
+    expect(screen.getByText("No changes with whitespace ignored")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Show whitespace changes" }));
+    expect(onShowWhitespaceChanges).toHaveBeenCalledTimes(1);
+  });
+
   it("renders BINARY_FILE sentinel", () => {
     render(wrap(<DiffViewer diff="BINARY_FILE" />));
     expect(screen.getByText("Binary file")).toBeTruthy();
@@ -1632,6 +1644,133 @@ describe("DiffViewer full file scope", () => {
       </TooltipProvider>
     );
     expect(renderedContent()).not.toContain("line1");
+  });
+
+  it("expands a whitespace-ignoring patch against the file on disk", () => {
+    // `git diff --ignore-all-space` (git 2.56.1) after reindenting a block,
+    // changing one line in it and appending one at the end: the reindented
+    // lines are context printed from the new side, so the file on disk still
+    // matches every hunk.
+    const diff = [
+      "diff --git a/f.js b/f.js",
+      "index 943a52b..8d5a6c1 100644",
+      "--- a/f.js",
+      "+++ b/f.js",
+      "@@ -1,6 +1,6 @@",
+      " function a() {",
+      "     if (x) {",
+      "-  return 1;",
+      "+        return 2;",
+      "     }",
+      " }",
+      " l1",
+      "@@ -13,3 +13,4 @@ l7",
+      " l8",
+      " l9",
+      " l10",
+      "+new",
+      "",
+    ].join("\n");
+    const tail = Array.from({ length: 10 }, (_, i) => `l${i + 1}`);
+    const source = [
+      "function a() {",
+      "    if (x) {",
+      "        return 2;",
+      "    }",
+      "}",
+      ...tail,
+      "new",
+    ].join("\n");
+    const onVerdict =
+      vi.fn<
+        (reason: FullFileUnavailableReason | null, forSource: string | null | undefined) => void
+      >();
+
+    renderViewer({ diff, source, fullFile: true, onFullFileVerdict: onVerdict });
+
+    expect(onVerdict).toHaveBeenLastCalledWith(null, source);
+    expect(renderedContent()).toEqual([
+      "function a() {",
+      "    if (x) {",
+      "  return 1;",
+      "        return 2;",
+      "    }",
+      "}",
+      ...tail,
+      "new",
+    ]);
+  });
+
+  it("keeps every hunk's own lines when expanding a file with several", () => {
+    // One range over the whole file reached into the second hunk's leading
+    // context, which the synthetic old side leaves blank, and rendered it empty.
+    const lines = Array.from({ length: 20 }, (_, i) => `l${i + 1}`);
+    const diff = [
+      "diff --git a/f.ts b/f.ts",
+      "index 86bba90..1d28e03 100644",
+      "--- a/f.ts",
+      "+++ b/f.ts",
+      "@@ -1,6 +1,6 @@",
+      " l1",
+      " l2",
+      "-l3",
+      "+X3",
+      " l4",
+      " l5",
+      " l6",
+      "@@ -12,7 +12,7 @@ l11",
+      " l12",
+      " l13",
+      " l14",
+      "-l15",
+      "+X15",
+      " l16",
+      " l17",
+      " l18",
+      "",
+    ].join("\n");
+    const changed = lines.map((line) => (line === "l3" ? "X3" : line === "l15" ? "X15" : line));
+
+    renderViewer({ diff, source: changed.join("\n"), fullFile: true });
+
+    expect(renderedContent()).toEqual([
+      ...lines.slice(0, 2),
+      "l3",
+      "X3",
+      ...lines.slice(3, 14),
+      "l15",
+      "X15",
+      ...lines.slice(15),
+    ]);
+  });
+
+  it("keeps a trailing insert when an earlier hunk precedes the one ending the file", () => {
+    // A range covering the whole last hunk kept the plain lines and dropped the
+    // hunk, taking the appended line with it.
+    const lines = Array.from({ length: 12 }, (_, i) => `l${i + 1}`);
+    const diff = [
+      "diff --git a/f.ts b/f.ts",
+      "index 1111111..2222222 100644",
+      "--- a/f.ts",
+      "+++ b/f.ts",
+      "@@ -1,4 +1,4 @@",
+      "-l1",
+      "+X1",
+      " l2",
+      " l3",
+      " l4",
+      "@@ -10,3 +10,4 @@ l9",
+      " l10",
+      " l11",
+      " l12",
+      "+new",
+      "",
+    ].join("\n");
+    const source = ["X1", ...lines.slice(1), "new"].join("\n");
+
+    renderViewer({ diff, source, fullFile: true });
+
+    expect(renderedContent()).toEqual(["l1", "X1", ...lines.slice(1), "new"]);
   });
 
   it("refuses to expand against a source that isn't the diff's new side", () => {
