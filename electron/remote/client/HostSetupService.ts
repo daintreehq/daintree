@@ -35,6 +35,7 @@ import {
   unsupportedConnection,
 } from "./connection.js";
 import { discoverHosts, discoverWslDistros } from "./discovery.js";
+import { listSshConfigAliases } from "./sshConfig.js";
 import { type ArtifactChecksum, lookupArtifactChecksum } from "./clientBuild.js";
 import { runHostInstall } from "./hostInstaller.js";
 import { RestartImpactSchema } from "../metrics/linkMethods.js";
@@ -181,6 +182,8 @@ export class HostSetupService {
       run: this.deps.run,
       platform: this.deps.platform,
       knownConnections: this.deps.knownConnections(),
+      // Read only here, when Add Host asks: never at startup, never written.
+      sshConfigAliases: (aliasSignal) => listSshConfigAliases({ signal: aliasSignal }),
       signal,
     });
   }

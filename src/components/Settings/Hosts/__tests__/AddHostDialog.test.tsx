@@ -323,6 +323,27 @@ describe("AddHostDialog", () => {
     expect(names).toEqual(["studio-2", "Studio-03", "studio-10", "studio-01"]);
   });
 
+  it("names an alias from the SSH config as its source and picks it as written, unchecked", async () => {
+    remoteHosts.discover!.mockResolvedValueOnce([
+      {
+        name: "build-box",
+        connection: { kind: "ssh", target: "build-box" },
+        source: "ssh-config",
+        platform: null,
+        online: false,
+        alreadyAdded: false,
+      },
+    ]);
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    const row = await screen.findByRole("radio", { name: "build-box" });
+    expect(discoveredRows()[0]!.textContent).toContain("SSH config");
+    fireEvent.click(row);
+    expect(
+      (screen.getByPlaceholderText("user@devbox.local") as HTMLInputElement).value
+    ).toBe("build-box");
+    expect(remoteHosts.probe).not.toHaveBeenCalled();
+  });
+
   describe("a large mesh", () => {
     function peer(
       name: string,

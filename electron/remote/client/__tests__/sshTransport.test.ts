@@ -1533,6 +1533,33 @@ describe("reconnecting to a host the transport already knows", () => {
     host.closeProxies();
   });
 
+  it("dials afresh once a file the ssh config includes re-points the alias", async () => {
+    const host = await knownHost();
+    const config = path.join(root, "ssh_config");
+    const included = path.join(root, "studio.conf");
+    writeFileSync(config, `Host studio\n  Include ${included}\n`);
+    writeFileSync(included, "HostName a.example\n");
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: host.spawner,
+      sshConfigFiles: [config],
+    });
+    const first = await transport.open(new AbortController().signal);
+    await first.dispose();
+    const second = await transport.open(new AbortController().signal);
+    expect(second.remembered).toBe(true);
+    await second.dispose();
+
+    writeFileSync(included, "HostName b.example.org\n");
+    const before = host.calls.length;
+    const third = await transport.open(new AbortController().signal);
+    expect(third.remembered).toBeUndefined();
+    expect(host.calls.slice(before).filter(isProbe)).toHaveLength(1);
+    await third.dispose();
+    host.closeProxies();
+  });
+
   it("starts no fresh dial for a remembered one that was cancelled", async () => {
     const host = await knownHost();
     const transport = new SshTransport({

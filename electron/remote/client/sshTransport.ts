@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { ATTACH_STDIO_FLAG } from "../host/attachStdio.js";
@@ -15,6 +14,7 @@ import {
 import type { CommandRunner } from "./commandRunner.js";
 import { createCommandStreamTransport, type StreamCommandChild } from "./commandStreamTransport.js";
 import { sshExecutable } from "./sshExecutable.js";
+import { defaultSshConfigRoots, sshConfigStamp } from "./sshConfig.js";
 import { isValidSshTarget } from "../../../shared/utils/sshTarget.js";
 import {
   HostModeOffError,
@@ -93,7 +93,7 @@ export interface SshTransportOptions {
    */
   ensureRunning?: (signal: AbortSignal) => Promise<boolean>;
   linuxDirName?: string;
-  /** The ssh config files a remembered route depends on; the user's and the system's unless given. */
+  /** The ssh config files a remembered route depends on, with what they Include; the user's and the system's unless given. */
   sshConfigFiles?: string[];
 }
 
@@ -830,31 +830,6 @@ interface KnownHost {
   configStamp: string;
 }
 
-/**
- * How the ssh config files stood. A remembered route is only good while they
- * are unchanged: after an edit (an alias re-pointed, say) the next dial runs
- * in full, as every dial did before, instead of carrying on by the control
- * path the old config expanded to. Files they `Include` aren't covered; a
- * person's Retry dials afresh whatever they say.
- */
-async function sshConfigStamp(files: readonly string[]): Promise<string> {
-  const stamps = await Promise.all(
-    files.map(async (file) => {
-      try {
-        const stat = await fs.stat(file);
-        return `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
-      } catch {
-        return "-";
-      }
-    })
-  );
-  return stamps.join("|");
-}
-
-function defaultSshConfigFiles(): string[] {
-  return [path.join(os.homedir(), ".ssh", "config"), "/etc/ssh/ssh_config"];
-}
-
 const SSH_TIMED_OUT = "ssh did not finish in time";
 
 export class SshTransport implements LinkTransport {
@@ -1040,8 +1015,15 @@ export class SshTransport implements LinkTransport {
     return refusal;
   }
 
+  /**
+   * A remembered route is only good while the ssh config stands as it did:
+   * after an edit (an alias re-pointed, say, in the config or a file it
+   * Includes) the next dial runs in full, as every dial did before, instead of
+   * carrying on by the control path the old config expanded to.
+   */
   private configStamp(): Promise<string> {
-    return sshConfigStamp(this.options.sshConfigFiles ?? defaultSshConfigFiles());
+    const files = this.options.sshConfigFiles;
+    return sshConfigStamp(files ? files.map((file) => ({ path: file })) : defaultSshConfigRoots());
   }
 
   /** Straight to the route an earlier open found, through the master it left running. */
