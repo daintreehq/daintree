@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, afterAll, beforeEach, afterEach, vi } from "vitest";
 import type { PtyPanelData } from "@shared/types/panel";
+import type { ActionDefinition, ActionId } from "@shared/types/actions";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -78,6 +79,8 @@ const { registerFleetActions } = await import("../fleetActions");
 // The run bodies load on first dispatch; load them here, under the mocks above.
 await import("../fleetActions.impl");
 const { useFleetRunStore } = await import("@/store/fleetRunStore");
+const { actionService } = await import("@/services/ActionService");
+const { registerActionActions } = await import("../actionActions");
 
 type ActionRegistry = Awaited<
   ReturnType<typeof import("@/services/actions/actionDefinitions").createActionDefinitions>
@@ -416,6 +419,121 @@ describe("fleet actions — threshold confirmation", () => {
     const registry = await buildRegistry();
     await run(registry, "fleet.interrupt");
     expect(terminalClient.batchDoubleEscape).toHaveBeenCalledWith(["full"]);
+  });
+});
+
+describe("fleet actions never arm action.repeatLast (#17205)", () => {
+  const earlierRun = vi.fn().mockResolvedValue(undefined);
+
+  function resetActionService(): void {
+    // @ts-expect-error — private field reset for test isolation
+    actionService.registry = new Map();
+    // @ts-expect-error — private field reset for test isolation
+    actionService.lastAction = null;
+  }
+
+  beforeEach(async () => {
+    resetStores();
+    vi.clearAllMocks();
+    // action.repeatLast reads the singleton, so the fleet actions go there.
+    resetActionService();
+    const registry = await buildRegistry();
+    registerActionActions(registry);
+    for (const factory of registry.values()) actionService.register(factory() as ActionDefinition);
+    actionService.register({
+      id: "test.earlier" as ActionId,
+      title: "Earlier",
+      description: "Something the person ran before reaching for the fleet",
+      category: "test",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      run: earlierRun,
+    });
+    await actionService.dispatch("test.earlier" as ActionId, undefined, { source: "user" });
+  });
+
+  afterAll(() => {
+    resetActionService();
+  });
+
+  function armAgents(prefix: string, count: number, agentState: "waiting" | "working"): void {
+    const agents = Array.from({ length: count }, (_, i) =>
+      makeAgent(`${prefix}${i}`, { agentState })
+    );
+    seedPanels(agents);
+    useFleetArmingStore.getState().armIds(agents.map((a) => a.id));
+  }
+
+  async function repeatLast(): Promise<void> {
+    const result = await actionService.dispatch("action.repeatLast" as ActionId, undefined, {
+      source: "keybinding",
+    });
+    expect(result.ok).toBe(true);
+  }
+
+  function keystrokesSent(): number {
+    return (
+      (terminalClient.write as ReturnType<typeof vi.fn>).mock.calls.length +
+      (terminalClient.batchDoubleEscape as ReturnType<typeof vi.fn>).mock.calls.length
+    );
+  }
+
+  it.each([
+    { id: "fleet.reject", count: 5, agentState: "waiting", confirmSource: "user" },
+    { id: "fleet.reject", count: 5, agentState: "waiting", confirmSource: "keybinding" },
+    { id: "fleet.interrupt", count: 3, agentState: "working", confirmSource: "user" },
+    { id: "fleet.interrupt", count: 3, agentState: "working", confirmSource: "keybinding" },
+  ] as const)(
+    "$id confirmed by $confirmSource isn't replayed past its prompt",
+    async ({ id, count, agentState, confirmSource }) => {
+      armAgents("a", count, agentState);
+      await actionService.dispatch(id as ActionId, undefined, { source: "keybinding" });
+      expect(useFleetPendingActionStore.getState().pending).not.toBeNull();
+      // The fleet bar clears its confirmation before re-dispatching as the person.
+      useFleetPendingActionStore.getState().clear();
+      const confirmed = await actionService.dispatch(
+        id as ActionId,
+        { confirmed: true },
+        { source: confirmSource }
+      );
+      expect(confirmed.ok).toBe(true);
+      expect(keystrokesSent()).toBeGreaterThan(0);
+
+      // A different fleet is armed by the time the person reaches for repeat.
+      armAgents("b", count, agentState);
+      vi.clearAllMocks();
+      await repeatLast();
+
+      expect(keystrokesSent()).toBe(0);
+      expect(earlierRun).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it("fleet.accept isn't replayed into whichever agents are waiting later", async () => {
+    armAgents("a", 1, "waiting");
+    await actionService.dispatch("fleet.accept" as ActionId, undefined, { source: "keybinding" });
+    expect(terminalClient.write).toHaveBeenCalledWith("a0", "y\r");
+
+    armAgents("b", 2, "waiting");
+    vi.clearAllMocks();
+    await repeatLast();
+
+    expect(terminalClient.write).not.toHaveBeenCalled();
+    expect(earlierRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("fleet.retryFailures isn't replayed against a later broadcast's failures", async () => {
+    useFleetFailureStore.setState({ failedIds: new Set(["t1"]), payload: "ls\r" });
+    await actionService.dispatch("fleet.retryFailures" as ActionId, undefined, { source: "user" });
+    expect(runManagedFleetBroadcast).toHaveBeenCalledTimes(1);
+
+    useFleetFailureStore.setState({ failedIds: new Set(["t2", "t3"]), payload: "git status\r" });
+    vi.clearAllMocks();
+    await repeatLast();
+
+    expect(runManagedFleetBroadcast).not.toHaveBeenCalled();
+    expect(earlierRun).toHaveBeenCalledTimes(1);
   });
 });
 

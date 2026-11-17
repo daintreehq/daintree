@@ -365,6 +365,9 @@ export function registerTerminalSpawnActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    // Only opens the new-worktree dialog; the move happens in its callback
+    // later, so a replay would reopen the dialog rather than repeat a move.
+    nonRepeatable: true,
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     run: async (args: unknown, ctx) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};

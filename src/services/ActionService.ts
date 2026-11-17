@@ -236,6 +236,21 @@ function cloneArgsForReplay(args: unknown): unknown {
   }
 }
 
+/**
+ * Whether a dispatch's args carry someone's approval past a confirmation: the
+ * `{ confirmed: true }` a runtime-escalated action's own prompt re-dispatches
+ * with. Recorded for `action.repeatLast`, it would apply that approval to
+ * whatever the action targets when it's replayed, without asking again
+ * (#17205). `options.confirmed` needs no check: a replay carries args only.
+ */
+function argsCarryConfirmation(args: unknown): boolean {
+  return (
+    typeof args === "object" &&
+    args !== null &&
+    (args as { confirmed?: unknown }).confirmed === true
+  );
+}
+
 export interface LastDispatchedAction {
   actionId: ActionId;
   args: unknown;
@@ -729,6 +744,10 @@ export class ActionService {
         ? useUIStore.getState().overlayClaimEpoch
         : null;
 
+    // Read before `run()`: args an action doesn't validate are the caller's
+    // object, which the run could change.
+    const confirmedDispatch = argsCarryConfirmation(validatedArgs);
+
     try {
       // Derive (don't mutate — `context` may be a shared object from the
       // context provider) a run-scoped context carrying the dispatch source
@@ -835,11 +854,13 @@ export class ActionService {
       if (
         REPEATABLE_SOURCES.has(source) &&
         !definition.nonRepeatable &&
-        definition.danger === "safe"
+        definition.danger === "safe" &&
+        !confirmedDispatch
       ) {
         // Only danger:"safe" actions are eligible for repeat. Confirm-gated actions
         // rely on originating UI dialogs for consent — replaying them from a keybinding
-        // would silently bypass that UI and repeat a destructive op.
+        // would silently bypass that UI and repeat a destructive op. The same goes
+        // for a safe action's confirmed dispatch, whose consent was given once.
         this.lastAction = { actionId, args: cloneArgsForReplay(validatedArgs) };
       }
       void this.emitActionDispatchedEvent({

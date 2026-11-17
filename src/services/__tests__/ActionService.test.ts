@@ -2225,10 +2225,10 @@ describe("ActionService", () => {
   });
 
   describe("lastAction tracking", () => {
-    const makeAction = (
+    const makeAction = <S extends z.ZodTypeAny | undefined = undefined>(
       id: string,
-      overrides: Partial<ActionDefinition> = {}
-    ): ActionDefinition => ({
+      overrides: Partial<ActionDefinition<S>> = {}
+    ): ActionDefinition<S> => ({
       id: id as ActionId,
       title: "Test",
       description: "Test action",
@@ -2356,6 +2356,56 @@ describe("ActionService", () => {
 
       await service.dispatch("test.destructive" as ActionId, undefined, { source: "context-menu" });
       expect(service.getLastAction()?.actionId).toBe("test.safe");
+    });
+
+    it.each(["user", "keybinding", "menu", "context-menu"] as const)(
+      "does not capture a safe action's confirmed dispatch from %s (#17205)",
+      async (source) => {
+        // A runtime-escalated safe action's prompt re-dispatches with
+        // `{ confirmed: true }`. Recording that would let action.repeatLast apply
+        // the approval to whatever the action targets later, unasked.
+        const schema = z.object({ confirmed: z.boolean().optional() }).optional();
+        const run = vi.fn().mockResolvedValue(undefined);
+        service.register(makeAction("test.safe"));
+        service.register(makeAction("test.escalating", { argsSchema: schema, run }));
+
+        await service.dispatch("test.safe" as ActionId, undefined, { source: "user" });
+        await service.dispatch("test.escalating" as ActionId, { confirmed: true }, { source });
+
+        expect(run).toHaveBeenCalledWith({ confirmed: true }, expect.anything());
+        expect(service.getLastAction()).toEqual({ actionId: "test.safe", args: undefined });
+      }
+    );
+
+    it("does not capture a confirmation the schema fills in (#17205)", async () => {
+      const schema = z.object({ confirmed: z.boolean().default(true) });
+      service.register(makeAction("test.defaultConfirmed", { argsSchema: schema }));
+
+      await service.dispatch("test.defaultConfirmed" as ActionId, {}, { source: "user" });
+      expect(service.getLastAction()).toBeNull();
+    });
+
+    it("still captures a dispatch whose args don't carry a confirmation", async () => {
+      const schema = z.object({ confirmed: z.boolean().optional() }).optional();
+      service.register(makeAction("test.escalating", { argsSchema: schema }));
+
+      await service.dispatch(
+        "test.escalating" as ActionId,
+        { confirmed: false },
+        { source: "user" }
+      );
+      expect(service.getLastAction()).toEqual({
+        actionId: "test.escalating",
+        args: { confirmed: false },
+      });
+
+      // Quick Create passes `options.confirmed`. A replay carries args only, so
+      // that approval can't ride along and the action stays repeatable.
+      await service.dispatch("test.escalating" as ActionId, undefined, {
+        source: "keybinding",
+        confirmed: true,
+      });
+      expect(service.getLastAction()).toEqual({ actionId: "test.escalating", args: undefined });
     });
 
     it("outer dispatch captures after inner dispatch completes (nested ordering)", async () => {
