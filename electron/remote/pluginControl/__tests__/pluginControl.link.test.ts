@@ -121,6 +121,55 @@ describe("a Shell plugin's call over a real link (#16767)", () => {
     expect(result).toMatchObject({ ok: false, error: { code: "HOST_UNREACHABLE" } });
   });
 
+  it("proves itself with the credential kept once the link is up, never one read while it connected (#17207)", async () => {
+    const host = installOnHost();
+    const before = "o".repeat(43);
+    let secret = before;
+    const sent: unknown[] = [];
+    const call = links.client.call.bind(links.client);
+    vi.spyOn(links.client, "call").mockImplementation((method, payload, options) => {
+      sent.push(payload);
+      return call(method, payload, options);
+    });
+    const client = new HostPluginControlClient({
+      hosts: () => [{ hostId: HOST_ID, name: "Studio", connection: { status: "disconnected" } }],
+      listHostProjects: async () => [],
+      connect: async () => undefined,
+      // Re-pointed while it connected: the old machine's secret was forgotten and a new one kept.
+      session: async () => {
+        secret = SHELL_SECRET;
+        return links.client;
+      },
+      credential: () => pluginCredentialFor(secret),
+    });
+
+    await client.dispatch(
+      { hostId: HOST_ID, pluginId: "acme.beads" },
+      { projectId: PROJECT, actionId: "worktree.list", args: {} }
+    );
+
+    expect(sent).toEqual([expect.objectContaining({ credential: pluginCredentialFor(SHELL_SECRET) })]);
+    expect(JSON.stringify(sent)).not.toContain(pluginCredentialFor(before));
+    host.dispose();
+  });
+
+  it("dials nothing when no credential can be kept here", async () => {
+    const session = vi.fn(async () => links.client);
+    const client = new HostPluginControlClient({
+      hosts: () => [{ hostId: HOST_ID, name: "Studio", connection: { status: "disconnected" } }],
+      listHostProjects: async () => [],
+      connect: async () => undefined,
+      session,
+      credential: () => null,
+    });
+    const result = await client.dispatch(
+      { hostId: HOST_ID, pluginId: "acme.beads" },
+      { projectId: PROJECT, actionId: "worktree.list", args: {} }
+    );
+    expect(result).toMatchObject({ ok: false, error: { code: "HOST_UNREACHABLE" } });
+    expect(session).not.toHaveBeenCalled();
+  });
+
   it("answers not-found on the host for an agent its plugin never launched there", async () => {
     const host = installOnHost();
     expect(

@@ -388,6 +388,20 @@ describe("dev preview through a forward", () => {
     expect(m.list()).toEqual([]);
   });
 
+  it("asks a forgotten host afresh for a preview it answered, with no forward open (#17207)", async () => {
+    const m = manager();
+    previewResolution = { kind: "not-running" };
+    const first = m.resolvePreview("dp-proj-panel");
+    await expect(first).resolves.toEqual({ kind: "not-running" });
+    expect(m.resolvePreview("dp-proj-panel")).toBe(first);
+
+    await m.forgetHost(HOST);
+
+    const again = m.resolvePreview("dp-proj-panel");
+    expect(again).not.toBe(first);
+    await again;
+  });
+
   it("asks nothing for a preview no view has claimed, or whose host isn't connected", () => {
     expect(manager({ previewOwner: () => null }).resolvePreview("dp-a-b")).toBeNull();
     expect(manager({ sessionFor: () => null }).resolvePreview("dp-a-b")).toBeNull();
@@ -631,6 +645,46 @@ describe("ssh -O forward on the ControlMaster", () => {
       "forward",
       "cancel",
       "forward",
+    ]);
+  });
+
+  it("never adds a forgotten host's retired forward again on its next session (#17207)", async () => {
+    const calls: string[][] = [];
+    const spawn = (args: string[]): SshChild => {
+      calls.push(args);
+      const child = new FakeSshChild();
+      setImmediate(() => child.emit("exit", 0, null));
+      return child as unknown as SshChild;
+    };
+    let current: LinkSession | null = client;
+    const m = manager({
+      sessionFor: (hostId) => (hostId === HOST && current?.isOpen ? current : null),
+      sshMuxFor: () => ({ target: "studio-01", controlPath: "/tmp/rh/cm-abc" }),
+      spawn,
+    });
+    const probe = net.createServer();
+    const remotePort = await listen(probe);
+    await new Promise((resolve) => probe.close(resolve));
+    await m.forward({ hostId: HOST, remotePort, label: "API" });
+
+    // The old machine's master goes with its session; the forward waits to be added again.
+    client.close("re-pointed");
+    expect(m.hasForwardsFor(HOST)).toBe(true);
+
+    await m.forgetHost(HOST);
+    expect(m.hasForwardsFor(HOST)).toBe(false);
+
+    const next = await openSessionPair(dir);
+    cleanups.push(() => {
+      next.host.close("done");
+      next.client.close("done");
+    });
+    current = next.client;
+    await m.reestablish(HOST);
+    expect(m.list()).toEqual([]);
+    expect(calls.filter((args) => args.includes("-O")).map((args) => args[args.indexOf("-O") + 1])).toEqual([
+      "forward",
+      "cancel",
     ]);
   });
 

@@ -561,8 +561,18 @@ export class PortForwardManager {
     }
     const prefix = keyOf(hostId, 0).slice(0, -1);
     for (const key of [...this.holds.keys()]) if (key.startsWith(prefix)) this.holds.delete(key);
+    // Its previews' answers were the old machine's, and so is any lookup still out there.
+    const previews = new Set<string>();
     for (const [subdomain, key] of this.previewKeys) {
-      if (key.startsWith(prefix)) this.previewKeys.delete(subdomain);
+      if (key.startsWith(prefix)) previews.add(subdomain);
+    }
+    for (const [subdomain, cached] of this.previewCache) {
+      if (cached.hostId === hostId) previews.add(subdomain);
+    }
+    for (const subdomain of previews) {
+      this.previewKeys.delete(subdomain);
+      this.previewCache.delete(subdomain);
+      this.previewGenerations.set(subdomain, ++this.previewGeneration);
     }
     for (const [key, recreation] of this.recreating) {
       if (key.startsWith(prefix)) recreation.stopped = true;
@@ -574,7 +584,6 @@ export class PortForwardManager {
     const gone = [...this.forwards].filter(([, forward]) => forward.info.hostId === hostId);
     if (gone.length === 0) return;
     for (const [key] of gone) this.forwards.delete(key);
-    this.previewCache.clear();
     // Its master may be gone with it: cancelling is only a courtesy, the local side always closes.
     await Promise.all(gone.map(([, forward]) => this.teardown(forward).catch(() => false)));
     await Promise.all(

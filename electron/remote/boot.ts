@@ -289,7 +289,9 @@ function startClient(options: StartRemoteHostsOptions): void {
     installPortForwardClient({
       onEndpointOpened: client.onEndpointOpened,
       hostForView: (webContentsId) => hostForView(webContentsId),
-      isKnownHost: (hostId) => hostEntry(hostId) !== undefined,
+      // One being removed or re-pointed is gone already: nothing forwarded meanwhile reaches its old machine.
+      isKnownHost: (hostId) =>
+        hostEntry(hostId) !== undefined && !client.client.isHostRetiring(hostId),
       onHostsChanged: (listener) => client.registry.onChange(listener),
       addUseCheck: (check) => client.manager.addUseCheck(check),
       onSessionOpened: (listener) => client.manager.onSessionOpened(listener),
@@ -425,6 +427,7 @@ function startClient(options: StartRemoteHostsOptions): void {
       onHostsChanged: (listener) => client.registry.onChange(listener),
       addUseCheck: (check) => client.manager.addUseCheck(check),
       hostName: (hostId) => client.registry.get(hostId)?.name ?? "a removed host",
+      isRetiring: (hostId) => client.client.isHostRetiring(hostId),
     })
   );
   // This Shell's installed plugins reaching its hosts as themselves (#16767):

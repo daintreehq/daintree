@@ -48,6 +48,8 @@ export interface HostControlLinkClientDeps {
   credential(hostId: HostId): string;
   /** The credential already kept for a host, never minting one; null when there is none. */
   existingCredential?(hostId: HostId): string | null;
+  /** Delete the credential kept for a host, so the next one presented there is minted afresh. */
+  forgetCredential?(hostId: HostId): void;
   /** The host's open session, connecting it if need be; null when the host can't be reached. */
   session(hostId: HostId): Promise<LinkSession | null>;
   /**
@@ -157,6 +159,15 @@ export class HostControlLinkClient {
    */
   pluginCredential(hostId: HostId): string {
     return pluginCredentialFor(this.deps.credential(hostId));
+  }
+
+  /**
+   * The host was removed or re-pointed (#17207): the secret the machine it
+   * named until now was shown goes, so another machine under the same id is
+   * never shown it.
+   */
+  forgetHost(hostId: HostId): void {
+    this.deps.forgetCredential?.(hostId);
   }
 
   start(): void {

@@ -602,6 +602,15 @@ export class RemoteHostsClient {
   }
 
   /**
+   * Whether the host is being removed or re-pointed: until that settles, a
+   * link still up reaches the machine it named before, so nothing is to be
+   * forwarded, claimed or proven to it.
+   */
+  isHostRetiring(hostId: HostId): boolean {
+    return this.retiring.has(hostId);
+  }
+
+  /**
    * Whether a host on this connection is being removed or re-pointed: an
    * install or Host mode setup there would race the cleanup that closes its
    * SSH master, so none starts until that settles.

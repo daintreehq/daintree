@@ -234,15 +234,20 @@ export class HostPluginControlClient implements PluginHostTargets {
         },
       },
     });
-    let credential: string | null;
-    try {
-      credential = this.deps.credential(hostId);
-    } catch {
-      credential = null;
-    }
-    if (credential === null) return unreachable();
+    const credentialOf = (): string | null => {
+      try {
+        return this.deps.credential(hostId);
+      } catch {
+        return null;
+      }
+    };
+    if (credentialOf() === null) return unreachable();
     const session = await this.deps.session(hostId).catch(() => null);
     if (!session || !session.isOpen) return unreachable();
+    // Read again once the session is up: the one taken before could be the
+    // secret of a machine the host was re-pointed from meanwhile (#17207).
+    const credential = credentialOf();
+    if (credential === null) return unreachable();
     return { ok: true, session, credential };
   }
 
