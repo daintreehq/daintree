@@ -90,7 +90,9 @@ function coordinator(overrides: Partial<PluginSearchDeps> = {}) {
   return new PluginSearchCoordinator({
     activatePlugin,
     recordDiagnostic: (pluginId, message) => diagnostics.push({ pluginId, message }),
-    hiddenProviderKeys: () => hidden,
+    // A fresh copy per read, as the store gives: a check that kept an earlier
+    // read would otherwise still see later changes.
+    hiddenProviderKeys: () => new Set(hidden),
     ...overrides,
   });
 }
@@ -326,30 +328,82 @@ describe("PluginSearchCoordinator", () => {
     const ask = (providerKey: string) =>
       search.query(endpoint(), "p1", { providerKey, query: "x", mode: "scoped" });
 
+    const answeredBy = async (providerKey: string) => {
+      const result = await ask(providerKey);
+      return result.status === "ok" ? result.results.map((row) => row.label) : result.status;
+    };
+
     hidden.add("acme.notes.notes");
-    expect((await ask("other.notes.notes")).status).toBe("ok");
-    expect(await ask("acme.notes.notes")).toEqual({ status: "unavailable" });
+    expect(await answeredBy("other.notes.notes")).toEqual(["other.notes.notes"]);
+    expect(await answeredBy("acme.notes.notes")).toBe("unavailable");
 
     hidden.delete("acme.notes.notes");
-    expect((await ask("acme.notes.notes")).status).toBe("ok");
-    expect(await ask("other.notes.notes")).toEqual({ status: "unavailable" });
+    expect(await answeredBy("acme.notes.notes")).toEqual(["acme.notes.notes"]);
+    expect(await answeredBy("other.notes.notes")).toBe("unavailable");
   });
 
-  it("drops a stand-in's answer when the provider it stood in for is shown again", async () => {
-    registerSearchProviders("acme.notes", [provider()]);
-    registerSearchProviders("other.notes", [provider({ pluginId: "other.notes" })]);
-    hidden.add("acme.notes.notes");
-    const answer = deferred<{ id: string; label: string }[]>();
-    bindSearchProviderImpl("other.notes.notes", () => answer.promise);
-    const result = coordinator().query(endpoint(), "p1", {
-      providerKey: "other.notes.notes",
-      query: "x",
-      mode: "scoped",
-    });
-    hidden.delete("acme.notes.notes");
-    answer.resolve([{ id: "n1", label: "Groceries" }]);
-    expect(await result).toEqual({ status: "unavailable" });
+  it("decides a keyword per project, so hiding one project's instance leaves another's", async () => {
+    projectOf.set("project__p1__acme.wiki", "p1");
+    projectOf.set("project__p2__acme.wiki", "p2");
+    registerSearchProviders("project__p1__acme.wiki", [
+      provider({ pluginId: "project__p1__acme.wiki", pluginName: "Wiki" }),
+    ]);
+    registerSearchProviders("project__p2__acme.wiki", [
+      provider({ pluginId: "project__p2__acme.wiki", pluginName: "Wiki" }),
+    ]);
+    registerSearchProviders("other.notes", [
+      provider({ pluginId: "other.notes", pluginName: "Other Notes" }),
+    ]);
+    for (const key of [
+      "project__p1__acme.wiki.notes",
+      "project__p2__acme.wiki.notes",
+      "other.notes.notes",
+    ]) {
+      bindSearchProviderImpl(key, () => [{ id: "n1", label: key }]);
+    }
+    hidden.add("project__p1__acme.wiki.notes");
+    const search = coordinator();
+    const status = async (projectId: string, providerKey: string) =>
+      (await search.query(endpoint(), projectId, { providerKey, query: "x", mode: "scoped" }))
+        .status;
+    const takenBy = (projectId: string) =>
+      listSearchProviders(projectId, hidden).map((p) => [p.key, p.keywordTakenBy ?? null]);
+
+    expect(takenBy("p1")).toEqual([
+      ["project__p1__acme.wiki.notes", null],
+      ["other.notes.notes", null],
+    ]);
+    expect(await status("p1", "other.notes.notes")).toBe("ok");
+
+    expect(takenBy("p2")).toEqual([
+      ["project__p2__acme.wiki.notes", null],
+      ["other.notes.notes", "Wiki"],
+    ]);
+    expect(await status("p2", "project__p2__acme.wiki.notes")).toBe("ok");
+    expect(await status("p2", "other.notes.notes")).toBe("unavailable");
   });
+
+  it.each(["scoped", "blended"] as const)(
+    "drops a stand-in's %s answer when the provider it stood in for is shown again",
+    async (mode) => {
+      registerSearchProviders("acme.notes", [provider()]);
+      registerSearchProviders("other.notes", [provider({ pluginId: "other.notes" })]);
+      hidden.add("acme.notes.notes");
+      const answer = deferred<{ id: string; label: string }[]>();
+      const impl = vi.fn(() => answer.promise);
+      bindSearchProviderImpl("other.notes.notes", impl);
+      const result = coordinator().query(endpoint(), "p1", {
+        providerKey: "other.notes.notes",
+        query: "x",
+        mode,
+      });
+      // The stand-in was asked, so the refusal below is the re-check's.
+      await vi.waitFor(() => expect(impl).toHaveBeenCalledTimes(1));
+      hidden.delete("acme.notes.notes");
+      answer.resolve([{ id: "n1", label: "Groceries" }]);
+      expect(await result).toEqual({ status: "unavailable" });
+    }
+  );
 
   it("drops a provider that misses its deadline and records it once per window", async () => {
     vi.useFakeTimers();

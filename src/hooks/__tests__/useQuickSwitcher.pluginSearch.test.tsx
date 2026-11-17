@@ -187,7 +187,13 @@ describe("useQuickSwitcher plugin search providers", () => {
   it("leaves out providers the user turned off or whose keyword another plugin holds", async () => {
     catalog = [
       provider({ shown: false }),
-      provider({ key: "acme.docs.docs", pluginId: "acme.docs", keyword: "docs", blend: false }),
+      provider({
+        key: "acme.docs.docs",
+        pluginId: "acme.docs",
+        pluginName: "Acme Docs",
+        keyword: "docs",
+        blend: false,
+      }),
       provider({
         key: "other.docs.docs",
         pluginId: "other.docs",

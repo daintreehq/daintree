@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
@@ -7,14 +7,22 @@ import { logError } from "@/utils/logger";
 import type { PluginSearchProviderInfo } from "@shared/types/plugin";
 
 const nameList = new Intl.ListFormat("en", { style: "long", type: "conjunction" });
-const NO_PENDING: ReadonlyMap<string, boolean> = new Map();
 
-function withoutPending(
-  pending: ReadonlyMap<string, boolean>,
+/** A switch position the user asked for, and the request that carries it. */
+interface PendingSwitch {
+  shown: boolean;
+  request: number;
+}
+
+const NO_PENDING: ReadonlyMap<string, PendingSwitch> = new Map();
+
+/** `pending` without `key`'s entry, when that entry is still `request`'s. */
+function settlePending(
+  pending: ReadonlyMap<string, PendingSwitch>,
   key: string,
-  shown: boolean
-): ReadonlyMap<string, boolean> {
-  if (pending.get(key) !== shown) return pending;
+  request: number
+): ReadonlyMap<string, PendingSwitch> {
+  if (pending.get(key)?.request !== request) return pending;
   const next = new Map(pending);
   next.delete(key);
   return next;
@@ -31,7 +39,7 @@ function describeProvider(
   catalog: readonly PluginSearchProviderInfo[]
 ): string {
   const keyword = provider.keyword;
-  if (provider.keywordTakenBy) {
+  if (provider.keywordTakenBy !== undefined) {
     return `Its keyword "${keyword}" is taken by ${provider.keywordTakenBy}, so the quick switcher leaves it out`;
   }
   const peers = catalog.filter((p) => p.key !== provider.key && p.keyword === keyword);
@@ -43,18 +51,20 @@ function describeProvider(
   }
   const sentences = [`Type "${keyword}" then Tab to search it`];
   if (provider.blend) sentences.push("Also adds a few results to every search");
-  const yieldedBy = [
-    ...new Set(
-      peers.filter((p) => !p.shown && p.keywordTakenBy === undefined).map((p) => p.pluginName)
-    ),
-  ];
-  if (provider.shown && yieldedBy.length > 0) {
-    sentences.push(
-      `It has the keyword only while ${nameList.format(yieldedBy)} ${yieldedBy.length === 1 ? "is" : "are"} switched off`
-    );
+  if (provider.shown) {
+    const yieldedBy = [
+      ...new Set(
+        peers.filter((p) => !p.shown && p.keywordTakenBy === undefined).map((p) => p.pluginName)
+      ),
+    ];
+    if (yieldedBy.length > 0) {
+      sentences.push(
+        `It has the keyword only while the ${nameList.format(yieldedBy)} ${yieldedBy.length === 1 ? "provider is" : "providers are"} switched off`
+      );
+    }
   }
   // One sentence goes without a period, several each take one (Settings copy).
-  return sentences.length === 1 ? sentences[0] : `${sentences.join(". ")}.`;
+  return sentences.join(". ") + (sentences.length > 1 ? "." : "");
 }
 
 /**
@@ -78,23 +88,31 @@ export function SearchProvidersSection({
   const [catalog, setCatalog] = useState<readonly PluginSearchProviderInfo[]>([]);
   // Switch positions main hasn't answered yet. The switch moves at once; what
   // the rows say waits for main, which decides who holds each keyword.
-  const [pending, setPending] = useState<ReadonlyMap<string, boolean>>(NO_PENDING);
+  const [pending, setPending] = useState<ReadonlyMap<string, PendingSwitch>>(NO_PENDING);
   // The write main refused, kept as asked so Retry repeats it rather than the
   // value the list rolled back to.
   const [saveError, setSaveError] = useState<{ key: string; shown: boolean } | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [loadSeq, setLoadSeq] = useState(0);
+  // Every read and write is numbered as it is sent. Each answer is the whole
+  // catalog as main saw it no earlier than the request arrived, so an answer
+  // to an earlier request never replaces a later one's.
+  const sentRef = useRef(0);
+  const appliedRef = useRef(0);
 
   useEffect(() => {
     const bridge = window.electron?.plugin;
     if (!pluginId || typeof bridge?.getSearchProviders !== "function") return undefined;
     let live = true;
+    const request = ++sentRef.current;
     bridge
       .getSearchProviders()
       .then((list) => {
         if (!live) return;
-        setCatalog(list);
         setLoadFailed(false);
+        if (request < appliedRef.current) return;
+        appliedRef.current = request;
+        setCatalog(list);
       })
       .catch((error: unknown) => {
         if (!live) return;
@@ -113,19 +131,23 @@ export function SearchProvidersSection({
   // replaces the catalog, and a refused write puts the switch back and reads
   // the catalog again.
   const setShown = (key: string, shown: boolean) => {
-    setPending((prev) => new Map(prev).set(key, shown));
     const bridge = window.electron?.plugin;
     if (typeof bridge?.setSearchProviderShown !== "function") return;
+    const request = ++sentRef.current;
+    setPending((prev) => new Map(prev).set(key, { shown, request }));
     bridge
       .setSearchProviderShown(key, shown)
       .then((list) => {
-        setCatalog(list);
-        setPending((prev) => withoutPending(prev, key, shown));
-        setSaveError(null);
+        if (request > appliedRef.current) {
+          appliedRef.current = request;
+          setCatalog(list);
+        }
+        setPending((prev) => settlePending(prev, key, request));
+        setSaveError((prev) => (prev?.key === key ? null : prev));
       })
       .catch((error: unknown) => {
         logError("Failed to save a search provider choice", error);
-        setPending((prev) => withoutPending(prev, key, shown));
+        setPending((prev) => settlePending(prev, key, request));
         setSaveError({ key, shown });
         setLoadSeq((seq) => seq + 1);
       });
@@ -153,7 +175,7 @@ export function SearchProvidersSection({
           />
         ) : (
           providers.map((provider) => {
-            const shown = pending.get(provider.key) ?? provider.shown;
+            const shown = pending.get(provider.key)?.shown ?? provider.shown;
             return (
               <SettingsRow
                 key={provider.key}
