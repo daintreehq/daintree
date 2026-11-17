@@ -3,7 +3,6 @@ import { actionService } from "@/services/ActionService";
 import { isLocalhostUrl, normalizeBrowserUrl } from "@/components/Browser/browserUtils";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { useWorktreeDevServerStore } from "@/store/worktreeDevServerStore";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import {
@@ -17,6 +16,8 @@ import {
   remoteHostOfView,
   resolveTerminalLinkForHost,
 } from "@/services/terminal/remoteLoopbackLinks";
+
+const LOG_PREFIX = "[openLinkUrl]";
 
 /** Whether activating `panel` can bring it on screen: not trashed, parked or in a dialog. */
 function isReachable(panel: PanelInstance): boolean {
@@ -63,23 +64,39 @@ function originOf(url: string | null | undefined): string | null {
 }
 
 /**
- * The worktree's dev preview when its server is running at `origin`. Read from
- * main's session broadcasts: the panel record's own dev-server fields are
- * never written, so they can't say whether the server is up.
+ * The dev preview in this worktree whose server is running at `origin`, the
+ * most recently used when several are. Asked of main at the moment of the
+ * click: the panel record's own dev-server fields are never written, and the
+ * renderer's per-worktree session cache holds one session and fills only as
+ * rows hydrate. A failed ask falls back to a browser pane.
  */
-function servingDevPreview(
+async function findServingDevPreview(
   panelsById: Readonly<Record<string, PanelInstance>>,
   worktreeId: string | null,
   origin: string
-): PanelInstance | undefined {
-  if (worktreeId === null) return undefined;
-  const session = useWorktreeDevServerStore.getState().sessionsByWorktreeId[worktreeId];
-  if (session?.status !== "running" || originOf(session.url) !== origin) return undefined;
-  const panel = panelsById[session.panelId];
-  if (!panel || !isDevPreviewPanel(panel) || (panel.worktreeId ?? null) !== worktreeId) {
+): Promise<PanelInstance | undefined> {
+  let sessions: Awaited<ReturnType<typeof window.electron.devPreview.getAllSessions>>;
+  try {
+    sessions = await window.electron.devPreview.getAllSessions();
+  } catch (error) {
+    logError(`${LOG_PREFIX} Failed to read the dev servers`, error);
     return undefined;
   }
-  return isReachable(panel) ? panel : undefined;
+  let best: PanelInstance | undefined;
+  let bestUsedAt = -1;
+  for (const session of sessions) {
+    if (session.status !== "running" || originOf(session.url) !== origin) continue;
+    const panel = panelsById[session.panelId];
+    if (!panel || !isDevPreviewPanel(panel) || (panel.worktreeId ?? null) !== worktreeId) continue;
+    if (!isReachable(panel)) continue;
+    const stamp = panel.lastActiveAt;
+    const usedAt = stamp !== undefined && Number.isFinite(stamp) && stamp > 0 ? stamp : 0;
+    if (usedAt > bestUsedAt) {
+      best = panel;
+      bestUsedAt = usedAt;
+    }
+  }
+  return best;
 }
 
 /**
@@ -112,8 +129,6 @@ export function openUrlExternally(url: string, logPrefix: string): void {
     .catch((error: unknown) => logError(`${logPrefix} Failed to open URL`, error));
 }
 
-const LOG_PREFIX = "[openLinkUrl]";
-
 /**
  * The address `url` opens at in a panel: a loopback http(s) address, which the
  * strict browser rule accepts and nothing else does. Undefined for the rest.
@@ -126,14 +141,25 @@ function panelAddress(url: string): string | undefined {
 /**
  * `url` as the system browser gets it: exactly as saved, so a path, query or
  * sign-in that a pane's address rules would rewrite reaches the site intact.
- * A bare host is read as https, as terminal links are. Only http(s) passes.
+ * Only http(s) passes. A bare host (`example.com/x`, `example.com:8080`, which
+ * parses with the host as its scheme) is read as https, as terminal links are.
  */
 function externalAddress(url: string): string | undefined {
   const trimmed = url.trim();
-  const candidate = trimmed.includes("://") ? trimmed : `https://${trimmed}`;
-  try {
+  const isWeb = (candidate: string) => {
     const { protocol } = new URL(candidate);
-    return protocol === "http:" || protocol === "https:" ? candidate : undefined;
+    return protocol === "http:" || protocol === "https:";
+  };
+  try {
+    const { protocol } = new URL(trimmed);
+    if (protocol === "http:" || protocol === "https:") return trimmed;
+    if (!protocol.includes(".")) return undefined;
+  } catch {
+    // Not absolute: a bare host, tried below.
+  }
+  const withScheme = `https://${trimmed}`;
+  try {
+    return isWeb(withScheme) ? withScheme : undefined;
   } catch {
     return undefined;
   }
@@ -184,15 +210,19 @@ export async function openLinkUrl(url: string): Promise<void> {
   const worktreeId = useWorktreeSelectionStore.getState().activeWorktreeId ?? null;
   const store = usePanelStore.getState();
   const origin = originOf(target);
+  const preview =
+    origin === null ? undefined : await findServingDevPreview(store.panelsById, worktreeId, origin);
+  // Re-read after the ask: the panels may have moved on while it was out.
+  const current = usePanelStore.getState();
   const existing =
-    (origin === null ? undefined : servingDevPreview(store.panelsById, worktreeId, origin)) ??
-    pickReusableBrowser(store.panelIds, store.panelsById, worktreeId);
+    (preview && current.panelsById[preview.id] ? preview : undefined) ??
+    pickReusableBrowser(current.panelIds, current.panelsById, worktreeId);
   if (existing) {
     showPanelAt(existing.id, target, LOG_PREFIX);
     return;
   }
   // The store raises its own notice when the panel limit refuses the pane.
-  await store.addPanel({
+  await current.addPanel({
     kind: "browser",
     browserUrl: target,
     worktreeId: worktreeId ?? undefined,

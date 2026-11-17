@@ -118,6 +118,21 @@ describe("openLinksLauncher from the action palette", () => {
     expect(useLinksLauncherStore.getState().paletteRestore).toBeNull();
   });
 
+  it("keeps the held return when it is opened again while open", () => {
+    const restore = vi.fn();
+    deferPaletteFocusRestore((give) => give());
+    openLinksLauncher();
+    consumeDeferredPaletteFocusRestore()?.(restore);
+    const opening = useLinksLauncherStore.getState().opening;
+
+    // A keybinding opening it again: no palette is closing this time.
+    openLinksLauncher();
+
+    expect(useLinksLauncherStore.getState().opening).toBe(opening);
+    expect(useLinksLauncherStore.getState().refreshSeq).toBe(2);
+    expect(useLinksLauncherStore.getState().takePaletteRestore()).toBe(restore);
+  });
+
   it("arms nothing when no palette is closing", () => {
     openLinksLauncher();
     expect(consumeDeferredPaletteFocusRestore()).toBeNull();

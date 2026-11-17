@@ -36,6 +36,7 @@ interface LinksLauncherState {
    * to, and the palette's opener is where the keyboard was. Spent by the close.
    */
   paletteRestore: (() => void) | null;
+  /** Open at `origin`; already open there, only read the links again. */
   open: (origin: LinksLauncherOrigin) => void;
   /** Close the launcher — only if it is still opening `seq`, when given. */
   close: (seq?: number, focus?: (() => HTMLElement | null) | null) => void;
@@ -53,12 +54,18 @@ export const useLinksLauncherStore = create<LinksLauncherState>((set, get) => ({
   closeFocus: null,
   paletteRestore: null,
   open: (origin) =>
-    set((s) => ({
-      opening: { origin, seq: nextSeq++ },
-      refreshSeq: s.refreshSeq + 1,
-      closeFocus: null,
-      paletteRestore: null,
-    })),
+    set((s) =>
+      // Already open there: the same opening, read again, keeping the focus
+      // return it holds.
+      s.opening?.origin === origin
+        ? { refreshSeq: s.refreshSeq + 1 }
+        : {
+            opening: { origin, seq: nextSeq++ },
+            refreshSeq: s.refreshSeq + 1,
+            closeFocus: null,
+            paletteRestore: null,
+          }
+    ),
   close: (seq, focus = null) => {
     const { opening } = get();
     if (opening === null) return;

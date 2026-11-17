@@ -21,10 +21,8 @@ const panelState = vi.hoisted(() => ({
 }));
 const selection = vi.hoisted(() => ({ activeWorktreeId: "w1" as string | null }));
 const devServers = vi.hoisted(() => ({
-  sessionsByWorktreeId: {} as Record<
-    string,
-    { panelId: string; status: string; url: string | null }
-  >,
+  sessions: [] as Array<{ panelId: string; status: string; url: string | null }>,
+  getAllSessions: vi.fn<() => Promise<unknown[]>>(),
 }));
 const remote = vi.hoisted(() => ({
   hostId: null as string | null,
@@ -39,14 +37,10 @@ vi.mock("@/lib/notify", () => ({ notify }));
 vi.mock("@/store/worktreeStore", () => ({
   useWorktreeSelectionStore: { getState: () => selection },
 }));
-vi.mock("@/store/worktreeDevServerStore", () => ({
-  useWorktreeDevServerStore: { getState: () => devServers },
-}));
 vi.mock("@/services/terminal/remoteLoopbackLinks", () => ({
   remoteHostOfView: () => remote.hostId,
   resolveTerminalLinkForHost: (url: string, hostId: string | null) => remote.resolve(url, hostId),
-  hostForwardFailure: (_url: string, error: unknown) =>
-    error instanceof Error ? error.message : "The host didn't answer.",
+  hostForwardFailure: () => "Port 8765 is in use on this machine",
 }));
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: {
@@ -71,13 +65,8 @@ function preview(id: string, extra: Record<string, unknown> = {}) {
   return { id, kind: "dev-preview", location: "grid", worktreeId: "w1", ...extra };
 }
 
-function serving(
-  worktreeId: string,
-  panelId: string,
-  status = "running",
-  url = "http://localhost:5173"
-) {
-  devServers.sessionsByWorktreeId[worktreeId] = { panelId, status, url };
+function serving(panelId: string, status = "running", url = "http://localhost:5173"): void {
+  devServers.sessions.push({ panelId, status, url });
 }
 
 function withPanels(...panels: Array<{ id: string }>): void {
@@ -99,7 +88,15 @@ beforeEach(() => {
   setActiveTab.mockClear();
   getPanelGroup.mockReset().mockReturnValue(undefined);
   selection.activeWorktreeId = "w1";
-  devServers.sessionsByWorktreeId = {};
+  devServers.sessions = [];
+  devServers.getAllSessions
+    .mockReset()
+    .mockImplementation(() => Promise.resolve(devServers.sessions));
+  Object.defineProperty(window, "electron", {
+    configurable: true,
+    writable: true,
+    value: { devPreview: { getAllSessions: devServers.getAllSessions } },
+  });
   remote.hostId = null;
   remote.resolve.mockReset().mockImplementation((url) => Promise.resolve(url));
   withPanels();
@@ -155,6 +152,36 @@ describe("openLinkUrl for an outside address", () => {
     );
   });
 
+  it.each(["https:status.example.com/x", "HTTPS://Status.Example.com/x"])(
+    "keeps an explicit web scheme as saved (%s)",
+    async (saved) => {
+      await openLinkUrl(saved);
+      expect(dispatch).toHaveBeenCalledWith(
+        "system.openExternal",
+        { url: saved },
+        { source: "user" }
+      );
+    }
+  );
+
+  it.each(["mailto:team@example.com", "file:///etc/hosts", "data:text/html,hi"])(
+    "refuses a non-web scheme (%s)",
+    async (saved) => {
+      await openLinkUrl(saved);
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(notify).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it("reads a bare host with a port as https", async () => {
+    await openLinkUrl("grafana.example.com:3000/d/abc");
+    expect(dispatch).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: "https://grafana.example.com:3000/d/abc" },
+      { source: "user" }
+    );
+  });
+
   it("reads a bare host as https", async () => {
     await openLinkUrl("status.example.com/incidents");
     expect(dispatch).toHaveBeenCalledWith(
@@ -199,7 +226,7 @@ describe("openLinkUrl for an outside address", () => {
 describe("openLinkUrl for a loopback address", () => {
   it("prefers the running dev preview serving that origin in the active worktree", async () => {
     withPanels(browser("b1", { lastActiveAt: 50 }), preview("p1"));
-    serving("w1", "p1");
+    serving("p1");
     getPanelGroup.mockReturnValue({ id: "g1", panelIds: ["p1", "x"] });
     await openLinkUrl("http://localhost:5173/settings");
     expect(activateTerminal).toHaveBeenCalledWith("p1");
@@ -214,10 +241,23 @@ describe("openLinkUrl for a loopback address", () => {
     );
   });
 
+  it("finds the right one of several previews in the worktree", async () => {
+    withPanels(
+      preview("api", { lastActiveAt: 90 }),
+      preview("web", { lastActiveAt: 10 }),
+      preview("web-stopped", { lastActiveAt: 99 }),
+      browser("b1")
+    );
+    serving("api", "running", "http://localhost:3000");
+    serving("web-stopped", "stopped", "http://localhost:5173");
+    serving("web", "running", "http://localhost:5173");
+    await openLinkUrl("http://localhost:5173/");
+    expect(activateTerminal).toHaveBeenCalledWith("web");
+  });
+
   it.each([
-    ["isn't running", () => serving("w1", "p1", "starting")],
-    ["serves another port", () => serving("w1", "p1", "running", "http://localhost:3000")],
-    ["serves another worktree", () => serving("w2", "p1")],
+    ["isn't running", () => serving("p1", "starting")],
+    ["serves another port", () => serving("p1", "running", "http://localhost:3000")],
     ["has no session", () => {}],
   ])("passes over a dev preview whose server %s", async (_label, arrange) => {
     withPanels(preview("p1"), browser("b1"));
@@ -227,9 +267,19 @@ describe("openLinkUrl for a loopback address", () => {
     expect(setBrowserUrl).toHaveBeenCalledWith("b1", "http://localhost:5173/");
   });
 
-  it("passes over a serving preview that can't be brought on screen", async () => {
-    withPanels(preview("p1", { location: "trash" }), browser("b1"));
-    serving("w1", "p1");
+  it.each([
+    ["sits in another worktree", { worktreeId: "w2" }],
+    ["can't be brought on screen", { location: "trash" }],
+  ])("passes over a serving preview that %s", async (_label, extra) => {
+    withPanels(preview("p1", extra), browser("b1"));
+    serving("p1");
+    await openLinkUrl("http://localhost:5173/");
+    expect(activateTerminal).toHaveBeenCalledWith("b1");
+  });
+
+  it("falls back to a browser pane when main can't list the dev servers", async () => {
+    withPanels(preview("p1"), browser("b1"));
+    devServers.getAllSessions.mockRejectedValue(new Error("host gone"));
     await openLinkUrl("http://localhost:5173/");
     expect(activateTerminal).toHaveBeenCalledWith("b1");
   });
