@@ -573,7 +573,7 @@ export function FileSection({
                 // justify-start so the glyph keeps the same x in both stacked
                 // sections; the ghost button has no chrome at rest, so the
                 // reserved trailing space is invisible.
-                className="shrink-0 min-w-[9rem] justify-start"
+                className="shrink-0 min-w-[9rem] justify-start tabular-nums"
                 data-testid={bulkActionTestId}
               >
                 <BulkActionIcon aria-hidden="true" />

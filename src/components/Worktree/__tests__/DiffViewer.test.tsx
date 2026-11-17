@@ -223,8 +223,8 @@ describe("DiffViewer collapse behavior", () => {
   it("renders small normal file without collapse", () => {
     render(wrap(<DiffViewer diff={SMALL_DIFF} />));
 
-    expect(screen.queryByText("Show diff")).toBeNull();
-    expect(screen.queryByText("Generated file collapsed")).toBeNull();
+    expect(screen.queryByText("Generated file")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Generated file|Large diff/ })).toBeNull();
   });
 
   it("toggles collapse state — expand then collapse again", () => {
@@ -232,13 +232,19 @@ describe("DiffViewer collapse behavior", () => {
 
     expect(screen.queryByTestId("diff-element")).toBeNull();
 
-    fireEvent.click(screen.getByText("Show diff"));
-    expect(screen.getByTestId("diff-element")).toBeTruthy();
-    expect(screen.getByText("Hide diff")).toBeTruthy();
+    const toggle = screen.getByRole("button", { name: "Generated file" });
+    expect(toggle.getAttribute("type")).toBe("button");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
 
-    fireEvent.click(screen.getByText("Hide diff"));
+    fireEvent.click(toggle);
+    expect(screen.getByTestId("diff-element")).toBeTruthy();
+    // The label never changes with state; `aria-expanded` carries it.
+    expect(toggle.textContent).toBe("Generated file");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.click(toggle);
     expect(screen.queryByTestId("diff-element")).toBeNull();
-    expect(screen.getByText("Show diff")).toBeTruthy();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
   });
 
   // #10013: consumers re-scan hunk rows on toggle, so the callback must fire on
@@ -249,10 +255,10 @@ describe("DiffViewer collapse behavior", () => {
 
     expect(onToggleCollapse).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByText("Show diff"));
+    fireEvent.click(screen.getByRole("button", { name: "Generated file" }));
     expect(onToggleCollapse).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByText("Hide diff"));
+    fireEvent.click(screen.getByRole("button", { name: "Generated file" }));
     expect(onToggleCollapse).toHaveBeenCalledTimes(2);
   });
 });
@@ -1315,16 +1321,16 @@ describe("DiffViewer native scroll proxy", () => {
     const { container } = render(wrap(<DiffViewer diff={LOCKFILE_DIFF} viewType="unified" />));
     expect(container.querySelector(".diff-file-scroll")).toBeNull();
 
-    fireEvent.click(screen.getByText("Show diff"));
+    fireEvent.click(screen.getByRole("button", { name: "Generated file" }));
     const scroller = container.querySelector<HTMLElement>(".diff-file-scroll");
     stubLayout(scroller!, 200, 500);
     resize(scroller!);
     expect(scroller?.getAttribute("data-proxy-active")).toBe("true");
 
-    fireEvent.click(screen.getByText("Hide diff"));
+    fireEvent.click(screen.getByRole("button", { name: "Generated file" }));
     expect(screen.queryByTestId("diff-hscrollbar")).toBeNull();
 
-    fireEvent.click(screen.getByText("Show diff"));
+    fireEvent.click(screen.getByRole("button", { name: "Generated file" }));
     const reopened = container.querySelector<HTMLElement>(".diff-file-scroll");
     stubLayout(reopened!, 200, 500);
     resize(reopened!);

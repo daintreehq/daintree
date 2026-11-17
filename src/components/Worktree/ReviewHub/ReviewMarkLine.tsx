@@ -177,7 +177,10 @@ export function ReviewMarkLine({
                 <button
                   type="button"
                   className={cn(LINE_ACTION_CLASS, "ml-auto")}
-                  onClick={onClear}
+                  onClick={() => {
+                    if (isClearing) return;
+                    onClear();
+                  }}
                   aria-label="Clear review mark"
                   aria-disabled={isClearing || undefined}
                   aria-busy={isClearing || undefined}
@@ -185,7 +188,7 @@ export function ReviewMarkLine({
                 >
                   <X className="size-3" aria-hidden="true" />
                   <span aria-hidden="true" className="hidden @[30rem]/mark-line:inline">
-                    {isClearing ? "Clearing…" : "Clear review mark"}
+                    Clear review mark
                   </span>
                 </button>
               </TooltipTrigger>

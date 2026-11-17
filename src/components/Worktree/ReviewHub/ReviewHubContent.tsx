@@ -2348,7 +2348,7 @@ export function ReviewHubContent({
                         {/* One label in both states (house rule: toggle labels
                             never change); the chevron and `aria-expanded`
                             carry open versus closed. */}
-                        <span>Files ({totalChanges})</span>
+                        <span className="tabular-nums">Files ({totalChanges})</span>
                       </button>
                     </div>
                     {fileListExpanded && (

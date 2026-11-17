@@ -160,10 +160,14 @@ function ReadinessOverflow({
           size="xs"
           data-testid="review-readiness-overflow"
           aria-label={`${items.length} more: ${items.map((i) => i.label).join(", ")}`}
-          className="shrink-0 px-1.5 font-normal"
+          className="shrink-0 px-1.5 font-normal tabular-nums"
         >
           {items.length} more
-          <ChevronDown aria-hidden="true" />
+          <ChevronDown
+            data-animated-chevron
+            aria-hidden="true"
+            className={cn("transition-transform duration-150 ease-out", open && "rotate-180")}
+          />
         </Button>
       </PopoverTrigger>
       <PopoverContent

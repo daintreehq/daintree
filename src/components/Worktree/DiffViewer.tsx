@@ -2083,6 +2083,7 @@ function FileDiff({
       )}
       {collapseDecision.collapse && (
         <button
+          type="button"
           onClick={handleToggleCollapse}
           aria-expanded={!isCollapsed}
           {...(!isCollapsed ? { "aria-controls": diffRegionId } : {})}
@@ -2095,11 +2096,8 @@ function FileDiff({
           />
           <span className="text-left">
             {collapseDecision.reason === "generated"
-              ? "Generated file collapsed"
+              ? "Generated file"
               : `Large diff (${formatBytes(fileBytes)})`}
-          </span>
-          <span className="ml-auto text-text-secondary font-mono text-xs">
-            {isCollapsed ? "Show diff" : "Hide diff"}
           </span>
         </button>
       )}

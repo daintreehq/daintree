@@ -129,8 +129,15 @@ describe("ReadinessRail", () => {
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     expect(trigger.getAttribute("aria-label")).toContain("2 more");
 
+    expect(trigger.className).toContain("tabular-nums");
+    const chevron = trigger.querySelector("[data-animated-chevron]");
+    expect(chevron?.getAttribute("class")).not.toContain("rotate-180");
+
     openDisclosure();
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(trigger.querySelector("[data-animated-chevron]")?.getAttribute("class")).toContain(
+      "rotate-180"
+    );
   });
 
   it("omits the disclosure when the leading condition is the only one", () => {
