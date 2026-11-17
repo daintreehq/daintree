@@ -520,7 +520,10 @@ describe("SshTransport with an injected ssh", () => {
       // A person's fresh dial asks again, and so does any dial once the interval has passed.
       await transport.open(new AbortController().signal, { fresh: true }).catch(() => {});
       expect(diagnoses()).toBe(2);
-      vi.setSystemTime(Date.now() + 5 * 60_000 + 1);
+      vi.setSystemTime(Date.now() + 5 * 60_000 - 1);
+      await transport.open(new AbortController().signal).catch(() => {});
+      expect(diagnoses()).toBe(2);
+      vi.setSystemTime(Date.now() + 2);
       await transport.open(new AbortController().signal).catch(() => {});
       expect(diagnoses()).toBe(3);
     } finally {
@@ -551,6 +554,7 @@ describe("SshTransport with an injected ssh", () => {
       const error = await transport.open(new AbortController().signal).catch((e: unknown) => e);
       expect(error).toBeInstanceOf(SshAccessError);
     }
+    expect(calls.filter((args) => args.includes("ControlPath=none"))).toHaveLength(2);
   });
 
   it("keeps a refusal that ends a long stretch of stderr, past what follows it", async () => {

@@ -49,6 +49,7 @@ import {
   noteSshMaster,
   shellQuote,
   SSH_COMMAND_TIMEOUT_MS,
+  utf8TailStart,
 } from "./sshTransport.js";
 
 /**
@@ -308,7 +309,7 @@ function collectTail(stream: Readable | null, cap: number): () => string {
   });
   return () => {
     const all = Buffer.concat(chunks);
-    return all.subarray(Math.max(0, all.byteLength - cap)).toString("utf8");
+    return all.subarray(utf8TailStart(all, cap)).toString("utf8");
   };
 }
 

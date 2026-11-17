@@ -763,6 +763,13 @@ interface RunResult {
   stderr: string;
 }
 
+/** Where the last `cap` bytes start, moved past any UTF-8 continuation byte so no character is cut. */
+export function utf8TailStart(bytes: Buffer, cap: number): number {
+  let start = Math.max(0, bytes.byteLength - cap);
+  while (start > 0 && start < bytes.byteLength && (bytes[start]! & 0xc0) === 0x80) start++;
+  return start;
+}
+
 function collect(stream: Readable | null, cap: number, keepTail: boolean): () => string {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -787,9 +794,9 @@ function collect(stream: Readable | null, cap: number, keepTail: boolean): () =>
   });
   return () => {
     const all = Buffer.concat(chunks);
-    return (
-      keepTail ? all.subarray(Math.max(0, all.byteLength - cap)) : all.subarray(0, cap)
-    ).toString("utf8");
+    return (keepTail ? all.subarray(utf8TailStart(all, cap)) : all.subarray(0, cap)).toString(
+      "utf8"
+    );
   };
 }
 
@@ -1028,7 +1035,8 @@ export class SshTransport implements LinkTransport {
       refusal =
         error instanceof SshExitError ? hopRefusalFrom(error.code, error.detail ?? "") : null;
     }
-    this.lastHopDiagnosis = refusal === null ? now : null;
+    // An abandoned ask says nothing, and mustn't hold off the dial that replaced it.
+    if (!signal.aborted) this.lastHopDiagnosis = refusal === null ? now : null;
     return refusal;
   }
 
