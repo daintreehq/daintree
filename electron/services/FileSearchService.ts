@@ -590,10 +590,7 @@ export class FileSearchService {
    */
   invalidateUnder(root: string): void {
     const resolvedRoot = path.resolve(root);
-    // The root itself always, so the exact key never depends on
-    // `scopesOverlap`. Dropping a key nothing holds retains nothing, so a root
-    // that was never searched costs nothing here.
-    const targets = new Set<string>([resolvedRoot]);
+    const targets = new Set<string>();
 
     // `Cache.forEach` skips expired entries without deleting them, so sweep
     // first: an expired descendant would otherwise be invisible here and

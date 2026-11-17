@@ -697,9 +697,9 @@ describe("FileSearchService", () => {
     });
 
     it("fences a descendant load in flight when its ancestor is invalidated", async () => {
-      // The root is always in the invalidation set, so a root-scoped test passes
-      // even with the in-flight descendant loop deleted. Only a nested cwd
-      // exercises it.
+      // A load in flight against the root itself would still be fenced by an
+      // exact-key drop; only a nested cwd needs the overlap scan of in-flight
+      // keys.
       const dir = makeTempDir();
       tempDirs.push(dir);
       const nested = path.join(dir, "src");
@@ -735,15 +735,43 @@ describe("FileSearchService", () => {
       const inFlight = service.search({ cwd: dir, query: "", limit: 5 });
       await pending.reached;
 
-      for (let i = 0; i < 200; i++) {
-        service.invalidateUnder(path.join(os.tmpdir(), `daintree-retired-worktree-${i}`));
-        service.invalidate(path.join(os.tmpdir(), `daintree-retired-cwd-${i}`));
+      const worktrees = Array.from({ length: 200 }, (_, i) =>
+        path.join(os.tmpdir(), `daintree-retired-worktree-${i}`)
+      );
+      const cwds = Array.from({ length: 200 }, (_, i) =>
+        path.join(os.tmpdir(), `daintree-retired-cwd-${i}`)
+      );
+      const retired = new Set([...worktrees, ...cwds]);
+
+      // Record every Map or Set the invalidations write a retired path into, so
+      // the check below covers structures `getRetainedKeyCount` doesn't know of.
+      const holders: Array<Map<unknown, unknown> | Set<unknown>> = [];
+      const mapSet = Map.prototype.set;
+      const setAdd = Set.prototype.add;
+      Map.prototype.set = function (this: Map<unknown, unknown>, key: unknown, value: unknown) {
+        if (typeof key === "string" && retired.has(key)) holders.push(this);
+        return mapSet.call(this, key, value);
+      } as typeof mapSet;
+      Set.prototype.add = function (this: Set<unknown>, value: unknown) {
+        if (typeof value === "string" && retired.has(value)) holders.push(this);
+        return setAdd.call(this, value);
+      } as typeof setAdd;
+      try {
+        for (let i = 0; i < worktrees.length; i++) {
+          service.invalidateUnder(worktrees[i]);
+          service.invalidate(cwds[i]);
+        }
+      } finally {
+        Map.prototype.set = mapSet;
+        Set.prototype.add = setAdd;
       }
+
       service.invalidateUnder(dir);
       pending.release("stale.ts\0");
       await inFlight;
       service.sweep();
 
+      expect([...retired].filter((key) => holders.some((holder) => holder.has(key)))).toEqual([]);
       expect(service.getRetainedKeyCount()).toBe(baseline);
     });
 
