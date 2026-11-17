@@ -112,6 +112,13 @@ USAGE
 esac
 
 # --- Resolve target directory ---
+# One folder only: `daintree my project` would otherwise open "my" and drop the rest.
+if [[ $# -gt 1 ]]; then
+  echo "daintree: expected one directory, got $# arguments (quote a path that contains spaces)" >&2
+  echo "Usage: daintree [directory]" >&2
+  exit 2
+fi
+
 TARGET="${1:-.}"
 ABSOLUTE_PATH="$(CDPATH= cd -- "$TARGET" 2>/dev/null && pwd -P)" || ABSOLUTE_PATH=""
 

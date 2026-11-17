@@ -82,6 +82,12 @@ export function generateAppImageWrapper(appImagePath: string, version = appVersi
     "    done",
     '    echo "Daintree is not running"; exit 1 ;;',
     "esac",
+    // One folder only: extra operands would otherwise be dropped silently.
+    'if [ "$#" -gt 1 ]; then',
+    `  echo "${CLI_COMMAND_NAME}: expected one directory, got $# arguments (quote a path that contains spaces)" >&2`,
+    `  echo "Usage: ${CLI_COMMAND_NAME} [directory]" >&2`,
+    "  exit 2",
+    "fi",
     'TARGET="${1:-.}"',
     `ABSOLUTE_PATH="$(CDPATH= cd -- "$TARGET" 2>/dev/null && pwd -P)" || { echo "${CLI_COMMAND_NAME}: '$TARGET' is not a directory" >&2; exit 1; }`,
     // Single-token `=` form: Chromium's `second-instance` command-line

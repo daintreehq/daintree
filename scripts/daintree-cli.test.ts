@@ -12,63 +12,108 @@ const SCRIPT_SOURCE = path.join(path.dirname(fileURLToPath(import.meta.url)), "d
 // `--cli-path=<path>` guarantee testable: asserting the script's source text
 // would only restate it, whereas a displaced or word-split value shows up here
 // as two argv entries instead of one (#11410).
+interface CliOptions {
+  cwd?: string;
+  env?: Record<string, string>;
+}
+
+interface CliRun {
+  /** What the stub received, in order; empty when it was never started. */
+  argv: string[];
+  /** Whether the stub was started at all, even with no arguments. */
+  launched: boolean;
+  root: string;
+  status: number | null;
+  stderr: string;
+}
+
+async function runCliWith(
+  args: string[],
+  { expectLaunch, cwd, env }: CliOptions & { expectLaunch: boolean }
+): Promise<CliRun> {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-cli-sh-"));
+  try {
+    const argvFile = path.join(root, "argv");
+    const binDir = path.join(root, "shim");
+    fs.mkdirSync(binDir);
+
+    const recorder = [
+      "#!/usr/bin/env bash",
+      // NUL-delimited so a value containing spaces stays one field. The redirect
+      // creates the file the moment the stub starts, even with no arguments, so
+      // the file's existence is the launch record.
+      `printf '%s\\0' "$@" > ${JSON.stringify(argvFile)}`,
+      "",
+    ].join("\n");
+
+    let scriptPath: string;
+    if (process.platform === "darwin") {
+      // The script derives the bundle from its own location when installed
+      // inside one, so no Spotlight/`/Applications` lookup is involved.
+      scriptPath = path.join(root, "Daintree.app", "Contents", "MacOS", "bin", "daintree");
+      fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+      // macOS hands off through `open -a <bundle> --args …`.
+      const openShim = path.join(binDir, "open");
+      fs.writeFileSync(openShim, recorder, { mode: 0o755 });
+    } else {
+      // Linux resolves the binary as ../daintree relative to the script's dir.
+      scriptPath = path.join(root, "opt", "bin", "daintree");
+      fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+      fs.writeFileSync(path.join(root, "opt", "daintree"), recorder, { mode: 0o755 });
+    }
+
+    fs.copyFileSync(SCRIPT_SOURCE, scriptPath);
+    fs.chmodSync(scriptPath, 0o755);
+
+    const result = spawnSync("bash", [scriptPath, ...args], {
+      env: {
+        ...process.env,
+        ...env,
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+      encoding: "utf-8",
+      cwd,
+      // The backgrounded Linux launch holds stderr open, so a stalled one would
+      // block here before the polling deadline below starts.
+      timeout: 10_000,
+    });
+    if (result.error) throw result.error;
+
+    // The Linux branch backgrounds the launch and exits immediately, and the
+    // recorder's `>` redirect creates the file before writing it, so wait for a
+    // trailing NUL rather than for the file to merely exist. A refused invocation
+    // only gets a short grace period: it must never reach the launch at all.
+    const deadline = Date.now() + (expectLaunch ? 5000 : 300);
+    let raw = "";
+    while (Date.now() < deadline) {
+      raw = fs.existsSync(argvFile) ? fs.readFileSync(argvFile, "utf-8") : "";
+      if (raw.endsWith("\0")) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    return {
+      argv: raw.split("\0").filter((entry) => entry.length > 0),
+      launched: fs.existsSync(argvFile),
+      root,
+      status: result.status,
+      stderr: result.stderr,
+    };
+  } catch (error) {
+    fs.rmSync(root, { recursive: true, force: true });
+    throw error;
+  }
+}
+
 async function runCli(
   target: string,
-  opts: { cwd?: string; env?: Record<string, string> } = {}
+  opts: CliOptions = {}
 ): Promise<{ argv: string[]; root: string }> {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-cli-sh-"));
-  const argvFile = path.join(root, "argv");
-  const binDir = path.join(root, "shim");
-  fs.mkdirSync(binDir);
-
-  const recorder = [
-    "#!/usr/bin/env bash",
-    // NUL-delimited so a value containing spaces stays one field.
-    `printf '%s\\0' "$@" > ${JSON.stringify(argvFile)}`,
-    "",
-  ].join("\n");
-
-  let scriptPath: string;
-  if (process.platform === "darwin") {
-    // The script derives the bundle from its own location when installed
-    // inside one, so no Spotlight/`/Applications` lookup is involved.
-    scriptPath = path.join(root, "Daintree.app", "Contents", "MacOS", "bin", "daintree");
-    fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
-    // macOS hands off through `open -a <bundle> --args …`.
-    const openShim = path.join(binDir, "open");
-    fs.writeFileSync(openShim, recorder, { mode: 0o755 });
-  } else {
-    // Linux resolves the binary as ../daintree relative to the script's dir.
-    scriptPath = path.join(root, "opt", "bin", "daintree");
-    fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
-    fs.writeFileSync(path.join(root, "opt", "daintree"), recorder, { mode: 0o755 });
+  const result = await runCliWith([target], { ...opts, expectLaunch: true });
+  if (result.status !== 0) {
+    fs.rmSync(result.root, { recursive: true, force: true });
+    throw new Error(`daintree CLI exited ${result.status}: ${result.stderr}`);
   }
-
-  fs.copyFileSync(SCRIPT_SOURCE, scriptPath);
-  fs.chmodSync(scriptPath, 0o755);
-
-  execFileSync("bash", [scriptPath, target], {
-    cwd: opts.cwd,
-    env: {
-      ...process.env,
-      ...opts.env,
-      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-    },
-    encoding: "utf-8",
-  });
-
-  // The Linux branch backgrounds the launch and exits immediately, and the
-  // recorder's `>` redirect creates the file before writing it — so wait for a
-  // trailing NUL rather than for the file to merely exist.
-  const deadline = Date.now() + 5000;
-  let raw = "";
-  while (Date.now() < deadline) {
-    raw = fs.existsSync(argvFile) ? fs.readFileSync(argvFile, "utf-8") : "";
-    if (raw.endsWith("\0")) break;
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-
-  return { argv: raw.split("\0").filter((entry) => entry.length > 0), root };
+  return result;
 }
 
 describe.skipIf(process.platform === "win32")("daintree-cli.sh", () => {
@@ -121,6 +166,57 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh", () => {
     // detached positional Chromium is free to displace.
     expect(argv).not.toContain("--cli-path");
     expect(argv.filter((entry) => entry.startsWith("--cli-path"))).toHaveLength(1);
+  });
+
+  // An unquoted `daintree ~/my project` reaches the script as two operands, the
+  // first of which can be a real folder: opening it would be a wrong project and a
+  // successful exit.
+  it("refuses extra operands with a usage error and never launches the app", async () => {
+    const other = path.join(workspace, "other");
+    fs.mkdirSync(other);
+
+    const refused = await runCliWith([projectDir, other], { expectLaunch: false });
+    roots.push(refused.root);
+
+    expect(refused.status).toBe(2);
+    expect(refused.stderr).toContain("expected one directory, got 2 arguments");
+    expect(refused.stderr).toContain("Usage: daintree [directory]");
+    expect(refused.launched).toBe(false);
+  });
+
+  it("counts every extra operand, whether or not it names a folder", async () => {
+    const refused = await runCliWith(
+      [projectDir, path.join(workspace, "no-such-dir"), path.join(workspace, "notes.txt")],
+      { expectLaunch: false }
+    );
+    roots.push(refused.root);
+
+    expect(refused.status).toBe(2);
+    expect(refused.stderr).toContain("got 3 arguments");
+    expect(refused.launched).toBe(false);
+  });
+
+  // The usage error must come before directory validation: with a missing first
+  // operand the cause is the operand count, and "not a directory" (exit 1) would
+  // point the user at the wrong problem.
+  it("reports the operand count before checking whether the first operand exists", async () => {
+    const refused = await runCliWith([path.join(workspace, "no-such-dir"), projectDir], {
+      expectLaunch: false,
+    });
+    roots.push(refused.root);
+
+    expect(refused.status).toBe(2);
+    expect(refused.stderr).toContain("got 2 arguments");
+    expect(refused.stderr).not.toContain("is not a directory");
+    expect(refused.launched).toBe(false);
+  });
+
+  it("opens the current directory when no operand is given", async () => {
+    const opened = await runCliWith([], { expectLaunch: true, cwd: projectDir });
+    roots.push(opened.root);
+
+    expect(opened.status).toBe(0);
+    expect(opened.argv).toContain(`--cli-path=${fs.realpathSync(projectDir)}`);
   });
 
   // The deb's /usr/bin/daintree is a symlink to resources/daintree-cli.sh, beside
