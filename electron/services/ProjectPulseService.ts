@@ -404,7 +404,7 @@ export class ProjectPulseService {
     // Walked in place rather than split, so a busy window doesn't also allocate
     // one string per commit.
     const dailyCounts = new Map<string, number>();
-    for (let start = 0; start < output.length; ) {
+    for (let start = 0; start < output.length;) {
       const newline = output.indexOf("\n", start);
       const end = newline === -1 ? output.length : newline;
       const timestamp = parseInt(output.slice(start, end), 10) * 1000;
