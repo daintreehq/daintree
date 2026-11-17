@@ -4427,6 +4427,16 @@ describe("Decisions questions (#17232)", () => {
     expect(finished()).toHaveLength(1);
   });
 
+  it("keeps the banner replaced when a spawn is reported in the middle of the turn", () => {
+    turn(() => {
+      setDecisionQuestions([question("term-1", Date.now())]);
+      vi.advanceTimersByTime(1_000);
+      events.emit("agent:spawned", { terminalId: "term-1", agentId: "agent-1" } as never);
+    });
+
+    expect(finished()).toHaveLength(0);
+  });
+
   it("shows a later turn's banner when the agent exits naturally after it", () => {
     turn(() => setDecisionQuestions([question("term-1", Date.now())]));
     events.emit("agent:state-changed", makePayload("working", "idle"));

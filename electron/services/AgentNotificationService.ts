@@ -478,8 +478,11 @@ class AgentNotificationService {
       if (agentKey) {
         this.agentSpawnTimestamps.set(agentKey, Date.now());
       }
-      // A new incarnation: what an earlier one asked under this terminal id ended none of its turns.
-      if (payload.terminalId) this.turnStartedAt.set(payload.terminalId, Date.now());
+      // A new incarnation (a kill or exit cleared the last one's turn): what an earlier one
+      // asked under this terminal id ended none of its turns. A turn under way keeps its start.
+      if (payload.terminalId && !this.turnStartedAt.has(payload.terminalId)) {
+        this.turnStartedAt.set(payload.terminalId, Date.now());
+      }
       // Its project's overrides, read now, are in by its first transition.
       if (payload.terminalId) this.loadPanelProject(payload.terminalId);
       const settings = projectStore.getEffectiveNotificationSettings(
