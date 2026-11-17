@@ -1329,3 +1329,88 @@ export const PR_CI_STATUS_QUERY = `
     rateLimit { cost remaining resetAt limit }
   }
 `;
+
+/** Deployments one source of a deployment read returns, newest first. */
+export const DEPLOYMENTS_PER_SOURCE = 20;
+
+const DEPLOYMENT_FIELDS = `
+  id
+  commitOid
+  environment
+  state
+  createdAt
+  updatedAt
+  ref {
+    prefix
+    name
+  }
+  latestStatus {
+    state
+    environmentUrl
+    createdAt
+    updatedAt
+  }
+`;
+
+/**
+ * Deployments recorded on a branch's tip commit (#17248). `qualifiedName` is
+ * `refs/heads/<branch>`; a branch the remote doesn't have resolves `ref` to
+ * null without an error.
+ */
+export const BRANCH_DEPLOYMENTS_QUERY = `
+  query GetBranchDeployments($owner: String!, $repo: String!, $qualifiedName: String!) {
+    repository(owner: $owner, name: $repo) {
+      ref(qualifiedName: $qualifiedName) {
+        target {
+          ... on Commit {
+            oid
+            deployments(
+              first: ${DEPLOYMENTS_PER_SOURCE}
+              orderBy: { field: CREATED_AT, direction: DESC }
+            ) {
+              nodes {${DEPLOYMENT_FIELDS}}
+            }
+          }
+        }
+      }
+    }
+    rateLimit { cost remaining resetAt limit }
+  }
+`;
+
+/**
+ * Deployments of a pull request (#17248): those on its head commit, plus the
+ * ones its timeline records as deployed events, which reach its merge ref and
+ * earlier pushes. A missing PR comes back as a `NOT_FOUND` error at
+ * `repository.pullRequest`.
+ */
+export const PR_DEPLOYMENTS_QUERY = `
+  query GetPRDeployments($owner: String!, $repo: String!, $number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        headRefName
+        commits(last: 1) {
+          nodes {
+            commit {
+              oid
+              deployments(
+                first: ${DEPLOYMENTS_PER_SOURCE}
+                orderBy: { field: CREATED_AT, direction: DESC }
+              ) {
+                nodes {${DEPLOYMENT_FIELDS}}
+              }
+            }
+          }
+        }
+        timelineItems(itemTypes: [DEPLOYED_EVENT], last: ${DEPLOYMENTS_PER_SOURCE}) {
+          nodes {
+            ... on DeployedEvent {
+              deployment {${DEPLOYMENT_FIELDS}}
+            }
+          }
+        }
+      }
+    }
+    rateLimit { cost remaining resetAt limit }
+  }
+`;

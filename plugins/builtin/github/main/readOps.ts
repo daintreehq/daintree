@@ -2,6 +2,8 @@ import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import type {
   CheckRun,
   CIStatus,
+  Deployment,
+  DeploymentTarget,
   FetchOptions,
   ForgeNumberReference,
   Issue,
@@ -38,6 +40,8 @@ import {
   buildBatchPRsQuery,
   buildBatchReferencesQuery,
   buildBatchRequiredChecksQuery,
+  BRANCH_DEPLOYMENTS_QUERY,
+  PR_DEPLOYMENTS_QUERY,
 } from "./GitHubQueries.js";
 import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
 import {
@@ -77,6 +81,7 @@ import {
   toForgePR,
   toForgeNumberReference,
   gitHubIssueToForgeIssue,
+  mapGitHubDeployment,
 } from "./mappers.js";
 import {
   dedupe,
@@ -88,6 +93,7 @@ import {
   getPRInflight,
   getCIStatusInflight,
   getChecksInflight,
+  getDeploymentsInflight,
   findPRsByBranchesInflight,
   findPRsByNumbersInflight,
   getCIStatusesInflight,
@@ -1261,6 +1267,144 @@ export async function getChecksImpl(
 
     throw incomplete(`more than ${MAX_CHECK_PAGES * 100} checks`);
   });
+}
+
+/**
+ * Map a deployment connection's nodes, rejecting rather than dropping one it
+ * can't read: the deployment left out could be the one that is live.
+ */
+function readDeploymentNodes(
+  connection: unknown,
+  incomplete: (why: string) => Error
+): Deployment[] {
+  const nodes = (connection as { nodes?: unknown } | null | undefined)?.nodes;
+  if (!Array.isArray(nodes)) throw incomplete("the provider returned no deployment list");
+  return nodes.map((node) => {
+    const deployment = mapGitHubDeployment(node);
+    if (!deployment) throw incomplete("the provider returned an unreadable deployment");
+    return deployment;
+  });
+}
+
+/**
+ * Whether a deployment found on a commit belongs to the branch or PR it was
+ * read for. One recorded against the bare commit (Vercel, Cloudflare Pages)
+ * does; one GitHub recorded against a different branch or a tag at the same
+ * commit — main's production rollout on a branch just cut from main — doesn't.
+ */
+function isRecordedFor(deployment: Deployment, branch: string, prNumber?: number): boolean {
+  const { ref } = deployment;
+  if (ref === undefined) return true;
+  if (ref === `refs/heads/${branch}`) return true;
+  return prNumber !== undefined && ref.startsWith(`refs/pull/${prNumber}/`);
+}
+
+/** Newest deployment first; a stable sort keeps the response order on a tie. */
+function newestFirst(deployments: Iterable<Deployment>): Deployment[] {
+  return [...deployments].sort((a, b) => b.createdAt - a.createdAt);
+}
+
+async function readBranchDeployments(
+  repo: RepoRef,
+  branch: string
+): Promise<{ deployments: Deployment[] } | null> {
+  const incomplete = (why: string): Error =>
+    new Error(`Could not read the branch's deployments: ${why}`);
+  const response = await runQuery(
+    BRANCH_DEPLOYMENTS_QUERY,
+    { owner: repo.owner, repo: repo.repo, qualifiedName: `refs/heads/${branch}` },
+    "BRANCH_DEPLOYMENTS_QUERY",
+    true
+  );
+  const repository = response?.repository as Record<string, unknown> | null | undefined;
+  if (!repository) throw incomplete("the provider returned no repository");
+  // A branch the remote doesn't have (never pushed, or deleted) resolves to null.
+  if (repository.ref === null) return null;
+  const target = (repository.ref as { target?: { deployments?: unknown } } | undefined)?.target;
+  const deployments = readDeploymentNodes(target?.deployments, incomplete).filter((d) =>
+    isRecordedFor(d, branch)
+  );
+  return { deployments: newestFirst(deployments) };
+}
+
+async function readPRDeployments(
+  repo: RepoRef,
+  prNumber: number
+): Promise<{ deployments: Deployment[] } | null> {
+  const incomplete = (why: string): Error =>
+    new Error(`Could not read deployments for PR #${prNumber}: ${why}`);
+  let response: GraphQlQueryResponseData;
+  try {
+    response = await runQuery(
+      PR_DEPLOYMENTS_QUERY,
+      { owner: repo.owner, repo: repo.repo, number: prNumber },
+      "PR_DEPLOYMENTS_QUERY",
+      true
+    );
+  } catch (error) {
+    // A missing PR is a NOT_FOUND error at `repository.pullRequest`; any other
+    // error (no repository, no access, transport) is a failed read.
+    if (repositoryDespiteMissingNumbers(error, new Set(["pullRequest"]))) return null;
+    throw error;
+  }
+  const repository = response?.repository as Record<string, unknown> | null | undefined;
+  if (!repository) throw incomplete("the provider returned no repository");
+  if (repository.pullRequest === null) return null;
+  const pr = repository.pullRequest as
+    | {
+        headRefName?: unknown;
+        commits?: { nodes?: Array<{ commit?: { deployments?: unknown } } | null> };
+        timelineItems?: { nodes?: unknown };
+      }
+    | undefined;
+  if (!pr || typeof pr.headRefName !== "string") {
+    throw incomplete("the provider returned no head branch");
+  }
+  const headRefName = pr.headRefName;
+
+  const byId = new Map<string, Deployment>();
+  const headCommit = pr.commits?.nodes?.[0]?.commit;
+  if (headCommit) {
+    for (const deployment of readDeploymentNodes(headCommit.deployments, incomplete)) {
+      if (isRecordedFor(deployment, headRefName, prNumber)) byId.set(deployment.id, deployment);
+    }
+  }
+  // GitHub ties a deployed event to this PR itself, which is what reaches a
+  // merge-ref rollout and earlier pushes' previews, so these need no ref check.
+  const events = pr.timelineItems?.nodes;
+  if (!Array.isArray(events)) throw incomplete("the provider returned no deployment timeline");
+  const timeline = readDeploymentNodes(
+    { nodes: events.map((event) => (event as { deployment?: unknown } | null)?.deployment) },
+    incomplete
+  );
+  for (const deployment of timeline) byId.set(deployment.id, deployment);
+  return { deployments: newestFirst(byId.values()) };
+}
+
+/**
+ * Where a branch or pull request is deployed, from GitHub's deployment records
+ * (#17248): one GraphQL request per call, never served from or written to the
+ * response cache, so a launcher reopened mid-rollout sees the rollout move.
+ * Concurrent identical reads share one request; the key carries the token
+ * version so a credential switch never answers from the previous account.
+ */
+export async function getDeploymentsImpl(
+  repo: RepoRef,
+  target: DeploymentTarget
+): Promise<{ deployments: Deployment[] } | null> {
+  const key = JSON.stringify([
+    GitHubAuth.getTokenVersion(),
+    repo.host,
+    repo.owner,
+    repo.repo,
+    target.kind,
+    target.kind === "branch" ? target.branch : target.prNumber,
+  ]);
+  return dedupe(getDeploymentsInflight, key, false, () =>
+    target.kind === "branch"
+      ? readBranchDeployments(repo, target.branch)
+      : readPRDeployments(repo, target.prNumber)
+  );
 }
 
 export async function probeOpenPRListImpl(
