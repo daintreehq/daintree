@@ -501,10 +501,14 @@ export function RecipeManager({
                 <FactSeparator />
               </>
             )}
-            <span className="min-w-0 truncate">
-              {pluralize(recipe.terminals.length, "terminal")}
-              {summary && summary !== recipe.name ? `: ${summary}` : ""}
-            </span>
+            <TruncatedTooltip
+              content={`${pluralize(recipe.terminals.length, "terminal")}${summary && summary !== recipe.name ? `: ${summary}` : ""}`}
+            >
+              <span className="min-w-0 truncate">
+                {pluralize(recipe.terminals.length, "terminal")}
+                {summary && summary !== recipe.name ? `: ${summary}` : ""}
+              </span>
+            </TruncatedTooltip>
             <FactSeparator />
             <span className="shrink-0">
               {recipe.lastUsedAt ? (
@@ -541,7 +545,7 @@ export function RecipeManager({
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    className="text-text-secondary hover:text-text-primary aria-expanded:bg-overlay-raised aria-expanded:text-text-primary"
+                    className="text-text-secondary hover:text-text-primary aria-expanded:bg-overlay-hover aria-expanded:text-text-primary"
                     aria-label={`More actions for recipe ${recipe.name}`}
                   >
                     <MoreHorizontal />
@@ -790,7 +794,7 @@ export function RecipeManager({
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="shrink-0 aria-expanded:bg-overlay-raised aria-expanded:text-text-primary"
+                      className="shrink-0 aria-expanded:bg-overlay-hover aria-expanded:text-text-primary"
                     >
                       <FileDown />
                       Import
