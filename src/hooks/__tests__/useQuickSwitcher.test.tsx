@@ -432,11 +432,12 @@ describe("useQuickSwitcher custom worktree titles (#17503)", () => {
     const { result } = renderHook(() => useQuickSwitcher());
     act(() => result.current.setQuery("release planning"));
 
-    const first = result.current.results[0];
-    expect(first?.id).toBe("worktree:wt-red");
+    expect(result.current.results.map((item) => item.id)).toEqual(["worktree:wt-red"]);
+    const [first] = result.current.results;
     expect(first?.title).toBe("Release planning");
     expect(first?.displaced).toBe("feature/auth-refresh");
     expect(first?.subtitle).toBe("/repo/wt-red");
+    expect(result.current.matchesById.get("worktree:wt-red")?.map((m) => m.key)).toEqual(["title"]);
   });
 
   it("still finds the titled worktree by the branch the title displaced, marking the branch", () => {
@@ -451,6 +452,26 @@ describe("useQuickSwitcher custom worktree titles (#17503)", () => {
     expect(keys).toEqual(["displaced"]);
   });
 
+  it("keeps the title's ranges and the branch's apart when a query matches both", () => {
+    setTitles({ "wt-red": "Auth refresh notes" });
+    seed(red);
+
+    const { result } = renderHook(() => useQuickSwitcher());
+    act(() => result.current.setQuery("authrefresh"));
+
+    const matches = result.current.matchesById.get("worktree:wt-red") ?? [];
+    expect(matches.map((m) => m.key).sort()).toEqual(["displaced", "title"]);
+    const text = (key: string) => {
+      const match = matches.find((m) => m.key === key)!;
+      return match.indices.map(([start, end]) => match.value!.slice(start, end + 1).toLowerCase());
+    };
+    // Each range indexes the text its key names, so the row can paint it there.
+    expect(text("title").join("")).toContain("auth");
+    expect(text("displaced").join("")).toContain("auth");
+    expect(matches.find((m) => m.key === "title")?.value).toBe("Auth refresh notes");
+    expect(matches.find((m) => m.key === "displaced")?.value).toBe("feature/auth-refresh");
+  });
+
   it("finds the titled worktree by its path as before", () => {
     setTitles({ "wt-red": "Release planning" });
     seed(red, blue);
@@ -458,17 +479,26 @@ describe("useQuickSwitcher custom worktree titles (#17503)", () => {
     const { result } = renderHook(() => useQuickSwitcher());
     act(() => result.current.setQuery("wt-red"));
 
-    expect(result.current.results[0]?.id).toBe("worktree:wt-red");
+    expect(result.current.results.map((item) => item.id)).toEqual(["worktree:wt-red"]);
+    expect(result.current.matchesById.get("worktree:wt-red")?.map((m) => m.key)).toEqual([
+      "subtitle",
+    ]);
   });
 
-  it("names a worktree without a title as before: its name, nothing displaced", () => {
+  it("names a worktree without a title by its name, falling back to its branch, nothing displaced", () => {
     setTitles({ "wt-red": "Release planning" });
-    seed(red, blue);
+    const folder = {
+      id: "wt-dir",
+      name: "billing-dir",
+      branch: "feature/billing",
+      path: "/repo/b",
+    };
+    seed(red, folder);
 
     const { result } = renderHook(() => useQuickSwitcher());
 
-    const item = result.current.results.find((entry) => entry.id === "worktree:wt-blue");
-    expect(item?.title).toBe("feature/billing");
+    const item = result.current.results.find((entry) => entry.id === "worktree:wt-dir");
+    expect(item?.title).toBe("billing-dir");
     expect(item?.displaced).toBeUndefined();
   });
 
@@ -506,12 +536,19 @@ describe("useQuickSwitcher custom worktree titles (#17503)", () => {
     expect(result.current.results[0]?.title).toBe("feature/auth-refresh");
   });
 
-  it("reads the titles as they are when the switcher opens", () => {
+  it("reads the titles as they are when the switcher opens, and ignores them while closed", () => {
     seed(red);
     usePaletteStore.setState({ activePaletteId: null });
-    const { result } = renderHook(() => useQuickSwitcher());
+    let renders = 0;
+    const { result } = renderHook(() => {
+      renders++;
+      return useQuickSwitcher();
+    });
+    const rendersBefore = renders;
 
     setTitles({ "wt-red": "Release planning" });
+    expect(renders).toBe(rendersBefore);
+
     act(() => usePaletteStore.setState({ activePaletteId: "quick-switcher" }));
 
     expect(result.current.results[0]?.title).toBe("Release planning");

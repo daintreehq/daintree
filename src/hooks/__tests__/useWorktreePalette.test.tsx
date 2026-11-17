@@ -83,6 +83,14 @@ describe("useWorktreePalette custom titles (#17503)", () => {
   const setTitles = (titles: Record<string, string>) =>
     act(() => useWorktreeFilterStore.setState({ worktreeCustomTitles: titles }));
 
+  const red: WorktreeState = {
+    ...worktree("wt-red", "auth-refresh"),
+    branch: "feature/oauth",
+    path: "/repo/red-dir",
+  };
+  const blue = worktree("wt-blue", "billing");
+  const list = [red, blue];
+
   beforeEach(() => {
     usePaletteStore.setState({ activePaletteId: "worktree" });
   });
@@ -92,14 +100,28 @@ describe("useWorktreePalette custom titles (#17503)", () => {
     usePaletteStore.setState({ activePaletteId: null });
   });
 
-  it("finds a worktree by its custom title and still by the name the title displaced", () => {
-    setTitles({ "wt-feature": "Release planning" });
-    const { result } = renderHook(() => useWorktreePalette({ worktrees }));
+  const idsFor = (result: { current: ReturnType<typeof useWorktreePalette> }, query: string) => {
+    act(() => result.current.setQuery(query));
+    return result.current.results.map((w) => w.id);
+  };
 
-    act(() => result.current.setQuery("release planning"));
-    expect(result.current.results.map((w) => w.id)).toEqual(["wt-feature"]);
+  it("finds a worktree by its custom title, and still by its name and branch", () => {
+    setTitles({ "wt-red": "Release planning" });
+    const { result } = renderHook(() => useWorktreePalette({ worktrees: list }));
 
-    act(() => result.current.setQuery("feature"));
-    expect(result.current.results.map((w) => w.id)).toEqual(["wt-feature"]);
+    expect(idsFor(result, "release planning")).toEqual(["wt-red"]);
+    expect(idsFor(result, "auth-refresh")).toEqual(["wt-red"]);
+    expect(idsFor(result, "oauth")).toEqual(["wt-red"]);
+    expect(idsFor(result, "zzz-unrelated")).toEqual([]);
+  });
+
+  it("follows a retitle without the query changing", () => {
+    setTitles({ "wt-red": "Release planning" });
+    const { result } = renderHook(() => useWorktreePalette({ worktrees: list }));
+    expect(idsFor(result, "hotfix")).toEqual([]);
+
+    setTitles({ "wt-red": "Hotfix rollout" });
+
+    expect(result.current.results.map((w) => w.id)).toEqual(["wt-red"]);
   });
 });

@@ -117,6 +117,11 @@ describe("QuickSwitcherItem custom worktree title", () => {
     Array.from(container.querySelectorAll("span"))
       .filter((el) => el.children.length === 0 && el.className.includes("bg-overlay-medium"))
       .map((el) => el.textContent);
+  // The qualifier is the one span in the headline line that caps its own width.
+  const qualifier = (container: HTMLElement) =>
+    container.querySelector<HTMLElement>('span[class*="max-w-[50%]"]');
+  const headline = (container: HTMLElement) =>
+    container.querySelector<HTMLElement>("span.font-medium");
 
   function titled(overrides: Partial<QuickSwitcherItemData> = {}) {
     return makeWorktreeItem({
@@ -128,76 +133,82 @@ describe("QuickSwitcherItem custom worktree title", () => {
     });
   }
 
-  it("shows the title with the branch it displaced and the path, so the row can still be identified", () => {
-    const { container } = render(
-      <QuickSwitcherItem item={titled()} isSelected={false} onSelect={() => {}} />
+  const renderRow = (item: QuickSwitcherItemData, extra: Record<string, unknown> = {}) =>
+    render(<QuickSwitcherItem item={item} isSelected={false} onSelect={() => {}} {...extra} />);
+
+  it("shows the title, the branch it displaced beside it, and the path under it", () => {
+    const { container } = renderRow(titled());
+    expect(headline(container)?.textContent).toBe("Release planning");
+    expect(qualifier(container)?.textContent).toContain("feature/auth-refresh");
+    // The detail line is the shortened path; the mocked tooltip carries the full one.
+    const detail = Array.from(container.querySelectorAll("div")).find((el) =>
+      el.className.includes("mt-0.5")
     );
-    const text = container.textContent ?? "";
-    expect(text).toContain("Release planning");
-    expect(text).toContain("feature/auth-refresh");
-    expect(text).toContain("wt-red");
+    expect(detail?.textContent).toContain("wt-red");
+    expect(detail?.textContent).not.toContain("/Users/me");
   });
 
-  it("sets the title as a name, not as the mono identifier a bare branch is", () => {
-    const { container } = render(
-      <QuickSwitcherItem item={titled()} isSelected={false} onSelect={() => {}} />
+  it("sets a custom title as a name and a bare branch as the mono identifier it is", () => {
+    const custom = renderRow(titled());
+    expect(headline(custom.container)?.className).not.toContain("font-mono");
+    custom.unmount();
+    const bare = renderRow(
+      makeWorktreeItem({ title: "feature/auth-refresh", branchLabel: "feature/auth-refresh" })
     );
-    const title = Array.from(container.querySelectorAll("span")).find(
-      (el) => el.textContent === "Release planning"
-    );
-    expect(title?.className).not.toContain("font-mono");
+    expect(headline(bare.container)?.className).toContain("font-mono");
+  });
+
+  it("marks a literal match on the displaced branch, with no Fuse ranges at all", () => {
+    const { container } = renderRow(titled(), { query: "refresh" });
+    expect(marked(container)).toEqual(["refresh"]);
+    expect(headline(container)?.textContent).toBe("Release planning");
   });
 
   it("marks a fuzzy match on the displaced branch on the branch, never on the title", () => {
-    const { container } = render(
-      <QuickSwitcherItem
-        item={titled()}
-        isSelected={false}
-        onSelect={() => {}}
-        query="authrefresh"
-        matches={[{ key: "displaced", indices: [[8, 11]], value: "feature/auth-refresh" }]}
-      />
-    );
+    const { container } = renderRow(titled(), {
+      query: "authrefresh",
+      matches: [{ key: "displaced", indices: [[8, 11]], value: "feature/auth-refresh" }],
+    });
     expect(marked(container)).toEqual(["auth"]);
+    expect(qualifier(container)?.querySelectorAll(".bg-overlay-medium")).toHaveLength(1);
   });
 
-  it("marks a match on the title on the title", () => {
-    const { container } = render(
-      <QuickSwitcherItem
-        item={titled()}
-        isSelected={false}
-        onSelect={() => {}}
-        query="release"
-        matches={[{ key: "title", indices: [[0, 6]], value: "Release planning" }]}
-      />
+  it("marks a fuzzy match on the title on the title, and keeps title and branch ranges apart", () => {
+    const { container } = renderRow(
+      titled({ title: "Auth refresh notes", displaced: "feature/auth-refresh" }),
+      {
+        query: "authrefresh",
+        matches: [
+          { key: "title", indices: [[0, 3]], value: "Auth refresh notes" },
+          { key: "displaced", indices: [[8, 11]], value: "feature/auth-refresh" },
+        ],
+      }
     );
-    expect(marked(container)).toEqual(["Release"]);
+    expect(headline(container)?.querySelectorAll(".bg-overlay-medium")).toHaveLength(1);
+    expect(marked(container)).toEqual(["Auth", "auth"]);
+    expect(qualifier(container)?.querySelector(".bg-overlay-medium")?.textContent).toBe("auth");
   });
 
   it("keeps main's branch qualifier when it has no custom title", () => {
-    const { container } = render(
-      <QuickSwitcherItem
-        item={makeWorktreeItem({
-          title: "daintree",
-          isMainWorktree: true,
-          branchLabel: "develop",
-        })}
-        isSelected={false}
-        onSelect={() => {}}
-      />
+    const { container } = renderRow(
+      makeWorktreeItem({ title: "daintree", isMainWorktree: true, branchLabel: "develop" })
     );
-    expect(container.textContent).toContain("develop");
+    expect(qualifier(container)?.textContent).toContain("develop");
   });
 
-  it("adds no qualifier to an untitled linked worktree whose title is its branch", () => {
-    const { container } = render(
-      <QuickSwitcherItem
-        item={makeWorktreeItem({ title: "feature/auth", branchLabel: "feature/auth" })}
-        isSelected={false}
-        onSelect={() => {}}
-      />
+  it("gives an untitled linked worktree no qualifier, whatever its branch label says", () => {
+    const { container } = renderRow(
+      makeWorktreeItem({ title: "billing-dir", branchLabel: "feature/billing" })
     );
-    expect((container.textContent ?? "").match(/feature\/auth/g)).toHaveLength(1);
+    expect(qualifier(container)).toBeNull();
+    expect(container.textContent).not.toContain("feature/billing");
+  });
+
+  it("adds no qualifier when the title is the branch itself", () => {
+    const { container } = renderRow(
+      makeWorktreeItem({ title: "feature/auth", branchLabel: "feature/auth" })
+    );
+    expect(qualifier(container)).toBeNull();
   });
 });
 

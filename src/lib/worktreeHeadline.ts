@@ -58,7 +58,8 @@ export function getWorktreeQualifier(
 ): string | null {
   if (worktree.isDetached) {
     const head = worktree.head?.slice(0, 7);
-    return head ? `detached at ${head}` : "detached";
+    const label = head ? `detached at ${head}` : "detached";
+    return label !== title ? label : null;
   }
   if (worktree.branch && worktree.branch !== title) return worktree.branch;
   return worktree.name && worktree.name !== title ? worktree.name : null;

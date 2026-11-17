@@ -8,6 +8,8 @@ type Ranges = readonly (readonly [number, number])[] | undefined;
 const TAIL_SPAN = 20;
 const TAIL_FALLBACK = 12;
 
+const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
+
 /**
  * Where the kept tail starts: at the first separator inside the final stretch
  * of the string, so the tail reads as whole words
@@ -23,6 +25,9 @@ export function tailStart(text: string): number {
   }
   let split = text.length - TAIL_FALLBACK;
   while (split < text.length - 1 && /\s/.test(text[split - 1]! + text[split]!)) split++;
+  // Never between the halves of a surrogate pair: an emoji in a custom title
+  // would draw as two broken glyphs, one on each side of the seam.
+  if (isLowSurrogate(text.charCodeAt(split))) split++;
   return split;
 }
 

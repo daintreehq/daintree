@@ -379,6 +379,11 @@ describe("getWorktreeQualifier", () => {
     expect(getWorktreeQualifier(createWorktree({ name: "x", branch: "x" }), "x")).toBeNull();
   });
 
+  it("keeps main's folder name as the qualifier when the custom title is its branch", () => {
+    const main = createWorktree({ isMainWorktree: true, name: "daintree", branch: "develop" });
+    expect(getWorktreeQualifier(main, "develop")).toBe("daintree");
+  });
+
   it("falls back to the worktree's own name when there is no branch to show", () => {
     const worktree = createWorktree({ name: "scratch", branch: undefined });
     expect(getWorktreeQualifier(worktree, "Scratch pad")).toBe("scratch");
@@ -396,5 +401,11 @@ describe("getWorktreeQualifier", () => {
     expect(getWorktreeQualifier({ ...detached, head: undefined }, "Release planning")).toBe(
       "detached"
     );
+  });
+
+  it("does not repeat a detached label the custom title already is", () => {
+    const detached = createWorktree({ isDetached: true, head: "0123456789abcdef" });
+    expect(getWorktreeQualifier(detached, "detached at 0123456")).toBeNull();
+    expect(getWorktreeQualifier({ ...detached, head: undefined }, "detached")).toBeNull();
   });
 });

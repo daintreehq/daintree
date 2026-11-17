@@ -215,9 +215,9 @@ export function QuickSwitcherItem({
             </span>
           )}
           {worktreeQualifier && (
-            // Bounded to half the line: a long branch beside a long custom title
-            // would otherwise take the whole row from the title.
-            <span className="flex min-w-0 max-w-[50%] font-mono text-xs text-text-secondary">
+            // Its own width, as before, capped at half the line: a long branch beside
+            // a long custom title would otherwise take the whole row from the title.
+            <span className="flex min-w-0 max-w-[50%] shrink-0 font-mono text-xs text-text-secondary">
               <span className="sr-only">, </span>
               <TailKeepingText
                 text={worktreeQualifier}
