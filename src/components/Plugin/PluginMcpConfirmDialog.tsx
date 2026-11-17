@@ -3,7 +3,7 @@ import { Callout } from "@/components/ui/Callout";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { afterCatch, ErrorBoundary } from "@/components/ErrorBoundary";
 import { usePluginMcpConfirmStore } from "@/store/pluginMcpConfirmStore";
 import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
 import type { BuiltInPluginCapability } from "@shared/types/plugin";
@@ -96,7 +96,7 @@ export function PluginMcpConfirmDialog() {
         variant="component"
         componentName="PluginMcpConfirmDialog"
         resetKeys={[resetKey]}
-        onError={() => usePluginMcpConfirmStore.getState().drop(resetKey)}
+        onError={afterCatch(() => usePluginMcpConfirmStore.getState().drop(resetKey))}
       >
         <ConfirmDialog
           isOpen={false}
@@ -127,7 +127,7 @@ export function PluginMcpConfirmDialog() {
       variant="component"
       componentName="PluginMcpConfirmDialog"
       resetKeys={[resetKey]}
-      onError={() => usePluginMcpConfirmStore.getState().drop(resetKey)}
+      onError={afterCatch(() => usePluginMcpConfirmStore.getState().drop(resetKey))}
     >
       <ConfirmDialog
         isOpen={true}

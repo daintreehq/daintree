@@ -6,7 +6,7 @@ import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { Badge } from "@/components/ui/badge";
 import { GitBranchPlus, Plus } from "@/components/icons";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { afterCatch, ErrorBoundary } from "@/components/ErrorBoundary";
 import { PluginProvenance } from "./PluginProvenance";
 import { usePluginAttribution } from "@/hooks/usePluginAttribution";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
@@ -443,7 +443,7 @@ export function PluginSendToAgentDialog() {
       variant="component"
       componentName="PluginSendToAgentDialog"
       resetKeys={[promptId ?? "null"]}
-      onError={() => dismissFailedUiPrompt(promptId)}
+      onError={afterCatch(() => dismissFailedUiPrompt(promptId))}
     >
       <SearchablePalette<SendToAgentRow>
         tier="command"

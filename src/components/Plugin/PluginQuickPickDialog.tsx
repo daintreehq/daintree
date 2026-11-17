@@ -8,7 +8,7 @@ import { CheckboxGlyph } from "@/components/ui/checkbox";
 import { isMac } from "@/lib/platform";
 import { PluginProvenance } from "./PluginProvenance";
 import { usePluginAttribution } from "@/hooks/usePluginAttribution";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { afterCatch, ErrorBoundary } from "@/components/ErrorBoundary";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { dismissFailedUiPrompt, usePluginPromptStore } from "@/store/pluginPromptStore";
 import type { PluginQuickPickItem } from "@shared/types/plugin";
@@ -230,7 +230,7 @@ export function PluginQuickPickDialog() {
       variant="component"
       componentName="PluginQuickPickDialog"
       resetKeys={[promptId ?? "null"]}
-      onError={() => dismissFailedUiPrompt(promptId)}
+      onError={afterCatch(() => dismissFailedUiPrompt(promptId))}
     >
       <SearchablePalette<PluginQuickPickItem>
         tier="command"

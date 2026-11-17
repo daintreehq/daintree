@@ -10,7 +10,7 @@
  * The dialogs are real; the surface they draw into throws while open when the
  * request's copy says "Explode", or for any request while `explodeAll` is set.
  */
-import { isValidElement, type ReactNode } from "react";
+import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -83,6 +83,9 @@ import { PanelLimitConfirmDialog } from "../Terminal/PanelLimitConfirmDialog";
 import { GitPullRebaseConfirmDialog } from "../Git/GitPullRebaseConfirmDialog";
 import { GitForcePushConfirmDialog } from "../Git/GitForcePushConfirmDialog";
 import { RecipeConflictDialog } from "../TerminalRecipe/RecipeConflictDialog";
+import { GitPushConfirmDialog } from "../Git/GitPushConfirmDialog";
+import { GitWorktreeOperationConfirmDialog } from "../Git/GitWorktreeOperationConfirmDialog";
+import { ErrorBoundary } from "../ErrorBoundary";
 import { __resetMcpConfirmStoreForTesting, requestMcpConfirmation } from "@/store/mcpConfirmStore";
 import {
   __resetPluginConfirmStoreForTesting,
@@ -96,11 +99,23 @@ import {
   __resetPluginCapabilityConfirmStoreForTesting,
   requestPluginCapabilityConsent,
 } from "@/store/pluginCapabilityConfirmStore";
-import { __resetPluginPromptStoreForTesting, enqueueUiPrompt } from "@/store/pluginPromptStore";
-import { usePanelLimitStore } from "@/store/panelLimitStore";
+import {
+  __resetPluginPromptStoreForTesting,
+  enqueueUiPrompt,
+  usePluginPromptStore,
+} from "@/store/pluginPromptStore";
+import {
+  declineFailedPanelLimitConfirmation,
+  usePanelLimitStore,
+  type PanelLimitConfirmRequest,
+} from "@/store/panelLimitStore";
 import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
+import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
+import { useGitWorktreeOperationConfirmStore } from "@/store/gitWorktreeOperationConfirmStore";
 import { useGitForcePushStore, type ForcePushRecovery } from "@/store/gitForcePushStore";
 import { useRecipeConflictStore } from "@/store/recipeConflictStore";
+import type { PluginUiPromptParams } from "@shared/types/pluginUiPrompt";
+import type { PluginPresetLaunchSummary } from "@shared/utils/agentPresetLaunchConsent";
 
 async function flush() {
   await act(async () => {
@@ -123,10 +138,11 @@ function shownText(): string | null {
 
 beforeEach(() => {
   surface.explodeAll = false;
-  // The force-push preview's load, which never answers here.
+  // The git dialogs' preview reads, which never answer here, so a dialog that
+  // is shown is shown on its loading state rather than on a failed read.
   Object.defineProperty(window, "electron", {
     configurable: true,
-    value: { git: { listRemoteCommits: () => new Promise(() => {}) } },
+    value: { git: new Proxy({}, { get: () => () => new Promise(() => {}) }) },
   });
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -140,6 +156,10 @@ afterEach(() => {
   __resetPluginPromptStoreForTesting();
   usePanelLimitStore.getState().resolveConfirmation(false);
   useGitPullRebaseConfirmStore.getState().resolveConfirmation(false);
+  useGitPushConfirmStore.getState().resolveConfirmation(null);
+  useGitWorktreeOperationConfirmStore.getState().resolveConfirmation(false);
+  const forcePush = useGitForcePushStore.getState().pendingConfirm;
+  if (forcePush) useGitForcePushStore.getState().resolveConfirmation(forcePush.requestId, false);
   useRecipeConflictStore.getState().resolveConflict("cancel");
   vi.restoreAllMocks();
 });
@@ -222,18 +242,33 @@ describe("queued dialogs answer the request whose content threw and show the nex
     expect(shownText()).toContain("do_thing");
   });
 
+  const preset: PluginPresetLaunchSummary = {
+    agentId: "claude",
+    agentName: "Claude",
+    presetId: "zai",
+    presetName: "Z.ai",
+    source: "project",
+    args: [],
+    dangerousMode: "inherit",
+    skipsPermissions: false,
+    envNames: [],
+    fallbacks: [],
+    fallbackOnRateLimit: false,
+  };
+
   it.each([
-    ["a capability", {}],
-    ["an external site", { site: "example.com" }],
-  ])("plugin capability consent for %s", async (_label, extra) => {
+    ["a capability", () => ({ capability: "shell:exec" as const })],
+    ["an external site", () => ({ capability: "shell:exec" as const, site: "example.com" })],
+    ["a preset launch", () => ({ capability: "agent:launch-preset" as const, preset })],
+    ["restoring permissions", () => ({ restore: ["shell:exec" as const] })],
+  ])("plugin capability consent for %s", async (_label, branch) => {
     const request = (requestId: string, pluginDisplayName: string) =>
       requestPluginCapabilityConsent({
         requestId,
         pluginId: "acme.tools",
         pluginDisplayName,
-        capability: "shell:exec",
         declaredCapabilities: ["shell:exec"],
-        ...extra,
+        ...branch(),
       });
     render(<PluginCapabilityConfirmDialog />);
     let failed!: Promise<unknown>;
@@ -272,16 +307,20 @@ describe("queued dialogs answer the request whose content threw and show the nex
     expect(shownText()).toContain("Ship it?");
   });
 
-  it.each([
-    ["quick pick", PluginQuickPickDialog, { kind: "quickPick", items: [], options: {} }],
-    ["input box", PluginInputBoxDialog, { kind: "inputBox", options: {} }],
-  ] as const)("plugin %s prompt", async (_label, Dialog, params) => {
+  it.each<[string, () => ReactElement, () => PluginUiPromptParams]>([
+    [
+      "quick pick",
+      () => <PluginQuickPickDialog />,
+      () => ({ kind: "quickPick", items: [], options: {} }),
+    ],
+    ["input box", () => <PluginInputBoxDialog />, () => ({ kind: "inputBox", options: {} })],
+  ])("plugin %s prompt", async (_label, dialog, params) => {
     surface.explodeAll = true;
-    render(<Dialog />);
+    render(dialog());
     let failed!: Promise<unknown>;
     let next!: Promise<unknown>;
     act(() => {
-      failed = enqueueUiPrompt({ promptId: "p1", pluginId: "acme.tools", params });
+      failed = enqueueUiPrompt({ promptId: "p1", pluginId: "acme.tools", params: params() });
       // Another dialog's kind, so this one's failure must not touch it.
       next = enqueueUiPrompt({
         promptId: "p2",
@@ -292,7 +331,19 @@ describe("queued dialogs answer the request whose content threw and show the nex
     await flush();
 
     expect(await failed).toBeUndefined();
+    expect(usePluginPromptStore.getState().current?.promptId).toBe("p2");
     expect(await isPending(next)).toBe(true);
+
+    // The dialog comes back for its own kind's next prompt.
+    surface.explodeAll = false;
+    act(() => usePluginPromptStore.getState().resolveCurrent(true));
+    let healthy!: Promise<unknown>;
+    act(() => {
+      healthy = enqueueUiPrompt({ promptId: "p3", pluginId: "acme.tools", params: params() });
+    });
+    await flush();
+    expect(await isPending(healthy)).toBe(true);
+    expect(shownText()).not.toBeNull();
   });
 });
 
@@ -323,6 +374,21 @@ describe("single-slot dialogs answer a request whose content throws on its first
       Dialog: GitPullRebaseConfirmDialog,
       request: () => useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo"),
       declined: false,
+    },
+    {
+      name: "push",
+      Dialog: GitPushConfirmDialog,
+      request: () => useGitPushConfirmStore.getState().requestConfirmation("/repo"),
+      declined: { confirmed: false, review: null },
+    },
+    {
+      name: "worktree operation",
+      Dialog: GitWorktreeOperationConfirmDialog,
+      request: () =>
+        useGitWorktreeOperationConfirmStore
+          .getState()
+          .requestConfirmation({ kind: "merge-base", cwd: "/repo", baseBranch: "main" }),
+      declined: { confirmed: false, pinned: null },
     },
     {
       name: "force push",
@@ -367,6 +433,58 @@ describe("single-slot dialogs answer a request whose content throws on its first
     });
     await flush();
     expect(await isPending(third)).toBe(true);
+    expect(shownText()).not.toBeNull();
+  });
+});
+
+describe("a panel limit host that fails above its own boundary", () => {
+  const healthy: PanelLimitConfirmRequest = {
+    currentCount: 20,
+    requestedCount: 2,
+    allowedCount: 2,
+    confirmationLimit: 20,
+    hardLimit: 32,
+  };
+
+  /** The dialog behind ModalHostLayer's boundary, wired as the layer wires it. */
+  function Host() {
+    const requestSeq = usePanelLimitStore((s) => s.requestSeq);
+    return (
+      <ErrorBoundary
+        variant="component"
+        componentName="PanelLimitConfirmDialog"
+        resetKeys={[requestSeq]}
+        onError={() => declineFailedPanelLimitConfirmation(requestSeq)}
+      >
+        <PanelLimitConfirmDialog />
+      </ErrorBoundary>
+    );
+  }
+
+  it("leaves the request its caller makes next alone when the unmounted dialog's cleanup runs", async () => {
+    // Its copy is read in the host itself, above the dialog's own boundary.
+    const broken = {
+      ...healthy,
+      get source(): never {
+        throw new Error("unreadable request");
+      },
+    };
+    render(<Host />);
+    await flush();
+
+    let retried: Promise<boolean> | null = null;
+    let first!: Promise<boolean>;
+    act(() => {
+      first = usePanelLimitStore.getState().requestConfirmation(broken);
+      void first.then(() => {
+        retried = usePanelLimitStore.getState().requestConfirmation(healthy);
+      });
+    });
+    await flush();
+
+    expect(await first).toBe(false);
+    expect(retried).not.toBeNull();
+    expect(await isPending(retried!)).toBe(true);
     expect(shownText()).not.toBeNull();
   });
 });

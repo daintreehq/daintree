@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Callout } from "@/components/ui/Callout";
 import { Button } from "@/components/ui/button";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { afterCatch, ErrorBoundary } from "@/components/ErrorBoundary";
 import { PluginProvenance } from "./PluginProvenance";
 import { usePluginAttribution } from "@/hooks/usePluginAttribution";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
@@ -322,7 +322,7 @@ export function PluginRunRecipeDialog() {
         variant="component"
         componentName="PluginRunRecipeDialog"
         resetKeys={[promptId ?? "null"]}
-        onError={() => dismissFailedUiPrompt(promptId)}
+        onError={afterCatch(() => dismissFailedUiPrompt(promptId))}
       >
         <ConfirmDialog
           isOpen={false}
@@ -341,7 +341,7 @@ export function PluginRunRecipeDialog() {
       variant="component"
       componentName="PluginRunRecipeDialog"
       resetKeys={[promptId ?? "null"]}
-      onError={() => dismissFailedUiPrompt(promptId)}
+      onError={afterCatch(() => dismissFailedUiPrompt(promptId))}
     >
       <ConfirmDialog
         isOpen={true}

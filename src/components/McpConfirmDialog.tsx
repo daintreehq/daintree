@@ -19,7 +19,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { afterCatch, ErrorBoundary } from "@/components/ErrorBoundary";
 import { WorktreeDeleteNotes } from "@/components/Worktree/WorktreeDeleteNotes";
 import { isCautionPreviewLine, stripCautionPrefix } from "@/lib/mcpPreviewLines";
 import {
@@ -526,7 +526,7 @@ export function McpConfirmDialog() {
         variant="component"
         componentName="McpConfirmDialog"
         resetKeys={[resetKey]}
-        onError={() => declineFailedMcpConfirmation(resetKey)}
+        onError={afterCatch(() => declineFailedMcpConfirmation(resetKey))}
       >
         <ConfirmDialog
           isOpen={false}
@@ -784,7 +784,7 @@ export function McpConfirmDialog() {
       variant="component"
       componentName="McpConfirmDialog"
       resetKeys={[resetKey]}
-      onError={() => declineFailedMcpConfirmation(resetKey)}
+      onError={afterCatch(() => declineFailedMcpConfirmation(resetKey))}
     >
       {isDestructive ? (
         <ConfirmDialog

@@ -233,6 +233,8 @@ describe.each([
     declined: false,
   },
 ])("$name decline on a failed render", ({ request, seq, decline, declined }) => {
+  afterEach(() => decline(seq()));
+
   it("answers the pending request with the decline", async () => {
     const pending = request();
     decline(seq());

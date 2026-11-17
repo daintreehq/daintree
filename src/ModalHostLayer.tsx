@@ -12,7 +12,7 @@ import type { PluginDeepLinkState } from "./hooks/app";
 import type { SettingsTab } from "./components/Settings";
 import type { NonGitFolderStep } from "./components/Project/NonGitFolderDialog";
 import type { PluginUiPromptParams } from "@shared/types/pluginUiPrompt";
-import { ErrorBoundary } from "./components/ErrorBoundary";
+import { afterCatch, ErrorBoundary } from "./components/ErrorBoundary";
 import { StopProjectConfirmDialog } from "./components/Project/StopProjectConfirmDialog";
 import { ProjectSwitcherModalLayer } from "./components/Project/ProjectSwitcherModalLayer";
 import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
@@ -205,7 +205,7 @@ function PluginPromptHost({
       variant="component"
       componentName={componentName}
       resetKeys={[promptId]}
-      onError={() => dismissFailedUiPrompt(promptId)}
+      onError={afterCatch(() => dismissFailedUiPrompt(promptId))}
     >
       <Suspense fallback={null}>{children}</Suspense>
     </ErrorBoundary>
@@ -432,7 +432,7 @@ export function ModalHostLayer({
           variant="component"
           componentName="McpConfirmDialog"
           resetKeys={[mcpConfirmResetKey]}
-          onError={() => declineFailedMcpConfirmation(mcpConfirmResetKey)}
+          onError={afterCatch(() => declineFailedMcpConfirmation(mcpConfirmResetKey))}
         >
           <Suspense fallback={null}>
             <LazyMcpConfirmDialog />
@@ -444,7 +444,7 @@ export function ModalHostLayer({
           variant="component"
           componentName="PluginConfirmDialog"
           resetKeys={[pluginConfirmResetKey]}
-          onError={() => usePluginConfirmStore.getState().drop(pluginConfirmResetKey)}
+          onError={afterCatch(() => usePluginConfirmStore.getState().drop(pluginConfirmResetKey))}
         >
           <Suspense fallback={null}>
             <LazyPluginConfirmDialog />
@@ -456,7 +456,9 @@ export function ModalHostLayer({
           variant="component"
           componentName="PluginMcpConfirmDialog"
           resetKeys={[pluginMcpConfirmResetKey]}
-          onError={() => usePluginMcpConfirmStore.getState().drop(pluginMcpConfirmResetKey)}
+          onError={afterCatch(() =>
+            usePluginMcpConfirmStore.getState().drop(pluginMcpConfirmResetKey)
+          )}
         >
           <Suspense fallback={null}>
             <LazyPluginMcpConfirmDialog />
@@ -468,7 +470,9 @@ export function ModalHostLayer({
           variant="component"
           componentName="PluginArchiveInstallConfirmDialog"
           resetKeys={[pluginArchiveInstallResetKey]}
-          onError={() => usePluginArchiveInstallStore.getState().drop(pluginArchiveInstallResetKey)}
+          onError={afterCatch(() =>
+            usePluginArchiveInstallStore.getState().drop(pluginArchiveInstallResetKey)
+          )}
         >
           <Suspense fallback={null}>
             <LazyPluginArchiveInstallConfirmDialog />
@@ -495,7 +499,7 @@ export function ModalHostLayer({
           variant="component"
           componentName="LayoutApplyConfirmDialog"
           resetKeys={[layoutApplyConfirmKey]}
-          onError={() => declineFailedLayoutApplyConfirmation(layoutApplyConfirmKey)}
+          onError={afterCatch(() => declineFailedLayoutApplyConfirmation(layoutApplyConfirmKey))}
         >
           <Suspense fallback={null}>
             <LazyLayoutApplyConfirmDialog />
@@ -544,9 +548,9 @@ export function ModalHostLayer({
           variant="component"
           componentName="PluginCapabilityConfirmDialog"
           resetKeys={[pluginCapabilityConfirmResetKey]}
-          onError={() =>
+          onError={afterCatch(() =>
             usePluginCapabilityConfirmStore.getState().drop(pluginCapabilityConfirmResetKey)
-          }
+          )}
         >
           <Suspense fallback={null}>
             <LazyPluginCapabilityConfirmDialog />

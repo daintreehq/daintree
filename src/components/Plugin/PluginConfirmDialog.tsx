@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { afterCatch, ErrorBoundary } from "@/components/ErrorBoundary";
 import { usePluginConfirmStore, type PluginConfirmationDecision } from "@/store/pluginConfirmStore";
 import { usePluginAttribution } from "@/hooks/usePluginAttribution";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
@@ -54,7 +54,7 @@ export function PluginConfirmDialog() {
         variant="component"
         componentName="PluginConfirmDialog"
         resetKeys={[resetKey]}
-        onError={() => usePluginConfirmStore.getState().drop(resetKey)}
+        onError={afterCatch(() => usePluginConfirmStore.getState().drop(resetKey))}
       >
         <ConfirmDialog
           isOpen={false}
@@ -79,7 +79,7 @@ export function PluginConfirmDialog() {
       variant="component"
       componentName="PluginConfirmDialog"
       resetKeys={[resetKey]}
-      onError={() => usePluginConfirmStore.getState().drop(resetKey)}
+      onError={afterCatch(() => usePluginConfirmStore.getState().drop(resetKey))}
     >
       <ConfirmDialog
         isOpen={true}

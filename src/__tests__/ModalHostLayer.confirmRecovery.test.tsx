@@ -7,7 +7,7 @@
  * that rejects.
  */
 import { lazy, type ComponentProps, type ComponentType } from "react";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const chunks = vi.hoisted(() => ({
@@ -144,6 +144,7 @@ import { __resetMcpConfirmStoreForTesting, requestMcpConfirmation } from "@/stor
 import {
   __resetPluginConfirmStoreForTesting,
   requestPluginConfirmation,
+  usePluginConfirmStore,
 } from "@/store/pluginConfirmStore";
 import {
   __resetPluginMcpConfirmStoreForTesting,
@@ -488,6 +489,18 @@ afterEach(async () => {
   cancelLayoutApplyConfirmations();
   cancelRecipeRunConfirmations();
   cancelScheduleRunConfirmations();
+  // The stubbed dialogs have no unmount cleanup, so a test that failed part
+  // way would leave these waiting for the next one.
+  usePanelLimitStore.getState().resolveConfirmation(false);
+  useGitPushConfirmStore.getState().resolveConfirmation(null);
+  useGitPullRebaseConfirmStore.getState().resolveConfirmation(false);
+  useFileMutationConfirmStore.getState().resolveConfirmation(null);
+  useGitWorktreeOperationConfirmStore.getState().resolveConfirmation(false);
+  const forcePush = useGitForcePushStore.getState().pendingConfirm;
+  if (forcePush) useGitForcePushStore.getState().resolveConfirmation(forcePush.requestId, false);
+  useRecipeConflictStore.getState().resolveConflict("cancel");
+  useProjectSleepConfirmStore.getState().resolveConfirmation(false);
+  useWorktreeResourceTeardownConfirmStore.getState().resolveConfirmation(false);
   vi.restoreAllMocks();
 });
 
@@ -516,15 +529,73 @@ describe("ModalHostLayer confirm hosts whose chunk fails", () => {
     }
   );
 
-  it("works through a queue that built up behind a dialog that can't load", async () => {
+  it("works through a queue too long to settle inside the commits that caught it", async () => {
     breakChunk("LazyPluginConfirmDialog");
     render(<Layer />);
     await flush();
 
-    const queued = [0, 1, 2].map(() => HOSTS.PluginConfirmDialog!.request());
+    // Past React's limit of 50 nested updates, two of which each request costs.
+    const queued = Array.from({ length: 60 }, () => HOSTS.PluginConfirmDialog!.request());
     await flush();
 
-    await expect(Promise.all(queued)).resolves.toEqual(["rejected", "rejected", "rejected"]);
+    const answers = await Promise.all(queued);
+    expect(answers.every((answer) => answer === "rejected")).toBe(true);
+  });
+
+  /** A loaded plugin confirmation dialog that can't render one action. */
+  function PluginConfirmThatFailsOn(actionTitle: string) {
+    return function PluginConfirm() {
+      const current = usePluginConfirmStore((s) => s.current);
+      if (current === null) return null;
+      if (current.actionTitle === actionTitle) throw new Error("render failed");
+      return <div data-testid="plugin-confirm">{current.actionTitle}</div>;
+    };
+  }
+
+  function pluginConfirm(requestId: string, actionTitle: string) {
+    return requestPluginConfirmation({
+      requestId,
+      pluginId: "acme.tools",
+      actionId: "acme.tools.wipe",
+      actionTitle,
+      actionDescription: "Wipes it.",
+      effectiveDanger: "confirm",
+      argsSummary: "",
+    });
+  }
+
+  it("answers only the request that failed and shows the one behind it", async () => {
+    chunks.impl.set("LazyPluginConfirmDialog", PluginConfirmThatFailsOn("Explode"));
+    render(<Layer />);
+    let failed!: Promise<unknown>;
+    let next!: Promise<unknown>;
+    act(() => {
+      failed = pluginConfirm("a", "Explode");
+      next = pluginConfirm("b", "Wipe cache");
+    });
+    await flush();
+
+    expect(await failed).toBe("rejected");
+    expect(await isPending(next)).toBe(true);
+    expect(screen.getByTestId("plugin-confirm").textContent).toBe("Wipe cache");
+  });
+
+  it("settles the request the failed render showed, not whichever is in front when it runs", async () => {
+    chunks.impl.set("LazyPluginConfirmDialog", PluginConfirmThatFailsOn("Explode"));
+    render(<Layer />);
+    let failed!: Promise<unknown>;
+    let next!: Promise<unknown>;
+    act(() => {
+      failed = pluginConfirm("a", "Explode");
+      next = pluginConfirm("b", "Wipe cache");
+    });
+    // Answered some other way after the failure was caught, before it settles.
+    act(() => usePluginConfirmStore.getState().resolveCurrent("approved"));
+    await flush();
+
+    expect(await failed).toBe("approved");
+    expect(await isPending(next)).toBe(true);
+    expect(usePluginConfirmStore.getState().current?.requestId).toBe("b");
   });
 
   it("moves a stalled archive install queue on, though nothing awaits it", async () => {
@@ -550,15 +621,16 @@ describe("ModalHostLayer confirm hosts whose chunk fails", () => {
 
   it("leaves a plugin prompt of another kind alone when one prompt dialog's chunk fails", async () => {
     breakChunk("LazyPluginQuickPickDialog");
-    render(<Layer />);
-    await flush();
-
     let confirm!: Promise<unknown>;
     let quickPick!: Promise<unknown>;
     act(() => {
       confirm = HOSTS.PluginConfirmPromptDialog!.request();
       quickPick = HOSTS.PluginQuickPickDialog!.request();
     });
+    // In front while the quick pick chunk fails on the layer's first load.
+    render(<Layer />);
+    await flush();
+    expect(usePluginPromptStore.getState().current?.params.kind).toBe("confirm");
     expect(await isPending(confirm)).toBe(true);
     expect(await isPending(quickPick)).toBe(true);
 

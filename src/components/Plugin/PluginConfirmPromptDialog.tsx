@@ -1,6 +1,6 @@
 import { useCallback, useRef } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { afterCatch, ErrorBoundary } from "@/components/ErrorBoundary";
 import { dismissFailedUiPrompt, usePluginPromptStore } from "@/store/pluginPromptStore";
 import { PluginProvenance } from "./PluginProvenance";
 import { usePluginAttribution } from "@/hooks/usePluginAttribution";
@@ -57,7 +57,7 @@ export function PluginConfirmPromptDialog() {
         variant="component"
         componentName="PluginConfirmPromptDialog"
         resetKeys={[resetKey]}
-        onError={() => dismissFailedUiPrompt(resetKey)}
+        onError={afterCatch(() => dismissFailedUiPrompt(resetKey))}
       >
         <ConfirmDialog
           isOpen={false}
@@ -78,7 +78,7 @@ export function PluginConfirmPromptDialog() {
       variant="component"
       componentName="PluginConfirmPromptDialog"
       resetKeys={[resetKey]}
-      onError={() => dismissFailedUiPrompt(resetKey)}
+      onError={afterCatch(() => dismissFailedUiPrompt(resetKey))}
     >
       <ConfirmDialog
         isOpen={true}

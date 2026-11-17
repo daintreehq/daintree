@@ -6,7 +6,7 @@ import { PluginProvenance } from "./PluginProvenance";
 import type { PluginUiPromptWaited } from "@shared/types/pluginUiPrompt";
 import { usePluginAttribution } from "@/hooks/usePluginAttribution";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { afterCatch, ErrorBoundary } from "@/components/ErrorBoundary";
 import { dismissFailedUiPrompt, usePluginPromptStore } from "@/store/pluginPromptStore";
 import type { PluginInputBoxOptions } from "@shared/types/plugin";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
@@ -143,7 +143,7 @@ export function PluginInputBoxDialog() {
       variant="component"
       componentName="PluginInputBoxDialog"
       resetKeys={[inputBox ? inputBox.promptId : "null"]}
-      onError={() => dismissFailedUiPrompt(inputBox ? inputBox.promptId : null)}
+      onError={afterCatch(() => dismissFailedUiPrompt(inputBox ? inputBox.promptId : null))}
     >
       <AppDialog
         isOpen={isInputBox}
