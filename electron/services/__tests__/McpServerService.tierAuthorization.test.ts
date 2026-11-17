@@ -1561,11 +1561,6 @@ describe("McpServerService", () => {
         title: "Toggle Portal",
         description: "Show or hide the portal",
       }),
-      createManifestEntry({
-        id: "portal.toggleDevDashboard" as ActionId,
-        title: "Toggle Dev Dashboard",
-        description: "Show or hide the portal dev dashboard",
-      }),
       // Full-only (#12116). The git and forge writes and forge openers that
       // follow are on neither in-app set; they stay in the fixture so their
       // absence below is the tier gate's doing.

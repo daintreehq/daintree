@@ -179,31 +179,6 @@ describe("PortalDock — context menu over the native page view", () => {
   });
 });
 
-describe("PortalDock — focus after hiding the dev servers dashboard", () => {
-  beforeEach(() => {
-    usePortalStore.setState({ isOpen: true, showDevDashboard: true });
-  });
-
-  it.each([
-    ["a click", 1, { preventScroll: true, focusVisible: false }],
-    ["the keyboard", 0, { preventScroll: true }],
-  ])("hands focus to the toolbar's dev servers toggle after %s", (_, detail, options) => {
-    renderDock();
-    const toggle = screen.getByRole("button", { name: "Dev servers" });
-    const focusSpy = vi.spyOn(toggle, "focus");
-    const hide = screen.getByRole("button", { name: "Hide dev servers" });
-    focus(hide);
-
-    act(() => fireEvent.click(hide, { detail }));
-
-    expect(screen.queryByRole("button", { name: "Hide dev servers" })).toBeNull();
-    expect(document.activeElement).toBe(toggle);
-    expect(focusSpy).toHaveBeenCalledWith(options);
-    expect(isTooltipSuppressedForElement(toggle)).toBe(true);
-    expect(toggle.getAttribute("aria-pressed")).toBe("false");
-  });
-});
-
 describe("PortalDock — focus after the dock closes", () => {
   let paneAccepts: boolean;
   const paneHandler = vi.fn(() => {
@@ -276,7 +251,7 @@ describe("PortalDock — focus after the dock closes", () => {
 
   it("restores focus on a store-driven close while the dock's chrome holds it", () => {
     render(<Workspace />);
-    focus(screen.getByRole("button", { name: "Dev servers" }));
+    focus(screen.getByRole("button", { name: "Close portal" }));
 
     act(() => usePortalStore.getState().toggle());
 

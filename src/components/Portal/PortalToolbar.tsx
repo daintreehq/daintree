@@ -5,7 +5,6 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
-  type Ref,
 } from "react";
 import { LayoutGroup } from "framer-motion";
 import {
@@ -20,7 +19,6 @@ import {
   PanelRight,
   Plus,
   RotateCw,
-  ServerCog,
   X,
 } from "lucide-react";
 import {
@@ -323,8 +321,6 @@ interface PortalToolbarProps {
   onOpenTabExternal?: (tabId: string) => void;
   onReloadTab?: (tabId: string) => void;
   enabledLinks: PortalLink[];
-  /** The dev servers toggle, which takes focus when the dashboard hides itself. */
-  devServersButtonRef?: Ref<HTMLButtonElement>;
 }
 
 export function PortalToolbar({
@@ -349,11 +345,8 @@ export function PortalToolbar({
   onOpenTabExternal,
   onReloadTab,
   enabledLinks,
-  devServersButtonRef,
 }: PortalToolbarProps) {
   const reorderTabs = usePortalStore((s) => s.reorderTabs);
-  const showDevDashboard = usePortalStore((s) => s.showDevDashboard);
-  const toggleDevDashboard = usePortalStore((s) => s.toggleDevDashboard);
   const closePortalShortcut = useEffectiveCombo("panel.togglePortal");
   const newTabShortcut = useEffectiveCombo("portal.newTab");
   const closePortalAriaShortcut = useAriaKeyshortcuts("panel.togglePortal");
@@ -639,23 +632,6 @@ export function PortalToolbar({
 
         <div className="flex-1" />
 
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              ref={devServersButtonRef}
-              type="button"
-              onClick={toggleDevDashboard}
-              aria-label="Dev servers"
-              aria-pressed={showDevDashboard}
-              className={iconButtonClass}
-            >
-              <ServerCog className={PANE_TOOLBAR_ICON_CLASS} />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {showDevDashboard ? "Hide dev servers" : "Show dev servers"}
-          </TooltipContent>
-        </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
             <button
