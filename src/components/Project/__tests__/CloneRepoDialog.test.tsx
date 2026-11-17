@@ -613,11 +613,24 @@ describe("CloneRepoDialog", () => {
       fireEvent.change(name, { target: { value: "あ".repeat(100) } });
       expect(name.getAttribute("aria-invalid")).toBe("true");
       const describedBy = name.getAttribute("aria-describedby");
-      expect(describedBy && document.getElementById(describedBy)?.textContent).toContain(
-        "255 bytes max"
-      );
+      const message = describedBy ? document.getElementById(describedBy)?.textContent : "";
+      expect(message).toMatch(/255/);
+      expect(message).toMatch(/byte/i);
 
       fireEvent.change(name, { target: { value: "あ".repeat(85) } });
+      expect(name.getAttribute("aria-invalid")).not.toBe("true");
+    } finally {
+      _resetHostPlatformForTests();
+    }
+  });
+
+  it("accepts the same 300-byte folder name on a macOS host", () => {
+    setHostPlatformInfo({ platform: "darwin" });
+    try {
+      render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+      const name = screen.getByLabelText(/^name$/i);
+
+      fireEvent.change(name, { target: { value: "あ".repeat(100) } });
       expect(name.getAttribute("aria-invalid")).not.toBe("true");
     } finally {
       _resetHostPlatformForTests();

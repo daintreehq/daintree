@@ -366,13 +366,17 @@ describe("MoveOrRenameProjectDialog", () => {
         target: { value: "あ".repeat(100) },
       });
       expect(confirmButton().getAttribute("aria-disabled")).toBe("true");
-      await new Promise((r) => setTimeout(r, 0));
+      // Past the preview debounce with the bad name still in the field.
+      await new Promise((r) => setTimeout(r, 400));
       expect(previewRelocation).not.toHaveBeenCalled();
 
       fireEvent.change(screen.getByTestId("relocate-folder-input"), {
         target: { value: "あ".repeat(85) },
       });
       await waitFor(() => expect(previewRelocation).toHaveBeenCalledTimes(1));
+      expect(previewRelocation).toHaveBeenCalledWith(
+        expect.objectContaining({ newPath: expect.stringContaining("あ".repeat(85)) })
+      );
     } finally {
       _resetHostPlatformForTests();
     }

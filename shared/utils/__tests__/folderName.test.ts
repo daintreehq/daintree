@@ -1,4 +1,4 @@
-import { afterEach, describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
 import { folderNameLengthError, validateFolderName } from "../folderName.js";
 
 describe("validateFolderName", () => {
@@ -135,10 +135,19 @@ describe("validateFolderName", () => {
 
 describe("validateFolderName byte limits", () => {
   const cjk = (count: number) => "あ".repeat(count);
-  const TOO_LONG = /^Folder name is too long \(255 bytes max/;
+  const TOO_LONG = /^Folder name is too long.*255.*byte/i;
+
+  // `vi.unstubAllGlobals` would also drop the globals the setup file stubbed.
+  const processDescriptor = Object.getOwnPropertyDescriptor(globalThis, "process")!;
+  const setProcess = (value: unknown) =>
+    Object.defineProperty(globalThis, "process", {
+      value,
+      configurable: true,
+      writable: true,
+    });
 
   afterEach(() => {
-    vi.unstubAllGlobals();
+    Object.defineProperty(globalThis, "process", processDescriptor);
   });
 
   describe("on Linux", () => {
@@ -197,19 +206,23 @@ describe("validateFolderName byte limits", () => {
 
   describe("without an explicit platform", () => {
     it("follows this process's platform", () => {
-      vi.stubGlobal("process", { platform: "linux" });
+      setProcess({ platform: "linux" });
       expect(validateFolderName(cjk(100))).toMatch(TOO_LONG);
-      vi.stubGlobal("process", { platform: "darwin" });
+      setProcess({ platform: "darwin" });
       expect(validateFolderName(cjk(100))).toBeNull();
     });
 
     it("lets an explicit platform win over this process's", () => {
-      vi.stubGlobal("process", { platform: "linux" });
+      setProcess({ platform: "linux" });
       expect(validateFolderName(cjk(100), { platform: "darwin" })).toBeNull();
     });
 
+    it("applies only the character limit to a platform it doesn't know", () => {
+      expect(validateFolderName(cjk(100), { platform: "freebsd" })).toBeNull();
+    });
+
     it("applies only the character limit when no platform is known", () => {
-      vi.stubGlobal("process", undefined);
+      setProcess(undefined);
       expect(validateFolderName(cjk(100))).toBeNull();
       expect(validateFolderName("a".repeat(256))).toBe("Folder name is too long");
     });

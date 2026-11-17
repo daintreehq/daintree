@@ -11,7 +11,7 @@ describe("validateHostFolderName", () => {
 
   it("applies Linux's byte limit in a view bound to a Linux host", () => {
     setHostPlatformInfo({ platform: "linux" });
-    expect(validateHostFolderName(threeHundredBytes)).toMatch(/too long \(255 bytes max/);
+    expect(validateHostFolderName(threeHundredBytes)).toMatch(/too long.*255.*byte/i);
   });
 
   it("counts characters in a view bound to a macOS host", () => {
