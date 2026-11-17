@@ -82,6 +82,7 @@ describe("PluginUpdateCheckService", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
   });
 
@@ -141,16 +142,221 @@ describe("PluginUpdateCheckService", () => {
     expect(storeState.value.lastCheckedAt).not.toBeNull();
   });
 
-  it("records lastCheckedAt even when every check fails (no retry storm)", async () => {
+  it("records lastCheckedAt when only some checks fail (the pass still learned something)", async () => {
     storeState.value = { enabled: true, lastCheckedAt: null };
-    pluginServiceMock.listPlugins.mockReturnValue([urlPlugin("pub.a")]);
-    pluginServiceMock.checkForUpdate.mockRejectedValue(new Error("network"));
+    pluginServiceMock.listPlugins.mockReturnValue([urlPlugin("pub.a"), urlPlugin("pub.b")]);
+    pluginServiceMock.checkForUpdate.mockImplementation(async (id: string) =>
+      id === "pub.a" ? { status: "fetch-failed", message: "net" } : { status: "up-to-date" }
+    );
 
     const svc = new PluginUpdateCheckService();
     await svc._checkNowForTest();
 
-    expect(broadcastMock).not.toHaveBeenCalled();
     expect(storeState.value.lastCheckedAt).not.toBeNull();
+  });
+
+  describe("offline passes", () => {
+    const HOUR = 60 * 60 * 1000;
+    const DAY = 24 * HOUR;
+    const START = new Date("2026-01-10T12:00:00Z").getTime();
+
+    // Only Date is faked: the passes are plain promise chains that need no timers.
+    const freezeClock = () => vi.useFakeTimers({ toFake: ["Date"] });
+    const advance = (ms: number) => vi.setSystemTime(Date.now() + ms);
+    const goOffline = () =>
+      pluginServiceMock.checkForUpdate.mockRejectedValue(new Error("network down"));
+    const goOnline = () =>
+      pluginServiceMock.checkForUpdate.mockResolvedValue({ status: "up-to-date" });
+    const dueSetup = (lastCheckedAt: number | null = START - 2 * DAY) => {
+      freezeClock();
+      vi.setSystemTime(START);
+      storeState.value = { enabled: true, lastCheckedAt };
+      pluginServiceMock.listPlugins.mockReturnValue([urlPlugin("pub.a"), urlPlugin("pub.b")]);
+      return new PluginUpdateCheckService();
+    };
+
+    it("leaves lastCheckedAt alone when every check fails", async () => {
+      const staleAt = START - 2 * DAY;
+      const svc = dueSetup(staleAt);
+      goOffline();
+
+      await svc.maybeRunDue("Periodic");
+
+      expect(pluginServiceMock.checkForUpdate).toHaveBeenCalledTimes(2);
+      expect(storeState.value.lastCheckedAt).toBe(staleAt);
+      expect(broadcastMock).not.toHaveBeenCalled();
+    });
+
+    it("recovers on a later idle tick once connectivity returns, without waiting a day", async () => {
+      const svc = dueSetup();
+      goOffline();
+      await svc.maybeRunDue("Initial");
+      pluginServiceMock.checkForUpdate.mockClear();
+
+      // The hourly tick after reconnecting finds the update.
+      goOnline();
+      pluginServiceMock.checkForUpdate.mockImplementation(async (id: string) =>
+        id === "pub.a" ? available("pub.a", "2.0.0") : { status: "up-to-date" }
+      );
+      advance(HOUR);
+      await svc.maybeRunDue("Periodic");
+
+      expect(pluginServiceMock.checkForUpdate).toHaveBeenCalledTimes(2);
+      expect(svc.getLatest()?.signature).toBe("pub.a@2.0.0");
+      expect(broadcastMock).toHaveBeenCalledTimes(1);
+      expect(storeState.value.lastCheckedAt).toBe(Date.now());
+
+      // The recovered pass is the day's check, so the daily gate applies again.
+      pluginServiceMock.checkForUpdate.mockClear();
+      advance(HOUR);
+      await svc.maybeRunDue("Periodic");
+      expect(pluginServiceMock.checkForUpdate).not.toHaveBeenCalled();
+    });
+
+    it("holds off retrying until the backoff window has passed", async () => {
+      const svc = dueSetup();
+      goOffline();
+      await svc.maybeRunDue("Initial");
+      pluginServiceMock.checkForUpdate.mockClear();
+
+      // A tick (or a wake) right after the failure must not hit the network again.
+      await svc.maybeRunDue("Resume");
+      advance(10 * 60 * 1000);
+      await svc.maybeRunDue("Periodic");
+      expect(pluginServiceMock.checkForUpdate).not.toHaveBeenCalled();
+
+      advance(HOUR);
+      await svc.maybeRunDue("Periodic");
+      expect(pluginServiceMock.checkForUpdate).toHaveBeenCalled();
+    });
+
+    it("keeps repeated failures rate-limited: waits grow, never shrink, and stay under a day", async () => {
+      const svc = dueSetup();
+      goOffline();
+
+      await svc.maybeRunDue("Periodic");
+
+      // After each failed pass, probe for the smallest wait that lets the next
+      // one run. The probe that gets through is itself that next (failing) pass.
+      const waits: number[] = [];
+      const step = 5 * 60 * 1000;
+      for (let pass = 0; pass < 8; pass++) {
+        let waited = 0;
+        for (;;) {
+          pluginServiceMock.checkForUpdate.mockClear();
+          await svc.maybeRunDue("Periodic");
+          if (pluginServiceMock.checkForUpdate.mock.calls.length > 0) break;
+          advance(step);
+          waited += step;
+          expect(waited).toBeLessThan(DAY);
+        }
+        waits.push(waited);
+      }
+
+      for (let i = 1; i < waits.length; i++) {
+        expect(waits[i]).toBeGreaterThanOrEqual(waits[i - 1]);
+      }
+      expect(waits[1]).toBeGreaterThan(waits[0]);
+      expect(Math.max(...waits)).toBeLessThan(DAY);
+      expect(waits[waits.length - 1]).toBe(waits[waits.length - 2]);
+      expect(storeState.value.lastCheckedAt).toBe(START - 2 * DAY);
+    });
+
+    it("treats a pass that throws before checking anything the same way", async () => {
+      const svc = dueSetup();
+      pluginServiceMock.listPlugins.mockImplementation(() => {
+        throw new Error("plugin service not ready");
+      });
+
+      await svc.maybeRunDue("Initial");
+      expect(storeState.value.lastCheckedAt).toBe(START - 2 * DAY);
+
+      pluginServiceMock.listPlugins.mockReturnValue([urlPlugin("pub.a")]);
+      pluginServiceMock.checkForUpdate.mockClear();
+      await svc.maybeRunDue("Periodic");
+      expect(pluginServiceMock.checkForUpdate).not.toHaveBeenCalled();
+    });
+
+    it("treats an unavailable catalog on every install as an offline pass", async () => {
+      const svc = dueSetup();
+      pluginServiceMock.listPlugins.mockReturnValue([
+        urlPlugin("pub.a", { source: "catalog", originalUrl: null, archiveHash: null }),
+      ]);
+      pluginServiceMock.checkForUpdate.mockResolvedValue({
+        status: "catalog-unavailable",
+        catalog: "unavailable",
+        failure: "unreachable",
+      });
+
+      await svc.maybeRunDue("Periodic");
+
+      expect(storeState.value.lastCheckedAt).toBe(START - 2 * DAY);
+    });
+
+    it("counts a pass with nothing to check as conclusive", async () => {
+      const svc = dueSetup();
+      pluginServiceMock.listPlugins.mockReturnValue([]);
+
+      await svc.maybeRunDue("Periodic");
+
+      expect(storeState.value.lastCheckedAt).toBe(Date.now());
+    });
+
+    it("keeps the cached offer through an offline pass", async () => {
+      const svc = dueSetup();
+      pluginServiceMock.checkForUpdate.mockImplementation(async (id: string) =>
+        id === "pub.a" ? available("pub.a", "2.0.0") : { status: "up-to-date" }
+      );
+      await svc._checkNowForTest();
+      const cached = svc.getLatest();
+      expect(cached).not.toBeNull();
+
+      goOffline();
+      await svc._checkNowForTest();
+
+      expect(svc.getLatest()).toBe(cached);
+    });
+
+    it("starts over after the user turns the check off and on", async () => {
+      const svc = dueSetup();
+      goOffline();
+      await svc.maybeRunDue("Initial");
+      pluginServiceMock.checkForUpdate.mockClear();
+
+      try {
+        svc.updateSettings({ enabled: false });
+        svc.updateSettings({ enabled: true });
+        await svc.maybeRunDue("Initial");
+
+        expect(pluginServiceMock.checkForUpdate).toHaveBeenCalled();
+      } finally {
+        await svc.dispose();
+      }
+    });
+
+    it("does not arm a backoff when the check was turned off during the failing pass", async () => {
+      const svc = dueSetup();
+      pluginServiceMock.listPlugins.mockReturnValue([urlPlugin("pub.a")]);
+      let rejectCheck: ((e: Error) => void) | undefined;
+      pluginServiceMock.checkForUpdate.mockImplementation(
+        () =>
+          new Promise((_res, rej) => {
+            rejectCheck = rej;
+          })
+      );
+      const pass = svc.maybeRunDue("Initial");
+      await vi.waitFor(() => expect(rejectCheck).toBeDefined());
+      storeState.value = { enabled: false, lastCheckedAt: storeState.value.lastCheckedAt };
+      rejectCheck?.(new Error("network down"));
+      await pass;
+
+      storeState.value = { enabled: true, lastCheckedAt: storeState.value.lastCheckedAt };
+      pluginServiceMock.checkForUpdate.mockReset();
+      goOffline();
+      await svc.maybeRunDue("Periodic");
+
+      expect(pluginServiceMock.checkForUpdate).toHaveBeenCalled();
+    });
   });
 
   it("skips a due pass while the user is active (below the idle threshold)", async () => {
