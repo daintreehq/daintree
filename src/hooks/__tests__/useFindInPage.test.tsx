@@ -1206,13 +1206,17 @@ describe("useFindInPage against Electron's find sessions", () => {
     act(() => result.current.setQuery("FIND"));
     a.flush();
     expect(result.current.matchCount).toBe(4);
-    act(() => result.current.goNext());
 
     rerender({ webview: b.webview });
     const firstOnB = renders.find((r) => r.webview === b.webview);
     expect(firstOnB?.snapshot).toEqual({ activeMatch: 0, matchCount: 0, isPending: true });
 
-    a.flush();
+    // Under the very id B's search holds, so only a detached listener keeps it out.
+    act(() => {
+      a.webview._emit("found-in-page", {
+        result: { requestId: 1, activeMatchOrdinal: 1, matches: 9, finalUpdate: true },
+      });
+    });
     expect(result.current.matchCount).toBe(0);
     expect(result.current.isPending).toBe(true);
     b.flush();
@@ -1238,6 +1242,52 @@ describe("useFindInPage against Electron's find sessions", () => {
 
     rerender({ ready: false });
     expect(renders.find((r) => !r.ready)?.matchCount).toBe(0);
+  });
+
+  it("asks afresh when Enter lands during a delayed search for older text", () => {
+    const { webview, flush } = createSessionWebview((text) => (text === "foo" ? 3 : 1));
+    // Chromium holds a new search for a query under four characters for 400ms,
+    // and a step landing meanwhile runs that search and is handed its id.
+    const sessionFind = webview.findInPage.getMockImplementation()!;
+    let delayedId: number | null = null;
+    webview.findInPage.mockImplementation((text: string, opts: { findNext?: boolean }) => {
+      if (!opts.findNext && delayedId !== null) {
+        const id = delayedId;
+        delayedId = null;
+        return id;
+      }
+      const id = sessionFind(text, opts);
+      if (opts.findNext) delayedId = text.length < 4 ? id : null;
+      return id;
+    });
+    const { result, rerender } = renderHook(
+      ({ ready }) => {
+        const state = useFindInPage("panel-1", webview, ready, true);
+        const { setQuery } = state;
+        // A keystroke landing after the ready commit, before its resume effect,
+        // which then asks for the older "foo".
+        useLayoutEffect(() => {
+          if (ready) setQuery("food");
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [ready]);
+        return state;
+      },
+      { initialProps: { ready: false } }
+    );
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("foo"));
+    rerender({ ready: true });
+    expect(result.current.isPending).toBe(true);
+
+    act(() => result.current.goNext());
+    expect(webview.findInPage).toHaveBeenLastCalledWith("food", {
+      findNext: true,
+      matchCase: false,
+    });
+    flush();
+    expect(result.current.matchCount).toBe(1);
+    expect(result.current.isPending).toBe(false);
   });
 
   it("never shows another query's count when typing overtakes the ready resume", () => {
@@ -1267,7 +1317,11 @@ describe("useFindInPage against Electron's find sessions", () => {
 
   it("is not pending once the query is emptied, and drops replies still in flight", () => {
     const { webview, flush } = createSessionWebview(() => 3);
-    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+    let renders = 0;
+    const { result } = renderHook(() => {
+      renders++;
+      return useFindInPage("panel-1", webview, true, true);
+    });
 
     act(() => result.current.open());
     act(() => result.current.setQuery("FIND"));
@@ -1277,7 +1331,10 @@ describe("useFindInPage against Electron's find sessions", () => {
     act(() => result.current.setQuery(""));
     expect(result.current.isPending).toBe(false);
     expect(result.current.matchCount).toBe(0);
+    const rendersBeforeReply = renders;
     flush();
+    // Taken into state, the reply would re-render even with nothing to show.
+    expect(renders).toBe(rendersBeforeReply);
     expect(result.current.isPending).toBe(false);
     expect(result.current.matchCount).toBe(0);
     expect(result.current.activeMatch).toBe(0);

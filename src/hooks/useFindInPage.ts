@@ -163,14 +163,30 @@ export function useFindInPage(
   );
 
   // A step is only meaningful inside an open session; the kept query would
-  // otherwise let a guest's Cmd+G step a search the bar no longer shows.
-  const goNext = useCallback(() => {
-    if (isOpen && query) safeFind(query, { forward: true, findNext: false });
-  }, [isOpen, query, safeFind]);
+  // otherwise let a guest's Cmd+G step a search the bar no longer shows. It
+  // also steps only a session asked for exactly what the bar shows; otherwise
+  // (nothing asked yet, or a search for older text still in flight) it asks
+  // afresh. Chromium answers a step landing during a short query's delayed
+  // search with that search's own request id, so stepping there would credit
+  // the older text's count to this query.
+  const step = useCallback(
+    (forward: boolean) => {
+      if (!isOpen || !query) return;
+      const asked = latestRequestRef.current;
+      const inSession =
+        asked?.webview === webviewElement && asked.query === query && asked.matchCase === matchCase;
+      if (inSession) {
+        safeFind(query, { forward, findNext: false });
+        return;
+      }
+      forgetAnswer();
+      safeFind(query, { findNext: true });
+    },
+    [isOpen, query, matchCase, webviewElement, forgetAnswer, safeFind]
+  );
 
-  const goPrev = useCallback(() => {
-    if (isOpen && query) safeFind(query, { forward: false, findNext: false });
-  }, [isOpen, query, safeFind]);
+  const goNext = useCallback(() => step(true), [step]);
+  const goPrev = useCallback(() => step(false), [step]);
 
   const toggleMatchCase = useCallback(() => {
     const next = !matchCase;
