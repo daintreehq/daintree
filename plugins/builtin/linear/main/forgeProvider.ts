@@ -169,15 +169,11 @@ const assignmentQueues = new Map<string, Promise<void>>();
 /**
  * Runs an assign or Undo for one issue after any still under way for it, so
  * each reads the assignee, writes and keeps its record without another landing
- * in between and leaving the records out of order.
+ * in between and leaving the records out of order. Not split by key: an old
+ * key's write still lands on the same issue, after a new key's read.
  */
-function queueAssignment<T>(
-  op: Op,
-  repo: RepoRef,
-  issueNumber: number,
-  run: () => Promise<T>
-): Promise<T> {
-  const key = `${op.version}\u0000${teamKeyOf(repo)}-${issueNumber}`;
+function queueAssignment<T>(repo: RepoRef, issueNumber: number, run: () => Promise<T>): Promise<T> {
+  const key = `${teamKeyOf(repo)}-${issueNumber}`;
   const result = (assignmentQueues.get(key) ?? Promise.resolve()).then(run);
   const settled = result.then(
     () => undefined,
@@ -525,7 +521,7 @@ export const linearForgeProvider: ForgeIssueProviderImpl = {
   async assignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]> {
     const op = beginOp();
     const viewer = await requireViewerFor(username, op);
-    return queueAssignment(op, repo, issueNumber, async () => {
+    return queueAssignment(repo, issueNumber, async () => {
       const issue = await requireIssue(repo, issueNumber, op);
       const before = assigneeIdOf(issue);
       const key = previousAssigneeKey(op, issue.id);
@@ -542,7 +538,7 @@ export const linearForgeProvider: ForgeIssueProviderImpl = {
   async unassignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]> {
     const op = beginOp();
     const viewer = await requireViewerFor(username, op);
-    return queueAssignment(op, repo, issueNumber, async () => {
+    return queueAssignment(repo, issueNumber, async () => {
       const current = await requireIssue(repo, issueNumber, op);
       // A key change cleared this history meanwhile: going on would take the
       // issue off the viewer rather than hand it back.
