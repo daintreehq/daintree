@@ -189,6 +189,57 @@ describe("resolveUnknownOutcome", () => {
       }
     });
 
+    it("wins over an ordinary lookup error", async () => {
+      const { client, emit, answer } = pendingReadClient();
+      const pending = resolveUnknownOutcome("op-1", { waitForConnected: async () => {}, client });
+
+      await vi.waitFor(() => expect(client.getStatus).toHaveBeenCalledOnce());
+      emit(settledEvent("op-1", succeeded));
+      answer(new Error("no handler"));
+
+      await expect(pending).resolves.toEqual(succeeded);
+    });
+
+    it.each([
+      ["a running reply", { status: "running", progress: null } as OperationOutcome],
+      ["a dropped link", appError("HOST_DISCONNECTED")],
+    ])("still loses to an abort that came with it, answered by %s", async (_label, reply) => {
+      const { client, emit, answer } = pendingReadClient();
+      const controller = new AbortController();
+      const pending = resolveUnknownOutcome("op-1", {
+        waitForConnected: async () => {},
+        client,
+        signal: controller.signal,
+        pollIntervalMs: 60_000,
+      });
+
+      await vi.waitFor(() => expect(client.getStatus).toHaveBeenCalledOnce());
+      emit(settledEvent("op-1", succeeded));
+      controller.abort();
+      answer(reply);
+
+      await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    });
+
+    it.each([
+      ["running", { status: "running", progress: null } as OperationOutcome],
+      ["unknown", { status: "unknown" } as OperationOutcome],
+    ])("ignores a settled event whose outcome is %s", async (_label, outcome) => {
+      const { client, emit, answer } = pendingReadClient();
+      const pending = resolveUnknownOutcome("op-1", { waitForConnected: async () => {}, client });
+
+      await vi.waitFor(() => expect(client.getStatus).toHaveBeenCalledOnce());
+      const failed: OperationOutcome = {
+        status: "failed",
+        error: { code: null, message: "clone failed" },
+        settledAt: 6,
+      };
+      emit(settledEvent("op-1", outcome));
+      answer(failed);
+
+      await expect(pending).resolves.toEqual(failed);
+    });
+
     it("ignores a settlement for another operation", async () => {
       const { client, emit, answer } = pendingReadClient();
       const pending = resolveUnknownOutcome("op-1", { waitForConnected: async () => {}, client });
