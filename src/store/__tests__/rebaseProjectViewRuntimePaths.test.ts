@@ -297,7 +297,10 @@ describe("rebaseProjectViewRuntimePaths", () => {
     panels._reset({
       ...panels.getState(),
       trashedTerminals: new Map([
-        ["main1", { id: "main1", expiresAt: 1, originalLocation: "grid", groupMetadata: meta(OLD) }],
+        [
+          "main1",
+          { id: "main1", expiresAt: 1, originalLocation: "grid", groupMetadata: meta(OLD) },
+        ],
         ["solo", { id: "solo", expiresAt: 1, originalLocation: "dock" }],
       ]),
       backgroundedTerminals: new Map([
