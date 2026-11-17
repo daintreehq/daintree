@@ -196,6 +196,22 @@ describe("WindowsStoreNotifierService", () => {
       expect(broadcastMock).not.toHaveBeenCalled();
     });
 
+    it.each([
+      ["1.2.3-nightly.1", "1.2.3-nightly.2", true],
+      ["1.2.3-nightly.1", "1.2.3", true],
+      ["1.2.3", "1.2.3-nightly.2", false],
+      ["1.2.3-nightly.2", "1.2.3-nightly.1", false],
+      ["1.2.3-nightly.2", "1.2.3-nightly.2", false],
+    ])("installed %s vs offered %s notifies=%s", async (installed, offered, notifies) => {
+      appMock.getVersion.mockReturnValue(installed);
+      netMock.fetch.mockResolvedValueOnce(
+        makeResponse({ body: `version: ${offered}\n`, etag: null })
+      );
+      windowsStoreNotifierService.initialize();
+      await windowsStoreNotifierService._checkNowForTest();
+      expect(broadcastMock.mock.calls.length > 0).toBe(notifies);
+    });
+
     it("suppresses re-broadcast when version equals lastNotifiedStoreVersion", async () => {
       storeMock.get.mockImplementation((key: string) => {
         if (key === "lastNotifiedStoreVersion") return "1.5.0";
