@@ -83,7 +83,7 @@ export function generateAppImageWrapper(appImagePath: string, version = appVersi
     '    echo "Daintree is not running"; exit 1 ;;',
     "esac",
     'TARGET="${1:-.}"',
-    `ABSOLUTE_PATH="$(cd -- "$TARGET" 2>/dev/null && pwd -P)" || { echo "${CLI_COMMAND_NAME}: '$TARGET' is not a directory" >&2; exit 1; }`,
+    `ABSOLUTE_PATH="$(CDPATH= cd -- "$TARGET" 2>/dev/null && pwd -P)" || { echo "${CLI_COMMAND_NAME}: '$TARGET' is not a directory" >&2; exit 1; }`,
     // Single-token `=` form: Chromium's `second-instance` command-line
     // reconstruction can inject a switch between a bare flag and its value
     // (#11410).

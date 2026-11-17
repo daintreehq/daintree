@@ -12,7 +12,10 @@ const SCRIPT_SOURCE = path.join(path.dirname(fileURLToPath(import.meta.url)), "d
 // `--cli-path=<path>` guarantee testable: asserting the script's source text
 // would only restate it, whereas a displaced or word-split value shows up here
 // as two argv entries instead of one (#11410).
-async function runCli(target: string): Promise<{ argv: string[]; root: string }> {
+async function runCli(
+  target: string,
+  opts: { cwd?: string; env?: Record<string, string> } = {}
+): Promise<{ argv: string[]; root: string }> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-cli-sh-"));
   const argvFile = path.join(root, "argv");
   const binDir = path.join(root, "shim");
@@ -45,7 +48,12 @@ async function runCli(target: string): Promise<{ argv: string[]; root: string }>
   fs.chmodSync(scriptPath, 0o755);
 
   execFileSync("bash", [scriptPath, target], {
-    env: { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}` },
+    cwd: opts.cwd,
+    env: {
+      ...process.env,
+      ...opts.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+    },
     encoding: "utf-8",
   });
 
@@ -88,6 +96,22 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh", () => {
     const expected = fs.realpathSync(projectDir);
     expect(argv).toContain(`--cli-path=${expected}`);
   });
+
+  it.each([false, true])(
+    "resolves a relative folder once (exported CDPATH: %s)",
+    async (exported) => {
+      const { argv, root } = await runCli("my project", {
+        cwd: workspace,
+        env: exported ? { CDPATH: workspace } : { CDPATH: "" },
+      });
+      roots.push(root);
+      expect(argv).toEqual([
+        ...argv.filter((a) => !a.startsWith("--cli-path=")),
+        `--cli-path=${fs.realpathSync(projectDir)}`,
+      ]);
+      expect(argv.filter((a) => a.startsWith("--cli-path="))).toHaveLength(1);
+    }
+  );
 
   it("never emits the flag and the path as two separate arguments", async () => {
     const { argv, root } = await runCli(projectDir);
