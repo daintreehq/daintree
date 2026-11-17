@@ -24,19 +24,23 @@ import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
 import { useCachedProjectViewsStore } from "@/store/cachedProjectViewsStore";
 import { useMemoryLeakConfigStore } from "@/store/memoryLeakConfigStore";
+import { useOsc52ClipboardStore } from "@/store/osc52ClipboardStore";
 import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 
 const getHardwareInfo = vi.fn();
 const setResourceMonitoring = vi.fn();
+const setOsc52ClipboardEnabled = vi.fn<(enabled: boolean) => Promise<void>>();
 
 beforeEach(() => {
   dispatch.mockClear();
   getHardwareInfo.mockReset().mockResolvedValue(null);
   setResourceMonitoring.mockReset().mockResolvedValue(undefined);
+  setOsc52ClipboardEnabled.mockReset().mockResolvedValue(undefined);
   Reflect.set(window, "electron", {
     system: { getHardwareInfo },
     terminalConfig: {
       setResourceMonitoring,
+      setOsc52ClipboardEnabled,
       setMemoryLeakDetection: vi.fn().mockResolvedValue(undefined),
       setMemoryLeakAutoRestartThresholdMb: vi.fn().mockResolvedValue(undefined),
     },
@@ -225,6 +229,52 @@ describe("TerminalSettingsTab save failures", () => {
     expect(useResourceMonitoringStore.getState().enabled).toBe(true);
     expect(toggle.getAttribute("aria-checked")).toBe("true");
     expect(screen.queryByText("Couldn't save that change")).toBeNull();
+  });
+});
+
+describe("TerminalSettingsTab OSC 52 clipboard switch", () => {
+  const osc52Switch = () =>
+    screen.getByRole("switch", { name: /Let programs copy to the clipboard \(OSC 52\)/ });
+
+  afterEach(() => useOsc52ClipboardStore.setState({ enabled: false }));
+
+  it("turns on only once the save lands", async () => {
+    let finishSave = () => {};
+    setOsc52ClipboardEnabled.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        finishSave = resolve;
+      })
+    );
+    renderSubtab("clipboard");
+    await act(async () => {
+      fireEvent.click(osc52Switch());
+    });
+    expect(setOsc52ClipboardEnabled).toHaveBeenCalledWith(true);
+    expect(useOsc52ClipboardStore.getState().enabled).toBe(false);
+
+    await act(async () => finishSave());
+    expect(useOsc52ClipboardStore.getState().enabled).toBe(true);
+  });
+
+  it("stays off when the save is refused", async () => {
+    setOsc52ClipboardEnabled.mockRejectedValueOnce(new Error("IPC down"));
+    renderSubtab("clipboard");
+    await act(async () => {
+      fireEvent.click(osc52Switch());
+    });
+    expect(useOsc52ClipboardStore.getState().enabled).toBe(false);
+    expect(screen.getByText("Couldn't save that change")).toBeTruthy();
+  });
+
+  it("turns off at once, before the save answers", async () => {
+    useOsc52ClipboardStore.setState({ enabled: true });
+    setOsc52ClipboardEnabled.mockReturnValueOnce(new Promise<void>(() => {}));
+    renderSubtab("clipboard");
+    await act(async () => {
+      fireEvent.click(osc52Switch());
+    });
+    expect(setOsc52ClipboardEnabled).toHaveBeenCalledWith(false);
+    expect(useOsc52ClipboardStore.getState().enabled).toBe(false);
   });
 });
 
