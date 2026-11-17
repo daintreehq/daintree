@@ -178,7 +178,10 @@ describe("useProjectSettingsForm saving alongside another settings writer (#1643
       hook.result.current.setDevServerCommand("npm start");
     });
     await act(async () => {
-      await Promise.all([quickRun.result.current.promoteToSaved(lint), hook.result.current.flush()]);
+      await Promise.all([
+        quickRun.result.current.promoteToSaved(lint),
+        hook.result.current.flush(),
+      ]);
     });
 
     expect(stored().devServerCommand).toBe("npm start");

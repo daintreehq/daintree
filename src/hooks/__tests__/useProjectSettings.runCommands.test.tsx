@@ -132,11 +132,7 @@ describe("useProjectSettings pin and unpin beside other settings writers (#17199
     const { promoteToSaved, removeFromSaved } = result.current;
 
     await act(async () => {
-      await Promise.all([
-        promoteToSaved(test),
-        promoteToSaved(lint),
-        removeFromSaved(dev.command),
-      ]);
+      await Promise.all([promoteToSaved(test), promoteToSaved(lint), removeFromSaved(dev.command)]);
     });
 
     expect(commandsOnDisk()).toEqual(["npm test", "npm run lint"]);
