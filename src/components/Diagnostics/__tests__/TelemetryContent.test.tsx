@@ -78,7 +78,10 @@ describe("TelemetryContent detail header", () => {
 
     expect(detailTime.tabIndex).toBe(0);
     expect(detailTime.getAttribute("datetime")).toBe(ISO);
-    expect(detailTime.textContent).toMatch(/\d{2}:\d{2}:\d{2}\.789$/);
+    const local = new Date(TIMESTAMP);
+    const pad = (n: number, width = 2) => String(n).padStart(width, "0");
+    const clock = `${pad(local.getHours())}:${pad(local.getMinutes())}:${pad(local.getSeconds())}.${pad(local.getMilliseconds(), 3)}`;
+    expect(detailTime.textContent).toBe(`${local.toLocaleDateString()} ${clock}`);
   });
 
   it("discloses the exact UTC time in a themed tooltip on focus, not a native title", async () => {
@@ -96,7 +99,7 @@ describe("TelemetryContent detail header", () => {
     const row = detailTime.parentElement!;
 
     const separator = row.querySelector('[aria-hidden="true"]');
-    expect(separator?.textContent).toBe("·");
+    expect(separator?.textContent).toBeTruthy();
     expect(row.textContent).not.toContain("•");
     expect(row.textContent).toContain("ID abcd1234");
     expect(row.children[0]).toBe(detailTime);

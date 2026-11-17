@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, act, fireEvent } from "@testing-library/react";
+import { render, screen, act, fireEvent, cleanup } from "@testing-library/react";
 import { WhySlowContent, describeSlowdowns, isAllClear } from "../WhySlowContent";
 import type { WhySlowSnapshot } from "@shared/types/whySlow";
 import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
@@ -812,6 +812,7 @@ describe("WhySlowContent refresh button", () => {
   });
 
   afterEach(() => {
+    cleanup();
     vi.useRealTimers();
   });
 
@@ -838,6 +839,7 @@ describe("WhySlowContent refresh button", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
 
+    expect(getWhySlowSnapshot).toHaveBeenCalledTimes(2);
     expect(button.getAttribute("aria-disabled")).toBeNull();
     expect(screen.getByRole("button", { name: BUTTON_NAME })).toBe(button);
     expect(document.activeElement).toBe(button);
@@ -858,9 +860,11 @@ describe("WhySlowContent refresh button", () => {
     expect(button.getAttribute("aria-disabled")).toBe("true");
     expect(document.activeElement).toBe(button);
 
-    // A press during the poll is vetoed rather than queued behind it.
+    // A press during the poll is vetoed rather than queued behind it, and does
+    // not turn the poll into one the user asked for.
     fireEvent.click(button);
     expect(getWhySlowSnapshot).toHaveBeenCalledTimes(2);
+    expect(spinning(button)).toBe(false);
 
     await act(async () => {
       read.resolve(makeSnapshot({ timestamp: Date.now() }));
@@ -868,6 +872,7 @@ describe("WhySlowContent refresh button", () => {
     });
     expect(button.getAttribute("aria-disabled")).toBeNull();
     expect(document.activeElement).toBe(button);
+    expect(getWhySlowSnapshot).toHaveBeenCalledTimes(2);
   });
 
   it("does not spin for a background poll that settles inside the Doherty gate", async () => {

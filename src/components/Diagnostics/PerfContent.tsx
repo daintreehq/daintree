@@ -200,25 +200,27 @@ export function PerfContent({ className }: PerfContentProps) {
     );
 
   // The user's own press spins at once as press feedback; the reads that mount
-  // and project changes start wait out the Doherty gate. Keyed by project so a
-  // read that outlives a switch can't make the next project's load spin early.
-  const [manualRefreshPath, setManualRefreshPath] = useState<string | null>(null);
+  // and project changes start wait out the Doherty gate. Each press is its own
+  // object, keyed by project, so a read that outlives a switch can't make the
+  // next project's load spin early and an older press can't clear a newer one.
+  const [manualRequest, setManualRequest] = useState<{ path: string } | null>(null);
   const refreshGateOpen = useDohertyGate(isLoadingSummaries);
   const refreshSpinning =
     isLoadingSummaries &&
-    ((projectPath !== null && manualRefreshPath === projectPath) || refreshGateOpen);
+    ((projectPath !== null && manualRequest?.path === projectPath) || refreshGateOpen);
   const now = useGlobalMinuteClock();
 
-  const handleManualRefresh = useCallback(async () => {
+  // `.finally` rather than try/finally: a try without a catch is a React Compiler
+  // bailout for the whole component.
+  const handleManualRefresh = useCallback(() => {
     // The live store, not the rendered flag: two presses can land before a
     // commit, and the store raises its flag synchronously.
     if (!projectPath || usePerfMetricsStore.getState().isLoadingSummaries) return;
-    setManualRefreshPath(projectPath);
-    try {
-      await refreshSummaries(projectPath);
-    } finally {
-      setManualRefreshPath((current) => (current === projectPath ? null : current));
-    }
+    const request = { path: projectPath };
+    setManualRequest(request);
+    void refreshSummaries(projectPath).finally(() => {
+      setManualRequest((current) => (current === request ? null : current));
+    });
   }, [projectPath, refreshSummaries]);
 
   useEffect(() => {
@@ -287,7 +289,7 @@ export function PerfContent({ className }: PerfContentProps) {
               <Button
                 variant="subtle"
                 size="xs"
-                onClick={() => void handleManualRefresh()}
+                onClick={handleManualRefresh}
                 // Not `disabled`: that would dim the button and drop keyboard focus
                 // to the page.
                 aria-disabled={isLoadingSummaries || undefined}

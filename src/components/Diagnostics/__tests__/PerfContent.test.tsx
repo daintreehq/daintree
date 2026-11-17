@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import type { ReactElement } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render as rtlRender, screen, act, fireEvent } from "@testing-library/react";
+import { render as rtlRender, screen, act, fireEvent, cleanup } from "@testing-library/react";
 
 vi.mock("@/clients/filesClient", () => ({
   filesClient: {
@@ -16,12 +16,12 @@ vi.mock("@/utils/logger", () => ({
 import { filesClient } from "@/clients/filesClient";
 import { ClientAppError } from "@/utils/clientAppError";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { resetPerfMetricsForTests } from "@/store/perfMetricsStore";
+import { resetPerfMetricsForTests, usePerfMetricsStore } from "@/store/perfMetricsStore";
 import { useProjectStore } from "@/store/projectStore";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { PerfContent } from "../PerfContent";
 
-const mockRead = filesClient.read as ReturnType<typeof vi.fn>;
+const mockRead = vi.mocked(filesClient.read);
 const render = (ui: ReactElement) => rtlRender(ui, { wrapper: TooltipProvider });
 
 const REFRESH_NAME = "Re-read benchmark results";
@@ -94,6 +94,7 @@ describe("PerfContent", () => {
   });
 
   afterEach(() => {
+    cleanup();
     vi.useRealTimers();
     resetPerfMetricsForTests();
     useProjectStore.setState({ currentProject: null });
@@ -141,6 +142,17 @@ describe("PerfContent", () => {
       await flush();
 
       expect(container.querySelector("time")!.textContent).toBe("Generated 3d ago");
+    });
+
+    it("names a month, never a numeric date, once a run is more than 30 days old", async () => {
+      serveSmoke("2026-04-01T12:00:00.000Z", [{ id: "boot", name: "Boot" }]);
+      const { container } = render(<PerfContent />);
+      await flush();
+
+      const text = container.querySelector("time")!.textContent!;
+      expect(text).toMatch(/^Generated /);
+      expect(text).not.toContain("ago");
+      expect(text).not.toMatch(/\d+[/.-]\d+/);
     });
 
     it("moves the age forward on the shared minute clock", async () => {
@@ -238,10 +250,11 @@ describe("PerfContent", () => {
       expect(spinning(button)).toBe(false);
     });
 
-    it("does not carry a finished manual press over to the next read", async () => {
+    it("does not carry a finished manual press over to the next read of the same project", async () => {
       const button = await mountLoaded();
       fireEvent.click(button);
       await flush();
+      // Past the spinner's own finishing turn.
       await act(async () => {
         await vi.advanceTimersByTimeAsync(2_000);
       });
@@ -252,15 +265,15 @@ describe("PerfContent", () => {
         await gate;
         throw new ClientAppError("NOT_FOUND", "file missing");
       });
-      // A project switch is the other thing that starts a read without a press.
-      useProjectStore.setState({
-        currentProject: { id: "p2", name: "Other", path: "/work/other", emoji: "", lastOpened: 0 },
+      // A read the user did not ask for, on the project the press was for.
+      act(() => {
+        void usePerfMetricsStore.getState().refreshSummaries("/work/app");
       });
-      await flush();
+      expect(button.getAttribute("aria-disabled")).toBe("true");
       await act(async () => {
         await vi.advanceTimersByTimeAsync(UI_DOHERTY_THRESHOLD - 50);
       });
-      expect(spinning(refreshButton())).toBe(false);
+      expect(spinning(button)).toBe(false);
 
       release();
       await flush();
@@ -283,6 +296,7 @@ describe("PerfContent", () => {
     });
 
     afterEach(() => {
+      cleanup();
       scrollWidth.mockRestore();
       clientWidth.mockRestore();
     });
