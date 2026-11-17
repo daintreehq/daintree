@@ -193,25 +193,27 @@ export function installHostAgentForwarding(deps: HostAgentForwardingDeps): HostA
   };
 
   // Named for this profile's own folder, so two profiles of one user never share it.
-  const fallbackDir =
-    deps.fallbackSocketDir ??
-    path.join(
-      os.tmpdir(),
-      `daintree-agent-${process.getuid?.() ?? "user"}-${crypto
-        .createHash("sha256")
-        .update(deps.socketDir)
-        .digest("hex")
-        .slice(0, 8)}`
-    );
+  // Named for this profile's own folder, so two profiles of one user never
+  // share one; under /tmp only when even the temp folder's path is too long.
+  const fallbackName = `daintree-${process.getuid?.() ?? "user"}-${crypto
+    .createHash("sha256")
+    .update(deps.socketDir)
+    .digest("hex")
+    .slice(0, 8)}`;
+  const socketDirs = [
+    deps.socketDir,
+    ...(deps.fallbackSocketDir
+      ? [deps.fallbackSocketDir]
+      : [path.join(os.tmpdir(), fallbackName), path.join("/tmp", fallbackName)]),
+  ];
 
   const listen = async (projectId: string): Promise<string> => {
     const name = agentSocketName(projectId);
-    let dir = deps.socketDir;
-    if (Buffer.byteLength(path.join(dir, name)) > maxSocketPathBytes()) dir = fallbackDir;
+    const dir = socketDirs.find(
+      (candidate) => Buffer.byteLength(path.join(candidate, name)) <= maxSocketPathBytes()
+    );
+    if (!dir) throw new Error(`No agent socket path short enough for ${name}`);
     const socketPath = path.join(dir, name);
-    if (Buffer.byteLength(socketPath) > maxSocketPathBytes()) {
-      throw new Error(`No agent socket path short enough for ${socketPath}`);
-    }
     await prepareOwnerOnlyDir(dir);
     const owner = pathOwners.get(socketPath);
     if (owner !== undefined && owner !== projectId) {
