@@ -20,6 +20,7 @@ import { createEditorSearchPanel } from "./editorSearchPanel";
 import { matchCodeMirrorLanguage } from "./codeMirrorLanguages";
 import { cn } from "@/lib/utils";
 import { CODE_VIEWER_OWNER_ATTR } from "@/lib/codeViewerKeys";
+import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
 
 export interface CodeViewerHandle {
   openSearch: () => void;
@@ -354,19 +355,23 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
           "has-[.cm-content:focus-visible]:outline-2 has-[.cm-content:focus-visible]:-outline-offset-2 has-[.cm-content:focus-visible]:outline-accent-primary"
         )}
       >
-        <div
-          className={cn(
-            "sticky top-0 z-10 pointer-events-none flex items-center px-2 truncate border-b whitespace-pre",
-            stickyScope !== null
-              ? "border-[var(--theme-border-default)] bg-[var(--theme-surface-sidebar)] text-[var(--theme-text-secondary)]"
-              : "border-transparent bg-transparent text-transparent"
+        {/* Zero-height anchor: the scope line overlays the first visible line
+            instead of reserving a band above line 1, so the document never
+            shifts when a scope appears or goes. */}
+        <div className="sticky top-0 z-10 h-0 pointer-events-none">
+          {stickyScope !== null && (
+            <div
+              data-code-viewer-sticky-scope=""
+              className="absolute inset-x-0 top-0 flex items-center px-2 truncate border-b whitespace-pre border-border-default bg-surface-sidebar text-text-secondary"
+              style={{
+                height: `${cmLineHeight}px`,
+                lineHeight: `${cmLineHeight}px`,
+                fontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
+              }}
+            >
+              {stickyScope}
+            </div>
           )}
-          style={{
-            height: `${cmLineHeight}px`,
-            lineHeight: `${cmLineHeight}px`,
-          }}
-        >
-          {stickyScope ?? " "}
         </div>
         <CodeMirror
           value={content}
