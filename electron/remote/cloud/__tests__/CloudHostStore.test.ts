@@ -183,6 +183,8 @@ describe("CloudHostStore provisioning", () => {
       { ...PICKS, location: { label: "Region", id: 5, value: "Europe" } },
       { ...PICKS, image: { label: "", id: "ami-euw1", value: "Ubuntu" } },
       { ...PICKS, network: "subnet-a" },
+      { location: PICKS.location, image: PICKS.image },
+      [PICKS.location, PICKS.image, PICKS.network],
     ]) {
       const backend = disk();
       backend.write({

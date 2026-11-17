@@ -60,12 +60,18 @@ function normalizeOptions(
       id,
       label: text(choice.label) ?? id,
       description: text(choice.description),
-      available: choice.available !== false,
+      // A constraint that doesn't read narrows, never widens: only a plain true is available,
+      // and locations that aren't a list tie the choice to none.
+      available: choice.available === true,
       reason: text(choice.reason),
       locations:
-        dimension !== "location" && Array.isArray(choice.locations)
-          ? choice.locations.filter((location): location is string => typeof location === "string")
-          : null,
+        dimension === "location" || choice.locations === null || choice.locations === undefined
+          ? null
+          : Array.isArray(choice.locations)
+            ? choice.locations.filter(
+                (location): location is string => typeof location === "string"
+              )
+            : [],
     });
   }
   const defaultId =

@@ -1001,6 +1001,7 @@ function offered(): NonNullable<ProviderCatalog["provisioning"]> {
       choices: [
         choice("ami-use1", "Ubuntu 24.04", ["us-east-1"]),
         choice("ami-euw1", "Ubuntu 24.04", ["eu-west-1"]),
+        choice("ami-any", "Debian 12"),
       ],
     },
     network: {
@@ -1011,11 +1012,11 @@ function offered(): NonNullable<ProviderCatalog["provisioning"]> {
   };
 }
 
-function offerRegions(provider: CloudProvider): void {
+function offerRegions(provider: CloudProvider, takes: () => CloudProvisioning = () => TAKES): void {
   const info = provider.info.bind(provider);
   provider.info = (platform) => {
     const base = info(platform);
-    return { ...base, capabilities: { ...base.capabilities, provisioning: TAKES } };
+    return { ...base, capabilities: { ...base.capabilities, provisioning: takes() } };
   };
   const catalog = provider.catalog;
   provider.catalog = vi.fn(async (credentials) => ({
@@ -1025,22 +1026,27 @@ function offerRegions(provider: CloudProvider): void {
 }
 
 describe("CloudHostLifecycle provisioning", () => {
-  const IRELAND = { location: "eu-west-1", image: "ami-euw1", network: null };
+  const IRELAND = { location: "eu-west-1", image: "ami-euw1", network: "subnet-euw1a" };
 
   function request(accountId: string, name = "build"): CloudHostCreateRequest {
     return { accountId, name, machineType: "default", lifetimeHours: 2, provisioning: IRELAND };
   }
 
-  it("sends the region and image it checked, shows them on the host, and remembers them for the account", async () => {
-    const { lifecycle, provider, account } = await setup({}, { adapt: offerRegions });
+  it("sends the region, image and subnet it checked, in the first write, and shows them on the host", async () => {
+    const { lifecycle, provider, account, store } = await setup({}, { adapt: offerRegions });
+    const put = vi.spyOn(store, "putBinding");
     await lifecycle.create(request(account.id));
-    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.machine).toBe("running"));
-    expect(vi.mocked(provider.create).mock.calls[0]?.[1].provisioning).toEqual(IRELAND);
-    expect(lifecycle.statuses()[0]?.provisioning).toEqual({
+    const picks = {
       location: { label: "Region", id: "eu-west-1", value: "Europe (Ireland)" },
       image: { label: "AMI", id: "ami-euw1", value: "Ubuntu 24.04" },
-      network: { label: "Subnet", id: null, value: "Chosen by Boat" },
-    });
+      network: { label: "Subnet", id: "subnet-euw1a", value: "eu-west-1a" },
+    };
+    // Kept from the first write, so a restart before the host is added still knows them.
+    expect(put.mock.calls[0]?.[0]).toMatchObject({ hostId: null, provisioning: picks });
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.machine).toBe("running"));
+    expect(vi.mocked(provider.create).mock.calls[0]?.[1].provisioning).toEqual(IRELAND);
+    expect(lifecycle.statuses()[0]?.provisioning).toEqual(picks);
+    expect(store.account(account.id)?.lastProvisioning).toEqual(IRELAND);
   });
 
   it("offers the account's last choice with every catalog, cached or read again", async () => {
@@ -1060,7 +1066,7 @@ describe("CloudHostLifecycle provisioning", () => {
     const attempts: CloudHostCreateRequest["provisioning"][] = [
       undefined,
       { location: null, image: "ami-use1", network: null },
-      { location: "ap-south-2", image: "ami-use1", network: null },
+      { location: "ap-south-2", image: "ami-any", network: null },
       { location: "us-east-1", image: "ami-euw1", network: null },
       { location: "us-east-1", image: "ami-use1", network: "subnet-euw1a" },
       { location: "us-east-1", image: "ami-gone", network: null },
@@ -1111,6 +1117,11 @@ describe("CloudHostLifecycle provisioning", () => {
       expect(lifecycle.statuses().find((s) => s.hostId === "other")?.machine).toBe("running")
     );
     expect(store.account(account.id)?.lastProvisioning).toEqual(VIRGINIA);
+    expect(lifecycle.statuses().find((s) => s.hostId === "other")?.provisioning?.network).toEqual({
+      label: "Subnet",
+      id: null,
+      value: "Chosen by Boat",
+    });
 
     const next = restart(lifecycle);
     await next.lifecycle.retryCreate("build");
@@ -1125,8 +1136,17 @@ describe("CloudHostLifecycle provisioning", () => {
     expect(next.store.account(account.id)?.lastProvisioning).toEqual(VIRGINIA);
   });
 
-  it("won't send a retry whose saved choice can't be read back", async () => {
-    const { lifecycle, provider, account, store } = await setup({}, { adapt: offerRegions });
+  it("won't send a retry whose saved choice can't be read back, even where nothing is required", async () => {
+    const optional: CloudProvisioning = {
+      location: "optional",
+      image: "optional",
+      network: "optional",
+      sshKey: "at-create",
+    };
+    const { lifecycle, provider, account, store } = await setup(
+      {},
+      { adapt: (p) => offerRegions(p, () => optional) }
+    );
     vi.mocked(provider.create).mockRejectedValueOnce(
       new BoatApiError("payment-required", "pay", 402, null, null)
     );
@@ -1134,9 +1154,32 @@ describe("CloudHostLifecycle provisioning", () => {
     await vi.waitFor(() => expect(lifecycle.statuses()[0]?.lastError?.code).toBe("billing"));
     const binding = store.bindings()[0]!;
     store.putBinding({ ...binding, provisioning: { location: 5 } as never });
+    store.updateBinding(binding.id, (current) => ({ ...current, intent: "run" }));
     expect(store.bindings()[0]?.provisioning).toBe("unreadable");
     await expect(lifecycle.retryCreate("build")).rejects.toMatchObject({ code: "VALIDATION" });
     expect(provider.create).toHaveBeenCalledTimes(1);
-    expect(lifecycle.statuses()[0]?.lastError?.message).toMatch(/won't guess/);
+    expect(lifecycle.statuses()[0]?.lastError?.message).toMatch(/can't read back/);
+  });
+
+  it("won't send a retry the provider now needs a region for that its create never named", async () => {
+    let takes: CloudProvisioning = {
+      location: "none",
+      image: "none",
+      network: "none",
+      sshKey: "after-create",
+    };
+    const { lifecycle, provider, account } = await setup(
+      {},
+      { adapt: (p) => offerRegions(p, () => takes) }
+    );
+    vi.mocked(provider.create).mockRejectedValueOnce(
+      new BoatApiError("payment-required", "pay", 402, null, null)
+    );
+    await lifecycle.create({ ...request(account.id), provisioning: undefined });
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.lastError?.code).toBe("billing"));
+    takes = TAKES;
+    await expect(lifecycle.retryCreate("build")).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(provider.create).toHaveBeenCalledTimes(1);
+    expect(lifecycle.statuses()[0]?.lastError?.message).toMatch(/never named/);
   });
 });

@@ -6,7 +6,10 @@ import type {
 } from "@shared/types/cloudHosts";
 import { startingSelection } from "../cloudProvisioningChoices";
 
-const choice = (id: string, extra: Partial<CloudProvisioningChoice> = {}) => ({
+const choice = (
+  id: string,
+  extra: Partial<CloudProvisioningChoice> = {}
+): CloudProvisioningChoice => ({
   id,
   label: id,
   description: null,
@@ -16,37 +19,71 @@ const choice = (id: string, extra: Partial<CloudProvisioningChoice> = {}) => ({
   ...extra,
 });
 
-const provider = {
+/** A region it always needs, an image it takes when asked, and no network at all. */
+const provider: CloudProviderInfo = {
+  id: "acme.clouds.droplets",
   name: "Acme",
+  description: "",
+  apiKeyUrl: "",
+  dashboardUrl: "",
+  docsUrl: "",
+  credentialFields: [],
   capabilities: {
-    provisioning: {
-      location: "required",
-      image: "optional",
-      network: "none",
-      sshKey: "at-create",
+    persistence: {
+      kept: "Files",
+      lost: "memory",
+      retentionDays: null,
+      saveRetryBilled: false,
+      stoppedComputeBilled: false,
     },
+    typicalStartSeconds: null,
+    lifetime: { kind: "none" },
+    sshTrust: "confirm-on-first-connect",
+    transport: "direct",
+    provisioning: { location: "required", image: "optional", network: "none", sshKey: "at-create" },
+    deletion: true,
   },
-} as unknown as CloudProviderInfo;
+  unsupportedReason: null,
+};
 
 function catalog(): CloudCatalog {
   return {
+    accountId: "ca_0123456789",
+    machineTypes: [],
     provisioning: {
       location: {
         label: "Region",
         defaultId: "nyc1",
-        choices: [choice("nyc1"), choice("sfo3"), choice("lon1", { available: false })],
+        choices: [choice("sfo3"), choice("nyc1"), choice("lon1", { available: false })],
       },
-      image: { label: "Image", defaultId: "ubuntu", choices: [choice("ubuntu"), choice("debian")] },
-      network: null,
+      image: { label: "Image", defaultId: "ubuntu", choices: [choice("debian"), choice("ubuntu")] },
+      // Offered, though the provider says a create takes no network.
+      network: { label: "VPC", defaultId: "vpc-1", choices: [choice("vpc-1")] },
     },
-  } as unknown as CloudCatalog;
+    lastChoice: null,
+    canStart: true,
+    includedHoursRemaining: null,
+    startsRemaining: null,
+    savedSnapshotDayDollars: null,
+    fetchedAt: 1,
+  };
 }
 
 describe("startingSelection", () => {
-  it("passes over a remembered region that can't be used any more", () => {
-    expect(
-      startingSelection(provider, catalog(), [{ location: "lon1", image: "debian", network: null }])
-    ).toEqual({ location: "nyc1", image: "debian", network: null });
+  it("starts from the provider's suggestions, optional ones included, never the first listed", () => {
+    expect(startingSelection(provider, catalog(), [])).toEqual({
+      location: "nyc1",
+      image: "ubuntu",
+      network: null,
+    });
+  });
+
+  it("passes over a remembered region that can't be used, or isn't offered any more", () => {
+    for (const location of ["lon1", "ams3"]) {
+      expect(
+        startingSelection(provider, catalog(), [{ location, image: "debian", network: null }])
+      ).toEqual({ location: "nyc1", image: "debian", network: null });
+    }
   });
 
   it("keeps an optional dimension the person left to the provider", () => {
@@ -58,15 +95,15 @@ describe("startingSelection", () => {
   it("prefers this dialog's picks over the account's last choice", () => {
     expect(
       startingSelection(provider, catalog(), [
-        { location: "sfo3", image: "ubuntu", network: null },
-        { location: "nyc1", image: "debian", network: null },
+        { location: "sfo3", image: "debian", network: null },
+        { location: "nyc1", image: "ubuntu", network: null },
       ])
-    ).toEqual({ location: "sfo3", image: "ubuntu", network: null });
+    ).toEqual({ location: "sfo3", image: "debian", network: null });
   });
 
-  it("never names a dimension the provider doesn't take", () => {
+  it("never names a dimension the provider doesn't take, whatever the catalog lists", () => {
     expect(
-      startingSelection(provider, catalog(), [{ location: "nyc1", image: null, network: "vpc" }])
+      startingSelection(provider, catalog(), [{ location: "nyc1", image: null, network: "vpc-1" }])
         .network
     ).toBeNull();
   });

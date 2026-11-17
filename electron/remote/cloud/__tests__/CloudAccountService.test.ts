@@ -386,12 +386,54 @@ describe("normalizeProvisioning", () => {
       choices: [region("ubuntu", { locations: ["nyc1", 3] })],
       defaultId: null,
     };
+    const network = {
+      label: "VPC",
+      choices: [region("vpc-1", { locations: ["nyc1"] })],
+      defaultId: null,
+    };
     const withLocation = normalizeProvisioning(
-      infoTaking({ location: "required", image: "required" }),
-      { location: { label: "Region", choices: [region("nyc1")], defaultId: null }, image } as never
+      infoTaking({ location: "required", image: "required", network: "optional" }),
+      {
+        location: { label: "Region", choices: [region("nyc1")], defaultId: null },
+        image,
+        network,
+      } as never
     );
     expect(withLocation.image?.choices[0]?.locations).toEqual(["nyc1"]);
-    const without = normalizeProvisioning(infoTaking({ image: "required" }), { image } as never);
+    expect(withLocation.network?.choices[0]?.locations).toEqual(["nyc1"]);
+    const without = normalizeProvisioning(infoTaking({ image: "required", network: "optional" }), {
+      image,
+      network,
+    } as never);
     expect(without.image?.choices[0]?.locations).toBeNull();
+    expect(without.network?.choices[0]?.locations).toBeNull();
+  });
+
+  it("narrows a choice whose constraints don't read, never widens it", () => {
+    const result = normalizeProvisioning(
+      infoTaking({ location: "required", image: "required", network: "optional" }),
+      {
+        location: { label: "Region", choices: [region("nyc1")], defaultId: null },
+        image: {
+          label: "Image",
+          choices: [
+            region("as-text", { locations: "nyc1" }),
+            region("said-false", { available: "false" }),
+            region("unsaid", { available: undefined }),
+          ],
+          defaultId: null,
+        },
+        network: {
+          label: "VPC",
+          choices: [region("vpc-1", { locations: { nyc1: true } })],
+          defaultId: null,
+        },
+      } as never
+    );
+    const image = (id: string) => result.image?.choices.find((choice) => choice.id === id);
+    expect(image("as-text")?.locations).toEqual([]);
+    expect(image("said-false")?.available).toBe(false);
+    expect(image("unsaid")?.available).toBe(false);
+    expect(result.network?.choices[0]?.locations).toEqual([]);
   });
 });

@@ -1,9 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ComponentProps } from "react";
 import { AppDialog, type DialogAction } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { FactSeparator } from "@/components/ui/FactSeparator";
-import { Field, FieldDescription, FieldLabel, InlineError } from "@/components/ui/field";
+import {
+  Field,
+  FieldDescription,
+  FieldLabel,
+  InlineError,
+  useFieldControl,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
@@ -72,6 +78,12 @@ const LIFETIME_VALUES = CLOUD_LIFETIME_CHOICES.map((hours) =>
  */
 const PROVIDER_DECIDES = "provider";
 const choiceValue = (id: string) => `id:${id}`;
+
+/** A Select trigger its Field's label and description name, as an Input is. */
+function FieldSelectTrigger(props: ComponentProps<typeof SelectTrigger>) {
+  const { controlProps } = useFieldControl(props);
+  return <SelectTrigger {...props} {...controlProps} />;
+}
 
 /**
  * Add a cloud host: create a new machine in a connected account, or add one
@@ -445,13 +457,12 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
                       }
                       disabled={busy}
                     >
-                      <SelectTrigger
+                      <FieldSelectTrigger
                         className="w-72"
-                        aria-label={options.label}
                         data-testid={`add-cloud-host-${dimension}`}
                       >
                         <SelectValue placeholder="Nothing to choose" />
-                      </SelectTrigger>
+                      </FieldSelectTrigger>
                       <SelectContent>
                         {optional && (
                           <SelectItem value={PROVIDER_DECIDES}>

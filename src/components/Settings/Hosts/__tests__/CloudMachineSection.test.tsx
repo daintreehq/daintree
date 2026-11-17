@@ -134,11 +134,32 @@ describe("CloudMachineSection provisioning rows", () => {
     );
     expect(screen.getByTestId("cloud-machine-image").textContent).toBe("Ubuntu 24.04 · ami-0abc");
     expect(screen.getByTestId("cloud-machine-network").textContent).toBe("Chosen by Acme");
+    // The provider's own names for them, kept with the machine.
+    expect(screen.getByText("Region")).toBeTruthy();
+    expect(screen.getByText("AMI")).toBeTruthy();
+    expect(screen.getByText("Subnet")).toBeTruthy();
+  });
+
+  it("names a choice once when its id is its name, and only the dimensions it was given", () => {
+    show(
+      status({
+        provisioning: {
+          location: { label: "Zone", id: "us-central1-a", value: "us-central1-a" },
+          image: null,
+          network: null,
+        },
+      })
+    );
+    expect(screen.getByTestId("cloud-machine-location").textContent).toBe("us-central1-a");
+    expect(screen.getByText("Zone")).toBeTruthy();
+    expect(screen.queryByTestId("cloud-machine-image")).toBeNull();
+    expect(screen.queryByTestId("cloud-machine-network")).toBeNull();
   });
 
   it("has no rows for a machine that named none", () => {
     show(status());
     expect(screen.queryByTestId("cloud-machine-location")).toBeNull();
     expect(screen.queryByTestId("cloud-machine-image")).toBeNull();
+    expect(screen.queryByTestId("cloud-machine-network")).toBeNull();
   });
 });

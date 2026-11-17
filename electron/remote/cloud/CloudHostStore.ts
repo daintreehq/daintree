@@ -161,9 +161,9 @@ export function readProvisioningSelection(raw: unknown): CloudProvisioningSelect
 }
 
 function readPick(raw: unknown): CloudProvisioningPick | null | undefined {
-  if (raw === null || raw === undefined) return null;
+  if (raw === null) return null;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const value = raw as Record<string, unknown>;
-  if (typeof value !== "object") return undefined;
   const id = optionalId(value.id);
   const label = nonEmpty(value.label);
   const shown = nonEmpty(value.value);
@@ -178,10 +178,12 @@ function readPick(raw: unknown): CloudProvisioningPick | null | undefined {
  */
 export function readHostProvisioning(raw: unknown): CloudHostProvisioning | "unreadable" | null {
   if (raw === null || raw === undefined) return null;
-  if (typeof raw !== "object") return "unreadable";
+  if (typeof raw !== "object" || Array.isArray(raw)) return "unreadable";
   const value = raw as Record<string, unknown>;
   const read = {} as CloudHostProvisioning;
   for (const dimension of CLOUD_PROVISIONING_DIMENSIONS) {
+    // Every create writes all three; one gone missing isn't "the provider decides".
+    if (!(dimension in value)) return "unreadable";
     const pick = readPick(value[dimension]);
     if (pick === undefined) return "unreadable";
     read[dimension] = pick;
