@@ -1675,6 +1675,20 @@ describe("NewWorktreeDialog — branch loading skeleton timing", () => {
     expect(document.activeElement).toBe(branchInput());
   });
 
+  it("never mounts the skeleton when the load settles in the batch the gate fires in", async () => {
+    const skeletonMounted = watchMounts(SKELETON_SELECTOR);
+    resolveBranchesAfter(UI_SKELETON_GATE_MS);
+    renderDialog();
+
+    // One act: the gate's timer and the load land in the same render.
+    await advance(UI_SKELETON_GATE_MS);
+    expect(branchInput()).not.toBeNull();
+    await sample(UI_SKELETON_FLOOR_MS);
+
+    expect(skeletonMounted()).toBe(false);
+    expect(branchInput()).not.toBeNull();
+  });
+
   it("shows the skeleton at the gate and holds it to the millisecond of the floor", async () => {
     const loadMs = UI_SKELETON_GATE_MS + 2 * STEP_MS;
     resolveBranchesAfter(loadMs);
@@ -1686,8 +1700,11 @@ describe("NewWorktreeDialog — branch loading skeleton timing", () => {
     await advance(1);
     expect(skeleton()).not.toBeNull();
 
-    // The load settles 20ms in; the floor runs from the skeleton's appearance.
-    await advance(UI_SKELETON_FLOOR_MS - 1);
+    // The load settles 20ms in, in an act of its own so it commits then; the
+    // floor still runs from the skeleton's appearance.
+    await advance(loadMs - UI_SKELETON_GATE_MS);
+    expect(skeleton()).not.toBeNull();
+    await advance(UI_SKELETON_GATE_MS + UI_SKELETON_FLOOR_MS - loadMs - 1);
     expect(skeleton()).not.toBeNull();
     expect(branchInput()).toBeNull();
     await advance(1);
@@ -1772,6 +1789,28 @@ describe("NewWorktreeDialog — branch loading skeleton timing", () => {
     expect(document.activeElement).toBe(branchInput());
   });
 
+  it("holds space again on a cold reopen after an opening that showed the form", async () => {
+    resolveBranchesAfter(UI_SKELETON_GATE_MS / 4);
+    const props = { onClose: vi.fn(), rootPath: "/test/root" };
+    const { rerender } = render(<NewWorktreeDialog isOpen={true} {...props} />);
+    await sample(UI_SKELETON_GATE_MS);
+    expect(branchInput()).not.toBeNull();
+
+    rerender(<NewWorktreeDialog isOpen={false} {...props} />);
+    await advance(STEP_MS);
+    clearBranchListCache();
+    resolveBranchesAfter(UI_SKELETON_GATE_MS + 2 * STEP_MS);
+    const formMounted = watchMounts(FORM_SELECTOR);
+    rerender(<NewWorktreeDialog isOpen={true} {...props} />);
+
+    expect(reservation()).not.toBeNull();
+    await advance(UI_SKELETON_GATE_MS - 1);
+    expect(formMounted()).toBe(false);
+    expect(reservation()).not.toBeNull();
+    await advance(1);
+    expect(skeleton()).not.toBeNull();
+  });
+
   it.each([
     ["clicking Create", () => fireEvent.click(screen.getByTestId("create-worktree-button"))],
     ["Cmd+Enter", () => fireEvent.keyDown(window, { key: "Enter", metaKey: true })],
@@ -1814,6 +1853,9 @@ describe("NewWorktreeDialog — branch loading skeleton timing", () => {
 
     expect(frames.filter((f) => !f.skeleton || !f.hint)).toEqual([]);
     expect(formMounted()).toBe(false);
+    // Create is still mounted for the fade, and as held as it was at the close.
+    const create = screen.getByTestId("create-worktree-button");
+    expect(create.getAttribute("aria-disabled")).toBe("true");
   });
 
   it("keeps the form up through the gate on a Retry after a failed load", async () => {
@@ -1830,9 +1872,13 @@ describe("NewWorktreeDialog — branch loading skeleton timing", () => {
       fireEvent.click(retry);
     });
     expect(screen.getByTestId("create-worktree-button").getAttribute("aria-disabled")).toBe("true");
+    // On screen but out of reach: a field touched against the emptied list
+    // would keep the reloaded one from seeding the base.
+    expect(branchInput()?.closest("[inert]")).not.toBeNull();
     const frames = await sample(UI_SKELETON_GATE_MS + UI_SKELETON_FLOOR_MS);
 
     expect(frames.filter((f) => !f.form)).toEqual([]);
+    expect(branchInput()?.closest("[inert]")).toBeNull();
     expect(formMounted()).toBe(false);
     expect(skeletonMounted()).toBe(false);
     expect(document.getElementById("base-branch")?.textContent).toContain("main");

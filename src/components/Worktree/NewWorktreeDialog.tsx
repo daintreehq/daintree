@@ -701,11 +701,13 @@ export function NewWorktreeDialog({
   // stays up for the floor rather than tearing down in the frame it appeared.
   // The floor drops while closed, so a reopen starts from a fresh gate instead
   // of inheriting the last opening's dwell.
+  const skeletonGate = useSkeletonGate(isOpen && branchesPending);
   const showSkeleton = useSkeletonDisplayFloor(
-    useSkeletonGate(isOpen && branchesPending),
+    // The gate's state lags its input by a render: a load that settles in the
+    // batch its timer fires in must not start a skeleton under the form.
+    isOpen && branchesPending && skeletonGate,
     isOpen ? UI_SKELETON_FLOOR_MS : 0
   );
-  const formNotReady = branchesPending || showSkeleton;
 
   // The body inside the gate holds the form's footprint invisibly, unless this
   // opening already has the form up (a Retry, a refetch), which stays put.
@@ -722,6 +724,9 @@ export function NewWorktreeDialog({
   // Closing resets the gate and floor for the next opening while AppDialog is
   // still fading this one out, so the body keeps what it last showed.
   const branchBody = isOpen ? liveBranchBody : lastBranchBody;
+  // Pending, or not yet showing the form. While closed the body is frozen, so a
+  // Create still mounted for the fade stays held if it was held at the close.
+  const formNotReady = branchesPending || branchBody !== "form";
 
   // Focus the new branch input once the form itself is mounted, not when the
   // load settles under a skeleton the floor is still holding.
@@ -1725,7 +1730,10 @@ export function NewWorktreeDialog({
               {branchPlaceholder}
             </div>
           ) : (
-            <>
+            // A refetch keeps the form on screen through the onset gate, but
+            // out of reach: a field touched against the emptied list would
+            // stop the reloaded one from seeding the base.
+            <div className="space-y-5" inert={branchesPending || undefined}>
               <FormGrid>
                 <FormSection
                   title="Branch"
@@ -2072,7 +2080,7 @@ export function NewWorktreeDialog({
                   <p>{errors.validationError}</p>
                 </Callout>
               )}
-            </>
+            </div>
           )}
         </AppDialog.Body>
 
