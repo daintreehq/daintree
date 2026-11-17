@@ -2358,6 +2358,60 @@ describe("ActionService", () => {
       expect(service.getLastAction()?.actionId).toBe("test.safe");
     });
 
+    it.each(["user", "keybinding", "menu", "context-menu"] as const)(
+      "does not capture a safe action's confirmed dispatch from %s (#17205)",
+      async (source) => {
+        // A runtime-escalated safe action's prompt re-dispatches with
+        // `{ confirmed: true }`. Recording that would let action.repeatLast apply
+        // the approval to whatever the action targets later, unasked.
+        const schema = z.object({ confirmed: z.boolean().optional() }).optional();
+        const run = vi.fn().mockResolvedValue(undefined);
+        service.register(makeAction("test.safe"));
+        service.register(makeAction("test.escalating", { argsSchema: schema, run }));
+
+        await service.dispatch("test.safe" as ActionId, undefined, { source: "user" });
+        await service.dispatch("test.escalating" as ActionId, { confirmed: true }, { source });
+
+        expect(run).toHaveBeenCalledWith({ confirmed: true }, expect.anything());
+        expect(service.getLastAction()).toEqual({ actionId: "test.safe", args: undefined });
+      }
+    );
+
+    it("does not capture a confirmation the schema fills in (#17205)", async () => {
+      const schema = z.object({ confirmed: z.boolean().default(true) });
+      service.register(makeAction("test.defaultConfirmed", { argsSchema: schema }));
+
+      await service.dispatch("test.defaultConfirmed" as ActionId, {}, { source: "user" });
+      expect(service.getLastAction()).toBeNull();
+    });
+
+    it("does not capture a dispatch the host marked confirmed (#17205)", async () => {
+      service.register(makeAction("test.hostConfirmed"));
+
+      await service.dispatch("test.hostConfirmed" as ActionId, undefined, {
+        source: "user",
+        confirmed: true,
+      });
+      expect(service.getLastAction()).toBeNull();
+    });
+
+    it("still captures a dispatch whose confirmed flag is false or absent", async () => {
+      const schema = z.object({ confirmed: z.boolean().optional() }).optional();
+      service.register(makeAction("test.escalating", { argsSchema: schema }));
+
+      await service.dispatch("test.escalating" as ActionId, { confirmed: false }, { source: "user" });
+      expect(service.getLastAction()).toEqual({
+        actionId: "test.escalating",
+        args: { confirmed: false },
+      });
+
+      await service.dispatch("test.escalating" as ActionId, undefined, {
+        source: "keybinding",
+        confirmed: false,
+      });
+      expect(service.getLastAction()).toEqual({ actionId: "test.escalating", args: undefined });
+    });
+
     it("outer dispatch captures after inner dispatch completes (nested ordering)", async () => {
       // Regression: when a user-dispatched action internally calls another
       // dispatch with source: "user", the outer action must win the lastAction

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 import type { AddPanelOptions } from "@/store/slices/panelRegistry/types";
+import type { ActionId } from "@shared/types/actions";
 
 const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const pushLayoutSnapshotMock = vi.hoisted(() => vi.fn());
@@ -774,6 +775,32 @@ describe("terminal.moveToNewWorktree", () => {
     await run("terminal.moveToNewWorktree", undefined);
 
     expect(moveToNewWorktree).toHaveBeenCalledExactlyOnceWith("p-focused");
+  });
+
+  it("isn't recorded for action.repeatLast, which would reopen its dialog unasked (#17205)", async () => {
+    const moveToNewWorktree = vi.fn();
+    setPanelState({
+      panels: [{ id: "p1", location: "grid", worktreeId: "wt-1" }],
+      moveToNewWorktree,
+    });
+    const actions: ActionRegistry = new Map();
+    registerTerminalSpawnActions(actions, {
+      getDefaultCwd: () => "/cwd",
+      getActiveWorktreeId: () => "wt-1",
+    } as unknown as ActionCallbacks);
+    const { ActionService } = await import("@/services/ActionService");
+    const service = new ActionService();
+    service.register(actions.get("terminal.moveToNewWorktree")!() as AnyActionDefinition);
+
+    const result = await service.dispatch(
+      "terminal.moveToNewWorktree" as ActionId,
+      { terminalId: "p1" },
+      { source: "context-menu" }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(moveToNewWorktree).toHaveBeenCalledExactlyOnceWith("p1");
+    expect(service.getLastAction()).toBeNull();
   });
 
   it("does nothing when there is no panel to move", async () => {
