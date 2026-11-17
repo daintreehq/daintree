@@ -257,7 +257,9 @@ describe("LinksSettingsTab and other views", () => {
   it("shows a link another view added", () => {
     renderTab();
     act(() => {
-      useGlobalLinksStore.getState().addLink({ title: "Status", url: "https://status.example.com" });
+      useGlobalLinksStore
+        .getState()
+        .addLink({ title: "Status", url: "https://status.example.com" });
     });
     expect(screen.getByRole("button", { name: "Edit Status" })).toBeTruthy();
   });

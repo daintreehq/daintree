@@ -97,7 +97,9 @@ export function LinksSettingsTab() {
       focusTarget.kind === "edit"
         ? find(edit)
         : (find(`[data-global-link-move="${id}:${focusTarget.direction}"]`) ??
-          find(`[data-global-link-move="${id}:${focusTarget.direction === "up" ? "down" : "up"}"]`) ??
+          find(
+            `[data-global-link-move="${id}:${focusTarget.direction === "up" ? "down" : "up"}"]`
+          ) ??
           find(edit));
     if (!target) return;
     // Keeping focus in the list is not asking for that button's tooltip.
