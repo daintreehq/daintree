@@ -2699,7 +2699,9 @@ describe("CloudHostLifecycle stale inspections (#17548)", () => {
     // The next read is held until the test answers it.
     const holdNextInspect = () => {
       const held = deferred<ProviderResource>();
-      vi.mocked(env.provider.inspect).mockClear().mockImplementationOnce(() => held.promise);
+      vi.mocked(env.provider.inspect)
+        .mockClear()
+        .mockImplementationOnce(() => held.promise);
       return held;
     };
     const pollDue = () => (env.lifecycle as unknown as { pollDue(): Promise<void> }).pollDue();
