@@ -60,8 +60,23 @@ export interface GitLabMergeRequest {
 
 export interface GitLabPipeline {
   id?: number;
+  /** The project the pipeline ran in, which for a fork's merge request is the fork. */
+  project_id?: number;
   status?: string;
   web_url?: string;
+}
+
+/** A pipeline job, or a trigger job ("bridge") that starts a downstream pipeline. */
+export interface GitLabJob {
+  id?: number;
+  name?: string;
+  stage?: string;
+  status?: string;
+  allow_failure?: boolean;
+  failure_reason?: string | null;
+  web_url?: string;
+  /** Bridges only: the pipeline this trigger job started, once it has. */
+  downstream_pipeline?: GitLabPipeline | null;
 }
 
 export interface GitLabProject {

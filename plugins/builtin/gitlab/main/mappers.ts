@@ -1,4 +1,5 @@
 import type {
+  CheckRun,
   CIStatusState,
   ForgeLabel,
   ForgeUser,
@@ -15,6 +16,7 @@ import type {
 } from "../../../../shared/types/forge.js";
 import type {
   GitLabIssue,
+  GitLabJob,
   GitLabMergeRequest,
   GitLabNote,
   GitLabRelease,
@@ -161,6 +163,77 @@ export function pipelineStatusToCIState(status: unknown): CIStatusState | undefi
     default:
       return "unknown";
   }
+}
+
+/** Failure reasons GitLab gives a job that ran out of time rather than failed its script. */
+const TIMEOUT_FAILURE_REASONS: ReadonlySet<string> = new Set([
+  "job_execution_timeout",
+  "stuck_or_timeout_failure",
+]);
+
+function jobOutcome(job: GitLabJob): Pick<CheckRun, "status" | "conclusion"> {
+  const status = typeof job.status === "string" ? job.status.toLowerCase() : "";
+  switch (status) {
+    case "created":
+    case "waiting_for_resource":
+    case "waiting_for_callback":
+    case "preparing":
+    case "pending":
+    case "scheduled":
+      return { status: "queued" };
+    case "running":
+    case "canceling":
+      return { status: "in_progress" };
+    case "success":
+      return { status: "completed", conclusion: "success" };
+    case "failed":
+      return {
+        status: "completed",
+        conclusion:
+          typeof job.failure_reason === "string" && TIMEOUT_FAILURE_REASONS.has(job.failure_reason)
+            ? "timed_out"
+            : "failure",
+      };
+    case "canceled":
+      return { status: "completed", conclusion: "cancelled" };
+    case "skipped":
+      return { status: "completed", conclusion: "skipped" };
+    case "manual":
+      // Waiting for someone to play it. A manual job the pipeline is blocked on
+      // is something to do; an optional one (a deploy button) is not.
+      return {
+        status: "completed",
+        conclusion: job.allow_failure === true ? "neutral" : "action_required",
+      };
+    default:
+      // A status this mapping doesn't know: no verdict, rather than a guessed one.
+      return { status: "completed" };
+  }
+}
+
+/**
+ * One job or trigger job from a pipeline's job lists → {@link CheckRun}.
+ * `null` for an entry with no name, which the caller treats as an unreadable
+ * check rather than one to leave out.
+ */
+export function gitlabJobToCheckRun(job: GitLabJob): CheckRun | null {
+  if (!job || typeof job !== "object") return null;
+  if (typeof job.name !== "string" || !job.name.trim()) return null;
+  // A trigger job's own page has no log; the pipeline it started is where its
+  // result lives.
+  const downstreamUrl = job.downstream_pipeline?.web_url;
+  const detailsUrl =
+    typeof downstreamUrl === "string" && downstreamUrl ? downstreamUrl : job.web_url;
+  return {
+    name: job.name,
+    ...jobOutcome(job),
+    // An allowed failure never fails the pipeline, so it can't hold up a merge.
+    // GitLab says nothing either way about whether any other job does.
+    ...(job.allow_failure === true ? { required: false } : {}),
+    ...(typeof detailsUrl === "string" && detailsUrl ? { detailsUrl } : {}),
+    ...(typeof job.stage === "string" && job.stage.trim() ? { workflow: job.stage } : {}),
+    rawData: job,
+  };
 }
 
 /**

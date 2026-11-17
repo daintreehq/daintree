@@ -886,6 +886,219 @@ describe("getCIStatus", () => {
   });
 });
 
+describe("checks.getChecks", () => {
+  const getChecks = (iid: number) => gitlabForgeProvider.checks!.getChecks(REPO, iid);
+
+  /** Answers the MR read and each job list by path, so call order doesn't matter. */
+  function routeChecks(routes: {
+    mr: () => Response;
+    jobs?: (page: string) => Response;
+    bridges?: (page: string) => Response;
+  }) {
+    fetchMock().mockImplementation(async (input: unknown) => {
+      const url = new URL(String(input));
+      const page = url.searchParams.get("page") ?? "1";
+      if (url.pathname.endsWith("/jobs")) return (routes.jobs ?? (() => jsonResponse([])))(page);
+      if (url.pathname.endsWith("/bridges")) {
+        return (routes.bridges ?? (() => jsonResponse([])))(page);
+      }
+      return routes.mr();
+    });
+  }
+
+  it("lists the head pipeline's jobs and trigger jobs as checks", async () => {
+    routeChecks({
+      mr: () =>
+        jsonResponse({ iid: 3, state: "opened", head_pipeline: { id: 77, status: "failed" } }),
+      jobs: () =>
+        jsonResponse([
+          {
+            id: 1,
+            name: "rspec",
+            stage: "test",
+            status: "failed",
+            allow_failure: false,
+            web_url: "https://gitlab.com/group/project/-/jobs/1",
+          },
+          { id: 2, name: "lint", stage: "test", status: "running", allow_failure: false },
+          { id: 3, name: "build", stage: "build", status: "success", allow_failure: false },
+        ]),
+      bridges: () =>
+        jsonResponse([
+          {
+            id: 4,
+            name: "deploy-docs",
+            stage: "deploy",
+            status: "pending",
+            allow_failure: false,
+            web_url: "https://gitlab.com/group/project/-/jobs/4",
+            downstream_pipeline: {
+              id: 90,
+              status: "pending",
+              web_url: "https://gitlab.com/group/docs/-/pipelines/90",
+            },
+          },
+        ]),
+    });
+
+    const result = await getChecks(3);
+
+    expect(result?.checks.map(({ rawData: _raw, ...check }) => check)).toEqual([
+      {
+        name: "rspec",
+        status: "completed",
+        conclusion: "failure",
+        detailsUrl: "https://gitlab.com/group/project/-/jobs/1",
+        workflow: "test",
+      },
+      { name: "lint", status: "in_progress", workflow: "test" },
+      { name: "build", status: "completed", conclusion: "success", workflow: "build" },
+      {
+        name: "deploy-docs",
+        status: "queued",
+        // A trigger job's result lives in the pipeline it started.
+        detailsUrl: "https://gitlab.com/group/docs/-/pipelines/90",
+        workflow: "deploy",
+      },
+    ]);
+    const urls = fetchMock().mock.calls.map((call) => requestUrl(call));
+    expect(urls).toContain(
+      "https://gitlab.com/api/v4/projects/group%2Fproject/pipelines/77/jobs?per_page=100&page=1"
+    );
+    expect(urls).toContain(
+      "https://gitlab.com/api/v4/projects/group%2Fproject/pipelines/77/bridges?per_page=100&page=1"
+    );
+  });
+
+  it("maps GitLab's job vocabulary onto check statuses and conclusions", async () => {
+    const statuses: Array<[Record<string, unknown>, string, string | undefined]> = [
+      [{ status: "created" }, "queued", undefined],
+      [{ status: "waiting_for_resource" }, "queued", undefined],
+      [{ status: "preparing" }, "queued", undefined],
+      [{ status: "pending" }, "queued", undefined],
+      [{ status: "scheduled" }, "queued", undefined],
+      [{ status: "canceling" }, "in_progress", undefined],
+      [{ status: "failed", failure_reason: "job_execution_timeout" }, "completed", "timed_out"],
+      [{ status: "failed", failure_reason: "script_failure" }, "completed", "failure"],
+      [{ status: "canceled" }, "completed", "cancelled"],
+      [{ status: "skipped" }, "completed", "skipped"],
+      [{ status: "manual", allow_failure: false }, "completed", "action_required"],
+      [{ status: "manual", allow_failure: true }, "completed", "neutral"],
+      [{ status: "some_future_status" }, "completed", undefined],
+    ];
+    routeChecks({
+      mr: () => jsonResponse({ iid: 3, head_pipeline: { id: 77, status: "running" } }),
+      jobs: () =>
+        jsonResponse(statuses.map(([fields], i) => ({ id: i + 1, name: `job-${i}`, ...fields }))),
+    });
+
+    const result = await getChecks(3);
+
+    expect(result?.checks.map((check) => [check.status, check.conclusion])).toEqual(
+      statuses.map(([, status, conclusion]) => [status, conclusion])
+    );
+  });
+
+  it("marks an allowed-to-fail job as not gating the merge", async () => {
+    routeChecks({
+      mr: () => jsonResponse({ iid: 3, head_pipeline: { id: 77, status: "success" } }),
+      jobs: () =>
+        jsonResponse([
+          { id: 1, name: "flaky", status: "failed", allow_failure: true },
+          { id: 2, name: "unit", status: "failed", allow_failure: false },
+        ]),
+    });
+
+    const [allowed, gating] = (await getChecks(3))!.checks;
+
+    expect(allowed).toMatchObject({ conclusion: "failure", required: false });
+    expect(gating.conclusion).toBe("failure");
+    // GitLab doesn't say whether a pipeline gates the merge, so nothing claims it does.
+    expect(gating).not.toHaveProperty("required");
+  });
+
+  it("reads the jobs of a fork's pipeline from the project it ran in", async () => {
+    routeChecks({
+      mr: () =>
+        jsonResponse({ iid: 3, head_pipeline: { id: 77, project_id: 4242, status: "running" } }),
+    });
+
+    await getChecks(3);
+
+    const urls = fetchMock().mock.calls.map((call) => requestUrl(call));
+    expect(urls).toContain(
+      "https://gitlab.com/api/v4/projects/4242/pipelines/77/jobs?per_page=100&page=1"
+    );
+  });
+
+  it("pages every job list to the end", async () => {
+    routeChecks({
+      mr: () => jsonResponse({ iid: 3, head_pipeline: { id: 77, status: "running" } }),
+      jobs: (page) =>
+        page === "1"
+          ? jsonResponse([{ id: 1, name: "first", status: "success" }], {
+              headers: { "x-next-page": "2" },
+            })
+          : jsonResponse([{ id: 2, name: "second", status: "success" }]),
+    });
+
+    const result = await getChecks(3);
+
+    expect(result?.checks.map((check) => check.name)).toEqual(["first", "second"]);
+  });
+
+  it("rejects rather than returning a list that pagination cut short", async () => {
+    routeChecks({
+      mr: () => jsonResponse({ iid: 3, head_pipeline: { id: 77, status: "running" } }),
+      // A next page that points back at itself never ends.
+      jobs: () =>
+        jsonResponse([{ id: 1, name: "loop", status: "success" }], {
+          headers: { "x-next-page": "1" },
+        }),
+    });
+
+    await expect(getChecks(3)).rejects.toThrow(/pagination stalled/);
+  });
+
+  it("rejects a job it can't name instead of leaving it out", async () => {
+    routeChecks({
+      mr: () => jsonResponse({ iid: 3, head_pipeline: { id: 77, status: "failed" } }),
+      jobs: () => jsonResponse([{ id: 1, status: "failed" }]),
+    });
+
+    await expect(getChecks(3)).rejects.toThrow(/no name/);
+  });
+
+  it("returns no checks for a merge request with no pipeline", async () => {
+    routeChecks({ mr: () => jsonResponse({ iid: 3, state: "opened", head_pipeline: null }) });
+
+    await expect(getChecks(3)).resolves.toEqual({ checks: [] });
+    expect(fetchMock()).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects when GitLab leaves the pipeline out, rather than reporting no checks", async () => {
+    // GitLab omits `head_pipeline` for an account that can't read pipelines.
+    routeChecks({ mr: () => jsonResponse({ iid: 3, state: "opened" }) });
+
+    await expect(getChecks(3)).rejects.toThrow(/didn't report the merge request's pipeline/);
+  });
+
+  it("returns null for a merge request that doesn't exist", async () => {
+    routeChecks({ mr: () => jsonResponse({ message: "404 Not found" }, { status: 404 }) });
+
+    await expect(getChecks(3)).resolves.toBeNull();
+  });
+
+  it("rejects when a job list can't be read", async () => {
+    routeChecks({
+      mr: () => jsonResponse({ iid: 3, head_pipeline: { id: 77, status: "failed" } }),
+      jobs: () => jsonResponse({ message: "403 Forbidden" }, { status: 403 }),
+    });
+
+    await expect(getChecks(3)).rejects.toThrow();
+  });
+});
+
 function mrNode(iid: number, pipeline: { status: string } | null = { status: "SUCCESS" }) {
   return {
     iid: String(iid),
