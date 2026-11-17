@@ -20,7 +20,12 @@ vi.mock("@/components/Worktree/hooks/useFirstAgentOptions", () => ({
   useFirstAgentOptions: () => [{ id: "claude", name: "Claude", iconId: "claude" }],
 }));
 vi.mock("../useScheduleLaunchOptions", () => ({
-  useScheduleLaunchOptions: () => ({ presets: [], preset: undefined, stopsAtPrompts: false }),
+  useScheduleLaunchOptions: (_agentId: string, presetId: string | null) => ({
+    presets: [],
+    preset: undefined,
+    presetStatus: presetId === null ? "none" : "missing",
+    stopsAtPrompts: false,
+  }),
 }));
 const platformMock = vi.hoisted(() => ({
   isMac: vi.fn(() => true),

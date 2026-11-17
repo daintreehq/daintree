@@ -340,7 +340,7 @@ export function ScheduleEditor({
   const loadLatestRef = useRef<HTMLButtonElement>(null);
 
   const agents = useFirstAgentOptions();
-  const { presets, preset, stopsAtPrompts } = useScheduleLaunchOptions(
+  const { presets, preset, presetStatus, stopsAtPrompts } = useScheduleLaunchOptions(
     draft.agentId,
     draft.presetId
   );
@@ -438,9 +438,13 @@ export function ScheduleEditor({
     { value: NO_PRESET_VALUE, label: "No preset" },
     ...presets.map((p) => ({ value: p.id, label: p.name })),
   ];
-  const presetMissing = draft.presetId !== null && preset === undefined;
-  if (presetMissing) {
-    presetOptions.push({ value: draft.presetId!, label: "Missing preset" });
+  // A preset its stores haven't read yet is shown as loading, never as missing.
+  const presetMissing = presetStatus === "missing";
+  if (draft.presetId !== null && (presetMissing || presetStatus === "loading")) {
+    presetOptions.push({
+      value: draft.presetId,
+      label: presetMissing ? "Missing preset" : "Loading preset…",
+    });
   }
 
   const worktreeOptions: SettingsSelectOption[] = [
