@@ -440,6 +440,16 @@ describe("portalStore persistence migration", () => {
     });
     const kept = (await import("../portalStore")).usePortalStore;
     expect(kept.getState().links.some((l) => l.id === "system-grok")).toBe(false);
+
+    // A corrupt global list recovers from its backup, as its own hydration does.
+    vi.resetModules();
+    installLocalStorageWith({
+      [STORAGE_KEY]: portalBlob,
+      "daintree-global-links": "{not json",
+      "daintree-global-links.__bak": globalPayload([]),
+    });
+    const recovered = (await import("../portalStore")).usePortalStore;
+    expect(recovered.getState().links.some((l) => l.id === "system-grok")).toBe(true);
   });
 
   it("still runs the discovered→system merge migration after version check", async () => {

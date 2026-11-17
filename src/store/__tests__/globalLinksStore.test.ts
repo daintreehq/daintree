@@ -500,49 +500,72 @@ describe("globalLinksStore", () => {
       expect(storedIds(backing)).toEqual(settled);
     });
 
-    it("keeps a move between two tied links when a stale view later edits one of them", async () => {
-      const backing = installLocalStorage({
-        [KEY]: JSON.stringify({
-          state: {
-            links: [
-              {
-                id: "a",
-                title: "A",
-                url: "https://a.test",
-                icon: "globe",
-                enabled: true,
-                order: 0,
-              },
-              {
-                id: "b",
-                title: "B",
-                url: "https://b.test",
-                icon: "globe",
-                enabled: true,
-                order: 1,
-              },
-              {
-                id: "c",
-                title: "C",
-                url: "https://c.test",
-                icon: "globe",
-                enabled: true,
-                order: 1,
-              },
-            ],
-          },
-          version: 0,
-        }),
+    function tiedPayload(first: string) {
+      const link = (id: string, order: number) => ({
+        id,
+        title: id.toUpperCase(),
+        url: `https://${id}.test`,
+        icon: "globe",
+        enabled: true,
+        order,
       });
+      return JSON.stringify({
+        state: { links: [link(first, 0), link("b", 1), link("c", 1)] },
+        version: 0,
+      });
+    }
+
+    function storedRanks(backing: Map<string, string>): number[] {
+      return (stored(backing) as { state: { links: Array<{ order: number }> } }).state.links.map(
+        (l) => l.order
+      );
+    }
+
+    it("keeps a move between two tied links when a stale view later edits the one it passed", async () => {
+      const backing = installLocalStorage({ [KEY]: tiedPayload("z") });
       const mover = await loadStore();
       const stale = await loadStore();
-      expect(ids(mover.useGlobalLinksStore.getState().links)).toEqual(["a", "b", "c"]);
+      expect(ids(mover.useGlobalLinksStore.getState().links)).toEqual(["z", "b", "c"]);
 
       mover.useGlobalLinksStore.getState().reorderLinks(0, 1);
-      expect(storedIds(backing)).toEqual(["b", "a", "c"]);
+      expect(storedIds(backing)).toEqual(["b", "z", "c"]);
 
       stale.useGlobalLinksStore.getState().updateLink("c", { title: "Renamed" });
-      expect(storedIds(backing)).toEqual(["b", "a", "c"]);
+      expect(storedIds(backing)).toEqual(["b", "z", "c"]);
+      const ranks = storedRanks(backing);
+      expect(ranks.every((rank, i) => i === 0 || rank > ranks[i - 1]!)).toBe(true);
+    });
+
+    it("does not bring back a link a sibling removed when a stale view's move renumbers the list", async () => {
+      const backing = installLocalStorage({ [KEY]: tiedPayload("a") });
+      const remover = await loadStore();
+      const stale = await loadStore();
+
+      remover.useGlobalLinksStore.getState().removeLink("c");
+      stale.useGlobalLinksStore.getState().reorderLinks(0, 1);
+
+      expect(storedIds(backing)).toEqual(["b", "a"]);
+    });
+
+    it("keeps both views' edits to different fields of the same link", async () => {
+      const { backing, stale, sibling, b } = await threeLinksInTwoViews();
+
+      sibling.useGlobalLinksStore.getState().toggleLink(b);
+      stale.useGlobalLinksStore.getState().updateLink(b, { title: "Renamed" });
+
+      const link = (
+        stored(backing) as { state: { links: Array<Record<string, unknown>> } }
+      ).state.links.find((l) => l.id === b);
+      expect(link).toMatchObject({ title: "Renamed", enabled: false });
+    });
+
+    it("brings back a link a sibling removed only when a stale view edited what it says", async () => {
+      const { backing, stale, sibling, a, b, c } = await threeLinksInTwoViews();
+
+      sibling.useGlobalLinksStore.getState().removeLink(b);
+      stale.useGlobalLinksStore.getState().updateLink(b, { title: "Still wanted" });
+
+      expect(storedIds(backing)).toEqual([a, b, c]);
     });
 
     it("picks up a sibling view's change from a storage event", async () => {

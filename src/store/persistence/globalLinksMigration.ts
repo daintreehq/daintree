@@ -1,5 +1,5 @@
 import type { GlobalLink } from "../globalLinksStore";
-import { readLocalStorageItemSafely } from "./safeStorage";
+import { createSafeJSONStorage, readLocalStorageItemSafely } from "./safeStorage";
 
 /**
  * Links a person added for every project on this machine (#17242), kept apart
@@ -72,24 +72,19 @@ export function readLegacyUserLinks(envelope: unknown): GlobalLink[] {
 }
 
 /**
- * The URLs of the person's own links as the global list last stored them, or
- * null while that list has never been written (or can't be read), when the
- * Portal's copy is still the person's list.
+ * The URLs of the person's own links as the global list last stored them, read
+ * with the same backup recovery that list's hydration has, or null while it
+ * has never been written (or can't be read), when the Portal's copy is still
+ * the person's list. A stored list nothing can be recovered from holds none.
  */
 export function readStoredGlobalLinkUrls(): string[] | null {
-  const raw = readLocalStorageItemSafely(GLOBAL_LINKS_STORAGE_KEY);
-  if (raw === null) return null;
-  let envelope: unknown;
-  try {
-    envelope = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (!envelope || typeof envelope !== "object") return null;
-  const state = field(envelope, "state");
-  if (!state || typeof state !== "object") return null;
+  if (readLocalStorageItemSafely(GLOBAL_LINKS_STORAGE_KEY) === null) return null;
+  const envelope = createSafeJSONStorage<unknown>().getItem(GLOBAL_LINKS_STORAGE_KEY);
+  if (!envelope || envelope instanceof Promise) return [];
+  const { state } = envelope;
+  if (!state || typeof state !== "object") return [];
   const stored = field(state, "links");
-  if (!Array.isArray(stored)) return null;
+  if (!Array.isArray(stored)) return [];
   const urls: string[] = [];
   for (const entry of stored) {
     const link = sanitizeGlobalLink(entry, 0);

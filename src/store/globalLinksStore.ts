@@ -3,7 +3,7 @@ import { persist } from "zustand/middleware";
 import { reinsert, type RemovedPosition } from "@/lib/undoToast";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 import {
-  mergeRecordByWriterDelta,
+  pickFieldByWriterDelta,
   type PersistWriteMergeContext,
 } from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
@@ -102,24 +102,61 @@ function readLinks(persisted: unknown): GlobalLink[] | null {
   return sortedByOrder(clean);
 }
 
-function byId(links: readonly GlobalLink[]): Record<string, GlobalLink> {
-  return Object.fromEntries(links.map((link) => [link.id, link]));
+function byId(links: readonly GlobalLink[]): Map<string, GlobalLink> {
+  return new Map(links.map((link) => [link.id, link]));
 }
 
-// Every project view writes this key from its own V8 context; merge by the
-// writer's delta, link by link, so a stale view can't drop a link a sibling
-// just added or bring back one it removed.
+function contentChanged(before: GlobalLink, after: GlobalLink): boolean {
+  return (
+    before.title !== after.title ||
+    before.url !== after.url ||
+    before.icon !== after.icon ||
+    before.enabled !== after.enabled ||
+    before.alwaysEnabled !== after.alwaysEnabled
+  );
+}
+
+/** One link both this writer and storage hold: each field this writer changed wins. */
+function mergeLink(baseline: GlobalLink, incoming: GlobalLink, onDisk: GlobalLink): GlobalLink {
+  const pick = <K extends keyof GlobalLink>(key: K) =>
+    pickFieldByWriterDelta(baseline[key], incoming[key], onDisk[key]);
+  return {
+    id: incoming.id,
+    title: pick("title"),
+    url: pick("url"),
+    icon: pick("icon"),
+    enabled: pick("enabled"),
+    order: pick("order"),
+    ...(pick("alwaysEnabled") ? { alwaysEnabled: true as const } : {}),
+  };
+}
+
+// Every project view writes this key from its own V8 context, so a write
+// merges against what storage holds by the writer's delta, field by field: a
+// stale view can't drop a link a sibling added, undo a sibling's edit or move
+// with a field it never touched, or bring back a link a sibling removed by
+// re-ranking it. Only an edit to a removed link's content brings it back.
 function mergeLinks({
   baseline,
   onDisk,
   incoming,
 }: PersistWriteMergeContext<GlobalLinksPersistedState>) {
-  const merged = mergeRecordByWriterDelta(
-    byId(readLinks(baseline?.state) ?? []),
-    byId(incoming.state.links),
-    byId(readLinks(onDisk?.state) ?? [])
-  );
-  return { ...incoming, state: { links: sortedByOrder(Object.values(merged)) } };
+  const known = byId(readLinks(baseline?.state) ?? []);
+  const stored = byId(readLinks(onDisk?.state) ?? []);
+  const merged: GlobalLink[] = [];
+  const mine = new Set<string>();
+  for (const link of incoming.state.links) {
+    mine.add(link.id);
+    const before = known.get(link.id);
+    const current = stored.get(link.id);
+    if (!before) merged.push(link);
+    else if (current) merged.push(mergeLink(before, link, current));
+    else if (contentChanged(before, link)) merged.push(link);
+  }
+  for (const link of stored.values()) {
+    if (!mine.has(link.id) && !known.has(link.id)) merged.push(link);
+  }
+  return { ...incoming, state: { links: sortedByOrder(merged) } };
 }
 
 const storage = createSafeJSONStorage<GlobalLinksPersistedState>({ mergeOnWrite: mergeLinks });
