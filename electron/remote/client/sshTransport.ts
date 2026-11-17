@@ -278,10 +278,14 @@ const CONNECT_TIMEOUT = ["-o", "ConnectTimeout=10"];
 export const SSH_COMMAND_TIMEOUT_MS = 30_000;
 
 export function sshCommonArgs(controlPath: string, controlPersist = "10m"): string[] {
+  return sshMasterArgs(controlPath, controlPersist, "yes");
+}
+
+function sshMasterArgs(controlPath: string, controlPersist: string, batchMode: "yes" | "no") {
   return [
     ...OWN_COMMAND_ARGS,
     "-o",
-    "BatchMode=yes",
+    `BatchMode=${batchMode}`,
     ...CONNECT_TIMEOUT,
     ...KEEPALIVE,
     ...NO_FORWARDING,
@@ -299,6 +303,16 @@ export const PROBE_COMMAND = 'echo; uname -s; id -u; echo "$HOME"';
 
 export function buildProbeArgs(target: string, controlPath: string, persist?: string): string[] {
   return [...sshCommonArgs(controlPath, persist), "--", target, PROBE_COMMAND];
+}
+
+/**
+ * The one call that may prompt: a person's Sign in, after a batch call was
+ * refused the login (`SshSignInService`). The probe with BatchMode off, so ssh
+ * asks its SSH_ASKPASS; it leaves the same master every other call rides,
+ * and each of those stays in batch mode.
+ */
+export function buildSignInArgs(target: string, controlPath: string, persist = "10m"): string[] {
+  return [...sshMasterArgs(controlPath, persist, "no"), "--", target, PROBE_COMMAND];
 }
 
 const DISCOVERY_START = "@@dt:discovery";

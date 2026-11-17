@@ -4,7 +4,7 @@ import { Callout } from "@/components/ui/Callout";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import type { HostConnectionState, HostId } from "@shared/types/remoteHosts";
 import { clientErrorText } from "@/utils/clientAppError";
-import { connectionLabel } from "./hostLabels";
+import { connectionLabel, isLoginRefused } from "./hostLabels";
 
 /**
  * Why a picked host's work settings can't be changed right now, above the
@@ -23,7 +23,7 @@ export function HostLinkStatus({
   connection: HostConnectionState;
   /** A reading from before the link dropped is still shown under this. */
   hasReading: boolean;
-  /** Settings → Hosts → this host, where builds and Host mode are dealt with. */
+  /** Settings → Hosts → this host, where builds, Host mode and a refused login are dealt with. */
   onOpenHost: () => void;
 }) {
   const [connecting, setConnecting] = useState(false);
@@ -52,9 +52,11 @@ export function HostLinkStatus({
     connecting ||
     connection.status === "connecting" ||
     (connection.status === "unreachable" && connection.restarting === true);
+  // Each is moved on from the host's own page: a build, Host mode, or a Sign in.
   const needsHost =
     connection.status === "version-mismatch" ||
-    (connection.status === "unreachable" && connection.hostModeOff === true);
+    (connection.status === "unreachable" && connection.hostModeOff === true) ||
+    isLoginRefused(connection);
 
   const title =
     connection.status === "connected"

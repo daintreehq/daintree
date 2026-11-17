@@ -26,3 +26,28 @@ export function sshRefusalLine(stderr: string | null | undefined): string | null
   if (trimmed.length === 0) return null;
   return trimmed.length > SSH_SAID_MAX ? `${trimmed.slice(0, SSH_SAID_MAX - 1)}…` : trimmed;
 }
+
+export type SshRefusalAdvice = "untrusted-host-key" | "changed-host-key" | "login-refused";
+
+/**
+ * What ssh's own words say stopped a call that BatchMode refused, so the next
+ * step can be named. Callers keep only the last lines of stderr, so a changed
+ * key is told apart by its "has changed" or "Offending" line rather than the
+ * banner above them. `login-refused` is the only one a sign-in may follow: by
+ * then the host key has already passed.
+ */
+export function sshRefusalAdvice(sshError: string | null | undefined): SshRefusalAdvice | null {
+  if (!sshError) return null;
+  if (
+    /^Host key for \S+ has changed\b|REMOTE HOST IDENTIFICATION HAS CHANGED|^Offending \S+ key in /im.test(
+      sshError
+    )
+  ) {
+    return "changed-host-key";
+  }
+  if (/Host key verification failed|No \S+ host key is known/i.test(sshError)) {
+    return "untrusted-host-key";
+  }
+  if (/Permission denied \(/i.test(sshError)) return "login-refused";
+  return null;
+}

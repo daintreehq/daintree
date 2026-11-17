@@ -2945,6 +2945,9 @@ function buildElectronApi(): ElectronAPI {
       ...buildRemoteHostsPreloadBindings(_unwrappingInvoke),
       onEvent: (callback: (event: IpcEventMap["remote-hosts:event"]) => void) =>
         _typedOn("remote-hosts:event", callback),
+      onSshSignInEvent: (
+        callback: (event: IpcEventMap["remote-hosts:ssh-sign-in-event"]) => void
+      ) => _typedOn("remote-hosts:ssh-sign-in-event", callback),
     },
     cloudHosts: buildCloudHostsPreloadBindings(_unwrappingInvoke),
     hostMode: {

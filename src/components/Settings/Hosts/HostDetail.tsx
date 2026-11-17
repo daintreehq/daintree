@@ -39,8 +39,11 @@ import {
   connectionLabel,
   describeBuildDifference,
   platformLabel,
+  isLoginRefused,
   removeHostOutcome,
 } from "./hostLabels";
+import { SshSignInDialog } from "./SshSignInDialog";
+import { useSshSignIn } from "./useSshSignIn";
 import { describeHostForge } from "@/components/Hosts/hostForges";
 import { cancelPlacement } from "@/components/Hosts/pendingPlacement";
 import { clientErrorText } from "@/utils/clientAppError";
@@ -181,6 +184,9 @@ export function HostDetail({
     connection.status === "driven-elsewhere" ||
     (connection.status === "unreachable" && connection.stoppedRetrying !== true);
   const hostModeOff = connection.status === "unreachable" && connection.hostModeOff === true;
+  const loginRefused = sshTarget !== null && isLoginRefused(connection);
+  // Signed in, ssh's master is up: the link dials again in batch mode and rides it.
+  const signIn = useSshSignIn(() => connect());
   const buildMismatch = connected ? (connection.buildMismatch ?? null) : null;
   const agentClis = [...(liveSummary?.agentClis ?? [])]
     .map((cli) => ({ ...cli, name: getAgentConfig(cli.agentId)?.name ?? cli.agentId }))
@@ -381,6 +387,15 @@ export function HostDetail({
                     }}
                   >
                     Bring back
+                  </Button>
+                )}
+                {loginRefused && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => signIn.start(descriptor.connection)}
+                  >
+                    Sign in…
                   </Button>
                 )}
                 {hostModeOff && !placement && (
@@ -641,6 +656,13 @@ export function HostDetail({
       >
         {removeError && <InlineError role="alert">{removeError}</InlineError>}
       </ConfirmDialog>
+      <SshSignInDialog
+        hostLabel={hostName}
+        state={signIn.state}
+        onAnswer={signIn.answer}
+        onRetry={signIn.retry}
+        onClose={signIn.close}
+      />
       {changeTargetOpen && sshTarget !== null && (
         <ChangeHostTargetDialog
           isOpen

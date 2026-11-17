@@ -29,6 +29,12 @@ export const UPDATE_CHANNEL_FLAG = "--update-channel";
  */
 export const ATTACH_STDIO_FLAG = "--attach-stdio";
 /**
+ * Hand one ssh prompt to the Daintree whose Remote Hosts sign-in started that
+ * ssh, print the answer and exit (see `remote/client/sshAskpass.ts`): ssh's
+ * SSH_ASKPASS. Never a second instance, never a window.
+ */
+export const SSH_ASKPASS_FLAG = "--ssh-askpass";
+/**
  * Chromium picks its Ozone backend before any of our code runs, so a headless
  * Host has to be started with this switch on its command line; appending it
  * from the main process is too late, and Ozone aborts looking for X11.
@@ -57,6 +63,10 @@ export function requestedUpdateChannel(argv: readonly string[]): "stable" | "nig
 
 export function isAttachStdioRequested(argv: readonly string[]): boolean {
   return argv.includes(ATTACH_STDIO_FLAG);
+}
+
+export function isSshAskpassRequested(argv: readonly string[]): boolean {
+  return argv.includes(SSH_ASKPASS_FLAG);
 }
 
 export function isHostModeHandoffOnly(argv: readonly string[]): boolean {
