@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { FileDiff as FileDiffIcon } from "lucide-react";
 import { Pilcrow } from "@/components/icons";
+import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import type { GitStatus } from "@shared/types/git";
 import type { DiffPanelData } from "@shared/types/panel";
 import { isAbsolute, join, resolveWorktreePathScope } from "@shared/utils/path";
@@ -773,6 +774,9 @@ export function DiffPane({
     if (!refocus || !trigger) return;
     const active = document.activeElement;
     if (active && active !== document.body && active.isConnected) return;
+    // A hand-off, not a move the user made: the menu button's tooltip must not
+    // open with the pointer nowhere near it.
+    armTooltipFocusSuppression();
     trigger.focus(
       refocus.ringless ? { preventScroll: true, focusVisible: false } : { preventScroll: true }
     );

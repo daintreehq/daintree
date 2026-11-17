@@ -2141,20 +2141,51 @@ describe("DiffPane ignore whitespace toggle (#17325)", () => {
     expect(preferences.setDiffIgnoreWhitespace).toHaveBeenCalledWith(true);
   });
 
-  it("stays out of the fold on a narrow panel while on, so the filter is never hidden", async () => {
+  it("stays out of the fold on a narrow panel while on, and folds back once off", async () => {
     preferences.diffIgnoreWhitespace = true;
     seedPanel({ filePath: "src/a.ts", fileStatus: "modified", changeSet: [entry("src/a.ts")] });
-    renderNarrow();
+    const { rerender } = renderNarrow();
 
     const button = toolbarToggle();
     expect(button?.getAttribute("aria-pressed")).toBe("true");
-    fireEvent.click(button!);
-    expect(preferences.setDiffIgnoreWhitespace).toHaveBeenCalledWith(false);
-
-    const menu = await openMoreActions();
+    let menu = await openMoreActions();
     expect(within(menu).queryByRole("menuitemcheckbox", { name: LABEL })).toBeNull();
     expect(within(menu).getByRole("menuitemcheckbox", { name: "Wrap long lines" })).toBeTruthy();
+    await act(async () => {
+      fireEvent.keyDown(menu, { key: "Escape" });
+    });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+
+    fireEvent.click(button!);
+    rerender(paneElement());
+
+    expect(preferences.setDiffIgnoreWhitespace).toHaveBeenCalledWith(false);
+    expect(toolbarToggle()).toBeNull();
+    menu = await openMoreActions();
+    const row = within(menu).getByRole("menuitemcheckbox", { name: LABEL });
+    expect(row.getAttribute("aria-checked")).toBe("false");
   });
+
+  it.each(["media/clip.mp4", "media/track.mp3", "docs/spec.pdf"])(
+    "is absent from %s, which previews the file rather than diffing it",
+    (path) => {
+      // The previews fetch the working-tree bytes; held pending, they never land.
+      const realFetch = globalThis.fetch;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() => new Promise(() => {}))
+      );
+      try {
+        preferences.diffIgnoreWhitespace = true;
+        seedPanel({ filePath: path, fileStatus: "modified", changeSet: [entry(path)] });
+        renderNarrow();
+
+        expect(toolbarToggle()).toBeNull();
+      } finally {
+        vi.stubGlobal("fetch", realFetch);
+      }
+    }
+  );
 
   it("hands focus to More actions when switching off folds the narrow button away", () => {
     preferences.diffIgnoreWhitespace = true;

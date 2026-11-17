@@ -1744,6 +1744,54 @@ describe("DiffViewer full file scope", () => {
     ]);
   });
 
+  it("fills each gap on the old side's lines once an earlier hunk has shifted them", () => {
+    // An insertion near the top moves every later new-side line down by one, so
+    // a gap bounded by new-side numbers would reach into the second hunk.
+    const lines = Array.from({ length: 20 }, (_, i) => `l${i + 1}`);
+    const diff = [
+      "diff --git a/f.ts b/f.ts",
+      "index 86bba90..e078a51 100644",
+      "--- a/f.ts",
+      "+++ b/f.ts",
+      "@@ -1,5 +1,6 @@",
+      " l1",
+      " l2",
+      "+A",
+      " l3",
+      " l4",
+      " l5",
+      "@@ -12,7 +13,7 @@ l11",
+      " l12",
+      " l13",
+      " l14",
+      "-l15",
+      "+X15",
+      " l16",
+      " l17",
+      " l18",
+      "",
+    ].join("\n");
+    const source = [
+      ...lines.slice(0, 2),
+      "A",
+      ...lines.slice(2).map((line) => (line === "l15" ? "X15" : line)),
+    ].join("\n");
+
+    renderViewer({ diff, source, fullFile: true });
+
+    expect(renderedContent()).toEqual([
+      ...lines.slice(0, 2),
+      "A",
+      ...lines.slice(2, 14),
+      "l15",
+      "X15",
+      ...lines.slice(15),
+    ]);
+    const hunks = capturedHunks();
+    expect(hunks.reduce((sum, hunk) => sum + hunk.oldLines, 0)).toBe(20);
+    expect(hunks.reduce((sum, hunk) => sum + hunk.newLines, 0)).toBe(21);
+  });
+
   it("keeps a trailing insert when an earlier hunk precedes the one ending the file", () => {
     // A range covering the whole last hunk kept the plain lines and dropped the
     // hunk, taking the appended line with it.
