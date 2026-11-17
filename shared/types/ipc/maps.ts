@@ -1,4 +1,9 @@
-import type { GitCommitResult, GitRemoteCommitPreview, StagingStatus } from "../git.js";
+import type {
+  GitCommitResult,
+  GitRemoteCommitPreview,
+  RepoOperationPin,
+  StagingStatus,
+} from "../git.js";
 import type { AgentId } from "../agent.js";
 import type {
   VoiceInputError,
@@ -1025,11 +1030,11 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: StagingStatus;
   };
   "git:abort-repository-operation": {
-    args: [cwd: string];
+    args: [cwd: string, expected?: RepoOperationPin];
     result: void;
   };
   "git:continue-repository-operation": {
-    args: [cwd: string];
+    args: [cwd: string, expected?: RepoOperationPin];
     result: void;
   };
   "git:scan-conflict-markers": {

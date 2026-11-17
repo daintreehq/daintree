@@ -4,7 +4,7 @@ import { syncBuiltinESMExports } from "node:module";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { StagingStatus } from "../../../../shared/types/git.js";
+import type { RepoOperationPin, StagingStatus } from "../../../../shared/types/git.js";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -970,5 +970,130 @@ describe("git-write repository operation handlers on a halted git am (real git)"
     expect(fs.existsSync(path.join(repo, ".git", "rebase-apply"))).toBe(false);
     expect(git(repo, "rev-parse", "HEAD").trim()).toBe(tip);
     expect(git(repo, "status", "--porcelain")).toBe("");
+  });
+});
+
+describe("abort and continue act only on the operation the user chose (real git, #17559)", () => {
+  /** A git command expected to stop on a conflict, which exits non-zero. */
+  function gitHalting(cwd: string, ...args: string[]): void {
+    try {
+      git(cwd, ...args);
+    } catch {
+      // The halt is the point; the tests assert on the state it leaves.
+    }
+  }
+
+  const statusAt = (cwd: string) =>
+    handler(CHANNELS.GIT_GET_STAGING_STATUS)(null, cwd) as Promise<StagingStatus>;
+  const abortAt = (cwd: string, pin?: RepoOperationPin) =>
+    handler(CHANNELS.GIT_ABORT_REPOSITORY_OPERATION)(null, cwd, pin);
+  const continueAt = (cwd: string, pin?: RepoOperationPin) =>
+    handler(CHANNELS.GIT_CONTINUE_REPOSITORY_OPERATION)(null, cwd, pin);
+
+  async function pinAt(cwd: string): Promise<RepoOperationPin> {
+    const status = await statusAt(cwd);
+    expect(status.repoState).not.toMatch(/^(CLEAN|DIRTY)$/);
+    expect(status.repoOperationId).toEqual(expect.any(String));
+    return {
+      operation: status.repoState as RepoOperationPin["operation"],
+      operationId: status.repoOperationId,
+    };
+  }
+
+  /** `main` and `side` both change f.txt, so merging or rebasing one onto the other conflicts. */
+  function divergedBranches(sideCommits = 1): void {
+    // The handlers' own git commits on continue, and reads no identity from the
+    // test's environment.
+    git(repo, "config", "user.name", "Test");
+    git(repo, "config", "user.email", "test@example.test");
+    commitFiles({ "f.txt": "base\n" });
+    git(repo, "checkout", "-q", "-b", "side");
+    for (let i = 1; i <= sideCommits; i++) {
+      fs.writeFileSync(path.join(repo, "f.txt"), `side ${i}\n`);
+      git(repo, "commit", "-q", "-am", `side ${i}`);
+    }
+    git(repo, "checkout", "-q", "main");
+    fs.writeFileSync(path.join(repo, "f.txt"), "main\n");
+    git(repo, "commit", "-q", "-am", "main");
+  }
+
+  // Linux stamps files from a coarse clock, a jiffy (up to 10ms) wide, and can
+  // hand a just-freed inode straight back: a restart inside the same tick could
+  // otherwise land on an identical file identity. Real clients take far longer
+  // than this between an abort and a fresh start.
+  const pastTimestampGranularity = () => new Promise((resolve) => setTimeout(resolve, 25));
+
+  it("refuses a merge restarted on the same commits, for abort and continue, then accepts a fresh choice", async () => {
+    divergedBranches();
+    gitHalting(repo, "merge", "side");
+    const chosen = await pinAt(repo);
+    expect(chosen.operation).toBe("MERGING");
+
+    git(repo, "merge", "--abort");
+    await pastTimestampGranularity();
+    gitHalting(repo, "merge", "side");
+    // Resolved and staged, so a continue that ran would commit the new merge.
+    fs.writeFileSync(path.join(repo, "f.txt"), "resolved\n");
+    git(repo, "add", "f.txt");
+    const mergeHead = path.join(repo, ".git", "MERGE_HEAD");
+
+    const mark = spawned.length;
+    await expect(abortAt(repo, chosen)).rejects.toMatchObject({
+      reason: "repo-operation-changed",
+    });
+    await expect(continueAt(repo, chosen)).rejects.toMatchObject({
+      reason: "repo-operation-changed",
+    });
+    expect(spawnedSince(mark).map(subcommand)).not.toContain("merge");
+    expect(fs.existsSync(mergeHead)).toBe(true);
+    expect(git(repo, "diff", "--cached", "--name-only")).toBe("f.txt\n");
+
+    const current = await pinAt(repo);
+    expect(current.operationId).not.toBe(chosen.operationId);
+    await abortAt(repo, current);
+    expect(fs.existsSync(mergeHead)).toBe(false);
+  });
+
+  it("refuses an operation of another kind, and one that has ended", async () => {
+    divergedBranches();
+    gitHalting(repo, "merge", "side");
+    const chosen = await pinAt(repo);
+
+    git(repo, "merge", "--abort");
+    await expect(abortAt(repo, chosen)).rejects.toThrow(/no longer in progress/);
+
+    gitHalting(repo, "cherry-pick", "side");
+    await expect(abortAt(repo, chosen)).rejects.toThrow(/cherry-pick is in progress now/);
+    expect(fs.existsSync(path.join(repo, ".git", "CHERRY_PICK_HEAD"))).toBe(true);
+  });
+
+  it("keeps one rebase's pin across its steps in a linked worktree", async () => {
+    divergedBranches(2);
+    const linked = path.join(tmp, "linked");
+    git(repo, "worktree", "add", "-q", linked, "side");
+    gitHalting(linked, "rebase", "main");
+    const chosen = await pinAt(linked);
+    expect(chosen.operation).toBe("REBASING");
+
+    // Resolving step 1 and continuing stops again on step 2's conflict, which
+    // the handler reports as a failure while the rebase has moved on.
+    fs.writeFileSync(path.join(linked, "f.txt"), "resolved 1\n");
+    git(linked, "add", "f.txt");
+    await expect(continueAt(linked, chosen)).rejects.toThrow(/could not apply/i);
+    const second = await statusAt(linked);
+    expect(second.repoState).toBe("REBASING");
+    expect(second.rebaseStep).toBe(2);
+    expect(second.repoOperationId).toBe(chosen.operationId);
+
+    await abortAt(linked, chosen);
+    expect((await statusAt(linked)).repoState).toBe("CLEAN");
+    expect(git(linked, "log", "-1", "--format=%s")).toBe("side 2\n");
+  });
+
+  it("reports no operation id for a clean worktree", async () => {
+    commitFiles({ "f.txt": "base\n" });
+    const status = await stagingStatus();
+    expect(status.repoState).toBe("CLEAN");
+    expect(status.repoOperationId).toBeNull();
   });
 });

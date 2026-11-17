@@ -167,6 +167,7 @@ describe("getRetryability", () => {
       "push-rejected-outdated",
       "push-rejected-policy",
       "pull-rebase-review-stale",
+      "repo-operation-changed",
       "pathspec-invalid",
       "lfs-missing",
       "lfs-quota-exceeded",

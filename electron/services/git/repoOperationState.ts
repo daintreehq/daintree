@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { SimpleGit } from "simple-git";
@@ -5,6 +6,7 @@ import type { RebaseSequence, RepoState } from "../../../shared/types/git.js";
 import {
   MAILBOX_APPLY_MARKER,
   OPERATION_SENTINEL_NAMES,
+  getRepoOperationState,
 } from "../../utils/gitRepoOperationState.js";
 import { resolveGitDirFromFs } from "../../utils/gitUtils.js";
 import { readRebaseSequence } from "../../utils/parseRebaseTodo.js";
@@ -108,4 +110,79 @@ export async function detectRepoOperationState(
     rebaseTotalSteps: null,
     rebaseSequence: null,
   };
+}
+
+/**
+ * The file `state`'s operation writes once, as it starts, and keeps untouched
+ * until it ends, relative to the git dir.
+ *
+ * Everything else in the operation's state moves while it runs: a rebase
+ * rewrites `msgnum`, `done` and the todo on every step, and a multi-commit
+ * cherry-pick or revert rewrites `CHERRY_PICK_HEAD`/`REVERT_HEAD` for each
+ * commit it stops on, so those are not the operation, only where it is.
+ *
+ * - A rebase's `orig-head` (both backends). `git am` also uses `rebase-apply/`
+ *   but writes no `orig-head`, so an `am` session has no anchor and no pin.
+ * - A multi-commit cherry-pick or revert's `sequencer/head`, the HEAD it
+ *   started from, which is also what git's own `--abort` rolls back to. A
+ *   single-commit one runs without a sequencer and has only its `*_HEAD`.
+ * - A merge's `MERGE_HEAD`.
+ */
+async function operationAnchor(gitDir: string, state: RepoState): Promise<string | null> {
+  switch (state) {
+    case "REBASING":
+      return (await pathExists(path.join(gitDir, "rebase-merge")))
+        ? "rebase-merge/orig-head"
+        : "rebase-apply/orig-head";
+    case "CHERRY_PICKING":
+    case "REVERTING":
+      if (await pathExists(path.join(gitDir, "sequencer"))) return "sequencer/head";
+      return state === "CHERRY_PICKING" ? "CHERRY_PICK_HEAD" : "REVERT_HEAD";
+    case "MERGING":
+      return "MERGE_HEAD";
+    default:
+      return null;
+  }
+}
+
+/**
+ * Identify the operation `state` names (#17559): the same answer for every
+ * read across its whole life, and a different one once it is replaced.
+ *
+ * The anchor's content alone is not enough: abort a merge and start it again
+ * from the same commit and `MERGE_HEAD` holds the same OID, yet the conflict
+ * work in the new one is not what anybody agreed to discard. So the file's
+ * own identity goes in too. A restart writes a new file, which gets a new
+ * inode or modification time; nothing during one operation rewrites it.
+ *
+ * `null` when the operation has no anchor or it cannot be read (it ended
+ * mid-read, or an `am` session). Null never matches a pin, so an operation
+ * this cannot identify is one no pin can approve.
+ */
+export async function readRepoOperationId(
+  gitDir: string,
+  state: RepoState
+): Promise<string | null> {
+  const anchor = await operationAnchor(gitDir, state);
+  if (anchor === null) return null;
+  const file = path.join(gitDir, ...anchor.split("/"));
+  try {
+    const [stat, content] = await Promise.all([
+      fs.promises.stat(file, { bigint: true }),
+      fs.promises.readFile(file, "utf8"),
+    ]);
+    if (!stat.isFile()) return null;
+    return createHash("sha256")
+      .update([state, anchor, String(stat.ino), String(stat.mtimeNs), content].join("\0"))
+      .digest("hex")
+      .slice(0, 32);
+  } catch {
+    return null;
+  }
+}
+
+/** {@link readRepoOperationId} for a caller that has not classified the state itself. */
+export async function readCurrentRepoOperationId(gitDir: string): Promise<string | null> {
+  const state = await getRepoOperationState(gitDir);
+  return state === undefined ? null : readRepoOperationId(gitDir, state);
 }

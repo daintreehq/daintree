@@ -34,6 +34,7 @@ import type {
   GitRemoteCommitPreview,
   GitStatus,
   RebaseSequence,
+  RepoOperationPin,
   RepoState,
   StagingStatus,
 } from "../../../shared/types/git.js";
@@ -62,7 +63,12 @@ import {
 import { store } from "../../store.js";
 import { getSoundService } from "../../services/getSoundService.js";
 import type * as SoundServiceModule from "../../services/SoundService.js";
-import { detectRepoOperationState, resolveGitDir } from "../../services/git/repoOperationState.js";
+import {
+  detectRepoOperationState,
+  readCurrentRepoOperationId,
+  readRepoOperationId,
+  resolveGitDir,
+} from "../../services/git/repoOperationState.js";
 import { RESOLVE_UNDO_ARGS, parseResolveUndoPaths } from "../../services/git/resolveUndo.js";
 import {
   parsePorcelainV2Conflicts,
@@ -1004,6 +1010,85 @@ function basePreviewUnresolvedError(
     "pathspec-invalid",
     encodeGitOperationErrorMessage("pathspec-invalid", message, { branchName }),
     { cwd, op: "list-base-integration-commits", rawMessage: message, branchName }
+  );
+}
+
+const OPERATION_NOUN: Record<RepoOperationPin["operation"], string> = {
+  MERGING: "merge",
+  REBASING: "rebase",
+  CHERRY_PICKING: "cherry-pick",
+  REVERTING: "revert",
+  APPLYING_MAILBOX: "patch apply",
+};
+
+function asHaltedOperation(state: RepoState): RepoOperationPin["operation"] | null {
+  return state === "CLEAN" || state === "DIRTY" ? null : state;
+}
+
+/**
+ * The pin an abort or continue arrived with, checked for shape. `undefined`
+ * only when none was sent; a malformed one is refused rather than read as
+ * none, which would quietly drop the check it was sent to make.
+ */
+function readRepoOperationPin(value: unknown): RepoOperationPin | undefined {
+  if (value === undefined) return undefined;
+  const pin = value as { operation?: unknown; operationId?: unknown } | null;
+  const operation = pin?.operation;
+  const operationId = pin?.operationId;
+  if (
+    typeof operation !== "string" ||
+    !Object.hasOwn(OPERATION_NOUN, operation) ||
+    !(operationId === null || (typeof operationId === "string" && operationId.length > 0))
+  ) {
+    throw new Error("Invalid repository operation pin");
+  }
+  return { operation: operation as RepoOperationPin["operation"], operationId };
+}
+
+/**
+ * Refuse an abort or continue unless the operation it was chosen for is the
+ * one in progress now (#17559).
+ *
+ * Without this the handler acted on whatever it found at execution time. A
+ * confirm left open while another client ended the merge and started another
+ * (or the same one again) would abort the new one, conflict work and all,
+ * under an approval given for the old. The kind is not enough: a same-kind
+ * replacement is exactly that case. So the pin carries the operation's
+ * identity, read from the status the user was shown, and the identity is read
+ * again here, as the last thing before git runs. Git's own `--abort` and
+ * `--continue` take no instance to check against, so a client acting after
+ * this read can still slip in; the window is this handler's, not the dialog's.
+ *
+ * A caller that sends no pin had nothing on screen to bind to (an agent
+ * dispatch) and keeps acting on what it finds.
+ */
+async function requireChosenRepoOperation(
+  gitDir: string,
+  state: RepoState,
+  pin: RepoOperationPin | undefined,
+  cwd: string,
+  op: "abort" | "continue"
+): Promise<void> {
+  if (pin === undefined) return;
+  const current = asHaltedOperation(state);
+  const currentId = current ? await readRepoOperationId(gitDir, current) : null;
+  if (current === pin.operation && pin.operationId !== null && currentId === pin.operationId) {
+    return;
+  }
+  const chosen = OPERATION_NOUN[pin.operation];
+  const detail =
+    current === null
+      ? `The ${chosen} you chose is no longer in progress`
+      : current !== pin.operation
+        ? `A ${OPERATION_NOUN[current]} is in progress now, not the ${chosen} you chose`
+        : pin.operationId === null || currentId === null
+          ? `Daintree couldn't confirm that the ${chosen} in progress is the one you chose`
+          : `The ${chosen} in progress was restarted or replaced after you chose it`;
+  const message = `${detail}. Nothing was ${op === "abort" ? "aborted" : "continued"}; check the worktree's current state and choose again.`;
+  throw new GitOperationError(
+    "repo-operation-changed",
+    encodeGitOperationErrorMessage("repo-operation-changed", message),
+    { cwd, op: `${op}-repository-operation`, rawMessage: message }
   );
 }
 
@@ -2205,6 +2290,12 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     validateCwd(cwd);
 
     const git = await createHardenedGit(cwd);
+    // Read on both sides of the status: an operation replaced while it runs
+    // would otherwise hand back the old one's conflict counts with the new
+    // one's identity, and a confirm built from that would describe one
+    // operation while approving another.
+    const gitDir = await resolveGitDir(git, cwd).catch(() => null);
+    const operationIdBefore = gitDir ? await readCurrentRepoOperationId(gitDir) : null;
     const status = await git.status();
 
     const mapStatus = (s: string): GitStatus => {
@@ -2273,7 +2364,6 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     // sentinels below, read from the filesystem rather than spawned. The OID
     // is still sampled after the status spawn, as the rev-parse it replaces
     // was; any shape the filesystem read can't prove falls back to it.
-    const gitDir = await resolveGitDir(git, cwd).catch(() => null);
     let headOid = (gitDir ? await resolveHeadOidFromGitDir(gitDir) : null) ?? "";
     if (!headOid) {
       try {
@@ -2381,6 +2471,12 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
         // Same fallback when the sentinel reads fail.
       }
     }
+    const halted = asHaltedOperation(repoState);
+    const operationIdAfter =
+      gitDir && halted && operationIdBefore !== null
+        ? await readRepoOperationId(gitDir, halted)
+        : null;
+    const repoOperationId = operationIdAfter === operationIdBefore ? operationIdAfter : null;
 
     // Only a stopped operation puts cleanly merged paths in the index beside
     // the resolved ones, so nothing else pays for the read. After the last
@@ -2411,6 +2507,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       pullSource,
       ...(isUnbornBranch ? { isUnbornBranch: true as const } : {}),
       repoState,
+      repoOperationId,
       rebaseStep,
       rebaseTotalSteps,
       rebaseSequence,
@@ -2418,13 +2515,15 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
   };
   handlers.push(typedHandle(CHANNELS.GIT_GET_STAGING_STATUS, handleGetStagingStatus));
 
-  const handleAbortRepositoryOperation = async (cwd: string): Promise<void> => {
+  const handleAbortRepositoryOperation = async (cwd: string, expected?: unknown): Promise<void> => {
     checkRateLimit(CHANNELS.GIT_ABORT_REPOSITORY_OPERATION, 5, 10_000);
     validateCwd(cwd);
+    const pin = readRepoOperationPin(expected);
 
     const git = await createHardenedGit(cwd);
     const gitDir = await resolveGitDir(git, cwd);
     const { state } = await detectRepoOperationState(gitDir, false);
+    await requireChosenRepoOperation(gitDir, state, pin, cwd, "abort");
 
     switch (state) {
       case "MERGING":
@@ -2453,9 +2552,13 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     typedHandle(CHANNELS.GIT_ABORT_REPOSITORY_OPERATION, handleAbortRepositoryOperation)
   );
 
-  const handleContinueRepositoryOperation = async (cwd: string): Promise<void> => {
+  const handleContinueRepositoryOperation = async (
+    cwd: string,
+    expected?: unknown
+  ): Promise<void> => {
     checkRateLimit(CHANNELS.GIT_CONTINUE_REPOSITORY_OPERATION, 5, 10_000);
     validateCwd(cwd);
+    const pin = readRepoOperationPin(expected);
 
     // The continue profile carries the hardened env plus editor suppression in
     // the one env it is built with: a later .env() would replace the hardening
@@ -2464,6 +2567,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     const git = await createContinueGit(cwd);
     const gitDir = await resolveGitDir(git, cwd);
     const { state } = await detectRepoOperationState(gitDir, false);
+    await requireChosenRepoOperation(gitDir, state, pin, cwd, "continue");
 
     switch (state) {
       case "MERGING":

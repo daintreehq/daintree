@@ -200,6 +200,12 @@ export const PUSH_BANNER_CONFIGS: Record<GitOperationReason, PushBannerConfig> =
       getGitRecoveryHint("conflict-unresolved") ?? "Resolve merge conflicts before continuing.",
     detailPolicy: "collapse",
   },
+  "repo-operation-changed": {
+    message:
+      getGitRecoveryHint("repo-operation-changed") ??
+      "The Git operation in progress changed, so it was left alone.",
+    detailPolicy: "hide",
+  },
   "pathspec-invalid": {
     message: getGitRecoveryHint("pathspec-invalid") ?? "The specified ref or path does not exist.",
     detailPolicy: "collapse",

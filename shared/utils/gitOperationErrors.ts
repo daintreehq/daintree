@@ -296,6 +296,8 @@ const RECOVERY_HINTS: Record<GitOperationReason, string | undefined> = {
     "The branch, its commits or its push destination changed after the push was reviewed, so nothing was pushed. Review the push again to see what it would publish now.",
   "pull-rebase-review-stale":
     "The worktree switched branches or gained commits after the pull and rebase was previewed, so nothing was rebased. Pull and rebase again to see what it would replay now.",
+  "repo-operation-changed":
+    "The operation in progress isn't the one you chose. It ended, or another one replaced it, so Git left it alone. Look at the current operation and choose again.",
   "pathspec-invalid": "The specified ref or path does not exist.",
   "lfs-missing": "Git LFS objects are missing — install git-lfs and run 'git lfs pull'.",
   "lfs-quota-exceeded":
@@ -324,6 +326,8 @@ const RECOVERY_ACTIONS: Partial<Record<GitOperationReason, RecoveryAction>> = {
   // branch holds now, so this reopens it rather than retrying the stale pin.
   "pull-rebase-review-stale": { label: "Pull and rebase", actionId: "git.pullRebase" },
   "conflict-unresolved": { label: "Resolve conflicts", actionId: "worktree.openReviewHub" },
+  // Shows the operation that is there now, never a replay of the refused one.
+  "repo-operation-changed": { label: "Open Review Hub", actionId: "worktree.openReviewHub" },
   "dubious-ownership": { label: "Trust this repo", actionId: "git.markSafeDirectory" },
 };
 

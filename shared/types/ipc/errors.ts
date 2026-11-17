@@ -142,6 +142,7 @@ export type GitOperationReason =
   | "push-config-unsupported"
   | "push-review-stale"
   | "pull-rebase-review-stale"
+  | "repo-operation-changed"
   | "pathspec-invalid"
   | "lfs-missing"
   | "lfs-quota-exceeded"

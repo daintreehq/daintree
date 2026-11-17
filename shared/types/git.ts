@@ -128,6 +128,17 @@ export type RepoState =
   "CLEAN" | "DIRTY" | "MERGING" | "REBASING" | "CHERRY_PICKING" | "REVERTING" | "APPLYING_MAILBOX";
 
 /**
+ * The halted operation a user chose to abort or continue, captured from the
+ * status they were shown (#17559). Main re-reads the worktree immediately
+ * before running git and refuses unless the same operation is still there.
+ */
+export interface RepoOperationPin {
+  operation: Exclude<RepoState, "CLEAN" | "DIRTY">;
+  /** `StagingStatus.repoOperationId` as shown, `null` when it could not be read. */
+  operationId: string | null;
+}
+
+/**
  * Why a worktree's git status read ended without an answer. `timed-out`: git
  * ran past its time limit and was stopped. `previous-still-running`: a git
  * already stopped in that worktree had not exited, so no new one was started.
@@ -526,6 +537,19 @@ export interface StagingStatus {
   isUnbornBranch?: true;
   /** Current in-progress repository operation, or `CLEAN`/`DIRTY`. */
   repoState: RepoState;
+  /**
+   * Opaque identity of the operation `repoState` names, stable for its whole
+   * life (every rebase step, every failed `--continue`) and different for any
+   * operation that replaces it, including a restart of the same kind on the
+   * same commits (#17559). Abort and Continue hand it back as a
+   * {@link RepoOperationPin} so they act on the operation the user saw.
+   *
+   * `null` when nothing is in progress, and when this read could not identify
+   * the operation (an unreadable sentinel, a `git am` session, or an
+   * operation that changed while the status was being read). A null pin is
+   * refused, so null never authorises anything.
+   */
+  repoOperationId: string | null;
   /** When `repoState === "REBASING"`, the current step number (1-based). Null otherwise. */
   rebaseStep: number | null;
   /** When `repoState === "REBASING"`, the total step count. Null otherwise. */
