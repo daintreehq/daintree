@@ -259,7 +259,7 @@ describe("WorkspaceService — resource environments saved in Project settings (
 
   it("tears the environment down when the worktree is deleted", async () => {
     await host()["initResourceConfigAsync"](monitor, worktreePath);
-    await host()["runLifecycleTeardown"](worktreePath, monitor, false);
+    await host()["runLifecycleTeardown"](worktreePath, monitor);
 
     expect(spawned).toEqual(["cloud-teardown"]);
   });
