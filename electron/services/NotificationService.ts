@@ -34,6 +34,15 @@ function paneKey(workspaceKey: string, panelId: string): string {
   return `${workspaceKey}\0${panelId}`;
 }
 
+/** The same number of waiting panes as before, but not the same panes. */
+function isSwap(previous: NotificationState, next: NotificationState): boolean {
+  const before = previous.waitingPanelIds;
+  const after = next.waitingPanelIds;
+  return (
+    before.length === after.length && before.some((panelId, index) => panelId !== after[index])
+  );
+}
+
 /** What each window's title and the Dock badge count. */
 interface WaitingTally {
   byWindow: Map<number, number>;
@@ -369,13 +378,14 @@ class NotificationService {
   updateNotifications(ownerWebContentsId: NotificationOwnerId, state: NotificationState): void {
     const previous = this.statesByOwner.get(ownerWebContentsId);
     this.statesByOwner.set(ownerWebContentsId, state);
-    // Which panes wait only matters against a waiting question. With none, a
-    // swap at the same count moves no number, so it neither rewrites the titles
-    // nor postpones another view's pending change.
+    // A swap at the same count (before panes were reported, one never reached
+    // main) never postpones a pass already armed, which tallies the latest
+    // state when it runs. With no question waiting it moves no number at all,
+    // so it schedules nothing. Any other report goes through as it did.
     if (
-      this.questionPanes.size === 0 &&
       previous !== undefined &&
-      previous.waitingPanelIds.length === state.waitingPanelIds.length
+      isSwap(previous, state) &&
+      (this.questionPanes.size === 0 || this.debounceTimer !== null)
     ) {
       return;
     }

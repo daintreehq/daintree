@@ -259,6 +259,40 @@ describe("focus-driven work benchmark", () => {
     }
   });
 
+  it("lets a count change after a swap restart the wait, and sends only the latest", async () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = renderHook(() => useWindowNotifications());
+      act(() => {
+        window.dispatchEvent(new Event("blur"));
+      });
+      counts.waitingPanelIds = ["t-a"];
+      rerender();
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      counts.waitingPanelIds = ["t-b"];
+      rerender();
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      counts.waitingPanelIds = ["t-b", "t-c"];
+      rerender();
+      act(() => {
+        vi.advanceTimersByTime(101);
+      });
+      expect(updateBadgeMock).not.toHaveBeenCalled();
+
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
+      expect(updateBadgeMock).toHaveBeenCalledTimes(1);
+      expect(updateBadgeMock).toHaveBeenLastCalledWith({ waitingPanelIds: ["t-b", "t-c"] });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("tells two panes from one whose id joins theirs", async () => {
     vi.useFakeTimers();
     try {
@@ -294,6 +328,12 @@ describe("focus-driven work benchmark", () => {
           window.dispatchEvent(new Event("blur"));
         });
         counts.waitingPanelIds = ["t-1"];
+        rerender();
+        act(() => {
+          vi.advanceTimersByTime(100);
+        });
+        // A swap that joined the pending report goes with it.
+        counts.waitingPanelIds = ["t-2"];
         rerender();
         act(() => {
           vi.advanceTimersByTime(100);

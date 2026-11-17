@@ -1386,17 +1386,20 @@ describe("NotificationService", () => {
       expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
     });
 
-    it("keeps a waiting question's count through a title refresh, as after a rename", async () => {
+    it("keeps a waiting question's count through a title refresh after a rename", async () => {
       const win = windowWithViews(11);
       win.activeProjectId = "alpha";
-      const rows = lookupOf({ alpha: { name: "alpha-app", status: "active" } });
-      notificationService.initialize(createRegistryMock([win]) as never, rows);
+      const rows: Record<string, ProjectTitleRow> = {
+        alpha: { name: "alpha-app", status: "active" },
+      };
+      notificationService.initialize(createRegistryMock([win]) as never, lookupOf(rows));
       await questionsLoaded();
       setDecisionQuestions([question("project-11", "terminal-a")]);
 
+      rows.alpha = { name: "alpha-renamed", status: "active" };
       notificationService.refreshTitles();
 
-      expect(win.setTitle).toHaveBeenLastCalledWith("(1) alpha-app");
+      expect(win.setTitle).toHaveBeenLastCalledWith("(1) alpha-renamed");
     });
 
     it("counts a window's other views when one of them has been torn down", async () => {
@@ -1497,6 +1500,29 @@ describe("NotificationService", () => {
         expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(3);
       });
 
+      it("keeps a swap's panes, so a question arriving later still counts the pane once", async () => {
+        const win1 = windowWithViews(11);
+        const win2 = windowWithViews(21);
+        notificationService.initialize(createRegistryMock([win1, win2]) as never);
+        await questionsLoaded();
+        notificationService.updateNotifications(11, waitingIn("terminal-a"));
+        vi.advanceTimersByTime(301);
+
+        notificationService.updateNotifications(21, waitingIn("terminal-x"));
+        notificationService.updateNotifications(11, waitingIn("terminal-b"));
+        setDecisionQuestions([question("project-11", "terminal-b")]);
+        expect(win1.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+        vi.advanceTimersByTime(301);
+        expect(win1.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+        expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(2);
+
+        setDecisionQuestions([
+          question("project-11", "terminal-b", { kind: "settled", outcome: "withdrawn" }),
+        ]);
+        expect(win1.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+        expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(2);
+      });
+
       it("still counts a swap once a question waits, which it may now matter to", async () => {
         const win = windowWithViews(11);
         notificationService.initialize(createRegistryMock([win]) as never);
@@ -1512,6 +1538,24 @@ describe("NotificationService", () => {
         expect(win.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
         expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
       });
+    });
+
+    it("never lets a swap postpone another view's pending change while a question waits", async () => {
+      const win1 = windowWithViews(11);
+      const win2 = windowWithViews(21);
+      notificationService.initialize(createRegistryMock([win1, win2]) as never);
+      await questionsLoaded();
+      setDecisionQuestions([question("project-elsewhere", "terminal-q")]);
+      notificationService.updateNotifications(11, waitingIn("terminal-a"));
+      vi.advanceTimersByTime(301);
+
+      notificationService.updateNotifications(21, waitingIn("terminal-x", "terminal-y"));
+      vi.advanceTimersByTime(200);
+      notificationService.updateNotifications(11, waitingIn("terminal-b"));
+      vi.advanceTimersByTime(101);
+
+      expect(win2.setTitle).toHaveBeenLastCalledWith("(2) Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(4);
     });
 
     describe("lifecycle", () => {
