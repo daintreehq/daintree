@@ -67,6 +67,10 @@ describe("declaredLinksFromPackageJson (#17252)", () => {
     expect(declaredLinksFromPackageJson({ homepage: "javascript:alert(1)" })).toEqual([]);
   });
 
+  it("reads homepage only as a string", () => {
+    expect(declaredLinksFromPackageJson({ homepage: { url: "https://acme.dev" } })).toEqual([]);
+  });
+
   it("ignores fields of the wrong type", () => {
     expect(
       declaredLinksFromPackageJson({

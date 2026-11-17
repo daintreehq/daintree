@@ -33,8 +33,10 @@ function webAddress(value: string): URL | null {
   return parsed;
 }
 
-function fieldUrl(value: unknown): string | null {
+/** The address a field names: `homepage` only as a string, the others also as `{ url }`. */
+function fieldUrl(field: DeclaredProjectLinkField, value: unknown): string | null {
   if (typeof value === "string") return value;
+  if (field === "homepage") return null;
   if (value !== null && typeof value === "object" && !Array.isArray(value)) {
     const { url } = value as Record<string, unknown>;
     if (typeof url === "string") return url;
@@ -75,7 +77,7 @@ export function declaredLinksFromPackageJson(manifest: unknown): DeclaredProject
   const links: DeclaredProjectLink[] = [];
   const seen = new Set<string>();
   for (const field of FIELD_ORDER) {
-    const raw = fieldUrl(fields[field]);
+    const raw = fieldUrl(field, fields[field]);
     if (raw === null) continue;
     const url = field === "repository" ? repositoryBrowseUrl(raw) : plainUrl(raw);
     if (url === null || seen.has(url)) continue;

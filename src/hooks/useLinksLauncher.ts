@@ -1,11 +1,12 @@
 import { useCallback, useEffect } from "react";
 import { useShallow } from "zustand/react/shallow";
-import type { ProjectLink } from "@shared/types";
+import type { DeclaredProjectLink, ProjectLink } from "@shared/types";
 import type { NormalizedPRState } from "@shared/types/forge";
 import type { DevPreviewSessionStatus } from "@shared/types/ipc/devPreview";
+import { normalize } from "@shared/utils/path";
 import { safeDetailsUrl } from "@/components/Worktree/ReviewHub/prChecks";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
-import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { useWorktreeStore, useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { getWorktreeBranchLabel } from "@/lib/worktreeHeadline";
 import { acquireAllDevSessions, useAllDevSessionsStore } from "@/store/allDevSessionsStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -13,22 +14,35 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useGlobalLinksStore, type GlobalLink } from "@/store/globalLinksStore";
 import { refreshCachedProjectLinks, useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useLinksLauncherStore } from "@/store/linksLauncherStore";
+import {
+  refreshDeclaredProjectLinks,
+  useDeclaredProjectLinksStore,
+} from "@/store/declaredProjectLinksStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { selectViewProject } from "@/store/viewWorkspace";
 import { useProjectViewRevealed } from "@/hooks/useProjectViewRevealed";
+import { useSharedPollTick } from "@/hooks/useSharedPollTick";
+import { useFileChangeCount } from "@/hooks/useFileChangeCount";
 import { logError } from "@/utils/logger";
 
 export interface LinksLauncherLinks {
   /** This view's project's links, never another project's (#17091). */
   projectLinks: readonly ProjectLink[];
+  /** The links this view's project's package.json declares (#17252). */
+  declaredLinks: readonly DeclaredProjectLink[];
   /** The person's global links that are switched on, in their order. */
   globalLinks: readonly GlobalLink[];
 }
 
 const NO_PROJECT_LINKS: readonly ProjectLink[] = [];
+const NO_DECLARED_LINKS: readonly DeclaredProjectLink[] = [];
 
 function useViewProjectId(): string | null {
   return useProjectStore((s) => selectViewProject(getViewWorkspaceId(), s)?.id ?? null);
+}
+
+function useViewProjectPath(): string | null {
+  return useProjectStore((s) => selectViewProject(getViewWorkspaceId(), s)?.path ?? null);
 }
 
 /** What the links launcher lists right now. */
@@ -37,13 +51,80 @@ export function useLinksLauncherLinks(): LinksLauncherLinks {
   const projectLinks = useProjectSettingsStore((s) =>
     viewProjectId !== null && s.projectId === viewProjectId ? s.settings?.links : undefined
   );
+  const declaredLinks = useDeclaredProjectLinksStore((s) =>
+    viewProjectId !== null && s.projectId === viewProjectId ? s.links : NO_DECLARED_LINKS
+  );
   const links = useGlobalLinksStore((s) => s.links);
   const globalLinks = links.filter((link) => link.enabled);
-  return { projectLinks: projectLinks ?? NO_PROJECT_LINKS, globalLinks };
+  return { projectLinks: projectLinks ?? NO_PROJECT_LINKS, declaredLinks, globalLinks };
 }
 
-export function hasLauncherLinks({ projectLinks, globalLinks }: LinksLauncherLinks): boolean {
-  return projectLinks.length > 0 || globalLinks.length > 0;
+export function hasLauncherLinks({
+  projectLinks,
+  declaredLinks,
+  globalLinks,
+}: LinksLauncherLinks): boolean {
+  return projectLinks.length > 0 || declaredLinks.length > 0 || globalLinks.length > 0;
+}
+
+/**
+ * How often an observable view re-reads its package.json links when nothing
+ * else has said the file changed: a folder with no worktree watcher behind
+ * it, or an edit the watcher folded into git status it already reported.
+ */
+const DECLARED_LINKS_POLL_MS = 20_000;
+const MANIFEST_NAME = "package.json";
+
+/**
+ * Keeps the view's package.json links following the file (#17252). Reads them
+ * when the project lands, on every opening, when the watcher on the worktree
+ * at the project's root says something in the root folder moved, and on a
+ * slow poll while the view can be seen, which also catches up as soon as a
+ * hidden view comes back. The read itself happens on the machine that holds
+ * the project, so a Remote Host's project shows its own file.
+ */
+function useDeclaredProjectLinksRefresh(viewProjectId: string | null, refreshSeq: number): void {
+  const projectPath = useViewProjectPath();
+  const rootWorktreeId = useWorktreeStoreOptional((state) => {
+    if (projectPath === null) return null;
+    const root = normalize(projectPath);
+    for (const worktree of state.worktrees.values()) {
+      if (normalize(worktree.path) === root) return worktree.id;
+    }
+    return null;
+  }, null);
+  const gitTick = useWorktreeStoreOptional(
+    (state) =>
+      rootWorktreeId === null
+        ? undefined
+        : state.worktrees.get(rootWorktreeId)?.worktreeChanges?.lastUpdated,
+    undefined
+  );
+  const fsTick = useWorktreeStoreOptional(
+    (state) =>
+      rootWorktreeId === null ? undefined : state.workingTreeChangedAtById.get(rootWorktreeId),
+    undefined
+  );
+  const changedDirs = useWorktreeStoreOptional(
+    (state) =>
+      rootWorktreeId === null ? undefined : state.workingTreeChangedDirsById.get(rootWorktreeId),
+    undefined
+  );
+  const tick = Math.max(gitTick ?? 0, fsTick ?? 0) || undefined;
+  const manifestChanges = useFileChangeCount(
+    tick,
+    rootWorktreeId === null ? undefined : { tick, gitTick, changedDirs },
+    rootWorktreeId === null ? null : MANIFEST_NAME,
+    true
+  );
+  const refresh = useCallback(() => {
+    if (viewProjectId === null) return;
+    void refreshDeclaredProjectLinks(viewProjectId);
+  }, [viewProjectId]);
+  useEffect(() => {
+    refresh();
+  }, [refresh, refreshSeq, manifestChanges]);
+  useSharedPollTick(refresh, DECLARED_LINKS_POLL_MS, viewProjectId !== null);
 }
 
 /** The active worktree's pull request, as the forge reported it (#17253). */
@@ -124,6 +205,7 @@ export function useLinksLauncherRefresh(): void {
     if (settingsCached) refresh();
   }, [settingsCached, refreshSeq, refresh]);
   useProjectViewRevealed(refresh, { enabled: settingsCached });
+  useDeclaredProjectLinksRefresh(viewProjectId, refreshSeq);
 }
 
 /**

@@ -1100,6 +1100,19 @@ describe("remote scope gate", () => {
     expect(status).toHaveBeenCalledTimes(1);
   });
 
+  it("lets a remote view read only its own project's package.json links (#17252)", async () => {
+    installScope();
+    const declared = handle("project-links:get-declared");
+    const { endpoint } = makeRemoteEndpoint(-3, "proj-1");
+
+    expect((await ask(endpoint, "project-links:get-declared", [{ projectId: "proj-1" }])).ok).toBe(
+      true
+    );
+    const other = await ask(endpoint, "project-links:get-declared", [{ projectId: "proj-2" }]);
+    expect(other.ok ? null : other.error.code).toBe("PERMISSION");
+    expect(declared).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps a remote view's review marks to its own project's worktrees", async () => {
     installScope();
     const mark = handle("review-marks:mark");

@@ -2,7 +2,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { StrictMode, useSyncExternalStore } from "react";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import type { ProjectLink } from "@shared/types";
+import type { DeclaredProjectLink, ProjectLink } from "@shared/types";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 import type { ForgeCheckRun } from "@shared/types/ipc/forge";
 import type { LauncherPullRequest } from "@/hooks/useLinksLauncher";
@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   enterFocusedPanel: vi.fn<(id: string | null) => boolean>(() => true),
   links: {
     projectLinks: [] as ProjectLink[],
+    declaredLinks: [] as DeclaredProjectLink[],
     globalLinks: [] as GlobalLink[],
   },
   devSessions: {
@@ -100,7 +101,8 @@ vi.mock("@/hooks/useLinksLauncher", async () => {
   return {
     useLinksLauncherLinks: () => useSyncExternalStore(subscribe, () => h.links),
     useLinksLauncherPullRequest: () => useSyncExternalStore(subscribe, () => h.pullRequest),
-    hasLauncherLinks: (l: typeof h.links) => l.projectLinks.length > 0 || l.globalLinks.length > 0,
+    hasLauncherLinks: (l: typeof h.links) =>
+      l.projectLinks.length > 0 || l.declaredLinks.length > 0 || l.globalLinks.length > 0,
   };
 });
 vi.mock("@/clients/forgeClient", () => ({
@@ -145,6 +147,16 @@ const STAGING: ProjectLink = {
   addedByAssistant: true,
 };
 const LOCAL: ProjectLink = { id: "l2", title: "Local app", url: "http://localhost:3000/" };
+const HOMEPAGE: DeclaredProjectLink = {
+  field: "homepage",
+  title: "Homepage",
+  url: "https://widget.example.dev/",
+};
+const REPOSITORY: DeclaredProjectLink = {
+  field: "repository",
+  title: "Repository",
+  url: "https://github.com/acme/widget",
+};
 const DOCS: GlobalLink = {
   id: "user-1",
   title: "Team docs",
@@ -193,7 +205,7 @@ beforeEach(() => {
   h.enterFocusedPanel.mockClear();
   h.restart.mockClear();
   h.stop.mockClear();
-  h.links = { projectLinks: [STAGING, LOCAL], globalLinks: [DOCS] };
+  h.links = { projectLinks: [STAGING, LOCAL], declaredLinks: [], globalLinks: [DOCS] };
   h.devSessions = { sessions: [], hydrated: true, fetchError: false };
   h.pullRequest = null;
   h.getChecks.mockReset();
@@ -243,6 +255,54 @@ describe("links launcher button", () => {
     }
   });
 
+  it("lists the links package.json declares in a section of their own, between the saved and the person's", async () => {
+    h.links = {
+      projectLinks: [LOCAL],
+      declaredLinks: [HOMEPAGE, REPOSITORY],
+      globalLinks: [DOCS],
+    };
+    render(<LinksLauncherToolbarButton />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Links" }));
+    });
+    await flush();
+
+    expect(headings()).toEqual(["Project links", "From package.json", "Your links"]);
+    expect(rows().map(describeRow)).toEqual([
+      { name: "Local app", description: "localhost" },
+      {
+        name: "Homepage",
+        description: "widget.example.dev, declared in the project's package.json",
+      },
+      { name: "Repository", description: "github.com, declared in the project's package.json" },
+      { name: "Team docs", description: "docs.example.org" },
+    ]);
+    // Nobody added them, so no Assistant badge.
+    const badges = Array.from(launcher()!.querySelectorAll('[aria-hidden="true"]')).filter(
+      (el) => el.textContent === "Assistant"
+    );
+    expect(badges).toHaveLength(0);
+
+    await act(async () => {
+      fireEvent.click(rows()[2]!, { detail: 1 });
+    });
+    await flush();
+    expect(h.openLinkUrl).toHaveBeenCalledWith("https://github.com/acme/widget");
+    expect(launcher()).toBeNull();
+  });
+
+  it("shows a project whose only links are declared ones without the empty state", async () => {
+    h.links = { projectLinks: [], declaredLinks: [REPOSITORY], globalLinks: [] };
+    render(<LinksLauncherToolbarButton />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Links" }));
+    });
+    await flush();
+
+    expect(headings()).toEqual(["From package.json"]);
+    expect(within(launcher()!).queryByRole("button", { name: "Add a project link" })).toBeNull();
+  });
+
   it("opens the picked link and closes", async () => {
     render(<LinksLauncherToolbarButton />);
     await act(async () => {
@@ -284,7 +344,7 @@ describe("links launcher button", () => {
     act(() => rows()[0]!.focus());
 
     await act(async () => {
-      setLinks({ projectLinks: [LOCAL], globalLinks: [DOCS] });
+      setLinks({ projectLinks: [LOCAL], declaredLinks: [], globalLinks: [DOCS] });
     });
 
     expect(rows().map((row) => describeRow(row).name)).toEqual(["Local app", "Team docs"]);
@@ -301,7 +361,7 @@ describe("links launcher button", () => {
     act(() => rows()[2]!.focus());
 
     await act(async () => {
-      setLinks({ projectLinks: [LOCAL], globalLinks: [DOCS] });
+      setLinks({ projectLinks: [LOCAL], declaredLinks: [], globalLinks: [DOCS] });
     });
     // Still on the same link, now the second row.
     expect(document.activeElement).toBe(rows()[1]);
@@ -418,7 +478,7 @@ describe("dev servers in the launcher", () => {
   });
 
   it("shows them alone, with no prompt to add a link, when there are no links", async () => {
-    h.links = { projectLinks: [], globalLinks: [] };
+    h.links = { projectLinks: [], declaredLinks: [], globalLinks: [] };
     h.devSessions.sessions = [devSession({ status: "error", terminalId: null })];
     await openLauncher();
 
@@ -436,7 +496,7 @@ describe("dev servers in the launcher", () => {
   });
 
   it("keeps the keyboard in the list when the server it was on stops", async () => {
-    h.links = { projectLinks: [], globalLinks: [DOCS] };
+    h.links = { projectLinks: [], declaredLinks: [], globalLinks: [DOCS] };
     h.devSessions.sessions = [devSession()];
     await openLauncher();
     const stop = within(launcher()!).getByRole("button", {
@@ -453,7 +513,7 @@ describe("dev servers in the launcher", () => {
   });
 
   it("hands focus to the focused panel when stopping the last server takes the button away", async () => {
-    h.links = { projectLinks: [], globalLinks: [] };
+    h.links = { projectLinks: [], declaredLinks: [], globalLinks: [] };
     h.devSessions.sessions = [devSession()];
     // The toolbar's own rule: shown only with a link or a live server.
     function Toolbar() {
@@ -636,7 +696,7 @@ describe("the active worktree's pull request in the launcher", () => {
     const second = deferred<{ checks: ForgeCheckRun[] } | null>();
     h.getChecks.mockImplementationOnce(() => first.promise);
     h.getChecks.mockImplementationOnce(() => second.promise);
-    h.links = { projectLinks: [], globalLinks: [] };
+    h.links = { projectLinks: [], declaredLinks: [], globalLinks: [] };
     h.pullRequest = PR;
     await openLauncher();
 
@@ -676,7 +736,7 @@ describe("the active worktree's pull request in the launcher", () => {
   it("stops showing the checks of the one before as soon as another is selected", async () => {
     h.getChecks.mockResolvedValueOnce({ checks: CHECKS });
     h.getChecks.mockImplementation(() => new Promise(() => {}));
-    h.links = { projectLinks: [], globalLinks: [] };
+    h.links = { projectLinks: [], declaredLinks: [], globalLinks: [] };
     h.pullRequest = PR;
     await openLauncher();
     expect(rows().map((row) => describeRow(row).name)).toEqual(["Fix login", "unit", "e2e"]);
@@ -692,7 +752,7 @@ describe("the active worktree's pull request in the launcher", () => {
     h.getChecks.mockResolvedValueOnce({ checks: CHECKS });
     h.getChecks.mockImplementationOnce(() => new Promise(() => {}));
     h.getChecks.mockImplementationOnce(() => third.promise);
-    h.links = { projectLinks: [], globalLinks: [] };
+    h.links = { projectLinks: [], declaredLinks: [], globalLinks: [] };
     h.pullRequest = PR;
     await openLauncher();
     expect(rows().map((row) => describeRow(row).name)).toEqual(["Fix login", "unit", "e2e"]);
@@ -739,7 +799,7 @@ describe("the active worktree's pull request in the launcher", () => {
         ],
       })
     );
-    h.links = { projectLinks: [], globalLinks: [] };
+    h.links = { projectLinks: [], declaredLinks: [], globalLinks: [] };
     h.pullRequest = PR;
     await openLauncher();
     await act(async () => {
@@ -787,7 +847,7 @@ describe("the active worktree's pull request in the launcher", () => {
   });
 
   it("leaves the pull request out once the forge says it doesn't exist", async () => {
-    h.links = { projectLinks: [], globalLinks: [] };
+    h.links = { projectLinks: [], declaredLinks: [], globalLinks: [] };
     h.pullRequest = PR;
     h.getChecks.mockResolvedValue(null);
     await openLauncher();
@@ -797,7 +857,7 @@ describe("the active worktree's pull request in the launcher", () => {
   });
 
   it("shows it alone, with no prompt to add a link, when there is nothing else", async () => {
-    h.links = { projectLinks: [], globalLinks: [] };
+    h.links = { projectLinks: [], declaredLinks: [], globalLinks: [] };
     h.pullRequest = PR;
     await openLauncher();
     expect(headings()).toEqual(["Pull request feature/login"]);
@@ -890,7 +950,7 @@ describe("detached launcher", () => {
   });
 
   it("names the next step when there is nothing to list", async () => {
-    h.links = { projectLinks: [], globalLinks: [] };
+    h.links = { projectLinks: [], declaredLinks: [], globalLinks: [] };
     render(<LinksLauncherDetachedHost />);
     await act(async () => {
       useLinksLauncherStore.getState().open("detached");
@@ -953,7 +1013,7 @@ describe("links in the `…` menu", () => {
   });
 
   it("offers one row for the dev servers, which asks for the launcher once the menu closes", async () => {
-    h.links = { projectLinks: [], globalLinks: [DOCS] };
+    h.links = { projectLinks: [], declaredLinks: [], globalLinks: [DOCS] };
     h.devSessions.sessions = [
       devSession(),
       devSession({ panelId: "panel-2", worktreeId: "wt-2", status: "error", terminalId: null }),
@@ -980,7 +1040,7 @@ describe("links in the `…` menu", () => {
   });
 
   it("offers the pull request as a row, and one row for its checks, reading none itself", async () => {
-    h.links = { projectLinks: [], globalLinks: [DOCS] };
+    h.links = { projectLinks: [], declaredLinks: [], globalLinks: [DOCS] };
     h.pullRequest = PR;
     render(<OverflowMenu />);
     await openMenu();
@@ -1011,6 +1071,27 @@ describe("links in the `…` menu", () => {
     expect(useLinksLauncherStore.getState().deferredFromOverflow).toBe("right");
     expect(h.openLinkUrl).not.toHaveBeenCalled();
     expect(h.getChecks).not.toHaveBeenCalled();
+  });
+
+  it("lists the declared links as their own group, saying where they came from", async () => {
+    h.links = { projectLinks: [LOCAL], declaredLinks: [HOMEPAGE], globalLinks: [DOCS] };
+    render(<OverflowMenu />);
+    await openMenu();
+
+    const groups = Array.from(document.querySelectorAll('[role="group"]'));
+    const declared = groups.find((group) => group.textContent?.startsWith("From package.json"));
+    expect(declared).toBeDefined();
+    expect(
+      within(declared as HTMLElement)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent)
+    ).toEqual(["Homepagewidget.example.dev, declared in the project's package.json"]);
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("menuitem")[1]!);
+    });
+    await flush();
+    expect(h.openLinkUrl).toHaveBeenCalledWith("https://widget.example.dev/");
   });
 
   it("has no dev servers row while none is listed", async () => {

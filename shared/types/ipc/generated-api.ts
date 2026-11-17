@@ -1864,6 +1864,9 @@ export interface GeneratedElectronAPI {
     change(
       ...args: IpcInvokeMap["project-links:change"]["args"]
     ): Promise<IpcInvokeMap["project-links:change"]["result"]>;
+    getDeclared(
+      ...args: IpcInvokeMap["project-links:get-declared"]["args"]
+    ): Promise<IpcInvokeMap["project-links:get-declared"]["result"]>;
   };
   projectMatch: {
     find(
