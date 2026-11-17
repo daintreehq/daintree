@@ -3,6 +3,7 @@ import {
   CLOUD_LIFETIME_CHOICES,
   CLOUD_PROVISIONING_DIMENSIONS,
   cloudChoiceFitsLocation,
+  cloudLifetimeIsChosen,
   cloudProvisioningArticleNoun,
   cloudProvisioningNoun,
   type CloudCatalog,
@@ -14,6 +15,7 @@ import {
   type CloudHostImportRequest,
   type CloudHostKeyReview,
   type CloudHostStatus,
+  type CloudLifetimeModel,
   type CloudMachineState,
   type CloudOperation,
   type CloudOperationKind,
@@ -56,11 +58,12 @@ import {
   type SshEndpoint,
 } from "./sshEndpoint.js";
 import { sshDeclarationProblem } from "./sshTunnel.js";
-import type {
-  CloudProvider,
-  ProviderCredentials,
-  ProviderResource,
-  ProviderSshAccess,
+import {
+  canRenewLifetime,
+  type CloudProvider,
+  type ProviderCredentials,
+  type ProviderResource,
+  type ProviderSshAccess,
 } from "./provider.js";
 
 /** How often a machine is asked about while Daintree changes it. */
@@ -102,6 +105,24 @@ function hostKeyReviewOf(binding: StoredCloudBinding): CloudHostKeyReview | null
     previousFingerprint: trusted ? hostKeyFingerprint(trusted.key) : null,
     previousTrustedAt: trusted?.at ?? null,
   };
+}
+
+function lifetimeModelOf(provider: CloudProvider): CloudLifetimeModel {
+  return provider.info(process.platform).capabilities.lifetime;
+}
+
+/**
+ * What a start tells the provider about the machine's runtime limit: the one
+ * kept here, where the provider takes one at start; nothing where it would
+ * keep its own (a limit fixed at create, an idle sleep, or none at all).
+ */
+function startOptions(
+  model: CloudLifetimeModel,
+  lifetimeSeconds: number | null
+): { lifetimeSeconds?: number | null } {
+  const takesLimit =
+    model.kind === "renewable" || (model.kind === "fixed-at-create" && model.canChangeWhileStopped);
+  return takesLimit ? { lifetimeSeconds } : {};
 }
 /**
  * What a failed read records (see inspectInto), which the next good answer
@@ -426,6 +447,18 @@ export class CloudHostLifecycle {
 
   statuses(): CloudHostStatus[] {
     const accounts = new Map(this.deps.store.accounts().map((account) => [account.id, account]));
+    const lifetimes = new Map<string, CloudLifetimeModel | null>();
+    const lifetimeFor = (providerId: string): CloudLifetimeModel | null => {
+      if (!lifetimes.has(providerId)) {
+        lifetimes.set(
+          providerId,
+          this.deps.accounts.providerUnavailable(providerId)
+            ? null
+            : lifetimeModelOf(this.deps.accounts.provider(providerId))
+        );
+      }
+      return lifetimes.get(providerId)!;
+    };
     return this.deps.store
       .bindings()
       .filter(
@@ -458,6 +491,7 @@ export class CloudHostLifecycle {
           vcpu: observation?.vcpu ?? null,
           memoryGB: observation?.memoryGB ?? null,
           hourlyDollars: this.deps.accounts.cachedHourly(binding.accountId, machineType),
+          lifetime: lifetimeFor(binding.providerId),
           autoStopAt: observation?.autoStopAt ?? null,
           lifetimeSeconds: binding.lifetimeSeconds,
           stoppedAt: observation?.stoppedAt ?? null,
@@ -541,11 +575,20 @@ export class CloudHostLifecycle {
     const provider = this.deps.accounts.requireSupported(account.providerId);
     const name = typeof request.name === "string" ? request.name.trim() : "";
     if (!name || name.length > MAX_NAME_LENGTH) throw invalid("Give the host a name.");
-    if (!CLOUD_LIFETIME_CHOICES.includes(request.lifetimeHours)) {
-      throw invalid("Choose how long the machine may run before it stops by itself.");
+    if (cloudLifetimeIsChosen(lifetimeModelOf(provider))) {
+      if (!CLOUD_LIFETIME_CHOICES.includes(request.lifetimeHours)) {
+        throw invalid("Choose how long the machine may run before it stops by itself.");
+      }
+    } else if (request.lifetimeHours !== null) {
+      // Refused, never dropped: a lifetime sent here means the asker thought it would hold.
+      throw invalid(`${nameOf(provider)} doesn't take a lifetime for its machines.`);
     }
     // A size is checked against the account's current catalog, never assumed.
     const catalog = await this.deps.accounts.catalog(account.id, { refresh: true });
+    // The lifetime was checked against this provider; one registered in its place meanwhile wasn't asked.
+    if (!this.stillRegistered(account.providerId, provider)) {
+      throw invalid(`${nameOf(provider)} changed while the machine was being set up. Try again.`);
+    }
     const size = catalog.machineTypes.find((type) => type.id === request.machineType);
     if (!size) throw invalid("Choose a machine size.");
     if (!size.available) {
@@ -621,6 +664,34 @@ export class CloudHostLifecycle {
         await this.waitFor(bindingId, "running", START_DEADLINE_MS, signal, "Starting the machine");
         return;
       }
+    }
+    // Asked only of the provider registered now, and only for what it still takes: a limit
+    // asked for under a model it has since dropped is refused, never sent as none.
+    const changed = !this.stillRegistered(binding.providerId, provider);
+    if (
+      changed ||
+      (binding.lifetimeSeconds !== null && !cloudLifetimeIsChosen(lifetimeModelOf(provider)))
+    ) {
+      // An earlier send may still have made a machine: that stays "outcome unknown", so
+      // removing the host goes the delete way, which looks for it first.
+      const sent = creation.sentAt !== null;
+      const reason = changed
+        ? `${nameOf(provider)} changed while the machine was being asked for.`
+        : `${nameOf(provider)} no longer takes a lifetime for its machines, so Daintree won't ask for one with it.`;
+      const next = sent
+        ? provider.info(process.platform).capabilities.deletion
+          ? "An earlier request may still have made it; removing the host checks once and deletes any machine it finds."
+          : `An earlier request may still have made it; check your ${nameOf(provider)} account for it.`
+        : changed
+          ? "Nothing was asked for; Retry asks again."
+          : "Nothing was created; remove the host and add it again.";
+      const message = `${reason} ${next}`;
+      this.recordError(bindingId, {
+        code: sent ? "outcome-unknown" : changed ? "failed" : "unsupported",
+        message,
+        at: this.now(),
+      });
+      throw invalid(message);
     }
     const provisioning = this.sendableProvisioning(binding, provider);
     this.stage(bindingId, `Asking ${nameOf(provider)} for a machine`);
@@ -843,7 +914,7 @@ export class CloudHostLifecycle {
         "That machine was created with snapshots off, so stopping it erases its disk. Daintree only adds machines whose disk survives a stop."
       );
     }
-    // Its own lifetime stays as it is; a start renews to it.
+    // Its own lifetime stays as it is; a start renews to it, where the provider takes one then.
     binding.resourceId = resource.resourceId;
     binding.lifetimeSeconds = resource.lifetimeSeconds;
     binding.observation = observationOf(resource, this.now());
@@ -912,9 +983,11 @@ export class CloudHostLifecycle {
     if (resource.machine === "stopped" || resource.machine === "error") {
       this.stage(bindingId, "Starting the machine");
       try {
-        const started = await provider.start(credentials, binding.resourceId!, {
-          lifetimeSeconds: binding.lifetimeSeconds,
-        });
+        const started = await provider.start(
+          credentials,
+          binding.resourceId!,
+          startOptions(lifetimeModelOf(provider), binding.lifetimeSeconds)
+        );
         if (started) this.observe(bindingId, started);
       } catch (error) {
         this.recordError(bindingId, provider.describeError(error));
@@ -1062,19 +1135,46 @@ export class CloudHostLifecycle {
   }
 
   /**
-   * Sets how long the machine runs before it stops by itself. A running
-   * machine's own deadline moves too (to that long from now, or none), so
-   * what Settings shows is what will happen to this run.
+   * Sets how long the machine runs before it stops by itself. On a renewable
+   * provider a running machine's own deadline moves too (to that long from
+   * now, or none), so what Settings shows is what will happen to this run. A
+   * limit fixed at create changes only while the machine is stopped, where the
+   * provider allows it, and holds from its next start; a provider with no
+   * lifetime, or one that sleeps machines when idle, has nothing to set.
    */
   async setLifetime(hostId: unknown, lifetimeHours: unknown): Promise<void> {
     const binding = this.requireBindingForHost(hostId);
     // Refused while its provider isn't registered, before anything here changes.
-    this.deps.accounts.provider(binding.providerId);
+    const owner = this.deps.accounts.provider(binding.providerId);
     if (!CLOUD_LIFETIME_CHOICES.includes(lifetimeHours as number | null)) {
       throw invalid("Choose how long the machine may run before it stops by itself.");
     }
     const lifetimeSeconds = lifetimeHours === null ? null : (lifetimeHours as number) * 3600;
+    const model = lifetimeModelOf(owner);
+    if (model.kind === "fixed-at-create") {
+      if (!model.canChangeWhileStopped) {
+        throw invalid(`${nameOf(owner)} fixes a machine's runtime limit when it's created.`);
+      }
+      if (
+        !binding.resourceId ||
+        machineOf(binding) !== "stopped" ||
+        this.operations.has(binding.id)
+      ) {
+        throw invalid(
+          `${nameOf(owner)} changes a machine's runtime limit only while it's stopped.`
+        );
+      }
+      this.deps.store.updateBinding(binding.id, (current) => ({ ...current, lifetimeSeconds }));
+      return;
+    }
+    if (!canRenewLifetime(owner)) {
+      throw invalid(`${nameOf(owner)} doesn't take a lifetime for its machines.`);
+    }
     await this.settleRenewal(binding.id);
+    // A provider that left or was replaced while the renewal settled may not take this at all.
+    if (!this.stillRegistered(binding.providerId, owner)) {
+      throw invalid(`${nameOf(owner)} changed while this was being saved. Try again.`);
+    }
     this.renewals.delete(binding.id);
     const keep = () =>
       this.deps.store.updateBinding(binding.id, (current) => ({ ...current, lifetimeSeconds }));
@@ -1089,11 +1189,25 @@ export class CloudHostLifecycle {
     // A running machine's own deadline moves first: a refusal leaves both the
     // machine and the lifetime Settings shows as they were.
     const { provider, credentials } = await this.context(binding);
+    // Sent only through the provider still registered, and its answer kept only while it still is.
+    if (!this.stillRegistered(binding.providerId, provider) || provider !== owner) {
+      throw invalid(`${nameOf(owner)} changed while this was being saved. Try again.`);
+    }
+    if (!canRenewLifetime(provider)) {
+      throw invalid(`${nameOf(provider)} doesn't take a lifetime for its machines.`);
+    }
     let resource: ProviderResource;
     try {
       resource = await provider.renewLifetime(credentials, binding.resourceId, lifetimeSeconds);
     } catch (error) {
+      // A replaced provider's failure says nothing about the account as it is now.
+      if (!this.stillRegistered(binding.providerId, provider)) {
+        throw invalid(`${nameOf(owner)} changed while this was being saved. Try again.`);
+      }
       throw this.deps.accounts.asAppError(provider, error);
+    }
+    if (!this.stillRegistered(binding.providerId, provider)) {
+      throw invalid(`${nameOf(owner)} changed while this was being saved. Try again.`);
     }
     keep();
     this.observe(binding.id, resource);
@@ -1694,6 +1808,8 @@ export class CloudHostLifecycle {
     if (!binding?.resourceId || !binding.hostId || binding.lifetimeSeconds === null) return false;
     if (binding.intent === "stop" || this.operations.has(binding.id)) return false;
     if (this.deps.accounts.providerUnavailable(binding.providerId)) return false;
+    // Only a deadline the provider can move: a fixed limit, an idle sleep or none has nothing to renew.
+    if (!canRenewLifetime(this.deps.accounts.provider(binding.providerId))) return false;
     if (machineOf(binding) !== "running") return false;
     const activity = this.deps.activity?.(binding.hostId);
     if (!activity?.connected || !(activity.busy || activity.shown)) return false;
@@ -1712,14 +1828,12 @@ export class CloudHostLifecycle {
     // renewalDue just found it registered; one that left since has nothing to renew and failed nothing.
     if (this.deps.accounts.providerUnavailable(binding.providerId)) return;
     const provider = this.deps.accounts.provider(binding.providerId);
+    if (!canRenewLifetime(provider)) return;
     try {
       const { credentials } = await this.context(binding);
       // A stop, a start or a new lifetime while the key was read: that wins. So
       // does the provider leaving, or another registering in its place.
-      if (
-        !this.renewalDue(bindingId) ||
-        this.deps.accounts.provider(binding.providerId) !== provider
-      ) {
+      if (!this.renewalDue(bindingId) || !this.stillRegistered(binding.providerId, provider)) {
         return;
       }
       const renewed = await provider.renewLifetime(
@@ -1727,6 +1841,8 @@ export class CloudHostLifecycle {
         binding.resourceId!,
         lifetimeSeconds
       );
+      // The answer of a provider that left or was replaced meanwhile is about a machine it no longer speaks for.
+      if (!this.stillRegistered(binding.providerId, provider)) return;
       const current = this.deps.store.binding(bindingId);
       if (!current || current.intent === "stop" || this.operations.has(bindingId)) return;
       this.observe(bindingId, renewed);
@@ -1738,6 +1854,7 @@ export class CloudHostLifecycle {
       this.deps.changed();
     } catch (error) {
       if (this.disposed || this.deps.store.binding(bindingId)?.intent === "stop") return;
+      if (!this.stillRegistered(binding.providerId, provider)) return;
       this.renewals.set(bindingId, { at: this.now(), ok: false });
       const described = provider.describeError(error);
       this.recordError(bindingId, {
@@ -1746,6 +1863,14 @@ export class CloudHostLifecycle {
         at: described.at,
       });
     }
+  }
+
+  /** The provider is still the one registered under its id: not gone, and not replaced. */
+  private stillRegistered(providerId: string, provider: CloudProvider): boolean {
+    return (
+      !this.deps.accounts.providerUnavailable(providerId) &&
+      this.deps.accounts.provider(providerId) === provider
+    );
   }
 
   /** Lets a renewal under way for the machine finish first, so it can't land after this. */

@@ -27,6 +27,7 @@ import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import {
   CLOUD_LIFETIME_CHOICES,
   DEFAULT_CLOUD_LIFETIME_HOURS,
+  cloudLifetimeIsChosen,
   cloudMachineLabel,
   type CloudCatalog,
   type CloudProviderInfo,
@@ -51,7 +52,9 @@ import {
   stoppedBillingSentence,
   hourlyShort,
   lifetimeLabel,
+  lifetimeSentence,
   machineSpecLabel,
+  providerStopSentence,
   sentenceCase,
 } from "@/components/Hosts/cloud/cloudHostLabels";
 
@@ -219,6 +222,10 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
   };
   const chosenResource = resources?.find((resource) => resource.resourceId === resourceId) ?? null;
   const trimmedName = name.trim();
+  // Only a provider that holds a machine to a deadline takes one; the rest are sent none,
+  // whatever the selector held for the last account.
+  const lifetimeChosen = provider !== null && cloudLifetimeIsChosen(provider.capabilities.lifetime);
+  const lifetimeHours = lifetimeChosen && lifetime !== "never" ? Number(lifetime) : null;
 
   const create = () => {
     if (!account || !machineType || !currentCatalog || provisioningProblem) return;
@@ -229,7 +236,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
         accountId: account.id,
         name: trimmedName,
         machineType,
-        lifetimeHours: lifetime === "never" ? null : Number(lifetime),
+        lifetimeHours,
         // Only for a provider that takes any, so Boat's request is what it always was.
         ...(dimensions.length > 0 ? { provisioning } : {}),
       })
@@ -384,7 +391,14 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
       secondary = { label: "Close", onClick: onClose };
     }
   } else {
-    const lifetimeHours = lifetime === "never" ? null : Number(lifetime);
+    const lifetimeModel = provider.capabilities.lifetime;
+    // Boat's review keeps its own words; every other model says it as the start confirm does.
+    const reviewLifetime =
+      lifetimeModel.kind === "renewable"
+        ? lifetimeHours === null
+          ? "It runs until you stop it."
+          : `It stops by itself ${lifetimeLabel(lifetimeHours).toLowerCase()} after starting unless it's in use here.`
+        : lifetimeSentence(lifetimeModel, lifetimeHours === null ? null : lifetimeHours * 3600);
     body = (
       <div className="space-y-5">
         {accounts.length > 1 && (
@@ -529,25 +543,34 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
                 {!catalog && <p className="text-sm text-text-secondary">Reading sizes…</p>}
               </RadioChoiceGroup>
             )}
-            <Field>
-              <FieldLabel>Stops by itself after</FieldLabel>
-              <Select value={lifetime} onValueChange={setLifetime} disabled={busy}>
-                <SelectTrigger className="w-52" data-testid="add-cloud-host-lifetime">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {LIFETIME_VALUES.map((value) => (
-                    <SelectItem key={value} value={value}>
-                      {lifetimeLabel(value === "never" ? null : Number(value))}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <FieldDescription>
-                Counted from each start, and pushed back while a window here shows it or its agents
-                are working. A guard against a machine left running, not a spending limit.
-              </FieldDescription>
-            </Field>
+            {lifetimeChosen ? (
+              <Field>
+                <FieldLabel>Stops by itself after</FieldLabel>
+                <Select value={lifetime} onValueChange={setLifetime} disabled={busy}>
+                  <SelectTrigger className="w-52" data-testid="add-cloud-host-lifetime">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {LIFETIME_VALUES.map((value) => (
+                      <SelectItem key={value} value={value}>
+                        {lifetimeLabel(value === "never" ? null : Number(value))}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <FieldDescription>
+                  {lifetimeModel.kind === "renewable"
+                    ? "Counted from each start, and pushed back while a window here shows it or its agents are working. A guard against a machine left running, not a spending limit."
+                    : lifetimeHours === null
+                      ? `${provider.name} can't extend a limit while the machine runs; with none, it runs until you stop it.`
+                      : `Counted from each start. ${provider.name} can't extend it while the machine runs, so it stops then even if its agents are still working.`}
+                </FieldDescription>
+              </Field>
+            ) : (
+              <p className="text-sm text-text-secondary" data-testid="add-cloud-host-lifetime-note">
+                {providerStopSentence(lifetimeModel, provider.name)}
+              </p>
+            )}
             {chosenType && (
               <p className="text-xs text-text-secondary" data-testid="add-cloud-host-review">
                 Billed to{" "}
@@ -557,10 +580,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
                 on {provider.name}
                 {chosenType.hourlyDollars !== null &&
                   `, about $${chosenType.hourlyDollars.toFixed(3)} an hour while it runs`}
-                .{" "}
-                {lifetimeHours === null
-                  ? "It runs until you stop it."
-                  : `It stops by itself ${lifetimeLabel(lifetimeHours).toLowerCase()} after starting unless it's in use here.`}{" "}
+                . {reviewLifetime}{" "}
                 {`Stopping ends what runs on it.${stoppedBillingSentence(provider) ? ` ${stoppedBillingSentence(provider)}` : ""} ${stopKeepsSentence(provider.capabilities.persistence)}`}
               </p>
             )}
@@ -626,8 +646,8 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
               <Field>
                 <FieldLabel>Name</FieldLabel>
                 <Input value={name} disabled={busy} onChange={(e) => setName(e.target.value)} />
-                <FieldDescription>
-                  Adding it doesn&apos;t start it or change its auto-stop
+                <FieldDescription data-testid="add-cloud-host-import-note">
+                  {`Adding it doesn't start it or change its auto-stop${providerStopSentence(lifetimeModel, provider.name) ? `. ${providerStopSentence(lifetimeModel, provider.name)}` : ""}`}
                 </FieldDescription>
               </Field>
             )}

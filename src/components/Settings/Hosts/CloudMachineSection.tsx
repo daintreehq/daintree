@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
@@ -23,6 +23,7 @@ import {
   isObservationStale,
   lifetimeLabel,
   machineSpecLabel,
+  providerStopSentence,
   stoppedBillingSentence,
 } from "@/components/Hosts/cloud/cloudHostLabels";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
@@ -216,6 +217,95 @@ export function CloudMachineSection({
     );
   };
 
+  const asReported = stale && running && checkedAt ? `As last reported ${checkedAt}: ` : "";
+
+  // When it stops by itself, in its provider's terms: only a renewable or fixed limit is chosen here.
+  const lifetime = status.lifetime;
+  let lifetimeRow: ReactNode;
+  if (lifetime === null) {
+    // Its provider isn't registered: what was last seen of this run, and no promise beyond it.
+    lifetimeRow = (
+      <SettingsRow
+        label="Stops by itself"
+        description={
+          <span data-testid="cloud-machine-lifetime">
+            {`${running && autoStop ? `${asReported}This run stops by itself ${autoStop}, as last reported. ` : ""}Unknown while ${providerName} isn't available.`}
+          </span>
+        }
+      />
+    );
+  } else if (lifetime.kind === "none" || lifetime.kind === "idle-sleep") {
+    lifetimeRow = (
+      <SettingsRow
+        label={lifetime.kind === "none" ? "Stops by itself" : "Sleeps when idle"}
+        description={
+          <span data-testid="cloud-machine-lifetime">
+            {providerStopSentence(lifetime, providerName)}
+          </span>
+        }
+      />
+    );
+  } else if (lifetime.kind === "fixed-at-create") {
+    const thisRun = running
+      ? `${asReported}${
+          autoStop
+            ? `This run stops by itself ${autoStop}.`
+            : status.lifetimeSeconds === null
+              ? "This run doesn't stop by itself."
+              : `${providerName} hasn't said when this run stops.`
+        } `
+      : "Counted from each start. ";
+    const rule = lifetime.canChangeWhileStopped
+      ? `${providerName} can't extend it while the machine runs; a change made while it's stopped applies the next time Daintree starts it.`
+      : `${providerName} sets it when the machine is created, and can't extend or change it.`;
+    // The limit asked for; with none asked for, a deadline the provider reports anyway speaks for itself.
+    const limit =
+      status.lifetimeSeconds !== null
+        ? `${durationLabel(status.lifetimeSeconds)}. `
+        : running && autoStop
+          ? ""
+          : "Never. ";
+    lifetimeRow = lifetime.canChangeWhileStopped ? (
+      <SettingsSelect
+        label="Stops by itself after"
+        description={<span data-testid="cloud-machine-lifetime">{thisRun + rule}</span>}
+        value={lifetimeValue}
+        onValueChange={setLifetime}
+        options={lifetimeOptions}
+        disabled={busy === "lifetime" || status.operation !== null || status.machine !== "stopped"}
+        error={lifetimeError ?? undefined}
+      />
+    ) : (
+      <SettingsRow
+        label="Stops by itself after"
+        description={
+          <span data-testid="cloud-machine-lifetime">{`${limit}${thisRun}${rule}`}</span>
+        }
+      />
+    );
+  } else {
+    lifetimeRow = (
+      <SettingsSelect
+        label="Stops by itself after"
+        description={
+          asReported +
+          (running
+            ? autoStop
+              ? status.lifetimeSeconds === null
+                ? `This run stops by itself ${autoStop}. A change applies from now.`
+                : `This run stops by itself ${autoStop}${status.keptRunningAt !== null ? `, pushed back ${clockTime(new Date(status.keptRunningAt).toISOString())}` : ""}. Daintree pushes it back while a window here shows it or its agents are working; a change applies from now.`
+              : "This run doesn't stop by itself. A change applies from now."
+            : "Counted from each start, and pushed back while a window here shows it or its agents are working. A guard against a machine left running, not a spending limit.")
+        }
+        value={lifetimeValue}
+        onValueChange={setLifetime}
+        options={lifetimeOptions}
+        disabled={busy === "lifetime" || status.operation !== null}
+        error={lifetimeError ?? undefined}
+      />
+    );
+  }
+
   // What Daintree is doing to it, in its own words; the provider's raw state stays in diagnostics.
   const stateDetail = status.operation?.stage || null;
 
@@ -398,24 +488,7 @@ export function CloudMachineSection({
             />
           );
         })}
-        <SettingsSelect
-          label="Stops by itself after"
-          description={
-            (stale && running && checkedAt ? `As last reported ${checkedAt}: ` : "") +
-            (running
-              ? autoStop
-                ? status.lifetimeSeconds === null
-                  ? `This run stops by itself ${autoStop}. A change applies from now.`
-                  : `This run stops by itself ${autoStop}${status.keptRunningAt !== null ? `, pushed back ${clockTime(new Date(status.keptRunningAt).toISOString())}` : ""}. Daintree pushes it back while a window here shows it or its agents are working; a change applies from now.`
-                : "This run doesn't stop by itself. A change applies from now."
-              : "Counted from each start, and pushed back while a window here shows it or its agents are working. A guard against a machine left running, not a spending limit.")
-          }
-          value={lifetimeValue}
-          onValueChange={setLifetime}
-          options={lifetimeOptions}
-          disabled={busy === "lifetime" || status.operation !== null}
-          error={lifetimeError ?? undefined}
-        />
+        {lifetimeRow}
         <HostIdleTimeRow
           key={hostId}
           hostId={hostId}

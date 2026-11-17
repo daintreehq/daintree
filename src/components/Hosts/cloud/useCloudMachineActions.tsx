@@ -232,10 +232,16 @@ export function useCloudMachineActions(): {
           startBusy
             ? undefined
             : startStatus && startAsk
-              ? startBilling && startStatus.machine === "stopped"
-                ? // Starting doesn't start the billing here: the stopped machine is billed already.
-                  `${notRunningSentence(startAsk.name, startStatus, startAsk.askedAt ?? 0)} It bills ${startStatus.accountName} ${hourlyClause(startStatus)} while it runs. ${startBilling} ${lifetimeSentence(startStatus.lifetimeSeconds)}`
-                : `${notRunningSentence(startAsk.name, startStatus, startAsk.askedAt ?? 0)} Starting it bills ${startStatus.accountName} ${hourlyClause(startStatus)} while it runs. ${lifetimeSentence(startStatus.lifetimeSeconds)}`
+              ? [
+                  notRunningSentence(startAsk.name, startStatus, startAsk.askedAt ?? 0),
+                  startBilling && startStatus.machine === "stopped"
+                    ? // Starting doesn't start the billing here: the stopped machine is billed already.
+                      `It bills ${startStatus.accountName} ${hourlyClause(startStatus)} while it runs. ${startBilling}`
+                    : `Starting it bills ${startStatus.accountName} ${hourlyClause(startStatus)} while it runs.`,
+                  lifetimeSentence(startStatus.lifetime, startStatus.lifetimeSeconds),
+                ]
+                  .filter(Boolean)
+                  .join(" ")
               : "Reading the machine's state…"
         }
         confirmLabel={startBusy ? "Starting…" : "Start machine"}

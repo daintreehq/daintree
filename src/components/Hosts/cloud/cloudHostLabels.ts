@@ -2,6 +2,7 @@ import { pluralize } from "@/lib/pluralize";
 import {
   cloudMachineLabel,
   type CloudHostStatus,
+  type CloudLifetimeModel,
   type CloudProviderInfo,
   type CloudProviderPersistence,
 } from "@shared/types/cloudHosts";
@@ -83,6 +84,7 @@ export function lifetimeLabel(hours: number | null): string {
 /** "2 hours", "30 minutes", "90 minutes": exact, since an imported machine's lifetime needn't be whole hours. */
 export function durationLabel(seconds: number): string {
   if (seconds % 3600 === 0) return lifetimeLabel(seconds / 3600);
+  if (seconds % 60 !== 0) return pluralize(seconds, "second");
   const minutes = Math.round(seconds / 60);
   return pluralize(minutes, "minute");
 }
@@ -240,7 +242,13 @@ export function cloudCostFacts(
     if (rate) facts.push(rate);
     const stop = clockTime(status.autoStopAt);
     if (status.machine === "running") {
-      facts.push(stop ? `stops by itself ${stop}` : "no auto-stop");
+      // No deadline is "no auto-stop" only where the provider's model says so:
+      // a fixed limit with no deadline reported is unknown, not none.
+      const unreportedLimit =
+        status.lifetime?.kind === "fixed-at-create" && status.lifetimeSeconds !== null;
+      if (stop) facts.push(`stops by itself ${stop}`);
+      else if (status.lifetime?.kind === "idle-sleep") facts.push("sleeps when idle");
+      else if (status.lifetime !== null && !unreportedLimit) facts.push("no auto-stop");
     }
   } else if (stoppedBilling) {
     facts.push(stoppedBilling);
@@ -269,12 +277,58 @@ export function canStopMachine(status: CloudHostStatus): boolean {
   );
 }
 
+/** "It sleeps by itself after 30 minutes without activity.", in whatever the provider said of it. */
+export function idleSleepSentence(idleSeconds: number | null): string {
+  return idleSeconds === null
+    ? "It sleeps by itself once it's been idle for a while."
+    : `It sleeps by itself after ${durationLabel(idleSeconds)} without activity.`;
+}
+
 /**
- * When a machine stops by itself, in one sentence for anywhere a lifetime is
- * chosen or a start confirmed. Daintree pushes the stop back while the host
- * is in use from this device, so the lifetime is a guard, not a budget.
+ * When a machine stops by itself, in one sentence for anywhere a start is
+ * confirmed or a create reviewed, in its provider's terms. On a renewable
+ * provider Daintree pushes the stop back while the host is in use from this
+ * device, so the lifetime is a guard, not a budget; a fixed limit holds even
+ * then. Nothing while the provider isn't registered: its model isn't known.
  */
-export function lifetimeSentence(lifetimeSeconds: number | null): string {
-  if (lifetimeSeconds === null) return "It runs until you stop it.";
-  return `It stops by itself ${durationLabel(lifetimeSeconds)} after starting, pushed back while a window here shows it or its agents are working.`;
+export function lifetimeSentence(
+  lifetime: CloudLifetimeModel | null,
+  lifetimeSeconds: number | null
+): string {
+  if (lifetime === null) return "";
+  switch (lifetime.kind) {
+    case "idle-sleep":
+      return idleSleepSentence(lifetime.idleSeconds);
+    case "none":
+      return "It runs until you stop it.";
+    case "fixed-at-create":
+      return lifetimeSeconds === null
+        ? "It runs until you stop it."
+        : `It stops by itself ${durationLabel(lifetimeSeconds)} after starting, and that can't be extended while it runs.`;
+    case "renewable":
+      return lifetimeSeconds === null
+        ? "It runs until you stop it."
+        : `It stops by itself ${durationLabel(lifetimeSeconds)} after starting, pushed back while a window here shows it or its agents are working.`;
+  }
+}
+
+/**
+ * How a provider whose lifetime a create doesn't choose stops a machine, in
+ * its own name: never, or by sleeping it once it's idle. Null for a provider
+ * whose create does choose one.
+ */
+export function providerStopSentence(
+  lifetime: CloudLifetimeModel,
+  providerName: string
+): string | null {
+  switch (lifetime.kind) {
+    case "none":
+      return `${providerName} has no lifetime for its machines: it runs until you stop it.`;
+    case "idle-sleep":
+      return lifetime.idleSeconds === null
+        ? `${providerName} puts it to sleep by itself once it's been idle for a while.`
+        : `${providerName} puts it to sleep by itself after ${durationLabel(lifetime.idleSeconds)} without activity.`;
+    default:
+      return null;
+  }
 }

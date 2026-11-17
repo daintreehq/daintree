@@ -49,6 +49,13 @@ export class CloudProviderRegistry {
     if (info.id !== id) {
       throw new Error(`Cloud provider ${id} describes itself as ${JSON.stringify(info.id)}`);
     }
+    // The keeper renews only what says it can and can; a provider claiming one without the other is a broken one.
+    if (
+      info.capabilities.lifetime.kind === "renewable" &&
+      typeof provider.renewLifetime !== "function"
+    ) {
+      throw new Error(`Cloud provider ${id} has a renewable lifetime but no renewLifetime`);
+    }
     // Its tunnel runs on this device, and its trust decides whether a key is pinned.
     const sshProblem = sshDeclarationProblem(info.capabilities);
     if (sshProblem) throw new Error(`Cloud provider ${id}: ${sshProblem}`);

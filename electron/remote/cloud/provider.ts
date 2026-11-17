@@ -79,6 +79,7 @@ export interface ProviderCatalog {
 export interface ProviderCreateRequest {
   name: string;
   machineType: string;
+  /** The runtime limit, for a provider whose create takes one; always null for the rest. */
   lifetimeSeconds: number | null;
   /** What the person chose, checked against the catalog; the same on every retry of this create. */
   provisioning: CloudProvisioningSelection;
@@ -106,7 +107,11 @@ export interface CloudProvider {
     credentials: ProviderCredentials,
     request: ProviderCreateRequest
   ): Promise<ProviderResource>;
-  /** Starts a stopped machine; resolves with what the provider said, which may still be starting. */
+  /**
+   * Starts a stopped machine; resolves with what the provider said, which may
+   * still be starting. `lifetimeSeconds` is the runtime limit to start it with,
+   * absent when it keeps whatever it has (and null for none).
+   */
   start(
     credentials: ProviderCredentials,
     resourceId: string,
@@ -114,8 +119,11 @@ export interface CloudProvider {
   ): Promise<ProviderResource | null>;
   /** A normal, saving stop. Never forced. */
   stop(credentials: ProviderCredentials, resourceId: string): Promise<ProviderResource | null>;
-  /** Moves the machine's automatic stop to `lifetimeSeconds` from now. */
-  renewLifetime(
+  /**
+   * Moves the machine's automatic stop to `lifetimeSeconds` from now. Only a
+   * provider whose lifetime is `renewable` has it, and that one must.
+   */
+  renewLifetime?(
     credentials: ProviderCredentials,
     resourceId: string,
     lifetimeSeconds: number | null
@@ -130,4 +138,18 @@ export interface CloudProvider {
   ): Promise<ProviderSshAccess>;
   /** A provider failure as a typed, user-facing error. */
   describeError(error: unknown): CloudHostError;
+}
+
+/** A provider that can move a running machine's automatic stop. */
+export type RenewingCloudProvider = CloudProvider & Required<Pick<CloudProvider, "renewLifetime">>;
+
+/**
+ * Whether the provider can move a running machine's deadline: it says its
+ * lifetime is renewable, and it has the method. Neither alone is enough.
+ */
+export function canRenewLifetime(provider: CloudProvider): provider is RenewingCloudProvider {
+  return (
+    provider.info(process.platform).capabilities.lifetime.kind === "renewable" &&
+    typeof provider.renewLifetime === "function"
+  );
 }

@@ -95,6 +95,14 @@ export type CloudLifetimeModel =
     };
 
 /**
+ * Whether a create names how long the machine may run. Only a provider that
+ * holds a machine to a deadline takes one; for the rest a create sends none.
+ */
+export function cloudLifetimeIsChosen(model: CloudLifetimeModel): boolean {
+  return model.kind === "renewable" || model.kind === "fixed-at-create";
+}
+
+/**
  * Where the trust in a machine's SSH server key comes from.
  * - `pinned-from-api`: the provider's authenticated API returns it, so it is pinned before any dial.
  * - `confirm-on-first-connect`: nothing vouches for it; the person confirms its fingerprint once.
@@ -478,9 +486,14 @@ export interface CloudHostStatus {
   vcpu: number | null;
   memoryGB: number | null;
   hourlyDollars: number | null;
-  /** When the provider stops the machine by itself; null when it never will. */
+  /** Whether and how its provider stops a machine by itself; null while its provider isn't registered. */
+  lifetime: CloudLifetimeModel | null;
+  /** When the provider last said it stops the machine by itself; null when it reported no deadline. */
   autoStopAt: string | null;
-  /** The lifetime the machine renews to, in seconds; null when it never stops by itself. */
+  /**
+   * The runtime limit asked for at create or start, in seconds; null for none.
+   * Meaningful only for a lifetime model a create chooses (`cloudLifetimeIsChosen`).
+   */
   lifetimeSeconds: number | null;
   stoppedAt: string | null;
   /** The last stop Daintree or the provider recorded, while it is pending or failing. */
@@ -509,7 +522,11 @@ export interface CloudHostCreateRequest {
   accountId: string;
   name: string;
   machineType: string;
-  /** Hours the machine may run before the provider stops it unless renewed; null for never. */
+  /**
+   * Hours the machine may run before the provider stops it (unless renewed,
+   * where the provider allows it); null for never. Always null for a provider
+   * whose lifetime a create doesn't choose.
+   */
   lifetimeHours: number | null;
   /**
    * The region, image and network, for a provider that takes any. Checked
@@ -540,7 +557,7 @@ export interface CloudHostsSnapshot {
 
 export type CloudHostsEvent = { type: "changed"; snapshot: CloudHostsSnapshot };
 
-/** Lifetimes offered when a machine is created, in hours; null is "never stops by itself". */
+/** Lifetimes offered when a machine is created (or a fixed limit changed), in hours; null is "never stops by itself". */
 export const CLOUD_LIFETIME_CHOICES: readonly (number | null)[] = [1, 2, 4, 8, 24, null];
 
 export const DEFAULT_CLOUD_LIFETIME_HOURS = 2;
