@@ -8,7 +8,10 @@ import type {
   PaneDecisionState,
 } from "../../../shared/types/decisions.js";
 import type {
+  AnswerDecisionQuestionPayload,
   CancelDecisionQuestionPayload,
+  DecisionAnswerResultRead,
+  DecisionQuestionAnswerResult,
   DecisionQuestionCancelResult,
   DecisionQuestionListItem,
   DecisionQuestionReference,
@@ -600,6 +603,30 @@ export class DecisionsService {
       projectId: reference.projectId,
       terminalId: reference.terminalId,
     });
+  }
+
+  /**
+   * The person's answer from Daintree's own view (#17101): signed with this
+   * computer's key when it is the owner's, never a Remote Host's, on the
+   * route agents ask on; not running while no route serves questions.
+   */
+  answerQuestion(payload: AnswerDecisionQuestionPayload): Promise<DecisionQuestionAnswerResult> {
+    const questions = this.questions;
+    if (this.disposed || this.state === "off" || questions === null) {
+      return Promise.resolve({ result: "not-running" });
+    }
+    if (this.role !== "owner") return Promise.resolve({ result: "refused", reason: "not-owner" });
+    return questions.answerForPerson(payload, this.settings?.hostId ?? null);
+  }
+
+  /** Where a person's answer stands, by the id it was submitted with (#17101). */
+  getAnswerResult(answerId: string): Promise<DecisionAnswerResultRead> {
+    const questions = this.questions;
+    if (this.disposed || this.state === "off" || questions === null) {
+      return Promise.resolve({ result: "not-running" });
+    }
+    if (this.role !== "owner") return Promise.resolve({ result: "not-found" });
+    return questions.answerResultForPerson(answerId);
   }
 
   /**

@@ -1,5 +1,6 @@
 import {
   RelayError,
+  answeredOn,
   openAnswerContent,
   openMessageContent,
   openQuestionContent,
@@ -69,6 +70,13 @@ export async function readQuestionContent(
     questionId: row.question_id,
     alias: row.alias,
     terminalId: row.origin.pane_id,
+    reference: {
+      hostId: row.origin.host_id,
+      projectId: row.origin.project_id,
+      terminalId: row.origin.pane_id,
+      questionId: row.question_id,
+    },
+    revision: row.question_revision,
     question: content.question,
     context: content.context ?? null,
     kind: content.kind,
@@ -290,6 +298,7 @@ async function readThread(ctx: SealContext, row: QuestionRow): Promise<DecisionT
         entryId: entry.entry_id,
         revision: entry.revision,
         from: entry.source === "proxy" ? "model" : "person",
+        onComputer: answeredOn(entry) === "computer",
         correction: entry.correction,
         confirmsModel: entry.action === "confirm-proxy",
         choices: (opened?.choices ?? []).map((choice) => ({

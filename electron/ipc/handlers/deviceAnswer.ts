@@ -78,8 +78,11 @@ import type {
   SetDecisionsModelThresholdPayload,
 } from "../../../shared/types/decisionsModel.js";
 import type {
+  AnswerDecisionQuestionPayload,
   CancelDecisionQuestionByReferencePayload,
   CancelDecisionQuestionPayload,
+  DecisionAnswerResultRead,
+  DecisionQuestionAnswerResult,
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
   DecisionQuestionImagePartResult,
@@ -91,6 +94,7 @@ import type {
   GetDecisionQuestionPayload,
   GetDecisionQuestionSummariesByReferencePayload,
   GetDecisionQuestionSummariesPayload,
+  GetDecisionAnswerResultPayload,
 } from "../../../shared/types/decisionsQuestion.js";
 import { AppError } from "../../utils/errorTypes.js";
 
@@ -336,6 +340,26 @@ const getQuestionSummariesByReferenceSchema = z
   .object({ references: z.array(questionReferenceSchema).max(64) })
   .strict();
 
+// An answer id the view mints (a UUID fits), in the protocol's id shape.
+const answerIdSchema = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/);
+
+// The person's answer (#17101), within the protocol's own bounds, which the
+// library checks again, with the question's rules, before anything is signed.
+const answerQuestionSchema = z
+  .object({
+    reference: questionReferenceSchema,
+    answerId: answerIdSchema,
+    expectedRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+    selectedOptionIds: z.array(z.string().min(1).max(64)).max(12),
+    text: z.string().max(16 * 1024).optional(),
+    explicitApproval: z.boolean().optional(),
+    reason: z.string().max(2_000).optional(),
+    reviewedAttachmentDigests: z.array(z.string().regex(/^[0-9a-f]{64}$/)).max(8),
+  })
+  .strict();
+
+const getAnswerResultSchema = z.object({ answerId: answerIdSchema }).strict();
+
 // A pane holds at most ten open questions; the cap leaves room for the settled ones a list names.
 const getQuestionSummariesSchema = z
   .object({
@@ -536,6 +560,32 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) return { result: "not-running" };
         return decisions.cancelDecisionQuestionByReference(payload);
+      }
+    ),
+    // The person's answer to a question (#17101), from Daintree's own view:
+    // `shell`, so this computer signs it with its owner key whichever machine
+    // asked, and a Remote Host window's answer never reaches the Host, whose
+    // key never signs one. The question is named by the reference its content
+    // was read with. There is no action, MCP tool or plugin surface for it.
+    // Never starts Decisions.
+    answerQuestion: opValidated(
+      CHANNELS.DECISIONS_ANSWER_QUESTION,
+      answerQuestionSchema,
+      async (payload: AnswerDecisionQuestionPayload): Promise<DecisionQuestionAnswerResult> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.answerDecisionQuestion(payload);
+      }
+    ),
+    getAnswerResult: opValidated(
+      CHANNELS.DECISIONS_GET_ANSWER_RESULT,
+      getAnswerResultSchema,
+      async (payload: GetDecisionAnswerResultPayload): Promise<DecisionAnswerResultRead> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.getDecisionAnswerResult(payload);
       }
     ),
     // Which terminals this view's hybrid input holds a draft for (#16282): an

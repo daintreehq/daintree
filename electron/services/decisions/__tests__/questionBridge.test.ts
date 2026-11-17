@@ -85,6 +85,18 @@ function liveBridge() {
       expectsReply: true,
     })),
     listPending: vi.fn(async () => []),
+    answerQuestion: vi.fn(async (input: { questionId: string; expectedRevision: number }) => ({
+      answerId: "answer_live_0001",
+      questionId: input.questionId,
+      expectedRevision: input.expectedRevision,
+      status: "sent" as const,
+    })),
+    getAnswerResult: vi.fn(async (answerId: string) => ({
+      answerId,
+      questionId: "q_live",
+      expectedRevision: 0,
+      status: "already-answered" as const,
+    })),
     getInvolvement: vi.fn(async (): Promise<InvolvementView> => ({
       status: "available",
       mode: "recommend",
@@ -917,6 +929,262 @@ describe("QuestionBridge", () => {
       await post;
       await expect(cancel).resolves.toEqual({ result: "cancelling" });
       expect(live.cancelQuestion).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("a person's answer (#17101)", () => {
+    const HOST = "host_a";
+    const ANSWER_ID = "0190f0aa-1111-4222-8333-444455556666";
+    const CHOICE = {
+      question: "Which cache?",
+      kind: "choice",
+      options: [
+        { id: "pg", label: "Postgres" },
+        { id: "redis", label: "Redis" },
+      ],
+    };
+
+    function payload(questionId: string, over: Record<string, unknown> = {}) {
+      return {
+        reference: { hostId: HOST, projectId: "p1", terminalId: "pane-1", questionId },
+        answerId: ANSWER_ID,
+        expectedRevision: 0,
+        selectedOptionIds: ["pg"],
+        reviewedAttachmentDigests: [],
+        ...over,
+      };
+    }
+
+    async function nothingSigned(): Promise<void> {
+      expect(await store.getMeta(`owner-answer:${ANSWER_ID}`)).toBeNull();
+      const items = await Promise.all(
+        (await store.listQuestions()).map((row) => store.outboxFor(row.question_id))
+      );
+      expect(items.flat().filter((item) => item.kind === "owner-answer")).toEqual([]);
+    }
+
+    it("refuses an agent's answer on the bridge agents ask on, signing nothing", async () => {
+      const b = bridge();
+      live = liveBridge();
+      const asked = await b.registerQuestion({ origin: ORIGIN, input: CHOICE });
+
+      await expect(
+        b.answerQuestion({
+          questionId: asked.questionId,
+          expectedRevision: 0,
+          selectedOptionIds: ["pg"],
+          answerId: ANSWER_ID,
+        })
+      ).rejects.toMatchObject({ code: "forbidden" });
+      await expect(b.getAnswerResult(ANSWER_ID)).rejects.toMatchObject({ code: "forbidden" });
+
+      expect(live.answerQuestion).not.toHaveBeenCalled();
+      expect(live.getAnswerResult).not.toHaveBeenCalled();
+      await nothingSigned();
+    });
+
+    it("answers this computer's own question on the live attempt, even after the run that asked was relaunched", async () => {
+      const b = bridge();
+      const asked = await b.registerQuestion({ origin: ORIGIN, input: CHOICE });
+      current = false;
+      live = liveBridge();
+
+      await expect(
+        b.answerForPerson(payload(asked.questionId, { text: "For now.", explicitApproval: true }), HOST)
+      ).resolves.toEqual({
+        result: "submitted",
+        answerId: "answer_live_0001",
+        outcome: { status: "sent" },
+      });
+
+      expect(live.answerQuestion).toHaveBeenCalledWith({
+        questionId: asked.questionId,
+        expectedRevision: 0,
+        selectedOptionIds: ["pg"],
+        reviewedAttachmentDigests: [],
+        answerId: ANSWER_ID,
+        text: "For now.",
+        explicitApproval: true,
+      });
+    });
+
+    it.each([
+      ["another machine", { hostId: "host_b" }],
+      ["another project", { projectId: "p2" }],
+      ["another terminal", { terminalId: "pane-2" }],
+    ])("refuses a reference naming %s for a question this computer asked", async (_label, over) => {
+      const b = bridge();
+      const asked = await b.registerQuestion({ origin: ORIGIN, input: CHOICE });
+      live = liveBridge();
+      const request = payload(asked.questionId);
+
+      await expect(
+        b.answerForPerson({ ...request, reference: { ...request.reference, ...over } }, HOST)
+      ).resolves.toEqual({ result: "refused", reason: "not-found" });
+
+      expect(live.answerQuestion).not.toHaveBeenCalled();
+    });
+
+    it("refuses a reference naming this computer for a question it doesn't hold", async () => {
+      const b = bridge();
+      live = liveBridge();
+
+      await expect(b.answerForPerson(payload("q_unknown_1234"), HOST)).resolves.toEqual({
+        result: "refused",
+        reason: "not-found",
+      });
+      await expect(b.answerForPerson(payload("q_unknown_1234"), null)).resolves.toEqual({
+        result: "refused",
+        reason: "not-found",
+      });
+      expect(live.answerQuestion).not.toHaveBeenCalled();
+    });
+
+    it("signs a Remote Host's question with this computer's key between attempts, and the same answer id stays one answer", async () => {
+      const b = bridge();
+      const questionId = "q_remote_host_0001";
+      const request = payload(questionId, {
+        reference: { hostId: "host_studio", projectId: "p9", terminalId: "pane-9", questionId },
+        expectedRevision: 2,
+        selectedOptionIds: ["approve"],
+        explicitApproval: true,
+        reviewedAttachmentDigests: ["a".repeat(64)],
+      });
+
+      await expect(b.answerForPerson(request, HOST)).resolves.toEqual({
+        result: "submitted",
+        answerId: ANSWER_ID,
+        outcome: { status: "queued" },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(fetches).toBe(0);
+
+      // No copy of the question here: the answer alone is committed, for the next attempt to send.
+      expect(await store.getQuestion(questionId)).toBeNull();
+      const items = await store.outboxFor(questionId);
+      expect(items.map((item) => item.kind)).toEqual(["owner-answer"]);
+      const { signed } = items[0]!.payload as {
+        signed: { record: Record<string, unknown>; envelope: Record<string, unknown> };
+      };
+      expect(
+        await verifyRecordAndEnvelope(
+          signed.record,
+          signed.envelope as never,
+          identity!.keys.signing.publicKey
+        )
+      ).toBe(true);
+      expect(signed.record).toMatchObject({
+        question_id: questionId,
+        action: "answer",
+        action_id: ANSWER_ID,
+        expected_revision: 2,
+        signer_device_id: identity!.config.deviceId,
+      });
+
+      // A retry after a lost result is the same answer, never a second one.
+      await expect(b.answerForPerson(request, HOST)).resolves.toMatchObject({
+        result: "submitted",
+        answerId: ANSWER_ID,
+      });
+      expect((await store.outboxFor(questionId)).map((item) => item.id)).toEqual([items[0]!.id]);
+      await expect(b.answerResultForPerson(ANSWER_ID)).resolves.toEqual({
+        result: "read",
+        questionId,
+        expectedRevision: 2,
+        outcome: { status: "queued" },
+      });
+
+      // The same id for another answer is refused, and changes nothing.
+      await expect(
+        b.answerForPerson({ ...request, selectedOptionIds: ["reject"] }, HOST)
+      ).resolves.toMatchObject({ result: "refused", reason: "invalid" });
+      expect(await store.outboxFor(questionId)).toHaveLength(1);
+    });
+
+    it("reads an answer's outcome from the live attempt, and nothing for an id never submitted", async () => {
+      const b = bridge();
+      await expect(b.answerResultForPerson(ANSWER_ID)).resolves.toEqual({ result: "not-found" });
+      live = liveBridge();
+
+      await expect(b.answerResultForPerson(ANSWER_ID)).resolves.toEqual({
+        result: "read",
+        questionId: "q_live",
+        expectedRevision: 0,
+        outcome: { status: "already-answered" },
+      });
+      expect(live.getAnswerResult).toHaveBeenCalledWith(ANSWER_ID);
+    });
+
+    it("checks this computer's own question against its rules before signing", async () => {
+      const b = bridge();
+      const asked = await b.registerQuestion({ origin: ORIGIN, input: CHOICE });
+
+      const refused = await b.answerForPerson(
+        payload(asked.questionId, { selectedOptionIds: ["mysql"] }),
+        HOST
+      );
+
+      expect(refused).toMatchObject({ result: "refused", reason: "invalid" });
+      await nothingSigned();
+    });
+
+    it("never signs on a Remote Host's own lifetime", async () => {
+      const b = bridge();
+      const hostIdentity = { ...identity!, role: "desktop-host" } as Identity;
+      source.identity = () => hostIdentity;
+      live = liveBridge();
+
+      await expect(
+        b.answerForPerson(
+          payload("q_remote_host_0001", {
+            reference: {
+              hostId: "host_owner",
+              projectId: "p1",
+              terminalId: "pane-1",
+              questionId: "q_remote_host_0001",
+            },
+          }),
+          HOST
+        )
+      ).resolves.toEqual({ result: "refused", reason: "not-owner" });
+      expect(live.answerQuestion).not.toHaveBeenCalled();
+      await nothingSigned();
+    });
+
+    it("is not running once the connection has ended", async () => {
+      const b = bridge();
+      identity = null;
+
+      await expect(b.answerForPerson(payload("q_remote_host_0001"), HOST)).resolves.toEqual({
+        result: "not-running",
+      });
+    });
+
+    it("goes again to the attempt that answers now when the live one retires partway", async () => {
+      const b = bridge();
+      const retiring = liveBridge();
+      const next = liveBridge();
+      retiring.answerQuestion.mockImplementation(async () => {
+        live = next;
+        throw new RetiredAttemptError();
+      });
+      live = retiring;
+      const request = payload("q_remote_host_0001", {
+        reference: {
+          hostId: "host_studio",
+          projectId: "p9",
+          terminalId: "pane-9",
+          questionId: "q_remote_host_0001",
+        },
+      });
+
+      await expect(b.answerForPerson(request, HOST)).resolves.toMatchObject({
+        result: "submitted",
+        outcome: { status: "sent" },
+      });
+      expect(next.answerQuestion).toHaveBeenCalledWith(
+        expect.objectContaining({ answerId: ANSWER_ID, questionId: "q_remote_host_0001" })
+      );
     });
   });
 });

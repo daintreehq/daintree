@@ -215,6 +215,13 @@ describe("readQuestionContent", () => {
         questionId: QID,
         alias: 1,
         terminalId: "pane-a",
+        reference: {
+          hostId: "host-1",
+          projectId: "project-1",
+          terminalId: "pane-a",
+          questionId: QID,
+        },
+        revision: 1,
         question: CONTENT.question,
         context: "The cache sits behind the API.",
         kind: "choice",
@@ -340,6 +347,7 @@ describe("readQuestionContent", () => {
       entryId: "entry-x",
       revision: 4,
       from: "person",
+      onComputer: false,
       correction: true,
       confirmsModel: false,
       choices: [{ id: "pg", label: "Postgres" }],
@@ -364,6 +372,43 @@ describe("readQuestionContent", () => {
       images: [{ attachmentId: "phoneimg_0001" }],
     });
     expect(thread[6]).toEqual({ type: "expired", entryId: "entry-e", sentAt: expired.created_at });
+  });
+
+  it("names the revision it read, and tells a person's answer on the computer from a phone's (#17101)", async () => {
+    const onPhone = await answer(
+      { entry_id: "entry-1", signer_role: "phone", event_seq: 2 },
+      { text: "From the phone." }
+    );
+    const onComputer = await answer(
+      { entry_id: "entry-2", revision: 2, signer_role: "owner-desktop", event_seq: 4 },
+      { text: "From the desk." }
+    );
+    const byModel = await answer({
+      entry_id: "entry-3",
+      revision: 3,
+      source: "proxy",
+      action: "proxy-answer",
+      signer_role: "owner-desktop",
+      event_seq: 6,
+    });
+    const row = await question(CONTENT, {
+      question_revision: 3,
+      answers_json: serializeAnswers([onPhone, onComputer, byModel]),
+    });
+
+    const read = await readQuestionContent(ctx(), row);
+    if (read.result !== "read") throw new Error(read.result);
+
+    expect(read.question.revision).toBe(3);
+    expect(
+      read.question.thread.map((entry) =>
+        entry.type === "answer" ? [entry.from, entry.onComputer] : null
+      )
+    ).toEqual([
+      ["person", false],
+      ["person", true],
+      ["model", false],
+    ]);
   });
 
   it("keeps the rest of the thread when one entry can't be opened", async () => {

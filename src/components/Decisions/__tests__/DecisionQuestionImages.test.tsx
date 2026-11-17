@@ -58,6 +58,8 @@ function question(attachments: DecisionQuestionAttachment[]): DecisionQuestionCo
     questionId: "qa",
     alias: 7,
     terminalId: "t1",
+    reference: { hostId: "host_1", projectId: "project-1", terminalId: "t1", questionId: "qa" },
+    revision: 0,
     question: "Ship the new header?",
     context: null,
     kind: "approval",

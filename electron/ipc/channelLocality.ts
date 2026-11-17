@@ -285,6 +285,10 @@ export const CHANNEL_LOCALITY = {
   "decisions:get-question-image-by-reference": "shell",
   "decisions:get-question-summaries-by-reference": "shell",
   "decisions:cancel-question-by-reference": "shell",
+  // The person's answer, signed by this computer's owner key whichever machine asked (#17101):
+  // a Remote Host's own key never signs one, so a Host window's answer never crosses the link.
+  "decisions:answer-question": "shell",
+  "decisions:get-answer-result": "shell",
   "decisions:get-policy": "shell",
   "decisions:report-composer-drafts": "host",
   "decisions:get-setup-check": "shell",

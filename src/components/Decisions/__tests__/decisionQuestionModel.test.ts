@@ -13,6 +13,7 @@ function answer(over: Partial<DecisionThreadAnswer> = {}): DecisionThreadAnswer 
     entryId: "a1",
     revision: 1,
     from: "person",
+    onComputer: false,
     correction: false,
     confirmsModel: false,
     choices: [],
