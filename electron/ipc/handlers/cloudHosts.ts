@@ -8,6 +8,7 @@ import type {
   CloudAccountCheckResult,
   CloudAccountSummary,
   CloudCatalog,
+  CloudCredentialValues,
   CloudHostsSnapshot,
   CloudResourceSummary,
 } from "../../../shared/types/cloudHosts.js";
@@ -21,8 +22,8 @@ function field(payload: unknown, name: string): unknown {
 }
 
 /**
- * Cloud accounts and cloud hosts. Keys come in once (check, add, replace) and
- * never go back out; every answer is the credential-free picture.
+ * Cloud accounts and cloud hosts. Credentials come in once (check, add,
+ * replace) and never go back out; every answer is the credential-free picture.
  */
 export const cloudHostsNamespace = defineIpcNamespace({
   name: "cloudHosts",
@@ -34,10 +35,13 @@ export const cloudHostsNamespace = defineIpcNamespace({
     ),
     checkAccountKey: op(
       CLOUD_HOSTS_METHOD_CHANNELS.checkAccountKey,
-      async (payload: { providerId: string; apiKey: string }): Promise<CloudAccountCheckResult> =>
-        requireRemoteService("cloudHosts").checkAccountKey(
+      async (payload: {
+        providerId: string;
+        credentials: CloudCredentialValues;
+      }): Promise<CloudAccountCheckResult> =>
+        requireRemoteService("cloudHosts").checkAccountCredentials(
           field(payload, "providerId"),
-          field(payload, "apiKey")
+          field(payload, "credentials")
         )
     ),
     addAccount: op(
@@ -47,10 +51,13 @@ export const cloudHostsNamespace = defineIpcNamespace({
     ),
     replaceAccountKey: op(
       CLOUD_HOSTS_METHOD_CHANNELS.replaceAccountKey,
-      async (payload: { accountId: string; apiKey: string }): Promise<CloudAccountSummary> =>
-        requireRemoteService("cloudHosts").replaceAccountKey(
+      async (payload: {
+        accountId: string;
+        credentials: CloudCredentialValues;
+      }): Promise<CloudAccountSummary> =>
+        requireRemoteService("cloudHosts").replaceAccountCredentials(
           field(payload, "accountId"),
-          field(payload, "apiKey")
+          field(payload, "credentials")
         )
     ),
     renameAccount: op(

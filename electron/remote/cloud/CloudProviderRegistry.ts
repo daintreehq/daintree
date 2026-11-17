@@ -3,6 +3,7 @@ import {
   type CloudProviderId,
   type CloudProviderNamespace,
 } from "../../../shared/types/cloudHosts.js";
+import { credentialFieldsProblem } from "./cloudCredentials.js";
 import { sshKeyContractProblem, type CloudProvider } from "./provider.js";
 import { sshDeclarationProblem } from "./sshTunnel.js";
 
@@ -61,6 +62,8 @@ export class CloudProviderRegistry {
     if (sshProblem) throw new Error(`Cloud provider ${id}: ${sshProblem}`);
     const sshKeyProblem = sshKeyContractProblem(provider, info.capabilities.provisioning.sshKey);
     if (sshKeyProblem) throw new Error(`Cloud provider ${id} ${sshKeyProblem}`);
+    const fieldsProblem = credentialFieldsProblem(info.credentialFields);
+    if (fieldsProblem) throw new Error(`Cloud provider ${id} ${fieldsProblem}`);
     if (this.entries.has(id)) throw new Error(`Cloud provider ${id} is already registered`);
     const registration: Registration = { provider, apiUrl: options.apiUrl, owner };
     this.entries.set(id, registration);

@@ -5,19 +5,26 @@ import type {
   CloudAccountCheckResult,
   CloudAccountSummary,
   CloudCatalog,
+  CloudCredentialValues,
   CloudHostsSnapshot,
   CloudResourceSummary,
 } from "@shared/types/cloudHosts";
 
-/** Cloud accounts and cloud hosts. A key goes in once and never comes back. */
+/** Cloud accounts and cloud hosts. Credentials go in once and never come back. */
 export const cloudHostsClient = {
   getSnapshot: (): Promise<CloudHostsSnapshot> => window.electron.cloudHosts.getSnapshot(),
-  checkAccountKey: (providerId: string, apiKey: string): Promise<CloudAccountCheckResult> =>
-    window.electron.cloudHosts.checkAccountKey({ providerId, apiKey }),
+  checkAccountCredentials: (
+    providerId: string,
+    credentials: CloudCredentialValues
+  ): Promise<CloudAccountCheckResult> =>
+    window.electron.cloudHosts.checkAccountKey({ providerId, credentials }),
   addAccount: (request: CloudAccountAddRequest): Promise<CloudAccountSummary> =>
     window.electron.cloudHosts.addAccount(request),
-  replaceAccountKey: (accountId: string, apiKey: string): Promise<CloudAccountSummary> =>
-    window.electron.cloudHosts.replaceAccountKey({ accountId, apiKey }),
+  replaceAccountCredentials: (
+    accountId: string,
+    credentials: CloudCredentialValues
+  ): Promise<CloudAccountSummary> =>
+    window.electron.cloudHosts.replaceAccountKey({ accountId, credentials }),
   renameAccount: (accountId: string, displayName: string): Promise<CloudAccountSummary> =>
     window.electron.cloudHosts.renameAccount({ accountId, displayName }),
   removeAccount: (accountId: string): Promise<void> =>
