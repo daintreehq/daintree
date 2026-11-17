@@ -105,6 +105,19 @@ function hasBottomBorderUtility(element: Element): boolean {
   });
 }
 
+// Keyboard focus opens a Radix tooltip without any hover delay, which is also
+// the path a native `title` could never offer.
+function focusTimerTooltip(container: HTMLElement): string {
+  const timer = container.querySelector<HTMLElement>(
+    "[data-testid='deleted-worktree-countdown-seconds']"
+  );
+  if (!timer) throw new Error("countdown readout not rendered");
+  act(() => {
+    timer.focus();
+  });
+  return screen.getByRole("tooltip").textContent ?? "";
+}
+
 function renderCard(wt: DeletedWorktree = worktree) {
   return render(
     <TooltipProvider>
@@ -557,10 +570,7 @@ describe("DeletedWorktreeCard", () => {
       const label =
         container.querySelector("[data-testid='deleted-worktree-countdown-hold']")?.textContent ??
         "";
-      const explanation =
-        container
-          .querySelector("[data-testid='deleted-worktree-countdown-seconds']")
-          ?.getAttribute("title") ?? "";
+      const explanation = focusTimerTooltip(container);
       cleanup();
       return { label, explanation };
     };
@@ -584,6 +594,55 @@ describe("DeletedWorktreeCard", () => {
     for (const { label } of [agent, drag, confirm]) {
       expect(label.endsWith(".")).toBe(false);
       expect(label.slice(1)).toBe(label.slice(1).toLowerCase());
+    }
+  });
+
+  it("discloses the countdown through a themed tooltip, with no native title", () => {
+    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+    const { container } = renderCard({ ...worktree, expiresAt: Date.now() + 40_000 });
+
+    const timer = container.querySelector("[data-testid='deleted-worktree-countdown-seconds']");
+    expect(timer?.getAttribute("tabindex")).toBe("0");
+    expect(focusTimerTooltip(container)).toMatch(/^Closes automatically in \d+s$/);
+    expect(container.querySelector("[title]")).toBeNull();
+  });
+
+  it("says why the countdown is holding in its tooltip", () => {
+    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+    const { container } = renderCard({
+      ...worktree,
+      expiresAt: Date.now() + 40_000,
+      heldRemainingMs: 38_000,
+      holdReason: "drag",
+    });
+
+    expect(focusTimerTooltip(container)).toBe(
+      "Auto-close is paused while a drag is in progress, holding at 38s"
+    );
+    expect(container.querySelector("[title]")).toBeNull();
+    expect(
+      screen.getByRole("timer", {
+        name: "Auto-close is paused while a drag is in progress, holding at 38 seconds",
+      })
+    ).toBeTruthy();
+  });
+
+  it("opens the countdown tooltip on pointer hover too", () => {
+    vi.useFakeTimers();
+    try {
+      setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+      const { container } = renderCard({ ...worktree, expiresAt: Date.now() + 40_000 });
+      const timer = container.querySelector("[data-testid='deleted-worktree-countdown-seconds']")!;
+      expect(screen.queryByRole("tooltip")).toBeNull();
+
+      act(() => {
+        fireEvent.pointerMove(timer, { pointerType: "mouse" });
+        vi.advanceTimersByTime(1000);
+      });
+
+      expect(screen.getByRole("tooltip").textContent).toMatch(/^Closes automatically in \d+s$/);
+    } finally {
+      vi.useRealTimers();
     }
   });
 
@@ -688,11 +747,7 @@ describe("DeletedWorktreeCard", () => {
         container.querySelector("[data-testid='deleted-worktree-countdown']")?.hasAttribute("title")
       ).toBe(false);
       // The readout keeps its own tooltip, so the information is not lost.
-      expect(
-        container
-          .querySelector("[data-testid='deleted-worktree-countdown-seconds']")
-          ?.getAttribute("title")
-      ).toContain("Closes automatically");
+      expect(focusTimerTooltip(container)).toContain("Closes automatically");
     });
   });
 

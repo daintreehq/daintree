@@ -46,6 +46,12 @@ import { buildDestructivePreview } from "@/utils/destructiveSessionConfirm";
 import { selectPtyPanels } from "@/hooks/useWorktreeTerminals";
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import { useDeletedWorktreeCountdown } from "./useDeletedWorktreeCountdown";
+import {
+  DeletedWorktreeTimer,
+  describeDeletedWorktreeTimer,
+  labelDeletedWorktreeTimer,
+} from "./DeletedWorktreeTimer";
+import { pluralize } from "@/lib/pluralize";
 import { Badge } from "@/components/ui/badge";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
@@ -201,10 +207,10 @@ export function DeletedWorktreeGroup({ worktrees, homeDir }: DeletedWorktreeGrou
   // rendering an empty summary.
   if (terminalCount === 0) return null;
 
-  const worktreeNoun = members.length === 1 ? "deleted worktree" : "deleted worktrees";
-  const terminalNoun = terminalCount === 1 ? "panel" : "panels";
+  const worktreeLabel = pluralize(members.length, "deleted worktree");
+  const panelLabel = pluralize(terminalCount, "panel");
   // Same verb as a single card's dismiss — the group only changes the scope.
-  const clearLabel = `Close ${terminalCount} ${terminalNoun}`;
+  const clearLabel = `Close ${panelLabel}`;
 
   return (
     <div className="border-b border-border-default" data-testid="deleted-worktree-group">
@@ -231,26 +237,24 @@ export function DeletedWorktreeGroup({ worktrees, homeDir }: DeletedWorktreeGrou
             {/* At a narrow sidebar the count gives way before the noun does:
                 "3 deleted wo…" names nothing. */}
             <span className="shrink-0 text-xs font-medium text-text-secondary transition-colors duration-150 group-hover/summary:text-text-primary">
-              {members.length} {worktreeNoun}
+              {worktreeLabel}
             </span>
             <span className="sr-only">, </span>
             <span className="min-w-0 truncate text-2xs tabular-nums text-text-secondary">
-              {terminalCount} {terminalNoun}
+              {panelLabel}
             </span>
           </span>
         </button>
         {/* Outside the disclosure button, so a value that changes every second
             never becomes part of that button's name. */}
         {hasNextClose && (
-          <span
-            role="timer"
-            aria-label={`Next cleanup in ${nextCloseSeconds} seconds`}
-            title={`Next cleanup in ${nextCloseSeconds}s`}
-            className="shrink-0 font-mono text-2xs tabular-nums text-text-secondary"
+          <DeletedWorktreeTimer
+            description={`Next cleanup in ${nextCloseSeconds}s`}
+            ariaLabel={`Next cleanup in ${nextCloseSeconds} seconds`}
             data-testid="deleted-worktree-group-countdown"
           >
             {nextCloseSeconds}s
-          </span>
+          </DeletedWorktreeTimer>
         )}
         <Tooltip>
           <TooltipTrigger asChild>
@@ -345,18 +349,13 @@ function DeletedWorktreeRailMember({
           </Tooltip>
         )}
         {hasCountdown && (
-          <span
-            role="timer"
-            aria-label={
-              hold !== undefined
-                ? `${hold.tooltip}, holding at ${remainingSeconds} seconds`
-                : `Closes automatically in ${remainingSeconds} seconds`
-            }
-            className="shrink-0 font-mono text-2xs tabular-nums text-text-secondary"
+          <DeletedWorktreeTimer
+            description={describeDeletedWorktreeTimer({ hold, remainingSeconds })}
+            ariaLabel={labelDeletedWorktreeTimer({ hold, remainingSeconds })}
             data-testid="deleted-worktree-member-countdown"
           >
             {remainingSeconds}s
-          </span>
+          </DeletedWorktreeTimer>
         )}
       </div>
       <div role="list" aria-label={listLabel} className="flex flex-col">

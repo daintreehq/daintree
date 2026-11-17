@@ -22,6 +22,12 @@ import {
 } from "@/utils/destructiveSessionConfirm";
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import { useDeletedWorktreeCountdown } from "./useDeletedWorktreeCountdown";
+import {
+  DeletedWorktreeTimer,
+  describeDeletedWorktreeTimer,
+  labelDeletedWorktreeTimer,
+} from "./DeletedWorktreeTimer";
+import { pluralize } from "@/lib/pluralize";
 import { Badge } from "@/components/ui/badge";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
@@ -166,8 +172,7 @@ export function DeletedWorktreeCard({
   // reach render. Bailing keeps a torn frame from showing a zero-terminal card.
   if (panelIds.length === 0) return null;
 
-  const noun = panelIds.length === 1 ? "panel" : "panels";
-  const closeLabel = `Close ${panelIds.length} ${noun}`;
+  const closeLabel = `Close ${pluralize(panelIds.length, "panel")}`;
 
   return (
     <div
@@ -211,23 +216,13 @@ export function DeletedWorktreeCard({
           </span>
           <div className="flex items-center gap-2 shrink-0">
             {hasCountdown && (
-              <span
-                role="timer"
-                aria-label={
-                  hold !== undefined
-                    ? `${hold.tooltip}, holding at ${remainingSeconds} seconds`
-                    : `Closes automatically in ${remainingSeconds} seconds`
-                }
-                className="font-mono text-2xs tabular-nums text-text-secondary"
-                title={
-                  hold !== undefined
-                    ? `${hold.tooltip}, holding at ${remainingSeconds}s`
-                    : `Closes automatically in ${remainingSeconds}s`
-                }
+              <DeletedWorktreeTimer
+                description={describeDeletedWorktreeTimer({ hold, remainingSeconds })}
+                ariaLabel={labelDeletedWorktreeTimer({ hold, remainingSeconds })}
                 data-testid="deleted-worktree-countdown-seconds"
               >
                 {remainingSeconds}s
-              </span>
+              </DeletedWorktreeTimer>
             )}
             {showDismissAction && (
               <Tooltip>
@@ -306,7 +301,7 @@ export function DeletedWorktreeCard({
           meant to serve. The cost is that it clips the outermost pixel of that
           button's inset focus ring along the bottom; the ring stays visible on
           all four sides, and the armed countdown already did this before
-          #11262. No `title` either: a 1px decorative strip is an unhittable
+          #11262. No tooltip either: a 1px decorative strip is an unhittable
           hover target, and the seconds readout in the header already owns that
           tooltip. */}
       <div
