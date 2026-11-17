@@ -211,3 +211,58 @@ describe("a close asked for from outside Settings", () => {
     expect(next).toHaveBeenCalledExactlyOnceWith(true);
   });
 });
+
+describe("close requests that overlap", () => {
+  it("carries on every request made before Settings has gone, and leaves a tab's follow-up alone", async () => {
+    const onClose = vi.fn();
+    const { rerender } = await openEnvironment(onClose);
+    await goToDecisions();
+    await act(async () => {
+      fireEvent.click(await closeButton());
+    });
+    const first = vi.fn();
+    const second = vi.fn();
+    // Asked while Settings animates out of the tab's own close.
+    rerender(dialog(false, onClose));
+    act(() => {
+      closeSettingsThen(first);
+      closeSettingsThen(second);
+    });
+    expect(first).not.toHaveBeenCalled();
+
+    await waitFor(() => expect(afterClose).toHaveBeenCalledExactlyOnceWith(true));
+    expect(first).toHaveBeenCalledExactlyOnceWith(true);
+    expect(second).toHaveBeenCalledExactlyOnceWith(true);
+  });
+
+  it("keeps a request waiting through a reopen, for the close that follows", async () => {
+    const onClose = vi.fn();
+    const { rerender } = await openEnvironment(onClose);
+    const next = vi.fn();
+    await act(async () => closeSettingsThen(next));
+    expect(onClose).toHaveBeenCalledOnce();
+
+    rerender(dialog(false, onClose));
+    rerender(dialog(true, onClose));
+    await waitPastExit();
+    expect(next).not.toHaveBeenCalled();
+
+    rerender(dialog(false, onClose));
+    await waitFor(() => expect(next).toHaveBeenCalledExactlyOnceWith(true));
+  });
+
+  it("lets a waiting request go on when Settings goes away without finishing its exit", async () => {
+    const onClose = vi.fn();
+    const view = await openEnvironment(onClose);
+    fireEvent.click(screen.getByRole("button", { name: /add variable/i }));
+    fireEvent.change(screen.getAllByLabelText(/^Name of variable \d+$/)[1]!, {
+      target: { value: "1BAD" },
+    });
+    const next = vi.fn();
+    await act(async () => closeSettingsThen(next));
+    expect(next).not.toHaveBeenCalled();
+
+    view.unmount();
+    expect(next).toHaveBeenCalledExactlyOnceWith(true);
+  });
+});

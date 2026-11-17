@@ -244,6 +244,13 @@ interface SettingsDialogProps {
 export type { SettingsTab, SettingsScope } from "./settingsTabRegistry";
 export { scopeForTab } from "./settingsTabRegistry";
 
+/** Settings has gone: every flow waiting to carry on after it does. */
+function settleCloseWaiters(waiters: Set<(closed: boolean) => void>): void {
+  const settles = [...waiters];
+  waiters.clear();
+  for (const settle of settles) settle(true);
+}
+
 export function SettingsDialog(props: SettingsDialogProps) {
   // Provider must wrap SettingsDialogInner: the inner component reads the registry
   // via useContext to render nav-sidebar error dots.
@@ -290,8 +297,12 @@ function SettingsDialogInner({
   // can fire while the dialog is animating out. Read this ref inside the
   // timer callback to skip the speculative mount when the dialog is closing.
   const isOpenRef = useRef(isOpen);
+  // Closed but still animating out, until onCloseComplete has handed focus back.
+  const exitingRef = useRef(false);
   useEffect(() => {
+    const wasOpen = isOpenRef.current;
     isOpenRef.current = isOpen;
+    exitingRef.current = !isOpen && (wasOpen || exitingRef.current);
     // Reopened before the exit finished: that close's follow-up hears it didn't close.
     if (isOpen) {
       const cancelled = afterCloseRef.current;
@@ -727,17 +738,31 @@ function SettingsDialogInner({
   };
 
   // A flow that started here and carries on in a dialog of its own (a worktree
-  // placed once its host's setup finishes) closes Settings the way Close does.
-  // An unsaved setting holds it, and the flow then waits for Settings to close.
+  // placed once its host's setup finishes) closes Settings the way Close does,
+  // and carries on once Settings has gone and handed focus back: an unsaved
+  // setting holds the close, and a reopen keeps the flow waiting for the next.
+  // One that asks while Settings is already animating out waits for that exit.
   const closeWaitersRef = useRef(new Set<(closed: boolean) => void>());
   const answerCloseRequest = useEffectEvent((request: SettingsCloseRequest) => {
-    if (!isOpenRef.current) return;
+    if (!isOpenRef.current && !exitingRef.current) return;
     request.claim();
-    void handleClose(request.settle).then((closing) => {
-      if (!closing) closeWaitersRef.current.add(request.settle);
-    });
+    closeWaitersRef.current.add(request.settle);
+    // Not handleClose: its follow-up slot belongs to the tab that closed with one.
+    if (isOpenRef.current) {
+      void flushBeforeClose().then((closing) => {
+        if (closing) onClose();
+      });
+    }
   });
-  useEffect(() => onSettingsCloseRequest((request) => answerCloseRequest(request)), []);
+  useEffect(() => {
+    const waiters = closeWaitersRef.current;
+    const stop = onSettingsCloseRequest((request) => answerCloseRequest(request));
+    return () => {
+      stop();
+      // Gone without finishing its exit (its error boundary, the view going): nothing is left to wait for.
+      settleCloseWaiters(waiters);
+    };
+  }, []);
 
   // A plugin's setting lives in the plugin manager or Project settings → Plugins,
   // so it goes through the action `host.settings.open` uses instead of a tab here.
@@ -1014,9 +1039,8 @@ function SettingsDialogInner({
         const afterClose = afterCloseRef.current;
         afterCloseRef.current = null;
         afterClose?.(true);
-        const waiters = [...closeWaitersRef.current];
-        closeWaitersRef.current.clear();
-        for (const settle of waiters) settle(true);
+        exitingRef.current = false;
+        settleCloseWaiters(closeWaitersRef.current);
       }}
       size="4xl"
       // Search owns first focus (below), not the first tabbable — which was the scope
