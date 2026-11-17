@@ -177,5 +177,8 @@ export function pullRequestMenuWords(
   pullRequest: LauncherPullRequest,
   words: PullRequestWords
 ): { title: string; detail: string } {
-  return { title: pullRequestTitle(pullRequest, words), detail: pullRequestDetail(pullRequest, words) };
+  return {
+    title: pullRequestTitle(pullRequest, words),
+    detail: pullRequestDetail(pullRequest, words),
+  };
 }

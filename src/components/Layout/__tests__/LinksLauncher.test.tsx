@@ -27,9 +27,9 @@ const h = vi.hoisted(() => ({
   },
   pullRequest: null as LauncherPullRequest | null,
   prTerm: "pull-request" as ForgePullRequestTerm,
-  getChecks: vi.fn<
-    (cwd: string, prNumber: number) => Promise<{ checks: ForgeCheckRun[] } | null>
-  >(() => Promise.resolve({ checks: [] })),
+  getChecks: vi.fn<(cwd: string, prNumber: number) => Promise<{ checks: ForgeCheckRun[] } | null>>(
+    () => Promise.resolve({ checks: [] })
+  ),
   listeners: new Set<() => void>(),
   restart: vi.fn((_target: unknown) => Promise.resolve()),
   stop: vi.fn((_target: unknown) => Promise.resolve()),
@@ -513,8 +513,18 @@ const OTHER_PR: LauncherPullRequest = {
   title: "Add signup",
 };
 const CHECKS: ForgeCheckRun[] = [
-  { name: "lint", status: "completed", conclusion: "success", detailsUrl: "https://ci.example.com/lint" },
-  { name: "unit", status: "completed", conclusion: "failure", detailsUrl: "https://ci.example.com/unit" },
+  {
+    name: "lint",
+    status: "completed",
+    conclusion: "success",
+    detailsUrl: "https://ci.example.com/lint",
+  },
+  {
+    name: "unit",
+    status: "completed",
+    conclusion: "failure",
+    detailsUrl: "https://ci.example.com/unit",
+  },
   { name: "e2e", status: "in_progress", detailsUrl: "https://ci.example.com/e2e" },
   { name: "deploy", status: "queued", detailsUrl: "https://ci.example.com/deploy" },
   { name: "docs", status: "completed", conclusion: "failure" },
@@ -704,14 +714,22 @@ describe("the active worktree's pull request in the launcher", () => {
     h.getChecks.mockRejectedValue(new Error("rate limited"));
     await openLauncher();
     expect(within(launcher()!).getByText("Couldn't load checks")).toBeTruthy();
-    expect(rows().slice(3).map((row) => describeRow(row).name)).toEqual(["Fix login"]);
+    expect(
+      rows()
+        .slice(3)
+        .map((row) => describeRow(row).name)
+    ).toEqual(["Fix login"]);
   });
 
   it("lists no checks when the forge has no such pull request", async () => {
     h.pullRequest = PR;
     h.getChecks.mockResolvedValue(null);
     await openLauncher();
-    expect(rows().slice(3).map((row) => describeRow(row).name)).toEqual(["Fix login"]);
+    expect(
+      rows()
+        .slice(3)
+        .map((row) => describeRow(row).name)
+    ).toEqual(["Fix login"]);
     expect(within(launcher()!).queryByText("Couldn't load checks")).toBeNull();
   });
 

@@ -671,8 +671,6 @@ describe("isFailingOrRunningCheck", () => {
       .filter((row) => isFailingOrRunningCheck(row))
       .map((row) => Number(row.key))
       .sort((a, b) => a - b);
-    expect(picked).toEqual(
-      cases.flatMap(([, expected], index) => (expected ? [index] : []))
-    );
+    expect(picked).toEqual(cases.flatMap(([, expected], index) => (expected ? [index] : [])));
   });
 });
