@@ -123,6 +123,10 @@ export function TerminalSearchBar({
   // has moved on, nothing else could (#16878). A search still loading its
   // addon by then is dropped rather than drawing them again.
   const liveTargetRef = useRef<TerminalSearchTarget | null>(null);
+  // The addon can load long after a search starts, and the field may be
+  // cleared, retyped or turned into an invalid regex in between: only the
+  // newest search may draw (#17485).
+  const searchGenerationRef = useRef(0);
   useEffect(() => {
     liveTargetRef.current = target;
     return () => {
@@ -140,6 +144,9 @@ export function TerminalSearchBar({
       const effectiveCaseSensitive = overrides?.caseSensitive ?? caseSensitive;
       const effectiveRegexEnabled = overrides?.regexEnabled ?? regexEnabled;
       const effectiveWholeWord = overrides?.wholeWord ?? wholeWord;
+      const generation = ++searchGenerationRef.current;
+      const isCurrent = () =>
+        liveTargetRef.current === target && searchGenerationRef.current === generation;
 
       if (!term) {
         setSearchStatus("idle");
@@ -170,7 +177,7 @@ export function TerminalSearchBar({
       void target
         .ensureSearchAddon()
         .then((searchAddon) => {
-          if (!searchAddon || liveTargetRef.current !== target) return;
+          if (!searchAddon || !isCurrent()) return;
           const found =
             direction === "next"
               ? searchAddon.findNext(term, options)
@@ -183,7 +190,7 @@ export function TerminalSearchBar({
           setSearchStatus(found ? "found" : "none");
         })
         .catch((error: unknown) => {
-          if (liveTargetRef.current !== target) return;
+          if (!isCurrent()) return;
           setSearchStatus(effectiveRegexEnabled ? "invalidRegex" : "none");
           setMatchResults(null);
           if (effectiveRegexEnabled && error instanceof Error) {
@@ -204,6 +211,7 @@ export function TerminalSearchBar({
 
   const clearSearch = useCallback(() => {
     cancelPendingSearch();
+    searchGenerationRef.current++;
     target.getSearchAddon()?.clearDecorations();
     setSearchStatus("idle");
     setMatchResults(null);
@@ -227,8 +235,11 @@ export function TerminalSearchBar({
 
       // The last result stays up until the new one lands rather than blanking
       // for the debounce: blanking flickered the count on every keystroke and
-      // re-announced it to screen readers each time.
+      // re-announced it to screen readers each time. A search for an older
+      // query still waiting on the addon must not land in its place, though.
+      searchGenerationRef.current++;
       debounceRef.current = setTimeout(() => {
+        debounceRef.current = null;
         performSearch(term, "next");
       }, 150);
     },
