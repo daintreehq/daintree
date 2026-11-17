@@ -1247,12 +1247,17 @@ describe("TerminalSearchBar", () => {
     it("shows nothing from the last terminal while a replacement's addon loads", async () => {
       const a = createMockManaged(false);
       const b = createMockManaged(true);
+      const managedB: { searchAddon: typeof b.searchAddon | null } = { searchAddon: null };
       let resolveB!: () => void;
       const loadOnB = new Promise<LoadedAddon>((resolve) => {
-        resolveB = () => resolve(b.searchAddon as unknown as LoadedAddon);
+        resolveB = () => {
+          managedB.searchAddon = b.searchAddon;
+          resolve(b.searchAddon as unknown as LoadedAddon);
+        };
       });
       vi.mocked(terminalInstanceService.get).mockImplementation(
-        (id) => (id === "a" ? a : b) as unknown as ReturnType<typeof terminalInstanceService.get>
+        (id) =>
+          (id === "a" ? a : managedB) as unknown as ReturnType<typeof terminalInstanceService.get>
       );
       vi.mocked(terminalInstanceService.ensureSearchAddon).mockImplementation((id) =>
         id === "a" ? Promise.resolve(a.searchAddon as unknown as LoadedAddon) : loadOnB
@@ -1326,6 +1331,7 @@ describe("TerminalSearchBar", () => {
     await act(() => {
       fireEvent.keyDown(input, { key: "ArrowDown" });
     });
+    expect(mock.searchAddon.findNext).not.toHaveBeenCalledWith("beta", expect.anything());
     await act(async () => {
       vi.advanceTimersByTime(150);
     });
