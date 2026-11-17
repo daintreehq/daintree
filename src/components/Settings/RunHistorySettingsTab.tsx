@@ -53,7 +53,7 @@ function FailureList({ items }: { items: { key: string | number; text: string }[
   );
 }
 
-function DraftPreview({ text }: { text: string }) {
+export function DraftPreview({ text }: { text: string }) {
   const [ref, clamped] = useClampDetection<HTMLParagraphElement>();
   return (
     <TruncatedTooltip
@@ -61,7 +61,10 @@ function DraftPreview({ text }: { text: string }) {
       isTruncated={clamped}
       contentClassName="[overflow-wrap:anywhere]"
     >
-      <p ref={ref} className="mt-0.5 line-clamp-2 text-xs text-text-secondary select-text">
+      <p
+        ref={ref}
+        className="mt-0.5 line-clamp-2 text-xs [overflow-wrap:anywhere] text-text-secondary select-text"
+      >
         {text}
       </p>
     </TruncatedTooltip>

@@ -64,7 +64,7 @@ function Countdown({ expiresAt, now }: { expiresAt: number; now: number }) {
   );
 }
 
-function InvitationUrl({ url }: { url: string | undefined }) {
+export function InvitationUrl({ url }: { url: string | undefined }) {
   const [ref, clamped] = useClampDetection<HTMLSpanElement>();
   const text = url ?? "…";
   return (
