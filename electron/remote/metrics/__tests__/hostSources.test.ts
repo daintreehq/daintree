@@ -270,6 +270,27 @@ describe("createHostSampleSources", () => {
     });
   });
 
+  it("says the host stops its machine once idle only while its keeper holds a key (#17361)", async () => {
+    const { registerRemoteService } = await import("../../runtime.js");
+    const observation = { idleAfterMinutes: 30, lastWorkAt: 10, busy: false, idleEndsAt: 1_800_010 };
+    const offIdle = registerRemoteService("hostIdle", {
+      observation: () => observation,
+    } as never);
+    let holds = false;
+    const offKeeper = registerRemoteService("machineKeeper", {
+      stopsWhenIdle: () => holds,
+    } as never);
+    try {
+      const sources = createHostSampleSources();
+      expect(sources.idle()).toEqual(observation);
+      holds = true;
+      expect(sources.idle()).toEqual({ ...observation, stopsWhenIdle: true });
+    } finally {
+      offKeeper();
+      offIdle();
+    }
+  });
+
   it("asks for agent CLIs itself when nothing has, so a windowless host lists them next sample", async () => {
     cli.service = {
       getAvailability: vi.fn(() => null),

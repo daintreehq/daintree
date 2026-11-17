@@ -8,6 +8,7 @@ import {
 } from "../boat/BoatClient.js";
 import { BoatProvider, boatResource } from "../boat/BoatProvider.js";
 import { boatMachineState } from "../boat/boatState.js";
+import { boatMachineKeyFailure } from "../boat/boatMachineDriver.js";
 
 const SANDBOX = {
   id: "bx_23456789",
@@ -473,5 +474,137 @@ describe("BoatProvider", () => {
     expect(p.describeError(new BoatApiError("network", "x", null, null, null)).code).toBe(
       "provider-unreachable"
     );
+  });
+});
+
+describe("machine keys (#17361)", () => {
+  const credentials = {
+    apiKey: ctx.apiKey,
+    scopeId: "personal",
+    apiUrl: "https://boat.test/api/v1",
+  };
+  const expiresAt = "2026-12-18T09:00:00Z";
+  const created = (scope: Record<string, unknown>) =>
+    jsonResponse(201, {
+      ok: true,
+      apiKey: { id: "sak_42", name: "daintree-mk_1", expiresAt, scope },
+      secret: "boat_live_machinesecretvalue",
+      apiKeys: [],
+    });
+
+  it("asks for a key that can only read, renew and stop the one machine, sent once", async () => {
+    const { client, calls } = clientWith([
+      created({ actions: ["sandbox.read", "sandbox.update", "sandbox.stop"], sandboxes: ["bx_23456789"] }),
+    ]);
+    const issued = await new BoatProvider(() => client).machineKeys.issue(
+      credentials,
+      "bx_23456789",
+      { name: "daintree-mk_1", ttlDays: 30 }
+    );
+    expect(calls[0].url).toBe("https://boat.test/api/v1/api-keys/scoped");
+    expect(calls[0].init.method).toBe("POST");
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({
+      name: "daintree-mk_1",
+      ttl: "30d",
+      actions: ["sandbox.read", "sandbox.update", "sandbox.stop"],
+      sandboxIds: ["bx_23456789"],
+    });
+    expect(issued).toEqual({
+      keyId: "sak_42",
+      secret: "boat_live_machinesecretvalue",
+      expiresAt: Date.parse(expiresAt),
+    });
+
+    const lost = clientWith([new TypeError("socket hang up")]);
+    await expect(
+      lost.client.createScopedKey(ctx, {
+        name: "x",
+        ttl: "30d",
+        actions: ["sandbox.read"],
+        sandboxIds: ["bx_23456789"],
+      })
+    ).rejects.toMatchObject({ kind: "network" });
+    expect(lost.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("revokes and refuses a key broader than the one asked for", async () => {
+    for (const scope of [
+      { actions: ["*"], sandboxes: ["bx_23456789"] },
+      { actions: ["sandbox.read"], sandboxes: "*" },
+      { actions: ["sandbox.read"], sandboxes: ["bx_23456789", "bx_otherother"] },
+      { actions: ["sandbox.read"], sandboxes: ["bx_23456789"], environments: ["env_1"] },
+    ]) {
+      const { client, calls } = clientWith([created(scope), jsonResponse(200, { ok: true, apiKeys: [] })]);
+      await expect(
+        new BoatProvider(() => client).machineKeys.issue(credentials, "bx_23456789", {
+          name: "daintree-mk_1",
+          ttlDays: 30,
+        })
+      ).rejects.toMatchObject({ kind: "bad-response" });
+      expect(calls[1].url).toBe("https://boat.test/api/v1/api-keys/sak_42");
+      expect(calls[1].init.method).toBe("DELETE");
+    }
+  });
+
+  it("reads a bare error code, such as key creation being switched off", async () => {
+    const { client } = clientWith([
+      jsonResponse(503, {
+        error: "scoped_api_key_creation_disabled",
+        message: "Scoped keys aren't on yet",
+        scopedCreationEnabled: false,
+      }),
+    ]);
+    await expect(
+      client.createScopedKey(ctx, {
+        name: "x",
+        ttl: "30d",
+        actions: ["sandbox.read"],
+        sandboxIds: ["bx_23456789"],
+      })
+    ).rejects.toMatchObject({
+      code: "scoped_api_key_creation_disabled",
+      message: "Scoped keys aren't on yet",
+    });
+  });
+
+  it("takes a key already gone as revoked, and finds keys by their exact name", async () => {
+    const { client, calls } = clientWith([
+      jsonResponse(404, { error: { code: "not_found", message: "no such key" } }),
+      jsonResponse(200, {
+        ok: true,
+        apiKeys: [
+          { id: "sak_1", name: "daintree-mk_1" },
+          { id: "sak_2", name: "daintree-mk_10" },
+          { name: "no id" },
+        ],
+      }),
+    ]);
+    const keys = new BoatProvider(() => client).machineKeys;
+    await expect(keys.revoke(credentials, "sak_1")).resolves.toBeUndefined();
+    expect(await keys.findByName(credentials, "daintree-mk_1")).toEqual(["sak_1"]);
+    expect(calls[1].url).toBe("https://boat.test/api/v1/api-keys");
+  });
+
+  it("sends the machine's own stop once, where a person's stop retries", async () => {
+    const once = clientWith([jsonResponse(500, { message: "oops" })]);
+    await expect(
+      once.client.stopSandbox(ctx, "bx_23456789", { once: true })
+    ).rejects.toMatchObject({ kind: "server" });
+    expect(once.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops the machine's key on a refusal, and retries anything that may pass", () => {
+    expect(
+      boatMachineKeyFailure(new BoatApiError("unauthorized", "no", 401, null, null)).kind
+    ).toBe("lost");
+    expect(
+      boatMachineKeyFailure(new BoatApiError("forbidden", "no", 403, "api_key_expired", null))
+    ).toMatchObject({ kind: "lost", problem: expect.stringMatching(/expired/) });
+    expect(boatMachineKeyFailure(new BoatApiError("not-found", "gone", 404, null, null)).kind).toBe(
+      "lost"
+    );
+    for (const kind of ["network", "timeout", "server", "rate-limited", "conflict"] as const) {
+      expect(boatMachineKeyFailure(new BoatApiError(kind, "x", null, null, null)).kind).toBe("retry");
+    }
   });
 });

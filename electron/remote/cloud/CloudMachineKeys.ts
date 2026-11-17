@@ -69,7 +69,7 @@ export class CloudMachineKeys {
   >();
   private readonly armRetryAt = new Map<string, number>();
   private readonly revokeRetryAt = new Map<string, number>();
-  private revoking: Promise<void> | null = null;
+  private revokeTail: Promise<void> = Promise.resolve();
   private disposed = false;
 
   constructor(private readonly deps: CloudMachineKeysDeps) {}
@@ -113,15 +113,15 @@ export class CloudMachineKeys {
     await this.revokePending();
   }
 
-  /** Turns off, at the provider, every key nothing here should hold any more. */
+  /**
+   * Turns off, at the provider, every key nothing here should hold any more.
+   * Passes run one after another, so a key marked during one is seen by the next.
+   * With `accountId`, only that account's, at once whatever the backoff: its key is about to go.
+   */
   revokePending(accountId?: string): Promise<void> {
-    if (this.revoking) {
-      return this.revoking.then(() => (accountId ? this.revokePending(accountId) : undefined));
-    }
-    this.revoking = this.revokeOnce(accountId).finally(() => {
-      this.revoking = null;
-    });
-    return this.revoking;
+    const pass = this.revokeTail.then(() => this.revokeOnce(accountId));
+    this.revokeTail = pass.catch(() => {});
+    return pass;
   }
 
   dispose(): void {
@@ -361,7 +361,6 @@ export class CloudMachineKeys {
       const abandoned =
         key.state === "issuing" && !this.issuing.has(key.id) && now - key.createdAt > ISSUING_ABANDONED_MS;
       if ((key.state !== "revoke" && !abandoned) || this.issuing.has(key.id)) continue;
-      // Run with an account: tried now, whatever the backoff, since its key is about to go.
       if (accountId === undefined && (this.revokeRetryAt.get(key.id) ?? 0) > now) continue;
       // Off by itself already.
       const expiresAt = key.expiresAt ?? key.createdAt + MACHINE_KEY_TTL_DAYS * DAY_MS;
