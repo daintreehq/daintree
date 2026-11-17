@@ -67,3 +67,21 @@ function fnv1a(input: string): string {
   }
   return (low >>> 0).toString(16).padStart(8, "0") + (high >>> 0).toString(16).padStart(8, "0");
 }
+
+/**
+ * Thrown by `runRecipeWithResults` when the recipe no longer matches what a
+ * dialog showed. Its own kind so a surface that asked can tell the user why the
+ * approved run started nothing, instead of filing it with launch errors (#17447).
+ */
+export class RecipeChangedSinceShownError extends Error {
+  constructor() {
+    super("Recipe changed since it was shown");
+    this.name = "RecipeChangedSinceShownError";
+  }
+}
+
+export function isRecipeChangedSinceShownError(
+  error: unknown
+): error is RecipeChangedSinceShownError {
+  return error instanceof RecipeChangedSinceShownError;
+}

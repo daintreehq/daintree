@@ -14,7 +14,7 @@ import {
   PANEL_LIMIT_DECLINED_REASON,
 } from "@/services/actions/definitions/panelLimitError";
 import { countPanelLimitUsage } from "./slices/panelRegistry/panelCount";
-import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
+import { RecipeChangedSinceShownError, recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { isMcpSpawnFocusSuppressed } from "./mcpSpawnFocusGuard";
 import { isAssistantFocused } from "./macroFocusStore";
 import {
@@ -1195,7 +1195,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       (recipe.id !== expected.id ||
         recipeApprovalDigest(recipe.terminals) !== expected.terminalsDigest)
     ) {
-      throw new Error("Recipe changed since it was shown");
+      throw new RecipeChangedSinceShownError();
     }
 
     // A recipe that needs its plugin's agent tools says so rather than starting

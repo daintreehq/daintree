@@ -120,7 +120,10 @@ import {
   resolveRecipeRunConfirmation,
   useRecipeRunConfirmStore,
 } from "@/store/recipeRunConfirmStore";
-import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
+import {
+  RecipeChangedSinceShownError,
+  recipeApprovalDigest,
+} from "@/utils/recipeApprovalDigest";
 
 const dispatchMock = vi.mocked(actionService.dispatch);
 
@@ -1186,6 +1189,312 @@ describe("useRecipeRunner — missing variables hold the run (#15022)", () => {
       }
     );
     await flush();
+  });
+});
+
+describe("useRecipeRunner — a confirmed recipe that changed before it started (#17447)", () => {
+  function pending() {
+    return useRecipeRunConfirmStore.getState().current;
+  }
+
+  async function answer(approved: boolean) {
+    await act(async () => {
+      resolveRecipeRunConfirmation(pending()!.requestId, approved);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  const needsPr = (overrides: Partial<TerminalRecipe> = {}) =>
+    makeRecipe({
+      id: "r1",
+      name: "Review",
+      terminals: [{ type: "claude-code", env: {}, initialPrompt: "review pr {{pr_number}}" }],
+      ...overrides,
+    });
+
+  // The store's own check: what the confirm approved against what it would launch now.
+  function refuseChangedRecipes() {
+    runRecipeWithResultsMock.mockImplementation(async (recipeId, _path, _wt, _ctx, options) => {
+      const expected = (options as { expectedRecipe?: { id: string; terminalsDigest: string } })
+        ?.expectedRecipe;
+      const current = recipeStoreState.getRecipeById(recipeId);
+      if (
+        expected &&
+        (current?.id !== expected.id ||
+          recipeApprovalDigest(current.terminals) !== expected.terminalsDigest)
+      ) {
+        throw new RecipeChangedSinceShownError();
+      }
+      return { spawned: [{ index: 0, terminalId: "t-0" }], failed: [] };
+    });
+  }
+
+  function editorRequests() {
+    const opened: unknown[] = [];
+    const listener = (e: Event) => {
+      if (e instanceof CustomEvent) opened.push(e.detail.recipeId);
+    };
+    window.addEventListener("daintree:open-recipe-editor", listener);
+    return { opened, stop: () => window.removeEventListener("daintree:open-recipe-editor", listener) };
+  }
+
+  it("says why the approved run started nothing and opens the current recipe for review", async () => {
+    recipes.push(needsPr());
+    refuseChangedRecipes();
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.handleRun("r1");
+    });
+    recipes.splice(0, 1, needsPr({ terminals: [{ type: "terminal", env: {} }] }));
+    await answer(true);
+
+    expect(runRecipeWithResultsMock).toHaveBeenCalledTimes(1);
+    expect(result.current.changedRecipe).toEqual({
+      recipeId: "r1",
+      recipeName: "Review",
+      reviewable: true,
+    });
+    expect(result.current.spawnFailureSummary).toBeNull();
+    expect(logErrorMock).not.toHaveBeenCalled();
+
+    const editor = editorRequests();
+    try {
+      act(() => {
+        result.current.reviewChangedRecipe();
+      });
+      expect(editor.opened).toEqual(["r1"]);
+    } finally {
+      editor.stop();
+    }
+    expect(result.current.changedRecipe).toBeNull();
+
+    // Trying again asks about what the recipe is now, and that run starts.
+    act(() => {
+      result.current.handleRun("r1");
+    });
+    await flush();
+    expect(runRecipeWithResultsMock).toHaveBeenCalledTimes(2);
+    expect(result.current.changedRecipe).toBeNull();
+  });
+
+  it("names the recipe a shadowed row now runs, and reviews that one", async () => {
+    recipes.push(needsPr({ id: "mine", name: "Dev" }));
+    refuseChangedRecipes();
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.handleRun("mine");
+    });
+    // A team recipe of the same name lands while the confirm is open.
+    recipes.splice(
+      0,
+      1,
+      needsPr({ id: "mine", name: "Dev", shadowedBy: "Dev" }),
+      needsPr({ id: "team-dev", name: "Dev", scope: "inrepo" })
+    );
+    await answer(true);
+
+    expect(result.current.changedRecipe).toEqual({
+      recipeId: "mine",
+      recipeName: "Dev",
+      reviewable: true,
+    });
+  });
+
+  it("offers no editor for a plugin's recipe, whose content its plugin owns", async () => {
+    const plugin = (initialPrompt: string) =>
+      makeRecipe({
+        id: "acme.tools.rel",
+        name: "Release",
+        origin: { kind: "plugin", pluginId: "acme.tools", contributionId: "rel" },
+        terminals: [{ type: "claude-code", env: {}, initialPrompt }],
+      });
+    recipes.push(plugin("ship {{pr_number}}"));
+    refuseChangedRecipes();
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.handleRun("acme.tools.rel");
+    });
+    recipes.splice(0, 1, plugin("ship it {{pr_number}}"));
+    await answer(true);
+
+    expect(result.current.changedRecipe).toEqual({
+      recipeId: "acme.tools.rel",
+      recipeName: "Release",
+      reviewable: false,
+    });
+    const editor = editorRequests();
+    try {
+      act(() => {
+        result.current.reviewChangedRecipe();
+      });
+      expect(editor.opened).toEqual([]);
+    } finally {
+      editor.stop();
+    }
+  });
+
+  it("opens no blank draft when the recipe is gone by the time review is asked for", async () => {
+    recipes.push(needsPr());
+    refuseChangedRecipes();
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+    act(() => {
+      result.current.handleRun("r1");
+    });
+    recipes.splice(0, 1, needsPr({ terminals: [{ type: "terminal", env: {} }] }));
+    await answer(true);
+    expect(result.current.changedRecipe).not.toBeNull();
+
+    recipes.length = 0;
+    const editor = editorRequests();
+    try {
+      act(() => {
+        result.current.reviewChangedRecipe();
+      });
+      expect(editor.opened).toEqual([]);
+    } finally {
+      editor.stop();
+    }
+    expect(result.current.changedRecipe).toBeNull();
+  });
+
+  it("replaces a retry's failure banner, whose terminals belong to the old recipe", async () => {
+    recipes.push(
+      makeRecipe({
+        id: "r1",
+        name: "Pair",
+        terminals: [
+          { type: "terminal", env: {} },
+          { type: "claude-code", env: {}, initialPrompt: "review pr {{pr_number}}" },
+        ],
+      })
+    );
+    runRecipeWithResultsMock.mockResolvedValueOnce({
+      spawned: [{ index: 0, terminalId: "t-0" }],
+      failed: [{ index: 1, error: "Panel limit reached" }],
+    });
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+    act(() => {
+      result.current.handleRun("r1");
+    });
+    await answer(true);
+    expect(result.current.spawnFailureSummary).not.toBeNull();
+
+    refuseChangedRecipes();
+    act(() => {
+      result.current.handleRetryFailed();
+    });
+    recipes.splice(
+      0,
+      1,
+      makeRecipe({
+        id: "r1",
+        name: "Pair",
+        terminals: [
+          { type: "terminal", env: {} },
+          { type: "codex", env: {}, initialPrompt: "review pr {{pr_number}}" },
+        ],
+      })
+    );
+    await answer(true);
+
+    expect(result.current.spawnFailureSummary).toBeNull();
+    expect(result.current.isRetryingFailed).toBe(false);
+    expect(result.current.changedRecipe).toMatchObject({ recipeId: "r1", recipeName: "Pair" });
+  });
+
+  it("drops the launched-empty notice, since nothing launched", async () => {
+    const plugin = (initialPrompt: string) =>
+      makeRecipe({
+        id: "acme.ledger.review",
+        name: "Ledger",
+        origin: { kind: "plugin", pluginId: "acme.ledger", contributionId: "review" },
+        terminals: [{ type: "claude-code", env: {}, initialPrompt }],
+      });
+    recipes.push(plugin("pr {{pr_number}} notes {{plugin.notes}}"));
+    refuseChangedRecipes();
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+    act(() => {
+      result.current.handleRun("acme.ledger.review");
+    });
+    recipes.splice(0, 1, plugin("pr {{pr_number}} more {{plugin.notes}}"));
+    await answer(true);
+
+    expect(result.current.changedRecipe).not.toBeNull();
+    expect(result.current.unresolvedVars).toEqual([]);
+  });
+
+  it("clears on dismiss and when the worktree changes", async () => {
+    recipes.push(needsPr());
+    refuseChangedRecipes();
+    const { result, rerender } = renderHook(
+      ({ wt }: { wt: string }) => useRecipeRunner({ activeWorktreeId: wt, defaultCwd: "/tmp" }),
+      { initialProps: { wt: "wt-1" } }
+    );
+    const refuse = async () => {
+      act(() => {
+        result.current.handleRun("r1");
+      });
+      const edited = recipes[0]!.terminals[0]!.initialPrompt + "!";
+      recipes.splice(
+        0,
+        1,
+        needsPr({ terminals: [{ type: "claude-code", env: {}, initialPrompt: edited }] })
+      );
+      await answer(true);
+      expect(result.current.changedRecipe).not.toBeNull();
+    };
+
+    await refuse();
+    act(() => {
+      result.current.dismissChangedRecipe();
+    });
+    expect(result.current.changedRecipe).toBeNull();
+
+    await refuse();
+    rerender({ wt: "wt-2" });
+    expect(result.current.changedRecipe).toBeNull();
+  });
+
+  it("drops a refusal that lands after the worktree changed", async () => {
+    recipes.push(needsPr());
+    let reject!: (error: unknown) => void;
+    runRecipeWithResultsMock.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, rej) => {
+          reject = rej;
+        })
+    );
+    const { result, rerender } = renderHook(
+      ({ wt }: { wt: string }) => useRecipeRunner({ activeWorktreeId: wt, defaultCwd: "/tmp" }),
+      { initialProps: { wt: "wt-1" } }
+    );
+    act(() => {
+      result.current.handleRun("r1");
+    });
+    await answer(true);
+    rerender({ wt: "wt-2" });
+    await act(async () => {
+      reject(new RecipeChangedSinceShownError());
+      await Promise.resolve();
+    });
+
+    expect(result.current.changedRecipe).toBeNull();
   });
 });
 
