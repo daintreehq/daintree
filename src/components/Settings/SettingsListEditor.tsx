@@ -2,8 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SettingsEmptyRow, SettingsRow } from "./SettingsGroup";
 import { useRowFocus } from "./useRowFocus";
+import { useReorderFocus } from "./useReorderFocus";
 
 /**
  * One editor for every "list of short strings" on the settings pages — excluded
@@ -40,6 +43,7 @@ function ListItems({
   onEmptied: () => void;
 }) {
   const { register: registerRow, registerFallback: registerAddButton, focusRow } = useRowFocus();
+  const { registerArrow, focusMoved } = useReorderFocus();
   const firstField = useRef<HTMLInputElement | null>(null);
 
   // The empty state is a different row, so the first add mounts this list fresh:
@@ -68,6 +72,8 @@ function ListItems({
     if (target < 0 || target >= items.length) return;
     const next = [...items];
     [next[index], next[target]] = [next[target]!, next[index]!];
+    // Rows are keyed by position, so the moved item's arrow is the one at its new index.
+    focusMoved(String(target), direction === -1 ? "up" : "down");
     onChange(next);
   };
 
@@ -91,34 +97,53 @@ function ListItems({
           />
           {reorderable && (
             <>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => move(index, -1)}
-                disabled={index === 0}
-                aria-label={`Move ${describe(index)} up`}
-              >
-                <ChevronUp />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => move(index, 1)}
-                disabled={index === items.length - 1}
-                aria-label={`Move ${describe(index)} down`}
-              >
-                <ChevronDown />
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    ref={registerArrow(String(index), "up")}
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => move(index, -1)}
+                    aria-disabled={index === 0 || undefined}
+                    className={ARIA_DISABLED_CLASSES}
+                    aria-label={`Move ${describe(index)} up`}
+                  >
+                    <ChevronUp />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Move up</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    ref={registerArrow(String(index), "down")}
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => move(index, 1)}
+                    aria-disabled={index === items.length - 1 || undefined}
+                    className={ARIA_DISABLED_CLASSES}
+                    aria-label={`Move ${describe(index)} down`}
+                  >
+                    <ChevronDown />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Move down</TooltipContent>
+              </Tooltip>
             </>
           )}
-          <Button
-            variant="ghost-danger"
-            size="icon-sm"
-            onClick={() => remove(index)}
-            aria-label={`Delete ${describe(index)}`}
-          >
-            <Trash2 />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost-danger"
+                size="icon-sm"
+                onClick={() => remove(index)}
+                aria-label={`Remove ${describe(index)}`}
+              >
+                <Trash2 />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Remove</TooltipContent>
+          </Tooltip>
         </div>
       ))}
       <div className="flex justify-end">

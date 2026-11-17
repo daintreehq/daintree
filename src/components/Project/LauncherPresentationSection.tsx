@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { InlineError } from "@/components/ui/field";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SettingsPresetGroup } from "@/components/Settings/SettingsPresetGroup";
 import { SettingsSelect } from "@/components/Settings/SettingsSelect";
+import { useReorderFocus } from "@/components/Settings/useReorderFocus";
 import { launcherArrangementFor, resolvePresentationFor } from "@/hooks/useResolvedPresentation";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectPresentationStore } from "@/store/projectPresentationStore";
@@ -77,6 +80,7 @@ export function LauncherPresentationSection() {
   const hiddenPluginIds = usePluginLaunchEntriesStore((s) => s.hiddenPluginIds);
   const initLaunchEntries = usePluginLaunchEntriesStore((s) => s.init);
   const initPresentation = useProjectPresentationStore((s) => s.init);
+  const { registerArrow, focusMoved } = useReorderFocus();
 
   useEffect(() => {
     initPresentation();
@@ -135,11 +139,12 @@ export function LauncherPresentationSection() {
     return layout.demoted.includes(groups[index]!) === layout.demoted.includes(groups[target]!);
   };
   const move = (index: number, by: -1 | 1) => {
-    if (!canMove(index, by)) return;
+    if (!applies || !canMove(index, by)) return;
     const drawn = [...groups];
     [drawn[index], drawn[index + by]] = [drawn[index + by]!, drawn[index]!];
     const stored = mergeLauncherGroupOrder(drawn, editing?.stored ?? launcherGroupOrder);
     setPending({ drawn, stored, sent: [...(editing?.sent ?? [storedKey]), orderKey(stored)] });
+    focusMoved(groups[index]!, by === -1 ? "up" : "down");
     void setLauncherGroupOrder(stored);
   };
   const resetOrder = () => {
@@ -244,24 +249,42 @@ export function LauncherPresentationSection() {
                   >
                     <span className="min-w-0 flex-1 truncate">{label}</span>
                     {inMore && <span className="text-xs text-text-secondary">In More</span>}
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => move(index, -1)}
-                      disabled={disabled || !canMove(index, -1)}
-                      aria-label={`Move ${label} up`}
-                    >
-                      <ChevronUp />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => move(index, 1)}
-                      disabled={disabled || !canMove(index, 1)}
-                      aria-label={`Move ${label} down`}
-                    >
-                      <ChevronDown />
-                    </Button>
+                    {/* The end of the list, or of the shown groups or More, leaves the
+                        arrow focusable: native disabled would drop the focus it holds. */}
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          ref={registerArrow(id, "up")}
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={() => move(index, -1)}
+                          disabled={disabled}
+                          aria-disabled={!canMove(index, -1) || undefined}
+                          className={ARIA_DISABLED_CLASSES}
+                          aria-label={`Move ${label} up`}
+                        >
+                          <ChevronUp />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">Move up</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          ref={registerArrow(id, "down")}
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={() => move(index, 1)}
+                          disabled={disabled}
+                          aria-disabled={!canMove(index, 1) || undefined}
+                          className={ARIA_DISABLED_CLASSES}
+                          aria-label={`Move ${label} down`}
+                        >
+                          <ChevronDown />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">Move down</TooltipContent>
+                    </Tooltip>
                   </div>
                 );
               })}
