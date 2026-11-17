@@ -39,4 +39,11 @@ describe("tailStart", () => {
     const text = "abcdefghijklmnop a b c d e \u{1F600}";
     expect(text.slice(tailStart(text))).toBe("p a b c d e \u{1F600}");
   });
+
+  it("keeps a bounded tail, and no emoji split, when no seam in reach is safe", () => {
+    const spaced = "AB" + " W".repeat(50);
+    expect(spaced.length - tailStart(spaced)).toBeLessThanOrEqual(20);
+    const emoji = "\u{1F600} ".repeat(8) + "Z";
+    expect(tailStart(emoji)).toBe(emoji.length - 13);
+  });
 });

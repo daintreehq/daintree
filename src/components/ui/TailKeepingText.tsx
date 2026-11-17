@@ -29,7 +29,9 @@ export function tailStart(text: string): number {
     isLowSurrogate(text.charCodeAt(at)) || /\s/.test(text[at - 1]! + text[at]!);
   const fallback = text.length - TAIL_FALLBACK;
   for (let at = fallback; at < text.length; at++) if (!badSeam(at)) return at;
-  for (let at = fallback - 1; at > 0; at--) if (!badSeam(at)) return at;
+  // Only as far back as the tail may be long: it never shrinks, so a seam further
+  // back would make it wider than the box it is kept in.
+  for (let at = fallback - 1; at >= from; at--) if (!badSeam(at)) return at;
   return isLowSurrogate(text.charCodeAt(fallback)) ? fallback - 1 : fallback;
 }
 
