@@ -585,6 +585,21 @@ describe("CommitPanel — push confirm", () => {
     }
   );
 
+  it("clears an opt-out a protected branch's confirm kept when what it confirmed moved (#17563)", async () => {
+    const onCommitAndPush = vi.fn(() => Promise.resolve("withheld" as const));
+    const { onSetSkipPushConfirm } = renderPanel({
+      currentBranch: "main",
+      skipPushConfirm: true,
+      onCommitAndPush,
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
+    await confirmWhenReady(/Push to origin\/main/);
+
+    expect(onCommitAndPush).toHaveBeenCalledTimes(1);
+    expect(onSetSkipPushConfirm).toHaveBeenCalledTimes(1);
+    expect(onSetSkipPushConfirm).toHaveBeenCalledWith(false);
+  });
+
   it("persists the opt-out even when the push call rejects", async () => {
     const onCommitAndPush = vi.fn().mockRejectedValue(new Error("network"));
     const { onSetSkipPushConfirm } = renderPanel({
