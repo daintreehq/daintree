@@ -62,7 +62,9 @@ export function TruncatedTooltip({
   const isFocusable = FOCUSABLE_TAGS.has(childType.toUpperCase());
 
   const mergedRef = mergeRefs(
-    isTruncatedProp ? undefined : ownDetection.ref,
+    // A caller that answers for itself, either way, measures elsewhere: this
+    // would be one more observation per row for a result nobody reads.
+    isTruncatedProp !== undefined ? undefined : ownDetection.ref,
     // React 19 carries a ref as a prop; reading `element.ref` is deprecated
     // and warns in development.
     (children.props as { ref?: React.Ref<unknown> }).ref

@@ -28,6 +28,8 @@ import { PREVIEW_COMMIT_LIMIT } from "@/components/Git/gitRemoteOperationPreview
 import { pluralize } from "@/lib/pluralize";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { PathTail } from "@/components/ui/PathTail";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { isCommitShortcut, type CommitShortcutHandler } from "./commitShortcut";
 import type { CommitPushTarget } from "./reviewHubUtils";
 
@@ -94,6 +96,39 @@ function describeBlockers({
  * being created publishes its whole history, most of which the remote usually
  * already holds on another branch, so it is never called "not on the remote".
  */
+/**
+ * A file in the push confirm's list. The directory gives way first, as in the
+ * file rows: the name is what identifies the file, so it never clips. The row
+ * only lays the two out, so each is measured where it clips, and it takes no
+ * tab stop: the scrolling list around it is the one.
+ */
+function PushConfirmPath({ path }: { path: string }) {
+  const { ref: dirRef, isTruncated: dirTruncated } = useTruncationDetection();
+  const { ref: baseRef, isTruncated: baseTruncated } = useTruncationDetection();
+  const slash = path.lastIndexOf("/");
+  const dir = slash === -1 ? "" : path.slice(0, slash + 1);
+  const base = slash === -1 ? path : path.slice(slash + 1);
+  return (
+    <TruncatedTooltip
+      content={path}
+      isTruncated={dirTruncated || baseTruncated}
+      focusable={false}
+      contentClassName="font-mono [overflow-wrap:anywhere]"
+    >
+      <li className="flex min-w-0">
+        {dir && (
+          <PathTail ref={dirRef} className="min-w-0 text-text-secondary">
+            {dir}
+          </PathTail>
+        )}
+        <span ref={baseRef} className="shrink-0 max-w-full truncate">
+          {base}
+        </span>
+      </li>
+    </TruncatedTooltip>
+  );
+}
+
 function describeOutgoingRange(range: GitPushCommitPreview): { line: string; rowsLabel: string } {
   const commits = pluralize(range.total, "earlier commit");
   switch (range.rangeBasis) {
@@ -698,7 +733,7 @@ export function CommitPanel({
   // aria-describedby, and a blocked click lands focus on whatever it names.
   let statusTone: "neutral" | "warning" = "neutral";
   let statusContent: React.ReactNode;
-  let statusTitle: string | undefined;
+  let statusTooltip: string | undefined;
   if (isPushing) {
     statusContent = pushTarget ? (
       <>
@@ -707,7 +742,7 @@ export function CommitPanel({
     ) : (
       "Pushing…"
     );
-    statusTitle = pushTarget ? `Pushing to ${pushTarget}` : undefined;
+    statusTooltip = pushTarget ? `Pushing to ${pushTarget}` : undefined;
   } else if (isCommitting) {
     statusContent = `Committing ${pluralize(pendingCount, "file")}…`;
   } else if (isBlocked) {
@@ -735,7 +770,9 @@ export function CommitPanel({
       // footer, which describes this exact situation.
       `${stagedSummary} · no push destination · set an upstream to push`
     );
-    statusTitle = destinationLabel ? `${stagedSummary} · pushes to ${destinationLabel}` : undefined;
+    statusTooltip = destinationLabel
+      ? `${stagedSummary} · pushes to ${destinationLabel}`
+      : undefined;
   } else {
     statusContent = stagedSummary;
   }
@@ -835,7 +872,6 @@ export function CommitPanel({
         ref={statusRef}
         id={statusId}
         tabIndex={-1}
-        title={statusTitle}
         data-testid="review-hub-commit-status"
         className={cn(
           "flex items-center gap-1.5 min-h-5 text-xs text-text-secondary rounded-[var(--radius-sm)]",
@@ -854,9 +890,18 @@ export function CommitPanel({
         )}
         {/* A blocker wraps so every requirement stays readable at any width; the
             ready and pushing lines truncate a long destination instead. */}
-        <span className={cn("min-w-0", isBlocked && !isBusy ? "break-words" : "truncate")}>
-          {statusContent}
-        </span>
+        {/* The buttons already describe themselves by this line, so a cut
+            destination is a pointer disclosure, not one more tab stop. */}
+        <TruncatedTooltip
+          content={statusTooltip}
+          disabled={statusTooltip === undefined}
+          focusable={false}
+          contentClassName="[overflow-wrap:anywhere]"
+        >
+          <span className={cn("min-w-0", isBlocked && !isBusy ? "break-words" : "truncate")}>
+            {statusContent}
+          </span>
+        </TruncatedTooltip>
         {isPushing && isPushQuiet && (
           // Its own slot, so a long destination truncating beside it can never
           // hide the one line explaining a pause.
@@ -979,19 +1024,9 @@ export function CommitPanel({
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                 )}
               >
-                {stagedPaths.map((path) => {
-                  // The directory gives way first, as in the file rows: the
-                  // name is what identifies the file, so it never clips.
-                  const slash = path.lastIndexOf("/");
-                  const dir = slash === -1 ? "" : path.slice(0, slash + 1);
-                  const base = slash === -1 ? path : path.slice(slash + 1);
-                  return (
-                    <li key={path} className="flex min-w-0" title={path}>
-                      {dir && <PathTail className="min-w-0 text-text-secondary">{dir}</PathTail>}
-                      <span className="shrink-0 max-w-full truncate">{base}</span>
-                    </li>
-                  );
-                })}
+                {stagedPaths.map((path) => (
+                  <PushConfirmPath key={path} path={path} />
+                ))}
               </ul>
             </div>
           )}
