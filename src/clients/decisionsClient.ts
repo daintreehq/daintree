@@ -226,6 +226,13 @@ export const decisionsClient = {
   },
 
   /**
+   * Main asking this window to open one question in its question view: a
+   * click on the question's desktop notification (#17232).
+   */
+  onOpenQuestion: (callback: (reference: DecisionQuestionReference) => void): (() => void) =>
+    window.electron.events.on("decisions:open-question", ({ reference }) => callback(reference)),
+
+  /**
    * A question by its reference, from any window on this computer, whatever
    * project it shows and whether its terminal is still open. Content is held
    * in memory only: never log it or keep it in a persisted store.

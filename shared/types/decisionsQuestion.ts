@@ -311,6 +311,11 @@ export interface DecisionQuestionList {
   questions: DecisionQuestionListItem[];
 }
 
+/** Open one question in the window's question view: a click on its desktop notification (#17232). */
+export interface DecisionsOpenQuestionRequest {
+  reference: DecisionQuestionReference;
+}
+
 /** One question read by its reference, from any window (#17229). */
 export interface GetDecisionQuestionByReferencePayload {
   reference: DecisionQuestionReference;

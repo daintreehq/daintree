@@ -1559,6 +1559,7 @@ export const EVENT_LOCALITY: Readonly<Record<string, ChannelLocality>> = {
   // The owner machine's switch and relay connection, like its settings.
   "decisions:status-changed": "shell",
   "decisions:questions-changed": "shell",
+  "decisions:open-question": "shell",
   "decisions:devices-changed": "shell",
   "decisions:setup-check-changed": "shell",
   "watchdog:active": "host",

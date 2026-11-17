@@ -16,7 +16,12 @@ import type {
 import type { AnswerDelivery, AnswerDeliveryDeps } from "./answerDelivery.js";
 import { createWorktreeAttachmentResolver } from "./attachmentResolver.js";
 import { DecisionsAttachments } from "./attachmentSpool.js";
-import { readHandledAnswers, withoutHandled, type HandledAnswers } from "./attentionList.js";
+import {
+  readHandledAnswers,
+  withoutHandled,
+  type HandledAnswers,
+  type MetaStore,
+} from "./attentionList.js";
 import type { DaintreeLocalStore, DecisionsStoreUnavailableReason } from "./daintreeLocalStore.js";
 import {
   DecisionModelRuntime,
@@ -46,6 +51,7 @@ import {
 import type { PaneSnapshotSources } from "./paneSnapshots.js";
 import { observeQuestionWrites, QuestionRowsFeed } from "./questionFeed.js";
 import { projectDecisionQuestions } from "./questionList.js";
+import type { QuestionNotifications } from "./questionNotifications.js";
 import {
   RelayConnection,
   type QuestionSource,
@@ -151,6 +157,12 @@ export interface DecisionsServiceOptions {
    */
   publishQuestions?: (questions: readonly DecisionQuestionListItem[]) => void;
   /**
+   * Starts raising a desktop notification for each question asked (#17232),
+   * reading and keeping what it has raised in `store`, once an owner's store
+   * has been read; stopped before that store is let go of.
+   */
+  notifyQuestions?: (store: MetaStore) => QuestionNotifications;
+  /**
    * The relay revoked the identity this lifetime connected with. The entry
    * records it, in the setting or the Host's record, so no later lifetime
    * connects with it either.
@@ -231,6 +243,7 @@ export class DecisionsService {
   private erasing = false;
   private readonly panes: PaneDecisionStates;
   private readonly publishQuestions: (questions: readonly DecisionQuestionListItem[]) => void;
+  private readonly notifyQuestions: ((store: MetaStore) => QuestionNotifications) | null;
   private readonly connect: DecisionsConnectionFactory;
   private readonly onRelayRevoked: (relay: RelayBinding, role: DecisionsRole) => void;
   private readonly onDevicesChanged: () => void;
@@ -261,6 +274,8 @@ export class DecisionsService {
   private readonly questionsWaiters = new Set<() => void>();
   /** Feeds the panes' state from the lifetime's store, for as long as it is open. */
   private feed: QuestionRowsFeed | null = null;
+  /** The desktop notifications for the store being fed, while it is an owner's. */
+  private notifications: QuestionNotifications | null = null;
   private offCommit: (() => void) | null = null;
   private offFault: (() => void) | null = null;
   /** When the attached store stopped writing; null while it writes. */
@@ -321,6 +336,7 @@ export class DecisionsService {
       options.publishAnswerAttention
     );
     this.publishQuestions = options.publishQuestions ?? (() => {});
+    this.notifyQuestions = options.notifyQuestions ?? null;
     this.connect = options.connect ?? ((connection) => new RelayConnection(connection));
     this.onRelayRevoked = options.onRelayRevoked ?? (() => {});
     this.onDevicesChanged = options.onDevicesChanged ?? (() => {});
@@ -1199,6 +1215,8 @@ export class DecisionsService {
     this.feed = null;
     this.offCommit?.();
     this.offCommit = null;
+    this.notifications?.stop();
+    this.notifications = null;
     if (store === null) return Promise.resolve();
     // What a person marked handled (#16020) shows nowhere: not on its pane, in Canopy or the
     // attention list. The list of every question keeps it, settled (#17229).
@@ -1216,7 +1234,16 @@ export class DecisionsService {
     );
     this.feed = feed;
     this.offCommit = store.onCommit(() => void feed.refresh());
-    return feed.refresh();
+    const first = feed.refresh();
+    const notifyQuestions = this.notifyQuestions;
+    if (notifyQuestions !== null && this.role === "owner") {
+      // After the first read is listed, so the notifications never start from another store's list.
+      void first.then(() => {
+        if (this.feed !== feed || this.disposed) return;
+        this.notifications = notifyQuestions(store);
+      });
+    }
+    return first;
   }
 
   /**

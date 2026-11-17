@@ -13,6 +13,7 @@ import type { MainProcessToastPayload } from "../../../shared/types/ipc/maps.js"
 import { isDiskSpaceFault } from "./storageRecovery.js";
 import { getAllAppWebContents } from "../../window/webContentsRegistry.js";
 import {
+  getAgentNotificationServiceRef,
   getDecisionsHostsPort,
   getMcpServerServiceRef,
   getPtyClient,
@@ -21,7 +22,13 @@ import {
 import { mcpPaneConfigService } from "../McpPaneConfigService.js";
 import { events } from "../events.js";
 import { setAnswerAttention } from "../runAnswerAttentionSource.js";
-import { setDecisionQuestions } from "../decisionsQuestionList.js";
+import {
+  getDecisionQuestionList,
+  onDecisionQuestionsChanged,
+  setDecisionQuestions,
+} from "../decisionsQuestionList.js";
+import { QuestionNotifier, type QuestionNotifications } from "./questionNotifications.js";
+import type { MetaStore } from "./attentionList.js";
 import {
   BridgeError,
   enrollHost,
@@ -363,6 +370,31 @@ function publishQuestions(questions: readonly DecisionQuestionListItem[]): void 
 }
 
 /**
+ * Desktop notifications for the questions agents ask (#17232), from the list
+ * every window here reads, so a Remote Host's questions notify once they are
+ * listed too. Raised by the agent notification service, which owns this
+ * computer's notification settings and sounds; until it has loaded, nothing shows.
+ */
+function notifyQuestions(store: MetaStore): QuestionNotifications {
+  const notifier = new QuestionNotifier({
+    store,
+    questions: { get: getDecisionQuestionList, onChange: onDecisionQuestionsChanged },
+    readOpeningLine: async (reference) => {
+      const read = await getDecisionQuestionSummariesByReference({ references: [reference] });
+      const summary = read.result === "read" ? read.summaries[0] : undefined;
+      return summary?.result === "read" ? summary.line : null;
+    },
+    notificationsOn: (projectId) =>
+      getAgentNotificationServiceRef()?.decisionQuestionNotificationsOn(projectId) ?? false,
+    show: (question, openingLine, key) =>
+      getAgentNotificationServiceRef()?.notifyDecisionQuestion(question, openingLine, key),
+    close: (key) => getAgentNotificationServiceRef()?.closeDecisionQuestion(key),
+  });
+  void notifier.start();
+  return notifier;
+}
+
+/**
  * Settings belong to this machine's own windows, never to a remote Shell's,
  * so what they show goes to the local views only.
  */
@@ -649,6 +681,7 @@ export function getDecisionsService(): Promise<DecisionsService> {
         publishPaneState,
         publishAnswerAttention: setAnswerAttention,
         publishQuestions,
+        notifyQuestions,
         onRelayRevoked: (relay, role) =>
           role === "host" ? void hostRevoked(relay) : recordRevocation(relay),
         forgetIdentity: forgetRecordedIdentity,

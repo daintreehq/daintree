@@ -1627,6 +1627,8 @@ export interface IpcEventMap {
   "decisions:status-changed": import("../decisions.js").DecisionsStatus;
   // Every question this computer's Decisions holds changed (#17229); never any content. Its own windows only.
   "decisions:questions-changed": import("../decisionsQuestion.js").DecisionQuestionList;
+  // Open one question in the question view (#17232): a click on its desktop notification. One window only.
+  "decisions:open-question": import("../decisionsQuestion.js").DecisionsOpenQuestionRequest;
   // The relay's paired devices or its key changed; Settings reads the list again. Its own windows only.
   "decisions:devices-changed": null;
   // The setup check's progress (#16024). Its own windows only.
@@ -2819,6 +2821,7 @@ export type IpcEventBusMap = Pick<
   // This machine's Decisions status (local windows only)
   | "decisions:status-changed"
   | "decisions:questions-changed"
+  | "decisions:open-question"
   | "decisions:devices-changed"
   | "decisions:setup-check-changed"
   // Agent session journaled — resume surfaces refetch (global broadcast)

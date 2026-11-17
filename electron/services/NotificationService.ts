@@ -17,6 +17,8 @@ import {
   type ProjectTitleLookup,
 } from "../window/windowTitle.js";
 import { readUserPresence, type UserPresence } from "./userPresence.js";
+import { CHANNELS } from "../ipc/channels.js";
+import type { DecisionQuestionReference } from "../../shared/types/decisionsQuestion.js";
 
 export interface NotificationState {
   waitingCount: number;
@@ -703,6 +705,39 @@ class NotificationService {
 
     revealWindow(fallbackWindow);
     sendToRenderer(fallbackWindow, navigateChannel, context);
+  }
+
+  /**
+   * Opens a Decisions question (#17232) in the question view of a window on
+   * this computer: the most recently focused one showing the question's
+   * project, else the most recently focused one. No project is switched to:
+   * every window reads a question by its reference, whatever it shows. False
+   * when no window could take it.
+   */
+  openDecisionQuestion(reference: DecisionQuestionReference): boolean {
+    const targets = (this.registry?.focusOrder() ?? []).flatMap((ctx) => {
+      const window = ctx.browserWindow;
+      if (window.isDestroyed()) return [];
+      const contents = getAppWebContents(window);
+      return contents.isDestroyed() ? [] : [{ window, contents }];
+    });
+    const target =
+      targets.find(
+        ({ contents }) => this.placeOf(contents.id)?.workspaceKey === reference.projectId
+      ) ?? targets[0];
+    if (!target) return false;
+    revealWindow(target.window);
+    try {
+      target.contents.focus();
+      target.contents.send(CHANNELS.EVENTS_PUSH, {
+        name: "decisions:open-question",
+        payload: { reference },
+      });
+      return true;
+    } catch {
+      // The view went between the check and the send.
+      return false;
+    }
   }
 
   /** False when the owner could not be reached, so the caller falls back. */
