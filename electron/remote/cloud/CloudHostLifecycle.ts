@@ -872,8 +872,6 @@ export class CloudHostLifecycle {
       async (signal) => {
         await this.settleRenewal(binding.id);
         await this.deps.hosts.disconnect(binding.hostId).catch(() => {});
-        // A delete or shutdown that took over meanwhile: the provider never hears of this stop.
-        if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
         await this.runStop(binding.id, signal);
       },
       () => this.deps.store.updateBinding(binding.id, (current) => ({ ...current, intent: "stop" }))
@@ -884,6 +882,8 @@ export class CloudHostLifecycle {
     const binding = this.deps.store.binding(bindingId);
     if (!binding?.resourceId) return;
     const { provider, credentials } = await this.context(binding, signal);
+    // A delete or shutdown that took over meanwhile: the provider never hears of this stop.
+    if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
     this.stage(bindingId, "Saving the disk and stopping");
     try {
       const stopping = await provider.stop(credentials, binding.resourceId);
@@ -918,11 +918,7 @@ export class CloudHostLifecycle {
     if (confirmed.resourceId && confirmResourceId !== confirmed.resourceId) {
       throw invalid("The machine to delete changed since you confirmed. Check it and try again.");
     }
-    const running = this.operations.get(confirmed.id);
-    if (running && running.kind !== "deleting") {
-      running.controller.abort();
-      await running.promise.catch(() => {});
-    }
+    await this.supersede(confirmed.id);
     let binding = this.deps.store.binding(confirmed.id) ?? confirmed;
     // A create that reached the provider may have made a machine nothing here has heard
     // of yet: find it (a read) before the host, and its label, are forgotten.
@@ -946,6 +942,8 @@ export class CloudHostLifecycle {
     }
     if (resourceId) {
       await this.deps.hosts.disconnect(confirmed.hostId).catch(() => {});
+      // A Stop or Start that claimed the machine while this waited gives way too.
+      await this.supersede(binding.id);
       await this.operate(binding.id, "deleting", async (signal) => {
         const { provider, credentials } = await this.context(binding, signal);
         // The provider may have been replaced while the operation waited.
@@ -963,6 +961,18 @@ export class CloudHostLifecycle {
       });
     }
     await this.deps.hosts.forget(confirmed.hostId);
+  }
+
+  /** Aborts whatever runs on the machine, and whatever claimed it next, until nothing but a delete is left. */
+  private async supersede(bindingId: string): Promise<void> {
+    for (
+      let running = this.operations.get(bindingId);
+      running && running.kind !== "deleting";
+      running = this.operations.get(bindingId)
+    ) {
+      running.controller.abort();
+      await running.promise.catch(() => {});
+    }
   }
 
   /**
