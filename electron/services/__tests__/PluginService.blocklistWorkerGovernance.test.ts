@@ -1105,7 +1105,9 @@ describe("Worker governance (idle dispose + snapshots)", () => {
   describe("a worker the supervisor gave up on (#17211)", () => {
     /**
      * Registers an imperative action, one of the registrations that otherwise
-     * keep a worker ineligible for idle disposal forever.
+     * keep a worker ineligible for idle disposal forever, and a panel handler
+     * that answers with the activation it was registered by. The module is
+     * imported once, so the counter survives across workers.
      */
     async function writeLoopingPlugin(dirName: string, name: string): Promise<void> {
       const dir = path.join(tmpDir, dirName);
@@ -1116,7 +1118,10 @@ describe("Worker governance (idle dispose + snapshots)", () => {
       );
       await fs.writeFile(
         path.join(dir, "main.mjs"),
-        `export function activate(host) {
+        `let activations = 0;
+        export function activate(host) {
+          const generation = ++activations;
+          host.registerHandler("probe", () => generation);
           host.registerAction(
             { id: "run", title: "Run", description: "", category: "Test", kind: "command", danger: "safe" },
             () => "ran"
@@ -1146,9 +1151,10 @@ describe("Worker governance (idle dispose + snapshots)", () => {
       await service.initialize();
       await service.activatePlugin("acme.looper");
       const flushed = vi.fn();
-      (
+      const eventCleanups = (
         service as unknown as { pluginEventCleanups: Map<string, Array<() => void>> }
-      ).pluginEventCleanups.set("acme.looper", [flushed]);
+      ).pluginEventCleanups;
+      eventCleanups.set("acme.looper", [flushed]);
       expect(service.listPluginActions().map((a) => a.id)).toContain("acme.looper.run");
 
       tripCrashLoop(base.hosts);
@@ -1156,6 +1162,7 @@ describe("Worker governance (idle dispose + snapshots)", () => {
       expect(devWorkerMock.instances[base.hosts].dispose).toHaveBeenCalledTimes(1);
       expect(devWorkerMock.bridges[base.bridges].dispose).toHaveBeenCalledTimes(1);
       expect(flushed).toHaveBeenCalledTimes(1);
+      expect(eventCleanups.has("acme.looper")).toBe(false);
       expect(service.listPluginActions().map((a) => a.id)).not.toContain("acme.looper.run");
       const snapshot = service.getWorkerGovernanceSnapshots().find((s) => s.id === "acme.looper");
       expect(snapshot).toMatchObject({ alive: false });
@@ -1166,16 +1173,19 @@ describe("Worker governance (idle dispose + snapshots)", () => {
       });
     });
 
-    it("forks a fresh worker on the next use instead of short-circuiting", async () => {
+    it("forks a fresh worker for the next lazy invocation instead of short-circuiting", async () => {
       const base = baseline();
       await writeLoopingPlugin("revived", "acme.revived");
       const service = startService();
       await service.initialize();
-      await service.activatePlugin("acme.revived");
+      const ctx = { projectId: null, worktreeId: null, webContentsId: 0, pluginId: "acme.revived" };
+      // A panel's invoke, which activates the plugin on its own like a palette
+      // command or an MCP call does.
+      expect(await service.dispatchHandler("acme.revived", "probe", ctx, [])).toBe(1);
       tripCrashLoop(base.hosts);
       const failedGeneration = workerStatus(service, "acme.revived")?.generation;
 
-      await service.activatePlugin("acme.revived");
+      expect(await service.dispatchHandler("acme.revived", "probe", ctx, [])).toBe(2);
 
       expect(devWorkerMock.instances).toHaveLength(base.hosts + 2);
       expect(service.listPluginActions().map((a) => a.id)).toContain("acme.revived.run");
