@@ -474,6 +474,8 @@ export type PtyHostRequest =
       query: string;
       isRegex: boolean;
       requestId: string;
+      /** Scan only these terminals; absent scans every terminal on the shard. */
+      terminalIds?: string[];
     }
   | { type: "set-ipc-data-mirror"; id: string; enabled: boolean }
   | { type: "graceful-kill"; id: string; requestId: string }
