@@ -35,6 +35,7 @@ import {
   unsupportedConnection,
 } from "./connection.js";
 import { discoverHosts, discoverWslDistros } from "./discovery.js";
+import { listSshConfigAliases } from "./sshConfig.js";
 import { type ArtifactChecksum, lookupArtifactChecksum } from "./clientBuild.js";
 import { runHostInstall } from "./hostInstaller.js";
 import { RestartImpactSchema } from "../metrics/linkMethods.js";
@@ -74,6 +75,8 @@ export interface HostSetupDeps {
   /** The release feed's checksum for an artifact; defaults to reading the feed's update manifest. */
   checksum?(url: string, signal: AbortSignal): Promise<ArtifactChecksum | null>;
   emit(event: RemoteHostsEvent): void;
+  /** The aliases the user's ssh config names; read from `~/.ssh/config` unless given. */
+  sshConfigAliases?: (signal?: AbortSignal) => Promise<readonly string[]>;
   sleep?(ms: number, signal: AbortSignal): Promise<void>;
   now?: () => number;
   idlePollMs?: number;
@@ -181,6 +184,10 @@ export class HostSetupService {
       run: this.deps.run,
       platform: this.deps.platform,
       knownConnections: this.deps.knownConnections(),
+      // Read only here, when Add Host asks: never at startup, never written.
+      sshConfigAliases:
+        this.deps.sshConfigAliases ??
+        ((aliasSignal) => listSshConfigAliases({ signal: aliasSignal })),
       signal,
     });
   }

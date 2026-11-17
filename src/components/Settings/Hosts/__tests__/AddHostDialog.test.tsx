@@ -274,7 +274,7 @@ describe("AddHostDialog", () => {
     render(<AddHostDialog isOpen onClose={() => {}} />);
     expect(await screen.findByText("Couldn't look for machines")).toBeTruthy();
     expect(screen.getByText("tailscale crashed")).toBeTruthy();
-    expect(screen.queryByText(/Nothing answered/)).toBeNull();
+    expect(screen.queryByText(/nothing answered/i)).toBeNull();
 
     remoteHosts.discover!.mockResolvedValueOnce([
       {
@@ -321,6 +321,33 @@ describe("AddHostDialog", () => {
     await screen.findByText("studio-10");
     const names = discoveredRows().map((row) => row.querySelector(".font-medium")!.textContent);
     expect(names).toEqual(["studio-2", "Studio-03", "studio-10", "studio-01"]);
+  });
+
+  it("names an alias from the SSH config as its source and picks it as written, unchecked", async () => {
+    remoteHosts.discover!.mockResolvedValueOnce([
+      {
+        name: "build-box",
+        connection: { kind: "ssh", target: "build-box" },
+        source: "ssh-config",
+        platform: null,
+        online: false,
+        alreadyAdded: false,
+      },
+    ]);
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    const row = await screen.findByRole("radio", { name: "build-box" });
+    expect(discoveredRows()[0]!.textContent).toContain("SSH config");
+    fireEvent.click(row);
+    expect((screen.getByPlaceholderText("user@devbox.local") as HTMLInputElement).value).toBe(
+      "build-box"
+    );
+    expect(remoteHosts.probe).not.toHaveBeenCalled();
+    // ssh resolves the alias only now, as it would a typed one.
+    fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+    await waitFor(() => expect(remoteHosts.probe).toHaveBeenCalledTimes(1));
+    expect(remoteHosts.probe!.mock.calls[0]![0]).toEqual({
+      connection: { kind: "ssh", target: "build-box" },
+    });
   });
 
   describe("a large mesh", () => {

@@ -88,6 +88,16 @@ function service(
 }
 
 describe("HostSetupService", () => {
+  it("reads the ssh config's aliases only when a scan asks, with that scan's signal", async () => {
+    const sshConfigAliases = vi.fn(async () => ["build-box"]);
+    const { setup } = service(LINUX_NO_UNIT, { platform: "linux", sshConfigAliases });
+    expect(sshConfigAliases).not.toHaveBeenCalled();
+    const abort = new AbortController();
+    const found = await setup.discover(abort.signal);
+    expect(sshConfigAliases).toHaveBeenCalledWith(abort.signal);
+    expect(found.map((host) => [host.name, host.source])).toEqual([["build-box", "ssh-config"]]);
+  });
+
   it("probes over the shared ControlMaster in BatchMode", async () => {
     const { setup, calls } = service(LINUX_NO_UNIT);
     const result = await setup.probe({ connection: { kind: "ssh", target: "greg@bigbox" } });

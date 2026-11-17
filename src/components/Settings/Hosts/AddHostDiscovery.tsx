@@ -15,6 +15,7 @@ const SOURCE_LABEL: Record<DiscoveredHost["source"], string> = {
   tailscale: "Tailnet",
   netbird: "NetBird",
   bonjour: "Local network",
+  "ssh-config": "SSH config",
   manual: "Entered",
   wsl: "WSL",
 };
@@ -117,7 +118,7 @@ export function AddHostDiscovery({
     <section aria-labelledby={headingId}>
       <div className="mb-2 flex min-h-7 items-center justify-between gap-3">
         <h3 id={headingId} className="text-sm font-medium text-text-primary">
-          Machines on your networks
+          Machines found
           {count && <span className="ml-2 font-normal text-text-secondary">{count}</span>}
         </h3>
         {(discovered !== null || error !== null || rescanning) && (
@@ -189,8 +190,8 @@ export function AddHostDiscovery({
         )
       ) : discovered.length === 0 ? (
         <p className="text-sm text-text-secondary">
-          Nothing answered on your tailnet, NetBird or local network. Enter an SSH target above, or
-          look again once the machine is awake.
+          Nothing in your SSH config, and nothing answered on your tailnet, NetBird or local
+          network. Enter an SSH target above, or look again once the machine is awake.
         </p>
       ) : shown.length === 0 ? (
         <p role="status" className="text-sm text-text-secondary">

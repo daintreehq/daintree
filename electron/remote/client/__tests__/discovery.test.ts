@@ -606,6 +606,85 @@ describe("discoverHosts", () => {
     expect(tried).toContain("/Applications/Tailscale.app/Contents/MacOS/Tailscale");
     expect(tried).toContain("avahi-browse");
   });
+
+  it("lists ssh config aliases as written, unresolved, behind a network row of the same name", async () => {
+    const status = JSON.stringify({
+      Peer: [
+        {
+          HostName: "box",
+          DNSName: "box.ts.net.",
+          OS: "linux",
+          Online: true,
+          TailscaleIPs: ["100.64.0.4"],
+        },
+      ],
+    });
+    const tried: string[] = [];
+    const run: CommandRunner = async (command) => {
+      tried.push(command);
+      return command === "tailscale" ? ok(status) : missing;
+    };
+    const hosts = await discoverHosts({
+      run,
+      platform: "linux",
+      knownConnections: [{ kind: "ssh", target: "greg@build-box" }],
+      sshConfigAliases: async () => [
+        "Box.ts.net",
+        "100.64.0.4",
+        "build-box",
+        "Build-Box",
+        "Jump",
+        "-oProxyCommand=x",
+      ],
+    });
+    expect(
+      hosts.map((h) => [
+        sshTargetOf(h.connection),
+        h.source,
+        h.platform,
+        h.online,
+        h.alreadyAdded,
+        !!h.knownMachine,
+      ])
+    ).toEqual([
+      ["box.ts.net", "tailscale", "linux", true, false, false],
+      // The tailnet vouches for this address, but ssh looks the alias up on its own.
+      ["100.64.0.4", "ssh-config", null, false, false, false],
+      ["build-box", "ssh-config", null, false, false, true],
+      ["Jump", "ssh-config", null, false, false, false],
+    ]);
+    // Listing an alias never asks ssh where it points.
+    expect(tried).not.toContain("ssh");
+  });
+
+  it("marks an alias added under that exact name", async () => {
+    const hosts = await discoverHosts({
+      run: async () => missing,
+      platform: "linux",
+      knownConnections: [{ kind: "ssh", target: "build-box" }],
+      sshConfigAliases: async () => ["build-box"],
+    });
+    expect(hosts.map((h) => [h.name, h.alreadyAdded])).toEqual([["build-box", true]]);
+  });
+
+  it("treats an ssh config that can't be read as no aliases, keeping the other sources", async () => {
+    const status = JSON.stringify({
+      Peer: [{ HostName: "a", OS: "linux", Online: true, TailscaleIPs: ["100.64.0.3"] }],
+    });
+    const sshConfigAliases = vi.fn(async () => {
+      throw new Error("EACCES");
+    });
+    const abort = new AbortController();
+    const hosts = await discoverHosts({
+      run: async (command) => (command === "tailscale" ? ok(status) : missing),
+      platform: "linux",
+      knownConnections: [],
+      sshConfigAliases,
+      signal: abort.signal,
+    });
+    expect(sshConfigAliases).toHaveBeenCalledWith(abort.signal);
+    expect(hosts.map((h) => sshTargetOf(h.connection))).toEqual(["100.64.0.3"]);
+  });
 });
 
 describe("parseNetbirdStatus", () => {
