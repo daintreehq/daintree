@@ -150,12 +150,18 @@ export class GitHubEnterpriseAccount {
     this.sessionHost = token ? host : null;
   }
 
-  async status(): Promise<EnterpriseStatus> {
+  /** `withAccount` names the token's account, validating it once if nothing has yet. */
+  async status(withAccount = false): Promise<EnterpriseStatus> {
     const host = getEnterpriseHost();
     const record = await this.readRecord();
     const hasToken = host !== null && record?.host === host;
     const staleTokenHost = record && record.host !== host ? record.host : null;
-    const account = hasToken ? (await GitHubAuth.getConfigAsync(host)).username : undefined;
+    const account =
+      hasToken && withAccount
+        ? (await GitHubAuth.getConfigAsync(host)).username
+        : hasToken
+          ? GitHubAuth.getConfig(host).username
+          : undefined;
     return { host, hasToken, staleTokenHost, ...(account ? { account } : {}) };
   }
 
@@ -308,7 +314,7 @@ export async function registerGitHubEnterprise(
   await host.registerHandler(
     ENTERPRISE_CHANNELS.status,
     {
-      args: EmptyArgsSchema,
+      args: z.object({ withAccount: z.boolean().optional() }).optional(),
       result: z.object({
         host: z.string().nullable(),
         hasToken: z.boolean(),
@@ -316,7 +322,7 @@ export async function registerGitHubEnterprise(
         account: z.string().optional(),
       }),
     },
-    () => account.status()
+    (_ctx, args) => account.status(args?.withAccount === true)
   );
   await host.registerHandler(
     ENTERPRISE_CHANNELS.setHost,

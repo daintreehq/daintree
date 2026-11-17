@@ -41,6 +41,7 @@ import {
   type PRStateFilter,
 } from "../stores/githubFilterStore";
 import { useGitHubConfigStore } from "../stores/githubConfigStore";
+import { hasAnyGitHubToken } from "../../shared/enterprise.js";
 import { forgeNotConnectedLabel, useRemoteHostName } from "@/hooks/useSettingsOwner";
 import type { Issue, PR } from "@shared/types/forge";
 import type { Worktree } from "@shared/types/worktree";
@@ -296,7 +297,7 @@ export function GitHubResourceList({
   const githubConfigInitialized = useGitHubConfigStore((s) => s.isInitialized);
   const githubConfig = useGitHubConfigStore((s) => s.config);
   const showNoTokenEmptyState =
-    githubConfigInitialized && githubConfig !== null && !githubConfig.hasToken;
+    githubConfigInitialized && githubConfig !== null && !hasAnyGitHubToken(githubConfig);
   const remoteHostName = useRemoteHostName();
 
   // Self-init the GitHub config store so the no-token empty state can render

@@ -3,6 +3,10 @@
  * account, beside github.com's, which goes through the host's forge credential
  * surface. Results carry no token: the main process keeps it.
  */
+import type { GitHubTokenConfig } from "./types.js";
+
+export const GITHUB_PLUGIN_ID = "daintree.github";
+
 export const ENTERPRISE_CHANNELS = {
   status: "enterprise.status",
   setHost: "enterprise.setHost",
@@ -48,3 +52,8 @@ export type EnterpriseImportPreviewResult =
 export type EnterpriseImportCommitResult =
   | { ok: true; account: string; scopes: string[] }
   | { ok: false; reason: string };
+
+/** Whether any GitHub host — github.com or the Enterprise Server — has a token. */
+export function hasAnyGitHubToken(config: GitHubTokenConfig): boolean {
+  return config.hasToken || config.hasEnterpriseToken === true;
+}

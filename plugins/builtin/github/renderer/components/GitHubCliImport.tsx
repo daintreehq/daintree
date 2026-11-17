@@ -54,7 +54,14 @@ const FAILURE_MESSAGES: Record<ForgeCredentialImportFailureReason, string> = {
   "save-failed": "Couldn't save the imported token.",
 };
 
-export function describeImportFailure(reason: ForgeCredentialImportFailureReason): string {
+/** `host` names the GitHub host the import read from, when it isn't github.com. */
+export function describeImportFailure(
+  reason: ForgeCredentialImportFailureReason,
+  host?: string
+): string {
+  if (host && reason === "not-signed-in") {
+    return `GitHub CLI isn't signed in to ${host}. Run gh auth login --hostname ${host}, then try again.`;
+  }
   return FAILURE_MESSAGES[reason] ?? FAILURE_MESSAGES["cli-failed"];
 }
 
