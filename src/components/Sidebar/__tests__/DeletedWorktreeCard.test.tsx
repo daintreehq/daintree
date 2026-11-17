@@ -619,6 +619,31 @@ describe("DeletedWorktreeCard", () => {
     expect(focusTimerTooltip(container)).toBe(
       "Auto-close is paused while a drag is in progress, holding at 38s"
     );
+    expect(container.querySelector("[title]")).toBeNull();
+    expect(
+      screen.getByRole("timer", {
+        name: "Auto-close is paused while a drag is in progress, holding at 38 seconds",
+      })
+    ).toBeTruthy();
+  });
+
+  it("opens the countdown tooltip on pointer hover too", () => {
+    vi.useFakeTimers();
+    try {
+      setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+      const { container } = renderCard({ ...worktree, expiresAt: Date.now() + 40_000 });
+      const timer = container.querySelector("[data-testid='deleted-worktree-countdown-seconds']")!;
+      expect(screen.queryByRole("tooltip")).toBeNull();
+
+      act(() => {
+        fireEvent.pointerMove(timer, { pointerType: "mouse" });
+        vi.advanceTimersByTime(1000);
+      });
+
+      expect(screen.getByRole("tooltip").textContent).toMatch(/^Closes automatically in \d+s$/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows no hold badge while the countdown is running", () => {

@@ -564,6 +564,32 @@ describe("DeletedWorktreeGroup", () => {
       expect(focusTooltip(timer)).toBe(
         "Auto-close is paused while an agent here is still working, holding at 33s"
       );
+      expect(container.querySelector("[title]")).toBeNull();
+      expect(
+        screen.getByRole("timer", {
+          name: "Auto-close is paused while an agent here is still working, holding at 33 seconds",
+        })
+      ).toBeTruthy();
+    });
+
+    it("opens a member's tooltip on pointer hover too", () => {
+      vi.useFakeTimers();
+      try {
+        setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+        const { container } = renderGroup([
+          makeDeleted("wt-1", "feature/alpha", Date.now() + 40_000),
+        ]);
+        const timer = container.querySelector("[data-testid='deleted-worktree-member-countdown']")!;
+
+        act(() => {
+          fireEvent.pointerMove(timer, { pointerType: "mouse" });
+          vi.advanceTimersByTime(1000);
+        });
+
+        expect(screen.getByRole("tooltip").textContent).toMatch(/^Closes automatically in \d+s$/);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("renders no native title on an expanded group's cards", () => {
