@@ -269,7 +269,8 @@ export function invalidateStagingDiffStatCache(cwd: string): void {
  * Resolve per-file line stats for staging-view paths. Issues a single
  * `git diff --numstat -z` call per mode (staged vs unstaged), keyed by
  * repo-relative path, and caches the resulting map for ~5s keyed by cwd and
- * head OID. Empty `paths` returns an empty map without spawning git.
+ * head OID (empty on an unborn branch, where `--cached` diffs the index against
+ * the empty tree). Empty `paths` returns an empty map without spawning git.
  *
  * Binary files surface as `{ insertions: null, deletions: null }`, from
  * numstat's `-\t-` placeholders. Errors are swallowed and yield an empty
@@ -283,7 +284,6 @@ export async function getPerFileDiffStats(
   mode: DiffStatMode
 ): Promise<Map<string, DiffStat>> {
   if (paths.length === 0) return new Map();
-  if (mode === "staged" && !headOid) return new Map();
 
   const cacheKey = makeStagingCacheKey(cwd, headOid, mode);
   const cached = STAGING_DIFF_STAT_CACHE.get(cacheKey);

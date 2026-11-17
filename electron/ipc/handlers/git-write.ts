@@ -2058,8 +2058,8 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       try {
         headOid = (await git.revparse(["HEAD"])).trim();
       } catch {
-        // No HEAD (unborn branch / empty repo) — staged numstat would also
-        // throw; skip churn entirely below.
+        // No HEAD (unborn branch / empty repo): `git diff --cached` still
+        // works against the empty tree, so churn is read with an empty OID.
       }
     }
 
