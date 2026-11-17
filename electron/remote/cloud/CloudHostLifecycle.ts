@@ -32,7 +32,6 @@ import {
 } from "../../../shared/types/remoteHosts.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { AppError } from "../../utils/errorTypes.js";
-import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { TransportError, UnusableConnectionError } from "../client/transport.js";
 import type { CloudAccountService } from "./CloudAccountService.js";
 import {
