@@ -48,6 +48,7 @@ import type { RunHistoryRecord } from "../shared/types/ipc/runHistory.js";
 import type { CanopyMode } from "../shared/types/ipc/canopy.js";
 import type { WindowOpeningConfig } from "../shared/types/ipc/windowOpening.js";
 import { DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW } from "../shared/types/windowOpen.js";
+import { DEFAULT_HOST_IDLE_MINUTES } from "../shared/types/hostIdle.js";
 import type {
   DismissedSuggestion,
   SuggestedDictionaryEntry,
@@ -171,6 +172,15 @@ export interface StoreSchema {
     includeIdleShells: boolean;
     /** One of `IDLE_SHELL_THRESHOLD_MINUTES`; the service normalizes anything else. */
     idleShellThresholdMinutes: number;
+  };
+  /**
+   * How long this machine, as a host, goes without seeing work before its idle
+   * time ends (#17357). Kept here so it is judged with no Shell attached; read
+   * through `hostIdleMinutesOf`, which folds anything out of bounds back to
+   * the default.
+   */
+  hostIdle: {
+    idleAfterMinutes: number;
   };
   pluginBackgroundUpdateCheck: {
     enabled: boolean;
@@ -1050,6 +1060,9 @@ const storeOptions = {
       thresholdMinutes: 15,
       includeIdleShells: false,
       idleShellThresholdMinutes: 60,
+    },
+    hostIdle: {
+      idleAfterMinutes: DEFAULT_HOST_IDLE_MINUTES,
     },
     // Background plugin update checks default OFF (#10893): a periodic network
     // re-fetch of every URL-installed plugin is an opt-in behavior, not a default.

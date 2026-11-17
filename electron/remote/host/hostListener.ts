@@ -38,6 +38,7 @@ import { getHostPreviousEnd } from "../../services/hostPreviousEnd.js";
 import { hostLaunchCommand, hostLocation } from "./hostLocation.js";
 import type { HostSocketLocation } from "./hostSocketPath.js";
 import { initRemoteHostsHost } from "./initHost.js";
+import { installHostIdle } from "./hostIdle.js";
 import {
   installHostMetricsHost,
   installLinkActivityHost,
@@ -178,6 +179,8 @@ async function buildHostListener(
   // new link (and closed expired endpoints) by the time ours run.
   const host = initRemoteHostsHost(server);
   teardowns.push(() => host.dispose());
+  // When this machine last saw work, with or without a Shell attached (#17357).
+  teardowns.push(installHostIdle(host.sessionHost));
   teardowns.push(() => disposeAllTerminalBridges());
 
   teardowns.push(

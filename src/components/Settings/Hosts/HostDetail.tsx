@@ -297,7 +297,14 @@ export function HostDetail({
       )}
 
       {/* The machine first: what it is doing and what it costs decide everything below. */}
-      {isCloud && <CloudMachineSection hostId={descriptor.id} hostName={hostName} />}
+      {isCloud && (
+        <CloudMachineSection
+          hostId={descriptor.id}
+          hostName={hostName}
+          connected={connected}
+          liveSummary={liveSummary ?? null}
+        />
+      )}
 
       <SettingsSection title="Connection">
         <SettingsGroup>

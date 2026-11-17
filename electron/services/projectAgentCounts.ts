@@ -194,6 +194,21 @@ function diedAtLaunch(terminal: CountableTerminal): boolean {
   );
 }
 
+/**
+ * Whether an agent runs in this terminal, or is starting in it. Runtime
+ * identity wins; launch intent is only a boot-window fallback before detection
+ * has ever committed. Demoted ex-agents must not count just because they were
+ * launched as agents.
+ */
+export function hasAgentIdentity(
+  terminal: Pick<CountableTerminal, "detectedAgentId" | "launchAgentId" | "everDetectedAgent">
+): boolean {
+  return (
+    Boolean(terminal.detectedAgentId) ||
+    (Boolean(terminal.launchAgentId) && terminal.everDetectedAgent !== true)
+  );
+}
+
 export function classifyRun(
   terminal: CountableTerminal,
   isHelpTerminal: (id: string) => boolean
@@ -219,13 +234,7 @@ export function classifyRun(
   if (terminal.kind === "dev-preview") return "dev-preview";
   if (terminal.hasPty === false) return "no-pty";
 
-  // Runtime identity wins; launch intent is only a boot-window fallback before
-  // detection has ever committed. Demoted ex-agents must not count just because
-  // they were launched as agents.
-  const hasLiveOrBootAgent =
-    Boolean(terminal.detectedAgentId) ||
-    (Boolean(terminal.launchAgentId) && terminal.everDetectedAgent !== true);
-  if (!hasLiveOrBootAgent && !diedAtLaunch(terminal)) return "not-an-agent";
+  if (!hasAgentIdentity(terminal) && !diedAtLaunch(terminal)) return "not-an-agent";
 
   return null;
 }

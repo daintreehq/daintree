@@ -190,6 +190,16 @@ const HostSummarySchema = z.object({
     .max(64)
     .nullable()
     .optional(),
+  // Unbounded above, so a later build may widen what a host stores without
+  // failing this Shell's whole summary.
+  idle: z
+    .object({
+      idleAfterMinutes: z.number().int().positive(),
+      lastWorkAt: epochMs,
+      busy: z.boolean(),
+      idleEndsAt: epochMs.nullable(),
+    })
+    .optional(),
 });
 
 const GoodbyeSchema = z.object({ reason: shortText });

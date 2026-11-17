@@ -98,6 +98,7 @@ export const SETTING_CATALOG = {
       parkedRuns: host,
       snoozedRuns: host,
       idleBackgroundAutoClose: host,
+      hostIdle: host,
       pluginBackgroundUpdateCheck: host,
       // The terminal list moves with the host; the grid layout, zoom, sidebar and
       // panel sizes, and palette habits stay with the client. This is the
