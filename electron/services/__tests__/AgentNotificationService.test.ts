@@ -2692,14 +2692,18 @@ describe("AgentNotificationService", () => {
       })),
     };
 
+    /** Each way to put a run aside, and the matching way to take it back with no transition. */
     const putAside = {
-      park: (id: string) => attention.park(id),
-      snooze: (id: string) => attention.snooze(id, "30m"),
+      park: { set: (id: string) => attention.park(id), lift: (id: string) => attention.unpark(id) },
+      snooze: {
+        set: (id: string) => attention.snooze(id, "30m"),
+        lift: (id: string) => attention.unsnooze(id),
+      },
     };
 
-    for (const [how, setAside] of Object.entries(putAside)) {
+    for (const [how, { set: setAside, lift }] of Object.entries(putAside)) {
       describe(`by a ${how}`, () => {
-        it("takes down a waiting agent's banner and cancels its reminder", () => {
+        it("takes down a waiting agent's banner and cancels its reminder for good", () => {
           mockStore({ waitingEnabled: true });
 
           events.emit("agent:state-changed", makePayload("waiting"));
@@ -2709,8 +2713,11 @@ describe("AgentNotificationService", () => {
           setAside("term-1");
           expect(notificationServiceMock.closeNotificationsForPanel).toHaveBeenCalledWith("term-1");
 
+          // Taken back while still waiting: the cancelled reminder stays cancelled.
+          lift("term-1");
           vi.advanceTimersByTime(300_000);
           expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+          expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
         });
 
         it("drops a waiting banner still in its burst window", () => {
@@ -2737,11 +2744,12 @@ describe("AgentNotificationService", () => {
           expect(soundServiceMock.playFile).not.toHaveBeenCalled();
         });
 
-        it("raises no completion banner when the run then finishes", () => {
+        it("starts no completion banner when the run then finishes", () => {
           mockStore({ completedEnabled: true, soundEnabled: true });
 
           setAside("term-1");
           events.emit("agent:state-changed", makePayload("completed"));
+          lift("term-1");
           vi.advanceTimersByTime(5000);
 
           expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
@@ -2754,6 +2762,7 @@ describe("AgentNotificationService", () => {
           events.emit("agent:state-changed", makePayload("completed"));
           vi.advanceTimersByTime(1000);
           setAside("term-1");
+          lift("term-1");
           vi.advanceTimersByTime(5000);
 
           expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
@@ -2766,6 +2775,7 @@ describe("AgentNotificationService", () => {
           events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "waiting"));
           events.emit("agent:state-changed", makePayloadFor("term-2", "agent-2", "waiting"));
           setAside("term-2");
+          lift("term-2");
           vi.advanceTimersByTime(180_000);
 
           expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
@@ -2782,6 +2792,7 @@ describe("AgentNotificationService", () => {
           setAside("term-2");
           events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "waiting"));
           events.emit("agent:state-changed", makePayloadFor("term-2", "agent-2", "waiting"));
+          lift("term-2");
           vi.advanceTimersByTime(180_000);
 
           expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
@@ -2790,6 +2801,20 @@ describe("AgentNotificationService", () => {
             expect.any(String),
             expect.objectContaining({ closeWithPanels: ["term-1"] })
           );
+        });
+
+        it("drops a finish already gathered for its burst", () => {
+          mockStore({ completedEnabled: true, soundEnabled: true });
+
+          events.emit("agent:state-changed", makePayload("completed"));
+          vi.advanceTimersByTime(1999);
+          // The debounce fires and gathers the finish; its burst goes out a tick later.
+          vi.advanceTimersToNextTimer();
+          setAside("term-1");
+          vi.advanceTimersByTime(100);
+
+          expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+          expect(soundServiceMock.playFile).not.toHaveBeenCalled();
         });
 
         it("drops a Canopy ask still in its burst window", () => {
@@ -2826,8 +2851,8 @@ describe("AgentNotificationService", () => {
           mockStore({ waitingEnabled: true }, twoDockedAgents);
           agentNotificationService.syncWatchedPanels(OWNER, ["term-1", "term-2"]);
 
-          setAside("term-2");
           events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "waiting"));
+          setAside("term-2");
           vi.advanceTimersByTime(200);
 
           expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
@@ -2873,6 +2898,28 @@ describe("AgentNotificationService", () => {
 
       expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
       expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+      expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+    });
+
+    it("holds back a waiting banner whose burst ends after a park it never heard of", () => {
+      mockStore({ waitingEnabled: true, soundEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      startAttention({ parks: { "term-1": { parkedAt: Date.now() } } });
+      vi.advanceTimersByTime(200);
+
+      expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+      expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+    });
+
+    it("holds back a finish whose debounce ends after a park it never heard of", () => {
+      mockStore({ completedEnabled: true, soundEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("completed"));
+      startAttention({ parks: { "term-1": { parkedAt: Date.now() } } });
+      vi.advanceTimersByTime(5000);
+
+      expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
       expect(soundServiceMock.playFile).not.toHaveBeenCalled();
     });
 

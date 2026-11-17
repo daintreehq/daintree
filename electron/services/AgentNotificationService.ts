@@ -1322,9 +1322,6 @@ class AgentNotificationService {
     this.completionBurstBuffer = this.completionBurstBuffer.filter(
       (item) => item.terminalId !== terminalId
     );
-    this.notificationQueue = this.notificationQueue.filter(
-      (item) => item.terminalId !== terminalId
-    );
   }
 
   private dropBufferedWaiting(terminalId: string): void {
