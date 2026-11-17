@@ -402,7 +402,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getAvailableTerminals(): Promise<BackendTerminalInfo[]>;
     getTerminalsByState(state: import("../agent.js").AgentState): Promise<BackendTerminalInfo[]>;
     getAllTerminals(): Promise<BackendTerminalInfo[]>;
-    searchSemanticBuffers(query: string, isRegex: boolean): Promise<SemanticSearchResult>;
+    searchSemanticBuffers(
+      query: string,
+      isRegex: boolean,
+      terminalIds?: string[]
+    ): Promise<SemanticSearchResult>;
     reconnect(terminalId: string): Promise<TerminalReconnectResult>;
     reconnectBulk(terminalIds: string[]): Promise<Record<string, TerminalReconnectResult>>;
     replayHistory(terminalId: string, maxLines?: number): Promise<{ replayed: number }>;

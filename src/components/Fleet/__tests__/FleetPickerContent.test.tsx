@@ -519,6 +519,102 @@ describe("FleetPickerContent + useFleetPicker", () => {
     });
   });
 
+  describe("output search scope (#17516)", () => {
+    let search: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      search = vi.fn().mockResolvedValue({ matches: [], complete: true });
+      Object.assign(window, { electron: { terminal: { searchSemanticBuffers: search } } });
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    async function openAndType(mode: "cold-start" | "add", query: string) {
+      const captured: { picker?: ReturnType<typeof useFleetPicker> } = {};
+      renderHarness([makeWorktreeSnap("wt-1", "main"), makeWorktreeSnap("wt-2", "feature")], {
+        mode,
+        owner: mode === "add" ? "ribbon-add" : "cold-start",
+        onCommit: () => {},
+        capturePicker: (p) => {
+          captured.picker = p;
+        },
+      });
+      await act(async () => {});
+      await act(async () => {
+        fireEvent.change(screen.getByTestId("fp-search"), { target: { value: query } });
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(300);
+      });
+      return captured;
+    }
+
+    it("searches only the panes the picker can show, across worktrees", async () => {
+      seedTerminals([
+        makeTerminal("t3", { worktreeId: "wt-2" }),
+        makeTerminal("t1", { worktreeId: "wt-1" }),
+        makeTerminal("t2", { worktreeId: "wt-1" }),
+        makeTerminal("browser", { kind: "browser", hasPty: false } as Partial<PtyPanelData>),
+      ]);
+      useFleetArmingStore.getState().armId("t1");
+      search.mockResolvedValue({
+        matches: [{ terminalId: "t3", line: "deploy finished", matchStart: 0, matchEnd: 6 }],
+        complete: true,
+      });
+
+      const captured = await openAndType("add", "deploy");
+
+      expect(search.mock.calls).toEqual([["deploy", false, ["t2", "t3"]]]);
+      // Matched by output alone: neither the title nor the worktree says "deploy".
+      expect(captured.picker?.visibleTerminals.map((t) => t.id)).toEqual(["t3"]);
+      expect(captured.picker?.snippetMap.get("t3")?.line).toBe("deploy finished");
+    });
+
+    it("searches again when a pane joins under the same query, but not on state churn", async () => {
+      seedTerminals([makeTerminal("t1"), makeTerminal("t2")]);
+      await openAndType("cold-start", "deploy");
+      expect(search).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        seedTerminals([makeTerminal("t2", { agentState: "working" }), makeTerminal("t1")]);
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(300);
+      });
+      expect(search).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        seedTerminals([makeTerminal("t1"), makeTerminal("t2"), makeTerminal("t0")]);
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(300);
+      });
+      expect(search.mock.calls.at(-1)).toEqual(["deploy", false, ["t0", "t1", "t2"]]);
+    });
+
+    it("skips the search when no pane is eligible", async () => {
+      seedTerminals([makeTerminal("t1")]);
+      useFleetArmingStore.getState().armId("t1");
+
+      const captured = await openAndType("add", "deploy");
+
+      expect(search).not.toHaveBeenCalled();
+      expect(captured.picker?.visibleTerminals).toEqual([]);
+    });
+
+    it("falls back to an unscoped search past the id cap", async () => {
+      seedTerminals(Array.from({ length: 257 }, (_, i) => makeTerminal(`t${i}`)));
+
+      await openAndType("cold-start", "deploy");
+
+      expect(search.mock.calls).toEqual([["deploy", false, undefined]]);
+    });
+  });
+
   describe("escape stack", () => {
     it("first Escape clears the search query when non-empty", async () => {
       seedTerminals([makeTerminal("t1")]);
@@ -761,7 +857,11 @@ describe("FleetPickerContent + useFleetPicker", () => {
     type Match = { terminalId: string; line: string; matchStart: number; matchEnd: number };
     type SearchResult = { matches: Match[]; complete: boolean };
     // An older host answers with the bare match array.
-    type SearchFn = (q: string, isRegex: boolean) => Promise<SearchResult | Match[]>;
+    type SearchFn = (
+      q: string,
+      isRegex: boolean,
+      terminalIds?: string[]
+    ) => Promise<SearchResult | Match[]>;
     let search: ReturnType<typeof vi.fn<SearchFn>>;
 
     const hit = (terminalId: string): Match => ({
@@ -858,7 +958,7 @@ describe("FleetPickerContent + useFleetPicker", () => {
 
       // Retry skips the debounce and searches the query on screen.
       expect(search).toHaveBeenCalledTimes(2);
-      expect(search).toHaveBeenLastCalledWith("alpha", false);
+      expect(search).toHaveBeenLastCalledWith("alpha", false, ["t1", "t2"]);
       expect(rowCount()).toBe(2);
       expect(screen.queryByTestId("fp-output-search-incomplete")).toBeNull();
       expect(liveStatus()).toBe("2 of 2 terminals match");
@@ -872,7 +972,7 @@ describe("FleetPickerContent + useFleetPicker", () => {
       await advance(300);
 
       // Waiting on the output search: no verdict yet.
-      expect(search).toHaveBeenCalledWith("omega", false);
+      expect(search).toHaveBeenCalledWith("omega", false, ["t1", "t2"]);
       expect(screen.queryByText("No terminals match")).toBeNull();
       expect(screen.queryByText("Searching recent output…")).toBeNull();
       await advance(150);
@@ -927,7 +1027,7 @@ describe("FleetPickerContent + useFleetPicker", () => {
       await type("zzzz");
       await advance(300);
       // The new query's search is out and unanswered; the outage still stands.
-      expect(search).toHaveBeenLastCalledWith("zzzz", false);
+      expect(search).toHaveBeenLastCalledWith("zzzz", false, ["t1", "t2"]);
       expect(incompleteShown()).toBe(1);
       expect(screen.queryByText("No terminals match")).toBeNull();
 

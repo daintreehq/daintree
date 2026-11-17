@@ -1075,8 +1075,8 @@ function buildElectronApi(): ElectronAPI {
 
       getAllTerminals: () => _unwrappingInvoke(CHANNELS.TERMINAL_GET_ALL),
 
-      searchSemanticBuffers: (query: string, isRegex: boolean) =>
-        _unwrappingInvoke(CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS, query, isRegex),
+      searchSemanticBuffers: (query: string, isRegex: boolean, terminalIds?: string[]) =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS, query, isRegex, terminalIds),
 
       reconnect: (terminalId: string) => _unwrappingInvoke(CHANNELS.TERMINAL_RECONNECT, terminalId),
 
