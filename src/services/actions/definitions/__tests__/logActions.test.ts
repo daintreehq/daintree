@@ -4,7 +4,7 @@ import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../..
 const errorStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const notificationHistoryMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const logsClientMock = vi.hoisted(() => ({ clear: vi.fn() }));
-const eventInspectorClientMock = vi.hoisted(() => ({ getEvents: vi.fn() }));
+const eventInspectorClientMock = vi.hoisted(() => ({ getEvents: vi.fn(), clear: vi.fn() }));
 const logsStoreMock = vi.hoisted(() => ({ clearLogs: vi.fn() }));
 
 vi.mock("@/store/errorStore", () => ({
@@ -35,6 +35,7 @@ vi.mock("@/services/KeybindingService", () => ({
 }));
 
 import { registerLogActions } from "../logActions";
+import { useEventStore, type EventRecord } from "@/store/eventStore";
 
 function setupActions(): ActionRegistry {
   const actions: ActionRegistry = new Map();
@@ -349,6 +350,73 @@ describe("logs.clear", () => {
     await expect(run(actions, "logs.clear")).rejects.toThrow("buffer locked");
 
     expect(logsStoreMock.clearLogs).not.toHaveBeenCalled();
+  });
+});
+
+function makeEvent(id: string): EventRecord {
+  return {
+    id,
+    timestamp: Number(id.replace(/\D/g, "")) || 1,
+    type: "agent:state-changed",
+    category: "agent",
+    payload: {},
+    source: "main",
+  };
+}
+
+describe("eventInspector.clear", () => {
+  beforeEach(() => {
+    useEventStore.getState().reset();
+  });
+
+  it("keeps the captured events and the selection when main's clear fails", async () => {
+    useEventStore.getState().setEvents([makeEvent("e1"), makeEvent("e2")]);
+    useEventStore.getState().setSelectedEvent("e2");
+    eventInspectorClientMock.clear.mockRejectedValue(new Error("bridge closed"));
+
+    await expect(run(setupActions(), "eventInspector.clear")).rejects.toThrow("bridge closed");
+
+    expect(useEventStore.getState().events.map((e) => e.id)).toEqual(["e1", "e2"]);
+    expect(useEventStore.getState().selectedEventId).toBe("e2");
+  });
+
+  it("drops what was captured before the clear but keeps events that arrived during it", async () => {
+    useEventStore.getState().setEvents([makeEvent("e1"), makeEvent("e2")]);
+    useEventStore.getState().setSelectedEvent("e1");
+    let resolveClear!: () => void;
+    eventInspectorClientMock.clear.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveClear = resolve;
+      })
+    );
+
+    const pending = run(setupActions(), "eventInspector.clear");
+    useEventStore.getState().addEvents([makeEvent("e3")]);
+    resolveClear();
+    await pending;
+
+    expect(eventInspectorClientMock.clear).toHaveBeenCalledTimes(1);
+    expect(useEventStore.getState().events.map((e) => e.id)).toEqual(["e3"]);
+    expect(useEventStore.getState().selectedEventId).toBeNull();
+  });
+
+  it("keeps a selection made on an event that arrived during the clear", async () => {
+    useEventStore.getState().setEvents([makeEvent("e1")]);
+    let resolveClear!: () => void;
+    eventInspectorClientMock.clear.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveClear = resolve;
+      })
+    );
+
+    const pending = run(setupActions(), "eventInspector.clear");
+    useEventStore.getState().addEvents([makeEvent("e2")]);
+    useEventStore.getState().setSelectedEvent("e2");
+    resolveClear();
+    await pending;
+
+    expect(useEventStore.getState().events.map((e) => e.id)).toEqual(["e2"]);
+    expect(useEventStore.getState().selectedEventId).toBe("e2");
   });
 });
 

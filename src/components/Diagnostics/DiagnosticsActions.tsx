@@ -6,6 +6,8 @@ import { useTelemetryPreviewStore } from "@/store/telemetryPreviewStore";
 import { actionService } from "@/services/ActionService";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { notify } from "@/lib/notify";
+import { logError } from "@/utils/logger";
 import { ClearLogsConfirmDialog } from "./ClearLogsConfirmDialog";
 
 // The button that fires these goes disabled once nothing is left to clear, and
@@ -155,10 +157,37 @@ export function TelemetryActions() {
 
 export function EventsActions() {
   const [showClearDialog, setShowClearDialog] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
 
   const handleConfirmClear = useCallback(async () => {
-    await actionService.dispatch("eventInspector.clear", undefined, { source: "user" });
-    setShowClearDialog(false);
+    setIsClearing(true);
+    try {
+      const result = await actionService.dispatch("eventInspector.clear", undefined, {
+        source: "user",
+      });
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
+    } catch (error) {
+      logError("Failed to clear events", error);
+      notify({
+        type: "error",
+        title: "Couldn't clear events",
+        message: "Your captured events are unchanged. Try again in a moment.",
+        // An unset priority resolves "low" under uiFeedback, which is inbox-only
+        // and strips the onClick recovery below.
+        priority: "high",
+        // Reopens the confirmation rather than re-dispatching, so the retry
+        // still passes through this gate.
+        actions: [
+          { label: "Try again", variant: "primary", onClick: () => setShowClearDialog(true) },
+        ],
+        context: { eventKind: "uiFeedback" },
+      });
+    } finally {
+      setIsClearing(false);
+      setShowClearDialog(false);
+    }
   }, []);
 
   return (
@@ -180,6 +209,7 @@ export function EventsActions() {
         description="All captured event records will be permanently deleted."
         confirmLabel="Clear events"
         variant="destructive"
+        isConfirmLoading={isClearing}
         onConfirm={handleConfirmClear}
       />
     </>

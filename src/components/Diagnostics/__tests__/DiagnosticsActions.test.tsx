@@ -214,6 +214,7 @@ describe("LogsActions — auto-scroll toggle", () => {
 describe("EventsActions — ConfirmDialog", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockDispatch.mockResolvedValue({ ok: true, result: undefined });
     vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
   });
 
@@ -253,6 +254,34 @@ describe("EventsActions — ConfirmDialog", () => {
     // After dispatch resolves, dialog should close
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.queryByText("Clear events?")).toBeNull();
+    expect(mockNotify).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a failed clear with a recovery action that re-confirms", async () => {
+    mockDispatch.mockResolvedValue({ ok: false, error: { message: "bridge closed" } });
+    const clearDispatches = () =>
+      mockDispatch.mock.calls.filter((call) => call[0] === "eventInspector.clear");
+    render(<EventsActions />);
+
+    fireEvent.click(screen.getByText("Clear events"));
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByText("Clear events"));
+
+    await waitFor(() => expect(mockNotify).toHaveBeenCalledTimes(1));
+    const payload = mockNotify.mock.calls[0]?.[0];
+    expect(payload?.type).toBe("error");
+    expect(payload?.title).toBe("Couldn't clear events");
+    // uiFeedback is passive: an unset priority would land inbox-only and drop
+    // the onClick recovery.
+    expect(payload?.priority).toBeDefined();
+    expect(payload?.priority).not.toBe("low");
+    await waitFor(() => expect(screen.queryByText("Clear events?")).toBeNull());
+
+    const retry = payload?.actions?.[0];
+    expect(retry?.label).toBe("Try again");
+    const dispatchesBefore = clearDispatches().length;
+    act(() => retry?.onClick());
+    expect(clearDispatches()).toHaveLength(dispatchesBefore);
+    expect(await screen.findByText("Clear events?")).toBeTruthy();
   });
 });
 

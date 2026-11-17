@@ -55,4 +55,24 @@ describe("eventStore", () => {
     expect(useEventStore.getState().events).toEqual([]);
     expect(useEventStore.getState().filters).toEqual({ agentId: "claude-1" });
   });
+
+  it("removeEvents drops only the named events and keeps a selection outside them", () => {
+    useEventStore.getState().setEvents([makeEvent("1"), makeEvent("2"), makeEvent("3")]);
+    useEventStore.getState().setSelectedEvent("3");
+
+    useEventStore.getState().removeEvents(new Set(["1", "2"]));
+
+    expect(useEventStore.getState().events.map((e) => e.id)).toEqual(["3"]);
+    expect(useEventStore.getState().selectedEventId).toBe("3");
+  });
+
+  it("removeEvents clears the selection when the selected event goes", () => {
+    useEventStore.getState().setEvents([makeEvent("1"), makeEvent("2")]);
+    useEventStore.getState().setSelectedEvent("1");
+
+    useEventStore.getState().removeEvents(new Set(["1"]));
+
+    expect(useEventStore.getState().events.map((e) => e.id)).toEqual(["2"]);
+    expect(useEventStore.getState().selectedEventId).toBeNull();
+  });
 });

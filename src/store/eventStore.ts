@@ -20,6 +20,8 @@ interface EventsState {
   addEvents: (events: EventRecord[]) => void;
   setEvents: (events: EventRecord[]) => void;
   clearEvents: () => void;
+  /** Drops the given events, and the selection only when it was one of them. */
+  removeEvents: (ids: ReadonlySet<string>) => void;
   togglePanel: () => void;
   setOpen: (open: boolean) => void;
   setFilters: (filters: Partial<EventFilterOptions>) => void;
@@ -103,6 +105,18 @@ const createEventsStore: StateCreator<EventsState> = (set, get) => ({
   },
 
   clearEvents: () => set({ events: [], selectedEventId: null }),
+
+  removeEvents: (ids) =>
+    set((state) => {
+      if (ids.size === 0) return state;
+      const events = state.events.filter((e) => !ids.has(e.id));
+      if (events.length === state.events.length) return state;
+      const selectedEventId =
+        state.selectedEventId !== null && ids.has(state.selectedEventId)
+          ? null
+          : state.selectedEventId;
+      return { events, selectedEventId };
+    }),
 
   togglePanel: () => set((state) => ({ isOpen: !state.isOpen })),
 
