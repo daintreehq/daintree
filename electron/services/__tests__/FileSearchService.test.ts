@@ -721,6 +721,88 @@ describe("FileSearchService", () => {
       expect(afterFence).toEqual(["fresh.ts"]);
     });
 
+    it("retains nothing for roots it was told about but never searched", async () => {
+      // The watcher reports every worktree it sees change, searched or not, and
+      // a long-lived main process sees many come and go.
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitClientMock.checkIsRepo.mockResolvedValue(true);
+      gitClientMock.revparse.mockResolvedValue(`${dir}\n`);
+      const pending = deferGitListing();
+
+      const service = await createService();
+      const baseline = service.getRetainedKeyCount();
+      const inFlight = service.search({ cwd: dir, query: "", limit: 5 });
+      await pending.reached;
+
+      for (let i = 0; i < 200; i++) {
+        service.invalidateUnder(path.join(os.tmpdir(), `daintree-retired-worktree-${i}`));
+        service.invalidate(path.join(os.tmpdir(), `daintree-retired-cwd-${i}`));
+      }
+      service.invalidateUnder(dir);
+      pending.release("stale.ts\0");
+      await inFlight;
+      service.sweep();
+
+      expect(service.getRetainedKeyCount()).toBe(baseline);
+    });
+
+    it("keeps a newer index when an invalidated load settles after it", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitClientMock.checkIsRepo.mockResolvedValue(true);
+      gitClientMock.revparse.mockResolvedValue(`${dir}\n`);
+      const first = deferGitListing();
+
+      const service = await createService();
+      const stale = service.search({ cwd: dir, query: "", limit: 5 });
+      await first.reached;
+      service.invalidateUnder(dir);
+
+      gitClientMock.raw.mockResolvedValue("fresh.ts\0");
+      await expect(service.search({ cwd: dir, query: "", limit: 5 })).resolves.toEqual([
+        "fresh.ts",
+      ]);
+
+      first.release("stale.ts\0");
+      await stale;
+
+      await expect(service.search({ cwd: dir, query: "", limit: 5 })).resolves.toEqual([
+        "fresh.ts",
+      ]);
+      expect(gitClientMock.raw).toHaveBeenCalledTimes(2);
+      expect(service.getRetainedKeyCount()).toBe(1);
+    });
+
+    it("keeps a newer load's index when an invalidated load settles before it", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitClientMock.checkIsRepo.mockResolvedValue(true);
+      gitClientMock.revparse.mockResolvedValue(`${dir}\n`);
+      const first = deferGitListing();
+
+      const service = await createService();
+      const stale = service.search({ cwd: dir, query: "", limit: 5 });
+      await first.reached;
+      service.invalidateUnder(dir);
+
+      const second = deferGitListing();
+      const fresh = service.search({ cwd: dir, query: "", limit: 5 });
+      await second.reached;
+      first.release("stale.ts\0");
+      await stale;
+      // Checked here, not only at the end: the newer load would paper over a
+      // stale commit by overwriting it when it lands.
+      expect(service.getCacheStats().size).toBe(0);
+      second.release("fresh.ts\0");
+      await expect(fresh).resolves.toEqual(["fresh.ts"]);
+
+      await expect(service.search({ cwd: dir, query: "", limit: 5 })).resolves.toEqual([
+        "fresh.ts",
+      ]);
+      expect(gitClientMock.raw).toHaveBeenCalledTimes(2);
+    });
+
     it("fences a load still settling when dispose runs", async () => {
       // Disposal that only forgot the in-flight entry would let the load's
       // completion reseed the cache — and rearm the sweep — after teardown.
