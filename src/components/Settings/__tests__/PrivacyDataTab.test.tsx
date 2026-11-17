@@ -783,6 +783,8 @@ describe("PrivacyDataTab", () => {
       fireEvent.click(logRetentionOption("7 days"));
 
       await act(async () => writes.pending[1].reject(new Error("IPC fail")));
+      // Only 30 days is confirmed while 90 days is still on its way.
+      expect(logRetentionOption("30 days").getAttribute("aria-checked")).toBe("true");
       await act(async () => writes.pending[0].resolve());
       expect(logRetentionOption("90 days").getAttribute("aria-checked")).toBe("true");
 
@@ -812,6 +814,57 @@ describe("PrivacyDataTab", () => {
 
       expect(sessionOption("Keep forever").getAttribute("aria-checked")).toBe("true");
       expect(screen.queryByText("Session history retention couldn't be saved")).toBeNull();
+    });
+
+    it("shows the older session retention that landed after the newer write failed, and retries the newer one", async () => {
+      const writes = deferredWrites();
+      Reflect.set(window, "electron", {
+        privacy: createPrivacyApi(),
+        agentSessionHistory: createAgentSessionHistoryApi({ setRetentionDays: writes.send }),
+      });
+      render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
+        wrapper: TooltipProvider,
+      });
+      await waitFor(() =>
+        expect(sessionOption("30 days").getAttribute("aria-checked")).toBe("true")
+      );
+
+      fireEvent.click(sessionOption("90 days"));
+      fireEvent.click(sessionOption("Keep forever"));
+
+      await act(async () => writes.pending[1].reject(new Error("IPC fail")));
+      expect(sessionOption("30 days").getAttribute("aria-checked")).toBe("true");
+      await act(async () => writes.pending[0].resolve());
+      expect(sessionOption("90 days").getAttribute("aria-checked")).toBe("true");
+
+      // Keep forever is still longer than what's saved, so the retry needs no confirm.
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(writes.send).toHaveBeenCalledTimes(3);
+      expect(writes.send).toHaveBeenLastCalledWith(0);
+    });
+
+    it("names the window being replaced while a confirmed shortening saves", async () => {
+      const writes = deferredWrites();
+      Reflect.set(window, "electron", {
+        privacy: createPrivacyApi(),
+        agentSessionHistory: createAgentSessionHistoryApi({ setRetentionDays: writes.send }),
+      });
+      render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
+        wrapper: TooltipProvider,
+      });
+      await waitFor(() =>
+        expect(sessionOption("30 days").getAttribute("aria-checked")).toBe("true")
+      );
+
+      fireEvent.click(sessionOption("7 days"));
+      const dialog = await screen.findByRole("alertdialog");
+      fireEvent.click(within(dialog).getByRole("button", { name: "Shorten and delete" }));
+      await waitFor(() => expect(writes.send).toHaveBeenCalledWith(7));
+
+      expect(within(dialog).getByText(/7 days instead of 30 days/)).toBeTruthy();
+      await act(async () => writes.pending[0].resolve());
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     });
   });
 });
