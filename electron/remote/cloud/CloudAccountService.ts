@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import {
+  cloudProviderNamespace,
   isCloudProviderId,
   type CloudAccountAddRequest,
   type CloudAccountCheckResult,
@@ -48,12 +49,26 @@ function normalizeName(value: unknown, fallback: string): string {
   return name;
 }
 
+/** The providers registered right now; a CloudProviderRegistry, or a plain map in tests. */
+export interface CloudProviderLookup {
+  get(providerId: CloudProviderId): CloudProvider | undefined;
+  values(): Iterable<CloudProvider>;
+}
+
+/** Why a stored account or host can't be used while its provider isn't registered. */
+export function cloudProviderUnavailableReason(providerId: CloudProviderId): string {
+  const namespace = cloudProviderNamespace(providerId);
+  return namespace?.kind === "plugin"
+    ? `Its cloud provider comes from the ${namespace.pluginId} plugin, which isn't running.`
+    : `This build of Daintree doesn't include the ${providerId} cloud provider.`;
+}
+
 export interface CloudAccountServiceDeps {
   store: CloudHostStore;
   vault: CloudCredentialVault;
-  providers: ReadonlyMap<CloudProviderId, CloudProvider>;
-  /** The API base URL this process may use for each provider. */
-  apiUrlFor(providerId: CloudProviderId): string;
+  providers: CloudProviderLookup;
+  /** The API base URL this process may use for each provider; null when it isn't registered. */
+  apiUrlFor(providerId: CloudProviderId): string | null;
   platform?: NodeJS.Platform;
   now?: () => number;
   /** An account was removed from this device: drop what was kept for it (its ssh key). */
@@ -81,13 +96,18 @@ export class CloudAccountService {
     );
   }
 
+  /** Null while the provider is registered; otherwise why its accounts and hosts can't be used. */
+  providerUnavailable(providerId: CloudProviderId): string | null {
+    return this.deps.providers.get(providerId) ? null : cloudProviderUnavailableReason(providerId);
+  }
+
   provider(providerId: CloudProviderId): CloudProvider {
     const provider = this.deps.providers.get(providerId);
     if (!provider) {
       throw new AppError({
         code: "UNSUPPORTED",
         message: `Unknown cloud provider ${providerId}`,
-        userMessage: "This build of Daintree doesn't know that cloud provider.",
+        userMessage: cloudProviderUnavailableReason(providerId),
       });
     }
     return provider;
@@ -108,6 +128,7 @@ export class CloudAccountService {
     return this.deps.store.accounts().map((account) => ({
       id: account.id,
       providerId: account.providerId,
+      providerUnavailable: this.providerUnavailable(account.providerId),
       displayName: account.displayName,
       identity: account.identity,
       billingScope: account.scope,
@@ -166,7 +187,7 @@ export class CloudAccountService {
     const key = normalizeApiKey(apiKey);
     this.requireVault();
     try {
-      return await provider.checkKey(key, this.deps.apiUrlFor(providerId));
+      return await provider.checkKey(key, this.apiUrl(providerId));
     } catch (error) {
       throw this.asAppError(provider, error);
     }
@@ -184,7 +205,7 @@ export class CloudAccountService {
     if (this.deps.store.accounts().length >= MAX_ACCOUNTS) {
       throw invalid(`At most ${MAX_ACCOUNTS} cloud accounts can be connected.`);
     }
-    const apiUrl = this.deps.apiUrlFor(request.providerId);
+    const apiUrl = this.apiUrl(request.providerId);
     let checked: CloudAccountCheckResult;
     try {
       checked = await provider.checkKey(key, apiUrl);
@@ -339,9 +360,9 @@ export class CloudAccountService {
 
   async catalog(accountId: unknown, options: { refresh?: boolean } = {}): Promise<CloudCatalog> {
     const account = this.requireAccount(accountId);
+    const provider = this.provider(account.providerId);
     const cached = this.catalogs.get(account.id);
     if (cached && !options.refresh && this.now() - cached.fetchedAt < CATALOG_TTL_MS) return cached;
-    const provider = this.provider(account.providerId);
     try {
       const catalog: CloudCatalog = {
         accountId: account.id,
@@ -443,8 +464,21 @@ export class CloudAccountService {
     });
   }
 
+  /** The registered provider's API origin; refused, like the provider itself, when it isn't registered. */
+  private apiUrl(providerId: CloudProviderId): string {
+    const apiUrl = this.deps.apiUrlFor(providerId);
+    if (apiUrl === null) {
+      throw new AppError({
+        code: "UNSUPPORTED",
+        message: `No API origin for cloud provider ${providerId}`,
+        userMessage: cloudProviderUnavailableReason(providerId),
+      });
+    }
+    return apiUrl;
+  }
+
   private requireCurrentOrigin(account: StoredCloudAccount): void {
-    const current = this.deps.apiUrlFor(account.providerId);
+    const current = this.apiUrl(account.providerId);
     if (account.apiUrl === current) return;
     throw new AppError({
       code: "PERMISSION",

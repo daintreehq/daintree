@@ -8,12 +8,50 @@ import type { HostId } from "./remoteHosts.js";
  * pays for it. Nothing here ever carries a credential.
  */
 
-export type CloudProviderId = "boat";
+/**
+ * A cloud provider's id. A provider built into Daintree has a bare id
+ * ("boat"); one an installed plugin contributes is named inside that plugin's
+ * namespace, `{publisher}.{name}.{provider}`. The two shapes can't overlap, so
+ * no plugin can take a built-in's id or another plugin's. Any id of either
+ * shape is an id, registered right now or not: an account or host stored
+ * under a provider that isn't registered is kept, and reported unavailable.
+ */
+export type CloudProviderId = BuiltInCloudProviderId | (string & {});
 
-export const CLOUD_PROVIDER_IDS: readonly CloudProviderId[] = ["boat"];
+/** The providers compiled into this build; the open union keeps their names autocompleting. */
+export type BuiltInCloudProviderId = "boat";
+
+/** Where a provider's id lives: Daintree's own bare names, or one plugin's namespace. */
+export type CloudProviderNamespace = { kind: "built-in" } | { kind: "plugin"; pluginId: string };
+
+const ID_SEGMENT = "[a-z0-9]+(?:-[a-z0-9]+)*";
+const BUILT_IN_PROVIDER_ID = new RegExp(`^${ID_SEGMENT}$`);
+const PLUGIN_PROVIDER_ID = new RegExp(`^(${ID_SEGMENT}\\.${ID_SEGMENT})\\.(${ID_SEGMENT})$`);
+const MAX_PROVIDER_NAME_LENGTH = 32;
+const MAX_PLUGIN_ID_LENGTH = 64;
+
+/** The namespace an id belongs to, or null when it isn't a provider id of either shape. */
+export function cloudProviderNamespace(value: unknown): CloudProviderNamespace | null {
+  if (typeof value !== "string") return null;
+  if (value.length <= MAX_PROVIDER_NAME_LENGTH && BUILT_IN_PROVIDER_ID.test(value)) {
+    return { kind: "built-in" };
+  }
+  if (value.length > MAX_PLUGIN_ID_LENGTH + 1 + MAX_PROVIDER_NAME_LENGTH) return null;
+  const match = PLUGIN_PROVIDER_ID.exec(value);
+  if (!match || match[1]!.length > MAX_PLUGIN_ID_LENGTH) return null;
+  if (match[2]!.length > MAX_PROVIDER_NAME_LENGTH) return null;
+  return { kind: "plugin", pluginId: match[1]! };
+}
 
 export function isCloudProviderId(value: unknown): value is CloudProviderId {
-  return typeof value === "string" && (CLOUD_PROVIDER_IDS as readonly string[]).includes(value);
+  return cloudProviderNamespace(value) !== null;
+}
+
+/** The id a plugin's provider is registered under, or null when either part isn't valid. */
+export function pluginCloudProviderId(pluginId: string, providerName: string): CloudProviderId | null {
+  const id = `${pluginId}.${providerName}`;
+  const namespace = cloudProviderNamespace(id);
+  return namespace?.kind === "plugin" && namespace.pluginId === pluginId ? id : null;
 }
 
 export { isValidCloudBindingId } from "./remoteHosts.js";
@@ -31,6 +69,59 @@ export interface CloudProviderPersistence {
   retentionDays: number | null;
   /** Whether the time a failed save is retried, with the machine still up, is billed. */
   saveRetryBilled: boolean;
+  /** Whether a stopped machine still bills for compute, not only for its disk. */
+  stoppedComputeBilled: boolean;
+}
+
+/**
+ * Whether and how a machine stops by itself, without Daintree asking.
+ * - `none`: it runs until someone stops it.
+ * - `fixed-at-create`: a runtime limit chosen at create, which can't be moved while it runs;
+ *   some providers let it change while the machine is stopped.
+ * - `renewable`: a deadline that can be moved forward while the machine is in use.
+ * - `idle-sleep`: the provider sleeps it once it has been idle for a while.
+ */
+export type CloudLifetimeModel =
+  | { kind: "none" }
+  | { kind: "fixed-at-create"; canChangeWhileStopped: boolean }
+  | { kind: "renewable" }
+  | {
+      kind: "idle-sleep";
+      /** How long the machine is idle before the provider sleeps it; null when the provider doesn't say. */
+      idleSeconds: number | null;
+    };
+
+/**
+ * Where the trust in a machine's SSH server key comes from.
+ * - `pinned-from-api`: the provider's authenticated API returns it, so it is pinned before any dial.
+ * - `confirm-on-first-connect`: nothing vouches for it; the person confirms its fingerprint once.
+ * - `provider-tunnel`: the provider's own tunnel authenticates the machine, whose key may change
+ *   when it is rebuilt or moved.
+ */
+export type CloudSshTrust = "pinned-from-api" | "confirm-on-first-connect" | "provider-tunnel";
+
+/**
+ * How the desktop reaches the machine's sshd: straight to an address, or
+ * through a command the provider supplies (an ssh `ProxyCommand`).
+ */
+export type CloudSshTransport = "direct" | "provider-command";
+
+/** Whether a create takes a value: never, when the person chooses to, or always. */
+export type CloudProvisioningInput = "none" | "optional" | "required";
+
+/** What a create names beyond the machine's name and type. */
+export interface CloudProvisioning {
+  /** The region or zone it runs in. */
+  location: CloudProvisioningInput;
+  /** The disk image it boots. */
+  image: CloudProvisioningInput;
+  /** The network, subnet or firewall it joins. */
+  network: CloudProvisioningInput;
+  /**
+   * When Daintree's SSH public key reaches the machine: with the create
+   * itself, or through the provider's API once the machine exists.
+   */
+  sshKey: "at-create" | "after-create";
 }
 
 /** What a provider can do, as semantics rather than a bare "supports start". */
@@ -38,14 +129,29 @@ export interface CloudProviderCapabilities {
   persistence: CloudProviderPersistence;
   /** About how long a start or create takes to running, for progress copy; null when unknown. */
   typicalStartSeconds: number | null;
-  /** The provider can stop the machine by itself after a lifetime (an orphan guard). */
-  lifetimeGuard: boolean;
-  /** How the desktop reaches the machine's sshd. */
-  route: "direct-ssh";
-  /** The server key arrives through the authenticated API, so it can be pinned. */
-  pinnedHostKey: boolean;
+  lifetime: CloudLifetimeModel;
+  sshTrust: CloudSshTrust;
+  transport: CloudSshTransport;
+  provisioning: CloudProvisioning;
   /** Machines can be deleted from Daintree. */
   deletion: boolean;
+}
+
+/**
+ * One value an account's credentials are made of, as the provider declares
+ * it: an API key, an access key id and its secret, a service-account key file.
+ */
+export interface CloudCredentialField {
+  /** The key the value is kept and handed to the provider under: "apiKey", "secretAccessKey". */
+  id: string;
+  label: string;
+  /** Masked as it's typed, kept only in the OS keychain, and never shown again. */
+  secret: boolean;
+  /** One line of text, text over several lines, or the contents of a file chosen from disk. */
+  input: "single-line" | "multi-line" | "key-file";
+  required: boolean;
+  /** A short hint shown with the field; null for none. */
+  help: string | null;
 }
 
 export interface CloudProviderInfo {
@@ -56,6 +162,8 @@ export interface CloudProviderInfo {
   apiKeyUrl: string;
   dashboardUrl: string;
   docsUrl: string;
+  /** What connecting an account asks for, in order. */
+  credentialFields: CloudCredentialField[];
   capabilities: CloudProviderCapabilities;
   /** Null when this platform's Shell can use the provider; otherwise why not. */
   unsupportedReason: string | null;
@@ -78,6 +186,8 @@ export type CloudAccountValidation =
 export interface CloudAccountSummary {
   id: string;
   providerId: CloudProviderId;
+  /** Null while its provider is registered; otherwise why it can't be used now. The account is kept either way. */
+  providerUnavailable: string | null;
   displayName: string;
   /** Who the key signs in as, as the provider reports it. */
   identity: string | null;
@@ -219,6 +329,8 @@ export interface CloudHostCreatedFor {
 export interface CloudHostStatus {
   hostId: HostId;
   providerId: CloudProviderId;
+  /** Null while its provider is registered; otherwise why the machine can't be reached now. The host is kept either way. */
+  providerUnavailable: string | null;
   accountId: string;
   accountName: string;
   /** Null before the machine exists (a saved draft or a create still under way). */

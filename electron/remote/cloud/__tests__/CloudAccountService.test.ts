@@ -27,12 +27,29 @@ function fakeProvider(overrides: Partial<CloudProvider> = {}): CloudProvider {
       apiKeyUrl: "",
       dashboardUrl: "",
       docsUrl: "",
+      credentialFields: [
+        {
+          id: "apiKey",
+          label: "API key",
+          secret: true,
+          input: "single-line",
+          required: true,
+          help: null,
+        },
+      ],
       capabilities: {
-        persistence: { kept: "Files", lost: "memory", retentionDays: null, saveRetryBilled: true },
+        persistence: {
+          kept: "Files",
+          lost: "memory",
+          retentionDays: null,
+          saveRetryBilled: true,
+          stoppedComputeBilled: false,
+        },
         typicalStartSeconds: null,
-        lifetimeGuard: true,
-        route: "direct-ssh",
-        pinnedHostKey: true,
+        lifetime: { kind: "renewable" },
+        sshTrust: "pinned-from-api",
+        transport: "direct",
+        provisioning: { location: "none", image: "none", network: "none", sshKey: "after-create" },
         deletion: true,
       },
       unsupportedReason: platform === "win32" ? "not on windows" : null,
@@ -267,7 +284,8 @@ describe("CloudHostStore", () => {
       memoryBackend({
         version: 1,
         accounts: [{ id: "nope" }, null],
-        bindings: [{ id: "cb_abcdefgh12", accountId: "ca_abcdefgh", providerId: "agent37" }],
+        // "agent37" would read (a provider this build may not have is still kept); this id has neither shape.
+        bindings: [{ id: "cb_abcdefgh12", accountId: "ca_abcdefgh", providerId: "Agent 37" }],
       })
     );
     expect(store.accounts()).toEqual([]);

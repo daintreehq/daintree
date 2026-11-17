@@ -179,6 +179,8 @@ export class CloudHostLifecycle {
   /** When each machine's lifetime was last renewed or tried, this run. */
   private readonly renewals = new Map<string, { at: number; ok: boolean }>();
   private readonly renewInFlight = new Map<string, Promise<void>>();
+  /** Creates sent before a restart whose provider wasn't registered to look for them yet. */
+  private readonly awaitingProvider = new Set<string>();
   private renewingAll = false;
   private stopWatchingHosts: (() => void) | null = null;
   private disposed = false;
@@ -191,6 +193,12 @@ export class CloudHostLifecycle {
 
   private sleep(ms: number, signal?: AbortSignal): Promise<void> {
     return (this.deps.sleep ?? defaultSleep)(ms, signal);
+  }
+
+  /** A provider registered or left: a create left unreconciled for want of its provider is looked for now. */
+  providersChanged(): void {
+    if (this.disposed || this.awaitingProvider.size === 0) return;
+    void this.reconcileUnfinishedCreates(new Set(this.awaitingProvider));
   }
 
   /** Begins background observation and reconciles what a previous run left unfinished. */
@@ -229,6 +237,7 @@ export class CloudHostLifecycle {
         return {
           hostId: binding.hostId,
           providerId: binding.providerId,
+          providerUnavailable: this.deps.accounts.providerUnavailable(binding.providerId),
           accountId: binding.accountId,
           accountName: account?.displayName ?? "Disconnected account",
           resourceId: binding.resourceId,
@@ -476,9 +485,16 @@ export class CloudHostLifecycle {
    * by its label, which is a read. If it isn't found, the host shows that
    * setup didn't finish and offers Retry; nothing is created on its own.
    */
-  private async reconcileUnfinishedCreates(): Promise<void> {
+  private async reconcileUnfinishedCreates(only?: ReadonlySet<string>): Promise<void> {
     for (const binding of this.deps.store.bindings()) {
+      if (only && !only.has(binding.id)) continue;
       if (binding.resourceId || !binding.creation?.sentAt || !binding.hostId) continue;
+      if (this.operations.has(binding.id)) continue;
+      if (this.deps.accounts.providerUnavailable(binding.providerId)) {
+        this.awaitingProvider.add(binding.id);
+        continue;
+      }
+      this.awaitingProvider.delete(binding.id);
       try {
         const { provider, credentials } = await this.context(binding);
         const resource = await this.findCreated(binding.id, provider, credentials);
@@ -1144,6 +1160,7 @@ export class CloudHostLifecycle {
     const binding = this.deps.store.binding(bindingId);
     if (!binding?.resourceId || !binding.hostId || binding.lifetimeSeconds === null) return false;
     if (binding.intent === "stop" || this.operations.has(binding.id)) return false;
+    if (this.deps.accounts.providerUnavailable(binding.providerId)) return false;
     if (machineOf(binding) !== "running") return false;
     const activity = this.deps.activity?.(binding.hostId);
     if (!activity?.connected || !(activity.busy || activity.shown)) return false;
@@ -1159,6 +1176,8 @@ export class CloudHostLifecycle {
   private async renew(bindingId: string): Promise<void> {
     const binding = this.deps.store.binding(bindingId)!;
     const lifetimeSeconds = binding.lifetimeSeconds;
+    // renewalDue just found it registered; one that left since has nothing to renew and failed nothing.
+    if (this.deps.accounts.providerUnavailable(binding.providerId)) return;
     const provider = this.deps.accounts.provider(binding.providerId);
     try {
       const { credentials } = await this.context(binding);
@@ -1201,6 +1220,8 @@ export class CloudHostLifecycle {
     const now = this.now();
     for (const binding of this.deps.store.bindings()) {
       if (!binding.resourceId || !binding.hostId || this.operations.has(binding.id)) continue;
+      // Its provider isn't registered: the last observation stays, with its time.
+      if (this.deps.accounts.providerUnavailable(binding.providerId)) continue;
       const due = this.nextPollAt.get(binding.id) ?? 0;
       if (now < due) continue;
       const machine = machineOf(binding);

@@ -269,8 +269,9 @@ function readBinding(raw: unknown): StoredCloudBinding | null {
 
 /**
  * Reads tolerate anything a hand edit or another build left; a record that
- * doesn't read is skipped here but kept on disk until the next write, so a
- * downgrade never deletes what it can't understand by reading it.
+ * doesn't read is skipped here but kept on disk, through every write, so a
+ * downgrade never deletes what it can't understand by reading it. A record
+ * whose provider isn't registered now still reads: its provider id is valid.
  */
 export class CloudHostStore {
   private readonly listeners = new Set<() => void>();
