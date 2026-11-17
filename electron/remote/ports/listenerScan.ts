@@ -151,18 +151,26 @@ const nodeProcFs: ProcFs = {
   readlink: (path) => fs.readlink(path),
 };
 
-async function readProcNetTables(procFs: ProcFs): Promise<ProcNetListener[]> {
-  const tables = await Promise.all([
+/**
+ * Both TCP tables, reachable listeners only. With `strict`, a table that
+ * exists but can't be read makes the answer null rather than half a list; a
+ * missing table is an address family the kernel doesn't have.
+ */
+async function readProcNetTables(
+  procFs: ProcFs,
+  strict = false
+): Promise<ProcNetListener[] | null> {
+  let failed = false;
+  const read = (file: string, family: 4 | 6) =>
     procFs
-      .readFile("/proc/net/tcp")
-      .then((text) => parseProcNetTcp(text, 4))
-      .catch(() => []),
-    procFs
-      .readFile("/proc/net/tcp6")
-      .then((text) => parseProcNetTcp(text, 6))
-      .catch(() => []),
-  ]);
-  return tables.flat();
+      .readFile(file)
+      .then((text) => parseProcNetTcp(text, family))
+      .catch((error: unknown) => {
+        if ((error as { code?: unknown }).code !== "ENOENT") failed = true;
+        return [];
+      });
+  const tables = await Promise.all([read("/proc/net/tcp", 4), read("/proc/net/tcp6", 6)]);
+  return strict && failed ? null : tables.flat();
 }
 
 /** The process holding each socket inode, from the user's own readable `/proc/<pid>/fd` links. */
@@ -203,7 +211,7 @@ export async function scanLinuxListeners(
   uid: number,
   procFs: ProcFs = nodeProcFs
 ): Promise<RawListener[]> {
-  const listeners = (await readProcNetTables(procFs)).filter((entry) => entry.uid === uid);
+  const listeners = ((await readProcNetTables(procFs)) ?? []).filter((entry) => entry.uid === uid);
   const owners = await socketOwners(new Set(listeners.map((listener) => listener.inode)), procFs);
   return listeners.map((listener) => {
     const owner = owners.get(listener.inode);
@@ -351,7 +359,9 @@ export async function findPortListeners(
       const uid = options.uid ?? process.getuid?.() ?? -1;
       // Filtered to the one port before any fd is read: a miss costs two
       // table reads, never a walk of every process.
-      const sockets = (await readProcNetTables(procFs)).filter((entry) => entry.port === port);
+      const tables = await readProcNetTables(procFs, true);
+      if (tables === null) return null;
+      const sockets = tables.filter((entry) => entry.port === port);
       if (sockets.length === 0) return [];
       if (sockets.some((socket) => socket.uid !== uid)) return null;
       const owners = await socketOwners(new Set(sockets.map((socket) => socket.inode)), procFs);

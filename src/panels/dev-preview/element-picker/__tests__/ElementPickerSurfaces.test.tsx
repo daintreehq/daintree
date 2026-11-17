@@ -665,6 +665,40 @@ describe("preview binding", () => {
       await screen.findAllByText(/served from another worktree/);
     });
 
+    it("re-proves a selection across a reload in the workspace it was proven in", async () => {
+      await mountSelected();
+      await act(async () => host.documentReady(1));
+      await waitFor(() => expect(host.picker.reselect).toHaveBeenCalled(), { timeout: 4000 });
+      await act(async () => host.select(1, undefined, "reselect"));
+      await waitFor(() => {
+        const state = session().getSnapshot().selection;
+        expect(state.status === "ready" && state.stale === null).toBe(true);
+      });
+      expect(host.calls("openWorkspace")).toHaveLength(1);
+      expect(host.calls("resolve").at(-1)).toMatchObject({ workspaceId: "ws-1", documentEpoch: 1 });
+    });
+
+    it("checks again when a document arrives while main was still looking", async () => {
+      const answers: Array<(result: ElementPickerWorkspaceOpenResult) => void> = [];
+      host.openWith = () => new Promise((resolve) => answers.push(resolve));
+      await mountBound();
+      await waitFor(() => expect(answers).toHaveLength(1));
+      // The panel's own server took the port back and the page reloaded.
+      await act(async () => host.documentReady(1));
+      await act(async () => answers[0]!(REFUSED));
+      await waitFor(() => expect(answers).toHaveLength(2));
+      await act(async () =>
+        answers[1]!({
+          status: "ready",
+          workspaceId: "ws-2",
+          appPath: ".",
+          appPaths: ["."],
+          scanComplete: true,
+        })
+      );
+      await waitFor(() => expect(session().getSnapshot().workspace.status).toBe("ready"));
+    });
+
     it("won't trace a page another worktree serves: the click still selects, nothing resolves", async () => {
       host.openWith = () => REFUSED;
       await mountBound();

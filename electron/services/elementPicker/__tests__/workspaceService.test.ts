@@ -411,7 +411,12 @@ describe("ElementPickerWorkspaceService.open for a browser page", () => {
     expect(findListeners).not.toHaveBeenCalled();
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("closes a workspace at resolve once another worktree serves its page", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
     let from = "single";
     const findListeners = vi.fn(async (_port: number) => [
       { pid: 4242, cwd: path.join(root, from) },
@@ -428,14 +433,43 @@ describe("ElementPickerWorkspaceService.open for a browser page", () => {
     await svc.resolve(owner, request, serving);
     expect(host.resolve).toHaveBeenCalledTimes(1);
 
-    // The worktree's server stopped and another took the port.
+    // The worktree's server stopped and another took the port, past the
+    // moment one scan answers for.
     from = "multi/apps/site";
+    vi.setSystemTime(Date.now() + 5_000);
     await expect(svc.resolve(owner, request, serving)).rejects.toMatchObject({
       code: "NOT_FOUND",
       message: ELEMENT_PICKER_WORKSPACE_CLOSED,
     });
     expect(host.resolve).toHaveBeenCalledTimes(1);
     expect(host.releaseWorkspace).toHaveBeenCalledWith(opened.workspaceId);
+  });
+
+  it("shares one scan of a port between the checks that ask at once, and for a moment after", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const findListeners = vi.fn(async (_port: number) => {
+      await gate;
+      return [{ pid: 4242, cwd: path.join(root, "single") }];
+    });
+    const { svc } = service({ findListeners });
+    const owner = { projectId: PROJECT, endpoint: new FakeEndpoint(1) };
+    const opening = [1, 2, 3].map(() =>
+      svc.open(owner, openRequest({ worktreeId: "wt-single" }), { pageUrl: PAGE })
+    );
+    await vi.waitFor(() => expect(findListeners).toHaveBeenCalledTimes(1));
+    release();
+    for (const opened of await Promise.all(opening)) expect(opened.status).toBe("ready");
+    expect(findListeners).toHaveBeenCalledTimes(1);
+
+    await svc.open(owner, openRequest({ worktreeId: "wt-single" }), { pageUrl: PAGE });
+    expect(findListeners).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(Date.now() + 5_000);
+    await svc.open(owner, openRequest({ worktreeId: "wt-single" }), { pageUrl: PAGE });
+    expect(findListeners).toHaveBeenCalledTimes(2);
   });
 
   it("checks nothing at resolve for a page main can't read", async () => {

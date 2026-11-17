@@ -818,6 +818,8 @@ export class InspectorController implements DevPreviewToolSession {
     const { projectId, worktreeId, worktreePath } = this.context;
     if (!projectId || !worktreeId || !worktreePath) return;
     const request = ++this.workspaceRequest;
+    // Main reads who serves the page as of now: a refusal is about this document.
+    const openedFor = this.state.page?.epoch ?? null;
     // A preview moved between worktrees keeps running its server from the old
     // one: the page would show one checkout while the agent works in another.
     const cwd = panelCwd(usePanelStore.getState().panelsById[this.panelId]);
@@ -899,10 +901,19 @@ export class InspectorController implements DevPreviewToolSession {
         this.patchState({
           workspace:
             result.reason === "other-worktree"
-              ? this.servedElsewhere(result.serverWorktreeId)
+              ? this.servedElsewhere(result.serverWorktreeId, openedFor)
               : { status: "failed", reason: result.reason, message: appPath ?? "" },
         });
         this.releaseHeld();
+        // A document that arrived while main was looking skipped its own check.
+        if (
+          result.reason === "other-worktree" &&
+          this.state.page !== null &&
+          this.state.page.epoch !== openedFor
+        ) {
+          this.servedElsewhereEpoch = this.state.page.epoch;
+          void this.openWorkspace();
+        }
         return;
     }
   }
@@ -964,9 +975,9 @@ export class InspectorController implements DevPreviewToolSession {
     });
   }
 
-  /** Refused because another worktree serves the page, as of the document showing now. */
-  private servedElsewhere(serverWorktreeId: string): WorkspaceState {
-    this.servedElsewhereEpoch = this.state.page?.epoch ?? null;
+  /** Refused because another worktree serves the page, as of the document the open was for. */
+  private servedElsewhere(serverWorktreeId: string, openedFor: number | null): WorkspaceState {
+    this.servedElsewhereEpoch = openedFor;
     return { status: "failed", reason: "served-elsewhere", message: serverWorktreeId };
   }
 
@@ -987,6 +998,14 @@ export class InspectorController implements DevPreviewToolSession {
     this.selectionRequest++;
     this.endReprove();
     this.patchState({ workspace: { status: "idle" }, selection: { status: "none" } });
+    void this.openWorkspace();
+  }
+
+  private reopenClosedWorkspace(workspaceId: string): void {
+    if (this.disposed || this.currentWorkspaceId() !== workspaceId) return;
+    if (this.recoveringWorkspace === workspaceId) return;
+    this.recoveringWorkspace = workspaceId;
+    this.closeWorkspace();
     void this.openWorkspace();
   }
 
@@ -1587,7 +1606,14 @@ export class InspectorController implements DevPreviewToolSession {
         budget: RESOLVE_BUDGET,
       });
     } catch (error) {
-      if (!this.isCurrentResolve(request, reproving)) return;
+      if (!this.isCurrentResolve(request, reproving)) {
+        // The answer is stale, the closure isn't: main can close a workspace
+        // at any resolve (another worktree took the page's port), and a newer
+        // pick that resolved nothing would never hear of it. Reopened without
+        // touching what the newer pick holds.
+        if (isWorkspaceClosed(error)) this.reopenClosedWorkspace(workspace.workspaceId);
+        return;
+      }
       if (isWorkspaceClosed(error)) {
         this.endReprove();
         this.recoverClosedWorkspace(workspace.workspaceId);

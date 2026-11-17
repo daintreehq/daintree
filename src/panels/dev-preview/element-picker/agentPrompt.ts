@@ -548,7 +548,7 @@ export function buildAgentTaskPrompt(input: AgentPromptInput): string {
   if (input.worktreePath) lines.push(`- Worktree: ${input.worktreePath}`);
   if (input.servedFrom) {
     lines.push(
-      `- Served from: ${input.servedFrom} — the process listening on the page's port runs from this other worktree, so the page's source is there, not in the worktree above`
+      `- Served from: ${input.servedFrom} — the process listening on the page's port was running from this other worktree when the request was made, so the page's source is most likely there rather than in the worktree above`
     );
   }
   if (project) {

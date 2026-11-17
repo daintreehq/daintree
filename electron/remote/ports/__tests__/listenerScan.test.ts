@@ -280,6 +280,33 @@ describe("findPortListeners", () => {
     }
   });
 
+  it("can't say when a socket table exists but can't be read, and goes on without an absent one", async () => {
+    const unreadable = linuxFs().procFs;
+    const withTable = (failure: string) => ({
+      ...unreadable,
+      readFile: (file: string) =>
+        file === "/proc/net/tcp"
+          ? Promise.reject(Object.assign(new Error(failure), { code: failure }))
+          : unreadable.readFile(file),
+    });
+    expect(
+      await findPortListeners(5173, {
+        platform: "linux",
+        uid: 1000,
+        procFs: withTable("EACCES"),
+        excludePids: new Set(),
+      })
+    ).toBeNull();
+    expect(
+      await findPortListeners(5173, {
+        platform: "linux",
+        uid: 1000,
+        procFs: withTable("ENOENT"),
+        excludePids: new Set(),
+      })
+    ).toEqual([{ pid: 300, cwd: "/repo/wt-a" }]);
+  });
+
   it("can't say on a platform it has no scan for, after a failed scan, or for a bad port", async () => {
     expect(await findPortListeners(5173, { platform: "win32" })).toBeNull();
     expect(

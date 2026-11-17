@@ -406,6 +406,46 @@ describe("elementPicker handlers", () => {
     }
   });
 
+  it("closes a browser page's workspace at resolve once another worktree took its port", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), "picker-handlers-other-"));
+    try {
+      store.worktrees.set("project-a", [
+        { id: "wt-1", path: root },
+        { id: "wt-2", path: other },
+      ]);
+      guests.set("browser-1", {
+        id: 50,
+        kind: "browser",
+        embedder: 1,
+        url: "http://localhost:5173/",
+      });
+      listening.cwd = root;
+      const all = await ops();
+      const opener = ctx("project-a", 1);
+      const opened = await all.openWorkspace.handler(opener, {
+        panelId: "browser-1",
+        worktreeId: "wt-1",
+      });
+      expect(opened).toMatchObject({ status: "ready", workspaceId: "ws-1" });
+      const request = { workspaceId: "ws-1", requestId: "r1" } as never;
+      await all.resolve.handler(opener, request);
+      expect(host.resolve).toHaveBeenCalledTimes(1);
+
+      listening.cwd = other;
+      vi.setSystemTime(Date.now() + 5_000);
+      await expect(all.resolve.handler(opener, request)).rejects.toMatchObject({
+        code: "NOT_FOUND",
+        message: ELEMENT_PICKER_WORKSPACE_CLOSED,
+      });
+      expect(host.resolve).toHaveBeenCalledTimes(1);
+      expect(host.releaseWorkspace).toHaveBeenCalledWith("ws-1");
+    } finally {
+      vi.useRealTimers();
+      fs.rmSync(other, { recursive: true, force: true });
+    }
+  });
+
   it("refuses a worktree of another project", async () => {
     store.projects.set("project-b", { path: root, status: "active" });
     store.worktrees.set("project-b", []);

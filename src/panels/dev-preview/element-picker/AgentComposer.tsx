@@ -399,6 +399,11 @@ export function AgentComposer({
     };
     let checked: { about: Pinned; scope: TaskScope | undefined } | null = null;
     let builtFor: string | null = null;
+    // What main said about the page's server when the request was made, not
+    // when it goes in: the panel may have moved on to another page by then.
+    const madeIn = controller.getSnapshot().workspace;
+    const servedFrom =
+      madeIn.status === "failed" && madeIn.reason === "served-elsewhere" ? madeIn.message : null;
     controller.holdWhile(
       deliverAgentRequest({
         memoryKey,
@@ -450,17 +455,13 @@ export function AgentComposer({
                   controller.pagePicture(about.selectionId),
                   controller.projectFor(about),
                 ]);
-          const workspace = controller.getSnapshot().workspace;
           return buildAgentTaskPrompt(
             promptInputFor({
               instruction,
               selection: about,
               scope: now.scope,
               worktreePath,
-              servedFrom:
-                workspace.status === "failed" && workspace.reason === "served-elsewhere"
-                  ? workspace.message
-                  : null,
+              servedFrom,
               project,
               picture,
             })

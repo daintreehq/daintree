@@ -17,6 +17,7 @@ import { AppError } from "../../utils/errorTypes.js";
 import { logWarn } from "../../utils/logger.js";
 import { AdmissionGate } from "./admissionGate.js";
 import { hasControlCharacter, isStrictlyInside } from "./containment.js";
+import type { PortListener } from "../../remote/ports/listenerScan.js";
 import { findServerWorktree, localServerPort, type ServerWorktreeDeps } from "./serverWorktree.js";
 import type { ElementPickerHost } from "./ElementPickerHost.js";
 import { ElementPickerHostError } from "./errors.js";
@@ -31,6 +32,8 @@ import { getElementPickerHost } from "./index.js";
  */
 
 const P = "[ElementPickerWorkspaces]";
+/** How long one scan of a port's listeners answers every check that asks. */
+const LISTENER_REUSE_MS = 1_000;
 
 /**
  * Workspaces one view may hold. A panel holds one; past this the oldest goes,
@@ -171,6 +174,16 @@ function toRelative(worktreeRoot: string, absolute: string): string {
   return relative === "" ? "." : relative.split(path.sep).join("/");
 }
 
+/** Whether a directory holds a `.git` of its own; an unreadable one counts, so it can't vouch. */
+async function isCheckoutRoot(dir: string): Promise<boolean> {
+  try {
+    await fs.lstat(path.join(dir, ".git"));
+    return true;
+  } catch (error) {
+    return (error as { code?: unknown }).code !== "ENOENT";
+  }
+}
+
 async function canonicalDirectory(target: string): Promise<string | null> {
   try {
     const real = await fs.realpath(target);
@@ -235,6 +248,10 @@ export class ElementPickerWorkspaceService {
   private readonly leases = new Map<string, LeaseRecord>();
   private readonly endpoints = new Map<string, EndpointRecord>();
   private readonly discoveries = new Map<string, Promise<AppDiscovery>>();
+  private readonly listenerLookups = new Map<
+    number,
+    { listeners: Promise<PortListener[] | null>; settledAt: number | null }
+  >();
   /**
    * One registration at a time per view: making room in its own leases and
    * registering the replacement are one step, or two opens from one view could
@@ -335,8 +352,9 @@ export class ElementPickerWorkspaceService {
       (worktree): worktree is { id: string; root: string } => worktree.root !== null
     );
     const verdict = await findServerWorktree(listenerPort, worktrees, {
-      findListeners,
+      findListeners: (port) => this.listenersOn(port, findListeners),
       canonical: canonicalDirectory,
+      isCheckoutRoot,
     });
     this.assertLive(owner);
     if (verdict.status !== "worktree" || verdict.worktreeId === worktreeId) return null;
@@ -345,6 +363,37 @@ export class ElementPickerWorkspaceService {
       reason: "other-worktree",
       serverWorktreeId: verdict.worktreeId,
     };
+  }
+
+  /**
+   * Who listens on a port, shared by every check that asks while one is out
+   * and for a moment after: a page can make selections far faster than a
+   * scan of the machine's sockets should run.
+   */
+  private listenersOn(
+    port: number,
+    find: NonNullable<ElementPickerWorkspaceServiceDeps["findListeners"]>
+  ): Promise<PortListener[] | null> {
+    const now = Date.now();
+    const recent = this.listenerLookups.get(port);
+    if (recent && (recent.settledAt === null || now - recent.settledAt < LISTENER_REUSE_MS)) {
+      return recent.listeners;
+    }
+    for (const [known, lookup] of this.listenerLookups) {
+      if (lookup.settledAt !== null && now - lookup.settledAt >= LISTENER_REUSE_MS) {
+        this.listenerLookups.delete(known);
+      }
+    }
+    const lookup: { listeners: Promise<PortListener[] | null>; settledAt: number | null } = {
+      listeners: find(port)
+        .catch(() => null)
+        .finally(() => {
+          lookup.settledAt = Date.now();
+        }),
+      settledAt: null,
+    };
+    this.listenerLookups.set(port, lookup);
+    return lookup.listeners;
   }
 
   close(owner: ElementPickerWorkspaceOwner, workspaceId: string): { closed: boolean } {

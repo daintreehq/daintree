@@ -22,6 +22,8 @@ export interface ServerWorktreeDeps {
   findListeners(port: number): Promise<PortListener[] | null>;
   /** The path with every link resolved; null when it doesn't resolve. */
   canonical(target: string): Promise<string | null>;
+  /** Whether a directory holds a `.git` of its own: another checkout starts there. */
+  isCheckoutRoot(dir: string): Promise<boolean>;
 }
 
 const UNKNOWN: ServerWorktreeVerdict = { status: "unknown" };
@@ -66,6 +68,19 @@ function innermost(
   return best;
 }
 
+/** Whether `target`, inside `root`, sits in a checkout of its own between the two. */
+async function nestedCheckout(
+  root: string,
+  target: string,
+  deps: ServerWorktreeDeps
+): Promise<boolean> {
+  for (let dir = target; dir !== root; dir = path.dirname(dir)) {
+    if (path.dirname(dir) === dir) return true;
+    if (await deps.isCheckoutRoot(dir).catch(() => true)) return true;
+  }
+  return false;
+}
+
 /**
  * @param worktrees the project's worktrees with canonical roots, so a listener's
  *   canonical cwd compares like for like.
@@ -87,6 +102,9 @@ export async function findServerWorktree(
     if (cwd === null) return UNKNOWN;
     const worktree = innermost(worktrees, cwd);
     if (worktree === null) return UNKNOWN;
+    // A checkout nested inside the worktree, another project's or a
+    // submodule, is not the worktree's own source.
+    if (await nestedCheckout(worktree.root, cwd, deps)) return UNKNOWN;
     if (found !== null && found !== worktree.id) return UNKNOWN;
     found = worktree.id;
   }

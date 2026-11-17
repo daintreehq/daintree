@@ -11,7 +11,8 @@ const WORKTREES = [
 
 function deps(
   listeners: PortListener[] | null,
-  links: Record<string, string> = {}
+  links: Record<string, string> = {},
+  checkouts: readonly string[] = []
 ): ServerWorktreeDeps & { asked: number[] } {
   const asked: number[] = [];
   return {
@@ -21,6 +22,7 @@ function deps(
       return listeners;
     },
     canonical: async (target) => links[target] ?? target,
+    isCheckoutRoot: async (dir) => checkouts.includes(dir),
   };
 }
 
@@ -35,6 +37,18 @@ describe("findServerWorktree", () => {
     expect(await findServerWorktree(5173, WORKTREES, deps([{ pid: 1, cwd: "/repo/src" }]))).toEqual(
       { status: "worktree", worktreeId: "main" }
     );
+  });
+
+  it("can't say for a checkout of its own nested inside a worktree", async () => {
+    // Another project, or a submodule, cloned under the main checkout.
+    const d = deps([{ pid: 1, cwd: "/repo/vendor/other/app" }], {}, ["/repo/vendor/other"]);
+    expect(await findServerWorktree(5173, WORKTREES, d)).toEqual({ status: "unknown" });
+    // The worktree's own root holding `.git` is no nesting.
+    const own = deps([{ pid: 1, cwd: "/repo/src" }], {}, ["/repo", "/repo/.worktrees/b"]);
+    expect(await findServerWorktree(5173, WORKTREES, own)).toEqual({
+      status: "worktree",
+      worktreeId: "main",
+    });
   });
 
   it("compares the directory with its links resolved", async () => {
@@ -94,13 +108,21 @@ describe("findServerWorktree", () => {
     const gone: ServerWorktreeDeps = {
       findListeners: async () => [{ pid: 1, cwd: "/work/c/deleted" }],
       canonical: async () => null,
+      isCheckoutRoot: async () => false,
     };
     expect(await findServerWorktree(5173, WORKTREES, gone)).toEqual({ status: "unknown" });
     const failing: ServerWorktreeDeps = {
       findListeners: () => Promise.reject(new Error("lsof failed")),
       canonical: async (target) => target,
+      isCheckoutRoot: async () => false,
     };
     expect(await findServerWorktree(5173, WORKTREES, failing)).toEqual({ status: "unknown" });
+    const unreadable: ServerWorktreeDeps = {
+      findListeners: async () => [{ pid: 1, cwd: "/work/c/app" }],
+      canonical: async (target) => target,
+      isCheckoutRoot: () => Promise.reject(new Error("EACCES")),
+    };
+    expect(await findServerWorktree(5173, WORKTREES, unreadable)).toEqual({ status: "unknown" });
   });
 });
 
