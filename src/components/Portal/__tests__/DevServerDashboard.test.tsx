@@ -39,6 +39,8 @@ vi.mock("@/store/projectStore", () => ({
 }));
 vi.mock("@/store/scratchStore", () => ({
   useScratchStore: (selector: (s: unknown) => unknown) => selector(scratchesState),
+  scratchName: (scratches: Array<{ id: string; name: string }>, id: string | null) =>
+    scratches.find((scratch) => scratch.id === id)?.name ?? null,
 }));
 
 import { DevServerDashboard } from "../DevServerDashboard";
@@ -266,6 +268,41 @@ describe("DevServerDashboard", () => {
       expect(stopDevServerByWorktree).not.toHaveBeenCalled();
     });
 
+    it("numbers the rows that share a worktree name, in every accessible name", () => {
+      mockSessions([failed(), running()]);
+      render(<DevServerDashboard />);
+      expect(screen.getByText("feature-foo · panel 1")).toBeTruthy();
+      expect(screen.getByText("feature-foo · panel 2")).toBeTruthy();
+      const restartNames = screen
+        .getAllByRole("button", { name: /^Restart dev server for / })
+        .map((b) => b.getAttribute("aria-label"));
+      expect(new Set(restartNames).size).toBe(2);
+    });
+
+    it("keeps each row's number when the snapshot reorders", () => {
+      mockSessions([failed(), running()]);
+      const { rerender } = render(<DevServerDashboard />);
+      const before = within(rows()[0]!).getByText(/^feature-foo · panel /).textContent;
+      mockSessions([running(), failed()]);
+      rerender(<DevServerDashboard />);
+      const failedRow = rows().find((li) => within(li).queryByText("Error") !== null)!;
+      expect(within(failedRow).getByText(/^feature-foo · panel /).textContent).toBe(before);
+    });
+
+    it("leaves a lone row in the worktree unnumbered", () => {
+      mockSessions([failed(), running(), session({ panelId: "p-other", worktreeId: "wt-2" })]);
+      useWorktreeStore.mockImplementation((selector: (s: unknown) => unknown) =>
+        selector({
+          worktrees: new Map([
+            ["wt-1", { id: "wt-1", name: "feature-foo" }],
+            ["wt-2", { id: "wt-2", name: "feature-bar" }],
+          ]),
+        })
+      );
+      render(<DevServerDashboard />);
+      expect(screen.getByText("feature-bar")).toBeTruthy();
+    });
+
     it("starts a restored-stopped panel by its own id", () => {
       mockSessions([session({ panelId: "p-app", status: "restored-stopped" }), running()]);
       render(<DevServerDashboard />);
@@ -308,6 +345,31 @@ describe("DevServerDashboard", () => {
       expect(screen.getByText("Spike")).toBeTruthy();
       fireEvent.click(screen.getByLabelText("Restart dev server for Spike"));
       expect(restart).toHaveBeenCalledWith({ panelId: "panel-1", projectId: SCRATCH_ID });
+    });
+
+    it("targets the right project when two projects' panels share a panel id", () => {
+      projectsState = {
+        projects: [
+          { id: "project-1", name: "Atlas" },
+          { id: "project-2", name: "Borealis" },
+        ],
+      };
+      mockSessions([
+        session({ worktreeId: undefined }),
+        session({ projectId: "project-2", worktreeId: undefined }),
+      ]);
+      render(<DevServerDashboard />);
+      fireEvent.click(screen.getByLabelText("Stop dev server for Borealis"));
+      expect(stop).toHaveBeenCalledWith({ panelId: "panel-1", projectId: "project-2" });
+      fireEvent.click(screen.getByLabelText("Restart dev server for Atlas"));
+      expect(restart).toHaveBeenCalledWith({ panelId: "panel-1", projectId: "project-1" });
+    });
+
+    it("starts a worktree-less restored-stopped session", () => {
+      mockSessions([session({ status: "restored-stopped", worktreeId: undefined })]);
+      render(<DevServerDashboard />);
+      fireEvent.click(screen.getByLabelText("Start dev server for Atlas"));
+      expect(restart).toHaveBeenCalledWith({ panelId: "panel-1", projectId: "project-1" });
     });
 
     it("never titles the row with the raw panel id when the workspace is unknown", () => {

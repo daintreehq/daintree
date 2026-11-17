@@ -2281,6 +2281,102 @@ describe("DevPreviewSessionService — cross-worktree snapshot", () => {
     expect(byPanel.get("panel-app")).toBe("restored-stopped");
   });
 
+  it("restart starts a worktree-less restore placeholder", async () => {
+    service.dispose();
+    ptyClient = createPtyClientMock();
+    service = new DevPreviewSessionService(
+      ptyClient as unknown as PtyClient,
+      onStateChanged,
+      [manifestEntry({ panelId: "panel-plain", worktreeId: undefined, cwd: "/plain" })],
+      () => {},
+      onAllSessionsChanged
+    );
+
+    const state = await service.restart({ panelId: "panel-plain", projectId: "project-1" });
+
+    expect(state.status).toBe("starting");
+    expect(state.worktreeId).toBeUndefined();
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    expect(ptyClient.spawn.mock.calls[0]?.[1]).toMatchObject({ cwd: "/plain" });
+  });
+
+  it("a stop queued ahead of restart leaves a restore placeholder stopped", async () => {
+    service.dispose();
+    ptyClient = createPtyClientMock();
+    service = new DevPreviewSessionService(
+      ptyClient as unknown as PtyClient,
+      onStateChanged,
+      [manifestEntry({ panelId: "panel-r", worktreeId: "wt-1" })],
+      () => {},
+      onAllSessionsChanged
+    );
+    const request = { panelId: "panel-r", projectId: "project-1" };
+
+    const [, restarted] = await Promise.all([service.stop(request), service.restart(request)]);
+
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+    expect(restarted.status).toBe("stopped");
+    expect(restarted.userStopped).toBe(true);
+    expect(service.getAllSessions()).toHaveLength(0);
+  });
+
+  it("a panel's ensure queued ahead of restart keeps its newer config", async () => {
+    service.dispose();
+    ptyClient = createPtyClientMock();
+    service = new DevPreviewSessionService(
+      ptyClient as unknown as PtyClient,
+      onStateChanged,
+      [manifestEntry({ panelId: "panel-r", worktreeId: "wt-1", cwd: "/repo/old" })],
+      () => {},
+      onAllSessionsChanged
+    );
+
+    await Promise.all([
+      service.ensure({
+        panelId: "panel-r",
+        projectId: "project-1",
+        cwd: "/repo/new",
+        devCommand: "npm run dev",
+        worktreeId: "wt-1",
+      }),
+      service.restart({ panelId: "panel-r", projectId: "project-1" }),
+    ]);
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
+    for (const call of ptyClient.spawn.mock.calls) {
+      expect(call[1]).toMatchObject({ cwd: "/repo/new" });
+    }
+  });
+
+  it("a panel's ensure queued behind restart relaunches the restored server on its newer config", async () => {
+    service.dispose();
+    ptyClient = createPtyClientMock();
+    service = new DevPreviewSessionService(
+      ptyClient as unknown as PtyClient,
+      onStateChanged,
+      [manifestEntry({ panelId: "panel-r", worktreeId: "wt-1", cwd: "/repo/old" })],
+      () => {},
+      onAllSessionsChanged
+    );
+
+    const [restarted, ensured] = await Promise.all([
+      service.restart({ panelId: "panel-r", projectId: "project-1" }),
+      service.ensure({
+        panelId: "panel-r",
+        projectId: "project-1",
+        cwd: "/repo/new",
+        devCommand: "npm run dev",
+        worktreeId: "wt-1",
+      }),
+    ]);
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
+    expect(ptyClient.spawn.mock.calls[0]?.[1]).toMatchObject({ cwd: "/repo/old" });
+    expect(ptyClient.spawn.mock.calls[1]?.[1]).toMatchObject({ cwd: "/repo/new" });
+    expect(ptyClient.kill).toHaveBeenCalledWith(restarted.terminalId, expect.anything());
+    expect(ensured.terminalId).not.toBe(restarted.terminalId);
+  });
+
   it("restart of a key with neither a session nor a placeholder spawns nothing", async () => {
     const state = await service.restart({ panelId: "nobody", projectId: "project-1" });
     expect(state.status).toBe("stopped");
