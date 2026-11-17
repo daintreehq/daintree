@@ -1179,8 +1179,15 @@ describe("terminal:search-semantic-buffers", () => {
     { terminalId: "mine", line: "token here", matchStart: 0, matchEnd: 5 },
     { terminalId: "theirs", line: "token there", matchStart: 0, matchEnd: 5 },
     { terminalId: "nobodys", line: "token", matchStart: 0, matchEnd: 5 },
+    { terminalId: "daintree-throwaway-probe", line: "token", matchStart: 0, matchEnd: 5 },
   ];
-  const owners: Record<string, string | null> = { mine: "proj-1", theirs: "proj-2", nobodys: null };
+  const visibleLocally = matches.slice(0, 3);
+  const owners: Record<string, string | null> = {
+    mine: "proj-1",
+    theirs: "proj-2",
+    nobodys: null,
+    "daintree-throwaway-probe": "proj-1",
+  };
 
   function remoteView(projectId: string | null): ClientEndpoint {
     return {
@@ -1287,7 +1294,26 @@ describe("terminal:search-semantic-buffers", () => {
       (result as { ok?: boolean; data?: unknown }).ok !== undefined
         ? (result as { data: unknown }).data
         : result;
-    expect(data).toEqual({ matches, complete: true });
+    expect(data).toEqual({ matches: visibleLocally, complete: true });
+  });
+
+  it("searches a 500-character query but refuses a longer one without fanning out", async () => {
+    ptyClient.searchSemanticBuffersAsync.mockClear();
+    const atCap = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteView("proj-1"), client },
+      CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
+      ["t".repeat(500), false]
+    );
+    expect(ptyClient.searchSemanticBuffersAsync).toHaveBeenCalledTimes(1);
+    expect(atCap.ok && atCap.data).toEqual({ matches: [matches[0]], complete: true });
+
+    const overCap = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteView("proj-1"), client },
+      CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
+      ["t".repeat(501), false]
+    );
+    expect(ptyClient.searchSemanticBuffersAsync).toHaveBeenCalledTimes(1);
+    expect(overCap.ok && overCap.data).toEqual({ matches: [], complete: true });
   });
 });
 

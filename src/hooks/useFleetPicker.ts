@@ -17,7 +17,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useFleetPickerSessionStore, type FleetPickerOwner } from "@/store/fleetPickerSessionStore";
-import type { SemanticSearchMatch } from "@shared/types";
+import type { SemanticSearchMatch, SemanticSearchResult } from "@shared/types";
 import type { PtyPanelData } from "@shared/types/panel";
 
 // Fallback empty worktree store for hosts that mount the picker without a
@@ -42,6 +42,33 @@ const EMPTY_PANELS_BY_ID: ReturnType<typeof usePanelStore.getState>["panelsById"
  * them resets.
  */
 let nextSearchRequestId = 0;
+
+// Bumping the counter in a module function keeps the mutation out of the hook
+// body, where React Compiler would refuse to compile the whole hook.
+function issueSearchRequestId(): number {
+  nextSearchRequestId += 1;
+  return nextSearchRequestId;
+}
+
+// A host on an older build answers with the bare match array it always sent,
+// and nothing about it says otherwise, so it reads as complete as it always did.
+function readOutputSearchResult(
+  result: SemanticSearchResult | SemanticSearchMatch[]
+): SemanticSearchResult {
+  return Array.isArray(result) ? { matches: result, complete: true } : result;
+}
+
+/**
+ * Where the output half of the search stands for the query on screen.
+ * - `idle`: no query.
+ * - `pending`: not answered yet, so "no match" can't be claimed.
+ * - `complete`: answered by every pty-host shard.
+ * - `incomplete`: the latest answer missed some output (a shard failed, timed
+ *   out, or was restarting, or the request failed). It holds across new
+ *   queries until an answer covers every shard, so an outage doesn't flash
+ *   "No terminals match" on each keystroke.
+ */
+export type OutputSearchStatus = "idle" | "pending" | "complete" | "incomplete";
 
 export interface PickerTerminal {
   id: string;
@@ -110,13 +137,7 @@ export interface UseFleetPickerResult {
   visibleIds: string[];
   isSingleWorktree: boolean;
   snippetMap: ReadonlyMap<string, SemanticSearchMatch>;
-  /**
-   * True while a non-empty query's latest output search couldn't reach every
-   * pty-host shard (or failed outright), so terminals matched only by their
-   * output may be missing. It holds until an answer covers every shard, which
-   * keeps an outage from flashing "No terminals match" on each keystroke.
-   */
-  outputSearchIncomplete: boolean;
+  outputSearchStatus: OutputSearchStatus;
   /** Search recent output again for the current query, skipping the debounce. */
   retryOutputSearch: () => void;
   confirmedIds: string[];
@@ -241,7 +262,11 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
   // PREVIOUS query keeps passing the filter under the new one — and can be
   // swept into a bulk selection while it is visibly unrelated to what was typed.
   const [snippetQuery, setSnippetQuery] = useState("");
-  const [outputSearchIncomplete, setOutputSearchIncomplete] = useState(false);
+  // The last output search that settled, answered or failed, and its query.
+  const [settledOutputSearch, setSettledOutputSearch] = useState<{
+    query: string;
+    complete: boolean;
+  } | null>(null);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   // Which tree node last held focus — `g:<worktreeId>` or `t:<terminalId>`.
   // `focusedId` only ever names a row, so without this a heading could take
@@ -279,7 +304,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     }
     setQuery("");
     setSnippetMap(new Map());
-    setOutputSearchIncomplete(false);
+    setSettledOutputSearch(null);
     rangeAnchorRef.current = null;
 
     if (mode === "cold-start") {
@@ -314,19 +339,20 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
   const runOutputSearch = useCallback((trimmed: string, issueId: number) => {
     window.electron.terminal
       .searchSemanticBuffers(trimmed, false)
-      .then((result) => {
+      .then((raw) => {
         if (currentRequestRef.current !== issueId) return;
+        const result = readOutputSearchResult(raw);
         const next = new Map<string, SemanticSearchMatch>();
         for (const m of result.matches) next.set(m.terminalId, m);
         setSnippetMap(next);
         setSnippetQuery(trimmed);
-        setOutputSearchIncomplete(!result.complete);
+        setSettledOutputSearch({ query: trimmed, complete: result.complete });
       })
       .catch(() => {
         if (currentRequestRef.current !== issueId) return;
         // Keep what an earlier answer for this query already found; a previous
         // query's hits are hidden by the `snippetQuery` freshness check anyway.
-        setOutputSearchIncomplete(true);
+        setSettledOutputSearch({ query: trimmed, complete: false });
       });
   }, []);
 
@@ -340,22 +366,19 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
       // unresolved IPC promise would otherwise call `setSnippetMap` after
       // close, leaking state into the (potentially still-mounted) component.
       // Bumping the counter guarantees the late `.then()` sees a stale id.
-      nextSearchRequestId += 1;
-      currentRequestRef.current = nextSearchRequestId;
+      currentRequestRef.current = issueSearchRequestId();
       return;
     }
     const trimmed = deferredQuery.trim();
     if (trimmed === "") {
       setSnippetMap(new Map());
       setSnippetQuery("");
-      setOutputSearchIncomplete(false);
-      nextSearchRequestId += 1;
-      currentRequestRef.current = nextSearchRequestId;
+      setSettledOutputSearch(null);
+      currentRequestRef.current = issueSearchRequestId();
       return;
     }
 
-    nextSearchRequestId += 1;
-    const issueId = nextSearchRequestId;
+    const issueId = issueSearchRequestId();
     currentRequestRef.current = issueId;
 
     const timer = window.setTimeout(() => {
@@ -370,8 +393,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
   const retryOutputSearch = useCallback(() => {
     const trimmed = deferredQuery.trim();
     if (!isOpen || !acquired || trimmed === "") return;
-    nextSearchRequestId += 1;
-    const issueId = nextSearchRequestId;
+    const issueId = issueSearchRequestId();
     currentRequestRef.current = issueId;
     runOutputSearch(trimmed, issueId);
   }, [deferredQuery, isOpen, acquired, runOutputSearch]);
@@ -549,6 +571,16 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
   }, [selectedIds, visibleIds, eligibleIdSet, deferredQuery]);
 
   const clearSearch = useCallback(() => setQuery(""), []);
+
+  const trimmedDeferredQuery = deferredQuery.trim();
+  const outputSearchStatus: OutputSearchStatus =
+    trimmedDeferredQuery === ""
+      ? "idle"
+      : settledOutputSearch !== null && !settledOutputSearch.complete
+        ? "incomplete"
+        : settledOutputSearch?.query === trimmedDeferredQuery
+          ? "complete"
+          : "pending";
 
   const handleToggleId = useCallback(
     (id: string, event?: React.MouseEvent) => {
@@ -817,7 +849,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     visibleIds,
     isSingleWorktree,
     snippetMap: freshSnippetMap,
-    outputSearchIncomplete: outputSearchIncomplete && deferredQuery.trim() !== "",
+    outputSearchStatus,
     retryOutputSearch,
     confirmedIds,
     driftCount,

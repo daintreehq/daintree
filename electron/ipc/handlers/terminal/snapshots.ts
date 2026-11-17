@@ -404,18 +404,26 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
     }
     // A window on another machine searches its own project's terminals only,
     // so one with no project has nothing to search and nothing left unsearched.
-    const remoteProjectId =
-      ctx.endpoint?.kind === "remote-view" ? ctx.endpoint.projectId : undefined;
-    if (remoteProjectId === null) return { matches: [], complete: true };
+    if (ctx.endpoint?.kind === "remote-view" && ctx.endpoint.projectId === null) {
+      return { matches: [], complete: true };
+    }
     try {
       const result = await ptyClient.searchSemanticBuffersAsync(query, isRegex);
       const matches = result.matches.filter(
-        (match) =>
-          !isHostThrowawayTerminalId(match.terminalId) &&
-          (remoteProjectId === undefined ||
-            ptyClient.getTerminalProjectId(match.terminalId) === remoteProjectId)
+        (match) => !isHostThrowawayTerminalId(match.terminalId)
       );
-      return { matches, complete: result.complete };
+      if (ctx.endpoint?.kind !== "remote-view") return { matches, complete: result.complete };
+      // Read after the search: the view may have been rebound while it ran.
+      const projectId = ctx.endpoint.projectId;
+      return {
+        matches:
+          projectId === null
+            ? []
+            : matches.filter(
+                (match) => ptyClient.getTerminalProjectId(match.terminalId) === projectId
+              ),
+        complete: result.complete,
+      };
     } catch (error) {
       logWarn("terminal:searchSemanticBuffers failed", { error });
       return { matches: [], complete: false };

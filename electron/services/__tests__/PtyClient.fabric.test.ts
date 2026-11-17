@@ -1711,10 +1711,29 @@ describe("PtyClient fabric", () => {
         shardA.child.emit("message", {
           type: "semantic-search-result",
           requestId: shardAReq.requestId,
+          matches: [match("t1")],
+        });
+
+        const result = await promise;
+        expect(result.complete).toBe(true);
+        expect(result.matches.map((m) => m.terminalId).sort()).toEqual(["t0", "t1"]);
+        client.dispose();
+      });
+
+      it("does not let a host that hasn't announced ready vouch for a complete search", async () => {
+        // Flag off: the lone host is the fallback target even before it is ready,
+        // and an answer from it may predate its terminals' replay.
+        const client = new PtyClientClass({ fabric: false });
+
+        const promise = client.searchSemanticBuffersAsync("token", false);
+        const req = messagesOfType(defaultShard().child, "search-semantic-buffers")[0];
+        defaultShard().child.emit("message", {
+          type: "semantic-search-result",
+          requestId: req.requestId,
           matches: [],
         });
 
-        await expect(promise).resolves.toEqual({ matches: [match("t0")], complete: true });
+        await expect(promise).resolves.toEqual({ matches: [], complete: false });
         client.dispose();
       });
 

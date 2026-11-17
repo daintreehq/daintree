@@ -1,4 +1,4 @@
-import { useCallback, useMemo, type ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useRef, type ReactElement } from "react";
 import { Checkbox, CheckboxGlyph } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { POPOVER_ROW_HOVER_CLASS } from "@/components/ui/popoverHeader";
@@ -10,7 +10,7 @@ import { KbdChord } from "@/components/ui/Kbd";
 import { cn } from "@/lib/utils";
 import { CircleHelp, RefreshCw } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { useEscapeStack } from "@/hooks";
+import { useDohertyGate, useEscapeStack } from "@/hooks";
 import {
   FALLBACK_GROUP_ID,
   FALLBACK_GROUP_NAME,
@@ -80,7 +80,7 @@ export function FleetPickerContent({
     groupedVisible,
     isSingleWorktree,
     snippetMap,
-    outputSearchIncomplete,
+    outputSearchStatus,
     retryOutputSearch,
     handleToggleId,
     handleListKeyDown,
@@ -96,6 +96,38 @@ export function FleetPickerContent({
   // the consumer's outer escape stack and closes the picker. Same idiom the
   // dialog used.
   useEscapeStack(query !== "", clearSearch);
+
+  const outputSearchIncomplete = outputSearchStatus === "incomplete";
+  // Until the output search answers, an empty list can't be called "no match".
+  // A short wait shows nothing; past the Doherty gate it says what it awaits.
+  const awaitingOutputSearch =
+    outputSearchStatus === "pending" &&
+    visibleTerminals.length === 0 &&
+    eligibleTerminals.length > 0;
+  const showSearchingOutput = useDohertyGate(awaitingOutputSearch);
+
+  // Retry unmounts or moves when its answer lands. If it held focus, hand focus
+  // to the search field instead of stranding it on <body>.
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const retryHeldFocusRef = useRef(false);
+  const retryPlacement = outputSearchIncomplete
+    ? visibleTerminals.length > 0
+      ? "inline"
+      : "empty"
+    : null;
+  useEffect(() => {
+    if (!retryHeldFocusRef.current) return;
+    retryHeldFocusRef.current = false;
+    const active = document.activeElement;
+    if (active === null || active === document.body) searchInputRef.current?.focus();
+  }, [retryPlacement]);
+  const handleRetryFocus = useCallback(() => {
+    retryHeldFocusRef.current = true;
+  }, []);
+  const handleRetryBlur = useCallback((e: React.FocusEvent<HTMLButtonElement>) => {
+    // A removed element's blur has no destination; only a real move clears it.
+    if (e.relatedTarget !== null) retryHeldFocusRef.current = false;
+  }, []);
 
   // Row refs live in the hook so its keydown handler can move DOM focus on
   // ArrowUp/Down (matches the tree's roving-tabindex pattern).
@@ -160,6 +192,7 @@ export function FleetPickerContent({
           hosts still read as the same surface. */}
       <div className="px-3 pt-2 pb-2 border-b border-border-strong shrink-0">
         <AppPaletteDialog.Input
+          inputRef={searchInputRef}
           autoFocus={autoFocusSearch}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -178,6 +211,8 @@ export function FleetPickerContent({
             <RetryOutputSearchButton
               size="xs"
               onRetry={retryOutputSearch}
+              onFocus={handleRetryFocus}
+              onBlur={handleRetryBlur}
               testIdPrefix={testIdPrefix}
             />
           </div>
@@ -218,11 +253,22 @@ export function FleetPickerContent({
               <RetryOutputSearchButton
                 size="sm"
                 onRetry={retryOutputSearch}
+                onFocus={handleRetryFocus}
+                onBlur={handleRetryBlur}
                 testIdPrefix={testIdPrefix}
               />
             }
             className="h-full min-h-[120px]"
           />
+        ) : awaitingOutputSearch ? (
+          showSearchingOutput ? (
+            <EmptyState
+              variant="filtered-empty"
+              scale="popover"
+              title={SEARCHING_OUTPUT}
+              className="h-full min-h-[120px]"
+            />
+          ) : null
         ) : visibleTerminals.length === 0 ? (
           <EmptyState
             variant="filtered-empty"
@@ -269,23 +315,32 @@ export function FleetPickerContent({
           ? "No terminals to arm"
           : query.trim() === ""
             ? `${eligibleTerminals.length} terminals`
-            : `${visibleTerminals.length} of ${eligibleTerminals.length} terminals match${
-                outputSearchIncomplete ? `. ${OUTPUT_SEARCH_INCOMPLETE}` : ""
-              }`}
+            : awaitingOutputSearch
+              ? showSearchingOutput
+                ? SEARCHING_OUTPUT
+                : ""
+              : `${visibleTerminals.length} of ${eligibleTerminals.length} terminals match${
+                  outputSearchIncomplete ? `. ${OUTPUT_SEARCH_INCOMPLETE}` : ""
+                }`}
       </span>
     </div>
   );
 }
 
 const OUTPUT_SEARCH_INCOMPLETE = "Recent output search is incomplete";
+const SEARCHING_OUTPUT = "Searching recent output…";
 
 function RetryOutputSearchButton({
   size,
   onRetry,
+  onFocus,
+  onBlur,
   testIdPrefix,
 }: {
   size: "xs" | "sm";
   onRetry: () => void;
+  onFocus: () => void;
+  onBlur: (e: React.FocusEvent<HTMLButtonElement>) => void;
   testIdPrefix: string;
 }): ReactElement {
   return (
@@ -293,6 +348,8 @@ function RetryOutputSearchButton({
       variant="subtle"
       size={size}
       onClick={onRetry}
+      onFocus={onFocus}
+      onBlur={onBlur}
       aria-label="Retry output search"
       data-testid={`${testIdPrefix}-retry-output-search`}
     >

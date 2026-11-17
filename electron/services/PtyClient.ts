@@ -2941,6 +2941,12 @@ export class PtyClient extends EventEmitter {
       0,
       [...this.shards.values()].filter((shard) => !shard.retired).length - shards.length
     );
+    // With nothing ready, `fanOutShards` still hands back the default shard, and
+    // a host that hasn't announced ready can answer before its terminals are
+    // replayed, so its answer can't vouch for a complete search.
+    const allLive = shards.every(
+      (shard) => !shard.retired && shard.lifecycle.isInitialized && shard.lifecycle.child !== null
+    );
     const results = await Promise.all(
       shards.map((shard) =>
         sendPtyHostRpc<import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[]>(
@@ -2963,7 +2969,7 @@ export class PtyClient extends EventEmitter {
     );
     return {
       matches: results.flatMap((r) => r.matches),
-      complete: unreachable === 0 && results.every((r) => r.ok),
+      complete: unreachable === 0 && allLive && results.every((r) => r.ok),
     };
   }
 
