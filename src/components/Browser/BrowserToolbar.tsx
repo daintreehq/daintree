@@ -23,7 +23,6 @@ import {
   ExternalLink,
   Globe,
   Lock,
-  PanelRight,
   RotateCw,
   Scan,
   Smartphone,
@@ -164,7 +163,6 @@ interface BrowserToolbarProps {
   onStop?: () => void;
   onHardReload?: () => void;
   onOpenExternal: () => void;
-  onPromoteToPortal?: () => void;
   onZoomChange?: (zoomFactor: number) => void;
   onCaptureScreenshot?: () => Promise<boolean>;
   onToggleConsole?: () => void;
@@ -221,7 +219,6 @@ export function BrowserToolbar({
   onStop,
   onHardReload,
   onOpenExternal,
-  onPromoteToPortal,
   onZoomChange,
   onCaptureScreenshot,
   onToggleConsole,
@@ -735,9 +732,7 @@ export function BrowserToolbar({
   const isConsoleShown = canToggleConsole && isConsoleOpen;
   const showStop = isLoading && Boolean(onStop);
   const consoleInMenu = isCompact && Boolean(onToggleConsole);
-  const hasNativeMenuContent = Boolean(
-    onZoomChange || onToggleDevTools || onPromoteToPortal || isCompact
-  );
+  const hasNativeMenuContent = Boolean(onZoomChange || onToggleDevTools || isCompact);
   const hasMoreMenu = hasNativeMenuContent || pluginItems.length > 0;
   // The chip stays while its popover is open, so stepping through 100% keeps the
   // controls under the pointer; it goes once the popover closes at the default.
@@ -1471,9 +1466,7 @@ export function BrowserToolbar({
                         Console
                       </DropdownMenuCheckboxItem>
                     )}
-                    {(onZoomChange || onToggleDevTools || onPromoteToPortal) && (
-                      <DropdownMenuSeparator />
-                    )}
+                    {(onZoomChange || onToggleDevTools) && <DropdownMenuSeparator />}
                   </>
                 )}
                 {onZoomChange && (
@@ -1508,22 +1501,11 @@ export function BrowserToolbar({
                     </DropdownMenuItem>
                   </>
                 )}
-                {onZoomChange && (onToggleDevTools || onPromoteToPortal) && (
-                  <DropdownMenuSeparator />
-                )}
+                {onZoomChange && onToggleDevTools && <DropdownMenuSeparator />}
                 {onToggleDevTools && (
                   <DropdownMenuItem disabled={!isWebviewReady} onSelect={onToggleDevTools}>
                     <Code data-menu-icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                     Toggle DevTools
-                  </DropdownMenuItem>
-                )}
-                {onPromoteToPortal && (
-                  <DropdownMenuItem
-                    onSelect={onPromoteToPortal}
-                    data-testid="browser-promote-portal"
-                  >
-                    <PanelRight data-menu-icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                    Open in Portal
                   </DropdownMenuItem>
                 )}
                 <PluginContextMenuSection

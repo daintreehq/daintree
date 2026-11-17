@@ -4,8 +4,7 @@
  * The `<webview>` in `DevPreviewPane` and any `WebContentsView` that wants to
  * share its session (cookies, localStorage, IndexedDB) must derive the exact
  * same `persist:dev-preview-*` partition string. Keeping the formula here is the
- * single source of truth so the renderer component and the promote-to-portal
- * action can never drift apart.
+ * single source of truth.
  */
 
 /** Normalize a single partition token to the `[a-z0-9_-]` charset. */

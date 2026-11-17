@@ -86,7 +86,6 @@ const AUDITED_LEAKY_IDS: readonly string[] = [
   "devPreview.restart",
   "devPreview.restartAndClearCache",
   "devPreview.reinstallAndRestart",
-  "devPreview.promoteToPortal",
   "devPreview.stop",
   "browser.openExternal",
   "browser.copyUrl",

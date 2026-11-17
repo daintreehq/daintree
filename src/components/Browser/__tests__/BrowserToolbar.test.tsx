@@ -1101,23 +1101,20 @@ describe("BrowserToolbar zoom", () => {
     expect(queryByTestId("browser-zoom-indicator")?.textContent).toContain("125%");
   });
 
-  it("offers zoom, DevTools and Portal from the More menu", async () => {
+  it("offers zoom and DevTools from the More menu", async () => {
     const onZoomChange = vi.fn();
     const onToggleDevTools = vi.fn();
-    const onPromoteToPortal = vi.fn();
     const { getByLabelText } = renderToolbar({
       onZoomChange,
       onToggleDevTools,
-      onPromoteToPortal,
       isWebviewReady: true,
     });
     fireEvent.pointerDown(getByLabelText("More page actions"), { button: 0, ctrlKey: false });
     await waitFor(() => expect(document.querySelector('[role="menu"]')).toBeTruthy());
     const items = Array.from(document.querySelectorAll('[role="menuitem"]'));
     const labels = items.map((i) => i.textContent?.trim());
-    expect(labels).toEqual(
-      expect.arrayContaining(["Zoom in", "Zoom out", "Toggle DevTools", "Open in Portal"])
-    );
+    expect(labels).toEqual(expect.arrayContaining(["Zoom in", "Zoom out", "Toggle DevTools"]));
+    expect(labels).not.toContain("Open in Portal");
     fireEvent.click(items.find((i) => i.textContent?.trim() === "Zoom in")!);
     expect(onZoomChange).toHaveBeenCalledWith(1.25);
   });

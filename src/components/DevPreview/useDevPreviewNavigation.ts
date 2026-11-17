@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useBrowserActionListeners } from "@/hooks/useBrowserActionListeners";
 import type { BrowserHistory, BrowserNavigationHistorySnapshot } from "@shared/types/browser";
 import { STOPPED_LOAD_MESSAGE, type NormalizeResult } from "../Browser/browserUtils";
@@ -47,7 +47,7 @@ interface UseDevPreviewNavigationParams {
 
 /**
  * Owns the toolbar/navigation action handlers (back/forward/reload/zoom/
- * screenshot/devtools/console/open-external/promote-to-portal), the
+ * screenshot/devtools/console/open-external), the
  * browser-action-listener wiring, the guest reload/close keyboard-shortcut
  * forwarding, and the URL/history/zoom persistence effects. `history`,
  * `currentUrl`, and the webview ref stay parent-owned — they're shared with
@@ -82,24 +82,6 @@ export function useDevPreviewNavigation({
   onHardReload,
 }: UseDevPreviewNavigationParams) {
   const screenshotInFlightRef = useRef(false);
-  const isPromotingRef = useRef(false);
-  // dispatch() resolves an ActionDispatchResult and never rejects, so the old
-  // .finally() reset dropped promotion failures on the floor (#11114). The
-  // error is surfaced by DevPreviewPane, which owns this hook's JSX.
-  const [promoteToPortalError, setPromoteToPortalError] = useState<string | null>(null);
-  const [isPromotingToPortal, setIsPromotingToPortal] = useState(false);
-  const promoteAttemptRef = useRef(0);
-
-  const clearPromoteToPortalError = useCallback(() => setPromoteToPortalError(null), []);
-
-  // A result that lands after the pane changed identity or project belongs to
-  // the previous context: drop it rather than surface it against the new one.
-  useEffect(() => {
-    promoteAttemptRef.current += 1;
-    setPromoteToPortalError(null);
-    setIsPromotingToPortal(false);
-    isPromotingRef.current = false;
-  }, [id, currentProjectId]);
 
   // Push history only; the imperative navigation effect (keyed on currentUrl
   // vs lastSetUrlRef) performs the actual loadURL. Pre-setting lastSetUrlRef
@@ -394,32 +376,6 @@ export function useDevPreviewNavigation({
     });
   }, [currentUrl, proxyOrigin, currentProjectId, id]);
 
-  const handlePromoteToPortal = useCallback(async () => {
-    if (isPromotingRef.current) return;
-    isPromotingRef.current = true;
-    const attempt = ++promoteAttemptRef.current;
-    setIsPromotingToPortal(true);
-    if (currentUrl) {
-      setBrowserUrl(id, currentUrl);
-    }
-    const result = await actionService.dispatch(
-      "devPreview.promoteToPortal",
-      { panelId: id, projectId: currentProjectId },
-      { source: "user" }
-    );
-    // A newer attempt (or a context change) already reset the guard and owns
-    // the UI — an obsolete completion must not unlock it or overwrite state.
-    if (promoteAttemptRef.current !== attempt) return;
-    isPromotingRef.current = false;
-    setIsPromotingToPortal(false);
-    if (result.ok) {
-      setPromoteToPortalError(null);
-      return;
-    }
-    logError("[DevPreviewPane] promoteToPortal failed", result.error);
-    setPromoteToPortalError(result.error.message);
-  }, [currentProjectId, currentUrl, id, setBrowserUrl]);
-
   const handleZoomChange = useCallback(
     (newZoom: number) => {
       const clamped = Math.max(0.25, Math.min(2.0, newZoom));
@@ -498,9 +454,5 @@ export function useDevPreviewNavigation({
     handleToggleConsole,
     handleZoomChange,
     handleOpenExternal,
-    handlePromoteToPortal,
-    promoteToPortalError,
-    isPromotingToPortal,
-    clearPromoteToPortalError,
   };
 }
