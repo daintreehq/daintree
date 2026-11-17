@@ -1,8 +1,8 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { Plus, Globe, Search } from "lucide-react";
+import { Globe, Search } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePortalStore } from "@/store/portalStore";
-import { useGlobalLinksStore, type GlobalLink } from "@/store/globalLinksStore";
+import { useGlobalLinksStore } from "@/store/globalLinksStore";
 import { withGlobalLinks } from "@/lib/portalLinks";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { BrandMark } from "@/components/icons";
@@ -10,13 +10,12 @@ import { actionService } from "@/services/ActionService";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DEFAULT_SYSTEM_LINKS, type PortalLink } from "@shared/types";
-import { notify } from "@/lib/notify";
-import { latestUndoOnly, positionOf, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { SettingsActions, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSelect } from "./SettingsSelect";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
+import { linkUrlProblem, validateLink, type LinkError } from "./linkValidation";
 
 function ServiceIcon({ name, size = 16 }: { name: string; size?: number }) {
   const className = size === 16 ? "w-4 h-4" : size === 32 ? "w-8 h-8" : "w-4 h-4";
@@ -43,60 +42,17 @@ function ServiceIcon({ name, size = 16 }: { name: string; size?: number }) {
   return <Globe className={className} />;
 }
 
-function FaviconIcon({ url }: { url: string }) {
-  const [hasError, setHasError] = useState(false);
-
-  try {
-    const domain = new URL(url).hostname;
-    const faviconUrl = `https://www.google.com/s2/favicons?domain=${domain}&sz=32`;
-
-    if (hasError) {
-      return <Globe className="w-4 h-4" />;
-    }
-
-    return <img src={faviconUrl} alt="" className="w-4 h-4" onError={() => setHasError(true)} />;
-  } catch {
-    return <Globe className="w-4 h-4" />;
-  }
-}
-
-function validateUrl(value: string): string | null {
-  try {
-    const url = new URL(value);
-    if (!["http:", "https:"].includes(url.protocol)) return "URL must use http:// or https://";
-    return null;
-  } catch {
-    return "Enter a full URL, starting with https://";
-  }
-}
-
-/** A problem pinned to the field that has to change, or to the form when neither does. */
-interface LinkError {
-  field: "name" | "url" | "form";
-  message: string;
-}
-
-function validateLink(name: string, url: string): LinkError | null {
-  if (!name.trim()) return { field: "name", message: "Enter a name for the link" };
-  if (!url.trim()) return { field: "url", message: "Enter the link's URL" };
-  const problem = validateUrl(url);
-  return problem ? { field: "url", message: problem } : null;
-}
-
 export function PortalSettingsTab() {
   const systemLinks = usePortalStore((s) => s.links);
   const userLinks = useGlobalLinksStore((s) => s.links);
   const defaultNewTabUrl = usePortalStore((s) => s.defaultNewTabUrl);
-  const [newLinkName, setNewLinkName] = useState("");
-  const [newLinkUrl, setNewLinkUrl] = useState("");
   const [editingLinkId, setEditingLinkId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editUrl, setEditUrl] = useState("");
-  const [addError, setAddError] = useState<LinkError | null>(null);
   const [editError, setEditError] = useState<LinkError | null>(null);
   // One write at a time. While it runs the form it came from is read-only, so
   // its completion can never clear or close something typed after submitting.
-  const [pending, setPendingState] = useState<"add" | "edit" | "custom" | null>(null);
+  const [pending, setPendingState] = useState<"edit" | "custom" | null>(null);
   // State drives the read-only rendering; the ref is the guard, because two
   // submits in one batch would both read the stale state.
   const pendingRef = useRef<typeof pending>(null);
@@ -105,8 +61,6 @@ export function PortalSettingsTab() {
     setPendingState(next);
   };
   const [focusNewTabSelect, setFocusNewTabSelect] = useState(false);
-  const addNameRef = useRef<HTMLInputElement>(null);
-  const addUrlRef = useRef<HTMLInputElement>(null);
   const editNameRef = useRef<HTMLInputElement>(null);
   const editUrlRef = useRef<HTMLInputElement>(null);
   // The link whose Edit button gets focus back once its editor closes — the
@@ -120,7 +74,6 @@ export function PortalSettingsTab() {
   const [errorSeq, setErrorSeq] = useState(0);
   const customUrlRef = useRef<HTMLInputElement>(null);
   const customUrlErrorId = useId();
-  const addLinkErrorId = useId();
   const editErrorId = useId();
 
   useEffect(() => {
@@ -143,44 +96,8 @@ export function PortalSettingsTab() {
   }, [focusNewTabSelect]);
 
   // Report validation state to sidebar
-  const hasError = Boolean(addError || customUrlError || editError);
+  const hasError = Boolean(customUrlError || editError);
   useSettingsTabValidation("portal", hasError);
-
-  const handleAddLink = async () => {
-    if (pendingRef.current) return;
-    const problem = validateLink(newLinkName, newLinkUrl);
-    if (problem) {
-      setAddError(problem);
-      setErrorSeq((n) => n + 1);
-      (problem.field === "name" ? addNameRef : addUrlRef).current?.focus();
-      return;
-    }
-
-    // The draft clears only once the link exists, so a failed add keeps what
-    // was typed for the retry.
-    setPending("add");
-    const result = await actionService.dispatch(
-      "portal.links.add",
-      {
-        title: newLinkName,
-        url: newLinkUrl,
-        icon: "globe",
-        type: "user",
-        enabled: true,
-      },
-      { source: "user" }
-    );
-    setPending(null);
-    if (!result.ok) {
-      setAddError({ field: "form", message: "Couldn't add the link. Try again." });
-      setErrorSeq((n) => n + 1);
-      return;
-    }
-
-    setNewLinkName("");
-    setNewLinkUrl("");
-    setAddError(null);
-  };
 
   const handleStartEdit = (id: string, title: string, url: string) => {
     if (pendingRef.current) return;
@@ -188,45 +105,6 @@ export function PortalSettingsTab() {
     setEditName(title);
     setEditUrl(url);
     setEditError(null);
-  };
-
-  // Removed at once and offered back, not confirmed: a link is a name and a URL,
-  // and Undo puts it back exactly where it was.
-  const handleRemoveLink = async (linkId: string) => {
-    if (pendingRef.current) return;
-    const userIndex = userLinks.findIndex((l) => l.id === linkId);
-    const link = userLinks[userIndex];
-    if (!link) return;
-    const position = positionOf(userLinks, link.id);
-    // The Remove button goes with the editor, so focus moves to the next custom
-    // link, or the one before it, or the add field once none are left.
-    const neighbour = userLinks[userIndex + 1] ?? userLinks[userIndex - 1];
-    setEditingLinkId(null);
-    setEditName("");
-    setEditUrl("");
-    setEditError(null);
-    if (neighbour) setReturnFocusTo(neighbour.id);
-    else addNameRef.current?.focus();
-    const result = await actionService.dispatch(
-      "portal.links.remove",
-      { id: link.id },
-      { source: "user" }
-    );
-    if (!result.ok) return;
-    notify({
-      type: "success",
-      title: "Link removed",
-      message: link.title || link.url,
-      priority: "high",
-      transient: true,
-      duration: UNDO_TOAST_DURATION_MS,
-      action: {
-        label: "Undo",
-        onClick: latestUndoOnly(`portal-link:${link.id}`, () =>
-          useGlobalLinksStore.getState().restoreLink(link, position)
-        ),
-      },
-    });
   };
 
   const closeEditor = () => {
@@ -301,7 +179,7 @@ export function PortalSettingsTab() {
       customUrlRef.current?.focus();
       return;
     }
-    const problem = validateUrl(customDefaultUrl);
+    const problem = linkUrlProblem(customDefaultUrl);
     if (problem) {
       setCustomUrlError({ field: "url", message: problem });
       setErrorSeq((n) => n + 1);
@@ -341,10 +219,8 @@ export function PortalSettingsTab() {
     setFocusNewTabSelect(true);
   };
 
-  const renderLinkRow = (link: PortalLink | GlobalLink, allowDelete: boolean) => {
+  const renderLinkRow = (link: PortalLink) => {
     if (editingLinkId === link.id) {
-      // Remove lives in the editor rather than on every row: at rest each row
-      // keeps the same Edit + switch rail as the built-in links above it.
       return (
         <div key={link.id} className="divide-y divide-border-subtle">
           <SettingsRow
@@ -403,21 +279,7 @@ export function PortalSettingsTab() {
               </div>
             }
           />
-          <SettingsActions
-            status={
-              allowDelete && (
-                <Button
-                  type="button"
-                  variant="ghost-danger"
-                  size="sm"
-                  onClick={() => void handleRemoveLink(link.id)}
-                  disabled={link.alwaysEnabled || pending !== null}
-                >
-                  Remove link
-                </Button>
-              )
-            }
-          >
+          <SettingsActions>
             <Button
               type="button"
               variant="outline"
@@ -443,7 +305,7 @@ export function PortalSettingsTab() {
 
     // A built-in link the user renamed, re-pointed or turned off is a departure
     // from what shipped, and gets the same bar and reset as any other setting.
-    const shipped = allowDelete ? undefined : DEFAULT_SYSTEM_LINKS.find((d) => d.id === link.id);
+    const shipped = DEFAULT_SYSTEM_LINKS.find((d) => d.id === link.id);
     const isModified =
       !!shipped &&
       (shipped.title !== link.title ||
@@ -471,7 +333,7 @@ export function PortalSettingsTab() {
         label={
           <span className="flex items-center gap-2">
             <span className="flex shrink-0">
-              {allowDelete ? <FaviconIcon url={link.url} /> : <ServiceIcon name={link.icon} />}
+              <ServiceIcon name={link.icon} />
             </span>
             {link.title}
           </span>
@@ -637,80 +499,30 @@ export function PortalSettingsTab() {
         title="Default links"
         description="Built-in agent and service links. Turn one off to hide it from the portal tab bar."
       >
-        <SettingsGroup>{systemLinks.map((link) => renderLinkRow(link, false))}</SettingsGroup>
+        <SettingsGroup>{systemLinks.map((link) => renderLinkRow(link))}</SettingsGroup>
       </SettingsSection>
 
       <SettingsSection
-        id="portal-custom-links"
-        title="Custom links"
-        description="Add your own links to AI services or documentation"
+        title="Your links"
+        description="Links you add for every project have their own page"
+        action={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              void actionService.dispatch(
+                "app.settings.openTab",
+                { tab: "links", sectionId: "global-links" },
+                { source: "user" }
+              )
+            }
+          >
+            Open Links settings
+          </Button>
+        }
       >
-        <SettingsGroup>
-          {userLinks.map((link) => renderLinkRow(link, true))}
-          <SettingsRow
-            layout="stacked"
-            label="Add a link"
-            error={
-              addError ? (
-                <span key={errorSeq} id={addLinkErrorId} role="alert">
-                  {addError.message}
-                </span>
-              ) : undefined
-            }
-            control={
-              <div className="flex items-center gap-2">
-                <Input
-                  ref={addNameRef}
-                  type="text"
-                  placeholder="Name"
-                  value={newLinkName}
-                  readOnly={pending === "add"}
-                  onChange={(e) => {
-                    setNewLinkName(e.target.value);
-                    setAddError(null);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void handleAddLink();
-                  }}
-                  className="w-40"
-                  aria-label="New link name"
-                  invalid={addError?.field === "name"}
-                  aria-invalid={addError?.field === "name" || undefined}
-                  aria-describedby={addError ? addLinkErrorId : undefined}
-                />
-                <Input
-                  type="text"
-                  placeholder="https://…"
-                  ref={addUrlRef}
-                  value={newLinkUrl}
-                  readOnly={pending === "add"}
-                  onChange={(e) => {
-                    setNewLinkUrl(e.target.value);
-                    setAddError(null);
-                  }}
-                  className="flex-1 min-w-0 font-mono"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void handleAddLink();
-                  }}
-                  aria-label="New link URL"
-                  invalid={addError?.field === "url"}
-                  aria-invalid={addError?.field === "url" || undefined}
-                  aria-describedby={addError ? addLinkErrorId : undefined}
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void handleAddLink()}
-                  disabled={pending !== null || !newLinkName.trim() || !newLinkUrl.trim()}
-                >
-                  <Plus aria-hidden="true" />
-                  Add
-                </Button>
-              </div>
-            }
-          />
-        </SettingsGroup>
+        {null}
       </SettingsSection>
     </div>
   );

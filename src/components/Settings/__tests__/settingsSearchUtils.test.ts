@@ -114,6 +114,26 @@ describe("filterSettings", () => {
     }
   );
 
+  it.each(["links", "bookmarks", "custom links", "global links", "launcher", "portal links"])(
+    "finds the person's own links on the Links page by %s, with or without a project open",
+    (query) => {
+      for (const hasProject of [true, false]) {
+        const hit = filterSettings(SETTINGS_SEARCH_INDEX, query, { hasProject }).find(
+          (entry) => entry.id === "global-links"
+        );
+        expect(hit?.tab).toBe("links");
+      }
+    }
+  );
+
+  it("no longer offers the person's own links on the Portal page", () => {
+    const portalHits = filterSettings(SETTINGS_SEARCH_INDEX, "custom links").filter(
+      (entry) => entry.tab === "portal" && entry.kind === "section"
+    );
+    expect(portalHits.map((entry) => entry.id)).not.toContain("portal-custom-links");
+    expect(SETTINGS_SEARCH_INDEX.some((entry) => entry.id === "portal-custom-links")).toBe(false);
+  });
+
   it.each(["group", "folder", "project group"])(
     "finds the project's group row by %s while a project is open",
     (query) => {
@@ -387,6 +407,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       portal: "Portal links",
       toolbar: "Toolbar customization",
       notifications: "Notifications",
+      links: "Links",
       integrations: "Integrations",
       voice: "Voice input",
       canopy: "Canopy",

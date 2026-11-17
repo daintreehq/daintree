@@ -227,37 +227,40 @@ test("settings workspace states — dependents, strategies, pattern and link edi
     await capture(page, "toolbar.move-menu");
     await page.keyboard.press("Escape");
 
-    // Portal — populated custom links.
-    await openAt(page, "portal");
-    const custom = page.locator(`${DIALOG} #portal-custom-links`);
+    // Links — the person's own links, populated.
+    await openAt(page, "links");
+    const custom = page.locator(`${DIALOG} #global-links`);
+    const newName = custom.getByRole("textbox", { name: "New link name" });
+    const newUrl = custom.getByRole("textbox", { name: "New link URL" });
     for (const [name, url] of [
       ["Team docs", "https://docs.helios.dev/handbook/engineering"],
       ["Linear", "https://linear.app/helios/team/DASH/active"],
     ]) {
-      await custom.getByRole("textbox").nth(-2).fill(name);
-      await custom.getByRole("textbox").last().fill(url);
+      await newName.fill(name);
+      await newUrl.fill(url);
       await custom.getByRole("button", { name: "Add", exact: true }).click();
       await expect(custom.getByText(name, { exact: true })).toBeVisible();
     }
-    await capture(page, "portal.populated");
-    await capture(page, "portal.custom-links", custom);
+    await capture(page, "links.populated");
+    await capture(page, "links.your-links", custom);
 
-    // Portal — editing one link.
-    await custom.getByRole("button", { name: "Edit" }).first().click();
+    // Links — editing one link.
+    await custom.getByRole("button", { name: "Edit Team docs", exact: true }).click();
     await expect(page.getByRole("textbox", { name: "Link URL", exact: true })).toBeVisible();
-    await capture(page, "portal.editing", custom);
+    await capture(page, "links.editing", custom);
     await custom.getByRole("button", { name: "Cancel", exact: true }).click();
 
-    // Portal — add refused.
-    await custom.getByRole("textbox").nth(-2).fill("Broken");
-    await custom.getByRole("textbox").last().fill("docs.helios.dev");
+    // Links — add refused.
+    await newName.fill("Broken");
+    await newUrl.fill("docs.helios.dev");
     await custom.getByRole("button", { name: "Add", exact: true }).click();
     await expect(custom.locator('[aria-invalid="true"]')).toHaveCount(1);
-    await capture(page, "portal.add-error", custom);
-    await custom.getByRole("textbox").nth(-2).fill("");
-    await custom.getByRole("textbox").last().fill("");
+    await capture(page, "links.add-error", custom);
+    await newName.fill("");
+    await newUrl.fill("");
 
     // Portal — custom new-tab URL.
+    await openAt(page, "portal");
     await page.locator(`${DIALOG} #portal-default-agent [role="combobox"]`).click();
     await page.getByRole("option", { name: /Custom URL/ }).click();
     await expect(page.getByRole("textbox", { name: "Custom URL" })).toBeVisible();

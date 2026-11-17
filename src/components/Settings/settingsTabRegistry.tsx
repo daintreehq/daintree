@@ -6,6 +6,7 @@ import {
   GitBranchPlus,
   History,
   LayoutGrid,
+  Link,
   Mic,
   Package,
   PanelRight,
@@ -152,6 +153,7 @@ const importTroubleshootingTab = () => import("./TroubleshootingTab");
 const importCodeForgeSettingsTab = () => import("./CodeForgeSettingsTab");
 const importNotificationSettingsTab = () => import("./NotificationSettingsTab");
 const importPortalSettingsTab = () => import("./PortalSettingsTab");
+const importLinksSettingsTab = () => import("./LinksSettingsTab");
 const importKeyboardShortcutsTab = () => import("./KeyboardShortcutsTab");
 const importWorktreeSettingsTab = () => import("./WorktreeSettingsTab");
 const importToolbarSettingsTab = () => import("./ToolbarSettingsTab");
@@ -198,6 +200,7 @@ const LazyNotificationSettingsTab = lazyWithPreload(
   (m) => m.NotificationSettingsTab
 );
 const LazyPortalSettingsTab = lazyWithPreload(importPortalSettingsTab, (m) => m.PortalSettingsTab);
+const LazyLinksSettingsTab = lazyWithPreload(importLinksSettingsTab, (m) => m.LinksSettingsTab);
 const LazyKeyboardShortcutsTab = lazyWithPreload(
   importKeyboardShortcutsTab,
   (m) => m.KeyboardShortcutsTab
@@ -795,6 +798,39 @@ export const SETTINGS_REGISTRY = [
         description:
           "Play a sound when notifications fire. Choose from chime, ping, complete, waiting, error, or pulse sounds.",
         keywords: ["sound", "audio", "chime", "ping", "notification", "alert", "volume"],
+      },
+    ],
+  } satisfies LazySettingsTabEntry,
+
+  {
+    id: "links",
+    scope: "global",
+    group: "General",
+    settings: ["storage:daintree-global-links"],
+    label: "Links",
+    icon: <Link className="w-4 h-4" />,
+    importKind: "lazy",
+    importer: LazyLinksSettingsTab.preload,
+    LazyComponent: LazyLinksSettingsTab,
+    searchNavDescription: "Your own links, offered in every project",
+    searchNavKeywords: ["links", "bookmarks", "urls", "launcher", "global"],
+    sections: [
+      {
+        id: "global-links",
+        section: "Your links",
+        title: "Your links",
+        description: "Add, edit, reorder, or turn off the links you keep for every project",
+        keywords: [
+          "links",
+          "custom links",
+          "global links",
+          "bookmarks",
+          "url",
+          "add",
+          "reorder",
+          "launcher",
+          "portal",
+        ],
       },
     ],
   } satisfies LazySettingsTabEntry,
@@ -1872,15 +1908,15 @@ export const SETTINGS_REGISTRY = [
     id: "portal",
     scope: "global",
     group: "Integrations",
-    settings: ["storage:portal-storage", "storage:daintree-global-links"],
+    settings: ["storage:portal-storage"],
     label: "Portal",
     headerTitle: "Portal links",
     icon: <PanelRight className="w-4 h-4" />,
     importKind: "lazy",
     importer: LazyPortalSettingsTab.preload,
     LazyComponent: LazyPortalSettingsTab,
-    searchNavDescription: "Default and custom links for the portal browser panel",
-    searchNavKeywords: ["integrations", "portal", "links", "browser", "bookmarks"],
+    searchNavDescription: "New tab page and built-in chat links for the portal browser panel",
+    searchNavKeywords: ["integrations", "portal", "browser", "chat"],
     sections: [
       {
         id: "portal-default-agent",
@@ -1894,14 +1930,7 @@ export const SETTINGS_REGISTRY = [
         section: "Default links",
         title: "Default links",
         description: "System-provided links shown in the portal panel",
-        keywords: ["portal", "links", "default", "browser", "bookmarks"],
-      },
-      {
-        id: "portal-custom-links",
-        section: "Custom links",
-        title: "Custom links",
-        description: "Add custom URLs and links to the portal panel",
-        keywords: ["portal", "custom", "links", "url", "add", "bookmark"],
+        keywords: ["portal", "links", "default", "browser", "chat"],
       },
     ],
   } satisfies LazySettingsTabEntry,
@@ -2916,6 +2945,7 @@ export const globalTabIcons: Record<GlobalSettingsTab, ReactNode> = {
   agents: <Plug className="w-5 h-5 text-text-secondary" />,
   assistant: <DaintreeIcon className="w-5 h-5 text-text-secondary" size={20} />,
   "code-forge": <GitPullRequest className="w-5 h-5 text-text-secondary" />,
+  links: <Link className="w-5 h-5 text-text-secondary" />,
   portal: <PanelRight className="w-5 h-5 text-text-secondary" />,
   toolbar: <PanelTop className="w-5 h-5 text-text-secondary" />,
   notifications: <Bell className="w-5 h-5 text-text-secondary" />,
