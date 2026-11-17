@@ -64,7 +64,9 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
   // to count on (jsdom has no inert focus fixup, Chromium runs it later), and
   // this component instance never unmounts — it just renders null — so a stuck
   // pause would silently disable auto-dismiss for every later summary. A card
-  // brought back mid-exit takes its focus pause from where focus really is.
+  // brought back mid-exit, or a replacement summary whose rows took the
+  // focused one away (removal fires no blur), takes its focus pause from where
+  // focus really is.
   useEffect(() => {
     if (!shouldRender) {
       setIsPaused(false);
@@ -73,7 +75,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
       return;
     }
     setIsFocusInside(visible && !!cardRef.current?.contains(document.activeElement));
-  }, [visible, shouldRender]);
+  }, [visible, shouldRender, entriesKey]);
 
   useEffect(() => {
     if (!visible || isPaused || isFocusInside || isPinned) return;
@@ -305,7 +307,9 @@ function ReEntrySummaryRow({
           and on keyboard focus without adding a tab stop per cut-off span. */}
       <TruncatedTooltip
         content={
-          <span className="flex flex-col">
+          // A name with no break opportunity would be clipped again by the
+          // tooltip's own width.
+          <span className="flex flex-col [overflow-wrap:anywhere]">
             <span className="font-medium">{row.label}</span>
             <span>{row.highlightTitle}</span>
           </span>
