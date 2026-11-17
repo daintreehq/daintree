@@ -21,10 +21,12 @@ let state: CloudHostsState = EMPTY;
 const listeners = new Set<() => void>();
 let stop: (() => void) | null = null;
 let generation = 0;
-// Every read and every push takes the next number; an answer counts only when
-// nothing numbered after it has been shown, so a slow read can't undo a push.
+// Every read and every push takes the next number. A snapshot counts only when
+// no later one has been shown, and an answer or failure sets `loadError` only
+// when no later outcome has, so a slow read can't undo a push or a newer read.
 let sequence = 0;
-let shown = 0;
+let snapshotMark = 0;
+let outcomeMark = 0;
 
 function publish(next: CloudHostsState): void {
   state = next;
@@ -42,7 +44,7 @@ function start(): () => void {
   const current = ++generation;
   const dispose = remote.onEvent((event) => {
     if (event.type !== "cloud-changed" || current !== generation) return;
-    shown = ++sequence;
+    snapshotMark = outcomeMark = ++sequence;
     publish({ snapshot: event.snapshot, loaded: true, loadError: null });
   });
   void refresh();
@@ -52,15 +54,17 @@ function start(): () => void {
 async function refresh(): Promise<void> {
   const current = generation;
   const ticket = ++sequence;
-  const superseded = () => current !== generation || ticket <= shown;
   try {
     const snapshot = await cloudHostsClient.getSnapshot();
-    if (superseded()) return;
-    shown = ticket;
-    publish({ snapshot, loaded: true, loadError: null });
+    if (current !== generation || ticket <= snapshotMark) return;
+    snapshotMark = ticket;
+    // A newer read's failure still stands; this answer only refreshes the picture.
+    const latest = ticket > outcomeMark;
+    if (latest) outcomeMark = ticket;
+    publish({ snapshot, loaded: true, loadError: latest ? null : state.loadError });
   } catch (error) {
-    if (superseded()) return;
-    shown = ticket;
+    if (current !== generation || ticket <= outcomeMark) return;
+    outcomeMark = ticket;
     logWarn("[CloudHosts] Couldn't read cloud accounts", { error });
     publish({ ...state, loaded: true, loadError: "Couldn't read cloud accounts" });
   }
