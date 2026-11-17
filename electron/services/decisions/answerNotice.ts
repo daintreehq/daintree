@@ -41,6 +41,11 @@ export interface AnswerBlock {
   /** The question as asked, quoted for the agent; null from a library that doesn't send it (0.2.0). */
   question: string | null;
   source: "human" | "proxy" | "system";
+  /**
+   * A person's answer given on their computer (#17101), signed by the owner
+   * desktop rather than a phone: still theirs, never a model's.
+   */
+  onComputer: boolean;
   /** A `system` block: the question expired without an answer. */
   expired: boolean;
   correction: boolean;
@@ -92,6 +97,8 @@ const FOLLOWUP_UNANSWERED_NOTE =
   "note: The person sent this from their phone before answering. It is not an answer or an approval: you are not authorised to continue a gated step on it.";
 const PROXY_NOTE =
   "note: A decision model answered this, not the human. The human may still confirm or overrule it.";
+const COMPUTER_NOTE =
+  "note: The person answered this themselves, on their computer rather than a phone. It is their own answer, not a decision model's.";
 const CORRECTION_NOTE =
   "note: This corrects an earlier answer. Reassess any work that depended on the earlier one.";
 const EXPIRED_NOTE =
@@ -100,6 +107,9 @@ const EXPIRED_NOTE =
 // The library's own fixed lines, which are all a `note:` may say.
 const LIBRARY_PROXY_NOTE =
   "note: This is a proxy answer from the decision model, not the human. The human may still confirm or overrule it.";
+const LIBRARY_COMPUTER_LINE = "answered_on: computer";
+const LIBRARY_COMPUTER_NOTE =
+  "note: This is the person's own answer, made on their computer rather than a phone. It is not a proxy answer.";
 const LIBRARY_CORRECTION_NOTE =
   "note: This CORRECTS an earlier answer. Reassess any work that depended on the previous answer.";
 const LIBRARY_EXPIRED_NOTE =
@@ -298,6 +308,7 @@ function parseBlock(cursor: Cursor): AnswerBlock | null {
     injectionId,
     question,
     source: "human",
+    onComputer: false,
     expired: false,
     correction: false,
     modelId: null,
@@ -321,6 +332,11 @@ function parseBlock(cursor: Cursor): AnswerBlock | null {
     block.expired = true;
   } else if (source === "human" || source === "proxy") {
     block.source = source;
+    // Only a person's answer is made on the computer, and it always says what that means.
+    if (source === "human" && cursor.takeExact(LIBRARY_COMPUTER_LINE)) {
+      if (!cursor.takeExact(LIBRARY_COMPUTER_NOTE)) return null;
+      block.onComputer = true;
+    }
     if (source === "proxy") {
       // A proxy block always says so, or it isn't typed at all.
       if (!cursor.takeExact(LIBRARY_PROXY_NOTE)) return null;
@@ -483,6 +499,9 @@ function renderBlock(block: AnswerBlock, marked = true): string {
     lines.push("source: system", "status: expired", "authorised: no", EXPIRED_NOTE);
   } else {
     lines.push(`source: ${block.source}`);
+    if (block.source === "human" && block.onComputer) {
+      lines.push(LIBRARY_COMPUTER_LINE, COMPUTER_NOTE);
+    }
     if (block.source === "proxy") {
       lines.push(PROXY_NOTE);
       if (block.modelId !== null) lines.push(`model: ${block.modelId}`);
