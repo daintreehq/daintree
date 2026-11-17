@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { KeybindingContributionSchema, getPluginManifestSchema } from "../plugin.js";
 import {
-  PLUGIN_KEYBINDING_SCOPES,
   RETIRED_PLUGIN_KEYBINDING_SCOPES,
   isRetiredPluginKeybindingScope,
 } from "../../../shared/config/pluginKeybindingScopes.js";
@@ -15,10 +14,11 @@ function scopeError(scope: string): string | undefined {
 }
 
 describe("KeybindingContributionSchema scope", () => {
-  it("accepts every declarable scope and an omitted one", () => {
+  it("accepts every live scope and an omitted one, none of them retired", () => {
     expect(KeybindingContributionSchema.safeParse(base).success).toBe(true);
-    for (const scope of PLUGIN_KEYBINDING_SCOPES) {
+    for (const scope of ["global", "worktreeGrid", "dev-preview"]) {
       expect(KeybindingContributionSchema.safeParse({ ...base, scope }).success).toBe(true);
+      expect(isRetiredPluginKeybindingScope(scope)).toBe(false);
     }
   });
 
@@ -27,8 +27,8 @@ describe("KeybindingContributionSchema scope", () => {
       expect(KeybindingContributionSchema.safeParse({ ...base, scope }).success).toBe(true);
       expect(isRetiredPluginKeybindingScope(scope)).toBe(true);
     }
+    expect(isRetiredPluginKeybindingScope("portal")).toBe(true);
     expect(isRetiredPluginKeybindingScope(undefined)).toBe(false);
-    expect(isRetiredPluginKeybindingScope("global")).toBe(false);
   });
 
   it("parses a whole manifest that binds a key in the retired portal scope (#17245)", () => {

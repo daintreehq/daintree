@@ -277,15 +277,15 @@ describe("usePluginKeybindings", () => {
     await waitFor(() =>
       expect(registerSpy).toHaveBeenCalledWith(expect.objectContaining({ actionId: "p1.live" }))
     );
-    const pressRetired = {
+    expect(registerSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ actionId: "p1.retired" })
+    );
+    const pressRetired = new KeyboardEvent("keydown", {
       key: "7",
       code: "Digit7",
       metaKey: true,
-      ctrlKey: false,
       shiftKey: true,
-      altKey: false,
-      getModifierState: () => false,
-    } as unknown as KeyboardEvent;
+    });
     expect(keybindingService.findMatchingAction(pressRetired)).toBeUndefined();
 
     registerSpy.mockClear();
