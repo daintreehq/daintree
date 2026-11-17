@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import {
   currentHostSwitchRequest,
   subscribeHostSwitchRequests,
@@ -30,13 +30,15 @@ import {
 const SETUP_HANDOFF_MS = 5_000;
 let lastAsked: { hostId: string; at: number } | null = null;
 
-function handingOff(): boolean {
-  if (!lastAsked) return false;
-  if (isHostSetupOpen(lastAsked.hostId) || Date.now() - lastAsked.at >= SETUP_HANDOFF_MS) {
+/** Milliseconds left of the handoff, or 0 when there is none. */
+function handingOff(): number {
+  if (!lastAsked) return 0;
+  const left = SETUP_HANDOFF_MS - (Date.now() - lastAsked.at);
+  if (isHostSetupOpen(lastAsked.hostId) || left <= 0) {
     lastAsked = null;
-    return false;
+    return 0;
   }
-  return true;
+  return left;
 }
 
 export function _resetCloudPlacementSetupForTesting(): void {
@@ -69,6 +71,7 @@ export function CloudPlacementSetup() {
   );
   const setupVersion = useSyncExternalStore(subscribeHostSetup, hostSetupVersion, () => 0);
   const armedVersion = useSyncExternalStore(subscribeCloudSetup, cloudSetupVersion, () => 0);
+  const [woken, setWoken] = useState(0);
 
   useEffect(() => {
     if (projectId === null || getViewHostId() !== null) return;
@@ -79,9 +82,14 @@ export function CloudPlacementSetup() {
       snapshot,
       projectId,
       isHostSetupOpen,
-      handoff || isAnyHostSetupOpen()
+      handoff > 0 || isAnyHostSetupOpen()
     );
     for (const hostId of stale) disarmCloudSetup(hostId);
+    // A setup asked for that never opened: look again once its handoff has run out.
+    if (handoff > 0) {
+      const wake = setTimeout(() => setWoken((n) => n + 1), handoff);
+      return () => clearTimeout(wake);
+    }
     if (!ready || !observable || switching) return;
     // Opened after the commit, as the switch resume is: a StrictMode replay
     // cancels this pass before anything is claimed.
@@ -95,7 +103,7 @@ export function CloudPlacementSetup() {
     return () => {
       cancelled = true;
     };
-  }, [hosts, snapshot, projectId, observable, switching, setupVersion, armedVersion]);
+  }, [hosts, snapshot, projectId, observable, switching, setupVersion, armedVersion, woken]);
 
   return null;
 }

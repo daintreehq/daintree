@@ -419,6 +419,49 @@ describe("a new worktree on a new machine", () => {
     ]);
   });
 
+  it("asks for the next machine's setup once a setup asked for never opened", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const second: PendingHostPlacement = {
+        ...PLACEMENT,
+        worktreeId: "/w2",
+        worktreePath: "/w2",
+        requestedAt: 2_000,
+      };
+      cloud.createHostForWorktree
+        .mockResolvedValueOnce({ hostId: "feature-login", requestedAt: 1_000 })
+        .mockResolvedValueOnce({ hostId: "feature-two", requestedAt: 2_000 });
+      for (const [worktreeId, branch] of [
+        [WORKTREE, "feature/login"],
+        ["/w2", "feature/two"],
+      ] as const) {
+        await startCloudWorktreePlacement({
+          projectId: "proj-1",
+          worktreeId,
+          branch,
+          machine: MACHINE,
+        });
+      }
+      env.hosts = [
+        hostEntry("feature-login", disconnected, PLACEMENT),
+        hostEntry("feature-two", disconnected, second),
+      ];
+      env.snapshot = {
+        ...snapshotWith(running()),
+        hosts: [running(), { ...running(), hostId: "feature-two" }],
+      };
+      await showView();
+      expect(requestHostUpdate).toHaveBeenCalledTimes(1);
+      // Nothing else changes: the handoff running out is enough.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(requestHostUpdate.mock.calls.at(-1)).toEqual(["feature-two", "setup"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("waits while another host's setup is open rather than replacing it", async () => {
     cloud.createHostForWorktree.mockResolvedValue({ hostId: "feature-login", requestedAt: 1_000 });
     await startCloudWorktreePlacement({

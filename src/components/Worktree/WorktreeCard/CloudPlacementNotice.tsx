@@ -75,12 +75,17 @@ export function CloudPlacementNotice({
   // The card's own focus target, for when this notice is gone by the time a dialog closes.
   const cardTarget = useRef<HTMLElement | null>(null);
 
+  // One action at a time: a second press before the first lands would ask twice.
+  const [acting, setActing] = useState(false);
   const run = (event: MouseEvent, work: () => Promise<unknown> | void, fallback: string) => {
     event.stopPropagation();
+    if (acting) return;
+    setActing(true);
     setActionError(null);
     Promise.resolve()
       .then(work)
-      .catch((err: unknown) => setActionError(errorText(err, fallback)));
+      .catch((err: unknown) => setActionError(errorText(err, fallback)))
+      .finally(() => setActing(false));
   };
 
   const retry = (event: MouseEvent) => {

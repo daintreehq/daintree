@@ -143,6 +143,7 @@ export function watchOwnedHostCleanup(options: OwnedHostCleanupOptions): () => v
       const refused = new Set<HostId>();
       try {
         if (confirm && !(await confirm())) return;
+        if (disposed) return;
         if (placements) {
           for (const host of waitingFor(worktreeId, worktreeGone)) {
             await options.clearPlacement?.(host.id).catch((error: unknown) => {
@@ -159,9 +160,10 @@ export function watchOwnedHostCleanup(options: OwnedHostCleanupOptions): () => v
         }
       } finally {
         pending.delete(worktreeId);
-      }
-      if (removalsWaiting.delete(worktreeId) && !disposed) {
-        forgetOwned(worktreeId, () => isWorktreeGone(probe(worktreeId)));
+        // Checked whichever way this pass ended, the early returns included.
+        if (removalsWaiting.delete(worktreeId) && !disposed) {
+          forgetOwned(worktreeId, () => isWorktreeGone(probe(worktreeId)));
+        }
       }
       // Refused while installing or being re-pointed: the box is still gone, so
       // try again once that settles rather than leave a host nothing removes.
