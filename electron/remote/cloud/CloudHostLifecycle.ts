@@ -437,7 +437,10 @@ export class CloudHostLifecycle {
         const operation = this.operations.get(binding.id);
         const machineType = observation?.machineType ?? binding.creation?.machineType ?? null;
         // A key the person trusted stays the machine's identity between the dials that pin it.
-        const pinnedKey = binding.access?.hostKey ?? binding.trustedHostKey?.key ?? null;
+        // Access, once resolved, says what is pinned now: none, when the tunnel vouches.
+        const pinnedKey = binding.access
+          ? binding.access.hostKey
+          : (binding.trustedHostKey?.key ?? null);
         return {
           hostId: binding.hostId,
           providerId: binding.providerId,
@@ -1277,6 +1280,8 @@ export class CloudHostLifecycle {
     if (written === undefined || written !== generation) {
       await this.deps.files.closeMaster(this.deps.clientDir, bindingId);
     }
+    // A write cut short leaves nothing here vouching for whatever reached the disk.
+    this.writtenRoutes.delete(bindingId);
     const route = await this.deps.files.write(bindingId, binding.accountId, record);
     this.writtenRoutes.set(bindingId, generation);
     this.deps.store.updateBinding(bindingId, (current) => ({

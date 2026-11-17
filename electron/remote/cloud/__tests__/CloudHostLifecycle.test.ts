@@ -82,6 +82,10 @@ function fakeProvider(
           ...info.capabilities,
           sshTrust: sshTrust ?? info.capabilities.sshTrust,
           transport: transport ?? info.capabilities.transport,
+          tunnel:
+            transport === "provider-command"
+              ? { command: "acme", args: ["tunnel", "%h"], installUrl: "https://example.com/acme" }
+              : info.capabilities.tunnel,
         },
       };
     },
@@ -473,7 +477,9 @@ describe("CloudHostLifecycle access through a provider's tunnel", () => {
 
   it("dials through the tunnel once it is installed, and says nothing was pinned", async () => {
     const installed = { path: null as string | null };
-    const { lifecycle, bindingId } = await tunnelled("provider-tunnel", installed);
+    const { lifecycle, store, bindingId } = await tunnelled("provider-tunnel", installed);
+    // Confirmed under an earlier declaration: not what a tunnel-trusted dial pins.
+    store.updateBinding(bindingId, (b) => ({ ...b, trustedHostKey: { key: HOST_KEY, at: 1 } }));
     await expect(lifecycle.ensureAccess(bindingId)).rejects.toBeInstanceOf(UnusableConnectionError);
     expect(lifecycle.statuses()[0]?.lastError?.code).toBe("ssh-tunnel-command-missing");
     installed.path = "/Users/Jo Smith/.local/bin/acme";
@@ -891,8 +897,8 @@ describe("CloudHostLifecycle host keys confirmed on first connect", () => {
 
   it("refuses a provider-command transport rather than dialling it directly", async () => {
     const env = await confirming("provider-command");
-    await expect(env.lifecycle.ensureAccess(env.bindingId)).rejects.toBeInstanceOf(
-      UnusableConnectionError
+    await expect(env.lifecycle.ensureAccess(env.bindingId)).rejects.toThrow(
+      /through the provider's own connection/
     );
     expect(env.provider.authorizeSsh).not.toHaveBeenCalled();
     expect(keyscans(env.run)).toBe(0);
