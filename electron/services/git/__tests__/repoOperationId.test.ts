@@ -43,7 +43,7 @@ describe("readRepoOperationId (#17559)", () => {
     expect(await readRepoOperationId(gitDir, "MERGING")).not.toBe(first);
   });
 
-  it("keeps a rebase's identity while its steps advance, for either backend", async () => {
+  it("keeps a rebase's identity while its steps advance, for either backend, and not past a restart", async () => {
     for (const backend of ["rebase-merge", "rebase-apply"]) {
       fs.rmSync(gitDir, { recursive: true, force: true });
       fs.mkdirSync(gitDir);
@@ -55,6 +55,9 @@ describe("readRepoOperationId (#17559)", () => {
       write(`${backend}/msgnum`, "2\n");
       write(`${backend}/done`, `pick ${OID_B}\n`);
       expect(await readRepoOperationId(gitDir, "REBASING")).toBe(first);
+
+      await recreate(`${backend}/orig-head`, `${OID_A}\n`);
+      expect(await readRepoOperationId(gitDir, "REBASING")).not.toBe(first);
     }
   });
 
@@ -68,24 +71,32 @@ describe("readRepoOperationId (#17559)", () => {
     write("sequencer/head", `${OID_A}\n`);
     write("CHERRY_PICK_HEAD", `${OID_A}\n`);
     const first = await readRepoOperationId(gitDir, "CHERRY_PICKING");
+    expect(first).toEqual(expect.any(String));
 
-    write("CHERRY_PICK_HEAD", `${OID_B}\n`);
+    await recreate("CHERRY_PICK_HEAD", `${OID_B}\n`);
     expect(await readRepoOperationId(gitDir, "CHERRY_PICKING")).toBe(first);
   });
 
   it("follows a single-commit revert, which has no sequencer, by its REVERT_HEAD", async () => {
     write("REVERT_HEAD", `${OID_A}\n`);
     const first = await readRepoOperationId(gitDir, "REVERTING");
-    write("REVERT_HEAD", `${OID_B}\n`);
-    expect(await readRepoOperationId(gitDir, "REVERTING")).not.toBe(first);
+    expect(first).toEqual(expect.any(String));
+    // The same commit reverted again: only the new file's identity differs.
+    await recreate("REVERT_HEAD", `${OID_A}\n`);
+    const second = await readRepoOperationId(gitDir, "REVERTING");
+    expect(second).toEqual(expect.any(String));
+    expect(second).not.toBe(first);
   });
 
   it("never identifies two kinds the same, or a state with no operation", async () => {
-    write("CHERRY_PICK_HEAD", `${OID_A}\n`);
-    write("REVERT_HEAD", `${OID_A}\n`);
-    expect(await readRepoOperationId(gitDir, "CHERRY_PICKING")).not.toBe(
-      await readRepoOperationId(gitDir, "REVERTING")
-    );
+    // Both kinds anchor on the one sequencer file here, so only the kind differs.
+    write("sequencer/head", `${OID_A}\n`);
+    const pick = await readRepoOperationId(gitDir, "CHERRY_PICKING");
+    const revert = await readRepoOperationId(gitDir, "REVERTING");
+    expect(pick).toEqual(expect.any(String));
+    expect(revert).toEqual(expect.any(String));
+    expect(pick).not.toBe(revert);
+    fs.rmSync(path.join(gitDir, "sequencer"), { recursive: true });
     expect(await readRepoOperationId(gitDir, "CLEAN")).toBeNull();
     expect(await readRepoOperationId(gitDir, "DIRTY")).toBeNull();
     expect(await readRepoOperationId(gitDir, "MERGING")).toBeNull();

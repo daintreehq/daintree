@@ -297,7 +297,7 @@ const RECOVERY_HINTS: Record<GitOperationReason, string | undefined> = {
   "pull-rebase-review-stale":
     "The worktree switched branches or gained commits after the pull and rebase was previewed, so nothing was rebased. Pull and rebase again to see what it would replay now.",
   "repo-operation-changed":
-    "The operation in progress isn't the one you chose. It ended, or another one replaced it, so Git left it alone. Look at the current operation and choose again.",
+    "Daintree couldn't confirm the operation in progress is the one you chose: it ended, another replaced it, or it couldn't be identified. Nothing was changed. Check the worktree and choose again.",
   "pathspec-invalid": "The specified ref or path does not exist.",
   "lfs-missing": "Git LFS objects are missing — install git-lfs and run 'git lfs pull'.",
   "lfs-quota-exceeded":

@@ -1085,11 +1085,13 @@ async function requireChosenRepoOperation(
           ? `Daintree couldn't confirm that the ${chosen} in progress is the one you chose`
           : `The ${chosen} in progress was restarted or replaced after you chose it`;
   const message = `${detail}. Nothing was ${op === "abort" ? "aborted" : "continued"}; check the worktree's current state and choose again.`;
-  throw new GitOperationError(
-    "repo-operation-changed",
-    encodeGitOperationErrorMessage("repo-operation-changed", message),
-    { cwd, op: `${op}-repository-operation`, rawMessage: message }
-  );
+  // Plain prose: the preload encodes the transport prefix from the reason, so
+  // encoding it here as well would show the user the second copy.
+  throw new GitOperationError("repo-operation-changed", message, {
+    cwd,
+    op: `${op}-repository-operation`,
+    rawMessage: message,
+  });
 }
 
 /** Classify anything a base-integration read or write throws, once. */

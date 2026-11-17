@@ -178,6 +178,15 @@ describe("getRetryability", () => {
     }
   });
 
+  it("never auto-retries an abort or continue refused because the operation changed", () => {
+    // Retrying would only send the same stale choice again (#17559). An errno
+    // that is otherwise transient must not override the reason.
+    const err = Object.assign(new GitOperationError("repo-operation-changed", "changed"), {
+      code: "EBUSY",
+    });
+    expect(getRetryability(err)).toBe("none");
+  });
+
   it("falls through to errno when gitReason is 'unknown'", () => {
     const err = new GitOperationError("unknown", "boom");
     Object.assign(err, { code: "ETIMEDOUT" });

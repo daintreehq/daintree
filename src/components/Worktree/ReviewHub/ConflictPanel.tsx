@@ -8,6 +8,7 @@ import type {
 } from "@shared/types";
 import type { ConflictMarkerScanEntry } from "@shared/types/ipc/git";
 import type { RepoOperationPin } from "@shared/types/git";
+import { isClientGitError } from "@/utils/clientGitError";
 import { cn } from "@/lib/utils";
 import { PathTail } from "@/components/ui/PathTail";
 import { UI_EXIT_DURATION } from "@/lib/animationUtils";
@@ -531,6 +532,10 @@ export function ConflictPanel({
   const operationLabel = operationKey ? OPERATION_LABEL[operationKey] : "Operation";
   const operationNoun = operationLabel.toLowerCase();
   const shownOperationId = status.repoOperationId;
+  // A halted operation this read couldn't identify (a `git am` session, or one
+  // that changed while the status was read): Main refuses any choice of it, so
+  // neither Abort nor Continue is offered until a read can say which it is.
+  const unidentified = operationKey !== null && shownOperationId == null;
 
   // A status read showing a different operation than the open abort confirm
   // asks about closes it: its question, and any approval of it, are about an
@@ -542,7 +547,7 @@ export function ConflictPanel({
     !isAborting &&
     abortChosen !== null &&
     (abortChosen.operation !== operationKey ||
-      (shownOperationId !== null && shownOperationId !== abortChosen.operationId))
+      (shownOperationId != null && shownOperationId !== abortChosen.operationId))
   ) {
     setIsAbortOpen(false);
   }
@@ -632,7 +637,8 @@ export function ConflictPanel({
     operationKey === "APPLYING_MAILBOX" && !hasStagedChanges && optimisticResolved.size === 0;
   const canContinue = conflictCount === 0 && !mailboxNeedsChanges;
   const needsUser = conflictCount > 0 || mailboxNeedsChanges;
-  const continueBlocked = !canContinue || isAborting || isContinuing || busyFile !== null;
+  const continueBlocked =
+    !canContinue || unidentified || isAborting || isContinuing || busyFile !== null;
 
   // Scan for hunk counts + first-marker line on every status read that lands,
   // not only when the conflicted path set moves. Fixing a region inside
@@ -682,19 +688,25 @@ export function ConflictPanel({
   }, [worktreePath, conflictedFiles, scanNonce]);
 
   const handleAbort = useCallback(async () => {
-    if (abortChosen === null) return;
+    // A closed confirm keeps its footer through the exit animation, and a key
+    // press there must not approve what was just dismissed.
+    if (abortChosen === null || !isAbortOpen) return;
     const unmoved = startUnmoved();
     setIsAborting(true);
     try {
       await onAbort(abortChosen);
       if (unmoved()) setIsAbortOpen(false);
-    } catch {
-      // The hub's banner reports it, and the confirm stays open over it. These
+    } catch (err) {
+      // The hub's banner reports it, and the confirm stays open over any other
+      // failure. One refused because the operation changed asks about an
+      // operation that is gone, so it closes and the banner says why. These
       // run from click handlers, where a rethrow is only an unhandled rejection.
+      const changed = isClientGitError(err) && err.gitReason === "repo-operation-changed";
+      if (changed && unmoved()) setIsAbortOpen(false);
     } finally {
       if (unmoved()) setIsAborting(false);
     }
-  }, [abortChosen, onAbort]);
+  }, [abortChosen, isAbortOpen, onAbort]);
 
   const handleContinue = useCallback(async () => {
     // `aria-disabled` keeps Continue focusable, so the veto lives here.
@@ -854,8 +866,9 @@ export function ConflictPanel({
     status.rebaseStep != null &&
     status.rebaseTotalSteps != null &&
     status.rebaseStep < status.rebaseTotalSteps;
-  const summary =
-    conflictCount > 0
+  const summary = unidentified
+    ? `Couldn't identify this ${operationNoun} — Abort and Continue wait until it can be read`
+    : conflictCount > 0
       ? `${pluralize(conflictCount, "conflicted file")} — resolve each, then continue`
       : mailboxNeedsChanges
         ? "Stage this patch's changes to continue, or run git am --skip in a terminal to drop it"
@@ -950,7 +963,7 @@ export function ConflictPanel({
                 setAbortChosen({ operation: operationKey, operationId: shownOperationId });
                 setIsAbortOpen(true);
               }}
-              disabled={isAborting || isContinuing}
+              disabled={unidentified || isAborting || isContinuing}
               className="shrink-0"
               data-testid="conflict-abort"
             >

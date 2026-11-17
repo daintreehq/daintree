@@ -166,18 +166,24 @@ export async function readRepoOperationId(
   const anchor = await operationAnchor(gitDir, state);
   if (anchor === null) return null;
   const file = path.join(gitDir, ...anchor.split("/"));
+  let handle: fs.promises.FileHandle | undefined;
   try {
-    const [stat, content] = await Promise.all([
-      fs.promises.stat(file, { bigint: true }),
-      fs.promises.readFile(file, "utf8"),
-    ]);
+    // One handle for both reads, opened and closed here: the identity and the
+    // content come from the same file, never one from a replacement. Nothing
+    // is held open past this read, which on Windows would leave the anchor
+    // undeletable for the git client that owns it.
+    handle = await fs.promises.open(file, "r");
+    const stat = await handle.stat({ bigint: true });
     if (!stat.isFile()) return null;
+    const content = await handle.readFile("utf8");
     return createHash("sha256")
       .update([state, anchor, String(stat.ino), String(stat.mtimeNs), content].join("\0"))
       .digest("hex")
       .slice(0, 32);
   } catch {
     return null;
+  } finally {
+    await handle?.close().catch(() => {});
   }
 }
 

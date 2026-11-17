@@ -1365,8 +1365,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /**
      * `expected` is the operation the user chose, from the status they saw:
      * the handler refuses with `repo-operation-changed`, running no git, unless
-     * that same operation is still in progress. Omit it only where nothing was
-     * shown to choose from (an agent dispatch); every UI path passes one.
+     * that same operation is still in progress. Every surface that shows an
+     * operation passes one; it is omitted only by a caller that showed none
+     * (an agent, the palette's generic command), which acts on what it finds.
      */
     abortRepositoryOperation(cwd: string, expected?: RepoOperationPin): Promise<void>;
     continueRepositoryOperation(cwd: string, expected?: RepoOperationPin): Promise<void>;

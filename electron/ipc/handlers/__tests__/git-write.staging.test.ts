@@ -59,6 +59,8 @@ const originalSpawn = childProcess.spawn;
 // A `git status` that exits non-zero without a word, which the default profile
 // would read as an empty, clean status.
 const silentStatusFailure = { on: false };
+/** Runs once, synchronously, as the next `git status` is spawned. */
+let duringNextStatus: (() => void) | null = null;
 
 /** The git subcommand, past the `-c key=value` pairs every hardened call leads with. */
 function subcommand(args: readonly string[]): string | undefined {
@@ -119,7 +121,14 @@ beforeAll(async () => {
   process.env.XDG_CONFIG_HOME = path.join(home, ".config");
   process.env.GIT_CONFIG_NOSYSTEM = "1";
   (childProcess as { spawn: typeof originalSpawn }).spawn = ((...args: unknown[]) => {
-    if (Array.isArray(args[1])) spawned.push(args[1] as string[]);
+    if (Array.isArray(args[1])) {
+      spawned.push(args[1] as string[]);
+      if (duringNextStatus && subcommand(args[1] as string[]) === "status") {
+        const run = duringNextStatus;
+        duringNextStatus = null;
+        run();
+      }
+    }
     if (silentStatusFailure.on && subcommand(args[1] as string[]) === "status") {
       args = [process.execPath, ["-e", "process.exit(1)"], args[2]];
     }
@@ -1088,6 +1097,38 @@ describe("abort and continue act only on the operation the user chose (real git,
     await abortAt(linked, chosen);
     expect((await statusAt(linked)).repoState).toBe("CLEAN");
     expect(git(linked, "log", "-1", "--format=%s")).toBe("side 2\n");
+  });
+
+  it("withholds the id when the merge is replaced while the status is read", async () => {
+    divergedBranches();
+    gitHalting(repo, "merge", "side");
+    const mergeHead = path.join(repo, ".git", "MERGE_HEAD");
+    // Another merge in its place mid-read: the counts would be the old one's.
+    const otherCommit = git(repo, "rev-parse", "main");
+    duringNextStatus = () => {
+      fs.rmSync(mergeHead);
+      fs.writeFileSync(mergeHead, otherCommit);
+    };
+
+    const status = await statusAt(repo);
+    expect(duringNextStatus).toBeNull();
+    expect(status.repoState).toBe("MERGING");
+    expect(status.repoOperationId).toBeNull();
+    // The next read, with nothing changing under it, identifies it again.
+    expect((await statusAt(repo)).repoOperationId).toEqual(expect.any(String));
+  });
+
+  it("withholds the id when a merge starts while the status is read", async () => {
+    divergedBranches();
+    const sideCommit = git(repo, "rev-parse", "side");
+    duringNextStatus = () => {
+      fs.writeFileSync(path.join(repo, ".git", "MERGE_HEAD"), sideCommit);
+    };
+
+    const status = await statusAt(repo);
+    expect(duringNextStatus).toBeNull();
+    expect(status.repoState).toBe("MERGING");
+    expect(status.repoOperationId).toBeNull();
   });
 
   it("reports no operation id for a clean worktree", async () => {

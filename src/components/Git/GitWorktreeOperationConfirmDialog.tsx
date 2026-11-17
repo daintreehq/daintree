@@ -307,16 +307,18 @@ function GitWorktreeOperationConfirmDialogInner() {
         // Held until this request's own read settles and identifies the
         // operation: the counts in the description are the whole reason to
         // confirm, and the identity is what the abort is checked against.
-        confirmDisabled={nothingInProgress || pin === null}
+        // With nothing in progress the primary is a Close, which declines.
+        confirmDisabled={!nothingInProgress && pin === null}
         hint={
           notice
-            ? "Retry to continue"
+            ? "Retry to check again"
             : !isSettled && showPendingHint
               ? "Checking what this would discard…"
               : null
         }
         onConfirm={() => {
-          if (pin) resolveConfirmation(true, null, pin);
+          if (nothingInProgress) resolveConfirmation(false);
+          else if (pin) resolveConfirmation(true, null, pin);
         }}
       >
         {notice && <PreviewFrame>{notice}</PreviewFrame>}

@@ -433,5 +433,29 @@ describe("GitWorktreeOperationConfirmDialog — abort binds to the operation it 
       abortButton("rebase").click();
     });
     expect(outcome.result).toBeNull();
+
+    // Retry reads again, and an identified answer is what can be approved.
+    getStagingStatus.mockResolvedValue(halted({ repoState: "REBASING", repoOperationId: "rb-1" }));
+    await act(async () => {
+      screen.getByTestId("git-abort-operation-retry").click();
+    });
+    expect(screen.queryByTestId("git-abort-operation-unidentified")).toBeNull();
+    await act(async () => {
+      abortButton("rebase").click();
+    });
+    expect(outcome.result?.operation).toEqual({ operation: "REBASING", operationId: "rb-1" });
+  });
+
+  it("declines from Close once the read finds nothing in progress", async () => {
+    getStagingStatus.mockResolvedValue(halted({ repoState: "CLEAN", repoOperationId: null }));
+    render(<GitWorktreeOperationConfirmDialog />);
+    const outcome = await openAbort("MERGING");
+
+    const close = screen.getByRole("button", { name: "Close" });
+    expect(isDisabled(close)).toBe(false);
+    await act(async () => {
+      close.click();
+    });
+    expect(outcome.result).toEqual({ confirmed: false, pinned: null, operation: null });
   });
 });

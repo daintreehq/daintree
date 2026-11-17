@@ -1280,7 +1280,8 @@ describe("abort and continue check the operation they were chosen for (#17559)",
   describe.each(CHANNELS_UNDER_TEST)("%s", (verb, channel) => {
     it.each([
       ["the same kind replaced it", "MERGING", "merge-b", /restarted or replaced/],
-      ["another kind replaced it", "REBASING", "rebase-a", /rebase is in progress now/],
+      // The same id, so only the kind comparison can refuse it.
+      ["another kind replaced it", "REBASING", "merge-a", /rebase is in progress now/],
       ["it ended", "CLEAN", null, /no longer in progress/],
       ["its identity can't be read now", "MERGING", null, /couldn't confirm/],
     ] as const)("refuses, running no git, when %s", async (_case, state, currentId, message) => {
@@ -1310,7 +1311,9 @@ describe("abort and continue check the operation they were chosen for (#17559)",
       ]) {
         await expect(handler(null, CWD, pin)).rejects.toThrow(/Invalid repository operation pin/);
       }
-      expect(detectRepoOperationStateMock).not.toHaveBeenCalled();
+      expect(createContinueGitMock).not.toHaveBeenCalled();
+      expect(createHardenedGitMock).not.toHaveBeenCalled();
+      expect(resolveGitDirMock).not.toHaveBeenCalled();
       expect(gitRan()).toBe(0);
     });
 

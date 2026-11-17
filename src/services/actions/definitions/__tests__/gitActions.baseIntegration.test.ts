@@ -449,10 +449,13 @@ describe("git.abortRepositoryOperation", () => {
       cwd: WT_PATH,
       operation: "REBASING",
     });
-    await settleConfirm(true, undefined, REBASE_A);
+    // The dialog's own read found a merge where the menu named a rebase.
+    const found: RepoOperationPin = { operation: "MERGING", operationId: "merge-a" };
+    await settleConfirm(true, undefined, found);
     await pending;
-    // The operation the dialog read and the user approved, for Main to check.
-    expect(git.abortRepositoryOperation).toHaveBeenCalledWith(WT_PATH, REBASE_A);
+    // What the dialog read and the user approved, for Main to check, never
+    // anything rebuilt from the request.
+    expect(git.abortRepositoryOperation).toHaveBeenCalledWith(WT_PATH, found);
     expect(refresh).toHaveBeenCalledWith(WT_ID);
   });
 
@@ -484,6 +487,17 @@ describe("git.abortRepositoryOperation", () => {
     expect(refresh).toHaveBeenCalledWith(WT_ID);
     expect(notify).toHaveBeenCalledWith(
       expect.objectContaining({ type: "error", title: "Git operation changed" })
+    );
+    // Its one recovery opens this worktree's Review Hub, where the operation
+    // there now can be chosen; it never replays the refused abort.
+    const toast = vi.mocked(notify).mock.calls.at(-1)?.[0];
+    dispatch.mockClear();
+    toast?.action?.onClick?.();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith(
+      "worktree.openReviewHub",
+      { worktreeId: WT_ID },
+      undefined
     );
   });
 

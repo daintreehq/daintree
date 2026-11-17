@@ -1205,19 +1205,31 @@ describe("Git submenu — recovery rows", () => {
     const rows = gitRowLabels(container);
     // Fetch survives: it writes only remote-tracking refs, so it is safe and
     // useful mid-operation. Only the start rows are replaced.
-    expect(rows).toEqual(["Fetch", "Fetch and prune", `Continue ${label}`, `Abort ${label}…`]);
+    expect(rows).toEqual([
+      "Fetch",
+      "Fetch and prune",
+      `Continue ${label} in Review Hub`,
+      `Abort ${label}…`,
+    ]);
     expect(rows.some((r) => r.includes("Rebase onto develop"))).toBe(false);
   });
 
-  it("dispatches continue without an operation argument", () => {
+  it("continues in Review Hub, never straight from a row that names only the kind", () => {
+    // The row's label comes from the last poll and identifies no operation, so
+    // continuing from here could advance one that replaced it (#17559).
     const { container } = renderWorktreeMenu({
       worktree: integrable({ repoState: "REBASING" } as Partial<WorktreeState>),
     });
     gitRow(container, "Continue").click();
     expect(dispatch).toHaveBeenCalledWith(
-      "git.continueRepositoryOperation",
+      "worktree.openReviewHub",
       { worktreeId: "wt-1" },
       { source: "menu" }
+    );
+    expect(dispatch).not.toHaveBeenCalledWith(
+      "git.continueRepositoryOperation",
+      expect.anything(),
+      expect.anything()
     );
   });
 

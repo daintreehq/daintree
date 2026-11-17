@@ -1710,19 +1710,19 @@ describe("ReviewHub", () => {
       /** The worktree's own event, which is what re-reads the hub's status. */
       async function statusChanged(next: StagingStatus) {
         getStagingStatusMock.mockResolvedValue(next);
-        const onWorktreeUpdate = onUpdateMock.mock.calls.find(
+        const onWorktreeUpdate: (data: unknown) => void = onUpdateMock.mock.calls.find(
           ([type]) => type === "worktree-update"
-        )?.[1] as (data: unknown) => void;
+        )?.[1];
         await act(async () => {
           onWorktreeUpdate({ worktree: { path: WORKTREE_PATH } });
         });
       }
 
-      function changedError(): Error {
-        return new Error(
-          "[GitError|repo-operation-changed||] The merge in progress was restarted or replaced after you chose it. Nothing was continued; check the worktree's current state and choose again."
-        );
-      }
+      /** As the preload delivers Main's refusal: the reason encoded once, ahead of plain prose. */
+      const changedMessage = (verb: string) =>
+        `The merge in progress was restarted or replaced after you chose it. Nothing was ${verb}; check the worktree's current state and choose again.`;
+      const changedError = (verb: string) =>
+        new Error(`[GitError|repo-operation-changed||] ${changedMessage(verb)}`);
 
       it("closes the abort confirm when a read shows another merge in its place", async () => {
         getStagingStatusMock.mockResolvedValue(makeMergingStatus());
@@ -1744,7 +1744,8 @@ describe("ReviewHub", () => {
         await screen.findByRole("alertdialog");
 
         await statusChanged(makeMergingStatus({ repoOperationId: null }));
-        await act(async () => {});
+        // The unidentified read has reached the panel behind the confirm.
+        await screen.findByText(/Couldn't identify this merge/);
 
         const dialog = screen.getByRole("alertdialog");
         fireEvent.click(within(dialog).getByRole("button", { name: /Abort merge/i }));
@@ -1763,26 +1764,72 @@ describe("ReviewHub", () => {
         fireEvent.click(await screen.findByRole("button", { name: /^Continue /i }));
         const retry = await screen.findByRole("button", { name: "Retry" });
 
-        await statusChanged(resolvedMerge({ repoOperationId: "merge-b" }));
+        // Merge B, visibly: a different resolved file, on screen before Retry.
+        await statusChanged(
+          resolvedMerge({
+            repoOperationId: "merge-b",
+            staged: [{ path: "src/other.ts", status: "modified", insertions: 1, deletions: 1 }],
+          })
+        );
+        await screen.findByText("other.ts");
         fireEvent.click(retry);
 
         await waitFor(() => expect(continueRepositoryOperationMock).toHaveBeenCalledTimes(2));
         expect(continueRepositoryOperationMock).toHaveBeenLastCalledWith(WORKTREE_PATH, MERGE_A);
+
+        // A fresh Continue, chosen from what is on screen now, is for B.
+        fireEvent.click(screen.getByRole("button", { name: /^Continue /i }));
+        await waitFor(() => expect(continueRepositoryOperationMock).toHaveBeenCalledTimes(3));
+        expect(continueRepositoryOperationMock).toHaveBeenLastCalledWith(WORKTREE_PATH, {
+          operation: "MERGING",
+          operationId: "merge-b",
+        });
       });
 
       it("offers no Retry once the merge was replaced, and reads the worktree again", async () => {
         getStagingStatusMock.mockResolvedValue(resolvedMerge());
-        continueRepositoryOperationMock.mockRejectedValueOnce(changedError());
+        continueRepositoryOperationMock.mockRejectedValueOnce(changedError("continued"));
         render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
         const continueBtn = await screen.findByRole("button", { name: /^Continue /i });
         const readsBefore = getStagingStatusMock.mock.calls.length;
         fireEvent.click(continueBtn);
 
-        await screen.findByText(/restarted or replaced after you chose it/);
+        // Exactly the prose, with no transport prefix left in it.
+        await screen.findByText(changedMessage("continued"));
         expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
         await waitFor(() =>
           expect(getStagingStatusMock.mock.calls.length).toBeGreaterThan(readsBefore)
         );
+      });
+
+      it("closes the abort confirm on a replaced merge, says why, and reads the worktree again", async () => {
+        getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+        abortRepositoryOperationMock.mockRejectedValueOnce(changedError("aborted"));
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        fireEvent.click(await screen.findByRole("button", { name: /^Abort /i }));
+        const dialog = await screen.findByRole("alertdialog");
+        const readsBefore = getStagingStatusMock.mock.calls.length;
+        fireEvent.click(within(dialog).getByRole("button", { name: /Abort merge/i }));
+
+        await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+        await screen.findByText(changedMessage("aborted"));
+        await waitFor(() =>
+          expect(getStagingStatusMock.mock.calls.length).toBeGreaterThan(readsBefore)
+        );
+      });
+
+      it("offers neither Abort nor Continue for a merge the read couldn't identify", async () => {
+        getStagingStatusMock.mockResolvedValue(resolvedMerge({ repoOperationId: null }));
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+        await screen.findByText(/Couldn't identify this merge/);
+        const abort = screen.getByRole("button", { name: /^Abort /i }) as HTMLButtonElement;
+        expect(abort.disabled).toBe(true);
+        const continueBtn = screen.getByRole("button", { name: /^Continue /i });
+        expect(continueBtn.getAttribute("aria-disabled")).toBe("true");
+        fireEvent.click(continueBtn);
+        await act(async () => {});
+        expect(continueRepositoryOperationMock).not.toHaveBeenCalled();
       });
     });
 
