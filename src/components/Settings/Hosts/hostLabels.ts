@@ -104,7 +104,9 @@ export function connectionLabel(state: HostConnectionState, now: number = Date.n
       if (state.hostModeOff) return `Not listening · ${formatSeen(state.lastSeenAt, now)}`;
       // What was seen, when there is something: ssh's own words for why it couldn't reach it.
       return [
-        "Unreachable",
+        state.blocker?.kind === "wsl-distro-missing"
+          ? `WSL couldn't find ${state.blocker.distro}`
+          : "Unreachable",
         formatSeen(state.lastSeenAt, now),
         ...(state.stoppedRetrying ? ["not retrying until you connect"] : []),
         ...(state.detail ? [state.detail] : []),

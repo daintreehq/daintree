@@ -1,6 +1,8 @@
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { olderBuildSide } from "@/components/Hosts/hostModel";
+import { asSentence } from "./recoveryCopy";
+import type { HostConnectionBlocker } from "@shared/types/remoteHosts";
 import {
   HOST_LINK_SETTLE_MS,
   selectHostBannerVariant,
@@ -19,6 +21,8 @@ export type HostLinkEpisode =
   | "restarting"
   | "host-mode-off"
   | "access-denied"
+  | "wsl-distro-missing"
+  | "connection-unavailable"
   | "version-mismatch"
   | "disconnected";
 
@@ -51,6 +55,8 @@ export function hostLinkEpisode(
       return "restarting";
     case "host-mode-off":
     case "access-denied":
+    case "wsl-distro-missing":
+    case "connection-unavailable":
     case "version-mismatch":
     case "disconnected":
       return variant;
@@ -68,7 +74,9 @@ export function hostLinkAnnouncement(
   /** The link was up before the episode being left (or, for a drop, before this one). */
   wasUp: boolean,
   /** Which side runs the older build, for a refused build; null when they have no order. */
-  olderSide: "host" | "local" | null = null
+  olderSide: "host" | "local" | null = null,
+  /** What stopped the retries, for a missing WSL distribution or an unusable connection. */
+  blocker: HostConnectionBlocker | null = null
 ): string | null {
   switch (next) {
     case "up":
@@ -84,6 +92,14 @@ export function hostLinkAnnouncement(
       return `Daintree isn't listening on ${hostName}.`;
     case "access-denied":
       return `Couldn't log in to ${hostName} over ssh.`;
+    case "wsl-distro-missing": {
+      const distro = blocker?.kind === "wsl-distro-missing" ? blocker.distro : hostName;
+      return `WSL couldn't find ${distro}. Restore it under that name, then retry.`;
+    }
+    case "connection-unavailable":
+      return blocker?.kind === "unusable"
+        ? `Couldn't connect to ${hostName}. ${asSentence(blocker.message)}`
+        : `Couldn't connect to ${hostName}.`;
     case "version-mismatch":
       // The banner's diagnosis and its one action, said together.
       if (olderSide === "local") {
@@ -156,7 +172,8 @@ export function watchHostConnectionAnnouncements(hostId: string): () => void {
         wasUp,
         state.connection?.status === "version-mismatch"
           ? olderBuildSide(state.connection.mismatch)
-          : null
+          : null,
+        state.connection?.status === "unreachable" ? (state.connection.blocker ?? null) : null
       );
       said = {
         hostId,

@@ -427,6 +427,17 @@ export interface HostDescriptor {
   wake?: HostWakeSetup;
 }
 
+/**
+ * What a link that stopped retrying on its own was told, when trying again
+ * can't change it: ssh refused the login, WSL has no distribution by the
+ * host's saved name, or the connection can't be used from this machine as set
+ * up (`message` is the transport's own sentence, never raw output).
+ */
+export type HostConnectionBlocker =
+  | { kind: "ssh-access" }
+  | { kind: "wsl-distro-missing"; distro: string }
+  | { kind: "unusable"; message: string };
+
 export type HostConnectionState =
   | { status: "local" }
   | { status: "disconnected" }
@@ -481,6 +492,8 @@ export type HostConnectionState =
        * still checked now and then, so the window comes back with it.
        */
       stoppedRetrying?: true;
+      /** What stopped the retries, other than Host mode being off; only with `stoppedRetrying`. */
+      blocker?: HostConnectionBlocker;
     }
   | { status: "version-mismatch"; mismatch: HandshakeMismatch; remote: HostHandshakeInfo }
   | { status: "driven-elsewhere"; driver: DriveLeaseHolder };

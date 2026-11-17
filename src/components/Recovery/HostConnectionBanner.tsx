@@ -90,6 +90,9 @@ export function HostConnectionBanner() {
   const mismatch = useHostConnectionStore((s) =>
     s.connection?.status === "version-mismatch" ? s.connection.mismatch : null
   );
+  const blocker = useHostConnectionStore((s) =>
+    s.connection?.status === "unreachable" ? (s.connection.blocker ?? null) : null
+  );
   const everConnected = useHostConnectionStore((s) => s.everConnected);
   const dropped =
     everConnected &&
@@ -115,7 +118,8 @@ export function HostConnectionBanner() {
     lastSeenAt,
     now,
     detail,
-    mismatch === null ? null : olderBuildSide(mismatch)
+    mismatch === null ? null : olderBuildSide(mismatch),
+    blocker
   );
 
   // A cloud host whose machine isn't running: the way back is starting it, on
@@ -355,9 +359,15 @@ export function HostConnectionBanner() {
     );
   }
 
-  if (variant === "access-denied" && hostId !== null) {
-    // Fixed outside Daintree (a key, known_hosts) or by a Sign in on the
-    // host's details, which also show the whole of what ssh said; then tried again.
+  if (
+    (variant === "access-denied" ||
+      variant === "wsl-distro-missing" ||
+      variant === "connection-unavailable") &&
+    hostId !== null
+  ) {
+    // Fixed outside Daintree (a key, known_hosts, a WSL distribution) or, for
+    // ssh, by a Sign in on the host's details, which also show everything the
+    // transport said; then tried again.
     return (
       <InlineStatusBanner
         title={title}

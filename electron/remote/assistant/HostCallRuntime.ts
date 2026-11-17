@@ -2070,6 +2070,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
           case "HOST_VERSION_MISMATCH":
           case "HOST_MODE_OFF":
           case "HOST_SSH_ACCESS_DENIED":
+          case "HOST_CONNECTION_UNUSABLE":
             return { ...this.outcomeWith("disconnected", ENSURE_DISCONNECTED_DETAIL), ...none };
           case "VALIDATION":
           case "NOT_FOUND":
