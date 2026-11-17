@@ -293,6 +293,18 @@ describe("NotificationSettingsTab", () => {
       ).toBe(false);
     });
 
+    it("lets a list that arrives after an import have the final say", async () => {
+      getSettings.mockResolvedValueOnce({ ...BASE, soundEnabled: true });
+      listCustomSounds.mockRejectedValueOnce(new Error("busy")).mockResolvedValue([]);
+      importMock.importNotificationSound.mockResolvedValue(IMPORTED);
+      render(<NotificationSettingsTab />);
+
+      await chooseFile("Waiting sound");
+
+      const waiting = screen.getByRole("combobox", { name: "Waiting sound" });
+      await waitFor(() => expect(waiting.textContent).toContain("Missing sound"));
+    });
+
     it("names a saved import by its label and disables Preview when its file is gone", async () => {
       getSettings.mockResolvedValueOnce({
         ...BASE,

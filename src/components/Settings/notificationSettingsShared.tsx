@@ -70,7 +70,10 @@ export function useCustomNotificationSounds() {
     api
       .list()
       .then((list) => {
-        if (request === requestRef.current) setListed(list);
+        // The newest list began after every import here was stored, so it has the final say.
+        if (request !== requestRef.current) return;
+        setListed(list);
+        setAdded([]);
       })
       .catch(() => {});
   }, []);
