@@ -106,7 +106,21 @@ function fadeOutVoice(ctx: AudioContext, voice: ActiveVoice): void {
   }
 }
 
-export async function playSound(soundFile: string, detune?: number): Promise<void> {
+export interface PlaySoundOptions {
+  detune?: number;
+  /** Linear gain from Main (the volume setting times any repeat decay), 0-1. */
+  volume?: number;
+}
+
+function gainFor(volume: number | undefined): number {
+  if (volume === undefined || !Number.isFinite(volume)) return 1;
+  return Math.max(0, Math.min(1, volume));
+}
+
+export async function playSound(
+  soundFile: string,
+  { detune, volume }: PlaySoundOptions = {}
+): Promise<void> {
   // Captured before any await — if cancelSound() fires during fetch/decode,
   // the generation advances and we abort before scheduling playback.
   const startGeneration = cancelGeneration;
@@ -122,6 +136,7 @@ export async function playSound(soundFile: string, detune?: number): Promise<voi
     if (detune !== undefined) source.detune.value = detune;
 
     const gainNode = ctx.createGain();
+    gainNode.gain.value = gainFor(volume);
     source.connect(gainNode);
     gainNode.connect(ctx.destination);
 

@@ -2708,8 +2708,9 @@ function buildElectronApi(): ElectronAPI {
 
     // Sound API (Web Audio playback via main → renderer push)
     sound: {
-      onTrigger: (callback: (payload: { soundFile: string; detune?: number }) => void) =>
-        _typedOn(CHANNELS.SOUND_TRIGGER, callback),
+      onTrigger: (
+        callback: (payload: { soundFile: string; detune?: number; volume?: number }) => void
+      ) => _typedOn(CHANNELS.SOUND_TRIGGER, callback),
       onCancel: (callback: () => void) => _eventBusOn("sound:cancel", () => callback()),
       getSoundDir: (): Promise<string> => _unwrappingInvoke(CHANNELS.SOUND_GET_DIR),
     },

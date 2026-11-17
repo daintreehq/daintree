@@ -1785,7 +1785,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   };
   sound: {
     /** Listen for sound trigger events from main process */
-    onTrigger(callback: (payload: { soundFile: string; detune?: number }) => void): () => void;
+    onTrigger(
+      callback: (payload: { soundFile: string; detune?: number; volume?: number }) => void
+    ): () => void;
     /** Listen for sound cancel events from main process */
     onCancel(callback: () => void): () => void;
     /** Get the absolute path to the sounds directory */

@@ -235,12 +235,35 @@ describe("WebAudioService", () => {
     const { service, mockSuccessfulFetch, sources, mockStart } = await setupTest();
     mockSuccessfulFetch();
 
-    await service.playSound("pulse.wav", 12);
+    await service.playSound("pulse.wav", { detune: 12 });
 
     // Snapshot captured at start() proves detune was assigned BEFORE start,
     // not after — the entire premise of this feature.
     expect(sources[0]!.detuneAtStart).toBe(12);
     expect(mockStart).toHaveBeenCalledWith(0);
+  });
+
+  it("plays at the level Main sent, so decay and the volume setting are audible", async () => {
+    const { service, mockSuccessfulFetch, sources } = await setupTest();
+    mockSuccessfulFetch();
+
+    await service.playSound("waiting.wav", { volume: 0.35 });
+
+    expect(sources[0]!.gainNode!.gain.value).toBeCloseTo(0.35);
+  });
+
+  it.each([
+    [undefined, 1],
+    [1.7, 1],
+    [-0.2, 0],
+    [Number.NaN, 1],
+  ])("clamps a trigger level of %s to %s", async (volume, expected) => {
+    const { service, mockSuccessfulFetch, sources } = await setupTest();
+    mockSuccessfulFetch();
+
+    await service.playSound("waiting.wav", { volume });
+
+    expect(sources[0]!.gainNode!.gain.value).toBe(expected);
   });
 
   it("cancelSound during async decode aborts the pending playback", async () => {
