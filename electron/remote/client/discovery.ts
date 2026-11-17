@@ -515,16 +515,14 @@ export async function discoverHosts(deps: DiscoverDeps): Promise<DiscoveredHost[
   ]);
   const fromConfig = configAliases
     .filter((alias) => isValidSshTarget(alias))
-    .map(
-      (alias): DiscoveryCandidate => ({
-        name: alias,
-        sshTarget: alias,
-        source: "ssh-config",
-        platform: null,
-        // Nothing was seen answering; the check is what reaches it.
-        online: false,
-      })
-    );
+    .map((alias): DiscoveryCandidate => ({
+      name: alias,
+      sshTarget: alias,
+      source: "ssh-config",
+      platform: null,
+      // Nothing was seen answering; the check is what reaches it.
+      online: false,
+    }));
   const knownTargets = deps.knownConnections
     .map(sshTargetOf)
     .filter((target): target is string => target !== null);

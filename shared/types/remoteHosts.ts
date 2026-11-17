@@ -132,12 +132,7 @@ export function isBlockingMismatch(mismatch: HandshakeMismatch): boolean {
 
 /** How a host was found. Discovery only proves reachability; `wsl` is a distro installed on this PC, `ssh-config` an alias the user's ssh config names. */
 export type HostDiscoverySource =
-  | "tailscale"
-  | "netbird"
-  | "bonjour"
-  | "ssh-config"
-  | "manual"
-  | "wsl";
+  "tailscale" | "netbird" | "bonjour" | "ssh-config" | "manual" | "wsl";
 
 /**
  * How this client reaches a host. Each kind names the one command that gets a

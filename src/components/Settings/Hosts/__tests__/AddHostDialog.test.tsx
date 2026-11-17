@@ -338,9 +338,9 @@ describe("AddHostDialog", () => {
     const row = await screen.findByRole("radio", { name: "build-box" });
     expect(discoveredRows()[0]!.textContent).toContain("SSH config");
     fireEvent.click(row);
-    expect(
-      (screen.getByPlaceholderText("user@devbox.local") as HTMLInputElement).value
-    ).toBe("build-box");
+    expect((screen.getByPlaceholderText("user@devbox.local") as HTMLInputElement).value).toBe(
+      "build-box"
+    );
     expect(remoteHosts.probe).not.toHaveBeenCalled();
   });
 

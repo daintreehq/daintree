@@ -39,7 +39,7 @@ describe("splitConfigLine", () => {
       keyword: "host",
       args: ["beta", "gamma"],
     });
-    expect(splitConfigLine('Include "dir with space/*" \'b\'')).toEqual({
+    expect(splitConfigLine("Include \"dir with space/*\" 'b'")).toEqual({
       keyword: "include",
       args: ["dir with space/*", "b"],
     });
