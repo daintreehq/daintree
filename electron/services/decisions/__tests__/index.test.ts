@@ -654,6 +654,8 @@ describe("Decisions entry", () => {
       expiresAt: null,
       settledAt: null,
       standing: { kind: "waiting", reason: "open" },
+      replyRequest: null,
+      stall: null,
     });
     const listPushes = () =>
       statusView.send.mock.calls.filter(

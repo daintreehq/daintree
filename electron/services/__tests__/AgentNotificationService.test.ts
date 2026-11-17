@@ -35,6 +35,7 @@ const notificationServiceMock = vi.hoisted(() => ({
   isOwnerViewFocused: vi.fn<(owner: number | undefined) => boolean>(() => false),
   closeNotificationByKey: vi.fn(),
   openDecisionQuestion: vi.fn(),
+  openDecisionAttention: vi.fn(),
 }));
 
 const soundServiceMock = vi.hoisted(() => ({
@@ -86,6 +87,7 @@ import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
 import { setDecisionQuestions } from "../decisionsQuestionList.js";
 import { getEffectiveRegistry } from "../../../shared/config/agentRegistry.js";
 import type { DecisionQuestionListItem } from "../../../shared/types/decisionsQuestion.js";
+import { deliveryReasonText } from "../../../shared/utils/decisionsDeliveryReasons.js";
 
 /** Stand-in for a project view's webContents id — the renderer that owns the watched panels. */
 const OWNER = 101;
@@ -4653,6 +4655,8 @@ describe("Decisions questions (#17232)", () => {
       expiresAt: null,
       settledAt: null,
       standing: { kind: "waiting", reason: "open" },
+      replyRequest: null,
+      stall: null,
       ...overrides,
     };
   }
@@ -4865,5 +4869,124 @@ describe("Decisions questions (#17232)", () => {
     expect(soundServiceMock.playFile).toHaveBeenCalledWith(
       DEFAULT_NOTIFICATION_SETTINGS.waitingSoundFile
     );
+  });
+
+  describe("follow-ups and stalled answers (#17235)", () => {
+    const agentName = () => getEffectiveRegistry().claude!.name;
+
+    it("names the agent wanting a reply and the question, and opens the question at that follow-up", () => {
+      const asked = question("term-unwatched", Date.now(), {
+        standing: { kind: "waiting", reason: "reply" },
+        replyRequest: "ask-1",
+      });
+
+      agentNotificationService.notifyDecisionReply(asked, "Ship the migration now?", "reply-key");
+
+      const [title, body, options] = notificationServiceMock.showNativeNotification.mock.calls[0]!;
+      expect(title).toBe(`${agentName()} in Daintree wants a reply`);
+      expect(body).toBe("Ship the migration now?");
+      expect(options.ownerWebContentsId).toBeUndefined();
+      options.onClick();
+      expect(notificationServiceMock.openDecisionQuestion).toHaveBeenCalledWith(
+        asked.reference,
+        "ask-1"
+      );
+    });
+
+    it("says how to read a follow-up whose question's line can't be read", () => {
+      projectStoreMock.getProjectById.mockReturnValue(null);
+      agentNotificationService.notifyDecisionReply(
+        question("term-1", Date.now(), { projectLabel: null, replyRequest: "ask-1" }),
+        null,
+        "reply-key"
+      );
+
+      const [title, body] = notificationServiceMock.showNativeNotification.mock.calls[0]!;
+      expect(title).toBe(`${agentName()} wants a reply`);
+      expect(body).toBe("Open the question to read the follow-up.");
+    });
+
+    it("gives a stalled answer's reason in the attention list's words, and opens that list", () => {
+      const stalled = question("term-1", Date.now(), {
+        standing: { kind: "needs-attention", deliveryStatus: "needs-attention" },
+        stall: { answerRevision: 2, followUpIds: [], reason: "pane_gone" },
+      });
+
+      agentNotificationService.notifyDecisionStall(stalled, "stall-key");
+
+      const [title, body, options] = notificationServiceMock.showNativeNotification.mock.calls[0]!;
+      expect(title).toBe(`Answer to ${agentName()} in Daintree needs attention`);
+      expect(body).toBe(deliveryReasonText("pane_gone"));
+      options.onClick();
+      expect(notificationServiceMock.openDecisionAttention).toHaveBeenCalledWith(
+        stalled.reference
+      );
+      expect(notificationServiceMock.openDecisionQuestion).not.toHaveBeenCalled();
+    });
+
+    it("names held follow-ups, an uncertain delivery, and a reason it has no words for", () => {
+      projectStoreMock.getProjectById.mockReturnValue(null);
+      agentNotificationService.notifyDecisionStall(
+        question("term-1", Date.now(), {
+          agentKind: "not-an-agent",
+          projectLabel: null,
+          standing: { kind: "needs-attention", deliveryStatus: "delivery-uncertain" },
+          stall: { answerRevision: null, followUpIds: ["m-1", "m-2"], reason: "inject_ambiguous" },
+        }),
+        "stall-key"
+      );
+      agentNotificationService.notifyDecisionStall(
+        question("term-1", Date.now(), {
+          standing: { kind: "needs-attention", deliveryStatus: "needs-attention" },
+          stall: { answerRevision: 1, followUpIds: ["m-1"], reason: "unspecified" },
+        }),
+        "stall-key-2"
+      );
+
+      const [[uncertainTitle, uncertainBody], [title, body]] =
+        notificationServiceMock.showNativeNotification.mock.calls;
+      expect(uncertainTitle).toBe("Follow-ups may or may not have been delivered");
+      expect(uncertainBody).toBe(deliveryReasonText("inject_ambiguous", "follow-ups"));
+      expect(title).toBe(`Answer and follow-up to ${agentName()} in Daintree need attention`);
+      expect(body).toBe("Daintree won't type them in on its own.");
+    });
+
+    it("is silenced by turning notifications off, as a question's own is", () => {
+      mockStore({ enabled: false } as never);
+      agentNotificationService.notifyDecisionReply(
+        question("term-1", Date.now(), { replyRequest: "ask-1" }),
+        "Hi?",
+        "k"
+      );
+      agentNotificationService.notifyDecisionStall(
+        question("term-1", Date.now(), {
+          stall: { answerRevision: 1, followUpIds: [], reason: "pane_gone" },
+        }),
+        "k"
+      );
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+      expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+    });
+
+    it("gives each its own banner, taken down by its key", () => {
+      agentNotificationService.notifyDecisionReply(
+        question("term-1", Date.now(), { replyRequest: "ask-1" }),
+        "Hi?",
+        "reply-key"
+      );
+      agentNotificationService.notifyDecisionStall(
+        question("term-1", Date.now(), {
+          stall: { answerRevision: 1, followUpIds: [], reason: "pane_gone" },
+        }),
+        "stall-key"
+      );
+      const [replyBanner, stallBanner] = notificationServiceMock.showNativeNotification.mock.calls.map(
+        (call) => call[2].replaceKey as string
+      );
+      expect(replyBanner).not.toBe(stallBanner);
+
+      agentNotificationService.closeDecisionQuestion("stall-key");
+      expect(notificationServiceMock.closeNotificationByKey).toHaveBeenCalledWith(stallBanner);
+    });
   });
 });

@@ -158,6 +158,8 @@ function pushList(revision: number, kinds: { qa: Kind; qz: Kind }) {
     expiresAt: null,
     settledAt: null,
     standing: kind === "waiting" ? { kind, reason: "open" as const } : { kind },
+    replyRequest: null,
+    stall: null,
   });
   for (const listener of [...listListeners]) {
     listener({
@@ -645,6 +647,40 @@ describe("DecisionQuestionDialog", () => {
   });
 
   describe("opened by reference (#17229)", () => {
+    it("opens a follow-up's question at that follow-up, once per opening (#17235)", async () => {
+      const scrolled: Element[] = [];
+      const scrollIntoView = vi.fn(function (this: Element) {
+        scrolled.push(this);
+      });
+      Reflect.set(Element.prototype, "scrollIntoView", scrollIntoView);
+      try {
+        act(() =>
+          useDecisionsQuestionViewStore
+            .getState()
+            .openReference([OTHER_PROJECT], OTHER_PROJECT, "m1")
+        );
+        await screen.findByTestId("decision-question-content");
+        await waitFor(() => expect(scrolled).toHaveLength(1));
+        expect(scrolled[0]!.getAttribute("data-message-id")).toBe("m1");
+
+        // A read again keeps the place the person scrolled to.
+        pushList(2, { qa: "to-type", qz: "waiting" });
+        await waitFor(() => expect(getQuestionContentByReference).toHaveBeenCalledTimes(2));
+        expect(scrolled).toHaveLength(1);
+
+        // A follow-up the thread doesn't show yet: its thread, then.
+        act(() =>
+          useDecisionsQuestionViewStore
+            .getState()
+            .openReference([OTHER_PROJECT], OTHER_PROJECT, "not-yet-read")
+        );
+        await waitFor(() => expect(scrolled).toHaveLength(2));
+        expect(scrolled[1]!.getAttribute("data-testid")).toBe("decision-question-thread");
+      } finally {
+        Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+      }
+    });
+
     it("reads a question from another project's window by its reference, never through a pane", async () => {
       openReference([OTHER_PROJECT]);
       const body = await screen.findByTestId("decision-question-content");
