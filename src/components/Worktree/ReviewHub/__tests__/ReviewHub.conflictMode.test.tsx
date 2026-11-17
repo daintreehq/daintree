@@ -1789,6 +1789,7 @@ describe("ReviewHub", () => {
       scanConflictMarkersMock.mockResolvedValueOnce(leftover);
       fireEvent.click(markButton);
       expect(scanConflictMarkersMock).toHaveBeenCalledTimes(scansBefore + 1);
+      expect(scanConflictMarkersMock).toHaveBeenLastCalledWith(WORKTREE_PATH, ["src/app.ts"]);
       const dialog = await screen.findByRole("alertdialog");
       expect(dialog.textContent).toContain("leftover conflict markers, starting on line 4");
       expect(dialog.textContent).not.toContain("without checking");
@@ -1801,13 +1802,11 @@ describe("ReviewHub", () => {
       const markAgain = await screen.findByRole("button", {
         name: /Mark src\/app\.ts as resolved/i,
       });
-      scanConflictMarkersMock.mockResolvedValueOnce(leftover);
+      scanConflictMarkersMock.mockResolvedValueOnce([{ ...leftover[0], firstMarkerLine: 9 }]);
       fireEvent.click(markAgain);
-      fireEvent.click(
-        within(await screen.findByRole("alertdialog")).getByRole("button", {
-          name: "Mark resolved",
-        })
-      );
+      const retryDialog = await screen.findByRole("alertdialog");
+      expect(retryDialog.textContent).toContain("starting on line 9");
+      fireEvent.click(within(retryDialog).getByRole("button", { name: "Mark resolved" }));
       await waitFor(() => {
         expect(stageFileMock).toHaveBeenCalledTimes(1);
       });
@@ -1893,6 +1892,7 @@ describe("ReviewHub", () => {
         { path: "src/app.ts", hunkCount: 0, hasMarkers: true, firstMarkerLine: 3 },
       ]);
       fireEvent.click(markButton);
+      expect(scanConflictMarkersMock).toHaveBeenLastCalledWith(WORKTREE_PATH, ["src/app.ts"]);
       const dialog = await screen.findByRole("alertdialog");
       expect(dialog.textContent).toContain("starting on line 3");
       expect(stageFileMock).not.toHaveBeenCalled();
