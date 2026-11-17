@@ -49,20 +49,15 @@ export function applyOptimisticProjectUpdate(
  * Undoes only the fields `write` still owns on this row: a pending predecessor
  * takes the field back, a saved one leaves its value in place. Fields a newer
  * write owns stay, with `write` spliced out of their history so a later failure
- * of that newer write restores past it. With `row` given (for `currentProject`:
- * its list row, already rolled back), owned fields copy the row instead of this
- * object's own history: reloads replace list rows but never `currentProject`,
- * so that history can predate Main's current value. Returns the same object
- * when nothing was restored.
+ * of that newer write restores past it. Returns the same object when nothing
+ * was restored.
  */
 export function rollbackOptimisticProjectUpdate(
   project: Project,
-  write: OptimisticProjectWrite,
-  row?: Project
+  write: OptimisticProjectWrite
 ): Project {
   const claims = claimsByRow.get(project);
   if (!claims) return project;
-  const rowClaims = row ? claimsByRow.get(row) : undefined;
   let next: Record<string, unknown> | null = null;
   const remaining = new Map(claims);
   for (const [key, claim] of claims) {
@@ -71,20 +66,9 @@ export function rollbackOptimisticProjectUpdate(
       continue;
     }
     next ??= { ...project };
-    let hasValue: boolean;
-    let value: unknown;
-    let owner: FieldClaim | undefined;
-    if (row) {
-      hasValue = Object.hasOwn(row, key);
-      value = (row as unknown as Record<string, unknown>)[key];
-      owner = rowClaims?.get(key);
-    } else {
-      hasValue = claim.hadPrior;
-      value = claim.prior;
-      owner = claim.previous?.write.status === "pending" ? claim.previous : undefined;
-    }
-    if (hasValue) next[key] = value;
+    if (claim.hadPrior) next[key] = claim.prior;
     else delete next[key];
+    const owner = claim.previous?.write.status === "pending" ? claim.previous : undefined;
     if (owner) remaining.set(key, owner);
     else remaining.delete(key);
   }

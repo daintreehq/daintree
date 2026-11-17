@@ -222,16 +222,16 @@ describe("projectStore.updateProject rollback", () => {
     expect(project("a")?.name).toBe("Alpha 3");
   });
 
-  it("leaves the store untouched when a newer pending write set the same value", async () => {
+  it("leaves the list untouched when a newer pending write set the same value", async () => {
     const calls = holdUpdates();
     const first = useProjectStore.getState().updateProject("a", { name: "Alpha 2" });
     const second = useProjectStore.getState().updateProject("a", { name: "Alpha 2" });
-    const { projects: before, currentProject: currentBefore } = useProjectStore.getState();
+    const before = useProjectStore.getState().projects;
 
     calls[0]!.reject(new Error("nope"));
     await failed(first);
     expect(useProjectStore.getState().projects).toBe(before);
-    expect(useProjectStore.getState().currentProject).toBe(currentBefore);
+    expect(useProjectStore.getState().currentProject).toBe(project("a"));
     expect(project("a")?.name).toBe("Alpha 2");
 
     calls[1]!.reject(new Error("nope"));
@@ -404,11 +404,11 @@ describe("projectStore.updateProject rollback", () => {
   });
 
   it.each([
-    ["older", [0, 1]],
-    ["newer", [1, 0]],
+    ["older", [0, 1], "Alpha 3"],
+    ["newer", [1, 0], "Alpha Saved"],
   ] as const)(
     "lands the current project on Main's value when both writes around a reload fail, %s first",
-    async (_order, rejectOrder) => {
+    async (_order, rejectOrder, afterFirst) => {
       const calls = holdUpdates();
       projectClientMock.checkMissing.mockReturnValueOnce(deferred<void>().promise);
       const writes = [useProjectStore.getState().updateProject("a", { name: "Alpha 2" })];
@@ -417,14 +417,39 @@ describe("projectStore.updateProject rollback", () => {
       await useProjectStore.getState().loadProjects();
       writes.push(useProjectStore.getState().updateProject("a", { name: "Alpha 3" }));
 
-      for (const index of rejectOrder) {
-        calls[index]!.reject(new Error("nope"));
-        await failed(writes[index]!);
-      }
+      const [firstIndex, secondIndex] = rejectOrder;
+      calls[firstIndex]!.reject(new Error("nope"));
+      await failed(writes[firstIndex]!);
+      expect(project("a")?.name).toBe(afterFirst);
+      expect(useProjectStore.getState().currentProject?.name).toBe(afterFirst);
+
+      calls[secondIndex]!.reject(new Error("nope"));
+      await failed(writes[secondIndex]!);
       expect(project("a")?.name).toBe("Alpha Saved");
       expect(useProjectStore.getState().currentProject?.name).toBe("Alpha Saved");
     }
   );
+
+  it("re-syncs the current project from the list when a write fails after a second reload", async () => {
+    const calls = holdUpdates();
+    projectClientMock.checkMissing.mockReturnValue(deferred<void>().promise);
+    const first = useProjectStore.getState().updateProject("a", { name: "Alpha 2" });
+
+    await useProjectStore.getState().loadProjects();
+    const second = useProjectStore.getState().updateProject("a", { name: "Alpha 3" });
+    calls[1]!.reject(new Error("nope"));
+    await failed(second);
+    expect(useProjectStore.getState().currentProject?.name).toBe("Alpha");
+
+    server.set("a", { ...server.get("a")!, name: "Alpha Saved" });
+    await useProjectStore.getState().loadProjects();
+    expect(project("a")?.name).toBe("Alpha Saved");
+
+    calls[0]!.reject(new Error("nope"));
+    await failed(first);
+    expect(project("a")?.name).toBe("Alpha Saved");
+    expect(useProjectStore.getState().currentProject?.name).toBe("Alpha Saved");
+  });
 
   it("restores a value the write explicitly cleared", async () => {
     useProjectStore.setState((state) => ({
