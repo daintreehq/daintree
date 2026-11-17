@@ -18,10 +18,15 @@ const MAX_INCLUDE_DEPTH = 16;
 const MAX_FILES = 256;
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_DIR_ENTRIES = 4096;
+/** Pattern comparisons per walk: a pathological Host line stops here rather than holding the main thread. */
+const MAX_MATCH_WORK = 1_000_000;
 /** A config on a dead mount stops the walk here rather than holding up a dial or the dialog. */
 const WALK_DEADLINE_MS = 2_000;
 /** More than a list can usefully show; the rest can still be typed. */
 const MAX_ALIASES = 500;
+
+const WHITESPACE = " \t\r\n";
+const NUL = String.fromCharCode(0);
 
 export interface SshConfigRoot {
   path: string;
@@ -48,6 +53,34 @@ export interface ConfigLine {
   keyword: string;
   /** Null when ssh would refuse the line: no argument, or a quote left open. */
   args: string[] | null;
+}
+
+function skipWhitespace(line: string, at: number): number {
+  while (at < line.length && WHITESPACE.includes(line[at]!)) at++;
+  return at;
+}
+
+/**
+ * OpenSSH's strdelim: one word, ending at whitespace, a double quote (whose
+ * contents join the word) or a single `=`. `next` is -1 once the line is used
+ * up; null for a quote left open.
+ */
+function strdelim(line: string, from: number): { word: string; next: number } | null {
+  let at = from;
+  while (at < line.length && !`${WHITESPACE}"=`.includes(line[at]!)) at++;
+  if (at >= line.length) return { word: line.slice(from), next: -1 };
+  if (line[at] === '"') {
+    const close = line.indexOf('"', at + 1);
+    if (close < 0) return null;
+    return {
+      word: line.slice(from, at) + line.slice(at + 1, close),
+      next: skipWhitespace(line, close + 1),
+    };
+  }
+  const equals = line[at] === "=";
+  let next = skipWhitespace(line, at + 1);
+  if (!equals && line[next] === "=") next = skipWhitespace(line, next + 1);
+  return { word: line.slice(from, at), next };
 }
 
 /**
@@ -89,16 +122,21 @@ function splitArgs(text: string): string[] | null {
   return args;
 }
 
-/** A keyword and its arguments, or null for a blank or comment line. Keywords are case-insensitive. */
+/** A keyword (lowercased) and its arguments, as readconf splits a line; null for a blank or comment line. */
 export function splitConfigLine(raw: string): ConfigLine | null {
-  const line = raw.replace(/^[ \t]+/, "").replace(/[ \t\r\n\f]+$/, "");
-  if (line === "" || line.startsWith("#")) return null;
-  const match = /^([^ \t"=]+)[ \t]*(?:=[ \t]*)?(.*)$/.exec(line);
-  if (!match) return null;
-  const keyword = match[1]!.toLowerCase();
-  const rest = match[2]!;
-  const args = rest === "" ? null : splitArgs(rest);
-  return { keyword, args: args && args.length > 0 ? args : null };
+  // A C string ends at its first NUL, and readconf trims trailing whitespace and form feeds.
+  const nul = raw.indexOf(NUL);
+  let end = nul < 0 ? raw.length : nul;
+  while (end > 0 && `${WHITESPACE}\f`.includes(raw[end - 1]!)) end--;
+  const line = raw.slice(0, end);
+  if (line === "") return null;
+  let first = strdelim(line, 0);
+  // Leading whitespace (or a leading `=`) gives an empty first word; the keyword is the next one.
+  if (first && first.word === "") first = first.next < 0 ? null : strdelim(line, first.next);
+  if (!first || first.word === "" || first.word.startsWith("#")) return null;
+  const keyword = first.word.toLowerCase();
+  const rest = first.next < 0 ? "" : line.slice(skipWhitespace(line, first.next));
+  return { keyword, args: rest === "" ? null : splitArgs(rest) };
 }
 
 /** OpenSSH's match_pattern: `*` and `?` wildcards, everything else literal and case-sensitive. */
@@ -154,66 +192,157 @@ type Block =
 interface WalkContext {
   mode: "aliases" | "dependencies";
   home: string;
-  signal?: AbortSignal;
+  deadlineAt: number;
   stopped: boolean;
+  /** Ends the caller's wait at once, whatever read is still pending. */
+  settle: () => void;
   files: number;
   dirEntries: number;
+  work: number;
   complete: boolean;
   aliases: string[];
   aliasSet: Set<string>;
   stamps: string[];
 }
 
+function halt(ctx: WalkContext): void {
+  ctx.stopped = true;
+  ctx.complete = false;
+  ctx.settle();
+}
+
+function outOfTime(ctx: WalkContext): boolean {
+  if (!ctx.stopped && Date.now() > ctx.deadlineAt) halt(ctx);
+  return ctx.stopped;
+}
+
+/** Not there: an ordinary miss, as ssh's glob and fopen see one. Anything else leaves ssh's view unknown. */
+function isMissing(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+/** The %-tokens Include shares with Match exec that don't depend on the destination. */
+function localToken(token: string, home: string): string | null {
+  try {
+    switch (token) {
+      case "%":
+        return "%";
+      case "d":
+        return home;
+      case "u":
+        return os.userInfo().username;
+      case "i":
+        return process.getuid ? String(process.getuid()) : null;
+      case "l":
+        return os.hostname();
+      case "L":
+        return os.hostname().split(".")[0] ?? null;
+      default:
+        // %h, %n, %p, %r, %C, %j, %k name the host being dialled.
+        return null;
+    }
+  } catch {
+    return null;
+  }
+}
+
+/** Include's environment variables and %-tokens (OpenSSH 9.9+); null when one can't be known here. */
+function expandIncludeTokens(arg: string, home: string): string | null {
+  let unresolved = false;
+  const withEnv = arg.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name: string) => {
+    const value = process.env[name];
+    if (value === undefined) unresolved = true;
+    return value ?? "";
+  });
+  if (unresolved || withEnv.includes("${")) return null;
+  let out = "";
+  for (let i = 0; i < withEnv.length; i++) {
+    const c = withEnv[i]!;
+    if (c !== "%") {
+      out += c;
+      continue;
+    }
+    const token = withEnv[++i];
+    const value = token === undefined ? null : localToken(token, home);
+    if (value === null) return null;
+    out += value;
+  }
+  return out;
+}
+
 /** Include's path as readconf anchors it: `~/` in user configs, relative ones under ~/.ssh or /etc/ssh. */
 function includePattern(arg: string, system: boolean, home: string): string | null {
-  if (arg.startsWith("~")) {
+  const expanded = expandIncludeTokens(arg, home);
+  if (expanded === null) return null;
+  if (expanded.startsWith("~")) {
     if (system) return null;
-    if (arg === "~" || arg.startsWith("~/")) return path.join(home, arg.slice(1));
+    if (expanded === "~" || expanded.startsWith("~/")) return home + expanded.slice(1);
     // Another user's home: glob(3) would look it up; not worth a passwd read here.
     return null;
   }
-  if (path.isAbsolute(arg)) return arg;
-  return path.join(system ? "/etc/ssh" : path.join(home, ".ssh"), arg);
+  if (path.isAbsolute(expanded)) return expanded;
+  // Joined as glob(3) sees it: `link/..` is the filesystem's to resolve, not collapsed here.
+  return `${system ? "/etc/ssh" : `${home}/.ssh`}/${expanded}`;
 }
 
-const GLOB_MAGIC = /[*?[]/;
+type GlobToken = { kind: "star" } | { kind: "one"; test: (c: string) => boolean; literal?: string };
 
-/** One path segment against a glob(3) pattern: `*`, `?`, `[...]` classes and `\` escapes, no leading dot unless written. */
-function globSegmentMatches(name: string, pattern: string): boolean {
-  if (name.startsWith(".") && !pattern.startsWith(".")) return false;
-  type Token = { kind: "star" } | { kind: "one"; test: (c: string) => boolean };
-  const tokens: Token[] = [];
-  for (let i = 0; i < pattern.length; i++) {
-    const c = pattern[i]!;
+/**
+ * One path segment of a glob(3) pattern: `*`, `?`, `[...]` (with `!` and
+ * ranges) and, on POSIX, `\` escapes. Null for a POSIX character class, which
+ * isn't read here.
+ */
+function globTokens(segment: string): GlobToken[] | null {
+  const escapes = path.sep === "/";
+  const tokens: GlobToken[] = [];
+  for (let i = 0; i < segment.length; i++) {
+    const c = segment[i]!;
     if (c === "*") {
       tokens.push({ kind: "star" });
-    } else if (c === "?") {
-      tokens.push({ kind: "one", test: () => true });
-    } else if (c === "[" && pattern.indexOf("]", i + 2) > 0) {
-      const close = pattern.indexOf("]", i + 2);
-      let body = pattern.slice(i + 1, close);
-      const negate = body.startsWith("!") || body.startsWith("^");
-      if (negate) body = body.slice(1);
-      const ranges: Array<[string, string]> = [];
-      for (let j = 0; j < body.length; j++) {
-        const from = body[j]!;
-        if (body[j + 1] === "-" && j + 2 < body.length) {
-          ranges.push([from, body[j + 2]!]);
-          j += 2;
-        } else {
-          ranges.push([from, from]);
-        }
-      }
-      tokens.push({
-        kind: "one",
-        test: (ch) => ranges.some(([lo, hi]) => ch >= lo && ch <= hi) !== negate,
-      });
-      i = close;
-    } else {
-      const literal = c === "\\" && i + 1 < pattern.length ? pattern[++i]! : c;
-      tokens.push({ kind: "one", test: (ch) => ch === literal });
+      continue;
     }
+    if (c === "?") {
+      tokens.push({ kind: "one", test: () => true });
+      continue;
+    }
+    if (c === "[") {
+      let j = i + 1;
+      const negate = segment[j] === "!";
+      if (negate) j++;
+      // A `]` first in the class is one of its characters.
+      const close = segment.indexOf("]", j + 1);
+      if (close > 0) {
+        const body = segment.slice(j, close);
+        if (body.includes("[:")) return null;
+        const ranges: Array<[string, string]> = [];
+        for (let k = 0; k < body.length; k++) {
+          const from = body[k]!;
+          if (body[k + 1] === "-" && k + 2 < body.length) {
+            ranges.push([from, body[k + 2]!]);
+            k += 2;
+          } else {
+            ranges.push([from, from]);
+          }
+        }
+        tokens.push({
+          kind: "one",
+          test: (ch) => ranges.some(([lo, hi]) => ch >= lo && ch <= hi) !== negate,
+        });
+        i = close;
+        continue;
+      }
+    }
+    const literal = escapes && c === "\\" && i + 1 < segment.length ? segment[++i]! : c;
+    tokens.push({ kind: "one", test: (ch) => ch === literal, literal });
   }
+  return tokens;
+}
+
+function globMatches(name: string, tokens: readonly GlobToken[]): boolean {
+  // A leading dot is matched only by a dot written as such.
+  const first = tokens[0];
+  if (name.startsWith(".") && !(first?.kind === "one" && first.literal === ".")) return false;
   let n = 0;
   let t = 0;
   let star = -1;
@@ -237,42 +366,100 @@ function globSegmentMatches(name: string, pattern: string): boolean {
   return t === tokens.length;
 }
 
-/** The files an Include pattern names, sorted as glob(3) sorts them. */
+function joinRaw(dir: string, name: string): string {
+  return dir.endsWith("/") || dir.endsWith(path.sep) ? dir + name : `${dir}${path.sep}${name}`;
+}
+
+/** A directory's names, up to what the walk has left to read; null once that runs out. */
+async function readDirBudgeted(dir: string, ctx: WalkContext): Promise<string[] | null> {
+  const names: string[] = [];
+  try {
+    for await (const entry of await fs.opendir(dir)) {
+      if (ctx.stopped) return null;
+      if (++ctx.dirEntries > MAX_DIR_ENTRIES) {
+        halt(ctx);
+        return null;
+      }
+      names.push(entry.name);
+    }
+  } catch (error) {
+    if (!isMissing(error)) ctx.complete = false;
+  }
+  return names;
+}
+
+/** The files an Include pattern names, in glob(3)'s byte order. */
 async function expandInclude(pattern: string, ctx: WalkContext): Promise<string[]> {
-  if (!GLOB_MAGIC.test(pattern)) return [pattern];
   const { root } = path.parse(pattern);
-  // A backslash is glob's escape on POSIX, so it only separates on Windows.
-  const separators = path.sep === "\\" ? /[\\/]+/ : /\/+/;
+  const separators = path.sep === "/" ? /\/+/ : /[\\/]+/;
+  const trailingSlash = /[\\/]$/.test(pattern) && pattern.length > root.length;
   const segments = pattern.slice(root.length).split(separators).filter(Boolean);
   let paths = [root];
+  let magic = false;
   for (const segment of segments) {
-    if (!GLOB_MAGIC.test(segment)) {
-      paths = paths.map((dir) => path.join(dir, segment));
+    const tokens = globTokens(segment);
+    if (tokens === null) {
+      ctx.complete = false;
+      return [];
+    }
+    if (tokens.every((token) => token.kind === "one" && token.literal !== undefined)) {
+      const literal = tokens.map((token) => (token.kind === "one" ? token.literal : "")).join("");
+      paths = paths.map((dir) => joinRaw(dir, literal));
       continue;
     }
+    magic = true;
     const next: string[] = [];
     for (const dir of paths) {
-      if (ctx.stopped) return [];
-      let entries: string[];
-      try {
-        entries = await fs.readdir(dir);
-      } catch {
-        continue;
-      }
-      ctx.dirEntries += entries.length;
-      if (ctx.dirEntries > MAX_DIR_ENTRIES) {
-        ctx.complete = false;
-        return [];
-      }
-      for (const entry of entries) {
-        if (globSegmentMatches(entry, segment)) next.push(path.join(dir, entry));
-      }
+      const names = await readDirBudgeted(dir, ctx);
+      if (names === null) return [];
+      for (const name of names) if (globMatches(name, tokens)) next.push(joinRaw(dir, name));
     }
     paths = next;
   }
+  // A trailing slash asks for a directory; stat then refuses a file named that way, as glob does.
+  if (trailingSlash) paths = paths.map((p) => `${p}/`);
+  if (!magic) return paths;
   // Every match counts toward the stamp, so a file newly matching the pattern changes it.
-  ctx.stamps.push(`glob:${pattern}`);
-  return paths.sort();
+  ctx.stamps.push(`glob\t${pattern}`);
+  return paths.sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
+}
+
+/** A file's bytes, or null when it holds `limit` bytes or more (it grew since it was stat'ed). */
+async function readBelow(file: string, limit: number): Promise<Buffer | null> {
+  const handle = await fs.open(file, "r");
+  try {
+    const buffer = Buffer.alloc(limit);
+    let length = 0;
+    while (length < limit) {
+      const { bytesRead } = await handle.read(buffer, length, limit - length, length);
+      if (bytesRead === 0) break;
+      length += bytesRead;
+    }
+    return length >= limit ? null : buffer.subarray(0, length);
+  } finally {
+    await handle.close();
+  }
+}
+
+function collectAliases(
+  patterns: readonly string[],
+  gates: readonly (readonly string[])[],
+  ctx: WalkContext
+): void {
+  // A literal on its own Host line matches it; only that line's negations can still rule it out.
+  const negations = patterns.filter((p) => p.startsWith("!")).map((p) => p.slice(1));
+  const gateWork = gates.reduce((sum, gate) => sum + gate.length, 0);
+  for (const alias of patterns) {
+    if (ctx.aliases.length >= MAX_ALIASES) return;
+    if (ctx.aliasSet.has(alias) || !isListableAlias(alias)) continue;
+    ctx.work += negations.length + gateWork;
+    if (ctx.work > MAX_MATCH_WORK) return halt(ctx);
+    if (negations.some((negation) => matchHostPattern(alias, negation))) continue;
+    // An included host applies only to names its Includes' own Host lines match too.
+    if (!gates.every((gate) => hostLineMatches(alias, gate))) continue;
+    ctx.aliasSet.add(alias);
+    ctx.aliases.push(alias);
+  }
 }
 
 async function walkFile(
@@ -283,67 +470,78 @@ async function walkFile(
   ancestry: ReadonlySet<string>,
   ctx: WalkContext
 ): Promise<void> {
-  if (ctx.stopped) return;
-  if (++ctx.files > MAX_FILES) {
-    ctx.complete = false;
-    return;
-  }
+  if (outOfTime(ctx)) return;
+  if (++ctx.files > MAX_FILES) return halt(ctx);
   let stat: Stats;
   try {
     stat = await fs.stat(file);
-  } catch {
-    ctx.stamps.push(`${file}:-`);
+  } catch (error) {
+    if (!isMissing(error)) ctx.complete = false;
+    ctx.stamps.push(`${file}\t-`);
     return;
   }
-  ctx.stamps.push(`${file}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`);
-  if (!stat.isFile()) return;
-  // ssh stops a loop at its depth limit; nothing past the first visit adds a host or a file.
+  if (ctx.stopped) return;
   const identity = `${stat.dev}:${stat.ino}`;
-  if (ancestry.has(identity)) return;
+  ctx.stamps.push(`${file}\t${identity}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`);
+  if (!stat.isFile()) {
+    // ssh reads a pipe's bytes, which no stat vouches for.
+    if (stat.isFIFO()) ctx.complete = false;
+    return;
+  }
+  if (ancestry.has(identity)) {
+    // ssh recurses until its depth limit refuses the whole config.
+    ctx.complete = false;
+    return;
+  }
   if (stat.size > MAX_FILE_BYTES) {
     ctx.complete = false;
     return;
   }
-  let text: string;
+  let bytes: Buffer | null;
   try {
-    text = await fs.readFile(file, "utf8");
+    bytes = await readBelow(file, stat.size + 1);
   } catch {
+    bytes = null;
+  }
+  if (ctx.stopped) return;
+  if (bytes === null) {
     ctx.complete = false;
     return;
   }
+  // The bytes too: two same-sized edits inside one timestamp tick otherwise look alike.
+  ctx.stamps.push(crypto.createHash("sha256").update(bytes).digest("hex"));
   const lineage = new Set(ancestry).add(identity);
   // Until its first Host or Match, a file is in whatever block included it.
   let block: Block = { kind: "all" };
-  for (const raw of text.replace(/^﻿/, "").split("\n")) {
-    if (ctx.stopped) return;
+  for (const raw of bytes.toString("utf8").split("\n")) {
+    if (outOfTime(ctx)) return;
     const line = splitConfigLine(raw);
     if (!line) continue;
     if (line.keyword === "host") {
       const args = line.args;
-      block = args && !args.includes("") ? { kind: "host", patterns: args } : { kind: "never" };
+      block =
+        args && args.length > 0 && !args.includes("")
+          ? { kind: "host", patterns: args }
+          : { kind: "never" };
       if (ctx.mode === "aliases" && block.kind === "host") {
-        for (const alias of block.patterns) {
-          if (ctx.aliasSet.has(alias) || !isListableAlias(alias)) continue;
-          // An included host applies only to names its Include's own Host lines match too.
-          if (!hostLineMatches(alias, block.patterns)) continue;
-          if (!gates.every((gate) => hostLineMatches(alias, gate))) continue;
-          if (ctx.aliases.length >= MAX_ALIASES) break;
-          ctx.aliasSet.add(alias);
-          ctx.aliases.push(alias);
-        }
+        collectAliases(block.patterns, gates, ctx);
+        if (ctx.stopped) return;
       }
     } else if (line.keyword === "match") {
       const args = line.args;
-      block = !args
-        ? { kind: "never" }
-        : args.length === 1 && args[0]!.toLowerCase() === "all"
-          ? { kind: "all" }
-          : { kind: "match" };
+      block =
+        !args || args.length === 0
+          ? { kind: "never" }
+          : args.length === 1 && args[0]!.toLowerCase() === "all"
+            ? { kind: "all" }
+            : { kind: "match" };
     } else if (line.keyword === "include" && line.args) {
       // Listing never decides a Match; a route's files follow every Include, whatever block it sits in.
       if (ctx.mode === "aliases" && (block.kind === "match" || block.kind === "never")) continue;
       const inner = block.kind === "host" ? [...gates, block.patterns] : gates;
       for (const arg of line.args) {
+        // ssh refuses the line at an empty path.
+        if (arg === "") break;
         const pattern = includePattern(arg, system, ctx.home);
         if (pattern === null) {
           // Nothing this can resolve, so a route can't be known to stay as it is.
@@ -351,12 +549,14 @@ async function walkFile(
           continue;
         }
         const files = await expandInclude(pattern, ctx);
+        if (ctx.stopped) return;
         for (const included of files) {
           if (depth + 1 > MAX_INCLUDE_DEPTH) {
             ctx.complete = false;
             break;
           }
           await walkFile(included, system, inner, depth + 1, lineage, ctx);
+          if (ctx.stopped) return;
         }
       }
     }
@@ -368,44 +568,42 @@ async function walk(
   mode: WalkContext["mode"],
   options: SshConfigWalkOptions
 ): Promise<WalkContext> {
+  let settle: () => void = () => {};
+  const settled = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
   const ctx: WalkContext = {
     mode,
     home: options.home ?? os.homedir(),
-    signal: options.signal,
+    deadlineAt: Date.now() + (options.deadlineMs ?? WALK_DEADLINE_MS),
     stopped: false,
+    settle,
     files: 0,
     dirEntries: 0,
+    work: 0,
     complete: true,
     aliases: [],
     aliasSet: new Set(),
     stamps: [],
   };
-  const stop = () => {
-    ctx.stopped = true;
-    ctx.complete = false;
-  };
+  const stop = () => halt(ctx);
   if (options.signal?.aborted) {
     stop();
     return ctx;
   }
   options.signal?.addEventListener("abort", stop, { once: true });
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<void>((resolve) => {
-    timer = setTimeout(() => {
-      stop();
-      resolve();
-    }, options.deadlineMs ?? WALK_DEADLINE_MS);
-  });
+  const timer = setTimeout(stop, Math.max(0, ctx.deadlineAt - Date.now()));
   const run = (async () => {
     for (const root of roots) {
       await walkFile(root.path, root.system === true, [], 0, new Set(), ctx);
+      if (ctx.stopped) return;
     }
   })().catch(() => {
     ctx.complete = false;
   });
   try {
-    // A read that hangs can't be cancelled; the walk is left to finish on its own and its result dropped.
-    await Promise.race([run, deadline]);
+    // A read that hangs can't be cancelled; it is left to finish on its own and its result dropped.
+    await Promise.race([run, settled]);
   } finally {
     clearTimeout(timer);
     options.signal?.removeEventListener("abort", stop);
@@ -434,10 +632,11 @@ let incompleteStamps = 0;
 
 /**
  * How the ssh config files stood: each file the roots reach through any
- * Include (whatever block it sits in), and what each Include pattern matched.
- * A remembered route is only good while this is unchanged. A walk cut short
- * (too many files, a hung read) gives a stamp no later one equals, so the
- * route is never reused on a partial view of the config.
+ * Include (whatever block it sits in), its bytes, and what each Include
+ * pattern matched. A remembered route is only good while this is unchanged.
+ * A walk that can't vouch for ssh's view (cut short, an Include naming the
+ * destination, an I/O error) gives a stamp no later one equals, so the route
+ * is never reused on a partial view of the config.
  */
 export async function sshConfigStamp(
   roots: readonly SshConfigRoot[],

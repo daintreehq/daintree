@@ -633,7 +633,7 @@ describe("discoverHosts", () => {
         "100.64.0.4",
         "build-box",
         "Build-Box",
-        "jump",
+        "Jump",
         "-oProxyCommand=x",
       ],
     });
@@ -651,7 +651,7 @@ describe("discoverHosts", () => {
       // The tailnet vouches for this address, but ssh looks the alias up on its own.
       ["100.64.0.4", "ssh-config", null, false, false, false],
       ["build-box", "ssh-config", null, false, false, true],
-      ["jump", "ssh-config", null, false, false, false],
+      ["Jump", "ssh-config", null, false, false, false],
     ]);
     // Listing an alias never asks ssh where it points.
     expect(tried).not.toContain("ssh");
@@ -667,16 +667,23 @@ describe("discoverHosts", () => {
     expect(hosts.map((h) => [h.name, h.alreadyAdded])).toEqual([["build-box", true]]);
   });
 
-  it("treats an ssh config that can't be read as no aliases", async () => {
+  it("treats an ssh config that can't be read as no aliases, keeping the other sources", async () => {
+    const status = JSON.stringify({
+      Peer: [{ HostName: "a", OS: "linux", Online: true, TailscaleIPs: ["100.64.0.3"] }],
+    });
+    const sshConfigAliases = vi.fn(async () => {
+      throw new Error("EACCES");
+    });
+    const abort = new AbortController();
     const hosts = await discoverHosts({
-      run: async () => missing,
+      run: async (command) => (command === "tailscale" ? ok(status) : missing),
       platform: "linux",
       knownConnections: [],
-      sshConfigAliases: async () => {
-        throw new Error("EACCES");
-      },
+      sshConfigAliases,
+      signal: abort.signal,
     });
-    expect(hosts).toEqual([]);
+    expect(sshConfigAliases).toHaveBeenCalledWith(abort.signal);
+    expect(hosts.map((h) => sshTargetOf(h.connection))).toEqual(["100.64.0.3"]);
   });
 });
 

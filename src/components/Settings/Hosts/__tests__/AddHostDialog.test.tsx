@@ -274,7 +274,7 @@ describe("AddHostDialog", () => {
     render(<AddHostDialog isOpen onClose={() => {}} />);
     expect(await screen.findByText("Couldn't look for machines")).toBeTruthy();
     expect(screen.getByText("tailscale crashed")).toBeTruthy();
-    expect(screen.queryByText(/Nothing answered/)).toBeNull();
+    expect(screen.queryByText(/nothing answered/i)).toBeNull();
 
     remoteHosts.discover!.mockResolvedValueOnce([
       {
@@ -342,6 +342,12 @@ describe("AddHostDialog", () => {
       "build-box"
     );
     expect(remoteHosts.probe).not.toHaveBeenCalled();
+    // ssh resolves the alias only now, as it would a typed one.
+    fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+    await waitFor(() => expect(remoteHosts.probe).toHaveBeenCalledTimes(1));
+    expect(remoteHosts.probe!.mock.calls[0]![0]).toEqual({
+      connection: { kind: "ssh", target: "build-box" },
+    });
   });
 
   describe("a large mesh", () => {

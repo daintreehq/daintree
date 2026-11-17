@@ -6,6 +6,13 @@ import net from "node:net";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The developer's own ~/.ssh/config would decide whether a route is remembered;
+// tests that care about the config name their files.
+vi.mock("../sshConfig.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sshConfig.js")>()),
+  defaultSshConfigRoots: () => [],
+}));
 import { HostServer } from "../../host/HostServer.js";
 import { hostSocketLocation, remoteHostSocketLocation } from "../../host/hostSocketPath.js";
 import { LinkClient, type LinkClientState } from "../LinkClient.js";

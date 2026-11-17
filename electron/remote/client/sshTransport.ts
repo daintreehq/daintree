@@ -887,8 +887,16 @@ export class SshTransport implements LinkTransport {
       this.lastHopDiagnosis = null;
     }
     let known = this.known;
-    if (known && known.configStamp !== (await this.configStamp())) {
-      this.known = known = null;
+    // Taken just now, so a dial that follows straight on needn't walk the config again.
+    let freshStamp: string | undefined;
+    if (known) {
+      const stamp = await this.configStamp(signal);
+      // A cancelled walk can't vouch for the config; that's no reason to forget the route.
+      if (signal.aborted) throw new TransportError("Connection cancelled", null);
+      if (known.configStamp !== stamp) {
+        this.known = known = null;
+        freshStamp = stamp;
+      }
     }
     if (known) {
       try {
@@ -903,7 +911,7 @@ export class SshTransport implements LinkTransport {
     }
     let reached = false;
     try {
-      return await this.openOnce(signal, () => (reached = true));
+      return await this.openOnce(signal, () => (reached = true), freshStamp);
     } catch (error) {
       // ssh itself failing (unreachable, refused key) is not Daintree being down.
       const ensureRunning = this.options.ensureRunning;
@@ -916,11 +924,12 @@ export class SshTransport implements LinkTransport {
 
   private async openOnce(
     signal: AbortSignal,
-    onReached: () => void
+    onReached: () => void,
+    stampedAt?: string
   ): Promise<LinkTransportConnection> {
     const { target, clientDir } = this.options;
     // Before anything is read: a change made during this dial shows on the next one.
-    const configStamp = await this.configStamp();
+    const configStamp = stampedAt ?? (await this.configStamp(signal));
     await fs.mkdir(clientDir, { recursive: true, mode: 0o700 });
     await fs.chmod(clientDir, 0o700);
     const controlPath = controlPathFor(clientDir, target);
@@ -1021,9 +1030,10 @@ export class SshTransport implements LinkTransport {
    * Includes) the next dial runs in full, as every dial did before, instead of
    * carrying on by the control path the old config expanded to.
    */
-  private configStamp(): Promise<string> {
+  private configStamp(signal: AbortSignal): Promise<string> {
     const files = this.options.sshConfigFiles;
-    return sshConfigStamp(files ? files.map((file) => ({ path: file })) : defaultSshConfigRoots());
+    const roots = files ? files.map((file) => ({ path: file })) : defaultSshConfigRoots();
+    return sshConfigStamp(roots, { signal });
   }
 
   /** Straight to the route an earlier open found, through the master it left running. */
