@@ -4,6 +4,7 @@ import type { TerminalResourceBatchPayload } from "../../../shared/types/pty-hos
 import {
   AUTO_RESTART_RETRY_MS,
   MemoryLeakAutoRestartService,
+  type MemoryLeakHostRestartGuards,
   type MemoryLeakRestartTarget,
   type MemoryLeakTerminalRead,
 } from "../MemoryLeakAutoRestartService.js";
@@ -32,7 +33,8 @@ function harness(
     value: options.target ?? ({ kind: "view", deliver } as MemoryLeakRestartTarget),
   };
   const restartOnHost = vi.fn(
-    async (_projectId: string, _terminalId: string, _isCurrent: () => boolean) => "restarted"
+    async (_projectId: string, _terminalId: string, _guards: MemoryLeakHostRestartGuards) =>
+      "restarted"
   );
   const readTerminal = vi.fn(
     async (_id: string): Promise<MemoryLeakTerminalRead | null> => terminal.value
@@ -124,7 +126,10 @@ describe("MemoryLeakAutoRestartService", () => {
     await h.sample(OVER_KB, "t1", AUTO_RESTART_STARTUP_SAMPLES);
     await flush();
     expect(h.restartOnHost).toHaveBeenCalledTimes(1);
-    expect(h.restartOnHost).toHaveBeenCalledWith("p1", "t1", expect.any(Function));
+    expect(h.restartOnHost).toHaveBeenCalledWith("p1", "t1", {
+      isCurrent: expect.any(Function),
+      stillWanted: expect.any(Function),
+    });
   });
 
   it("never restarts a terminal waiting for input, and tries again later", async () => {
@@ -149,11 +154,29 @@ describe("MemoryLeakAutoRestartService", () => {
     h.generations.set("t1", 1);
     await h.sample(OVER_KB, "t1", AUTO_RESTART_STARTUP_SAMPLES);
     await flush();
-    const isCurrent = h.restartOnHost.mock.calls[0]![2];
+    const { isCurrent } = h.restartOnHost.mock.calls[0]![2];
     expect(isCurrent()).toBe(true);
 
     h.generations.set("t1", 2);
     expect(isCurrent()).toBe(false);
+  });
+
+  it("lets the host restart see its decision dropped, while its own kill's exit leaves the launch current", async () => {
+    const h = harness({ target: { kind: "host" } });
+    h.generations.set("t1", 1);
+    await h.sample(OVER_KB, "t1", AUTO_RESTART_STARTUP_SAMPLES);
+    await flush();
+    const { isCurrent, stillWanted } = h.restartOnHost.mock.calls[0]![2];
+    expect(stillWanted()).toBe(true);
+
+    h.policy.enabled = false;
+    expect(stillWanted()).toBe(false);
+    expect(isCurrent()).toBe(true);
+
+    h.policy.enabled = true;
+    h.exit("t1");
+    expect(stillWanted()).toBe(false);
+    expect(isCurrent()).toBe(true);
   });
 
   it("waits while the project's driver is away", async () => {
@@ -237,6 +260,15 @@ describe("MemoryLeakAutoRestartService", () => {
       expect(h.deliver).not.toHaveBeenCalled();
     });
 
+    it("stays dropped when a sample climbs back over after recovering", async () => {
+      const { h, settle } = await pendingDecision();
+      await h.sample(UNDER_KB);
+      await h.sample(OVER_KB);
+      settle();
+      await flush();
+      expect(h.deliver).not.toHaveBeenCalled();
+    });
+
     it("still goes ahead when the threshold drops but the latest sample stays over it", async () => {
       const { h, settle } = await pendingDecision();
       h.policy.thresholdMb = THRESHOLD_MB / 2;
@@ -273,6 +305,24 @@ describe("MemoryLeakAutoRestartService", () => {
       const { h, isCurrent } = await delivered();
       await h.sample(UNDER_KB);
       expect(isCurrent()).toBe(false);
+    });
+
+    it("stays dropped once the threshold falls back under the usage", async () => {
+      const { h, isCurrent } = await delivered();
+      h.policy.thresholdMb = THRESHOLD_MB * 2;
+      expect(isCurrent()).toBe(false);
+      h.policy.thresholdMb = THRESHOLD_MB;
+      expect(isCurrent()).toBe(false);
+    });
+
+    it("no longer holds once a newer decision replaces it", async () => {
+      const { h, isCurrent } = await delivered();
+      h.clock.now = AUTO_RESTART_RETRY_MS;
+      await h.sample(OVER_KB);
+      await flush();
+      expect(h.deliver).toHaveBeenCalledTimes(2);
+      expect(isCurrent()).toBe(false);
+      expect((h.deliver.mock.calls[1]![1] as () => boolean)()).toBe(true);
     });
 
     it("no longer holds once the policy was turned off and on again", async () => {
