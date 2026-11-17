@@ -268,6 +268,7 @@ import {
 } from "@/registry/builtinRendererRegistry";
 import { usePluginRuntimeStore, _resetPluginRuntimeStoreForTest } from "@/store/pluginRuntimeStore";
 import { useFileDocumentStore } from "@/store/fileDocumentStore";
+import { useFileBrowserDraftReviewStore } from "@/store/fileBrowserDraftReviewStore";
 import { FileBrowserViewer } from "../FileBrowserViewer";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ContextMenuItem } from "@/components/ui/context-menu";
@@ -1990,6 +1991,80 @@ describe("plugin-contributed editing in the file browser", () => {
     renderViewer("/repo/another.md", { editorContext: context });
     expect(await screen.findByRole("radio", { name: "Edit" })).toBeTruthy();
     expect(screen.queryByTestId("file-editor-hint")).toBeNull();
+  });
+
+  describe("Review draft (#17197)", () => {
+    afterEach(() => {
+      useFileBrowserDraftReviewStore.setState({ byPanelId: {} });
+    });
+
+    function requestReview(panelId: string, path: string) {
+      act(() => useFileBrowserDraftReviewStore.getState().requestReview(panelId, path));
+    }
+
+    function editChecked(): string | null {
+      return screen.getByRole("radio", { name: "Edit" }).getAttribute("aria-checked");
+    }
+
+    it("opens the draft's file in Edit when the request is waiting at mount", async () => {
+      enabled = true;
+      requestReview("panel-1", "notes.md");
+
+      renderViewer("/repo/notes.md", { editorContext: context });
+
+      expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
+      expect(editChecked()).toBe("true");
+      // Taken up once: it is the reader's own Edit choice from here on.
+      await waitFor(() =>
+        expect(useFileBrowserDraftReviewStore.getState().byPanelId["panel-1"]).toBeUndefined()
+      );
+      fireEvent.click(screen.getByRole("radio", { name: "Rendered" }));
+      expect(screen.queryByTestId("plugin-editor")).toBeNull();
+      expect(currentViewMode()).toBe("rendered");
+    });
+
+    it("opens Edit for the panel a reused viewer switches to, over the reset to defaults", async () => {
+      // A tab group renders one unkeyed viewer for whichever tab is active, and
+      // the switch resets the mode to the file's default.
+      enabled = true;
+      const viewer = renderViewer("/repo/notes.md", {
+        editorContext: context,
+        panelId: "panel-a",
+      });
+      await screen.findByTestId("markdown-viewer-mock");
+      expect(currentViewMode()).toBe("rendered");
+
+      requestReview("panel-b", "notes.md");
+      viewer.rerender(viewerJsx("/repo/notes.md", { editorContext: context, panelId: "panel-b" }));
+
+      expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
+      expect(editorProps.at(-1)).toMatchObject({ panelId: "panel-b" });
+    });
+
+    it("leaves another panel's request alone", async () => {
+      enabled = true;
+      requestReview("panel-b", "notes.md");
+
+      renderViewer("/repo/notes.md", { editorContext: context, panelId: "panel-a" });
+
+      await screen.findByTestId("markdown-viewer-mock");
+      expect(screen.queryByTestId("plugin-editor")).toBeNull();
+      expect(useFileBrowserDraftReviewStore.getState().byPanelId["panel-b"]).toBeDefined();
+    });
+
+    it("waits while the viewer shows a different file than the draft's", async () => {
+      enabled = true;
+      requestReview("panel-1", "docs/notes.md");
+
+      const viewer = renderViewer("/repo/other.md", { editorContext: context });
+
+      await screen.findByTestId("markdown-viewer-mock");
+      expect(screen.queryByTestId("plugin-editor")).toBeNull();
+      viewer.rerender(
+        viewerJsx("/repo/docs/notes.md", { editorContext: context, relativePath: "docs/notes.md" })
+      );
+      expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
+    });
   });
 
   it("hands focus to the Rendered segment, not the first one, when leaving Edit for Rendered", async () => {
