@@ -360,6 +360,139 @@ describe("PluginUpdateCheckService", () => {
     });
   });
 
+  describe("a fresh update from another plugin (#17444)", () => {
+    type Install = typeof urlPlugin;
+    const netFailed = async () => ({ status: "fetch-failed", message: "net" });
+    const catalogDown = async () => ({
+      status: "catalog-unavailable",
+      catalog: "unavailable",
+      failure: "unreachable",
+    });
+    const threw = async (): Promise<never> => {
+      throw new Error("boom");
+    };
+
+    // Caches a 2.0.0 offer for each id, as the first pass of a day.
+    async function cacheOffers(installs: Record<string, Install>) {
+      storeState.value = { enabled: true, lastCheckedAt: null };
+      pluginServiceMock.listPlugins.mockReturnValue(
+        Object.entries(installs).map(([id, install]) => install(id))
+      );
+      pluginServiceMock.checkForUpdate.mockImplementation(async (id: string) =>
+        available(id, "2.0.0")
+      );
+      const svc = new PluginUpdateCheckService();
+      await svc._checkNowForTest();
+      expect(svc.getLatest()?.updates).toHaveLength(Object.keys(installs).length);
+      return svc;
+    }
+
+    function answerPass(answers: Record<string, () => Promise<unknown>>) {
+      pluginServiceMock.checkForUpdate.mockImplementation(async (id: string) => answers[id]());
+    }
+
+    it.each([
+      ["fetch-failed", urlPlugin, netFailed],
+      ["catalog-unavailable", catalogPlugin, catalogDown],
+      ["a thrown check", urlPlugin, threw],
+    ])(
+      "keeps the offer for a plugin whose check failed (%s) beside the new one",
+      async (_label, install, failure) => {
+        const svc = await cacheOffers({ "pub.a": install, "pub.c": urlPlugin });
+        pluginServiceMock.listPlugins.mockReturnValue([
+          install("pub.a"),
+          urlPlugin("pub.b"),
+          urlPlugin("pub.c"),
+        ]);
+        answerPass({
+          "pub.a": failure,
+          "pub.b": async () => available("pub.b", "3.0.0"),
+          // checked and current: its old offer must not ride along
+          "pub.c": async () => ({ status: "up-to-date" }),
+        });
+        await svc._checkNowForTest();
+
+        const latest = svc.getLatest();
+        expect(latest?.updates.map((u) => u.pluginId).sort()).toEqual(["pub.a", "pub.b"]);
+        expect(latest?.updates.find((u) => u.pluginId === "pub.a")?.version).toBe("2.0.0");
+        expect(latest?.signature).toBe("pub.a@2.0.0,pub.b@3.0.0");
+        // A renderer already open gets the same set a newly mounted one hydrates.
+        expect(broadcastMock).toHaveBeenCalledTimes(2);
+        expect(broadcastMock.mock.calls[1][1].payload).toEqual(latest);
+      }
+    );
+
+    it.each([
+      ["current", { status: "up-to-date" }],
+      ["delisted", { status: "delisted", scope: "plugin", version: "1.0.0" }],
+    ])("drops the old offer once the plugin is checked and is %s", async (_label, answer) => {
+      const svc = await cacheOffers({ "pub.a": catalogPlugin, "pub.c": catalogPlugin });
+      pluginServiceMock.listPlugins.mockReturnValue([
+        catalogPlugin("pub.a"),
+        urlPlugin("pub.b"),
+        catalogPlugin("pub.c"),
+      ]);
+      answerPass({
+        "pub.a": catalogDown,
+        "pub.b": async () => available("pub.b", "3.0.0"),
+        "pub.c": catalogDown,
+      });
+      await svc._checkNowForTest();
+      expect(svc.getLatest()?.signature).toBe("pub.a@2.0.0,pub.b@3.0.0,pub.c@2.0.0");
+
+      // pub.c is still unreachable, so its offer stands while pub.a's goes.
+      answerPass({
+        "pub.a": async () => answer,
+        "pub.b": async () => available("pub.b", "3.0.0"),
+        "pub.c": catalogDown,
+      });
+      await svc._checkNowForTest();
+
+      const latest = svc.getLatest();
+      expect(latest?.signature).toBe("pub.b@3.0.0,pub.c@2.0.0");
+      expect(broadcastMock.mock.calls[2][1].payload).toEqual(latest);
+    });
+
+    it("replaces a cached offer with the fresh version while another plugin stays unchecked", async () => {
+      const svc = await cacheOffers({ "pub.a": urlPlugin, "pub.b": urlPlugin });
+      answerPass({
+        "pub.a": async () => available("pub.a", "2.1.0"),
+        "pub.b": netFailed,
+      });
+      await svc._checkNowForTest();
+
+      expect(svc.getLatest()?.signature).toBe("pub.a@2.1.0,pub.b@2.0.0");
+      expect(svc.getLatest()?.updates).toHaveLength(2);
+    });
+
+    it("checks a plugin once when the registry lists it twice", async () => {
+      const svc = await cacheOffers({ "pub.a": urlPlugin });
+      pluginServiceMock.checkForUpdate.mockClear();
+      // A re-enable in flight holds the plugin in both the running and disabled rows.
+      pluginServiceMock.listPlugins.mockReturnValue([urlPlugin("pub.a"), urlPlugin("pub.a")]);
+      const answers = [async () => available("pub.a", "3.0.0"), netFailed];
+      pluginServiceMock.checkForUpdate.mockImplementation(async () => answers.shift()!());
+      await svc._checkNowForTest();
+
+      expect(pluginServiceMock.checkForUpdate).toHaveBeenCalledTimes(1);
+      expect(svc.getLatest()?.signature).toBe("pub.a@3.0.0");
+    });
+
+    it("does not resurrect an offer for a plugin that is no longer installed", async () => {
+      const svc = await cacheOffers({ "pub.a": urlPlugin, "pub.c": urlPlugin });
+      // pub.a is gone, so it is no longer a target and is never reported as
+      // unchecked; pub.c stays unreachable and keeps its offer.
+      pluginServiceMock.listPlugins.mockReturnValue([urlPlugin("pub.b"), urlPlugin("pub.c")]);
+      answerPass({
+        "pub.b": async () => available("pub.b", "3.0.0"),
+        "pub.c": netFailed,
+      });
+      await svc._checkNowForTest();
+
+      expect(svc.getLatest()?.signature).toBe("pub.b@3.0.0,pub.c@2.0.0");
+    });
+  });
+
   it("does not broadcast or cache when disabled mid-pass", async () => {
     storeState.value = { enabled: true, lastCheckedAt: null };
     pluginServiceMock.listPlugins.mockReturnValue([urlPlugin("pub.a")]);

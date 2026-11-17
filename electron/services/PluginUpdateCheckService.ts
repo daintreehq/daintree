@@ -254,8 +254,8 @@ export class PluginUpdateCheckService {
     // entry it already cleared.
     if (this.disposed || !this.getSettings().enabled) return;
 
-    const { updates, inconclusive, unchecked } = outcome;
-    if (updates.length === 0) {
+    const { updates: fresh, inconclusive, unchecked } = outcome;
+    if (fresh.length === 0) {
       // A conclusive empty pass supersedes any cached detection so a
       // late-mounting renderer doesn't hydrate an already-resolved update. Keep
       // the cache when the pass was inconclusive — we genuinely don't know.
@@ -266,6 +266,13 @@ export class PluginUpdateCheckService {
         this.lastDetected = keepUnchecked(this.lastDetected, unchecked);
       }
       return;
+    }
+
+    // A plugin this pass couldn't check keeps its last known offer beside the
+    // fresh ones, the same rule as the empty branch above (#17444).
+    let updates = fresh;
+    if (inconclusive && this.lastDetected && unchecked) {
+      updates = [...fresh, ...this.lastDetected.updates.filter((u) => unchecked.has(u.pluginId))];
     }
 
     const result: PluginBackgroundUpdateCheckResult = {
@@ -301,13 +308,20 @@ export class PluginUpdateCheckService {
     // Re-check enabled after the async init — a toggle-off mid-wait aborts.
     if (this.disposed || !this.getSettings().enabled) return null;
 
-    const targets = pluginService
-      .listPlugins()
-      // A catalog install is checked against the catalog, not its URL (#16781).
-      .filter(
-        (p) => !p.isBuiltin && (p.source === "catalog" || (!!p.originalUrl && !!p.archiveHash))
-      )
-      .map((p) => p.manifest.name);
+    // The registry can list one plugin twice while a re-enable is in flight (running
+    // and disabled rows). One check per id keeps a plugin out of both `found` and
+    // `failedIds`, so a fresh offer never sits beside its own cached version.
+    const targets = [
+      ...new Set(
+        pluginService
+          .listPlugins()
+          // A catalog install is checked against the catalog, not its URL (#16781).
+          .filter(
+            (p) => !p.isBuiltin && (p.source === "catalog" || (!!p.originalUrl && !!p.archiveHash))
+          )
+          .map((p) => p.manifest.name)
+      ),
+    ];
 
     const { found, failedIds } = await this.checkAll(pluginService, targets);
     return {
