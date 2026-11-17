@@ -109,11 +109,7 @@ function PushConfirmPath({ path }: { path: string }) {
   const dir = slash === -1 ? "" : path.slice(0, slash + 1);
   const base = slash === -1 ? path : path.slice(slash + 1);
   return (
-    <TruncatedTooltip
-      content={path}
-      isTruncated={dirTruncated || baseTruncated}
-      focusable={false}
-    >
+    <TruncatedTooltip content={path} isTruncated={dirTruncated || baseTruncated} focusable={false}>
       <li className="flex min-w-0">
         {dir && (
           <PathTail ref={dirRef} className="min-w-0 text-text-secondary">
@@ -769,7 +765,9 @@ export function CommitPanel({
       // footer, which describes this exact situation.
       `${stagedSummary} · no push destination · set an upstream to push`
     );
-    statusTooltip = destinationLabel ? `${stagedSummary} · pushes to ${destinationLabel}` : undefined;
+    statusTooltip = destinationLabel
+      ? `${stagedSummary} · pushes to ${destinationLabel}`
+      : undefined;
   } else {
     statusContent = stagedSummary;
   }
