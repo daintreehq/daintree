@@ -65,6 +65,7 @@ import {
   readQuestionContent,
   readQuestionImage,
   readQuestionSummary,
+  type QuestionReadRequest,
   type QuestionReadScope,
 } from "./questionContent.js";
 import {
@@ -406,7 +407,7 @@ export class AnswerDelivery {
    * expired question stays readable for as long as the store holds it.
    */
   async questionContent(
-    scope: Omit<QuestionReadScope, "hostId">,
+    scope: QuestionReadRequest,
     questionId: string
   ): Promise<DecisionQuestionContentResult> {
     const row = await this.store.getQuestion(questionId);
@@ -420,7 +421,7 @@ export class AnswerDelivery {
    * written, and nothing is kept between parts.
    */
   async questionImage(
-    scope: Omit<QuestionReadScope, "hostId">,
+    scope: QuestionReadRequest,
     questionId: string,
     attachmentId: string,
     offset: number
@@ -432,7 +433,7 @@ export class AnswerDelivery {
 
   /** Each question's opening line, in the order asked for, each id once (#17097). */
   async questionSummaries(
-    scope: Omit<QuestionReadScope, "hostId">,
+    scope: QuestionReadRequest,
     questionIds: readonly string[]
   ): Promise<DecisionQuestionSummary[]> {
     const read = this.readScope(scope);
@@ -448,8 +449,14 @@ export class AnswerDelivery {
     return summaries;
   }
 
-  private readScope(scope: Omit<QuestionReadScope, "hostId">): QuestionReadScope {
-    return { ...scope, hostId: this.o.deps.hostId() };
+  /** This machine's own scope; a reference naming another machine reads nothing here. */
+  private readScope(scope: QuestionReadRequest): QuestionReadScope {
+    const own = this.o.deps.hostId();
+    return {
+      projectId: scope.projectId,
+      terminalId: scope.terminalId,
+      hostId: scope.hostId === undefined || scope.hostId === own ? own : null,
+    };
   }
 
   /**

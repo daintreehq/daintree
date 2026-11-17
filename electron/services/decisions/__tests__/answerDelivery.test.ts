@@ -2148,6 +2148,8 @@ describe("AnswerDelivery question reads (#17097)", () => {
       { ...OWN, terminalId: "pane-2" },
       { ...OWN, projectId: "project-2" },
       { ...OWN, projectId: null },
+      // A reference naming another machine (#17229), whatever else it gets right.
+      { ...OWN, hostId: "host_elsewhere" },
     ]) {
       await expect(h.delivery.questionImage(scope, Q1, attachmentId, 0)).resolves.toEqual({
         result: "not-found",
@@ -2157,6 +2159,10 @@ describe("AnswerDelivery question reads (#17097)", () => {
     expect(h.reports.filter((r) => r.path.includes("/attachments/"))).toEqual([]);
 
     const read = await h.delivery.questionImage(OWN, Q1, attachmentId, 0);
+    // A reference naming this machine reads the same image.
+    await expect(
+      h.delivery.questionImage({ ...OWN, hostId: HOST }, Q1, attachmentId, 0)
+    ).resolves.toEqual(read);
 
     expect(read).toEqual({
       result: "read",
@@ -2169,6 +2175,33 @@ describe("AnswerDelivery question reads (#17097)", () => {
         bytes: new Uint8Array(png),
       },
     });
+  });
+
+  it("reads by a reference naming this machine, whatever its terminal became, and nothing for another machine (#17229)", async () => {
+    const h = setup();
+    await answeredAndTyped(h.store, Q1, 1);
+    await withContent(h.store, Q1, "Approve the migration?");
+    // A reference carries the question's own project and terminal, not the asking view's;
+    // no terminal by that id need still run here.
+    const reference = { hostId: HOST, ...OWN };
+
+    await expect(h.delivery.questionContent(reference, Q1)).resolves.toMatchObject({
+      result: "read",
+      question: { questionId: Q1, question: "Approve the migration?" },
+    });
+    await expect(h.delivery.questionSummaries(reference, [Q1])).resolves.toEqual([
+      { questionId: Q1, result: "read", line: "Approve the migration?" },
+    ]);
+    for (const scope of [
+      { ...reference, hostId: "host_elsewhere" },
+      { ...reference, projectId: "project-2" },
+      { ...reference, terminalId: "pane-2" },
+    ]) {
+      await expect(h.delivery.questionContent(scope, Q1)).resolves.toEqual({ result: "not-found" });
+      await expect(h.delivery.questionSummaries(scope, [Q1])).resolves.toEqual([
+        { questionId: Q1, result: "not-found" },
+      ]);
+    }
   });
 
   it("names each question asked for once, in order, and only the pane's own", async () => {

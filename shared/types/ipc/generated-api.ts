@@ -451,6 +451,9 @@ export interface GeneratedElectronAPI {
     cancelQuestion(
       ...args: IpcInvokeMap["decisions:cancel-question"]["args"]
     ): Promise<IpcInvokeMap["decisions:cancel-question"]["result"]>;
+    cancelQuestionByReference(
+      ...args: IpcInvokeMap["decisions:cancel-question-by-reference"]["args"]
+    ): Promise<IpcInvokeMap["decisions:cancel-question-by-reference"]["result"]>;
     cancelRelayDeploy(
       ...args: IpcInvokeMap["decisions:cancel-relay-deploy"]["args"]
     ): Promise<IpcInvokeMap["decisions:cancel-relay-deploy"]["result"]>;
@@ -508,12 +511,21 @@ export interface GeneratedElectronAPI {
     getQuestionContent(
       ...args: IpcInvokeMap["decisions:get-question-content"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-question-content"]["result"]>;
+    getQuestionContentByReference(
+      ...args: IpcInvokeMap["decisions:get-question-content-by-reference"]["args"]
+    ): Promise<IpcInvokeMap["decisions:get-question-content-by-reference"]["result"]>;
     getQuestionImage(
       ...args: IpcInvokeMap["decisions:get-question-image"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-question-image"]["result"]>;
+    getQuestionImageByReference(
+      ...args: IpcInvokeMap["decisions:get-question-image-by-reference"]["args"]
+    ): Promise<IpcInvokeMap["decisions:get-question-image-by-reference"]["result"]>;
     getQuestionSummaries(
       ...args: IpcInvokeMap["decisions:get-question-summaries"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-question-summaries"]["result"]>;
+    getQuestionSummariesByReference(
+      ...args: IpcInvokeMap["decisions:get-question-summaries-by-reference"]["args"]
+    ): Promise<IpcInvokeMap["decisions:get-question-summaries-by-reference"]["result"]>;
     getSetupCheck(
       ...args: IpcInvokeMap["decisions:get-setup-check"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-setup-check"]["result"]>;
@@ -532,6 +544,9 @@ export interface GeneratedElectronAPI {
     listHosts(
       ...args: IpcInvokeMap["decisions:list-hosts"]["args"]
     ): Promise<IpcInvokeMap["decisions:list-hosts"]["result"]>;
+    listQuestions(
+      ...args: IpcInvokeMap["decisions:list-questions"]["args"]
+    ): Promise<IpcInvokeMap["decisions:list-questions"]["result"]>;
     markAnswerHandled(
       ...args: IpcInvokeMap["decisions:mark-answer-handled"]["args"]
     ): Promise<IpcInvokeMap["decisions:mark-answer-handled"]["result"]>;

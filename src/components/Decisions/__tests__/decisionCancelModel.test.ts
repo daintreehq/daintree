@@ -8,12 +8,15 @@ import {
 } from "../decisionCancelModel";
 
 const TARGET: DecisionCancelTarget = {
-  terminalId: "t1",
-  questionId: "q42",
+  question: { scope: "pane", terminalId: "t1", questionId: "q42" },
   label: "q-42",
   line: "Ship the migration?",
 };
-const OTHER: DecisionCancelTarget = { ...TARGET, questionId: "q7", label: "q-7" };
+const OTHER: DecisionCancelTarget = {
+  ...TARGET,
+  question: { scope: "pane", terminalId: "t1", questionId: "q7" },
+  label: "q-7",
+};
 
 describe("decisionCancelModel", () => {
   it("asks about the question it names", () => {

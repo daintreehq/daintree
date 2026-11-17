@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { PaneDecisionState } from "@shared/types/decisions";
 import type {
+  DecisionQuestionCancelResult,
   DecisionQuestionContent,
   DecisionQuestionContentResult,
+  DecisionQuestionList,
+  DecisionQuestionReference,
+  DecisionQuestionSummariesResult,
 } from "@shared/types/decisionsQuestion";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
@@ -28,8 +32,27 @@ vi.mock("@/hooks/useDecisionsOn", async () => {
 import { DecisionQuestionDialog } from "../DecisionQuestionDialog";
 
 type Payload = { terminalId: string; questionId: string };
+type ByReference = { reference: DecisionQuestionReference };
 const getQuestionContent = vi.fn<(payload: Payload) => Promise<DecisionQuestionContentResult>>();
+const getQuestionContentByReference =
+  vi.fn<(payload: ByReference) => Promise<DecisionQuestionContentResult>>();
+const getQuestionSummaries =
+  vi.fn<(payload: unknown) => Promise<DecisionQuestionSummariesResult>>();
+const getQuestionSummariesByReference =
+  vi.fn<(payload: unknown) => Promise<DecisionQuestionSummariesResult>>();
+const cancelQuestion = vi.fn<(payload: Payload) => Promise<DecisionQuestionCancelResult>>();
+const cancelQuestionByReference =
+  vi.fn<(payload: ByReference) => Promise<DecisionQuestionCancelResult>>();
 let paneListeners: Array<(state: PaneDecisionState) => void> = [];
+let listListeners: Array<(list: DecisionQuestionList) => void> = [];
+
+/** A question of project B's, read from a window showing another project (#17229). */
+const OTHER_PROJECT: DecisionQuestionReference = {
+  hostId: "host_1",
+  projectId: "project-b",
+  terminalId: "t9",
+  questionId: "qa",
+};
 
 function content(
   questionId: string,
@@ -110,16 +133,78 @@ function openView(ids: string[], id: string) {
   act(() => useDecisionsQuestionViewStore.getState().open("t1", ids, id));
 }
 
+function openReference(references: DecisionQuestionReference[], reference = references[0]!) {
+  act(() => useDecisionsQuestionViewStore.getState().openReference(references, reference));
+}
+
+type Kind = "waiting" | "to-type";
+
+/** This computer's list: `qa` (the question opened) and one other question, `qz`, each standing as given. */
+function pushList(revision: number, kinds: { qa: Kind; qz: Kind }) {
+  const item = (reference: DecisionQuestionReference, alias: number, kind: Kind) => ({
+    reference,
+    alias,
+    agentKind: "claude",
+    projectLabel: null,
+    worktreeId: "w1",
+    worktreeRoot: "/repo",
+    requirement: "human-required" as const,
+    askedAt: "2026-11-02T10:00:00.000Z",
+    expiresAt: null,
+    settledAt: null,
+    standing: kind === "waiting" ? { kind, reason: "open" as const } : { kind },
+  });
+  for (const listener of [...listListeners]) {
+    listener({
+      revision,
+      questions: [
+        // The same question id on another machine is another question.
+        item({ ...OTHER_PROJECT, hostId: "host_2" }, 8, kinds.qz),
+        item(OTHER_PROJECT, 7, kinds.qa),
+        item({ ...OTHER_PROJECT, questionId: "qz" }, 9, kinds.qz),
+      ],
+    });
+  }
+}
+
 beforeEach(() => {
   decisionsOn = true;
   paneListeners = [];
+  listListeners = [];
   useDecisionsQuestionViewStore.setState({ isOpen: false, request: null });
   getQuestionContent.mockReset().mockImplementation(async ({ questionId }) => {
     const question = QUESTIONS[questionId];
     return question ? { result: "read", question } : { result: "not-found" };
   });
+  getQuestionContentByReference.mockReset().mockImplementation(async ({ reference }) => {
+    const question = QUESTIONS[reference.questionId];
+    return question ? { result: "read", question } : { result: "not-found" };
+  });
+  getQuestionSummaries.mockReset().mockResolvedValue({ result: "not-running" });
+  getQuestionSummariesByReference.mockReset().mockResolvedValue({
+    result: "read",
+    summaries: [{ questionId: "qa", result: "read", line: "Ship the migration?" }],
+  });
+  cancelQuestion.mockReset().mockResolvedValue({ result: "cancelling" });
+  cancelQuestionByReference.mockReset().mockResolvedValue({ result: "cancelling" });
   Reflect.set(window, "electron", {
-    decisions: { getQuestionContent },
+    decisions: {
+      getQuestionContent,
+      getQuestionContentByReference,
+      getQuestionSummaries,
+      getQuestionSummariesByReference,
+      cancelQuestion,
+      cancelQuestionByReference,
+    },
+    events: {
+      on: (name: string, callback: (list: DecisionQuestionList) => void) => {
+        if (name !== "decisions:questions-changed") return () => {};
+        listListeners.push(callback);
+        return () => {
+          listListeners = listListeners.filter((listener) => listener !== callback);
+        };
+      },
+    },
     terminal: {
       onDecisionState: (callback: (state: PaneDecisionState) => void) => {
         paneListeners.push(callback);
@@ -347,6 +432,192 @@ describe("DecisionQuestionDialog", () => {
       resolveOld({ result: "read", question: content("qa", 7, { context: "Old read" }) })
     );
     expect(screen.queryByText("Old read")).toBeNull();
+  });
+
+  describe("opened by reference (#17229)", () => {
+    it("reads a question from another project's window by its reference, never through a pane", async () => {
+      openReference([OTHER_PROJECT]);
+      const body = await screen.findByTestId("decision-question-content");
+      expect(getQuestionContentByReference).toHaveBeenCalledWith({ reference: OTHER_PROJECT });
+      expect(getQuestionContent).not.toHaveBeenCalled();
+      expect(body.textContent).toContain("Some notes");
+      expect(screen.getByRole("dialog").textContent).toContain("q-7");
+      // Nothing listens on a pane for it: its terminal may be in another project, or gone.
+      expect(paneListeners).toHaveLength(0);
+    });
+
+    it("steps between referenced questions from different projects", async () => {
+      const elsewhere = { ...OTHER_PROJECT, projectId: "project-c", questionId: "qb" };
+      openReference([OTHER_PROJECT, elsewhere]);
+      await screen.findByTestId("decision-question-content");
+      fireEvent.click(screen.getByTestId("decision-question-next"));
+      await waitFor(() => expect(screen.getByRole("dialog").textContent).toContain("q-8"));
+      expect(getQuestionContentByReference).toHaveBeenLastCalledWith({ reference: elsewhere });
+    });
+
+    it("reads again when its place in the list moves, and not for another question's", async () => {
+      openReference([OTHER_PROJECT]);
+      await screen.findByTestId("decision-question-content");
+      act(() => pushList(1, { qa: "waiting", qz: "waiting" }));
+      await waitFor(() => expect(getQuestionContentByReference).toHaveBeenCalledTimes(2));
+      // Only the other question moves: nothing new to read for this one.
+      act(() => pushList(2, { qa: "waiting", qz: "to-type" }));
+      await act(async () => {});
+      expect(getQuestionContentByReference).toHaveBeenCalledTimes(2);
+      act(() => pushList(3, { qa: "to-type", qz: "to-type" }));
+      await waitFor(() => expect(getQuestionContentByReference).toHaveBeenCalledTimes(3));
+      expect(paneListeners).toHaveLength(0);
+    });
+
+    it("withdraws a waiting question by its reference, after a confirmation naming it", async () => {
+      QUESTIONS.qw = content("qw", 11, { status: "open", thread: [] });
+      const waiting = { ...OTHER_PROJECT, questionId: "qw" };
+      getQuestionSummariesByReference.mockResolvedValue({
+        result: "read",
+        summaries: [{ questionId: "qw", result: "read", line: "Ship the migration?" }],
+      });
+      try {
+        openReference([waiting]);
+        fireEvent.click(await screen.findByTestId("decision-question-cancel"));
+        const confirm = await screen.findByRole("alertdialog");
+        expect(confirm.textContent).toContain("q-11");
+        await waitFor(() => expect(confirm.textContent).toContain("Ship the migration?"));
+        expect(getQuestionSummariesByReference).toHaveBeenCalledWith({ references: [waiting] });
+
+        await act(async () => {
+          fireEvent.click(within(confirm).getByRole("button", { name: "Cancel question" }));
+        });
+        expect(cancelQuestionByReference).toHaveBeenCalledExactlyOnceWith({ reference: waiting });
+        expect(cancelQuestion).not.toHaveBeenCalled();
+        await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+        // Read again at once, to show it withdrawn once the relay confirms.
+        await waitFor(() => expect(getQuestionContentByReference).toHaveBeenCalledTimes(2));
+      } finally {
+        delete QUESTIONS.qw;
+      }
+    });
+  });
+
+  it("offers a withdrawal only while the question waits, and sends a pane's through its pane", async () => {
+    openView(["qa"], "qa");
+    await screen.findByTestId("decision-question-content");
+    expect(screen.queryByTestId("decision-question-cancel")).toBeNull();
+
+    QUESTIONS.qw = content("qw", 11, { status: "queued", thread: [] });
+    try {
+      openView(["qw"], "qw");
+      fireEvent.click(await screen.findByTestId("decision-question-cancel"));
+      const confirm = await screen.findByRole("alertdialog");
+      expect(confirm.textContent).toMatch(/hasn't been sent to your phones yet/);
+      await act(async () => {
+        fireEvent.click(within(confirm).getByRole("button", { name: "Cancel question" }));
+      });
+      expect(cancelQuestion).toHaveBeenCalledExactlyOnceWith({
+        terminalId: "t1",
+        questionId: "qw",
+      });
+      expect(cancelQuestionByReference).not.toHaveBeenCalled();
+    } finally {
+      delete QUESTIONS.qw;
+    }
+  });
+
+  it.each([
+    ["queued", true],
+    ["open", true],
+    ["human-answered", false],
+    ["proxy-answered", false],
+    ["cancelled", false],
+    ["expired", false],
+    ["publish-failed", false],
+  ] as const)("offers a withdrawal for a %s question: %s", async (status, offered) => {
+    QUESTIONS.qw = content("qw", 11, { status, thread: [] });
+    try {
+      openView(["qw"], "qw");
+      await screen.findByTestId("decision-question-content");
+      expect(screen.queryByTestId("decision-question-cancel") !== null).toBe(offered);
+    } finally {
+      delete QUESTIONS.qw;
+    }
+  });
+
+  it("sends nothing once the question stops waiting under the confirmation", async () => {
+    QUESTIONS.qw = content("qw", 11, { status: "open", thread: [] });
+    try {
+      openView(["qw"], "qw");
+      fireEvent.click(await screen.findByTestId("decision-question-cancel"));
+      const confirm = await screen.findByRole("alertdialog");
+
+      QUESTIONS.qw = content("qw", 11, { status: "human-answered" });
+      act(() => pushPane("t1"));
+      await waitFor(() => expect(confirm.textContent).toMatch(/isn't waiting for an answer/));
+      const send = within(confirm).getByRole("button", { name: "Cancel question" });
+      expect(send.getAttribute("aria-disabled")).toBe("true");
+      await act(async () => {
+        fireEvent.click(send);
+      });
+      expect(cancelQuestion).not.toHaveBeenCalled();
+    } finally {
+      delete QUESTIONS.qw;
+    }
+  });
+
+  it("keeps focus in the view when stepping away from the withdrawal button by arrow key", async () => {
+    QUESTIONS.qw = content("qw", 11, { status: "open", thread: [] });
+    try {
+      openView(["qw", "qa"], "qw");
+      const cancel = await screen.findByTestId("decision-question-cancel");
+      act(() => cancel.focus());
+      fireEvent.keyDown(cancel, { key: "ArrowRight" });
+      await waitFor(() => expect(screen.getByRole("dialog").textContent).toContain("q-7"));
+      expect(document.activeElement).toBe(screen.getByTestId("decision-question-next"));
+      expect(screen.queryByTestId("decision-question-cancel")).toBeNull();
+
+      fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
+      expect(useDecisionsQuestionViewStore.getState().request?.index).toBe(0);
+    } finally {
+      delete QUESTIONS.qw;
+    }
+  });
+
+  it("never brings a confirmation back after the view closed under it", async () => {
+    QUESTIONS.qw = content("qw", 11, { status: "open", thread: [] });
+    try {
+      openView(["qw"], "qw");
+      fireEvent.click(await screen.findByTestId("decision-question-cancel"));
+      await screen.findByRole("alertdialog");
+
+      act(() => useDecisionsQuestionViewStore.getState().close());
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      openView(["qw"], "qw");
+      await screen.findByTestId("decision-question-cancel");
+      await act(async () => {});
+
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(cancelQuestion).not.toHaveBeenCalled();
+    } finally {
+      delete QUESTIONS.qw;
+    }
+  });
+
+  it("never brings a confirmation back after the view stepped away and back", async () => {
+    QUESTIONS.qw = content("qw", 11, { status: "open", thread: [] });
+    try {
+      openView(["qw", "qa"], "qw");
+      fireEvent.click(await screen.findByTestId("decision-question-cancel"));
+      await screen.findByRole("alertdialog");
+
+      act(() => useDecisionsQuestionViewStore.getState().step(1));
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      act(() => useDecisionsQuestionViewStore.getState().step(-1));
+      await screen.findByTestId("decision-question-cancel");
+      await act(async () => {});
+
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(cancelQuestion).not.toHaveBeenCalled();
+    } finally {
+      delete QUESTIONS.qw;
+    }
   });
 
   it("closes on Escape", async () => {

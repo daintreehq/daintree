@@ -84,6 +84,8 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "terminal:decision-state": "external",
   // Sent to this machine's own windows by the Decisions service, only while it is loaded.
   "decisions:status-changed": "external",
+  // Every question this computer's Decisions holds (#17229); sent to its own windows by Decisions.
+  "decisions:questions-changed": "external",
   // The same, when the relay's paired devices or its key changed (#16010).
   "decisions:devices-changed": "external",
   // The setup check's progress (#16024), to this machine's own windows.

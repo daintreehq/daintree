@@ -32,6 +32,7 @@ import {
 import { pluralize } from "@/lib/pluralize";
 import { DecisionCancelDialog } from "@/components/Decisions/DecisionCancelDialog";
 import type { DecisionCancelTarget } from "@/components/Decisions/decisionCancelModel";
+import { paneQuestion, questionOf } from "@/components/Decisions/decisionQuestionTarget";
 import type { PaneDecisionState } from "@shared/types/decisions";
 import {
   cancelNote,
@@ -253,7 +254,8 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
   const lines = useQuestionLines(terminalId, questionIds, open);
 
   // Outside the popover and the chip, so neither closing nor the last row going takes it away.
-  const asked = cancel === null ? undefined : (id: string) => id === cancel.target.questionId;
+  const askedId = cancel === null ? null : questionOf(cancel.target.question).questionId;
+  const asked = askedId === null ? undefined : (id: string) => id === askedId;
   const openIds = new Set(state?.openQuestions.map((question) => question.questionId));
   const cancelDialog = (
     <DecisionCancelDialog
@@ -380,8 +382,7 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
                           setOpen(false);
                           setCancel({
                             target: {
-                              terminalId,
-                              questionId: item.questionId,
+                              question: paneQuestion(terminalId, item.questionId),
                               label: item.label,
                               line: lines.get(item.questionId) ?? null,
                             },

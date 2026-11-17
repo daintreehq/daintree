@@ -1601,6 +1601,13 @@ export const CHANNELS = {
   // A person withdrawing a pane's question from its view (#17099), on the machine that owns the pane.
   DECISIONS_CANCEL_QUESTION: "decisions:cancel-question",
   DECISIONS_GET_QUESTION_IMAGE: "decisions:get-question-image",
+  // Every question this computer's Decisions holds, and each one read by its
+  // reference from any of its windows (#17229). This computer's own.
+  DECISIONS_LIST_QUESTIONS: "decisions:list-questions",
+  DECISIONS_GET_QUESTION_CONTENT_BY_REFERENCE: "decisions:get-question-content-by-reference",
+  DECISIONS_GET_QUESTION_IMAGE_BY_REFERENCE: "decisions:get-question-image-by-reference",
+  DECISIONS_GET_QUESTION_SUMMARIES_BY_REFERENCE: "decisions:get-question-summaries-by-reference",
+  DECISIONS_CANCEL_QUESTION_BY_REFERENCE: "decisions:cancel-question-by-reference",
   DECISIONS_SET_ENABLED: "decisions:set-enabled",
   // A relay URL's unsigned health and protocol check (#16005), from main.
   DECISIONS_CHECK_RELAY: "decisions:check-relay",

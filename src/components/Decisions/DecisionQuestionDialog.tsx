@@ -19,8 +19,15 @@ import type {
   DecisionQuestionContentResult,
   DecisionThreadEntry,
 } from "@shared/types/decisionsQuestion";
+import { DecisionCancelDialog } from "./DecisionCancelDialog";
+import type { DecisionCancelTarget } from "./decisionCancelModel";
 import { DecisionMarkdown } from "./DecisionMarkdown";
 import { DecisionQuestionImages } from "./DecisionQuestionImages";
+import {
+  readTargetContent,
+  targetKey,
+  type DecisionQuestionTarget,
+} from "./decisionQuestionTarget";
 import { imagesKey } from "./questionImageLoader";
 import {
   aliasLabel,
@@ -49,8 +56,32 @@ interface TaggedRead {
   read: Read;
 }
 
-function readKey(terminalId: string, questionId: string): string {
-  return `${terminalId}\u0000${questionId}`;
+/**
+ * Be told whenever the question may have moved: its pane's state, for one of
+ * a pane's; its place in this computer's list, for one opened by reference.
+ */
+function onQuestionMoved(target: DecisionQuestionTarget, moved: () => void): () => void {
+  if (target.scope === "pane") {
+    return decisionsClient.onPaneState((state) => {
+      if (state.terminalId === target.terminalId) moved();
+    });
+  }
+  const key = targetKey(target);
+  let last: string | undefined;
+  return decisionsClient.onQuestionsChanged((list) => {
+    const item = list.questions.find(
+      (question) => targetKey({ scope: "reference", reference: question.reference }) === key
+    );
+    const now = JSON.stringify(item ?? null);
+    if (now === last) return;
+    last = now;
+    moved();
+  });
+}
+
+/** Whether the question still waits for an answer, and so can be withdrawn. */
+function isWaiting(status: DecisionQuestionContent["status"]): boolean {
+  return status === "queued" || status === "open";
 }
 
 const UNAVAILABLE: Record<Exclude<Read["result"], "read">, string> = {
@@ -108,11 +139,11 @@ function ThreadEntry({
 
 function QuestionBody({
   question,
-  terminalId,
+  target,
   active,
 }: {
   question: DecisionQuestionContent;
-  terminalId: string;
+  target: DecisionQuestionTarget;
   active: boolean;
 }) {
   return (
@@ -167,9 +198,8 @@ function QuestionBody({
       {question.attachments.length > 0 && (
         // Keyed by the images it lists, so a read again every few seconds keeps what's loaded.
         <DecisionQuestionImages
-          key={imagesKey(terminalId, question.questionId, question.attachments)}
-          terminalId={terminalId}
-          questionId={question.questionId}
+          key={imagesKey(target, question.attachments)}
+          question={target}
           attachments={question.attachments}
           active={active}
         />
@@ -238,10 +268,12 @@ function StepButton({
 }
 
 /**
- * A pane's Decisions question, read in full (#17098): its words, notes,
- * options, requirement, times, and the answers and follow-ups so far. Read on
- * demand from the machine that owns the pane and held in memory only; it
- * steps through the questions the dropdown listed without closing.
+ * A Decisions question, read in full (#17098): its words, notes, options,
+ * requirement, times, and the answers and follow-ups so far. One of a pane's
+ * is read on demand from the machine that owns the pane; one opened by its
+ * reference (#17229), from this computer for any of its windows. Held in
+ * memory only; it steps through the questions it was opened with without
+ * closing, and a question still waiting can be withdrawn from here.
  */
 export function DecisionQuestionDialog() {
   const isOpen = useDecisionsQuestionViewStore((state) => state.isOpen);
@@ -253,14 +285,18 @@ export function DecisionQuestionDialog() {
   const on = useDecisionsOn();
   const [tagged, setTagged] = useState<TaggedRead | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const [cancel, setCancel] = useState<{ target: DecisionCancelTarget; open: boolean } | null>(
+    null
+  );
   const previousRef = useRef<HTMLButtonElement>(null);
   const nextRef = useRef<HTMLButtonElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
 
-  const terminalId = request?.terminalId ?? null;
-  const questionId = request?.questionIds[request.index] ?? null;
-  const count = request?.questionIds.length ?? 0;
+  const target = request?.questions[request.index] ?? null;
+  const terminalId = target?.scope === "pane" ? target.terminalId : null;
+  const count = request?.questions.length ?? 0;
   const index = request?.index ?? 0;
-  const key = terminalId !== null && questionId !== null ? readKey(terminalId, questionId) : null;
+  const key = target !== null ? targetKey(target) : null;
 
   // Turning Decisions off takes the question off screen at once.
   useEffect(() => {
@@ -273,8 +309,8 @@ export function DecisionQuestionDialog() {
   }, [on, clearReviews]);
 
   useEffect(() => {
-    if (!isOpen || !on || terminalId === null || questionId === null) return;
-    const thisKey = readKey(terminalId, questionId);
+    if (!isOpen || !on || target === null) return;
+    const thisKey = targetKey(target);
     let live = true;
     // Reads can land out of order; only the newest one started may paint.
     let latest = 0;
@@ -284,16 +320,14 @@ export function DecisionQuestionDialog() {
       const accept = (result: Read) => {
         if (live && seq === latest) setTagged({ key: thisKey, read: result });
       };
-      decisionsClient.getQuestionContent(terminalId, questionId).then(accept, () =>
+      readTargetContent(target).then(accept, () =>
         // Never the error itself: it could carry what the question says.
         accept({ result: "failed" })
       );
     };
     read();
-    // An answer or its delivery moves the pane's state; read again so the thread keeps up.
-    const off = decisionsClient.onPaneState((state) => {
-      if (state.terminalId === terminalId) read();
-    });
+    // An answer or its delivery moves the question; read again so the thread keeps up.
+    const off = onQuestionMoved(target, read);
     // A follow-up can change the thread without moving the pane's state.
     const timer = setInterval(read, REREAD_MS);
     return () => {
@@ -301,7 +335,7 @@ export function DecisionQuestionDialog() {
       off();
       clearInterval(timer);
     };
-  }, [isOpen, on, terminalId, questionId, attempt]);
+  }, [isOpen, on, target, attempt]);
 
   const current = tagged !== null && tagged.key === key ? tagged.read : null;
   const showSkeleton = useSkeletonGate(isOpen && current === null);
@@ -312,21 +346,23 @@ export function DecisionQuestionDialog() {
   const goTo = useCallback(
     (delta: number) => {
       if (request === null) return;
-      const target = request.index + delta;
-      if (target < 0 || target >= request.questionIds.length) return;
+      const next = request.index + delta;
+      if (next < 0 || next >= request.questions.length) return;
       // A Retry or a link in the content goes with the step; keep focus in the dialog.
       const active = document.activeElement;
       const stepper = delta < 0 ? previousRef.current : nextRef.current;
+      // The cancel footer goes with the question it was for, so focus leaves it the same way.
       if (
         active instanceof HTMLElement &&
         active !== previousRef.current &&
         active !== nextRef.current &&
-        active.closest('[data-testid="decision-question-body"]') !== null
+        (active === cancelRef.current ||
+          active.closest('[data-testid="decision-question-body"]') !== null)
       ) {
         stepper?.focus({ preventScroll: true });
       }
       step(delta);
-      announce(`Question ${(target + 1).toLocaleString()} of ${count.toLocaleString()}`);
+      announce(`Question ${(next + 1).toLocaleString()} of ${count.toLocaleString()}`);
     },
     [request, step, announce, count]
   );
@@ -349,7 +385,8 @@ export function DecisionQuestionDialog() {
   }, [isOpen, count, goTo]);
 
   // Back to the pane's chip while it shows, else the pane itself: the chip
-  // goes once the pane's last question settles.
+  // goes once the pane's last question settles. One opened by reference goes
+  // back to whatever opened it.
   const restoreFocusTo = useCallback((): HTMLElement | null => {
     if (terminalId === null) return null;
     const escaped = CSS.escape(terminalId);
@@ -362,66 +399,114 @@ export function DecisionQuestionDialog() {
 
   const alias = current?.result === "read" ? aliasLabel(current.question.alias) : null;
   const position = positionText(index, count);
+  const cancellable =
+    current?.result === "read" && target !== null && isWaiting(current.question.status);
+  // The withdrawal asked about, while this view still shows that question.
+  const cancelShown = cancel !== null && key === targetKey(cancel.target.question);
+  const cancelStatus = cancelShown && current?.result === "read" ? current.question.status : null;
+  // A confirmation ends with the view, or once it moves to another question: neither brings it back.
+  if (cancel !== null && cancel.open && (!isOpen || !cancelShown)) {
+    setCancel({ ...cancel, open: false });
+  }
 
   return (
-    <AppDialog
-      isOpen={isOpen}
-      onClose={close}
-      size="4xl"
-      maxHeight="max-h-[min(48rem,85vh)]"
-      initialFocus="surface"
-      restoreFocusTo={restoreFocusTo}
-      // Content is never kept past the close.
-      onCloseComplete={() => setTagged(null)}
-      data-testid="decision-question-dialog"
-    >
-      <AppDialog.Header>
-        <AppDialog.Title icon={<DecisionsIcon size={16} />}>
-          {alias !== null ? `Question ${alias}` : "Question"}
-        </AppDialog.Title>
-        {count > 1 && (
-          <div className="ml-auto flex items-center gap-1">
-            <StepButton
-              ref={previousRef}
-              direction="previous"
-              available={hasPrevious}
-              onStep={() => goTo(-1)}
-            />
-            <span
-              className="min-w-12 text-center text-xs text-text-secondary tabular-nums"
-              data-testid="decision-question-position"
-            >
-              {position}
-            </span>
-            <StepButton ref={nextRef} direction="next" available={hasNext} onStep={() => goTo(1)} />
+    <>
+      <AppDialog
+        isOpen={isOpen}
+        onClose={close}
+        size="4xl"
+        maxHeight="max-h-[min(48rem,85vh)]"
+        initialFocus="surface"
+        restoreFocusTo={restoreFocusTo}
+        // Content is never kept past the close.
+        onCloseComplete={() => setTagged(null)}
+        data-testid="decision-question-dialog"
+      >
+        <AppDialog.Header>
+          <AppDialog.Title icon={<DecisionsIcon size={16} />}>
+            {alias !== null ? `Question ${alias}` : "Question"}
+          </AppDialog.Title>
+          {count > 1 && (
+            <div className="ml-auto flex items-center gap-1">
+              <StepButton
+                ref={previousRef}
+                direction="previous"
+                available={hasPrevious}
+                onStep={() => goTo(-1)}
+              />
+              <span
+                className="min-w-12 text-center text-xs text-text-secondary tabular-nums"
+                data-testid="decision-question-position"
+              >
+                {position}
+              </span>
+              <StepButton
+                ref={nextRef}
+                direction="next"
+                available={hasNext}
+                onStep={() => goTo(1)}
+              />
+            </div>
+          )}
+          <AppDialog.CloseButton />
+        </AppDialog.Header>
+        <AppDialog.Body resetScrollKey={key ?? undefined}>
+          <div data-testid="decision-question-body">
+            {current === null && showSkeleton && <QuestionSkeleton />}
+            {current?.result === "read" && target !== null && (
+              <QuestionBody question={current.question} target={target} active={isOpen} />
+            )}
+            {current !== null && current.result !== "read" && (
+              <Callout
+                severity={current.result === "failed" ? "warning" : "neutral"}
+                size="compact"
+                action={
+                  current.result === "failed" || current.result === "not-running" ? (
+                    <Button variant="outline" size="xs" onClick={() => setAttempt((n) => n + 1)}>
+                      Retry
+                    </Button>
+                  ) : undefined
+                }
+                data-testid="decision-question-unavailable"
+              >
+                {UNAVAILABLE[current.result]}
+              </Callout>
+            )}
           </div>
-        )}
-        <AppDialog.CloseButton />
-      </AppDialog.Header>
-      <AppDialog.Body resetScrollKey={key ?? undefined}>
-        <div data-testid="decision-question-body">
-          {current === null && showSkeleton && <QuestionSkeleton />}
-          {current?.result === "read" && terminalId !== null && (
-            <QuestionBody question={current.question} terminalId={terminalId} active={isOpen} />
-          )}
-          {current !== null && current.result !== "read" && (
-            <Callout
-              severity={current.result === "failed" ? "warning" : "neutral"}
-              size="compact"
-              action={
-                current.result === "failed" || current.result === "not-running" ? (
-                  <Button variant="outline" size="xs" onClick={() => setAttempt((n) => n + 1)}>
-                    Retry
-                  </Button>
-                ) : undefined
-              }
-              data-testid="decision-question-unavailable"
+        </AppDialog.Body>
+        {cancellable && (
+          <AppDialog.Footer>
+            <Button
+              ref={cancelRef}
+              variant="ghost-danger"
+              onClick={() => {
+                if (current?.result !== "read" || target === null) return;
+                setCancel({
+                  target: {
+                    question: target,
+                    label: aliasLabel(current.question.alias),
+                    line: null,
+                  },
+                  open: true,
+                });
+              }}
+              data-testid="decision-question-cancel"
             >
-              {UNAVAILABLE[current.result]}
-            </Callout>
-          )}
-        </div>
-      </AppDialog.Body>
-    </AppDialog>
+              Cancel question
+            </Button>
+          </AppDialog.Footer>
+        )}
+      </AppDialog>
+      <DecisionCancelDialog
+        target={cancel?.target ?? null}
+        isOpen={isOpen && cancelShown && cancel.open}
+        waiting={cancelStatus !== null && isWaiting(cancelStatus)}
+        queued={cancelStatus === "queued"}
+        onClose={() => setCancel((asked) => (asked === null ? null : { ...asked, open: false }))}
+        // Read again now rather than at the next change: it shows withdrawn once the relay confirms.
+        onCancelling={() => setAttempt((n) => n + 1)}
+        restoreFocusTo={() => cancelRef.current}
+      />
+    </>
   );
 }

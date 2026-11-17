@@ -1,22 +1,54 @@
 import { create } from "zustand";
+import {
+  paneQuestion,
+  referencedQuestion,
+  targetKey,
+  type DecisionQuestionTarget,
+} from "@/components/Decisions/decisionQuestionTarget";
+import type { DecisionQuestionReference } from "@shared/types/decisionsQuestion";
 
 /**
  * The question being read in the Decisions question view (#17098): ids only.
  * The content is read on demand by the view and never stored here.
  */
 export interface DecisionsQuestionViewRequest {
-  terminalId: string;
-  /** The pane's questions in the order the dropdown listed them; the view steps through these. */
-  questionIds: string[];
+  /** The questions in the order they were listed; the view steps through these. */
+  questions: DecisionQuestionTarget[];
   index: number;
 }
 
 interface DecisionsQuestionViewState {
   isOpen: boolean;
   request: DecisionsQuestionViewRequest | null;
+  /** One of a pane's questions, from its dropdown, read for this view's project. */
   open: (terminalId: string, questionIds: readonly string[], questionId: string) => void;
+  /**
+   * A question by its reference (#17229), from any window on this computer,
+   * stepping through `references` in their order.
+   */
+  openReference: (
+    references: readonly DecisionQuestionReference[],
+    reference: DecisionQuestionReference
+  ) => void;
   step: (delta: number) => void;
   close: () => void;
+}
+
+/** Each question once, opened on `chosen`; null when `chosen` isn't among them. */
+function requestOf(
+  questions: readonly DecisionQuestionTarget[],
+  chosen: DecisionQuestionTarget
+): DecisionsQuestionViewRequest | null {
+  const seen = new Set<string>();
+  const listed = questions.filter((question) => {
+    const key = targetKey(question);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const chosenKey = targetKey(chosen);
+  const index = listed.findIndex((question) => targetKey(question) === chosenKey);
+  return index === -1 ? null : { questions: listed, index };
 }
 
 /**
@@ -28,17 +60,22 @@ export const useDecisionsQuestionViewStore = create<DecisionsQuestionViewState>(
   isOpen: false,
   request: null,
   open: (terminalId, questionIds, questionId) => {
-    const ids = [...new Set(questionIds)];
-    const index = ids.indexOf(questionId);
-    if (index === -1) return;
-    set({ isOpen: true, request: { terminalId, questionIds: ids, index } });
+    const request = requestOf(
+      questionIds.map((id) => paneQuestion(terminalId, id)),
+      paneQuestion(terminalId, questionId)
+    );
+    if (request !== null) set({ isOpen: true, request });
+  },
+  openReference: (references, reference) => {
+    const request = requestOf(references.map(referencedQuestion), referencedQuestion(reference));
+    if (request !== null) set({ isOpen: true, request });
   },
   step: (delta) =>
     set((state) => {
       const request = state.request;
       if (request === null) return state;
       const index = request.index + delta;
-      if (index < 0 || index >= request.questionIds.length || index === request.index) {
+      if (index < 0 || index >= request.questions.length || index === request.index) {
         return state;
       }
       return { request: { ...request, index } };

@@ -279,6 +279,12 @@ export const CHANNEL_LOCALITY = {
   "decisions:get-question-content": "host",
   "decisions:get-question-summaries": "host",
   "decisions:get-question-image": "host",
+  // This computer's own questions, read by reference from any of its windows (#17229).
+  "decisions:list-questions": "shell",
+  "decisions:get-question-content-by-reference": "shell",
+  "decisions:get-question-image-by-reference": "shell",
+  "decisions:get-question-summaries-by-reference": "shell",
+  "decisions:cancel-question-by-reference": "shell",
   "decisions:get-policy": "shell",
   "decisions:report-composer-drafts": "host",
   "decisions:get-setup-check": "shell",
@@ -1552,6 +1558,7 @@ export const EVENT_LOCALITY: Readonly<Record<string, ChannelLocality>> = {
   "terminal:decision-state": "host",
   // The owner machine's switch and relay connection, like its settings.
   "decisions:status-changed": "shell",
+  "decisions:questions-changed": "shell",
   "decisions:devices-changed": "shell",
   "decisions:setup-check-changed": "shell",
   "watchdog:active": "host",

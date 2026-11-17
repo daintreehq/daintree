@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PaneDecisionState } from "@shared/types/decisions";
-import type { DecisionQuestionImagePartResult } from "@shared/types/decisionsQuestion";
+import type {
+  DecisionQuestionImagePartResult,
+  DecisionQuestionList,
+  DecisionQuestionReference,
+} from "@shared/types/decisionsQuestion";
 
 const typedGlobal = globalThis as unknown as Record<string, unknown>;
 
@@ -304,5 +308,144 @@ describe("decisionsClient.getQuestionImage", () => {
       decisionsClient.getQuestionImage("pane-a", "q-1", "attach_0001", controller.signal)
     ).rejects.toThrow("closed");
     expect(getQuestionImage).toHaveBeenCalledOnce();
+  });
+});
+
+describe("decisionsClient.watchQuestions (#17229)", () => {
+  let pushList: (list: DecisionQuestionList) => void;
+  let listQuestions: ReturnType<typeof vi.fn>;
+  let off: ReturnType<typeof vi.fn>;
+  let resolveList: (list: DecisionQuestionList) => void;
+  let rejectList: (err: Error) => void;
+  const steps: string[] = [];
+
+  const list = (revision: number): DecisionQuestionList => ({ revision, questions: [] });
+
+  beforeEach(async () => {
+    vi.resetModules();
+    steps.length = 0;
+    off = vi.fn();
+    listQuestions = vi.fn(() => {
+      steps.push("read");
+      return new Promise<DecisionQuestionList>((resolve, reject) => {
+        resolveList = resolve;
+        rejectList = reject;
+      });
+    });
+    typedGlobal.window = {
+      electron: {
+        decisions: { listQuestions },
+        events: {
+          on: vi.fn((name: string, callback: (list: DecisionQuestionList) => void) => {
+            if (name === "decisions:questions-changed") {
+              steps.push("subscribe");
+              pushList = callback;
+            }
+            return off;
+          }),
+        },
+      },
+    };
+    ({ decisionsClient } = await import("../decisionsClient"));
+  });
+
+  afterEach(() => {
+    delete typedGlobal.window;
+  });
+
+  it("subscribes before it reads, and never lets a late read roll a push back", async () => {
+    const seen: number[] = [];
+    decisionsClient.watchQuestions((l) => seen.push(l.revision));
+    expect(steps).toEqual(["subscribe", "read"]);
+
+    pushList(list(5));
+    pushList(list(5));
+    resolveList(list(4));
+    await Promise.resolve();
+    pushList(list(6));
+
+    expect(seen).toEqual([5, 6]);
+  });
+
+  it("shows the read when nothing was pushed, and keeps watching when it fails", async () => {
+    const seen: number[] = [];
+    decisionsClient.watchQuestions((l) => seen.push(l.revision));
+    resolveList(list(0));
+    await Promise.resolve();
+    expect(seen).toEqual([0]);
+
+    decisionsClient.watchQuestions((l) => seen.push(l.revision * 10));
+    rejectList(new Error("gone"));
+    await Promise.resolve();
+    pushList(list(2));
+    expect(seen).toEqual([0, 20]);
+  });
+
+  it("stops listening, and ignores a read still in flight, once stopped", async () => {
+    const seen: number[] = [];
+    const stop = decisionsClient.watchQuestions((l) => seen.push(l.revision));
+    stop();
+    resolveList(list(3));
+    await Promise.resolve();
+    expect(off).toHaveBeenCalledOnce();
+    expect(seen).toEqual([]);
+  });
+});
+
+describe("decisionsClient reads by reference (#17229)", () => {
+  type Payload = {
+    reference: DecisionQuestionReference;
+    attachmentId: string;
+    offset: number;
+  };
+  const REFERENCE: DecisionQuestionReference = {
+    hostId: "host_1",
+    projectId: "project-b",
+    terminalId: "pane-closed",
+    questionId: "q-1",
+  };
+  const IMAGE = Uint8Array.from({ length: 10 }, (_, i) => i + 1);
+  let getQuestionImageByReference: ReturnType<
+    typeof vi.fn<(payload: Payload) => Promise<DecisionQuestionImagePartResult>>
+  >;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    getQuestionImageByReference = vi.fn(async ({ attachmentId, offset }: Payload) => ({
+      result: "read" as const,
+      part: {
+        attachmentId,
+        mime: "image/png" as const,
+        sha256: "d".repeat(64),
+        size: IMAGE.length,
+        offset,
+        bytes: IMAGE.slice(offset, offset + 4),
+      },
+    }));
+    typedGlobal.window = { electron: { decisions: { getQuestionImageByReference } } };
+    ({ decisionsClient } = await import("../decisionsClient"));
+  });
+
+  afterEach(() => {
+    delete typedGlobal.window;
+  });
+
+  it("puts an image together from parts read by the question's reference", async () => {
+    await expect(
+      decisionsClient.getQuestionImageByReference(REFERENCE, "attach_0001")
+    ).resolves.toEqual({
+      result: "read",
+      image: {
+        attachmentId: "attach_0001",
+        mime: "image/png",
+        sha256: "d".repeat(64),
+        bytes: IMAGE,
+      },
+    });
+    expect(getQuestionImageByReference.mock.calls.map(([payload]) => payload)).toEqual([
+      { reference: REFERENCE, attachmentId: "attach_0001", offset: 0 },
+      { reference: REFERENCE, attachmentId: "attach_0001", offset: 4 },
+      { reference: REFERENCE, attachmentId: "attach_0001", offset: 8 },
+    ]);
   });
 });

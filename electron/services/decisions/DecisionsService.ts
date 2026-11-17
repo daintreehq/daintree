@@ -10,6 +10,8 @@ import type {
 import type {
   CancelDecisionQuestionPayload,
   DecisionQuestionCancelResult,
+  DecisionQuestionListItem,
+  DecisionQuestionReference,
 } from "../../../shared/types/decisionsQuestion.js";
 import type { AnswerDelivery, AnswerDeliveryDeps } from "./answerDelivery.js";
 import { createWorktreeAttachmentResolver } from "./attachmentResolver.js";
@@ -43,6 +45,7 @@ import {
 } from "./paneDecisionState.js";
 import type { PaneSnapshotSources } from "./paneSnapshots.js";
 import { observeQuestionWrites, QuestionRowsFeed } from "./questionFeed.js";
+import { projectDecisionQuestions } from "./questionList.js";
 import {
   RelayConnection,
   type QuestionSource,
@@ -143,6 +146,11 @@ export interface DecisionsServiceOptions {
   /** Tells the fleet which panes have answers needing a person (`runAnswerAttentionSource`). */
   publishAnswerAttention?: AnswerAttentionPublisher;
   /**
+   * Every question this computer asked, after each write (#17229); an empty
+   * list once the lifetime ends. Only an owner's lifetime lists any.
+   */
+  publishQuestions?: (questions: readonly DecisionQuestionListItem[]) => void;
+  /**
    * The relay revoked the identity this lifetime connected with. The entry
    * records it, in the setting or the Host's record, so no later lifetime
    * connects with it either.
@@ -222,6 +230,7 @@ export class DecisionsService {
   /** Local data is being deleted (#16025): no key store or rotation is made until it finishes. */
   private erasing = false;
   private readonly panes: PaneDecisionStates;
+  private readonly publishQuestions: (questions: readonly DecisionQuestionListItem[]) => void;
   private readonly connect: DecisionsConnectionFactory;
   private readonly onRelayRevoked: (relay: RelayBinding, role: DecisionsRole) => void;
   private readonly onDevicesChanged: () => void;
@@ -311,6 +320,7 @@ export class DecisionsService {
       Date.now,
       options.publishAnswerAttention
     );
+    this.publishQuestions = options.publishQuestions ?? (() => {});
     this.connect = options.connect ?? ((connection) => new RelayConnection(connection));
     this.onRelayRevoked = options.onRelayRevoked ?? (() => {});
     this.onDevicesChanged = options.onDevicesChanged ?? (() => {});
@@ -438,11 +448,14 @@ export class DecisionsService {
    */
   updateSettings(settings: DecisionsSettings): void {
     if (this.disposed || this.settings === null || !settings.enabled) return;
+    const hostChanged = this.settings.hostId !== settings.hostId;
     this.settings = settings;
     this.applyPolicy(settings);
     this.paused = false;
     this.applyModel();
     this.reconcileConnection();
+    // The list names questions by this machine's host id: a forgotten or new one lists again now.
+    if (hostChanged) void this.feed?.refresh();
   }
 
   /**
@@ -567,6 +580,29 @@ export class DecisionsService {
   }
 
   /**
+   * A person withdrawing a question by its reference (#17229), from any
+   * window on this computer: the reference's project and terminal stand in
+   * for the view's, and a reference naming another machine finds nothing.
+   */
+  cancelQuestionByReference(
+    reference: DecisionQuestionReference
+  ): Promise<DecisionQuestionCancelResult> {
+    const questions = this.questions;
+    if (this.disposed || this.state === "off" || questions === null) {
+      return Promise.resolve({ result: "not-running" });
+    }
+    const hostId = this.settings?.hostId ?? null;
+    if (hostId === null || reference.hostId !== hostId) {
+      return Promise.resolve({ result: "refused", reason: "not-found" });
+    }
+    return questions.cancelForPerson(reference.questionId, {
+      hostId,
+      projectId: reference.projectId,
+      terminalId: reference.terminalId,
+    });
+  }
+
+  /**
    * The store's question rows, all of them, after a write commits: each
    * pane's state becomes what they show, and the panes that changed are
    * pushed. Ignored while stopped, so nothing is pushed while Decisions is off.
@@ -575,6 +611,25 @@ export class DecisionsService {
     if (this.disposed || this.state === "off") return;
     this.panes.replace(rows, handled);
     this.connection?.observeQuestions?.(rows);
+  }
+
+  /**
+   * Every question row, handled answers included, as this computer's list of
+   * questions (#17229). Only an owner's lifetime lists any: a Remote Host's
+   * questions are its owner's to show.
+   */
+  private listQuestions(rows: readonly QuestionRow[], handled: HandledAnswers): void {
+    if (this.disposed || this.state === "off" || this.role !== "owner") return;
+    this.sendQuestions(projectDecisionQuestions(rows, handled, this.settings?.hostId ?? null));
+  }
+
+  /** The list is best effort, like pane chrome: a failed push must never unwind the write that caused it. */
+  private sendQuestions(questions: readonly DecisionQuestionListItem[]): void {
+    try {
+      this.publishQuestions(questions);
+    } catch (err) {
+      console.warn("[Decisions] A question list update failed:", err);
+    }
   }
 
   /**
@@ -652,6 +707,8 @@ export class DecisionsService {
         opened = await this.openStore(() => this.disposed);
       } catch (error) {
         this.storeFailed = true;
+        // With no store there is nothing to list until the next start opens one.
+        this.sendQuestions([]);
         logWarn("[Decisions] The local store didn't reopen after it stopped writing", {
           reason,
           error: error instanceof Error ? error.name : "error",
@@ -682,8 +739,10 @@ export class DecisionsService {
       if (this.disposed || !settings.enabled) return;
       if (this.settings !== null && this.role !== role) await this.release(true);
       if (this.disposed) return;
+      const hostChanged = this.settings?.hostId !== settings.hostId;
       this.role = role;
       this.settings = settings;
+      if (hostChanged) void this.feed?.refresh();
       this.applyPolicy(settings);
       this.paused = false;
       // There is no relay identity until a relay is claimed or restored, and no
@@ -765,8 +824,11 @@ export class DecisionsService {
         } finally {
           this.erasing = false;
         }
-        // Every row is gone, so no pane has anything outstanding.
-        if (outcome.result !== "failed") this.panes.clear(true);
+        // Every row is gone, so no pane has anything outstanding, and nothing is listed.
+        if (outcome.result !== "failed") {
+          this.panes.clear(true);
+          this.sendQuestions([]);
+        }
         if (outcome.result !== "incomplete" && !this.disposed && this.settings !== null) {
           try {
             const reopened = await this.openStore(() => this.disposed);
@@ -884,6 +946,7 @@ export class DecisionsService {
       await store?.close();
     } finally {
       this.panes.clear(clearViews && !this.disposed && this.state !== "off");
+      this.sendQuestions([]);
       // A rotation that is saving its key finishes before the keys close.
       await rotations?.close();
       await keyStore?.close();
@@ -1137,15 +1200,19 @@ export class DecisionsService {
     this.offCommit?.();
     this.offCommit = null;
     if (store === null) return Promise.resolve();
-    // What a person marked handled (#16020) shows nowhere: not on its pane, in Canopy or the list.
+    // What a person marked handled (#16020) shows nowhere: not on its pane, in Canopy or the
+    // attention list. The list of every question keeps it, settled (#17229).
     // Reads run one at a time, so each is fed with the record it was read with.
     let handled: HandledAnswers = new Map();
     const feed = new QuestionRowsFeed(
       async () => {
         handled = await readHandledAnswers(store);
-        return withoutHandled(await store.listQuestions(), handled);
+        return store.listQuestions();
       },
-      (rows) => this.observeQuestions(rows, handled)
+      (rows) => {
+        this.listQuestions(rows, handled);
+        this.observeQuestions(withoutHandled(rows, handled), handled);
+      }
     );
     this.feed = feed;
     this.offCommit = store.onCommit(() => void feed.refresh());

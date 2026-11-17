@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   DecisionQuestionAttachment,
   DecisionQuestionImageResult,
+  DecisionQuestionReference,
 } from "@shared/types/decisionsQuestion";
 
 const getQuestionImage = vi.hoisted(() =>
@@ -15,9 +16,29 @@ const getQuestionImage = vi.hoisted(() =>
     ) => Promise<DecisionQuestionImageResult>
   >()
 );
-vi.mock("@/clients/decisionsClient", () => ({ decisionsClient: { getQuestionImage } }));
+const getQuestionImageByReference = vi.hoisted(() =>
+  vi.fn<
+    (
+      reference: DecisionQuestionReference,
+      attachmentId: string,
+      signal?: AbortSignal
+    ) => Promise<DecisionQuestionImageResult>
+  >()
+);
+vi.mock("@/clients/decisionsClient", () => ({
+  decisionsClient: { getQuestionImage, getQuestionImageByReference },
+}));
 
 import { QuestionImageLoader, imagesKey } from "../questionImageLoader";
+import type { DecisionQuestionTarget } from "../decisionQuestionTarget";
+
+const PANE: DecisionQuestionTarget = { scope: "pane", terminalId: "t1", questionId: "qa" };
+const REFERENCE: DecisionQuestionReference = {
+  hostId: "host_1",
+  projectId: "project-b",
+  terminalId: "t1",
+  questionId: "qa",
+};
 
 function image(n: number): DecisionQuestionAttachment {
   return {
@@ -88,7 +109,7 @@ function readIds(): string[] {
 
 describe("QuestionImageLoader", () => {
   it("reads two images at a time, in the question's order", async () => {
-    const loader = new QuestionImageLoader("t1", "qa", IMAGES);
+    const loader = new QuestionImageLoader(PANE, IMAGES);
     loader.start();
     expect(readIds()).toEqual(["attach_0001", "attach_0002"]);
 
@@ -101,7 +122,7 @@ describe("QuestionImageLoader", () => {
   });
 
   it("reads an opened image next, ahead of the ones still waiting", async () => {
-    const loader = new QuestionImageLoader("t1", "qa", IMAGES);
+    const loader = new QuestionImageLoader(PANE, IMAGES);
     loader.start();
     loader.prioritize("attach_0004");
 
@@ -112,7 +133,7 @@ describe("QuestionImageLoader", () => {
   });
 
   it("drops every image and revokes its URL on stop, and drops a read that lands after", async () => {
-    const loader = new QuestionImageLoader("t1", "qa", IMAGES.slice(0, 2));
+    const loader = new QuestionImageLoader(PANE, IMAGES.slice(0, 2));
     const seen = vi.fn();
     loader.subscribe(seen);
     loader.start();
@@ -134,7 +155,7 @@ describe("QuestionImageLoader", () => {
   });
 
   it("starts over after a stop, as a remount does, and drops the read from before it", async () => {
-    const loader = new QuestionImageLoader("t1", "qa", IMAGES.slice(0, 1));
+    const loader = new QuestionImageLoader(PANE, IMAGES.slice(0, 1));
     const seen = vi.fn();
     loader.subscribe(seen);
     loader.start();
@@ -155,7 +176,7 @@ describe("QuestionImageLoader", () => {
   });
 
   it("fails an image that couldn't be drawn and lets its URL go, once it was ready", async () => {
-    const loader = new QuestionImageLoader("t1", "qa", IMAGES.slice(0, 2));
+    const loader = new QuestionImageLoader(PANE, IMAGES.slice(0, 2));
     loader.start();
     loader.undecodable("attach_0001");
     expect(loader.getSnapshot()["attach_0001"]).toEqual({ status: "loading" });
@@ -174,7 +195,7 @@ describe("QuestionImageLoader", () => {
   });
 
   it("says why an image failed, never with the error, and reads it again on retry", async () => {
-    const loader = new QuestionImageLoader("t1", "qa", IMAGES.slice(0, 2));
+    const loader = new QuestionImageLoader(PANE, IMAGES.slice(0, 2));
     loader.start();
     getQuestionImage.mockClear();
     settle(1, { result: "not-running" });
@@ -192,7 +213,7 @@ describe("QuestionImageLoader", () => {
   it("calls a read that broke failed, and retries nothing that hasn't failed", async () => {
     getQuestionImage.mockReset().mockRejectedValueOnce(new Error("image bytes"));
     getQuestionImage.mockImplementation(() => new Promise(() => {}));
-    const loader = new QuestionImageLoader("t1", "qa", IMAGES.slice(0, 2));
+    const loader = new QuestionImageLoader(PANE, IMAGES.slice(0, 2));
     loader.start();
     await flush();
 
@@ -204,17 +225,60 @@ describe("QuestionImageLoader", () => {
 
 describe("imagesKey", () => {
   it("changes when an image's digest does, and not when nothing it names does", () => {
-    const key = imagesKey("t1", "qa", IMAGES);
+    const key = imagesKey(PANE, IMAGES);
     expect(
       imagesKey(
-        "t1",
-        "qa",
+        PANE,
         IMAGES.map((a) => ({ ...a, alt: "changed" }))
       )
     ).toBe(key);
-    expect(
-      imagesKey("t1", "qa", [{ ...image(1), sha256: "f".repeat(64) }, ...IMAGES.slice(1)])
-    ).not.toBe(key);
-    expect(imagesKey("t2", "qa", IMAGES)).not.toBe(key);
+    expect(imagesKey(PANE, [{ ...image(1), sha256: "f".repeat(64) }, ...IMAGES.slice(1)])).not.toBe(
+      key
+    );
+    expect(imagesKey({ ...PANE, terminalId: "t2" }, IMAGES)).not.toBe(key);
+  });
+
+  it("changes with the way the question is read, so a pane's images never stand in for a reference's", () => {
+    const byReference = imagesKey({ scope: "reference", reference: REFERENCE }, IMAGES);
+    expect(byReference).not.toBe(imagesKey(PANE, IMAGES));
+    for (const reference of [
+      { ...REFERENCE, hostId: "host_2" },
+      { ...REFERENCE, projectId: "project-c" },
+      { ...REFERENCE, terminalId: "t2" },
+      { ...REFERENCE, questionId: "qb" },
+    ]) {
+      expect(imagesKey({ scope: "reference", reference }, IMAGES)).not.toBe(byReference);
+    }
+  });
+});
+
+describe("QuestionImageLoader opened by reference", () => {
+  it("reads each image by the question's reference, never through the pane", async () => {
+    getQuestionImageByReference
+      .mockReset()
+      .mockImplementation(async (_reference, attachmentId) => ({
+        result: "read",
+        image: {
+          attachmentId,
+          mime: "image/png",
+          sha256: image(1).sha256,
+          bytes: new Uint8Array([1, 2, 3]),
+        },
+      }));
+    const loader = new QuestionImageLoader(
+      { scope: "reference", reference: REFERENCE },
+      IMAGES.slice(0, 1)
+    );
+    loader.start();
+    await flush();
+
+    expect(getQuestionImageByReference).toHaveBeenCalledExactlyOnceWith(
+      REFERENCE,
+      "attach_0001",
+      expect.any(AbortSignal)
+    );
+    expect(getQuestionImage).not.toHaveBeenCalled();
+    expect(loader.getSnapshot()["attach_0001"]).toEqual({ status: "ready", url: "blob:1" });
+    loader.stop();
   });
 });

@@ -23,11 +23,15 @@ import type {
   DecisionsStatusEvent,
   PaneDecisionState,
 } from "../../../../shared/types/decisions.js";
-import { outstandingRows, row } from "./questionRows.js";
+import { answers, outstandingRows, qid, row } from "./questionRows.js";
 import type { DecisionsRows } from "../localData.js";
 import type { QuestionSource, RelayConnectionOptions } from "../relayConnection.js";
 import type { QuestionReadScope } from "../questionContent.js";
-import type { DecisionQuestionCancelResult } from "../../../../shared/types/decisionsQuestion.js";
+import type {
+  DecisionQuestionCancelResult,
+  DecisionQuestionListItem,
+} from "../../../../shared/types/decisionsQuestion.js";
+import { HANDLED_ANSWERS_META_KEY } from "../attentionList.js";
 import type { LearnedDecision, QuestionRow } from "@daintreehq/decisions-client";
 import {
   FakeAdapter,
@@ -580,6 +584,183 @@ describe("DecisionsService pane state", () => {
   });
 });
 
+describe("DecisionsService question list (#17229)", () => {
+  function listed(options: { handled?: Record<string, number> } = {}) {
+    let rows: QuestionRow[] = [];
+    let reads = 0;
+    let handled = options.handled ?? null;
+    // Set to hold the next read until the test lets it land.
+    let gate: Promise<void> | null = null;
+    const listeners = new Set<() => void>();
+    const store = {
+      ...fakeStore(),
+      onCommit: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      listQuestions: async () => {
+        reads += 1;
+        const read = rows;
+        if (gate !== null) await gate;
+        return read;
+      },
+      getMeta: async (key: string) =>
+        key === HANDLED_ANSWERS_META_KEY && handled !== null ? JSON.stringify(handled) : null,
+    } as unknown as DaintreeLocalStore;
+    const lists: DecisionQuestionListItem[][] = [];
+    const panes: PaneDecisionState[] = [];
+    const service = new DecisionsService({
+      openStore: async () => store,
+      keyFilePath: () => ABSENT_KEY_FILE,
+      publishPaneState: (_projectId, state) => panes.push(state),
+      publishQuestions: (questions) => lists.push([...questions]),
+    });
+    const commit = async (next: QuestionRow[]) => {
+      rows = next;
+      const before = lists.length;
+      for (const listener of listeners) listener();
+      await vi.waitFor(() => expect(lists.length).toBeGreaterThan(before));
+    };
+    return {
+      service,
+      lists,
+      panes,
+      commit,
+      setRows: (next: QuestionRow[]) => (rows = next),
+      reads: () => reads,
+      setHandled: (next: Record<string, number>) => (handled = next),
+      fireCommit: () => {
+        for (const listener of listeners) listener();
+      },
+      hold: () => {
+        let release!: () => void;
+        gate = new Promise<void>((resolve) => (release = resolve));
+        return () => {
+          gate = null;
+          release();
+        };
+      },
+    };
+  }
+
+  const HOST = { hostId: "host_1" };
+
+  it("lists every question this computer asked, across projects, after each commit", async () => {
+    const { service, lists, commit } = listed();
+    await service.start(on(HOST));
+    await commit([
+      row(1),
+      row(2, { origin: { project_id: "project-b", pane_id: "pane-b" } }),
+      row(3, { origin: { host_id: "host_other" } }),
+    ]);
+
+    expect(lists.at(-1)!.map((item) => item.reference)).toEqual([
+      { hostId: "host_1", projectId: "project-1", terminalId: "pane-a", questionId: qid(1) },
+      { hostId: "host_1", projectId: "project-b", terminalId: "pane-b", questionId: qid(2) },
+    ]);
+    await service.stop();
+  });
+
+  it("keeps an answer marked handled, settled, though no pane or attention list shows it", async () => {
+    // The handled record keeps only ids shaped as the library mints them.
+    const handledRow = row(1, {
+      question_id: "q_handled_0001",
+      local_status: "human-answered",
+      delivery_status: "needs-attention",
+      answers_json: answers({ revision: 1 }),
+    });
+    const { service, lists, panes, setRows } = listed({ handled: { q_handled_0001: 1 } });
+    setRows([handledRow]);
+    await service.start(on(HOST));
+
+    expect(lists.at(-1)).toEqual([
+      expect.objectContaining({
+        alias: 1,
+        standing: { kind: "settled", outcome: "answered", handled: true },
+      }),
+    ]);
+    // The pane shows nothing for it, as before.
+    expect(panes).toEqual([]);
+    expect(service.getPaneState("pane-a")).toBeNull();
+    await service.stop();
+  });
+
+  it("settles an answer once a person marks it handled, on the commit that follows", async () => {
+    const attention = row(1, {
+      question_id: "q_handled_0001",
+      local_status: "human-answered",
+      delivery_status: "needs-attention",
+      answers_json: answers({ revision: 1 }),
+    });
+    const { service, lists, commit, setRows, setHandled } = listed();
+    setRows([attention]);
+    await service.start(on(HOST));
+    expect(lists.at(-1)?.[0]?.standing).toMatchObject({ kind: "needs-attention" });
+
+    setHandled({ q_handled_0001: 1 });
+    await commit([attention]);
+
+    expect(lists.at(-1)?.[0]?.standing).toEqual({
+      kind: "settled",
+      outcome: "answered",
+      handled: true,
+    });
+    await service.stop();
+  });
+
+  it("empties the list when it stops, and a read that lands after lists nothing", async () => {
+    const { service, lists, setRows, fireCommit, hold } = listed();
+    setRows([row(1)]);
+    await service.start(on(HOST));
+    expect(lists.at(-1)).toHaveLength(1);
+
+    const release = hold();
+    setRows([row(1), row(2)]);
+    fireCommit();
+    await service.stop();
+    expect(lists.at(-1)).toEqual([]);
+    const after = lists.length;
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(lists).toHaveLength(after);
+  });
+
+  it("lists again when this machine's host id is forgotten or set, with no write to the store", async () => {
+    const { service, lists, setRows, reads } = listed();
+    setRows([row(1)]);
+    await service.start(on(HOST));
+    expect(lists.at(-1)).toHaveLength(1);
+
+    service.updateSettings(on({ hostId: null }));
+    await vi.waitFor(() => expect(lists.at(-1)).toEqual([]));
+
+    service.updateSettings(on(HOST));
+    await vi.waitFor(() => expect(lists.at(-1)).toHaveLength(1));
+
+    // The same, through a start of the lifetime already running.
+    await service.start(on({ hostId: null }));
+    await vi.waitFor(() => expect(lists.at(-1)).toEqual([]));
+    await service.start(on(HOST));
+    await vi.waitFor(() => expect(lists.at(-1)).toHaveLength(1));
+    // An unchanged host id reads nothing again.
+    const before = reads();
+    await service.start(on(HOST));
+    service.updateSettings(on(HOST));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(reads()).toBe(before);
+    await service.stop();
+  });
+
+  it("lists nothing for a Remote Host's own lifetime: its questions are its owner's to show", async () => {
+    const { service, lists, setRows } = listed();
+    setRows([row(1)]);
+    await service.start(on(HOST), "host");
+    expect(lists.flat()).toEqual([]);
+    await service.stop();
+  });
+});
+
 describe("DecisionsService relay connection", () => {
   const RELAY = {
     relayOrigin: "https://relay.example.com",
@@ -1089,6 +1270,40 @@ describe("DecisionsService relay connection", () => {
       result: "not-running",
     });
     expect(routes.cancels).toHaveLength(2);
+  });
+
+  it("withdraws a question by its reference from any window, refusing one another machine asked (#17229)", async () => {
+    const routes = questionRoutes();
+    const { service, made } = connected(undefined, routes.openQuestions);
+    const reference = {
+      hostId: "host_aaaaaaaa",
+      projectId: "project-b",
+      terminalId: "pane-closed",
+      questionId: "q_0123456789",
+    };
+    await service.start(on({ ...RELAY, hostId: "host_aaaaaaaa" }));
+    await expect(service.cancelQuestionByReference(reference)).resolves.toEqual({
+      result: "not-running",
+    });
+
+    made[0]!.options.onQuestionsReady!(SOURCE);
+    await expect(service.cancelQuestionByReference(reference)).resolves.toEqual({
+      result: "cancelling",
+    });
+    await expect(
+      service.cancelQuestionByReference({ ...reference, hostId: "host_elsewhere" })
+    ).resolves.toEqual({ result: "refused", reason: "not-found" });
+    // The reference's project and terminal stand in for a view's: whatever window asked.
+    expect(routes.cancels).toEqual([
+      {
+        route: 1,
+        questionId: "q_0123456789",
+        scope: { hostId: "host_aaaaaaaa", projectId: "project-b", terminalId: "pane-closed" },
+      },
+    ]);
+
+    for (const route of routes.opened) route.release();
+    await service.stop();
   });
 
   it("hands a launch the route's port once the connection opens it, waiting while its identity loads", async () => {
@@ -2348,6 +2563,31 @@ describe("DecisionsService disk-space recovery (#16605)", () => {
     expect(service.getStatus()).toEqual({ state: "not-connected", problem: "storage" });
     made[1]!.options.onStatus({ state: "connected" });
     expect(service.getStatus()).toEqual({ state: "connected" });
+  });
+
+  it("lists nothing once a replacement store doesn't open (#17229)", async () => {
+    const lists: DecisionQuestionListItem[][] = [];
+    const first = faultableStore([row(1)]);
+    let opens = 0;
+    const service = new DecisionsService({
+      openStore: async () => {
+        opens += 1;
+        if (opens === 1) return first.store;
+        throw new Error("still no room");
+      },
+      keyFilePath: () => "/nonexistent/keys.bin",
+      publishQuestions: (questions) => lists.push([...questions]),
+      connect: () => ({ start: () => {}, stop: () => {} }),
+    });
+    await service.start(on({ ...RELAY, hostId: "host_1" }));
+    expect(lists.at(-1)).toHaveLength(1);
+    first.fault("disk-pressure");
+
+    expect(await service.diskSpaceRecovered()).toBe(false);
+
+    expect(opens).toBe(2);
+    expect(lists.at(-1)).toEqual([]);
+    await service.stop();
   });
 
   it("restarts a Host's lifetime as a Host", async () => {

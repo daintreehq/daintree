@@ -21,6 +21,7 @@ import {
 import { mcpPaneConfigService } from "../McpPaneConfigService.js";
 import { events } from "../events.js";
 import { setAnswerAttention } from "../runAnswerAttentionSource.js";
+import { setDecisionQuestions } from "../decisionsQuestionList.js";
 import {
   BridgeError,
   enrollHost,
@@ -89,13 +90,20 @@ import type {
   ReassignDecisionsAnswerPayload,
 } from "../../../shared/types/decisionsAttention.js";
 import type {
+  CancelDecisionQuestionByReferencePayload,
   CancelDecisionQuestionPayload,
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
   DecisionQuestionImagePartResult,
+  DecisionQuestionListItem,
+  DecisionQuestionReference,
   DecisionQuestionSummariesResult,
+  DecisionQuestionSummary,
+  GetDecisionQuestionByReferencePayload,
+  GetDecisionQuestionImageByReferencePayload,
   GetDecisionQuestionImagePayload,
   GetDecisionQuestionPayload,
+  GetDecisionQuestionSummariesByReferencePayload,
   GetDecisionQuestionSummariesPayload,
 } from "../../../shared/types/decisionsQuestion.js";
 import { AppError } from "../../utils/errorTypes.js";
@@ -339,6 +347,19 @@ function publishPaneState(projectId: string, state: PaneDecisionState): void {
     name: "terminal:decision-state",
     payload: state,
   });
+}
+
+/**
+ * Every question this computer asked (#17229), for main's own consumers and
+ * every window here: the list is this computer's, so a remote Shell's views
+ * never get it. Ids, labels, times and statuses only; never any content.
+ */
+function publishQuestions(questions: readonly DecisionQuestionListItem[]): void {
+  // Once quit begins the list only empties, for main's consumers; the windows are going.
+  if (shutDown && questions.length > 0) return;
+  const changed = setDecisionQuestions(questions);
+  if (changed === null || shutDown) return;
+  sendToLocalViews("decisions:questions-changed", changed);
 }
 
 /**
@@ -627,6 +648,7 @@ export function getDecisionsService(): Promise<DecisionsService> {
       const next: DecisionsService = new DecisionsService({
         publishPaneState,
         publishAnswerAttention: setAnswerAttention,
+        publishQuestions,
         onRelayRevoked: (relay, role) =>
           role === "host" ? void hostRevoked(relay) : recordRevocation(relay),
         forgetIdentity: forgetRecordedIdentity,
@@ -853,19 +875,104 @@ export function getDecisionQuestionSummaries(
 }
 
 /**
+ * One question with its content opened, by its reference (#17229), for any
+ * window on this computer whatever project it shows. Never makes or starts
+ * the service.
+ */
+export function getDecisionQuestionContentByReference(
+  payload: GetDecisionQuestionByReferencePayload
+): Promise<DecisionQuestionContentResult> {
+  const { reference } = payload;
+  return whileReading<DecisionQuestionContentResult>(
+    (delivery) => delivery.questionContent(referenceScope(reference), reference.questionId),
+    { result: "not-running" }
+  );
+}
+
+/** Part of one image of a question, by its reference (#17229). Never makes or starts the service. */
+export function getDecisionQuestionImageByReference(
+  payload: GetDecisionQuestionImageByReferencePayload
+): Promise<DecisionQuestionImagePartResult> {
+  const { reference } = payload;
+  return whileReading<DecisionQuestionImagePartResult>(
+    (delivery) =>
+      delivery.questionImage(
+        referenceScope(reference),
+        reference.questionId,
+        payload.attachmentId,
+        payload.offset
+      ),
+    { result: "not-running" }
+  );
+}
+
+/**
+ * The opening lines of questions by their references (#17229), in the order
+ * asked for, each question once. Never makes or starts the service.
+ */
+export function getDecisionQuestionSummariesByReference(
+  payload: GetDecisionQuestionSummariesByReferencePayload
+): Promise<DecisionQuestionSummariesResult> {
+  return whileReading<DecisionQuestionSummariesResult>(
+    async (delivery) => {
+      const seen = new Set<string>();
+      const summaries: DecisionQuestionSummary[] = [];
+      for (const reference of payload.references) {
+        if (seen.has(reference.questionId)) continue;
+        seen.add(reference.questionId);
+        summaries.push(
+          ...(await delivery.questionSummaries(referenceScope(reference), [reference.questionId]))
+        );
+      }
+      return { result: "read", summaries };
+    },
+    { result: "not-running" }
+  );
+}
+
+/** The reference's machine, project and terminal, read on this machine only. */
+function referenceScope(reference: DecisionQuestionReference): {
+  hostId: string;
+  projectId: string;
+  terminalId: string;
+} {
+  return {
+    hostId: reference.hostId,
+    projectId: reference.projectId,
+    terminalId: reference.terminalId,
+  };
+}
+
+/**
  * A person withdrawing one of a pane's questions from that pane's view
  * (#17099), for the view of the project the pane belongs to. Never makes or
  * starts the service. A connection that ended, or a store that stopped,
  * under the cancel answers as not running.
  */
-export async function cancelDecisionQuestion(
+export function cancelDecisionQuestion(
   projectId: string | null,
   payload: CancelDecisionQuestionPayload
+): Promise<DecisionQuestionCancelResult> {
+  return cancelling((running) => running.cancelQuestion(projectId, payload));
+}
+
+/**
+ * A person withdrawing a question by its reference (#17229), from any window
+ * on this computer. Never makes or starts the service.
+ */
+export function cancelDecisionQuestionByReference(
+  payload: CancelDecisionQuestionByReferencePayload
+): Promise<DecisionQuestionCancelResult> {
+  return cancelling((running) => running.cancelQuestionByReference(payload.reference));
+}
+
+async function cancelling(
+  cancel: (running: DecisionsService) => Promise<DecisionQuestionCancelResult>
 ): Promise<DecisionQuestionCancelResult> {
   const running = service;
   if (running === null) return { result: "not-running" };
   try {
-    return await running.cancelQuestion(projectId, payload);
+    return await cancel(running);
   } catch (error) {
     if (error instanceof BridgeError && error.code === "not_found") {
       return { result: "refused", reason: "not-found" };

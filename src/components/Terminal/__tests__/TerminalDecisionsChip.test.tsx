@@ -316,7 +316,9 @@ describe("TerminalDecisionsChip", () => {
       await act(async () => {});
       expect(screen.queryByTestId("terminal-decisions-row-line")).toBeNull();
       fireEvent.click(row);
-      expect(useDecisionsQuestionViewStore.getState().request?.questionIds).toEqual(["q42"]);
+      expect(useDecisionsQuestionViewStore.getState().request?.questions).toEqual([
+        { scope: "pane", terminalId: "t1", questionId: "q42" },
+      ]);
     });
 
     it("keeps rows openable when the read fails", async () => {
@@ -340,7 +342,13 @@ describe("TerminalDecisionsChip", () => {
 
       expect(useDecisionsQuestionViewStore.getState()).toMatchObject({
         isOpen: true,
-        request: { terminalId: "t1", questionIds: ["q42", "q43"], index: 1 },
+        request: {
+          questions: [
+            { scope: "pane", terminalId: "t1", questionId: "q42" },
+            { scope: "pane", terminalId: "t1", questionId: "q43" },
+          ],
+          index: 1,
+        },
       });
       expect(screen.queryByTestId("popover-content")).toBeNull();
     });

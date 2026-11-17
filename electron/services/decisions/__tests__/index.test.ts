@@ -469,8 +469,11 @@ import {
   prepareRelayDeploy,
   exportRecoveryKit,
   getDecisionQuestionContent,
+  getDecisionQuestionContentByReference,
   getDecisionQuestionImage,
+  getDecisionQuestionImageByReference,
   getDecisionQuestionSummaries,
+  getDecisionQuestionSummariesByReference,
   getDecisionsPaneState,
   getDecisionsPolicy,
   cancelSetupCheck,
@@ -504,7 +507,16 @@ import {
   verifyRecoveryKit,
 } from "../index.js";
 import type { AnswerDelivery } from "../answerDelivery.js";
-import type { DecisionQuestionImagePartResult } from "../../../../shared/types/decisionsQuestion.js";
+import type {
+  DecisionQuestionImagePartResult,
+  DecisionQuestionList,
+  DecisionQuestionListItem,
+} from "../../../../shared/types/decisionsQuestion.js";
+import {
+  getDecisionQuestionList,
+  onDecisionQuestionsChanged,
+  setDecisionQuestions,
+} from "../../decisionsQuestionList.js";
 import { RetiredAttemptError } from "../relayTransport.js";
 
 const RELAY = {
@@ -620,6 +632,52 @@ describe("Decisions entry", () => {
     await stopDecisions();
 
     expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it("lets the question list only empty once quit begins, and pushes no list to windows (#17229)", async () => {
+    saved.value = { enabled: true };
+    await startDecisionsIfEnabled();
+    const service = peekDecisionsService()!;
+    // The publisher the entry handed the service, as its feed calls it.
+    const publish = Reflect.get(service, "publishQuestions") as (
+      questions: DecisionQuestionListItem[]
+    ) => void;
+    const item = (questionId: string): DecisionQuestionListItem => ({
+      reference: { hostId: "host_1", projectId: "project-1", terminalId: "pane-a", questionId },
+      alias: 1,
+      agentKind: "claude",
+      projectLabel: null,
+      worktreeId: "w1",
+      worktreeRoot: "/repo",
+      requirement: "human-required",
+      askedAt: "2026-11-02T10:00:00.000Z",
+      expiresAt: null,
+      settledAt: null,
+      standing: { kind: "waiting", reason: "open" },
+    });
+    const listPushes = () =>
+      statusView.send.mock.calls.filter(
+        ([, message]) => (message as { name?: string }).name === "decisions:questions-changed"
+      );
+    const heard: DecisionQuestionList[] = [];
+    const off = onDecisionQuestionsChanged((list) => heard.push(list));
+    try {
+      statusView.send.mockClear();
+      publish([item("q_quit_000001")]);
+      expect(getDecisionQuestionList().questions).toEqual([item("q_quit_000001")]);
+      expect(listPushes()).toHaveLength(1);
+
+      await stopDecisions();
+      publish([item("q_quit_000001"), item("q_quit_000002")]);
+
+      expect(getDecisionQuestionList().questions).toEqual([]);
+      expect(heard.map((list) => list.questions.length)).toEqual([1, 0]);
+      expect(listPushes()).toHaveLength(1);
+    } finally {
+      off();
+      // The list outlives the entry's reset: leave none for the tests after.
+      setDecisionQuestions([]);
+    }
   });
 
   it("makes no service at boot while the setting is off", async () => {
@@ -1074,6 +1132,117 @@ describe("Decisions entry", () => {
       await expect(
         getDecisionQuestionSummaries("project-1", { terminalId: "pane-1", questionIds: [] })
       ).resolves.toEqual({ result: "not-running" });
+    });
+
+    describe("by reference, from any window (#17229)", () => {
+      const REFERENCE = {
+        hostId: "host_1",
+        projectId: "project-b",
+        terminalId: "pane-closed",
+        questionId: "0190f0aa11112222333344445555aa01",
+      };
+      const SCOPE = { hostId: "host_1", projectId: "project-b", terminalId: "pane-closed" };
+
+      it("reads with the reference's machine, project and terminal, never a view's", async () => {
+        const read = { result: "not-found" } as const;
+        const questionContent = vi.fn(async () => read);
+        const questionImage = vi.fn(async () => read);
+        await running({ questionContent, questionImage });
+
+        await expect(getDecisionQuestionContentByReference({ reference: REFERENCE })).resolves.toBe(
+          read
+        );
+        await expect(
+          getDecisionQuestionImageByReference({
+            reference: REFERENCE,
+            attachmentId: "attach_0001",
+            offset: 8,
+          })
+        ).resolves.toBe(read);
+
+        expect(questionContent).toHaveBeenCalledExactlyOnceWith(SCOPE, REFERENCE.questionId);
+        expect(questionImage).toHaveBeenCalledExactlyOnceWith(
+          SCOPE,
+          REFERENCE.questionId,
+          "attach_0001",
+          8
+        );
+      });
+
+      it("names each question once, in order, each read in its own reference's scope", async () => {
+        const other = {
+          ...REFERENCE,
+          projectId: "project-c",
+          questionId: "0190f0aa11112222333344445555aa02",
+        };
+        const questionSummaries = vi.fn(async (_scope: unknown, ids: readonly string[]) =>
+          ids.map((questionId) => ({ questionId, result: "not-found" as const }))
+        );
+        await running({ questionSummaries });
+
+        await expect(
+          getDecisionQuestionSummariesByReference({ references: [other, REFERENCE, other] })
+        ).resolves.toEqual({
+          result: "read",
+          summaries: [
+            { questionId: other.questionId, result: "not-found" },
+            { questionId: REFERENCE.questionId, result: "not-found" },
+          ],
+        });
+        expect(questionSummaries.mock.calls).toEqual([
+          [{ ...SCOPE, projectId: "project-c" }, [other.questionId]],
+          [SCOPE, [REFERENCE.questionId]],
+        ]);
+      });
+
+      it("is not running with no delivery, or when it stops under the read", async () => {
+        await expect(
+          getDecisionQuestionContentByReference({ reference: REFERENCE })
+        ).resolves.toEqual({ result: "not-running" });
+        expect(peekDecisionsService()).toBeNull();
+
+        const current = await running(null);
+        current.delivery = {
+          questionSummaries: async () => {
+            throw new RetiredAttemptError();
+          },
+        } as Partial<AnswerDelivery> as AnswerDelivery;
+        await expect(
+          getDecisionQuestionSummariesByReference({ references: [REFERENCE] })
+        ).resolves.toEqual({ result: "not-running" });
+
+        // A read that returns normally as its delivery ends answers not running too.
+        const ending = {
+          questionContent: async () => {
+            current.delivery = null;
+            return { result: "not-found" as const };
+          },
+          questionImage: async () => {
+            current.delivery = null;
+            return { result: "not-found" as const };
+          },
+          questionSummaries: async () => {
+            current.delivery = null;
+            return [];
+          },
+        } as Partial<AnswerDelivery> as AnswerDelivery;
+        current.delivery = ending;
+        await expect(
+          getDecisionQuestionContentByReference({ reference: REFERENCE })
+        ).resolves.toEqual({ result: "not-running" });
+        current.delivery = ending;
+        await expect(
+          getDecisionQuestionImageByReference({
+            reference: REFERENCE,
+            attachmentId: "attach_0001",
+            offset: 0,
+          })
+        ).resolves.toEqual({ result: "not-running" });
+        current.delivery = ending;
+        await expect(
+          getDecisionQuestionSummariesByReference({ references: [REFERENCE] })
+        ).resolves.toEqual({ result: "not-running" });
+      });
     });
 
     it("is not running when the delivery stopped under the read, whatever the read returned", async () => {

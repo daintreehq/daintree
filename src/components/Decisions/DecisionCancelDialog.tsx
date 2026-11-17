@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Callout } from "@/components/ui/Callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { decisionsClient } from "@/clients/decisionsClient";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -13,6 +12,7 @@ import {
   type DecisionCancelProblem,
   type DecisionCancelTarget,
 } from "./decisionCancelModel";
+import { cancelTarget, questionOf, readTargetLine } from "./decisionQuestionTarget";
 
 interface DecisionCancelDialogProps {
   /** The question asked about; kept while the dialog closes so its words don't blank mid-exit. */
@@ -61,14 +61,8 @@ export function DecisionCancelDialog({
     const settle = (line: string | null) => {
       if (live) setRead({ target, line });
     };
-    decisionsClient.getQuestionSummaries(target.terminalId, [target.questionId]).then(
-      (result) => {
-        const summary =
-          result.result === "read"
-            ? result.summaries.find((candidate) => candidate.questionId === target.questionId)
-            : undefined;
-        settle(summary?.result === "read" ? summary.line : null);
-      },
+    readTargetLine(target.question).then(
+      settle,
       // A question whose words can't be read here is named by alias alone.
       () => settle(null)
     );
@@ -93,13 +87,13 @@ export function DecisionCancelDialog({
     setPending(true);
     setAnswered(null);
     try {
-      const outcome = await decisionsClient.cancelQuestion(asked.terminalId, asked.questionId);
+      const outcome = await cancelTarget(asked.question);
       const refused = cancelProblem(asked, outcome);
       if (refused !== null) {
         setAnswered({ target: asked, problem: refused });
         return;
       }
-      if (outcome.result === "cancelling") onCancelling(asked.questionId);
+      if (outcome.result === "cancelling") onCancelling(questionOf(asked.question).questionId);
       onClose();
     } catch (error) {
       setAnswered({
