@@ -373,7 +373,7 @@ describe("git-write staging handlers (real git)", () => {
       silentStatusFailure.on = true;
       try {
         const mark = spawned.length;
-        await expect(unstage("renamed.txt")).rejects.toThrow();
+        await expect(unstage("renamed.txt")).rejects.toThrow(/exited with 1 and no error output/);
         expect(spawnedSince(mark).map(subcommand)).toEqual(["status"]);
       } finally {
         silentStatusFailure.on = false;
