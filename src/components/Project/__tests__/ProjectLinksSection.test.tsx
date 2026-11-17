@@ -175,8 +175,11 @@ describe("ProjectLinksSection (#17091)", () => {
       remaining: ProjectLink[]
     ) {
       mainAnswers(remaining, link);
+      const button = getByRole("button", { name: `Remove ${link.title}` });
+      button.focus();
+      expect(document.activeElement).toBe(button);
       await act(async () => {
-        fireEvent.click(getByRole("button", { name: `Remove ${link.title}` }));
+        fireEvent.click(button);
       });
       expect(changeMock).toHaveBeenCalledWith({
         projectId: "proj-1",

@@ -87,7 +87,10 @@ describe("DictationVocabularySection", () => {
   describe("focus after removing a term", () => {
     const remove = async (term: string, remaining: VoiceDictionaryEntry[]) => {
       api.removeFromProject.mockResolvedValueOnce(remaining);
-      fireEvent.click(await screen.findByRole("button", { name: `Remove ${term}` }));
+      const button = await screen.findByRole("button", { name: `Remove ${term}` });
+      button.focus();
+      expect(document.activeElement).toBe(button);
+      fireEvent.click(button);
       await waitFor(() =>
         expect(screen.queryByRole("button", { name: `Remove ${term}` })).toBeNull()
       );
@@ -101,20 +104,20 @@ describe("DictationVocabularySection", () => {
     it("moves focus to the next term's remove button when a middle term goes", async () => {
       render(<DictationVocabularySection projectId="p1" />);
       await remove("Beta", [entry("Alpha"), entry("Gamma")]);
-      expect(document.activeElement).toBe(removeButton("Gamma"));
+      await waitFor(() => expect(document.activeElement).toBe(removeButton("Gamma")));
     });
 
     it("moves focus to the term before when the last term goes", async () => {
       render(<DictationVocabularySection projectId="p1" />);
       await remove("Gamma", [entry("Alpha"), entry("Beta")]);
-      expect(document.activeElement).toBe(removeButton("Beta"));
+      await waitFor(() => expect(document.activeElement).toBe(removeButton("Beta")));
     });
 
     it("moves focus to the term field when the only term goes", async () => {
       api.getProject.mockResolvedValue([entry("Alpha")]);
       render(<DictationVocabularySection projectId="p1" />);
       await remove("Alpha", []);
-      expect(document.activeElement).toBe(termInput());
+      await waitFor(() => expect(document.activeElement).toBe(termInput()));
     });
 
     it("falls back to a surviving row when the captured neighbour went first", async () => {
@@ -123,10 +126,11 @@ describe("DictationVocabularySection", () => {
       api.removeFromProject.mockResolvedValueOnce([entry("Alpha")]);
       render(<DictationVocabularySection projectId="p1" />);
       fireEvent.click(await screen.findByRole("button", { name: "Remove Gamma" }));
-      fireEvent.click(screen.getByRole("button", { name: "Remove Beta" }));
+      removeButton("Beta").focus();
+      fireEvent.click(removeButton("Beta"));
       await act(async () => resolveGamma([entry("Alpha"), entry("Beta")]));
       await waitFor(() => expect(screen.queryByRole("button", { name: "Remove Beta" })).toBeNull());
-      expect(document.activeElement).toBe(removeButton("Alpha"));
+      await waitFor(() => expect(document.activeElement).toBe(removeButton("Alpha")));
     });
 
     it("leaves focus where the user moved it while the removal was saving", async () => {
@@ -270,7 +274,7 @@ describe("DictationVocabularySection", () => {
 
       expect(screen.queryByRole("button", { name: "Move phrase" })).toBeNull();
       expect(termInput().value).toBe("Zoostand");
-      expect(document.activeElement).toBe(termInput());
+      await waitFor(() => expect(document.activeElement).toBe(termInput()));
 
       fireEvent.click(screen.getByRole("button", { name: "Add" }));
       expect(screen.getByRole("button", { name: "Move phrase" })).toBeTruthy();
