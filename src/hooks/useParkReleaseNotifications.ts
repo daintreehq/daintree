@@ -5,6 +5,7 @@ import { actionService } from "@/services/ActionService";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { composePilotRunTitle } from "@/components/Pilot/pilotRows";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import { hostScopedKey } from "@/hooks/useHostPlatform";
 import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
 import type { IpcEventMap } from "@shared/types/ipc/maps";
 
@@ -45,6 +46,9 @@ function notifyParkReleased(payload: ParkReleasedPayload, run: FleetRunRow | und
     // A re-park and re-release of the same run retires the older row
     // rather than stacking near-duplicates in the inbox.
     supersedeKey: `park-released:${payload.id}`,
+    // Every project view hears the release; one row for it, whichever view
+    // files it first. A remote host's views share this inbox, hence the host.
+    historyId: hostScopedKey(`park-released:${payload.id}:${payload.timestamp}`),
     context: {
       eventKind: "agent",
       panelId: payload.id,

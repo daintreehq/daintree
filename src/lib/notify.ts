@@ -289,6 +289,15 @@ interface NotifyPayloadBase {
    */
   supersedes?: string;
   /**
+   * The inbox row's id, for an event every project view hears at once (a host
+   * broadcast). Each view files it under this id, so their writes merge into
+   * one row and a view already holding it files no second one; only the
+   * focused view toasts, as for any notification. Names the one event, never
+   * its kind. A rate-limited one keeps its own row rather than joining a
+   * summary row, which every other view's copy would duplicate.
+   */
+  historyId?: string;
+  /**
    * Replace an earlier notification with the same key: its live toast is
    * dismissed and, unless `supersedeKey` says otherwise, its inbox row is
    * retired. Unlike `coalesce` there is no window and no count — the new one
@@ -798,6 +807,12 @@ function checkAndApplyRateLimit(payload: NotifyPayload): boolean {
   // A held-back replacement keeps its own inbox row (the caller writes it),
   // so it isn't counted again in a summary row.
   if (payload.replaceKey !== undefined) return true;
+  // So does an event every view hears, since the others file its own row and a
+  // summary here would be a second; the held-back toast is still announced.
+  if (payload.historyId !== undefined) {
+    announceOverflow(key, now);
+    return true;
+  }
 
   bucket.overflowCount += 1;
   const historyStore = useNotificationHistoryStore.getState();
@@ -851,13 +866,16 @@ function checkAndApplyRateLimit(payload: NotifyPayload): boolean {
     });
   }
 
+  announceOverflow(key, now);
+  return true;
+}
+
+function announceOverflow(key: string, now: number): void {
   const lastAnnounce = _overflowAnnouncementTimestamps.get(key);
   if (lastAnnounce === undefined || now - lastAnnounce >= OVERFLOW_ANNOUNCEMENT_COOLDOWN_MS) {
     useAnnouncerStore.getState().announce("Events suppressed — check notification inbox", "polite");
     _overflowAnnouncementTimestamps.set(key, now);
   }
-
-  return true;
 }
 
 let _quietUntil = 0;
@@ -1087,6 +1105,7 @@ export function notify(payload: NotifyPayload): string {
             context,
             supersedeKey: payload.supersedeKey,
             supersedes: payload.supersedes,
+            id: payload.historyId,
           })
         : undefined;
     if (!notificationsEnabled || isQuiet) return "";
@@ -1173,8 +1192,9 @@ export function notify(payload: NotifyPayload): string {
     checkAndApplyRateLimit(payload)
   ) {
     // A replacement still retires the row it replaces and leaves its own
-    // buttons in the inbox; only its toast is held back.
-    if (payload.replaceKey !== undefined && hasHistory) {
+    // buttons in the inbox, and an event every view hears keeps its one row;
+    // only the toast is held back.
+    if ((payload.replaceKey !== undefined || payload.historyId !== undefined) && hasHistory) {
       useNotificationHistoryStore.getState().addEntry({
         type,
         title,
@@ -1186,6 +1206,7 @@ export function notify(payload: NotifyPayload): string {
         context,
         supersedeKey: payload.supersedeKey,
         supersedes: payload.supersedes,
+        id: payload.historyId,
       });
     }
     return "";
@@ -1204,6 +1225,7 @@ export function notify(payload: NotifyPayload): string {
           context,
           supersedeKey: payload.supersedeKey,
           supersedes: payload.supersedes,
+          id: payload.historyId,
         })
       : undefined;
 

@@ -70,6 +70,37 @@ describe("useIdleBackgroundCloseNotifications", () => {
     notifyMock.mockClear();
   });
 
+  // Every project view hears the sweep and files it under the same id, so
+  // their writes merge into one row (#17191).
+  it("files a sweep under one id however many views hear it, and the next under another", () => {
+    const historyIdOf = (payload: IdleBackgroundClosedPayload): unknown => {
+      notifyMock.mockClear();
+      deliver(payload);
+      const arg: unknown = notifyMock.mock.calls[0]?.[0];
+      return arg !== null && typeof arg === "object" ? Reflect.get(arg, "historyId") : undefined;
+    };
+    const sweep: IdleBackgroundClosedPayload = {
+      projects: [
+        { projectId: "p1", projectName: "Alpha" },
+        { projectId: "p2", projectName: "Beta" },
+      ],
+      timestamp: 1_000,
+    };
+
+    const first = historyIdOf(sweep);
+    expect(typeof first).toBe("string");
+    expect(historyIdOf({ ...sweep, projects: [...sweep.projects] })).toBe(first);
+    expect(historyIdOf({ ...sweep, timestamp: 2_000 })).not.toBe(first);
+    expect(historyIdOf({ ...sweep, projects: [sweep.projects[0]!] })).not.toBe(first);
+    // A remote host's views share this inbox; its sweep is its own row.
+    window.__DAINTREE_HOST_ID__ = { id: "build-box" };
+    try {
+      expect(historyIdOf(sweep)).not.toBe(first);
+    } finally {
+      delete window.__DAINTREE_HOST_ID__;
+    }
+  });
+
   it("subscribes once however often it mounts", () => {
     renderHook(() => useIdleBackgroundCloseNotifications());
     expect(onClosedMock).toHaveBeenCalledTimes(1);

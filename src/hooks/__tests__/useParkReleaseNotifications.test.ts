@@ -7,6 +7,7 @@ interface NotifyArg {
   title?: string;
   message?: string;
   supersedeKey?: string;
+  historyId?: string;
   context?: { projectId?: string; panelId?: string };
   action?: { label?: string; actionId?: string; actionArgs?: Record<string, unknown> };
 }
@@ -90,6 +91,7 @@ describe("useParkReleaseNotifications", () => {
   afterEach(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     delete (window as any).electron;
+    delete window.__DAINTREE_HOST_ID__;
   });
 
   it("subscribes exactly once across mount → unmount → remount", async () => {
@@ -252,6 +254,45 @@ describe("useParkReleaseNotifications", () => {
     // No run means no workspace to open — an action that cannot resolve its
     // target is worse than none.
     expect(payload.action).toBeUndefined();
+  });
+
+  // Every project view hears the release and files it under one id, whether
+  // its own snapshot named the run or it had to go without (#17191).
+  it("files a release under one id in every view, and a later release under another", async () => {
+    const release = (timestamp: number): ReleasePayload => ({
+      id: "t1",
+      gateRunId: "g1",
+      reason: "gate-ready",
+      timestamp,
+    });
+    const named = await load();
+    named.useFleetSnapshotStore.setState({ snapshot: snapshotOf([seedRun()]) });
+    renderHook(() => named.useParkReleaseNotifications());
+    act(() => captured!(release(NOW)));
+
+    vi.resetModules();
+    getSnapshotMock.mockRejectedValue(new Error("ipc down"));
+    const unnamed = await load();
+    renderHook(() => unnamed.useParkReleaseNotifications());
+    await act(async () => captured!(release(NOW)));
+    await act(async () => captured!(release(NOW + 1)));
+    await act(async () => captured!({ ...release(NOW), id: "t2" }));
+
+    vi.resetModules();
+    window.__DAINTREE_HOST_ID__ = { id: "build-box" };
+    const remote = await load();
+    renderHook(() => remote.useParkReleaseNotifications());
+    await act(async () => captured!(release(NOW)));
+
+    expect(notifyCalls).toHaveLength(5);
+    // The two views really differed: one named the run, one couldn't.
+    expect(notifyArg(0).message).toContain("Fix the auth redirect");
+    expect(notifyArg(1).message).toContain("A parked agent");
+    expect(notifyArg(0).historyId).toBeDefined();
+    expect(notifyArg(1).historyId).toBe(notifyArg(0).historyId);
+    expect(notifyArg(2).historyId).not.toBe(notifyArg(0).historyId);
+    expect(notifyArg(3).historyId).not.toBe(notifyArg(0).historyId);
+    expect(notifyArg(4).historyId).not.toBe(notifyArg(0).historyId);
   });
 
   it("does not subscribe when Electron is unavailable", async () => {
