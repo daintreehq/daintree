@@ -22,7 +22,7 @@ import {
   withoutHandled,
 } from "../attentionList.js";
 import { DECISION_BLOCK_START, DECISION_FOLLOWUP_START } from "../answerNotice.js";
-import { entry, message, messages, row as baseRow } from "./questionRows.js";
+import { DECLINE, entry, message, messages, row as baseRow } from "./questionRows.js";
 
 /**
  * A question id as the library mints it: long enough for the id pattern the
@@ -75,6 +75,30 @@ describe("needs attention", () => {
     expect(needsAttention(row(4, { delivery_status: "needs-attention", history_only: true }))).toBe(
       false
     );
+  });
+
+  it("never takes a person's own decline, however its notice stopped, and still takes a withdrawal (#17234)", () => {
+    const declined = {
+      local_status: "cancelled" as const,
+      answers_json: serializeAnswers([entry(DECLINE)]),
+    };
+    for (const delivery_status of ["needs-attention", "delivery-uncertain"] as const) {
+      const r = row(1, { ...declined, delivery_status });
+      expect(needsAttention(r)).toBe(false);
+      expect(threadNeedsAttention(r, new Map())).toBe(false);
+      // Not hidden as handled either: the list still shows it, as declined.
+      expect(isHandled(r, new Map())).toBe(false);
+      expect(withoutHandled([r], new Map([[r.question_id, 1]]))).toEqual([r]);
+    }
+    expect(
+      needsAttention(row(2, { local_status: "cancelled", delivery_status: "needs-attention" }))
+    ).toBe(true);
+    // Declined, reopened, then withdrawn: the decline no longer closed it.
+    expect(
+      needsAttention(
+        row(3, { ...declined, question_revision: 2, delivery_status: "needs-attention" })
+      )
+    ).toBe(true);
   });
 });
 
