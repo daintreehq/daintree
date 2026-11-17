@@ -1116,7 +1116,10 @@ describe("NotificationService", () => {
       expect(notificationService.openDecisionQuestion(referenceIn(21))).toBe(true);
 
       expect(opened(21)).toEqual([
-        ["events:push", { name: "decisions:open-question", payload: { reference: referenceIn(21) } }],
+        [
+          "events:push",
+          { name: "decisions:open-question", payload: { reference: referenceIn(21) } },
+        ],
       ]);
       expect(opened(11)).toHaveLength(0);
       expect(showing.restore).toHaveBeenCalled();

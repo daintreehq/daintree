@@ -4433,9 +4433,7 @@ describe("Decisions questions (#17232)", () => {
 
     agentNotificationService.closeDecisionQuestion("k");
 
-    expect(notificationServiceMock.closeNotificationByKey).toHaveBeenCalledWith(
-      options.replaceKey
-    );
+    expect(notificationServiceMock.closeNotificationByKey).toHaveBeenCalledWith(options.replaceKey);
   });
 
   it("is silenced by turning notifications off, and only by that", () => {

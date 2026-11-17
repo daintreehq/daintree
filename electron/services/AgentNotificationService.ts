@@ -683,11 +683,7 @@ class AgentNotificationService {
     if (state === "exited" && terminalId) this.projectByTerminal.delete(terminalId);
     this.checkAllClear(state, previousState, terminalId, projectId);
     if (state === previousState) return;
-    if (
-      terminalId &&
-      ACTIVE_AGENT_STATES.has(state) &&
-      !ACTIVE_AGENT_STATES.has(previousState)
-    ) {
+    if (terminalId && ACTIVE_AGENT_STATES.has(state) && !ACTIVE_AGENT_STATES.has(previousState)) {
       this.turnStartedAt.set(terminalId, payload.timestamp);
     }
     // The project as resolved, retained or saved: a natural exit has no live one to read.

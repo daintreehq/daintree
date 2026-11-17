@@ -156,26 +156,23 @@ describe("QuestionNotifier", () => {
     ["answered by the person", { kind: "settled", outcome: "answered", handled: false }],
     ["answered by the model and waiting to be typed", { kind: "to-type" }],
     ["withdrawn", { kind: "settled", outcome: "withdrawn" }],
-  ])(
-    "shows nothing for a question %s while its opening line was read",
-    async (_case, standing) => {
-      const store = recorded();
-      const list = questionList();
-      let answer!: (line: string) => void;
-      const { notifier: made, show } = notifier(store, list, {
-        readOpeningLine: () => new Promise((resolve) => (answer = resolve)),
-      });
-      await made.start();
+  ])("shows nothing for a question %s while its opening line was read", async (_case, standing) => {
+    const store = recorded();
+    const list = questionList();
+    let answer!: (line: string) => void;
+    const { notifier: made, show } = notifier(store, list, {
+      readOpeningLine: () => new Promise((resolve) => (answer = resolve)),
+    });
+    await made.start();
 
-      list.publish([question("q-1")]);
-      await settle(made);
-      list.publish([question("q-1", standing)]);
-      answer("Should I?");
-      await settle(made);
+    list.publish([question("q-1")]);
+    await settle(made);
+    list.publish([question("q-1", standing)]);
+    answer("Should I?");
+    await settle(made);
 
-      expect(show).not.toHaveBeenCalled();
-    }
-  );
+    expect(show).not.toHaveBeenCalled();
+  });
 
   it("shows nothing for a question already settled or answered when first listed", async () => {
     const list = questionList();
@@ -218,37 +215,31 @@ describe("QuestionNotifier", () => {
     list.publish([question("q-1"), question("q-1", OPEN, { hostId: "host-2" })]);
     await settle(made);
 
-    expect(show.mock.calls.map(([asked]) => asked.reference.hostId)).toEqual([
-      "host-1",
-      "host-2",
-    ]);
+    expect(show.mock.calls.map(([asked]) => asked.reference.hostId)).toEqual(["host-1", "host-2"]);
   });
 
   it.each([
     ["no record yet", metaStore()],
     ["a damaged record", metaStore({ [NOTIFIED_QUESTIONS_META_KEY]: "{not json" })],
-  ])(
-    "with %s takes the questions asked before it started as seen",
-    async (_case, store) => {
-      const list = questionList();
-      list.publish([question("q-old", OPEN, { askedAt: BEFORE })]);
-      const { notifier: made, show } = notifier(store, list);
-      await made.start();
+  ])("with %s takes the questions asked before it started as seen", async (_case, store) => {
+    const list = questionList();
+    list.publish([question("q-old", OPEN, { askedAt: BEFORE })]);
+    const { notifier: made, show } = notifier(store, list);
+    await made.start();
 
-      list.publish([
-        question("q-old", OPEN, { askedAt: BEFORE }),
-        question("q-new", OPEN, { askedAt: AFTER }),
-      ]);
-      await settle(made);
+    list.publish([
+      question("q-old", OPEN, { askedAt: BEFORE }),
+      question("q-new", OPEN, { askedAt: AFTER }),
+    ]);
+    await settle(made);
 
-      expect(shownIds(show)).toEqual(["q-new"]);
-      // Both are claimed, so the next run shows neither.
-      const next = notifier(store, list);
-      await next.notifier.start();
-      await settle(next.notifier);
-      expect(next.show).not.toHaveBeenCalled();
-    }
-  );
+    expect(shownIds(show)).toEqual(["q-new"]);
+    // Both are claimed, so the next run shows neither.
+    const next = notifier(store, list);
+    await next.notifier.start();
+    await settle(next.notifier);
+    expect(next.show).not.toHaveBeenCalled();
+  });
 
   it("shows nothing while notifications are off, and nothing later for what was asked then", async () => {
     const store = recorded();
