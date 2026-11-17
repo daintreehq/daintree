@@ -18,6 +18,7 @@ import { useProjectRelocationStore } from "@/store/projectRelocationStore";
 import { ImportConfigDialogGate } from "@/components/Config/ImportConfigDialogGate";
 import { ProjectDialogHost } from "./ProjectDialogHost";
 import { DecisionQuestionHost } from "@/components/Decisions/DecisionQuestionHost";
+import { DecisionsAttentionHost } from "@/components/Decisions/DecisionsAttentionHost";
 import { ChordIndicator } from "./ChordIndicator";
 
 import { AllClearOverlay } from "../AllClearOverlay";
@@ -1017,8 +1018,10 @@ export function AppLayout({
           keybindings too, so they must answer whatever the sidebar shows. */}
       {hasWorkspace && isHydrated && <ProjectDialogHost />}
       {/* Outside the workspace gate: any window can show a question by its
-          reference, so a notification's click opens it wherever it lands (#17232). */}
+          reference, and this computer's answers needing attention, so a
+          notification's click opens them wherever it lands (#17232, #17235). */}
       {isHydrated && <DecisionQuestionHost followsOpenRequests />}
+      {isHydrated && <DecisionsAttentionHost followsOpenRequests />}
       <div
         {...(chromeInert ? { inert: true } : {})}
         className="flex-1 flex flex-col overflow-hidden"

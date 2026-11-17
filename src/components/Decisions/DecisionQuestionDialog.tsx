@@ -13,7 +13,10 @@ import { useDecisionsSwitch } from "@/hooks/useDecisionsOn";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
 import { useDecisionsImageReviewStore } from "@/store/decisionsImageReviewStore";
-import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
+import {
+  useDecisionsQuestionViewStore,
+  type DecisionsQuestionViewRequest,
+} from "@/store/decisionsQuestionViewStore";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import type {
   DecisionQuestionContent,
@@ -132,6 +135,7 @@ function ThreadEntry({
     <li
       className="flex flex-col gap-1 rounded-[var(--radius-md)] bg-overlay-subtle px-3 py-2"
       data-testid="decision-thread-entry"
+      data-message-id={entry.type === "message" ? entry.messageId : undefined}
     >
       <p className="text-2xs text-text-secondary">
         {threadEntryHeading(entry)} <FactSeparator /> <TimeAgo timestamp={entry.sentAt} />
@@ -227,7 +231,11 @@ function QuestionBody({
       )}
       {/* After the images: an approval waits until each has been opened. */}
       <DecisionAnswerComposer question={question} target={target} onMoved={onMoved} />
-      <section className="flex flex-col gap-1.5" aria-label="Answers and follow-ups">
+      <section
+        className="flex flex-col gap-1.5"
+        aria-label="Answers and follow-ups"
+        data-testid="decision-question-thread"
+      >
         <h3 className="text-xs font-medium text-text-secondary">Answers and follow-ups</h3>
         {question.thread.length === 0 ? (
           <p className="text-xs text-text-secondary">Nothing yet.</p>
@@ -432,6 +440,22 @@ export function DecisionQuestionDialog() {
   // Bound to the question the composer was shown for, and stable: its effects call it.
   const rereadShown = useCallback(() => readAgain(target), [readAgain, target]);
 
+  // A follow-up's notification opens its question at that follow-up (#17235),
+  // once the question is read; once per opening, so a read again stays put.
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const shownAt = useRef<DecisionsQuestionViewRequest | null>(null);
+  const loaded = readQuestion !== null;
+  useEffect(() => {
+    if (!isOpen || !loaded || request?.threadMessageId === undefined) return;
+    if (shownAt.current === request) return;
+    shownAt.current = request;
+    const body = bodyRef.current;
+    const entry =
+      body?.querySelector(`[data-message-id="${CSS.escape(request.threadMessageId)}"]`) ??
+      body?.querySelector('[data-testid="decision-question-thread"]');
+    entry?.scrollIntoView({ block: "nearest" });
+  }, [isOpen, loaded, request]);
+
   const hasPrevious = index > 0;
   const hasNext = index < count - 1;
 
@@ -547,7 +571,7 @@ export function DecisionQuestionDialog() {
           <AppDialog.CloseButton />
         </AppDialog.Header>
         <AppDialog.Body resetScrollKey={key ?? undefined}>
-          <div data-testid="decision-question-body">
+          <div ref={bodyRef} data-testid="decision-question-body">
             {current === null && showSkeleton && <QuestionSkeleton />}
             {current?.result === "read" && target !== null && (
               <QuestionBody

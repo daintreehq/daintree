@@ -22,6 +22,8 @@ import { onProjectPresenceChanged } from "../window/projectPresenceChanges.js";
 import type {
   DecisionQuestionList,
   DecisionQuestionReference,
+  DecisionsOpenAttentionRequest,
+  DecisionsOpenQuestionRequest,
 } from "../../shared/types/decisionsQuestion.js";
 
 export interface NotificationState {
@@ -896,13 +898,37 @@ class NotificationService {
 
   /**
    * Opens a Decisions question (#17232) in the question view of a window on
-   * this computer: the most recently focused one showing the question's
-   * project, else the most recently focused one. No project is switched to:
-   * every window reads a question by its reference, whatever it shows. A view
-   * still loading gets it once it subscribes (the preload replays it). False
-   * when no window could take it.
+   * this computer, at `messageId` in its thread when given (#17235): the most
+   * recently focused one showing the question's project, else the most
+   * recently focused one. No project is switched to: every window reads a
+   * question by its reference, whatever it shows. A view still loading gets
+   * it once it subscribes (the preload replays it). False when no window
+   * could take it.
    */
-  openDecisionQuestion(reference: DecisionQuestionReference): boolean {
+  openDecisionQuestion(reference: DecisionQuestionReference, messageId?: string): boolean {
+    return this.sendToDecisionsWindow(
+      reference.projectId,
+      "decisions:open-question",
+      messageId === undefined ? { reference } : { reference, messageId }
+    );
+  }
+
+  /**
+   * Opens the list of answers needing attention (#17235) at the pane that
+   * asked `reference`, in a window on this computer chosen as a question is.
+   * The list is this computer's, whatever project the window shows.
+   */
+  openDecisionAttention(reference: DecisionQuestionReference): boolean {
+    return this.sendToDecisionsWindow(reference.projectId, "decisions:open-attention", {
+      terminalId: reference.terminalId,
+    });
+  }
+
+  private sendToDecisionsWindow(
+    projectId: string,
+    name: "decisions:open-question" | "decisions:open-attention",
+    payload: DecisionsOpenQuestionRequest | DecisionsOpenAttentionRequest
+  ): boolean {
     const targets = (this.registry?.focusOrder() ?? []).flatMap((ctx) => {
       const window = ctx.browserWindow;
       if (window.isDestroyed()) return [];
@@ -912,17 +938,13 @@ class NotificationService {
       return [{ window, contents }];
     });
     const target =
-      targets.find(
-        ({ contents }) => this.placeOf(contents.id)?.workspaceKey === reference.projectId
-      ) ?? targets[0];
+      targets.find(({ contents }) => this.placeOf(contents.id)?.workspaceKey === projectId) ??
+      targets[0];
     if (!target) return false;
     revealWindow(target.window);
     try {
       target.contents.focus();
-      target.contents.send(CHANNELS.EVENTS_PUSH, {
-        name: "decisions:open-question",
-        payload: { reference },
-      });
+      target.contents.send(CHANNELS.EVENTS_PUSH, { name, payload });
       return true;
     } catch {
       // The view went between the check and the send.

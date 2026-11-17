@@ -64,6 +64,8 @@ const _eventBusReplayable: ReadonlySet<keyof IpcEventBusMap> = new Set([
   // A click on a Decisions question's notification (#17232) can land on a view
   // whose question host hasn't mounted yet; the latest click is the one to open.
   "decisions:open-question",
+  // The same for a stalled answer's notification and the attention list (#17235).
+  "decisions:open-attention",
 ]);
 // Replayable events that accumulate instead of superseding. A double-clicked
 // `.dntr` archive (#11280) is one decision per file, so collapsing two

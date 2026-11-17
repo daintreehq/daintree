@@ -330,6 +330,32 @@ export interface DecisionQuestionListItem {
    */
   settledAt: string | null;
   standing: DecisionQuestionStanding;
+  /**
+   * The agent's follow-up asking the person for a reply they haven't given
+   * yet, by message id (#17235): what brings an answered question back to
+   * Needs you on the phone. Null otherwise.
+   */
+  replyRequest: string | null;
+  /** What delivery stopped on while it needs a person (#17235); null otherwise. */
+  stall: DecisionQuestionStall | null;
+}
+
+/**
+ * An answer, or follow-ups after it, that delivery stopped on and a person
+ * hasn't dealt with, as the list of answers needing attention shows it. Ids
+ * and the library's code only.
+ */
+export interface DecisionQuestionStall {
+  /** The answer's revision while it needs a person; null while only follow-ups do. */
+  answerRevision: number | null;
+  /** The person's follow-ups delivery stopped on, by message id, in thread order. */
+  followUpIds: string[];
+  /**
+   * The library's code for why (`pane_gone`, `resume_timeout`, …), the
+   * answer's while it needs a person, else the first follow-up's;
+   * `unspecified` when none was recorded.
+   */
+  reason: string;
 }
 
 /**
@@ -345,6 +371,16 @@ export interface DecisionQuestionList {
 /** Open one question in the window's question view: a click on its desktop notification (#17232). */
 export interface DecisionsOpenQuestionRequest {
   reference: DecisionQuestionReference;
+  /** The follow-up in its thread to open at (#17235); absent to open at the top. */
+  messageId?: string;
+}
+
+/**
+ * Open the list of answers needing attention: a click on a stalled answer's
+ * desktop notification (#17235), starting at the pane that asked.
+ */
+export interface DecisionsOpenAttentionRequest {
+  terminalId: string;
 }
 
 /** One question read by its reference, from any window (#17229). */

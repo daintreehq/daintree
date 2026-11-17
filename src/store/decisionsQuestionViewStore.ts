@@ -15,6 +15,11 @@ export interface DecisionsQuestionViewRequest {
   /** The questions in the order they were listed; the view steps through these. */
   questions: DecisionQuestionTarget[];
   index: number;
+  /**
+   * The follow-up in the opened question's thread to show once it is read
+   * (#17235); a step to another question drops it.
+   */
+  threadMessageId?: string;
 }
 
 interface DecisionsQuestionViewState {
@@ -24,11 +29,13 @@ interface DecisionsQuestionViewState {
   open: (terminalId: string, questionIds: readonly string[], questionId: string) => void;
   /**
    * A question by its reference (#17229), from any window on this computer,
-   * stepping through `references` in their order.
+   * stepping through `references` in their order, at `threadMessageId` in its
+   * thread when given.
    */
   openReference: (
     references: readonly DecisionQuestionReference[],
-    reference: DecisionQuestionReference
+    reference: DecisionQuestionReference,
+    threadMessageId?: string
   ) => void;
   step: (delta: number) => void;
   close: () => void;
@@ -66,9 +73,13 @@ export const useDecisionsQuestionViewStore = create<DecisionsQuestionViewState>(
     );
     if (request !== null) set({ isOpen: true, request });
   },
-  openReference: (references, reference) => {
+  openReference: (references, reference, threadMessageId) => {
     const request = requestOf(references.map(referencedQuestion), referencedQuestion(reference));
-    if (request !== null) set({ isOpen: true, request });
+    if (request === null) return;
+    set({
+      isOpen: true,
+      request: threadMessageId === undefined ? request : { ...request, threadMessageId },
+    });
   },
   step: (delta) =>
     set((state) => {
@@ -78,7 +89,7 @@ export const useDecisionsQuestionViewStore = create<DecisionsQuestionViewState>(
       if (index < 0 || index >= request.questions.length || index === request.index) {
         return state;
       }
-      return { request: { ...request, index } };
+      return { request: { questions: request.questions, index } };
     }),
   // The request stays until the next opening, so the closing dialog keeps its content on screen.
   close: () => set({ isOpen: false }),

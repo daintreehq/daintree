@@ -15,7 +15,6 @@ import { ProjectWorktreeCreateDialog } from "./ProjectWorktreeCreateDialog";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useFleetPickerPaletteStore } from "@/store/fleetPickerPaletteStore";
-import { DecisionsAttentionHost } from "@/components/Decisions/DecisionsAttentionHost";
 import { MoveTerminalsDialogHost } from "./MoveTerminalsDialogHost";
 import { useSchedulesViewStore } from "@/store/schedulesViewStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -274,8 +273,6 @@ function ProjectDialogHost() {
           </Suspense>
         )}
       </ErrorBoundary>
-
-      <DecisionsAttentionHost />
 
       <MoveTerminalsDialogHost />
 
