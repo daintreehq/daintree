@@ -1541,9 +1541,10 @@ describe("ProjectPulseService", () => {
 
   describe("heatmap past 20,000 commits in the window (#17455)", () => {
     // 2,000 commits on each of the last ten days plus one 100 days ago: 20,001
-    // in a 180-day window, and one 200 days ago that --since slop can still let
-    // through. Newest first, as `git log` prints them, and the stub honours
-    // --max-count so a ceiling cuts the read where git would.
+    // in a 180-day window. The stub ignores --since, so a row 200 days back
+    // reaches the parser and checks that rows outside the grid stay out of the
+    // totals. Newest first, as `git log` prints them, and the stub applies
+    // --max-count= so a ceiling cuts the read where git would.
     function buildBusyRepo() {
       vi.setSystemTime(new Date(2025, 0, 15, 12, 0, 0));
       const at = (daysAgo: number, second: number) =>

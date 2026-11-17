@@ -401,8 +401,8 @@ export class ProjectPulseService {
       return this.createEmptyHeatmap(rangeDays);
     }
 
-    // Walked in place rather than split, so a busy window doesn't also allocate
-    // one string per commit.
+    // Walked in place rather than split, so a busy window never holds an array of
+    // every timestamp string at once.
     const dailyCounts = new Map<string, number>();
     for (let start = 0; start < output.length;) {
       const newline = output.indexOf("\n", start);

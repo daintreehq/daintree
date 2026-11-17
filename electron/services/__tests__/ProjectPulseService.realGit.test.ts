@@ -142,8 +142,9 @@ describe("Project Pulse past 20,000 commits in the window (#17455)", () => {
     // before its local midnight, one exactly on it and one a minute after, one
     // 100 days back, then 20,000 in the seconds before NOW: built with
     // fast-import because 20,004 `git commit` runs would take minutes. git fills
-    // a bare --since date with its own clock's time of day, so the first-day
-    // commits only count from a midnight cutoff.
+    // a bare --since=YYYY-MM-DD with its own clock's time of day, so this proves
+    // the commits from midnight on count; the one before midnight has no cell
+    // either way, and the exact cutoff is pinned by the unit suite.
     const firstMidnight = Math.floor(
       new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate() - 179).getTime() / 1000
     );
