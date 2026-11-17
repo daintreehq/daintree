@@ -1445,14 +1445,21 @@ async function hasHeadCommit(
  *
  * Pairs come from an unscoped status read, the one Review Hub lists rows from
  * (`status.renames` decides what is a pair): a pathspec would hide the half it
- * doesn't name. A copy's source is a file of its own and is left alone. The
+ * doesn't name. Only the index side matters, so a submodule's own working tree
+ * isn't scanned. A copy's source is a file of its own and is left alone. The
  * read must answer before anything is reset; an empty answer from a git that
  * died would quietly bring the half-unstage back.
  */
 async function withStagedRenamePartners(cwd: string, paths: string[]): Promise<string[]> {
   const git = await createStrictExitGit(cwd);
   const entries = parsePorcelainV1Z(
-    await git.raw(["status", "--porcelain=v1", "-z", "--untracked-files=no"])
+    await git.raw([
+      "status",
+      "--porcelain=v1",
+      "-z",
+      "--untracked-files=no",
+      "--ignore-submodules=dirty",
+    ])
   );
   const requested = new Set(paths);
   const expanded = new Set(paths);

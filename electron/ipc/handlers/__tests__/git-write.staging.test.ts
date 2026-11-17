@@ -48,6 +48,9 @@ vi.mock("../../../utils/gitUtils.js", async (importOriginal) => {
 // real repository and the real spawn can show. simple-git binds `spawn` by name.
 const spawned: string[][] = [];
 const originalSpawn = childProcess.spawn;
+// A `git status` that exits non-zero without a word, which the default profile
+// would read as an empty, clean status.
+const silentStatusFailure = { on: false };
 
 /** The git subcommand, past the `-c key=value` pairs every hardened call leads with. */
 function subcommand(args: readonly string[]): string | undefined {
@@ -106,6 +109,9 @@ beforeAll(async () => {
   process.env.GIT_CONFIG_NOSYSTEM = "1";
   (childProcess as { spawn: typeof originalSpawn }).spawn = ((...args: unknown[]) => {
     if (Array.isArray(args[1])) spawned.push(args[1] as string[]);
+    if (silentStatusFailure.on && subcommand(args[1] as string[]) === "status") {
+      args = [process.execPath, ["-e", "process.exit(1)"], args[2]];
+    }
     return (originalSpawn as (...a: unknown[]) => ReturnType<typeof originalSpawn>)(...args);
   }) as typeof originalSpawn;
   syncBuiltinESMExports();
@@ -277,22 +283,21 @@ describe("git-write staging handlers (real git)", () => {
       expectRenameUnstaged("original.txt", "renamed.txt", "keep\n");
     });
 
-    it("unstages a rename with staged edits and keeps the edited bytes", async () => {
+    it("unstages a rename with staged and unstaged edits and keeps the newest bytes", async () => {
       commitFiles({ "original.txt": "a\nb\nc\nd\n" });
       git(repo, "mv", "original.txt", "renamed.txt");
       fs.writeFileSync(path.join(repo, "renamed.txt"), "a\nb\nc\nd\ne\n");
       git(repo, "add", "renamed.txt");
-      expect(git(repo, "diff", "--cached", "--name-status", "-M")).toMatch(
-        /^R\d+\toriginal\.txt\trenamed\.txt\n$/
-      );
+      fs.writeFileSync(path.join(repo, "renamed.txt"), "a\nb\nc\nd\ne\nf\n");
+      expect(git(repo, "status", "--porcelain=v1")).toBe("RM original.txt -> renamed.txt\n");
 
       await unstage("renamed.txt");
 
       expect(cached()).toBe("");
-      expectRenameUnstaged("original.txt", "renamed.txt", "a\nb\nc\nd\ne\n");
+      expectRenameUnstaged("original.txt", "renamed.txt", "a\nb\nc\nd\ne\nf\n");
     });
 
-    it("unstages every rename a multi-file unstage names and nothing it doesn't", async () => {
+    it("unstages every rename a multi-file unstage names, by either half, and nothing else", async () => {
       commitFiles({ "one.txt": "1\n", "sub/two.txt": "2\n", "three.txt": "3\n", "p.txt": "a\n" });
       stageRename("one.txt", "uno.txt");
       stageRename("sub/two.txt", "dos.txt");
@@ -300,7 +305,7 @@ describe("git-write staging handlers (real git)", () => {
       fs.writeFileSync(path.join(repo, "p.txt"), "b\n");
       git(repo, "add", "p.txt");
 
-      await unstageFiles(["uno.txt", "dos.txt", "p.txt"]);
+      await unstageFiles(["uno.txt", "sub/two.txt", "p.txt"]);
 
       expectRenameUnstaged("one.txt", "uno.txt", "1\n");
       expectRenameUnstaged("sub/two.txt", "dos.txt", "2\n");
@@ -319,6 +324,18 @@ describe("git-write staging handlers (real git)", () => {
       await unstage("b.txt");
 
       expect(cached()).toBe("M\ta.txt\n");
+    });
+
+    it("leaves a staged rename alone when unstaging the file its destination moved to", async () => {
+      commitFiles({ "a.txt": "one\ntwo\nthree\n" });
+      stageRename("a.txt", "b.txt");
+      fs.renameSync(path.join(repo, "b.txt"), path.join(repo, "c.txt"));
+      git(repo, "add", "-N", "c.txt");
+      expect(git(repo, "status", "--porcelain=v1")).toBe("R  a.txt -> b.txt\n R b.txt -> c.txt\n");
+
+      await unstage("c.txt");
+
+      expect(cached()).toBe("D\ta.txt\nA\tb.txt\n");
     });
 
     it("unstages a source whose name is a glob without widening to the names it matches", async () => {
@@ -349,12 +366,18 @@ describe("git-write staging handlers (real git)", () => {
       expect(cached()).toBe("D\ttwo.txt\n");
     });
 
-    it("refuses before resetting anything when the status read fails", async () => {
+    it("refuses before resetting anything when the status read fails silently", async () => {
       commitFiles({ "original.txt": "keep\n" });
       stageRename("original.txt", "renamed.txt");
-      git(repo, "config", "status.renameLimit", "not-a-number");
 
-      await expect(unstage("renamed.txt")).rejects.toThrow(/renamelimit/i);
+      silentStatusFailure.on = true;
+      try {
+        const mark = spawned.length;
+        await expect(unstage("renamed.txt")).rejects.toThrow();
+        expect(spawnedSince(mark).map(subcommand)).toEqual(["status"]);
+      } finally {
+        silentStatusFailure.on = false;
+      }
 
       expect(cached()).toBe("D\toriginal.txt\nA\trenamed.txt\n");
     });
