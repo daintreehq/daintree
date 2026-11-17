@@ -1038,6 +1038,72 @@ describe("All hosts", () => {
     ]);
   });
 
+  it("names a host whose terminals went unsearched, keeps the others' matches, and retries the same search (#17594)", async () => {
+    const own = installElectron();
+    own.searchScreens.mockResolvedValue(["shared-run"]);
+    let studioSearches = false;
+    state.invoke.mockImplementation(async (_hostId: string, channel: string) => {
+      if (channel === "canopy:set-active") return remoteCanopy;
+      if (channel === "fleet:get-snapshot") return remoteFleet;
+      if (channel === "canopy:search-screens") {
+        if (!studioSearches) throw new Error("offline");
+        return ["shared-run"];
+      }
+      return null;
+    });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    const input = document.querySelector<HTMLInputElement>("input[role=combobox]")!;
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "segfault" } });
+    });
+    await screenSearchSettled();
+    expect(cardOf("local", "shared-run")).not.toBeNull();
+    expect(cardOf("studio", "shared-run")).toBeNull();
+    const note = screen.getByTestId("canopy-search-incomplete");
+    expect(note.textContent).toContain("studio-01");
+    expect(note.textContent).not.toContain("This Mac");
+
+    studioSearches = true;
+    const searchesBefore = state.invoke.mock.calls.filter(
+      (call) => call[1] === "canopy:search-screens"
+    ).length;
+    await act(async () => {
+      fireEvent.click(within(note).getByRole("button", { name: "Retry" }));
+    });
+    await screenSearchSettled();
+    const retried = state.invoke.mock.calls.filter((call) => call[1] === "canopy:search-screens");
+    expect(retried).toHaveLength(searchesBefore + 1);
+    expect(retried.at(-1)![2]).toEqual([
+      expect.objectContaining({ runId: "shared-run", terms: ["segfault"] }),
+    ]);
+    expect(input.value).toBe("segfault");
+    expect(cardOf("local", "shared-run")).not.toBeNull();
+    expect(cardOf("studio", "shared-run")).not.toBeNull();
+    expect(screen.queryByTestId("canopy-search-incomplete")).toBeNull();
+  });
+
+  it("never calls a search with an unsearched host's terminals a search with no match (#17594)", async () => {
+    installElectron();
+    state.invoke.mockImplementation(async (_hostId: string, channel: string) => {
+      if (channel === "canopy:set-active") return remoteCanopy;
+      if (channel === "fleet:get-snapshot") return remoteFleet;
+      if (channel === "canopy:search-screens") throw new Error("offline");
+      return null;
+    });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    const input = document.querySelector<HTMLInputElement>("input[role=combobox]")!;
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "segfault" } });
+    });
+    await screenSearchSettled();
+    expect(cardOf("local", "shared-run")).toBeNull();
+    expect(cardOf("studio", "shared-run")).toBeNull();
+    expect(screen.getByTestId("canopy-search-incomplete").textContent).toContain("studio-01");
+    expect(document.body.textContent).not.toContain("No agent matches");
+  });
+
   it("says once, in the empty Assistants line, that only this machine's assistants are listed", async () => {
     installElectron();
     render(<CanopyView frame={frame} />);
