@@ -67,8 +67,10 @@ const mockCompareWorktrees = vi.fn();
 const A = { path: "a.ts", status: "M", insertions: 1, deletions: 0 };
 const B = { path: "b.ts", status: "M", insertions: 2, deletions: 1 };
 
+let files: { path: string; status: string; insertions: number; deletions: number }[];
+
 function listResponse() {
-  return { branch1: "main", branch2: "feature", files: [A, B].map((f) => ({ ...f })) };
+  return { branch1: "main", branch2: "feature", files: files.map((f) => ({ ...f })) };
 }
 
 function deferred<T = unknown>() {
@@ -107,6 +109,7 @@ function respondWith(respond: Respond) {
 
 beforeEach(() => {
   mockCompareWorktrees.mockReset();
+  files = [A, B];
   respondWith((file, context) =>
     Promise.resolve(context ? wholeFile(`source ${file}`) : `diff ${file}`)
   );
@@ -171,6 +174,7 @@ describe("CrossWorktreeDiff loading a file's hidden context", () => {
 
     fireEvent.click(fileRow("b.ts")!);
     await waitFor(() => expect(viewer().textContent).toBe("diff b.ts"));
+    expect(contextCalls("b.ts").length).toBe(1);
 
     await act(async () => source.reject(new Error("too big")));
     expect(viewer().textContent).toBe("diff b.ts");
@@ -230,6 +234,42 @@ describe("CrossWorktreeDiff loading a file's hidden context", () => {
     await act(async () => {});
     expect(contextCalls("b.ts").length).toBe(0);
   });
+
+  it.each([
+    ["added", "A", 0],
+    ["deleted", "D", 0],
+    ["renamed", "R", 1],
+    ["copied", "C", 1],
+  ])(
+    "reads whole-file context for a %s file only when it's on both sides",
+    async (_, status, reads) => {
+      files = [A, { ...B, status }];
+      await openComparison();
+
+      fireEvent.click(fileRow("b.ts")!);
+      await waitFor(() => expect(viewer().textContent).toBe("diff b.ts"));
+      await waitFor(() => expect(viewer().dataset.source).toBe(reads ? "source b.ts" : ""));
+      expect(contextCalls("b.ts").length).toBe(reads);
+    }
+  );
+
+  it("drops a whole-file read that describes different blobs than the patch", async () => {
+    await openComparison();
+    const header = (index: string) => `diff --git a/b.ts b/b.ts\nindex ${index} 100644\n`;
+    respondWith((_file, context) =>
+      Promise.resolve(
+        context
+          ? header("abc1234..9990000") + wholeFile("source b.ts from a newer commit")
+          : header("abc1234..def5678") + "@@ -1 +1 @@\n-old\n+source b.ts"
+      )
+    );
+
+    fireEvent.click(fileRow("b.ts")!);
+    await waitFor(() => expect(contextCalls("b.ts").length).toBe(1));
+    await act(async () => {});
+    expect(viewer().textContent).toContain("+source b.ts");
+    expect(viewer().dataset.source).toBe("");
+  });
 });
 
 describe("CrossWorktreeDiff refreshing an open file's hidden context", () => {
@@ -255,17 +295,42 @@ describe("CrossWorktreeDiff refreshing an open file's hidden context", () => {
     expect(viewer().dataset.source).toBe("source a.ts v2");
   });
 
-  it("keeps the old pair when a refresh's patch fails, even once its source lands", async () => {
+  it("holds a refreshed source back until its patch lands", async () => {
     const view = await openComparison();
     const patch = deferred<string>();
     const source = deferred<string>();
     respondWith((_file, context) => (context ? source.promise : patch.promise));
 
     await refresh(view);
-    await act(async () => patch.reject(new Error("boom")));
     await act(async () => source.resolve(wholeFile("source a.ts v2")));
-
     expect(viewer().textContent).toBe("diff a.ts");
     expect(viewer().dataset.source).toBe("source a.ts");
+
+    await act(async () => patch.resolve("diff a.ts v2"));
+    expect(viewer().textContent).toBe("diff a.ts v2");
+    expect(viewer().dataset.source).toBe("source a.ts v2");
   });
+
+  it.each([
+    [
+      "is rejected",
+      (patch: ReturnType<typeof deferred<unknown>>) => patch.reject(new Error("boom")),
+    ],
+    ["isn't diff text", (patch: ReturnType<typeof deferred<unknown>>) => patch.resolve(undefined)],
+  ])(
+    "keeps the old pair when a refresh's patch %s, even once its source lands",
+    async (_, fail) => {
+      const view = await openComparison();
+      const patch = deferred<unknown>();
+      const source = deferred<string>();
+      respondWith((_file, context) => (context ? source.promise : patch.promise));
+
+      await refresh(view);
+      await act(async () => source.resolve(wholeFile("source a.ts v2")));
+      await act(async () => fail(patch));
+
+      expect(viewer().textContent).toBe("diff a.ts");
+      expect(viewer().dataset.source).toBe("source a.ts");
+    }
+  );
 });

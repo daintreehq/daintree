@@ -302,7 +302,7 @@ describe("CrossWorktreeDiff when the chosen pair can no longer be compared", () 
     expect(fileRow("b.ts")?.getAttribute("aria-current")).toBeNull();
   });
 
-  it("drops the previous pair's file diff and source once another pair is chosen", async () => {
+  it("drops the previous pair's source that lands once another pair is chosen", async () => {
     setWorktrees(LEFT(), RIGHT(), snapshot("wt-other", "other"));
     render(tree());
     const stalePatch = deferred<string>();
@@ -333,7 +333,7 @@ describe("CrossWorktreeDiff when the chosen pair can no longer be compared", () 
     await waitFor(() => expect(featureFileCalls().length).toBe(1));
     await act(async () => stalePatch.resolve("stale diff"));
     await waitFor(() => expect(featureFileCalls().length).toBe(2));
-    expect(screen.getByTestId("diff-viewer").textContent).toBe("stale diff");
+    await waitFor(() => expect(screen.getByTestId("diff-viewer").textContent).toBe("stale diff"));
 
     fireEvent.change(screen.getByLabelText("Compare"), { target: { value: "wt-other" } });
     await waitFor(() => expect(screen.getByTestId("diff-viewer").textContent).toBe("diff other"));

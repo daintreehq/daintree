@@ -39,7 +39,7 @@ import {
   WHOLE_FILE_CONTEXT_LINES,
   comparableBranch,
   comparisonBlocker,
-  committedSourceFromFullDiff,
+  committedSourceForPatch,
   sortWorktreesForComparison,
   worktreeOptionLabel,
   type ComparisonBlocker,
@@ -485,7 +485,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
       // sides has gaps to fill, and a failed read costs the expanders, never
       // the diff.
       const expandable = file.status === "M" || file.status === "R" || file.status === "C";
-      const readSource = () =>
+      const readWholeFile = () =>
         window.electron.git
           .compareWorktrees(
             leftPath,
@@ -496,7 +496,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
             undefined,
             WHOLE_FILE_CONTEXT_LINES
           )
-          .then((full) => (typeof full === "string" ? committedSourceFromFullDiff(full) : null))
+          .then((full) => (typeof full === "string" ? full : null))
           .catch(() => null);
 
       // A refresh swaps the patch and its source together, so the old pair stays
@@ -505,7 +505,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
       let diff: string | null = null;
       let refreshedSource: string | null = null;
       try {
-        const [patch, source] = await Promise.all([
+        const [patch, full] = await Promise.all([
           window.electron.git.compareWorktrees(
             leftPath,
             leftBranch,
@@ -514,12 +514,12 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
             undefined,
             ignoreWhitespaceRef.current
           ),
-          refresh && expandable ? readSource() : null,
+          refresh && expandable ? readWholeFile() : null,
         ]);
         // Anything but diff text is a failure the user can retry, not a blank pane.
         if (typeof patch === "string") {
           diff = patch;
-          refreshedSource = source;
+          refreshedSource = committedSourceForPatch(full, patch);
         }
       } catch {
         // A rejected read takes the same retryable failure path.
@@ -541,8 +541,8 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
       // asks for it only when the patch lands with the file still open, so
       // stepping past a file never pays for it. The expanders appear with it.
       if (!expandable || DIFF_SENTINELS.has(diff)) return;
-      const source = await readSource();
-      if (token === fileDiffTokenRef.current) setFileSource(source);
+      const full = await readWholeFile();
+      if (token === fileDiffTokenRef.current) setFileSource(committedSourceForPatch(full, diff));
     },
     [leftPath, leftBranch, rightBranch]
   );
