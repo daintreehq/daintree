@@ -279,6 +279,19 @@ function acquireFigures(): () => void {
 }
 
 /**
+ * A read's answer, except that a host whose link was heard since it was asked
+ * for keeps the link it now has, and the summary that goes with it.
+ */
+function keepLinksHeard(hosts: HostListEntry[], heard: ReadonlySet<HostId>): HostListEntry[] {
+  if (heard.size === 0) return hosts;
+  return hosts.map((entry) => {
+    if (!heard.has(entry.descriptor.id)) return entry;
+    const held = snapshot.hosts.find((h) => h.descriptor.id === entry.descriptor.id);
+    return held ? { ...entry, connection: held.connection, summary: held.summary } : entry;
+  });
+}
+
+/**
  * Follow the host list while anything shows it. Makes no calls at all where
  * Remote Hosts doesn't exist, so nothing changes for a Windows build.
  */
@@ -291,13 +304,17 @@ function start(): () => void {
   // Bumped by every full list, from either source. An answer to a request
   // made before the latest full list is older than it and is dropped.
   let listVersion = 0;
+  // Links heard since the latest read was asked for. Its answer may still
+  // carry what they were before, since a reply and a push share no order.
+  const linksHeard = new Set<HostId>();
   const refresh = () => {
     const requestedAt = ++listVersion;
+    linksHeard.clear();
     api
       .list()
       .then((hosts) => {
         if (current !== generation || requestedAt !== listVersion) return;
-        publish({ ...snapshot, hosts: remoteEntries(hosts) });
+        publish({ ...snapshot, hosts: keepLinksHeard(remoteEntries(hosts), linksHeard) });
       })
       .catch((error: unknown) => {
         logWarn("[Hosts] Couldn't read the host list", { error });
@@ -307,6 +324,7 @@ function start(): () => void {
     api.onEvent((event) => {
       if (event.type === "hosts-changed") listVersion += 1;
       if (!applyRemoteHostsEvent(event)) refresh();
+      else if (event.type === "connection-changed") linksHeard.add(event.hostId);
     })
   );
   refresh();

@@ -488,6 +488,44 @@ describe("host status and host figures", () => {
     expect(figures.result.current.hosts[0]?.summary).toBeNull();
   });
 
+  it("keeps a link lost while a remounted subscriber's read was in flight over the older answer", async () => {
+    list.mockResolvedValue([reporting("studio-01", 3), connectedHost("studio-02")]);
+    const first = renderHook(() => useHostFigures());
+    await settle();
+    expect(first.result.current.hosts[0]?.summary?.sampledAt).toBe(3);
+    first.unmount();
+
+    const pending = deferred<HostListEntry[]>();
+    list.mockReturnValueOnce(pending.promise);
+    const figures = renderHook(() => useHostFigures());
+    expect(ids(figures.result.current.hosts)).toEqual(["studio-01", "studio-02"]);
+
+    act(() =>
+      emit?.({
+        type: "connection-changed",
+        hostId: "studio-01",
+        connection: { status: "disconnected" },
+      })
+    );
+    expect(figures.result.current.hosts[0]?.connection.status).toBe("disconnected");
+
+    const renamed = { ...connectedHost("studio-02") };
+    renamed.descriptor = { ...renamed.descriptor, name: "Studio two" };
+    const lostDescriptor = { ...reporting("studio-01", 3) };
+    lostDescriptor.descriptor = { ...lostDescriptor.descriptor, name: "Studio one" };
+    await act(async () => {
+      pending.resolve([lostDescriptor, renamed, connectedHost("studio-03")]);
+      await pending.promise;
+    });
+    const hosts = figures.result.current.hosts;
+    expect(ids(hosts)).toEqual(["studio-01", "studio-02", "studio-03"]);
+    expect(hosts[0]?.connection.status).toBe("disconnected");
+    expect(hosts[0]?.summary).toBeNull();
+    expect(hosts[0]?.descriptor.name).toBe("Studio one");
+    expect(hosts[1]?.descriptor.name).toBe("Studio two");
+    expect(hosts[1]?.connection.status).toBe("connected");
+  });
+
   it("stops following while main has the view cached, though the page still reads visible", async () => {
     const lifecycle: { cached?: () => void; active?: () => void } = {};
     Object.assign(window.electron, {
