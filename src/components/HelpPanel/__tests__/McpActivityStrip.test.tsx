@@ -59,6 +59,7 @@ function makePolicy(expectHandoff: () => void): OverlayFocusRestore {
     setRestoreTarget: vi.fn(),
     resetForOpen: vi.fn(),
     deferToRadix: vi.fn(),
+    restoreIfStranded: vi.fn(),
     expectHandoff,
     onContentPointerDown: vi.fn(),
     onContentPointerDownOutside: vi.fn(),

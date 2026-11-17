@@ -48,7 +48,9 @@ Element-scoped, in `src/lib/tooltipFocusSuppression.ts`: the close arms a one-sh
 
 ## Known local wiring
 
-A consumer that preventDefaults `onCloseAutoFocus` itself keeps ownership of the outcome (`AppPalettePopover`), so it never does that to claim a pointer close: it skips the click-away fallback and strands focus on `document.body` (#16922). A plugin popover opened from a menu row is the toolbar's one such owner, since the popover takes focus into itself.
+A consumer that preventDefaults `onCloseAutoFocus` itself keeps ownership of the outcome, so it never does that to claim a pointer close: it skips the click-away fallback and strands focus on `document.body` (#16922). A plugin popover opened from a menu row is the toolbar's one such owner, since the popover takes focus into itself. `AppPalettePopover` is the other: on the closes it cancels (a click-away, a launch that suppressed the return) it queues the fallback back itself through `restoreIfStranded(returnFocusRef)` before `deferToRadix()`, so a modal palette's swallowed press or a declined launch still returns focus a task later (#17202).
+
+`PopoverContent` reads clicks and keys in the capture phase, so a row that stops its own click or Enter still counts as the gesture that decides the ring.
 
 Sanctioned survivors, because launching or switching moves focus away from the control entirely: `AgentButton.tsx`, `PluginTrayButton.tsx`, `DockLaunchButton.tsx` (controlled tooltip + `isRestoringFocusRef`), and the toolbar's project pill (`useToolbarProjectPill.tsx`, `isRestoringFocusPillRef`).
 
