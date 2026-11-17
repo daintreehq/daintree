@@ -234,6 +234,8 @@ describe("sshRefusalAdvice", () => {
   });
 
   it("stays quiet for other failures", () => {
+    // A command on the host saying it, after a login, isn't ssh's refusal.
+    expect(sshRefusalAdvice("Permission denied (restricted command)")).toBeNull();
     expect(sshRefusalAdvice(null)).toBeNull();
     expect(sshRefusalAdvice("ssh: connect to host studio port 22: Connection refused")).toBeNull();
   });

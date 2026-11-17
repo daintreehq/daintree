@@ -48,6 +48,13 @@ export function sshRefusalAdvice(sshError: string | null | undefined): SshRefusa
   if (/Host key verification failed|No \S+ host key is known/i.test(sshError)) {
     return "untrusted-host-key";
   }
-  if (/Permission denied \(/i.test(sshError)) return "login-refused";
+  if (LOGIN_REFUSED.test(sshError)) return "login-refused";
   return null;
 }
+
+/**
+ * ssh's own authentication refusal, which lists the methods the server still
+ * offered (`Permission denied (publickey,keyboard-interactive).`); a command
+ * on the host that prints "Permission denied (restricted command)" isn't one.
+ */
+const LOGIN_REFUSED = /Permission denied \([a-z0-9@.-]+(?:,[a-z0-9@.-]+)*\)/i;

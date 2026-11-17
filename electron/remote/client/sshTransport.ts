@@ -347,6 +347,22 @@ export function isProxyClosedEarly(stderr: string | null | undefined): boolean {
   return PROXY_CLOSED_EARLY.test(stderr ?? "");
 }
 
+/** The lines the ssh in front adds once a hop gave up, which would push the hop's own words out of a short tail. */
+const PROXY_CLOSED_LINE =
+  /^(?:kex_exchange_identification: Connection closed|Connection closed by UNKNOWN port 65535)/;
+
+/** A diagnosis's stderr as the hop that refused wrote it: ssh's own failure (255) naming an access refusal, or null. */
+function hopRefusalFrom(code: number | null, stderr: string): string | null {
+  if (code !== SSH_FAILED || !isSshAccessDenied(stderr)) return null;
+  return stderr
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0 && !PROXY_CLOSED_LINE.test(line))
+    .join("\n");
+}
+
+/** ssh's own exit status when it fails, rather than a remote command's. */
+const SSH_FAILED = 255;
+
 /**
  * The same login with no master involved (`ControlPath=none`), so the hops'
  * own stderr reaches this side and a jump host's refusal is heard in its own
@@ -383,9 +399,11 @@ export async function hiddenHopRefusal(
     env: BATCH_SSH_ENV,
     ...(signal ? { signal } : {}),
   });
-  const stderr = result.stderr.trim();
-  return result.code !== 0 && isSshAccessDenied(stderr) ? stderr : null;
+  return hopRefusalFrom(result.code, result.stderr);
 }
+
+/** How often a dial that keeps failing behind a proxy asks the hops again: each ask is one more login there. */
+const HOP_DIAGNOSIS_INTERVAL_MS = 5 * 60_000;
 
 const DISCOVERY_START = "@@dt:discovery";
 const DISCOVERY_END = "@@dt:discovery-end";
@@ -837,6 +855,8 @@ export class SshTransport implements LinkTransport {
    * longer takes is the link's to notice (`remembered` on the connection).
    */
   private known: KnownHost | null = null;
+  /** When the hops were last asked why a dial through them closed early. */
+  private lastHopDiagnosis: number | null = null;
 
   constructor(private readonly options: SshTransportOptions) {
     if (!isValidSshTarget(options.target)) {
@@ -973,14 +993,22 @@ export class SshTransport implements LinkTransport {
     return this.reach(controlPath, info, null, configStamp, signal);
   }
 
-  /** {@link hiddenHopRefusal} over this transport's own ssh. */
+  /**
+   * {@link hiddenHopRefusal} over this transport's own ssh, at most once per
+   * {@link HOP_DIAGNOSIS_INTERVAL_MS}: a proxy that is simply down would
+   * otherwise double every retry.
+   */
   private async hopRefusal(signal: AbortSignal): Promise<string | null> {
+    const now = Date.now();
+    if (this.lastHopDiagnosis !== null && now - this.lastHopDiagnosis < HOP_DIAGNOSIS_INTERVAL_MS) {
+      return null;
+    }
+    this.lastHopDiagnosis = now;
     try {
       await this.run(buildHopDiagnosisArgs(this.options.target), signal);
       return null;
     } catch (error) {
-      const detail = error instanceof TransportError ? (error.detail ?? "") : "";
-      return isSshAccessDenied(detail) ? detail : null;
+      return error instanceof SshExitError ? hopRefusalFrom(error.code, error.detail ?? "") : null;
     }
   }
 

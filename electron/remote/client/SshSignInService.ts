@@ -459,20 +459,15 @@ export class SshSignInService {
     }
     if (!refused) return { status: "failed", detail };
 
+    // Cancel stops ssh and touches no master: one that is up by then may be
+    // another caller's (a dial that rode an agent unlocked meanwhile), and a
+    // login that finished as Cancel landed stays, like any, for ControlPersist.
     const relay = await this.openRelay(attempt, owner);
-    let result: SshSignInResult;
     try {
-      result = await this.runInteractive(attempt, relay, sshPath, controlPath);
+      return await this.runInteractive(attempt, relay, sshPath, controlPath);
     } finally {
       await relay.close();
     }
-    // A Cancel that arrived before the end wins, even one after ssh got in:
-    // its master may already be up, and a cancelled sign-in leaves no login behind.
-    if (signal.aborted) {
-      await exitMaster(1_500);
-      return { status: "cancelled" };
-    }
-    return result;
   }
 
   /** Relay folders a launch that crashed mid sign-in left behind: none is in use before this one. */
@@ -616,6 +611,8 @@ export class SshSignInService {
         settled = true;
         clearTimeout(killTimer);
         signal.removeEventListener("abort", onAbort);
+        // ssh is gone; anything it started that outlived its SIGTERM (a ProxyJump's ssh) goes now.
+        if (signal.aborted) killGroup(child, "SIGKILL");
         resolve(result);
       };
       const onAbort = () => {
@@ -631,8 +628,6 @@ export class SshSignInService {
         )
       );
       child.on("exit", (code) => {
-        // ssh went on SIGTERM; anything it started that didn't (a ProxyJump's ssh) goes now.
-        if (signal.aborted) killGroup(child, "SIGKILL");
         // Let the last of stderr land before reading it.
         setImmediate(() => {
           if (signal.aborted) finish({ status: "cancelled" });

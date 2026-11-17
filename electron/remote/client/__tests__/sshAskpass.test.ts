@@ -2,13 +2,14 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { readOneLine, runAskpassClient, type AskpassRequest } from "../sshAskpass.js";
 
 vi.mock("electron", () => ({ app: { dock: { hide: vi.fn() } } }));
 
 let dir: string;
 let server: net.Server | null = null;
+const accepted = new Set<net.Socket>();
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "askp-"));
@@ -17,6 +18,9 @@ beforeEach(() => {
 afterEach(async () => {
   const listening = server;
   server = null;
+  // A test that failed mid-way may leave a helper connected, which would hold close() open.
+  for (const socket of accepted) socket.destroy();
+  accepted.clear();
   if (listening) await new Promise<void>((resolve) => listening.close(() => resolve()));
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -28,6 +32,7 @@ async function relay(
   const socketPath = path.join(dir, "s");
   const requests: AskpassRequest[] = [];
   server = net.createServer((socket) => {
+    accepted.add(socket);
     socket.on("error", () => {});
     readOneLine(socket, 64 * 1024, (line) => {
       if (line === null) return;
@@ -151,6 +156,7 @@ describe.skipIf(process.platform === "win32")("--ssh-askpass", () => {
     process.env.DAINTREE_ASKPASS_PROMPT = "Confirm user presence for key ED25519-SK SHA256:abc";
     process.env.SSH_ASKPASS_PROMPT = "none";
     const write = vi.spyOn(process.stdout, "write");
+    onTestFinished(() => write.mockRestore());
     const closed = new Promise<void>((resolve) =>
       server!.once("connection", (socket) => socket.once("close", () => resolve()))
     );
@@ -170,7 +176,6 @@ describe.skipIf(process.platform === "win32")("--ssh-askpass", () => {
     expect(await exited).toBe(1);
     await closed;
     expect(write).not.toHaveBeenCalled();
-    write.mockRestore();
     expect(process.listeners("SIGTERM")).not.toContain(added[0]);
   });
 
@@ -191,9 +196,9 @@ describe.skipIf(process.platform === "win32")("--ssh-askpass", () => {
       callback?.();
       return true;
     }) as typeof process.stdout.write);
+    onTestFinished(() => write.mockRestore());
     const { runSshAskpassCli } = await import("../sshAskpassCli.js");
     expect(await runSshAskpassCli()).toBe(0);
-    write.mockRestore();
     expect(written).toEqual(["hunter2\n"]);
   });
 });

@@ -28,6 +28,7 @@ import {
   buildSignInArgs,
   buildStreamLocalCheckArgs,
   defaultSshSpawner,
+  hiddenHopRefusal,
   controlPathFor,
   controlPathOption,
   exitStaleSshMasters,
@@ -40,6 +41,7 @@ import {
   type SshStreamSpawner,
 } from "../sshTransport.js";
 import { remoteShellArgs, scpArgs } from "../remoteShell.js";
+import type { CommandRunner } from "../commandRunner.js";
 import { HostModeOffError, SshAccessError, TransportError } from "../transport.js";
 import {
   TEST_HANDSHAKE,
@@ -76,6 +78,48 @@ const COMMON = [
   "-o",
   'ControlPath="/cp/cm-%C"',
 ];
+
+describe("hiddenHopRefusal", () => {
+  const run =
+    (code: number, stderr: string): CommandRunner =>
+    async () => ({
+      code,
+      stdout: "",
+      stderr,
+      spawnError: null,
+      timedOut: false,
+    });
+
+  it("keeps a changed jump-host key's own lines, not the closing lines ssh adds after them", async () => {
+    const refusal = await hiddenHopRefusal(
+      run(
+        255,
+        [
+          "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@",
+          "@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @",
+          "Offending ECDSA key in /Users/g/.ssh/known_hosts:3",
+          "Host key for bastion has changed and you have requested strict checking.",
+          "Host key verification failed.",
+          "kex_exchange_identification: Connection closed by remote host",
+          "Connection closed by UNKNOWN port 65535",
+        ].join("\n")
+      ),
+      "ssh",
+      "studio"
+    );
+    expect(refusal?.split("\n").slice(-3)).toEqual([
+      "Offending ECDSA key in /Users/g/.ssh/known_hosts:3",
+      "Host key for bastion has changed and you have requested strict checking.",
+      "Host key verification failed.",
+    ]);
+  });
+
+  it("is nothing when ssh itself didn't fail: a command there printed the words", async () => {
+    expect(
+      await hiddenHopRefusal(run(1, "Permission denied (restricted command)\n"), "ssh", "studio")
+    ).toBeNull();
+  });
+});
 
 describe("ssh argument construction", () => {
   it("turns batch mode off only for a sign-in, which is otherwise the probe on the same master", () => {
@@ -451,6 +495,25 @@ describe("SshTransport with an injected ssh", () => {
     expect(calls).toHaveLength(2);
     expect(calls[1]).toContain("BatchMode=yes");
     expect(calls[1]).not.toContain("ControlMaster=auto");
+  });
+
+  it("asks the hops at most once a while when a proxy just keeps closing", async () => {
+    const calls: string[][] = [];
+    const spawner: SshSpawner = (args) => {
+      calls.push(args);
+      const child = new FakeChild();
+      child.finish(255, "", "Connection closed by UNKNOWN port 65535\n");
+      return child;
+    };
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: spawner,
+    });
+    await transport.open(new AbortController().signal).catch(() => {});
+    await transport.open(new AbortController().signal).catch(() => {});
+    expect(calls.filter((args) => args.includes("ControlPath=none"))).toHaveLength(1);
+    expect(calls).toHaveLength(3);
   });
 
   it("keeps retrying a host behind a jump host that didn't refuse the login", async () => {

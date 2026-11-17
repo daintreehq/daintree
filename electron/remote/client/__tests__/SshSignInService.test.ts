@@ -247,6 +247,18 @@ describe.skipIf(process.platform === "win32")("SshSignInService", () => {
     await expect(done).resolves.toEqual({ status: "signed-in" });
   });
 
+  it("never takes a command's words on the diagnosis run for a jump host's refusal", async () => {
+    const { service, spawned } = setup((args) =>
+      args.includes("ControlPath=none")
+        ? result({ code: 1, stderr: "Permission denied (restricted command)\n" })
+        : result({ code: 255, stderr: "Connection closed by UNKNOWN port 65535\n" })
+    );
+    await expect(
+      service.start(fakeOwner().owner, { attemptId: "attempt-0001", connection: SSH })
+    ).resolves.toMatchObject({ status: "failed" });
+    expect(spawned).toHaveLength(0);
+  });
+
   it("stops at a jump host that closed without refusing the login, in its own words", async () => {
     const { service, spawned } = setup((args) =>
       args.includes("ControlPath=none")
@@ -392,7 +404,7 @@ describe.skipIf(process.platform === "win32")("SshSignInService", () => {
     await expect(done).resolves.toEqual({ status: "signed-in" });
   });
 
-  it("stops ssh and closes any master it left when the person cancels", async () => {
+  it("stops ssh when the person cancels, and leaves the host's master alone", async () => {
     const { service, spawned, calls } = setup(result({ code: 255, stderr: REFUSED }));
     const { owner } = fakeOwner();
     const done = service.start(owner, { attemptId: "attempt-0001", connection: SSH });
@@ -403,16 +415,18 @@ describe.skipIf(process.platform === "win32")("SshSignInService", () => {
     await expect(done).resolves.toEqual({ status: "cancelled" });
     expect(spawned[0]!.signals).toContain("SIGTERM");
     expect(await waiting.done).toBe(1);
-    expect(calls.some(({ args }) => args.includes("-O") && args.includes("exit"))).toBe(true);
+    // A master up by now may be another caller's: Cancel never closes one.
+    expect(calls.some(({ args }) => args.includes("-O"))).toBe(false);
   });
 
   it("takes down what ssh started too, even what outlives ssh's own SIGTERM", async () => {
     const pidFile = path.join(clientDir, "proxy.pid");
     const fakeSsh = path.join(clientDir, "ssh");
     // A ProxyJump's ssh stands in: it ignores SIGTERM and would outlive the ssh that started it.
+    // It writes its pid only once its trap is set, then becomes the sleep.
     fs.writeFileSync(
       fakeSsh,
-      `#!/bin/sh\n( trap '' TERM; exec sleep 30 ) &\necho $! > '${pidFile}'\nwait\n`,
+      `#!/bin/sh\nsh -c 'trap "" TERM; echo $$ > "$1"; exec sleep 30' sh '${pidFile}' &\nwait\n`,
       { mode: 0o700 }
     );
     const { service } = setup(result({ code: 255, stderr: REFUSED }), {
@@ -427,7 +441,14 @@ describe.skipIf(process.platform === "win32")("SshSignInService", () => {
     const proxyPid = Number(fs.readFileSync(pidFile, "utf8").trim());
     service.cancel(owner.id, { attemptId: "attempt-0001" });
     await expect(done).resolves.toEqual({ status: "cancelled" });
-    await vi.waitFor(() => expect(() => process.kill(proxyPid, 0)).toThrow(), { timeout: 5_000 });
+    // Gone, not just a zombie waiting to be reaped.
+    const alive = () => {
+      const stat = spawnSync("ps", ["-o", "stat=", "-p", String(proxyPid)])
+        .stdout.toString()
+        .trim();
+      return stat.length > 0 && !stat.startsWith("Z");
+    };
+    await vi.waitFor(() => expect(alive()).toBe(false), { timeout: 5_000 });
   });
 
   it("stops when the view that asked goes away", async () => {
