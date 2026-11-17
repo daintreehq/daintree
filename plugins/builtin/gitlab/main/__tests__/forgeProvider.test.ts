@@ -963,7 +963,7 @@ describe("checks.getChecks", () => {
     ]);
     const urls = fetchMock().mock.calls.map((call) => requestUrl(call));
     expect(urls).toContain(
-      "https://gitlab.com/api/v4/projects/group%2Fproject/pipelines/77/jobs?per_page=100&page=1"
+      "https://gitlab.com/api/v4/projects/group%2Fproject/pipelines/77/jobs?include_retried=false&per_page=100&page=1"
     );
     expect(urls).toContain(
       "https://gitlab.com/api/v4/projects/group%2Fproject/pipelines/77/bridges?per_page=100&page=1"
@@ -1027,7 +1027,7 @@ describe("checks.getChecks", () => {
 
     const urls = fetchMock().mock.calls.map((call) => requestUrl(call));
     expect(urls).toContain(
-      "https://gitlab.com/api/v4/projects/4242/pipelines/77/jobs?per_page=100&page=1"
+      "https://gitlab.com/api/v4/projects/4242/pipelines/77/jobs?include_retried=false&per_page=100&page=1"
     );
   });
 
@@ -1045,6 +1045,44 @@ describe("checks.getChecks", () => {
     const result = await getChecks(3);
 
     expect(result?.checks.map((check) => check.name)).toEqual(["first", "second"]);
+  });
+
+  it("reads past a full page that arrived without pagination headers", async () => {
+    const fullPage = Array.from({ length: 100 }, (_, i) => ({
+      id: i + 1,
+      name: `job-${i + 1}`,
+      status: "success",
+    }));
+    routeChecks({
+      mr: () => jsonResponse({ iid: 3, head_pipeline: { id: 77, status: "running" } }),
+      // No `x-next-page` at all: a proxy that strips headers, not a last page.
+      jobs: (page) =>
+        page === "1"
+          ? jsonResponse(fullPage)
+          : jsonResponse([{ id: 101, name: "job-101", status: "failed" }]),
+    });
+
+    const result = await getChecks(3);
+
+    expect(result?.checks).toHaveLength(101);
+    expect(result?.checks.at(-1)?.name).toBe("job-101");
+  });
+
+  it("keeps only the latest attempt of a retried trigger job", async () => {
+    routeChecks({
+      mr: () => jsonResponse({ iid: 3, head_pipeline: { id: 77, status: "running" } }),
+      bridges: () =>
+        jsonResponse([
+          { id: 9, name: "downstream", status: "running" },
+          { id: 4, name: "downstream", status: "failed" },
+        ]),
+    });
+
+    const result = await getChecks(3);
+
+    expect(result?.checks.map((check) => [check.name, check.status])).toEqual([
+      ["downstream", "in_progress"],
+    ]);
   });
 
   it("rejects rather than returning a list that pagination cut short", async () => {

@@ -30,6 +30,7 @@ import {
   getRateLimitSnapshot,
   resetRateLimitSnapshots,
   resetReadFlights,
+  type QueryValue,
 } from "./GitLabClient.js";
 import { BoundedCache } from "./boundedCache.js";
 import { GITLAB_API_TIMEOUT_MS, getInstanceHost } from "./GitLabAuth.js";
@@ -487,6 +488,7 @@ const MAX_CHECK_PAGES = 10;
 async function listPipelineJobs(
   host: string,
   path: string,
+  query: Record<string, QueryValue>,
   fresh: boolean,
   incomplete: (why: string) => Error
 ): Promise<GitLabJob[]> {
@@ -498,16 +500,50 @@ async function listPipelineJobs(
     const result = await gitlabRestPage<GitLabJob>({
       host,
       path,
-      query: { per_page: CHECKS_PAGE_SIZE, page },
+      query: { ...query, per_page: CHECKS_PAGE_SIZE, page },
       ...(fresh ? { fresh: true } : {}),
     });
     jobs.push(...result.items);
-    if (result.nextCursor === null) return jobs;
+    let next = result.nextCursor;
+    // A full page with no next page may be a proxy that dropped GitLab's
+    // pagination headers rather than the last page; the next page settles it.
+    if (next === null && result.items.length >= CHECKS_PAGE_SIZE) {
+      next = String(Number.parseInt(page, 10) + 1);
+    }
+    if (next === null) return jobs;
     // A next page that repeats one already read would loop, or drop the rest.
-    if (seenPages.has(result.nextCursor)) throw incomplete("pagination stalled");
-    page = result.nextCursor;
+    if (seenPages.has(next)) throw incomplete("pagination stalled");
+    page = next;
   }
   throw incomplete(`more than ${MAX_CHECK_PAGES * CHECKS_PAGE_SIZE} jobs`);
+}
+
+/**
+ * GitLab names every job in a pipeline uniquely, so two entries sharing a name
+ * are attempts of one job: a retried trigger job (the bridges list documents no
+ * `include_retried`), or a job a retry shifted across a page boundary mid-read.
+ * The newer attempt replaces the older in place. Entries without ids to compare
+ * are all kept, since dropping one would hide a check.
+ */
+function latestAttempts(jobs: readonly GitLabJob[]): GitLabJob[] {
+  const out: GitLabJob[] = [];
+  const indexByName = new Map<string, number>();
+  for (const job of jobs) {
+    const name = job && typeof job === "object" ? job.name : undefined;
+    const at = typeof name === "string" ? indexByName.get(name) : undefined;
+    if (at === undefined) {
+      if (typeof name === "string") indexByName.set(name, out.length);
+      out.push(job);
+      continue;
+    }
+    const keptId = out[at].id;
+    if (typeof keptId === "number" && typeof job.id === "number") {
+      if (job.id > keptId) out[at] = job;
+    } else {
+      out.push(job);
+    }
+  }
+  return out;
 }
 
 /**
@@ -566,12 +602,12 @@ export async function getChecksImpl(
   const base = `/projects/${projectId}/pipelines/${pipelineId}`;
 
   const [jobs, bridges] = await Promise.all([
-    listPipelineJobs(repo.host, `${base}/jobs`, fresh, incomplete),
-    listPipelineJobs(repo.host, `${base}/bridges`, fresh, incomplete),
+    listPipelineJobs(repo.host, `${base}/jobs`, { include_retried: false }, fresh, incomplete),
+    listPipelineJobs(repo.host, `${base}/bridges`, {}, fresh, incomplete),
   ]);
 
   const checks: CheckRun[] = [];
-  for (const job of [...jobs, ...bridges]) {
+  for (const job of latestAttempts([...jobs, ...bridges])) {
     const check = gitlabJobToCheckRun(job);
     if (!check) throw incomplete("GitLab returned a job with no name");
     checks.push(check);
