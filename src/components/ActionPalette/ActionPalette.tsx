@@ -40,7 +40,8 @@ type PrefixRouteSpec = {
   label: string;
   // When `null`, the chip displays in-place (commands mode is already inside
   // the action palette). Otherwise the action palette atomically hands off
-  // to the target palette via `paletteStore.openPalette`.
+  // to the target palette (see `handleKeyDown` for the routes that need more
+  // than `paletteStore.openPalette`).
   paletteId: PaletteId | null;
   mode: ActionPaletteMode | null;
 };

@@ -2949,7 +2949,9 @@ describe("useProjectSwitcherPalette", () => {
       projectStatsState.stats = {
         waiting: { activeAgentCount: 0, waitingAgentCount: 1, processCount: 0 },
       };
-      getBulkStatsMock.mockResolvedValue(emptyBulkStats(["waiting", "idle"]));
+      // Both openings fetch bulk stats; answering with the store's own counts
+      // keeps the dropdown's fetch from erasing the wait before the modal opens.
+      answerBulkStatsLikeTheStore({ zeroFillRequested: true });
 
       const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
 
