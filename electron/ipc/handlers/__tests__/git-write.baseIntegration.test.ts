@@ -74,9 +74,24 @@ function registeredHandlers(): Handlers {
   return map;
 }
 
+interface StatusDouble {
+  isClean: () => boolean;
+  conflicted: string[];
+  files: Array<{ path: string }>;
+}
+
+/** A `git status` result as simple-git shapes it: conflicted paths are in `files` too. */
+function statusOf(paths: string[], conflicted: string[] = []): StatusDouble {
+  return {
+    isClean: () => paths.length === 0,
+    conflicted,
+    files: paths.map((path) => ({ path })),
+  };
+}
+
 interface GitDoubleOptions {
   /** `git status` result. Clean unless overridden. */
-  status?: { isClean: () => boolean; conflicted: string[] };
+  status?: StatusDouble;
   /** Refs `rev-parse --verify` should report as existing. */
   existingRefs?: string[];
   /** Branch `rev-parse --abbrev-ref HEAD` reports. */
@@ -91,7 +106,7 @@ interface GitDoubleOptions {
 
 function gitDouble(options: GitDoubleOptions = {}) {
   const {
-    status = { isClean: () => true, conflicted: [] },
+    status = statusOf([]),
     existingRefs = [BASE_TRACKING_REF],
     branch = BRANCH,
     failWith,
@@ -207,7 +222,7 @@ describe("git:rebase-onto-base", () => {
   });
 
   it("refuses a dirty worktree BEFORE touching history", async () => {
-    const git = gitDouble({ status: { isClean: () => false, conflicted: [] } });
+    const git = gitDouble({ status: statusOf(["a.ts"]) });
     createHardenedGitMock.mockResolvedValue(git);
     registerGitWriteHandlers({} as never);
 
@@ -220,7 +235,9 @@ describe("git:rebase-onto-base", () => {
   it("refuses when only unmerged files are present", async () => {
     // `isClean()` can be true while conflicts stand, so the conflicted list is
     // checked separately rather than trusted to fold into it.
-    const git = gitDouble({ status: { isClean: () => true, conflicted: ["a.ts"] } });
+    const git = gitDouble({
+      status: { isClean: () => true, conflicted: ["a.ts"], files: [] },
+    });
     createHardenedGitMock.mockResolvedValue(git);
     registerGitWriteHandlers({} as never);
 
@@ -361,7 +378,7 @@ describe("git:merge-base-into-branch", () => {
   });
 
   it("refuses a dirty worktree before merging", async () => {
-    const git = gitDouble({ status: { isClean: () => false, conflicted: [] } });
+    const git = gitDouble({ status: statusOf(["a.ts"]) });
     createHardenedGitMock.mockResolvedValue(git);
     registerGitWriteHandlers({} as never);
 
@@ -652,6 +669,95 @@ describe("git:list-base-integration-commits", () => {
       )
     ).rejects.toMatchObject({ reason: "config-missing" });
   });
+});
+
+describe("git:list-base-integration-commits — blockers the write would refuse (#17189)", () => {
+  async function readPreview(
+    git: ReturnType<typeof gitDouble>,
+    kind: "rebase-onto-base" | "merge-base" = "rebase-onto-base"
+  ) {
+    createHardenedGitMock.mockResolvedValue(git);
+    registerGitWriteHandlers({} as never);
+    return (await registeredHandlers().get(CHANNELS.GIT_LIST_BASE_INTEGRATION_COMMITS)!(
+      {},
+      { cwd: CWD, baseBranch: BASE, kind }
+    )) as { blocker: unknown; branch: string | null; commits: unknown[] };
+  }
+
+  it("reports no blocker for a clean feature branch", async () => {
+    const result = await readPreview(gitDouble());
+    expect(result.blocker).toBeNull();
+    expect(result.commits).toHaveLength(1);
+  });
+
+  it("counts uncommitted changes, untracked files included", async () => {
+    const result = await readPreview(gitDouble({ status: statusOf(["a.ts", "new.txt"]) }));
+    expect(result.blocker).toEqual({ reason: "uncommitted-changes", count: 2 });
+  });
+
+  it("names unresolved conflicts ahead of the other changes", async () => {
+    const result = await readPreview(
+      gitDouble({ status: statusOf(["a.ts", "b.ts", "c.ts"], ["a.ts"]) }),
+      "merge-base"
+    );
+    expect(result.blocker).toEqual({ reason: "conflicts", count: 1 });
+  });
+
+  it("flags the base branch itself checked out, ahead of a dirty tree", async () => {
+    const result = await readPreview(gitDouble({ branch: BASE, status: statusOf(["a.ts"]) }));
+    expect(result.blocker).toEqual({ reason: "base-checked-out" });
+  });
+
+  it("flags a halted rebase on its detached HEAD instead of failing the read", async () => {
+    // A halted rebase detaches HEAD, so a read that asked for the branch first
+    // would fail with "no branch checked out" — the wrong diagnosis and the
+    // wrong fix, the same trap the pull-rebase confirm already avoids.
+    detectRepoOperationStateMock.mockResolvedValue({
+      state: "REBASING",
+      rebaseStep: 2,
+      rebaseTotalSteps: 5,
+    });
+    const git = gitDouble({ branch: "HEAD", status: statusOf(["a.ts"], ["a.ts"]) });
+    const result = await readPreview(git);
+
+    expect(result.blocker).toEqual({
+      reason: "operation-in-progress",
+      operation: "REBASING",
+      rebaseStep: 2,
+      rebaseTotalSteps: 5,
+    });
+    expect(result.branch).toBeNull();
+    expect(result.commits).toEqual([]);
+    // Nothing is measured against a HEAD that is mid-replay.
+    expect(git.log).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["uncommitted changes", { status: statusOf(["a.ts"]) }, null],
+    ["unresolved conflicts", { status: statusOf(["a.ts"], ["a.ts"]) }, null],
+    ["the base branch checked out", { branch: BASE }, null],
+    ["a halted merge", {}, "MERGING"],
+  ] as const)(
+    "flags exactly what the write then refuses: %s",
+    async (_label, options, halted) => {
+      for (const [kind, channel] of [
+        ["rebase-onto-base", CHANNELS.GIT_REBASE_ONTO_BASE],
+        ["merge-base", CHANNELS.GIT_MERGE_BASE_INTO_BRANCH],
+      ] as const) {
+        vi.clearAllMocks();
+        _resetRateLimitQueuesForTest();
+        detectRepoOperationStateMock.mockResolvedValue({ state: halted ?? "CLEAN" });
+        const git = gitDouble(options);
+        const result = await readPreview(git, kind);
+        expect(result.blocker).toMatchObject({ reason: expect.any(String) });
+
+        await expect(
+          registeredHandlers().get(channel)!({}, { cwd: CWD, baseBranch: BASE })
+        ).rejects.toBeDefined();
+        expect(callsTo(git, kind === "rebase-onto-base" ? "rebase" : "merge")).toEqual([]);
+      }
+    }
+  );
 });
 
 describe("git:continue-repository-operation handler", () => {
