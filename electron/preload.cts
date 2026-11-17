@@ -3037,6 +3037,8 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.FORGE_GET_REPO_URL, payload),
       getNewPRLink: (payload: ForgeNewPRLinkRequest) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_NEW_PR_LINK, payload),
+      getPullRequestTerm: (payload: { providerId: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_PULL_REQUEST_TERM, payload),
       assignIssue: (payload: { cwd: string; issueNumber: number; username: string }) =>
         _unwrappingInvoke(CHANNELS.FORGE_ASSIGN_ISSUE, payload),
       unassignIssue: (payload: { cwd: string; issueNumber: number; username: string }) =>

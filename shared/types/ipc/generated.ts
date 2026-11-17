@@ -2175,6 +2175,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { cwd: string; numbers: number[] }];
     result: import("../forge.js").PRLookupResult[];
   };
+  "forge:get-pull-request-term": {
+    args: [payload: { providerId: string }];
+    result: import("../forge.js").ForgePullRequestTerm | null;
+  };
   "forge:get-rate-limit-details": {
     args: [payload: { cwd: string }];
     result: import("../forge.js").RateLimitDetails | null;

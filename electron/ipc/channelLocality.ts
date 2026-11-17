@@ -497,6 +497,7 @@ export const CHANNEL_LOCALITY = {
   "forge:get-repo-metadata": "host",
   "forge:get-repo-stats": "host",
   "forge:get-new-pr-link": "host",
+  "forge:get-pull-request-term": "host",
   "forge:get-repo-url": "host",
   "forge:get-settings": "host",
   "forge:get-token-health": "host",

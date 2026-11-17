@@ -2,6 +2,7 @@ import type {
   AuthValidation,
   ForgeUser,
   ForgeLabel,
+  ForgePullRequestTerm,
   PushErrorClassification,
   Issue,
   IssueComment,
@@ -77,6 +78,10 @@ export const forgeClient = {
 
   getNewPRLink: (request: ForgeNewPRLinkRequest): Promise<ForgeNewPRLink> => {
     return window.electron.forge.getNewPRLink(request);
+  },
+
+  getPullRequestTerm: (providerId: string): Promise<ForgePullRequestTerm | null> => {
+    return window.electron.forge.getPullRequestTerm({ providerId });
   },
 
   assignIssue: (cwd: string, issueNumber: number, username: string): Promise<ForgeUser[]> => {
