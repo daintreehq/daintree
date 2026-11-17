@@ -38,6 +38,7 @@ vi.mock("@/store/scratchStore", () => ({
 import { LinksLauncherDevServers, type DevSessionsSnapshot } from "../LinksLauncherDevServers";
 import type { ReactElement } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { UI_SKELETON_GATE_MS } from "@/lib/animationUtils";
 
 function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
   return rtlRender(ui, { wrapper: TooltipProvider, ...options });
@@ -106,7 +107,9 @@ describe("LinksLauncherDevServers", () => {
       const { container } = render(<DevServers />);
       expect(container.querySelector("section")).toBeNull();
 
-      act(() => vi.advanceTimersByTime(250));
+      act(() => vi.advanceTimersByTime(UI_SKELETON_GATE_MS - 1));
+      expect(container.querySelector("section")).toBeNull();
+      act(() => vi.advanceTimersByTime(1));
 
       expect(screen.getByRole("region", { name: "Dev servers" })).toBeTruthy();
       expect(screen.getByRole("status", { name: "Loading dev servers" })).toBeTruthy();

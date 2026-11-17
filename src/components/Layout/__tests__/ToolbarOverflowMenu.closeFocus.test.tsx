@@ -129,6 +129,7 @@ describe("toolbar overflow menu close focus", () => {
   it("drops a request a closed menu never spent when it opens again", async () => {
     useLinksLauncherStore.getState().deferFromOverflow("right");
     const { menu } = await openOverflow(["links-launcher"]);
+    expect(useLinksLauncherStore.getState().deferredFromOverflow).toBeNull();
 
     fireEvent.pointerDown(document.body, { pointerType: "mouse" });
     await waitFor(() => expect(menu.isConnected).toBe(false));

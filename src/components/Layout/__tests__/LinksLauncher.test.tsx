@@ -452,6 +452,7 @@ describe("dev servers in the launcher", () => {
     // Going down keeps the keyboard where it was.
     expect(document.activeElement).toBe(stop);
     expect(stop.getAttribute("aria-disabled")).toBe("true");
+    expect((stop as HTMLButtonElement).disabled).toBe(false);
 
     await act(async () => {
       setDevSessions([devSession({ status: "stopped", terminalId: null })]);
