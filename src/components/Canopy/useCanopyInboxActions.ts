@@ -393,7 +393,7 @@ export function useCanopyInboxActions({
             });
             return;
           }
-          const notDone = `Didn't finish on ${left}. Its agents are still unread.`;
+          const notDone = `Couldn't confirm it on ${left}. Its agents may still be unread.`;
           if (after.length === 0) {
             undo.forget();
             notify({
