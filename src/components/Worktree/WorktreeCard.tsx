@@ -1438,7 +1438,7 @@ export function WorktreeCard({
                         // that; painting it on card hover ran a lit bar down
                         // the whole card for a control most hovers never
                         // wanted.
-                        "opacity-0 text-text-muted group-hover/card:opacity-100 hover:bg-overlay-soft hover:text-text-secondary hover:opacity-100"
+                        "opacity-0 text-text-secondary group-hover/card:opacity-100 hover:bg-overlay-soft hover:text-text-primary hover:opacity-100"
                   )}
                   // Pointer-only affordance: the grip is non-focusable (the row
                   // strips dnd-kit's role/tabIndex), so an aria-label here is
