@@ -594,22 +594,30 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
     if (readFor !== seq) {
       // A control in a modal, this one or a confirmation over it, is the
       // person's move. This one's surface taking focus as it opens, the list's
-      // place taking it from a click on no control, the element already
-      // holding focus taking it again as the window comes back, and focus
-      // behind every modal (a popover handing it back to the chip that opened
-      // the list) are not.
-      let holder: EventTarget | null = document.activeElement;
+      // place taking it from a click on no control, the element that held
+      // focus when the window lost it taking it again as the window comes
+      // back, and focus behind every modal (a popover handing it back to the
+      // chip that opened the list) are not.
+      let heldAtWindowBlur: Element | null = null;
+      // Blur doesn't bubble, so outside the capture phase only the window's own arrives.
+      const onWindowBlur = () => {
+        heldAtWindowBlur = document.activeElement;
+      };
       const onFocusIn = (event: FocusEvent) => {
         const { target } = event;
-        const replayed = target === holder;
-        holder = target;
+        const replayed = target === heldAtWindowBlur;
+        heldAtWindowBlur = null;
         const body = bodyRef.current;
         if (replayed || !(target instanceof Element) || body === null) return;
         if (target.contains(body) || target.closest('[aria-modal="true"]') === null) return;
         focusMovedFor.current = seq;
       };
+      window.addEventListener("blur", onWindowBlur);
       document.addEventListener("focusin", onFocusIn, true);
-      return () => document.removeEventListener("focusin", onFocusIn, true);
+      return () => {
+        window.removeEventListener("blur", onWindowBlur);
+        document.removeEventListener("focusin", onFocusIn, true);
+      };
     }
     focusedFor.current = seq;
     // A control the refresh took away leaves focus on nothing, which no one chose.
