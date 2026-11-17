@@ -76,6 +76,20 @@ describe("WorktreeSelector", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  it("names a detached worktree that retains its branch name as detached", () => {
+    render(
+      <WorktreeSelector
+        label="Compare"
+        worktrees={[WORKTREES[0]!, { ...worktree("wt-b", "feature/x"), isDetached: true }]}
+        selectedId="wt-b"
+        onChange={vi.fn()}
+      />
+    );
+    const text = screen.getByRole("combobox", { name: "Compare" }).textContent;
+    expect(text).toContain("wt-b (detached)");
+    expect(text).not.toContain("feature/x");
+  });
+
   it("ties its visible label to the picker, so pressing the label reaches it", () => {
     render(
       <WorktreeSelector

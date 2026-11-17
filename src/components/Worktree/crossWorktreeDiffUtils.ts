@@ -11,13 +11,27 @@ export function sortWorktreesForComparison(
 }
 
 /**
+ * The branch a worktree can be compared by, or undefined when it has none. The
+ * monitor keeps the last branch name on a snapshot whose HEAD has since been
+ * detached, so the branch's presence alone would compare the old tip while the
+ * checkout sits at another commit.
+ */
+export function comparableBranch(
+  wt: Pick<WorktreeSnapshot, "branch" | "isDetached"> | null | undefined
+): string | undefined {
+  if (!wt || wt.isDetached) return undefined;
+  return wt.branch || undefined;
+}
+
+/**
  * The comparison is branch against branch, so the branch is what an option
  * names. A detached worktree has none to compare and is offered disabled
  * rather than accepted and silently ignored.
  */
 export function worktreeOptionLabel(wt: WorktreeSnapshot): string {
-  if (!wt.branch) return `${wt.name} (detached)`;
-  return wt.isMainWorktree ? `${wt.branch} (main worktree)` : wt.branch;
+  const branch = comparableBranch(wt);
+  if (!branch) return `${wt.name} (detached)`;
+  return wt.isMainWorktree ? `${branch} (main worktree)` : branch;
 }
 
 export type ComparisonSide = "base" | "compare";
@@ -41,10 +55,14 @@ export function comparisonBlocker(
 ): ComparisonBlocker | null {
   if (baseId && !base) return { kind: "missing", side: "base" };
   if (compareId && !compare) return { kind: "missing", side: "compare" };
-  if (base && !base.branch) return { kind: "detached", side: "base", name: base.name };
-  if (compare && !compare.branch) return { kind: "detached", side: "compare", name: compare.name };
-  if (!base?.branch || !compare?.branch) return { kind: "unchosen" };
-  if (base.branch === compare.branch) return { kind: "same-branch", branch: base.branch };
+  if (base && !comparableBranch(base)) return { kind: "detached", side: "base", name: base.name };
+  if (compare && !comparableBranch(compare)) {
+    return { kind: "detached", side: "compare", name: compare.name };
+  }
+  const baseBranch = comparableBranch(base);
+  const compareBranch = comparableBranch(compare);
+  if (!baseBranch || !compareBranch) return { kind: "unchosen" };
+  if (baseBranch === compareBranch) return { kind: "same-branch", branch: baseBranch };
   return null;
 }
 
