@@ -610,7 +610,10 @@ export class SetupCheck {
     if (settled !== null) return settled;
     const row = last as QuestionRow | null;
     const answered =
-      row !== null && parseAnswers(row.answers_json).some((entry) => entry.source === "human");
+      row !== null &&
+      parseAnswers(row.answers_json).some(
+        (entry) => entry.kind === "answer" && entry.source === "human"
+      );
     return { passed: false, observation: { result: answered ? "not-typed" : "not-answered" } };
   }
 

@@ -141,9 +141,9 @@ function ThreadEntry({
           {choices.join(", ")}
         </p>
       )}
-      {entry.type !== "expired" && entry.text !== null && !entry.unreadable && (
-        <DecisionMarkdown text={entry.text} className="text-xs" />
-      )}
+      {(entry.type === "answer" || entry.type === "message") &&
+        entry.text !== null &&
+        !entry.unreadable && <DecisionMarkdown text={entry.text} className="text-xs" />}
       {entry.type === "answer" && entry.reason !== null && !entry.unreadable && (
         <p className="text-xs text-text-secondary [text-wrap:pretty]">Why: {entry.reason}</p>
       )}
@@ -168,14 +168,15 @@ function QuestionBody({
   return (
     <div className="flex flex-col gap-4" data-testid="decision-question-content">
       <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-text-secondary">
-        <span>{questionStatusText(question.status)}</span>
+        <span>{questionStatusText(question)}</span>
         <FactSeparator />
         <span data-testid="decision-question-requirement">
           {requirementText(question.requirement)}
         </span>
         <FactSeparator />
         <TimeAgo timestamp={question.askedAt} prefix="Asked " />
-        {question.expiresAt !== null && (
+        {/* A declined question is over, whatever its deadline would have said. */}
+        {question.expiresAt !== null && question.closedReason !== "declined" && (
           <>
             <FactSeparator />
             <ExpiryText expiresAt={question.expiresAt} />

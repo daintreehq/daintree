@@ -114,6 +114,16 @@ export interface DecisionThreadExpiry {
 }
 
 /**
+ * The person declined to answer, from their phone or tablet (#17234). It
+ * carries no answer and authorises nothing.
+ */
+export interface DecisionThreadDecline {
+  type: "declined";
+  entryId: string;
+  sentAt: string;
+}
+
+/**
  * A follow-up message on the question's thread, from the person or the
  * agent. A follow-up never answers the question. `deliveryStatus` is how far
  * a person's message has got into the pane; null for the agent's own.
@@ -132,7 +142,13 @@ export interface DecisionThreadMessage {
 }
 
 export type DecisionThreadEntry =
-  DecisionThreadAnswer | DecisionThreadExpiry | DecisionThreadMessage;
+  DecisionThreadAnswer | DecisionThreadExpiry | DecisionThreadDecline | DecisionThreadMessage;
+
+/**
+ * Why a closed question has no answer: `declined` by the person from their
+ * phone or tablet, `withdrawn` (cancelled from the desktop), or `expired`.
+ */
+export type DecisionQuestionClosedReason = "declined" | "withdrawn" | "expired";
 
 /** A question with its content opened, in memory, for the desktop to show. Never stored. */
 export interface DecisionQuestionContent {
@@ -159,9 +175,11 @@ export interface DecisionQuestionContent {
   /** ISO 8601 as recorded; null when the question never expires. */
   expiresAt: string | null;
   status: DecisionQuestionStatus;
+  /** Why a `cancelled` or `expired` question has no answer; null otherwise. */
+  closedReason: DecisionQuestionClosedReason | null;
   deliveryStatus: DecisionDeliveryStatus;
   attachments: DecisionQuestionAttachment[];
-  /** Answers, expiry and follow-ups, in the order the relay recorded them. */
+  /** Answers, expiry, a decline and follow-ups, in the order the relay recorded them. */
   thread: DecisionThreadEntry[];
 }
 
@@ -277,7 +295,7 @@ export interface DecisionQuestionReference {
  * - `needs-attention`: an answer or a person's follow-up that delivery stopped
  *   on, as the list of answers needing attention shows it;
  * - `settled`: answered and typed in or marked handled, withdrawn, expired,
- *   or declined (reserved: nothing records a decline yet).
+ *   or declined by the person from their phone or tablet.
  */
 export type DecisionQuestionStanding =
   | { kind: "waiting"; reason: "open" | "reply" }

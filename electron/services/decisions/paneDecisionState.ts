@@ -51,7 +51,9 @@ function byAlias(a: QuestionRow, b: QuestionRow): number {
  *   without keeping it. A follow-up held for a person (#16231) counts too,
  *   with its own status and code once the answer is past needing one.
  * - **Waiting:** otherwise, an answer entry still marked for delivery and not
- *   yet delivered, the same test the delivery engine uses.
+ *   yet delivered, the same test the delivery engine uses. A person's decline
+ *   (#17234) isn't one: they chose not to answer, so the pane drops the
+ *   question even while its notice waits to be typed.
  *
  * Imported history is never delivered and shows nowhere. Rows are taken in
  * question order, and a pane belongs to the project of its newest question,
@@ -84,7 +86,9 @@ export function projectPaneDecisionStates(
     const pending =
       attention || isAttention(deliveryStatus)
         ? []
-        : parseAnswers(row.answers_json).filter((entry) => entry.deliver && !entry.delivered);
+        : parseAnswers(row.answers_json).filter(
+            (entry) => entry.deliver && !entry.delivered && entry.kind !== "declined"
+          );
     if (!open && !attention && pending.length === 0) continue;
 
     let pane = panes.get(paneId);

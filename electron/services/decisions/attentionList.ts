@@ -20,6 +20,7 @@ import {
   sanitizeAnswerText,
   type DecisionBlock,
 } from "./answerNotice.js";
+import { declineOf } from "./questionClosed.js";
 
 /**
  * The answers a person has marked handled (#16020), by question, at the
@@ -74,11 +75,17 @@ export async function markAnswerHandled(
   await store.setMeta(HANDLED_ANSWERS_META_KEY, JSON.stringify(next));
 }
 
-/** Delivery stopped at a point where a person decides what happens next. Imported history never does. */
+/**
+ * Delivery stopped at a point where a person decides what happens next.
+ * Imported history never does, and nor does a person's own decline (#17234):
+ * a cancel drops every answer not yet typed, so its notice is all that could
+ * have stopped, and it is news only for an agent still listening.
+ */
 export function needsAttention(row: QuestionRow): boolean {
   return (
     !row.history_only &&
-    (row.delivery_status === "needs-attention" || row.delivery_status === "delivery-uncertain")
+    (row.delivery_status === "needs-attention" || row.delivery_status === "delivery-uncertain") &&
+    declineOf(row) === undefined
   );
 }
 

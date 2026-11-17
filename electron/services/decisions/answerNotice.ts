@@ -48,6 +48,11 @@ export interface AnswerBlock {
   onComputer: boolean;
   /** A `system` block: the question expired without an answer. */
   expired: boolean;
+  /**
+   * The person declined to answer from their phone or tablet (#17234): a
+   * `human` block that carries no answer and authorises nothing.
+   */
+  declined: boolean;
   correction: boolean;
   modelId: string | null;
   confidence: number | null;
@@ -103,6 +108,8 @@ const CORRECTION_NOTE =
   "note: This corrects an earlier answer. Reassess any work that depended on the earlier one.";
 const EXPIRED_NOTE =
   "note: The question expired without an answer. You are not authorised to continue the gated step: ask again, or stop and report.";
+const DECLINED_NOTE =
+  "note: The person chose not to answer this question. Nothing was decided or approved: stop waiting for it, and don't continue the gated step.";
 
 // The library's own fixed lines, which are all a `note:` may say.
 const LIBRARY_PROXY_NOTE =
@@ -114,6 +121,8 @@ const LIBRARY_CORRECTION_NOTE =
   "note: This CORRECTS an earlier answer. Reassess any work that depended on the previous answer.";
 const LIBRARY_EXPIRED_NOTE =
   "note: The question expired without an answer. You are NOT authorised to continue the gated step; re-ask or stop and report.";
+const LIBRARY_DECLINED_NOTE =
+  "note: The person declined to answer this question. Nothing was decided or approved; stop waiting for it and do not continue the gated step.";
 
 /** Question and injection ids as the library mints them: hex, never free text. */
 const ID = /^[A-Za-z0-9_-]{8,80}$/;
@@ -310,6 +319,7 @@ function parseBlock(cursor: Cursor): AnswerBlock | null {
     source: "human",
     onComputer: false,
     expired: false,
+    declined: false,
     correction: false,
     modelId: null,
     confidence: null,
@@ -330,6 +340,12 @@ function parseBlock(cursor: Cursor): AnswerBlock | null {
     }
     block.source = "system";
     block.expired = true;
+  } else if (source === "human" && cursor.takeExact("status: declined")) {
+    // A decline is the person's, and says only that: no choice, words or images follow.
+    if (!cursor.takeExact("authorised: no") || !cursor.takeExact(LIBRARY_DECLINED_NOTE)) {
+      return null;
+    }
+    block.declined = true;
   } else if (source === "human" || source === "proxy") {
     block.source = source;
     // Only a person's answer is made on the computer, and it always says what that means.
@@ -497,6 +513,8 @@ function renderBlock(block: AnswerBlock, marked = true): string {
   }
   if (block.expired) {
     lines.push("source: system", "status: expired", "authorised: no", EXPIRED_NOTE);
+  } else if (block.declined) {
+    lines.push("source: human", "status: declined", "authorised: no", DECLINED_NOTE);
   } else {
     lines.push(`source: ${block.source}`);
     if (block.source === "human" && block.onComputer) {
