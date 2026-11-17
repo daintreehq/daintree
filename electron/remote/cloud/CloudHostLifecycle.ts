@@ -799,6 +799,8 @@ export class CloudHostLifecycle {
         throw new AppError({ code: "UNSUPPORTED", message: reason, userMessage: reason });
       }
     }
+    // Cancelled while the credentials or the key were read: nothing is marked as sent.
+    if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
     this.stage(bindingId, `Asking ${nameOf(provider)} for a machine`);
     // Written before the request: a lost answer is then found again, never sent blind.
     binding = this.deps.store.updateBinding(bindingId, (current) => ({
