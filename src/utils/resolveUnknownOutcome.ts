@@ -63,10 +63,12 @@ export async function resolveUnknownOutcome(
     wake: null,
   };
   const unsubscribe = client.onEvent((event: OperationsEvent) => {
-    if (event.type === "settled" && event.record.opId === opId) {
-      state.settled = event.record.outcome;
-      state.wake?.();
-    }
+    if (event.type !== "settled" || event.record.opId !== opId) return;
+    const { outcome } = event.record;
+    // The record type allows these, but neither is a settlement to stop on.
+    if (outcome.status === "running" || outcome.status === "unknown") return;
+    state.settled = outcome;
+    state.wake?.();
   });
   const onAbort = () => state.wake?.();
   signal?.addEventListener("abort", onAbort);
@@ -81,13 +83,20 @@ export async function resolveUnknownOutcome(
       try {
         outcome = await client.getStatus(opId);
       } catch (error) {
+        if (signal?.aborted) throw abortError();
+        // A settlement that arrived during the read answers it, whatever the read did.
+        if (state.settled) return state.settled;
         // The link dropped again before the Host could answer: wait it out.
         if (!isUnknownOutcomeError(error)) throw error;
         await options.waitForConnected(signal);
         continue;
       }
+      // The reply was read before any settlement that arrived while it was in
+      // flight, so a running or unknown answer is stale next to it.
+      if (signal?.aborted) throw abortError();
+      if (state.settled) return state.settled;
       if (outcome.status !== "running") return outcome;
-      if (Date.now() >= deadline) return state.settled ?? outcome;
+      if (Date.now() >= deadline) return outcome;
 
       await new Promise<void>((resolve) => {
         const done = () => {
