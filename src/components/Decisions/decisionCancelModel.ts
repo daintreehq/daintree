@@ -1,9 +1,10 @@
 import type { DecisionQuestionCancelResult } from "@shared/types/decisionsQuestion";
+import type { DecisionQuestionTarget } from "./decisionQuestionTarget";
 
 /** The question a person asked to withdraw, as its row named it when they asked. */
 export interface DecisionCancelTarget {
-  terminalId: string;
-  questionId: string;
+  /** One of a pane's, or one named by its reference (#17229): withdrawn the same way it was read. */
+  question: DecisionQuestionTarget;
   /** `q-42`. */
   label: string;
   /** The opening line, when the row had read it. */

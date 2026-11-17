@@ -8,7 +8,10 @@ import type {
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
   DecisionQuestionImagePart,
+  DecisionQuestionImagePartResult,
   DecisionQuestionImageResult,
+  DecisionQuestionList,
+  DecisionQuestionReference,
   DecisionQuestionSummariesResult,
 } from "@shared/types/decisionsQuestion";
 
@@ -24,26 +27,20 @@ export class DecisionImagePartsError extends Error {
 }
 
 /**
- * One of a question's images, read part by part, each part from a read that
- * checked the whole image against its digest. Stops between parts once
- * `signal` aborts, rejecting with its reason.
+ * One of a question's images, read part by part with `readPart`, each part
+ * from a read that checked the whole image against its digest. Stops between
+ * parts once `signal` aborts, rejecting with its reason.
  */
 async function readQuestionImage(
-  terminalId: string,
-  questionId: string,
   attachmentId: string,
+  readPart: (offset: number) => Promise<DecisionQuestionImagePartResult>,
   signal?: AbortSignal
 ): Promise<DecisionQuestionImageResult> {
   let whole: { first: DecisionQuestionImagePart; bytes: Uint8Array<ArrayBuffer> } | null = null;
   let offset = 0;
   for (;;) {
     signal?.throwIfAborted();
-    const read = await window.electron.decisions.getQuestionImage({
-      terminalId,
-      questionId,
-      attachmentId,
-      offset,
-    });
+    const read = await readPart(offset);
     if (read.result !== "read") return read;
     const { part } = read;
     // A Remote Host's link carries whatever its peer sent: nothing is taken on trust.
@@ -168,7 +165,17 @@ export const decisionsClient = {
     attachmentId: string,
     signal?: AbortSignal
   ): Promise<DecisionQuestionImageResult> =>
-    readQuestionImage(terminalId, questionId, attachmentId, signal),
+    readQuestionImage(
+      attachmentId,
+      (offset) =>
+        window.electron.decisions.getQuestionImage({
+          terminalId,
+          questionId,
+          attachmentId,
+          offset,
+        }),
+      signal
+    ),
 
   /** The opening line of each of a pane's questions, for a list to name them by. */
   getQuestionSummaries: (
@@ -184,6 +191,74 @@ export const decisionsClient = {
    */
   cancelQuestion: (terminalId: string, questionId: string): Promise<DecisionQuestionCancelResult> =>
     window.electron.decisions.cancelQuestion({ terminalId, questionId }),
+
+  /**
+   * Every question this computer's Decisions holds (#17229), across its
+   * projects and terminals, open or closed: ids, labels, times and where each
+   * stands, never its words.
+   */
+  listQuestions: (): Promise<DecisionQuestionList> => window.electron.decisions.listQuestions(),
+
+  /** Every change to that list, with the new list. */
+  onQuestionsChanged: (callback: (list: DecisionQuestionList) => void): (() => void) =>
+    window.electron.events.on("decisions:questions-changed", callback),
+
+  /**
+   * That list from now on: subscribes before reading, and keeps whichever
+   * carries the higher revision, so a read that lands after a push can't roll
+   * it back. A read that fails calls nothing. The returned function stops it,
+   * read included.
+   */
+  watchQuestions: (onList: (list: DecisionQuestionList) => void): (() => void) => {
+    let latest = -1;
+    let stopped = false;
+    const accept = (list: DecisionQuestionList) => {
+      if (stopped || list.revision <= latest) return;
+      latest = list.revision;
+      onList(list);
+    };
+    const off = window.electron.events.on("decisions:questions-changed", accept);
+    window.electron.decisions.listQuestions().then(accept, () => {});
+    return () => {
+      stopped = true;
+      off();
+    };
+  },
+
+  /**
+   * A question by its reference, from any window on this computer, whatever
+   * project it shows and whether its terminal is still open. Content is held
+   * in memory only: never log it or keep it in a persisted store.
+   */
+  getQuestionContentByReference: (
+    reference: DecisionQuestionReference
+  ): Promise<DecisionQuestionContentResult> =>
+    window.electron.decisions.getQuestionContentByReference({ reference }),
+
+  /** One of a question's images, by its reference; held as `getQuestionImage`'s are. */
+  getQuestionImageByReference: (
+    reference: DecisionQuestionReference,
+    attachmentId: string,
+    signal?: AbortSignal
+  ): Promise<DecisionQuestionImageResult> =>
+    readQuestionImage(
+      attachmentId,
+      (offset) =>
+        window.electron.decisions.getQuestionImageByReference({ reference, attachmentId, offset }),
+      signal
+    ),
+
+  /** The opening line of each question, by reference, for a list to name them by. */
+  getQuestionSummariesByReference: (
+    references: DecisionQuestionReference[]
+  ): Promise<DecisionQuestionSummariesResult> =>
+    window.electron.decisions.getQuestionSummariesByReference({ references }),
+
+  /** Withdraws a question by its reference, as `cancelQuestion` does one of a pane's. */
+  cancelQuestionByReference: (
+    reference: DecisionQuestionReference
+  ): Promise<DecisionQuestionCancelResult> =>
+    window.electron.decisions.cancelQuestionByReference({ reference }),
 
   /** Every pane's state changes for this project. Callers filter by `terminalId`. */
   onPaneState: (callback: (state: PaneDecisionState) => void): (() => void) =>

@@ -13,12 +13,13 @@ import {
 } from "./decisionQuestionImageModel";
 import { DecisionImageViewer } from "./DecisionImageViewer";
 import { useQuestionImages } from "./questionImageLoader";
+import { questionOf, type DecisionQuestionTarget } from "./decisionQuestionTarget";
 
 const LOADING: QuestionImageLoad = { status: "loading" };
 
 export interface DecisionQuestionImagesProps {
-  terminalId: string;
-  questionId: string;
+  /** The question, as it was opened: its images are read the same way. */
+  question: DecisionQuestionTarget;
   attachments: readonly DecisionQuestionAttachment[];
   /** Whether the question view is open; its closing closes the viewer too. */
   active: boolean;
@@ -26,22 +27,19 @@ export interface DecisionQuestionImagesProps {
 
 /**
  * The images a question was asked with (#17100), each with its role and alt
- * text, read and checked on the machine that owns the pane and held only in
+ * text, read and checked where the question is read from and held only in
  * this view's memory while it shows the question. One that can't be shown
  * says why in its place; the rest are unaffected. Opening one shows it at
  * full size, filling the window. Mount under `imagesKey`.
  */
 export function DecisionQuestionImages({
-  terminalId,
-  questionId,
+  question,
   attachments,
   active,
 }: DecisionQuestionImagesProps) {
-  const { loads, retry, prioritize, undecodable } = useQuestionImages(
-    terminalId,
-    questionId,
-    attachments
-  );
+  const { loads, retry, prioritize, undecodable } = useQuestionImages(question, attachments);
+  // Seen is a fact about the question, however it was opened.
+  const { terminalId, questionId } = questionOf(question);
   const reviewed = useReviewedImages(terminalId, questionId);
   const markShown = useDecisionsImageReviewStore((state) => state.markShown);
   const [viewing, setViewing] = useState<number | null>(null);

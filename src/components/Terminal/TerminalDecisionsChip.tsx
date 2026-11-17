@@ -32,6 +32,7 @@ import {
 import { pluralize } from "@/lib/pluralize";
 import { DecisionCancelDialog } from "@/components/Decisions/DecisionCancelDialog";
 import type { DecisionCancelTarget } from "@/components/Decisions/decisionCancelModel";
+import { paneQuestion } from "@/components/Decisions/decisionQuestionTarget";
 import type { PaneDecisionState } from "@shared/types/decisions";
 import {
   cancelNote,
@@ -380,8 +381,7 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
                           setOpen(false);
                           setCancel({
                             target: {
-                              terminalId,
-                              questionId: item.questionId,
+                              question: paneQuestion(terminalId, item.questionId),
                               label: item.label,
                               line: lines.get(item.questionId) ?? null,
                             },

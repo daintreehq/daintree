@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { decisionsClient } from "@/clients/decisionsClient";
 import type { DecisionQuestionAttachment } from "@shared/types/decisionsQuestion";
 import type { QuestionImageLoad } from "./decisionQuestionImageModel";
+import { readTargetImage, targetKey, type DecisionQuestionTarget } from "./decisionQuestionTarget";
 
 /** Images read at once: one can be 20 MiB, and the one a person opens goes next. */
 const CONCURRENT_READS = 2;
@@ -11,7 +11,8 @@ const LOADING: QuestionImageLoad = { status: "loading" };
 export type QuestionImageLoads = Readonly<Record<string, QuestionImageLoad>>;
 
 /**
- * A question's images, each read from the machine that owns the pane and
+ * A question's images, each read the way the question was opened (from the
+ * machine that owns the pane, or from this computer by reference) and
  * checked against its digest there, then held as an object URL in this view's
  * memory only. An external store, so a view can show each image's state;
  * `stop` drops every image and revokes its URL, and anything read after it is
@@ -26,8 +27,7 @@ export class QuestionImageLoader {
   private controller: AbortController | null = null;
 
   constructor(
-    private readonly terminalId: string,
-    private readonly questionId: string,
+    private readonly question: DecisionQuestionTarget,
     private readonly attachments: readonly DecisionQuestionAttachment[]
   ) {
     this.loads = this.allLoading();
@@ -111,9 +111,8 @@ export class QuestionImageLoader {
   ): Promise<void> {
     let load: QuestionImageLoad;
     try {
-      const read = await decisionsClient.getQuestionImage(
-        this.terminalId,
-        this.questionId,
+      const read = await readTargetImage(
+        this.question,
         attachment.attachmentId,
         controller.signal
       );
@@ -146,12 +145,11 @@ export class QuestionImageLoader {
 
 /**
  * A question's images for as long as the calling component is mounted. Mount
- * it under a key naming the pane, the question and its images' ids and
+ * it under a key naming the question as it was opened and its images' ids and
  * digests: the loader is made once, for the images it was first given.
  */
 export function useQuestionImages(
-  terminalId: string,
-  questionId: string,
+  question: DecisionQuestionTarget,
   attachments: readonly DecisionQuestionAttachment[]
 ): {
   loads: QuestionImageLoads;
@@ -159,7 +157,7 @@ export function useQuestionImages(
   prioritize: (attachmentId: string) => void;
   undecodable: (attachmentId: string) => void;
 } {
-  const [loader] = useState(() => new QuestionImageLoader(terminalId, questionId, attachments));
+  const [loader] = useState(() => new QuestionImageLoader(question, attachments));
   const loads = useSyncExternalStore(loader.subscribe, loader.getSnapshot);
   useEffect(() => {
     loader.start();
@@ -173,15 +171,13 @@ export function useQuestionImages(
   };
 }
 
-/** A key that changes exactly when the images a question lists do. */
+/** A key that changes exactly when the question, the way it's read, or the images it lists do. */
 export function imagesKey(
-  terminalId: string,
-  questionId: string,
+  question: DecisionQuestionTarget,
   attachments: readonly DecisionQuestionAttachment[]
 ): string {
   return [
-    terminalId,
-    questionId,
+    targetKey(question),
     ...attachments.map((a) => `${a.attachmentId}:${a.sha256}:${a.mime}`),
   ].join("\u0000");
 }
