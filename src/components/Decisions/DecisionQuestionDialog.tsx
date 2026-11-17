@@ -11,6 +11,7 @@ import { decisionsClient } from "@/clients/decisionsClient";
 import { useSkeletonGate } from "@/hooks/useDeferredLoading";
 import { useDecisionsSwitch } from "@/hooks/useDecisionsOn";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
 import { useDecisionsImageReviewStore } from "@/store/decisionsImageReviewStore";
 import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
@@ -19,6 +20,12 @@ import type {
   DecisionQuestionContentResult,
   DecisionThreadEntry,
 } from "@shared/types/decisionsQuestion";
+import {
+  DecisionAnswerComposer,
+  useAnswerComposerMode,
+  useAnswerInFlight,
+  type AnswerComposerMode,
+} from "./DecisionAnswerComposer";
 import { DecisionCancelDialog } from "./DecisionCancelDialog";
 import type { DecisionCancelTarget } from "./decisionCancelModel";
 import { DecisionMarkdown } from "./DecisionMarkdown";
@@ -141,10 +148,14 @@ function QuestionBody({
   question,
   target,
   active,
+  answerMode,
+  onMoved,
 }: {
   question: DecisionQuestionContent;
   target: DecisionQuestionTarget;
   active: boolean;
+  answerMode: AnswerComposerMode;
+  onMoved: () => void;
 }) {
   return (
     <div className="flex flex-col gap-4" data-testid="decision-question-content">
@@ -170,7 +181,8 @@ function QuestionBody({
           <DecisionMarkdown text={question.context} className="text-xs" />
         </section>
       )}
-      {question.options.length > 0 && (
+      {/* While it takes an answer here, the composer offers the options instead. */}
+      {question.options.length > 0 && answerMode !== "form" && (
         <section className="flex flex-col gap-1.5" aria-label="Options">
           <h3 className="text-xs font-medium text-text-secondary">Options</h3>
           <ul className="flex flex-col gap-1.5">
@@ -204,6 +216,8 @@ function QuestionBody({
           active={active}
         />
       )}
+      {/* After the images: an approval waits until each has been opened. */}
+      <DecisionAnswerComposer question={question} target={target} onMoved={onMoved} />
       <section className="flex flex-col gap-1.5" aria-label="Answers and follow-ups">
         <h3 className="text-xs font-medium text-text-secondary">Answers and follow-ups</h3>
         {question.thread.length === 0 ? (
@@ -273,7 +287,8 @@ function StepButton({
  * is read on demand from the machine that owns the pane; one opened by its
  * reference (#17229), from this computer for any of its windows. Held in
  * memory only; it steps through the questions it was opened with without
- * closing, and a question still waiting can be withdrawn from here.
+ * closing, and a question still waiting can be answered (#17102) or
+ * withdrawn from here.
  */
 export function DecisionQuestionDialog() {
   const isOpen = useDecisionsQuestionViewStore((state) => state.isOpen);
@@ -281,6 +296,7 @@ export function DecisionQuestionDialog() {
   const step = useDecisionsQuestionViewStore((state) => state.step);
   const close = useDecisionsQuestionViewStore((state) => state.close);
   const clearReviews = useDecisionsImageReviewStore((state) => state.clear);
+  const clearAnswers = useDecisionsAnswerStore((state) => state.clear);
   const announce = useAnnouncerStore((state) => state.announce);
   const decisionsSwitch = useDecisionsSwitch();
   const on = decisionsSwitch === "on";
@@ -309,6 +325,12 @@ export function DecisionQuestionDialog() {
   useEffect(() => {
     if (!on) clearReviews();
   }, [on, clearReviews]);
+
+  // Nor do drafts and answers; only once it is known to be off, so one being
+  // followed isn't forgotten while main is still saying whether it is on.
+  useEffect(() => {
+    if (decisionsSwitch === "off") clearAnswers();
+  }, [decisionsSwitch, clearAnswers]);
 
   useEffect(() => {
     if (!isOpen || !on || target === null) return;
@@ -341,6 +363,10 @@ export function DecisionQuestionDialog() {
 
   const current = tagged !== null && tagged.key === key ? tagged.read : null;
   const showSkeleton = useSkeletonGate(isOpen && current === null);
+  const readQuestion = current?.result === "read" ? current.question : null;
+  const answerMode = useAnswerComposerMode(readQuestion);
+  const answering = useAnswerInFlight(readQuestion) || answerMode === "progress";
+  const reread = useCallback(() => setAttempt((n) => n + 1), []);
 
   const hasPrevious = index > 0;
   const hasNext = index < count - 1;
@@ -401,8 +427,12 @@ export function DecisionQuestionDialog() {
 
   const alias = current?.result === "read" ? aliasLabel(current.question.alias) : null;
   const position = positionText(index, count);
+  // Not while an answer from here is on its way: one or the other would be turned away.
   const cancellable =
-    current?.result === "read" && target !== null && isWaiting(current.question.status);
+    current?.result === "read" &&
+    target !== null &&
+    isWaiting(current.question.status) &&
+    !answering;
   // The withdrawal asked about, while this view still shows that question.
   const cancelShown = cancel !== null && key === targetKey(cancel.target.question);
   const cancelStatus = cancelShown && current?.result === "read" ? current.question.status : null;
@@ -456,7 +486,13 @@ export function DecisionQuestionDialog() {
           <div data-testid="decision-question-body">
             {current === null && showSkeleton && <QuestionSkeleton />}
             {current?.result === "read" && target !== null && (
-              <QuestionBody question={current.question} target={target} active={isOpen} />
+              <QuestionBody
+                question={current.question}
+                target={target}
+                active={isOpen}
+                answerMode={answerMode}
+                onMoved={reread}
+              />
             )}
             {current !== null && current.result !== "read" && (
               <Callout
@@ -506,7 +542,7 @@ export function DecisionQuestionDialog() {
         queued={cancelStatus === "queued"}
         onClose={() => setCancel((asked) => (asked === null ? null : { ...asked, open: false }))}
         // Read again now rather than at the next change: it shows withdrawn once the relay confirms.
-        onCancelling={() => setAttempt((n) => n + 1)}
+        onCancelling={reread}
         restoreFocusTo={() => cancelRef.current}
       />
     </>
