@@ -280,10 +280,10 @@ export function PulseHeatmap({ cells, rangeDays, describedBy }: PulseHeatmapProp
 
   // `source` is who owns the readout: the pointer leaving only closes what the
   // pointer opened, and a blur only what focus opened, so one input ending
-  // never wipes out the other's. A tap's readout answers to neither of those:
-  // the pointerleave a lifted finger fires leaves it up, and it closes on a
-  // second tap, a tap elsewhere, a scroll, Escape, or focus moving to a control
-  // outside the grid.
+  // never wipes out the other's. A tap's readout is neither: the pointerleave a
+  // lifted finger fires and a blur between days leave it up, and it closes on a
+  // second tap, a tap elsewhere, a scroll, Escape, or focus leaving the grid for
+  // another control (`handleBlur`).
   const showTip = (date: string, source: TipSource) => {
     setTip((prev) =>
       prev.date === date &&
