@@ -14,7 +14,7 @@ import { logInfo, logWarn } from "../../../utils/logger.js";
 import { events, type DaintreeEventMap } from "../../../services/events.js";
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
 import { forgetPluginToolsLaunch } from "../../../services/pluginAgentMcp/agentLaunchRecords.js";
-import { getMcpServerServiceRef } from "../../../window/serviceRefs.js";
+import { getMcpServerServiceRef, getRunAttentionServiceRef } from "../../../window/serviceRefs.js";
 import { peekDriveLeaseService } from "../../../services/DriveLeaseService.js";
 import {
   acceptCapturedAgentSession,
@@ -121,6 +121,9 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
     // covers. Unloaded means nothing was ever handed over.
     getMcpServerServiceRef()?.handleTerminalExit(id);
     if (forRestart) return;
+    // After the restart check: a restart keeps the id alive, so runs parked on
+    // it still wait for it rather than resurfacing as if it had closed.
+    getRunAttentionServiceRef()?.handleTerminalExit(id);
     broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
       name: "terminal:exit",
       payload: preserveSession ? [id, exitCode, { preserveSession: true }] : [id, exitCode],

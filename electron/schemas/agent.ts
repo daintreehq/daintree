@@ -66,6 +66,9 @@ export const AgentStateChangedSchema = z.extend(EventContextSchema, {
   // Working directory of the spawned terminal (equal to the worktree path in
   // the typical case).
   cwd: z.optional(z.string()),
+  // The transition happened while Daintree was ending the terminal (a kill, or
+  // the graceful quit ahead of one). Absent on every ordinary transition.
+  terminalClosing: z.optional(z.literal(true)),
   waitingReason: z.optional(z.enum(["prompt", "question", "approval", "error"])),
   sessionCost: z.optional(z.number().check(z.nonnegative())),
   sessionTokens: z.optional(nonNegativeInt),

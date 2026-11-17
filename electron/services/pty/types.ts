@@ -59,6 +59,12 @@ export interface TerminalPublicState {
   /** Wall-clock timestamp when BootDetector first declared boot complete. */
   bootCompleteAt?: number;
   wasKilled?: boolean;
+  /**
+   * A graceful shutdown is quitting this terminal's agent ahead of the kill
+   * that ends it. Set for the attempt's duration only: `wasKilled` takes over
+   * once the kill lands.
+   */
+  gracefullyClosing?: boolean;
   isExited?: boolean;
   agentState?: AgentState;
   waitingReason?: WaitingReason;

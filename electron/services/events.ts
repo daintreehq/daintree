@@ -704,6 +704,13 @@ export type DaintreeEventMap = {
     previousState: AgentState;
     trigger: AgentStateChangeTrigger;
     confidence: number;
+    /**
+     * Present when the transition happened while Daintree was ending the
+     * terminal: its kill, or the graceful quit ahead of one. Such an edge is
+     * the terminal going away, not its agent settling, and the PTY's exit
+     * follows.
+     */
+    terminalClosing?: true;
     /** Terminal working directory (the worktree root in the typical case). */
     cwd?: string;
     waitingReason?: import("../../shared/types/agent.js").WaitingReason;

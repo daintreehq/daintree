@@ -1085,6 +1085,7 @@ events.on("agent:state-changed", (payload) => {
       traceId: payload.traceId,
       trigger: payload.trigger,
       confidence: payload.confidence,
+      ...(payload.terminalClosing ? { terminalClosing: true as const } : {}),
       cwd: payload.cwd,
       waitingReason: payload.waitingReason,
       sessionCost: payload.sessionCost,

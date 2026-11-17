@@ -141,6 +141,7 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         traceId: event.traceId,
         trigger: normalizeAgentTrigger(event.trigger),
         confidence: normalizeConfidence(event.confidence),
+        ...(event.terminalClosing === true ? { terminalClosing: true as const } : {}),
         cwd: event.cwd,
         waitingReason: event.waitingReason,
         sessionCost: event.sessionCost,

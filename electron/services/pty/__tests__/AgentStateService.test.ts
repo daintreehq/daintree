@@ -64,6 +64,26 @@ describe("AgentStateService", () => {
     expect(stateChanges[0]?.confidence).toBe(1);
   });
 
+  it("marks transitions made while Daintree ends the terminal, and only those (#17193)", () => {
+    const service = new AgentStateService();
+    const closing: Array<boolean | undefined> = [];
+    events.on("agent:state-changed", (payload) => closing.push(payload.terminalClosing));
+
+    // An ordinary settle, and the FSM kill an unregistered agent's revocation
+    // uses while the shell lives on, are not the terminal closing.
+    const live = createTerminal({ agentState: "working" });
+    service.updateAgentState(live, { type: "prompt" });
+    service.updateAgentState(createTerminal({ agentState: "working" }), { type: "kill" });
+
+    // The graceful quit ahead of a kill, and the kill itself.
+    const quitting = createTerminal({ agentState: "working", gracefullyClosing: true });
+    service.updateAgentState(quitting, { type: "prompt" });
+    const killed = createTerminal({ agentState: "working", wasKilled: true });
+    service.updateAgentState(killed, { type: "kill" });
+
+    expect(closing).toEqual([undefined, undefined, true, true]);
+  });
+
   it("rejects stale transitions with mismatched spawnedAt token", () => {
     const service = new AgentStateService();
     const terminal = createTerminal({ spawnedAt: 1000 });

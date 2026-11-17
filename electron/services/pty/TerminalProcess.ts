@@ -1433,6 +1433,9 @@ export class TerminalProcess {
     }
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
+    // Every transition the quit provokes (the agent dropping back to its prompt,
+    // exiting to the shell) is the terminal closing, not its agent finishing.
+    this.terminalInfo.gracefullyClosing = true;
     const inFlight = runGracefulShutdown({
       terminalInfo: this.terminalInfo,
       get isAgentLive() {
@@ -1454,6 +1457,7 @@ export class TerminalProcess {
     const clear = () => {
       if (self.gracefulShutdownInFlight === inFlight) {
         self.gracefulShutdownInFlight = null;
+        self.terminalInfo.gracefullyClosing = false;
       }
     };
     void inFlight.then(clear, clear);

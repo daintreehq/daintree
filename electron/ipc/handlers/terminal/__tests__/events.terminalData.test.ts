@@ -67,9 +67,13 @@ const notifyPanelsChanged = vi.hoisted(() => vi.fn());
 vi.mock("../../../../services/DriveLeaseService.js", () => ({
   peekDriveLeaseService: () => ({ notifyPanelsChanged }),
 }));
+const runAttentionRef = vi.hoisted(() => ({
+  current: null as { handleTerminalExit: ReturnType<typeof vi.fn> } | null,
+}));
 vi.mock("../../../../window/serviceRefs.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../../window/serviceRefs.js")>()),
   getMcpServerServiceRef: () => serviceRef.current,
+  getRunAttentionServiceRef: () => runAttentionRef.current,
 }));
 
 import { CHANNELS } from "../../../channels.js";
@@ -89,6 +93,7 @@ import type { HandlerDependencies } from "../../../types.js";
 
 beforeEach(() => {
   serviceRef.current = null;
+  runAttentionRef.current = null;
 });
 
 /**
@@ -793,6 +798,26 @@ describe("terminal exit forwarding during restart", () => {
     ptyClient.emit("exit", "t1", 0, 15, true);
 
     expect(broadcastToRenderer).not.toHaveBeenCalled();
+  });
+
+  it("tells run attention a terminal ended, but not when it is only restarting (#17193)", () => {
+    const attention = { handleTerminalExit: vi.fn() };
+    runAttentionRef.current = attention;
+
+    // A restart keeps the id alive, so a run parked on it must keep waiting.
+    ptyClient.consumeRestartExitSuppression.mockReturnValueOnce(true);
+    ptyClient.emit("exit", "t1", 0);
+    expect(attention.handleTerminalExit).not.toHaveBeenCalled();
+
+    // A kill, a natural exit, and a session-preserving teardown all end it.
+    ptyClient.emit("exit", "t1", 0);
+    ptyClient.emit("exit", "t2", 0, 15, true);
+    expect(attention.handleTerminalExit.mock.calls).toEqual([["t1"], ["t2"]]);
+
+    dispose();
+    ptyClient.emit("exit", "t3", 0);
+    expect(attention.handleTerminalExit).toHaveBeenCalledTimes(2);
+    dispose = () => {};
   });
 });
 
