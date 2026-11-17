@@ -267,9 +267,17 @@ describe("PendingUploadChips", () => {
     for (const name of ["a.png", "b.png"]) {
       const button = cancelButton(name);
       const chip = button.closest("[data-pending-uploads] > *")!;
+      const classes = button.className.split(" ");
       const box = px(button, "h-")!;
       expect(px(button, "w-")).toBe(box);
-      const reach = px(button, "after:-inset-")!;
+      const inset = classes.find((c) => /^(before|after):-inset-/.test(c))!;
+      const pseudo = inset.slice(0, inset.indexOf(":"));
+      // An inset only reaches anywhere on a pseudo-element that is drawn and
+      // placed against the button; otherwise the target is the bare box.
+      expect(classes).toContain(`${pseudo}:content-['']`);
+      expect(classes).toContain(`${pseudo}:absolute`);
+      expect(classes).toContain("relative");
+      const reach = px(button, `${pseudo}:-inset-`)!;
       expect(box + 2 * reach).toBeGreaterThanOrEqual(24);
       // Within the chip's own padding, so it never meets the next chip's
       // target across the gap or a wrapped row's.
