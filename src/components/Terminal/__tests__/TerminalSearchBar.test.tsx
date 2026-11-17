@@ -346,6 +346,12 @@ describe("TerminalSearchBar", () => {
 
     it("keeps stepping available, explains the failure, and retries into a working search with counts", async () => {
       const mock = createMockManaged(true);
+      // xterm reports the result from inside the search, so a retry that
+      // subscribes after searching would lose this first count.
+      mock.searchAddon.findNext.mockImplementation(() => {
+        mock._fireResults({ resultIndex: 0, resultCount: 3 });
+        return true;
+      });
       let loadWorks = false;
       vi.mocked(terminalInstanceService.ensureSearchAddon).mockImplementation(async () => {
         if (!loadWorks) throw new Error("chunk failed to load");
@@ -369,10 +375,6 @@ describe("TerminalSearchBar", () => {
       });
 
       expect(mock.searchAddon.findNext).toHaveBeenCalledWith("hello", expect.anything());
-      // The load that failed on open never subscribed, so the retry must.
-      await act(async () => {
-        mock._fireResults({ resultIndex: 0, resultCount: 3 });
-      });
       expect(screen.getByRole("status").textContent).toBe("1 of 3");
       expect(input.getAttribute("aria-describedby")).toBeNull();
     });
@@ -400,6 +402,26 @@ describe("TerminalSearchBar", () => {
       await act(async () => rejectLoad(new Error("chunk failed to load")));
 
       expect(screen.getByRole("status").textContent).toBe("Invalid regex");
+    });
+
+    it("does not let a late load failure announce itself over a query still being typed", async () => {
+      let rejectLoad!: (error: Error) => void;
+      vi.mocked(terminalInstanceService.ensureSearchAddon).mockImplementation(
+        () =>
+          new Promise((_, reject) => {
+            rejectLoad = reject;
+          })
+      );
+
+      await typeQuery("hello");
+      await act(() => {
+        fireEvent.change(screen.getByPlaceholderText("Find in terminal…"), {
+          target: { value: "world" },
+        });
+      });
+      await act(async () => rejectLoad(new Error("chunk failed to load")));
+
+      expect(screen.getByRole("status").textContent).toBe("");
     });
 
     it("does not let a late load failure resurface after the field is cleared", async () => {
@@ -1316,7 +1338,7 @@ describe("TerminalSearchBar", () => {
 
       await act(async () => settle.reject(new Error("addon failed to load")));
 
-      expect(screen.getByRole("status").textContent).toBe("No matches");
+      expect(screen.getByRole("status").textContent).toContain("Search failed");
     });
 
     it("drops the old query once the field changes, even before the new search runs", async () => {
