@@ -68,9 +68,23 @@ export function useReviewHubStagingActions({
 }: UseReviewHubStagingActionsArgs): UseReviewHubStagingActionsReturn {
   const isBulkStagingRef = useRef(false);
   const getView = useLatestGetter({ worktreePath, unstaged });
+  const writeIdRef = useRef(0);
 
-  /** Whether the hub still shows `cwd`; a failure there is not this view's to report. */
-  const isShowing = useCallback((cwd: string) => getView().worktreePath === cwd, [getView]);
+  /** Starts a write: clears the last failure and supersedes any write still reporting. */
+  const beginWrite = useCallback((): number => {
+    setActionError(null);
+    debouncedBgRefreshRef.current?.cancel();
+    return ++writeIdRef.current;
+  }, [setActionError, debouncedBgRefreshRef]);
+
+  /**
+   * Whether a failure of write `id` may still be reported: no newer write has
+   * cleared the banner, and the hub still shows `cwd`.
+   */
+  const mayReport = useCallback(
+    (id: number, cwd: string) => writeIdRef.current === id && getView().worktreePath === cwd,
+    [getView]
+  );
 
   // A large stage runs in batches, so one that failed partway has already
   // staged some paths. Its Retry sends only the paths still unstaged: git
@@ -92,7 +106,7 @@ export function useReviewHubStagingActions({
    * landed shows first and a stage Retry narrows `paths` against that read
    * rather than the one before the failure. An unstage Retry replays every
    * path, which both of Main's unstage commands take quietly. Nothing is
-   * reported once the hub shows another worktree.
+   * reported once a newer write or another worktree has taken the hub.
    */
   const writePaths = useCallback(
     async (
@@ -103,8 +117,7 @@ export function useReviewHubStagingActions({
     ): Promise<void> => {
       const cwd = worktreePath;
       const attempt = async (attemptScope: string[]): Promise<void> => {
-        setActionError(null);
-        debouncedBgRefreshRef.current?.cancel();
+        const id = beginWrite();
         let error: { cause: unknown } | null = null;
         try {
           if (attemptScope.length > 0) {
@@ -115,9 +128,9 @@ export function useReviewHubStagingActions({
         } catch (err) {
           error = { cause: err };
         }
-        if (!isShowing(cwd)) return;
+        if (!mayReport(id, cwd)) return;
         await refresh();
-        if (!error || !isShowing(cwd)) return;
+        if (!error || !mayReport(id, cwd)) return;
         setActionError({
           title: failure.title,
           detail: formatErrorMessage(error.cause, failure.fallback),
@@ -126,14 +139,13 @@ export function useReviewHubStagingActions({
       };
       await attempt(scope);
     },
-    [worktreePath, refresh, setActionError, debouncedBgRefreshRef, isShowing, stillUnstaged]
+    [worktreePath, refresh, setActionError, beginWrite, mayReport, stillUnstaged]
   );
 
   const handleStageFile = useCallback(
     async (filePath: string) => {
       const attempt = async (): Promise<void> => {
-        setActionError(null);
-        debouncedBgRefreshRef.current?.cancel();
+        beginWrite();
         try {
           await window.electron.git.stageFile(worktreePath, filePath);
           await refresh();
@@ -147,14 +159,13 @@ export function useReviewHubStagingActions({
       };
       await attempt();
     },
-    [worktreePath, refresh, setActionError, debouncedBgRefreshRef]
+    [worktreePath, refresh, setActionError, beginWrite]
   );
 
   const handleUnstageFile = useCallback(
     async (filePath: string) => {
       const attempt = async (): Promise<void> => {
-        setActionError(null);
-        debouncedBgRefreshRef.current?.cancel();
+        beginWrite();
         try {
           await window.electron.git.unstageFile(worktreePath, filePath);
           await refresh();
@@ -168,13 +179,12 @@ export function useReviewHubStagingActions({
       };
       await attempt();
     },
-    [worktreePath, refresh, setActionError, debouncedBgRefreshRef]
+    [worktreePath, refresh, setActionError, beginWrite]
   );
 
   const handleStageAll = useCallback(async () => {
     const attempt = async (): Promise<void> => {
-      setActionError(null);
-      debouncedBgRefreshRef.current?.cancel();
+      beginWrite();
       try {
         await window.electron.git.stageAll(worktreePath);
         await refresh();
@@ -187,12 +197,11 @@ export function useReviewHubStagingActions({
       }
     };
     await attempt();
-  }, [worktreePath, refresh, setActionError, debouncedBgRefreshRef]);
+  }, [worktreePath, refresh, setActionError, beginWrite]);
 
   const handleUnstageAll = useCallback(async () => {
     const attempt = async (): Promise<void> => {
-      setActionError(null);
-      debouncedBgRefreshRef.current?.cancel();
+      beginWrite();
       try {
         await window.electron.git.unstageAll(worktreePath);
         await refresh();
@@ -205,7 +214,7 @@ export function useReviewHubStagingActions({
       }
     };
     await attempt();
-  }, [worktreePath, refresh, setActionError, debouncedBgRefreshRef]);
+  }, [worktreePath, refresh, setActionError, beginWrite]);
 
   const handleStageFiltered = useCallback(async () => {
     const paths = derivedUnstaged.map((f) => f.path);
@@ -231,8 +240,7 @@ export function useReviewHubStagingActions({
     isBulkStagingRef.current = true;
     const paths = Array.from(selectedPaths);
     const cwd = worktreePath;
-    setActionError(null);
-    debouncedBgRefreshRef.current?.cancel();
+    const id = beginWrite();
     try {
       await window.electron.git.stageFiles(cwd, paths);
       setSelectedPaths(new Set());
@@ -240,10 +248,10 @@ export function useReviewHubStagingActions({
       selectionAnchorRef.current = null;
       await refresh();
     } catch (err) {
-      if (!isShowing(cwd)) return;
+      if (!mayReport(id, cwd)) return;
       // Part of a large selection may have landed before the failure.
       await refresh();
-      if (!isShowing(cwd)) return;
+      if (!mayReport(id, cwd)) return;
       // The selection's own paths, captured at the click: by the time Retry
       // is pressed the selection may have moved on.
       setActionError({
@@ -267,8 +275,8 @@ export function useReviewHubStagingActions({
     setSelectedPaths,
     setSelectionSection,
     selectionAnchorRef,
-    debouncedBgRefreshRef,
-    isShowing,
+    beginWrite,
+    mayReport,
     stillUnstaged,
     writePaths,
   ]);
@@ -279,8 +287,7 @@ export function useReviewHubStagingActions({
     isBulkStagingRef.current = true;
     const paths = Array.from(selectedPaths);
     const cwd = worktreePath;
-    setActionError(null);
-    debouncedBgRefreshRef.current?.cancel();
+    const id = beginWrite();
     try {
       await window.electron.git.unstageFiles(cwd, paths);
       setSelectedPaths(new Set());
@@ -288,10 +295,10 @@ export function useReviewHubStagingActions({
       selectionAnchorRef.current = null;
       await refresh();
     } catch (err) {
-      if (!isShowing(cwd)) return;
+      if (!mayReport(id, cwd)) return;
       // Part of a large selection may have landed before the failure.
       await refresh();
-      if (!isShowing(cwd)) return;
+      if (!mayReport(id, cwd)) return;
       // The selection's own paths, captured at the click: by the time Retry
       // is pressed the selection may have moved on.
       setActionError({
@@ -315,8 +322,8 @@ export function useReviewHubStagingActions({
     setSelectedPaths,
     setSelectionSection,
     selectionAnchorRef,
-    debouncedBgRefreshRef,
-    isShowing,
+    beginWrite,
+    mayReport,
     writePaths,
   ]);
 

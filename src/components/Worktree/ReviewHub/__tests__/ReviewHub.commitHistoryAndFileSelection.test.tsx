@@ -1457,6 +1457,86 @@ describe("ReviewHub", () => {
         expect(stageFilesMock).toHaveBeenCalledTimes(1);
       });
 
+      const holdNextRead = (status: StagingStatus): (() => void) => {
+        let release!: () => void;
+        getStagingStatusMock.mockImplementationOnce(
+          () =>
+            new Promise<StagingStatus>((resolve) => {
+              release = () => resolve(status);
+            })
+        );
+        getStagingStatusMock.mockResolvedValue(status);
+        return () => release();
+      };
+
+      const failUnstageShown = async () => {
+        await renderWith(
+          makeStatus({
+            staged: [row("docs/c.md"), row("src/a.ts"), row("src/b.ts")],
+            unstaged: [row("src/x.ts")],
+          })
+        );
+        fireEvent.change(screen.getByLabelText("Filter staged files"), {
+          target: { value: "src/" },
+        });
+        await waitFor(() => expect(screen.queryByTestId("file-stage-row-docs/c.md")).toBeNull());
+
+        unstageFilesMock.mockRejectedValueOnce(
+          new Error("Unstaged at least 1 of 2 files before Git stopped: index.lock exists")
+        );
+        const releaseRead = holdNextRead(
+          makeStatus({
+            staged: [row("docs/c.md"), row("src/b.ts")],
+            unstaged: [row("src/a.ts"), row("src/x.ts")],
+          })
+        );
+        const readsBefore = getStagingStatusMock.mock.calls.length;
+        fireEvent.click(screen.getByTestId("review-hub-unstage-section-button"));
+        await waitFor(() =>
+          expect(getStagingStatusMock.mock.calls.length).toBeGreaterThan(readsBefore)
+        );
+        await act(async () => {
+          await Promise.resolve();
+        });
+        expect(unstageFilesMock).toHaveBeenCalledWith(WORKTREE_PATH, ["src/a.ts", "src/b.ts"]);
+        expect(screen.queryByText("Couldn't unstage files")).toBeNull();
+        return releaseRead;
+      };
+
+      it("reports a failed Unstage shown after its read, and its Retry replays every path", async () => {
+        const releaseRead = await failUnstageShown();
+
+        await act(async () => {
+          releaseRead();
+        });
+        await screen.findByText("Couldn't unstage files");
+        expect(inSection(unstagedSection, "src/a.ts")).toBe(true);
+
+        await clickRetry();
+        await waitFor(() => expect(unstageFilesMock).toHaveBeenCalledTimes(2));
+        expect(unstageFilesMock).toHaveBeenNthCalledWith(2, WORKTREE_PATH, [
+          "src/a.ts",
+          "src/b.ts",
+        ]);
+      });
+
+      it("drops an older failure once a newer write has started", async () => {
+        const releaseRead = await failUnstageShown();
+
+        const toggle = within(screen.getByTestId("file-stage-row-src/x.ts")).getByRole("button", {
+          name: /Stage src\/x\.ts/i,
+        });
+        fireEvent.click(toggle);
+        await waitFor(() => expect(stageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/x.ts"));
+
+        await act(async () => {
+          releaseRead();
+        });
+        await waitFor(() => expect(inSection(unstagedSection, "src/a.ts")).toBe(true));
+        expect(screen.queryByText("Couldn't unstage files")).toBeNull();
+        expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      });
+
       it("shows what landed when an unstage selection fails partway", async () => {
         await renderWith(
           makeStatus({

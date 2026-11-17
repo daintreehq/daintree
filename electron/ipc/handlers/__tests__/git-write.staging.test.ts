@@ -34,6 +34,8 @@ vi.mock("../../../services/getSoundService.js", () => ({
 
 // A git dir read that never settles, as on a stalled network mount.
 const stallGitDirRead = vi.hoisted(() => ({ on: false }));
+// A git dir read that fails outright, which proves nothing about HEAD either.
+const failGitDirRead = vi.hoisted(() => ({ on: false }));
 // A `rev-parse` that exits non-zero with nothing on stderr, as a killed one can.
 const silentRevParseFailure = { on: false };
 
@@ -42,7 +44,11 @@ vi.mock("../../../utils/gitUtils.js", async (importOriginal) => {
   return {
     ...actual,
     resolveGitDirFromFs: (cwd: string) =>
-      stallGitDirRead.on ? new Promise<never>(() => {}) : actual.resolveGitDirFromFs(cwd),
+      failGitDirRead.on
+        ? Promise.reject(new Error("git dir unreadable"))
+        : stallGitDirRead.on
+          ? new Promise<never>(() => {})
+          : actual.resolveGitDirFromFs(cwd),
   };
 });
 
@@ -227,24 +233,16 @@ describe("git-write staging handlers (real git)", () => {
     for (const name of ["a.txt", "b.txt"]) fs.writeFileSync(path.join(repo, name), "two\n");
     git(repo, "add", ".");
 
-    stallGitDirRead.on = true;
+    failGitDirRead.on = true;
     silentRevParseFailure.on = true;
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const mark = spawned.length;
-      const run = handler(CHANNELS.GIT_UNSTAGE_FILES)(null, {
-        cwd: repo,
-        filePaths: ["a.txt", "b.txt"],
-      });
-      await vi.advanceTimersByTimeAsync(5_000);
-      vi.useRealTimers();
-      await run;
+      await handler(CHANNELS.GIT_UNSTAGE_FILES)(null, { cwd: repo, filePaths: ["a.txt", "b.txt"] });
       expect(spawnedSince(mark).map(subcommand)).toEqual(["rev-parse", "status", "reset"]);
       expect(git(repo, "diff", "--cached", "--name-only")).toBe("");
       expect(git(repo, "ls-files")).toBe("a.txt\nb.txt\n");
     } finally {
-      vi.useRealTimers();
-      stallGitDirRead.on = false;
+      failGitDirRead.on = false;
       silentRevParseFailure.on = false;
     }
   });
