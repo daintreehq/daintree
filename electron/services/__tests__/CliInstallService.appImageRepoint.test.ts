@@ -209,6 +209,47 @@ describe("CliInstallService — following a moved AppImage", () => {
     }
   );
 
+  // `daintree first second` used to open "first" and drop the rest, exiting 0.
+  // The stub AppImage records its argv, so a launch (or a refusal to launch) is
+  // observed rather than inferred from the script text.
+  it.skipIf(process.platform === "win32")(
+    "opens exactly one folder and refuses extra operands without launching",
+    async () => {
+      const service = await load();
+      const record = path.join(root, "argv");
+      const image = path.join(root, "Daintree.AppImage");
+      fs.writeFileSync(image, `#!/usr/bin/env bash\nprintf '%s\\0' "$@" > "${record}"\n`, {
+        mode: 0o755,
+      });
+      const wrapper = path.join(root, "daintree-cli.sh");
+      fs.writeFileSync(wrapper, service.generateAppImageWrapper(image, "1.2.3"), { mode: 0o755 });
+      const first = path.join(root, "first folder");
+      const second = path.join(root, "second");
+      fs.mkdirSync(first);
+      fs.mkdirSync(second);
+
+      const refused = spawnSync("bash", [wrapper, first, second], { encoding: "utf8" });
+      expect(refused.status).toBe(2);
+      expect(refused.stderr).toContain("expected one directory, got 2 arguments");
+      expect(refused.stderr).toContain("Usage: daintree [directory]");
+      // A launch would be backgrounded, so give one time to show up.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(fs.existsSync(record)).toBe(false);
+
+      const accepted = spawnSync("bash", [wrapper, first], { encoding: "utf8" });
+      expect(accepted.status).toBe(0);
+      // The launch is backgrounded; the recorder's redirect creates the file before
+      // writing it, so wait for the trailing NUL.
+      const deadline = Date.now() + 5000;
+      let raw = "";
+      while (Date.now() < deadline && !raw.endsWith("\0")) {
+        raw = fs.existsSync(record) ? fs.readFileSync(record, "utf8") : "";
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(raw.split("\0").filter(Boolean)).toEqual([`--cli-path=${fs.realpathSync(first)}`]);
+    }
+  );
+
   it.runIf(process.platform === "linux")(
     "answers --status from the app's own binary, not a shell naming the wrapper",
     async () => {
