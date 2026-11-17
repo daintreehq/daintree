@@ -307,6 +307,7 @@ const BASE_BRANCH_STATUS_CONFIG: Record<
   M: { label: "M", word: "Modified", bg: "bg-status-warning/15", text: "text-status-warning-text" },
   R: { label: "R", word: "Renamed", bg: "bg-status-info/15", text: "text-status-info-text" },
   C: { label: "C", word: "Copied", bg: "bg-status-info/15", text: "text-status-info-text" },
+  T: { label: "T", word: "Type changed", bg: "bg-status-info/15", text: "text-status-info-text" },
   U: { label: "U", word: "Unmerged", bg: "bg-status-error/15", text: "text-status-danger-text" },
 };
 

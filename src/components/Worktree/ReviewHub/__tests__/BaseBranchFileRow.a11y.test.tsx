@@ -18,13 +18,14 @@ describe("BaseBranchFileRow accessible name", () => {
     ["D", "Deleted"],
     ["R", "Renamed"],
     ["M", "Modified"],
+    ["T", "Type changed"],
   ])("announces %s as %s with the path", (status, word) => {
     renderRow({ path: "src/lib/thing.ts", status, insertions: 1, deletions: 0 });
     expect(screen.getByRole("button", { name: `${word}: src/lib/thing.ts` })).toBeTruthy();
   });
 
   it("falls back to the raw status for an unknown code", () => {
-    renderRow({ path: "a.ts", status: "T", insertions: null, deletions: null });
-    expect(screen.getByRole("button", { name: "T: a.ts" })).toBeTruthy();
+    renderRow({ path: "a.ts", status: "X", insertions: null, deletions: null });
+    expect(screen.getByRole("button", { name: "X: a.ts" })).toBeTruthy();
   });
 });
