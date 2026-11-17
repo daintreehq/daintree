@@ -556,6 +556,7 @@ describe("CrossWorktreeDiff shelf with a large comparison (#17461)", () => {
           screen.getAllByRole("tooltip").some((tip) => tip.textContent === row.dataset.filePath)
         ).toBe(true)
       );
+      expect(row.getAttribute("data-state")).not.toBe("closed");
 
       // The shelf comes back with room for the directory (a scrollbar gone,
       // say): the remounted band measures again and its rows stop disclosing.
@@ -566,12 +567,9 @@ describe("CrossWorktreeDiff shelf with a large comparison (#17461)", () => {
       await waitFor(() => expect(fileRows().length).toBeGreaterThan(2));
       const next = fileRows()[2]!;
       fireEvent.focus(next);
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      });
-      expect(
-        screen.queryAllByRole("tooltip").some((tip) => tip.textContent === next.dataset.filePath)
-      ).toBe(false);
+      await act(async () => {});
+      // The trigger's own state: its content would render a beat later.
+      expect(next.getAttribute("data-state")).toBe("closed");
     } finally {
       scrollWidth.mockRestore();
       clientWidth.mockRestore();
