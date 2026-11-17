@@ -234,6 +234,7 @@ describe("readQuestionContent", () => {
         askedAt: row.origin_created_at,
         expiresAt: "2026-11-02T10:00:00.000Z",
         status: "human-answered",
+        closedReason: null,
         deliveryStatus: "terminal-delivered",
         attachments: [
           {
@@ -409,6 +410,55 @@ describe("readQuestionContent", () => {
       ["person", true],
       ["model", false],
     ]);
+  });
+
+  it("reads a person's decline as declined, apart from a withdrawal and an expiry, and keeps it in the thread (#17234)", async () => {
+    const decline: AnswerEntry = {
+      entry_id: "entry-d",
+      kind: "declined",
+      action: "cancel",
+      revision: 1,
+      source: "human",
+      correction: false,
+      created_at: "2026-11-01T10:30:00.000Z",
+      event_seq: 6,
+      deliver: true,
+      delivered: false,
+      sealed: null,
+    };
+    const fromAgent = await message("msg_agent_01", "agent", "Still needed?", 4);
+    const read = async (over: Partial<QuestionRow>) => {
+      const result = await readQuestionContent(ctx(), await question(CONTENT, over));
+      if (result.result !== "read") throw new Error(result.result);
+      return result.question;
+    };
+
+    const declined = await read({
+      local_status: "cancelled",
+      answers_json: serializeAnswers([decline]),
+      messages_json: serializeMessages([fromAgent]),
+    });
+    expect(declined.status).toBe("cancelled");
+    expect(declined.closedReason).toBe("declined");
+    expect(declined.thread).toEqual([
+      expect.objectContaining({ type: "message", messageId: "msg_agent_01" }),
+      { type: "declined", entryId: "entry-d", sentAt: decline.created_at },
+    ]);
+
+    // Declined, reopened, then withdrawn from the desktop: the decline is history, not why it closed.
+    const reopened = await read({
+      local_status: "cancelled",
+      question_revision: 2,
+      answers_json: serializeAnswers([decline]),
+    });
+    expect(reopened.closedReason).toBe("withdrawn");
+    expect(reopened.thread).toEqual([
+      { type: "declined", entryId: "entry-d", sentAt: decline.created_at },
+    ]);
+
+    expect((await read({ local_status: "cancelled" })).closedReason).toBe("withdrawn");
+    expect((await read({ local_status: "expired" })).closedReason).toBe("expired");
+    expect((await read({ local_status: "open" })).closedReason).toBeNull();
   });
 
   it("keeps the rest of the thread when one entry can't be opened", async () => {

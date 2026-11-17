@@ -168,7 +168,7 @@ function QuestionBody({
   return (
     <div className="flex flex-col gap-4" data-testid="decision-question-content">
       <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-text-secondary">
-        <span>{questionStatusText(question)}</span>
+        <span data-testid="decision-question-status">{questionStatusText(question)}</span>
         <FactSeparator />
         <span data-testid="decision-question-requirement">
           {requirementText(question.requirement)}

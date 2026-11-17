@@ -491,6 +491,42 @@ async function phoneAnswers(
   });
 }
 
+/**
+ * The person dismisses `questionId` on the phone (#17234): a cancel the phone
+ * signs, carrying no content, at the revision the question is open at.
+ */
+async function phoneDeclines(
+  relay: FakeRelay,
+  owner: Awaited<ReturnType<typeof makeOwner>>,
+  phone: Phone,
+  questionId: string
+): Promise<void> {
+  const signed = await buildSignedAction({
+    installationId: owner.installationId,
+    questionId,
+    action: "cancel",
+    signerDeviceId: phone.deviceId,
+    signingKey: phone.keys.signing.privateKey,
+    expectedRevision: 0,
+  });
+  relay.append({
+    event_type: "decision.cancelled",
+    question_id: questionId,
+    question_revision: 0,
+    origin_device_id: phone.deviceId,
+    data: EventData.action.parse({
+      action: "cancel",
+      record: signed.record,
+      envelope: signed.envelope,
+      provenance: null,
+      status: "cancelled",
+      revision: 0,
+      target_host_id: relay.questions.get(questionId)!.target_host_id,
+      deliverable: false,
+    }) as Record<string, unknown>,
+  });
+}
+
 /** The phone sends a follow-up on `questionId`, signed and sealed as the 0.4.0 phone app does. */
 async function phoneFollowsUp(
   relay: FakeRelay,
@@ -1189,11 +1225,67 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
       expect(ticket.body).toHaveProperty("features", [
         "involvement-v1",
         "owner-desktop-answers-v1",
+        "person-declines-v1",
         "phone-images-v1",
         "thread-messages-v1",
       ]);
     }
   }, 60_000);
+  // A 0.7.0 phone offers Dismiss only on a question whose asking desktop declared person declines (#17234).
+  it("declares person declines, types a phone's decline into the Host pane still listening, and never tells one that has gone", async () => {
+    const { owner, phone, relay, host, terminals, listener, service } = await startHost();
+    await vi.waitFor(
+      () => expect(relay.declared.get(host.config.deviceId)).toContain("person-declines-v1"),
+      { timeout: 15_000 }
+    );
+    const listening = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
+    const gone = await askHuman(listener.port, "token-pane-2", "Which way for the lexer?");
+    await vi.waitFor(
+      () => expect(relay.questions.has(listening) && relay.questions.has(gone)).toBe(true),
+      { timeout: 15_000 }
+    );
+
+    // Still listening: told plainly that the person declined, with nothing approved.
+    await phoneDeclines(relay, owner, phone, listening);
+    await vi.waitFor(() => expect(terminals.submitted).toHaveLength(1), { timeout: 15_000 });
+    expect(terminals.submitted[0]!.id).toBe("pane-1");
+    expect(terminals.submitted[0]!.text).toContain(
+      "source: human\nstatus: declined\nauthorised: no\nnote: "
+    );
+    expect(typedChoices(terminals.submitted[0]!.text)).toEqual([]);
+    const decision = await callTool(listener.port, "token-pane-1", "get_decision", {
+      question_id: listening,
+    });
+    expect(decision.structuredContent).toMatchObject({
+      question_id: listening,
+      status: "cancelled",
+      closed_reason: "declined",
+      provenance: null,
+      choice: null,
+    });
+    expect(await readOnHost(service, "pane-1", listening)).toMatchObject({
+      status: "cancelled",
+      closedReason: "declined",
+      thread: [{ type: "declined" }],
+    });
+
+    // Gone: nothing is typed or resumed for it, and no person is asked about it.
+    terminals.terminals.delete("pane-2");
+    await phoneDeclines(relay, owner, phone, gone);
+    const store = new DaintreeLocalStore(sqlite);
+    await vi.waitFor(
+      async () =>
+        expect(parseAnswers((await store.getQuestion(gone))!.answers_json)).toEqual([
+          expect.objectContaining({ kind: "declined", deliver: false, delivered: false }),
+        ]),
+      { timeout: 15_000 }
+    );
+    expect((await store.getQuestion(gone))!.local_status).toBe("cancelled");
+    expect(await service.getAnswerDelivery()!.attentionItems()).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(terminals.submitted).toHaveLength(1);
+  }, 60_000);
+
   // The person's involvement preference reaches a Host's agents from its own relay connection (#17228).
   it("serves a Host's agents the involvement preference a phone sets, and its change without a relaunch", async () => {
     const { owner, phone, relay, listener } = await startHost();

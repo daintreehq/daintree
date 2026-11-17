@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { QuestionRow } from "@daintreehq/decisions-client";
 import { projectDecisionQuestions, standingOf } from "../questionList.js";
 import { threadNeedsAttention } from "../attentionList.js";
-import { SECRET, answers, askedAt, messages, qid, row } from "./questionRows.js";
+import { DECLINE, SECRET, answers, askedAt, messages, qid, row } from "./questionRows.js";
 
 const HOST = "host_1";
 
@@ -500,6 +500,35 @@ describe("standingOf", () => {
     expect(corrected?.settledAt).toBe("2026-11-01T10:09:00.000Z");
     expect(superseded?.standing).toMatchObject({ kind: "settled", outcome: "answered" });
     expect(superseded?.settledAt).toBe("2026-11-01T10:05:00.000Z");
+  });
+
+  it("settles a question the person declined at their decline, apart from a withdrawal and an expiry, whatever became of its notice (#17234)", () => {
+    const declined = { local_status: "cancelled" as const, answers_json: answers(DECLINE) };
+    const list = projectDecisionQuestions(
+      [
+        // Its notice waiting for the agent, typed in, or stopped: the question is settled either way.
+        row(1, { ...declined, delivery_status: "desktop-received" }),
+        row(2, {
+          ...declined,
+          delivery_status: "terminal-delivered",
+          answers_json: answers({ ...DECLINE, delivered: true }),
+        }),
+        row(3, { ...declined, delivery_status: "delivery-uncertain" }),
+        row(4, { ...declined, answers_json: answers({ ...DECLINE, deliver: false }) }),
+        // Declined at revision 1, reopened, then withdrawn at revision 2.
+        row(5, { ...declined, question_revision: 2 }),
+      ],
+      new Map(),
+      HOST
+    );
+
+    expect(list.map((item) => [item.alias, item.standing, item.settledAt])).toEqual([
+      [1, { kind: "settled", outcome: "declined" }, "2026-11-01T10:07:00.000Z"],
+      [2, { kind: "settled", outcome: "declined" }, "2026-11-01T10:07:00.000Z"],
+      [3, { kind: "settled", outcome: "declined" }, "2026-11-01T10:07:00.000Z"],
+      [4, { kind: "settled", outcome: "declined" }, "2026-11-01T10:07:00.000Z"],
+      [5, { kind: "settled", outcome: "withdrawn" }, null],
+    ]);
   });
 
   it("settles a closed question even when its delivery status is left from before", () => {

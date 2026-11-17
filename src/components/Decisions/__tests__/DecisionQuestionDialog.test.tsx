@@ -78,6 +78,7 @@ function content(
     askedAt: "2026-11-02T10:00:00.000Z",
     expiresAt: "2099-01-01T00:00:00.000Z",
     status: "human-answered",
+    closedReason: null,
     deliveryStatus: "terminal-delivered",
     attachments: [],
     thread: [
@@ -705,6 +706,53 @@ describe("DecisionQuestionDialog", () => {
         delete QUESTIONS.qw;
       }
     });
+  });
+
+  it("shows a question the person declined from their phone as declined, apart from a withdrawal (#17234)", async () => {
+    const EXPIRY = "time[datetime='2099-01-01T00:00:00.000Z']";
+    const statusOf = (body: HTMLElement) =>
+      body.querySelector("[data-testid='decision-question-status']")?.textContent ?? "";
+    QUESTIONS.qd = content("qd", 12, { status: "open", thread: [] });
+    try {
+      openView(["qd"], "qd");
+      let body = await screen.findByTestId("decision-question-content");
+      expect(screen.queryByTestId("decision-question-cancel")).not.toBeNull();
+      expect(body.querySelector(EXPIRY)).not.toBeNull();
+      const waiting = statusOf(body);
+
+      // The person dismisses it on their phone while the view is open.
+      QUESTIONS.qd = content("qd", 12, {
+        status: "cancelled",
+        closedReason: "declined",
+        thread: [{ type: "declined", entryId: "d1", sentAt: "2026-11-02T10:07:00.000Z" }],
+      });
+      act(() => pushPane("t1"));
+      await waitFor(() => expect(screen.queryByTestId("decision-question-cancel")).toBeNull());
+      body = screen.getByTestId("decision-question-content");
+      const declined = statusOf(body);
+      expect(declined).not.toBe(waiting);
+      expect(declined).toMatch(/declined/i);
+      const [entry, ...rest] = screen.getAllByTestId("decision-thread-entry");
+      expect(rest).toEqual([]);
+      expect(entry!.textContent).toMatch(/declined/i);
+      // It answers nothing, and says nothing is missing from it.
+      expect(entry!.querySelectorAll("p")).toHaveLength(1);
+      // Over, whatever its deadline would have said.
+      expect(body.querySelector(EXPIRY)).toBeNull();
+
+      QUESTIONS.qd = content("qd", 12, {
+        status: "cancelled",
+        closedReason: "withdrawn",
+        thread: [],
+      });
+      act(() => pushPane("t1"));
+      await waitFor(() =>
+        expect(statusOf(screen.getByTestId("decision-question-content"))).not.toBe(declined)
+      );
+      expect(statusOf(screen.getByTestId("decision-question-content"))).not.toMatch(/declined/i);
+    } finally {
+      delete QUESTIONS.qd;
+    }
   });
 
   it("offers a withdrawal only while the question waits, and sends a pane's through its pane", async () => {
