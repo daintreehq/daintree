@@ -501,6 +501,13 @@ describe("GitHubRateLimitService", () => {
     });
 
     it("doesn't block on REST headers that report a zero-sized window", () => {
+      const reset = String(Math.floor(Date.now() / 1000) + 3600);
+      gitHubRateLimitService.update(
+        new Headers({ "x-ratelimit-remaining": "0", "x-ratelimit-reset": reset }),
+        403
+      );
+      expect(gitHubRateLimitService.shouldBlockRequest().blocked).toBe(true);
+
       gitHubRateLimitService.update(
         new Headers({
           "x-ratelimit-limit": "0",

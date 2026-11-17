@@ -145,10 +145,15 @@ export class GitHubEnterpriseAccount {
     this.credentialRevision++;
   }
 
-  /** The token setting changed, from this account or the generated settings form. */
+  /**
+   * The token setting changed, from this account or the generated settings
+   * form. Whatever was fetched under the previous credential goes, even when
+   * no session held it yet (a change during the startup read).
+   */
   onTokenSetting(): void {
     if (this.disposed) return;
     this.markChanged();
+    clearGitHubCaches();
   }
 
   /** Mirror a new `enterpriseHost` value, retiring what belonged to the old host. */
@@ -292,6 +297,7 @@ export class GitHubEnterpriseAccount {
     if (getEnterpriseHost() !== expectedHost) return { cleared: false };
     this.markChanged();
     await this.deps.settings.unset(ENTERPRISE_TOKEN_SETTING);
+    clearGitHubCaches();
     await this.applySession();
     return { cleared: true };
   }

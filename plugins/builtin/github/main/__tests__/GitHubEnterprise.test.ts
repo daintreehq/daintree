@@ -294,6 +294,16 @@ describe("GitHubEnterpriseAccount", () => {
     expect(repoStatsCache.get("team/app")).toBeUndefined();
   });
 
+  it("drops cached pages when the token is cleared before startup finished reading it", async () => {
+    repoStatsCache.set("ghe.example/team/app", { issueCount: 3, prCount: 1 });
+    const { account } = makeAccount({ enterpriseHost: GHES });
+    await account.loadHost();
+
+    account.onTokenSetting();
+
+    expect(repoStatsCache.get("ghe.example/team/app")).toBeUndefined();
+  });
+
   it("installs nothing when disposed while the startup token read is still pending", async () => {
     let releaseRead: (value: unknown) => void = () => {};
     const { settings } = makeSettings({ enterpriseHost: GHES });
