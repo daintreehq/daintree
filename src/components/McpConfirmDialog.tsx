@@ -19,11 +19,12 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { afterCatch, ErrorBoundary } from "@/components/ErrorBoundary";
 import { WorktreeDeleteNotes } from "@/components/Worktree/WorktreeDeleteNotes";
 import { isCautionPreviewLine, stripCautionPrefix } from "@/lib/mcpPreviewLines";
 import {
   confirmationEndsAt,
+  declineFailedMcpConfirmation,
   useMcpConfirmStore,
   type McpConfirmSelectableTarget,
   type PendingMcpConfirm,
@@ -521,7 +522,12 @@ export function McpConfirmDialog() {
 
   if (current === null) {
     return (
-      <ErrorBoundary variant="component" componentName="McpConfirmDialog" resetKeys={[resetKey]}>
+      <ErrorBoundary
+        variant="component"
+        componentName="McpConfirmDialog"
+        resetKeys={[resetKey]}
+        onError={afterCatch(() => declineFailedMcpConfirmation(resetKey))}
+      >
         <ConfirmDialog
           isOpen={false}
           title=""
@@ -774,7 +780,12 @@ export function McpConfirmDialog() {
   // only on the destructive arm, and a variable variant erases the discriminant
   // that makes the gate impossible to attach to a non-destructive confirm.
   return (
-    <ErrorBoundary variant="component" componentName="McpConfirmDialog" resetKeys={[resetKey]}>
+    <ErrorBoundary
+      variant="component"
+      componentName="McpConfirmDialog"
+      resetKeys={[resetKey]}
+      onError={afterCatch(() => declineFailedMcpConfirmation(resetKey))}
+    >
       {isDestructive ? (
         <ConfirmDialog
           {...sharedProps}

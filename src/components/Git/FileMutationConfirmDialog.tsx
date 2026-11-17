@@ -32,7 +32,10 @@ import { pluralize } from "@/lib/pluralize";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isClientAppError } from "@/utils/clientAppError";
-import { useFileMutationConfirmStore } from "@/store/fileMutationConfirmStore";
+import {
+  declineFailedFileMutationConfirmation,
+  useFileMutationConfirmStore,
+} from "@/store/fileMutationConfirmStore";
 import type {
   FileChangeSide,
   FileChurn,
@@ -445,6 +448,7 @@ export function FileMutationConfirmDialog() {
       variant="component"
       componentName="FileMutationConfirmDialog"
       resetKeys={[requestSeq]}
+      onError={() => declineFailedFileMutationConfirmation(requestSeq)}
     >
       <FileMutationConfirmDialogInner />
     </ErrorBoundary>

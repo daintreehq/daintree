@@ -20,7 +20,10 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isClientGitError } from "@/utils/clientGitError";
-import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
+import {
+  declineFailedGitPullRebaseConfirmation,
+  useGitPullRebaseConfirmStore,
+} from "@/store/gitPullRebaseConfirmStore";
 import {
   buildGitRemoteOperationPreview,
   formatGitPushDestination,
@@ -518,6 +521,7 @@ export function GitPullRebaseConfirmDialog() {
       variant="component"
       componentName="GitPullRebaseConfirmDialog"
       resetKeys={[requestSeq]}
+      onError={() => declineFailedGitPullRebaseConfirmation(requestSeq)}
     >
       <GitPullRebaseConfirmDialogInner />
     </ErrorBoundary>

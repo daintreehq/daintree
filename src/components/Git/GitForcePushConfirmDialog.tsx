@@ -287,6 +287,7 @@ export function GitForcePushConfirmDialog() {
       variant="component"
       componentName="GitForcePushConfirmDialog"
       resetKeys={[requestSeq]}
+      onError={() => useGitForcePushStore.getState().resolveConfirmation(requestSeq, false)}
     >
       <GitForcePushConfirmDialogInner />
     </ErrorBoundary>

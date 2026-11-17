@@ -654,6 +654,20 @@ function patchItem(requestId: string, patch: Partial<PendingMcpConfirm>): void {
 }
 
 /**
+ * Answer a request whose dialog failed to render (#17204), so the queue moves
+ * on and the bridge stops waiting. A live request is rejected, as Cancel would;
+ * `drop` would forget it without an answer and leave the bridge's await
+ * pending. An expired one was already answered as a timeout, so it only
+ * closes. A no-op unless `requestId` is still the one in front.
+ */
+export function declineFailedMcpConfirmation(requestId: string): void {
+  const state = useMcpConfirmStore.getState();
+  if (state.current === null || state.current.requestId !== requestId) return;
+  if (state.current.expired === true) state.dismiss(requestId);
+  else state.resolveCurrent("rejected");
+}
+
+/**
  * Push a confirmation request into the queue and return a Promise that
  * resolves with the user's decision, and — for a selectable confirmation — the
  * targets they left checked. The returned Promise never rejects — the

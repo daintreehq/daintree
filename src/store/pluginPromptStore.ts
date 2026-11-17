@@ -155,6 +155,18 @@ export function enqueueUiPrompt(
   });
 }
 
+/**
+ * Dismiss a prompt whose dialog failed to render (#17204), so the plugin gets
+ * its dismiss value and the prompts queued behind it can show. A no-op unless
+ * `promptId` is still the prompt in front: a failure reported late must not
+ * answer the one that replaced it.
+ */
+export function dismissFailedUiPrompt(promptId: string | null): void {
+  const { current, cancelByPluginId } = usePluginPromptStore.getState();
+  if (promptId === null || current === null || current.promptId !== promptId) return;
+  cancelByPluginId(current.pluginId, promptId);
+}
+
 /** Test-only escape hatch — resets the queue. */
 export function __resetPluginPromptStoreForTesting(): void {
   usePluginPromptStore.getState().reset();

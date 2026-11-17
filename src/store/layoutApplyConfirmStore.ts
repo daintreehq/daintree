@@ -94,6 +94,17 @@ export function cancelLayoutApplyConfirmations(layoutIds?: ReadonlySet<string>):
   }
 }
 
+/**
+ * Decline a request whose dialog failed to render (#17204), so the layout
+ * waiting on it stops and the next one can ask. A no-op unless `requestId` is
+ * still the request in front.
+ */
+export function declineFailedLayoutApplyConfirmation(requestId: string): void {
+  const { current, resolveCurrent } = useLayoutApplyConfirmStore.getState();
+  if (current === null || current.requestId !== requestId) return;
+  resolveCurrent(false);
+}
+
 /** Ask the user to approve applying a layout; resolves `false` when they decline. */
 export function requestLayoutApplyConfirmation(
   request: Omit<PendingLayoutApplyConfirm, "requestId">

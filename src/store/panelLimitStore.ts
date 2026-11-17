@@ -347,6 +347,17 @@ export function _resetInitPromise(): void {
   _initPromise = null;
 }
 
+/**
+ * Decline a batch whose dialog failed to render or went away under it
+ * (#17204), so the launch awaiting it ends. A no-op unless request
+ * `requestSeq` is still pending.
+ */
+export function declineFailedPanelLimitConfirmation(requestSeq: number): void {
+  const state = usePanelLimitStore.getState();
+  if (state.pendingConfirm === null || state.requestSeq !== requestSeq) return;
+  state.resolveConfirmation(false);
+}
+
 function notifyPanelLimitReached(hardLimit: number, worktreeId: string | undefined): void {
   notify({
     type: "warning",

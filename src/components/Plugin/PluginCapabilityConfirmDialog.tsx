@@ -1,6 +1,6 @@
 import { useCallback, useRef } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { afterCatch, ErrorBoundary } from "@/components/ErrorBoundary";
 import { usePluginCapabilityConfirmStore } from "@/store/pluginCapabilityConfirmStore";
 import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
 import {
@@ -51,6 +51,7 @@ export function PluginCapabilityConfirmDialog() {
         variant="component"
         componentName="PluginCapabilityConfirmDialog"
         resetKeys={[resetKey]}
+        onError={afterCatch(() => usePluginCapabilityConfirmStore.getState().drop(resetKey))}
       >
         <ConfirmDialog
           isOpen={false}
@@ -78,6 +79,7 @@ export function PluginCapabilityConfirmDialog() {
         variant="component"
         componentName="PluginCapabilityConfirmDialog"
         resetKeys={[resetKey]}
+        onError={afterCatch(() => usePluginCapabilityConfirmStore.getState().drop(resetKey))}
       >
         <ConfirmDialog
           isOpen={true}
@@ -116,6 +118,7 @@ export function PluginCapabilityConfirmDialog() {
         variant="component"
         componentName="PluginCapabilityConfirmDialog"
         resetKeys={[resetKey]}
+        onError={afterCatch(() => usePluginCapabilityConfirmStore.getState().drop(resetKey))}
       >
         <ConfirmDialog
           isOpen={true}
@@ -140,6 +143,7 @@ export function PluginCapabilityConfirmDialog() {
         variant="component"
         componentName="PluginCapabilityConfirmDialog"
         resetKeys={[resetKey]}
+        onError={afterCatch(() => usePluginCapabilityConfirmStore.getState().drop(resetKey))}
       >
         <ConfirmDialog
           isOpen={true}
@@ -170,6 +174,7 @@ export function PluginCapabilityConfirmDialog() {
       variant="component"
       componentName="PluginCapabilityConfirmDialog"
       resetKeys={[resetKey]}
+      onError={afterCatch(() => usePluginCapabilityConfirmStore.getState().drop(resetKey))}
     >
       <ConfirmDialog
         isOpen={true}

@@ -3,7 +3,11 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { actionService } from "@/services/ActionService";
-import { usePanelLimitStore, type PanelLimitConfirmRequest } from "@/store/panelLimitStore";
+import {
+  declineFailedPanelLimitConfirmation,
+  usePanelLimitStore,
+  type PanelLimitConfirmRequest,
+} from "@/store/panelLimitStore";
 import { pluralize } from "@/lib/pluralize";
 
 /**
@@ -65,16 +69,19 @@ export function PanelLimitConfirmDialog() {
   // same commit — declining there would cancel a request the moment it opened.
   // A ref, not a closure flag: the remount runs a fresh setup, and only state
   // shared across both runs can tell the declining microtask it came back.
+  // Only the request pending at unmount is declined: a host that unmounted
+  // because it failed has already declined that one, and the caller may have
+  // asked again before the microtask runs (#17204).
   const mountedRef = useRef(false);
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      const { pendingConfirm: pending, requestSeq: pendingSeq } = usePanelLimitStore.getState();
+      if (pending === null) return;
       queueMicrotask(() => {
         if (mountedRef.current) return;
-        if (usePanelLimitStore.getState().pendingConfirm) {
-          usePanelLimitStore.getState().resolveConfirmation(false);
-        }
+        declineFailedPanelLimitConfirmation(pendingSeq);
       });
     };
   }, []);
@@ -97,6 +104,7 @@ export function PanelLimitConfirmDialog() {
       variant="component"
       componentName="PanelLimitConfirmDialog"
       resetKeys={[requestSeq]}
+      onError={() => declineFailedPanelLimitConfirmation(requestSeq)}
     >
       <ConfirmDialog
         isOpen={true}

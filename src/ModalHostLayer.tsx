@@ -1,4 +1,4 @@
-import { Suspense } from "react";
+import { Suspense, type ReactNode } from "react";
 import { TourHost } from "@/components/Tour/TourHost";
 import type { Project, ProjectCreationIdentity } from "@shared/types";
 import type { ProjectOpenDisposition } from "@shared/types/windowOpen";
@@ -11,7 +11,8 @@ import type { UseAgentLauncherReturn } from "./hooks/useAgentLauncher";
 import type { PluginDeepLinkState } from "./hooks/app";
 import type { SettingsTab } from "./components/Settings";
 import type { NonGitFolderStep } from "./components/Project/NonGitFolderDialog";
-import { ErrorBoundary } from "./components/ErrorBoundary";
+import type { PluginUiPromptParams } from "@shared/types/pluginUiPrompt";
+import { afterCatch, ErrorBoundary } from "./components/ErrorBoundary";
 import { StopProjectConfirmDialog } from "./components/Project/StopProjectConfirmDialog";
 import { ProjectSwitcherModalLayer } from "./components/Project/ProjectSwitcherModalLayer";
 import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
@@ -21,6 +22,23 @@ import {
   cancelScheduleRunConfirmations,
   useScheduleRunConfirmStore,
 } from "@/store/scheduleRunConfirmStore";
+import {
+  declineFailedLayoutApplyConfirmation,
+  useLayoutApplyConfirmStore,
+} from "@/store/layoutApplyConfirmStore";
+import { dismissFailedUiPrompt, usePluginPromptStore } from "@/store/pluginPromptStore";
+import { declineFailedMcpConfirmation } from "@/store/mcpConfirmStore";
+import { usePluginConfirmStore } from "@/store/pluginConfirmStore";
+import { usePluginMcpConfirmStore } from "@/store/pluginMcpConfirmStore";
+import { usePluginCapabilityConfirmStore } from "@/store/pluginCapabilityConfirmStore";
+import { usePluginArchiveInstallStore } from "@/store/pluginArchiveInstallStore";
+import { declineFailedPanelLimitConfirmation } from "@/store/panelLimitStore";
+import { declineFailedGitPushConfirmation } from "@/store/gitPushConfirmStore";
+import { declineFailedGitPullRebaseConfirmation } from "@/store/gitPullRebaseConfirmStore";
+import { declineFailedFileMutationConfirmation } from "@/store/fileMutationConfirmStore";
+import { declineFailedGitWorktreeOperationConfirmation } from "@/store/gitWorktreeOperationConfirmStore";
+import { useGitForcePushStore } from "@/store/gitForcePushStore";
+import { cancelFailedRecipeConflict } from "@/store/recipeConflictStore";
 import { usePilotStore } from "@/store/pilotStore";
 import { useCanopyOfferShown } from "@/hooks/app/useCanopyOfferShown";
 import { useScratchStore } from "@/store/scratchStore";
@@ -166,10 +184,43 @@ interface ModalHostLayerProps {
 }
 
 /**
+ * One plugin prompt dialog's boundary. Keyed on the prompt in front only while
+ * it is this dialog's kind, so a dialog whose chunk failed retries on its own
+ * next prompt and dismisses only that one, never a prompt another dialog owns.
+ */
+function PluginPromptHost({
+  kind,
+  componentName,
+  children,
+}: {
+  kind: PluginUiPromptParams["kind"];
+  componentName: string;
+  children: ReactNode;
+}) {
+  const promptId = usePluginPromptStore((s) =>
+    s.current?.params.kind === kind ? s.current.promptId : ""
+  );
+  return (
+    <ErrorBoundary
+      variant="component"
+      componentName={componentName}
+      resetKeys={[promptId]}
+      onError={afterCatch(() => dismissFailedUiPrompt(promptId))}
+    >
+      <Suspense fallback={null}>{children}</Suspense>
+    </ErrorBoundary>
+  );
+}
+
+/**
  * Every always-mounted or conditionally-lazy palette, dialog, and overlay
  * host in the app shell — one `ErrorBoundary` + `Suspense` pair per lazy
  * child, matching the original inline structure 1:1 so each host's fault
  * isolation and reset-key behavior is unchanged by the move out of AppInner.
+ *
+ * A host whose dialog answers a waiting request also settles, on failure, the
+ * request its reset key names, so a dialog that can't load or render declines
+ * its caller, and the queue behind it moves on, instead of waiting for good.
  */
 export function ModalHostLayer({
   resumeSession,
@@ -247,6 +298,7 @@ export function ModalHostLayer({
   // Each Run now question retries a dialog that failed, so none waits on a fallback.
   const scheduleRunConfirmKey = useScheduleRunConfirmStore((s) => s.current?.requestId ?? "");
   const resourceTeardownConfirmKey = useWorktreeResourceTeardownConfirmStore((s) => s.requestSeq);
+  const layoutApplyConfirmKey = useLayoutApplyConfirmStore((s) => s.current?.requestId ?? "");
 
   return (
     <>
@@ -380,6 +432,7 @@ export function ModalHostLayer({
           variant="component"
           componentName="McpConfirmDialog"
           resetKeys={[mcpConfirmResetKey]}
+          onError={afterCatch(() => declineFailedMcpConfirmation(mcpConfirmResetKey))}
         >
           <Suspense fallback={null}>
             <LazyMcpConfirmDialog />
@@ -391,6 +444,7 @@ export function ModalHostLayer({
           variant="component"
           componentName="PluginConfirmDialog"
           resetKeys={[pluginConfirmResetKey]}
+          onError={afterCatch(() => usePluginConfirmStore.getState().drop(pluginConfirmResetKey))}
         >
           <Suspense fallback={null}>
             <LazyPluginConfirmDialog />
@@ -402,6 +456,9 @@ export function ModalHostLayer({
           variant="component"
           componentName="PluginMcpConfirmDialog"
           resetKeys={[pluginMcpConfirmResetKey]}
+          onError={afterCatch(() =>
+            usePluginMcpConfirmStore.getState().drop(pluginMcpConfirmResetKey)
+          )}
         >
           <Suspense fallback={null}>
             <LazyPluginMcpConfirmDialog />
@@ -413,6 +470,9 @@ export function ModalHostLayer({
           variant="component"
           componentName="PluginArchiveInstallConfirmDialog"
           resetKeys={[pluginArchiveInstallResetKey]}
+          onError={afterCatch(() =>
+            usePluginArchiveInstallStore.getState().drop(pluginArchiveInstallResetKey)
+          )}
         >
           <Suspense fallback={null}>
             <LazyPluginArchiveInstallConfirmDialog />
@@ -420,28 +480,27 @@ export function ModalHostLayer({
         </ErrorBoundary>
       )}
       {isStateLoaded && (
-        <ErrorBoundary variant="component" componentName="PluginQuickPickDialog">
-          <Suspense fallback={null}>
-            <LazyPluginQuickPickDialog />
-          </Suspense>
-        </ErrorBoundary>
+        <PluginPromptHost kind="quickPick" componentName="PluginQuickPickDialog">
+          <LazyPluginQuickPickDialog />
+        </PluginPromptHost>
       )}
       {isStateLoaded && (
-        <ErrorBoundary variant="component" componentName="PluginSendToAgentDialog">
-          <Suspense fallback={null}>
-            <LazyPluginSendToAgentDialog />
-          </Suspense>
-        </ErrorBoundary>
+        <PluginPromptHost kind="sendToAgent" componentName="PluginSendToAgentDialog">
+          <LazyPluginSendToAgentDialog />
+        </PluginPromptHost>
       )}
       {isStateLoaded && (
-        <ErrorBoundary variant="component" componentName="PluginInputBoxDialog">
-          <Suspense fallback={null}>
-            <LazyPluginInputBoxDialog />
-          </Suspense>
-        </ErrorBoundary>
+        <PluginPromptHost kind="inputBox" componentName="PluginInputBoxDialog">
+          <LazyPluginInputBoxDialog />
+        </PluginPromptHost>
       )}
       {isStateLoaded && (
-        <ErrorBoundary variant="component" componentName="LayoutApplyConfirmDialog">
+        <ErrorBoundary
+          variant="component"
+          componentName="LayoutApplyConfirmDialog"
+          resetKeys={[layoutApplyConfirmKey]}
+          onError={afterCatch(() => declineFailedLayoutApplyConfirmation(layoutApplyConfirmKey))}
+        >
           <Suspense fallback={null}>
             <LazyLayoutApplyConfirmDialog />
           </Suspense>
@@ -475,24 +534,23 @@ export function ModalHostLayer({
         </ErrorBoundary>
       )}
       {isStateLoaded && (
-        <ErrorBoundary variant="component" componentName="PluginConfirmPromptDialog">
-          <Suspense fallback={null}>
-            <LazyPluginConfirmPromptDialog />
-          </Suspense>
-        </ErrorBoundary>
+        <PluginPromptHost kind="confirm" componentName="PluginConfirmPromptDialog">
+          <LazyPluginConfirmPromptDialog />
+        </PluginPromptHost>
       )}
       {isStateLoaded && (
-        <ErrorBoundary variant="component" componentName="PluginRunRecipeDialog">
-          <Suspense fallback={null}>
-            <LazyPluginRunRecipeDialog />
-          </Suspense>
-        </ErrorBoundary>
+        <PluginPromptHost kind="runRecipe" componentName="PluginRunRecipeDialog">
+          <LazyPluginRunRecipeDialog />
+        </PluginPromptHost>
       )}
       {isStateLoaded && (
         <ErrorBoundary
           variant="component"
           componentName="PluginCapabilityConfirmDialog"
           resetKeys={[pluginCapabilityConfirmResetKey]}
+          onError={afterCatch(() =>
+            usePluginCapabilityConfirmStore.getState().drop(pluginCapabilityConfirmResetKey)
+          )}
         >
           <Suspense fallback={null}>
             <LazyPluginCapabilityConfirmDialog />
@@ -567,6 +625,7 @@ export function ModalHostLayer({
           variant="component"
           componentName="PanelLimitConfirmDialog"
           resetKeys={[panelLimitResetKey]}
+          onError={() => declineFailedPanelLimitConfirmation(panelLimitResetKey)}
         >
           <Suspense fallback={null}>
             <LazyPanelLimitConfirmDialog />
@@ -595,6 +654,7 @@ export function ModalHostLayer({
           variant="component"
           componentName="GitPushConfirmDialog"
           resetKeys={[gitPushResetKey]}
+          onError={() => declineFailedGitPushConfirmation(gitPushResetKey)}
         >
           <Suspense fallback={null}>
             <LazyGitPushConfirmDialog />
@@ -607,6 +667,7 @@ export function ModalHostLayer({
           variant="component"
           componentName="GitPullRebaseConfirmDialog"
           resetKeys={[gitPullRebaseResetKey]}
+          onError={() => declineFailedGitPullRebaseConfirmation(gitPullRebaseResetKey)}
         >
           <Suspense fallback={null}>
             <LazyGitPullRebaseConfirmDialog />
@@ -619,6 +680,7 @@ export function ModalHostLayer({
           variant="component"
           componentName="FileMutationConfirmDialog"
           resetKeys={[fileMutationResetKey]}
+          onError={() => declineFailedFileMutationConfirmation(fileMutationResetKey)}
         >
           <Suspense fallback={null}>
             <LazyFileMutationConfirmDialog />
@@ -631,6 +693,9 @@ export function ModalHostLayer({
           variant="component"
           componentName="GitWorktreeOperationConfirmDialog"
           resetKeys={[gitWorktreeOperationResetKey]}
+          onError={() =>
+            declineFailedGitWorktreeOperationConfirmation(gitWorktreeOperationResetKey)
+          }
         >
           <Suspense fallback={null}>
             <LazyGitWorktreeOperationConfirmDialog />
@@ -643,6 +708,9 @@ export function ModalHostLayer({
           variant="component"
           componentName="GitForcePushConfirmDialog"
           resetKeys={[gitForcePushResetKey]}
+          onError={() =>
+            useGitForcePushStore.getState().resolveConfirmation(gitForcePushResetKey, false)
+          }
         >
           <Suspense fallback={null}>
             <LazyGitForcePushConfirmDialog />
@@ -687,6 +755,7 @@ export function ModalHostLayer({
           variant="component"
           componentName="RecipeConflictDialog"
           resetKeys={[recipeConflictResetKey]}
+          onError={() => cancelFailedRecipeConflict(recipeConflictResetKey)}
         >
           <Suspense fallback={null}>
             <LazyRecipeConflictDialog />
