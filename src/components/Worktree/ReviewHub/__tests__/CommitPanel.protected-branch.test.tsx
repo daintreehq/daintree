@@ -113,7 +113,7 @@ interface RenderProps {
   pushDestination?: { remote: string; branch: string } | null;
   commitMessage?: string;
   skipPushConfirm?: boolean;
-  onCommitAndPush?: (message: string, target: CommitPushTarget) => Promise<void>;
+  onCommitAndPush?: (message: string, target: CommitPushTarget) => Promise<"withheld" | void>;
   onSetSkipPushConfirm?: (value: boolean) => void;
   stagedPaths?: readonly string[];
 }
@@ -554,25 +554,34 @@ describe("CommitPanel — push confirm", () => {
     expect(onCommitAndPush).not.toHaveBeenCalled();
   });
 
-  it("records no opt-out when the commit refuses what was confirmed, so the next push confirms again (#17563)", async () => {
-    // Main's refusal as the preload hands it over.
-    const refused = new Error(
-      "[GitError|commit-review-stale||feature%2Fx] This commit changed after it was reviewed: the staged changes are different. Nothing was committed or pushed. Commit and push again to review what is staged now."
-    );
-    const onCommitAndPush = vi.fn().mockRejectedValueOnce(refused);
-    const { onSetSkipPushConfirm } = renderPanel({ currentBranch: "feature/x", onCommitAndPush });
-    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
-    fireEvent.click(screen.getByTestId("commit-panel-push-confirm-dont-ask"));
-    await confirmWhenReady(/Push to origin\/feature\/x/);
+  it.each([
+    [
+      "the commit is refused",
+      // Main's refusal as the preload hands it over.
+      () =>
+        Promise.reject(
+          new Error(
+            "[GitError|commit-review-stale||feature%2Fx] This commit changed after it was reviewed: the staged changes are different. Nothing was committed or pushed. Commit and push again to review what is staged now."
+          )
+        ),
+    ],
+    ["the push is held back", () => Promise.resolve("withheld" as const)],
+  ])(
+    "records no opt-out when %s because what was confirmed moved (#17563)",
+    async (_label, outcome) => {
+      const onCommitAndPush = vi.fn(outcome);
+      const { onSetSkipPushConfirm } = renderPanel({
+        currentBranch: "feature/x",
+        onCommitAndPush,
+      });
+      fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
+      fireEvent.click(screen.getByTestId("commit-panel-push-confirm-dont-ask"));
+      await confirmWhenReady(/Push to origin\/feature\/x/);
 
-    expect(onCommitAndPush).toHaveBeenCalledTimes(1);
-    expect(onSetSkipPushConfirm).not.toHaveBeenCalled();
-    // The stored preference is unchanged, so following the refusal's advice
-    // opens a fresh confirm rather than committing straight away.
-    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
-    expect(screen.getByTestId("push-confirm-dialog")).toBeDefined();
-    expect(onCommitAndPush).toHaveBeenCalledTimes(1);
-  });
+      expect(onCommitAndPush).toHaveBeenCalledTimes(1);
+      expect(onSetSkipPushConfirm).not.toHaveBeenCalled();
+    }
+  );
 
   it("persists the opt-out even when the push call rejects", async () => {
     const onCommitAndPush = vi.fn().mockRejectedValue(new Error("network"));

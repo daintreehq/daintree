@@ -202,7 +202,10 @@ interface CommitPanelProps {
    */
   onCommit: (message: string) => Promise<void>;
   /** `target` is what the push is pinned to once the commit lands (#16790). */
-  onCommitAndPush: (message: string, target: CommitPushTarget) => Promise<void>;
+  onCommitAndPush: (
+    message: string,
+    target: CommitPushTarget
+  ) => Promise<"withheld" | undefined | void>;
   /**
    * The branch has no commit yet, so git names no destination for its push
    * and this panel has nothing to preview it against (#17588). Commit & push
@@ -502,8 +505,9 @@ export function CommitPanel({
     }
   }, [canCommit, actionsBusy, stagedCount, commitMessage, onCommit]);
 
-  // Resolves to "review-stale" when main refused the reviewed commit because
-  // what the confirm showed moved under it, so the confirm's choices never ran.
+  // Resolves to "review-stale" when what the confirm showed moved under it, so
+  // its approval never ran: main refused the commit, or the commit landed with
+  // other contents and its push was held back.
   const handleCommitAndPush = useCallback(
     async (message: string, target: CommitPushTarget): Promise<"review-stale" | undefined> => {
       if (!canCommit || actionsBusy) return undefined;
@@ -512,8 +516,7 @@ export function CommitPanel({
       setPendingCount(stagedCount);
       setPendingAction("commit-push");
       try {
-        await onCommitAndPush(message, target);
-        return undefined;
+        return (await onCommitAndPush(message, target)) === "withheld" ? "review-stale" : undefined;
       } catch (err) {
         // Error is handled by the parent via setActionError
         return readGitErrorFields(err).gitReason === "commit-review-stale"
@@ -616,10 +619,11 @@ export function CommitPanel({
       reviewed: { headOid: outgoingRange.headOid, stagedIdentity: outgoingRange.staged.identity },
     }).then((outcome) => {
       // The opt-out stands however the push goes — a preference about the
-      // confirm, orthogonal to network or rejection failures — except when the
-      // commit refused what was confirmed (#17563). The refusal asks for a
-      // fresh review, and an opt-out recorded here would answer that next
-      // click with a commit and push nobody reviewed.
+      // confirm, orthogonal to network or rejection failures — except when
+      // what was confirmed moved under it and nothing it approved ran
+      // (#17563). That outcome asks for a fresh review, and an opt-out
+      // recorded here would answer the next click with a commit and push
+      // nobody reviewed.
       if (outcome !== "review-stale") onSetSkipPushConfirm(skipNextConfirm);
     });
   }, [

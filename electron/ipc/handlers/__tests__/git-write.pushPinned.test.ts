@@ -849,6 +849,34 @@ describe("commit & push — held to the staged changes its confirm listed (#1756
     expect(committed.stagedIdentity).not.toBe(staged.identity);
   });
 
+  it("vouches for nothing when a replace ref hides the commit's real parent", async () => {
+    const fixture = makeFixture();
+    stageText(fixture.repo, "user.txt", "reviewed text\n");
+    const { shown, staged } = await reviewCommit(fixture.repo, "topic");
+    // After every check, an agent lands an empty commit, so the user's commit
+    // sits on it with exactly the reviewed contents; then a replace ref
+    // presents the reviewed tip as its parent.
+    commitHook.before = () => {
+      // Empty, and made without touching the index the user staged.
+      const tree = git(fixture.repo, ["rev-parse", "HEAD^{tree}"]);
+      const agent = git(fixture.repo, ["commit-tree", tree, "-p", "HEAD", "-m", "agent"]);
+      git(fixture.repo, ["update-ref", "refs/heads/topic", agent]);
+    };
+    commitHook.after = () => {
+      const made = git(fixture.repo, ["rev-parse", "HEAD"]);
+      git(fixture.repo, ["replace", "--graft", made, fixture.reviewed]);
+    };
+
+    const committed = await commitAsReviewed(fixture.repo, "topic", shown);
+
+    expect(committed.parentOids).toEqual([fixture.reviewed]);
+    expect(git(fixture.repo, ["--no-replace-objects", "rev-parse", `${committed.oid}^`])).not.toBe(
+      fixture.reviewed
+    );
+    expect(staged.identity).toEqual(expect.any(String));
+    expect(committed.stagedIdentity).toBeNull();
+  });
+
   it("refuses when the branch gained a commit while the confirm was open", async () => {
     const fixture = makeFixture();
     stageText(fixture.repo, "user.txt", "reviewed text\n");

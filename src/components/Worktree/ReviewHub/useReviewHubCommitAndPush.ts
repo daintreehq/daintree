@@ -284,7 +284,8 @@ export function useReviewHubCommitAndPush({
   );
 
   const handleCommitAndPush = useCallback(
-    async (message: string, target: CommitPushTarget) => {
+    /** Resolves to "withheld" when the commit landed but its push was held back unrun. */
+    async (message: string, target: CommitPushTarget): Promise<"withheld" | undefined> => {
       setActionError(null);
       setPushError(null);
       debouncedBgRefreshRef.current?.cancel();
@@ -304,9 +305,10 @@ export function useReviewHubCommitAndPush({
         const push = reviewForCommittedPush(committed, target);
         if ("withheld" in push) {
           withholdPush(push.withheld, target.branch);
-          return;
+          return "withheld";
         }
         await runPush(push.review);
+        return undefined;
       } finally {
         setIsCommitPushInFlight(false);
       }

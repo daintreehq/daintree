@@ -507,10 +507,16 @@ describe("useReviewHubCommitAndPush — held to the staged changes the confirm l
     const onCommitted = vi.fn();
     const { result } = renderPushHook({ setActionError, onCommitted });
 
+    let rethrown: unknown;
     await act(async () => {
-      await result.current.handleCommitAndPush("feat: x", CONFIRMED).catch(() => {});
+      await result.current.handleCommitAndPush("feat: x", CONFIRMED).catch((err: unknown) => {
+        rethrown = err;
+      });
     });
 
+    // Rethrown with its reason readable, so the composer can tell a refused
+    // review from any other failed commit.
+    expect((rethrown as { gitReason?: string }).gitReason).toBe("commit-review-stale");
     expect(push).not.toHaveBeenCalled();
     expect(onCommitted).not.toHaveBeenCalled();
     expect(headMoved).not.toHaveBeenCalled();
@@ -533,9 +539,13 @@ describe("useReviewHubCommitAndPush — held to the staged changes the confirm l
     await act(() => result.current.handleCommitAndPush("feat: first", CONFIRMED));
     expect(push).toHaveBeenCalledTimes(1);
 
-    await act(() => result.current.handleCommitAndPush("feat: x", CONFIRMED));
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.handleCommitAndPush("feat: x", CONFIRMED);
+    });
 
     // The commit landed, so the draft goes; only the push is withheld.
+    expect(outcome).toBe("withheld");
     expect(onCommitted).toHaveBeenLastCalledWith(PATH, "feat: x");
     expect(push).toHaveBeenCalledTimes(1);
     expect(result.current.pushError?.reason).toBe("push-review-stale");
