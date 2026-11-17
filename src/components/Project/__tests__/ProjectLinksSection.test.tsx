@@ -58,6 +58,9 @@ afterEach(() => {
   cleanup();
   cleanupProjectSettingsStore();
   vi.clearAllMocks();
+  // clearAllMocks keeps queued one-shot answers, so one a test never took would land in the next.
+  changeMock.mockReset();
+  getSettingsMock.mockReset();
 });
 
 describe("ProjectLinksSection (#17091)", () => {
@@ -264,6 +267,11 @@ describe("ProjectLinksSection (#17091)", () => {
         fireEvent.keyDown(input(container, EDIT_TITLE), { key: "Enter" });
       });
 
+      expect(changeMock).toHaveBeenCalledWith({
+        projectId: "proj-1",
+        actor: "user",
+        change: { op: "update", id: "b", title: "CI", url: ci.url },
+      });
       expect(queryByRole("button", { name: "Save" })).toBeNull();
       expect(document.activeElement).toBe(getByRole("button", { name: "Edit CI" }));
     });
