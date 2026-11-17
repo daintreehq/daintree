@@ -308,9 +308,14 @@ export function cloudChoiceFitsLocation(
   return location !== null && choice.locations.includes(location);
 }
 
-/** A dimension's name inside a sentence, with its article: "a region", "an AMI". */
+/** A dimension's name inside a sentence: "region", "AMI". */
 export function cloudProvisioningNoun(label: string): string {
-  const noun = /^[A-Z][a-z]/.test(label) ? `${label[0]!.toLowerCase()}${label.slice(1)}` : label;
+  return /^[A-Z][a-z]/.test(label) ? `${label[0]!.toLowerCase()}${label.slice(1)}` : label;
+}
+
+/** The same, with its article: "a region", "an AMI". */
+export function cloudProvisioningArticleNoun(label: string): string {
+  const noun = cloudProvisioningNoun(label);
   return `${/^[aeiou]/i.test(noun) ? "an" : "a"} ${noun}`;
 }
 

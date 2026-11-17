@@ -3,6 +3,7 @@ import {
   CLOUD_LIFETIME_CHOICES,
   CLOUD_PROVISIONING_DIMENSIONS,
   cloudChoiceFitsLocation,
+  cloudProvisioningArticleNoun,
   cloudProvisioningNoun,
   type CloudCatalog,
   type CloudHostCreatedFor,
@@ -161,16 +162,16 @@ function checkProvisioning(
     named = true;
     const noun = cloudProvisioningNoun(options.label);
     if (value === undefined || value === null) {
-      if (takes[dimension] === "required") throw invalid(`Choose ${noun}.`);
+      if (takes[dimension] === "required") {
+        throw invalid(`Choose ${cloudProvisioningArticleNoun(options.label)}.`);
+      }
       picks[dimension] = { label: options.label, id: null, value: `Chosen by ${name}` };
       continue;
     }
     const choice =
       typeof value === "string" ? options.choices.find((entry) => entry.id === value) : undefined;
     if (!choice)
-      throw invalid(
-        `${name} doesn't offer that ${noun.replace(/^an? /, "")} to this account. Choose another.`
-      );
+      throw invalid(`${name} doesn't offer that ${noun} to this account. Choose another.`);
     if (!choice.available) {
       throw invalid(
         choice.reason
@@ -181,7 +182,7 @@ function checkProvisioning(
     if (!cloudChoiceFitsLocation(choice, selection.location)) {
       const where = catalog.provisioning.location;
       throw invalid(
-        `${choice.label} isn't offered in ${where ? `that ${where.label.toLowerCase()}` : "every location"}. Choose another.`
+        `${choice.label} isn't offered in ${where ? `that ${cloudProvisioningNoun(where.label)}` : "every location"}. Choose another.`
       );
     }
     selection[dimension] = choice.id;
@@ -571,7 +572,7 @@ export class CloudHostLifecycle {
     for (const dimension of CLOUD_PROVISIONING_DIMENSIONS) {
       if (takes[dimension] === "required" && !picks?.[dimension]?.id) {
         refuse(
-          `${nameOf(provider)} needs ${cloudProvisioningNoun(DIMENSION_WORDS[dimension])} for this machine that its create never named, so Daintree won't guess one. Remove the host and create it again.`
+          `${nameOf(provider)} needs ${cloudProvisioningArticleNoun(DIMENSION_WORDS[dimension])} for this machine that its create never named, so Daintree won't guess one. Remove the host and create it again.`
         );
       }
     }

@@ -116,3 +116,29 @@ describe("CloudMachineSection created-for row", () => {
     expect(screen.getByText(/Added from the account/)).toBeTruthy();
   });
 });
+
+describe("CloudMachineSection provisioning rows", () => {
+  it("shows where the machine runs and what it boots, as named at create, with its provider gone", () => {
+    show(
+      status({
+        providerId: "acme.clouds.ec2",
+        provisioning: {
+          location: { label: "Region", id: "eu-west-1", value: "Europe (Ireland)" },
+          image: { label: "AMI", id: "ami-0abc", value: "Ubuntu 24.04" },
+          network: { label: "Subnet", id: null, value: "Chosen by Acme" },
+        },
+      })
+    );
+    expect(screen.getByTestId("cloud-machine-location").textContent).toBe(
+      "Europe (Ireland) · eu-west-1"
+    );
+    expect(screen.getByTestId("cloud-machine-image").textContent).toBe("Ubuntu 24.04 · ami-0abc");
+    expect(screen.getByTestId("cloud-machine-network").textContent).toBe("Chosen by Acme");
+  });
+
+  it("has no rows for a machine that named none", () => {
+    show(status());
+    expect(screen.queryByTestId("cloud-machine-location")).toBeNull();
+    expect(screen.queryByTestId("cloud-machine-image")).toBeNull();
+  });
+});
