@@ -2547,11 +2547,14 @@ describe("ReviewHub", () => {
     });
 
     describe("a staging write the previous worktree answers after the move (#17584)", () => {
-      const twoUnstaged = (): StagingStatus =>
+      // Three rows with two selected, so the selection's write can't pass for a
+      // whole-section one.
+      const threeUnstaged = (): StagingStatus =>
         makeStatus({
           unstaged: [
             { path: "src/x.ts", status: "modified", insertions: 1, deletions: 0 },
             { path: "src/y.ts", status: "modified", insertions: 1, deletions: 0 },
+            { path: "src/z.ts", status: "modified", insertions: 1, deletions: 0 },
           ],
         });
 
@@ -2566,7 +2569,7 @@ describe("ReviewHub", () => {
       }
 
       async function renderAndMove(start: () => Promise<void>) {
-        getStagingStatusMock.mockResolvedValue(twoUnstaged());
+        getStagingStatusMock.mockResolvedValue(threeUnstaged());
         const view = render(
           <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
         );

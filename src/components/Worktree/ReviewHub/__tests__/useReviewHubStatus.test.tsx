@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useLayoutEffect } from "react";
 import { act, renderHook } from "@testing-library/react";
 import type { StagingStatus } from "@shared/types";
 import type { ReviewMarkCaptureOutcome } from "@shared/types/ipc/reviewMarks";
@@ -389,17 +390,30 @@ describe("useReviewHubStatus after a worktree switch", () => {
     expect(result.current.loading).toBe(false);
   });
 
-  it("answers whether a path is the worktree open now", () => {
+  it("answers whether a path is the worktree open now, from the switch's own commit", async () => {
     marks.available = false;
+    // A layout effect declared after the hook runs after its own: what anything
+    // settling between the switch's commit and its passive effects would see.
+    const seenAtCommit: boolean[] = [];
     const { result, rerender } = renderHook(
-      ({ path }: { path: string }) =>
-        useReviewHubStatus({ isOpen: true, worktreePath: path, worktreeId: "wt-1" }),
+      ({ path }: { path: string }) => {
+        const hub = useReviewHubStatus({ isOpen: true, worktreePath: path, worktreeId: "wt-1" });
+        const { isOpenPath } = hub;
+        useLayoutEffect(() => {
+          seenAtCommit.push(isOpenPath(WT));
+        }, [isOpenPath, path]);
+        return hub;
+      },
       { initialProps: { path: WT } }
     );
+    await advance(0);
     expect(result.current.isOpenPath(WT)).toBe(true);
+    seenAtCommit.length = 0;
 
     rerender({ path: OTHER });
+    await advance(0);
 
+    expect(seenAtCommit[0]).toBe(false);
     expect(result.current.isOpenPath(WT)).toBe(false);
     expect(result.current.isOpenPath(OTHER)).toBe(true);
   });

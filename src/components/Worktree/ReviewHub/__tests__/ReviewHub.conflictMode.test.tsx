@@ -1116,6 +1116,7 @@ describe("ReviewHub", () => {
       expect(
         screen.getByRole("button", { name: /^Continue /i }).getAttribute("aria-disabled")
       ).toBe("true");
+      await screen.findByText("Couldn't mark file resolved");
     });
 
     it("rolls back optimistic resolution when Take ours fails", async () => {
@@ -1133,6 +1134,7 @@ describe("ReviewHub", () => {
         // The row reappears after rollback — the Take ours button is still rendered.
         expect(screen.getByRole("menuitem", { name: /for src\/app\.ts \(ours\)/i })).toBeTruthy();
       });
+      await screen.findByText("Couldn't take ours");
     });
 
     it("disables Continue while a checkout IPC call is still in flight", async () => {
@@ -1600,6 +1602,45 @@ describe("ReviewHub", () => {
         expect(abortRepositoryOperationMock).toHaveBeenCalledTimes(1);
       });
 
+      it("keeps the old worktree's Take ours failure off the new one's banner (#17584)", async () => {
+        const oldCheckout = deferred<void>();
+        checkoutOursTheirsMock.mockImplementationOnce(() => oldCheckout.promise);
+        const moveToOther = renderMergingHub();
+        fireEvent.click(
+          await screen.findByRole("menuitem", { name: /for src\/app\.ts \(ours\)/i })
+        );
+        await confirmCheckout("ours");
+        await waitFor(() =>
+          expect(checkoutOursTheirsMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts", "ours")
+        );
+
+        moveToOther();
+        await act(async () => {
+          oldCheckout.reject(new Error("checkout failed"));
+        });
+
+        expect(screen.queryByText("Couldn't take ours")).toBeNull();
+      });
+
+      it("keeps the old worktree's abort failure off the new one's banner (#17584)", async () => {
+        const oldAbort = deferred<void>();
+        abortRepositoryOperationMock.mockImplementationOnce(() => oldAbort.promise);
+        const moveToOther = renderMergingHub();
+        fireEvent.click(await screen.findByRole("button", { name: /^Abort /i }));
+        const dialog = await screen.findByRole("alertdialog");
+        fireEvent.click(within(dialog).getByRole("button", { name: /Abort merge/i }));
+        await waitFor(() =>
+          expect(abortRepositoryOperationMock).toHaveBeenCalledWith(WORKTREE_PATH, MERGE_A)
+        );
+
+        moveToOther();
+        await act(async () => {
+          oldAbort.reject(new Error("abort failed"));
+        });
+
+        expect(screen.queryByText("Couldn't abort repository operation")).toBeNull();
+      });
+
       it("keeps the new worktree's own resolve when the old worktree's same-named resolve fails", async () => {
         const oldStage = deferred<void>();
         const newStage = deferred<void>();
@@ -1869,6 +1910,42 @@ describe("ReviewHub", () => {
         await act(async () => {});
         expect(continueRepositoryOperationMock).not.toHaveBeenCalled();
       });
+    });
+
+    it("keeps a Continue failure that lands after a move, and its Retry, off the new worktree (#17584)", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeMergingStatus({
+          conflicted: [],
+          conflictedFiles: [],
+          staged: [{ path: "src/app.ts", status: "modified", insertions: 1, deletions: 1 }],
+        })
+      );
+      let rejectContinue: (reason: unknown) => void = () => {};
+      continueRepositoryOperationMock.mockImplementationOnce(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            rejectContinue = reject;
+          })
+      );
+      const { rerender } = render(
+        <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+      );
+      fireEvent.click(await screen.findByRole("button", { name: /^Continue /i }));
+      await waitFor(() =>
+        expect(continueRepositoryOperationMock).toHaveBeenCalledWith(WORKTREE_PATH, MERGE_A)
+      );
+
+      rerender(
+        <ReviewHubContent isOpen={true} worktreePath="/home/user/other" onClose={vi.fn()} />
+      );
+      await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalledWith("/home/user/other"));
+      await act(async () => {
+        rejectContinue(new Error("could not continue"));
+      });
+
+      expect(screen.queryByText("Couldn't continue repository operation")).toBeNull();
+      expect(screen.queryByRole("button", { name: /^Retry$/ })).toBeNull();
+      expect(continueRepositoryOperationMock).toHaveBeenCalledTimes(1);
     });
 
     it("does not continue while conflicts remain, even though Continue stays focusable", async () => {
