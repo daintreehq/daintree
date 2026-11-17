@@ -279,15 +279,23 @@ function AttentionItem({ item, worktreeName, busy, onResume, onChoose, onHandled
     if (stillWorking) announce(`${alias}: ${STILL_WORKING}`);
   }, [stillWorking, alias, announce]);
 
+  // Every opening and closing starts a new generation, so a lookup from an opening already
+  // closed can't overwrite the agents (or the error) of the menu showing now.
+  const destinationsGenerationRef = useRef(0);
   const loadDestinations = (open: boolean) => {
+    const generation = ++destinationsGenerationRef.current;
     if (!open) return;
     setDestinations(null);
     setDestinationsError(null);
-    decisionsClient
-      .listAnswerDestinations(item.questionId)
-      .then(setDestinations, (error) =>
-        setDestinationsError(formatErrorMessage(error, "Couldn't list the running agents"))
-      );
+    decisionsClient.listAnswerDestinations(item.questionId).then(
+      (listed) => {
+        if (generation === destinationsGenerationRef.current) setDestinations(listed);
+      },
+      (error) => {
+        if (generation !== destinationsGenerationRef.current) return;
+        setDestinationsError(formatErrorMessage(error, "Couldn't list the running agents"));
+      }
+    );
   };
 
   return (

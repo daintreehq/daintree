@@ -2,6 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type {
+  DecisionsAnswerDestination,
+  DecisionsAnswerDestinations,
   DecisionsAnswerOutcome,
   DecisionsAttentionItem,
   DecisionsAttentionList,
@@ -15,6 +17,7 @@ vi.mock("@/hooks/useWorktrees", () => ({ useWorktrees: () => ({ worktrees: [] })
 const listAttention = vi.fn<() => Promise<DecisionsAttentionList>>();
 const markAnswerHandled =
   vi.fn<(payload: { questionId: string }) => Promise<DecisionsAnswerOutcome>>();
+const listAnswerDestinations = vi.fn<(questionId: string) => Promise<DecisionsAnswerDestinations>>();
 
 /** The list as main would read it now; actions change it before the next read. */
 let listed: DecisionsAttentionItem[] = [];
@@ -108,6 +111,17 @@ async function ask(alias: number): Promise<HTMLElement> {
   return asking;
 }
 
+function stubElectron() {
+  Object.defineProperty(window, "electron", {
+    value: {
+      decisions: { listAttention, markAnswerHandled, listAnswerDestinations },
+      terminal: { onDecisionState: () => () => {} },
+    },
+    configurable: true,
+    writable: true,
+  });
+}
+
 function handlesQuestions() {
   markAnswerHandled.mockImplementation(async ({ questionId }) => {
     listed = listed.filter((item) => item.questionId !== questionId);
@@ -121,14 +135,7 @@ describe("DecisionsAttentionDialog: Mark handled (#16638)", () => {
     listAttention.mockReset();
     markAnswerHandled.mockReset();
     listAttention.mockImplementation(async () => ({ result: "listed", items: listed }));
-    Object.defineProperty(window, "electron", {
-      value: {
-        decisions: { listAttention, markAnswerHandled },
-        terminal: { onDecisionState: () => () => {} },
-      },
-      configurable: true,
-      writable: true,
-    });
+    stubElectron();
     useDecisionsAttentionStore.setState({
       isOpen: true,
       request: { terminalId: null, returnFocusTo: null, seq: 1 },
@@ -267,4 +274,113 @@ describe("DecisionsAttentionDialog: Mark handled (#16638)", () => {
     expect(confirm()).toBeNull();
     expect(markAnswerHandled).not.toHaveBeenCalled();
   });
+});
+
+function destination(terminalId: string, title: string): DecisionsAnswerDestination {
+  return {
+    terminalId,
+    title,
+    agentId: "claude",
+    agentName: "Claude",
+    projectId: "project-1",
+    projectName: "Helios",
+    worktreeId: "worktree-1",
+    worktreeName: "main",
+    askedHere: false,
+  };
+}
+
+function settleable<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function destinationsMenu(): HTMLElement | null {
+  return screen.queryByRole("menu");
+}
+
+async function openDestinations(alias: number) {
+  const trigger = screen.getByRole("button", { name: `Choose destination for q-${alias}` });
+  act(() => trigger.focus());
+  fireEvent.keyDown(trigger, { key: "Enter" });
+  await waitFor(() => expect(destinationsMenu()).not.toBeNull());
+}
+
+async function closeDestinations() {
+  fireEvent.keyDown(destinationsMenu()!, { key: "Escape" });
+  await waitFor(() => expect(destinationsMenu()).toBeNull());
+}
+
+function menuRows(): string[] {
+  return within(destinationsMenu()!)
+    .getAllByRole("menuitem")
+    .map((row) => row.textContent ?? "");
+}
+
+describe("DecisionsAttentionDialog: Choose destination (#17560)", () => {
+  beforeEach(() => {
+    listed = [makeItem(3)];
+    listAttention.mockReset();
+    listAnswerDestinations.mockReset();
+    listAttention.mockImplementation(async () => ({ result: "listed", items: listed }));
+    stubElectron();
+    useDecisionsAttentionStore.setState({
+      isOpen: true,
+      request: { terminalId: null, returnFocusTo: null, seq: 1 },
+    });
+  });
+  afterEach(() => {
+    cleanup();
+  });
+
+  it.each([
+    {
+      how: "lists agents that have since gone",
+      settle: (older: ReturnType<typeof settleable<DecisionsAnswerDestinations>>) =>
+        older.resolve({ result: "listed", destinations: [destination("pane-old", "Gone agent")] }),
+    },
+    {
+      how: "fails",
+      settle: (older: ReturnType<typeof settleable<DecisionsAnswerDestinations>>) =>
+        older.reject(new Error("The relay went away")),
+    },
+  ])(
+    "keeps the reopened menu's agents when the lookup of a closed opening $how afterwards",
+    async ({ settle }) => {
+      const older = settleable<DecisionsAnswerDestinations>();
+      const newer = settleable<DecisionsAnswerDestinations>();
+      listAnswerDestinations
+        .mockReturnValueOnce(older.promise)
+        .mockReturnValueOnce(newer.promise);
+      render(tree(true));
+      await listedRows(1);
+
+      await openDestinations(3);
+      expect(menuRows()).toEqual(["Looking…"]);
+      await closeDestinations();
+      await openDestinations(3);
+      expect(listAnswerDestinations).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        newer.resolve({ result: "listed", destinations: [destination("pane-new", "Fresh agent")] });
+      });
+      await waitFor(() => expect(menuRows()[0]).toContain("Fresh agent"));
+
+      await act(async () => {
+        settle(older);
+        await older.promise.catch(() => {});
+      });
+
+      const rows = menuRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toContain("Fresh agent");
+      expect(destinationsMenu()!.textContent).not.toContain("Gone agent");
+      expect(destinationsMenu()!.textContent).not.toContain("The relay went away");
+    }
+  );
 });
