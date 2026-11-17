@@ -457,10 +457,11 @@ describe("PilotView", () => {
 
     screen.getByTestId("pilot-row").click();
 
-    expect(dispatchMock).toHaveBeenCalledWith("pilot.openRun", {
-      runId: "t9",
-      workspaceId: "p1",
-    });
+    // Strict: a run with no worktree sends no `worktreeId` key at all.
+    expect(dispatchMock.mock.calls.find(([id]) => id === "pilot.openRun")).toStrictEqual([
+      "pilot.openRun",
+      { runId: "t9", workspaceId: "p1" },
+    ]);
   });
 
   it("names the row's worktree when opening its run", () => {

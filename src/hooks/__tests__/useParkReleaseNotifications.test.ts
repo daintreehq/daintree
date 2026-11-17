@@ -133,9 +133,11 @@ describe("useParkReleaseNotifications", () => {
       supersedeKey: "park-released:t1",
       context: { projectId: "p1", panelId: "t1" },
     });
-    expect(payload.action).toMatchObject({
-      actionId: "pilot.openRun",
-      actionArgs: { runId: "t1", workspaceId: "p1" },
+    expect(payload.action).toMatchObject({ actionId: "pilot.openRun" });
+    // Strict: a run with no worktree carries no `worktreeId` key to replay.
+    expect(payload.action?.actionArgs).toStrictEqual({
+      runId: "t1",
+      workspaceId: "p1",
     });
     // The view's own snapshot named the run, so main was never asked.
     expect(getSnapshotMock).not.toHaveBeenCalled();
@@ -155,8 +157,14 @@ describe("useParkReleaseNotifications", () => {
     });
 
     const expected = { runId: "t1", workspaceId: "p1", worktreeId: "/repo/wt/alpha" };
-    const action = notifyArg(0).action as { actionArgs: unknown; onClick: () => Promise<void> };
-    expect(action.actionArgs).toEqual(expected);
+    const action = notifyArg(0).action as {
+      label: string;
+      actionId: string;
+      actionArgs: unknown;
+      onClick: () => Promise<void>;
+    };
+    expect(action).toMatchObject({ label: "Open", actionId: "pilot.openRun" });
+    expect(action.actionArgs).toStrictEqual(expected);
     await action.onClick();
     expect(dispatchMock).toHaveBeenCalledWith("pilot.openRun", expected);
   });

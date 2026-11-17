@@ -156,7 +156,7 @@ describe("pilot.openRun", () => {
     expect(dispatchMock).not.toHaveBeenCalledWith("panel.focus", { panelId: "t9" });
   });
 
-  it("names the run's worktree on the switch, so a run that exits on the way still lands there", async () => {
+  it("names the run's worktree on the switch's focus intent", async () => {
     // The run can exit while the destination hydrates. Without its worktree the
     // incoming view has nowhere to land but whichever worktree it last showed.
     await openRun({ runId: "t9", workspaceId: PROJECT_ELSEWHERE, worktreeId: "/repo/wt/alpha" });
@@ -179,9 +179,11 @@ describe("pilot.openRun", () => {
   it("names no worktree for a blank id, which identifies none", async () => {
     await openRun({ runId: "t9", workspaceId: PROJECT_ELSEWHERE, worktreeId: "  " });
 
-    expect(switchProject).toHaveBeenCalledWith(PROJECT_ELSEWHERE, {
-      focusIntent: { intent: "focus-panel", panelId: "t9" },
-    });
+    // Strict: an explicit `worktreeId: undefined` key would pass a loose match.
+    expect(switchProject.mock.calls[0]).toStrictEqual([
+      PROJECT_ELSEWHERE,
+      { focusIntent: { intent: "focus-panel", panelId: "t9" } },
+    ]);
   });
 
   it("keeps the worktree on Try again after a rejected switch", async () => {
@@ -193,8 +195,10 @@ describe("pilot.openRun", () => {
       worktreeId: "/repo/wt/alpha",
     });
 
-    const toast = notifyMock.mock.calls[0]![0] as { actions?: { onClick: () => void }[] };
-    toast.actions![0]!.onClick();
+    const toast = notifyMock.mock.calls[0]![0] as {
+      actions?: { label: string; onClick: () => void }[];
+    };
+    toast.actions!.find((action) => action.label === "Try again")!.onClick();
     expect(dispatchMock).toHaveBeenCalledWith("pilot.openRun", {
       runId: "t9",
       workspaceId: PROJECT_ELSEWHERE,
