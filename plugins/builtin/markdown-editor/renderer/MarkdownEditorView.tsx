@@ -41,6 +41,7 @@ import {
 } from "@daintreehq/plugin-ui";
 import { cn } from "@/lib/utils";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
+import { canPanelTakeFind } from "@/lib/findInPanel";
 import { MarkdownEditorStatusBar } from "./MarkdownEditorStatusBar.js";
 import { DocumentController } from "./documentController.js";
 import { identityKey } from "../shared/ids.js";
@@ -374,10 +375,12 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
   }, [polarity]);
 
   // Cmd+F from the panel chrome lands in this editor's find bar while the
-  // panel is focused, as it does for Source mode.
+  // panel is focused, as it does for Source mode. A modal over the panel keeps
+  // it out.
   useEffect(() => {
     if (!props.isFocused) return;
     const handler = () => {
+      if (!canPanelTakeFind(hostRef.current)) return;
       if (viewRef.current) openSearchPanel(viewRef.current);
     };
     window.addEventListener("daintree:find-in-panel", handler);

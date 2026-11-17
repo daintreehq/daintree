@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { UndoCloseMenuState } from "@shared/types/menu";
 
@@ -47,9 +47,15 @@ const { keybindingService } = await import("@/services/KeybindingService");
 const history = await import("../panelCloseHistory");
 const { trackNativeFieldEdits, resetCloseUndoOrderForTests } = await import("../closeUndoOrder");
 const { undoCloseMenuState, startUndoCloseMenuPublisher } = await import("../undoCloseMenu");
+const { undoCloseTakesKey } = await import("../undoCloseKey");
 const { PLUGIN_STYLE_OWNER_ATTRIBUTE } = await import("@/services/plugin/pluginStyleOwner");
 const { registerPanelCoreActions } =
   await import("@/services/actions/definitions/panelCoreActions");
+const { EditorState, Transaction } = await import("@codemirror/state");
+const { EditorView } = await import("@codemirror/view");
+const { markdown, markdownLanguage } = await import("@codemirror/lang-markdown");
+const { buildMarkdownEditorExtensions } =
+  await import("../../../../plugins/builtin/markdown-editor/renderer/markdownEditorExtensions");
 
 function seed(id: string, extra: Partial<PtyPanelData> = {}) {
   const panel: PtyPanelData = {
@@ -93,6 +99,39 @@ function typeInto(field: HTMLInputElement, value: string) {
   field.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, inputType: "insertText" }));
   field.value = value;
   field.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+}
+
+// The Markdown editor's own buffer, as a File or File Browser panel mounts it.
+function focusMarkdownEditor(doc: string): InstanceType<typeof EditorView> {
+  const parent = document.createElement("div");
+  document.body.appendChild(parent);
+  const view = new EditorView({
+    parent,
+    state: EditorState.create({
+      doc,
+      extensions: buildMarkdownEditorExtensions({
+        language: markdown({ base: markdownLanguage }),
+        polarity: "dark",
+        wrapLines: false,
+        ariaLabel: "plan.md",
+        callbacks: { onChange: () => {}, onSave: () => {}, onFollowLink: () => {} },
+      }),
+    }),
+  });
+  view.focus();
+  return view;
+}
+
+// Stamped with `time`, so typing a moment apart stays inside the delay that
+// merges it into one undo step however long the run pauses between.
+function typeInEditor(view: InstanceType<typeof EditorView>, text: string, time: number) {
+  const at = view.state.doc.length;
+  view.dispatch({
+    changes: { from: at, insert: text },
+    selection: { anchor: at + text.length },
+    userEvent: "input.type",
+    annotations: Transaction.time.of(time),
+  });
 }
 
 function undoCloseAction() {
@@ -363,6 +402,23 @@ describe("the publisher", () => {
 });
 
 describe("panel.undoClose chosen from Edit > Undo", () => {
+  // jsdom has no layout: undo scrolls the caret into view, and CodeMirror
+  // measures it through Range rects jsdom lacks.
+  const rangeStubs = { getClientRects: () => [], getBoundingClientRect: () => new DOMRect() };
+  const originals = new Map<string, PropertyDescriptor | undefined>();
+  beforeAll(() => {
+    for (const [name, value] of Object.entries(rangeStubs)) {
+      originals.set(name, Object.getOwnPropertyDescriptor(Range.prototype, name));
+      Object.defineProperty(Range.prototype, name, { configurable: true, value });
+    }
+  });
+  afterAll(() => {
+    for (const [name, descriptor] of originals) {
+      if (descriptor) Object.defineProperty(Range.prototype, name, descriptor);
+      else Reflect.deleteProperty(Range.prototype, name);
+    }
+  });
+
   it("reopens the close it named", async () => {
     seed("a");
     userClose(["a"]);
@@ -385,5 +441,34 @@ describe("panel.undoClose chosen from Edit > Undo", () => {
     }
     expect(execCommand).toHaveBeenCalledWith("undo");
     expect(locationOf("a")).toBe("trash");
+  });
+
+  it("takes a Markdown editor's typing since the close back first, then the close, then older typing (#17180)", async () => {
+    const editor = focusMarkdownEditor("# Plan\n");
+    try {
+      typeInEditor(editor, "older", 1000);
+      seed("a");
+      userClose(["a"]);
+      typeInEditor(editor, " newer", 1001);
+      expect(document.activeElement).toBe(editor.contentDOM);
+      // Cmd+Z goes on to the editor rather than reopening, as Edit > Undo does.
+      expect(undoCloseTakesKey(editor.contentDOM, false, true)).toBe(false);
+      expect(undoCloseMenuState()).toBeNull();
+
+      await undoCloseAction().run(undefined, { dispatchSource: "menu" });
+      expect(editor.state.doc.toString()).toBe("# Plan\nolder");
+      expect(locationOf("a")).toBe("trash");
+
+      expect(undoCloseTakesKey(editor.contentDOM, false, true)).toBe(true);
+      expect(undoCloseMenuState()).toEqual({ count: 1, title: "a" });
+      await undoCloseAction().run(undefined, { dispatchSource: "menu" });
+      expect(locationOf("a")).toBe("grid");
+      expect(editor.state.doc.toString()).toBe("# Plan\nolder");
+
+      await undoCloseAction().run(undefined, { dispatchSource: "menu" });
+      expect(editor.state.doc.toString()).toBe("# Plan\n");
+    } finally {
+      editor.destroy();
+    }
   });
 });
