@@ -87,7 +87,15 @@ export function FleetHostComposer(): ReactElement {
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            // An IME's Enter confirms a candidate and its Escape dismisses the
+            // list, so neither sends or clears. Chromium also reports keyCode 229
+            // for the keydown that commits. Escape stays off the ribbon, whose bare
+            // Escape exits the fleet, but the IME still gets the key.
+            if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) {
+              if (e.key === "Escape") e.stopPropagation();
+              return;
+            }
+            if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               void submit();
               return;
