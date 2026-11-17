@@ -381,7 +381,9 @@ export class AgentStateService {
       // Read here rather than by the subscriber: by the time the event reaches
       // Main the terminal may be gone, and a kill's edge is otherwise
       // indistinguishable from the agent settling on its own.
-      ...(terminal.wasKilled || terminal.gracefullyClosing ? { terminalClosing: true as const } : {}),
+      ...(terminal.wasKilled || terminal.gracefullyClosing
+        ? { terminalClosing: true as const }
+        : {}),
       ...(newState === "waiting" && waitingReason ? { waitingReason } : {}),
       ...((newState === "completed" || newState === "exited") && sessionCost != null
         ? { sessionCost }
