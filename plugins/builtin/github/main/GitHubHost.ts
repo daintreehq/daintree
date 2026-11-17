@@ -21,7 +21,9 @@ export function setEnterpriseHost(raw: unknown): void {
 /** Whether this provider serves `host` right now: github.com, or the configured enterprise host. */
 export function isServedGitHubHost(host: string): boolean {
   const normalized = host.toLowerCase();
-  return normalized === GITHUB_COM_HOST || (enterpriseHost !== null && normalized === enterpriseHost);
+  return (
+    normalized === GITHUB_COM_HOST || (enterpriseHost !== null && normalized === enterpriseHost)
+  );
 }
 
 function servedHost(host: string): string {

@@ -16,7 +16,9 @@ import { GITHUB_COM_HOST } from "./GitHubHost.js";
 import { forgeQueryCache, forgeQueryInflight } from "./GitHubCaches.js";
 import { parseGitHubError } from "./GitHubErrors.js";
 
-export function requireGitHubClient(host: string): NonNullable<ReturnType<typeof GitHubAuth.createClient>> {
+export function requireGitHubClient(
+  host: string
+): NonNullable<ReturnType<typeof GitHubAuth.createClient>> {
   const client = GitHubAuth.createClient(host);
   if (!client) {
     throw new Error(missingTokenMessage(host));

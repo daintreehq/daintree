@@ -23,9 +23,9 @@ vi.mock("../GitHubAuth.js", () => ({
 
 vi.mock("../GitHubRateLimitService.js", () => {
   const gitHubRateLimitService = {
-      updateFromGraphQL: vi.fn(),
-      shouldBlockRequest: vi.fn(() => ({ blocked: false, reason: null })),
-      getState: vi.fn(() => ({ blocked: false })),
+    updateFromGraphQL: vi.fn(),
+    shouldBlockRequest: vi.fn(() => ({ blocked: false, reason: null })),
+    getState: vi.fn(() => ({ blocked: false })),
   };
   return {
     gitHubRateLimitService,
@@ -292,7 +292,11 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
     mockClient.mockReset();
     mockFetch.mockReset();
     mockGetRepoContext.mockReset();
-    mockGetRepoContext.mockResolvedValue({ host: "github.com", owner: "testowner", repo: "testrepo" });
+    mockGetRepoContext.mockResolvedValue({
+      host: "github.com",
+      owner: "testowner",
+      repo: "testrepo",
+    });
     mockStatsCache.get.mockReset();
     mockStatsCache.get.mockReturnValue(null);
     vi.mocked(gitHubRateLimitService.shouldBlockRequest).mockReturnValue({
@@ -1267,9 +1271,17 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
           });
         });
 
-        const leader = fetchRestCounts("test-token", { host: "github.com", owner: "testowner", repo: "testrepo" });
+        const leader = fetchRestCounts("test-token", {
+          host: "github.com",
+          owner: "testowner",
+          repo: "testrepo",
+        });
         vi.setSystemTime(1_005_000);
-        const joiner = fetchRestCounts("test-token", { host: "github.com", owner: "testowner", repo: "testrepo" });
+        const joiner = fetchRestCounts("test-token", {
+          host: "github.com",
+          owner: "testowner",
+          repo: "testrepo",
+        });
         resolveRepo(repoOk(2));
         const [a, b] = await Promise.all([leader, joiner]);
 

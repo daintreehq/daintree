@@ -35,9 +35,7 @@ function invoke<T>(channel: string, args?: unknown): Promise<T> {
 }
 
 type TokenFeedback =
-  | { kind: "saved" | "tested"; message: string }
-  | { kind: "error"; message: string }
-  | null;
+  { kind: "saved" | "tested"; message: string } | { kind: "error"; message: string } | null;
 
 interface ImportPreview {
   host: string;

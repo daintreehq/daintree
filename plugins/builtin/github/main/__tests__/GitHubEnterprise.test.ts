@@ -218,7 +218,9 @@ describe("GitHubEnterpriseAccount", () => {
       validation: { valid: true, scopes: ["repo"], account: "mona" },
     });
 
-    await expect(account.commitImport({ account: "mona", host: "ghe.other.example" })).resolves.toEqual({
+    await expect(
+      account.commitImport({ account: "mona", host: "ghe.other.example" })
+    ).resolves.toEqual({
       ok: false,
       reason: "host-changed",
     });

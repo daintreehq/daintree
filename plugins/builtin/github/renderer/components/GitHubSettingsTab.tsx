@@ -459,7 +459,10 @@ export function GitHubSettingsTab() {
         )}
       </SettingsSection>
 
-      <GitHubEnterpriseSection isGhAvailable={isGhAvailable} onTokenChanged={() => void refresh()} />
+      <GitHubEnterpriseSection
+        isGhAvailable={isGhAvailable}
+        onTokenChanged={() => void refresh()}
+      />
 
       {/* `nested`: this tab renders inside the Settings modal. */}
       <ConfirmDialog

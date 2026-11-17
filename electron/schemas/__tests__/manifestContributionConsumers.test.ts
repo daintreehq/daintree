@@ -1765,7 +1765,10 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
     matchesSettingRef: {
       mode: "cross-reference",
       consumers: [
-        { file: "electron/schemas/plugin/validation/providers.ts", symbol: "validateForgeProviderRefs" },
+        {
+          file: "electron/schemas/plugin/validation/providers.ts",
+          symbol: "validateForgeProviderRefs",
+        },
         { file: FORGE_REGISTRY, symbol: "setForgeProviderSettingMatch" },
       ],
       note: "Validated against a declared user-scoped string setting; its value joins the provider's hostname matches.",

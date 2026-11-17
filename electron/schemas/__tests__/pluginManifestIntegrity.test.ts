@@ -151,7 +151,10 @@ describe("forgeProvider cross-references (#10620)", () => {
   it.each([
     ["names no declared setting", []],
     ["names a secret", [{ id: "enterpriseHost", type: "secret" }]],
-    ["names a project-scoped setting", [{ id: "enterpriseHost", type: "string", scope: "project" }]],
+    [
+      "names a project-scoped setting",
+      [{ id: "enterpriseHost", type: "string", scope: "project" }],
+    ],
     ["names a non-string setting", [{ id: "enterpriseHost", type: "boolean" }]],
   ])("rejects matchesSettingRef that %s", (_label, settings) => {
     const result = manifestWith({

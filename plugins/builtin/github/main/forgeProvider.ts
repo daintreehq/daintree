@@ -208,10 +208,9 @@ function toStatsPage<TIn, TOut>(
 
 const repoStatsCapability: RepoStatsCapability = {
   async getRepoStats(repo: RepoRef, opts?: { bypassCache?: boolean }): Promise<RepoStatsSnapshot> {
-    const result = await getRepoStatsAndPageForContext(
-      toContext(repo),
-      { bypassCache: opts?.bypassCache === true }
-    );
+    const result = await getRepoStatsAndPageForContext(toContext(repo), {
+      bypassCache: opts?.bypassCache === true,
+    });
     return {
       counts: toForgeRepoCounts(result, repo.host),
       issues: result.issues ? toStatsPage(result.issues, gitHubIssueToForgeIssue) : null,
@@ -237,10 +236,9 @@ const projectHealthCapability: ProjectHealthCapability = {
     repo: RepoRef,
     opts?: { bypassCache?: boolean }
   ): Promise<{ health: ProjectHealthSnapshot | null; error?: string }> {
-    const result = await getProjectHealthForContext(
-      toContext(repo),
-      { bypassCache: opts?.bypassCache === true }
-    );
+    const result = await getProjectHealthForContext(toContext(repo), {
+      bypassCache: opts?.bypassCache === true,
+    });
     if (!result.health) {
       return { health: null, ...(result.error ? { error: result.error } : {}) };
     }

@@ -30,7 +30,8 @@ export interface EnterpriseStatus {
   account?: string;
 }
 
-export type EnterpriseSetHostResult = { ok: true; host: string | null } | { ok: false; error: string };
+export type EnterpriseSetHostResult =
+  { ok: true; host: string | null } | { ok: false; error: string };
 
 export interface EnterpriseTokenResult {
   valid: boolean;
@@ -50,8 +51,7 @@ export type EnterpriseImportPreviewResult =
   | { ok: false; reason: string };
 
 export type EnterpriseImportCommitResult =
-  | { ok: true; account: string; scopes: string[] }
-  | { ok: false; reason: string };
+  { ok: true; account: string; scopes: string[] } | { ok: false; reason: string };
 
 /** Whether any GitHub host — github.com or the Enterprise Server — has a token. */
 export function hasAnyGitHubToken(config: GitHubTokenConfig): boolean {

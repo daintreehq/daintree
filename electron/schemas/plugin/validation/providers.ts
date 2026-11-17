@@ -198,7 +198,9 @@ export function validateForgeProviderRefs(
       // The host reads this setting to route remotes before the plugin runs,
       // and routing is the same for every project: only a plain user-scoped
       // string can name a hostname there.
-      const setting = manifest.contributes.settings.find((s) => s.id === provider.matchesSettingRef);
+      const setting = manifest.contributes.settings.find(
+        (s) => s.id === provider.matchesSettingRef
+      );
       if (!setting || (setting.type ?? "string") !== "string" || setting.scope !== "user") {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,

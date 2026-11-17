@@ -32,9 +32,9 @@ vi.mock("../GitHubStats.js", () => ({
 
 vi.mock("../GitHubRateLimitService.js", () => {
   const gitHubRateLimitService = {
-      updateFromGraphQL: vi.fn(),
-      getState: vi.fn(() => ({ blocked: false })),
-      shouldBlockRequest: (resource?: string) => mockShouldBlockRequest(resource),
+    updateFromGraphQL: vi.fn(),
+    getState: vi.fn(() => ({ blocked: false })),
+    shouldBlockRequest: (resource?: string) => mockShouldBlockRequest(resource),
   };
   return {
     gitHubRateLimitService,

@@ -453,9 +453,11 @@ describe("batchCheckLinkedPRs repo-level probe gate", () => {
     _resetGithubFetchSemaphoreForTests();
     GitHubAuth.initializeStorage(createStorage());
     GitHubAuth.setToken("ghp_validtoken012345678901234567890123456789");
-    vi.mocked(getRepoContext).mockResolvedValue({ host: "github.com", owner: "o", repo: "r" } as Awaited<
-      ReturnType<typeof getRepoContext>
-    >);
+    vi.mocked(getRepoContext).mockResolvedValue({
+      host: "github.com",
+      owner: "o",
+      repo: "r",
+    } as Awaited<ReturnType<typeof getRepoContext>>);
   });
 
   afterEach(() => {

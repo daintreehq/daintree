@@ -11,7 +11,7 @@ vi.mock("../GitHubAuth.js", () => ({
 
 vi.mock("../GitHubRateLimitService.js", () => {
   const gitHubRateLimitService = {
-      updateFromGraphQL: vi.fn(),
+    updateFromGraphQL: vi.fn(),
   };
   return {
     gitHubRateLimitService,

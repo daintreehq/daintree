@@ -19,9 +19,9 @@ vi.mock("../GitHubStats.js", () => ({
 
 vi.mock("../GitHubRateLimitService.js", () => {
   const gitHubRateLimitService = {
-      updateFromGraphQL: vi.fn(),
-      getState: vi.fn(() => ({ blocked: false })),
-      shouldBlockRequest: () => ({ blocked: false, reason: null }),
+    updateFromGraphQL: vi.fn(),
+    getState: vi.fn(() => ({ blocked: false })),
+    shouldBlockRequest: () => ({ blocked: false, reason: null }),
   };
   return {
     gitHubRateLimitService,

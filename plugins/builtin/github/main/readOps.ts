@@ -764,7 +764,10 @@ export async function findPRsByBranchesImpl(
       const query = buildBatchBranchPRQuery(repo.owner, repo.repo, chunk);
       let response: Record<string, unknown>;
       try {
-        response = (await runQuery(repo.host, query, {}, "BATCH_BRANCH_PR_QUERY")) as Record<string, unknown>;
+        response = (await runQuery(repo.host, query, {}, "BATCH_BRANCH_PR_QUERY")) as Record<
+          string,
+          unknown
+        >;
       } catch {
         // Omit this chunk's branches from the result — caller's missing-key
         // fallback path handles them.
@@ -790,7 +793,8 @@ export async function findPRsByBranchesImpl(
         // warmed entry is complete (not a partial that a later hover refetches).
         if (forgePR) {
           const tooltip = prToTooltipData(forgePR);
-          if (tooltip) writePRTooltip(cacheOwner(repo), repo.repo, forgePR.number, tooltip, requestedAt);
+          if (tooltip)
+            writePRTooltip(cacheOwner(repo), repo.repo, forgePR.number, tooltip, requestedAt);
         }
       }
     }
@@ -865,7 +869,8 @@ export async function findPRsByNumbersImpl(
 
         if (forgePR) {
           const tooltip = prToTooltipData(forgePR);
-          if (tooltip) writePRTooltip(cacheOwner(repo), repo.repo, forgePR.number, tooltip, requestedAt);
+          if (tooltip)
+            writePRTooltip(cacheOwner(repo), repo.repo, forgePR.number, tooltip, requestedAt);
         }
       }
     }

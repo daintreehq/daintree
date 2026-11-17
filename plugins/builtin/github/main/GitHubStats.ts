@@ -303,14 +303,11 @@ async function fetchRestCountsImpl(
         signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
         daintreeSkipRateLimitPreflight: true,
       }),
-      rateLimitAwareFetch(
-        `${apiBase}/repos/${owner}/${repo}/pulls?state=open&per_page=1`,
-        {
-          headers: prHeaders,
-          signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
-          daintreeSkipRateLimitPreflight: true,
-        }
-      ),
+      rateLimitAwareFetch(`${apiBase}/repos/${owner}/${repo}/pulls?state=open&per_page=1`, {
+        headers: prHeaders,
+        signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+        daintreeSkipRateLimitPreflight: true,
+      }),
     ]);
 
     // A concurrent cache clear invalidated the ETag baseline these requests
@@ -907,7 +904,8 @@ export async function getRepoStatsAndPageForContext(
     };
     const issueEpochUnchanged =
       getRepoListEpoch("issue", cacheOwner(context), context.repo) === issueEpochAtStart;
-    const prEpochUnchanged = getRepoListEpoch("pr", cacheOwner(context), context.repo) === prEpochAtStart;
+    const prEpochUnchanged =
+      getRepoListEpoch("pr", cacheOwner(context), context.repo) === prEpochAtStart;
     if (issueEpochUnchanged) {
       issueListCache.set(issuesListCacheKey, {
         items: issuesPage.items,

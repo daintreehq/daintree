@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RepoRef } from "../../../../../shared/types/forge.js";
-import { GitHubAuth, rateLimitAwareFetch, _resetGithubFetchSemaphoreForTests } from "../GitHubAuth.js";
+import {
+  GitHubAuth,
+  rateLimitAwareFetch,
+  _resetGithubFetchSemaphoreForTests,
+} from "../GitHubAuth.js";
 import { _resetEnterpriseHostForTests, setEnterpriseHost } from "../GitHubHost.js";
 import { _resetForgeQueryCachesForTests, clearGitHubCaches } from "../GitHubCaches.js";
 import { gitHubRateLimitService, rateLimitServiceForHost } from "../GitHubRateLimitService.js";

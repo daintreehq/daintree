@@ -206,7 +206,10 @@ export class GitHubEnterpriseAccount {
     if (!validation.valid) return toTokenResult(validation);
     // A token is only ever stored against the host it was checked on.
     if (getEnterpriseHost() !== host) {
-      return { valid: false, error: "The Enterprise Server host changed while the token was checked." };
+      return {
+        valid: false,
+        error: "The Enterprise Server host changed while the token was checked.",
+      };
     }
     await this.persist(host, trimmed, validation);
     return toTokenResult(validation);
@@ -248,7 +251,11 @@ export class GitHubEnterpriseAccount {
       scopes: validation.scopes ?? [],
       ...(validation.account ? { username: validation.account } : {}),
     });
-    return { ok: true, account: validation.account ?? expected.account, scopes: validation.scopes ?? [] };
+    return {
+      ok: true,
+      account: validation.account ?? expected.account,
+      scopes: validation.scopes ?? [],
+    };
   }
 
   /** Empty the in-memory session; the saved record stays for the next activation. */
@@ -267,7 +274,10 @@ export class GitHubEnterpriseAccount {
 
 const TokenArgsSchema = z.object({ token: z.string().min(1).max(512) });
 const HostArgsSchema = z.object({ host: z.string().max(512) });
-const CommitArgsSchema = z.object({ account: z.string().min(1).max(256), host: z.string().min(1).max(512) });
+const CommitArgsSchema = z.object({
+  account: z.string().min(1).max(256),
+  host: z.string().min(1).max(512),
+});
 const EmptyArgsSchema = z.object({}).optional();
 
 const TokenResultSchema = z.object({

@@ -9,20 +9,20 @@ const {
   registerEnterpriseMock,
   disposeEnterpriseMock,
 } = vi.hoisted(() => ({
-    gitHubAuthMock: {
-      initializeStorage: vi.fn(),
-      getToken: vi.fn<() => string | undefined>(),
-      getTokenVersion: vi.fn(() => 0),
-      validate: vi.fn(),
-      setValidatedUserInfo: vi.fn(),
-      setMemoryToken: vi.fn(),
-    },
-    secureStorageMock: { get: vi.fn(), set: vi.fn(), delete: vi.fn() },
-    tokenHealthMock: { start: vi.fn(), stop: vi.fn(), resetState: vi.fn() },
-    updateForgeCredentialsMock: vi.fn(),
-    registerEnterpriseMock: vi.fn(),
-    disposeEnterpriseMock: vi.fn(),
-  }));
+  gitHubAuthMock: {
+    initializeStorage: vi.fn(),
+    getToken: vi.fn<() => string | undefined>(),
+    getTokenVersion: vi.fn(() => 0),
+    validate: vi.fn(),
+    setValidatedUserInfo: vi.fn(),
+    setMemoryToken: vi.fn(),
+  },
+  secureStorageMock: { get: vi.fn(), set: vi.fn(), delete: vi.fn() },
+  tokenHealthMock: { start: vi.fn(), stop: vi.fn(), resetState: vi.fn() },
+  updateForgeCredentialsMock: vi.fn(),
+  registerEnterpriseMock: vi.fn(),
+  disposeEnterpriseMock: vi.fn(),
+}));
 
 vi.mock("../GitHubAuth.js", () => ({ GitHubAuth: gitHubAuthMock }));
 vi.mock("../forgeProvider.js", () => ({ githubForgeProvider: {} }));

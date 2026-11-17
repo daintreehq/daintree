@@ -587,7 +587,9 @@ describe("forgeProviderRegistry — setting-backed hostnames (#17324)", () => {
     setForgeProviderSettingMatch("acme.gitea", "gitea", "ghe.example.com");
 
     expect(listMatchingProviders("https://ghe.example.com/team/app")).toEqual([]);
-    expect(getRegisteredForgeProviders().find((p) => p.pluginId === "acme.gitea")?.contribution.matches).toEqual(["gitea.com"]);
+    expect(
+      getRegisteredForgeProviders().find((p) => p.pluginId === "acme.gitea")?.contribution.matches
+    ).toEqual(["gitea.com"]);
   });
 
   it("drops the setting's hostname with the plugin's descriptors", () => {

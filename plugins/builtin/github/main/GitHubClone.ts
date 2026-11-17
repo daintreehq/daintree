@@ -104,9 +104,7 @@ async function probeGhAuth(externalSignal?: AbortSignal, url?: string): Promise<
   // credentials, as it did before the host was configured.
   const host = url ? parseGitHubRepoUrl(url)?.host : undefined;
   const statusArgs =
-    host && host !== GITHUB_COM_HOST
-      ? ["auth", "status", "--hostname", host]
-      : ["auth", "status"];
+    host && host !== GITHUB_COM_HOST ? ["auth", "status", "--hostname", host] : ["auth", "status"];
   const env = { ...process.env, ...GH_NON_INTERACTIVE_ENV };
   let gh: string;
   try {

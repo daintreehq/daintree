@@ -580,7 +580,12 @@ export async function listIssues(
           Number.isSafeInteger(totalCount) &&
           totalCount >= 0
         ) {
-          updateRepoStatsCount(`${cacheOwner(context)}/${context.repo}`, "issue", totalCount, readAt);
+          updateRepoStatsCount(
+            `${cacheOwner(context)}/${context.repo}`,
+            "issue",
+            totalCount,
+            readAt
+          );
         }
       }
 
