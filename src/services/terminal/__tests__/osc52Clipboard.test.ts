@@ -158,9 +158,7 @@ describe("handleOsc52", () => {
     await flush();
     handleOsc52(shell(), `c;${b64("second")}`);
     await flush();
-    const notices = live();
-    expect(notices).toHaveLength(1);
-    expect(notices[0].message).toContain("second");
+    expect(onlyNotice().message).toContain("second");
   });
 
   it("names a pane with no title generically, and a hostile title safely", async () => {
