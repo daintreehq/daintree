@@ -389,7 +389,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
     ctx: IpcContext,
     query: string,
     isRegex: boolean
-  ): Promise<import("../../../../shared/types/ipc/terminal.js").SemanticSearchMatch[]> => {
+  ): Promise<import("../../../../shared/types/ipc/terminal.js").SemanticSearchResult> => {
     if (typeof query !== "string") {
       throw new Error("Invalid query: must be a string");
     }
@@ -397,23 +397,31 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       throw new Error("Invalid isRegex: must be a boolean");
     }
     // Cap query length so a pathological regex can't lock up the pty-host
-    // event loop scanning every terminal's buffer.
+    // event loop scanning every terminal's buffer. A refused query is a
+    // policy answer, not an outage, so retrying it would never help.
     if (query.length === 0 || query.length > 500) {
-      return [];
+      return { matches: [], complete: true };
     }
     try {
-      const matches = (await ptyClient.searchSemanticBuffersAsync(query, isRegex)).filter(
+      const result = await ptyClient.searchSemanticBuffersAsync(query, isRegex);
+      const matches = result.matches.filter(
         (match) => !isHostThrowawayTerminalId(match.terminalId)
       );
       // A window on another machine searches its own project's terminals only.
-      if (ctx.endpoint?.kind !== "remote-view") return matches;
+      if (ctx.endpoint?.kind !== "remote-view") return { matches, complete: result.complete };
       const projectId = ctx.endpoint.projectId;
-      return projectId === null
-        ? []
-        : matches.filter((match) => ptyClient.getTerminalProjectId(match.terminalId) === projectId);
+      return {
+        matches:
+          projectId === null
+            ? []
+            : matches.filter(
+                (match) => ptyClient.getTerminalProjectId(match.terminalId) === projectId
+              ),
+        complete: result.complete,
+      };
     } catch (error) {
       logWarn("terminal:searchSemanticBuffers failed", { error });
-      return [];
+      return { matches: [], complete: false };
     }
   };
 

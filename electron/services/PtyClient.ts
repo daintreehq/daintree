@@ -2927,29 +2927,44 @@ export class PtyClient extends EventEmitter {
   /**
    * Scan every terminal's semantic buffer for `query` and return one
    * ANSI-stripped snippet per matching terminal, across all shards. Substring
-   * (case-insensitive) unless `isRegex` is true. Returns an empty array on
-   * regex compile error or IPC failure — UI never throws on bad input.
+   * (case-insensitive) unless `isRegex` is true. Never rejects: a regex
+   * compile error yields no matches, and a shard that fails, times out, or is
+   * mid-restart keeps the other shards' matches but marks the answer
+   * incomplete, so its silence never reads as "nothing matched".
    */
   async searchSemanticBuffersAsync(
     query: string,
     isRegex: boolean
-  ): Promise<import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[]> {
-    const results = await Promise.all(
-      this.fanOutShards().map((shard) => {
-        const promise = sendPtyHostRpc<
-          import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[]
-        >(shard, "semantic-search", (requestId) => ({
-          type: "search-semantic-buffers",
-          query,
-          isRegex,
-          requestId,
-        }));
-        return promise.catch(
-          () => [] as import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[]
-        );
-      })
+  ): Promise<import("../../shared/types/ipc/terminal.js").SemanticSearchResult> {
+    const shards = this.fanOutShards();
+    const unreachable = Math.max(
+      0,
+      [...this.shards.values()].filter((shard) => !shard.retired).length - shards.length
     );
-    return results.flat();
+    const results = await Promise.all(
+      shards.map((shard) =>
+        sendPtyHostRpc<import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[]>(
+          shard,
+          "semantic-search",
+          (requestId) => ({
+            type: "search-semantic-buffers",
+            query,
+            isRegex,
+            requestId,
+          })
+        ).then(
+          (matches) => ({ matches, ok: true }),
+          () => ({
+            matches: [] as import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[],
+            ok: false,
+          })
+        )
+      )
+    );
+    return {
+      matches: results.flatMap((r) => r.matches),
+      complete: unreachable === 0 && results.every((r) => r.ok),
+    };
   }
 
   /** Replay terminal history */

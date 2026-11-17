@@ -129,7 +129,7 @@ describe("FleetPickerContent + useFleetPicker", () => {
     Object.assign(window, {
       electron: {
         terminal: {
-          searchSemanticBuffers: vi.fn().mockResolvedValue([]),
+          searchSemanticBuffers: vi.fn().mockResolvedValue({ matches: [], complete: true }),
         },
       },
     });
@@ -754,6 +754,194 @@ describe("FleetPickerContent + useFleetPicker", () => {
 
       expect(search.value).toBe("");
       expect(screen.queryAllByRole("treeitem").length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("incomplete output search (#17517)", () => {
+    type SearchResult = {
+      matches: Array<{ terminalId: string; line: string; matchStart: number; matchEnd: number }>;
+      complete: boolean;
+    };
+    let search: ReturnType<typeof vi.fn<(q: string, isRegex: boolean) => Promise<SearchResult>>>;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      search = vi.fn<(q: string, isRegex: boolean) => Promise<SearchResult>>();
+      Object.assign(window, { electron: { terminal: { searchSemanticBuffers: search } } });
+      seedTerminals([
+        makeTerminal("t1", { title: "alpha" }),
+        makeTerminal("t2", { title: "beta" }),
+      ]);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    async function typeQuery(value: string): Promise<void> {
+      await act(async () => {
+        fireEvent.change(screen.getByTestId("fp-search"), { target: { value } });
+      });
+      // Past the search debounce and the empty state's crossfade.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+    }
+
+    async function settle(): Promise<void> {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+    }
+
+    function liveStatus(): string {
+      return document.querySelector('[role="status"][aria-live="polite"]')?.textContent ?? "";
+    }
+
+    it("keeps title matches visible and offers Retry when some output went unsearched", async () => {
+      search.mockResolvedValueOnce({ matches: [], complete: false });
+      renderHarness([makeWorktreeSnap("wt-1", "main")], {
+        mode: "cold-start",
+        onCommit: () => {},
+      });
+      await act(async () => {});
+
+      await typeQuery("alpha");
+
+      expect(screen.queryAllByRole("treeitem")).toHaveLength(1);
+      expect(screen.getByTestId("fp-output-search-incomplete").textContent).toContain(
+        "Recent output search is incomplete"
+      );
+      expect(liveStatus()).toContain("Recent output search is incomplete");
+
+      search.mockResolvedValueOnce({
+        matches: [{ terminalId: "t2", line: "alpha in output", matchStart: 0, matchEnd: 5 }],
+        complete: true,
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fp-retry-output-search"));
+      });
+      await act(async () => {});
+
+      // Retry skips the debounce and searches the query on screen.
+      expect(search).toHaveBeenCalledTimes(2);
+      expect(search).toHaveBeenLastCalledWith("alpha", false);
+      expect(screen.queryAllByRole("treeitem")).toHaveLength(2);
+      expect(screen.queryByTestId("fp-output-search-incomplete")).toBeNull();
+      expect(liveStatus()).not.toContain("incomplete");
+    });
+
+    it("never claims 'No terminals match' for output that could not be searched", async () => {
+      search.mockRejectedValueOnce(new Error("ipc down"));
+      renderHarness([makeWorktreeSnap("wt-1", "main")], {
+        mode: "cold-start",
+        onCommit: () => {},
+      });
+      await act(async () => {});
+
+      await typeQuery("zzz-only-in-output");
+      await settle();
+
+      expect(screen.queryByText("No terminals match")).toBeNull();
+      expect(screen.getByText("Recent output search is incomplete")).toBeTruthy();
+      expect(screen.queryAllByRole("treeitem")).toHaveLength(0);
+
+      search.mockResolvedValueOnce({ matches: [], complete: true });
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fp-retry-output-search"));
+      });
+      await settle();
+
+      expect(screen.getByText("No terminals match")).toBeTruthy();
+      expect(screen.queryByText("Recent output search is incomplete")).toBeNull();
+    });
+
+    it("holds the incomplete state across a new query until an answer covers every shard", async () => {
+      search.mockResolvedValueOnce({ matches: [], complete: false });
+      renderHarness([makeWorktreeSnap("wt-1", "main")], {
+        mode: "cold-start",
+        onCommit: () => {},
+      });
+      await act(async () => {});
+      await typeQuery("zzz");
+      expect(screen.getByText("Recent output search is incomplete")).toBeTruthy();
+
+      let answer: (r: SearchResult) => void = () => {};
+      search.mockReturnValueOnce(
+        new Promise<SearchResult>((resolve) => {
+          answer = resolve;
+        })
+      );
+      await act(async () => {
+        fireEvent.change(screen.getByTestId("fp-search"), { target: { value: "zzzz" } });
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(299);
+      });
+      // Still waiting on the new query's search: no premature "no match".
+      expect(screen.queryByText("No terminals match")).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      await act(async () => {
+        answer({ matches: [], complete: true });
+      });
+      await settle();
+
+      expect(search).toHaveBeenLastCalledWith("zzzz", false);
+      expect(screen.getByText("No terminals match")).toBeTruthy();
+      expect(screen.queryByText("Recent output search is incomplete")).toBeNull();
+    });
+
+    it("ignores an incomplete answer that arrives after a newer query was answered", async () => {
+      let staleAnswer: (r: SearchResult) => void = () => {};
+      search.mockReturnValueOnce(
+        new Promise<SearchResult>((resolve) => {
+          staleAnswer = resolve;
+        })
+      );
+      search.mockResolvedValueOnce({ matches: [], complete: true });
+      renderHarness([makeWorktreeSnap("wt-1", "main")], {
+        mode: "cold-start",
+        onCommit: () => {},
+      });
+      await act(async () => {});
+
+      await typeQuery("zzz");
+      await typeQuery("yyy");
+      expect(screen.getByText("No terminals match")).toBeTruthy();
+
+      await act(async () => {
+        staleAnswer({ matches: [], complete: false });
+      });
+      await settle();
+
+      expect(screen.getByText("No terminals match")).toBeTruthy();
+      expect(screen.queryByText("Recent output search is incomplete")).toBeNull();
+    });
+
+    it("forgets an incomplete search once the query is cleared", async () => {
+      search.mockResolvedValueOnce({ matches: [], complete: false });
+      renderHarness([makeWorktreeSnap("wt-1", "main")], {
+        mode: "cold-start",
+        onCommit: () => {},
+      });
+      await act(async () => {});
+      await typeQuery("alpha");
+      expect(screen.getByTestId("fp-output-search-incomplete")).toBeTruthy();
+
+      await typeQuery("");
+      expect(screen.queryByTestId("fp-output-search-incomplete")).toBeNull();
+
+      // A fresh query starts from a clean slate, not the old outage.
+      search.mockReturnValueOnce(new Promise<SearchResult>(() => {}));
+      await act(async () => {
+        fireEvent.change(screen.getByTestId("fp-search"), { target: { value: "zzz" } });
+      });
+      await settle();
+      expect(screen.getByText("No terminals match")).toBeTruthy();
     });
   });
 

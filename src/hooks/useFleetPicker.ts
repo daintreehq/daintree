@@ -110,6 +110,15 @@ export interface UseFleetPickerResult {
   visibleIds: string[];
   isSingleWorktree: boolean;
   snippetMap: ReadonlyMap<string, SemanticSearchMatch>;
+  /**
+   * True while a non-empty query's latest output search couldn't reach every
+   * pty-host shard (or failed outright), so terminals matched only by their
+   * output may be missing. It holds until an answer covers every shard, which
+   * keeps an outage from flashing "No terminals match" on each keystroke.
+   */
+  outputSearchIncomplete: boolean;
+  /** Search recent output again for the current query, skipping the debounce. */
+  retryOutputSearch: () => void;
   confirmedIds: string[];
   driftCount: number;
   /** Total eligible terminals, ignoring the filter — the denominator of "N of M selected". */
@@ -232,6 +241,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
   // PREVIOUS query keeps passing the filter under the new one — and can be
   // swept into a bulk selection while it is visibly unrelated to what was typed.
   const [snippetQuery, setSnippetQuery] = useState("");
+  const [outputSearchIncomplete, setOutputSearchIncomplete] = useState(false);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   // Which tree node last held focus — `g:<worktreeId>` or `t:<terminalId>`.
   // `focusedId` only ever names a row, so without this a heading could take
@@ -269,6 +279,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     }
     setQuery("");
     setSnippetMap(new Map());
+    setOutputSearchIncomplete(false);
     rangeAnchorRef.current = null;
 
     if (mode === "cold-start") {
@@ -297,6 +308,28 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     }
   }, [isOpen, acquired, mode]);
 
+  // One output search for `trimmed`, applied only while `issueId` is still the
+  // latest request. The debounced effect and Retry share it so both obey the
+  // same stale-response guard.
+  const runOutputSearch = useCallback((trimmed: string, issueId: number) => {
+    window.electron.terminal
+      .searchSemanticBuffers(trimmed, false)
+      .then((result) => {
+        if (currentRequestRef.current !== issueId) return;
+        const next = new Map<string, SemanticSearchMatch>();
+        for (const m of result.matches) next.set(m.terminalId, m);
+        setSnippetMap(next);
+        setSnippetQuery(trimmed);
+        setOutputSearchIncomplete(!result.complete);
+      })
+      .catch(() => {
+        if (currentRequestRef.current !== issueId) return;
+        // Keep what an earlier answer for this query already found; a previous
+        // query's hits are hidden by the `snippetQuery` freshness check anyway.
+        setOutputSearchIncomplete(true);
+      });
+  }, []);
+
   // Debounced semantic-buffer search with stale-response guarding via the
   // module-scope monotonic counter. Each request bumps `nextSearchRequestId`
   // and stores the issued id in `currentRequestRef`; responses whose issued
@@ -315,6 +348,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     if (trimmed === "") {
       setSnippetMap(new Map());
       setSnippetQuery("");
+      setOutputSearchIncomplete(false);
       nextSearchRequestId += 1;
       currentRequestRef.current = nextSearchRequestId;
       return;
@@ -325,23 +359,22 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     currentRequestRef.current = issueId;
 
     const timer = window.setTimeout(() => {
-      window.electron.terminal
-        .searchSemanticBuffers(trimmed, false)
-        .then((matches) => {
-          if (currentRequestRef.current !== issueId) return;
-          const next = new Map<string, SemanticSearchMatch>();
-          for (const m of matches) next.set(m.terminalId, m);
-          setSnippetMap(next);
-          setSnippetQuery(trimmed);
-        })
-        .catch(() => {
-          if (currentRequestRef.current !== issueId) return;
-          setSnippetMap(new Map());
-        });
+      // A Retry during the debounce already searched this query.
+      if (currentRequestRef.current !== issueId) return;
+      runOutputSearch(trimmed, issueId);
     }, SEMANTIC_SEARCH_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timer);
-  }, [deferredQuery, isOpen, acquired]);
+  }, [deferredQuery, isOpen, acquired, runOutputSearch]);
+
+  const retryOutputSearch = useCallback(() => {
+    const trimmed = deferredQuery.trim();
+    if (!isOpen || !acquired || trimmed === "") return;
+    nextSearchRequestId += 1;
+    const issueId = nextSearchRequestId;
+    currentRequestRef.current = issueId;
+    runOutputSearch(trimmed, issueId);
+  }, [deferredQuery, isOpen, acquired, runOutputSearch]);
 
   const eligibleTerminals = useMemo<PickerTerminal[]>(() => {
     const out: PickerTerminal[] = [];
@@ -784,6 +817,8 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     visibleIds,
     isSingleWorktree,
     snippetMap: freshSnippetMap,
+    outputSearchIncomplete: outputSearchIncomplete && deferredQuery.trim() !== "",
+    retryOutputSearch,
     confirmedIds,
     driftCount,
     eligibleCount,

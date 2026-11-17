@@ -1203,7 +1203,12 @@ describe("terminal:search-semantic-buffers", () => {
   };
 
   const ptyClient = {
-    searchSemanticBuffersAsync: vi.fn(async () => matches),
+    searchSemanticBuffersAsync: vi.fn(
+      async (): Promise<{ matches: typeof matches; complete: boolean }> => ({
+        matches,
+        complete: true,
+      })
+    ),
     getTerminalProjectId: (id: string) => owners[id] ?? null,
   };
   let dispose: (() => void) | undefined;
@@ -1232,13 +1237,35 @@ describe("terminal:search-semantic-buffers", () => {
       ["token", false]
     );
     if (!envelope.ok) throw new Error(JSON.stringify(envelope.error));
-    expect(envelope.data).toEqual([matches[0]]);
+    expect(envelope.data).toEqual({ matches: [matches[0]], complete: true });
     const none = await getIpcDispatcher().invokeForEndpoint(
       { endpoint: remoteView(null), client },
       CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
       ["token", false]
     );
-    expect(none.ok && none.data).toEqual([]);
+    expect(none.ok && none.data).toEqual({ matches: [], complete: true });
+  });
+
+  it("keeps a partial answer's matches and passes on that it was incomplete", async () => {
+    ptyClient.searchSemanticBuffersAsync.mockResolvedValueOnce({ matches, complete: false });
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteView("proj-1"), client },
+      CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
+      ["token", false]
+    );
+    if (!envelope.ok) throw new Error(JSON.stringify(envelope.error));
+    expect(envelope.data).toEqual({ matches: [matches[0]], complete: false });
+  });
+
+  it("reports a search that threw as incomplete rather than as no matches", async () => {
+    ptyClient.searchSemanticBuffersAsync.mockRejectedValueOnce(new Error("host gone"));
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteView("proj-1"), client },
+      CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
+      ["token", false]
+    );
+    if (!envelope.ok) throw new Error(JSON.stringify(envelope.error));
+    expect(envelope.data).toEqual({ matches: [], complete: false });
   });
 
   it("finds every terminal for this machine's own window", async () => {
@@ -1255,7 +1282,7 @@ describe("terminal:search-semantic-buffers", () => {
       (result as { ok?: boolean; data?: unknown }).ok !== undefined
         ? (result as { data: unknown }).data
         : result;
-    expect(data).toEqual(matches);
+    expect(data).toEqual({ matches, complete: true });
   });
 });
 

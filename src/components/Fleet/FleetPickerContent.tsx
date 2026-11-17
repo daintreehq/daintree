@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
 import { KbdChord } from "@/components/ui/Kbd";
 import { cn } from "@/lib/utils";
-import { CircleHelp } from "lucide-react";
+import { CircleHelp, RefreshCw } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useEscapeStack } from "@/hooks";
 import {
@@ -80,6 +80,8 @@ export function FleetPickerContent({
     groupedVisible,
     isSingleWorktree,
     snippetMap,
+    outputSearchIncomplete,
+    retryOutputSearch,
     handleToggleId,
     handleListKeyDown,
     handleConfirm,
@@ -167,6 +169,19 @@ export function FleetPickerContent({
           data-testid={`${testIdPrefix}-search`}
         />
         {headerSlot}
+        {outputSearchIncomplete && visibleTerminals.length > 0 && (
+          <div
+            className="mt-2 flex items-center justify-between gap-2"
+            data-testid={`${testIdPrefix}-output-search-incomplete`}
+          >
+            <span className="text-xs text-text-secondary">{OUTPUT_SEARCH_INCOMPLETE}</span>
+            <RetryOutputSearchButton
+              size="xs"
+              onRetry={retryOutputSearch}
+              testIdPrefix={testIdPrefix}
+            />
+          </div>
+        )}
       </div>
 
       <div
@@ -191,6 +206,21 @@ export function FleetPickerContent({
             variant="zero-data"
             scale="popover"
             title="Open a terminal in the grid to arm it"
+            className="h-full min-h-[120px]"
+          />
+        ) : visibleTerminals.length === 0 && outputSearchIncomplete ? (
+          // Output that was never searched can't vouch for "no match".
+          <EmptyState
+            variant="filtered-empty"
+            scale="popover"
+            title={OUTPUT_SEARCH_INCOMPLETE}
+            action={
+              <RetryOutputSearchButton
+                size="sm"
+                onRetry={retryOutputSearch}
+                testIdPrefix={testIdPrefix}
+              />
+            }
             className="h-full min-h-[120px]"
           />
         ) : visibleTerminals.length === 0 ? (
@@ -239,9 +269,36 @@ export function FleetPickerContent({
           ? "No terminals to arm"
           : query.trim() === ""
             ? `${eligibleTerminals.length} terminals`
-            : `${visibleTerminals.length} of ${eligibleTerminals.length} terminals match`}
+            : `${visibleTerminals.length} of ${eligibleTerminals.length} terminals match${
+                outputSearchIncomplete ? `. ${OUTPUT_SEARCH_INCOMPLETE}` : ""
+              }`}
       </span>
     </div>
+  );
+}
+
+const OUTPUT_SEARCH_INCOMPLETE = "Recent output search is incomplete";
+
+function RetryOutputSearchButton({
+  size,
+  onRetry,
+  testIdPrefix,
+}: {
+  size: "xs" | "sm";
+  onRetry: () => void;
+  testIdPrefix: string;
+}): ReactElement {
+  return (
+    <Button
+      variant="subtle"
+      size={size}
+      onClick={onRetry}
+      aria-label="Retry output search"
+      data-testid={`${testIdPrefix}-retry-output-search`}
+    >
+      <RefreshCw aria-hidden="true" />
+      Retry
+    </Button>
   );
 }
 

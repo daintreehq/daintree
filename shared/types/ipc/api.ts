@@ -83,7 +83,7 @@ import type {
   TerminalInfoPayload,
   TerminalLocation,
   TerminalActivityPayload,
-  SemanticSearchMatch,
+  SemanticSearchResult,
 } from "./terminal.js";
 import type { AppVersionInfo } from "./app.js";
 import type {
@@ -399,7 +399,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getAvailableTerminals(): Promise<BackendTerminalInfo[]>;
     getTerminalsByState(state: import("../agent.js").AgentState): Promise<BackendTerminalInfo[]>;
     getAllTerminals(): Promise<BackendTerminalInfo[]>;
-    searchSemanticBuffers(query: string, isRegex: boolean): Promise<SemanticSearchMatch[]>;
+    searchSemanticBuffers(query: string, isRegex: boolean): Promise<SemanticSearchResult>;
     reconnect(terminalId: string): Promise<TerminalReconnectResult>;
     reconnectBulk(terminalIds: string[]): Promise<Record<string, TerminalReconnectResult>>;
     replayHistory(terminalId: string, maxLines?: number): Promise<{ replayed: number }>;

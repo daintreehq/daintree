@@ -500,3 +500,13 @@ export interface SemanticSearchMatch {
   matchStart: number;
   matchEnd: number;
 }
+
+/**
+ * Answer to a semantic-buffer search. `complete` is false when at least one
+ * pty-host shard's output went unsearched (it failed, timed out, or was
+ * restarting), so an empty `matches` is not evidence that nothing matched.
+ */
+export interface SemanticSearchResult {
+  matches: SemanticSearchMatch[];
+  complete: boolean;
+}
