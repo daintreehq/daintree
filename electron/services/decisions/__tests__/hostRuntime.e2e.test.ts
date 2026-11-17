@@ -298,7 +298,7 @@ class FakeRelay {
           deliverable: true,
         }) as Record<string, unknown>,
       });
-      return json(200, {
+      return json(201, {
         question_id: questionId,
         revision,
         status: "human-answered",
@@ -1507,7 +1507,10 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
       outcome: { status: "unsupported", by: "relay" },
     });
     expect(relay.requests.some((r) => r.path.endsWith("/answer"))).toBe(false);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    // Nothing was committed for the question, so the Host has nothing to type.
+    expect(relay.events.filter((e) => e.question_id === asked).map((e) => e.event_type)).toEqual([
+      "decision.created",
+    ]);
     expect(terminals.submitted).toHaveLength(0);
   }, 60_000);
 
@@ -1535,7 +1538,9 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
         "host_owner_mac"
       )
     ).resolves.toMatchObject({ outcome: { status: "unsupported", by: "asking-desktop" } });
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(relay.events.filter((e) => e.question_id === asked).map((e) => e.event_type)).toEqual([
+      "decision.created",
+    ]);
     expect(terminals.submitted).toHaveLength(0);
   }, 60_000);
 });

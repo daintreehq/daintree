@@ -82,6 +82,12 @@ export interface QuestionSource {
   readonly store: RelayConnectionStore;
   /** The lifetime's trusted policy, the one every attempt's bridge asks under. */
   readonly policy: PolicyRegistry;
+  /**
+   * The lock every bridge over the store takes its turn under once the
+   * lifetime's delivery runs (each attempt's bridge does); null before then.
+   * Read at each turn: the source is handed out before delivery starts.
+   */
+  lock?(): DecisionsBridge["ctx"]["lock"] | null;
   /** The lifetime's attachments, the ones every attempt's bridge asks with; none refuses them. */
   readonly attachments?: QuestionAttachments;
 }
@@ -411,6 +417,7 @@ export class RelayConnection {
       },
       store: this.store,
       policy: this.o.policy,
+      lock: () => this.delivery?.lock ?? null,
       ...(this.o.attachments ? { attachments: this.o.attachments } : {}),
     });
     if (this.ended) return;

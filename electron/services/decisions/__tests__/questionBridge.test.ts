@@ -15,6 +15,7 @@ import {
 } from "@daintreehq/decisions-client";
 import {
   buildSignedInvolvement,
+  decryptEnvelope,
   generateDeviceKeys,
   generateEpochKeyBytes,
   serializeDeviceKeys,
@@ -991,7 +992,13 @@ describe("QuestionBridge", () => {
 
       await expect(
         b.answerForPerson(
-          payload(asked.questionId, { text: "For now.", explicitApproval: true }),
+          payload(asked.questionId, {
+            expectedRevision: 3,
+            text: "For now.",
+            explicitApproval: true,
+            reason: "Saw both images.",
+            reviewedAttachmentDigests: ["b".repeat(64), "c".repeat(64)],
+          }),
           HOST
         )
       ).resolves.toEqual({
@@ -1000,14 +1007,15 @@ describe("QuestionBridge", () => {
         outcome: { status: "sent" },
       });
 
-      expect(live.answerQuestion).toHaveBeenCalledWith({
+      expect(live.answerQuestion).toHaveBeenCalledExactlyOnceWith({
         questionId: asked.questionId,
-        expectedRevision: 0,
+        expectedRevision: 3,
         selectedOptionIds: ["pg"],
-        reviewedAttachmentDigests: [],
+        reviewedAttachmentDigests: ["b".repeat(64), "c".repeat(64)],
         answerId: ANSWER_ID,
         text: "For now.",
         explicitApproval: true,
+        reason: "Saw both images.",
       });
     });
 
@@ -1050,7 +1058,9 @@ describe("QuestionBridge", () => {
         reference: { hostId: "host_studio", projectId: "p9", terminalId: "pane-9", questionId },
         expectedRevision: 2,
         selectedOptionIds: ["approve"],
+        text: "Ship it.",
         explicitApproval: true,
+        reason: "Both images match.",
         reviewedAttachmentDigests: ["a".repeat(64)],
       });
 
@@ -1082,6 +1092,22 @@ describe("QuestionBridge", () => {
         action_id: ANSWER_ID,
         expected_revision: 2,
         signer_device_id: identity!.config.deviceId,
+      });
+      // The whole answer the person gave, sealed as it was submitted.
+      expect(
+        await decryptEnvelope(signed.envelope as never, identity!.epochs, {
+          installationId: identity!.config.installationId,
+          questionId,
+          recordType: "answer",
+          revision: 3,
+        })
+      ).toEqual({
+        content_version: 1,
+        selected_option_ids: ["approve"],
+        text: "Ship it.",
+        explicit_approval: true,
+        reason: "Both images match.",
+        reviewed_attachment_digests: ["a".repeat(64)],
       });
 
       // A retry after a lost result is the same answer, never a second one.
@@ -1116,6 +1142,80 @@ describe("QuestionBridge", () => {
         outcome: { status: "already-answered" },
       });
       expect(live.getAnswerResult).toHaveBeenCalledWith(ANSWER_ID);
+    });
+
+    const OUTCOMES = [
+      { status: "queued" },
+      { status: "sent" },
+      { status: "already-answered" },
+      { status: "changed" },
+      { status: "closed", reason: "expired" },
+      { status: "closed", reason: "cancelled" },
+      { status: "closed", reason: "not-found" },
+      { status: "unsupported", by: "relay" },
+      { status: "unsupported", by: "asking-desktop" },
+      { status: "rejected", code: "rate_limited" },
+    ] as const;
+
+    it.each(OUTCOMES)(
+      "hands back the library's outcome $status whole, from a submission and a later read",
+      async (outcome) => {
+        const b = bridge();
+        live = liveBridge();
+        const questionId = "q_remote_host_0001";
+        const settled = { answerId: ANSWER_ID, questionId, expectedRevision: 4, ...outcome };
+        live.answerQuestion.mockResolvedValueOnce(settled as never);
+        live.getAnswerResult.mockResolvedValueOnce(settled as never);
+        const request = payload(questionId, {
+          reference: { hostId: "host_studio", projectId: "p9", terminalId: "pane-9", questionId },
+          expectedRevision: 4,
+        });
+
+        await expect(b.answerForPerson(request, HOST)).resolves.toEqual({
+          result: "submitted",
+          answerId: ANSWER_ID,
+          outcome,
+        });
+        await expect(b.answerResultForPerson(ANSWER_ID)).resolves.toEqual({
+          result: "read",
+          questionId,
+          expectedRevision: 4,
+          outcome,
+        });
+      }
+    );
+
+    it("commits between attempts only in its turn under the lifetime's lock, after a live attempt's settling", async () => {
+      // The lock the lifetime's delivery and every attempt's bridge share.
+      let tail: Promise<unknown> = Promise.resolve();
+      const shared = {
+        run<T>(fn: () => Promise<T>): Promise<T> {
+          const turn = tail.then(fn);
+          tail = turn.catch(() => {});
+          return turn;
+        },
+      };
+      source = { ...source, lock: () => shared as never };
+      const b = bridge();
+      const questionId = "q_remote_host_0001";
+      let settle!: () => void;
+      const settling = shared.run(() => new Promise<void>((resolve) => (settle = resolve)));
+
+      const answering = b.answerForPerson(
+        payload(questionId, {
+          reference: { hostId: "host_studio", projectId: "p9", terminalId: "pane-9", questionId },
+        }),
+        HOST
+      );
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(await store.outboxFor(questionId)).toEqual([]);
+
+      settle();
+      await settling;
+      await expect(answering).resolves.toMatchObject({ outcome: { status: "queued" } });
+      expect((await store.outboxFor(questionId)).map((item) => item.kind)).toEqual([
+        "owner-answer",
+      ]);
     });
 
     it("checks this computer's own question against its rules before signing", async () => {
@@ -1185,9 +1285,19 @@ describe("QuestionBridge", () => {
         result: "submitted",
         outcome: { status: "sent" },
       });
-      expect(next.answerQuestion).toHaveBeenCalledWith(
-        expect.objectContaining({ answerId: ANSWER_ID, questionId: "q_remote_host_0001" })
+      // The same answer, whole, on the attempt that answers now.
+      expect(next.answerQuestion).toHaveBeenCalledExactlyOnceWith(
+        retiring.answerQuestion.mock.calls[0]![0]
       );
+
+      const reading = liveBridge();
+      reading.getAnswerResult.mockImplementation(async () => {
+        live = next;
+        throw new RetiredAttemptError();
+      });
+      live = reading;
+      await expect(b.answerResultForPerson(ANSWER_ID)).resolves.toMatchObject({ result: "read" });
+      expect(next.getAnswerResult).toHaveBeenCalledExactlyOnceWith(ANSWER_ID);
     });
   });
 });

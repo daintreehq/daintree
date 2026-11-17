@@ -1422,12 +1422,15 @@ describe("decisions IPC", () => {
       expect(
         answer.safeParse({
           ...ANSWER,
-          selectedOptionIds: [],
+          answerId: "a".repeat(64),
+          expectedRevision: Number.MAX_SAFE_INTEGER,
+          selectedOptionIds: Array(12).fill("x".repeat(64)),
           text: "x".repeat(16 * 1024),
-          reason: "Saw both images.",
-          reviewedAttachmentDigests: [],
+          reason: "x".repeat(2_000),
+          reviewedAttachmentDigests: Array(8).fill("a".repeat(64)),
         }).success
       ).toBe(true);
+      expect(answer.safeParse({ ...ANSWER, selectedOptionIds: [] }).success).toBe(true);
       for (const bad of [
         {},
         { ...ANSWER, reference: undefined },
@@ -1435,6 +1438,9 @@ describe("decisions IPC", () => {
         { ...ANSWER, reference: { ...ANSWER.reference, hostId: "" } },
         { ...ANSWER, answerId: undefined },
         { ...ANSWER, answerId: "short" },
+        { ...ANSWER, answerId: "a".repeat(65) },
+        { ...ANSWER, expectedRevision: Number.MAX_SAFE_INTEGER + 1 },
+        { ...ANSWER, selectedOptionIds: [""] },
         { ...ANSWER, answerId: "has spaces in it" },
         { ...ANSWER, expectedRevision: -1 },
         { ...ANSWER, expectedRevision: 1.5 },
