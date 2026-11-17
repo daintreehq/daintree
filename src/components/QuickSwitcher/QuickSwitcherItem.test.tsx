@@ -158,10 +158,14 @@ describe("QuickSwitcherItem custom worktree title", () => {
     expect(headline(bare.container)?.className).toContain("font-mono");
   });
 
-  it("marks a literal match on the displaced branch, with no Fuse ranges at all", () => {
-    const { container } = renderRow(titled(), { query: "refresh" });
-    expect(marked(container)).toEqual(["refresh"]);
-    expect(headline(container)?.textContent).toBe("Release planning");
+  it("marks a literal match on what the title displaced, with no Fuse ranges at all", () => {
+    // A detached row's qualifier is not its branch label, so this reads the rendered text.
+    const { container } = renderRow(
+      titled({ displaced: "detached at 0123456", branchLabel: "feature/auth-refresh" }),
+      { query: "0123456" }
+    );
+    expect(qualifier(container)?.querySelector(".bg-overlay-medium")?.textContent).toBe("0123456");
+    expect(marked(container)).toEqual(["0123456"]);
   });
 
   it("marks a fuzzy match on the displaced branch on the branch, never on the title", () => {
@@ -204,9 +208,26 @@ describe("QuickSwitcherItem custom worktree title", () => {
     expect(container.textContent).not.toContain("feature/billing");
   });
 
-  it("adds no qualifier when the title is the branch itself", () => {
-    const { container } = renderRow(
+  it("adds no qualifier when the title is the branch itself, for linked and main alike", () => {
+    const linked = renderRow(
       makeWorktreeItem({ title: "feature/auth", branchLabel: "feature/auth" })
+    );
+    expect(qualifier(linked.container)).toBeNull();
+    linked.unmount();
+    const main = renderRow(
+      makeWorktreeItem({ title: "develop", isMainWorktree: true, branchLabel: "develop" })
+    );
+    expect(qualifier(main.container)).toBeNull();
+  });
+
+  it("does not fall back to main's branch when a custom title displaced nothing", () => {
+    const { container } = renderRow(
+      makeWorktreeItem({
+        title: "detached at 0123456",
+        isMainWorktree: true,
+        branchLabel: "daintree",
+        displaced: null,
+      })
     );
     expect(qualifier(container)).toBeNull();
   });

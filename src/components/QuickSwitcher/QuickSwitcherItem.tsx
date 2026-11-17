@@ -151,10 +151,11 @@ export function QuickSwitcherItem({
   const worktreeQualifier =
     item.type !== "worktree"
       ? null
-      : (item.displaced ??
-        (item.isMainWorktree && item.branchLabel && item.branchLabel !== item.title
+      : item.displaced !== undefined
+        ? item.displaced
+        : item.isMainWorktree && item.branchLabel && item.branchLabel !== item.title
           ? item.branchLabel
-          : null));
+          : null;
   const hasDetail = !!terminalDetail || (isPlugin && !!item.subtitle) || shortened !== null;
 
   return (
@@ -197,8 +198,10 @@ export function QuickSwitcherItem({
               indices={titleIndices}
               className={cn(
                 // Only the family changes for a branch: the title keeps the
-                // row's title size so it stays above the text-xs path line.
-                "text-sm font-medium text-text-primary",
+                // row's title size so it stays above the text-xs path line. Clipped,
+                // not overflowing, when its kept tail is wider than what the
+                // qualifier leaves, so the two never overlap.
+                "text-sm font-medium text-text-primary overflow-hidden",
                 isBranchTitled && "font-mono"
               )}
             />

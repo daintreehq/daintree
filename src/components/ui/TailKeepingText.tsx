@@ -23,11 +23,14 @@ export function tailStart(text: string): number {
   for (let i = from; i < text.length - 4; i++) {
     if ("/-_.".includes(text[i]!)) return i;
   }
+  // A seam is bad beside whitespace, and between the halves of a surrogate pair:
+  // an emoji in a custom title would draw as two broken glyphs, one each side.
+  const badSeam = (at: number) =>
+    isLowSurrogate(text.charCodeAt(at)) || /\s/.test(text[at - 1]! + text[at]!);
   let split = text.length - TAIL_FALLBACK;
-  while (split < text.length - 1 && /\s/.test(text[split - 1]! + text[split]!)) split++;
-  // Never between the halves of a surrogate pair: an emoji in a custom title
-  // would draw as two broken glyphs, one on each side of the seam.
-  if (isLowSurrogate(text.charCodeAt(split))) split++;
+  while (split < text.length - 1 && badSeam(split)) split++;
+  // Out of room to move on: a trailing emoji stays whole, in the tail.
+  if (isLowSurrogate(text.charCodeAt(split))) split--;
   return split;
 }
 

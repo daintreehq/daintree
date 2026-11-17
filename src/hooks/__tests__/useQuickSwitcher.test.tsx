@@ -408,7 +408,7 @@ describe("useQuickSwitcher custom worktree titles (#17503)", () => {
   const setTitles = (titles: Record<string, string>) =>
     act(() => useWorktreeFilterStore.setState({ worktreeCustomTitles: titles }));
 
-  const seed = (...worktrees: (typeof red)[]) =>
+  const seed = (...worktrees: { id: string }[]) =>
     seedWorktreeState({
       isInitialized: true,
       worktrees: new Map(worktrees.map((w) => [w.id, w])),
@@ -461,13 +461,13 @@ describe("useQuickSwitcher custom worktree titles (#17503)", () => {
 
     const matches = result.current.matchesById.get("worktree:wt-red") ?? [];
     expect(matches.map((m) => m.key).sort()).toEqual(["displaced", "title"]);
-    const text = (key: string) => {
+    const fragments = (key: string) => {
       const match = matches.find((m) => m.key === key)!;
-      return match.indices.map(([start, end]) => match.value!.slice(start, end + 1).toLowerCase());
+      return match.indices.map(([start, end]) => match.value!.slice(start, end + 1));
     };
     // Each range indexes the text its key names, so the row can paint it there.
-    expect(text("title").join("")).toContain("auth");
-    expect(text("displaced").join("")).toContain("auth");
+    expect(fragments("title")).toEqual(["Auth", "refresh"]);
+    expect(fragments("displaced")).toEqual(["auth", "refresh"]);
     expect(matches.find((m) => m.key === "title")?.value).toBe("Auth refresh notes");
     expect(matches.find((m) => m.key === "displaced")?.value).toBe("feature/auth-refresh");
   });
@@ -485,7 +485,7 @@ describe("useQuickSwitcher custom worktree titles (#17503)", () => {
     ]);
   });
 
-  it("names a worktree without a title by its name, falling back to its branch, nothing displaced", () => {
+  it("names a worktree without a title by its name, nothing displaced", () => {
     setTitles({ "wt-red": "Release planning" });
     const folder = {
       id: "wt-dir",
@@ -500,6 +500,35 @@ describe("useQuickSwitcher custom worktree titles (#17503)", () => {
     const item = result.current.results.find((entry) => entry.id === "worktree:wt-dir");
     expect(item?.title).toBe("billing-dir");
     expect(item?.displaced).toBeUndefined();
+  });
+
+  it("falls back to the branch for a nameless worktree without a title", () => {
+    seedWorktreeState({
+      isInitialized: true,
+      worktrees: new Map([["wt-n", { id: "wt-n", branch: "feature/nameless", path: "/repo/n" }]]),
+    });
+
+    const { result } = renderHook(() => useQuickSwitcher());
+
+    expect(result.current.results[0]?.title).toBe("feature/nameless");
+  });
+
+  it("says nothing displaced, not undefined, when a title is the only thing a detached worktree is called", () => {
+    const detachedMain = {
+      id: "wt-main",
+      name: "daintree",
+      path: "/repo/daintree",
+      isMainWorktree: true,
+      isDetached: true,
+      head: "0123456789abcdef",
+    };
+    setTitles({ "wt-main": "detached at 0123456" });
+    seed(detachedMain);
+
+    const { result } = renderHook(() => useQuickSwitcher());
+
+    expect(result.current.results[0]?.title).toBe("detached at 0123456");
+    expect(result.current.results[0]?.displaced).toBeNull();
   });
 
   it("leaves the order of untitled worktrees under the MRU boost where it was", () => {

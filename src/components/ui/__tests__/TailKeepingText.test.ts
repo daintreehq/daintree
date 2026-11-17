@@ -11,11 +11,9 @@ describe("tailStart", () => {
     expect(tailStart("feature/short")).toBe(0);
   });
 
-  it("starts the tail at a separator in the final stretch", () => {
+  it("starts the tail at the first separator in the final stretch", () => {
     const text = "feature/auth-token-refresh-retry";
-    const split = tailStart(text);
-    expect("/-_.").toContain(text[split]!);
-    expect(text.length - split).toBeLessThanOrEqual(20);
+    expect(text.slice(tailStart(text))).toBe("-token-refresh-retry");
   });
 
   it("falls back to a fixed-length tail when no separator is in reach", () => {
@@ -28,7 +26,19 @@ describe("tailStart", () => {
     const text = "abcdefghijklm\u{1F600}abcdefghijk";
     expect(isLowSurrogate(text, text.length - 12)).toBe(true);
     const split = tailStart(text);
+    expect(text.slice(0, split)).toBe("abcdefghijklm\u{1F600}");
+    expect(text.slice(split)).toBe("abcdefghijk");
+  });
+
+  it("moves past whitespace that follows the emoji it just kept whole", () => {
+    const text = "abcdefghijklm\u{1F600} abcdefghij";
+    const split = tailStart(text);
     expect(isLowSurrogate(text, split)).toBe(false);
-    expect(text.slice(0, split) + text.slice(split)).toBe(text);
+    expect(/\s/.test(text[split - 1]! + text[split]!)).toBe(false);
+  });
+
+  it("keeps a trailing emoji whole, in the tail, when there is no room to move on", () => {
+    const text = "abcdefghijklmnop a b c d e \u{1F600}";
+    expect(text.slice(tailStart(text))).toBe("\u{1F600}");
   });
 });

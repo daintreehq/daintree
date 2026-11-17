@@ -55,10 +55,12 @@ export interface QuickSwitcherItem {
   /**
    * What a custom title (#13409) displaced: the branch, or the detached commit.
    * It is the row's qualifier and is searched with the title, so a worktree the
-   * user retitled is still found and told apart by what git calls it. Absent
-   * without a title, and when the title is the branch itself.
+   * user retitled is still found and told apart by what git calls it. `null`
+   * when a title displaced nothing worth saying (it is the branch itself), so
+   * the row does not fall back to the qualifier an untitled worktree gets;
+   * `undefined` without a title.
    */
-  displaced?: string;
+  displaced?: string | null;
   /** A plugin search provider's result (#13792): what it opens and who it came from. */
   pluginHit?: PluginSearchHit;
 }
@@ -242,7 +244,7 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
         isCurrent: w.id === activeWorktreeId,
         isMainWorktree: w.isMainWorktree,
         branchLabel: getWorktreeBranchLabel(w),
-        displaced: customTitle ? (getWorktreeQualifier(w, customTitle) ?? undefined) : undefined,
+        displaced: customTitle ? getWorktreeQualifier(w, customTitle) : undefined,
       });
     }
 
