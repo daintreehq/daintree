@@ -14,6 +14,7 @@ import {
   DecisionsService,
   type DecisionsServiceOptions,
   type DecisionsStoreOpener,
+  type HostServedQuestions,
 } from "../DecisionsService.js";
 import type { DaintreeLocalStore } from "../daintreeLocalStore.js";
 import { defaultDecisionsSettings } from "../decisionsSettings.js";
@@ -614,12 +615,19 @@ describe("DecisionsService question list (#17229)", () => {
         key === HANDLED_ANSWERS_META_KEY && handled !== null ? JSON.stringify(handled) : null,
     } as unknown as DaintreeLocalStore;
     const lists: DecisionQuestionListItem[][] = [];
+    const listing: boolean[] = [];
+    const hostLists: Array<HostServedQuestions | null> = [];
     const panes: PaneDecisionState[] = [];
     const service = new DecisionsService({
       openStore: async () => store,
       keyFilePath: () => ABSENT_KEY_FILE,
       publishPaneState: (_projectId, state) => panes.push(state),
-      publishQuestions: (questions) => lists.push([...questions]),
+      publishQuestions: (questions, nowListing) => {
+        lists.push([...questions]);
+        listing.push(nowListing);
+      },
+      publishHostQuestions: (list) =>
+        hostLists.push(list === null ? null : { ...list, questions: [...list.questions] }),
       notifyQuestions: options.notifyQuestions,
     });
     const commit = async (next: QuestionRow[]) => {
@@ -632,6 +640,8 @@ describe("DecisionsService question list (#17229)", () => {
       service,
       store,
       lists,
+      listing,
+      hostLists,
       panes,
       commit,
       setRows: (next: QuestionRow[]) => (rows = next),
@@ -751,16 +761,19 @@ describe("DecisionsService question list (#17229)", () => {
   });
 
   it("empties the list when it stops, and a read that lands after lists nothing", async () => {
-    const { service, lists, setRows, fireCommit, hold } = listed();
+    const { service, lists, listing, setRows, fireCommit, hold } = listed();
     setRows([row(1)]);
     await service.start(on(HOST));
     expect(lists.at(-1)).toHaveLength(1);
+    expect(listing.at(-1)).toBe(true);
 
     const release = hold();
     setRows([row(1), row(2)]);
     fireCommit();
     await service.stop();
     expect(lists.at(-1)).toEqual([]);
+    // Not an empty store: nothing is listed at all, so no Host's questions are either (#17230).
+    expect(listing.at(-1)).toBe(false);
     const after = lists.length;
     release();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -800,6 +813,41 @@ describe("DecisionsService question list (#17229)", () => {
     await service.start(on(HOST), "host");
     expect(lists.flat()).toEqual([]);
     await service.stop();
+  });
+
+  it("hands a Remote Host lifetime's own questions to its owner's Shell after each commit, and nothing once it stops (#17230)", async () => {
+    const { service, hostLists, setRows, fireCommit } = listed();
+    setRows([row(1), row(2, { origin: { host_id: "host_other" } })]);
+    await service.start(on(HOST), "host");
+    await vi.waitFor(() => expect(hostLists.at(-1)?.questions).toHaveLength(1));
+    expect(hostLists.at(-1)).toEqual({
+      hostId: "host_1",
+      questions: [expect.objectContaining({ reference: expect.objectContaining({ hostId: "host_1" }) })],
+    });
+
+    setRows([
+      row(1, { local_status: "cancelled" }),
+      row(3, { origin: { project_id: "project-c", pane_id: "pane-c" } }),
+    ]);
+    fireCommit();
+    await vi.waitFor(() =>
+      expect(hostLists.at(-1)?.questions.map((question) => question.standing)).toEqual([
+        { kind: "settled", outcome: "withdrawn" },
+        { kind: "waiting", reason: "open" },
+      ])
+    );
+
+    await service.stop();
+    expect(hostLists.at(-1)).toBeNull();
+  });
+
+  it("hands nothing to a Remote Host's owner from an owner's lifetime", async () => {
+    const { service, hostLists, setRows, lists } = listed();
+    setRows([row(1)]);
+    await service.start(on(HOST));
+    expect(lists.at(-1)).toHaveLength(1);
+    await service.stop();
+    expect(hostLists.filter((list) => list !== null)).toEqual([]);
   });
 });
 

@@ -607,6 +607,7 @@ describe("DecisionQuestionDialog", () => {
 
   it.each([
     ["not-running", true],
+    ["host-not-connected", true],
     ["off", false],
     ["not-found", false],
     ["unreadable", false],

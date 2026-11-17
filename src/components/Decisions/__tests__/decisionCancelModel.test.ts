@@ -65,6 +65,12 @@ describe("decisionCancelModel", () => {
       severity: "info",
       retry: false,
     });
+    // A Remote Host's question whose Host went away (#17230): it may or may not have been withdrawn.
+    expect(cancelProblem(TARGET, { result: "host-not-connected" })).toMatchObject({
+      severity: "warning",
+      message: expect.stringMatching(/may not have been cancelled/),
+      retry: true,
+    });
     expect(noLongerWaiting(OTHER)).toEqual({
       severity: "info",
       message: expect.stringMatching(/^q-7 isn't waiting for an answer any more/),

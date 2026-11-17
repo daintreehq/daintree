@@ -434,7 +434,13 @@ import { defaultDecisionsSettings } from "../decisionsSettings.js";
 import { RelayCheckCancelledError } from "../relayCheck.js";
 import { setDecisionsHostsPort } from "../../../window/serviceRefs.js";
 import { noteRelayRemovalLaunch } from "../../pty/relayRemovalLaunches.js";
-import type { DecisionsHostLink, DecisionsHostsPort } from "../../../types/decisionsHosts.js";
+import type {
+  DecisionsHostLink,
+  DecisionsHostQuestionRead,
+  DecisionsHostQuestions,
+  DecisionsHostsPort,
+  HostCallOutcome,
+} from "../../../types/decisionsHosts.js";
 
 /** An entry status: what it observed, and the revision it was read at. */
 function withRevision<T extends object>(status: T): T & { revision: number } {
@@ -474,6 +480,7 @@ import {
   getDecisionQuestionImageByReference,
   getDecisionQuestionSummaries,
   getDecisionQuestionSummariesByReference,
+  cancelDecisionQuestionByReference,
   getDecisionsPaneState,
   getDecisionsPolicy,
   cancelSetupCheck,
@@ -508,6 +515,7 @@ import {
 } from "../index.js";
 import type { AnswerDelivery } from "../answerDelivery.js";
 import type {
+  DecisionQuestionCancelResult,
   DecisionQuestionImagePartResult,
   DecisionQuestionList,
   DecisionQuestionListItem,
@@ -678,6 +686,102 @@ describe("Decisions entry", () => {
     } finally {
       off();
       // The list outlives the entry's reset: leave none for the tests after.
+      setDecisionQuestions([]);
+    }
+  });
+
+  it("lists each enrolled Host's questions with this computer's, named by its Host, oldest first (#17230)", async () => {
+    saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+    await startDecisionsIfEnabled();
+    const service = peekDecisionsService()!;
+    const publish = Reflect.get(service, "publishQuestions") as (
+      questions: DecisionQuestionListItem[],
+      listing?: boolean
+    ) => void;
+    const item = (
+      hostId: string,
+      questionId: string,
+      askedAt: string
+    ): DecisionQuestionListItem => ({
+      reference: { hostId, projectId: "project-1", terminalId: "pane-a", questionId },
+      alias: 1,
+      agentKind: "claude",
+      projectLabel: null,
+      worktreeId: "w1",
+      worktreeRoot: "/repo",
+      requirement: "human-required",
+      askedAt,
+      expiresAt: null,
+      settledAt: null,
+      standing: { kind: "waiting", reason: "open" },
+    });
+    const own = item(RELAY.hostId, "q_own_000001", "2026-11-02T10:05:00.000Z");
+    const theirs = item("qhost_studio_0001", "q_host_00001", "2026-11-02T10:01:00.000Z");
+    let hosts: DecisionsHostQuestions[] = [
+      {
+        hostId: "studio",
+        name: "Studio",
+        connected: true,
+        questionHostId: "qhost_studio_0001",
+        questions: [theirs],
+      },
+    ];
+    const changed = new Set<() => void>();
+    const withdraw = setDecisionsHostsPort({
+      hosts: () => [],
+      linkFor: () => null,
+      onLinkOpened: () => () => {},
+      onHostsChanged: () => () => {},
+      runtimeOf: () => null,
+      announceOwnerState: () => {},
+      hostQuestions: () => hosts,
+      onHostQuestionsChanged: (listener) => {
+        changed.add(listener);
+        return () => changed.delete(listener);
+      },
+      readHostQuestion: () => null,
+      cancelHostQuestion: () => null,
+    });
+    const listPushes = () =>
+      statusView.send.mock.calls.filter(
+        ([, message]) => (message as { name?: string }).name === "decisions:questions-changed"
+      );
+    try {
+      publish([own]);
+      expect(getDecisionQuestionList().questions).toEqual([
+        { ...theirs, remoteHost: { hostId: "studio", name: "Studio", connected: true } },
+        own,
+      ]);
+
+      // The Host's link goes: its questions stay, as not connected, and every window hears it.
+      statusView.send.mockClear();
+      hosts = [{ ...hosts[0], connected: false }];
+      for (const listener of changed) listener();
+      expect(getDecisionQuestionList().questions[0]?.remoteHost).toEqual({
+        hostId: "studio",
+        name: "Studio",
+        connected: false,
+      });
+      expect(listPushes()).toHaveLength(1);
+
+      // With none asked here, the Host's are still listed.
+      publish([]);
+      expect(getDecisionQuestionList().questions.map((question) => question.reference)).toEqual([
+        theirs.reference,
+      ]);
+
+      // A Host whose questions name this computer's own id lists none of them.
+      hosts = [{ ...hosts[0], questionHostId: RELAY.hostId, questions: [own] }];
+      for (const listener of changed) listener();
+      expect(getDecisionQuestionList().questions).toEqual([]);
+
+      // Nothing listed here means nothing at all, and the Hosts' changes are no longer followed.
+      hosts = [{ ...hosts[0], questionHostId: "qhost_studio_0001", questions: [theirs] }];
+      publish([], false);
+      expect(getDecisionQuestionList().questions).toEqual([]);
+      expect(changed.size).toBe(0);
+    } finally {
+      withdraw();
       setDecisionQuestions([]);
     }
   });
@@ -1244,6 +1348,174 @@ describe("Decisions entry", () => {
         await expect(
           getDecisionQuestionSummariesByReference({ references: [REFERENCE] })
         ).resolves.toEqual({ result: "not-running" });
+      });
+    });
+
+    describe("on an enrolled Remote Host (#17230)", () => {
+      /** A question the Host asked, named by the id its own questions carry. */
+      const ON_HOST = {
+        hostId: "qhost_studio_0001",
+        projectId: "project-server",
+        terminalId: "pane-host",
+        questionId: "0190f0aa11112222333344445555bb01",
+      };
+      const OWN = { ...ON_HOST, hostId: RELAY.hostId, questionId: "0190f0aa11112222333344445555aa09" };
+
+      function publishHostPort(over: Partial<DecisionsHostsPort>): () => void {
+        return setDecisionsHostsPort({
+          hosts: () => [],
+          linkFor: () => null,
+          onLinkOpened: () => () => {},
+          onHostsChanged: () => () => {},
+          runtimeOf: () => null,
+          announceOwnerState: () => {},
+          hostQuestions: () => [],
+          onHostQuestionsChanged: () => () => {},
+          readHostQuestion: () => null,
+          cancelHostQuestion: () => null,
+          ...over,
+        });
+      }
+
+      it("reads a Host's question on that Host, with or without a delivery here", async () => {
+        const questionContent = vi.fn(async () => ({ result: "not-found" as const }));
+        const current = await running({ questionContent });
+        const answered = { result: "unreadable" } as const;
+        const readHostQuestion = vi.fn((questionHostId: string) =>
+          questionHostId === ON_HOST.hostId
+            ? Promise.resolve({ ok: true as const, value: answered })
+            : null
+        );
+        const withdraw = publishHostPort({
+          readHostQuestion: readHostQuestion as DecisionsHostsPort["readHostQuestion"],
+        });
+        try {
+          await expect(getDecisionQuestionContentByReference({ reference: ON_HOST })).resolves.toBe(
+            answered
+          );
+          current.delivery = null;
+          await expect(
+            getDecisionQuestionImageByReference({
+              reference: ON_HOST,
+              attachmentId: "attach_0001",
+              offset: 8,
+            })
+          ).resolves.toBe(answered);
+
+          expect(readHostQuestion.mock.calls).toEqual([
+            [ON_HOST.hostId, { read: "content", reference: ON_HOST }],
+            [
+              ON_HOST.hostId,
+              { read: "image", reference: ON_HOST, attachmentId: "attach_0001", offset: 8 },
+            ],
+          ]);
+          expect(questionContent).not.toHaveBeenCalled();
+        } finally {
+          withdraw();
+        }
+      });
+
+      it("never reads a reference naming this computer on a Host", async () => {
+        const questionContent = vi.fn(async () => ({ result: "not-found" as const }));
+        await running({ questionContent });
+        const readHostQuestion = vi.fn(() => null);
+        const withdraw = publishHostPort({ readHostQuestion });
+        try {
+          await expect(getDecisionQuestionContentByReference({ reference: OWN })).resolves.toEqual({
+            result: "not-found",
+          });
+          expect(readHostQuestion).not.toHaveBeenCalled();
+          expect(questionContent).toHaveBeenCalledOnce();
+        } finally {
+          withdraw();
+        }
+      });
+
+      it("says the Host isn't connected when its link is down or went under the read, and fails on any other answer", async () => {
+        await running(null);
+        let outcome: HostCallOutcome<unknown> = { ok: false, failure: "disconnected" };
+        const withdraw = publishHostPort({
+          readHostQuestion: (() => Promise.resolve(outcome)) as DecisionsHostsPort["readHostQuestion"],
+          cancelHostQuestion: () =>
+            Promise.resolve(outcome as HostCallOutcome<DecisionQuestionCancelResult>),
+        });
+        try {
+          await expect(getDecisionQuestionContentByReference({ reference: ON_HOST })).resolves.toEqual({
+            result: "host-not-connected",
+          });
+          await expect(cancelDecisionQuestionByReference({ reference: ON_HOST })).resolves.toEqual({
+            result: "host-not-connected",
+          });
+          outcome = { ok: false, failure: "outcome-unknown" };
+          await expect(cancelDecisionQuestionByReference({ reference: ON_HOST })).resolves.toEqual({
+            result: "host-not-connected",
+          });
+          outcome = { ok: false, failure: "unexpected-answer" };
+          await expect(
+            getDecisionQuestionContentByReference({ reference: ON_HOST })
+          ).rejects.toThrow(/unexpected-answer/);
+          outcome = { ok: true, value: { result: "cancelling" } };
+          await expect(cancelDecisionQuestionByReference({ reference: ON_HOST })).resolves.toEqual({
+            result: "cancelling",
+          });
+        } finally {
+          withdraw();
+        }
+      });
+
+      it("reads opening lines here and on each Host in one batch, in the order asked for", async () => {
+        const questionSummaries = vi.fn(async (_scope: unknown, ids: readonly string[]) =>
+          ids.map((questionId) => ({ questionId, result: "read" as const, line: "Here?" }))
+        );
+        await running({ questionSummaries });
+        const second = { ...ON_HOST, questionId: "0190f0aa11112222333344445555bb02" };
+        let connected = true;
+        const readHostQuestion = vi.fn(
+          (_questionHostId: string, read: DecisionsHostQuestionRead) =>
+            Promise.resolve(
+              connected && read.read === "summaries"
+                ? {
+                    ok: true as const,
+                    value: {
+                      result: "read" as const,
+                      summaries: [
+                        { questionId: ON_HOST.questionId, result: "read" as const, line: "There?" },
+                      ],
+                    },
+                  }
+                : { ok: false as const, failure: "disconnected" as const }
+            )
+        );
+        const withdraw = publishHostPort({
+          readHostQuestion: readHostQuestion as unknown as DecisionsHostsPort["readHostQuestion"],
+        });
+        try {
+          await expect(
+            getDecisionQuestionSummariesByReference({ references: [ON_HOST, OWN, second, ON_HOST] })
+          ).resolves.toEqual({
+            result: "read",
+            summaries: [
+              { questionId: ON_HOST.questionId, result: "read", line: "There?" },
+              { questionId: OWN.questionId, result: "read", line: "Here?" },
+              { questionId: second.questionId, result: "not-found" },
+            ],
+          });
+          // One read for the Host's two questions.
+          expect(readHostQuestion).toHaveBeenCalledExactlyOnceWith(ON_HOST.hostId, {
+            read: "summaries",
+            references: [ON_HOST, second],
+          });
+
+          connected = false;
+          await expect(
+            getDecisionQuestionSummariesByReference({ references: [ON_HOST] })
+          ).resolves.toEqual({
+            result: "read",
+            summaries: [{ questionId: ON_HOST.questionId, result: "host-not-connected" }],
+          });
+        } finally {
+          withdraw();
+        }
       });
     });
 
