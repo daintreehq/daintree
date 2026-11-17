@@ -495,12 +495,19 @@ describe("RecipeEditor", () => {
       addVariable(2);
 
       fireEvent.change(valueField(1, 1), { target: { value: "4000" } });
+      // A real click or keypress focuses the delete button first; focus recovery keys off that.
+      const nodeEnvDelete = within(card(1)).getByRole("button", {
+        name: "Delete NODE_ENV (row 2)",
+      });
+      nodeEnvDelete.focus();
       act(() => {
-        within(card(1)).getByRole("button", { name: "Delete NODE_ENV (row 2)" }).click();
+        nodeEnvDelete.click();
       });
       expect(document.activeElement).toBe(nameField(1, 1));
+      const debugDelete = within(card(3)).getByRole("button", { name: "Delete DEBUG (row 1)" });
+      debugDelete.focus();
       act(() => {
-        within(card(3)).getByRole("button", { name: "Delete DEBUG (row 1)" }).click();
+        debugDelete.click();
       });
       expect(document.activeElement).toBe(
         within(card(3)).getByRole("button", { name: "Add variable to terminal 3" })
