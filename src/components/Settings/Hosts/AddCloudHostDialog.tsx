@@ -19,7 +19,6 @@ import { cloudHostsClient } from "@/clients/cloudHostsClient";
 import { cloudStatusFor, useCloudHosts } from "@/components/Hosts/cloud/cloudHostsState";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import {
-  CLOUD_LIFETIME_CHOICES,
   cloudMachineLabel,
   type CloudProviderInfo,
   type CloudResourceSummary,
@@ -27,7 +26,7 @@ import {
 import type { HostId } from "@shared/types/remoteHosts";
 import { ConnectCloudAccountDialog } from "./ConnectCloudAccountDialog";
 import { CloudProvisioningSelect, provisioningChoiceDescription } from "./CloudProvisioningSelect";
-import { useCloudMachineForm } from "./useCloudMachineForm";
+import { LIFETIME_VALUES, useCloudMachineForm } from "./useCloudMachineForm";
 import {
   canStartMachine,
   formatHourly,
@@ -56,10 +55,6 @@ function errorText(err: unknown, fallback: string): string {
     ? err.userMessage
     : clientErrorText(err, fallback);
 }
-
-export const LIFETIME_VALUES = CLOUD_LIFETIME_CHOICES.map((hours) =>
-  hours === null ? "never" : String(hours)
-);
 
 /**
  * Add a cloud host: create a new machine in a connected account, or add one

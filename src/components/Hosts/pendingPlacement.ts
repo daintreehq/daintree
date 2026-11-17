@@ -5,7 +5,7 @@ import type {
   PendingHostPlacement,
 } from "@shared/types/remoteHosts";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
-import { requestHostSwitch } from "@/components/HostSwitch/hostSwitchRequests";
+import { onHostSwitchSettled, requestHostSwitch } from "@/components/HostSwitch/hostSwitchRequests";
 import { openHostsSettingsTab } from "@/components/Settings/Hosts/hostSettingsRequests";
 import { requestHostUpdate } from "@/components/Settings/Hosts/hostUpdateRequests";
 import { closeSettingsThen } from "@/components/Settings/settingsCloseRequests";
@@ -13,8 +13,9 @@ import { logWarn } from "@/utils/logger";
 
 export type PlacementRequest = Omit<PendingHostPlacement, "requestedAt" | "failure">;
 
+const keyFor = (hostId: HostId, requestedAt: number) => `${hostId}\n${requestedAt}`;
 const keyOf = (hostId: HostId, placement: PendingHostPlacement) =>
-  `${hostId}\n${placement.requestedAt}`;
+  keyFor(hostId, placement.requestedAt);
 
 /**
  * Placements this view asked for since it loaded. One found otherwise was
@@ -41,6 +42,11 @@ export async function holdPlacement(
   askedHere.add(keyOf(hostId, placement));
   await remoteHostsClient.update({ hostId, pendingPlacement: placement });
   return placement;
+}
+
+/** A placement main wrote with its host at this view's asking: the switch dialog needn't ask first. */
+export function noteAskedHere(hostId: HostId, requestedAt: number): void {
+  askedHere.add(keyFor(hostId, requestedAt));
 }
 
 export async function cancelPlacement(hostId: HostId): Promise<void> {
@@ -112,7 +118,10 @@ export function placementReadyToResume(
  * has checked out, and stop holding it: the dialog owns it from here.
  * Settings closes first, the way its own Close does, so the switch dialog
  * never opens under it; `stillReady` is asked again once it has, and a
- * placement that is no longer ready stays held for the next try.
+ * placement that is no longer ready stays held for the next try. One whose
+ * machine was made for it is held until the dialog has opened the worktree
+ * there: a dialog closed without it leaves the placement failed, so the
+ * worktree's card still offers Retry and the machine's Delete.
  */
 export function resumePlacement(
   hostId: HostId,
@@ -134,11 +143,26 @@ export function resumePlacement(
     if (requestId === null) return;
     handedOff.add(key);
     askedHere.delete(key);
+    if (placement.createdMachine) {
+      onHostSwitchSettled(requestId, (settlement) => {
+        const settled =
+          settlement === "completed"
+            ? cancelPlacement(hostId)
+            : notePlacementFailure(hostId, placement, NOT_OPENED);
+        settled.catch((error: unknown) => {
+          logWarn("[Hosts] Couldn't settle a placement the switch dialog had", { error });
+        });
+      });
+      return;
+    }
     cancelPlacement(hostId).catch((error: unknown) => {
       logWarn("[Hosts] Couldn't clear a placement handed to the switch dialog", { error });
     });
   });
 }
+
+/** What a placement says once its switch dialog closed without opening the worktree. */
+export const NOT_OPENED = "The switch was closed before the worktree opened there.";
 
 const setupOpen = new Map<HostId, number>();
 const setupListeners = new Set<() => void>();

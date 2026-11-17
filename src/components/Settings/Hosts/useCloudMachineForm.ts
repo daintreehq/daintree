@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { cloudHostsClient } from "@/clients/cloudHostsClient";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import {
+  CLOUD_LIFETIME_CHOICES,
   DEFAULT_CLOUD_LIFETIME_HOURS,
   cloudLifetimeIsChosen,
   type CloudAccountSummary,
@@ -18,6 +19,11 @@ import {
   shownDimensions,
   startingSelection,
 } from "./cloudProvisioningChoices";
+
+/** The lifetime selector's values: hours as text, or "never". */
+export const LIFETIME_VALUES = CLOUD_LIFETIME_CHOICES.map((hours) =>
+  hours === null ? "never" : String(hours)
+);
 
 function errorText(err: unknown, fallback: string): string {
   return isClientAppError(err) && err.userMessage
