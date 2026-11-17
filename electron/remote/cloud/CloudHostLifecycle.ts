@@ -34,6 +34,7 @@ import {
   type HostConnection,
   type HostDescriptor,
   type HostId,
+  type PendingHostPlacement,
 } from "../../../shared/types/remoteHosts.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { AppError } from "../../utils/errorTypes.js";
@@ -169,7 +170,11 @@ export interface CloudHostLifecycleDeps {
   files: CloudSshFiles;
   clientDir: string;
   hosts: {
-    add(name: string, connection: HostConnection): HostDescriptor;
+    add(
+      name: string,
+      connection: HostConnection,
+      pendingPlacement?: PendingHostPlacement
+    ): HostDescriptor;
     get(hostId: HostId): HostDescriptor | null;
     list(): HostDescriptor[];
     /** Removes the host from this device as Settings → Remove host does. */
@@ -703,11 +708,13 @@ export class CloudHostLifecycle {
    * `createdFor` marks the machine as made for a worktree, in that first write
    * so the mark holds through the create and any restart. It is a parameter of
    * its own, never read off the request: Settings → Hosts sends the request
-   * over IPC and must never mark a machine.
+   * over IPC and must never mark a machine. `pendingPlacement` is the worktree
+   * waiting to open on the new host, written with the host itself.
    */
   async create(
     request: CloudHostCreateRequest,
-    createdFor: CloudHostCreatedFor | null = null
+    createdFor: CloudHostCreatedFor | null = null,
+    pendingPlacement?: PendingHostPlacement
   ): Promise<{ hostId: HostId }> {
     if (!request || typeof request !== "object") throw invalid("Missing machine details.");
     const mark = createdFor === null ? null : checkedCreatedFor(createdFor);
@@ -769,7 +776,7 @@ export class CloudHostLifecycle {
     this.deps.store.putBinding(binding);
     let descriptor: HostDescriptor;
     try {
-      descriptor = this.deps.hosts.add(name, cloudConnection(bindingId));
+      descriptor = this.deps.hosts.add(name, cloudConnection(bindingId), pendingPlacement);
     } catch (error) {
       this.deps.store.removeBinding(bindingId);
       throw error;

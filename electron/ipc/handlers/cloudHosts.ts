@@ -1,7 +1,13 @@
+import path from "node:path";
 import { defineIpcNamespace, op } from "../define.js";
+import { getIpcDispatcher } from "../dispatcher.js";
+import type { IpcContext } from "../types.js";
 import { getRemoteService, requireRemoteService } from "../../remote/runtime.js";
+import { projectStore } from "../../services/ProjectStore.js";
+import { AppError } from "../../utils/errorTypes.js";
 import { CLOUD_HOSTS_METHOD_CHANNELS } from "./cloudHosts.preload.js";
 import type {
+  CloudHostCreateForWorktreeRequest,
   CloudHostCreateRequest,
   CloudHostImportRequest,
   CloudAccountAddRequest,
@@ -22,6 +28,34 @@ function field(payload: unknown, name: string): unknown {
   return payload && typeof payload === "object"
     ? (payload as Record<string, unknown>)[name]
     : undefined;
+}
+
+/**
+ * The local project a machine is being made for, as main knows it. Only a
+ * window on this machine, asking for its own project, can mark a machine for
+ * one of its worktrees: a window bound to another host has none here.
+ */
+function requireOwnWorktree(ctx: IpcContext, worktree: unknown): { projectName: string } {
+  const refuse = (message: string) =>
+    new AppError({ code: "VALIDATION", message, userMessage: message });
+  if (
+    !ctx.event ||
+    ctx.client?.kind !== "local" ||
+    getIpcDispatcher().hostForSender(ctx.webContentsId) !== null
+  ) {
+    throw refuse("A machine is made for a worktree only from a window on this machine.");
+  }
+  const projectId = field(worktree, "projectId");
+  const worktreeId = field(worktree, "worktreeId");
+  if (typeof projectId !== "string" || projectId !== ctx.projectId) {
+    throw refuse("The worktree isn't in this window's project.");
+  }
+  if (typeof worktreeId !== "string" || !path.isAbsolute(worktreeId)) {
+    throw refuse("The worktree this machine is for is missing its path.");
+  }
+  const project = projectStore.getProjectById(projectId);
+  if (!project) throw refuse("The worktree's project isn't open on this machine.");
+  return { projectName: project.name };
 }
 
 /**
@@ -98,6 +132,23 @@ export const cloudHostsNamespace = defineIpcNamespace({
       CLOUD_HOSTS_METHOD_CHANNELS.createHost,
       async (payload: CloudHostCreateRequest): Promise<{ hostId: string }> =>
         requireRemoteService("cloudHosts").createHost(payload)
+    ),
+    // The only path that marks a machine as made for a worktree; Settings' createHost never does.
+    createHostForWorktree: op(
+      CLOUD_HOSTS_METHOD_CHANNELS.createHostForWorktree,
+      async (
+        ctx: IpcContext,
+        payload: CloudHostCreateForWorktreeRequest
+      ): Promise<{ hostId: string; requestedAt: number }> => {
+        const worktree = field(payload, "worktree");
+        const { projectName } = requireOwnWorktree(ctx, worktree);
+        return requireRemoteService("cloudHosts").createHostForWorktree(
+          field(payload, "machine"),
+          worktree,
+          projectName
+        );
+      },
+      { withContext: true }
     ),
     importHost: op(
       CLOUD_HOSTS_METHOD_CHANNELS.importHost,

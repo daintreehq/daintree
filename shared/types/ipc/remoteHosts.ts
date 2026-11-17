@@ -23,6 +23,8 @@ export interface AddHostPayload {
   connection: HostConnection;
   /** Added for this worktree's resource environment, and removed along with it. */
   ownerWorktreeId?: string;
+  /** A worktree waiting on the new host, written with the host so no restart can split them. */
+  pendingPlacement?: PendingHostPlacement;
 }
 
 export interface UpdateHostPayload {

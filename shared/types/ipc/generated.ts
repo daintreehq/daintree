@@ -669,6 +669,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../cloudHosts.js").CloudHostCreateRequest];
     result: { hostId: string };
   };
+  "cloud-hosts:create-host-for-worktree": {
+    args: [payload: import("../cloudHosts.js").CloudHostCreateForWorktreeRequest];
+    result: { hostId: string; requestedAt: number };
+  };
   "cloud-hosts:delete-machine": {
     args: [payload: { hostId: string; resourceId: string | null }];
     result: void;
