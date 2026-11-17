@@ -497,11 +497,9 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     payload: HostQuestionListPayload
   ): void {
     const owner = ownerKeyOf(this.deps.ownerState());
-    if (!session.isOpen || owner === null || payload.hostId === null || payload.owner === null) {
+    if (owner === null || payload.hostId === null || !this.takesList(hostId, session, payload)) {
       return;
     }
-    // Heard over the Host's current link, and served to the owner this computer speaks as now.
-    if (this.deps.sessionFor(hostId) !== session || ownerKey(payload.owner) !== owner) return;
     const questionHostId = payload.hostId;
     const questions: Omit<DecisionQuestionListItem, "remoteHost">[] = [];
     for (const raw of payload.questions) {
@@ -510,6 +508,22 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     }
     this.questionReports.set(hostId, { session, owner, questionHostId, questions });
     this.questionsChanged();
+  }
+
+  /** A list heard over the Host's current link, served to the owner this computer speaks as now. */
+  private takesList(
+    hostId: string,
+    session: DecisionsHostSession,
+    payload: HostQuestionListPayload
+  ): boolean {
+    const owner = ownerKeyOf(this.deps.ownerState());
+    return (
+      session.isOpen &&
+      this.deps.sessionFor(hostId) === session &&
+      payload.owner !== null &&
+      owner !== null &&
+      ownerKey(payload.owner) === owner
+    );
   }
 
   private questionsChanged(): void {
@@ -539,8 +553,8 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       DecisionsLinkMethod.QUESTIONS_CHANGED,
       HostQuestionsChangedPayloadSchema,
       (payload) => {
-        // A link a newer one replaced moves nothing of the newer one's.
-        if (this.deps.sessionFor(hostId) !== session) return null;
+        // A replaced link's list, or one served to another owner, moves nothing: not even a read's turn.
+        if (!this.takesList(hostId, session, payload)) return null;
         // Newer than any read still waiting for its answer.
         this.questionTurns.set(hostId, (this.questionTurns.get(hostId) ?? 0) + 1);
         this.hearQuestions(hostId, session, payload);

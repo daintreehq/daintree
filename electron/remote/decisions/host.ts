@@ -73,13 +73,15 @@ const OFF = { result: "off" } as const;
 /** What a Shell this Host doesn't serve its questions to is told: a list of none. */
 const NO_QUESTIONS = { hostId: null, owner: null, questions: [] } as const;
 
-/** What one list may take besides its questions: the envelope, with the longest owner ids. */
-const LIST_ENVELOPE_BYTES = 256;
+/** The longest owner ids a list can name, for sizing its envelope before knowing which owner. */
+const LONGEST_OWNER = { installationId: "x".repeat(64), ownerDeviceId: "x".repeat(64) };
 
 /** The newest questions within what one message carries, by count and by size. */
 function bounded(list: HostQuestionList): HostQuestionList {
   const kept: HostQuestionList["questions"] = [];
-  let bytes = LIST_ENVELOPE_BYTES + Buffer.byteLength(list.hostId);
+  let bytes = Buffer.byteLength(
+    JSON.stringify({ hostId: list.hostId, owner: LONGEST_OWNER, questions: [] })
+  );
   for (let i = list.questions.length - 1; i >= 0 && kept.length < MAX_HOST_QUESTIONS; i--) {
     const question = list.questions[i]!;
     // Each question, and the comma before it when one is already kept.

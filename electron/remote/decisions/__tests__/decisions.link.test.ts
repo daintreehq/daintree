@@ -1493,6 +1493,45 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
     expect(shell.client.hostQuestions()[0]?.questions).toEqual([item(3)]);
   });
 
+  it("keeps a read of the new owner's list when the earlier owner's list lands while it is out", async () => {
+    const { host, client } = await pair();
+    const other = { ...OWNER, installationId: "inst_owner_9876543210" };
+    let hold = false;
+    let reading!: () => void;
+    const readStarted = new Promise<void>((resolve) => (reading = resolve));
+    let release!: (list: unknown) => void;
+    answerAnnouncements(
+      host,
+      () => RUNNING,
+      () => {
+        if (!hold) return { hostId: null, owner: null, questions: [] };
+        reading();
+        return new Promise((resolve) => (release = resolve));
+      }
+    );
+    const shell = shellOf([STUDIO]);
+    shell.open(HOST, client);
+    await vi.waitFor(() => expect(shell.client.runtimeOf(HOST)?.runtime).toEqual(RUNNING));
+
+    // The owner here changes and says so; the Host's list for it is held while the earlier one's lands.
+    hold = true;
+    shell.setOwner(other);
+    shell.client.announceOwnerState();
+    await readStarted;
+    await host.call(DecisionsLinkMethod.QUESTIONS_CHANGED, {
+      hostId: QHOST,
+      owner: SERVED,
+      questions: [item(1)],
+    });
+    release({
+      hostId: QHOST,
+      owner: { installationId: other.installationId, ownerDeviceId: other.ownerDeviceId },
+      questions: [item(2)],
+    });
+
+    await vi.waitFor(() => expect(shell.client.hostQuestions()[0]?.questions).toEqual([item(2)]));
+  });
+
   it("lets nothing a replaced link sends move the current link's list or its read", async () => {
     const old = await pair();
     answerAnnouncements(old.host);
@@ -1566,7 +1605,11 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
     await vi.waitFor(() =>
       expect(calls.mock.calls.map(([method]) => method)).toContain(DecisionsLinkMethod.QUESTIONS)
     );
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    const read = calls.mock.results[
+      calls.mock.calls.findIndex(([method]) => method === DecisionsLinkMethod.QUESTIONS)
+    ]!.value as Promise<unknown>;
+    await expect(read).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(shell.client.hostQuestions()[0]?.questions).toEqual([item(1)]);
   });
 
