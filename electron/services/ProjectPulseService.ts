@@ -519,8 +519,11 @@ export class ProjectPulseService {
     headBranch: string
   ): Promise<BranchDeltaToMain | null> {
     const resolveRef = async (ref: string): Promise<string | null> => {
+      // `--` after --verify turns the ref into a path and always fails, so the ref
+      // is pinned to a commit with ^{commit} instead; a leading dash can't be an option.
+      if (ref.startsWith("-")) return null;
       try {
-        const sha = (await git.raw(["rev-parse", "--verify", "--", ref])).trim();
+        const sha = (await git.raw(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`])).trim();
         return sha || null;
       } catch {
         return null;
