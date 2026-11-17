@@ -1417,6 +1417,10 @@ export function ReviewHubContent({
         await window.electron.git.checkoutOursTheirs(worktreePath, filePath, choice);
         await refresh();
       } catch (err) {
+        // Main refuses a choice the index no longer agrees with, and the read
+        // that would have shown the change was cancelled above: read again so
+        // the row offers what is there now.
+        debouncedBgRefreshRef.current?.();
         const action =
           choice.resolution === "delete"
             ? "delete file"

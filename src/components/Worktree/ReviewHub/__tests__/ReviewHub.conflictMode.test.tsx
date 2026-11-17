@@ -779,7 +779,7 @@ describe("ReviewHub", () => {
         });
       });
 
-      it("names the failed deletion and brings the row back", async () => {
+      it("names the failed deletion and reads the conflict again", async () => {
         getStagingStatusMock.mockResolvedValue(
           makeMergingStatus({
             conflictedFiles: [{ path: "src/app.ts", xy: "UD", label: "deleted by them" }],
@@ -792,12 +792,21 @@ describe("ReviewHub", () => {
         await waitFor(() => screen.getByTestId("conflict-panel"));
         fireEvent.click(screen.getByRole("menuitem", { name: /^Delete src\/app\.ts/ }));
         const dialog = await screen.findByRole("alertdialog");
+        // Meanwhile the conflict turned around: the current branch side is now
+        // the one without the file.
+        getStagingStatusMock.mockResolvedValue(
+          makeMergingStatus({
+            conflictedFiles: [{ path: "src/app.ts", xy: "DU", label: "deleted by us" }],
+          })
+        );
         fireEvent.click(within(dialog).getByRole("button", { name: "Delete file" }));
 
         expect(await screen.findByText("Couldn't delete file")).toBeTruthy();
-        await waitFor(() => {
-          expect(screen.getByRole("menuitem", { name: /^Delete src\/app\.ts/ })).toBeTruthy();
-        });
+        expect(
+          await screen.findByRole("menuitem", {
+            name: "Delete src/app.ts to match current branch (ours)",
+          })
+        ).toBeTruthy();
       });
     });
 
