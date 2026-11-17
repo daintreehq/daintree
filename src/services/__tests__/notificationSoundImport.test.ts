@@ -19,7 +19,7 @@ function decodedAudio(channels: number[][]) {
   return {
     numberOfChannels: channels.length,
     length: channels[0]?.length ?? 0,
-    getChannelData: (c: number) => Float32Array.from(channels[c]),
+    getChannelData: (c: number) => Float32Array.from(channels[c] ?? []),
   };
 }
 
@@ -75,6 +75,86 @@ describe("notificationSoundImport", () => {
       )
     ).toEqual([0.5, 0]);
     expect(Array.from(downmixToMono(decodedAudio([[0.25, -1]])))).toEqual([0.25, -1]);
+    const threeChannels = decodedAudio([
+      [0.75, 0],
+      [0, 0],
+      [0, -0.75],
+    ]);
+    expect(Array.from(downmixToMono(threeChannels))).toEqual([0.25, -0.25]);
+  });
+
+  it("encodes the averaged samples, not one channel", async () => {
+    decodeAudioData.mockResolvedValue(decodedAudio([[0.5], [0]]));
+
+    const { wav } = await encodeImportedSound(audioFile());
+
+    expect(new DataView(wav.buffer).getInt16(44, true)).toBe(Math.trunc(0.25 * 0x7fff));
+  });
+
+  describe("duration from metadata", () => {
+    let duration: number | null;
+
+    beforeEach(() => {
+      duration = null;
+      // jsdom has no object URLs; outside this block the probe finds none and decodes.
+      Object.defineProperty(URL, "createObjectURL", {
+        value: vi.fn(() => "blob:sound"),
+        configurable: true,
+      });
+      Object.defineProperty(URL, "revokeObjectURL", { value: vi.fn(), configurable: true });
+      const realCreate = document.createElement.bind(document);
+      vi.spyOn(document, "createElement").mockImplementation((tag: string) => {
+        if (tag !== "audio") return realCreate(tag);
+        const audio = {
+          preload: "",
+          duration: Number.NaN,
+          onloadedmetadata: null as null | (() => void),
+          onerror: null as null | (() => void),
+          removeAttribute: vi.fn(),
+          set src(_: string) {
+            queueMicrotask(() => {
+              if (duration === null) {
+                audio.onerror?.();
+                return;
+              }
+              audio.duration = duration;
+              audio.onloadedmetadata?.();
+            });
+          },
+        };
+        return audio as unknown as HTMLElement;
+      });
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      Reflect.deleteProperty(URL, "createObjectURL");
+      Reflect.deleteProperty(URL, "revokeObjectURL");
+    });
+
+    it("refuses a long recording before reading or decoding it", async () => {
+      duration = 3600;
+      const file = audioFile("lecture.opus", 2 * 1024 * 1024);
+
+      expect(await refusal(encodeImportedSound(file))).toBe("too-long");
+      expect(file.arrayBuffer).not.toHaveBeenCalled();
+      expect(decodeAudioData).not.toHaveBeenCalled();
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:sound");
+    });
+
+    it("leaves a duration within the encoder-padding margin to the exact decoded check", async () => {
+      duration = 3.2;
+      decodeAudioData.mockResolvedValue(decodedAudio([[0.1]]));
+
+      await expect(encodeImportedSound(audioFile())).resolves.toBeTruthy();
+    });
+
+    it("decodes when the metadata can't say", async () => {
+      decodeAudioData.mockResolvedValue(decodedAudio([[0.1]]));
+
+      await expect(encodeImportedSound(audioFile())).resolves.toBeTruthy();
+      expect(decodeAudioData).toHaveBeenCalled();
+    });
   });
 
   it("decodes at 44.1 kHz and encodes the canonical mono WAV", async () => {
@@ -91,6 +171,14 @@ describe("notificationSoundImport", () => {
     expect(payload.label).toBe("Door bell");
     expect(isNotificationWav(payload.wav)).toBe(true);
     expect(payload.wav.byteLength).toBe(44 + 2 * 2);
+  });
+
+  it("reads a file exactly at the size limit", async () => {
+    decodeAudioData.mockResolvedValue(decodedAudio([[0.1]]));
+
+    await expect(
+      encodeImportedSound(audioFile("max.wav", CUSTOM_SOUND_MAX_SOURCE_BYTES))
+    ).resolves.toBeTruthy();
   });
 
   it("refuses a file over the size limit before reading it", async () => {
@@ -125,7 +213,16 @@ describe("notificationSoundImport", () => {
 
   it.each([
     ["a decode failure", () => decodeAudioData.mockRejectedValue(new DOMException("bad"))],
-    ["no audio in it", () => decodeAudioData.mockResolvedValue(decodedAudio([[]]))],
+    ["no samples in it", () => decodeAudioData.mockResolvedValue(decodedAudio([[]]))],
+    [
+      "no channels in it",
+      () =>
+        decodeAudioData.mockResolvedValue({
+          numberOfChannels: 0,
+          length: 4,
+          getChannelData: () => new Float32Array(4),
+        }),
+    ],
   ])("refuses %s as unreadable", async (_, arrange) => {
     arrange();
 
@@ -147,12 +244,15 @@ describe("notificationSoundImport", () => {
       id: "custom:x",
       label: "bell",
     });
-    expect(isNotificationWav(importSound.mock.calls[0][0].wav)).toBe(true);
+    const sent = importSound.mock.calls[0]?.[0] as { label: string; wav: Uint8Array };
+    expect(sent.label).toBe("bell");
+    expect(isNotificationWav(sent.wav)).toBe(true);
   });
 
   it("says why a file was refused, and offers a retry for anything else", () => {
     expect(soundImportErrorMessage(new SoundImportError("too-long"))).toMatch(/3 seconds/);
     expect(soundImportErrorMessage(new SoundImportError("too-large"))).toMatch(/8 MB/);
+    expect(soundImportErrorMessage(new SoundImportError("undecodable"))).toMatch(/read as audio/);
     expect(soundImportErrorMessage(new Error("EACCES"))).toMatch(/Try again/);
   });
 });

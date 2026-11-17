@@ -41,7 +41,13 @@ const soundServiceMock = vi.hoisted(() => ({
 const soundModuleMock = vi.hoisted(() => ({
   soundService: soundServiceMock,
   ALLOWED_SOUND_FILES: new Set(["completed.mp3", "waiting.mp3", "escalation.mp3"]),
-  PLAYABLE_SOUND_FILES: new Set(["completed.mp3", "waiting.mp3", "escalation.mp3"]),
+  // Imports are playable too, though never in the bundled set.
+  PLAYABLE_SOUND_FILES: new Set([
+    "completed.mp3",
+    "waiting.mp3",
+    "escalation.mp3",
+    "custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e6f",
+  ]),
   SOUND_FILES: { click: "click.mp3", error: "error.mp3" },
   getSoundsDir: vi.fn(() => "/sounds"),
 }));
@@ -150,6 +156,18 @@ describe("notifications IPC adversarial", () => {
       ...defaultSettings,
       completedSoundFile: "waiting.mp3",
     });
+  });
+
+  it("settingsSet and preview accept an import this device has, not just bundled files", async () => {
+    const id = "custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e6f";
+    await getHandler(CHANNELS.NOTIFICATION_SETTINGS_SET)(fakeEvent(), { waitingSoundFile: id });
+    await getHandler(CHANNELS.NOTIFICATION_PLAY_SOUND)(fakeEvent(), id);
+
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("notificationSettings", {
+      ...defaultSettings,
+      waitingSoundFile: id,
+    });
+    expect(soundServiceMock.previewFile).toHaveBeenCalledWith(id);
   });
 
   it("settingsSet writes a multi-field patch once, keeping untouched fields and dropping rejected ones (#17026)", async () => {

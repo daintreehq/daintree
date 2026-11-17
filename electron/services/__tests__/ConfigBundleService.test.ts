@@ -243,6 +243,17 @@ describe("ConfigBundleService.apply", () => {
     expect(mockStore.get("notificationSettings.completedSoundFile")).toBe("chime.wav");
   });
 
+  it("exports a never-moved volume as 100%, so a copy can raise a host's lowered volume", async () => {
+    const { service } = makeService();
+
+    const exported = (await service.collect(["notificationSettings"])).notificationSettings;
+    const report = await service.apply({ notificationSettings: { soundVolume: 0.25 } });
+
+    expect(exported).toMatchObject({ soundVolume: 1 });
+    expect(statusFor(report, "notificationSettings", "soundVolume")?.status).toBe("applied");
+    expect(mockStore.get("notificationSettings.soundVolume")).toBe(0.25);
+  });
+
   it("applies a sound file that does exist on this machine", async () => {
     const { service } = makeService();
 

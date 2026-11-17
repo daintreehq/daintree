@@ -11,10 +11,7 @@ import {
   type CustomNotificationSound,
   type CustomNotificationSoundEntry,
 } from "../../shared/types/ipc/notificationSounds.js";
-import {
-  isNotificationWav,
-  notificationSoundLabel,
-} from "../../shared/utils/notificationSoundWav.js";
+import { isNotificationWav, sanitizeSoundLabel } from "../../shared/utils/notificationSoundWav.js";
 
 const FALLBACK_LABEL = "Custom sound";
 
@@ -32,7 +29,7 @@ function readCatalog(): CustomNotificationSound[] {
     const { id, label } = entry as Record<string, unknown>;
     if (!isCustomSoundId(id) || seen.has(id)) continue;
     seen.add(id);
-    out.push({ id, label: notificationSoundLabel(label) || FALLBACK_LABEL });
+    out.push({ id, label: sanitizeSoundLabel(label) || FALLBACK_LABEL });
   }
   return out;
 }
@@ -43,8 +40,14 @@ function readCatalog(): CustomNotificationSound[] {
  * no caller-supplied text reaches the filesystem, and a symlink is refused.
  */
 export function resolveCustomSoundPath(id: string): string | null {
+  if (!isCustomSoundId(id) || !readCatalog().some((entry) => entry.id === id)) return null;
+  return storedFile(id);
+}
+
+/** The file for an id already known to be registered, or null if it isn't there. */
+function storedFile(id: string): string | null {
   const fileName = customSoundFileName(id);
-  if (!fileName || !readCatalog().some((entry) => entry.id === id)) return null;
+  if (!fileName) return null;
   const filePath = path.join(getCustomSoundsDir(), fileName);
   try {
     return lstatSync(filePath).isFile() ? filePath : null;
@@ -59,10 +62,7 @@ export function isPlayableCustomSound(id: string): boolean {
 }
 
 export function listCustomSounds(): CustomNotificationSoundEntry[] {
-  return readCatalog().map((entry) => ({
-    ...entry,
-    available: resolveCustomSoundPath(entry.id) !== null,
-  }));
+  return readCatalog().map((entry) => ({ ...entry, available: storedFile(entry.id) !== null }));
 }
 
 function toBytes(value: unknown): Uint8Array | null {
@@ -83,13 +83,15 @@ export async function importCustomSound(payload: unknown): Promise<CustomNotific
   if (!bytes || !isNotificationWav(bytes)) {
     throw new Error("The sound isn't a 16-bit mono 44.1 kHz WAV of 3 seconds or less");
   }
-  const label = notificationSoundLabel(rawLabel) || FALLBACK_LABEL;
+  const label = sanitizeSoundLabel(rawLabel) || FALLBACK_LABEL;
   const id = customSoundId(randomUUID());
   const dir = getCustomSoundsDir();
   const filePath = path.join(dir, customSoundFileName(id)!);
   await fsp.mkdir(dir, { recursive: true });
-  await resilientAtomicWriteFile(filePath, bytes);
   try {
+    // The write can fail after its rename (the directory sync), so its file is
+    // cleaned up too: an unlisted WAV would never be offered or played anyway.
+    await resilientAtomicWriteFile(filePath, bytes);
     // Read and write with no await between, so two windows importing at once both land.
     store.set("customNotificationSounds", [...readCatalog(), { id, label }]);
   } catch (error) {

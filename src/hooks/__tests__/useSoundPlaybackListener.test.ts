@@ -71,6 +71,13 @@ describe("useSoundPlaybackListener", () => {
     });
   });
 
+  it("forwards detune and volume together, as a working pulse sends them", () => {
+    renderHook(() => useSoundPlaybackListener());
+    triggerCallback!({ soundFile: "pulse.wav", detune: -12, volume: 0.3 });
+
+    expect(mockPlaySound).toHaveBeenCalledWith("pulse.wav", { detune: -12, volume: 0.3 });
+  });
+
   it("calls cancelSound when cancel event fires", () => {
     renderHook(() => useSoundPlaybackListener());
     cancelCallback!();

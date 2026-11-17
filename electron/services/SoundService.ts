@@ -5,7 +5,10 @@ import { playSound, type SoundHandle } from "../utils/soundPlayer.js";
 import { broadcastToRenderer, sendToOneVisibleRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { store } from "../store.js";
-import { isCustomSoundId } from "../../shared/types/ipc/notificationSounds.js";
+import {
+  CUSTOM_SOUND_MAX_SECONDS,
+  isCustomSoundId,
+} from "../../shared/types/ipc/notificationSounds.js";
 import { isPlayableCustomSound, resolveCustomSoundPath } from "./customNotificationSounds.js";
 
 export function getSoundsDir(): string {
@@ -63,6 +66,8 @@ interface ActiveVoice {
   handle: SoundHandle;
   priority: number;
   startedAt: number;
+  /** How long the OS player may still be sounding it; an import can run to the 3 s cap. */
+  durationMs: number;
 }
 
 const DEBOUNCE_MS = 150;
@@ -71,6 +76,7 @@ const DECAY_FACTOR = 0.7;
 const VOLUME_FLOOR = 0.1;
 const MAX_VOICES = 3;
 const MAX_SOUND_DURATION_MS = 600;
+const MAX_CUSTOM_SOUND_DURATION_MS = CUSTOM_SOUND_MAX_SECONDS * 1000;
 const CHORD_WINDOW_MS = 2000;
 
 const PRIORITY_MAP: Record<string, number> = {
@@ -106,6 +112,9 @@ class SoundService {
   private completionBurstWindowStart = 0;
 
   play(id: SoundId, variant?: number): void {
+    // Muted plays leave no trace in the chord, debounce or decay state, so the
+    // first sound after unmuting plays as if the muted ones never happened.
+    if (settingsVolume() <= 0) return;
     const now = Date.now();
     const isChordable = id === "complete" || id === "chime";
 
@@ -122,6 +131,10 @@ class SoundService {
   }
 
   playFile(soundFile: string): void {
+    // Checked before the throttle, so a muted or unplayable file can't swallow the
+    // next audible one. Settings are validated on the way in, but a project's save
+    // reaches here before its next decode.
+    if (settingsVolume() <= 0 || !PLAYABLE_SOUND_FILES.has(soundFile)) return;
     const now = Date.now();
     if (now - this.lastPlayFileAt < SOUND_THROTTLE_MS) return;
     this.lastPlayFileAt = now;
@@ -138,6 +151,7 @@ class SoundService {
   }
 
   previewFile(soundFile: string): void {
+    if (!PLAYABLE_SOUND_FILES.has(soundFile)) return;
     this.playBypassed(soundFile);
   }
 
@@ -164,6 +178,7 @@ class SoundService {
   }
 
   playPulse(soundFile: string, detuneCents?: number): void {
+    if (!PLAYABLE_SOUND_FILES.has(soundFile)) return;
     this.playBypassed(soundFile, detuneCents);
   }
 
@@ -211,7 +226,12 @@ class SoundService {
     const soundPath = customPath ?? path.join(getSoundsDir(), soundFile);
     if (!existsSync(soundPath)) return;
     const handle = playSound(soundPath, volume);
-    this.activeVoices.push({ handle, priority: 0, startedAt: Date.now() });
+    this.activeVoices.push({
+      handle,
+      priority: 0,
+      startedAt: Date.now(),
+      durationMs: customPath ? MAX_CUSTOM_SOUND_DURATION_MS : MAX_SOUND_DURATION_MS,
+    });
   }
 
   private playDampened(
@@ -253,7 +273,12 @@ class SoundService {
     if (!this.acquireVoiceSlot(opts.priority)) return;
 
     const handle = playSound(soundPath, effectiveVolume);
-    this.activeVoices.push({ handle, priority: opts.priority, startedAt: now });
+    this.activeVoices.push({
+      handle,
+      priority: opts.priority,
+      startedAt: now,
+      durationMs: customPath ? MAX_CUSTOM_SOUND_DURATION_MS : MAX_SOUND_DURATION_MS,
+    });
   }
 
   private computeVolume(now: number): number {
@@ -267,7 +292,7 @@ class SoundService {
   }
 
   private pruneStaleVoices(now: number): void {
-    this.activeVoices = this.activeVoices.filter((v) => now - v.startedAt < MAX_SOUND_DURATION_MS);
+    this.activeVoices = this.activeVoices.filter((v) => now - v.startedAt < v.durationMs);
   }
 
   private acquireVoiceSlot(priority: number): boolean {

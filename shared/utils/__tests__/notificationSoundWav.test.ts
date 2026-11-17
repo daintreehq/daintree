@@ -3,6 +3,7 @@ import {
   encodeNotificationWav,
   isNotificationWav,
   notificationSoundLabel,
+  sanitizeSoundLabel,
 } from "../notificationSoundWav.js";
 import {
   CUSTOM_SOUND_MAX_FRAMES,
@@ -81,18 +82,26 @@ describe("encodeNotificationWav / isNotificationWav", () => {
 });
 
 describe("notificationSoundLabel", () => {
-  it("drops the extension and keeps the name", () => {
+  it("drops the extension once and keeps the name", () => {
     expect(notificationSoundLabel("Door bell.mp3")).toBe("Door bell");
     expect(notificationSoundLabel("v1.2 alert")).toBe("v1.2 alert");
+    expect(notificationSoundLabel("Door.v2.wav")).toBe("Door.v2");
   });
 
   it("makes control and bidi characters harmless and collapses whitespace", () => {
-    expect(notificationSoundLabel("a\nb‮\tc.wav")).toBe("a b c");
+    expect(notificationSoundLabel("a\nb\u202e\tc  \t d.wav")).toBe("a b c d");
   });
 
-  it("bounds the length and returns nothing for a non-string", () => {
+  it("bounds the length", () => {
     expect(notificationSoundLabel(`${"x".repeat(200)}.wav`)).toHaveLength(60);
-    expect(notificationSoundLabel(42)).toBe("");
+  });
+
+  it("stores a label Main can read back and save again without losing text", () => {
+    const label = notificationSoundLabel("Door.v2.wav");
+
+    expect(sanitizeSoundLabel(label)).toBe("Door.v2");
+    expect(sanitizeSoundLabel(sanitizeSoundLabel(label))).toBe("Door.v2");
+    expect(sanitizeSoundLabel(42)).toBe("");
   });
 });
 

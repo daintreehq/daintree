@@ -103,6 +103,8 @@ describe("NotificationSettingsTab", () => {
     it("shows each step while dragging and saves once when the drag ends", async () => {
       const slider = await renderWithSound({ soundVolume: 0.8 });
 
+      expect(slider.value).toBe("80");
+      fireEvent.pointerDown(slider);
       fireEvent.change(slider, { target: { value: "55" } });
       fireEvent.change(slider, { target: { value: "40" } });
       expect(slider.getAttribute("aria-valuetext")).toBe("40 percent");
@@ -116,18 +118,40 @@ describe("NotificationSettingsTab", () => {
     it("saves a keyboard step when the key is released", async () => {
       const slider = await renderWithSound({ soundVolume: 0.5 });
 
+      fireEvent.keyDown(slider, { key: "ArrowLeft" });
       fireEvent.change(slider, { target: { value: "45" } });
       fireEvent.keyUp(slider, { key: "ArrowLeft" });
 
       expect(setSettings).toHaveBeenCalledWith({ soundVolume: 0.45 });
     });
 
+    it("saves a value set with no pointer or key behind it, as assistive tech does", async () => {
+      const slider = await renderWithSound({ soundVolume: 0.8 });
+
+      fireEvent.change(slider, { target: { value: "30" } });
+
+      expect(setSettings).toHaveBeenCalledExactlyOnceWith({ soundVolume: 0.3 });
+    });
+
+    it("saves a drag once even when the release is followed by a blur", async () => {
+      const slider = await renderWithSound({ soundVolume: 0.8 });
+
+      fireEvent.pointerDown(slider);
+      fireEvent.change(slider, { target: { value: "65" } });
+      fireEvent.pointerUp(slider);
+      fireEvent.blur(slider);
+
+      expect(setSettings).toHaveBeenCalledExactlyOnceWith({ soundVolume: 0.65 });
+      expect(slider.value).toBe("65");
+    });
+
     it("saves nothing when a drag ends where it started", async () => {
       const slider = await renderWithSound({ soundVolume: 0.5 });
 
+      fireEvent.pointerDown(slider);
       fireEvent.change(slider, { target: { value: "70" } });
       fireEvent.change(slider, { target: { value: "50" } });
-      fireEvent.blur(slider);
+      fireEvent.pointerUp(slider);
 
       expect(setSettings).not.toHaveBeenCalled();
     });
@@ -152,7 +176,7 @@ describe("NotificationSettingsTab", () => {
   describe("imported sounds", () => {
     const IMPORTED = { id: "custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e6f", label: "Door bell" };
 
-    async function chooseFile(container: HTMLElement, row: string) {
+    async function chooseFile(row: string) {
       const picker = await screen.findByRole("combobox", { name: row });
       await waitFor(() => expect(picker.hasAttribute("disabled")).toBe(false));
       const input = picker.parentElement?.querySelector('input[type="file"]');
@@ -167,9 +191,9 @@ describe("NotificationSettingsTab", () => {
     it("selects an imported file for the row it was chosen from", async () => {
       getSettings.mockResolvedValueOnce({ ...BASE, soundEnabled: true });
       importMock.importNotificationSound.mockResolvedValue(IMPORTED);
-      const { container } = render(<NotificationSettingsTab />);
+      render(<NotificationSettingsTab />);
 
-      const { file } = await chooseFile(container, "Waiting sound");
+      const { file } = await chooseFile("Waiting sound");
 
       expect(importMock.importNotificationSound).toHaveBeenCalledWith(file);
       await waitFor(() =>
@@ -181,12 +205,58 @@ describe("NotificationSettingsTab", () => {
       const { SoundImportError } = await import("@/services/notificationSoundImport");
       getSettings.mockResolvedValueOnce({ ...BASE, soundEnabled: true });
       importMock.importNotificationSound.mockRejectedValue(new SoundImportError("too-long"));
-      const { container } = render(<NotificationSettingsTab />);
+      render(<NotificationSettingsTab />);
 
-      await chooseFile(container, "Finished sound");
+      await chooseFile("Finished sound");
 
       expect(await screen.findByText("Choose a sound that's 3 seconds or shorter")).toBeTruthy();
       expect(setSettings).not.toHaveBeenCalled();
+    });
+
+    it("drops an import that finishes after the row was reset", async () => {
+      getSettings.mockResolvedValueOnce({
+        ...BASE,
+        soundEnabled: true,
+        waitingSoundFile: "ping.wav",
+      });
+      let finishImport!: (sound: typeof IMPORTED) => void;
+      importMock.importNotificationSound.mockReturnValue(
+        new Promise((resolve) => (finishImport = resolve))
+      );
+      render(<NotificationSettingsTab />);
+
+      await chooseFile("Waiting sound");
+      fireEvent.click(screen.getByRole("button", { name: "Reset Waiting sound to default" }));
+      await act(async () => finishImport(IMPORTED));
+
+      expect(setSettings).toHaveBeenCalledExactlyOnceWith({ waitingSoundFile: "waiting.wav" });
+    });
+
+    it("keeps Preview for a bundled sound the menu doesn't list", async () => {
+      getSettings.mockResolvedValueOnce({
+        ...BASE,
+        soundEnabled: true,
+        completedSoundFile: "git-commit.wav",
+      });
+      render(<NotificationSettingsTab />);
+
+      const preview = await screen.findByRole("button", { name: "Preview finished sound" });
+      await waitFor(() => expect((preview as HTMLButtonElement).disabled).toBe(false));
+    });
+
+    it("doesn't call a saved import missing before the list of imports has arrived", async () => {
+      getSettings.mockResolvedValueOnce({
+        ...BASE,
+        soundEnabled: true,
+        completedSoundFile: IMPORTED.id,
+      });
+      listCustomSounds.mockRejectedValue(new Error("busy"));
+      render(<NotificationSettingsTab />);
+
+      const picker = await screen.findByRole("combobox", { name: "Finished sound" });
+      await waitFor(() => expect(picker.textContent).toContain("Custom sound"));
+      const preview = screen.getByRole("button", { name: "Preview finished sound" });
+      expect((preview as HTMLButtonElement).disabled).toBe(false);
     });
 
     it("names a saved import by its label and disables Preview when its file is gone", async () => {

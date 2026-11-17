@@ -706,16 +706,22 @@ describe("decodeNotificationOverrides (internal)", () => {
   });
 
   it("keeps a well-formed imported sound id in every sound field, including the legacy alias", () => {
-    const id = "custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e6f";
+    const id = (n: number) => `custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e6${n}`;
     expect(
       __internal.decodeNotificationOverrides({
-        waitingSoundFile: id,
-        escalationSoundFile: id,
-        workingPulseSoundFile: id,
+        completedSoundFile: id(1),
+        waitingSoundFile: id(2),
+        escalationSoundFile: id(3),
+        workingPulseSoundFile: id(4),
       })
-    ).toEqual({ waitingSoundFile: id, escalationSoundFile: id, workingPulseSoundFile: id });
-    expect(__internal.decodeNotificationOverrides({ soundFile: id })).toEqual({
-      completedSoundFile: id,
+    ).toEqual({
+      completedSoundFile: id(1),
+      waitingSoundFile: id(2),
+      escalationSoundFile: id(3),
+      workingPulseSoundFile: id(4),
+    });
+    expect(__internal.decodeNotificationOverrides({ soundFile: id(5) })).toEqual({
+      completedSoundFile: id(5),
     });
   });
 

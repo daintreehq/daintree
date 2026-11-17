@@ -37,24 +37,29 @@ export const ESCALATION_DELAY_OPTIONS = [
   { value: 600_000, label: "10 min", ariaLabel: "10 minutes" },
 ] as const;
 
+/** `customSounds` is null until this device's imports have been listed. */
 export function soundLabel(
   file: unknown,
-  customSounds: readonly CustomNotificationSoundEntry[] = []
+  customSounds: readonly CustomNotificationSoundEntry[] | null = []
 ): string {
   const bundled = NOTIFICATION_SOUNDS.find((s) => s.file === file);
   if (bundled) return bundled.label;
+  if (!isCustomSoundId(file)) return String(file);
+  if (customSounds === null) return "Custom sound";
   const custom = customSounds.find((s) => s.id === file);
   if (custom) return custom.available ? custom.label : `${custom.label} (missing)`;
-  return isCustomSoundId(file) ? "Missing sound" : String(file);
+  return "Missing sound";
 }
 
 /**
  * This device's imported sounds for one settings page, shared by its pickers. A
  * list that resolves after a newer one started (an import, a picker opening) is
- * dropped, so it can't hide a sound that was just added.
+ * dropped, so it can't hide a sound that was just added. Null until a list has
+ * arrived, so a failed lookup is never mistaken for missing files; opening a
+ * picker asks again.
  */
 export function useCustomNotificationSounds() {
-  const [sounds, setSounds] = useState<CustomNotificationSoundEntry[]>([]);
+  const [sounds, setSounds] = useState<CustomNotificationSoundEntry[] | null>(null);
   const requestRef = useRef(0);
 
   const refresh = useCallback(() => {
@@ -77,9 +82,9 @@ export function useCustomNotificationSounds() {
     async (file: File): Promise<CustomNotificationSound> => {
       const imported = await importNotificationSound(file);
       setSounds((current) =>
-        current.some((s) => s.id === imported.id)
+        current?.some((s) => s.id === imported.id)
           ? current
-          : [...current, { ...imported, available: true }]
+          : [...(current ?? []), { ...imported, available: true }]
       );
       refresh();
       return imported;
@@ -164,7 +169,8 @@ export function SoundPickerRow({
   value: string | undefined;
   onChange: (value: string) => void;
   onPreview: (file: string) => void;
-  customSounds?: readonly CustomNotificationSoundEntry[];
+  /** Null until this device's imports have been listed. */
+  customSounds?: readonly CustomNotificationSoundEntry[] | null;
   onImportFile?: (file: File) => Promise<CustomNotificationSound>;
   /** Called as the list opens, so imports made in another window show up. */
   onOpen?: () => void;
@@ -176,19 +182,43 @@ export function SoundPickerRow({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
+  // An import finishes after the page may have moved on: it applies through the
+  // newest onChange (whose settings include edits made meanwhile), and not at all
+  // once the row was reset or unmounted.
+  const onChangeRef = useRef(onChange);
+  const importGeneration = useRef(0);
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  });
+  useEffect(
+    () => () => {
+      importGeneration.current++;
+    },
+    []
+  );
 
-  const available = customSounds.filter((s) => s.available);
+  const available = (customSounds ?? []).filter((s) => s.available);
+  const inMenu =
+    NOTIFICATION_SOUNDS.some((s) => s.file === value) || available.some((s) => s.id === value);
+  // Any bundled file Main accepts previews; an import only while its file is there.
   const playable =
-    value !== undefined &&
-    (NOTIFICATION_SOUNDS.some((s) => s.file === value) || available.some((s) => s.id === value));
+    !!value &&
+    (!isCustomSoundId(value) || customSounds === null || available.some((s) => s.id === value));
 
   const handleFile = (file: File | undefined) => {
     if (!file || !onImportFile) return;
+    const generation = ++importGeneration.current;
     setImportError(null);
     setImporting(true);
     onImportFile(file)
-      .then((imported) => onChange(imported.id))
-      .catch((error: unknown) => setImportError(soundImportErrorMessage(error)))
+      .then((imported) => {
+        if (generation === importGeneration.current) onChangeRef.current(imported.id);
+      })
+      .catch((error: unknown) => {
+        if (generation === importGeneration.current) {
+          setImportError(soundImportErrorMessage(error));
+        }
+      })
       .finally(() => setImporting(false));
   };
 
@@ -197,7 +227,15 @@ export function SoundPickerRow({
       label={label}
       description={description}
       isModified={isModified}
-      onReset={onReset}
+      onReset={
+        onReset
+          ? () => {
+              importGeneration.current++;
+              setImportError(null);
+              onReset();
+            }
+          : undefined
+      }
       resetAriaLabel={resetAriaLabel}
       disabled={disabled}
       error={importError}
@@ -237,9 +275,10 @@ export function SoundPickerRow({
                   {sound.label}
                 </SelectItem>
               ))}
-              {value && !playable && (
-                // The saved choice is an import whose file is gone: shown so the
-                // trigger names it, but it can't be picked again.
+              {value && !inMenu && (
+                // A saved choice the menu doesn't offer (an import whose file is
+                // gone, or a bundled file set elsewhere): shown so the trigger
+                // names it, but it can't be picked again from here.
                 <SelectItem value={value} disabled>
                   {soundLabel(value, customSounds)}
                 </SelectItem>
@@ -288,7 +327,8 @@ export function SoundPickerRow({
 
 /**
  * The volume setting as a slider. It shows each step while dragging but saves
- * once, when the drag or key press ends, rather than a write per step.
+ * once, when the drag or key press ends, rather than a write per step. A change
+ * with no pointer or key behind it (an assistive "set value") saves at once.
  */
 export function SoundVolumeRow({
   value,
@@ -302,8 +342,10 @@ export function SoundVolumeRow({
   onReset?: () => void;
 }) {
   const [draft, setDraft] = useState<number | null>(null);
+  const gestureRef = useRef(false);
   const percent = Math.round((draft ?? value) * 100);
   const commit = () => {
+    gestureRef.current = false;
     if (draft === null) return;
     setDraft(null);
     if (draft !== value) onCommit(draft);
@@ -323,9 +365,23 @@ export function SoundVolumeRow({
             type="range"
             min="0"
             max="100"
-            step="5"
+            step="1"
             value={percent}
-            onChange={(e) => setDraft(Number(e.target.value) / 100)}
+            onPointerDown={() => {
+              gestureRef.current = true;
+            }}
+            onKeyDown={() => {
+              gestureRef.current = true;
+            }}
+            onChange={(e) => {
+              const next = Number(e.target.value) / 100;
+              if (gestureRef.current) {
+                setDraft(next);
+                return;
+              }
+              setDraft(null);
+              if (next !== value) onCommit(next);
+            }}
             onPointerUp={commit}
             onKeyUp={commit}
             onBlur={commit}

@@ -34,6 +34,9 @@ const MAX_CACHED_CUSTOM_BUFFERS = 8;
 let audioContext: AudioContext | null = null;
 let soundsDir: string | null = null;
 let customSoundsDir: string | null = null;
+// Advanced by dispose(), so a lookup or decode that settles afterwards can't
+// repopulate the caches it just cleared.
+let lifetime = 0;
 const bufferCache = new Map<string, AudioBuffer>();
 const activeVoices: ActiveVoice[] = [];
 let cancelGeneration = 0;
@@ -88,8 +91,11 @@ async function ensureSoundsDir(): Promise<string> {
 async function locate(soundFile: string): Promise<{ dir: string; file: string }> {
   const customFile = customSoundFileName(soundFile);
   if (customFile) {
-    customSoundsDir ??= await window.electron.notificationSounds.getCustomDir();
-    return { dir: customSoundsDir, file: customFile };
+    if (customSoundsDir !== null) return { dir: customSoundsDir, file: customFile };
+    const started = lifetime;
+    const dir = await window.electron.notificationSounds.getCustomDir();
+    if (started === lifetime) customSoundsDir = dir;
+    return { dir, file: customFile };
   }
   return { dir: await ensureSoundsDir(), file: soundFile };
 }
@@ -112,6 +118,7 @@ async function getBuffer(ctx: AudioContext, soundFile: string): Promise<AudioBuf
     return cached;
   }
 
+  const started = lifetime;
   try {
     const { dir, file } = await locate(soundFile);
     const url = `daintree-file://?path=${encodeURIComponent(`${dir}/${file}`)}&root=${encodeURIComponent(dir)}`;
@@ -120,7 +127,7 @@ async function getBuffer(ctx: AudioContext, soundFile: string): Promise<AudioBuf
 
     const arrayBuffer = await response.arrayBuffer();
     const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
-    cacheBuffer(soundFile, audioBuffer);
+    if (started === lifetime) cacheBuffer(soundFile, audioBuffer);
     return audioBuffer;
   } catch {
     return null;
@@ -219,4 +226,5 @@ export function dispose(): void {
   }
   soundsDir = null;
   customSoundsDir = null;
+  lifetime++;
 }

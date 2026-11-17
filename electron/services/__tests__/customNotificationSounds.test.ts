@@ -50,13 +50,12 @@ describe("customNotificationSounds", () => {
 
   it("stores an import under a generated id inside app data and lists it", async () => {
     const wav = validWav();
-    const imported = await importCustomSound({ label: "Door bell.mp3", wav });
+    const imported = await importCustomSound({ label: " Door\tbell ", wav });
 
     expect(imported.label).toBe("Door bell");
     const filePath = resolveCustomSoundPath(imported.id);
     expect(filePath).not.toBeNull();
-    expect(path.dirname(filePath!)).toBe(getCustomSoundsDir());
-    expect(path.dirname(getCustomSoundsDir())).toBe(path.join(userData.dir, "sounds"));
+    expect(path.dirname(filePath!)).toBe(path.join(userData.dir, "sounds", "custom"));
     expect(new Uint8Array(fs.readFileSync(filePath!))).toEqual(wav);
     expect(listCustomSounds()).toEqual([{ ...imported, available: true }]);
     expect(isPlayableCustomSound(imported.id)).toBe(true);
@@ -100,8 +99,24 @@ describe("customNotificationSounds", () => {
     expect(fs.readdirSync(getCustomSoundsDir())).toEqual([]);
   });
 
+  it("keeps a dotted label as the window sent it, across a later import's rewrite", async () => {
+    const first = await importCustomSound({ label: "Door.v2", wav: validWav() });
+    await importCustomSound({ label: "other", wav: validWav() });
+
+    expect(first.label).toBe("Door.v2");
+    expect(listCustomSounds().find((s) => s.id === first.id)?.label).toBe("Door.v2");
+  });
+
+  it("registers an import only once its file is written", async () => {
+    const pending = importCustomSound({ label: "x", wav: validWav() });
+
+    expect(storeState.values.customNotificationSounds).toBeUndefined();
+    const imported = await pending;
+    expect(listCustomSounds().map((s) => s.id)).toEqual([imported.id]);
+  });
+
   it("falls back to a generic label when the name has nothing showable", async () => {
-    const imported = await importCustomSound({ label: "‮​.wav", wav: validWav() });
+    const imported = await importCustomSound({ label: "\u202e\u200b \t", wav: validWav() });
 
     expect(imported.label).toBe("Custom sound");
   });

@@ -161,21 +161,64 @@ describe("WebAudioService", () => {
     expect(mockStart).toHaveBeenCalledWith(0);
   });
 
-  it("keeps only the most recently played imports decoded", async () => {
+  it("keeps only the most recently played imports decoded, and every bundled sound", async () => {
     const { service, mockFetch, mockSuccessfulFetch } = await setupTest();
     const ids = Array.from(
       { length: 9 },
       (_, i) => `custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e${String(i).padStart(2, "0")}`
     );
-    for (let i = 0; i < 11; i++) mockSuccessfulFetch();
+    for (let i = 0; i < 12; i++) mockSuccessfulFetch();
 
-    for (const id of ids) await service.playSound(id);
+    await service.playSound("chime.wav");
+    for (const id of ids.slice(0, 8)) await service.playSound(id);
+    // Playing the oldest import again makes the next-oldest the one to go.
+    await service.playSound(ids[0]!);
     await service.playSound(ids[8]!);
-    await service.playSound(ids[1]!);
-    expect(mockFetch).toHaveBeenCalledTimes(9);
+    expect(mockFetch).toHaveBeenCalledTimes(10);
 
     await service.playSound(ids[0]!);
+    await service.playSound("chime.wav");
     expect(mockFetch).toHaveBeenCalledTimes(10);
+
+    await service.playSound(ids[1]!);
+    expect(mockFetch).toHaveBeenCalledTimes(11);
+  });
+
+  it("asks for the imports directory once, and again after dispose", async () => {
+    const { service, mockSuccessfulFetch } = await setupTest();
+    const getCustomDir = window.electron.notificationSounds.getCustomDir as ReturnType<
+      typeof vi.fn
+    >;
+    for (let i = 0; i < 3; i++) mockSuccessfulFetch();
+
+    await service.playSound("custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e01");
+    await service.playSound("custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e02");
+    expect(getCustomDir).toHaveBeenCalledTimes(1);
+
+    service.dispose();
+    await service.playSound("custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e03");
+    expect(getCustomDir).toHaveBeenCalledTimes(2);
+  });
+
+  it("doesn't keep a directory or buffer that arrives after dispose", async () => {
+    const { service, mockSuccessfulFetch } = await setupTest();
+    const getCustomDir = window.electron.notificationSounds.getCustomDir as ReturnType<
+      typeof vi.fn
+    >;
+    let resolveDir!: (dir: string) => void;
+    getCustomDir.mockReturnValueOnce(new Promise<string>((r) => (resolveDir = r)));
+    mockSuccessfulFetch();
+    mockSuccessfulFetch();
+    const id = "custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e01";
+
+    const pending = service.playSound(id);
+    await vi.waitFor(() => expect(getCustomDir).toHaveBeenCalledTimes(1));
+    service.dispose();
+    resolveDir("/stale/custom");
+    await pending;
+    await service.playSound(id);
+
+    expect(getCustomDir).toHaveBeenCalledTimes(2);
   });
 
   it("caches decoded buffers on second play", async () => {

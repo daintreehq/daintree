@@ -207,7 +207,7 @@ function displayNotificationValue(key: string, value: unknown): string | undefin
       const seconds = Math.round(value / 1000);
       return seconds >= 60 && seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds}s`;
     }
-    if (key === "soundVolume") return `${Math.round(value * 100)}%`;
+    if (key === "soundVolume") return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
   }
   return displayScalar(value);
 }
@@ -1380,7 +1380,9 @@ export class ConfigBundleService {
   private notificationSettingsSection(): SectionHandler {
     const readSettings = (): Record<string, unknown> => {
       const settings = store.get("notificationSettings");
-      return isRecord(settings) ? settings : {};
+      // A volume never moved from full is absent; export and compare it as 100% so a
+      // copy to a host that turned its volume down brings it back up.
+      return isRecord(settings) ? { soundVolume: 1, ...settings } : {};
     };
 
     return {
