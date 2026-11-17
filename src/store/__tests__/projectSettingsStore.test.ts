@@ -490,6 +490,19 @@ describe("projectSettingsStore", () => {
       });
     });
 
+    it("keeps the links a whole-settings write installed during the first load", async () => {
+      const detected = createDeferred<RunCommand[]>();
+      getSettingsMock.mockResolvedValueOnce({ runCommands: [], portalLinks: [] });
+      detectRunnersMock.mockReturnValueOnce(detected.promise);
+
+      const load = useProjectSettingsStore.getState().loadSettings("project-a");
+      useProjectSettingsStore.getState().setSettings({ runCommands: [], portalLinks: [staging] });
+      detected.resolve([]);
+      await load;
+
+      expect(useProjectSettingsStore.getState().settings?.portalLinks).toEqual([staging]);
+    });
+
     it("applies links saved during the initial load once that load lands", async () => {
       const settingsRead = createDeferred<ProjectSettings>();
       getSettingsMock.mockReturnValueOnce(settingsRead.promise);

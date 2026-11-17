@@ -200,22 +200,26 @@ describe("useProjectSettings pin and unpin beside other settings writers (#17199
     });
 
     let pinning!: Promise<void>;
-    act(() => {
-      pinning = hook.result.current.promoteToSaved(test);
-    });
-    await waitFor(() => {
-      expect(projectClient.saveSettings).toHaveBeenCalled();
-    });
+    try {
+      act(() => {
+        pinning = hook.result.current.promoteToSaved(test);
+      });
+      await waitFor(() => {
+        expect(projectClient.saveSettings).toHaveBeenCalled();
+      });
 
-    hook.rerender({ projectId: THIRD_PROJECT_ID });
-    await waitFor(() => {
-      expect(hook.result.current.settings?.runCommands.map((c) => c.command)).toEqual([
-        "npm run lint",
-      ]);
-    });
+      hook.rerender({ projectId: THIRD_PROJECT_ID });
+      await waitFor(() => {
+        expect(hook.result.current.settings?.runCommands.map((c) => c.command)).toEqual([
+          "npm run lint",
+        ]);
+      });
+    } finally {
+      // The write queue outlives this test: a held save would block the next one.
+      releaseSave();
+    }
 
     await act(async () => {
-      releaseSave();
       await pinning;
     });
 

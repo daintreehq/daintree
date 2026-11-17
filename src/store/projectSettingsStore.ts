@@ -154,9 +154,9 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
       // Links main returned while this read was out are at least as new as it.
       if (cachedLinksRevision > linksRevisionAtStart && current) {
         settings = withPortalLinks(settings, current.portalLinks);
-      } else if (kept && portalLinksRevision === linksRevisionAtStart) {
-        // The whole-settings write kept the cached links, which this read is
-        // newer than: another window may have changed them.
+      } else if (kept && isRevalidation && portalLinksRevision === linksRevisionAtStart) {
+        // A whole-settings write onto settings already cached kept their links,
+        // which this read is newer than: another window may have changed them.
         settings = withPortalLinks(settings, data.portalLinks);
       }
       const savedCommandStrings = new Set(settings.runCommands?.map((c) => c.command) || []);

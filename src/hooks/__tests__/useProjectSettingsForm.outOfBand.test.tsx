@@ -208,16 +208,20 @@ describe("useProjectSettingsForm saving alongside another settings writer (#1643
     });
     let flushing!: Promise<unknown>;
     let unpinning!: Promise<void>;
-    await act(async () => {
-      flushing = hook.result.current.flush();
-      await formSaving;
-      unpinning = quickRun.result.current.removeFromSaved("npm run dev");
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
-    expect(stored().runCommands.map((c) => c.command)).toEqual(["npm run dev"]);
+    try {
+      await act(async () => {
+        flushing = hook.result.current.flush();
+        await formSaving;
+        unpinning = quickRun.result.current.removeFromSaved("npm run dev");
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(stored().runCommands.map((c) => c.command)).toEqual(["npm run dev"]);
+    } finally {
+      // The write queue outlives this test: a held save would block the next one.
+      releaseFormSave();
+    }
 
     await act(async () => {
-      releaseFormSave();
       await flushing;
       await unpinning;
     });
