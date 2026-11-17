@@ -589,13 +589,15 @@ export const agentActionRuns = {
     return { terminalId: result.terminalId, location: result.location };
   },
   "agent.browser": async (args: unknown, _ctx: ActionContext, callbacks: ActionCallbacks) => {
-    const { location, spawnedBy } = (args ?? {}) as {
+    const { location, spawnedBy, focusPolicy } = (args ?? {}) as {
       location?: "grid" | "dock" | "overlay";
       spawnedBy?: TerminalSpawnSource;
+      focusPolicy?: "auto" | "preserve" | "take";
     };
     const result = await callbacks.onLaunchAgent("browser", {
       location,
       spawnedBy,
+      focusPolicy,
     });
     if (!result) return null;
     return { terminalId: result.terminalId, location: result.location };

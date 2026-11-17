@@ -589,7 +589,8 @@ export const usePanelStore = create<PanelGridState>()(
           // keyboard focus back while leaving the dock popover open. Preserve-policy
           // spawns skip both registry focus and dock-popover activation entirely
           // (handled in `panelRegistry/addPanel.ts`), so no rollback is needed.
-          if (assistantHasFocus && resolvedFocusPolicy !== "preserve") {
+          // `"take"` keeps the focus it asked for, as it does in the grid.
+          if (assistantHasFocus && resolvedFocusPolicy === "auto") {
             set({ focusedId: focusedBeforeCreate });
           } else if (
             resolvedFocusPolicy !== "preserve" &&

@@ -45,7 +45,7 @@ import {
   getCurrentLaunchCliDetail,
   resolveAgentLaunchBaseCommand,
 } from "@/utils/agentLaunchCommand";
-import { resolveAgentLaunchKind } from "@/utils/agentLaunchValidation";
+import { resolveAgentLaunchKind, sanitizeTerminalName } from "@/utils/agentLaunchValidation";
 import {
   hostShellDialect,
   isHostMac,
@@ -522,18 +522,34 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           caseInsensitive: isHostMac() || isHostWindows(),
         });
 
+        // What a browser or dev-preview panel takes from the caller, as the
+        // terminal branch below does (#17221). Read when the panel is added,
+        // after any await, like the terminal branch's focus policy.
+        // `launchedByPluginId` stays off: it lets a plugin hold an agent's
+        // pane on restart, and these panels have no agent to hold.
+        const panelLaunchOptions = () => {
+          const name = launchOptions?.name ? sanitizeTerminalName(launchOptions.name) : "";
+          const focusPolicy: AddPanelFocusPolicy | undefined =
+            launchOptions?.focusPolicy ?? (isMcpSpawnFocusSuppressed() ? "preserve" : undefined);
+          return {
+            cwd,
+            worktreeId: effectiveWorktreeId || undefined,
+            location: launchOptions?.location,
+            activateDockOnCreate: launchOptions?.activateDockOnCreate,
+            excludeFromPersistence: launchOptions?.excludeFromPersistence,
+            removeOnExit: launchOptions?.removeOnExit,
+            spawnedBy: launchOptions?.spawnedBy,
+            focusPolicy,
+            requestedId: launchOptions?.requestedId,
+            ...(name && { title: name, titleMode: "custom" as const }),
+          };
+        };
+
         // Handle browser pane specially
         if (agentId === "browser") {
           try {
             const terminalId = await addPanel(
-              {
-                kind: "browser",
-                cwd,
-                worktreeId: effectiveWorktreeId || undefined,
-                location: launchOptions?.location,
-                activateDockOnCreate: launchOptions?.activateDockOnCreate,
-                spawnedBy: launchOptions?.spawnedBy,
-              },
+              { kind: "browser", ...panelLaunchOptions() },
               addPanelCommit
             );
             if (!terminalId) return declineAddPanel();
@@ -556,16 +572,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             // globally-current one.
             const devCommand = await readViewDevServerCommand();
             const terminalId = await addPanel(
-              {
-                kind: "dev-preview",
-                title: "Dev server",
-                devCommand,
-                cwd,
-                worktreeId: effectiveWorktreeId || undefined,
-                location: launchOptions?.location,
-                activateDockOnCreate: launchOptions?.activateDockOnCreate,
-                spawnedBy: launchOptions?.spawnedBy,
-              },
+              { kind: "dev-preview", title: "Dev server", devCommand, ...panelLaunchOptions() },
               addPanelCommit
             );
             if (!terminalId) return declineAddPanel();
