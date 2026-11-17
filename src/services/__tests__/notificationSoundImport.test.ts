@@ -92,7 +92,8 @@ describe("notificationSoundImport", () => {
   });
 
   describe("duration from metadata", () => {
-    let duration: number | null;
+    let duration: number | null | "never";
+    const load = vi.fn();
 
     beforeEach(() => {
       duration = null;
@@ -111,8 +112,10 @@ describe("notificationSoundImport", () => {
           onloadedmetadata: null as null | (() => void),
           onerror: null as null | (() => void),
           removeAttribute: vi.fn(),
+          load,
           set src(_: string) {
             queueMicrotask(() => {
+              if (duration === "never") return;
               if (duration === null) {
                 audio.onerror?.();
                 return;
@@ -157,6 +160,26 @@ describe("notificationSoundImport", () => {
 
       await expect(encodeImportedSound(audioFile())).resolves.toBeTruthy();
       expect(decodeAudioData).toHaveBeenCalled();
+    });
+
+    it("gives up on metadata that never arrives, aborts that load, and decodes", async () => {
+      vi.useFakeTimers();
+      try {
+        duration = "never";
+        load.mockClear();
+        decodeAudioData.mockResolvedValue(decodedAudio([[0.1]]));
+
+        const pending = encodeImportedSound(audioFile());
+        await vi.advanceTimersByTimeAsync(4_999);
+        expect(decodeAudioData).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+
+        await expect(pending).resolves.toBeTruthy();
+        expect(load).toHaveBeenCalled();
+        expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:sound");
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

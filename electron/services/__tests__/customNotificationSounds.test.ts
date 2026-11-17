@@ -8,7 +8,23 @@ const userData = vi.hoisted(() => ({ dir: "" }));
 const storeState = vi.hoisted(() => ({
   values: {} as Record<string, unknown>,
   failNextSet: false,
+  reads: 0,
 }));
+const fsState = vi.hoisted(() => ({ failAfterWrite: false }));
+
+vi.mock("../../utils/fs.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils/fs.js")>();
+  return {
+    ...actual,
+    // A write whose file is in place but whose directory sync then fails.
+    resilientAtomicWriteFile: async (
+      ...args: Parameters<typeof actual.resilientAtomicWriteFile>
+    ) => {
+      await actual.resilientAtomicWriteFile(...args);
+      if (fsState.failAfterWrite) throw new Error("fsync failed");
+    },
+  };
+});
 
 vi.mock("electron", () => ({
   app: { getPath: (name: string) => (name === "userData" ? userData.dir : "") },
@@ -16,7 +32,10 @@ vi.mock("electron", () => ({
 
 vi.mock("../../store.js", () => ({
   store: {
-    get: (key: string) => storeState.values[key],
+    get: (key: string) => {
+      storeState.reads++;
+      return storeState.values[key];
+    },
     set: (key: string, value: unknown) => {
       if (storeState.failNextSet) {
         storeState.failNextSet = false;
@@ -42,6 +61,8 @@ describe("customNotificationSounds", () => {
     userData.dir = fs.mkdtempSync(path.join(os.tmpdir(), "custom-sounds-"));
     storeState.values = {};
     storeState.failNextSet = false;
+    storeState.reads = 0;
+    fsState.failAfterWrite = false;
   });
 
   afterEach(() => {
@@ -113,6 +134,25 @@ describe("customNotificationSounds", () => {
     expect(storeState.values.customNotificationSounds).toBeUndefined();
     const imported = await pending;
     expect(listCustomSounds().map((s) => s.id)).toEqual([imported.id]);
+  });
+
+  it("removes the file when the write fails after the file is already in place", async () => {
+    fsState.failAfterWrite = true;
+
+    await expect(importCustomSound({ label: "x", wav: validWav() })).rejects.toThrow(
+      "fsync failed"
+    );
+
+    expect(fs.readdirSync(getCustomSoundsDir())).toEqual([]);
+    expect(storeState.values.customNotificationSounds).toBeUndefined();
+  });
+
+  it("reads the stored list once to list every import", async () => {
+    for (let i = 0; i < 3; i++) await importCustomSound({ label: `s${i}`, wav: validWav() });
+    storeState.reads = 0;
+
+    expect(listCustomSounds()).toHaveLength(3);
+    expect(storeState.reads).toBe(1);
   });
 
   it("falls back to a generic label when the name has nothing showable", async () => {

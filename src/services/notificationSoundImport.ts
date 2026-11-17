@@ -79,7 +79,9 @@ async function probeDuration(file: File): Promise<number | null> {
   } finally {
     audio.onloadedmetadata = null;
     audio.onerror = null;
+    // load() after dropping the source aborts a load the timeout gave up on.
     audio.removeAttribute("src");
+    audio.load();
     URL.revokeObjectURL(url);
   }
 }

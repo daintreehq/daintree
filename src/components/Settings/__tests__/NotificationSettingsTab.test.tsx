@@ -119,10 +119,11 @@ describe("NotificationSettingsTab", () => {
       const slider = await renderWithSound({ soundVolume: 0.5 });
 
       fireEvent.keyDown(slider, { key: "ArrowLeft" });
-      fireEvent.change(slider, { target: { value: "45" } });
+      fireEvent.change(slider, { target: { value: "49" } });
+      expect(setSettings).not.toHaveBeenCalled();
       fireEvent.keyUp(slider, { key: "ArrowLeft" });
 
-      expect(setSettings).toHaveBeenCalledWith({ soundVolume: 0.45 });
+      expect(setSettings).toHaveBeenCalledExactlyOnceWith({ soundVolume: 0.49 });
     });
 
     it("saves a value set with no pointer or key behind it, as assistive tech does", async () => {
@@ -143,6 +144,17 @@ describe("NotificationSettingsTab", () => {
 
       expect(setSettings).toHaveBeenCalledExactlyOnceWith({ soundVolume: 0.65 });
       expect(slider.value).toBe("65");
+    });
+
+    it("saves a touch drag the browser cancels", async () => {
+      const slider = await renderWithSound({ soundVolume: 0.8 });
+
+      fireEvent.pointerDown(slider);
+      fireEvent.change(slider, { target: { value: "20" } });
+      fireEvent.pointerCancel(slider);
+      fireEvent.change(slider, { target: { value: "25" } });
+
+      expect(setSettings.mock.calls).toEqual([[{ soundVolume: 0.2 }], [{ soundVolume: 0.25 }]]);
     });
 
     it("saves nothing when a drag ends where it started", async () => {

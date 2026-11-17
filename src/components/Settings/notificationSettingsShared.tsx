@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -81,10 +81,12 @@ export function useCustomNotificationSounds() {
   const importFile = useCallback(
     async (file: File): Promise<CustomNotificationSound> => {
       const imported = await importNotificationSound(file);
+      // Before the first list has arrived the import is left to the refresh: a
+      // one-entry list would call every other saved import missing.
       setSounds((current) =>
-        current?.some((s) => s.id === imported.id)
+        current === null || current.some((s) => s.id === imported.id)
           ? current
-          : [...(current ?? []), { ...imported, available: true }]
+          : [...current, { ...imported, available: true }]
       );
       refresh();
       return imported;
@@ -184,13 +186,14 @@ export function SoundPickerRow({
   const [importError, setImportError] = useState<string | null>(null);
   // An import finishes after the page may have moved on: it applies through the
   // newest onChange (whose settings include edits made meanwhile), and not at all
-  // once the row was reset or unmounted.
+  // once the row was reset or unmounted. Layout effects, so no promise can settle
+  // between a commit and the ref catching up with it.
   const onChangeRef = useRef(onChange);
   const importGeneration = useRef(0);
-  useEffect(() => {
+  useLayoutEffect(() => {
     onChangeRef.current = onChange;
   });
-  useEffect(
+  useLayoutEffect(
     () => () => {
       importGeneration.current++;
     },
@@ -383,6 +386,7 @@ export function SoundVolumeRow({
               if (next !== value) onCommit(next);
             }}
             onPointerUp={commit}
+            onPointerCancel={commit}
             onKeyUp={commit}
             onBlur={commit}
             aria-labelledby={labelId}

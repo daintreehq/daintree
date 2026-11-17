@@ -80,24 +80,24 @@ async function ensureContext(): Promise<AudioContext> {
   return audioContext;
 }
 
-async function ensureSoundsDir(): Promise<string> {
-  if (!soundsDir) {
-    soundsDir = await window.electron.sound.getSoundDir();
-  }
-  return soundsDir;
+async function ensureSoundsDir(started: number): Promise<string> {
+  if (soundsDir) return soundsDir;
+  const dir = await window.electron.sound.getSoundDir();
+  if (started === lifetime) soundsDir = dir;
+  return dir;
 }
 
 /** Where a sound's file lives: the bundled directory, or this device's imports for a custom id. */
-async function locate(soundFile: string): Promise<{ dir: string; file: string }> {
+/** `started` is the lifetime the play began in; a lookup from an older one isn't kept. */
+async function locate(soundFile: string, started: number): Promise<{ dir: string; file: string }> {
   const customFile = customSoundFileName(soundFile);
   if (customFile) {
     if (customSoundsDir !== null) return { dir: customSoundsDir, file: customFile };
-    const started = lifetime;
     const dir = await window.electron.notificationSounds.getCustomDir();
     if (started === lifetime) customSoundsDir = dir;
     return { dir, file: customFile };
   }
-  return { dir: await ensureSoundsDir(), file: soundFile };
+  return { dir: await ensureSoundsDir(started), file: soundFile };
 }
 
 function cacheBuffer(soundFile: string, buffer: AudioBuffer): void {
@@ -109,7 +109,11 @@ function cacheBuffer(soundFile: string, buffer: AudioBuffer): void {
   }
 }
 
-async function getBuffer(ctx: AudioContext, soundFile: string): Promise<AudioBuffer | null> {
+async function getBuffer(
+  ctx: AudioContext,
+  soundFile: string,
+  started: number
+): Promise<AudioBuffer | null> {
   const cached = bufferCache.get(soundFile);
   if (cached) {
     // Re-inserted so the custom-buffer cap evicts the least recently played.
@@ -118,9 +122,8 @@ async function getBuffer(ctx: AudioContext, soundFile: string): Promise<AudioBuf
     return cached;
   }
 
-  const started = lifetime;
   try {
-    const { dir, file } = await locate(soundFile);
+    const { dir, file } = await locate(soundFile, started);
     const url = `daintree-file://?path=${encodeURIComponent(`${dir}/${file}`)}&root=${encodeURIComponent(dir)}`;
     const response = await fetch(url);
     if (!response.ok) return null;
@@ -161,10 +164,11 @@ export async function playSound(
   // Captured before any await — if cancelSound() fires during fetch/decode,
   // the generation advances and we abort before scheduling playback.
   const startGeneration = cancelGeneration;
+  const startLifetime = lifetime;
   pendingPlays++;
   try {
     const ctx = await ensureContext();
-    const buffer = await getBuffer(ctx, soundFile);
+    const buffer = await getBuffer(ctx, soundFile, startLifetime);
     if (!buffer) return;
     if (startGeneration !== cancelGeneration) return;
 
