@@ -372,17 +372,152 @@ describe("VoiceFileLinkResolver", () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it("tells the reranker to decline a tie it is still asked about", async () => {
-      // One token short of the confident bar, so the reranker sees both files.
+    it("declines a tie the reranker is still asked about, rather than take its pick of the tied files", async () => {
+      // "profile page" is a token short of the confident bar, so the reranker
+      // sees both files, but it has nothing to tell them apart either.
+      const tied = ["app/Profile.tsx", "lib/Profile.tsx"];
+      const fetchMock = rerankReply("lib/Profile.tsx");
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(pick("profile page", tied)).resolves.toBeNull();
+
+      const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as { input: string };
+      expect(body.input).toContain("app/Profile.tsx");
+      expect(body.input).toContain("lib/Profile.tsx");
+    });
+
+    it("still takes a rerank pick from outside the tied files", async () => {
+      vi.stubGlobal("fetch", rerankReply("src/pages/Settings.tsx"));
+
+      await expect(
+        pick("profile page", ["app/Profile.tsx", "lib/Profile.tsx", "src/pages/Settings.tsx"])
+      ).resolves.toBe("src/pages/Settings.tsx");
+    });
+
+    it("sees a tie among files whose names differ past the words spoken", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        pick("user profile", [
+          "app/UserProfileCard.tsx",
+          "src/Profile.tsx",
+          "lib/UserProfileView.tsx",
+        ])
+      ).resolves.toBeNull();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("sees the tie when a repeated path comes first", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        pick("user profile", ["app/UserProfile.tsx", "app/UserProfile.tsx", "lib/UserProfile.tsx"])
+      ).resolves.toBeNull();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("reads a directory named in a longer description, at any depth", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        pick("the user profile in lib folder", [
+          "src/app/UserProfile.tsx",
+          "src/lib/UserProfile.tsx",
+        ])
+      ).resolves.toBe("src/lib/UserProfile.tsx");
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("counts a word once when the name and a directory both carry it", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        pick("user profile", ["user/UserProfile.tsx", "lib/UserProfile.tsx"])
+      ).resolves.toBeNull();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("does not credit a longer spoken word for a shorter directory name", async () => {
       const fetchMock = rerankReply(null);
       vi.stubGlobal("fetch", fetchMock);
 
-      await pick("profile page", ["app/Profile.tsx", "lib/Profile.tsx"]);
+      await expect(
+        pick("application user profile", ["app/UserProfile.tsx", "lib/UserProfile.tsx"])
+      ).resolves.toBeNull();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
 
-      const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as {
-        instructions: string;
-      };
-      expect(body.instructions).toContain("equally well");
+    it("takes a file on one name word and the directory said beside it", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(pick("app profile", ["lib/Profile.tsx", "app/Profile.tsx"])).resolves.toBe(
+        "app/Profile.tsx"
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("lets a fuller cover outrank a fuller name", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        pick("app settings user profile", [
+          "lib/UserProfileSettings.tsx",
+          "app/settings/UserProfile.tsx",
+        ])
+      ).resolves.toBe("app/settings/UserProfile.tsx");
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("lets more name words outrank fewer unsaid ones", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        pick("user profile", ["user/Profile.tsx", "src/UserProfile.test.tsx"])
+      ).resolves.toBe("src/UserProfile.test.tsx");
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("prefers a name that is what was said over one that only starts with it", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        pick("user profile", ["src/UserProfiler.tsx", "src/UserProfile.tsx"])
+      ).resolves.toBe("src/UserProfile.tsx");
+      await expect(
+        pick("auth flow", ["src/AuthenticationAuthorizationFlow.tsx", "src/AuthFlowForm.tsx"])
+      ).resolves.toBe("src/AuthFlowForm.tsx");
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("takes the sibling whose extension was named", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        pick("user profile css", ["src/UserProfile.tsx", "src/UserProfile.css"])
+      ).resolves.toBe("src/UserProfile.css");
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("holds a named extension to the file's own, not a directory called the same", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        pick("user profile settings tsx", [
+          "packages/tsx/UserProfileSettings.ts",
+          "src/UserProfileSettings.tsx",
+        ])
+      ).resolves.toBe("src/UserProfileSettings.tsx");
+      expect(fetchMock).not.toHaveBeenCalled();
     });
   });
 

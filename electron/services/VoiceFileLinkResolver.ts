@@ -39,11 +39,10 @@ const AI_RERANK_SCHEMA = {
 
 /**
  * Resolves to null only when the search or reranker found no match, or when
- * several files fit the description equally well. A lookup
- * that couldn't finish (a failed search, an API error, the rerank's own
- * timeout, an unreadable reply) rejects instead, so it isn't reported as a
- * miss (#14983). One its caller aborted resolves to null: the caller has
- * stopped listening.
+ * several files fit the description equally well. A lookup that couldn't
+ * finish (a failed search, an API error, the rerank's own timeout, an
+ * unreadable reply) rejects instead, so it isn't reported as a miss (#14983).
+ * One its caller aborted resolves to null: the caller has stopped listening.
  */
 export class VoiceFileLinkResolver {
   async resolve(payload: {
@@ -84,25 +83,25 @@ export class VoiceFileLinkResolver {
     }
 
     const tokens = this.extractTokens(description);
-    if (tokens.length >= MIN_MATCHING_TOKENS) {
-      const best = this.strongestMatches(tokens, candidates);
-      if (best && best.score >= NL_CONFIDENCE_THRESHOLD) {
-        if (best.paths.length === 1) {
-          logDebug(`${P} High-confidence match`, { score: Number(best.score.toFixed(2)) });
-          return best.paths[0];
-        }
-        // Same-named files in different directories score alike. Nothing in the
-        // description tells them apart, so any one of them, the model's pick
-        // included, is a guess; a miss is reported and the spoken words stay.
-        logDebug(`${P} Equally strong matches`, {
-          score: Number(best.score.toFixed(2)),
-          tied: best.paths.length,
-        });
-        return null;
+    const best = tokens.length > 0 ? this.strongestMatches(tokens, candidates) : null;
+    // Same-named files in different directories fit a description alike, and
+    // nothing in it tells them apart: any one of them, the reranker's pick
+    // included, is a guess. A miss is reported and the spoken words stay.
+    const tied = best && best.paths.length > 1 ? new Set(best.paths) : null;
+
+    if (best && tokens.length >= MIN_MATCHING_TOKENS && best.score >= NL_CONFIDENCE_THRESHOLD) {
+      if (!tied) {
+        logDebug(`${P} High-confidence match`, { score: Number(best.score.toFixed(2)) });
+        return best.paths[0];
       }
+      logDebug(`${P} Equally strong matches`, {
+        score: Number(best.score.toFixed(2)),
+        tied: tied.size,
+      });
+      return null;
     }
 
-    return this.aiRerank(
+    const matched = await this.aiRerank(
       description,
       [...candidates],
       apiKey,
@@ -110,6 +109,11 @@ export class VoiceFileLinkResolver {
       projectId,
       payload.signal
     );
+    if (matched && tied?.has(matched)) {
+      logDebug(`${P} Rerank chose among equally strong matches`, { tied: tied.size });
+      return null;
+    }
+    return matched;
   }
 
   private extractTokens(description: string): string[] {
@@ -162,31 +166,35 @@ export class VoiceFileLinkResolver {
   /**
    * How well `file` fits the spoken tokens. The file's own name has to match at
    * least one, so a directory alone never selects a file. A token the name
-   * doesn't carry still counts when a directory word is exactly it ("app user
-   * profile" names `app/UserProfile.tsx` over `lib/UserProfile.tsx`). Past the
-   * score, a name match outweighs a directory match, and `extraWords` is how
-   * much of the name the description left unsaid, which separates
-   * `UserProfile.tsx` from its `UserProfile.test.tsx` sibling.
+   * doesn't carry still counts when it is the file's extension, or a directory
+   * word exactly ("app user profile" names `app/UserProfile.tsx` over
+   * `lib/UserProfile.tsx`). Past the score, a name or extension match outweighs
+   * a directory match, and `extraWords` is how much of the name the description
+   * never said outright, which separates `UserProfile.tsx` from its
+   * `UserProfile.test.tsx` and `UserProfiler.tsx` neighbours.
    */
   private scorePath(tokens: readonly string[], file: string): PathFit | null {
     const lastSlash = file.lastIndexOf("/");
-    const nameWords = this.splitWords(file.slice(lastSlash + 1).replace(/\.[^.]+$/, ""));
+    const base = file.slice(lastSlash + 1);
+    const extension = /\.([^.]+)$/.exec(base);
+    const nameWords = this.splitWords(extension ? base.slice(0, extension.index) : base);
     const dirWords =
       lastSlash > 0 ? this.splitWords(file.slice(0, lastSlash).replace(/\//g, " ")) : [];
 
-    let nameMatched = 0;
+    let wordMatched = 0;
+    let extensionMatched = 0;
     let dirMatched = 0;
     for (const token of tokens) {
-      if (nameWords.some((w) => this.wordMatches(w, token))) nameMatched++;
+      if (nameWords.some((w) => this.wordMatches(w, token))) wordMatched++;
+      else if (extension && token === extension[1].toLowerCase()) extensionMatched++;
       else if (dirWords.includes(token)) dirMatched++;
     }
-    if (nameMatched === 0) return null;
+    if (wordMatched === 0) return null;
 
-    const sayable = nameWords.filter((w) => tokens.some((t) => this.wordMatches(w, t))).length;
     return {
-      score: (nameMatched + dirMatched) / tokens.length,
-      nameMatched,
-      extraWords: nameWords.length - sayable,
+      score: (wordMatched + extensionMatched + dirMatched) / tokens.length,
+      nameMatched: wordMatched + extensionMatched,
+      extraWords: nameWords.filter((w) => !tokens.includes(w)).length,
     };
   }
 
@@ -236,7 +244,7 @@ export class VoiceFileLinkResolver {
         body: JSON.stringify({
           model: VOICE_DICTATION_AI_MODEL,
           instructions:
-            "Given a natural language description and a list of file paths from a project, return the path that best matches the description. If no path is a good match, return null. If several paths match equally well and the description does not say which one is meant, return null rather than guessing.",
+            "Given a natural language description and a list of file paths from a project, return the path that best matches the description. If no path is a good match, return null.",
           input: `Description: ${description}\n\nCandidates:\n${candidates.map((c, i) => `${i + 1}. ${c}`).join("\n")}`,
           prompt_cache_key: AI_RERANK_CACHE_PREFIX,
           service_tier: "auto",
