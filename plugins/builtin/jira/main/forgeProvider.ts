@@ -501,8 +501,9 @@ const SERVER_DEPLOYMENTS: readonly unknown[] = ["Server", "DataCenter"];
  * of Cloud says `Cloud` here without the token ever reaching it. A Server or
  * Data Center instance says which and what version; one too old for personal
  * access tokens is named rather than left to read as a rejected token. An
- * instance that keeps even `serverInfo` from anonymous callers isn't Cloud, and
- * `/myself` decides for it.
+ * instance that keeps even `serverInfo` from anonymous callers isn't Cloud's
+ * open answer, so it's asked again with the token, which `/myself` would carry
+ * there next anyway.
  */
 async function checkDataCenter(connection: JiraConnection): Promise<string | null> {
   let info: JiraServerInfo;
@@ -512,8 +513,8 @@ async function checkDataCenter(connection: JiraConnection): Promise<string | nul
       anonymous: true,
     });
   } catch (err) {
-    if (err instanceof JiraApiError && (err.status === 401 || err.status === 403)) return null;
-    throw err;
+    if (!(err instanceof JiraApiError) || (err.status !== 401 && err.status !== 403)) throw err;
+    info = await jiraRequest<JiraServerInfo>(connection, "/serverInfo", { ignoreCooldown: true });
   }
   if (info.deploymentType === "Cloud") {
     return "That address is a Jira Cloud site. Choose Jira Cloud and use its atlassian.net address.";
@@ -546,7 +547,9 @@ async function validateConnection(
       if (refusal) return { valid: false, error: refusal };
     }
     const me = await jiraRequest<JiraUserNode>(connection, "/myself", { ignoreCooldown: true });
-    const id = userIdOf(me);
+    // Each deployment's own kind of id: a Cloud-shaped account behind a Data
+    // Center address couldn't be assigned anything there.
+    const id = connection.deployment === "cloud" ? me.accountId : me.name;
     if (!id) return { valid: false, error: "Jira didn't recognize this account" };
     if (candidate) recordProvenValidation(connection.token, connection.siteUrl);
     return { valid: true, account: me.displayName || me.emailAddress || id };

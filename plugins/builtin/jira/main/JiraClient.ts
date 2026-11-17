@@ -266,7 +266,7 @@ export async function jiraRequest<T>(
   if (payload === null) {
     throw new JiraApiError("Jira sent a response Daintree couldn't read", response.status);
   }
-  // Jira answered, so whatever the cooldown was about has passed.
-  if (cooldown?.connectionKey === connectionKey) cooldown = null;
+  // Jira answered the credential, so whatever the cooldown was about has passed.
+  if (!options.anonymous && cooldown?.connectionKey === connectionKey) cooldown = null;
   return payload as T;
 }

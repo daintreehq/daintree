@@ -109,6 +109,19 @@ function resolveBinding(token: string): TokenBinding | null {
   return recorded.tokenDigest === digest ? recorded.binding : null;
 }
 
+/**
+ * Forget the in-memory token and any proofs without touching the durable
+ * record: what an activation does before the host replays, so a save that
+ * finished on a retired provider can't leave its token live.
+ */
+export function resetTokenState(): void {
+  provenValidations.clear();
+  if (memoryToken === null && tokenBinding === null) return;
+  memoryToken = null;
+  tokenBinding = null;
+  tokenVersion++;
+}
+
 export function getToken(): string | null {
   return memoryToken;
 }

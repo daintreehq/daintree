@@ -1323,7 +1323,9 @@ describe("Server and Data Center", () => {
       routeDc({ "GET /serverInfo": () => json(info), "GET /myself": () => json(ADA_DC) });
       const result = await jiraForgeProvider.validateToken("pat");
       expect(result).toMatchObject({ valid: false, error: expect.stringMatching(message) });
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(dcRequests()).toEqual([
+        expect.objectContaining({ url: `${API}/serverInfo`, authorization: undefined }),
+      ]);
     });
 
     it.each([
@@ -1331,23 +1333,57 @@ describe("Server and Data Center", () => {
       ["10.3 by its string", { deploymentType: "DataCenter", version: "10.3.1" }],
       [
         "a malformed array with a usable string",
-        { deploymentType: "Server", versionNumbers: "x", version: "9.4.0" },
+        { deploymentType: "Server", versionNumbers: [9, "4", 0], version: "9.4.0" },
       ],
     ])("accepts %s", async (_name, info) => {
       routeDc({ "GET /serverInfo": () => json(info), "GET /myself": () => json(ADA_DC) });
       await expect(jiraForgeProvider.validateToken("pat")).resolves.toMatchObject({ valid: true });
     });
 
-    it("lets /myself decide when serverInfo is closed to anonymous callers", async () => {
+    it.each([401, 403])(
+      "asks again with the token when serverInfo is closed to anonymous callers (%i)",
+      async (status) => {
+        routeDc({
+          "GET /serverInfo": () => json({}, status),
+          "GET /myself": () => json(ADA_DC),
+        });
+        fetchMock
+          .mockImplementationOnce(async () => json({}, status))
+          .mockImplementationOnce(async () =>
+            json({ deploymentType: "Server", versionNumbers: [8, 13] })
+          );
+        await expect(jiraForgeProvider.validateToken("pat")).resolves.toMatchObject({
+          valid: false,
+          error: expect.stringContaining("8.14"),
+        });
+        expect(dcRequests().map((request) => [request.url, request.authorization])).toEqual([
+          [`${API}/serverInfo`, undefined],
+          [`${API}/serverInfo`, "Bearer pat"],
+        ]);
+
+        fetchMock.mockReset();
+        routeDc({
+          "GET /serverInfo": () => json({}, status),
+          "GET /myself": () => json(ADA_DC),
+        });
+        fetchMock
+          .mockImplementationOnce(async () => json({}, status))
+          .mockImplementationOnce(async () => json(SERVER_INFO));
+        await expect(jiraForgeProvider.validateToken("pat")).resolves.toMatchObject({
+          valid: true,
+        });
+      }
+    );
+
+    it("refuses a Cloud-shaped account behind a Data Center address", async () => {
       routeDc({
-        "GET /serverInfo": () => json({}, 401),
-        "GET /myself": () => json(ADA_DC),
+        "GET /serverInfo": () => json(SERVER_INFO),
+        "GET /myself": () => json({ accountId: "abc", displayName: "Ada" }),
       });
-      await expect(jiraForgeProvider.validateToken("pat")).resolves.toMatchObject({ valid: true });
-      expect(dcRequests().map((request) => request.authorization)).toEqual([
-        undefined,
-        "Bearer pat",
-      ]);
+      await expect(jiraForgeProvider.validateToken("pat")).resolves.toMatchObject({
+        valid: false,
+        error: "Jira didn't recognize this account",
+      });
     });
 
     it("needs no email and no accountId, but does need a username", async () => {
@@ -1430,6 +1466,8 @@ describe("Server and Data Center", () => {
       });
       const first = await jiraForgeProvider.listIssues(DC_REPO, { perPage: 2 });
       expect(first).toMatchObject({ nextCursor: "2", hasMore: true });
+      // A key search adds an issue to the page, so Jira's total isn't the page's.
+      expect(first).not.toHaveProperty("totalCount");
       expect(first.items.map((issue) => issue.key)).toEqual(["ENG-1", "ENG-2"]);
       const second = await jiraForgeProvider.listIssues(DC_REPO, { perPage: 2, cursor: "2" });
       expect(second).toMatchObject({ nextCursor: null, hasMore: false });
@@ -1478,7 +1516,7 @@ describe("Server and Data Center", () => {
         id: "example.com:8443/jira/10042",
         body: "h1. Steps\n*bold*",
       });
-      await expect(jiraForgeProvider.getIssueById(DC_REPO, issue!.id)).resolves.toMatchObject({
+      await expect(jiraForgeProvider.getIssueById!(DC_REPO, issue!.id!)).resolves.toMatchObject({
         key: "ENG-12",
       });
       for (const elsewhere of [
@@ -1486,7 +1524,7 @@ describe("Server and Data Center", () => {
         "example.com/jira/10042",
         "acme.atlassian.net/10042",
       ]) {
-        await expect(jiraForgeProvider.getIssueById(DC_REPO, elsewhere)).resolves.toBeNull();
+        await expect(jiraForgeProvider.getIssueById!(DC_REPO, elsewhere)).resolves.toBeNull();
       }
       expect(dcRequests().map((request) => request.url)).toEqual([
         `${API}/issue/ENG-12?fields=${ISSUE_FIELDS.join(",")}`,

@@ -11,7 +11,13 @@ import {
   setConnectionSettingsReader,
   setProjectKeyReader,
 } from "./forgeProvider.js";
-import { setMemoryToken, setProvenanceAccessors, type CredentialProvenance } from "./JiraAuth.js";
+import { normalizeSiteUrl, deploymentOf } from "../shared/connection.js";
+import {
+  resetTokenState,
+  setMemoryToken,
+  setProvenanceAccessors,
+  type CredentialProvenance,
+} from "./JiraAuth.js";
 
 /**
  * Plugin-storage key of the stored token's {@link CredentialProvenance}: where it
@@ -20,10 +26,10 @@ import { setMemoryToken, setProvenanceAccessors, type CredentialProvenance } fro
 const CREDENTIAL_PROVENANCE_KEY = "credentialProvenance";
 
 /**
- * Set at the first activation that keeps records, before any token can be
- * saved under them. Without it, a record lost to a failed write would look like
- * an install from before records were kept, and a Data Center token would be
- * taken for a Cloud one.
+ * Set once the first activation that keeps records has replayed, before any
+ * token can be saved under them. Without it, a record lost to a failed write
+ * would look like an install from before records were kept, and a Data Center
+ * token would be taken for a Cloud one.
  */
 const PROVENANCE_TRACKED_KEY = "credentialProvenanceTracked";
 
@@ -33,26 +39,35 @@ function isProvenance(value: unknown): value is CredentialProvenance {
   return typeof binding === "string" && binding !== "" && typeof tokenDigest === "string";
 }
 
+function isDataCenterSite(value: unknown): boolean {
+  const siteUrl = normalizeSiteUrl(value);
+  return siteUrl !== null && deploymentOf(siteUrl) === "dataCenter";
+}
+
 /**
  * Wires the token's durable provenance. Loaded before registration, because the
  * host replays the stored token into `setCredentials` as part of it, and a token
- * read before its record would have nowhere it may go.
+ * read before its record would have nowhere it may go. Says whether records were
+ * already being kept, so the caller marks them kept once the replay is done.
  */
-async function wireProvenance(host: PluginHostApi): Promise<void> {
+async function wireProvenance(host: PluginHostApi): Promise<boolean> {
   let provenance: CredentialProvenance | null | "unknown";
+  let tracked = false;
   try {
-    const [stored, tracked] = await Promise.all([
+    const [stored, marker, siteUrl] = await Promise.all([
       host.storage.get<unknown>(CREDENTIAL_PROVENANCE_KEY),
       host.storage.get<unknown>(PROVENANCE_TRACKED_KEY),
+      host.settings.get<unknown>(SITE_URL_SETTING),
     ]);
+    tracked = marker === true;
     if (stored !== undefined) provenance = isProvenance(stored) ? stored : "unknown";
-    else provenance = tracked === true ? "unknown" : null;
-    if (tracked !== true) {
-      await host.storage.set(PROVENANCE_TRACKED_KEY, true).catch(() => undefined);
-    }
+    // Before records were kept only Cloud could be configured, so a Data Center
+    // site with no record is a record that went missing.
+    else provenance = tracked || isDataCenterSite(siteUrl) ? "unknown" : null;
   } catch {
     // Withholds the token rather than guessing where it belongs.
     provenance = "unknown";
+    tracked = true;
   }
   setProvenanceAccessors(
     () => provenance,
@@ -65,6 +80,7 @@ async function wireProvenance(host: PluginHostApi): Promise<void> {
       ).catch(() => undefined);
     }
   );
+  return tracked;
 }
 
 /**
@@ -123,18 +139,20 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
     return { siteUrl, email };
   });
   setProjectKeyReader(readProjectKey);
-  // A save that finished after the last disposal can have left a token in
-  // memory; only the host's replay may put one there. Cleared before the
-  // accessors are wired, so the durable record stays.
-  setProvenanceAccessors(null, null);
-  setMemoryToken(null);
-  await wireProvenance(host);
+  const tracked = await wireProvenance(host);
   const disposeSettings = await Promise.all(
     [PROJECT_KEY_SETTING, SITE_URL_SETTING].map((key) =>
       host.settings.onDidChange(key, () => void refreshBranchClaims()).catch(() => () => undefined)
     )
   );
+  // A save that finished on a retired provider can have left a token in memory;
+  // only the host's replay may put one there. Nothing is awaited between this
+  // and the replay.
+  resetTokenState();
   const disposeForge = await host.registerForgeProvider({ id: "jira" }, jiraForgeProvider);
+  // After the replay, whose adoption of a pre-record token is written first:
+  // storage keeps writes in order.
+  if (!tracked) await host.storage.set(PROVENANCE_TRACKED_KEY, true).catch(() => undefined);
   return () => {
     disposeForge();
     for (const dispose of disposeSettings) dispose();

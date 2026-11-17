@@ -17,6 +17,7 @@ describe("normalizeCloudSiteUrl", () => {
     ["https://acme.atlassian.net/jira/your-work?x=1#y", "https://acme.atlassian.net"],
     ["https://acme.atlassian.net:443", "https://acme.atlassian.net"],
     ["my-team-2.atlassian.net", "https://my-team-2.atlassian.net"],
+    ["acme.atlassian.net:443", "https://acme.atlassian.net"],
   ])("accepts %s", (input, expected) => {
     expect(normalizeCloudSiteUrl(input)).toBe(expected);
   });
@@ -61,6 +62,12 @@ describe("normalizeDataCenterUrl", () => {
     ["https://example.com/issues", "https://example.com/issues"],
     ["https://example.com/tools/projects/jira", "https://example.com/tools/projects/jira"],
     ["https://example.com/browse", "https://example.com/browse"],
+    [
+      "https://example.com/jira/browse/ENG-12-tools",
+      "https://example.com/jira/browse/ENG-12-tools",
+    ],
+    ["https://example.com/teams/issues?theme=dark", "https://example.com/teams/issues"],
+    ["https://example.com/tools/projects/Jira", "https://example.com/tools/projects/Jira"],
     ["jira.example.com:8443/jira", "https://jira.example.com:8443/jira"],
     ["https://10.0.0.5:8443/jira", "https://10.0.0.5:8443/jira"],
     ["https://[::1]:8443", "https://[::1]:8443"],
@@ -77,7 +84,7 @@ describe("normalizeDataCenterUrl", () => {
     ["a Cloud tenant behind a trailing dot", "https://acme.atlassian.net."],
     ["any host behind a trailing dot", "https://jira.example.com."],
     ["a scheme missing a slash", "https:/jira.example.com"],
-    ["a backslash", "https:\\\\jira.example.com"],
+    ["a backslash in the path", "https://jira.example.com\\jira"],
     ["an encoded slash in the path", "https://example.com/a%2Fb"],
     ["an encoded character in the path", "https://example.com/j%69ra"],
     ["another scheme", "file://jira.example.com"],

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { getPluginManifestSchema } from "../../../../../electron/schemas/plugin.js";
 import { validateForgeImplRoles } from "../../../../../electron/services/forgeProviderRegistry.js";
 import { DEFAULT_DISABLED_PLUGIN_IDS } from "../../../../../shared/config/pluginDefaults.js";
@@ -8,7 +8,7 @@ import { BUILTIN_JIRA_PROVIDER_ID } from "../../../../../shared/utils/forgeProvi
 import type { PluginHostApi } from "../../../../../shared/types/plugin.js";
 
 const getProjectByPath = vi.fn();
-let fetchMock: ReturnType<typeof vi.fn>;
+let fetchMock: Mock<JiraFetch>;
 const getSettingValuesForUi = vi.fn();
 
 vi.mock("../../../../../electron/services/ProjectStore.js", () => ({
@@ -31,7 +31,7 @@ vi.mock("../../../../../electron/services/PluginService.js", () => ({
 import { activate } from "../index.js";
 import { jiraForgeProvider } from "../forgeProvider.js";
 import { digestToken, getToken, tokenMayGoTo } from "../JiraAuth.js";
-import { setJiraTransport } from "../JiraClient.js";
+import { setJiraTransport, type JiraFetch } from "../JiraClient.js";
 
 function makeHost(settings: Record<string, unknown> = {}, storage: Record<string, unknown> = {}) {
   const register = vi.fn(async () => () => undefined);
@@ -66,7 +66,7 @@ beforeEach(() => {
   getProjectByPath.mockReset();
   getSettingValuesForUi.mockReset();
   updateForgeSettingsForAllProjects.mockClear();
-  fetchMock = vi.fn();
+  fetchMock = vi.fn<JiraFetch>();
   setJiraTransport(fetchMock);
 });
 
@@ -238,7 +238,10 @@ describe("where the stored token may go", () => {
   });
 
   it("takes a token from before records were kept as Cloud, once, and marks records as kept", async () => {
-    const { host, storage } = makeHost({ siteUrl: BASE });
+    const { host, storage } = makeHost({
+      siteUrl: "https://acme.atlassian.net",
+      email: "ada@example.com",
+    });
     replaying(host, "legacy");
     const dispose = await activate(host);
     expect(tokenMayGoTo("https://acme.atlassian.net")).toBe(true);
@@ -247,6 +250,17 @@ describe("where the stored token may go", () => {
       credentialProvenanceTracked: true,
       credentialProvenance: { binding: "cloud", tokenDigest: digestToken("legacy") },
     });
+    dispose();
+  });
+
+  it("sends a token nowhere when a Data Center site has no record, marker or not", async () => {
+    // Before records were kept only Cloud could be configured.
+    const { host, storage } = makeHost({ siteUrl: BASE });
+    replaying(host, "pat");
+    const dispose = await activate(host);
+    expect(tokenMayGoTo(BASE)).toBe(false);
+    expect(tokenMayGoTo("https://acme.atlassian.net")).toBe(false);
+    expect(storage.credentialProvenance).toBeUndefined();
     dispose();
   });
 

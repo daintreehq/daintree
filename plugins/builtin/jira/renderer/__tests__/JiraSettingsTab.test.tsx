@@ -450,6 +450,40 @@ describe("JiraSettingsTab", () => {
       expect(screen.queryByLabelText("Jira account email")).toBeNull();
     });
 
+    it.each([
+      ["site", { site: "acme.atlassian.net" }],
+      ["email", { email: "ada@example.com" }],
+      ["token", { token: "ATATT3x" }],
+    ])(
+      "keeps the deployment when only the %s was typed during a slow load",
+      async (_name, typed) => {
+        stored.siteUrl = "https://example.com/jira";
+        let finish!: () => void;
+        getSettingValues.mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              finish = () => resolve({ values: { ...stored } });
+            })
+        );
+        render(<JiraSettingsTab />);
+        fill(typed);
+        await act(async () => finish());
+        await screen.findByText("No credentials saved");
+        expect(screen.getByRole("radio", { name: "Jira Cloud" }).getAttribute("aria-checked")).toBe(
+          "true"
+        );
+      }
+    );
+
+    it("says where each deployment's token goes", async () => {
+      await renderLoaded("No credentials saved");
+      expect(screen.getByText("Stored by Daintree, and only ever sent to Atlassian")).toBeTruthy();
+      chooseDataCenter();
+      expect(
+        screen.getByText("Stored by Daintree, and only ever sent to the Jira it was saved for")
+      ).toBeTruthy();
+    });
+
     it("keeps the form typed into during a slow load on its own deployment", async () => {
       stored.siteUrl = "https://example.com/jira";
       let finish!: () => void;
