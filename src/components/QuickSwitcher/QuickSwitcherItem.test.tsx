@@ -111,6 +111,96 @@ describe("QuickSwitcherItem path evidence", () => {
   });
 });
 
+describe("QuickSwitcherItem custom worktree title", () => {
+  const path = "/Users/me/Projects/app-worktrees/wt-red";
+  const marked = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll("span"))
+      .filter((el) => el.children.length === 0 && el.className.includes("bg-overlay-medium"))
+      .map((el) => el.textContent);
+
+  function titled(overrides: Partial<QuickSwitcherItemData> = {}) {
+    return makeWorktreeItem({
+      title: "Release planning",
+      subtitle: path,
+      branchLabel: "feature/auth-refresh",
+      displaced: "feature/auth-refresh",
+      ...overrides,
+    });
+  }
+
+  it("shows the title with the branch it displaced and the path, so the row can still be identified", () => {
+    const { container } = render(
+      <QuickSwitcherItem item={titled()} isSelected={false} onSelect={() => {}} />
+    );
+    const text = container.textContent ?? "";
+    expect(text).toContain("Release planning");
+    expect(text).toContain("feature/auth-refresh");
+    expect(text).toContain("wt-red");
+  });
+
+  it("sets the title as a name, not as the mono identifier a bare branch is", () => {
+    const { container } = render(
+      <QuickSwitcherItem item={titled()} isSelected={false} onSelect={() => {}} />
+    );
+    const title = Array.from(container.querySelectorAll("span")).find(
+      (el) => el.textContent === "Release planning"
+    );
+    expect(title?.className).not.toContain("font-mono");
+  });
+
+  it("marks a fuzzy match on the displaced branch on the branch, never on the title", () => {
+    const { container } = render(
+      <QuickSwitcherItem
+        item={titled()}
+        isSelected={false}
+        onSelect={() => {}}
+        query="authrefresh"
+        matches={[{ key: "displaced", indices: [[8, 11]], value: "feature/auth-refresh" }]}
+      />
+    );
+    expect(marked(container)).toEqual(["auth"]);
+  });
+
+  it("marks a match on the title on the title", () => {
+    const { container } = render(
+      <QuickSwitcherItem
+        item={titled()}
+        isSelected={false}
+        onSelect={() => {}}
+        query="release"
+        matches={[{ key: "title", indices: [[0, 6]], value: "Release planning" }]}
+      />
+    );
+    expect(marked(container)).toEqual(["Release"]);
+  });
+
+  it("keeps main's branch qualifier when it has no custom title", () => {
+    const { container } = render(
+      <QuickSwitcherItem
+        item={makeWorktreeItem({
+          title: "daintree",
+          isMainWorktree: true,
+          branchLabel: "develop",
+        })}
+        isSelected={false}
+        onSelect={() => {}}
+      />
+    );
+    expect(container.textContent).toContain("develop");
+  });
+
+  it("adds no qualifier to an untitled linked worktree whose title is its branch", () => {
+    const { container } = render(
+      <QuickSwitcherItem
+        item={makeWorktreeItem({ title: "feature/auth", branchLabel: "feature/auth" })}
+        isSelected={false}
+        onSelect={() => {}}
+      />
+    );
+    expect((container.textContent ?? "").match(/feature\/auth/g)).toHaveLength(1);
+  });
+});
+
 // The terminal row's state mark is the pane's own glyph (#16057): amber only
 // for an unread Canopy ask, never for a prompt that asks nothing.
 describe("QuickSwitcherItem agent mark from the fleet band", () => {

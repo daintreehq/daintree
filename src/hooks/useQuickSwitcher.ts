@@ -21,7 +21,8 @@ import { openPluginSearchHit } from "@/components/QuickSwitcher/openPluginSearch
 import { SEARCH_PROVIDER_BLENDED_TOTAL } from "@shared/config/pluginSearchProviders";
 import { withDisplayEmoji } from "@shared/utils/displayIdentity";
 import type { PluginSearchProviderInfo } from "@shared/types/plugin";
-import { getWorktreeBranchLabel } from "@/lib/worktreeHeadline";
+import { getWorktreeBranchLabel, getWorktreeQualifier } from "@/lib/worktreeHeadline";
+import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 
 export type QuickSwitcherItemType = "terminal" | "worktree" | "plugin";
 
@@ -51,6 +52,13 @@ export interface QuickSwitcherItem {
    */
   isMainWorktree?: boolean;
   branchLabel?: string;
+  /**
+   * What a custom title (#13409) displaced: the branch, or the detached commit.
+   * It is the row's qualifier and is searched with the title, so a worktree the
+   * user retitled is still found and told apart by what git calls it. Absent
+   * without a title, and when the title is the branch itself.
+   */
+  displaced?: string;
   /** A plugin search provider's result (#13792): what it opens and who it came from. */
   pluginHit?: PluginSearchHit;
 }
@@ -87,13 +95,23 @@ export interface UseQuickSwitcherReturn {
 // so a query fuzzily matching them listed rows with nothing visible to explain
 // why ("lin" found every panel through "terminal").
 //
+// A custom-titled worktree's `displaced` text is a second value of the `title`
+// key rather than a key of its own: Fuse spreads each key's weight across every
+// configured key, present on a row or not, so a third key moved the scores of
+// rows that have no title and reordered them under the MRU boost. An untitled
+// row still hands Fuse its scalar title and scores exactly as before.
+//
 // One index ranks and highlights. Its match floor stays at Fuse's default of
 // one character: `minMatchCharLength` also decides membership, so raising it
 // would drop single-letter queries from the results. The two-character floor
 // for highlights is applied to the ranges instead (`highlightRanges`).
 const FUSE_OPTIONS: IFuseOptions<QuickSwitcherItem> = {
   keys: [
-    { name: "title", weight: 2 },
+    {
+      name: "title",
+      weight: 2,
+      getFn: (item) => (item.displaced ? [item.title, item.displaced] : item.title),
+    },
     { name: "subtitle", weight: 1 },
   ],
   threshold: 0.4,
@@ -106,6 +124,11 @@ const searchBuiltinItems = createFuseSearch(FUSE_OPTIONS);
 /** Shortest range worth marking: a fuzzy hit shouldn't sprinkle single-letter bands across a row. */
 const MIN_HIGHLIGHT_LENGTH = 2;
 
+/** `displaced` is the second value of the `title` key (`FUSE_OPTIONS`), so its matches carry `refIndex` 1. */
+const DISPLACED_REF_INDEX = 1;
+
+// A match on `displaced` is relabelled to say so: left as `title`, its ranges
+// would be read as offsets into the headline.
 function highlightRanges(
   matches: readonly FuseResultMatch[] | undefined
 ): readonly FuseResultMatch[] | null {
@@ -113,7 +136,10 @@ function highlightRanges(
   const kept: FuseResultMatch[] = [];
   for (const match of matches) {
     const indices = match.indices.filter(([start, end]) => end - start + 1 >= MIN_HIGHLIGHT_LENGTH);
-    if (indices.length > 0) kept.push({ ...match, indices });
+    if (indices.length === 0) continue;
+    const key =
+      match.key === "title" && match.refIndex === DISPLACED_REF_INDEX ? "displaced" : match.key;
+    kept.push({ ...match, key, indices });
   }
   return kept.length > 0 ? kept : null;
 }
@@ -128,6 +154,7 @@ const MRU_BOOST_FACTOR = 0.05;
 const EMPTY_PANEL_IDS: string[] = [];
 const EMPTY_PANELS_BY_ID: ReturnType<typeof usePanelStore.getState>["panelsById"] = {};
 const EMPTY_MRU: string[] = [];
+const EMPTY_CUSTOM_TITLES: Readonly<Record<string, string>> = {};
 
 export function useQuickSwitcher(): UseQuickSwitcherReturn {
   // Always mounted in App: subscribe to the panel/worktree data only while the
@@ -143,6 +170,9 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
   const mruList = usePanelStore((state) => (paletteIsOpen ? state.mruList : EMPTY_MRU));
   const focusedPanelId = usePanelStore((state) => (paletteIsOpen ? state.focusedId : null));
   const pruneMru = usePanelStore((state) => state.pruneMru);
+  const customTitles = useWorktreeFilterStore((state) =>
+    paletteIsOpen ? state.worktreeCustomTitles : EMPTY_CUSTOM_TITLES
+  );
 
   const {
     worktrees,
@@ -203,19 +233,29 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
 
     // Add worktrees
     for (const w of worktrees) {
+      const customTitle = customTitles[w.id];
       result.push({
         id: `worktree:${w.id}`,
         type: "worktree",
-        title: w.name ?? w.branch ?? "Worktree",
+        title: customTitle || (w.name ?? w.branch ?? "Worktree"),
         subtitle: w.path,
         isCurrent: w.id === activeWorktreeId,
         isMainWorktree: w.isMainWorktree,
         branchLabel: getWorktreeBranchLabel(w),
+        displaced: customTitle ? (getWorktreeQualifier(w, customTitle) ?? undefined) : undefined,
       });
     }
 
     return result;
-  }, [panelIds, panelsById, worktrees, worktreeMap, focusedPanelId, activeWorktreeId]);
+  }, [
+    panelIds,
+    panelsById,
+    worktrees,
+    worktreeMap,
+    focusedPanelId,
+    activeWorktreeId,
+    customTitles,
+  ]);
 
   const { state: pluginState } = pluginSearch;
   const pluginItems = useMemo<QuickSwitcherItem[]>(() => {

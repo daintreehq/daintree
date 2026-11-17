@@ -143,16 +143,18 @@ export function QuickSwitcherItem({
   const shortened = item.type === "worktree" && item.subtitle ? shortenPath(item.subtitle) : null;
   // A linked worktree is named by its branch, so its title is an identifier and
   // set in mono as the sidebar sets it; main is named by its folder, which stays
-  // a name and carries its branch beside it, as the worktree palette does.
+  // a name and carries its branch beside it, as the worktree palette does. A
+  // custom title displaces either, and the branch it displaced goes beside it
+  // in the same place.
   const isBranchTitled =
     item.type === "worktree" && !item.isMainWorktree && item.title === item.branchLabel;
   const worktreeQualifier =
-    item.type === "worktree" &&
-    item.isMainWorktree &&
-    item.branchLabel &&
-    item.branchLabel !== item.title
-      ? item.branchLabel
-      : null;
+    item.type !== "worktree"
+      ? null
+      : (item.displaced ??
+        (item.isMainWorktree && item.branchLabel && item.branchLabel !== item.title
+          ? item.branchLabel
+          : null));
   const hasDetail = !!terminalDetail || (isPlugin && !!item.subtitle) || shortened !== null;
 
   return (
@@ -213,11 +215,18 @@ export function QuickSwitcherItem({
             </span>
           )}
           {worktreeQualifier && (
-            <span className="shrink-0 font-mono text-xs text-text-secondary">
+            // Bounded to half the line: a long branch beside a long custom title
+            // would otherwise take the whole row from the title.
+            <span className="flex min-w-0 max-w-[50%] font-mono text-xs text-text-secondary">
               <span className="sr-only">, </span>
-              <HighlightedText
+              <TailKeepingText
                 text={worktreeQualifier}
-                indices={wordMatchIndices(worktreeQualifier, query)}
+                indices={
+                  wordMatchIndices(worktreeQualifier, query) ??
+                  (worktreeQualifier === item.displaced
+                    ? findMatchIndices(matches, "displaced")
+                    : undefined)
+                }
               />
             </span>
           )}

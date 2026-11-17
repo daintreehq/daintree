@@ -28,6 +28,7 @@ vi.mock("@/store", async () => {
 
 import { useQuickSwitcher, type QuickSwitcherItem } from "../useQuickSwitcher";
 import { usePaletteStore } from "@/store/paletteStore";
+import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { consumeDeferredPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 
 type MockWorktreeState = {
@@ -386,5 +387,133 @@ describe("useQuickSwitcher panel items (#13763)", () => {
     renderHook(() => useQuickSwitcher());
 
     expect(pruneMru).toHaveBeenCalledWith(new Set(["terminal:br-1"]));
+  });
+});
+
+describe("useQuickSwitcher custom worktree titles (#17503)", () => {
+  const { pruneMru } = usePanelStore.getState();
+  const red = {
+    id: "wt-red",
+    name: "feature/auth-refresh",
+    branch: "feature/auth-refresh",
+    path: "/repo/wt-red",
+  };
+  const blue = {
+    id: "wt-blue",
+    name: "feature/billing",
+    branch: "feature/billing",
+    path: "/repo/wt-blue",
+  };
+
+  const setTitles = (titles: Record<string, string>) =>
+    act(() => useWorktreeFilterStore.setState({ worktreeCustomTitles: titles }));
+
+  const seed = (...worktrees: (typeof red)[]) =>
+    seedWorktreeState({
+      isInitialized: true,
+      worktrees: new Map(worktrees.map((w) => [w.id, w])),
+    });
+
+  beforeEach(() => {
+    usePanelStore.setState({ panelsById: {}, panelIds: [], mruList: [], pruneMru });
+    useWorktreeStoreMock.mockReset();
+    usePaletteStore.setState({ activePaletteId: "quick-switcher" });
+  });
+
+  afterEach(() => {
+    setTitles({});
+    usePaletteStore.setState({ activePaletteId: null });
+  });
+
+  it("finds a worktree by its custom title and shows that title, with its branch and path", () => {
+    setTitles({ "wt-red": "Release planning" });
+    seed(red, blue);
+
+    const { result } = renderHook(() => useQuickSwitcher());
+    act(() => result.current.setQuery("release planning"));
+
+    const first = result.current.results[0];
+    expect(first?.id).toBe("worktree:wt-red");
+    expect(first?.title).toBe("Release planning");
+    expect(first?.displaced).toBe("feature/auth-refresh");
+    expect(first?.subtitle).toBe("/repo/wt-red");
+  });
+
+  it("still finds the titled worktree by the branch the title displaced, marking the branch", () => {
+    setTitles({ "wt-red": "Release planning" });
+    seed(red, blue);
+
+    const { result } = renderHook(() => useQuickSwitcher());
+    act(() => result.current.setQuery("authrefresh"));
+
+    expect(result.current.results.map((item) => item.id)).toEqual(["worktree:wt-red"]);
+    const keys = result.current.matchesById.get("worktree:wt-red")?.map((match) => match.key);
+    expect(keys).toEqual(["displaced"]);
+  });
+
+  it("finds the titled worktree by its path as before", () => {
+    setTitles({ "wt-red": "Release planning" });
+    seed(red, blue);
+
+    const { result } = renderHook(() => useQuickSwitcher());
+    act(() => result.current.setQuery("wt-red"));
+
+    expect(result.current.results[0]?.id).toBe("worktree:wt-red");
+  });
+
+  it("names a worktree without a title as before: its name, nothing displaced", () => {
+    setTitles({ "wt-red": "Release planning" });
+    seed(red, blue);
+
+    const { result } = renderHook(() => useQuickSwitcher());
+
+    const item = result.current.results.find((entry) => entry.id === "worktree:wt-blue");
+    expect(item?.title).toBe("feature/billing");
+    expect(item?.displaced).toBeUndefined();
+  });
+
+  it("leaves the order of untitled worktrees under the MRU boost where it was", () => {
+    // Fuse spreads key weights over every configured key, so a key of its own
+    // for the displaced text moved these scores by more than the boost.
+    const a = { id: "wt-a", name: "auth", branch: "auth", path: "/repo/auth" };
+    const b = { id: "wt-b", name: "xauth", branch: "xauth", path: "/repo/xauth" };
+    usePanelStore.setState({ mruList: ["worktree:wt-b"] });
+    seed(a, b);
+
+    const { result } = renderHook(() => useQuickSwitcher());
+    act(() => result.current.setQuery("auth"));
+
+    expect(result.current.results.map((item) => item.id)).toEqual([
+      "worktree:wt-b",
+      "worktree:wt-a",
+    ]);
+  });
+
+  it("follows a rename or a cleared title while open, falling back to the name", () => {
+    setTitles({ "wt-red": "Release planning" });
+    seed(red);
+
+    const { result } = renderHook(() => useQuickSwitcher());
+    act(() => result.current.setQuery("hotfix"));
+    expect(result.current.results).toHaveLength(0);
+
+    setTitles({ "wt-red": "Hotfix" });
+    expect(result.current.results[0]?.title).toBe("Hotfix");
+
+    setTitles({});
+    expect(result.current.results).toHaveLength(0);
+    act(() => result.current.setQuery("auth-refresh"));
+    expect(result.current.results[0]?.title).toBe("feature/auth-refresh");
+  });
+
+  it("reads the titles as they are when the switcher opens", () => {
+    seed(red);
+    usePaletteStore.setState({ activePaletteId: null });
+    const { result } = renderHook(() => useQuickSwitcher());
+
+    setTitles({ "wt-red": "Release planning" });
+    act(() => usePaletteStore.setState({ activePaletteId: "quick-switcher" }));
+
+    expect(result.current.results[0]?.title).toBe("Release planning");
   });
 });

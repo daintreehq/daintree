@@ -12,6 +12,7 @@ vi.mock("@/store", () => ({
 
 import { useWorktreePalette } from "../useWorktreePalette";
 import { usePaletteStore } from "@/store/paletteStore";
+import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { consumeDeferredPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 
 function worktree(id: string, name: string, isMainWorktree = false): WorktreeState {
@@ -75,5 +76,30 @@ describe("useWorktreePalette focus restore", () => {
     act(() => result.current.close());
     expect(result.current.isOpen).toBe(false);
     expect(consumeDeferredPaletteFocusRestore()).toBeNull();
+  });
+});
+
+describe("useWorktreePalette custom titles (#17503)", () => {
+  const setTitles = (titles: Record<string, string>) =>
+    act(() => useWorktreeFilterStore.setState({ worktreeCustomTitles: titles }));
+
+  beforeEach(() => {
+    usePaletteStore.setState({ activePaletteId: "worktree" });
+  });
+
+  afterEach(() => {
+    setTitles({});
+    usePaletteStore.setState({ activePaletteId: null });
+  });
+
+  it("finds a worktree by its custom title and still by the name the title displaced", () => {
+    setTitles({ "wt-feature": "Release planning" });
+    const { result } = renderHook(() => useWorktreePalette({ worktrees }));
+
+    act(() => result.current.setQuery("release planning"));
+    expect(result.current.results.map((w) => w.id)).toEqual(["wt-feature"]);
+
+    act(() => result.current.setQuery("feature"));
+    expect(result.current.results.map((w) => w.id)).toEqual(["wt-feature"]);
   });
 });
