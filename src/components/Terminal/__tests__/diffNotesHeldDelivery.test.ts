@@ -61,14 +61,16 @@ const workingAgent = {
   hasPty: true,
 } as unknown as PtyPanelData;
 
+const HOLD_TTL_MS = 60 * 60_000;
+
 function heldSend(token: string, text: string): HeldComposerSend {
   return {
     terminalId: "t1",
     token,
     text,
     imagePaths: [],
-    heldAt: 0,
-    expiresAt: 60 * 60_000,
+    heldAt: Date.now(),
+    expiresAt: Date.now() + HOLD_TTL_MS,
     status: "held",
   };
 }
@@ -141,7 +143,13 @@ describe("@notes in a held pane composer send", () => {
       send: heldSend("hold-1", text),
     }));
     useDiffNotesStore.setState({ notes: {}, editingIds: {} });
-    useHeldComposerSendStore.setState({ held: {}, dropped: {}, refused: {}, endedTokens: [] });
+    useHeldComposerSendStore.setState({
+      held: {},
+      dropped: {},
+      refused: {},
+      endedTokens: [],
+      deliveredTokens: [],
+    });
     note = useDiffNotesStore.getState().addNote({
       worktreePath: "/repo",
       filePath: "src/a.ts",
@@ -181,6 +189,28 @@ describe("@notes in a held pane composer send", () => {
     endHeld("hold-1", { kind: "delivered" });
     await vi.advanceTimersByTimeAsync(0);
     expect(pending(note)).toBe(false);
+    // The composer's own token never went anywhere, so nothing asks after it.
+    expect(terminalClient.getSubmissions).not.toHaveBeenCalled();
+  });
+
+  it("clears the notes of a send held longer than a terminal submission is watched", async () => {
+    await sendHeld();
+
+    await vi.advanceTimersByTimeAsync(45 * 60_000);
+    expect(pending(note)).toBe(true);
+
+    endHeld("hold-1", { kind: "delivered" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pending(note)).toBe(false);
+  });
+
+  it("stops following a held send it never hears end, and leaves its notes", async () => {
+    await sendHeld();
+
+    await vi.advanceTimersByTimeAsync(HOLD_TTL_MS + 10 * 60_000);
+    endHeld("hold-1", { kind: "delivered" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pending(note)).toBe(true);
   });
 
   it.each<ComposerHoldOutcome>([

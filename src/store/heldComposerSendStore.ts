@@ -28,6 +28,8 @@ interface HeldComposerSendState {
   /** Panes where a send was just refused because one is held. */
   refused: Readonly<Record<string, true>>;
   endedTokens: readonly string[];
+  /** Those of `endedTokens` main confirmed written, which is what clears the notes they carried. */
+  deliveredTokens: readonly string[];
   applyChange: (change: ComposerHoldChange) => void;
   replaceAll: (sends: readonly HeldComposerSend[]) => void;
   /** Main's answer to this view's own hold, which may come before or after its push. */
@@ -49,12 +51,16 @@ export const useHeldComposerSendStore = create<HeldComposerSendState>((set) => (
   dropped: {},
   refused: {},
   endedTokens: [],
+  deliveredTokens: [],
 
   applyChange: ({ terminalId, held, ended }) =>
     set((state) => {
-      let { dropped, refused, endedTokens } = state;
+      let { dropped, refused, endedTokens, deliveredTokens } = state;
       if (ended !== undefined) {
         endedTokens = [...endedTokens, ended.token].slice(-MAX_ENDED_TOKENS);
+        if (ended.outcome.kind === "delivered") {
+          deliveredTokens = [...deliveredTokens, ended.token].slice(-MAX_ENDED_TOKENS);
+        }
         const previous = state.held[terminalId];
         const known = previous?.token === ended.token ? previous : undefined;
         const text = ended.text ?? known?.text;
@@ -76,6 +82,7 @@ export const useHeldComposerSendStore = create<HeldComposerSendState>((set) => (
           refused: without(refused, terminalId),
           dropped,
           endedTokens,
+          deliveredTokens,
         };
       }
       // A send held afresh replaces whatever the pane last said about the one before.
@@ -83,7 +90,13 @@ export const useHeldComposerSendStore = create<HeldComposerSendState>((set) => (
         dropped = without(dropped, terminalId);
         refused = without(refused, terminalId);
       }
-      return { held: { ...state.held, [terminalId]: held }, dropped, refused, endedTokens };
+      return {
+        held: { ...state.held, [terminalId]: held },
+        dropped,
+        refused,
+        endedTokens,
+        deliveredTokens,
+      };
     }),
 
   replaceAll: (sends) =>
@@ -130,4 +143,17 @@ export const useHeldComposerSendStore = create<HeldComposerSendState>((set) => (
 /** Whether this view knows of a send held for `terminalId`. */
 export function hasHeldComposerSend(terminalId: string): boolean {
   return terminalId in useHeldComposerSendStore.getState().held;
+}
+
+/**
+ * Whether the held send `token` was written, once this view has heard it
+ * ended, and undefined until then. Main says `delivered` only of a write the
+ * terminal confirmed (#17181).
+ */
+export function heldComposerSendDelivered(
+  state: Pick<HeldComposerSendState, "endedTokens" | "deliveredTokens">,
+  token: string
+): boolean | undefined {
+  if (!state.endedTokens.includes(token)) return undefined;
+  return state.deliveredTokens.includes(token);
 }
