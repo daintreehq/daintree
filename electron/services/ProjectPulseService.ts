@@ -55,7 +55,7 @@ interface HistoryEntry {
   facts: HistoryFacts;
   // When the walks started: the age a Pulse built on these facts inherits.
   timestamp: number;
-  // Start order of the load, so a slower walk of an older HEAD can't evict a newer one.
+  // When its compute read HEAD, so a slower walk of an older HEAD can't evict a newer one.
   seq: number;
 }
 
@@ -316,7 +316,8 @@ export class ProjectPulseService {
         );
         // Only the current flight publishes, and only while its day and zone still hold: an
         // aborted, invalidated or overtaken compute, or one answering for a day already over,
-        // would otherwise replace a fresher entry.
+        // would otherwise replace a fresher entry. A Pulse standing on a failed walk's fallback is
+        // served once and retried, like the history it lacks.
         const now = readLocalCalendar();
         if (
           cacheable &&
@@ -442,9 +443,13 @@ export class ProjectPulseService {
     }
 
     let headSha: string | null;
+    let historySeq: number;
     try {
       const headOut = await git.raw(["rev-parse", "--verify", "HEAD"]);
       headSha = headOut.trim() || null;
+      // Ordered by when HEAD was read, so a compute that read an older HEAD can't evict the
+      // history of one that read a newer HEAD, whichever walk finishes last.
+      historySeq = ++this.historyLoadSeq;
     } catch (error) {
       const errorMessage = formatErrorMessage(error, "Failed to read git HEAD");
       if (isNoCommitsError(errorMessage)) {
@@ -488,7 +493,7 @@ export class ProjectPulseService {
         includeDelta && branch
           ? this.getBranchDelta(git, mainBranch, branch, rev)
           : Promise.resolve(null),
-        this.getHistoryFacts(git, options, headSha, calendar.timeZone, signal),
+        this.getHistoryFacts(git, options, headSha, historySeq, calendar.timeZone, signal),
       ]);
 
     // HEAD resolved, so this repository has history: a failed read of it is a
@@ -825,6 +830,7 @@ export class ProjectPulseService {
     git: SimpleGit,
     options: GetProjectPulseOptions,
     headSha: string | null,
+    seq: number,
     timeZone: string,
     signal?: AbortSignal
   ): Promise<HistoryResult> {
@@ -858,7 +864,6 @@ export class ProjectPulseService {
     }
 
     const loadedAt = Date.now();
-    const seq = ++this.historyLoadSeq;
     const load = async (): Promise<HistoryResult> => {
       const { facts, complete } = await this.loadHistoryFacts(git, headSha, options.worktreeId);
       // invalidate() aborts the signal and drops this flight, so an aborted or superseded load

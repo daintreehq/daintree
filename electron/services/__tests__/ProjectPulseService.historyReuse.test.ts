@@ -285,6 +285,36 @@ describe("ProjectPulseService range-independent history reuse", () => {
     expect(next.currentStreakDays).toBe(3);
   });
 
+  it("keeps the newer HEAD's history when an older HEAD's walk publishes first", async () => {
+    const olderBranch = deferred();
+    const newerWalk = deferred();
+    let branchLookups = 0;
+    state.gate = (args) => {
+      if (isBranchLookup(args) && branchLookups++ === 0) return olderBranch.promise;
+      if (isStreakLog(args) && args.includes("cafef00d")) return newerWalk.promise;
+      return undefined;
+    };
+    const { raw, count } = createRepo(state);
+    const svc = await loadService(raw);
+
+    // The older compute reads HEAD first, then stalls before its walk starts.
+    const older = svc.getPulse(pulseOptions(60));
+    await vi.advanceTimersByTimeAsync(0);
+    state.headSha = "cafef00d";
+    state.commitTimestamps = [localNoon(2025, 0, 15), ...state.commitTimestamps];
+    const newer = svc.getPulse(pulseOptions(120));
+    await vi.advanceTimersByTimeAsync(0);
+
+    olderBranch.resolve();
+    await older;
+    newerWalk.resolve();
+    expect((await newer).currentStreakDays).toBe(3);
+
+    const next = await svc.getPulse(pulseOptions(180));
+    expect(count(isStreakLog)).toBe(2);
+    expect(next.currentStreakDays).toBe(3);
+  });
+
   it("drops reused history on invalidate, for that worktree only", async () => {
     const { raw, count } = createRepo(state);
     const svc = await loadService(raw);
@@ -404,8 +434,11 @@ describe("ProjectPulseService range-independent history reuse", () => {
       expect(degraded.heatmap.some((c) => c.isBeforeProject)).toBe(beforeProject);
       expect(degraded.currentStreakDays).toBe(streak);
 
+      // Neither the history nor the Pulse standing on its fallback is kept, so the same range
+      // walks again rather than serving the fallback.
       state[flag] = false;
-      const recovered = await svc.getPulse(pulseOptions(120));
+      const recovered = await svc.getPulse(pulseOptions(180));
+      expect(count(isHeatmapLog)).toBe(2);
       expect(count(isRootWalk)).toBe(2);
       expect(count(isStreakLog)).toBe(2);
       expect(recovered.heatmap.some((c) => c.isBeforeProject)).toBe(true);
