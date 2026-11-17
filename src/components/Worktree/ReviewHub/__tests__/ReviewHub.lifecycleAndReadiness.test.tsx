@@ -644,28 +644,33 @@ describe("ReviewHub", () => {
       expect(stageAllMock).toHaveBeenCalledTimes(1);
     });
 
-    it("does not stage mid-operation even with no conflicts left", async () => {
-      getStagingStatusMock.mockResolvedValue(
-        makeStatus({
-          staged: [],
-          unstaged: [{ path: "src/unrelated.ts", status: "modified", insertions: 1, deletions: 0 }],
-          repoState: "CHERRY_PICKING",
-        })
-      );
-      render(
-        <ReviewHubContent
-          isOpen={true}
-          worktreePath={WORKTREE_PATH}
-          onClose={vi.fn()}
-          autoStageOnOpen={true}
-        />
-      );
-      await waitFor(() => screen.getByTestId("conflict-panel"));
-      await act(async () => {
-        await Promise.resolve();
-      });
-      expect(stageAllMock).not.toHaveBeenCalled();
-    });
+    it.each(["MERGING", "REBASING", "CHERRY_PICKING", "REVERTING"] as const)(
+      "does not stage mid-operation (%s) even with no conflicts left",
+      async (repoState) => {
+        getStagingStatusMock.mockResolvedValue(
+          makeStatus({
+            staged: [],
+            unstaged: [
+              { path: "src/unrelated.ts", status: "modified", insertions: 1, deletions: 0 },
+            ],
+            repoState,
+          })
+        );
+        render(
+          <ReviewHubContent
+            isOpen={true}
+            worktreePath={WORKTREE_PATH}
+            onClose={vi.fn()}
+            autoStageOnOpen={true}
+          />
+        );
+        await waitFor(() => screen.getByTestId("conflict-panel"));
+        await act(async () => {
+          await Promise.resolve();
+        });
+        expect(stageAllMock).not.toHaveBeenCalled();
+      }
+    );
 
     it("does not stage when autoStageOnOpen is omitted", async () => {
       getStagingStatusMock.mockResolvedValue(
