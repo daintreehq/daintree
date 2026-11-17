@@ -245,7 +245,10 @@ describe("DesktopPresence on Electron's own signals", () => {
     reporter.stop();
     expect(powerMonitor.off).toHaveBeenCalledWith("suspend", suspend);
     expect(powerMonitor.off).toHaveBeenCalledWith("resume", resume);
+    // The power policy no longer reaches it at all.
+    const refresh = vi.spyOn(reporter, "refresh");
     updatePowerObservations({ anyWindowFocused: true });
+    expect(refresh).not.toHaveBeenCalled();
     expect(reports).toHaveLength(6);
   });
 

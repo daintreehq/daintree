@@ -39,7 +39,11 @@ const netFetch = vi.hoisted(() => vi.fn<(url: string, init: RequestInit) => Prom
 // Whether the system can show a native notification (#17240).
 const nativeNotifications = vi.hoisted(() => ({ supported: true }));
 // Whether the fake store holds a question notification record the notifier can read (#17240).
-const notificationRecord = vi.hoisted(() => ({ readable: false }));
+const notificationRecord = vi.hoisted(() => ({
+  readable: false,
+  /** Resolves the record's read; already resolved unless a test holds it. */
+  read: Promise.resolve() as Promise<void>,
+}));
 
 vi.mock("electron", () => ({
   net: { fetch: netFetch },
@@ -442,7 +446,14 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
             faultReason: () => loads.faultReason,
             listQuestions: async () => [],
             ...(notificationRecord.readable
-              ? { getMeta: async () => "[]", setMeta: async () => {} }
+              ? {
+                  getMeta: async (key: string) => {
+                    if (key !== "daintree:notified-questions") return null;
+                    await notificationRecord.read;
+                    return "[]";
+                  },
+                  setMeta: async () => {},
+                }
               : {}),
           } as never;
         },
@@ -594,6 +605,7 @@ describe("Decisions entry", () => {
     savedNotifications.value = { enabled: true };
     nativeNotifications.supported = true;
     notificationRecord.readable = false;
+    notificationRecord.read = Promise.resolve();
     loads.failNextConstruct = false;
     loads.failNextOpen = false;
     loads.closing = null;
@@ -1838,13 +1850,21 @@ describe("Decisions entry", () => {
 
     it("reports presence only while Decisions, the switch and desktop notifications are on, telling the connection of each turn", async () => {
       notificationRecord.readable = true;
+      let readRecord!: () => void;
+      notificationRecord.read = new Promise<void>((resolve) => (readRecord = resolve));
       saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
       await startDecisionsIfEnabled();
-      const connection = connections.at(-1)!;
+      await vi.waitFor(() => expect(connections).toHaveLength(1));
+      const connection = connections[0]!;
       const presence = connection.options.presence!;
-      // On by default, with nothing new to agree to, once question notifications follow the lifetime.
-      await vi.waitFor(() => expect(presence.allowed()).toBe(true));
-      // Whether the connection was there yet to hear it start following, it reads the gate on loading.
+      // Nothing until question notifications follow the lifetime; then the connection hears so.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(presence.allowed()).toBe(false);
+      const before = connection.presenceChanged;
+      readRecord();
+      await vi.waitFor(() => expect(connection.presenceChanged).toBe(before + 1));
+      // On by default, with nothing new to agree to.
+      expect(presence.allowed()).toBe(true);
       const told = connection.presenceChanged;
       expect((await getDecisionsStatus()).holdPhonePushes).toBeUndefined();
 
@@ -1922,12 +1942,14 @@ describe("Decisions entry", () => {
         answered = true;
         return status;
       });
-      await vi.waitFor(() =>
-        expect(pushedStatuses().at(-1)).toMatchObject({ holdPhonePushes: false })
-      );
-      expect(answered).toBe(false);
-
-      closed();
+      try {
+        await vi.waitFor(() =>
+          expect(pushedStatuses().at(-1)).toMatchObject({ holdPhonePushes: false })
+        );
+        expect(answered).toBe(false);
+      } finally {
+        closed();
+      }
       const [, , status] = await Promise.all([stopping, enabling, off]);
       expect(status.holdPhonePushes).toBe(false);
     });
