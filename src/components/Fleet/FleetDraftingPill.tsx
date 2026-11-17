@@ -75,9 +75,9 @@ export function FleetDraftingPill(): ReactElement | null {
   useEscapeStack(open, () => setOpen(false));
 
   // Per-target overrides are ephemeral per-broadcast (#8691). The broadcast
-  // pipeline (fleetEnterBroadcast.doSend) reads the snapshot taken at
-  // Enter-press time and clears in its `finally`, so this effect only
-  // covers the "user opened, edited, then dismissed without sending" case.
+  // pipeline (fleetEnterBroadcast.doSend) sends the snapshot taken at
+  // Enter-press time and consumes it once it settles, so this effect covers
+  // the popover closing: dismissed without sending, or its draft gone.
   useEffect(() => {
     if (!open) {
       useFleetTargetOverridesStore.getState().clear();

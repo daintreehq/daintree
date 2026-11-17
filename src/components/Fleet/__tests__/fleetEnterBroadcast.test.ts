@@ -711,12 +711,13 @@ describe("tryFleetBroadcastFromEditor — per-target overrides and skips (#8691)
       arm(["a", "b"]);
       const submits = holdSubmits();
       useFleetTargetOverridesStore.getState().setPayloadOverride("b", "for this send");
-      tryFleetBroadcastFromEditor("a", "hello", vi.fn());
+      const delivered = vi.fn();
+      tryFleetBroadcastFromEditor("a", "hello", delivered);
       await vi.waitFor(() => expect(submits.held()).toBe(2));
 
       useFleetTargetOverridesStore.getState().setPayloadOverride("b", "for the next send");
       submits.release(2);
-      await settle();
+      await vi.waitFor(() => expect(delivered).toHaveBeenCalledTimes(1));
 
       expect(submitMock).toHaveBeenCalledWith("b", "for this send");
       expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({
@@ -729,12 +730,13 @@ describe("tryFleetBroadcastFromEditor — per-target overrides and skips (#8691)
       arm(["a", "b", "c"]);
       const submits = holdSubmits();
       useFleetTargetOverridesStore.getState().setPayloadOverride("b", "for this send");
-      tryFleetBroadcastFromEditor("a", "hello", vi.fn());
+      const delivered = vi.fn();
+      tryFleetBroadcastFromEditor("a", "hello", delivered);
       await vi.waitFor(() => expect(submits.held()).toBe(3));
 
       useFleetTargetOverridesStore.getState().setSkipped("c", true);
       submits.release(3);
-      await settle();
+      await vi.waitFor(() => expect(delivered).toHaveBeenCalledTimes(1));
 
       expect(submitMock).toHaveBeenCalledWith("c", "hello");
       const state = useFleetTargetOverridesStore.getState();
@@ -750,13 +752,14 @@ describe("tryFleetBroadcastFromEditor — per-target overrides and skips (#8691)
       arm(["a", "b", "c"]);
       const submits = holdSubmits();
       useFleetTargetOverridesStore.getState().setSkipped("c", true);
-      tryFleetBroadcastFromEditor("a", "hello", vi.fn());
+      const delivered = vi.fn();
+      tryFleetBroadcastFromEditor("a", "hello", delivered);
       await vi.waitFor(() => expect(submits.held()).toBe(2));
 
       useFleetTargetOverridesStore.getState().setSkipped("c", false);
       useFleetTargetOverridesStore.getState().setSkipped("c", true);
       submits.release(2);
-      await settle();
+      await vi.waitFor(() => expect(delivered).toHaveBeenCalledTimes(1));
 
       expect(submitMock).not.toHaveBeenCalledWith("c", "hello");
       expect(useFleetTargetOverridesStore.getState().skippedIds.has("c")).toBe(true);
@@ -769,31 +772,61 @@ describe("tryFleetBroadcastFromEditor — per-target overrides and skips (#8691)
       useFleetTargetOverridesStore.getState().setPayloadOverride("b", "shared");
       tryFleetBroadcastFromEditor("a", "first", vi.fn());
       await vi.waitFor(() => expect(submits.held()).toBe(2));
-      tryFleetBroadcastFromEditor("a", "second", vi.fn());
+      const newerDelivered = vi.fn();
+      tryFleetBroadcastFromEditor("a", "second", newerDelivered);
       await vi.waitFor(() => expect(submits.held()).toBe(4));
 
       // The newer send settles first and lets go of the edit both sends took.
       submits.releaseNewest(2);
-      await settle();
+      await vi.waitFor(() => expect(newerDelivered).toHaveBeenCalledTimes(1));
       expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({});
 
       useFleetTargetOverridesStore.getState().setPayloadOverride("b", "shared");
       submits.release(2);
       await settle();
 
-      expect(submits.held()).toBe(0);
       expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({ b: "shared" });
+    });
+
+    it("lets an older send settling first consume what it took while a newer one is out", async () => {
+      arm(["a", "b"]);
+      const submits = holdSubmits();
+      useFleetTargetOverridesStore.getState().setPayloadOverride("b", "shared");
+      tryFleetBroadcastFromEditor("a", "first", vi.fn());
+      await vi.waitFor(() => expect(submits.held()).toBe(2));
+      tryFleetBroadcastFromEditor("a", "second", vi.fn());
+      await vi.waitFor(() => expect(submits.held()).toBe(4));
+
+      submits.release(2);
+      await vi.waitFor(() =>
+        expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({})
+      );
+      // The newer send already holds its own copy of the edit.
+      expect(submitMock.mock.calls.filter(([id]) => id === "b")).toEqual([
+        ["b", "shared"],
+        ["b", "shared"],
+      ]);
+      submits.release(2);
+      await settle();
     });
   });
 
   it("consumes the send's overrides and exclusions once it settles", async () => {
     arm(["a", "b", "c"]);
+    const pending: Array<() => void> = [];
+    submitMock.mockImplementation(() => new Promise<void>((resolve) => pending.push(resolve)));
     useFleetTargetOverridesStore.getState().setPayloadOverride("b", "x");
     useFleetTargetOverridesStore.getState().setSkipped("c", true);
-    tryFleetBroadcastFromEditor("a", "hello", vi.fn());
-    await flush();
-    await flush();
+    const delivered = vi.fn();
+    tryFleetBroadcastFromEditor("a", "hello", delivered);
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+
     expect(submitMock).toHaveBeenCalledWith("b", "x");
+    expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({ b: "x" });
+    expect([...useFleetTargetOverridesStore.getState().skippedIds]).toEqual(["c"]);
+
+    for (const resolve of pending.splice(0)) resolve();
+    await vi.waitFor(() => expect(delivered).toHaveBeenCalledTimes(1));
     expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({});
     expect(useFleetTargetOverridesStore.getState().skippedIds.size).toBe(0);
   });

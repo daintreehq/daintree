@@ -182,7 +182,7 @@ describe("fleetTargetOverridesStore", () => {
       expect(useFleetTargetOverridesStore.getState()).toBe(settled);
     });
 
-    it("hands a send copies that later edits can't reach", () => {
+    it("keeps what a send took as it stood when taken", () => {
       store().setPayloadOverride("t-1", "sent");
       store().setSkipped("t-2", true);
       const snapshot = store().snapshot();
@@ -232,6 +232,9 @@ describe("fleetTargetOverridesStore", () => {
         // B is still armed — its entries must survive.
         expect(state.payloadOverrides["b"]).toBe("for b");
         expect(state.skippedIds.has("b")).toBe(true);
+        // A's revisions leave with its entries (#17518).
+        expect(Object.keys(state.payloadRevisions)).toEqual(["b"]);
+        expect(Object.keys(state.skipRevisions)).toEqual(["b"]);
       } finally {
         unsub();
       }

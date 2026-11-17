@@ -129,18 +129,24 @@ export const useFleetTargetOverridesStore = create<FleetTargetOverridesState>((s
       let payloadRevisions = state.payloadRevisions;
       for (const id of Object.keys(snapshot.payloadOverrides)) {
         if (!Object.hasOwn(payloadOverrides, id) || !taken(payloadRevisions, id)) continue;
-        if (payloadOverrides === state.payloadOverrides) payloadOverrides = { ...payloadOverrides };
+        if (payloadOverrides === state.payloadOverrides) {
+          payloadOverrides = { ...payloadOverrides };
+          payloadRevisions = { ...payloadRevisions };
+        }
         delete payloadOverrides[id];
-        payloadRevisions = withoutRevision(payloadRevisions, id);
+        delete payloadRevisions[id];
       }
 
       let skippedIds = state.skippedIds;
       let skipRevisions = state.skipRevisions;
       for (const id of snapshot.skippedIds) {
         if (!skippedIds.has(id) || !taken(skipRevisions, id)) continue;
-        if (skippedIds === state.skippedIds) skippedIds = new Set(skippedIds);
+        if (skippedIds === state.skippedIds) {
+          skippedIds = new Set(skippedIds);
+          skipRevisions = { ...skipRevisions };
+        }
         skippedIds.delete(id);
-        skipRevisions = withoutRevision(skipRevisions, id);
+        delete skipRevisions[id];
       }
 
       if (payloadOverrides === state.payloadOverrides && skippedIds === state.skippedIds) {
