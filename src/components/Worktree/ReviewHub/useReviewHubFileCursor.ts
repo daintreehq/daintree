@@ -138,27 +138,39 @@ export function useReviewHubFileCursor({
 
   // Reconcile `focusedIndex` when the list mutates (filter, sort, stage/unstage,
   // refresh). Preserve focus on the same file by `section:path`; if it left the
-  // list, move to its nearest neighbour in the same section.
-  useEffect(() => {
+  // list, move to its nearest neighbour in the same section. Returns the index
+  // the cursor settles on.
+  //
+  // Normally run from the passive effect below, which lands after the commit
+  // that changed the rows. Focus entering the list in that same commit (a bulk
+  // stage handing it on) runs it early instead: until then `focusedIndex` still
+  // names the row's old position, which is now some other file. Running twice
+  // is harmless — the second pass finds the list already reconciled.
+  const reconcileCursor = useCallback((): number => {
     const previousItems = reconciledItemsRef.current;
     reconciledItemsRef.current = navigableItems;
     if (navigableItems.length === 0) {
       writeCursorKey(null);
       setFocusedIndex((prev) => (prev === -1 ? prev : -1));
-      return;
+      return -1;
     }
     const key = focusedItemKeyRef.current;
-    if (key === null) return;
+    if (key === null) return focusedIndex;
     const nextIdx = navigableItems.findIndex((item) => cursorKeyOf(item) === key);
     if (nextIdx === -1) {
       const replacement = resolveDisplacedCursor(previousItems, focusedIndex, key, navigableItems);
       const replacementItem = navigableItems[replacement];
       writeCursorKey(replacementItem ? cursorKeyOf(replacementItem) : null);
       setFocusedIndex(replacement);
-    } else if (nextIdx !== focusedIndex) {
-      setFocusedIndex(nextIdx);
+      return replacement;
     }
+    if (nextIdx !== focusedIndex) setFocusedIndex(nextIdx);
+    return nextIdx;
   }, [navigableItems, focusedIndex, writeCursorKey]);
+
+  useEffect(() => {
+    reconcileCursor();
+  }, [reconcileCursor]);
 
   // Whether the working-tree list windows. Decided across BOTH sections: they
   // share one scroll container and one cursor, so windowing one and not the
@@ -294,6 +306,7 @@ export function useReviewHubFileCursor({
     setFocusedIndex,
     writeCursorKey,
     moveCursorTo,
+    reconcileCursor,
     fileListRef,
     movingListFocusRef,
     stagedListRef,

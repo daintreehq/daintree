@@ -611,6 +611,7 @@ export function ReviewHubContent({
     focusedIndex,
     setFocusedIndex,
     writeCursorKey,
+    reconcileCursor,
     fileListRef,
     movingListFocusRef,
     stagedListRef,
@@ -1431,6 +1432,55 @@ export function ReviewHubContent({
     [fileListExpanded, setFileListExpanded, worktreePath, fileListRef]
   );
 
+  // A bulk button that unmounted while it held focus, recorded mid-commit and
+  // handed on by the layout effect below once every mutation has landed — the
+  // composer's enabled state and the list's rows are then the new ones. Owned
+  // here, not by the section: staging everything can leave a clean tree, which
+  // removes both sections and the composer in that same commit.
+  const orphanedBulkFocusRef = useRef<{
+    section: FileStageRowSection;
+    button: HTMLButtonElement;
+  } | null>(null);
+  // Whether this hub's layout effects are connected. An Activity hide (or a
+  // StrictMode replay) disconnects them parent-first, so this clears before the
+  // button's own cleanup reports: a record taken then could only be consumed
+  // on reveal, against whatever the hidden tree has since become.
+  const bulkHandoffLiveRef = useRef(false);
+  useLayoutEffect(() => {
+    bulkHandoffLiveRef.current = true;
+    return () => {
+      bulkHandoffLiveRef.current = false;
+      orphanedBulkFocusRef.current = null;
+    };
+  }, []);
+  const handleBulkActionFocusOrphaned = useCallback(
+    (section: FileStageRowSection, button: HTMLButtonElement) => {
+      if (bulkHandoffLiveRef.current) orphanedBulkFocusRef.current = { section, button };
+    },
+    []
+  );
+  const refreshButtonRef = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    const orphan = orphanedBulkFocusRef.current;
+    if (orphan === null) return;
+    orphanedBulkFocusRef.current = null;
+    // Still connected: a StrictMode replay or an Activity hide, not a removal.
+    if (orphan.button.isConnected) return;
+    // Something else took focus during the commit; it keeps it.
+    const doc = orphan.button.ownerDocument;
+    if (doc.activeElement !== null && doc.activeElement !== doc.body) return;
+    // Staging leaves something to commit, so the message is next; unstaging
+    // leaves files to pick through, and the list is where that happens.
+    // Refresh is the one control a clean tree still has.
+    const message =
+      orphan.section === "unstaged"
+        ? rootRef.current?.querySelector<HTMLTextAreaElement>(
+            '[data-testid="review-hub-commit-message"]:not(:disabled)'
+          )
+        : null;
+    (message ?? fileListRef.current ?? refreshButtonRef.current)?.focus({ preventScroll: true });
+  });
+
   const handleReadinessCta = useCallback(
     (cta: ReviewReadinessCta) => {
       switch (cta.kind) {
@@ -1821,6 +1871,7 @@ export function ReviewHubContent({
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
+                    ref={refreshButtonRef}
                     onClick={() => {
                       if (diffMode === "base-branch") {
                         if (!baseBranchLoading) void fetchBaseBranch();
@@ -2342,13 +2393,16 @@ export function ReviewHubContent({
                               movingListFocusRef.current
                             )
                               return;
-                            if (focusedIndex < 0) {
+                            // Reconciled first: focus handed here in the commit
+                            // that moved rows finds an index from before the move.
+                            const cursorIndex = reconcileCursor();
+                            if (cursorIndex < 0) {
                               const first = navigableItems[0]!;
                               setFocusedIndex(0);
                               writeCursorKey(`${first.section}:${first.file.path}`);
                             } else {
                               fileListRef.current
-                                ?.querySelector<HTMLElement>(`[data-row-index="${focusedIndex}"]`)
+                                ?.querySelector<HTMLElement>(`[data-row-index="${cursorIndex}"]`)
                                 ?.scrollIntoView({ behavior: "instant", block: "nearest" });
                             }
                           }}
@@ -2391,6 +2445,7 @@ export function ReviewHubContent({
                                   ? handleUnstageFiltered()
                                   : handleUnstageAll());
                             }}
+                            onBulkActionFocusOrphaned={handleBulkActionFocusOrphaned}
                             viewedFiles={viewedFiles}
                             onViewedChange={handleViewedChange}
                             renderRowMenu={renderRowMenu}
@@ -2428,6 +2483,7 @@ export function ReviewHubContent({
                                   ? handleStageFiltered()
                                   : handleStageAll());
                             }}
+                            onBulkActionFocusOrphaned={handleBulkActionFocusOrphaned}
                             viewedFiles={viewedFiles}
                             onViewedChange={handleViewedChange}
                             renderRowMenu={renderRowMenu}
