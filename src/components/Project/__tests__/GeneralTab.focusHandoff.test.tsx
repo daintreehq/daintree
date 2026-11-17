@@ -99,7 +99,7 @@ describe("GeneralTab focus handoff", () => {
     render(<Harness />);
     const clear = screen.getByRole("button", { name: "Clear project color" });
     const remove = screen.getByRole("button", { name: "Remove" });
-    expect(clear.className).toContain("border");
+    expect(clear.className).toContain("ring-border-strong");
     expect(remove.className).toContain("text-status-danger-text");
   });
 });
