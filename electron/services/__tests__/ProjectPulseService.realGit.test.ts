@@ -131,3 +131,43 @@ describe("Project Pulse age across unrelated histories (#17509)", () => {
     expect(pulse.heatmap.every((cell) => !cell.isBeforeProject)).toBe(true);
   });
 });
+
+describe("Project Pulse past 20,000 commits in the window (#17455)", () => {
+  it("counts every commit git walks in a 180-day window", async () => {
+    const repo = path.join(root, "busy");
+    fs.mkdirSync(repo);
+    git(repo, null, "init", "-q", "-b", "main");
+
+    // One commit 100 days back, then 20,000 in the hours before NOW: built with
+    // fast-import because 20,001 `git commit` runs would take minutes.
+    const nowSeconds = Math.floor(NOW.getTime() / 1000);
+    const oldSeconds = nowSeconds - 100 * 86_400;
+    const stamps = [oldSeconds];
+    for (let i = 20_000; i >= 1; i--) stamps.push(nowSeconds - i);
+    const stream = stamps
+      .map((s) => `commit refs/heads/main\ncommitter T <t@example.com> ${s} +0000\ndata 0\n\n`)
+      .join("");
+    execFileSync("git", ["fast-import", "--quiet"], {
+      cwd: repo,
+      input: stream,
+      env: { PATH: process.env.PATH ?? "", HOME: home, GIT_CONFIG_NOSYSTEM: "1" },
+      stdio: ["pipe", "ignore", "ignore"],
+    });
+    expect(git(repo, null, "rev-list", "--count", "HEAD").trim()).toBe("20001");
+
+    const pulse = await new ProjectPulseService().getPulse({
+      worktreePath: repo,
+      worktreeId: "wt-busy",
+      mainBranch: "main",
+      rangeDays: 180 as const,
+      includeDelta: false,
+      includeRecentCommits: false,
+    });
+
+    expect(pulse.commitsInRange).toBe(20_001);
+    const oldCell = pulse.heatmap.find(
+      (cell) => cell.date === localDay(new Date(oldSeconds * 1000).toISOString())
+    );
+    expect(oldCell?.count).toBe(1);
+  });
+});
