@@ -1086,9 +1086,11 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
         // side effect of where the throw landed, and it lets `hasHydrated()`
         // resolve at all.
         const persisted = (persistedState ?? {}) as Partial<ToolbarPreferencesState>;
+        // A side that isn't a list falls back to its defaults, keeping the
+        // rest of the blob (pins, launcher) rather than throwing it away.
         const healed = healCrossSideDuplicates(
-          persisted.layout?.leftButtons,
-          persisted.layout?.rightButtons
+          asButtonList(persisted.layout?.leftButtons),
+          asButtonList(persisted.layout?.rightButtons)
         );
         return {
           ...currentState,

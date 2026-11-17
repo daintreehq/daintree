@@ -108,6 +108,41 @@ describe("runValidate", () => {
     ]);
   });
 
+  it("reads an id in the plugin's own namespace as its own command, even one spelled like a retired built-in", async () => {
+    const command = {
+      id: "add",
+      title: "Add",
+      description: "Add a link",
+      category: "Links",
+      kind: "command",
+      danger: "safe",
+      keywords: ["add"],
+    };
+    await writeManifest({
+      name: "portal.links",
+      version: "1.0.0",
+      contributes: {
+        commands: [command],
+        keybindings: [{ actionId: "portal.links.add", combo: "Cmd+Shift+7" }],
+      },
+    });
+    const own = await runValidate({ dir: tmpDir });
+    expect(own.ok).toBe(true);
+    expect(own.warnings.filter((w) => w.includes("no longer has"))).toEqual([]);
+
+    await writeManifest({
+      name: "portal.links",
+      version: "1.0.0",
+      contributes: {
+        commands: [command],
+        keybindings: [{ actionId: "portal.links.remove", combo: "Cmd+Shift+7" }],
+      },
+    });
+    const undeclared = await runValidate({ dir: tmpDir });
+    expect(undeclared.ok).toBe(false);
+    expect(undeclared.errors.join("\n")).toMatch(/matches no entry in contributes\.commands/);
+  });
+
   it("accepts a deprecated experimental_* alias but warns to rename it (#10466)", async () => {
     await writeManifest({
       name: "acme.demo",

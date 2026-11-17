@@ -1682,6 +1682,28 @@ describe("toolbarPreferencesStore", () => {
       }
     );
 
+    it("falls back to defaults for a saved side that isn't a list, keeping the pins", async () => {
+      const blob = (leftButtons: unknown) =>
+        JSON.stringify({
+          state: {
+            layout: { leftButtons, pinnedButtons: { "copy-tree": false } },
+            launcher: { alwaysShowDevServer: true },
+          },
+          version: 14,
+        });
+      storageMock.setItem(STORAGE_KEY, blob(undefined));
+      const without = (await loadStore()).getState();
+
+      vi.resetModules();
+      storageMock.setItem(STORAGE_KEY, blob("portal-toggle"));
+      const store = await loadStore();
+
+      expect(store.persist.hasHydrated()).toBe(true);
+      expect(store.getState().layout).toEqual(without.layout);
+      expect(store.getState().layout.pinnedButtons).toEqual({ "copy-tree": false });
+      expect(store.getState().launcher.alwaysShowDevServer).toBe(true);
+    });
+
     it("drops a hidden Portal toggle carried through the v7→v8 pin migration (#17256)", async () => {
       storageMock.setItem(
         STORAGE_KEY,
