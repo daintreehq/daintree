@@ -3,6 +3,7 @@ import { Pause, Play, RotateCcw, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { cn } from "@/lib/utils";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import type { TourPlayer } from "@daintreehq/tour";
@@ -174,11 +175,15 @@ function TimeReadout({ player }: { player: TourPlayer }) {
 
 function IconButton({
   label,
+  tooltip,
   pressed,
   onClick,
   children,
 }: {
+  /** Stable accessible name: the toggle state is carried by `aria-pressed`. */
   label: string;
+  /** What a click does now; sighted users never see `aria-pressed`. */
+  tooltip: string;
   pressed?: boolean;
   onClick: () => void;
   children: React.ReactNode;
@@ -196,7 +201,7 @@ function IconButton({
           {children}
         </Button>
       </TooltipTrigger>
-      <TooltipContent side="top">{label}</TooltipContent>
+      <TooltipContent side="top">{tooltip}</TooltipContent>
     </Tooltip>
   );
 }
@@ -269,6 +274,7 @@ export function TourControls({
       <div className="flex items-center gap-2">
         <IconButton
           label={ended ? "Replay" : "Play"}
+          tooltip={ended ? "Replay" : playing ? "Pause" : "Play"}
           pressed={ended ? undefined : playing}
           onClick={() => player.toggle()}
         >
@@ -284,11 +290,14 @@ export function TourControls({
         <span aria-hidden="true" className="text-xs">
           <FactSeparator />
         </span>
-        <h3 className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
-          {chapter.title}
-        </h3>
+        <TruncatedTooltip content={chapter.title} side="top">
+          <h3 className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
+            {chapter.title}
+          </h3>
+        </TruncatedTooltip>
         <IconButton
           label="Mute narration"
+          tooltip={state.muted ? "Unmute narration" : "Mute narration"}
           pressed={state.muted}
           onClick={() => {
             player.setMuted(!state.muted);
