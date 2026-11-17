@@ -509,7 +509,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
   actions.set("git.abortRepositoryOperation", () => ({
     id: "git.abortRepositoryOperation",
     title: "Abort Git operation",
-    description: "Abort the merge, rebase, cherry-pick, revert, or git am this worktree is halted on",
+    description:
+      "Abort the merge, rebase, cherry-pick, revert, or git am this worktree is halted on",
     category: "git",
     kind: "command",
     danger: "confirm",

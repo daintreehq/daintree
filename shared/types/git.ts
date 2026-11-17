@@ -125,13 +125,7 @@ export interface StagingFileEntry {
  * rebase and is told apart by the `applying` file git writes inside it.
  */
 export type RepoState =
-  | "CLEAN"
-  | "DIRTY"
-  | "MERGING"
-  | "REBASING"
-  | "CHERRY_PICKING"
-  | "REVERTING"
-  | "APPLYING_MAILBOX";
+  "CLEAN" | "DIRTY" | "MERGING" | "REBASING" | "CHERRY_PICKING" | "REVERTING" | "APPLYING_MAILBOX";
 
 /**
  * Why a worktree's git status read ended without an answer. `timed-out`: git

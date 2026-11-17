@@ -73,8 +73,7 @@ export function isRepoOperationInProgress(gitDir: string): boolean {
 export function getRepoOperationStateSync(gitDir: string): RepoState | undefined {
   const entries = readGitDirEntries(gitDir);
   if (!entries) return undefined;
-  const mailbox =
-    entries.has("rebase-apply") && existsSync(pathJoin(gitDir, MAILBOX_APPLY_MARKER));
+  const mailbox = entries.has("rebase-apply") && existsSync(pathJoin(gitDir, MAILBOX_APPLY_MARKER));
   return classifyRepoOperationState(entries, mailbox);
 }
 
@@ -113,10 +112,7 @@ export function getRepoOperationState(gitDir: string): Promise<RepoState | undef
 
 const inFlightOperationStateReads = new Map<string, Promise<RepoState | undefined>>();
 
-function classifyRepoOperationState(
-  entries: Set<string>,
-  mailbox: boolean
-): RepoState | undefined {
+function classifyRepoOperationState(entries: Set<string>, mailbox: boolean): RepoState | undefined {
   if (mailbox) {
     return "APPLYING_MAILBOX";
   }
