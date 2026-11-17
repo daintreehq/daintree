@@ -45,6 +45,7 @@ import {
 } from "./GitHubQueries.js";
 import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
 import {
+  cacheOwner,
   forgeIssueListCache,
   forgePRListCache,
   getIssueCommentsEpoch,
@@ -221,7 +222,7 @@ function uniquePositiveIntegers(values: number[]): number[] {
 }
 
 function buildNumberBatchInflightKey(repo: RepoRef, numbers: number[]): string {
-  return `${repo.owner}/${repo.repo}:${[...numbers].sort((a, b) => a - b).join(",")}`;
+  return `${cacheOwner(repo)}/${repo.repo}:${[...numbers].sort((a, b) => a - b).join(",")}`;
 }
 
 /**
@@ -255,10 +256,11 @@ async function searchIssuesImpl(
   const prefix = `repo:${repo.owner}/${repo.repo} is:issue${stateQualifier} ${sortQualifier} `;
   const available = 256 - prefix.length;
   const searchQuery = `${prefix}${available > 0 ? search.slice(0, available) : ""}`.trim();
-  const dedupeKey = `search:${searchQuery}:${cursor ?? ""}:${limit}`;
+  const dedupeKey = `search:${repo.host}:${searchQuery}:${cursor ?? ""}:${limit}`;
 
   return dedupe(listIssuesInflight, dedupeKey, bypass, async () => {
     const response = await runQuery(
+      repo.host,
       SEARCH_QUERY,
       {
         searchQuery,
@@ -329,7 +331,7 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
   // routes through `searchIssuesImpl` above and never touches this cache.
   const cacheKey = buildListCacheKey({
     type: "issue",
-    owner: repo.owner,
+    owner: cacheOwner(repo),
     repo: repo.repo,
     state,
     search: "",
@@ -350,10 +352,11 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
     // Captured before the network call: if the count-as-cache-buster bumps
     // the epoch mid-flight, this page predates the observed change and must
     // not repopulate the just-busted cache.
-    const epochAtStart = getRepoListEpoch("issue", repo.owner, repo.repo);
+    const epochAtStart = getRepoListEpoch("issue", cacheOwner(repo), repo.repo);
     const readAt = issueReadStamp();
 
     const response = await runQuery(
+      repo.host,
       LIST_ISSUES_QUERY,
       {
         owner: repo.owner,
@@ -390,7 +393,7 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
     // Skip the shared-cache write when a newer bypass call has superseded us
     // or the count buster invalidated this repo's issue pages mid-flight, so
     // a slow stale fetch can't clobber the fresher committed result.
-    if (isCurrent() && getRepoListEpoch("issue", repo.owner, repo.repo) === epochAtStart) {
+    if (isCurrent() && getRepoListEpoch("issue", cacheOwner(repo), repo.repo) === epochAtStart) {
       forgeIssueListCache.set(cacheKey, page);
     }
     // The open total is held on its own terms: the ledger orders it by when
@@ -398,7 +401,7 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
     // an unconfirmed REST delta must not swallow it (#16866).
     const openTotal = state === "open" && !cursor ? openTotalOf(issues) : undefined;
     if (openTotal !== undefined) {
-      updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "issue", openTotal, readAt);
+      updateRepoStatsCount(`${cacheOwner(repo)}/${repo.repo}`, "issue", openTotal, readAt);
     }
     return page;
   });
@@ -530,10 +533,11 @@ async function searchPRsImpl(repo: RepoRef, search: string, opts: ListOptions): 
   const prefix = `repo:${repo.owner}/${repo.repo} is:pr${stateQualifier} ${sortQualifier} `;
   const available = 256 - prefix.length;
   const searchQuery = `${prefix}${available > 0 ? search.slice(0, available) : ""}`.trim();
-  const dedupeKey = `search:${searchQuery}:${cursor ?? ""}:${limit}`;
+  const dedupeKey = `search:${repo.host}:${searchQuery}:${cursor ?? ""}:${limit}`;
 
   return dedupe(listPRsInflight, dedupeKey, bypass, async () => {
     const response = await runQuery(
+      repo.host,
       SEARCH_QUERY,
       {
         searchQuery,
@@ -591,7 +595,7 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
   // routes through `searchPRsImpl` above and never touches this cache.
   const cacheKey = buildListCacheKey({
     type: "pr",
-    owner: repo.owner,
+    owner: cacheOwner(repo),
     repo: repo.repo,
     state,
     search: "",
@@ -610,10 +614,11 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
   return dedupe(listPRsInflight, cacheKey, bypass, async (isCurrent) => {
     const orderBy = buildOrderBy(sortOrder, direction);
     // Same mid-flight count-buster guard as the issues list above.
-    const epochAtStart = getRepoListEpoch("pr", repo.owner, repo.repo);
+    const epochAtStart = getRepoListEpoch("pr", cacheOwner(repo), repo.repo);
     const readAt = issueReadStamp();
 
     const response = await runQuery(
+      repo.host,
       LIST_PRS_QUERY,
       {
         owner: repo.owner,
@@ -650,21 +655,22 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
       source: "network",
     };
 
-    if (isCurrent() && getRepoListEpoch("pr", repo.owner, repo.repo) === epochAtStart) {
+    if (isCurrent() && getRepoListEpoch("pr", cacheOwner(repo), repo.repo) === epochAtStart) {
       forgePRListCache.set(cacheKey, page);
     }
     const openTotal = state === "open" && !cursor ? openTotalOf(prs) : undefined;
     if (openTotal !== undefined) {
-      updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "pr", openTotal, readAt);
+      updateRepoStatsCount(`${cacheOwner(repo)}/${repo.repo}`, "pr", openTotal, readAt);
     }
     return page;
   });
 }
 
 export async function getIssueImpl(repo: RepoRef, number: number): Promise<Issue | null> {
-  const key = `${repo.owner}/${repo.repo}:${number}`;
+  const key = `${cacheOwner(repo)}/${repo.repo}:${number}`;
   return dedupe(getIssueInflight, key, false, async () => {
     const response = await runQuery(
+      repo.host,
       GET_ISSUE_QUERY,
       {
         owner: repo.owner,
@@ -691,12 +697,13 @@ export async function getPRImpl(
   options?: FetchOptions
 ): Promise<PR | null> {
   const fresh = options?.fresh === true;
-  const key = `${repo.owner}/${repo.repo}:${number}`;
+  const key = `${cacheOwner(repo)}/${repo.repo}:${number}`;
   // A fresh read never joins one already in flight: that one may predate a
   // write the caller is about to preview against.
   return dedupe(getPRInflight, key, fresh, async () => {
     const requestedAt = Date.now();
     const response = await runQuery(
+      repo.host,
       GET_PR_QUERY,
       {
         owner: repo.owner,
@@ -713,7 +720,7 @@ export async function getPRImpl(
     // Side-effect tooltip pre-warm (write-through only); guarded by the
     // ownership-token timestamp so a slow response can't clobber a fresher one.
     const tooltip = prToTooltipData(forgePR);
-    if (tooltip) writePRTooltip(repo.owner, repo.repo, number, tooltip, requestedAt);
+    if (tooltip) writePRTooltip(cacheOwner(repo), repo.repo, number, tooltip, requestedAt);
     return forgePR;
   });
 }
@@ -738,7 +745,7 @@ export async function findPRsByBranchesImpl(
   // Coalesce concurrent fleet-wide sweeps requesting the same branch set
   // (order-independent) into one round-trip. The result Map preserves each
   // caller's branch keys regardless of the sorted key used for coalescing.
-  const inflightKey = `${repo.owner}/${repo.repo}:${[...unique].sort().join(",")}`;
+  const inflightKey = `${cacheOwner(repo)}/${repo.repo}:${[...unique].sort().join(",")}`;
   return dedupe(findPRsByBranchesInflight, inflightKey, false, async () => {
     const result = new Map<string, PR | null>();
 
@@ -757,7 +764,7 @@ export async function findPRsByBranchesImpl(
       const query = buildBatchBranchPRQuery(repo.owner, repo.repo, chunk);
       let response: Record<string, unknown>;
       try {
-        response = (await runQuery(query, {}, "BATCH_BRANCH_PR_QUERY")) as Record<string, unknown>;
+        response = (await runQuery(repo.host, query, {}, "BATCH_BRANCH_PR_QUERY")) as Record<string, unknown>;
       } catch {
         // Omit this chunk's branches from the result — caller's missing-key
         // fallback path handles them.
@@ -783,7 +790,7 @@ export async function findPRsByBranchesImpl(
         // warmed entry is complete (not a partial that a later hover refetches).
         if (forgePR) {
           const tooltip = prToTooltipData(forgePR);
-          if (tooltip) writePRTooltip(repo.owner, repo.repo, forgePR.number, tooltip, requestedAt);
+          if (tooltip) writePRTooltip(cacheOwner(repo), repo.repo, forgePR.number, tooltip, requestedAt);
         }
       }
     }
@@ -799,6 +806,7 @@ export async function findPRByBranchImpl(repo: RepoRef, branchName: string): Pro
   const escapedBranch = branchName.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   const searchQuery = `repo:${repo.owner}/${repo.repo} is:pr head:"${escapedBranch}" sort:created-desc`;
   const response = await runQuery(
+    repo.host,
     SEARCH_QUERY,
     {
       searchQuery,
@@ -839,7 +847,7 @@ export async function findPRsByNumbersImpl(
 
       let response: GraphQlQueryResponseData;
       try {
-        response = await runQuery(query, {}, "BATCH_PRS_QUERY", fresh);
+        response = await runQuery(repo.host, query, {}, "BATCH_PRS_QUERY", fresh);
       } catch {
         // Omit this chunk so callers treat it as transient and keep stale data.
         continue;
@@ -857,7 +865,7 @@ export async function findPRsByNumbersImpl(
 
         if (forgePR) {
           const tooltip = prToTooltipData(forgePR);
-          if (tooltip) writePRTooltip(repo.owner, repo.repo, forgePR.number, tooltip, requestedAt);
+          if (tooltip) writePRTooltip(cacheOwner(repo), repo.repo, forgePR.number, tooltip, requestedAt);
         }
       }
     }
@@ -916,7 +924,7 @@ export async function findReferencesByNumbersImpl(
 
     let repository: Record<string, unknown> | null;
     try {
-      const response = await runQuery(query, {}, "BATCH_REFERENCES_QUERY");
+      const response = await runQuery(repo.host, query, {}, "BATCH_REFERENCES_QUERY");
       repository = (response?.repository as Record<string, unknown> | undefined) ?? null;
     } catch (error) {
       repository = repositoryDespiteMissingNumbers(error, new Set(chunk.map((n) => `r${n}`)));
@@ -952,7 +960,7 @@ export async function getCIStatusesImpl(
     const missing: number[] = [];
 
     for (const prNumber of unique) {
-      const cacheKey = `${repo.owner}/${repo.repo}:${prNumber}`;
+      const cacheKey = `${cacheOwner(repo)}/${repo.repo}:${prNumber}`;
       const cached = getPRRequiredStatusForCurrentHead(cacheKey);
       if (cached) {
         result.set(prNumber, buildCIStatus(cached, null));
@@ -977,7 +985,7 @@ export async function getCIStatusesImpl(
       // rejected as stale.
       let response: GraphQlQueryResponseData;
       try {
-        response = await runQuery(query, {}, "BATCH_REQUIRED_CHECKS_QUERY", true);
+        response = await runQuery(repo.host, query, {}, "BATCH_REQUIRED_CHECKS_QUERY", true);
       } catch {
         // Omit this chunk so callers treat it as transient and retry later.
         continue;
@@ -997,7 +1005,7 @@ export async function getCIStatusesImpl(
           ciStatus: undefined,
           ciSummary: undefined,
         };
-        const cacheKey = `${repo.owner}/${repo.repo}:${prNumber}`;
+        const cacheKey = `${cacheOwner(repo)}/${repo.repo}:${prNumber}`;
         prRequiredStatusCache.set(cacheKey, entry);
         // GitHub can still answer for the previous head seconds after a push.
         // Omitted rather than returned: per the batch contract that is a
@@ -1017,7 +1025,7 @@ export async function getCIStatusImpl(repo: RepoRef, prNumber: number): Promise<
   // and {@link PRRequiredStatusEntry} value). This is the hottest forge path —
   // the worktree dashboard polls CI per open PR across every view — so the
   // cache + single-flight collapse the fan-out to one request per PR per 60s.
-  const cacheKey = `${repo.owner}/${repo.repo}:${prNumber}`;
+  const cacheKey = `${cacheOwner(repo)}/${repo.repo}:${prNumber}`;
   const cached = getPRRequiredStatusForCurrentHead(cacheKey);
   if (cached) return buildCIStatus(cached, null);
 
@@ -1077,7 +1085,7 @@ async function fetchCIRollupPage(
   let response: GraphQlQueryResponseData;
   let recoveredFrom: unknown = null;
   try {
-    response = await runQuery(PR_CI_STATUS_QUERY, variables, "PR_CI_STATUS_QUERY", true);
+    response = await runQuery(repo.host, PR_CI_STATUS_QUERY, variables, "PR_CI_STATUS_QUERY", true);
   } catch (error) {
     const partial = withIdentity ? workflowRunOnlyPartialData(error) : null;
     if (!partial) throw error;
@@ -1202,7 +1210,7 @@ export async function getChecksImpl(
   repo: RepoRef,
   prNumber: number
 ): Promise<{ checks: CheckRun[] } | null> {
-  const inflightKey = `${repo.owner}/${repo.repo}:${prNumber}`;
+  const inflightKey = `${cacheOwner(repo)}/${repo.repo}:${prNumber}`;
   return dedupe(getChecksInflight, inflightKey, false, async () => {
     const incomplete = (why: string): Error =>
       new Error(`Could not read all checks for PR #${prNumber}: ${why}`);
@@ -1424,14 +1432,14 @@ export async function probeOpenPRListImpl(
   repo: RepoRef,
   tracked: PRSnapshot[]
 ): Promise<PRListProbeResult> {
-  const token = GitHubAuth.getToken();
+  const token = GitHubAuth.getToken(repo.host);
   // No token → the conditional GET can't be made; let the caller revalidate
   // through its normal (also token-gated) path rather than claim "unchanged".
   if (!token) return { kind: "fallback" };
-  const result = await probeOpenPRList(repo.owner, repo.repo, token, tracked);
+  const result = await probeOpenPRList(repo, token, tracked);
   if (result.kind === "changed") {
     for (const snap of result.changed) {
-      recordObservedPRHead(`${repo.owner}/${repo.repo}:${snap.number}`, snap.headSha);
+      recordObservedPRHead(`${cacheOwner(repo)}/${repo.repo}:${snap.number}`, snap.headSha);
     }
   }
   return result;
@@ -1439,6 +1447,7 @@ export async function probeOpenPRListImpl(
 
 export async function getRepoMetadataImpl(repo: RepoRef): Promise<RepoMetadata> {
   const response = await runQuery(
+    repo.host,
     REPO_METADATA_QUERY,
     {
       owner: repo.owner,
@@ -1503,6 +1512,7 @@ export async function getReviewThreadsImpl(
   let pageCount = 0;
   while (true) {
     const response = await runQuery(
+      repo.host,
       GET_PR_REVIEW_THREADS_QUERY,
       {
         owner: repo.owner,
@@ -1588,17 +1598,18 @@ export async function listIssueCommentsImpl(
   // as `null` keeps it from colliding with the real first page's dedupe slot.
   const cursor = opts.cursor?.trim() ? opts.cursor : null;
   const dedupeKey = JSON.stringify([
-    GitHubAuth.getTokenVersion(),
-    repo.owner,
+    GitHubAuth.getTokenVersion(repo.host),
+    cacheOwner(repo),
     repo.repo,
     issueNumber,
-    getIssueCommentsEpoch(repo.owner, repo.repo),
+    getIssueCommentsEpoch(cacheOwner(repo), repo.repo),
     cursor,
     limit,
   ]);
 
   return dedupe(listIssueCommentsInflight, dedupeKey, bypass, async () => {
     const response = await runQuery(
+      repo.host,
       LIST_ISSUE_COMMENTS_QUERY,
       { owner: repo.owner, repo: repo.repo, number: issueNumber, cursor, limit },
       "LIST_ISSUE_COMMENTS_QUERY",
@@ -1674,7 +1685,7 @@ export async function findIssuesByNumbersImpl(
   issueNumbers: number[]
 ): Promise<Map<number, Issue | null>> {
   const items = await getIssuesByNumbersForContext(
-    { owner: repo.owner, repo: repo.repo },
+    { host: repo.host, owner: repo.owner, repo: repo.repo },
     issueNumbers
   );
   const result = new Map<number, Issue | null>();

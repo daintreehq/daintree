@@ -138,7 +138,7 @@ export interface ShouldBlockResult {
 
 type StateChangeListener = (state: GitHubRateLimitPayload) => void;
 
-class GitHubRateLimitServiceImpl {
+export class GitHubRateLimitServiceImpl {
   private readonly states = new Map<string, BlockState>();
   private readonly listeners = new Set<StateChangeListener>();
   // Consecutive secondary-limit hits since the last `clear()` or 2xx response.
@@ -331,6 +331,9 @@ class GitHubRateLimitServiceImpl {
 
     const cost = typeof rateLimit.cost === "number" ? rateLimit.cost : null;
     const limit = typeof rateLimit.limit === "number" ? rateLimit.limit : null;
+    // A window with no limit describes no budget: an Enterprise Server with
+    // rate limiting turned off. Its `remaining: 0` is not an exhausted quota.
+    if (limit !== null && limit <= 0) return;
 
     if (queryLabel && cost !== null) {
       this._logGraphQLCost(queryLabel, cost, remaining, limit);
@@ -716,4 +719,32 @@ export class GitHubRateLimitError extends Error {
   }
 }
 
+/** github.com's breaker, the one the host's rate-limit surfaces report. */
 export const gitHubRateLimitService = new GitHubRateLimitServiceImpl();
+
+/**
+ * Each GitHub Enterprise Server host gets a breaker of its own: its quota (or
+ * none, when the server turns rate limiting off) has nothing to do with
+ * github.com's, so a block on one must never stop requests to the other.
+ */
+const enterpriseRateLimitServices = new Map<string, GitHubRateLimitServiceImpl>();
+
+export function rateLimitServiceForHost(host: string): GitHubRateLimitServiceImpl {
+  const normalized = host.toLowerCase();
+  if (normalized === "github.com") return gitHubRateLimitService;
+  let service = enterpriseRateLimitServices.get(normalized);
+  if (!service) {
+    service = new GitHubRateLimitServiceImpl();
+    enterpriseRateLimitServices.set(normalized, service);
+  }
+  return service;
+}
+
+/** Drop a retired enterprise host's breaker, with its timers. */
+export function releaseRateLimitServiceForHost(host: string): void {
+  const normalized = host.toLowerCase();
+  const service = enterpriseRateLimitServices.get(normalized);
+  if (!service) return;
+  service.clear();
+  enterpriseRateLimitServices.delete(normalized);
+}

@@ -8,6 +8,7 @@ import type {
   PluginProtocolAuthority,
   ViewContribution,
   PluginHostBinding,
+  PluginManifest,
 } from "../../../shared/types/plugin.js";
 import type { PluginContributionBroadcaster } from "./PluginContributionBroadcaster.js";
 import {
@@ -87,6 +88,7 @@ import {
 } from "../WhenClauseService.js";
 import {
   registerForgeProviders,
+  setForgeProviderSettingMatch,
   unregisterForgeProviderImpls,
   unregisterForgeProviders,
 } from "../forgeProviderRegistry.js";
@@ -248,6 +250,15 @@ export interface PluginContributionRegistrarDeps {
   pluginDataDir: (pluginId: string) => string;
   publishProjectSurfaces: (projectIds: Iterable<string>) => void;
   themesChanged: (pluginId: string, change: PluginThemeChange) => void;
+  /**
+   * The stored user-scope value of one of the plugin's declared settings, or
+   * its declared default. Read for a forge provider's `matchesSettingRef`.
+   */
+  readUserSetting: (
+    pluginId: string,
+    key: string,
+    manifest: Readonly<PluginManifest>
+  ) => Promise<unknown>;
 }
 
 /**
@@ -257,7 +268,58 @@ export interface PluginContributionRegistrarDeps {
  * two load phases — stays with `PluginService`, which calls in at each step.
  */
 export class PluginContributionRegistrar {
+  /** Latest refresh per plugin, so a slow read can't land after a newer one. */
+  private readonly forgeSettingMatchReads = new Map<string, number>();
+
   constructor(private readonly deps: PluginContributionRegistrarDeps) {}
+
+  /**
+   * Each forge provider's `matchesSettingRef` hostname, by contribution id. A
+   * setting that can't be read routes nothing extra rather than failing the
+   * load: the provider still matches its manifest hostnames.
+   */
+  private async readForgeSettingMatches(
+    pluginId: string,
+    manifest: Readonly<PluginManifest>
+  ): Promise<Map<string, string | null>> {
+    const result = new Map<string, string | null>();
+    await Promise.all(
+      manifest.contributes.forgeProviders.map(async (contribution) => {
+        const key = contribution.matchesSettingRef;
+        if (!key) return;
+        let value: unknown;
+        try {
+          value = await this.deps.readUserSetting(pluginId, key, manifest);
+        } catch {
+          value = undefined;
+        }
+        result.set(contribution.id, typeof value === "string" ? value : null);
+      })
+    );
+    return result;
+  }
+
+  /**
+   * Re-read the settings behind a loaded plugin's setting-backed forge
+   * hostnames after one of its settings changed. Free for a plugin whose forge
+   * providers declare none.
+   */
+  async refreshForgeSettingMatches(pluginId: string): Promise<void> {
+    const plugin = this.deps.getLoadedPlugin(pluginId);
+    if (!plugin) return;
+    if (!plugin.manifest.contributes.forgeProviders.some((c) => c.matchesSettingRef)) return;
+    const read = (this.forgeSettingMatchReads.get(pluginId) ?? 0) + 1;
+    this.forgeSettingMatchReads.set(pluginId, read);
+    const matches = await this.readForgeSettingMatches(pluginId, plugin.manifest);
+    if (this.forgeSettingMatchReads.get(pluginId) !== read) return;
+    if (!this.deps.isCurrent(pluginId, plugin)) return;
+    for (const [contributionId, hostname] of matches) {
+      setForgeProviderSettingMatch(pluginId, contributionId, hostname);
+    }
+    // Same wake-up as a fresh registration: a workspace whose PR polling found
+    // no provider for its remote re-resolves against the new hostname.
+    this.deps.getWorkspaceClient()?.notifyForgeProviderRegistryUpdated();
+  }
 
   /**
    * The registrations that may await (custom icons, skills, themes) and those
@@ -483,8 +545,14 @@ export class PluginContributionRegistrar {
     // keeps idle plugins from holding live subprocesses they never use.
 
     if (manifest.contributes.forgeProviders.length > 0) {
+      // Read before registering, so a remote on a setting-named host routes
+      // from the first lookup, before the (lazy) plugin has ever activated.
+      const settingMatches = manifest.contributes.forgeProviders.some((c) => c.matchesSettingRef)
+        ? await this.readForgeSettingMatches(pluginId, manifest)
+        : undefined;
       registerForgeProviders(pluginId, manifest.contributes.forgeProviders, {
         builtin: plugin.isBuiltin,
+        settingMatches,
       });
       // Wake workspace-hosts whose PR polling paused on a "no provider
       // matches" resolution so they re-evaluate against the new descriptor
@@ -1296,7 +1364,11 @@ export class PluginContributionRegistrar {
     runUnloadStep(pluginId, "unregisterElementPickerProviders", () =>
       unregisterElementPickerProviders(pluginId)
     );
-    runUnloadStep(pluginId, "unregisterForgeProviders", () => unregisterForgeProviders(pluginId));
+    runUnloadStep(pluginId, "unregisterForgeProviders", () => {
+      // A setting read still in flight belongs to the instance going away.
+      this.forgeSettingMatchReads.delete(pluginId);
+      unregisterForgeProviders(pluginId);
+    });
     runUnloadStep(pluginId, "unregisterForgeProviderImpls", () =>
       unregisterForgeProviderImpls(pluginId)
     );

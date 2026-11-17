@@ -24,6 +24,18 @@ import type {
   Page,
 } from "../../../../shared/types/forge.js";
 
+/**
+ * The owner segment every repository cache key is built from: the bare owner
+ * on github.com, `host/owner` on an Enterprise Server. A key keeps its
+ * `owner/repo` shape either way (repository names can't hold a `/`), so the
+ * same `team/app` on both hosts never shares an entry, and github.com keys are
+ * what they always were.
+ */
+export function cacheOwner(repo: { host: string; owner: string }): string {
+  const host = repo.host.toLowerCase();
+  return host === "github.com" ? repo.owner : `${host}/${repo.owner}`;
+}
+
 export const repoContextCache = new Cache<string, RepoContext>({ maxSize: 20, defaultTTL: 300000 });
 export const repoStatsCache = new Cache<string, RepoStats>({ maxSize: 20, defaultTTL: 60000 });
 export const issueListCache = new Cache<string, GitHubListResponse<GitHubIssue>>({

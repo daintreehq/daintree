@@ -31,8 +31,11 @@ import { cloneCapability } from "./GitHubClone.js";
 import { credentialImportCapability } from "./GitHubCliCredential.js";
 import { validateGitHubToken } from "./GitHubToken.js";
 import { parseGitHubRepoUrl } from "./GitHubRepoContext.js";
-import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
-import { clearPRCaches, repoEventsETagCache } from "./GitHubCaches.js";
+import { gitHubRateLimitService, rateLimitServiceForHost } from "./GitHubRateLimitService.js";
+import { cacheOwner, clearPRCaches, repoEventsETagCache } from "./GitHubCaches.js";
+import { githubWebBase } from "./GitHubHost.js";
+import { missingTokenMessage } from "./queryInfra.js";
+import type { RepoContext } from "./types.js";
 import {
   fetchActivityProbe,
   getFirstPageCacheForContext,
@@ -135,20 +138,24 @@ const identityCapability: IdentityCapability = {
   },
 };
 
+function toContext(repo: RepoRef): RepoContext {
+  return { host: repo.host, owner: repo.owner, repo: repo.repo };
+}
+
 // Tooltip lookups route through the context-variant cores (dedicated
 // short-TTL tooltip caches + per-number singleflight). Tooltips are
 // best-effort by contract, so every failure collapses to `null` here.
 const tooltipCapability: TooltipCapability = {
   async getIssueTooltip(repo: RepoRef, issueNumber: number): Promise<IssueTooltipData | null> {
     try {
-      return await getIssueTooltipForContext({ owner: repo.owner, repo: repo.repo }, issueNumber);
+      return await getIssueTooltipForContext(toContext(repo), issueNumber);
     } catch {
       return null;
     }
   },
   async getPRTooltip(repo: RepoRef, prNumber: number): Promise<PRTooltipData | null> {
     try {
-      return await getPRTooltipForContext({ owner: repo.owner, repo: repo.repo }, prNumber);
+      return await getPRTooltipForContext(toContext(repo), prNumber);
     } catch {
       return null;
     }
@@ -161,8 +168,8 @@ const tooltipCapability: TooltipCapability = {
  * block is active. Local-git facts (commit count) are deliberately absent —
  * the host computes those itself.
  */
-function toForgeRepoCounts(result: RepoStatsAndPageResult): ForgeRepoCounts {
-  const rateLimitState = gitHubRateLimitService.getState();
+function toForgeRepoCounts(result: RepoStatsAndPageResult, host: string): ForgeRepoCounts {
+  const rateLimitState = rateLimitServiceForHost(host).getState();
   return {
     issueCount: result.stats?.issueCount ?? null,
     prCount: result.stats?.prCount ?? null,
@@ -193,11 +200,11 @@ function toStatsPage<TIn, TOut>(
 const repoStatsCapability: RepoStatsCapability = {
   async getRepoStats(repo: RepoRef, opts?: { bypassCache?: boolean }): Promise<RepoStatsSnapshot> {
     const result = await getRepoStatsAndPageForContext(
-      { owner: repo.owner, repo: repo.repo },
+      toContext(repo),
       { bypassCache: opts?.bypassCache === true }
     );
     return {
-      counts: toForgeRepoCounts(result),
+      counts: toForgeRepoCounts(result, repo.host),
       issues: result.issues ? toStatsPage(result.issues, gitHubIssueToForgeIssue) : null,
       prs: result.prs ? toStatsPage(result.prs, gitHubPRToForgePR) : null,
       source: result.source,
@@ -205,7 +212,7 @@ const repoStatsCapability: RepoStatsCapability = {
   },
 
   async getFirstPageCache(repo: RepoRef): Promise<FirstPageSnapshot | null> {
-    const payload = await getFirstPageCacheForContext({ owner: repo.owner, repo: repo.repo });
+    const payload = await getFirstPageCacheForContext(toContext(repo));
     if (!payload) return null;
     return {
       issues: toStatsPage(payload.issues, gitHubIssueToForgeIssue),
@@ -222,7 +229,7 @@ const projectHealthCapability: ProjectHealthCapability = {
     opts?: { bypassCache?: boolean }
   ): Promise<{ health: ProjectHealthSnapshot | null; error?: string }> {
     const result = await getProjectHealthForContext(
-      { owner: repo.owner, repo: repo.repo },
+      toContext(repo),
       { bypassCache: opts?.bypassCache === true }
     );
     if (!result.health) {
@@ -339,7 +346,7 @@ export const githubForgeProvider: ForgeProviderImpl = {
     const parsed = parseGitHubRepoUrl(url);
     if (!parsed) return null;
     return {
-      host: "github.com",
+      host: parsed.host,
       owner: parsed.owner,
       repo: parsed.repo,
       rawData: { url },
@@ -363,11 +370,11 @@ export const githubForgeProvider: ForgeProviderImpl = {
   getRepoMetadata: getRepoMetadataImpl,
 
   buildIssueUrl(repo: RepoRef, number: number): string {
-    return `https://github.com/${repo.owner}/${repo.repo}/issues/${number}`;
+    return `${githubWebBase(repo.host)}/${repo.owner}/${repo.repo}/issues/${number}`;
   },
 
   buildPRUrl(repo: RepoRef, number: number): string {
-    return `https://github.com/${repo.owner}/${repo.repo}/pull/${number}`;
+    return `${githubWebBase(repo.host)}/${repo.owner}/${repo.repo}/pull/${number}`;
   },
 
   // GitHub's bare `/issues` list already scopes to `is:issue is:open`, so the
@@ -378,7 +385,7 @@ export const githubForgeProvider: ForgeProviderImpl = {
   // have no bare-URL equivalent, so they stay as `q` qualifiers even without a
   // query (#9986).
   buildIssuesUrl(repo: RepoRef, options?: { query?: string; state?: string }): string {
-    const base = `https://github.com/${repo.owner}/${repo.repo}/issues`;
+    const base = `${githubWebBase(repo.host)}/${repo.owner}/${repo.repo}/issues`;
     const query = options?.query;
     const state = options?.state;
     const qParts: string[] = [];
@@ -392,7 +399,7 @@ export const githubForgeProvider: ForgeProviderImpl = {
   // Mirrors buildIssuesUrl with the `is:pr` type qualifier; bare `/pulls`
   // already scopes to `is:pr is:open`. See buildIssuesUrl for the rationale.
   buildPRsUrl(repo: RepoRef, options?: { query?: string; state?: string }): string {
-    const base = `https://github.com/${repo.owner}/${repo.repo}/pulls`;
+    const base = `${githubWebBase(repo.host)}/${repo.owner}/${repo.repo}/pulls`;
     const query = options?.query;
     const state = options?.state;
     const qParts: string[] = [];
@@ -404,19 +411,19 @@ export const githubForgeProvider: ForgeProviderImpl = {
   },
 
   buildCommitsUrl(repo: RepoRef, branch?: string): string {
-    const base = `https://github.com/${repo.owner}/${repo.repo}/commits`;
+    const base = `${githubWebBase(repo.host)}/${repo.owner}/${repo.repo}/commits`;
     return branch ? `${base}/${encodeURIComponent(branch)}` : base;
   },
 
   buildRepoUrl(repo: RepoRef): string {
-    return `https://github.com/${repo.owner}/${repo.repo}`;
+    return `${githubWebBase(repo.host)}/${repo.owner}/${repo.repo}`;
   },
 
   // Each ref is encoded on its own so the `...` separator stays literal, and a
   // `#` or `%` in a branch name can't end or corrupt the path.
   buildNewPRUrl(repo: RepoRef, refs: { base: string; head: string }): string {
     const range = `${encodeURIComponent(refs.base)}...${encodeURIComponent(refs.head)}`;
-    return `https://github.com/${repo.owner}/${repo.repo}/compare/${range}?expand=1`;
+    return `${githubWebBase(repo.host)}/${repo.owner}/${repo.repo}/compare/${range}?expand=1`;
   },
 
   // GitHub's `Files changed` view deep-links to a specific file via a
@@ -428,7 +435,7 @@ export const githubForgeProvider: ForgeProviderImpl = {
   // anchor to the current diff on the PR's "Files changed" tab.
   buildPRFileUrl(repo: RepoRef, number: number, path: string): string {
     const hash = createHash("sha256").update(path, "utf8").digest("hex");
-    return `https://github.com/${repo.owner}/${repo.repo}/pull/${number}/files#diff-${hash}`;
+    return `${githubWebBase(repo.host)}/${repo.owner}/${repo.repo}/pull/${number}/files#diff-${hash}`;
   },
 
   createIssue: createIssueImpl,
@@ -464,12 +471,12 @@ export const githubForgeProvider: ForgeProviderImpl = {
   },
 
   async getRepoActivityProbe(repo: RepoRef): Promise<{ freshnessToken: string }> {
-    const token = GitHubAuth.getToken();
+    const token = GitHubAuth.getToken(repo.host);
     if (!token) {
-      throw new Error("GitHub token not configured");
+      throw new Error(missingTokenMessage(repo.host));
     }
-    const probe = await fetchActivityProbe(token, repo.owner, repo.repo);
-    const cacheKey = `${repo.owner}/${repo.repo}`;
+    const probe = await fetchActivityProbe(token, toContext(repo));
+    const cacheKey = `${cacheOwner(repo)}/${repo.repo}`;
     // The REST events probe returns either a fresh ETag (`changed`) or signals
     // "nothing new since the cached ETag" (`unchanged`); either way the latest
     // ETag is what the host should byte-compare. On `unknown` the probe has no
