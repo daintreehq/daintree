@@ -1,11 +1,15 @@
 import {
+  CLOUD_PROVISIONING_DIMENSIONS,
   isCloudProviderId,
   isValidCloudBindingId,
   type CloudAccountValidation,
   type CloudBillingScope,
   type CloudHostCreatedFor,
   type CloudHostError,
+  type CloudHostProvisioning,
   type CloudProviderId,
+  type CloudProvisioningPick,
+  type CloudProvisioningSelection,
 } from "../../../shared/types/cloudHosts.js";
 import { isValidRemoteHostId, type HostId } from "../../../shared/types/remoteHosts.js";
 
@@ -31,6 +35,8 @@ export interface StoredCloudAccount {
   keyHint: string | null;
   addedAt: number;
   validation: CloudAccountValidation;
+  /** What this account's last create named, offered first next time; null before its first. */
+  lastProvisioning: CloudProvisioningSelection | null;
 }
 
 /** A create that may have reached the provider: kept until its outcome is known. */
@@ -78,6 +84,12 @@ export interface StoredCloudBinding {
   ownership: "created-by-daintree" | "imported";
   /** The worktree this machine was created for; kept after its create is settled. */
   createdFor: CloudHostCreatedFor | null;
+  /**
+   * The region, image and network its create named, kept after the create
+   * is settled: every retry sends these, and the host's details show them.
+   * "unreadable" when a record holds one that doesn't read (see readHostProvisioning).
+   */
+  provisioning: CloudHostProvisioning | "unreadable" | null;
   creation: StoredCreationIntent | null;
   /** The lifetime a start and every renewal sets, in seconds; null for none. */
   lifetimeSeconds: number | null;
@@ -132,6 +144,51 @@ function readScope(raw: unknown): CloudBillingScope | null {
   return { kind: value.kind, id: value.id, name: str(value.name) ?? value.id };
 }
 
+function optionalId(value: unknown): string | null | undefined {
+  if (value === null) return null;
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/** A remembered choice only reads whole: one unreadable id drops it, and the dialog starts afresh. */
+export function readProvisioningSelection(raw: unknown): CloudProvisioningSelection | null {
+  const value = raw as Record<string, unknown> | null;
+  if (!value || typeof value !== "object") return null;
+  const location = optionalId(value.location);
+  const image = optionalId(value.image);
+  const network = optionalId(value.network);
+  if (location === undefined || image === undefined || network === undefined) return null;
+  return { location, image, network };
+}
+
+function readPick(raw: unknown): CloudProvisioningPick | null | undefined {
+  if (raw === null || raw === undefined) return null;
+  const value = raw as Record<string, unknown>;
+  if (typeof value !== "object") return undefined;
+  const id = optionalId(value.id);
+  const label = nonEmpty(value.label);
+  const shown = nonEmpty(value.value);
+  if (id === undefined || !label || !shown) return undefined;
+  return { label, id, value: shown };
+}
+
+/**
+ * What a create named. Unlike a mark, an unreadable one isn't dropped to
+ * nothing: a retry would then send the provider's defaults. It reads as
+ * "unreadable", and the create refuses to go out until the host is made again.
+ */
+export function readHostProvisioning(raw: unknown): CloudHostProvisioning | "unreadable" | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw !== "object") return "unreadable";
+  const value = raw as Record<string, unknown>;
+  const read = {} as CloudHostProvisioning;
+  for (const dimension of CLOUD_PROVISIONING_DIMENSIONS) {
+    const pick = readPick(value[dimension]);
+    if (pick === undefined) return "unreadable";
+    read[dimension] = pick;
+  }
+  return read;
+}
+
 function readAccount(raw: unknown): StoredCloudAccount | null {
   const value = raw as Record<string, unknown> | null;
   if (!value || !isValidCloudAccountId(value.id) || !isCloudProviderId(value.providerId))
@@ -149,6 +206,7 @@ function readAccount(raw: unknown): StoredCloudAccount | null {
     keyHint: str(value.keyHint),
     addedAt: num(value.addedAt) ?? 0,
     validation: readValidation(value.validation),
+    lastProvisioning: readProvisioningSelection(value.lastProvisioning),
   };
 }
 
@@ -257,6 +315,7 @@ function readBinding(raw: unknown): StoredCloudBinding | null {
     ownership,
     // An imported machine was never created for anything, whatever a hand edit says.
     createdFor: ownership === "imported" ? null : readCreatedFor(value.createdFor),
+    provisioning: ownership === "imported" ? null : readHostProvisioning(value.provisioning),
     creation: readCreation(value.creation),
     lifetimeSeconds: value.lifetimeSeconds === null ? null : (num(value.lifetimeSeconds) ?? null),
     intent: value.intent === "run" || value.intent === "stop" ? value.intent : null,

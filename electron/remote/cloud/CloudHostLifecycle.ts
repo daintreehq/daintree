@@ -1,8 +1,13 @@
 import crypto from "node:crypto";
 import {
   CLOUD_LIFETIME_CHOICES,
+  CLOUD_PROVISIONING_DIMENSIONS,
+  cloudChoiceFitsLocation,
+  cloudProvisioningNoun,
+  type CloudCatalog,
   type CloudHostCreatedFor,
   type CloudHostCreateRequest,
+  type CloudHostProvisioning,
   type CloudHostError,
   type CloudHostErrorCode,
   type CloudHostImportRequest,
@@ -10,6 +15,7 @@ import {
   type CloudMachineState,
   type CloudOperation,
   type CloudOperationKind,
+  type CloudProvisioningSelection,
 } from "../../../shared/types/cloudHosts.js";
 import {
   cloudConnection,
@@ -120,6 +126,79 @@ function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
     };
     signal?.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+/**
+ * Checks what a create names against the catalog just read and the
+ * provider's own word on what it takes. Nothing is filled in: a required
+ * dimension left out is refused, and only an optional one may be left to the
+ * provider. Returns the ids to send and, for the host's details, the words
+ * they were chosen by; null words when the provider takes none of them.
+ */
+function checkProvisioning(
+  provider: CloudProvider,
+  catalog: CloudCatalog,
+  raw: unknown
+): { selection: CloudProvisioningSelection; picks: CloudHostProvisioning | null } {
+  if (raw !== undefined && raw !== null && typeof raw !== "object") {
+    throw invalid("Choose where the machine runs and what it boots.");
+  }
+  const requested = (raw ?? {}) as Record<string, unknown>;
+  const name = nameOf(provider);
+  const takes = provider.info(process.platform).capabilities.provisioning;
+  const selection: CloudProvisioningSelection = { location: null, image: null, network: null };
+  const picks: CloudHostProvisioning = { location: null, image: null, network: null };
+  let named = false;
+  for (const dimension of CLOUD_PROVISIONING_DIMENSIONS) {
+    const value = requested[dimension];
+    const options = catalog.provisioning[dimension];
+    if (takes[dimension] === "none" || options === null) {
+      if (value !== undefined && value !== null) {
+        throw invalid(`${name} doesn't take a ${dimension} for a new machine.`);
+      }
+      continue;
+    }
+    named = true;
+    const noun = cloudProvisioningNoun(options.label);
+    if (value === undefined || value === null) {
+      if (takes[dimension] === "required") throw invalid(`Choose ${noun}.`);
+      picks[dimension] = { label: options.label, id: null, value: `Chosen by ${name}` };
+      continue;
+    }
+    const choice =
+      typeof value === "string" ? options.choices.find((entry) => entry.id === value) : undefined;
+    if (!choice)
+      throw invalid(
+        `${name} doesn't offer that ${noun.replace(/^an? /, "")} to this account. Choose another.`
+      );
+    if (!choice.available) {
+      throw invalid(
+        choice.reason
+          ? `${choice.label} isn't available: ${choice.reason}`
+          : `${choice.label} isn't available on this account.`
+      );
+    }
+    if (!cloudChoiceFitsLocation(choice, selection.location)) {
+      const where = catalog.provisioning.location;
+      throw invalid(
+        `${choice.label} isn't offered in ${where ? `that ${where.label.toLowerCase()}` : "every location"}. Choose another.`
+      );
+    }
+    selection[dimension] = choice.id;
+    picks[dimension] = { label: options.label, id: choice.id, value: choice.label };
+  }
+  return { selection, picks: named ? picks : null };
+}
+
+const DIMENSION_WORDS = { location: "Location", image: "Image", network: "Network" } as const;
+
+/** The ids a create sends, from what its binding keeps. */
+function selectionOf(picks: CloudHostProvisioning | null): CloudProvisioningSelection {
+  return {
+    location: picks?.location?.id ?? null,
+    image: picks?.image?.id ?? null,
+    network: picks?.network?.id ?? null,
+  };
 }
 
 function observationOf(resource: ProviderResource, at: number): StoredCloudObservation {
@@ -250,6 +329,7 @@ export class CloudHostLifecycle {
           machineName: observation?.name ?? binding.creation?.name ?? null,
           ownership: binding.ownership,
           createdFor: binding.createdFor,
+          provisioning: binding.provisioning === "unreadable" ? null : binding.provisioning,
           machine: machineOf(binding),
           rawState: observation?.rawState ?? null,
           machineType,
@@ -335,7 +415,7 @@ export class CloudHostLifecycle {
     if (!request || typeof request !== "object") throw invalid("Missing machine details.");
     const mark = createdFor === null ? null : checkedCreatedFor(createdFor);
     const account = this.deps.accounts.requireAccount(request.accountId);
-    this.deps.accounts.requireSupported(account.providerId);
+    const provider = this.deps.accounts.requireSupported(account.providerId);
     const name = typeof request.name === "string" ? request.name.trim() : "";
     if (!name || name.length > MAX_NAME_LENGTH) throw invalid("Give the host a name.");
     if (!CLOUD_LIFETIME_CHOICES.includes(request.lifetimeHours)) {
@@ -352,6 +432,7 @@ export class CloudHostLifecycle {
           : `${size.label} isn't available on this account.`
       );
     }
+    const { selection, picks } = checkProvisioning(provider, catalog, request.provisioning);
     const bindingId = `cb_${crypto.randomBytes(6).toString("hex")}`;
     const binding: StoredCloudBinding = {
       id: bindingId,
@@ -361,6 +442,7 @@ export class CloudHostLifecycle {
       resourceId: null,
       ownership: "created-by-daintree",
       createdFor: mark,
+      provisioning: picks,
       creation: {
         operationId: crypto.randomUUID(),
         idempotencyKey: crypto.randomUUID(),
@@ -384,6 +466,8 @@ export class CloudHostLifecycle {
       throw error;
     }
     this.deps.store.updateBinding(bindingId, (current) => ({ ...current, hostId: descriptor.id }));
+    // What was asked for, whatever the provider makes of it: a retry never moves it.
+    if (picks) this.deps.accounts.rememberProvisioning(account.id, selection);
     void this.operate(bindingId, "creating", (signal) => this.runCreate(bindingId, signal)).catch(
       () => {}
     );
@@ -413,6 +497,7 @@ export class CloudHostLifecycle {
         return;
       }
     }
+    const provisioning = this.sendableProvisioning(binding, provider);
     this.stage(bindingId, `Asking ${nameOf(provider)} for a machine`);
     // Written before the request: a lost answer is then found again, never sent blind.
     binding = this.deps.store.updateBinding(bindingId, (current) => ({
@@ -428,6 +513,7 @@ export class CloudHostLifecycle {
         name: creation.name,
         machineType: creation.machineType,
         lifetimeSeconds: binding.lifetimeSeconds,
+        provisioning,
         labels: {
           [LABEL_MARKER]: "1",
           [LABEL_BINDING]: bindingId,
@@ -459,6 +545,37 @@ export class CloudHostLifecycle {
     }
     this.bindCreated(bindingId, resource);
     await this.waitFor(bindingId, "running", START_DEADLINE_MS, signal, "Starting the machine");
+  }
+
+  /**
+   * What this create was asked to name, exactly as it was checked. Refused
+   * when it can't be read back, or when the provider now needs a dimension it
+   * never named: sending its defaults instead would make another machine
+   * than the one asked for.
+   */
+  private sendableProvisioning(
+    binding: StoredCloudBinding,
+    provider: CloudProvider
+  ): CloudProvisioningSelection {
+    const refuse = (message: string): never => {
+      this.recordError(binding.id, { code: "failed", message, at: this.now() });
+      throw invalid(message);
+    };
+    if (binding.provisioning === "unreadable") {
+      refuse(
+        "Daintree can't read back where this machine was meant to run, so it won't guess. Remove the host and create it again."
+      );
+    }
+    const picks = binding.provisioning === "unreadable" ? null : binding.provisioning;
+    const takes = provider.info(process.platform).capabilities.provisioning;
+    for (const dimension of CLOUD_PROVISIONING_DIMENSIONS) {
+      if (takes[dimension] === "required" && !picks?.[dimension]?.id) {
+        refuse(
+          `${nameOf(provider)} needs ${cloudProvisioningNoun(DIMENSION_WORDS[dimension])} for this machine that its create never named, so Daintree won't guess one. Remove the host and create it again.`
+        );
+      }
+    }
+    return selectionOf(picks);
   }
 
   /** The machine a create for this binding made, found by its label; null when there is none. */
@@ -570,6 +687,7 @@ export class CloudHostLifecycle {
       resourceId: null,
       ownership: "imported",
       createdFor: null,
+      provisioning: null,
       creation: null,
       lifetimeSeconds: null,
       intent: null,

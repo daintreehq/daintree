@@ -5,6 +5,9 @@ import type {
   CloudMachineType,
   CloudProviderId,
   CloudProviderInfo,
+  CloudProvisioningDimension,
+  CloudProvisioningOptions,
+  CloudProvisioningSelection,
 } from "../../../shared/types/cloudHosts.js";
 import type { SshEndpoint } from "./sshEndpoint.js";
 
@@ -61,12 +64,20 @@ export interface ProviderCatalog {
   includedHoursRemaining: number | null;
   startsRemaining: number | null;
   savedSnapshotDayDollars: number | null;
+  /**
+   * The regions, images and networks this account may create with, for each
+   * dimension the provider's capabilities say a create takes. One left out
+   * reads as offering nothing; one the provider doesn't take is ignored.
+   */
+  provisioning?: Partial<Record<CloudProvisioningDimension, CloudProvisioningOptions>>;
 }
 
 export interface ProviderCreateRequest {
   name: string;
   machineType: string;
   lifetimeSeconds: number | null;
+  /** What the person chose, checked against the catalog; the same on every retry of this create. */
+  provisioning: CloudProvisioningSelection;
   /** Non-secret identifiers that let a lost create be found again. */
   labels: Record<string, string>;
   idempotencyKey: string;

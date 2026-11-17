@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { AppError } from "../../../utils/errorTypes.js";
-import { CloudAccountService } from "../CloudAccountService.js";
+import { CloudAccountService, normalizeProvisioning } from "../CloudAccountService.js";
 import { MemoryCloudCredentialVault } from "../CloudCredentialVault.js";
 import { CloudHostStore, type CloudHostsValue } from "../CloudHostStore.js";
 import type { CloudProvider } from "../provider.js";
-import type { CloudProviderId } from "../../../../shared/types/cloudHosts.js";
+import type {
+  CloudProviderId,
+  CloudProviderInfo,
+  CloudProvisioning,
+} from "../../../../shared/types/cloudHosts.js";
 
 function memoryBackend(initial?: unknown) {
   const backend = {
@@ -186,6 +190,7 @@ describe("CloudAccountService", () => {
       resourceId: "bx_23456789",
       ownership: "created-by-daintree",
       createdFor: null,
+      provisioning: null,
       creation: null,
       lifetimeSeconds: 7200,
       intent: null,
@@ -313,5 +318,80 @@ describe("CloudHostStore", () => {
     expect(store.bindings().map((entry) => [entry.id, entry.providerId])).toEqual([
       ["cb_ijklmnop34", "acme.clouds.ec2"],
     ]);
+  });
+});
+
+describe("normalizeProvisioning", () => {
+  function infoTaking(provisioning: Partial<CloudProvisioning>): CloudProviderInfo {
+    const base = fakeProvider().info("darwin");
+    return {
+      ...base,
+      capabilities: {
+        ...base.capabilities,
+        provisioning: { ...base.capabilities.provisioning, ...provisioning },
+      },
+    };
+  }
+  const region = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    label: id.toUpperCase(),
+    description: null,
+    available: true,
+    reason: null,
+    locations: null,
+    ...extra,
+  });
+
+  it("offers only the dimensions the provider says a create takes", () => {
+    const offered = {
+      location: { label: "Region", choices: [region("nyc1")], defaultId: "nyc1" },
+      image: { label: "Image", choices: [region("ubuntu")], defaultId: null },
+    };
+    expect(normalizeProvisioning(infoTaking({}), offered)).toEqual({
+      location: null,
+      image: null,
+      network: null,
+    });
+    const taken = normalizeProvisioning(infoTaking({ location: "required" }), offered);
+    expect(taken.location?.choices.map((choice) => choice.id)).toEqual(["nyc1"]);
+    expect(taken.image).toBeNull();
+  });
+
+  it("reads a declared dimension the catalog left out as offering nothing, under a plain name", () => {
+    expect(normalizeProvisioning(infoTaking({ image: "required" }), undefined).image).toEqual({
+      label: "Image",
+      choices: [],
+      defaultId: null,
+    });
+  });
+
+  it("keeps each id once and a default only when it names a choice", () => {
+    const result = normalizeProvisioning(infoTaking({ location: "optional" }), {
+      location: {
+        label: " Zone ",
+        choices: [region("a"), region("a", { label: "again" }), { label: "no id" }, region("b")],
+        defaultId: "c",
+      } as never,
+    });
+    expect(result.location).toMatchObject({ label: "Zone", defaultId: null });
+    expect(result.location?.choices.map((choice) => [choice.id, choice.label])).toEqual([
+      ["a", "A"],
+      ["b", "B"],
+    ]);
+  });
+
+  it("ties images and networks to locations only when the provider takes a location", () => {
+    const image = {
+      label: "Image",
+      choices: [region("ubuntu", { locations: ["nyc1", 3] })],
+      defaultId: null,
+    };
+    const withLocation = normalizeProvisioning(
+      infoTaking({ location: "required", image: "required" }),
+      { location: { label: "Region", choices: [region("nyc1")], defaultId: null }, image } as never
+    );
+    expect(withLocation.image?.choices[0]?.locations).toEqual(["nyc1"]);
+    const without = normalizeProvisioning(infoTaking({ image: "required" }), { image } as never);
+    expect(without.image?.choices[0]?.locations).toBeNull();
   });
 });

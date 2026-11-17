@@ -382,6 +382,7 @@ describe("BoatProvider", () => {
         name: "Build host",
         machineType: "large",
         lifetimeSeconds: 7200,
+        provisioning: { location: null, image: null, network: null },
         labels: { daintree: "1" },
         idempotencyKey: "k",
       }

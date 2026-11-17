@@ -39,6 +39,7 @@ function binding(overrides: Partial<StoredCloudBinding> = {}): StoredCloudBindin
     resourceId: null,
     ownership: "created-by-daintree",
     createdFor: LOCAL_MARK,
+    provisioning: null,
     creation: {
       operationId: "op",
       idempotencyKey: "key",
@@ -146,5 +147,86 @@ describe("CloudHostStore worktree marks", () => {
       })
     );
     expect(new CloudHostStore(backend).bindings()[0]?.observation?.name).toBe("feature-login-box");
+  });
+});
+
+describe("CloudHostStore provisioning", () => {
+  const PICKS = {
+    location: { label: "Region", id: "eu-west-1", value: "Europe (Ireland)" },
+    image: { label: "AMI", id: "ami-euw1", value: "Ubuntu 24.04" },
+    network: { label: "Subnet", id: null, value: "Chosen by Acme" },
+  };
+
+  it("keeps what a create named after the machine exists, through unrelated writes", () => {
+    const backend = disk();
+    const store = new CloudHostStore(backend);
+    store.putBinding(binding({ provisioning: PICKS }));
+    store.updateBinding("cb_abcdefgh12", (current) => ({
+      ...current,
+      resourceId: "i-0123",
+      creation: null,
+    }));
+    store.removeAccount("ca_9999999999");
+    expect(new CloudHostStore(backend).binding("cb_abcdefgh12")?.provisioning).toEqual(PICKS);
+  });
+
+  it("reads a binding saved before provisioning existed as naming nothing", () => {
+    const backend = disk();
+    const { provisioning: _dropped, ...legacy } = binding();
+    backend.write({ version: 1, accounts: [], bindings: [legacy] });
+    expect(new CloudHostStore(backend).bindings()[0]?.provisioning).toBeNull();
+  });
+
+  it("reads a choice it can't make sense of as unreadable, never as the provider's defaults", () => {
+    for (const broken of [
+      "eu-west-1",
+      { ...PICKS, location: { label: "Region", id: 5, value: "Europe" } },
+      { ...PICKS, image: { label: "", id: "ami-euw1", value: "Ubuntu" } },
+      { ...PICKS, network: "subnet-a" },
+    ]) {
+      const backend = disk();
+      backend.write({
+        version: 1,
+        accounts: [],
+        bindings: [{ ...binding(), provisioning: broken }],
+      });
+      const read = new CloudHostStore(backend).bindings();
+      expect(read.map((entry) => entry.id)).toEqual(["cb_abcdefgh12"]);
+      expect(read[0]?.provisioning).toBe("unreadable");
+    }
+  });
+
+  it("never reads a choice on an imported machine", () => {
+    const backend = disk();
+    backend.write({
+      version: 1,
+      accounts: [],
+      bindings: [{ ...binding({ ownership: "imported", creation: null }), provisioning: PICKS }],
+    });
+    expect(new CloudHostStore(backend).bindings()[0]?.provisioning).toBeNull();
+  });
+
+  it("remembers an account's last choice whole, or not at all", () => {
+    const account = {
+      id: "ca_0123456789",
+      providerId: "acme.clouds.ec2",
+      displayName: "Acme",
+      identity: null,
+      scope: { kind: "personal", id: "personal", name: "Personal" },
+      apiUrl: "https://api.acme.test",
+      keyHint: null,
+      addedAt: 1,
+      validation: { status: "valid", checkedAt: 1 },
+    };
+    const last = { location: "eu-west-1", image: "ami-euw1", network: null };
+    const read = (lastProvisioning: unknown) => {
+      const backend = disk();
+      backend.write({ version: 1, accounts: [{ ...account, lastProvisioning }], bindings: [] });
+      return new CloudHostStore(backend).accounts()[0]?.lastProvisioning;
+    };
+    expect(read(last)).toEqual(last);
+    expect(read(undefined)).toBeNull();
+    expect(read({ ...last, image: 7 })).toBeNull();
+    expect(read({ location: "eu-west-1" })).toBeNull();
   });
 });
