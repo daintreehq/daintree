@@ -46,6 +46,11 @@ import {
 import type { NotificationAction } from "./notificationStore";
 import { getViewWorkspaceId } from "./viewWorkspaceId";
 import {
+  applyOptimisticProjectUpdate,
+  rollbackOptimisticProjectUpdate,
+  type OptimisticProjectWrite,
+} from "./optimisticProjectWrites";
+import {
   clearPanelStoreForSwitchThroughAccessor,
   clearFleetArmingThroughAccessor,
   getPanelStoreSnapshot,
@@ -1316,40 +1321,59 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   },
 
   updateProject: async (id, updates) => {
-    // Snapshot for rollback
-    const prevProjects = get().projects;
-    const prevCurrentProject = get().currentProject;
+    const write: OptimisticProjectWrite = { status: "pending" };
 
     // Optimistic apply — no isLoading spinner; UI reflects the change immediately
     set((state) => ({
       error: null,
-      projects: state.projects.map((p) => (p.id === id ? { ...p, ...updates } : p)),
+      projects: state.projects.map((p) =>
+        p.id === id ? applyOptimisticProjectUpdate(p, updates, write) : p
+      ),
       currentProject:
         state.currentProject?.id === id
-          ? { ...state.currentProject, ...updates }
+          ? applyOptimisticProjectUpdate(state.currentProject, updates, write)
           : state.currentProject,
     }));
 
     try {
       await projectClient.update(id, updates);
-      // Reconcile with server-side normalization in the background. loadProjects
-      // only fills currentProject when it's null, so explicitly re-sync the
-      // active project from the reloaded list to pick up any normalization.
-      await get().loadProjects();
-      if (get().currentProject?.id === id) {
-        const reconciled = get().projects.find((p) => p.id === id);
-        if (reconciled) set({ currentProject: reconciled });
-      }
+      write.status = "saved";
     } catch (error) {
-      // Rollback to pre-optimistic state
-      set({ projects: prevProjects, currentProject: prevCurrentProject, isLoading: false });
+      write.status = "failed";
+      // Undo only the fields this write still owns (#17520): other projects'
+      // saved edits, a newer selection, and other operations' isLoading stay.
+      set((state) => {
+        let rolledBack = false;
+        const projects = state.projects.map((p) => {
+          if (p.id !== id) return p;
+          const restored = rollbackOptimisticProjectUpdate(p, write);
+          if (restored !== p) rolledBack = true;
+          return restored;
+        });
+        return {
+          projects: rolledBack ? projects : state.projects,
+          currentProject:
+            state.currentProject?.id === id
+              ? rollbackOptimisticProjectUpdate(state.currentProject, write)
+              : state.currentProject,
+          error: "Failed to update project",
+        };
+      });
       logErrorWithContext(error, {
         operation: "update_project",
         component: "projectStore",
         details: { projectId: id, updates },
       });
-      set({ error: "Failed to update project" });
       throw error;
+    }
+
+    // Reconcile with server-side normalization in the background. loadProjects
+    // only fills currentProject when it's null, so explicitly re-sync the
+    // active project from the reloaded list to pick up any normalization.
+    await get().loadProjects();
+    if (get().currentProject?.id === id) {
+      const reconciled = get().projects.find((p) => p.id === id);
+      if (reconciled) set({ currentProject: reconciled });
     }
   },
 
