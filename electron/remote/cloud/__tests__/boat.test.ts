@@ -385,6 +385,7 @@ describe("BoatProvider", () => {
         provisioning: { location: null, image: null, network: null },
         labels: { daintree: "1" },
         idempotencyKey: "k",
+        publicKey: null,
       }
     );
     const body = JSON.parse(String(calls[0].init.body)) as Record<string, unknown>;

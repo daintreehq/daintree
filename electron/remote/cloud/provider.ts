@@ -5,6 +5,7 @@ import type {
   CloudMachineType,
   CloudProviderId,
   CloudProviderInfo,
+  CloudProvisioning,
   CloudProvisioningDimension,
   CloudProvisioningOptions,
   CloudProvisioningSelection,
@@ -86,6 +87,12 @@ export interface ProviderCreateRequest {
   /** Non-secret identifiers that let a lost create be found again. */
   labels: Record<string, string>;
   idempotencyKey: string;
+  /**
+   * The account's SSH public key, `type base64 comment`, for a provider whose
+   * `provisioning.sshKey` is "at-create"; null for one that authorizes it after.
+   * A retried create carries the same key.
+   */
+  publicKey: string | null;
 }
 
 /**
@@ -131,11 +138,21 @@ export interface CloudProvider {
   rename(credentials: ProviderCredentials, resourceId: string, name: string): Promise<void>;
   /** Called only while the provider's capabilities declare `deletion`. */
   delete(credentials: ProviderCredentials, resourceId: string): Promise<void>;
-  authorizeSsh(
+  /**
+   * Puts `publicKey` on the machine and says how to reach its sshd. Required
+   * when `provisioning.sshKey` is "after-create", and only called then.
+   */
+  authorizeSsh?(
     credentials: ProviderCredentials,
     resourceId: string,
     publicKey: string
   ): Promise<ProviderSshAccess>;
+  /**
+   * Says how to reach the sshd of a machine that took the key with its create,
+   * changing nothing on it. Required when `provisioning.sshKey` is "at-create",
+   * and only called then.
+   */
+  sshAccess?(credentials: ProviderCredentials, resourceId: string): Promise<ProviderSshAccess>;
   /** A provider failure as a typed, user-facing error. */
   describeError(error: unknown): CloudHostError;
 }
@@ -152,4 +169,28 @@ export function canRenewLifetime(provider: CloudProvider): provider is RenewingC
     provider.info(process.platform).capabilities.lifetime.kind === "renewable" &&
     typeof provider.renewLifetime === "function"
   );
+}
+
+/** When the provider takes Daintree's SSH key, as it declares. */
+export function sshKeyTiming(provider: CloudProvider): CloudProvisioning["sshKey"] {
+  return provider.info(process.platform).capabilities.provisioning.sshKey;
+}
+
+/** Why a provider can't take Daintree's SSH key the way its info declares; null when it can. */
+export function sshKeyContractProblem(
+  provider: CloudProvider,
+  timing: CloudProvisioning["sshKey"]
+): string | null {
+  switch (timing) {
+    case "at-create":
+      return typeof provider.sshAccess === "function"
+        ? null
+        : "takes the SSH key at create but has no sshAccess";
+    case "after-create":
+      return typeof provider.authorizeSsh === "function"
+        ? null
+        : "authorizes the SSH key after create but has no authorizeSsh";
+    default:
+      return `declares an unknown SSH key timing ${JSON.stringify(timing)}`;
+  }
 }

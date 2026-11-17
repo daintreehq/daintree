@@ -210,6 +210,54 @@ describe("CloudProviderRegistry", () => {
     expect(registry.get(PLUGIN_PROVIDER)).toBe(plain);
   });
 
+  it("refuses a provider without the SSH method its key timing needs, and changes nothing", () => {
+    const registry = new CloudProviderRegistry();
+    const owner = { kind: "plugin" as const, pluginId: "acme.clouds" };
+    const changes = vi.fn();
+    registry.onChange(changes);
+    const timed = (sshKey: string) => {
+      const provider = fakeProvider(PLUGIN_PROVIDER, () => resource());
+      const info = provider.info;
+      provider.info = (platform) => {
+        const described = info(platform);
+        const { capabilities } = described;
+        return {
+          ...described,
+          capabilities: {
+            ...capabilities,
+            provisioning: {
+              ...capabilities.provisioning,
+              sshKey: sshKey as "at-create" | "after-create",
+            },
+          },
+        };
+      };
+      return provider;
+    };
+
+    // Taking the key at create needs a way to read access; authorizing it after needs authorizeSsh.
+    expect(() => registry.register(timed("at-create"), { owner, apiUrl: "" })).toThrow(/sshAccess/);
+    const onlyAccess = timed("after-create");
+    delete onlyAccess.authorizeSsh;
+    onlyAccess.sshAccess = vi.fn();
+    expect(() => registry.register(onlyAccess, { owner, apiUrl: "" })).toThrow(/authorizeSsh/);
+    const notCallable = timed("at-create");
+    (notCallable as { sshAccess?: unknown }).sshAccess = {};
+    expect(() => registry.register(notCallable, { owner, apiUrl: "" })).toThrow(/sshAccess/);
+    expect(() => registry.register(timed("on-boot"), { owner, apiUrl: "" })).toThrow(
+      /unknown SSH key timing/
+    );
+    expect([...registry.values()]).toEqual([]);
+    expect(changes).not.toHaveBeenCalled();
+
+    // The method its timing needs is enough on its own.
+    const atCreate = timed("at-create");
+    delete atCreate.authorizeSsh;
+    atCreate.sshAccess = vi.fn();
+    registry.register(atCreate, { owner, apiUrl: "" });
+    expect(registry.get(PLUGIN_PROVIDER)).toBe(atCreate);
+  });
+
   it("lets an old registration's remover leave a newer one in place", () => {
     const registry = new CloudProviderRegistry();
     const owner = { kind: "plugin" as const, pluginId: "acme.clouds" };
