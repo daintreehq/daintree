@@ -195,9 +195,7 @@ describe("VoiceDictionaryPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
     await waitFor(() =>
-      expect(container.textContent).toContain(
-        "Added 1 term. Skipped 1 entry over 100 characters"
-      )
+      expect(container.textContent).toContain("Added 1 term. Skipped 1 entry over 100 characters")
     );
     expect(main.importTerms).toHaveBeenCalledWith({ entries: [{ term: "Daintree", heardAs: [] }] });
     expect(main.add).not.toHaveBeenCalled();
