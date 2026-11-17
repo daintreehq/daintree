@@ -70,11 +70,12 @@ interface FileSectionProps {
   ) => void;
   onBulkAction: () => void;
   /**
-   * The bulk button unmounted while it held focus: its section has no rows left
-   * for it to act on. Called from a layout effect, once the commit that removed
-   * it is in the DOM, so the hub can hand focus to what that commit left.
+   * The bulk button is unmounting while it holds focus. Called mid-commit,
+   * before the node leaves the DOM, so it may only record: the hub hands focus
+   * on once the commit has landed, and that has to be the hub because the
+   * same commit can remove this whole section.
    */
-  onBulkActionFocusLost?: (section: FileStageRowSection) => void;
+  onBulkActionFocusOrphaned?: (section: FileStageRowSection, button: HTMLButtonElement) => void;
   viewedFiles: ReadonlySet<string>;
   onViewedChange: (viewedKey: string, viewed: boolean) => void;
   sectionRef?: Ref<HTMLDivElement>;
@@ -253,7 +254,7 @@ export function FileSection({
   onToggle,
   onRowClick,
   onBulkAction,
-  onBulkActionFocusLost,
+  onBulkActionFocusOrphaned,
   viewedFiles,
   onViewedChange,
   sectionRef,
@@ -399,25 +400,10 @@ export function FileSection({
   // change exists to remove.
   const awaitingScrollParent = virtualized && scrollParent === null;
 
-  // The cleanup only records; focus moves in the layout phase, after every
-  // mutation in the commit, so the hub's target (the composer, enabled by the
-  // same status) is already in its new state. A cleanup whose node is still
-  // connected was a StrictMode replay or an Activity hide, not a removal.
-  const showBulkAction = shownCount > 0;
-  const orphanedBulkButtonRef = useRef<HTMLButtonElement | null>(null);
-  const handleBulkFocusOrphaned = useCallback((button: HTMLButtonElement) => {
-    orphanedBulkButtonRef.current = button;
-  }, []);
-  const reportBulkFocusLost = useEffectEvent(() => onBulkActionFocusLost?.(section));
-  useLayoutEffect(() => {
-    const button = orphanedBulkButtonRef.current;
-    if (!button) return;
-    orphanedBulkButtonRef.current = null;
-    if (button.isConnected) return;
-    const doc = button.ownerDocument;
-    if (doc.activeElement !== null && doc.activeElement !== doc.body) return;
-    reportBulkFocusLost();
-  }, [showBulkAction]);
+  const handleBulkFocusOrphaned = useCallback(
+    (button: HTMLButtonElement) => onBulkActionFocusOrphaned?.(section, button),
+    [onBulkActionFocusOrphaned, section]
+  );
 
   return (
     <div
@@ -572,7 +558,7 @@ export function FileSection({
                 </DropdownMenuCheckboxItem>
               </DropdownMenuContent>
             </DropdownMenu>
-            {showBulkAction && (
+            {shownCount > 0 && (
               <BulkActionButton
                 onFocusOrphaned={handleBulkFocusOrphaned}
                 variant="ghost"

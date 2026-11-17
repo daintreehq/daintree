@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
+import { Activity } from "react";
 import type { ReactNode, Ref } from "react";
 import type { StagingStatus } from "@shared/types";
 import type { WorktreeState } from "@shared/types";
@@ -1257,14 +1258,11 @@ describe("ReviewHub", () => {
       expect(document.activeElement).toBe(stagedFilter);
     });
 
-    it("leaves focus alone when the section empties while something else holds it", async () => {
-      await renderWith(makeStatus({ staged: [entry("src/a.ts")], unstaged: [entry("src/b.ts")] }));
-      const textarea = screen.getByLabelText("Commit message");
-      act(() => textarea.focus());
+    /** A background refresh that stages `src/b.ts` out of Changes. */
+    async function refreshToAllStaged() {
       getStagingStatusMock.mockResolvedValue(
         makeStatus({ staged: [entry("src/a.ts"), entry("src/b.ts")], unstaged: [] })
       );
-
       await act(async () => {
         capturedUpdateCallback!(makeWorktreeState());
         await Promise.resolve();
@@ -1273,8 +1271,170 @@ describe("ReviewHub", () => {
         expect(screen.queryByTestId("review-hub-stage-section-button")).toBeNull()
       );
       await act(async () => {});
+    }
 
-      expect(document.activeElement).toBe(textarea);
+    it("leaves focus alone when the section empties while something else holds it", async () => {
+      await renderWith(makeStatus({ staged: [entry("src/a.ts")], unstaged: [entry("src/b.ts")] }));
+      const stagedFilter = screen.getByLabelText("Filter staged files");
+      act(() => stagedFilter.focus());
+
+      await refreshToAllStaged();
+
+      expect(document.activeElement).toBe(stagedFilter);
+    });
+
+    it("leaves focus on <body> when the button it removes never held it", async () => {
+      await renderWith(makeStatus({ staged: [entry("src/a.ts")], unstaged: [entry("src/b.ts")] }));
+      act(() => (document.activeElement as HTMLElement | null)?.blur());
+      expect(document.activeElement).toBe(document.body);
+
+      await refreshToAllStaged();
+
+      expect(document.activeElement).toBe(document.body);
+    });
+
+    it("keeps focus that something else took while the button was being removed", async () => {
+      await renderWith(makeStatus({ staged: [entry("src/a.ts")], unstaged: [entry("src/b.ts")] }));
+      const button = screen.getByTestId("review-hub-stage-section-button");
+      const stagedFilter = screen.getByLabelText("Filter staged files");
+      act(() => button.focus());
+      // The button's unmount has already been recorded by the time React
+      // detaches the node; focus moving here stands in for any other component
+      // taking it later in the same commit.
+      const removeChild = Node.prototype.removeChild;
+      const removeSpy = vi.spyOn(Node.prototype, "removeChild").mockImplementation(function <
+        T extends Node,
+      >(this: Node, child: T): T {
+        if (child === button) stagedFilter.focus();
+        return removeChild.call(this, child) as T;
+      });
+      try {
+        await refreshToAllStaged();
+      } finally {
+        removeSpy.mockRestore();
+      }
+
+      expect(button.isConnected).toBe(false);
+      expect(document.activeElement).toBe(stagedFilter);
+    });
+
+    it("hands focus on when Stage selection empties Changes", async () => {
+      await renderWith(makeStatus({ staged: [entry("src/a.ts")], unstaged: [entry("src/b.ts")] }));
+      fireEvent.click(screen.getByTestId("file-stage-row-src/b.ts"), { metaKey: true });
+      await screen.findByText("Stage selection (1)");
+
+      await activateFromKeyboard(
+        "review-hub-stage-section-button",
+        makeStatus({ staged: [entry("src/a.ts"), entry("src/b.ts")], unstaged: [] })
+      );
+
+      expect(stageFilesMock).toHaveBeenCalledWith(WORKTREE_PATH, ["src/b.ts"]);
+      expect(document.activeElement).toBe(screen.getByLabelText("Commit message"));
+    });
+
+    it("hands focus to Refresh when staging leaves a clean tree", async () => {
+      // Staged and unstaged edits that cancel out: staging the second makes the
+      // index match HEAD, so the list and the composer go in the same commit.
+      await renderWith(makeStatus({ staged: [entry("src/a.ts")], unstaged: [entry("src/a.ts")] }));
+
+      await activateFromKeyboard(
+        "review-hub-stage-section-button",
+        makeStatus({ staged: [], unstaged: [] })
+      );
+
+      expect(screen.queryByRole("listbox", { name: "Changed files" })).toBeNull();
+      expect(screen.queryByLabelText("Commit message")).toBeNull();
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Refresh" }));
+    });
+
+    it.each([
+      ["Enter", "Enter"],
+      ["Space", " "],
+    ] as const)(
+      "lands the list cursor on its own file, not its old index, after Unstage all (%s)",
+      async (_name, key) => {
+        await renderWith(
+          makeStatus({
+            staged: [entry("src/x.ts"), entry("src/y.ts"), entry("src/z.ts")],
+            unstaged: [entry("src/a.ts")],
+          })
+        );
+        const list = screen.getByRole("listbox", { name: "Changed files" });
+        act(() => list.focus());
+        for (let i = 0; i < 3; i++) fireEvent.keyDown(list, { key: "ArrowDown" });
+        await waitFor(() =>
+          expect(list.getAttribute("aria-activedescendant")).toBe("review-hub-row-3")
+        );
+        expect(document.getElementById("review-hub-row-3")?.dataset.testid).toBe(
+          "file-stage-row-src/a.ts"
+        );
+
+        const scrolled: Element[] = [];
+        const originalScroll = HTMLElement.prototype.scrollIntoView;
+        HTMLElement.prototype.scrollIntoView = function (this: HTMLElement) {
+          scrolled.push(this);
+        };
+        try {
+          // A live cursor is what lets a row key act on the list, so the
+          // bulk button's own Enter/Space must still reach it as a click.
+          await activateFromKeyboard(
+            "review-hub-unstage-section-button",
+            makeStatus({
+              staged: [],
+              unstaged: [
+                entry("src/a.ts"),
+                entry("src/x.ts"),
+                entry("src/y.ts"),
+                entry("src/z.ts"),
+              ],
+            }),
+            key
+          );
+        } finally {
+          HTMLElement.prototype.scrollIntoView = originalScroll;
+        }
+
+        expect(unstageAllMock).toHaveBeenCalledWith(WORKTREE_PATH);
+        expect(stageFileMock).not.toHaveBeenCalled();
+        expect(unstageFileMock).not.toHaveBeenCalled();
+        expect(document.activeElement).toBe(list);
+        await waitFor(() =>
+          expect(list.getAttribute("aria-activedescendant")).toBe("review-hub-row-0")
+        );
+        const cursorRow = document.getElementById("review-hub-row-0")!;
+        expect(cursorRow.dataset.testid).toBe("file-stage-row-src/a.ts");
+        // Row 3 is now z.ts: the position a.ts held before the unstage.
+        expect(scrolled).toContain(cursorRow);
+        expect(scrolled).not.toContain(document.getElementById("review-hub-row-3"));
+      }
+    );
+
+    it("does not hand focus on when an Activity hide unmounts the button's effects", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({ staged: [entry("src/a.ts")], unstaged: [entry("src/b.ts")] })
+      );
+      const hub = (mode: "visible" | "hidden") => (
+        <Activity mode={mode}>
+          <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+        </Activity>
+      );
+      const { rerender } = render(hub("visible"));
+      const button = await screen.findByTestId("review-hub-stage-section-button");
+      await act(async () => {});
+      act(() => button.focus());
+
+      rerender(hub("hidden"));
+      // jsdom won't blur an element in a hidden subtree; a focused node that
+      // leaves the document is what drops focus to <body> there.
+      const elsewhere = document.body.appendChild(document.createElement("input"));
+      act(() => elsewhere.focus());
+      act(() => elsewhere.remove());
+      expect(document.activeElement).toBe(document.body);
+      rerender(hub("visible"));
+      await act(async () => {});
+
+      expect(button.isConnected).toBe(true);
+      expect(document.activeElement).toBe(document.body);
     });
   });
 
