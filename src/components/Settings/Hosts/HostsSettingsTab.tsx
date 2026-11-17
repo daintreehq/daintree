@@ -94,7 +94,8 @@ export default function HostsSettingsTab() {
   // stop finishing is heard whichever is showing, and never twice.
   const cloudNews = useCloudLifecycleNews(
     cloudSnapshot.hosts,
-    (hostId) => hosts.find((entry) => entry.descriptor.id === hostId)?.descriptor.name ?? hostId
+    (hostId) => hosts.find((entry) => entry.descriptor.id === hostId)?.descriptor.name ?? hostId,
+    cloudSnapshot.providers
   );
   const cloudAnnouncer = (
     <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">

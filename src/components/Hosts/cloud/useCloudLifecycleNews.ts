@@ -1,7 +1,12 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type { CloudHostStatus } from "@shared/types/cloudHosts";
 import type { HostId } from "@shared/types/remoteHosts";
-import { cloudStatusLabel } from "./cloudHostLabels";
+import {
+  cloudProviderFor,
+  cloudStatusLabel,
+  stoppedBillingFact,
+  type CloudProviderTerms,
+} from "./cloudHostLabels";
 
 interface News {
   seq: number;
@@ -26,13 +31,24 @@ function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
-function ingest(statuses: readonly CloudHostStatus[]): void {
+/** The state as heard: a stopped machine its provider still bills says so. */
+function heardLabel(status: CloudHostStatus, provider: CloudProviderTerms | null): string {
+  const label = cloudStatusLabel(status);
+  return status.operation === null && stoppedBillingFact(status, provider)
+    ? `${label}, still billing`
+    : label;
+}
+
+function ingest(
+  statuses: readonly CloudHostStatus[],
+  providers: readonly (CloudProviderTerms & { id: string })[]
+): void {
   if (statuses === ingested) return;
   ingested = statuses;
   const next = new Map<HostId, string>();
   const moved: Array<{ hostId: HostId; label: string }> = [];
   for (const status of statuses) {
-    const label = cloudStatusLabel(status);
+    const label = heardLabel(status, cloudProviderFor(providers, status));
     next.set(status.hostId, label);
     const before = labels?.get(status.hostId);
     if (before !== undefined && before !== label) moved.push({ hostId: status.hostId, label });
@@ -54,7 +70,9 @@ function ingest(statuses: readonly CloudHostStatus[]): void {
  */
 export function useCloudLifecycleNews(
   statuses: readonly CloudHostStatus[],
-  nameOf: (hostId: HostId) => string
+  nameOf: (hostId: HostId) => string,
+  /** The same snapshot's providers, which say whether a stopped machine still bills. */
+  providers: readonly (CloudProviderTerms & { id: string })[]
 ): string {
   const [id] = useState(() => Symbol("cloud-news"));
   useEffect(() => {
@@ -69,7 +87,7 @@ export function useCloudLifecycleNews(
       emit();
     };
   }, [id]);
-  useEffect(() => ingest(statuses), [statuses]);
+  useEffect(() => ingest(statuses, providers), [statuses, providers]);
   const mine = useSyncExternalStore(subscribe, () => {
     const top = owners[owners.length - 1];
     return top?.id === id && news.seq > top.since ? news : null;

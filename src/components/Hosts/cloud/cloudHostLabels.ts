@@ -192,7 +192,8 @@ export function cloudChipStatus(
 ): string {
   if (status.operation === null && status.machine === "unknown") return "state unknown";
   if (status.operation?.kind === "stopping") return "machine stopping";
-  if (status.operation === null && stoppedBillingFact(status, provider)) {
+  // An expired disk says why it can't start; that outranks the bill here.
+  if (status.operation === null && !status.dataExpired && stoppedBillingFact(status, provider)) {
     return "stopped, still billing";
   }
   return cloudStatusLabel(status).toLowerCase();

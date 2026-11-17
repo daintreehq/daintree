@@ -243,7 +243,12 @@ describe("what stopping and deleting mean for each provider (#17346)", () => {
     expect(cloudCostFacts(stopped, billed)).toEqual(["still billing"]);
     expect(cloudChipStatus(stopped, billed)).toBe("stopped, still billing");
     // A running machine's facts are the same either way.
-    expect(cloudCostFacts(status(), billed)).toEqual(cloudCostFacts(status(), BOAT_PROVIDER));
+    expect(cloudCostFacts(status(), billed)).toEqual(["$0.036/h", "no auto-stop"]);
+    expect(cloudCostFacts(status(), BOAT_PROVIDER)).toEqual(["$0.036/h", "no auto-stop"]);
+    // An expired disk is why it can't start: the chip keeps saying that.
+    expect(cloudChipStatus(status({ machine: "stopped", dataExpired: true }), billed)).toBe(
+      "machine saved disk expired"
+    );
   });
 
   it("points to the provider's console when Daintree can't delete there", () => {

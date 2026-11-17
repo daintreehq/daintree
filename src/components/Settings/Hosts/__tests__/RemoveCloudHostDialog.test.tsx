@@ -235,3 +235,92 @@ describe("RemoveCloudHostDialog by what the provider declares (#17346)", () => {
     expect(cloudClient.deleteMachine).not.toHaveBeenCalled();
   });
 });
+
+describe("RemoveCloudHostDialog for a provider without deletion, as its machine changes (#17346)", () => {
+  const consoleOnly = providerWith({ stoppedComputeBilled: true, deletion: false });
+
+  function openWith(
+    current: CloudHostStatus,
+    declared: CloudProviderInfo | null,
+    providerName = "Acme"
+  ) {
+    return render(
+      <RemoveCloudHostDialog
+        hostId="build"
+        name="Login box"
+        status={current}
+        providerName={providerName}
+        provider={declared}
+        onClose={() => {}}
+      />
+    );
+  }
+
+  it("keeps the console when a create lands while it is open", async () => {
+    const creating = status({
+      createdFor: null,
+      resourceId: null,
+      machine: "not-created",
+      operation: { id: "op", kind: "creating", startedAt: 0, stage: "Asking Acme" },
+    });
+    const view = openWith(creating, consoleOnly);
+    view.rerender(
+      <RemoveCloudHostDialog
+        hostId="build"
+        name="Login box"
+        status={status({ createdFor: null, machine: "running" })}
+        providerName="Acme"
+        provider={consoleOnly}
+        onClose={() => {}}
+      />
+    );
+    expect(dialogText()).not.toContain("No machine was created for it.");
+    expect(dialogText()).toContain("Acme made a machine for it while this was open");
+    expect(screen.getByRole("button", { name: "Open Acme console" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Remove host" }));
+    await waitFor(() => expect(remoteClient.forget).toHaveBeenCalledWith("build"));
+    expect(cloudClient.deleteMachine).not.toHaveBeenCalled();
+  });
+
+  it("claims no machine the provider reported deleted, and offers no console for it", () => {
+    openWith(status({ createdFor: null, machine: "deleted" }), consoleOnly);
+    expect(dialogText()).not.toContain("stays in your Acme account");
+    expect(dialogText()).not.toContain("keeps billing");
+    expect(screen.queryByTestId("remove-cloud-host-console")).toBeNull();
+  });
+
+  it("only says removing doesn't delete a machine it last saw long ago", () => {
+    openWith(status({ createdFor: null, observedAt: 0 }), consoleOnly);
+    expect(dialogText()).toContain("removing it doesn't delete its machine from your Acme account");
+    expect(dialogText()).not.toContain("stays in your Acme account");
+  });
+
+  it("takes Delete away when the provider registers as unable to delete", async () => {
+    const view = openWith(status({ createdFor: null }), null, "the provider");
+    expect(screen.getByRole("radio", { name: /Delete the machine too/ })).toBeTruthy();
+    view.rerender(
+      <RemoveCloudHostDialog
+        hostId="build"
+        name="Login box"
+        status={status({ createdFor: null })}
+        providerName="Acme"
+        provider={consoleOnly}
+        onClose={() => {}}
+      />
+    );
+    expect(screen.queryByRole("radio")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Remove host" }));
+    await waitFor(() => expect(remoteClient.forget).toHaveBeenCalledWith("build"));
+    expect(cloudClient.deleteMachine).not.toHaveBeenCalled();
+  });
+
+  it("still says a kept machine bills when its saved disk has expired", () => {
+    openWith(
+      status({ createdFor: null, dataExpired: true }),
+      providerWith({ stoppedComputeBilled: true, deletion: true })
+    );
+    expect(dialogText()).toContain(
+      "Acme has deleted its saved disk. It keeps billing Personal until it's deleted."
+    );
+  });
+});

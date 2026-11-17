@@ -1212,6 +1212,46 @@ describe("CloudHostLifecycle.deleteMachine by the provider's declaration (#17346
     expect(store.bindings()[0]!.resourceId).toBe("bx_23456789");
   });
 
+  it("leaves an operation under way running when it refuses", async () => {
+    const { lifecycle, provider, store, state } = await setup({ machine: "stopped" });
+    await lifecycle.importMachine({
+      accountId: store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    let release: () => void = () => {};
+    vi.mocked(provider.inspect).mockImplementation(async () => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return state.machine;
+    });
+    const starting = lifecycle.startMachine("build");
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation?.kind).toBe("starting"));
+    withoutDeletion(provider);
+    await expect(lifecycle.deleteMachine("build", "bx_23456789")).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+    expect(lifecycle.statuses()[0]?.operation?.kind).toBe("starting");
+    vi.mocked(provider.inspect).mockImplementation(async () => state.machine);
+    release();
+    await starting.catch(() => {});
+  });
+
+  it("asks again before the delete itself, so a provider replaced meanwhile isn't asked", async () => {
+    const { lifecycle, provider, store, hosts, disconnect } = await setup();
+    await lifecycle.importMachine({
+      accountId: store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    // Revoked after the first check, while the link is let go.
+    disconnect.mockImplementationOnce(async () => withoutDeletion(provider));
+    await expect(lifecycle.deleteMachine("build", "bx_23456789")).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+    expect(provider.delete).not.toHaveBeenCalled();
+    expect(hosts.map((host) => host.id)).toEqual(["build"]);
+  });
+
   it("refuses an unanswered create's host without looking for its machine", async () => {
     const { lifecycle, provider, store, hosts } = await setup();
     vi.mocked(provider.create).mockRejectedValueOnce(

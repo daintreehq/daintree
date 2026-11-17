@@ -66,7 +66,7 @@ function keepState(status: CloudHostStatus, providerName: string, billedStopped:
         : `It's stopping. Once stopped it stays in your account.${back}`;
     case "stopped":
       return status.dataExpired
-        ? `It stays in your account, but ${providerName} has deleted its saved disk.`
+        ? `It stays in your account, but ${providerName} has deleted its saved disk.${billedStopped ? ` It keeps billing ${status.accountName} until it's deleted.` : ""}`
         : billedStopped
           ? `It stays stopped in your account and keeps billing ${status.accountName} until it's deleted.${back}`
           : `It stays stopped in your account.${back}`;
@@ -102,26 +102,38 @@ export function RemoveCloudHostDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const now = useNow(status !== null);
-  // The machine this dialog is about, as it was when it first knew.
-  // Whether it may delete is fixed with it; main refuses a delete the provider no longer allows.
+  // The machine this dialog is about, as it was when it first knew, with
+  // whether it could be deleted then. A provider registered since as unable to
+  // delete takes that away; nothing gives it back. Main refuses such a delete too.
   const [openedFor, setOpenedFor] = useState(() =>
     status ? { resourceId: status.resourceId, deletable: canDeleteMachines(provider) } : null
   );
   if (openedFor === null && status !== null) {
     setOpenedFor({ resourceId: status.resourceId, deletable: canDeleteMachines(provider) });
   }
-  const deletable = openedFor?.deletable ?? canDeleteMachines(provider);
+  const deletable = (openedFor?.deletable ?? true) && canDeleteMachines(provider);
   const created = openedFor !== null && openedFor.resourceId !== null;
   const mayHaveMachine =
     openedFor !== null &&
     !created &&
     status !== null &&
     (status.operation?.kind === "creating" || status.lastError?.code === "outcome-unknown");
+  // A create that landed while this was open: a machine the opening never named.
+  const appeared = openedFor !== null && !created && status !== null && status.resourceId !== null;
   const deleting = deletable && ((created && choice === "delete") || mayHaveMachine);
   const billedStopped = billsWhileStopped(provider);
-  // Only a provider without deletion: its machine is deleted, if at all, in its own console.
-  const consoleUrl = !deletable && provider ? provider.dashboardUrl : null;
   const ready = status !== null && openedFor !== null;
+  // Only a provider without deletion: its machine is deleted, if at all, in its
+  // own console, and is claimed to exist only from a fresh reading.
+  const machineGone = status?.machine === "deleted";
+  const machineSeen =
+    status !== null &&
+    status.machine !== "unknown" &&
+    !isObservationStale({ ...status, operation: null }, now);
+  const consoleUrl =
+    ready && !deletable && provider && !machineGone && (created || mayHaveMachine || appeared)
+      ? provider.dashboardUrl
+      : null;
   // A machine made for a worktree is expected to go with it; removing the host
   // by hand leaves it in the account, so the dialog names what stays. Its
   // existence is claimed only from a fresh reading: an unknown or old one may
@@ -145,7 +157,7 @@ export function RemoveCloudHostDialog({
     // machine confirmed here and finds one an unanswered create may have made.
     // A provider without deletion is only ever forgotten here.
     const work =
-      openedFor.deletable && (deleting || !created)
+      deletable && (deleting || !created)
         ? cloudHostsClient.deleteMachine(hostId, openedFor.resourceId)
         : remoteHostsClient.forget(hostId);
     work.then(
@@ -176,8 +188,10 @@ export function RemoveCloudHostDialog({
             ? keptMachine.seen
               ? `The host leaves your list, but its machine '${keptMachine.name}' still exists in your ${providerName} account (${status.accountName}).`
               : `The host leaves your list, but removing it doesn't delete its machine '${keptMachine.name}' from your ${providerName} account (${status.accountName}).`
-            : !deletable && created
-              ? `The host leaves your list, but its machine stays in your ${providerName} account.`
+            : !deletable && (created || appeared) && !machineGone
+              ? machineSeen && created
+                ? `The host leaves your list, but its machine stays in your ${providerName} account.`
+                : `The host leaves your list, but removing it doesn't delete its machine from your ${providerName} account.`
               : "The host leaves your list."
       } Windows on it return to this machine, and its plugin permissions, history and browser data on this device are cleared.`}
       confirmLabel={deleting ? "Delete machine" : "Remove host"}
@@ -195,7 +209,7 @@ export function RemoveCloudHostDialog({
     >
       <div className="space-y-3" data-testid="remove-cloud-host-choice">
         {!ready && <p className="text-sm text-text-secondary">Reading the machine&apos;s state…</p>}
-        {ready && created && status && !deletable && (
+        {ready && created && status && !deletable && !machineGone && (
           <p className="text-sm text-text-secondary">
             {keepDescription(status, providerName, billedStopped, now)}
           </p>
@@ -222,15 +236,17 @@ export function RemoveCloudHostDialog({
             />
           </RadioChoiceGroup>
         )}
-        {ready && !created && !mayHaveMachine && (
+        {ready && !created && !mayHaveMachine && !appeared && (
           <p className="text-sm text-text-secondary">No machine was created for it.</p>
         )}
-        {ready && !created && mayHaveMachine && !deletable && (
+        {ready && !created && (mayHaveMachine || appeared) && !deletable && (
           <p className="text-sm text-text-secondary">
-            {`${providerName} hasn't confirmed whether it made a machine for it, and removing the host doesn't delete one.`}
+            {appeared
+              ? `${providerName} made a machine for it while this was open, and removing the host doesn't delete it.`
+              : `${providerName} hasn't confirmed whether it made a machine for it, and removing the host doesn't delete one.`}
           </p>
         )}
-        {ready && consoleUrl !== null && (created || mayHaveMachine) && (
+        {consoleUrl !== null && (
           <div className="space-y-2" data-testid="remove-cloud-host-console">
             <p className="text-sm text-text-secondary">
               {`Daintree can't delete machines on ${providerName}. To delete it and stop paying for it, use ${providerName}'s console.`}

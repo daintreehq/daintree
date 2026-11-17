@@ -285,13 +285,12 @@ function HostMenuItem({
         ? `checked ${formatTimeAgo(cloud.observedAt, now)}`
         : "never checked"
       : null;
+  // A stopped machine that still bills says so, in either section.
+  const billingFact =
+    machineDown && cloud.operation === null ? stoppedBillingFact(cloud, provider) : null;
   // A running cloud machine's row says what it costs and when it stops, beside the link.
   const note = machineDown
-    ? [
-        cloud.operation === null ? stoppedBillingFact(cloud, provider) : null,
-        staleAge,
-        canStartMachine(cloud) ? "Opening it starts the machine" : null,
-      ]
+    ? [billingFact, staleAge, canStartMachine(cloud) ? "Opening it starts the machine" : null]
         .filter(Boolean)
         .join(" · ") || null
     : cloud !== null
@@ -324,7 +323,9 @@ function HostMenuItem({
       {away ? (
         <AwayHostLabel
           row={row}
-          machineState={machineDown ? [state, staleAge].filter(Boolean).join(" · ") : null}
+          machineState={
+            machineDown ? [state, billingFact, staleAge].filter(Boolean).join(" · ") : null
+          }
         />
       ) : (
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -434,7 +435,8 @@ export function HostChip() {
   const cloudNews = useCloudLifecycleNews(
     cloudHosts,
     (hostId) =>
-      hostList.hosts.find((entry) => entry.descriptor.id === hostId)?.descriptor.name ?? hostId
+      hostList.hosts.find((entry) => entry.descriptor.id === hostId)?.descriptor.name ?? hostId,
+    cloudProviders
   );
 
   if (!visible) return null;
