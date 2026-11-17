@@ -209,41 +209,94 @@ describe("EditorIntegrationTab", () => {
     });
   });
 
-  it("tells WebStorm and IntelliJ IDEA apart, and keeps the saved one selected on reload", async () => {
-    const jetbrains = [
-      { id: "webstorm", available: true, executablePath: "/opt/jetbrains/webstorm" },
-      { id: "intellij-idea", available: true, executablePath: "/opt/jetbrains/idea" },
-    ];
-    getConfigMock.mockResolvedValue({
-      preferredEditor: { id: "webstorm" },
-      discoveredEditors: jetbrains,
-    });
-    const saveButton = await renderLoadedTab();
-    const select = screen.getByLabelText("Editor") as HTMLSelectElement;
+  describe("JetBrains IDEs", () => {
     const optionText = (id: string) =>
-      Array.from(select.options).find((option) => option.value === id)?.textContent;
-    expect(optionText("webstorm")).toBe("WebStorm");
-    expect(optionText("intellij-idea")).toBe("IntelliJ IDEA");
+      Array.from((screen.getByLabelText("Editor") as HTMLSelectElement).options).find(
+        (option) => option.value === id
+      )?.textContent;
 
-    selectEditor("intellij-idea");
-    fireEvent.click(saveButton);
-    await waitFor(() => {
-      expect(setConfigMock).toHaveBeenCalledWith({
-        editor: { id: "intellij-idea", customCommand: undefined, customTemplate: undefined },
-        projectId: "proj-1",
+    it("tells WebStorm and IntelliJ IDEA apart, and keeps the saved one selected on reload", async () => {
+      const jetbrains = [
+        { id: "jetbrains-webstorm", available: true, executablePath: "/opt/jetbrains/webstorm" },
+        { id: "jetbrains-idea", available: true, executablePath: "/opt/jetbrains/idea" },
+      ];
+      getConfigMock.mockResolvedValue({
+        preferredEditor: { id: "jetbrains-webstorm" },
+        discoveredEditors: jetbrains,
       });
+      const saveButton = await renderLoadedTab();
+      expect(optionText("jetbrains-webstorm")).toBe("WebStorm");
+      expect(optionText("jetbrains-idea")).toBe("IntelliJ IDEA");
+
+      selectEditor("jetbrains-idea");
+      fireEvent.click(saveButton);
+      await waitFor(() => {
+        expect(setConfigMock).toHaveBeenCalledWith({
+          editor: { id: "jetbrains-idea", customCommand: undefined, customTemplate: undefined },
+          projectId: "proj-1",
+        });
+      });
+
+      cleanup();
+      getConfigMock.mockResolvedValue({
+        preferredEditor: { id: "jetbrains-idea" },
+        discoveredEditors: jetbrains,
+      });
+      await renderLoadedTab();
+
+      expect((screen.getByLabelText("Editor") as HTMLSelectElement).value).toBe("jetbrains-idea");
+      const selected = document.querySelector('[data-editor-entry="jetbrains-idea"]');
+      expect(selected?.textContent).toContain("/opt/jetbrains/idea");
     });
 
-    cleanup();
-    getConfigMock.mockResolvedValue({
-      preferredEditor: { id: "intellij-idea" },
-      discoveredEditors: jetbrains,
-    });
-    await renderLoadedTab();
+    it("never offers the pre-split JetBrains choice to a project that doesn't have it", async () => {
+      await renderLoadedTab();
 
-    expect((screen.getByLabelText("Editor") as HTMLSelectElement).value).toBe("intellij-idea");
-    const selected = document.querySelector('[data-editor-entry="intellij-idea"]');
-    expect(selected?.textContent).toContain("/opt/jetbrains/idea");
+      expect(optionText("webstorm")).toBeUndefined();
+    });
+
+    it("shows a saved pre-split choice as the JetBrains IDE it opens, without rewriting it", async () => {
+      getConfigMock.mockResolvedValue({
+        preferredEditor: { id: "webstorm" },
+        discoveredEditors: [
+          { id: "vscode", available: true, executablePath: "/usr/bin/code" },
+          { id: "jetbrains-webstorm", available: false },
+          { id: "jetbrains-idea", available: true, executablePath: "/opt/jetbrains/idea" },
+          { id: "jetbrains-pycharm", available: true, executablePath: "/opt/jetbrains/pycharm" },
+        ],
+      });
+      const saveButton = await renderLoadedTab();
+      const select = screen.getByLabelText("Editor") as HTMLSelectElement;
+
+      expect(select.value).toBe("webstorm");
+      expect(optionText("webstorm")).toBe("Any JetBrains IDE");
+      expect(saveButton.disabled).toBe(true);
+      const entries = Array.from(document.querySelectorAll("[data-editor-entry]"));
+      expect(entries.map((el) => el.getAttribute("data-editor-entry"))).toEqual(["jetbrains-idea"]);
+      expect(entries[0]?.textContent).toContain("/opt/jetbrains/idea");
+      expect(screen.getByText("Not found: WebStorm")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Show 2 other found editors" })).toBeTruthy();
+
+      selectEditor("jetbrains-webstorm");
+      expect(optionText("webstorm")).toBeUndefined();
+      expect(setConfigMock).not.toHaveBeenCalled();
+    });
+
+    it("marks a saved pre-split choice not found when no JetBrains IDE is", async () => {
+      getConfigMock.mockResolvedValue({
+        preferredEditor: { id: "webstorm" },
+        discoveredEditors: [
+          { id: "vscode", available: true, executablePath: "/usr/bin/code" },
+          { id: "jetbrains-idea", available: false },
+        ],
+      });
+      await renderLoadedTab();
+
+      expect(optionText("webstorm")).toBe("Any JetBrains IDE (not found)");
+      const entries = Array.from(document.querySelectorAll("[data-editor-entry]"));
+      expect(entries.map((el) => el.getAttribute("data-editor-entry"))).toEqual(["webstorm"]);
+      expect(entries[0]?.textContent).toContain("Any JetBrains IDE");
+    });
   });
 
   it("keeps Save disabled until the draft differs from the saved preference", async () => {

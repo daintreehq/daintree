@@ -111,7 +111,7 @@ describe("EditorService.discover", () => {
 
     const discover = await loadDiscover();
     const results = await discover();
-    const webstorm = results.find((e) => e.id === "webstorm");
+    const webstorm = results.find((e) => e.id === "jetbrains-webstorm");
 
     expect(webstorm).toBeDefined();
     expect(webstorm!.available).toBe(true);
@@ -124,7 +124,7 @@ describe("EditorService.discover", () => {
 
     const discover = await loadDiscover();
     const results = await discover();
-    const idea = results.find((e) => e.id === "intellij-idea");
+    const idea = results.find((e) => e.id === "jetbrains-idea");
 
     expect(idea).toBeDefined();
     expect(idea!.available).toBe(true);
@@ -149,11 +149,11 @@ describe("EditorService.discover", () => {
     const discover = await loadDiscover();
     const results = await discover();
 
-    expect(results.find((e) => e.id === "intellij-idea")!.executablePath).toBe("/slow/bin/idea");
+    expect(results.find((e) => e.id === "jetbrains-idea")!.executablePath).toBe("/slow/bin/idea");
 
     present.delete("/slow/bin/idea");
     const second = await discover();
-    expect(second.find((e) => e.id === "intellij-idea")!.executablePath).toBe("/fast/bin/idea");
+    expect(second.find((e) => e.id === "jetbrains-idea")!.executablePath).toBe("/fast/bin/idea");
   });
 
   it("skips a directory match and a non-executable file for the next candidate", async () => {
@@ -235,7 +235,7 @@ describe("EditorService.discover", () => {
 
     const discover = await loadDiscover();
     const results = await discover();
-    const webstorm = results.find((e) => e.id === "webstorm");
+    const webstorm = results.find((e) => e.id === "jetbrains-webstorm");
 
     expect(webstorm).toBeDefined();
     expect(webstorm!.available).toBe(true);
@@ -263,7 +263,7 @@ describe("EditorService.discover", () => {
 
     const discover = await loadDiscover();
     const results = await discover();
-    const webstorm = results.find((e) => e.id === "webstorm");
+    const webstorm = results.find((e) => e.id === "jetbrains-webstorm");
 
     expect(webstorm).toBeDefined();
     expect(webstorm!.available).toBe(false);
@@ -1006,6 +1006,7 @@ describe("EditorService directory targets", () => {
       ["zed", "zed"],
       ["sublime", "subl"],
       ["webstorm", "webstorm"],
+      ["jetbrains-idea", "idea"],
     ] as const) {
       vi.clearAllMocks();
       mockExecaChildren(execaMock.execa, ["spawned"]);
@@ -1354,8 +1355,8 @@ describe("EditorService JetBrains products", () => {
 
     const results = await discover();
 
-    expect(results.find((e) => e.id === "webstorm")?.executablePath).toBe(WEBSTORM);
-    expect(results.find((e) => e.id === "intellij-idea")?.executablePath).toBe(IDEA);
+    expect(results.find((e) => e.id === "jetbrains-webstorm")?.executablePath).toBe(WEBSTORM);
+    expect(results.find((e) => e.id === "jetbrains-idea")?.executablePath).toBe(IDEA);
   });
 
   it("reports WebStorm as not found when only IntelliJ IDEA is installed", async () => {
@@ -1364,8 +1365,8 @@ describe("EditorService JetBrains products", () => {
 
     const results = await discover();
 
-    expect(results.find((e) => e.id === "webstorm")?.available).toBe(false);
-    expect(results.find((e) => e.id === "intellij-idea")?.executablePath).toBe(IDEA);
+    expect(results.find((e) => e.id === "jetbrains-webstorm")?.available).toBe(false);
+    expect(results.find((e) => e.id === "jetbrains-idea")?.executablePath).toBe(IDEA);
   });
 
   it("finds each product's own Toolbox script and community-edition bundle", async () => {
@@ -1382,15 +1383,15 @@ describe("EditorService JetBrains products", () => {
     );
 
     expect(found).toEqual({
-      goland: `${toolbox}/goland`,
-      pycharm: "/Users/testuser/Applications/PyCharm CE.app/Contents/MacOS/pycharm",
-      "intellij-idea": "/Applications/IntelliJ IDEA CE.app/Contents/MacOS/idea",
+      "jetbrains-goland": `${toolbox}/goland`,
+      "jetbrains-pycharm": "/Users/testuser/Applications/PyCharm CE.app/Contents/MacOS/pycharm",
+      "jetbrains-idea": "/Applications/IntelliJ IDEA CE.app/Contents/MacOS/idea",
     });
   });
 
   it.each([
-    { id: "webstorm", expected: WEBSTORM },
-    { id: "intellij-idea", expected: IDEA },
+    { id: "jetbrains-webstorm", expected: WEBSTORM },
+    { id: "jetbrains-idea", expected: IDEA },
   ] as const)("opens a file at its line in the chosen $id", async ({ id, expected }) => {
     mockExistingFiles([WEBSTORM, IDEA]);
     const { openFile } = await loadModule();
@@ -1407,8 +1408,8 @@ describe("EditorService JetBrains products", () => {
   });
 
   it.each([
-    { id: "webstorm", expected: WEBSTORM },
-    { id: "intellij-idea", expected: IDEA },
+    { id: "jetbrains-webstorm", expected: WEBSTORM },
+    { id: "jetbrains-idea", expected: IDEA },
   ] as const)("opens a worktree folder in the chosen $id", async ({ id, expected }) => {
     mockExistingFiles([WEBSTORM, IDEA]);
     const { openFile } = await loadModule();
@@ -1443,11 +1444,63 @@ describe("EditorService JetBrains products", () => {
     expect(launchedPrograms()).toEqual(["/late/bin/webstorm"]);
   });
 
+  it("reports no separate row for a saved webstorm choice", async () => {
+    mockExistingFiles([WEBSTORM, IDEA]);
+    const { discover } = await loadModule();
+
+    const ids = (await discover()).map((e) => e.id);
+
+    expect(ids).not.toContain("webstorm");
+  });
+
+  // The two ids differ only once WebStorm is gone: the old one meant any
+  // JetBrains IDE, a WebStorm chosen since then means WebStorm.
+  it.each([
+    { id: "webstorm", expected: IDEA },
+    { id: "jetbrains-webstorm", expected: "code" },
+  ] as const)("with only IDEA installed, $id opens $expected", async ({ id, expected }) => {
+    process.env.VISUAL = "code";
+    mockExistingFiles([IDEA]);
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/src/Main.java", 3, undefined, { id });
+
+    expect(launchedPrograms()).toEqual([expected]);
+  });
+
+  it("finds a Windows Toolbox script under a profile path with spaces", async () => {
+    setPlatform("win32");
+    const originalLocalAppData = process.env.LOCALAPPDATA;
+    const originalPathExt = process.env.PATHEXT;
+    process.env.LOCALAPPDATA = "C:\\Users\\Test User\\AppData\\Local";
+    process.env.PATHEXT = ".EXE;.CMD";
+    const script = "C:\\Users\\Test User\\AppData\\Local\\JetBrains\\Toolbox\\scripts\\idea.cmd";
+    windowsDisk([script]);
+
+    try {
+      const { discover, openFile } = await loadModule();
+      const results = await discover();
+      expect(results.find((e) => e.id === "jetbrains-idea")?.executablePath).toBe(script);
+      expect(results.find((e) => e.id === "jetbrains-webstorm")?.available).toBe(false);
+
+      await openFile("/repo/Main.java", 7, undefined, { id: "jetbrains-idea" });
+      expect(execaMock.execa.mock.calls[0]?.slice(0, 2)).toEqual([
+        script,
+        ["--line", "7", "/repo/Main.java"],
+      ]);
+    } finally {
+      if (originalLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = originalLocalAppData;
+      if (originalPathExt === undefined) delete process.env.PATHEXT;
+      else process.env.PATHEXT = originalPathExt;
+    }
+  });
+
   it("never swaps a chosen product for a different JetBrains IDE", async () => {
     mockExistingFiles([WEBSTORM, VSCODE]);
     const { openFile } = await loadModule();
 
-    await openFile("/abs/src/Main.java", 3, undefined, { id: "intellij-idea" });
+    await openFile("/abs/src/Main.java", 3, undefined, { id: "jetbrains-idea" });
 
     expect(launchedPrograms()).toEqual([VSCODE]);
   });

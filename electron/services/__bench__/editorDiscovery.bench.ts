@@ -172,7 +172,7 @@ const found = sample
   .filter((e) => e.executablePath)
   .map((e) => `${e.id}=${path.basename(e.executablePath!)}`);
 const launched = path.basename(execaMock.execa.mock.lastCall?.[0] ?? "none");
-if (found.join(",") !== "rider=rider,sublime=subl" || launched !== "rider") {
+if (found.join(",") !== "jetbrains-rider=rider,sublime=subl" || launched !== "rider") {
   throw new Error(`Unexpected discovery result: ${found.join(",")} / ${launched}`);
 }
 // Straight to the fd: bench mode swallows console output.

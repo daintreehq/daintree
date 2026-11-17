@@ -4,9 +4,12 @@ import os from "os";
 import { openWithDefaultApp } from "../utils/openPath.js";
 import { linuxDesktopAppEnv } from "./pty/EnvironmentFilter.js";
 import {
+  JETBRAINS_EDITOR_IDS,
+  LEGACY_JETBRAINS_EDITOR_ID,
   terminalOnlyEditorCommand,
-  type EditorConfig,
   type DiscoveredEditor,
+  type EditorConfig,
+  type JetBrainsEditorId,
   type KnownEditorId,
 } from "../../shared/types/editor.js";
 import type { SystemOpenInEditorNeedsTerminal } from "../../shared/types/ipc/system.js";
@@ -31,7 +34,6 @@ interface EditorDefinition {
 }
 
 interface JetBrainsProduct {
-  id: KnownEditorId;
   name: string;
   /** The launcher name, both for a Toolbox script and inside the app bundle */
   binary: string;
@@ -39,27 +41,21 @@ interface JetBrainsProduct {
   bundles: string[];
 }
 
-/**
- * One entry per IDE, so each is its own choice. Listed in the order their
- * binaries were searched when they shared a single entry, which keeps the
- * automatic pick in `openFile` landing on the same IDE it always did.
- */
-const JETBRAINS_PRODUCTS: JetBrainsProduct[] = [
-  { id: "webstorm", name: "WebStorm", binary: "webstorm", bundles: ["WebStorm"] },
-  {
-    id: "intellij-idea",
+const JETBRAINS_PRODUCTS: Record<JetBrainsEditorId, JetBrainsProduct> = {
+  "jetbrains-webstorm": { name: "WebStorm", binary: "webstorm", bundles: ["WebStorm"] },
+  "jetbrains-idea": {
     name: "IntelliJ IDEA",
     binary: "idea",
     bundles: ["IntelliJ IDEA", "IntelliJ IDEA CE"],
   },
-  { id: "phpstorm", name: "PhpStorm", binary: "phpstorm", bundles: ["PhpStorm"] },
-  { id: "pycharm", name: "PyCharm", binary: "pycharm", bundles: ["PyCharm", "PyCharm CE"] },
-  { id: "goland", name: "GoLand", binary: "goland", bundles: ["GoLand"] },
-  { id: "rider", name: "Rider", binary: "rider", bundles: ["Rider"] },
-  { id: "clion", name: "CLion", binary: "clion", bundles: ["CLion"] },
-  { id: "datagrip", name: "DataGrip", binary: "datagrip", bundles: ["DataGrip"] },
-  { id: "rubymine", name: "RubyMine", binary: "rubymine", bundles: ["RubyMine"] },
-];
+  "jetbrains-phpstorm": { name: "PhpStorm", binary: "phpstorm", bundles: ["PhpStorm"] },
+  "jetbrains-pycharm": { name: "PyCharm", binary: "pycharm", bundles: ["PyCharm", "PyCharm CE"] },
+  "jetbrains-goland": { name: "GoLand", binary: "goland", bundles: ["GoLand"] },
+  "jetbrains-rider": { name: "Rider", binary: "rider", bundles: ["Rider"] },
+  "jetbrains-clion": { name: "CLion", binary: "clion", bundles: ["CLion"] },
+  "jetbrains-datagrip": { name: "DataGrip", binary: "datagrip", bundles: ["DataGrip"] },
+  "jetbrains-rubymine": { name: "RubyMine", binary: "rubymine", bundles: ["RubyMine"] },
+};
 
 function jetbrainsBuildArgs(filePath: string, line?: number): string[] {
   if (line !== undefined) {
@@ -68,34 +64,38 @@ function jetbrainsBuildArgs(filePath: string, line?: number): string[] {
   return [filePath];
 }
 
-function jetbrainsEditor(product: JetBrainsProduct): EditorDefinition {
-  return {
-    id: product.id,
-    name: product.name,
-    binaries: [product.binary],
-    extraDirs: () => [
-      ...jetbrainsToolboxScriptDirs(),
-      ...macAppBundleDirs(product.bundles.map((name) => ({ name }))),
-    ],
-    buildArgs: jetbrainsBuildArgs,
-  };
+function jetbrainsDirs(products: JetBrainsProduct[]): () => string[] {
+  return () => [
+    ...jetbrainsToolboxScriptDirs(),
+    ...macAppBundleDirs(products.flatMap((product) => product.bundles).map((name) => ({ name }))),
+  ];
 }
 
 /**
- * What a saved `webstorm` meant before each IDE had its own entry: whichever
- * JetBrains IDE is found first. A config saved then keeps opening the same IDE
- * when WebStorm itself isn't installed, instead of leaving JetBrains entirely.
+ * One entry per IDE, in the order their launchers were searched when they shared
+ * a single entry, so the automatic pick in `openFile` lands on the IDE it always did.
+ */
+const JETBRAINS_EDITORS: EditorDefinition[] = JETBRAINS_EDITOR_IDS.map((id) => {
+  const product = JETBRAINS_PRODUCTS[id];
+  return {
+    id,
+    name: product.name,
+    binaries: [product.binary],
+    extraDirs: jetbrainsDirs([product]),
+    buildArgs: jetbrainsBuildArgs,
+  };
+});
+
+/**
+ * The single entry a saved `webstorm` names: every JetBrains launcher, searched
+ * launcher first and directory second, exactly as before the split. Not
+ * discovered on its own, since each IDE it can find already is.
  */
 const LEGACY_JETBRAINS: EditorDefinition = {
-  id: "webstorm",
-  name: "WebStorm",
-  binaries: JETBRAINS_PRODUCTS.map((product) => product.binary),
-  extraDirs: () => [
-    ...jetbrainsToolboxScriptDirs(),
-    ...macAppBundleDirs(
-      JETBRAINS_PRODUCTS.flatMap((product) => product.bundles).map((name) => ({ name }))
-    ),
-  ],
+  id: LEGACY_JETBRAINS_EDITOR_ID,
+  name: "JetBrains IDE",
+  binaries: JETBRAINS_EDITOR_IDS.map((id) => JETBRAINS_PRODUCTS[id].binary),
+  extraDirs: jetbrainsDirs(JETBRAINS_EDITOR_IDS.map((id) => JETBRAINS_PRODUCTS[id])),
   buildArgs: jetbrainsBuildArgs,
 };
 
@@ -176,7 +176,7 @@ const KNOWN_EDITORS: EditorDefinition[] = [
       return [filePath];
     },
   },
-  ...JETBRAINS_PRODUCTS.map(jetbrainsEditor),
+  ...JETBRAINS_EDITORS,
   {
     id: "sublime",
     name: "Sublime Text",
@@ -304,8 +304,9 @@ function jetbrainsToolboxScriptDirs(): string[] {
   } else if (process.platform === "linux") {
     dirs.push(path.posix.join(os.homedir(), ".local", "share", "JetBrains", "Toolbox", "scripts"));
   } else if (process.platform === "win32") {
-    const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
-    dirs.push(path.join(localAppData, "JetBrains", "Toolbox", "scripts"));
+    const localAppData =
+      process.env.LOCALAPPDATA || path.win32.join(os.homedir(), "AppData", "Local");
+    dirs.push(path.win32.join(localAppData, "JetBrains", "Toolbox", "scripts"));
   }
   return dirs;
 }
@@ -354,6 +355,7 @@ function findWindowsEditor(binary: string, extraDirs: string[] = []): Promise<st
 }
 
 function resolveEditorDef(id: KnownEditorId): EditorDefinition | undefined {
+  if (id === LEGACY_JETBRAINS_EDITOR_ID) return LEGACY_JETBRAINS;
   return KNOWN_EDITORS.find((e) => e.id === id);
 }
 
@@ -582,7 +584,7 @@ export async function openFile(
         if (launched) return;
       }
     } else {
-      const def = config.id === "webstorm" ? LEGACY_JETBRAINS : resolveEditorDef(config.id);
+      const def = resolveEditorDef(config.id);
       const terminalCommand = def && terminalOnlyEditorCommand(def.id);
       if (def && terminalCommand) {
         return { outcome: "needs-terminal", editorName: def.name, command: terminalCommand };
