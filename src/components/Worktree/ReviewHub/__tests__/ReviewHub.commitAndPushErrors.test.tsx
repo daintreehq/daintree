@@ -306,6 +306,9 @@ const makeStatus = (overrides?: Partial<StagingStatus>): StagingStatus => ({
   ...overrides,
 });
 
+/** What the approving pull-rebase confirm showed; the pull carries exactly this (#17188). */
+const PULL_REBASE_REVIEW = { branch: "feature/x", headOid: "f".repeat(40) };
+
 /**
  * `pullRebase` gates on the shared pull-rebase confirm (#8242), the same one
  * the `git.pullRebase` action uses. The push-error CTA only asks for it;
@@ -315,7 +318,7 @@ async function confirmPullRebase(): Promise<void> {
   await waitFor(() =>
     expect(useGitPullRebaseConfirmStore.getState().pendingConfirm?.cwd).toBe(WORKTREE_PATH)
   );
-  useGitPullRebaseConfirmStore.getState().resolveConfirmation(true);
+  useGitPullRebaseConfirmStore.getState().resolveConfirmation(PULL_REBASE_REVIEW);
 }
 
 describe("ReviewHub", () => {
@@ -969,7 +972,9 @@ describe("ReviewHub", () => {
         await Promise.resolve();
       });
 
-      await waitFor(() => expect(pullRebaseMock).toHaveBeenCalledWith(WORKTREE_PATH));
+      await waitFor(() =>
+        expect(pullRebaseMock).toHaveBeenCalledWith(WORKTREE_PATH, PULL_REBASE_REVIEW)
+      );
       await waitFor(() => expect(screen.queryByTestId("review-hub-push-error")).toBeNull());
       // refresh() called: once on initial load + once after commit (in
       // handleCommitAndPush) + once after pull-rebase success.
@@ -999,7 +1004,7 @@ describe("ReviewHub", () => {
         expect(useGitPullRebaseConfirmStore.getState().pendingConfirm?.cwd).toBe(WORKTREE_PATH)
       );
       expect(pullRebaseMock).not.toHaveBeenCalled();
-      useGitPullRebaseConfirmStore.getState().resolveConfirmation(false);
+      useGitPullRebaseConfirmStore.getState().resolveConfirmation(null);
     });
 
     it("Pull-and-rebase failure surfaces conflict-unresolved through the banner", async () => {
@@ -1036,6 +1041,64 @@ describe("ReviewHub", () => {
           "conflict-unresolved"
         )
       );
+    });
+
+    it("a stale pull-rebase preview re-banners with a CTA that asks for a fresh confirm (#17188)", async () => {
+      pushMock.mockRejectedValue(
+        Object.assign(new Error("! [rejected]"), {
+          name: "GitOperationError",
+          gitReason: "push-rejected-outdated",
+          leaseSha: "abc123",
+          branchName: "feature/x",
+        })
+      );
+
+      await triggerCommitAndPush();
+      await screen.findByTestId("review-hub-push-error");
+
+      pullRebaseMock.mockRejectedValueOnce(
+        Object.assign(new Error("The branch changed since this pull and rebase was previewed"), {
+          name: "GitOperationError",
+          gitReason: "pull-rebase-review-stale",
+        })
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("review-hub-push-error-cta"));
+        await Promise.resolve();
+      });
+      await act(async () => {
+        await confirmPullRebase();
+        await Promise.resolve();
+      });
+
+      await waitFor(() =>
+        expect(screen.getByTestId("review-hub-push-error").getAttribute("data-reason")).toBe(
+          "pull-rebase-review-stale"
+        )
+      );
+      expect(pullRebaseMock).toHaveBeenCalledTimes(1);
+
+      // The CTA reopens the confirm for a fresh preview; it never retries the
+      // approval that just went stale.
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("review-hub-push-error-cta"));
+        await Promise.resolve();
+      });
+      await waitFor(() =>
+        expect(useGitPullRebaseConfirmStore.getState().pendingConfirm?.cwd).toBe(WORKTREE_PATH)
+      );
+      expect(pullRebaseMock).toHaveBeenCalledTimes(1);
+
+      // The second pull carries the second approval, never the stale one.
+      const fresh = { branch: "feature/x", headOid: "a".repeat(40) };
+      pullRebaseMock.mockResolvedValueOnce(undefined);
+      await act(async () => {
+        useGitPullRebaseConfirmStore.getState().resolveConfirmation(fresh);
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(pullRebaseMock).toHaveBeenCalledTimes(2));
+      expect(pullRebaseMock).toHaveBeenLastCalledWith(WORKTREE_PATH, fresh);
     });
 
     it("Force-push CTA dispatches the action rather than pushing from this pane", async () => {

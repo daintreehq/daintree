@@ -37,7 +37,7 @@ import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
 import type { ForgeNewPRLinkRequest } from "../shared/types/ipc/forge.js";
 import type { ProjectCloneJobSnapshot } from "../shared/types/ipc/projectClone.js";
 import type { KeybindingOverridesSnapshot } from "../shared/types/ipc/api.js";
-import type { GitPushReview } from "../shared/types/git.js";
+import type { GitPullRebaseReview, GitPushReview } from "../shared/types/git.js";
 import type { PluginPerfSnapshot } from "../shared/types/pluginMetrics.js";
 import type { PluginRendererMetricsEnvelope } from "../shared/types/ipc/pluginMetrics.js";
 import { CHANNELS } from "./ipc/channels.js";
@@ -2217,7 +2217,11 @@ function buildElectronApi(): ElectronAPI {
             : {}),
         }),
 
-      pullRebase: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_PULL_REBASE, { cwd }),
+      pullRebase: (cwd: string, review?: GitPullRebaseReview) =>
+        _unwrappingInvoke(CHANNELS.GIT_PULL_REBASE, {
+          cwd,
+          ...(review ? { expectedBranch: review.branch, expectedHeadOid: review.headOid } : {}),
+        }),
 
       ...buildGitFetchPreloadBindings(_unwrappingInvoke),
 

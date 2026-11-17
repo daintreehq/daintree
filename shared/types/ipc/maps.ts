@@ -986,11 +986,13 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
   "git:pull-rebase": {
-    args: [payload: { cwd: string }];
+    args: [payload: { cwd: string; expectedBranch?: string; expectedHeadOid?: string }];
     /**
-     * Runs `git pull --rebase origin <currentBranch>`. Throws
+     * Runs `git pull --rebase <upstream remote> <upstream branch>`. Throws
      * `GitOperationError` on failure (including `conflict-unresolved` when the
-     * rebase halts on a conflict).
+     * rebase halts on a conflict). With `expectedBranch` and `expectedHeadOid`
+     * (both or neither) it refuses with `pull-rebase-review-stale` when the
+     * worktree is no longer on that branch at that commit.
      */
     result: void;
   };

@@ -335,6 +335,24 @@ export interface GitRebaseCommitPreview {
    * the last fetch. Empty when the range could not be measured.
    */
   incoming: GitRemoteCommit[];
+  /**
+   * The commit the named branch pointed at once the ranges above were measured,
+   * read last so a commit landing mid-read shows up as a refusal on submit
+   * rather than an unnoticed substitution. `null` when it could not be read,
+   * which leaves the preview with nothing to approve.
+   */
+  headOid: string | null;
+}
+
+/**
+ * What a pull-and-rebase confirm put in front of the approver: this branch, at
+ * this commit. Handed to the pull so it refuses rather than rebasing whatever
+ * the worktree holds by then, when an agent switched branches or committed
+ * while the confirm was open (#17188).
+ */
+export interface GitPullRebaseReview {
+  branch: string;
+  headOid: string;
 }
 
 /**

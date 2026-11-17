@@ -12,6 +12,7 @@
 
 import {
   GIT_REMOTE_COMMIT_PREVIEW_MAX,
+  type GitPullRebaseReview,
   type GitPushDestination,
   type GitPushReview,
 } from "@shared/types/git";
@@ -156,6 +157,14 @@ export interface GitRemoteOperationPreview {
    * range was measured. `null` everywhere else.
    */
   rebaseRange: GitRebaseRangeFacts | null;
+  /**
+   * The branch and commit the replay set was measured against, which is what
+   * approving a pull-rebase preview approves (#17188). Handed to the pull so it
+   * refuses rather than rebasing anything else if the worktree moved while the
+   * confirm was open. Set alongside {@link rebaseRange} when main could read
+   * the branch's commit; `null` means there is nothing to approve.
+   */
+  pullRebaseReview: GitPullRebaseReview | null;
 }
 
 /**
@@ -216,7 +225,14 @@ export async function buildGitRemoteOperationPreview(
     // Both states already block confirm on their own terms, and the dialog says
     // which one it is rather than showing an empty list that reads as "safe".
     if (!status.currentBranch || !status.pushDestination) {
-      return { ...base, commits: [], pushRange: null, pushReview: null, rebaseRange: null };
+      return {
+        ...base,
+        commits: [],
+        pushRange: null,
+        pushReview: null,
+        rebaseRange: null,
+        pullRebaseReview: null,
+      };
     }
     const preview = await window.electron.git.listPushCommits(
       cwd,
@@ -248,6 +264,7 @@ export async function buildGitRemoteOperationPreview(
           }
         : null,
       rebaseRange: null,
+      pullRebaseReview: null,
     };
   }
 
@@ -255,7 +272,14 @@ export async function buildGitRemoteOperationPreview(
   // is no range to measure, and each blocks confirm on its own terms. So does an
   // operation already halted here — `git pull --rebase` refuses to start over one.
   if (!status.currentBranch || !status.pullSource || repoOperation !== null) {
-    return { ...base, commits: [], pushRange: null, pushReview: null, rebaseRange: null };
+    return {
+      ...base,
+      commits: [],
+      pushRange: null,
+      pushReview: null,
+      rebaseRange: null,
+      pullRebaseReview: null,
+    };
   }
   const preview = await window.electron.git.listRebaseCommits(
     cwd,
@@ -284,6 +308,12 @@ export async function buildGitRemoteOperationPreview(
         author: c.author,
       })),
     },
+    // The branch named in the range read and the tip main measured it from,
+    // never a second status read: the two diverge the moment anything checks
+    // out another branch between the calls.
+    pullRebaseReview: preview.headOid
+      ? { branch: status.currentBranch, headOid: preview.headOid }
+      : null,
   };
 }
 

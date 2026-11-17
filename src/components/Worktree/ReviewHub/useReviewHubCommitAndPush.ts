@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
-import type { GitCommitResult, GitPushReview } from "@shared/types/git";
+import type { GitCommitResult, GitPullRebaseReview, GitPushReview } from "@shared/types/git";
 import { isClientAppError } from "@/utils/clientAppError";
 import type { debounce } from "@/utils/debounce";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
@@ -296,44 +296,49 @@ export function useReviewHubCommitAndPush({
     await runPush(result.review);
   }, [worktreePath, runPush]);
 
-  const handlePullRebase = useCallback(async () => {
-    if (isPullRebasingRef.current) return;
-    isPullRebasingRef.current = true;
-    setPullRebasing(true);
-    debouncedBgRefreshRef.current?.cancel();
-    try {
-      await window.electron.git.pullRebase(worktreePath);
-      // Successful rebase may have changed the working tree; refresh staging
-      // status before clearing the banner so the user sees the new state.
-      await refresh();
-      setPushError(null);
-    } catch (err) {
-      // A rebase that halts on conflicts surfaces as `conflict-unresolved`;
-      // surface it through the same banner so the user sees the next step.
-      const errFields = readGitErrorFields(err);
-      const rawMessage = formatErrorMessage(err, "Failed to pull and rebase");
-      setPushError({
-        reason: errFields.gitReason ?? classifyGitError(rawMessage),
-        rawMessage,
-      });
-      // Refresh in case the rebase started and left files in conflict.
-      await refresh();
-    } finally {
-      isPullRebasingRef.current = false;
-      setPullRebasing(false);
-    }
-  }, [worktreePath, refresh, debouncedBgRefreshRef]);
+  const handlePullRebase = useCallback(
+    async (review: GitPullRebaseReview) => {
+      if (isPullRebasingRef.current) return;
+      isPullRebasingRef.current = true;
+      setPullRebasing(true);
+      debouncedBgRefreshRef.current?.cancel();
+      try {
+        // Held to the branch and commit the confirm showed (#17188): an agent
+        // committing or switching branches while it was open makes the pull
+        // refuse with `pull-rebase-review-stale`, whose banner reopens the
+        // confirm rather than retrying the stale approval.
+        await window.electron.git.pullRebase(worktreePath, review);
+        // Successful rebase may have changed the working tree; refresh staging
+        // status before clearing the banner so the user sees the new state.
+        await refresh();
+        setPushError(null);
+      } catch (err) {
+        // A rebase that halts on conflicts surfaces as `conflict-unresolved`;
+        // surface it through the same banner so the user sees the next step.
+        const errFields = readGitErrorFields(err);
+        const rawMessage = formatErrorMessage(err, "Failed to pull and rebase");
+        setPushError({
+          reason: errFields.gitReason ?? classifyGitError(rawMessage),
+          rawMessage,
+        });
+        // Refresh in case the rebase started and left files in conflict.
+        await refresh();
+      } finally {
+        isPullRebasingRef.current = false;
+        setPullRebasing(false);
+      }
+    },
+    [worktreePath, refresh, debouncedBgRefreshRef]
+  );
 
   // Confirmed through the same dialog the `git.pullRebase` action uses, so the
   // Review Hub CTA shows the upstream, the incoming commits and the replay set
   // rather than two counts. It used to open its own count-only confirm, which
   // made the same operation look different depending on where it was started.
   const confirmPullRebase = useCallback(async () => {
-    const confirmed = await useGitPullRebaseConfirmStore
-      .getState()
-      .requestConfirmation(worktreePath);
-    if (!confirmed) return;
-    await handlePullRebase();
+    const result = await useGitPullRebaseConfirmStore.getState().requestConfirmation(worktreePath);
+    if (!result.confirmed) return;
+    await handlePullRebase(result.review);
   }, [worktreePath, handlePullRebase]);
 
   /**
