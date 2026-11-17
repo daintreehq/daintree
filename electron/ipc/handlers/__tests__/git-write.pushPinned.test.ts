@@ -648,3 +648,68 @@ describe("commit then push — pinned to the commit just made (#16790)", () => {
     expect(remoteTip(fixture.bare, "refs/heads/topic")).toBe(committed.oid);
   });
 });
+
+// Review Hub's Commit & push on a branch with no commit yet (#17588): git names
+// no destination before the first commit, so the commit lands first and the
+// push is previewed and approved through the same handlers as any other.
+describe("first commit, then its reviewed push (#17588)", () => {
+  function unbornRepo(bare: string): string {
+    const repo = fs.mkdtempSync(path.join(tmpRoot, "unborn-"));
+    git(repo, ["init", "-q", "-b", "main"]);
+    git(repo, ["config", "user.email", "test@example.com"]);
+    git(repo, ["config", "user.name", "Test"]);
+    git(repo, ["remote", "add", "origin", bare]);
+    fs.writeFileSync(path.join(repo, "README.md"), "first\n");
+    git(repo, ["add", "README.md"]);
+    return repo;
+  }
+
+  async function commitFirst(repo: string): Promise<{ oid: string | null; parentOids: string[] }> {
+    return (await getHandler("git:commit")(FAKE_EVENT, {
+      cwd: repo,
+      message: "Initial commit",
+    })) as { oid: string | null; parentOids: string[] };
+  }
+
+  it("previews the root commit as creating the branch, and publishes exactly it", async () => {
+    const bare = makeBare();
+    const repo = unbornRepo(bare);
+
+    const committed = await commitFirst(repo);
+    expect(committed.parentOids).toEqual([]);
+    const shown = (await preview(repo, "main")) as PushPreview & { rangeBasis: string };
+
+    expect(shown.destination).toEqual({ remote: "origin", branch: "main" });
+    expect(shown.rangeBasis).toBe("creates");
+    expect(shown.headOid).toBe(committed.oid);
+    expect(shown.commits.map((c) => c.hash)).toEqual([committed.oid]);
+
+    await approvedPush(repo, "main", shown);
+
+    expect(remoteTip(bare, "refs/heads/main")).toBe(committed.oid);
+    expect(upstreamOf(repo, "main")).toBe("refs/remotes/origin/main");
+  });
+
+  it("leaves a remote branch with other history to git's own refusal", async () => {
+    const bare = makeBare();
+    const other = fs.mkdtempSync(path.join(tmpRoot, "other-"));
+    git(other, ["init", "-q", "-b", "main"]);
+    git(other, ["config", "user.email", "test@example.com"]);
+    git(other, ["config", "user.name", "Test"]);
+    const existing = commit(other, "theirs.txt");
+    git(other, ["push", "-q", bare, "main"]);
+    const repo = unbornRepo(bare);
+
+    await commitFirst(repo);
+    const shown = (await preview(repo, "main")) as PushPreview & { rangeBasis: string };
+
+    // The remote named a tip this repository has never fetched: no claim that
+    // the branch is being created, and none that it is level.
+    expect(shown.rangeBasis).toBe("unverified");
+    const error = await rejection(approvedPush(repo, "main", shown));
+
+    expect(error).not.toBeNull();
+    expect(error).not.toMatch(/push-review-stale/);
+    expect(remoteTip(bare, "refs/heads/main")).toBe(existing);
+  });
+});
