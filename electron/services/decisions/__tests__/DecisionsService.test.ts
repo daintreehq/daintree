@@ -585,7 +585,12 @@ describe("DecisionsService pane state", () => {
 });
 
 describe("DecisionsService question list (#17229)", () => {
-  function listed(options: { handled?: Record<string, number> } = {}) {
+  function listed(
+    options: {
+      handled?: Record<string, number>;
+      notifyQuestions?: DecisionsServiceOptions["notifyQuestions"];
+    } = {}
+  ) {
     let rows: QuestionRow[] = [];
     let reads = 0;
     let handled = options.handled ?? null;
@@ -614,6 +619,7 @@ describe("DecisionsService question list (#17229)", () => {
       keyFilePath: () => ABSENT_KEY_FILE,
       publishPaneState: (_projectId, state) => panes.push(state),
       publishQuestions: (questions) => lists.push([...questions]),
+      notifyQuestions: options.notifyQuestions,
     });
     const commit = async (next: QuestionRow[]) => {
       rows = next;
@@ -658,6 +664,35 @@ describe("DecisionsService question list (#17229)", () => {
       { hostId: "host_1", projectId: "project-1", terminalId: "pane-a", questionId: qid(1) },
       { hostId: "host_1", projectId: "project-b", terminalId: "pane-b", questionId: qid(2) },
     ]);
+    await service.stop();
+  });
+
+  it("raises desktop notifications from an owner's store once its first list is out, and stops them with it (#17232)", async () => {
+    const seen: string[] = [];
+    const { service, lists, setRows } = listed({
+      notifyQuestions: () => {
+        seen.push(`started after ${lists.length} list(s)`);
+        return { stop: () => seen.push("stopped") };
+      },
+    });
+    setRows([row(1)]);
+    await service.start(on(HOST));
+    await vi.waitFor(() => expect(seen).toEqual(["started after 1 list(s)"]));
+
+    await service.stop();
+
+    expect(seen).toEqual(["started after 1 list(s)", "stopped"]);
+  });
+
+  it("raises none for a Remote Host's lifetime, whose questions are its owner's to show", async () => {
+    const notifyQuestions = vi.fn(() => ({ stop: () => {} }));
+    const { service, reads } = listed({ notifyQuestions });
+    await service.start(on(HOST), "host");
+    // Its store is read, as an owner's is.
+    await vi.waitFor(() => expect(reads()).toBeGreaterThan(0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(notifyQuestions).not.toHaveBeenCalled();
     await service.stop();
   });
 

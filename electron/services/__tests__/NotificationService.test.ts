@@ -1082,6 +1082,79 @@ describe("NotificationService", () => {
     });
   });
 
+  describe("opening a Decisions question (#17232)", () => {
+    /** A reference to a question asked in the project view `ownerId` would show. */
+    const referenceIn = (ownerId: number) => ({
+      hostId: "host-1",
+      projectId: `project-${ownerId}`,
+      terminalId: "term-1",
+      questionId: "q-1",
+    });
+
+    /** Windows most recently focused first, each showing its first view, as the registry ranks them. */
+    function windowsInFocusOrder(windows: WindowMock[]) {
+      for (const w of windows) w.activeProjectId = `project-${w.ownerIds[0]}`;
+      const registry = createRegistryMock(windows);
+      registryMock.getAppWebContents.mockImplementation((win: WindowMock) => ({
+        ...electronMock.webContentsById.get(win.ownerIds[0]!)!,
+        focus: vi.fn(),
+      }));
+      notificationService.initialize({ ...registry, focusOrder: () => registry.all() } as never);
+    }
+
+    const opened = (ownerId: number) =>
+      ownerSend(ownerId).mock.calls.filter(
+        ([, event]) => (event as { name: string }).name === "decisions:open-question"
+      );
+
+    it("opens it in the window showing the question's project, brought forward", () => {
+      const recent = createWindowMock(true, [11]);
+      const showing = createWindowMock(false, [21]);
+      showing.isMinimized.mockReturnValue(true);
+      windowsInFocusOrder([recent, showing]);
+
+      expect(notificationService.openDecisionQuestion(referenceIn(21))).toBe(true);
+
+      expect(opened(21)).toEqual([
+        ["events:push", { name: "decisions:open-question", payload: { reference: referenceIn(21) } }],
+      ]);
+      expect(opened(11)).toHaveLength(0);
+      expect(showing.restore).toHaveBeenCalled();
+      expect(showing.focus).toHaveBeenCalled();
+    });
+
+    it("opens it in the most recently focused window when none shows its project", () => {
+      const recent = createWindowMock(false, [11]);
+      const older = createWindowMock(false, [21]);
+      windowsInFocusOrder([recent, older]);
+
+      const reference = { ...referenceIn(11), projectId: "project-closed" };
+      notificationService.openDecisionQuestion(reference);
+
+      expect(opened(11)).toHaveLength(1);
+      expect(opened(21)).toHaveLength(0);
+      expect(recent.focus).toHaveBeenCalled();
+    });
+
+    it("passes over a window that has gone", () => {
+      const gone = createWindowMock(false, [11]);
+      gone.isDestroyed.mockReturnValue(true);
+      const live = createWindowMock(false, [21]);
+      windowsInFocusOrder([gone, live]);
+
+      notificationService.openDecisionQuestion(referenceIn(11));
+
+      expect(opened(11)).toHaveLength(0);
+      expect(opened(21)).toHaveLength(1);
+    });
+
+    it("reports that nothing could take it with no window open", () => {
+      windowsInFocusOrder([]);
+
+      expect(notificationService.openDecisionQuestion(referenceIn(11))).toBe(false);
+    });
+  });
+
   describe("click routing", () => {
     const context = { panelId: "term-9", panelTitle: "Agent", worktreeId: "wt-1" };
 
