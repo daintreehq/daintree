@@ -45,8 +45,12 @@ vi.mock("@/store/terminalInputStore", () => {
 });
 
 vi.mock("@/store/fleetArmingStore", () => {
-  const getState = () => ({ armedIds: new Set<string>() });
-  return { useFleetArmingStore: Object.assign(getState, { getState }) };
+  const getState = () => ({ armedIds: new Set<string>(), crossHostTargets: [] });
+  return {
+    useFleetArmingStore: Object.assign(getState, { getState }),
+    selectFleetMemberCount: (s: { armedIds: Set<string>; crossHostTargets: unknown[] }) =>
+      s.armedIds.size + s.crossHostTargets.length,
+  };
 });
 
 vi.mock("@/store/panelStore", () => {
