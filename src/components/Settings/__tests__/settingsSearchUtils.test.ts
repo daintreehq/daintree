@@ -127,10 +127,6 @@ describe("filterSettings", () => {
   );
 
   it("no longer offers the person's own links on the Portal page", () => {
-    const portalHits = filterSettings(SETTINGS_SEARCH_INDEX, "custom links").filter(
-      (entry) => entry.tab === "portal" && entry.kind === "section"
-    );
-    expect(portalHits.map((entry) => entry.id)).not.toContain("portal-custom-links");
     expect(SETTINGS_SEARCH_INDEX.some((entry) => entry.id === "portal-custom-links")).toBe(false);
   });
 

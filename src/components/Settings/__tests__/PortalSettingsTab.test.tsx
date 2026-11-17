@@ -123,8 +123,16 @@ describe("PortalSettingsTab built-in link editing", () => {
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
     });
 
+    expect(dispatch).toHaveBeenCalledWith(
+      "portal.links.update",
+      { id: SHIPPED.id, updates: { title: "Handbook", url: SHIPPED.url } },
+      { source: "user" }
+    );
     const name = screen.getByRole("textbox", { name: "Link name" }) as HTMLInputElement;
     expect(name.value).toBe("Handbook");
+    // A failed write is the form's problem, not a malformed field.
+    expect(describedText(name)).not.toBe("");
+    expect(name.getAttribute("aria-invalid")).toBeNull();
   });
 
   it("hands focus back to the link's Edit button when the editor closes", () => {
@@ -180,6 +188,11 @@ describe("PortalSettingsTab while a save is in flight", () => {
     expect(screen.getByRole("textbox", { name: "Link name" })).toBeTruthy();
 
     await act(async () => answer({ ok: true, result: undefined }));
+    expect(screen.queryByRole("textbox", { name: "Link name" })).toBeNull();
+    const [savedEdit, nextEdit] = screen.getAllByRole("button", { name: "Edit" });
+    expect(document.activeElement).toBe(savedEdit);
+    fireEvent.click(nextEdit!);
+    expect(screen.getByRole("textbox", { name: "Link name" })).toBeTruthy();
   });
 });
 
@@ -294,11 +307,17 @@ describe("PortalSettingsTab custom new-tab URL failure", () => {
 });
 
 describe("PortalSettingsTab and the person's own links", () => {
-  it("lists none of them and takes no new ones", () => {
+  it("manages only the built-in links, while still offering the person's as new-tab choices", () => {
+    portal.links = [{ ...SHIPPED }];
     globalLinks.links = [DOCS];
     renderTab();
-    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+    expect(screen.getAllByRole("switch")).toHaveLength(1);
+    expect(screen.getByRole("switch", { name: SHIPPED.title })).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Edit" })).toHaveLength(1);
+    expect(screen.queryByText(DOCS.url)).toBeNull();
     expect(screen.queryByRole("textbox", { name: "New link URL" })).toBeNull();
+    const select = screen.getByRole("combobox", { name: "New tabs open" }) as HTMLSelectElement;
+    expect([...select.options].map((o) => o.textContent)).toContain(DOCS.title);
   });
 
   it("sends the person to the Links page to manage them", () => {

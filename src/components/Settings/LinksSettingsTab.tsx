@@ -8,6 +8,7 @@ import {
   type GlobalLink,
   type GlobalLinkUpdate,
 } from "@/store/globalLinksStore";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 import { notify } from "@/lib/notify";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { latestUndoOnly, positionOf, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
@@ -83,6 +84,15 @@ export function LinksSettingsTab() {
   const { register: registerRemove, registerFallback, focusAfterDelete } = useRowFocus();
 
   useSettingsTabValidation("links", Boolean(addError || editError));
+
+  // Another view removed the link being edited. Its draft goes with it, rather
+  // than waiting hidden for an Undo there to bring the editor back.
+  useEffect(() => {
+    if (!editing || links.some((l) => l.id === editing.id)) return;
+    setEditing(null);
+    setEditError(null);
+    focusAfterDelete([], 0);
+  }, [editing, links, focusAfterDelete]);
 
   useEffect(() => {
     if (!focusTarget) return;
@@ -161,11 +171,10 @@ export function LinksSettingsTab() {
   const remove = (link: GlobalLink) => {
     const ids = links.map((l) => l.id);
     const position = positionOf(links, link.id);
-    if (editing?.id === link.id) {
-      setEditing(null);
-      setEditError(null);
-    }
     useGlobalLinksStore.getState().removeLink(link.id);
+    // Focus moves to a neighbour's Remove once the row is gone, which is not
+    // asking for that button's tooltip.
+    armTooltipFocusSuppression();
     focusAfterDelete(ids, ids.indexOf(link.id));
     notify({
       type: "success",
@@ -174,6 +183,7 @@ export function LinksSettingsTab() {
       priority: "high",
       transient: true,
       duration: UNDO_TOAST_DURATION_MS,
+      context: { eventKind: "uiFeedback" },
       action: {
         label: "Undo",
         onClick: latestUndoOnly(`global-link:${link.id}`, () =>
@@ -195,10 +205,16 @@ export function LinksSettingsTab() {
 
   const onFieldKeyDown =
     (submit: () => void, cancel?: () => void) => (event: React.KeyboardEvent<HTMLInputElement>) => {
-      if (event.key === "Enter") {
+      if (isEnterToSubmit(event)) {
         event.preventDefault();
         submit();
-      } else if (event.key === "Escape" && cancel) {
+      } else if (
+        event.key === "Escape" &&
+        cancel &&
+        // An IME's Escape dismisses its candidates, not the editor.
+        !event.nativeEvent.isComposing &&
+        event.nativeEvent.keyCode !== 229
+      ) {
         event.preventDefault();
         event.stopPropagation();
         cancel();
@@ -326,7 +342,8 @@ export function LinksSettingsTab() {
               tooltip="Remove"
               aria-label={`Remove ${name}`}
               variant="ghost-danger"
-              ref={registerRemove(link.id)}
+              // A Remove that can't be pressed can't take focus after a delete either.
+              ref={link.alwaysEnabled ? undefined : registerRemove(link.id)}
               disabled={link.alwaysEnabled}
               onClick={() => remove(link)}
             >
