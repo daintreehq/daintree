@@ -40,6 +40,9 @@ function harness(
     async (_id: string): Promise<MemoryLeakTerminalRead | null> => terminal.value
   );
   const offMetrics = vi.fn();
+  // A fresh object per read, as the store gives: a service holding on to one
+  // read must not see later changes through it.
+  const readPolicy = vi.fn(() => ({ ...policy }));
   const service = new MemoryLeakAutoRestartService({
     onMetrics: (listener) => {
       metricsListener = listener;
@@ -49,7 +52,7 @@ function harness(
       exitListener = listener;
       return () => {};
     },
-    readPolicy: () => policy,
+    readPolicy,
     generationOf: (id) => generations.get(id),
     readTerminal,
     pickTarget: () => target.value,
@@ -75,6 +78,7 @@ function harness(
     target,
     restartOnHost,
     readTerminal,
+    readPolicy,
     offMetrics,
     sample,
     exit: (id: string) => exitListener?.(id),
@@ -172,11 +176,29 @@ describe("MemoryLeakAutoRestartService", () => {
     h.policy.enabled = false;
     expect(stillWanted()).toBe(false);
     expect(isCurrent()).toBe(true);
+  });
 
-    h.policy.enabled = true;
+  it("lets its own kill's exit drop the host restart's decision but leave the launch current", async () => {
+    const h = harness({ target: { kind: "host" } });
+    h.generations.set("t1", 1);
+    await h.sample(OVER_KB, "t1", AUTO_RESTART_STARTUP_SAMPLES);
+    await flush();
+    const { isCurrent, stillWanted } = h.restartOnHost.mock.calls[0]![2];
+
     h.exit("t1");
     expect(stillWanted()).toBe(false);
     expect(isCurrent()).toBe(true);
+  });
+
+  it("lets the host restart see the service stop", async () => {
+    const h = harness({ target: { kind: "host" } });
+    await h.sample(OVER_KB, "t1", AUTO_RESTART_STARTUP_SAMPLES);
+    await flush();
+    const { isCurrent, stillWanted } = h.restartOnHost.mock.calls[0]![2];
+
+    h.service.dispose();
+    expect(isCurrent()).toBe(false);
+    expect(stillWanted()).toBe(false);
   });
 
   it("waits while the project's driver is away", async () => {
@@ -235,10 +257,11 @@ describe("MemoryLeakAutoRestartService", () => {
       expect(h.deliver).not.toHaveBeenCalled();
     });
 
-    it("is dropped when the policy is turned off and a later batch arrives", async () => {
+    it("is dropped when the policy is turned off, a batch arrives, and it is turned on again", async () => {
       const { h, settle } = await pendingDecision();
       h.policy.enabled = false;
-      await h.sample(UNDER_KB);
+      await h.sample(OVER_KB);
+      h.policy.enabled = true;
       settle();
       await flush();
       expect(h.deliver).not.toHaveBeenCalled();
@@ -250,6 +273,75 @@ describe("MemoryLeakAutoRestartService", () => {
       settle();
       await flush();
       expect(h.deliver).not.toHaveBeenCalled();
+    });
+
+    it("is dropped when the threshold rises above a newer sample, though not the one it was taken on", async () => {
+      const h = harness();
+      let answer: (read: MemoryLeakTerminalRead) => void = () => {};
+      h.readTerminal.mockImplementationOnce(
+        () => new Promise<MemoryLeakTerminalRead>((resolve) => (answer = resolve))
+      );
+      await h.sample(UNDER_KB * 3, "t1", AUTO_RESTART_STARTUP_SAMPLES);
+      await h.sample(UNDER_KB * 1.5);
+      h.policy.thresholdMb = THRESHOLD_MB * 2;
+      answer({ projectId: "p1" });
+      await flush();
+      expect(h.deliver).not.toHaveBeenCalled();
+    });
+
+    it("is dropped when the policy is turned off and on again with no batch or check between", async () => {
+      const { h, settle } = await pendingDecision();
+      h.policy.enabled = false;
+      h.service.policyChanged();
+      h.policy.enabled = true;
+      h.service.policyChanged();
+      settle();
+      await flush();
+      expect(h.deliver).not.toHaveBeenCalled();
+    });
+
+    it("is dropped when the threshold is raised and lowered again with no batch or check between", async () => {
+      const { h, settle } = await pendingDecision();
+      h.policy.thresholdMb = THRESHOLD_MB * 2;
+      h.service.policyChanged();
+      h.policy.thresholdMb = THRESHOLD_MB;
+      h.service.policyChanged();
+      settle();
+      await flush();
+      expect(h.deliver).not.toHaveBeenCalled();
+    });
+
+    it("survives a policy write that still backs it", async () => {
+      const { h, settle } = await pendingDecision();
+      h.policy.thresholdMb = THRESHOLD_MB / 2;
+      h.service.policyChanged();
+      settle();
+      await flush();
+      expect(h.deliver).toHaveBeenCalledTimes(1);
+    });
+
+    it("is dropped when its terminal exits before the lookup settles", async () => {
+      const { h, settle } = await pendingDecision();
+      h.exit("t1");
+      settle();
+      await flush();
+      expect(h.deliver).not.toHaveBeenCalled();
+    });
+
+    it("is dropped when the service stops before the lookup settles", async () => {
+      const { h, settle } = await pendingDecision();
+      h.service.dispose();
+      settle();
+      await flush();
+      expect(h.deliver).not.toHaveBeenCalled();
+    });
+
+    it("survives a batch that recovers only another terminal", async () => {
+      const { h, settle } = await pendingDecision();
+      await h.sample(UNDER_KB, "t2");
+      settle();
+      await flush();
+      expect(h.deliver).toHaveBeenCalledTimes(1);
     });
 
     it("is dropped when a newer sample comes back under the threshold", async () => {
@@ -299,6 +391,37 @@ describe("MemoryLeakAutoRestartService", () => {
       const { h, isCurrent } = await delivered();
       h.policy.thresholdMb = THRESHOLD_MB * 2;
       expect(isCurrent()).toBe(false);
+    });
+
+    it("no longer holds once the terminal is relaunched", async () => {
+      const { h, isCurrent } = await delivered();
+      h.generations.set("t1", 7);
+      expect(isCurrent()).toBe(false);
+    });
+
+    it("no longer holds once the policy was turned off and on again with no batch between", async () => {
+      const { h, isCurrent } = await delivered();
+      h.policy.enabled = false;
+      h.service.policyChanged();
+      h.policy.enabled = true;
+      h.service.policyChanged();
+      expect(isCurrent()).toBe(false);
+    });
+
+    it("no longer holds when the policy can't be read, and a later decision still goes ahead", async () => {
+      const { h, isCurrent } = await delivered();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      h.readPolicy.mockImplementationOnce(() => {
+        throw new Error("store unreadable");
+      });
+      expect(isCurrent()).toBe(false);
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      h.clock.now = AUTO_RESTART_RETRY_MS;
+      await h.sample(OVER_KB);
+      await flush();
+      expect(h.deliver).toHaveBeenCalledTimes(2);
+      expect((h.deliver.mock.calls[1]![1] as () => boolean)()).toBe(true);
     });
 
     it("no longer holds once a newer sample recovers", async () => {

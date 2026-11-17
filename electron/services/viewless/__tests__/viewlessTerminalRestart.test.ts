@@ -365,9 +365,16 @@ describe("restartTerminalWithoutView", () => {
 
   it("stops before the kill when the terminal was relaunched during its checks", async () => {
     const { deps, invoke } = setup({ id: "t2", command: "npm run dev" }, {});
+    let current = true;
+    const read = deps.getProjectState;
+    deps.getProjectState = async (projectId) => {
+      const state = await read(projectId);
+      current = false;
+      return state;
+    };
 
     await expect(
-      restartTerminalWithoutView(PROJECT.id, "t2", deps, { isCurrent: () => false })
+      restartTerminalWithoutView(PROJECT.id, "t2", deps, { isCurrent: () => current })
     ).resolves.toBe("stale");
     expect(invoke).not.toHaveBeenCalled();
   });

@@ -76,6 +76,10 @@ vi.mock("../../utils.js", async (importOriginal) => ({
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { registerTerminalConfigHandlers } from "../terminalConfig.js";
+import {
+  MemoryLeakAutoRestartService,
+  setActiveMemoryLeakAutoRestart,
+} from "../../../services/MemoryLeakAutoRestartService.js";
 
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
 
@@ -290,6 +294,29 @@ describe("terminalConfig handlers", () => {
         { resourceMonitoringEnabled: true, memoryLeakAutoRestartThresholdMb: 4096 },
       ]);
       expect(ptyClient.setResourceMonitoring).toHaveBeenCalledWith(true);
+    });
+
+    it("tells the memory-leak auto-restart of each policy write once it has landed (#17598)", async () => {
+      const landed: unknown[] = [];
+      const policyChanged = vi.fn(() => landed.push({ ...storeState.data.terminalConfig }));
+      setActiveMemoryLeakAutoRestart({ policyChanged } as unknown as MemoryLeakAutoRestartService);
+      try {
+        registerTerminalConfigHandlers({ ptyClient: { setResourceMonitoring: vi.fn() } } as never);
+
+        await getHandler(CHANNELS.TERMINAL_CONFIG_SET_RESOURCE_MONITORING)({}, false);
+        await getHandler(CHANNELS.TERMINAL_CONFIG_SET_MEMORY_LEAK_DETECTION)({}, false);
+        await getHandler(CHANNELS.TERMINAL_CONFIG_SET_MEMORY_LEAK_AUTO_RESTART)({}, 4096);
+        await getHandler(CHANNELS.TERMINAL_CONFIG_SET_MEMORY_LEAK_AUTO_RESTART)({}, 99);
+        await getHandler(CHANNELS.TERMINAL_CONFIG_SET_SCROLLBACK)({}, 5000);
+
+        expect(landed).toEqual([
+          expect.objectContaining({ resourceMonitoringEnabled: false }),
+          expect.objectContaining({ memoryLeakDetectionEnabled: false }),
+          expect.objectContaining({ memoryLeakAutoRestartThresholdMb: 4096 }),
+        ]);
+      } finally {
+        setActiveMemoryLeakAutoRestart(null);
+      }
     });
 
     it("tells no one about a value the handler refused", async () => {

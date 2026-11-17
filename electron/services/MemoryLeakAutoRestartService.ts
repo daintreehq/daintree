@@ -93,6 +93,25 @@ export class MemoryLeakAutoRestartService {
     ];
   }
 
+  /**
+   * The policy was written. Every decision it no longer backs is dropped now
+   * rather than at its next check, which might find the change already undone:
+   * a policy turned off and on, or a threshold raised and lowered again, before
+   * a pending lookup or thaw settles.
+   */
+  policyChanged(): void {
+    if (this.disposed) return;
+    const policy = this.deps.readPolicy();
+    if (!policy.enabled) {
+      this.tracks.clear();
+      return;
+    }
+    const thresholdKb = policy.thresholdMb * 1024;
+    for (const track of this.tracks.values()) {
+      if (track.memoryKb <= thresholdKb) track.decision = null;
+    }
+  }
+
   private handleBatch(metrics: TerminalResourceBatchPayload): void {
     if (this.disposed) return;
     const policy = this.deps.readPolicy();
@@ -151,12 +170,21 @@ export class MemoryLeakAutoRestartService {
    * forgets every track, so turning it on again doesn't revive it), a threshold
    * raised past the newest sample, or a newer sample back under it drops it. The
    * policy is read here rather than left to the next batch, which never comes
-   * once resource monitoring is off. Once dropped, it stays dropped.
+   * once resource monitoring is off. Once dropped, it stays dropped, and a
+   * policy that can't be read drops it too: a deferred send calls this outside
+   * any handler.
    */
   private stillWanted(terminalId: string, track: TerminalTrack, decision: object): boolean {
     if (this.tracks.get(terminalId) !== track || track.decision !== decision) return false;
-    const policy = this.deps.readPolicy();
-    if (policy.enabled && track.memoryKb > policy.thresholdMb * 1024) return true;
+    try {
+      const policy = this.deps.readPolicy();
+      if (policy.enabled && track.memoryKb > policy.thresholdMb * 1024) return true;
+    } catch (err) {
+      console.warn(
+        `[MemoryLeak] Dropped the auto-restart of terminal ${terminalId.slice(0, 8)}: policy unreadable:`,
+        formatErrorMessage(err, "unknown")
+      );
+    }
     track.decision = null;
     return false;
   }
