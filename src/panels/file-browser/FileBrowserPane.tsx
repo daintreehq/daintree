@@ -122,12 +122,9 @@ export function FileBrowserPane({
   const { dirty, conflict } = useFileDocumentFlags(id);
   // Every write goes through the guarded path shared with the reveal actions,
   // so a selection change over unsaved edits asks first wherever it came from.
-  const setFileBrowserView = useCallback(
-    (panelId: string, patch: FileBrowserViewPatch) => {
-      void navigateFileBrowserView(panelId, patch);
-    },
-    []
-  );
+  const setFileBrowserView = useCallback((panelId: string, patch: FileBrowserViewPatch) => {
+    void navigateFileBrowserView(panelId, patch);
+  }, []);
   const handleClose = useCallback(() => {
     if (location !== "dialog" || !getFileDocumentProjection(id)?.dirty) {
       onClose?.();

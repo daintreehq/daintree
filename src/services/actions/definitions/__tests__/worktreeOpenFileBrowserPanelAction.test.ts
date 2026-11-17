@@ -864,7 +864,10 @@ describe("worktree.openFileBrowserPanel", () => {
 
       expect(setFileBrowserViewMock).toHaveBeenCalledWith(
         "fb-existing",
-        expect.objectContaining({ browserSelectedPath: "src/app.ts", browserViewerCollapsed: false })
+        expect.objectContaining({
+          browserSelectedPath: "src/app.ts",
+          browserViewerCollapsed: false,
+        })
       );
     });
   });

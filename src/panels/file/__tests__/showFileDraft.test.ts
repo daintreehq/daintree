@@ -43,7 +43,9 @@ beforeEach(() => {
 
 describe("showFileDraft (#15017)", () => {
   it("brings an inactive tab forward in Edit and focuses it", async () => {
-    panelState.panelsById = { p1: { id: "p1", kind: "file", location: "grid", worktreeId: "wt-1" } };
+    panelState.panelsById = {
+      p1: { id: "p1", kind: "file", location: "grid", worktreeId: "wt-1" },
+    };
     panelState.getPanelGroup.mockReturnValue({ id: "g1" });
 
     await showFileDraft("p1");
