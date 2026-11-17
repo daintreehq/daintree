@@ -109,6 +109,11 @@ vi.mock("@/store/hostDriverNavigation", () => ({
 vi.mock("@/store/slices/panelRegistry/helpers", () => ({
   deriveRuntimeStatus: () => "running",
 }));
+const dropAllHeldDurations = vi.hoisted(() => vi.fn());
+vi.mock("@/store/panelStatusBuffer", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/store/panelStatusBuffer")>()),
+  dropAllHeldDurations,
+}));
 const replayPanelLifecycle = vi.hoisted(() => vi.fn());
 const replayViewConsumers = vi.hoisted(() => vi.fn());
 vi.mock("@/services/plugin/pluginPanelLifecycle", () => ({
@@ -3186,5 +3191,24 @@ describe("one host's views after a fresh session", () => {
     } finally {
       for (const view of views) view.stop();
     }
+  });
+});
+
+describe("held pause durations across an event gap (#17575)", () => {
+  it("drops them when this view's host had to be resynced, not for another host", async () => {
+    const { emitHost } = installElectron();
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await flush();
+    dropAllHeldDurations.mockClear();
+
+    emitHost({ type: "resync-required", hostId: "studio-02", reason: "overflow" });
+    await flush();
+    expect(dropAllHeldDurations).not.toHaveBeenCalled();
+
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "overflow" });
+    await vi.waitFor(() => expect(dropAllHeldDurations).toHaveBeenCalledTimes(1));
+    await resyncFromHost();
+    stop();
   });
 });

@@ -237,3 +237,21 @@ export function cancelTerminalFlowState(terminalId: string): void {
   flowStatusBuffer.delete(terminalId);
   heldDurationBuffer.delete(terminalId);
 }
+
+/**
+ * Forget every held duration, buffered or committed, at a gap in the host's
+ * events: the gauge that named a hold as over may be among those missed
+ * (#17575). Samples after the gap set them again, for holds still running.
+ */
+export function dropAllHeldDurations(): void {
+  heldDurationBuffer.clear();
+  usePanelStore.setState((state) => {
+    let nextById: typeof state.panelsById | null = null;
+    for (const [id, panel] of Object.entries(state.panelsById)) {
+      if (!panel || !isPtyPanel(panel) || panel.heldDurationMs === undefined) continue;
+      nextById ??= { ...state.panelsById };
+      nextById[id] = { ...panel, heldDurationMs: undefined };
+    }
+    return nextById ? { panelsById: nextById } : state;
+  });
+}

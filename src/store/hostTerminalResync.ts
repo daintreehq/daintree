@@ -48,7 +48,6 @@ export async function resyncHostTerminals(
   // Taken before asking, so a pane opened while the answer is in flight is
   // never judged against a list that predates it.
   const { usePanelStore } = await import("@/store/panelStore");
-  const { clearHeldDuration } = await import("@/store/panelStatusBuffer");
   const terminalInstanceService = await terminalServiceForResync(usePanelStore.getState());
   const knownBefore = new Set(usePanelStore.getState().panelIds);
   const before = usePanelStore.getState();
@@ -60,14 +59,6 @@ export async function resyncHostTerminals(
 
   const onHost = new Map(infos.map((info) => [info.id, info]));
   const store = usePanelStore.getState();
-
-  // The missed events may include the one gauge that named a hold as over
-  // (#17575), so no held duration from before the gap is trusted: a hold still
-  // running is sampled again on the host's next tick.
-  for (const id of store.panelIds) {
-    const panel = store.panelsById[id];
-    if (panel && isPtyPanel(panel)) clearHeldDuration(id);
-  }
 
   for (const info of infos) {
     takeHostAgentState(info.id, info, store, terminalInstanceService);

@@ -1067,14 +1067,17 @@ describe("PtyClient fabric", () => {
       client.dispose();
     });
 
-    it("clears every terminal a crashed shard owned, and none of a sibling's", async () => {
+    it("clears every live terminal a crashed shard owned, and none of a sibling's", async () => {
       const seen = await collectGauges();
       const client = createFabricClient();
+      client.spawn("t0", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
       client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
       client.spawn("t2", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
       client.spawn("t3", { cwd: "/tmp", cols: 80, rows: 24 });
       const shardA = projectShard("project-a");
       shardA.child.emit("message", { type: "ready" });
+      // Exited but kept on the shard: its own exit already cleared it.
+      shardA.child.emit("message", { type: "exit", id: "t0", exitCode: 0, preserved: true });
 
       shardA.child.emit("exit", 1);
       await vi.advanceTimersByTimeAsync(0);

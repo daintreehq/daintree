@@ -5,6 +5,7 @@ import type { PtyPanelData } from "@shared/types/panel";
 import {
   cancelPanelStatusBuffer,
   clearHeldDuration,
+  dropAllHeldDurations,
   enqueueActivityUpdate,
   enqueueFlowStatusUpdate,
   enqueueHeldDurationUpdate,
@@ -281,6 +282,25 @@ describe("panelStatusBuffer — held-duration batching", () => {
     enqueueHeldDurationUpdate("term-1", 12000);
     raf.flushAll();
     expect(getPtyPanel("term-1")?.heldDurationMs).toBeUndefined();
+  });
+
+  it("drops every held duration at an event gap, and lets later samples set them", () => {
+    seedPanel("term-1", { heldDurationMs: 8000 });
+    seedPanel("term-2");
+    seedPanel("term-3");
+    enqueueHeldDurationUpdate("term-2", 3000);
+    const untouched = usePanelStore.getState().panelsById["term-3"];
+
+    dropAllHeldDurations();
+    expect(getPtyPanel("term-1")?.heldDurationMs).toBeUndefined();
+    raf.flushAll();
+    // The sample buffered before the gap is gone with it.
+    expect(getPtyPanel("term-2")?.heldDurationMs).toBeUndefined();
+    expect(usePanelStore.getState().panelsById["term-3"]).toBe(untouched);
+
+    enqueueHeldDurationUpdate("term-1", 10000);
+    raf.flushAll();
+    expect(getPtyPanel("term-1")?.heldDurationMs).toBe(10000);
   });
 
   it("writes nothing for a clear on a panel that holds no duration", () => {

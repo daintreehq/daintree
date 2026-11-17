@@ -276,7 +276,10 @@ describe("terminal resource-metrics fan-out", () => {
     });
 
     it("sends a project with no view of its own nothing, and nobody else its terminals", () => {
-      bus.emit("terminal:reliability-metric", gauge({ "p0-t0": 2000, "gone-t0": 900 }, ["gone-t1"]));
+      bus.emit(
+        "terminal:reliability-metric",
+        gauge({ "p0-t0": 2000, "gone-t0": 900 }, ["gone-t1"])
+      );
 
       expect(gaugesFor(registry.views[0]!)).toEqual([
         { held: [{ terminalId: "p0-t0", heldDurationMs: 2000 }], cleared: undefined },
