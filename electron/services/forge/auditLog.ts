@@ -8,12 +8,10 @@ import type {
 } from "../../../shared/types/ipc/forge.js";
 import {
   FORGE_AUDIT_ANOMALY_MIN_RECORDS,
-  FORGE_AUDIT_DEFAULT_MAX_RECORDS,
-  FORGE_AUDIT_MAX_RECORDS,
-  FORGE_AUDIT_MIN_RECORDS,
   FORGE_AUDIT_SCHEMA_VERSION,
   computeForgeAuditSeverity,
 } from "../../../shared/types/ipc/forge.js";
+import { normalizeAuditRingMaxRecords } from "../persistence/auditRingRetention.js";
 
 /**
  * Debounce window for flushing the ring buffer to disk. Mirrors the MCP
@@ -200,11 +198,7 @@ export class ForgeAuditService {
   }
 
   normalizeMaxRecords(value: unknown): number {
-    const n = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : NaN;
-    if (!Number.isFinite(n)) return FORGE_AUDIT_DEFAULT_MAX_RECORDS;
-    if (n < FORGE_AUDIT_MIN_RECORDS) return FORGE_AUDIT_MIN_RECORDS;
-    if (n > FORGE_AUDIT_MAX_RECORDS) return FORGE_AUDIT_MAX_RECORDS;
-    return n;
+    return normalizeAuditRingMaxRecords("forgeAuditLog", value);
   }
 
   appendRecord(input: {

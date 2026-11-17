@@ -3,6 +3,7 @@ import type { ForgeAuditResult, ForgeProviderMethodName } from "../../../shared/
 import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "../../../shared/types/ipc/forge.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
+import { AUDIT_RING_RETENTION } from "../persistence/auditRingRetention.js";
 import { auditRingStore } from "../persistence/auditRingStore.js";
 import { store } from "../../store.js";
 import { ForgeAuditService, type ForgeAuditLogStore } from "./auditLog.js";
@@ -39,11 +40,17 @@ function persistConfig(patch: Record<string, unknown>): void {
 
 // Persists the ring in SQLite `audit_rings` so config.json stays small and
 // audit appends never re-serialize it. `auditEnabled` / `auditMaxRecords` stay
-// in config.json (`forgeAudit`).
+// in config.json (`forgeAudit`). The service trims the ring to the configured
+// limit, so the store is handed the ceiling and keeps the whole snapshot.
 const forgeAuditLogStore: ForgeAuditLogStore = {
   read: () => auditRingStore.readAll("forgeAuditLog"),
   write: (records, options) =>
-    auditRingStore.writeAll("forgeAuditLog", records, FORGE_AUDIT_DEFAULT_MAX_RECORDS, options),
+    auditRingStore.writeAll(
+      "forgeAuditLog",
+      records,
+      AUDIT_RING_RETENTION.forgeAuditLog.max,
+      options
+    ),
 };
 
 export const forgeAuditService = new ForgeAuditService(

@@ -5,12 +5,11 @@ import type {
   TurnOutcomeAlertClass,
   TurnOutcomeClass,
 } from "../../../shared/types/ipc/mcpServer.js";
-import {
-  MCP_AUDIT_DEFAULT_MAX_RECORDS,
-  MCP_AUDIT_MAX_RECORDS,
-  MCP_AUDIT_MIN_RECORDS,
-} from "../../../shared/types/ipc/mcpServer.js";
 import { auditRingStore } from "../persistence/auditRingStore.js";
+import {
+  AUDIT_RING_RETENTION,
+  normalizeAuditRingMaxRecords,
+} from "../persistence/auditRingRetention.js";
 import { AUDIT_FLUSH_DEBOUNCE_MS, TIER_NOT_PERMITTED_CODE } from "./shared.js";
 
 export interface TurnOutcomeLogStore {
@@ -23,7 +22,12 @@ export interface TurnOutcomeLogStore {
 const defaultLogStore: TurnOutcomeLogStore = {
   read: () => auditRingStore.readAll("mcpTurnOutcomeLog"),
   write: (records, options) =>
-    auditRingStore.writeAll("mcpTurnOutcomeLog", records, MCP_AUDIT_DEFAULT_MAX_RECORDS, options),
+    auditRingStore.writeAll(
+      "mcpTurnOutcomeLog",
+      records,
+      AUDIT_RING_RETENTION.mcpTurnOutcomeLog.max,
+      options
+    ),
 };
 
 /**
@@ -348,11 +352,7 @@ export class TurnOutcomeService {
   }
 
   normalizeMaxRecords(value: unknown): number {
-    const n = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : NaN;
-    if (!Number.isFinite(n)) return MCP_AUDIT_DEFAULT_MAX_RECORDS;
-    if (n < MCP_AUDIT_MIN_RECORDS) return MCP_AUDIT_MIN_RECORDS;
-    if (n > MCP_AUDIT_MAX_RECORDS) return MCP_AUDIT_MAX_RECORDS;
-    return n;
+    return normalizeAuditRingMaxRecords("mcpTurnOutcomeLog", value);
   }
 
   /**
@@ -529,6 +529,23 @@ export class TurnOutcomeService {
   getRecords(): AssistantTurnRecord[] {
     this.hydrate();
     return [...this.records].reverse();
+  }
+
+  /**
+   * Apply a changed MCP audit limit now. The limit is saved by the dispatch
+   * log's setter; without this a lowered limit would reach this ring only on
+   * its next turn, and raising it again before then would keep records the
+   * lower limit had evicted.
+   */
+  setMaxRecords(max: number): void {
+    this.hydrate();
+    const cap = this.normalizeMaxRecords(max);
+    if (this.records.length > cap) {
+      this.records.splice(0, this.records.length - cap);
+    }
+    // Hydrating a cold ring trims only memory, so write even when nothing is
+    // spliced here.
+    this.flushNow();
   }
 
   clear(): void {

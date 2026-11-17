@@ -183,7 +183,8 @@ const OWNERS: OwnerCase[] = [
         harness.config.mcpServer = { ...(harness.config.mcpServer as object), ...patch };
       };
       const readConfig = () => harness.config.mcpServer as Record<string, unknown>;
-      // The turn log has no setter of its own: the MCP audit setting drives it.
+      // The turn ring shares the MCP audit setting, which the dispatch log's
+      // setter saves; McpServerService.setAuditMaxRecords applies it to both.
       const settings = new AuditService(saveConfig, readConfig, {
         read: () => [],
         write: () => {},
@@ -198,7 +199,7 @@ const OWNERS: OwnerCase[] = [
         append: (n) => {
           for (let i = 0; i < n; i++) svc.recordDirectOutcome({ outcome: "mcp-not-ready" });
         },
-        setMaxRecords: (max) => void settings.setMaxRecords(max),
+        setMaxRecords: (max) => svc.setMaxRecords(settings.setMaxRecords(max).maxRecords),
         flushDebounced: async () => {
           await vi.advanceTimersByTimeAsync(5_000);
           await settle();
@@ -304,7 +305,7 @@ describe.each(OWNERS)("$name ring keeps the configured history length", (owner) 
     harness.db = null;
   });
 
-  it("keeps a raised history across a debounced flush and a restart, and trims it when lowered", async () => {
+  it("keeps a raised history across a debounced flush and a restart", async () => {
     const raised = owner.defaultMax * 2;
     const collected = owner.defaultMax + 200;
 
@@ -313,28 +314,38 @@ describe.each(OWNERS)("$name ring keeps the configured history length", (owner) 
     svc.append(collected);
     const before = svc.ids();
     expect(before).toHaveLength(collected);
+    // The setter's synchronous write left an acknowledged empty ring, so this
+    // goes out as a keyed delta.
     await svc.flushDebounced();
     expect(persistedCount(owner.ring)).toBe(collected);
 
     svc = await boot();
     expect(svc.ids()).toEqual(before);
 
-    // A further append goes out as a keyed delta on top of the hydrated ring.
+    // A fresh ring store knows nothing of the rows, so this is a full replacement.
     svc.append(1);
     await svc.flushDebounced();
     expect(persistedCount(owner.ring)).toBe(collected + 1);
+  });
 
-    // The turn ring has no setter of its own and applies a lowered MCP setting
-    // on its next append, so every owner gets one.
+  it("trims storage as soon as the limit is lowered, and a later raise keeps it trimmed", async () => {
+    const raised = owner.defaultMax * 2;
     const lowered = owner.defaultMax + 100;
-    svc.setMaxRecords(lowered);
-    svc.append(1);
-    const kept = svc.ids();
-    expect(kept).toHaveLength(lowered);
-    await svc.flushDebounced();
+
+    let svc = await boot();
+    svc.setMaxRecords(raised);
+    svc.append(owner.defaultMax + 200);
+    const all = svc.ids();
     svc.flushNow();
+
+    // Lowered before this boot's ring has been read or written.
+    svc = await boot();
+    svc.setMaxRecords(lowered);
+    const kept = svc.ids();
+    expect(kept).toEqual(all.slice(-lowered));
     expect(persistedCount(owner.ring)).toBe(lowered);
 
+    svc.setMaxRecords(raised);
     svc = await boot();
     expect(svc.ids()).toEqual(kept);
   });

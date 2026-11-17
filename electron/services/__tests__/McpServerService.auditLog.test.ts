@@ -522,6 +522,30 @@ describe("McpServerService", () => {
       expect(turnSpy).toHaveBeenCalledWith(30);
     });
 
+    it("setAuditMaxRecords trims the turn-outcome ring at once, so raising it again keeps nothing evicted", () => {
+      auditLogsState.mcpTurnOutcomeLog = Array.from({ length: 120 }, (_, i) => ({
+        id: `turn-${i}`,
+        timestamp: 1000 + i,
+        terminalId: "term-1",
+        sessionId: "help-1",
+        outcome: "answered",
+      }));
+      const newest60 = auditLogsState.mcpTurnOutcomeLog.slice(-60).map((r) => r.id);
+
+      // The turn ring has not been read yet this session.
+      service.setAuditMaxRecords(60);
+      expect(auditLogsState.mcpTurnOutcomeLog.map((r) => r.id)).toEqual(newest60);
+
+      service.setAuditMaxRecords(1000);
+      expect(
+        service._turnOutcomeService
+          .getRecords()
+          .map((r) => r.id)
+          .reverse()
+      ).toEqual(newest60);
+      expect(auditLogsState.mcpTurnOutcomeLog.map((r) => r.id)).toEqual(newest60);
+    });
+
     it("getAuditDiagnostics reads the owned ring passively, before the server starts (#12508)", () => {
       const audit = service._auditService;
       const append = (toolId: string, tier: "core" | "external") =>

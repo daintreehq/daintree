@@ -1385,7 +1385,10 @@ export class McpServerService {
   }
 
   setAuditMaxRecords(max: number): { enabled: boolean; maxRecords: number } {
-    return this.auditService.setMaxRecords(max);
+    const config = this.auditService.setMaxRecords(max);
+    // The turn-outcome ring shares the setting.
+    this.turnOutcomeService.setMaxRecords(config.maxRecords);
+    return config;
   }
 
   getTurnOutcomeRecords(): AssistantTurnRecord[] {
