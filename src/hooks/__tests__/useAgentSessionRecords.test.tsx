@@ -97,6 +97,45 @@ describe("useAgentSessionRecords", () => {
     expect(result.current.isLoading).toBe(false);
   });
 
+  // #17483 — Main rejects the list when the journal exists but can't be read.
+  // That must surface as `failed` (the palette's error state and Retry), never
+  // as an empty journal, and Retry must re-read rather than keep the failure.
+  it("reports a rejected initial read as failed, and reload recovers", async () => {
+    listMock.mockRejectedValueOnce(new Error("The session history couldn't be read."));
+    const { result } = renderHook(() => useAgentSessionRecords(true));
+    await waitFor(() => {
+      expect(result.current.hasLoaded).toBe(true);
+    });
+    expect(result.current.failed).toBe(true);
+    expect(result.current.sessions).toEqual([]);
+
+    act(() => {
+      result.current.reload();
+    });
+    await waitFor(() => {
+      expect(result.current.sessions.map((s) => s.sessionId)).toEqual(["a"]);
+    });
+    expect(result.current.failed).toBe(false);
+    expect(listMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the rows on screen when an event-driven refetch fails", async () => {
+    const { result } = renderHook(() => useAgentSessionRecords(true));
+    await waitFor(() => {
+      expect(result.current.sessions.map((s) => s.sessionId)).toEqual(["a"]);
+    });
+
+    listMock.mockRejectedValueOnce(new Error("The session history couldn't be read."));
+    await act(async () => {
+      recordedCallback?.();
+      // Let the rejected refetch settle before asserting it changed nothing.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(listMock).toHaveBeenCalledTimes(2);
+    expect(result.current.failed).toBe(false);
+    expect(result.current.sessions.map((s) => s.sessionId)).toEqual(["a"]);
+  });
+
   it("ignores a stale response resolving after a newer fetch (latest wins)", async () => {
     let resolveFirst: (v: AgentSessionRecord[]) => void = () => {};
     listMock.mockReturnValueOnce(

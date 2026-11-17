@@ -426,10 +426,12 @@ async function readSessionHistoryResult(userData?: string): Promise<SessionHisto
   }
 }
 
-// Read-only consumers (listAgentSessions and the MCP list action) collapse an
-// unreadable journal to `[]` — a transient failure degrades the displayed list
-// for one read without touching disk. The `unreadable` outcome is never cached,
-// so the next read re-attempts the file. The read-modify-write paths use
+// Tolerant read-only consumers (listAgentSessions, listBookmarks) collapse an
+// unreadable journal to `[]` — a transient failure degrades their result for
+// one read without touching disk. The resume surfaces read through
+// listAgentSessionsOrThrow instead, so an unreadable journal reaches them as a
+// failure rather than as "nothing closed". The `unreadable` outcome is never
+// cached, so the next read re-attempts the file. The read-modify-write paths use
 // readSessionHistoryResult directly and ABORT on `unreadable`.
 export function readSessionHistorySync(userData?: string): AgentSessionRecord[] {
   const result = readSessionHistoryResultSync(userData);
@@ -495,7 +497,38 @@ export function listAgentSessions(
   retentionDays?: AgentSessionRetentionDays,
   projectId?: string
 ): AgentSessionRecord[] {
-  const records = readSessionHistorySync(userData);
+  return scopeAgentSessions(readSessionHistorySync(userData), worktreeId, retentionDays, projectId);
+}
+
+/**
+ * The same list as {@link listAgentSessions}, except that a journal which exists
+ * but could not be read throws instead of reading as empty. The `agent-session:list`
+ * IPC uses it so the resume UI can tell "nothing closed" from "history unreadable"
+ * and offer a retry. The message is fixed: it crosses IPC to MCP clients, so it
+ * names no path. An absent journal is still an ordinary empty list.
+ */
+export function listAgentSessionsOrThrow(
+  worktreeId?: string,
+  userData?: string,
+  retentionDays?: AgentSessionRetentionDays,
+  projectId?: string
+): AgentSessionRecord[] {
+  const result = readSessionHistoryResultSync(userData);
+  if (result.status === "unreadable") {
+    throw new Error(
+      "The session history couldn't be read. It's left untouched on disk, so try again.",
+      { cause: result.error }
+    );
+  }
+  return scopeAgentSessions(result.records, worktreeId, retentionDays, projectId);
+}
+
+function scopeAgentSessions(
+  records: AgentSessionRecord[],
+  worktreeId: string | undefined,
+  retentionDays: AgentSessionRetentionDays | undefined,
+  projectId: string | undefined
+): AgentSessionRecord[] {
   const now = Date.now();
   const fresh = evictRecords(records, now, retentionDaysToMs(retentionDays));
 

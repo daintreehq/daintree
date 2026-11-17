@@ -137,6 +137,7 @@ import {
   readSessionHistory,
   readSessionHistorySync,
   listAgentSessions,
+  listAgentSessionsOrThrow,
   getSessionHistoryPath,
   resetSessionHistoryCacheForTesting,
   type AgentSessionRecord,
@@ -210,6 +211,65 @@ describe("agentSessionHistory — transient read faults (adversarial)", () => {
 
     // Fault cleared: the file was never touched, so the next read returns it.
     expect(listAgentSessions(undefined, userDataDir).map((r) => r.sessionId)).toEqual(["a"]);
+  });
+
+  // #17483 — the resume UI reads through the strict list so an unreadable
+  // journal shows its error state and Retry instead of "nothing closed".
+  it.each(["EACCES", "EIO", "EMFILE"])(
+    "strict list throws on a transient %s, leaves the journal intact, then recovers",
+    async (code) => {
+      await seedJournal([rec("a", "wt-1", "p1"), rec("b", "wt-2", "p2")]);
+      const before = await rawOnDisk();
+      h.armed.read = { code };
+
+      expect(() => listAgentSessionsOrThrow(undefined, userDataDir)).toThrow(
+        /session history couldn't be read/
+      );
+      expect(await rawOnDisk()).toBe(before);
+      expect(await quarantineSidecars()).toEqual([]);
+
+      // The failure was never cached: the retry reads the file and scopes it.
+      expect(listAgentSessionsOrThrow(undefined, userDataDir).map((r) => r.sessionId)).toEqual([
+        "a",
+        "b",
+      ]);
+      expect(
+        listAgentSessionsOrThrow(undefined, userDataDir, undefined, "p2").map((r) => r.sessionId)
+      ).toEqual(["b"]);
+    }
+  );
+
+  it("strict list keeps the filesystem error as its cause and names no path", async () => {
+    await seedJournal([rec("a", "wt-1")]);
+    h.armed.read = { code: "EACCES" };
+
+    let thrown: unknown;
+    try {
+      listAgentSessionsOrThrow(undefined, userDataDir);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).cause).toMatchObject({ code: "EACCES" });
+    expect((thrown as Error).message).not.toContain(userDataDir);
+  });
+
+  it("strict list reads an absent journal as an ordinary empty list", () => {
+    expect(listAgentSessionsOrThrow(undefined, userDataDir)).toEqual([]);
+  });
+
+  it("strict list reads a quarantined corrupt journal as empty, and throws when the quarantine fails", async () => {
+    await fsp.writeFile(getSessionHistoryPath(userDataDir)!, "corrupt bytes");
+    h.armed.renameFault = "EACCES";
+
+    expect(() => listAgentSessionsOrThrow(undefined, userDataDir)).toThrow(
+      /session history couldn't be read/
+    );
+    expect(await rawOnDisk()).toBe("corrupt bytes");
+
+    // Rename works again: the corrupt file is moved aside and the list is empty.
+    expect(listAgentSessionsOrThrow(undefined, userDataDir)).toEqual([]);
+    expect(await quarantineSidecars()).toHaveLength(1);
   });
 
   it("persistAgentSession aborts on an unreadable journal, preserving existing records", async () => {

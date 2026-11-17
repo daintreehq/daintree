@@ -72,7 +72,7 @@ const { persistAgentSessionMock } = vi.hoisted(() => ({
 
 vi.mock("../../../../services/pty/agentSessionHistory.js", () => ({
   persistAgentSession: persistAgentSessionMock,
-  listAgentSessions: vi.fn(() => []),
+  listAgentSessionsOrThrow: vi.fn(() => []),
   clearAgentSessions: vi.fn().mockResolvedValue(undefined),
   pruneAgentSessions: vi.fn().mockResolvedValue(undefined),
   DEFAULT_RETENTION_DAYS: 30,
