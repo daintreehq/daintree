@@ -722,12 +722,16 @@ describe("git:list-base-integration-commits — measured from the commits it pin
       return inner(args);
     });
     const log = git.log;
+    // How many counts had already run when the ref moved: the move has to land
+    // between the rows and the counts for the case to be the reported race.
+    let countsBeforeMove: number | null = null;
     git.log = vi.fn(async (args: string[]) => {
       const rows = await log(args);
+      countsBeforeMove = callsTo(git, "rev-list").length;
       onLog(refs);
       return rows;
     });
-    return git;
+    return { git, countsBeforeMove: () => countsBeforeMove };
   }
 
   /** The argument lists of every `git log` and `rev-list` the preview ran, in order. */
@@ -796,7 +800,7 @@ describe("git:list-base-integration-commits — measured from the commits it pin
   ] as const)(
     "$kind: $label mid-read, and the approval is refused as stale",
     async ({ kind, channel, subcommand, stale, move }) => {
-      const git = liveRefsDouble(move);
+      const { git, countsBeforeMove } = liveRefsDouble(move);
       createHardenedGitMock.mockResolvedValue(git);
       registerGitWriteHandlers({} as never);
 
@@ -809,6 +813,7 @@ describe("git:list-base-integration-commits — measured from the commits it pin
       // refs named once the log had finished.
       expect(preview).toMatchObject({ branch: BRANCH, headOid: HEAD_OID, baseOid: BASE_OID });
       // Every count runs after the move, and still describes the pinned pair.
+      expect(countsBeforeMove()).toBe(0);
       expect(measurements(git)).toEqual(MEASURED[kind]);
 
       // Approving that preview is refused on the side that moved: that commit
