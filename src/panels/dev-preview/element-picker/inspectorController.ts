@@ -867,6 +867,7 @@ export class InspectorController implements DevPreviewToolSession {
       });
     } catch (error) {
       if (request !== this.workspaceRequest) return;
+      this.staleRefusals = 0;
       this.patchState({
         workspace: {
           status: "failed",

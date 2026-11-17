@@ -512,7 +512,7 @@ describe("ElementPickerWorkspaceService.open for a browser page", () => {
     expect(findListeners).toHaveBeenCalledTimes(3);
   });
 
-  it("frees a scan's slot at its deadline, and its callers open as asked", async () => {
+  it("answers a hung scan's callers at its deadline, and keeps its slot while it runs", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const findListeners = vi.fn((port: number) =>
       port === 5175
@@ -529,7 +529,8 @@ describe("ElementPickerWorkspaceService.open for a browser page", () => {
     await vi.waitFor(() => expect(findListeners).toHaveBeenCalledTimes(2));
     await vi.advanceTimersByTimeAsync(6_000);
     for (const result of await Promise.all(hung)) expect(result.status).toBe("ready");
-    await expect(at(5175)).resolves.toMatchObject({ status: "unavailable" });
+    await expect(at(5175)).resolves.toMatchObject({ status: "ready" });
+    expect(findListeners).toHaveBeenCalledTimes(2);
   });
 
   it("can't say past a few scans at once, and opens as asked", async () => {

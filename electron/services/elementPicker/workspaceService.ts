@@ -254,6 +254,7 @@ export class ElementPickerWorkspaceService {
   private readonly leases = new Map<string, LeaseRecord>();
   private readonly endpoints = new Map<string, EndpointRecord>();
   private readonly discoveries = new Map<string, Promise<AppDiscovery>>();
+  private scansRunning = 0;
   private readonly listenerLookups = new Map<
     number,
     { listeners: Promise<PortListener[] | null>; settledAt: number | null }
@@ -398,18 +399,23 @@ export class ElementPickerWorkspaceService {
     }
     const recent = this.listenerLookups.get(port);
     if (recent && (recent.settledAt === null || reuseSettled)) return recent.listeners;
-    let running = 0;
-    for (const lookup of this.listenerLookups.values()) if (lookup.settledAt === null) running++;
     const others = this.listenerLookups.size - (recent ? 1 : 0);
-    if (running >= MAX_LISTENER_SCANS || others >= MAX_LISTENER_LOOKUPS) {
+    // Counted until the scan itself ends, not its callers' deadline.
+    if (this.scansRunning >= MAX_LISTENER_SCANS || others >= MAX_LISTENER_LOOKUPS) {
       return Promise.resolve(null);
     }
+    this.scansRunning++;
+    const scan = find(port)
+      .catch(() => null)
+      .finally(() => {
+        this.scansRunning--;
+      });
     let deadline: ReturnType<typeof setTimeout> | undefined;
     const lookup: { listeners: Promise<PortListener[] | null>; settledAt: number | null } = {
-      // A read that never returns frees the slot at the deadline: its callers
+      // A read that never returns answers its callers at the deadline: they
       // can't say, and the scan's own late answer goes nowhere.
       listeners: Promise.race([
-        find(port).catch(() => null),
+        scan,
         new Promise<null>((resolve) => {
           deadline = setTimeout(() => resolve(null), LISTENER_SCAN_DEADLINE_MS);
           deadline.unref?.();
