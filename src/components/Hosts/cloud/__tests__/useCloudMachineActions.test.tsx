@@ -70,7 +70,9 @@ function show(current: CloudHostStatus, declared: CloudProviderInfo) {
   render(<Harness />);
 }
 
-const dialogText = () => screen.getByRole("alertdialog").textContent ?? "";
+// Stop is destructive (an alertdialog); Start is a plain dialog.
+const dialogText = () =>
+  (screen.queryByRole("alertdialog") ?? screen.getByRole("dialog")).textContent ?? "";
 
 afterEach(() => {
   cleanup();
