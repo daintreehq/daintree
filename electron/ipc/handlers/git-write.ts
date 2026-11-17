@@ -69,11 +69,13 @@ import {
   PORCELAIN_V2_CONFLICT_ARGS,
 } from "../../services/git/porcelainConflicts.js";
 import {
+  CONFLICT_MARKER_SCAN_CONCURRENCY,
   STAGED_FILE_SIZE_CAP,
   scanConflictMarkerText,
   scanStagedFilesForConflictMarkers,
 } from "../../services/git/conflictMarkerScan.js";
 import { EMPTY_TREE } from "../../services/git/reviewPoint/captureReviewPoint.js";
+import { createProbeLimiter } from "../../utils/probeLimiter.js";
 import { shouldPlayUiFeedbackSound } from "../../utils/uiFeedbackSound.js";
 import { resolveExecutableForSpawn } from "../../utils/windowsExecutable.js";
 import { getSanitizedProcessEnv } from "../../utils/gitEnv.js";
@@ -106,6 +108,10 @@ import {
 } from "../../utils/gitPushDestination.js";
 
 const execFileAsync = promisify(execFile);
+
+// Shared by every scan, so a refresh the renderer has already superseded can't
+// stack its reads on top of the one that replaced it.
+const conflictMarkerScanLimiter = createProbeLimiter(CONFLICT_MARKER_SCAN_CONCURRENCY);
 
 function classifyGitFailure(error: unknown, formattedMessage: string) {
   const reason = classifyGitError(error);
@@ -2590,7 +2596,21 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       }
     };
 
-    return Promise.all(payload.filePaths.map(scanOne));
+    // Each scan queues at most one file per worker, so a later single-file scan
+    // waits behind a few files of a large one rather than its whole list.
+    const filePaths = payload.filePaths;
+    const results = new Array<ConflictMarkerScanEntry>(filePaths.length);
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (next < filePaths.length) {
+        const index = next++;
+        results[index] = await conflictMarkerScanLimiter.withSlot(() => scanOne(filePaths[index]));
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(CONFLICT_MARKER_SCAN_CONCURRENCY, filePaths.length) }, worker)
+    );
+    return results;
   };
   handlers.push(typedHandle(CHANNELS.GIT_SCAN_CONFLICT_MARKERS, handleScanConflictMarkers));
 
