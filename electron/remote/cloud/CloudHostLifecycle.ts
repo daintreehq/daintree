@@ -1268,7 +1268,21 @@ export class CloudHostLifecycle {
     for (let waits = 0; waits < 3; waits++) {
       const pending = this.accessInFlight.get(bindingId);
       if (!pending) break;
-      await pending.catch(() => {});
+      // This dial may give up while it waits; the shared resolution carries on.
+      await new Promise<void>((resolve, reject) => {
+        const onAbort = () => reject(new TransportError("Cancelled", null));
+        if (signal?.aborted) {
+          onAbort();
+          return;
+        }
+        signal?.addEventListener("abort", onAbort, { once: true });
+        void pending
+          .catch(() => {})
+          .then(() => {
+            signal?.removeEventListener("abort", onAbort);
+            resolve();
+          });
+      });
     }
     // No await from here into ensureAccess: the resolution it starts reads the cleared access.
     this.deps.store.updateBinding(bindingId, (current) => ({ ...current, access: null }));

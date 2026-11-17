@@ -607,6 +607,27 @@ describe("CloudHostLifecycle host keys confirmed on first connect", () => {
     expect((refused as Error).message).toMatch(/identity changed/i);
   });
 
+  it("lets a cancelled dial go while its recheck waits on another resolution", async () => {
+    const env = await confirming();
+    await trusted(env);
+    let release!: (value: boolean) => void;
+    const exists = vi.spyOn(env.files, "exists");
+    exists.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          release = resolve;
+        })
+    );
+    const dial = env.lifecycle.ensureAccess(env.bindingId);
+    await vi.waitFor(() => expect(exists).toHaveBeenCalled());
+    const abort = new AbortController();
+    const recheck = env.lifecycle.recheckHostKey(env.bindingId, abort.signal);
+    abort.abort();
+    await expect(recheck).rejects.toBeInstanceOf(TransportError);
+    release(true);
+    await dial;
+  });
+
   it("retries a machine that presents no key yet instead of refusing it", async () => {
     const env = await confirming();
     env.scan.output = "";
