@@ -291,6 +291,12 @@ describe("useReviewHubStatus failed reads", () => {
     getStagingStatus.mockReturnValueOnce(foreground.promise);
     act(() => void result.current.refresh());
 
+    // The opening's read, superseded by Refresh, fails with nothing published
+    // yet: only its request id keeps it from showing.
+    await act(async () => opening.reject(new Error("opening failed")));
+    expect(result.current.loadError).toBeNull();
+    expect(result.current.loading).toBe(true);
+
     // A rejection (the host's rate limit, say) carries no status to order by.
     await act(async () => foreground.reject(new Error("rate limited")));
     expect(result.current.loadError).toBe("rate limited");
@@ -302,10 +308,28 @@ describe("useReviewHubStatus failed reads", () => {
     expect(result.current.loadError).toBeNull();
     expect(result.current.statusIsFresh).toBe(true);
     expect(result.current.isBackgroundRefreshing).toBe(false);
+  });
 
-    // The opening's read, superseded by Refresh, lands last and changes nothing.
-    await act(async () => opening.resolve(status));
+  it("shows a Refresh's failure over an earlier result, until a newer read answers", async () => {
+    marks.available = false;
+    const { result } = renderStatus();
+    await advance(0);
+    expect(result.current.status?.currentBranch).toBe("feature");
+
+    const foreground = deferred<StagingStatus>();
+    getStagingStatus.mockReturnValueOnce(foreground.promise);
+    act(() => void result.current.refresh());
+    const background = deferred<StagingStatus>();
+    getStagingStatus.mockReturnValueOnce(background.promise);
+    act(() => result.current.readWithCapture());
+
+    await act(async () => foreground.reject(new Error("git status failed")));
+    expect(result.current.loadError).toBe("git status failed");
+    expect(result.current.loading).toBe(false);
+
+    await act(async () => background.resolve(newer));
     expect(result.current.status?.currentBranch).toBe("newer");
+    expect(result.current.loadError).toBeNull();
   });
 
   it("keeps a held Refresh's failure for another worktree out of the open one", async () => {
