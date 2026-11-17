@@ -286,9 +286,12 @@ describe("ProjectHostsGroup", () => {
       for (const band of ["asking", "running"]) {
         expect(cell(rowFor("h2"), band).className).toBe(cell(rowFor("h1"), band).className);
       }
+      for (const band of ["asking", "running"]) {
+        const tokens = cell(rowFor("h1"), band).classList;
+        expect(tokens.contains("w-9")).toBe(true);
+        expect(tokens.contains("@[15rem]/hosts:w-9.5")).toBe(true);
+      }
       const running = cell(rowFor("h1"), "running").classList;
-      expect(running.contains("w-9")).toBe(true);
-      expect(running.contains("@[15rem]/hosts:w-9.5")).toBe(true);
       // Cells grow leftward, so the counts still end on the row's right edge.
       expect(running.contains("justify-end")).toBe(true);
       expect(cell(rowFor("local"), "running").className).toBe(
@@ -332,6 +335,9 @@ describe("ProjectHostsGroup", () => {
       expect(digitsOf(more)).toEqual(["running:2"]);
       expect(digitsOf(rowFor("h2"))).toEqual(["running:2"]);
       expect(cell(rowFor("h2"), "running").className).toBe(cell(more, "running").className);
+      for (const row of [rowFor("h2"), more]) {
+        expect(cell(row, "running").classList.contains("w-9")).toBe(true);
+      }
 
       // Once the fold opens its sum is gone, and so is the width it asked for.
       fireEvent.click(more);
