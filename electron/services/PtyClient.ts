@@ -1896,7 +1896,7 @@ export class PtyClient extends EventEmitter {
     }
   }
 
-  private groupByOwnerShard(ids: string[]): Map<PtyShard, string[]> {
+  private groupByOwnerShard(ids: readonly string[]): Map<PtyShard, string[]> {
     const groups = new Map<PtyShard, string[]>();
     for (const id of ids) {
       const shard = this.shardForTerminal(id);
@@ -2958,30 +2958,43 @@ export class PtyClient extends EventEmitter {
   }
 
   /**
-   * Scan every terminal's semantic buffer for `query` and return one
-   * ANSI-stripped snippet per matching terminal, across all shards. Substring
-   * (case-insensitive) unless `isRegex` is true. Never rejects: a regex
-   * compile error yields no matches, and a shard that fails, times out, or is
-   * mid-restart keeps the other shards' matches but marks the answer
-   * incomplete, so its silence never reads as "nothing matched".
+   * Scan semantic buffers for `query` and return one ANSI-stripped snippet per
+   * matching terminal. Substring (case-insensitive) unless `isRegex` is true.
+   * With `terminalIds`, only those terminals' owning shards are asked, each for
+   * its own ids; without, every terminal on every shard is scanned. Never
+   * rejects: a regex compile error yields no matches, and a shard that fails,
+   * times out, or is mid-restart keeps the other shards' matches but marks the
+   * answer incomplete, so its silence never reads as "nothing matched".
    */
   async searchSemanticBuffersAsync(
     query: string,
-    isRegex: boolean
+    isRegex: boolean,
+    terminalIds?: readonly string[]
   ): Promise<import("../../shared/types/ipc/terminal.js").SemanticSearchResult> {
-    const shards = this.fanOutShards();
-    const unreachable = Math.max(
-      0,
-      [...this.shards.values()].filter((shard) => !shard.retired).length - shards.length
-    );
+    const reachable = this.fanOutShards();
+    let targets: Array<[PtyShard, string[] | undefined]>;
+    let unreachable: number;
+    if (terminalIds === undefined) {
+      targets = reachable.map((shard) => [shard, undefined]);
+      unreachable = Math.max(
+        0,
+        [...this.shards.values()].filter((shard) => !shard.retired).length - reachable.length
+      );
+    } else {
+      // A scoped search needs only the shards that own its terminals.
+      const owners = [...this.groupByOwnerShard(terminalIds)];
+      targets = owners.filter(([shard]) => reachable.includes(shard));
+      unreachable = owners.length - targets.length;
+    }
     // With nothing ready, `fanOutShards` still hands back the default shard, and
     // a host that hasn't announced ready can answer before its terminals are
     // replayed, so its answer can't vouch for a complete search.
-    const allLive = shards.every(
-      (shard) => !shard.retired && shard.lifecycle.isInitialized && shard.lifecycle.child !== null
+    const allLive = targets.every(
+      ([shard]) =>
+        !shard.retired && shard.lifecycle.isInitialized && shard.lifecycle.child !== null
     );
     const results = await Promise.all(
-      shards.map((shard) =>
+      targets.map(([shard, ids]) =>
         sendPtyHostRpc<import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[]>(
           shard,
           "semantic-search",
@@ -2990,6 +3003,7 @@ export class PtyClient extends EventEmitter {
             query,
             isRegex,
             requestId,
+            ...(ids ? { terminalIds: ids } : {}),
           })
         ).then(
           (matches) => ({ matches, ok: true }),
