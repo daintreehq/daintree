@@ -145,11 +145,14 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
     return (
       <SoundPickerRow
         label={label}
-        description={describe(key, undefined, (v) => soundLabel(v, customSounds.sounds))}
+        description={describe(key, undefined, (v) =>
+          soundLabel(v, customSounds.sounds, customSounds.loaded)
+        )}
         value={typeof value === "string" ? value : undefined}
         onChange={(v) => setOverride(key, v)}
         onPreview={previewNotificationSound}
         customSounds={customSounds.sounds}
+        customSoundsLoaded={customSounds.loaded}
         onImportFile={customSounds.importFile}
         onOpen={customSounds.refresh}
         disabled={unknownValue(key)}

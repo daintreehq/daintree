@@ -216,6 +216,24 @@ describe("WebAudioService", () => {
     expect(getCustomDir).toHaveBeenCalledTimes(2);
   });
 
+  it("doesn't keep a bundled directory looked up across dispose", async () => {
+    const { service, mockSuccessfulFetch } = await setupTest();
+    const getSoundDir = window.electron.sound.getSoundDir as ReturnType<typeof vi.fn>;
+    let resolveDir!: (dir: string) => void;
+    getSoundDir.mockReturnValueOnce(new Promise<string>((r) => (resolveDir = r)));
+    mockSuccessfulFetch();
+    mockSuccessfulFetch();
+
+    const pending = service.playSound("chime.wav");
+    await vi.waitFor(() => expect(getSoundDir).toHaveBeenCalledTimes(1));
+    service.dispose();
+    resolveDir("/stale/sounds");
+    await pending;
+    await service.playSound("ping.wav");
+
+    expect(getSoundDir).toHaveBeenCalledTimes(2);
+  });
+
   it("decodes again after dispose rather than keeping a decode that finished after it", async () => {
     const { service, mockFetch, mockDecodeAudioData } = await setupTest();
     const ok = () => ({ ok: true, arrayBuffer: () => Promise.resolve(new ArrayBuffer(16)) });

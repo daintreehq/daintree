@@ -37,29 +37,30 @@ export const ESCALATION_DELAY_OPTIONS = [
   { value: 600_000, label: "10 min", ariaLabel: "10 minutes" },
 ] as const;
 
-/** `customSounds` is null until this device's imports have been listed. */
+/** `loaded` is false until this device's imports have been listed once. */
 export function soundLabel(
   file: unknown,
-  customSounds: readonly CustomNotificationSoundEntry[] | null = []
+  customSounds: readonly CustomNotificationSoundEntry[] = [],
+  loaded = true
 ): string {
   const bundled = NOTIFICATION_SOUNDS.find((s) => s.file === file);
   if (bundled) return bundled.label;
   if (!isCustomSoundId(file)) return String(file);
-  if (customSounds === null) return "Custom sound";
   const custom = customSounds.find((s) => s.id === file);
   if (custom) return custom.available ? custom.label : `${custom.label} (missing)`;
-  return "Missing sound";
+  return loaded ? "Missing sound" : "Custom sound";
 }
 
 /**
  * This device's imported sounds for one settings page, shared by its pickers. A
  * list that resolves after a newer one started (an import, a picker opening) is
- * dropped, so it can't hide a sound that was just added. Null until a list has
- * arrived, so a failed lookup is never mistaken for missing files; opening a
- * picker asks again.
+ * dropped, so it can't hide a sound that was just added. Until a list has arrived
+ * (`loaded`), a saved import that isn't known is never called missing, and one
+ * imported here is offered anyway; opening a picker asks again.
  */
 export function useCustomNotificationSounds() {
-  const [sounds, setSounds] = useState<CustomNotificationSoundEntry[] | null>(null);
+  const [listed, setListed] = useState<CustomNotificationSoundEntry[] | null>(null);
+  const [added, setAdded] = useState<CustomNotificationSoundEntry[]>([]);
   const requestRef = useRef(0);
 
   const refresh = useCallback(() => {
@@ -69,7 +70,7 @@ export function useCustomNotificationSounds() {
     api
       .list()
       .then((list) => {
-        if (request === requestRef.current) setSounds(list);
+        if (request === requestRef.current) setListed(list);
       })
       .catch(() => {});
   }, []);
@@ -81,20 +82,15 @@ export function useCustomNotificationSounds() {
   const importFile = useCallback(
     async (file: File): Promise<CustomNotificationSound> => {
       const imported = await importNotificationSound(file);
-      // Before the first list has arrived the import is left to the refresh: a
-      // one-entry list would call every other saved import missing.
-      setSounds((current) =>
-        current === null || current.some((s) => s.id === imported.id)
-          ? current
-          : [...current, { ...imported, available: true }]
-      );
+      setAdded((current) => [...current, { ...imported, available: true }]);
       refresh();
       return imported;
     },
     [refresh]
   );
 
-  return { sounds, refresh, importFile };
+  const sounds = [...(listed ?? []), ...added.filter((a) => !listed?.some((s) => s.id === a.id))];
+  return { sounds, loaded: listed !== null, refresh, importFile };
 }
 
 const CHOOSE_FILE_VALUE = "__choose-file__";
@@ -159,6 +155,7 @@ export function SoundPickerRow({
   onChange,
   onPreview,
   customSounds = [],
+  customSoundsLoaded = true,
   onImportFile,
   onOpen,
   isModified,
@@ -171,8 +168,9 @@ export function SoundPickerRow({
   value: string | undefined;
   onChange: (value: string) => void;
   onPreview: (file: string) => void;
-  /** Null until this device's imports have been listed. */
-  customSounds?: readonly CustomNotificationSoundEntry[] | null;
+  customSounds?: readonly CustomNotificationSoundEntry[];
+  /** False until this device's imports have been listed once. */
+  customSoundsLoaded?: boolean;
   onImportFile?: (file: File) => Promise<CustomNotificationSound>;
   /** Called as the list opens, so imports made in another window show up. */
   onOpen?: () => void;
@@ -200,13 +198,13 @@ export function SoundPickerRow({
     []
   );
 
-  const available = (customSounds ?? []).filter((s) => s.available);
+  const available = customSounds.filter((s) => s.available);
   const inMenu =
     NOTIFICATION_SOUNDS.some((s) => s.file === value) || available.some((s) => s.id === value);
   // Any bundled file Main accepts previews; an import only while its file is there.
   const playable =
     !!value &&
-    (!isCustomSoundId(value) || customSounds === null || available.some((s) => s.id === value));
+    (!isCustomSoundId(value) || !customSoundsLoaded || available.some((s) => s.id === value));
 
   const handleFile = (file: File | undefined) => {
     if (!file || !onImportFile) return;
@@ -283,7 +281,7 @@ export function SoundPickerRow({
                 // gone, or a bundled file set elsewhere): shown so the trigger
                 // names it, but it can't be picked again from here.
                 <SelectItem value={value} disabled>
-                  {soundLabel(value, customSounds)}
+                  {soundLabel(value, customSounds, customSoundsLoaded)}
                 </SelectItem>
               )}
               {onImportFile && (

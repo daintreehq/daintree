@@ -366,6 +366,7 @@ export function NotificationSettingsTab() {
       }}
       onPreview={previewNotificationSound}
       customSounds={customSounds.sounds}
+      customSoundsLoaded={customSounds.loaded}
       onImportFile={customSounds.importFile}
       onOpen={customSounds.refresh}
       {...reset(key)}

@@ -271,6 +271,28 @@ describe("NotificationSettingsTab", () => {
       expect((preview as HTMLButtonElement).disabled).toBe(false);
     });
 
+    it("offers an import made before the list arrived, without calling other imports missing", async () => {
+      const saved = "custom:11111111-2222-4333-8444-555555555555";
+      getSettings.mockResolvedValueOnce({ ...BASE, soundEnabled: true, completedSoundFile: saved });
+      listCustomSounds.mockRejectedValue(new Error("busy"));
+      importMock.importNotificationSound.mockResolvedValue(IMPORTED);
+      render(<NotificationSettingsTab />);
+
+      await chooseFile("Waiting sound");
+
+      await waitFor(() =>
+        expect(setSettings).toHaveBeenCalledWith({ waitingSoundFile: IMPORTED.id })
+      );
+      const waiting = screen.getByRole("combobox", { name: "Waiting sound" });
+      await waitFor(() => expect(waiting.textContent).toContain("Door bell"));
+      const finished = screen.getByRole("combobox", { name: "Finished sound" });
+      expect(finished.textContent).toContain("Custom sound");
+      expect(
+        (screen.getByRole("button", { name: "Preview finished sound" }) as HTMLButtonElement)
+          .disabled
+      ).toBe(false);
+    });
+
     it("names a saved import by its label and disables Preview when its file is gone", async () => {
       getSettings.mockResolvedValueOnce({
         ...BASE,
