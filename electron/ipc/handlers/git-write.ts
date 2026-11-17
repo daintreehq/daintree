@@ -2279,7 +2279,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
         const out = (await git.revparse(["HEAD"])).trim();
         // On a branch with no commit, a tracked file named `HEAD` makes
         // rev-parse echo the path back rather than fail.
-        headOid = /^[0-9a-f]{40,64}$/i.test(out) ? out : "";
+        headOid = FULL_OID_PATTERN.test(out) ? out : "";
       } catch {
         // No HEAD (unborn branch / empty repo): `git diff --cached` still
         // works against the empty tree, so churn is read with an empty OID.

@@ -41,7 +41,15 @@ interface GitPushConfirmState {
    * `pendingConfirm` never returns to null between requests (#9918).
    */
   requestSeq: number;
-  requestConfirmation: (cwd: string) => Promise<GitPushConfirmResult>;
+  /**
+   * `yieldToPending` is for a review nothing asked for at that moment, such as
+   * the one a first commit raises once it lands (#17588): it declines at once
+   * rather than taking over a review that is already open.
+   */
+  requestConfirmation: (
+    cwd: string,
+    options?: { yieldToPending?: boolean }
+  ) => Promise<GitPushConfirmResult>;
   /** Approve with the review on screen, or decline with `null`. */
   resolveConfirmation: (review: GitPushReview | null) => void;
 }
@@ -50,8 +58,12 @@ export const useGitPushConfirmStore = create<GitPushConfirmState>()((set, get) =
   pendingConfirm: null,
   requestSeq: 0,
 
-  requestConfirmation: (cwd: string): Promise<GitPushConfirmResult> => {
+  requestConfirmation: (
+    cwd: string,
+    options?: { yieldToPending?: boolean }
+  ): Promise<GitPushConfirmResult> => {
     const existing = get().pendingConfirm;
+    if (existing && options?.yieldToPending) return Promise.resolve(DECLINED);
     if (existing) {
       existing.resolve(DECLINED);
     }

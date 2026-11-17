@@ -253,7 +253,9 @@ describe("useReviewHubCommitAndPush — first commit (#17588)", () => {
   }
 
   function stubReview(answer: () => Promise<GitPushConfirmResult>) {
-    const requestConfirmation = vi.fn((_cwd: string) => answer());
+    const requestConfirmation = vi.fn((_cwd: string, _options?: { yieldToPending?: boolean }) =>
+      answer()
+    );
     useGitPushConfirmStore.setState({ requestConfirmation });
     return requestConfirmation;
   }
@@ -295,7 +297,7 @@ describe("useReviewHubCommitAndPush — first commit (#17588)", () => {
       refreshed.resolve();
       await done;
     });
-    expect(requestConfirmation).toHaveBeenCalledWith(PATH);
+    expect(requestConfirmation).toHaveBeenCalledWith(PATH, { yieldToPending: true });
     expect(push).toHaveBeenCalledWith(PATH, undefined, undefined, FIRST_PUSH);
   });
 
@@ -346,6 +348,7 @@ describe("useReviewHubCommitAndPush — first commit (#17588)", () => {
     });
     await act(async () => {});
     expect(result.current.isCommitPushInFlight).toBe(true);
+    expect(push).not.toHaveBeenCalled();
 
     await act(async () => review.resolve(APPROVED));
     expect(push).toHaveBeenCalledTimes(1);
@@ -389,6 +392,22 @@ describe("useReviewHubCommitAndPush — first commit (#17588)", () => {
     expect(commit).toHaveBeenCalledTimes(1);
     expect(requestConfirmation).not.toHaveBeenCalled();
     expect(push).not.toHaveBeenCalled();
+  });
+
+  it("never takes over a push review that another worktree already has open", async () => {
+    commit.mockResolvedValue(ROOT);
+    const store = useGitPushConfirmStore.getState();
+    let other: GitPushConfirmResult | null = null;
+    void store.requestConfirmation("/other").then((answer) => (other = answer));
+    const { result } = renderFirstPushHook();
+
+    await act(() => result.current.handleCommitThenReviewPush("Initial commit"));
+
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(useGitPushConfirmStore.getState().pendingConfirm?.cwd).toBe("/other");
+    expect(other).toBeNull();
+    expect(push).not.toHaveBeenCalled();
+    act(() => useGitPushConfirmStore.getState().resolveConfirmation(null));
   });
 
   it("leaves the review alone when the hub unmounts while the commit ran", async () => {

@@ -49,6 +49,32 @@ describe("gitPushConfirmStore", () => {
     await expect(second).resolves.toEqual({ confirmed: true, review: shown });
   });
 
+  it("declines a yielding request at once and leaves the open one pending", async () => {
+    const store = useGitPushConfirmStore.getState();
+    const open = store.requestConfirmation("/repo/open");
+    let openSettled = false;
+    void open.then(() => (openSettled = true));
+    const seq = useGitPushConfirmStore.getState().requestSeq;
+
+    const yielded = await store.requestConfirmation("/repo/late", { yieldToPending: true });
+
+    expect(yielded).toEqual({ confirmed: false, review: null });
+    expect(useGitPushConfirmStore.getState().pendingConfirm?.cwd).toBe("/repo/open");
+    expect(useGitPushConfirmStore.getState().requestSeq).toBe(seq);
+    await Promise.resolve();
+    expect(openSettled).toBe(false);
+    store.resolveConfirmation(null);
+  });
+
+  it("opens a yielding request normally when nothing is pending", () => {
+    void useGitPushConfirmStore
+      .getState()
+      .requestConfirmation("/repo/late", { yieldToPending: true });
+
+    expect(useGitPushConfirmStore.getState().pendingConfirm?.cwd).toBe("/repo/late");
+    useGitPushConfirmStore.getState().resolveConfirmation(null);
+  });
+
   it("resolveConfirmation is a no-op when nothing is pending", () => {
     expect(() =>
       useGitPushConfirmStore.getState().resolveConfirmation(review("topic"))

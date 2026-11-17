@@ -336,12 +336,18 @@ export function useReviewHubCommitAndPush({
         // Closed or moved on while the commit ran: the commit stays, and its
         // push is reviewed whenever someone next asks for one.
         if (reviewOwnerRef.current !== owner) return;
-        await handlePushClean();
+        // Raised by the commit landing, not by a click now, so it never takes
+        // over a push review opened elsewhere while the commit ran.
+        const result = await useGitPushConfirmStore
+          .getState()
+          .requestConfirmation(worktreePath, { yieldToPending: true });
+        if (!result.confirmed) return;
+        await runPush(result.review);
       } finally {
         setIsCommitPushInFlight(false);
       }
     },
-    [commitForPush, handlePushClean, setActionError, debouncedBgRefreshRef]
+    [worktreePath, commitForPush, runPush, setActionError, debouncedBgRefreshRef]
   );
 
   const handlePullRebase = useCallback(
