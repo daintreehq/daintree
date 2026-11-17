@@ -1352,7 +1352,7 @@ const gitBaseIntegrationNamespace = defineIpcNamespace({
           const baseOid = await readOid(git, target.fullRef);
           if (!baseOid) {
             throw basePreviewUnresolvedError(
-              `Base ref '${target.compareRef}' does not resolve to a commit. Try the preview again.`,
+              `Base ref '${target.compareRef}' does not resolve to a commit, so there is nothing to preview.`,
               payload.cwd,
               branchName
             );
