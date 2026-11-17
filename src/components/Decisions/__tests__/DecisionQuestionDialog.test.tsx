@@ -327,28 +327,6 @@ describe("DecisionQuestionDialog", () => {
     expect(body.textContent).not.toContain("Stale notes");
   });
 
-  it("keeps the newest of two overlapping reads of one question", async () => {
-    openView(["qa"], "qa");
-    await screen.findByTestId("decision-question-content");
-    const pending: Array<(result: DecisionQuestionContentResult) => void> = [];
-    getQuestionContent.mockImplementation(
-      () => new Promise<DecisionQuestionContentResult>((resolve) => pending.push(resolve))
-    );
-    act(() => pushPane("t1"));
-    act(() => pushPane("t1"));
-    await waitFor(() => expect(pending).toHaveLength(2));
-
-    await act(async () =>
-      pending[1]!({ result: "read", question: content("qa", 7, { context: "Newer notes" }) })
-    );
-    await act(async () =>
-      pending[0]!({ result: "read", question: content("qa", 7, { context: "Older notes" }) })
-    );
-    const body = screen.getByTestId("decision-question-content");
-    expect(body.textContent).toContain("Newer notes");
-    expect(body.textContent).not.toContain("Older notes");
-  });
-
   it("reads again when the pane's state moves, so a new answer shows", async () => {
     openView(["qa"], "qa");
     await screen.findByTestId("decision-question-content");
@@ -387,6 +365,62 @@ describe("DecisionQuestionDialog", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("shows a read slower than one poll, rather than starting another over it (#17564)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const pending: Array<(result: DecisionQuestionContentResult) => void> = [];
+      getQuestionContent.mockImplementation(
+        () => new Promise<DecisionQuestionContentResult>((resolve) => pending.push(resolve))
+      );
+      openView(["qa"], "qa");
+      expect(pending).toHaveLength(1);
+      await act(async () => {
+        vi.advanceTimersByTime(40_000);
+      });
+      expect(pending).toHaveLength(1);
+
+      await act(async () =>
+        pending[0]!({ result: "read", question: content("qa", 7, { context: "Slow read" }) })
+      );
+      expect(screen.getByTestId("decision-question-content").textContent).toContain("Slow read");
+      // Nothing moved while it was out, so the next read waits for the next poll.
+      expect(pending).toHaveLength(1);
+      await act(async () => {
+        vi.advanceTimersByTime(16_000);
+      });
+      expect(pending).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("folds moves while a read is out into one read after it, and paints both", async () => {
+    openView(["qa"], "qa");
+    await screen.findByTestId("decision-question-content");
+    const pending: Array<(result: DecisionQuestionContentResult) => void> = [];
+    getQuestionContent.mockImplementation(
+      () => new Promise<DecisionQuestionContentResult>((resolve) => pending.push(resolve))
+    );
+    act(() => pushPane("t1"));
+    act(() => pushPane("t1"));
+    act(() => pushPane("t1"));
+    expect(pending).toHaveLength(1);
+
+    await act(async () =>
+      pending[0]!({ result: "read", question: content("qa", 7, { context: "First notes" }) })
+    );
+    const body = screen.getByTestId("decision-question-content");
+    expect(body.textContent).toContain("First notes");
+    expect(pending).toHaveLength(2);
+
+    await act(async () =>
+      pending[1]!({ result: "read", question: content("qa", 7, { context: "Follow-up notes" }) })
+    );
+    expect(body.textContent).toContain("Follow-up notes");
+    await act(async () => {});
+    expect(pending).toHaveLength(2);
   });
 
   it("says why a question can't be read, and offers a retry when it may come back", async () => {

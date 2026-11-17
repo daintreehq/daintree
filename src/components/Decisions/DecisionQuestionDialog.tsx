@@ -301,13 +301,14 @@ export function DecisionQuestionDialog() {
   const decisionsSwitch = useDecisionsSwitch();
   const on = decisionsSwitch === "on";
   const [tagged, setTagged] = useState<TaggedRead | null>(null);
-  const [attempt, setAttempt] = useState(0);
   const [cancel, setCancel] = useState<{ target: DecisionCancelTarget; open: boolean } | null>(
     null
   );
   const previousRef = useRef<HTMLButtonElement>(null);
   const nextRef = useRef<HTMLButtonElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
+  /** Reads the shown question again, or once more after the read still out. */
+  const refreshRef = useRef<(() => void) | null>(null);
 
   const target = request?.questions[request.index] ?? null;
   const terminalId = target?.scope === "pane" ? target.terminalId : null;
@@ -336,37 +337,51 @@ export function DecisionQuestionDialog() {
     if (!isOpen || !on || target === null) return;
     const thisKey = targetKey(target);
     let live = true;
-    // Reads can land out of order; only the newest one started may paint.
-    let latest = 0;
+    // One read at a time (#17564): a newer one started over a slow read would
+    // discard it, and on a link slower than the poll none would ever paint.
+    // What moves while it's out is read once after it lands.
+    let reading = false;
+    let again = false;
+    let poll: ReturnType<typeof setTimeout> | undefined;
     const read = () => {
-      latest += 1;
-      const seq = latest;
-      const accept = (result: Read) => {
-        if (live && seq === latest) setTagged({ key: thisKey, read: result });
+      if (reading) {
+        again = true;
+        return;
+      }
+      reading = true;
+      again = false;
+      clearTimeout(poll);
+      const settle = (result: Read) => {
+        if (!live) return;
+        reading = false;
+        setTagged({ key: thisKey, read: result });
+        if (again) read();
+        // A follow-up can change the thread without moving the pane's state.
+        else poll = setTimeout(read, REREAD_MS);
       };
-      readTargetContent(target).then(accept, () =>
+      readTargetContent(target).then(settle, () =>
         // Never the error itself: it could carry what the question says.
-        accept({ result: "failed" })
+        settle({ result: "failed" })
       );
     };
     read();
     // An answer or its delivery moves the question; read again so the thread keeps up.
     const off = onQuestionMoved(target, read);
-    // A follow-up can change the thread without moving the pane's state.
-    const timer = setInterval(read, REREAD_MS);
+    refreshRef.current = read;
     return () => {
       live = false;
       off();
-      clearInterval(timer);
+      clearTimeout(poll);
+      refreshRef.current = null;
     };
-  }, [isOpen, on, target, attempt]);
+  }, [isOpen, on, target]);
 
   const current = tagged !== null && tagged.key === key ? tagged.read : null;
   const showSkeleton = useSkeletonGate(isOpen && current === null);
   const readQuestion = current?.result === "read" ? current.question : null;
   const answerMode = useAnswerComposerMode(readQuestion);
   const answering = useAnswerInFlight(readQuestion) || answerMode === "progress";
-  const reread = useCallback(() => setAttempt((n) => n + 1), []);
+  const reread = useCallback(() => refreshRef.current?.(), []);
 
   const hasPrevious = index > 0;
   const hasNext = index < count - 1;
@@ -500,7 +515,7 @@ export function DecisionQuestionDialog() {
                 size="compact"
                 action={
                   current.result === "failed" || current.result === "not-running" ? (
-                    <Button variant="outline" size="xs" onClick={() => setAttempt((n) => n + 1)}>
+                    <Button variant="outline" size="xs" onClick={() => refreshRef.current?.()}>
                       Retry
                     </Button>
                   ) : undefined
