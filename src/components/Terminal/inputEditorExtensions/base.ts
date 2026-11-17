@@ -887,6 +887,8 @@ interface CustomKeymapConfig {
   onPopStash: () => boolean;
   onExpand: () => boolean;
   onHistorySearch: () => boolean;
+  /** Runs the action of the note at the autocomplete menu's foot, while one shows. */
+  onAutocompleteNote: () => boolean;
 }
 
 export function createCustomKeymap(config: CustomKeymapConfig): Extension {
@@ -986,6 +988,12 @@ export function createCustomKeymap(config: CustomKeymapConfig): Extension {
         key: "Mod-r",
         run() {
           return config.onHistorySearch();
+        },
+      },
+      {
+        key: "Mod-Shift-,",
+        run() {
+          return config.onAutocompleteNote();
         },
       },
     ])

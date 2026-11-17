@@ -3,9 +3,13 @@ import { isPointerClaimed } from "@/lib/pointerClaim";
 import type { CompletionKind } from "@shared/types";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
-import { KBD_COMPACT_CLASS } from "@/components/ui/Kbd";
+import { KBD_COMPACT_CLASS, KbdChord } from "@/components/ui/Kbd";
 import { PathTail } from "@/components/ui/PathTail";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
+import { POPOVER_ROW_HOVER_CLASS } from "@/components/ui/popoverHeader";
+import { comboToAriaKeyshortcuts, describeChord } from "@/lib/kbdShortcut";
+import { useKeyLabels } from "@/lib/keyboardLayout";
+import { isMac } from "@/lib/platform";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import {
@@ -267,9 +271,11 @@ export interface AutocompleteMenuProps {
   /**
    * A line at the foot of the menu, outside the rows: the arrow keys and Enter
    * never reach it, and it stays while the rows narrow or empty. Clicking it runs
-   * `onClick`; the status region speaks it for anyone not using a pointer.
+   * `onClick`; the status region speaks it for anyone not using a pointer. Focus
+   * stays in the editor, so the keyboard path is `shortcut`, which the caller
+   * binds to the same `onClick` and the note shows and announces.
    */
-  note?: { text: string; onClick: () => void };
+  note?: { text: string; onClick: () => void; shortcut?: string };
 }
 
 export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps>(
@@ -298,6 +304,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
     // and fades out like its sibling overlays instead of popping on every
     // `/` or `@` keystroke.
     const skipMotion = useShouldSkipMotion();
+    const keyLabels = useKeyLabels();
     const { isVisible, shouldRender } = useAnimatedPresence({
       isOpen,
       animationDuration: getUiPaletteTransitionDuration("exit"),
@@ -347,6 +354,13 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
         ? [tabFirstHint(firstItem)]
         : getKeyHints(selectedItem, isSelectedStale);
     const hasRows = items.length > 0;
+    const mac = isMac();
+    const noteShortcut = note?.shortcut;
+    const spokenNote = note
+      ? noteShortcut
+        ? `${note.text}, ${describeChord(noteShortcut, mac, keyLabels)} to open`
+        : note.text
+      : null;
     // Spoken for every state, shown only when there are no rows to show instead:
     // with rows on screen the header carries "Updating…" visibly. No row is
     // selected to carry the Tab instruction, so this says it.
@@ -435,7 +449,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
             className={cn(hasRows ? "sr-only" : "px-2 py-1.5 text-xs text-text-secondary")}
           >
             {statusText}
-            {note && <span className="sr-only"> {note.text}</span>}
+            {spokenNote && <span className="sr-only"> {spokenNote}</span>}
           </div>
 
           <div
@@ -533,14 +547,34 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
         {note && (
           <button
             type="button"
+            // Out of the Tab order like the rows: Tab belongs to the editor, and
+            // the note's shortcut is the keyboard path.
             tabIndex={-1}
-            aria-hidden="true"
+            aria-keyshortcuts={comboToAriaKeyshortcuts(noteShortcut, mac, keyLabels)}
             data-autocomplete-note=""
-            className="shrink-0 border-t border-tint/5 px-2 py-1 text-left text-3xs text-text-secondary transition-colors hover:text-text-primary"
+            className={cn(
+              "flex shrink-0 cursor-pointer items-center justify-between gap-2 border-t border-divider px-2 py-1 text-left text-3xs text-text-secondary hover:text-text-primary",
+              POPOVER_ROW_HOVER_CLASS,
+              PALETTE_ROW_FOCUS_CLASS
+            )}
             onMouseDown={(e) => e.preventDefault()}
-            onClick={note.onClick}
+            onClick={(e) => {
+              // A host that refocuses its editor on click would pull focus back
+              // under whatever the note opens.
+              e.stopPropagation();
+              note.onClick();
+            }}
           >
-            {note.text}
+            <span className="min-w-0">{note.text}</span>
+            {noteShortcut && (
+              // Named by `aria-keyshortcuts` and spoken by the status region.
+              <KbdChord
+                shortcut={noteShortcut}
+                density="compact"
+                className="shrink-0"
+                rootAttributes={{ "aria-hidden": "true" }}
+              />
+            )}
           </button>
         )}
       </div>

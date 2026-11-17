@@ -767,6 +767,65 @@ describe("HybridInputBar's own prompt templates in the `/` menu", () => {
     );
   });
 
+  it("goes to the problem from the editor by the note's shortcut, leaving the draft alone", async () => {
+    const dispatch = vi
+      .spyOn(actionService, "dispatch")
+      .mockResolvedValue({ ok: true } as Awaited<ReturnType<typeof actionService.dispatch>>);
+    withFolder(() => folder([mine()], [{ fileName: "bad.md", reason: "title is missing" }]));
+    const { type, view } = await renderComposer("");
+    const mac = /Mac/.test(navigator.platform);
+    const chord = () =>
+      act(async () => {
+        runScopeHandlers(
+          view,
+          new KeyboardEvent("keydown", { key: ",", shiftKey: true, metaKey: mac, ctrlKey: !mac }),
+          "editor"
+        );
+      });
+
+    // No menu, no note: the chord is nobody's.
+    await chord();
+    expect(dispatch).not.toHaveBeenCalled();
+
+    // A `/` matching nothing still shows the note, and the chord still reaches it.
+    await type("/zzz");
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+    await chord();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      expect.objectContaining({ tab: "agents", sectionId: "agents-prompt-templates" }),
+      { source: "user" }
+    );
+    expect(view.state.doc.toString()).toBe("/zzz");
+  });
+
+  it("leaves the shortcut alone once the folder is healthy again", async () => {
+    const dispatch = vi
+      .spyOn(actionService, "dispatch")
+      .mockResolvedValue({ ok: true } as Awaited<ReturnType<typeof actionService.dispatch>>);
+    withFolder(() => folder([mine()], [{ fileName: "bad.md", reason: "title is missing" }]));
+    const { type, view, container } = await renderComposer("");
+    await type("/boiler");
+    expect(container.querySelector("[data-autocomplete-note]")).not.toBeNull();
+
+    act(() => {
+      useUserPromptTemplateStore.setState({ problems: [] });
+    });
+    await act(async () => {});
+    expect(container.querySelector("[data-autocomplete-note]")).toBeNull();
+
+    const mac = /Mac/.test(navigator.platform);
+    await act(async () => {
+      runScopeHandlers(
+        view,
+        new KeyboardEvent("keydown", { key: ",", shiftKey: true, metaKey: mac, ctrlKey: !mac }),
+        "editor"
+      );
+    });
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it("shows no note while the folder is healthy, or in another menu", async () => {
     withFolder(() => folder([mine()]));
     const { type, container, view, rows } = await renderComposer("");

@@ -400,6 +400,8 @@ interface LatestState {
   uploadSurface: string;
   modEnterSend?: () => ComposerSendRoute;
   altChords?: readonly string[];
+  /** The action of the note at the menu's foot, while one shows. */
+  autocompleteNoteAction?: () => void;
 }
 
 interface HybridInputE2EController {
@@ -475,6 +477,9 @@ const NO_TEMPLATE_ITEMS: AutocompleteItem[] = [];
 /** A file left out of the templates folder would otherwise just be absent from the menu. */
 const TEMPLATE_PROBLEMS_NOTE = {
   text: "Some prompt templates weren't loaded. See why in Settings > CLI agents",
+  // Bound in the composer's keymap (`Mod-Shift-,`): focus stays in the editor
+  // while the menu is open, so the note itself is never a tab stop.
+  shortcut: "Cmd+Shift+,",
   onClick: () => {
     void actionService.dispatch(
       "app.settings.openTab",
@@ -1162,6 +1167,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const promptTemplates = usePromptTemplates(currentProjectId);
     const hasTemplateProblems = useUserPromptTemplateStore((s) => s.problems.length > 0);
     const isSlashMenuOpen = isCompleting && triggerChar === "/";
+    const autocompleteNote =
+      isSlashMenuOpen && hasTemplateProblems ? TEMPLATE_PROBLEMS_NOTE : undefined;
     // A plugin attached in dev mode announces itself without a provenance event,
     // and a file saved in the templates folder doesn't announce itself at all. An
     // expanded composer keeps its menu open across a trip to another app, which is
@@ -1260,6 +1267,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         modEnterSend,
         altChords,
         uploadSurface,
+        autocompleteNoteAction: autocompleteNote?.onClick,
       };
     });
 
@@ -2832,7 +2840,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 ? "No files match"
                 : "No matches"
         }
-        note={isSlashMenuOpen && hasTemplateProblems ? TEMPLATE_PROBLEMS_NOTE : undefined}
+        note={autocompleteNote}
       />
     );
 
