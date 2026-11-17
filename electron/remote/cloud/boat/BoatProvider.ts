@@ -236,6 +236,7 @@ export class BoatProvider implements CloudProvider {
           retentionDays: 14,
           saveRetryBilled: false,
           stoppedComputeBilled: false,
+          stoppedStorageBilled: false,
         },
         typicalStartSeconds: 60,
         lifetime: { kind: "renewable" },

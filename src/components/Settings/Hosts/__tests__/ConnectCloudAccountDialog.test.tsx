@@ -45,6 +45,7 @@ function provider(id: string, credentialFields: CloudCredentialField[]): CloudPr
         retentionDays: null,
         saveRetryBilled: false,
         stoppedComputeBilled: false,
+        stoppedStorageBilled: false,
       },
       typicalStartSeconds: null,
       lifetime: { kind: "none" },

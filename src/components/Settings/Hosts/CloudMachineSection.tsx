@@ -240,7 +240,10 @@ export function CloudMachineSection({
         label={lifetime.kind === "none" ? "Stops by itself" : "Sleeps when idle"}
         description={
           <span data-testid="cloud-machine-lifetime">
-            {providerStopSentence(lifetime, providerName)}
+            {lifetime.kind === "none" && provider?.capabilities.lifetime.kind === "idle-sleep"
+              ? // The provider sleeps idle machines, but this one has it turned off.
+                "Sleeping when idle is off for this machine: it runs until you stop it."
+              : providerStopSentence(lifetime, providerName)}
           </span>
         }
       />
@@ -330,7 +333,10 @@ export function CloudMachineSection({
                   <>
                     {" "}
                     <FactSeparator />{" "}
-                    <TimeAgo prefix="stopped " timestamp={Date.parse(status.stoppedAt)} />
+                    <TimeAgo
+                      prefix={status.asleep ? "fell asleep " : "stopped "}
+                      timestamp={Date.parse(status.stoppedAt)}
+                    />
                   </>
                 )}
                 {status.observedAt !== null && (

@@ -37,14 +37,21 @@ export function canDeleteMachines(provider: CloudProviderTerms | null): boolean 
 /**
  * For a provider that bills a stopped machine, that it does and the way to
  * stop paying: Delete when Daintree can, the provider's console otherwise.
- * Null for one where stopping ends compute billing, which needs no warning.
+ * For one that bills a stopped machine's disk alone, that it does, asleep
+ * too where its machines sleep. Null for one where stopping ends billing.
  */
 export function stoppedBillingSentence(provider: CloudProviderTerms | null): string | null {
-  if (!provider || !billsWhileStopped(provider)) return null;
-  const stopPaying = provider.capabilities.deletion
-    ? "remove the host and delete its machine"
-    : `delete the machine in ${provider.name}'s console`;
-  return `${provider.name} keeps billing a stopped machine for compute until it's deleted. To stop paying for it, ${stopPaying}.`;
+  if (!provider) return null;
+  if (billsWhileStopped(provider)) {
+    const stopPaying = provider.capabilities.deletion
+      ? "remove the host and delete its machine"
+      : `delete the machine in ${provider.name}'s console`;
+    return `${provider.name} keeps billing a stopped machine for compute until it's deleted. To stop paying for it, ${stopPaying}.`;
+  }
+  if (!provider.capabilities.persistence.stoppedStorageBilled) return null;
+  const parked =
+    provider.capabilities.lifetime.kind === "idle-sleep" ? "stopped or asleep" : "stopped";
+  return `${provider.name} bills only for its disk while it's ${parked}.`;
 }
 
 /** That a stopped machine on this provider is still billing, for a line of short facts. */
@@ -183,6 +190,7 @@ export function cloudStateWord(status: CloudHostStatus): string {
     }
   }
   if (status.dataExpired) return "Saved disk expired";
+  if (status.machine === "stopped" && status.asleep) return "Asleep";
   // Not proof of anything: a refused key or a lost scope reads the same as a deleted machine.
   if (status.machine === "unknown") return "Couldn't check its state";
   if (status.machine === "not-created")

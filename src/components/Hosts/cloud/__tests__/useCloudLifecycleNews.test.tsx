@@ -37,6 +37,7 @@ function status(machine: CloudHostStatus["machine"]): CloudHostStatus {
     hostKeyFingerprint: null,
     hostKeyReview: null,
     keptRunningAt: null,
+    asleep: false,
   };
 }
 

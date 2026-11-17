@@ -49,6 +49,7 @@ function fakeProvider(overrides: Partial<CloudProvider> = {}): CloudProvider {
           retentionDays: null,
           saveRetryBilled: true,
           stoppedComputeBilled: false,
+          stoppedStorageBilled: false,
         },
         typicalStartSeconds: null,
         lifetime: { kind: "renewable" },
@@ -129,6 +130,147 @@ describe("CloudAccountService", () => {
     expect(JSON.stringify(backend.value)).not.toContain("boat_live_0123456789abcd");
     expect(JSON.stringify(summary)).not.toContain("boat_live_0123456789abcd");
     expect(vault.sets.get(summary.id)).toEqual({ apiKey: "boat_live_0123456789abcd" });
+  });
+
+  function anonymousProvider(overrides: Partial<CloudProvider> = {}): CloudProvider {
+    const base = fakeProvider();
+    return fakeProvider({
+      info: (platform) => ({ ...base.info(platform), name: "Acme Cloud" }),
+      checkCredentials: vi.fn(async () => ({
+        identity: null,
+        scopes: [
+          {
+            scope: { kind: "workspace" as const, id: "workspace", name: "Workspace" },
+            active: true,
+          },
+        ],
+      })),
+      ...overrides,
+    });
+  }
+
+  function bindingFor(accountId: string, resourceId: string) {
+    return {
+      id: `cb_${resourceId.slice(-10)}`,
+      hostId: resourceId,
+      accountId,
+      providerId: "boat",
+      resourceId,
+      ownership: "imported" as const,
+      createdFor: null,
+      provisioning: null,
+      creation: null,
+      lifetimeSeconds: null,
+      intent: null,
+      observation: null,
+      access: null,
+      trustedHostKey: null,
+      offeredHostKey: null,
+      lastError: null,
+      createdAt: 0,
+    };
+  }
+
+  it("takes a new key for a nameless workspace only when it sees that account's machines (#17347)", async () => {
+    const seen = new Set(["sk_live_old", "sk_live_same"]);
+    const inspect = vi.fn(async (credentials: { values: { apiKey?: string } }) => {
+      if (!seen.has(credentials.values.apiKey ?? "")) throw { code: "404" };
+      return {} as never;
+    });
+    const provider = anonymousProvider({
+      inspect,
+      describeError: (error) => ({
+        code: (error as { code?: string })?.code === "404" ? "not-found" : "failed",
+        message: "described",
+        at: 0,
+      }),
+    });
+    const { accounts, store, vault } = service({ provider });
+    const summary = await accounts.addAccount({
+      providerId: "boat",
+      credentials: { apiKey: "sk_live_old" },
+      scopeId: "workspace",
+    });
+    // Nothing bound yet: there is nothing a key from elsewhere could strand.
+    await accounts.replaceCredentials(summary.id, { apiKey: "sk_live_elsewhere" });
+    expect(inspect).not.toHaveBeenCalled();
+    await accounts.replaceCredentials(summary.id, { apiKey: "sk_live_old" });
+
+    store.putBinding(bindingFor(summary.id, "vm_gone000001"));
+    store.putBinding(bindingFor(summary.id, "vm_kept000001"));
+    inspect.mockImplementation(
+      async (credentials: { values: { apiKey?: string } }, resourceId?: unknown) => {
+        if (resourceId === "vm_gone000001" || !seen.has(credentials.values.apiKey ?? ""))
+          throw { code: "404" };
+        return {} as never;
+      }
+    );
+    await expect(
+      accounts.replaceCredentials(summary.id, { apiKey: "sk_live_elsewhere" })
+    ).rejects.toThrow(/can't see this account's machines.*another Acme Cloud workspace/);
+    expect(vault.sets.get(summary.id)).toEqual({ apiKey: "sk_live_old" });
+    // One machine deleted since proves nothing; another it can see is enough.
+    await accounts.replaceCredentials(summary.id, { apiKey: "sk_live_same" });
+    expect(vault.sets.get(summary.id)).toEqual({ apiKey: "sk_live_same" });
+
+    // A machine asked for and not yet found is looked for with this account's key: hold it.
+    store.putBinding({
+      ...bindingFor(summary.id, "vm_pend000001"),
+      resourceId: null,
+      ownership: "created-by-daintree",
+      creation: {
+        operationId: "op",
+        idempotencyKey: "key",
+        sentAt: 5,
+        name: "pending",
+        machineType: "2x4",
+      },
+    });
+    await expect(
+      accounts.replaceCredentials(summary.id, { apiKey: "sk_live_old" })
+    ).rejects.toThrow(/hasn't been confirmed yet/);
+    expect(vault.sets.get(summary.id)).toEqual({ apiKey: "sk_live_same" });
+  });
+
+  it("connects a second workspace whose provider can't say who a key is, named after the provider (#17347)", async () => {
+    const provider = fakeProvider({
+      info: anonymousProvider().info,
+      checkCredentials: vi.fn(async () => ({
+        identity: null,
+        scopes: [
+          {
+            scope: { kind: "workspace" as const, id: "workspace", name: "Workspace" },
+            active: true,
+          },
+        ],
+      })),
+    });
+    const { accounts, store, backend, vault } = service({ provider });
+    const first = await accounts.addAccount({
+      providerId: "boat",
+      credentials: { apiKey: "sk_live_first" },
+      scopeId: "workspace",
+    });
+    expect(first).toMatchObject({
+      displayName: "Acme Cloud",
+      identity: null,
+      billingScope: { kind: "workspace", id: "workspace", name: "Workspace" },
+    });
+    // Nothing tells two such keys apart, so neither is refused as the other.
+    const second = await accounts.addAccount({
+      providerId: "boat",
+      credentials: { apiKey: "sk_live_second" },
+      scopeId: "workspace",
+    });
+    expect(store.accounts()).toHaveLength(2);
+    expect(vault.sets.get(first.id)).toEqual({ apiKey: "sk_live_first" });
+    expect(vault.sets.get(second.id)).toEqual({ apiKey: "sk_live_second" });
+    // The scope reads back from disk as it was written.
+    const reread = new CloudHostStore(memoryBackend(backend.value));
+    expect(reread.accounts().map((account) => account.scope.kind)).toEqual([
+      "workspace",
+      "workspace",
+    ]);
   });
 
   it("refuses a scope the key can't bill", async () => {

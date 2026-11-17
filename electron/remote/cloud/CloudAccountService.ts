@@ -303,6 +303,8 @@ export class CloudAccountService {
     apiUrl: string,
     exceptId: string | null = null
   ): StoredCloudAccount | undefined {
+    // A provider that can't say who a key belongs to can't tell two of its accounts apart.
+    if (identity === null) return undefined;
     return this.deps.store
       .accounts()
       .find(
@@ -359,9 +361,9 @@ export class CloudAccountService {
     refuseDuplicate();
     const id = `ca_${crypto.randomBytes(8).toString("hex")}`;
     const fallbackName =
-      choice.scope.kind === "personal"
-        ? (checked.identity ?? provider.info(process.platform).name)
-        : choice.scope.name;
+      choice.scope.kind === "organization"
+        ? choice.scope.name
+        : (checked.identity ?? provider.info(process.platform).name);
     const account: StoredCloudAccount = {
       id,
       providerId: request.providerId,
@@ -426,6 +428,8 @@ export class CloudAccountService {
           `${duplicate.displayName} is already connected as ${identity} for ${before.scope.name}. Remove one of them instead.`
         );
       }
+      // Nothing says whose these are: they must see the machines this account already has.
+      if (checked.identity === null) await this.requireSameMachines(before, provider, credentials);
       // Read before anything is overwritten: a set that can't be read now couldn't be put back.
       const previous = await this.deps.vault.get(account.id);
       await this.deps.vault.put(account.id, credentials);
@@ -462,6 +466,46 @@ export class CloudAccountService {
       this.catalogs.delete(account.id);
       return this.requireSummary(account.id);
     });
+  }
+
+  /**
+   * For a provider that can't say who a key belongs to: the new key must see
+   * at least one of the machines bound to the account. A key for another
+   * workspace would otherwise take over, and the bound machines would read as
+   * gone (a delete through it, a not-found, forgets a host whose machine
+   * keeps billing). An account with no machines has nothing to strand.
+   */
+  private async requireSameMachines(
+    account: StoredCloudAccount,
+    provider: CloudProvider,
+    values: CloudCredentialValues
+  ): Promise<void> {
+    const bound = this.deps.store.bindings().filter((binding) => binding.accountId === account.id);
+    // A create sent and not yet found is looked for, and deleted, with the account's key.
+    if (bound.some((binding) => binding.resourceId === null && binding.creation?.sentAt != null)) {
+      throw invalid(
+        "A machine this account asked for hasn't been confirmed yet, and a new key may not see it. Replace the key once it has, or remove that host first."
+      );
+    }
+    const resourceIds = bound
+      .filter((binding) => binding.resourceId !== null)
+      .map((binding) => binding.resourceId!);
+    if (resourceIds.length === 0) return;
+    const credentials = { values, scopeId: account.scope.id, apiUrl: account.apiUrl };
+    for (const resourceId of resourceIds) {
+      try {
+        await provider.inspect(credentials, resourceId);
+        return;
+      } catch (error) {
+        // One deleted elsewhere proves nothing either way; anything else is an answer to give.
+        if (provider.describeError(error).code !== "not-found") {
+          throw this.asAppError(provider, error);
+        }
+      }
+    }
+    throw invalid(
+      `That key can't see this account's machines, so it may belong to another ${provider.info(process.platform).name} workspace. Connect it as another account instead.`
+    );
   }
 
   rename(accountId: unknown, displayName: unknown): CloudAccountSummary {
@@ -629,6 +673,7 @@ export class CloudAccountService {
         boundHostId:
           bindings.find((binding) => binding.resourceId === resource.resourceId)?.hostId ?? null,
         restricted: resource.restricted,
+        asleep: resource.machine === "stopped" && resource.asleep === true,
       }));
   }
 

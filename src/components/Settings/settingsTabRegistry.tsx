@@ -329,6 +329,8 @@ const HOSTS_TAB = {
     "update",
     "cloud",
     "boat",
+    "agent 37",
+    "agent37",
   ],
   sections: [
     {
@@ -344,7 +346,18 @@ const HOSTS_TAB = {
       title: "Cloud providers",
       description:
         "Connect a cloud provider account to create machines as hosts, start and stop them, and delete them when you're done",
-      keywords: ["boat", "cloud", "api key", "provider", "machine", "vm", "sandbox", "account"],
+      keywords: [
+        "boat",
+        "agent 37",
+        "agent37",
+        "cloud",
+        "api key",
+        "provider",
+        "machine",
+        "vm",
+        "sandbox",
+        "account",
+      ],
     },
     {
       id: "host-mode",

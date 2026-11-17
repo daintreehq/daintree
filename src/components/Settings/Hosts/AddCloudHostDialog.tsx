@@ -332,11 +332,12 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     // Unknown is no reason to offer Start: the way forward is asking again.
     const unknown = machine === "unknown" && !operation;
     const stoppedImport = mode === "import" && !startRequested && startable;
+    const parked = status?.asleep ? "asleep" : "stopped";
     body = (
       <div className="space-y-4" data-testid="add-cloud-host-progress">
         {stoppedImport ? (
           <p className="text-sm text-text-primary">
-            {`It's in your host list. Its machine is ${cloudMachineLabel(machine).toLowerCase()}, and Daintree didn't start it.`}
+            {`It's in your host list. Its machine is ${status?.asleep ? "asleep" : cloudMachineLabel(machine).toLowerCase()}, and Daintree didn't start it.`}
           </p>
         ) : unknown ? (
           <p className="text-sm text-text-primary">
@@ -361,7 +362,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
         )}
         {stoppedImport && status && (
           <p className="text-sm text-text-secondary">
-            {`Start it now to set up Daintree there${hourlyShort(status.hourlyDollars) ? `; it bills ${status.accountName} ${hourlyShort(status.hourlyDollars)} while it runs` : ""}. Or leave it stopped and start it from the host menu when you need it.${stoppedBillingSentence(provider) ? ` ${stoppedBillingSentence(provider)}` : ""}`}
+            {`Start it now to set up Daintree there${hourlyShort(status.hourlyDollars) ? `; it bills ${status.accountName} ${hourlyShort(status.hourlyDollars)} while it runs` : ""}. Or leave it ${parked} and start it from the host menu when you need it.${stoppedBillingSentence(provider) ? ` ${stoppedBillingSentence(provider)}` : ""}`}
           </p>
         )}
         {failed && status?.lastError && (
@@ -373,7 +374,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     );
     if (stoppedImport) {
       primary = { label: "Start machine", onClick: startAdded };
-      secondary = { label: "Leave stopped", onClick: onClose };
+      secondary = { label: `Leave ${parked}`, onClick: onClose };
     } else if (unknown) {
       primary = { label: "Check status", onClick: checkAdded };
       secondary = { label: "Close", onClick: onClose };
@@ -631,7 +632,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
                           : resource.dataExpired
                             ? "Its saved disk was deleted"
                             : [
-                                cloudMachineLabel(resource.machine),
+                                resource.asleep ? "Asleep" : cloudMachineLabel(resource.machine),
                                 machineSpecLabel(resource.vcpu, resource.memoryGB),
                                 stoppedBillingFact(resource, provider),
                               ]
@@ -647,7 +648,10 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
                 <FieldLabel>Name</FieldLabel>
                 <Input value={name} disabled={busy} onChange={(e) => setName(e.target.value)} />
                 <FieldDescription data-testid="add-cloud-host-import-note">
-                  {`Adding it doesn't start it or change its auto-stop${providerStopSentence(lifetimeModel, provider.name) ? `. ${providerStopSentence(lifetimeModel, provider.name)}` : ""}`}
+                  {lifetimeModel.kind === "idle-sleep"
+                    ? // Each machine's own setting decides whether it sleeps; this one's may be off.
+                      `Adding it doesn't start it or change whether ${provider.name} puts it to sleep when idle.`
+                    : `Adding it doesn't start it or change its auto-stop${providerStopSentence(lifetimeModel, provider.name) ? `. ${providerStopSentence(lifetimeModel, provider.name)}` : ""}`}
                 </FieldDescription>
               </Field>
             )}

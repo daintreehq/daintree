@@ -2,6 +2,8 @@ import { app } from "electron";
 import path from "node:path";
 import type { RemoteHostsEvent } from "../../../shared/types/ipc/remoteHosts.js";
 import { registerRemoteService } from "../runtime.js";
+import { Agent37Client, resolveAgent37ApiUrl } from "./agent37/Agent37Client.js";
+import { Agent37Provider } from "./agent37/Agent37Provider.js";
 import { BoatClient, resolveBoatApiUrl } from "./boat/BoatClient.js";
 import { BoatProvider } from "./boat/BoatProvider.js";
 import { CloudAccountService } from "./CloudAccountService.js";
@@ -40,10 +42,23 @@ export function initCloudHosts(params: {
     }
     return client;
   };
+  const agent37Clients = new Map<string, Agent37Client>();
+  const agent37ClientFor = (apiUrl: string): Agent37Client => {
+    let client = agent37Clients.get(apiUrl);
+    if (!client) {
+      client = new Agent37Client({ baseUrl: apiUrl });
+      agent37Clients.set(apiUrl, client);
+    }
+    return client;
+  };
   const providers = new CloudProviderRegistry();
   providers.register(new BoatProvider(boatClientFor), {
     owner: { kind: "built-in" },
     apiUrl: boatUrl,
+  });
+  providers.register(new Agent37Provider(agent37ClientFor), {
+    owner: { kind: "built-in" },
+    apiUrl: resolveAgent37ApiUrl(app.isPackaged),
   });
   const accounts = new CloudAccountService({
     store,

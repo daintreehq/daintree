@@ -51,6 +51,14 @@ export interface ProviderResource {
   restricted: boolean;
   /** The provider's word on why it is stopped or failed. */
   error: string | null;
+  /** Stopped because the provider slept it on idle; a request to it would wake it. Absent: not asleep. */
+  asleep?: boolean;
+  /**
+   * Whether this machine sleeps by itself when idle, and after how long, as
+   * the provider reports it for this machine; absent when it doesn't say per
+   * machine, and the provider's declared lifetime holds.
+   */
+  idleSleep?: { enabled: boolean; idleSeconds: number | null };
 }
 
 /** How to reach the machine's sshd right now, as the provider's authenticated API said. */
@@ -143,6 +151,14 @@ export interface MachineKeyIssuer {
  */
 export interface CloudProvider {
   readonly id: CloudProviderId;
+  /**
+   * What a create whose answer was lost may do once a lookup by its labels
+   * finds nothing: send it again with the same idempotency key, which the
+   * provider answers with the machine it made, if any (`same-key`, the
+   * default); or only look again (`lookup-only`), for a provider with no such
+   * key, where a second send could make a second machine.
+   */
+  readonly createReplay?: "same-key" | "lookup-only";
   info(platform: NodeJS.Platform): CloudProviderInfo;
   /**
    * Checks credentials the person entered, already normalised against the
@@ -189,7 +205,9 @@ export interface CloudProvider {
   delete(credentials: ProviderCredentials, resourceId: string): Promise<void>;
   /**
    * Puts `publicKey` on the machine and says how to reach its sshd. Required
-   * when `provisioning.sshKey` is "after-create", and only called then.
+   * when `provisioning.sshKey` is "after-create". A provider that takes the
+   * key at create may have it too, for a machine it didn't create with the
+   * key (an imported one); it is then called for those alone.
    */
   authorizeSsh?(
     credentials: ProviderCredentials,

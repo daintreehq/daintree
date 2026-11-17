@@ -1,4 +1,4 @@
-import type { CloudProviderInfo } from "@shared/types/cloudHosts";
+import type { CloudLifetimeModel, CloudProviderInfo } from "@shared/types/cloudHosts";
 
 /**
  * Boat as `BoatProvider.info()` declares it; `boat.test.ts` pins the
@@ -19,6 +19,7 @@ export const BOAT_PROVIDER: CloudProviderInfo = {
       retentionDays: 14,
       saveRetryBilled: false,
       stoppedComputeBilled: false,
+      stoppedStorageBilled: false,
     },
     typicalStartSeconds: 60,
     lifetime: { kind: "renewable" },
@@ -33,7 +34,13 @@ export const BOAT_PROVIDER: CloudProviderInfo = {
 
 /** A provider shaped like the one the declarations exist for: a stopped machine still bills. */
 export function provider(
-  overrides: { stoppedComputeBilled?: boolean; deletion?: boolean; name?: string } = {}
+  overrides: {
+    stoppedComputeBilled?: boolean;
+    stoppedStorageBilled?: boolean;
+    deletion?: boolean;
+    name?: string;
+    lifetime?: CloudLifetimeModel;
+  } = {}
 ): CloudProviderInfo {
   const name = overrides.name ?? "Acme";
   return {
@@ -49,7 +56,9 @@ export function provider(
         retentionDays: null,
         saveRetryBilled: false,
         stoppedComputeBilled: overrides.stoppedComputeBilled ?? true,
+        stoppedStorageBilled: overrides.stoppedStorageBilled ?? false,
       },
+      lifetime: overrides.lifetime ?? BOAT_PROVIDER.capabilities.lifetime,
       deletion: overrides.deletion ?? true,
     },
   };

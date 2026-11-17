@@ -19,7 +19,7 @@ import type { HostId } from "./remoteHosts.js";
 export type CloudProviderId = BuiltInCloudProviderId | (string & {});
 
 /** The providers compiled into this build; the open union keeps their names autocompleting. */
-export type BuiltInCloudProviderId = "boat";
+export type BuiltInCloudProviderId = "boat" | "agent37";
 
 /** Where a provider's id lives: Daintree's own bare names, or one plugin's namespace. */
 export type CloudProviderNamespace = { kind: "built-in" } | { kind: "plugin"; pluginId: string };
@@ -74,6 +74,11 @@ export interface CloudProviderPersistence {
   saveRetryBilled: boolean;
   /** Whether a stopped machine still bills for compute, not only for its disk. */
   stoppedComputeBilled: boolean;
+  /**
+   * Whether a stopped machine's disk keeps billing on its own, so stopping
+   * cuts the bill to storage rather than ending it.
+   */
+  stoppedStorageBilled: boolean;
 }
 
 /**
@@ -206,9 +211,12 @@ export interface CloudProviderInfo {
   unsupportedReason: string | null;
 }
 
-/** A wallet an account may bill: the person's own, or an organization they belong to. */
+/**
+ * A wallet an account may bill: the person's own, an organization they belong
+ * to, or the one workspace a provider binds each key to.
+ */
 export interface CloudBillingScope {
-  kind: "personal" | "organization";
+  kind: "personal" | "organization" | "workspace";
   /** The provider's id for it: what every request names. */
   id: string;
   name: string;
@@ -394,6 +402,8 @@ export interface CloudResourceSummary {
   boundHostId: HostId | null;
   /** The account cannot start or connect to it (a teammate's private machine). */
   restricted: boolean;
+  /** Stopped because the provider slept it on idle. */
+  asleep: boolean;
 }
 
 /** What Daintree is doing to a machine right now, in the user's terms. */
@@ -535,6 +545,11 @@ export interface CloudHostStatus {
    * its provider has no such keys. Optional for snapshots from before it.
    */
   selfStopProblem?: string | null;
+  /**
+   * The provider put the stopped machine to sleep on idle rather than being
+   * asked to stop it: a request to it would wake it, and it bills as stopped.
+   */
+  asleep: boolean;
 }
 
 /** The machine as it would be created. */

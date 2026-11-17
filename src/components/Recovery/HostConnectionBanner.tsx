@@ -179,8 +179,8 @@ export function HostConnectionBanner() {
           ? "last reported an error"
           : "reported an error"
         : stale
-          ? "last reported stopped"
-          : "is stopped";
+          ? `last reported ${cloud.asleep ? "asleep" : "stopped"}`
+          : `is ${cloud.asleep ? "asleep" : "stopped"}`;
     const unknownReason = cloud.lastError?.message.replace(/\.$/, "") ?? null;
     // A provider that bills a stopped machine says so where its stop is shown.
     const stoppedBilling =

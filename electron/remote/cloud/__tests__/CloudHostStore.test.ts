@@ -144,11 +144,64 @@ describe("CloudHostStore worktree marks", () => {
           stop: null,
           lastSnapshotAt: null,
           dataExpired: false,
+          asleep: false,
+          idleSleep: null,
           observedAt: 5,
         },
       })
     );
     expect(new CloudHostStore(backend).bindings()[0]?.observation?.name).toBe("feature-login-box");
+  });
+
+  it("keeps whether the provider slept the machine, and its own idle sleep (#17347)", () => {
+    const backend = disk();
+    const observation = {
+      machine: "stopped",
+      name: "build",
+      rawState: "sleeping",
+      machineType: "2x4",
+      vcpu: 2,
+      memoryGB: 4,
+      autoStopAt: null,
+      lifetimeSeconds: null,
+      stoppedAt: null,
+      stop: null,
+      lastSnapshotAt: null,
+      dataExpired: false,
+      asleep: true,
+      idleSleep: { enabled: true, idleSeconds: 600 },
+      observedAt: 5,
+    };
+    new CloudHostStore(backend).putBinding(binding({ observation }));
+    expect(new CloudHostStore(backend).bindings()[0]?.observation).toMatchObject({
+      asleep: true,
+      idleSleep: { enabled: true, idleSeconds: 600 },
+    });
+    // A record from before either existed reads as awake, with nothing reported.
+    const { asleep: _asleep, idleSleep: _idleSleep, ...older } = observation;
+    backend.write({
+      version: 1,
+      accounts: [],
+      bindings: [binding({ observation: older as never })],
+    });
+    expect(new CloudHostStore(backend).bindings()[0]?.observation).toMatchObject({
+      asleep: false,
+      idleSleep: null,
+    });
+    // Sleep turned off reads as off; an idle time that isn't one reads as unreported.
+    backend.write({
+      version: 1,
+      accounts: [],
+      bindings: [
+        binding({
+          observation: { ...observation, idleSleep: { enabled: false, idleSeconds: -5 } } as never,
+        }),
+      ],
+    });
+    expect(new CloudHostStore(backend).bindings()[0]?.observation?.idleSleep).toEqual({
+      enabled: false,
+      idleSeconds: null,
+    });
   });
 });
 

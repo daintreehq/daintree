@@ -454,7 +454,9 @@ export function ConnectCloudAccountDialog({
                         ? checked.identity
                           ? `Your own account, ${checked.identity}`
                           : "Your own account"
-                        : "An organization you belong to"
+                        : choice.scope.kind === "workspace"
+                          ? "The workspace this key belongs to"
+                          : "An organization you belong to"
                     }
                   />
                 ))}

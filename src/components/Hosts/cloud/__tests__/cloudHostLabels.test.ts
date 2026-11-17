@@ -53,6 +53,7 @@ function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
     hostKeyFingerprint: null,
     hostKeyReview: null,
     keptRunningAt: null,
+    asleep: false,
     ...overrides,
   };
 }
@@ -124,6 +125,7 @@ describe("cloud host labels", () => {
       lost: "caches",
       saveRetryBilled: false,
       stoppedComputeBilled: false,
+      stoppedStorageBilled: false,
     };
     expect(stopKeepsSentence({ ...persistence, retentionDays: 14 })).toBe(
       "Files are kept for at least 14 days while it's stopped, and may be deleted after that; caches aren't."
@@ -365,5 +367,47 @@ describe("what stopping and deleting mean for each provider (#17346)", () => {
     expect(cloudCostFacts(stopped, null)).toEqual(["$0.036/h when started"]);
     // A delete through it is refused in main with the reason it's unavailable.
     expect(canDeleteMachines(null)).toBe(true);
+  });
+});
+
+describe("a machine that sleeps when idle and bills its disk while parked (#17347)", () => {
+  const sleeper = provider({
+    name: "Agent 37",
+    stoppedComputeBilled: false,
+    stoppedStorageBilled: true,
+    lifetime: { kind: "idle-sleep", idleSeconds: 900 },
+  });
+
+  it("says a stopped or asleep machine bills only for its disk", () => {
+    expect(stoppedBillingSentence(sleeper)).toBe(
+      "Agent 37 bills only for its disk while it's stopped or asleep."
+    );
+    const stopsOnly = provider({
+      name: "Agent 37",
+      stoppedComputeBilled: false,
+      stoppedStorageBilled: true,
+    });
+    expect(stoppedBillingSentence(stopsOnly)).toBe(
+      "Agent 37 bills only for its disk while it's stopped."
+    );
+    // Storage alone is no compute bill: a stopped machine's facts and chip stay a start's price.
+    const stopped = status({ machine: "stopped", lifetime: sleeper.capabilities.lifetime });
+    expect(cloudCostFacts(stopped, sleeper)).toEqual(["$0.036/h when started"]);
+    expect(cloudChipStatus(stopped, sleeper)).toBe("machine stopped");
+  });
+
+  it("calls a machine the provider slept on idle asleep, and offers to start it", () => {
+    // The normalized fact decides, whatever the provider's own word for it.
+    const asleep = status({ machine: "stopped", asleep: true, rawState: "parked" });
+    expect(cloudStatusLabel(asleep)).toBe("Machine asleep");
+    expect(cloudStatusLabel(asleep, true)).toBe("Last reported asleep");
+    expect(cloudChipStatus(asleep, sleeper)).toBe("machine asleep");
+    expect(canStartMachine(asleep)).toBe(true);
+    expect(canStopMachine(asleep)).toBe(false);
+    // Running, it says it sleeps when idle rather than claiming no auto-stop.
+    expect(cloudCostFacts(status({ lifetime: sleeper.capabilities.lifetime }), sleeper)).toEqual([
+      "$0.036/h",
+      "sleeps when idle",
+    ]);
   });
 });

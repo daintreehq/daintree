@@ -60,6 +60,7 @@ function provider(id: string, name: string, provisioning: CloudProvisioning): Cl
         retentionDays: null,
         saveRetryBilled: false,
         stoppedComputeBilled: false,
+        stoppedStorageBilled: false,
       },
       typicalStartSeconds: null,
       lifetime: { kind: "renewable" },
