@@ -54,6 +54,21 @@ import { groupCallsByTurn } from "../RecentCallsPopover";
 import type { McpToolActivityState } from "@/controllers/HelpSessionController";
 import { __resetHelpSessionControllersForTests } from "@/controllers/helpSessionControllerRegistry";
 
+function makePolicy(expectHandoff: () => void): OverlayFocusRestore {
+  return {
+    setRestoreTarget: vi.fn(),
+    resetForOpen: vi.fn(),
+    deferToRadix: vi.fn(),
+    expectHandoff,
+    onContentPointerDown: vi.fn(),
+    onContentPointerDownOutside: vi.fn(),
+    onContentInteractOutside: vi.fn(),
+    onContentKeyDown: vi.fn(),
+    onContentClick: vi.fn(),
+    onContentCloseAutoFocus: vi.fn(),
+  };
+}
+
 function makeRecord(overrides: Partial<McpAuditRecord> = {}): McpAuditRecord {
   return {
     id: overrides.id ?? "rec-1",
@@ -469,19 +484,23 @@ describe("McpActivityStrip", () => {
     expect(screen.queryByTestId("popover-content")).toBeNull();
   });
 
-  it("hands focus to Settings when the audit log link closes the popover", async () => {
-    const expectHandoff = vi.fn();
+  it("hands focus to Settings before the audit log link closes the popover", async () => {
+    const calls: string[] = [];
+    dispatch.mockImplementation(() => {
+      calls.push("dispatch");
+      return Promise.resolve();
+    });
     render(
-      <OverlayFocusRestoreContext.Provider
-        value={{ expectHandoff } as unknown as OverlayFocusRestore}
-      >
+      <OverlayFocusRestoreContext.Provider value={makePolicy(() => calls.push("handoff"))}>
         <McpActivityStrip sessionId="session-a" activity={null} />
       </OverlayFocusRestoreContext.Provider>
     );
     fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
-    fireEvent.click(await screen.findByRole("button", { name: /open full audit log/i }));
+    const link = await screen.findByRole("button", { name: /open full audit log/i });
+    expect(calls).toEqual([]);
+    fireEvent.click(link);
 
-    expect(expectHandoff).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual(["handoff", "dispatch"]);
   });
 
   it("keeps the rows it already read when a refresh fails", async () => {

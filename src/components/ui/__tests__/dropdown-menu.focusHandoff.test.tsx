@@ -36,7 +36,8 @@ function Harness({ focusHandoff }: { focusHandoff: boolean }) {
   );
 }
 
-const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 250));
+const CLOSE_SETTLE_MS = 250;
+const settle = () => new Promise<void>((resolve) => setTimeout(resolve, CLOSE_SETTLE_MS));
 
 async function openAndPick(focusHandoff: boolean) {
   const utils = render(<Harness focusHandoff={focusHandoff} />);
@@ -60,14 +61,23 @@ describe("DropdownMenuItem focusHandoff", () => {
   });
 
   it("keeps focus in the surface the item opened once the menu has finished closing", async () => {
-    const { trigger, findByLabelText } = await openAndPick(true);
+    const { findByLabelText } = await openAndPick(true);
     await act(async () => {
       await settle();
     });
     const field = await findByLabelText("dialog field");
 
     expect(document.activeElement).toBe(field);
-    expect(document.activeElement).not.toBe(trigger);
+  });
+
+  it("lets the close take focus back from a destination when the item is no handoff", async () => {
+    // The control: the same flow without the prop is the bug this prevents.
+    const { trigger } = await openAndPick(false);
+    await act(async () => {
+      await settle();
+    });
+
+    expect(document.activeElement).toBe(trigger);
   });
 
   it("returns focus to the trigger when nothing took it", async () => {

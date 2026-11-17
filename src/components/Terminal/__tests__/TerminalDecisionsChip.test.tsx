@@ -136,6 +136,21 @@ afterEach(() => {
   Reflect.deleteProperty(window, "electron");
 });
 
+function makePolicy(expectHandoff: () => void): OverlayFocusRestore {
+  return {
+    setRestoreTarget: vi.fn(),
+    resetForOpen: vi.fn(),
+    deferToRadix: vi.fn(),
+    expectHandoff,
+    onContentPointerDown: vi.fn(),
+    onContentPointerDownOutside: vi.fn(),
+    onContentInteractOutside: vi.fn(),
+    onContentKeyDown: vi.fn(),
+    onContentClick: vi.fn(),
+    onContentCloseAutoFocus: vi.fn(),
+  };
+}
+
 describe("TerminalDecisionsChip", () => {
   it("with Decisions off, reads and watches no pane and shows nothing", async () => {
     render(<TerminalDecisionsChip terminalId="t1" />);
@@ -199,7 +214,7 @@ describe("TerminalDecisionsChip", () => {
     expect(paneClick).toHaveReturnedWith(true);
   });
 
-  it("hands focus to the attention dialog when Review answers closes the popover", async () => {
+  it("hands focus to the attention dialog before Review answers closes the popover", async () => {
     getStatus.mockResolvedValue({ state: "connected", revision: 1 });
     getPaneState.mockResolvedValue(
       paneState({
@@ -208,20 +223,25 @@ describe("TerminalDecisionsChip", () => {
         ],
       })
     );
-    const expectHandoff = vi.fn();
-    const overlay = { expectHandoff } as unknown as OverlayFocusRestore;
-    const openAttention = vi.fn();
-    useDecisionsAttentionStore.setState({ open: openAttention });
-    render(
-      <OverlayFocusRestoreContext.Provider value={overlay}>
-        <TerminalDecisionsChip terminalId="t1" />
-      </OverlayFocusRestoreContext.Provider>
-    );
-    fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
-    fireEvent.click(await screen.findByTestId("terminal-decisions-review"));
+    const calls: string[] = [];
+    const policy = makePolicy(() => calls.push("handoff"));
+    const original = useDecisionsAttentionStore.getState().open;
+    useDecisionsAttentionStore.setState({ open: () => calls.push("open") });
+    try {
+      render(
+        <OverlayFocusRestoreContext.Provider value={policy}>
+          <TerminalDecisionsChip terminalId="t1" />
+        </OverlayFocusRestoreContext.Provider>
+      );
+      fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+      expect(calls).toEqual([]);
+      fireEvent.click(await screen.findByTestId("terminal-decisions-review"));
 
-    expect(openAttention).toHaveBeenCalledWith("t1");
-    expect(expectHandoff).toHaveBeenCalledTimes(1);
+      expect(calls).toEqual(["handoff", "open"]);
+      expect(screen.queryByTestId("popover-content")).toBeNull();
+    } finally {
+      useDecisionsAttentionStore.setState({ open: original });
+    }
   });
 
   it("stays out of the way when the bridge is missing", () => {

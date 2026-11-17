@@ -21,6 +21,8 @@ import {
   type HelpSessionTab,
 } from "../HelpSessionTabs";
 
+const CLOSE_SETTLE_MS = 250;
+
 function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
   return rtlRender(ui, { wrapper: InstantTooltips, ...options });
 }
@@ -332,6 +334,35 @@ describe("HelpSessionTabs", () => {
     fireEvent.click(within(await openPicker()).getByRole("menuitem", { name: "Close session" }));
     expect(onClose).toHaveBeenCalledWith(1);
   });
+
+  it.each(["Clear conversation", "Close session"])(
+    "leaves focus in the dialog %s opens once the menu has finished closing",
+    async (label) => {
+      // A dialog that has claimed focus by the time the menu's close handler runs;
+      // jsdom has no exit animation, so a microtask stands in for AppDialog's frame.
+      const opensDialog = () => {
+        const field = document.createElement("input");
+        document.body.appendChild(field);
+        queueMicrotask(() => field.focus());
+      };
+      render(
+        strip({
+          tabs: lanes(2, () => ({ canRestart: true })),
+          activeSlot: 1,
+          onRestart: opensDialog,
+          onClose: opensDialog,
+        })
+      );
+      fireEvent.click(within(await openPicker()).getByRole("menuitem", { name: label }));
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, CLOSE_SETTLE_MS));
+      });
+
+      const active = document.activeElement;
+      expect(active instanceof HTMLInputElement).toBe(true);
+      active?.remove();
+    }
+  );
 
   it("offers a restart only where the selected lane has something to restart, and agents only when there is a choice", async () => {
     render(
