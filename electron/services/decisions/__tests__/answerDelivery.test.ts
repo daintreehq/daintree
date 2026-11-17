@@ -2171,6 +2171,36 @@ describe("AnswerDelivery question reads (#17097)", () => {
     });
   });
 
+  it("reads by a reference naming this machine, whatever its terminal became, and nothing for another machine (#17229)", async () => {
+    const h = setup();
+    await answeredAndTyped(h.store, Q1, 1);
+    await withContent(h.store, Q1, "Approve the migration?");
+    // A reference carries the question's own project and terminal, not the asking view's;
+    // no terminal by that id need still run here.
+    const reference = { hostId: HOST, ...OWN };
+
+    await expect(h.delivery.questionContent(reference, Q1)).resolves.toMatchObject({
+      result: "read",
+      question: { questionId: Q1, question: "Approve the migration?" },
+    });
+    await expect(h.delivery.questionSummaries(reference, [Q1])).resolves.toEqual([
+      { questionId: Q1, result: "read", line: "Approve the migration?" },
+    ]);
+    for (const scope of [
+      { ...reference, hostId: "host_elsewhere" },
+      { ...reference, projectId: "project-2" },
+      { ...reference, terminalId: "pane-2" },
+    ]) {
+      await expect(h.delivery.questionContent(scope, Q1)).resolves.toEqual({ result: "not-found" });
+      await expect(h.delivery.questionSummaries(scope, [Q1])).resolves.toEqual([
+        { questionId: Q1, result: "not-found" },
+      ]);
+    }
+    await expect(
+      h.delivery.questionImage({ ...reference, hostId: "host_elsewhere" }, Q1, "attach_00000001", 0)
+    ).resolves.toEqual({ result: "not-found" });
+  });
+
   it("names each question asked for once, in order, and only the pane's own", async () => {
     const h = setup();
     await answered(h.store, Q1, 1, "approve");

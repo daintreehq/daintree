@@ -29,13 +29,19 @@ import type {
   EnrollDecisionsHostPayload,
 } from "../../../../shared/types/decisionsHosts.js";
 import type {
+  CancelDecisionQuestionByReferencePayload,
   CancelDecisionQuestionPayload,
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
   DecisionQuestionImagePartResult,
+  DecisionQuestionList,
+  DecisionQuestionReference,
   DecisionQuestionSummariesResult,
+  GetDecisionQuestionByReferencePayload,
+  GetDecisionQuestionImageByReferencePayload,
   GetDecisionQuestionImagePayload,
   GetDecisionQuestionPayload,
+  GetDecisionQuestionSummariesByReferencePayload,
   GetDecisionQuestionSummariesPayload,
 } from "../../../../shared/types/decisionsQuestion.js";
 
@@ -76,6 +82,28 @@ const decisionsEntry = vi.hoisted(() => ({
       _projectId: string | null,
       _payload: GetDecisionQuestionImagePayload
     ): Promise<DecisionQuestionImagePartResult> => ({ result: "not-found" })
+  ),
+  getDecisionQuestionContentByReference: vi.fn(
+    async (
+      _payload: GetDecisionQuestionByReferencePayload
+    ): Promise<DecisionQuestionContentResult> => ({
+      result: "not-found",
+    })
+  ),
+  getDecisionQuestionImageByReference: vi.fn(
+    async (
+      _payload: GetDecisionQuestionImageByReferencePayload
+    ): Promise<DecisionQuestionImagePartResult> => ({ result: "not-found" })
+  ),
+  getDecisionQuestionSummariesByReference: vi.fn(
+    async (
+      _payload: GetDecisionQuestionSummariesByReferencePayload
+    ): Promise<DecisionQuestionSummariesResult> => ({ result: "read", summaries: [] })
+  ),
+  cancelDecisionQuestionByReference: vi.fn(
+    async (
+      _payload: CancelDecisionQuestionByReferencePayload
+    ): Promise<DecisionQuestionCancelResult> => ({ result: "cancelling" })
   ),
   setDecisionsEnabled: vi.fn(async (enabled: boolean): Promise<DecisionsStatus> => ({
     state: enabled ? "not-connected" : "off",
@@ -240,6 +268,10 @@ vi.mock("../../../services/decisions/index.js", () => {
     getDecisionQuestionSummaries: decisionsEntry.getDecisionQuestionSummaries,
     cancelDecisionQuestion: decisionsEntry.cancelDecisionQuestion,
     getDecisionQuestionImage: decisionsEntry.getDecisionQuestionImage,
+    getDecisionQuestionContentByReference: decisionsEntry.getDecisionQuestionContentByReference,
+    getDecisionQuestionImageByReference: decisionsEntry.getDecisionQuestionImageByReference,
+    getDecisionQuestionSummariesByReference: decisionsEntry.getDecisionQuestionSummariesByReference,
+    cancelDecisionQuestionByReference: decisionsEntry.cancelDecisionQuestionByReference,
     setDecisionsEnabled: decisionsEntry.setDecisionsEnabled,
     checkRelay: decisionsEntry.checkRelay,
     claimRelay: decisionsEntry.claimRelay,
@@ -320,6 +352,24 @@ const getQuestionImage = decisionsNamespace.ops.getQuestionImage.handler as unkn
   ctx: { projectId: string | null },
   payload: GetDecisionQuestionImagePayload
 ) => Promise<DecisionQuestionImagePartResult>;
+const listQuestions = decisionsNamespace.ops.listQuestions
+  .handler as unknown as () => DecisionQuestionList;
+const getQuestionContentByReference = decisionsNamespace.ops.getQuestionContentByReference
+  .handler as unknown as (
+  payload: GetDecisionQuestionByReferencePayload
+) => Promise<DecisionQuestionContentResult>;
+const getQuestionImageByReference = decisionsNamespace.ops.getQuestionImageByReference
+  .handler as unknown as (
+  payload: GetDecisionQuestionImageByReferencePayload
+) => Promise<DecisionQuestionImagePartResult>;
+const getQuestionSummariesByReference = decisionsNamespace.ops.getQuestionSummariesByReference
+  .handler as unknown as (
+  payload: GetDecisionQuestionSummariesByReferencePayload
+) => Promise<DecisionQuestionSummariesResult>;
+const cancelQuestionByReference = decisionsNamespace.ops.cancelQuestionByReference
+  .handler as unknown as (
+  payload: CancelDecisionQuestionByReferencePayload
+) => Promise<DecisionQuestionCancelResult>;
 const setEnabled = decisionsNamespace.ops.setEnabled.handler as unknown as (
   payload: SetDecisionsEnabledPayload
 ) => Promise<DecisionsStatus>;
@@ -432,6 +482,11 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_GET_QUESTION_CONTENT,
   CHANNELS.DECISIONS_GET_QUESTION_SUMMARIES,
   CHANNELS.DECISIONS_CANCEL_QUESTION,
+  CHANNELS.DECISIONS_LIST_QUESTIONS,
+  CHANNELS.DECISIONS_GET_QUESTION_CONTENT_BY_REFERENCE,
+  CHANNELS.DECISIONS_GET_QUESTION_IMAGE_BY_REFERENCE,
+  CHANNELS.DECISIONS_GET_QUESTION_SUMMARIES_BY_REFERENCE,
+  CHANNELS.DECISIONS_CANCEL_QUESTION_BY_REFERENCE,
   CHANNELS.DECISIONS_SET_ENABLED,
   CHANNELS.DECISIONS_CHECK_RELAY,
   CHANNELS.DECISIONS_CLAIM_RELAY,
@@ -1109,6 +1164,130 @@ describe("decisions IPC", () => {
       result: "off",
     });
     expect(decisionsEntry.cancelDecisionQuestion).toHaveBeenCalledTimes(1);
+  });
+
+  describe("this computer's questions, by reference (#17229)", () => {
+    const REFERENCE: DecisionQuestionReference = {
+      hostId: "host_1",
+      projectId: "project-b",
+      terminalId: "pane-closed",
+      questionId: QUESTION_ID,
+    };
+
+    it("lists what Decisions last installed, loading none of it, whatever the switch says", async () => {
+      const { setDecisionQuestions } = await import("../../../services/decisionsQuestionList.js");
+      saved.value = { enabled: false };
+      expect(listQuestions().questions).toEqual([]);
+
+      const changed = setDecisionQuestions([
+        {
+          reference: REFERENCE,
+          alias: 3,
+          agentKind: "claude",
+          projectLabel: null,
+          worktreeId: "w1",
+          worktreeRoot: "/repo",
+          requirement: "human-required",
+          askedAt: "2026-11-02T10:00:00.000Z",
+          expiresAt: null,
+          settledAt: null,
+          standing: { kind: "waiting", reason: "open" },
+        },
+      ]);
+      saved.value = { enabled: true };
+      expect(listQuestions()).toBe(changed);
+      setDecisionQuestions([]);
+
+      expect(decisionsEntry.evaluated).toBe(0);
+      expect(decisionsEntry.libraries).toBe(0);
+    });
+
+    it.each([
+      ["absent", undefined],
+      ["off", { enabled: false }],
+    ])(
+      "reads and cancels nothing with the setting %s, saying it's off, loading none of Decisions",
+      async (_label, value) => {
+        saved.value = value;
+        // An enrolled Host's own switch never opens this computer's list.
+        saved.host = { deviceId: "dev_host_1", ownerOffAt: null, revokedAt: null };
+
+        await expect(getQuestionContentByReference({ reference: REFERENCE })).resolves.toEqual({
+          result: "off",
+        });
+        await expect(
+          getQuestionImageByReference({
+            reference: REFERENCE,
+            attachmentId: ATTACHMENT_ID,
+            offset: 0,
+          })
+        ).resolves.toEqual({ result: "off" });
+        await expect(getQuestionSummariesByReference({ references: [REFERENCE] })).resolves.toEqual(
+          { result: "off" }
+        );
+        await expect(cancelQuestionByReference({ reference: REFERENCE })).resolves.toEqual({
+          result: "off",
+        });
+
+        expect(decisionsEntry.evaluated).toBe(0);
+        expect(decisionsEntry.libraries).toBe(0);
+      }
+    );
+
+    it("passes the reference to Decisions once on, with no view's project in it", async () => {
+      saved.value = { enabled: true };
+      const image = { reference: REFERENCE, attachmentId: ATTACHMENT_ID, offset: 0 };
+
+      await getQuestionContentByReference({ reference: REFERENCE });
+      await getQuestionImageByReference(image);
+      await getQuestionSummariesByReference({ references: [REFERENCE] });
+      await expect(cancelQuestionByReference({ reference: REFERENCE })).resolves.toEqual({
+        result: "cancelling",
+      });
+
+      expect(decisionsEntry.getDecisionQuestionContentByReference).toHaveBeenCalledExactlyOnceWith({
+        reference: REFERENCE,
+      });
+      expect(decisionsEntry.getDecisionQuestionImageByReference).toHaveBeenCalledExactlyOnceWith(
+        image
+      );
+      expect(
+        decisionsEntry.getDecisionQuestionSummariesByReference
+      ).toHaveBeenCalledExactlyOnceWith({ references: [REFERENCE] });
+      expect(decisionsEntry.cancelDecisionQuestionByReference).toHaveBeenCalledExactlyOnceWith({
+        reference: REFERENCE,
+      });
+    });
+
+    it("takes a whole reference and nothing else", () => {
+      const content = decisionsNamespace.ops.getQuestionContentByReference.schema as SafeParse;
+      const cancel = decisionsNamespace.ops.cancelQuestionByReference.schema as SafeParse;
+      const image = decisionsNamespace.ops.getQuestionImageByReference.schema as SafeParse;
+      const summaries = decisionsNamespace.ops.getQuestionSummariesByReference.schema as SafeParse;
+      for (const schema of [content, cancel]) {
+        expect(schema.safeParse({ reference: REFERENCE }).success).toBe(true);
+        for (const bad of [
+          {},
+          REFERENCE,
+          { reference: { ...REFERENCE, hostId: "" } },
+          { reference: { ...REFERENCE, projectId: "" } },
+          { reference: { ...REFERENCE, terminalId: "" } },
+          { reference: { ...REFERENCE, questionId: "../q" } },
+          { reference: { ...REFERENCE, extra: 1 } },
+          { reference: REFERENCE, projectId: "project-2" },
+        ]) {
+          expect(schema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+        }
+      }
+      expect(
+        image.safeParse({ reference: REFERENCE, attachmentId: ATTACHMENT_ID, offset: 0 }).success
+      ).toBe(true);
+      expect(
+        image.safeParse({ reference: REFERENCE, attachmentId: "../a", offset: 0 }).success
+      ).toBe(false);
+      expect(summaries.safeParse({ references: Array(64).fill(REFERENCE) }).success).toBe(true);
+      expect(summaries.safeParse({ references: Array(65).fill(REFERENCE) }).success).toBe(false);
+    });
   });
 
   it("takes only a pane and a question id to cancel, never a project", () => {

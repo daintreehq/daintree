@@ -23,11 +23,15 @@ import type {
   DecisionsStatusEvent,
   PaneDecisionState,
 } from "../../../../shared/types/decisions.js";
-import { outstandingRows, row } from "./questionRows.js";
+import { answers, outstandingRows, qid, row } from "./questionRows.js";
 import type { DecisionsRows } from "../localData.js";
 import type { QuestionSource, RelayConnectionOptions } from "../relayConnection.js";
 import type { QuestionReadScope } from "../questionContent.js";
-import type { DecisionQuestionCancelResult } from "../../../../shared/types/decisionsQuestion.js";
+import type {
+  DecisionQuestionCancelResult,
+  DecisionQuestionListItem,
+} from "../../../../shared/types/decisionsQuestion.js";
+import { HANDLED_ANSWERS_META_KEY } from "../attentionList.js";
 import type { LearnedDecision, QuestionRow } from "@daintreehq/decisions-client";
 import {
   FakeAdapter,
@@ -580,6 +584,101 @@ describe("DecisionsService pane state", () => {
   });
 });
 
+describe("DecisionsService question list (#17229)", () => {
+  function listed(options: { handled?: Record<string, number> } = {}) {
+    let rows: QuestionRow[] = [];
+    const listeners = new Set<() => void>();
+    const store = {
+      ...fakeStore(),
+      onCommit: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      listQuestions: async () => rows,
+      getMeta: async (key: string) =>
+        key === HANDLED_ANSWERS_META_KEY && options.handled
+          ? JSON.stringify(options.handled)
+          : null,
+    } as unknown as DaintreeLocalStore;
+    const lists: DecisionQuestionListItem[][] = [];
+    const panes: PaneDecisionState[] = [];
+    const service = new DecisionsService({
+      openStore: async () => store,
+      keyFilePath: () => ABSENT_KEY_FILE,
+      publishPaneState: (_projectId, state) => panes.push(state),
+      publishQuestions: (questions) => lists.push([...questions]),
+    });
+    const commit = async (next: QuestionRow[]) => {
+      rows = next;
+      const before = lists.length;
+      for (const listener of listeners) listener();
+      await vi.waitFor(() => expect(lists.length).toBeGreaterThan(before));
+    };
+    return { service, lists, panes, commit, setRows: (next: QuestionRow[]) => (rows = next) };
+  }
+
+  const HOST = { hostId: "host_1" };
+
+  it("lists every question this computer asked, across projects, after each commit", async () => {
+    const { service, lists, commit } = listed();
+    await service.start(on(HOST));
+    await commit([
+      row(1),
+      row(2, { origin: { project_id: "project-b", pane_id: "pane-b" } }),
+      row(3, { origin: { host_id: "host_other" } }),
+    ]);
+
+    expect(lists.at(-1)!.map((item) => item.reference)).toEqual([
+      { hostId: "host_1", projectId: "project-1", terminalId: "pane-a", questionId: qid(1) },
+      { hostId: "host_1", projectId: "project-b", terminalId: "pane-b", questionId: qid(2) },
+    ]);
+    await service.stop();
+  });
+
+  it("keeps an answer marked handled, settled, though no pane or attention list shows it", async () => {
+    const handledRow = row(1, {
+      local_status: "human-answered",
+      delivery_status: "needs-attention",
+      answers_json: answers({ revision: 1 }),
+    });
+    const { service, lists, panes, setRows } = listed({ handled: { [qid(1)]: 1 } });
+    setRows([handledRow]);
+    await service.start(on(HOST));
+
+    expect(lists.at(-1)).toEqual([
+      expect.objectContaining({
+        alias: 1,
+        standing: { kind: "settled", outcome: "answered", handled: true },
+      }),
+    ]);
+    // The pane shows nothing for it, as before.
+    expect(panes).toEqual([]);
+    expect(service.getPaneState("pane-a")).toBeNull();
+    await service.stop();
+  });
+
+  it("empties the list when it stops, and lists nothing while off", async () => {
+    const { service, lists, setRows } = listed();
+    setRows([row(1)]);
+    await service.start(on(HOST));
+    expect(lists.at(-1)).toHaveLength(1);
+
+    await service.stop();
+    expect(lists.at(-1)).toEqual([]);
+    const after = lists.length;
+    service.observeQuestions([row(2)]);
+    expect(lists).toHaveLength(after);
+  });
+
+  it("lists nothing for a Remote Host's own lifetime: its questions are its owner's to show", async () => {
+    const { service, lists, setRows } = listed();
+    setRows([row(1)]);
+    await service.start(on(HOST), "host");
+    expect(lists.flat()).toEqual([]);
+    await service.stop();
+  });
+});
+
 describe("DecisionsService relay connection", () => {
   const RELAY = {
     relayOrigin: "https://relay.example.com",
@@ -1089,6 +1188,40 @@ describe("DecisionsService relay connection", () => {
       result: "not-running",
     });
     expect(routes.cancels).toHaveLength(2);
+  });
+
+  it("withdraws a question by its reference from any window, refusing one another machine asked (#17229)", async () => {
+    const routes = questionRoutes();
+    const { service, made } = connected(undefined, routes.openQuestions);
+    const reference = {
+      hostId: "host_aaaaaaaa",
+      projectId: "project-b",
+      terminalId: "pane-closed",
+      questionId: "q_0123456789",
+    };
+    await service.start(on({ ...RELAY, hostId: "host_aaaaaaaa" }));
+    await expect(service.cancelQuestionByReference(reference)).resolves.toEqual({
+      result: "not-running",
+    });
+
+    made[0]!.options.onQuestionsReady!(SOURCE);
+    await expect(service.cancelQuestionByReference(reference)).resolves.toEqual({
+      result: "cancelling",
+    });
+    await expect(
+      service.cancelQuestionByReference({ ...reference, hostId: "host_elsewhere" })
+    ).resolves.toEqual({ result: "refused", reason: "not-found" });
+    // The reference's project and terminal stand in for a view's: whatever window asked.
+    expect(routes.cancels).toEqual([
+      {
+        route: 1,
+        questionId: "q_0123456789",
+        scope: { hostId: "host_aaaaaaaa", projectId: "project-b", terminalId: "pane-closed" },
+      },
+    ]);
+
+    for (const route of routes.opened) route.release();
+    await service.stop();
   });
 
   it("hands a launch the route's port once the connection opens it, waiting while its identity loads", async () => {

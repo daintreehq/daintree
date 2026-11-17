@@ -469,8 +469,11 @@ import {
   prepareRelayDeploy,
   exportRecoveryKit,
   getDecisionQuestionContent,
+  getDecisionQuestionContentByReference,
   getDecisionQuestionImage,
+  getDecisionQuestionImageByReference,
   getDecisionQuestionSummaries,
+  getDecisionQuestionSummariesByReference,
   getDecisionsPaneState,
   getDecisionsPolicy,
   cancelSetupCheck,
@@ -1074,6 +1077,85 @@ describe("Decisions entry", () => {
       await expect(
         getDecisionQuestionSummaries("project-1", { terminalId: "pane-1", questionIds: [] })
       ).resolves.toEqual({ result: "not-running" });
+    });
+
+    describe("by reference, from any window (#17229)", () => {
+      const REFERENCE = {
+        hostId: "host_1",
+        projectId: "project-b",
+        terminalId: "pane-closed",
+        questionId: "0190f0aa11112222333344445555aa01",
+      };
+      const SCOPE = { hostId: "host_1", projectId: "project-b", terminalId: "pane-closed" };
+
+      it("reads with the reference's machine, project and terminal, never a view's", async () => {
+        const read = { result: "not-found" } as const;
+        const questionContent = vi.fn(async () => read);
+        const questionImage = vi.fn(async () => read);
+        await running({ questionContent, questionImage });
+
+        await expect(getDecisionQuestionContentByReference({ reference: REFERENCE })).resolves.toBe(
+          read
+        );
+        await expect(
+          getDecisionQuestionImageByReference({
+            reference: REFERENCE,
+            attachmentId: "attach_0001",
+            offset: 8,
+          })
+        ).resolves.toBe(read);
+
+        expect(questionContent).toHaveBeenCalledExactlyOnceWith(SCOPE, REFERENCE.questionId);
+        expect(questionImage).toHaveBeenCalledExactlyOnceWith(
+          SCOPE,
+          REFERENCE.questionId,
+          "attach_0001",
+          8
+        );
+      });
+
+      it("names each question once, in order, each read in its own reference's scope", async () => {
+        const other = {
+          ...REFERENCE,
+          projectId: "project-c",
+          questionId: "0190f0aa11112222333344445555aa02",
+        };
+        const questionSummaries = vi.fn(async (_scope: unknown, ids: readonly string[]) =>
+          ids.map((questionId) => ({ questionId, result: "not-found" as const }))
+        );
+        await running({ questionSummaries });
+
+        await expect(
+          getDecisionQuestionSummariesByReference({ references: [other, REFERENCE, other] })
+        ).resolves.toEqual({
+          result: "read",
+          summaries: [
+            { questionId: other.questionId, result: "not-found" },
+            { questionId: REFERENCE.questionId, result: "not-found" },
+          ],
+        });
+        expect(questionSummaries.mock.calls).toEqual([
+          [{ ...SCOPE, projectId: "project-c" }, [other.questionId]],
+          [SCOPE, [REFERENCE.questionId]],
+        ]);
+      });
+
+      it("is not running with no delivery, or when it stops under the read", async () => {
+        await expect(
+          getDecisionQuestionContentByReference({ reference: REFERENCE })
+        ).resolves.toEqual({ result: "not-running" });
+        expect(peekDecisionsService()).toBeNull();
+
+        const current = await running(null);
+        current.delivery = {
+          questionSummaries: async () => {
+            throw new RetiredAttemptError();
+          },
+        } as Partial<AnswerDelivery> as AnswerDelivery;
+        await expect(
+          getDecisionQuestionSummariesByReference({ references: [REFERENCE] })
+        ).resolves.toEqual({ result: "not-running" });
+      });
     });
 
     it("is not running when the delivery stopped under the read, whatever the read returned", async () => {
