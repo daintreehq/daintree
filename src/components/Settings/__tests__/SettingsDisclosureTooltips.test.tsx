@@ -11,6 +11,25 @@ vi.mock("@/components/ui/tooltip", () => ({
   ),
 }));
 
+// Discloses only when the caller says so: the real component falls back to its own
+// measurement of the child, which would hide a caller that dropped `isTruncated`.
+vi.mock("@/components/ui/TruncatedTooltip", () => ({
+  TruncatedTooltip: ({
+    children,
+    content,
+    isTruncated,
+  }: {
+    children: React.ReactNode;
+    content: React.ReactNode;
+    isTruncated?: boolean;
+  }) => (
+    <>
+      {children}
+      {isTruncated === true && <div data-testid="tooltip-content">{content}</div>}
+    </>
+  ),
+}));
+
 const truncation = vi.hoisted(() => ({ value: false }));
 vi.mock("@/hooks/useTruncationDetection", () => ({
   useTruncationDetection: () => ({ ref: () => {}, isTruncated: truncation.value }),
