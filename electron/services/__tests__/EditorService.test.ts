@@ -698,6 +698,21 @@ describe("EditorService adversarial", () => {
     expect(execaMock.execa.mock.calls[0][1]).toEqual(["--goto", "/abs/file.ts"]);
   });
 
+  it.each(["code --goto=false", "code --", "idea --line 12"])(
+    "leaves user navigation args in %s untouched",
+    async (visual) => {
+      process.env.VISUAL = visual;
+      const { openFile } = await loadModule();
+
+      await openFile("/abs/file.ts", 37, 8);
+
+      expect(execaMock.execa.mock.calls[0][1]).toEqual([
+        ...visual.split(" ").slice(1),
+        "/abs/file.ts",
+      ]);
+    }
+  );
+
   it("opens a directory from VISUAL as a bare path", async () => {
     process.env.VISUAL = "code";
     const { openFile } = await loadModule();

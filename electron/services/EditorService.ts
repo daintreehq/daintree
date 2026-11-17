@@ -427,8 +427,9 @@ function envEditorBinaryName(binary: string): string {
   return name;
 }
 
-// A user who already wrote their own goto flag has chosen the navigation syntax.
-const USER_GOTO_FLAGS = new Set(["--goto", "-g"]);
+// A user who already wrote their own navigation flag (or an end-of-options
+// marker) has chosen the syntax, and appending ours could change its meaning.
+const USER_NAVIGATION_ARG = /^(--|-g|--goto(=.*)?|--line(=.*)?|--column(=.*)?)$/;
 
 async function tryEnvEditor(
   envEditor: string,
@@ -448,7 +449,7 @@ async function tryEnvEditor(
   // it is picked from the list; the user's own flags stay ahead of it.
   const binaryName = envEditorBinaryName(binary);
   const def = KNOWN_EDITORS.find((e) => e.binaries.includes(binaryName));
-  if (def && line !== undefined && !extraArgs.some((arg) => USER_GOTO_FLAGS.has(arg))) {
+  if (def && line !== undefined && !extraArgs.some((arg) => USER_NAVIGATION_ARG.test(arg))) {
     return launchEditor(binary, [...extraArgs, ...def.buildArgs(filePath, line, col, isDirectory)]);
   }
   return launchEditor(binary, [...extraArgs, filePath]);
