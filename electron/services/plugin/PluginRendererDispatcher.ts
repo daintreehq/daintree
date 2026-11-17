@@ -4,7 +4,11 @@ import { CHANNELS } from "../../ipc/channels.js";
 import { getWindowRegistry, getProjectViewManager } from "../../window/windowRef.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import { getProjectForWebContents } from "../../window/webContentsRegistry.js";
-import { resolveTargetWebContents, type PluginTargetProjectId } from "./rendererTargeting.js";
+import {
+  resolveAmbientWebContents,
+  resolveTargetWebContents,
+  type PluginTargetProjectId,
+} from "./rendererTargeting.js";
 import { thawThenSend } from "../../utils/thawThenSend.js";
 import type { ClientEndpoint } from "../../ipc/endpoint.js";
 import {
@@ -595,7 +599,10 @@ export class PluginRendererDispatcher {
   ): Promise<{ viewKey: string | null; agents: PluginAgentPaneObservation[] } | null> {
     const frontend = this.routedFrontend(null, pluginId);
     if ((frontend !== null && frontend.kind !== "local") || this.deps.isDisposed()) return null;
-    const webContents = resolveTargetWebContents(null, "Plugin agents.list");
+    // The one ambient read that may answer from a Remote Host's view: its
+    // caller names the host the panes are on (#16845), so nothing here passes
+    // for this machine's.
+    const webContents = resolveAmbientWebContents({ includeRemoteHostViews: true });
     if (!webContents) return null;
     const viewKey = getProjectForWebContents(webContents.id);
     // Same response shape as `sendAgentsListToRenderer`: the channel's listener
