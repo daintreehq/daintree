@@ -264,6 +264,24 @@ describe("PortalSettingsTab new-tab choices", () => {
   });
 });
 
+describe("PortalSettingsTab new-tab default from a global link", () => {
+  it("shows a global link chosen as the default as that link, not as a custom URL", () => {
+    portal.defaultNewTabUrl = DOCS.url;
+    renderTab();
+    const select = screen.getByRole("combobox", { name: "New tabs open" }) as HTMLSelectElement;
+    expect(select.value).toBe(DOCS.url);
+    expect(screen.queryByRole("textbox", { name: "Custom URL" })).toBeNull();
+  });
+
+  it("treats the default as a custom URL once that global link is switched off", () => {
+    portal.defaultNewTabUrl = DOCS.url;
+    globalLinks.links = [{ ...DOCS, enabled: false }];
+    renderTab();
+    const select = screen.getByRole("combobox", { name: "New tabs open" }) as HTMLSelectElement;
+    expect(select.value).toBe("custom");
+  });
+});
+
 describe("PortalSettingsTab built-in links", () => {
   it("marks a changed built-in link and restores what shipped", () => {
     const shipped = DEFAULT_SYSTEM_LINKS[0]!;

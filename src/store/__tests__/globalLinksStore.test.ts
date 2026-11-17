@@ -229,6 +229,25 @@ describe("globalLinksStore", () => {
       expect(nextLaunch.useGlobalLinksStore.getState().links.map((l) => l.id)).toEqual(["user-a"]);
     });
 
+    it("doesn't record the move when the Portal's payload can't be read, so a later launch still moves it", async () => {
+      const backing = installLocalStorage({
+        [PORTAL_KEY]: portalPayload([portalLink("user-a", "user")]),
+      });
+      const realGet = globalThis.localStorage.getItem.bind(globalThis.localStorage);
+      vi.spyOn(globalThis.localStorage, "getItem").mockImplementation((key) => {
+        if (key === PORTAL_KEY) throw new Error("storage unavailable");
+        return realGet(key);
+      });
+
+      const first = await loadStore();
+      expect(first.useGlobalLinksStore.getState().links).toEqual([]);
+      expect(backing.has(KEY)).toBe(false);
+
+      vi.restoreAllMocks();
+      const nextLaunch = await loadStore();
+      expect(nextLaunch.useGlobalLinksStore.getState().links.map((l) => l.id)).toEqual(["user-a"]);
+    });
+
     it("reads an unversioned payload from an older release and keeps an always-on link always on", async () => {
       installLocalStorage({
         [PORTAL_KEY]: JSON.stringify({
@@ -298,25 +317,72 @@ describe("globalLinksStore", () => {
       expect(after.find((l) => l.id === c)).not.toBe(before.get(c));
     });
 
-    it("puts a removed link back where it was", async () => {
+    it("puts a removed link back where it was, with a rank that holds after a restart, once its neighbours have moved", async () => {
+      installLocalStorage();
+      const first = await loadStore();
+      const { positionOf } = await import("@/lib/undoToast");
+      const store = first.useGlobalLinksStore.getState();
+      const a = store.addLink({ title: "A", url: "https://a.test" });
+      const b = store.addLink({ title: "B", url: "https://b.test", icon: "search" });
+      const c = store.addLink({ title: "C", url: "https://c.test" });
+      store.toggleLink(b);
+
+      const removed = first.useGlobalLinksStore.getState().links[1]!;
+      const position = positionOf(first.useGlobalLinksStore.getState().links, b);
+      store.removeLink(b);
+      // C moves ahead of A: B's old rank now sits outside the gap it came from.
+      store.reorderLinks(1, 0);
+      store.updateLink(a, { order: 0.5 });
+      expect(ids(first.useGlobalLinksStore.getState().links)).toEqual([c, a]);
+
+      store.restoreLink(removed, { order: [c, b, a] });
+      store.restoreLink(removed, position);
+
+      const restored = first.useGlobalLinksStore.getState().links;
+      expect(ids(restored)).toEqual([c, b, a]);
+      expect(restored[1]).toMatchObject({ title: "B", icon: "search", enabled: false });
+
+      const afterRestart = await loadStore();
+      expect(ids(afterRestart.useGlobalLinksStore.getState().links)).toEqual([c, b, a]);
+    });
+
+    it("restores the original order whichever of two removals is undone first", async () => {
       installLocalStorage();
       const { useGlobalLinksStore } = await loadStore();
       const { positionOf } = await import("@/lib/undoToast");
       const store = useGlobalLinksStore.getState();
-      store.addLink({ title: "A", url: "https://a.test" });
+      const a = store.addLink({ title: "A", url: "https://a.test" });
       const b = store.addLink({ title: "B", url: "https://b.test" });
       store.addLink({ title: "C", url: "https://c.test" });
+      const before = useGlobalLinksStore.getState().links;
+      const [linkA, linkB] = [a, b].map((id) => before.find((l) => l.id === id)!);
 
-      const removed = useGlobalLinksStore.getState().links[1]!;
-      const position = positionOf(useGlobalLinksStore.getState().links, b);
-      store.removeLink(b);
-      store.restoreLink(removed, position);
-      store.restoreLink(removed, position);
+      for (const undoOrder of [
+        [linkA!, linkB!],
+        [linkB!, linkA!],
+      ]) {
+        const positions = new Map<string, ReturnType<typeof positionOf>>();
+        for (const link of [linkA!, linkB!]) {
+          positions.set(link.id, positionOf(useGlobalLinksStore.getState().links, link.id));
+          store.removeLink(link.id);
+        }
+        for (const link of undoOrder) store.restoreLink(link, positions.get(link.id)!);
+        expect(ids(useGlobalLinksStore.getState().links)).toEqual(ids(before));
+      }
+    });
 
-      const restored = useGlobalLinksStore.getState().links;
-      expect(restored.map((l) => l.title)).toEqual(["A", "B", "C"]);
-      expect(restored[0]!.order).toBeLessThan(restored[1]!.order);
-      expect(restored[1]!.order).toBeLessThan(restored[2]!.order);
+    it("keeps adding after a link was given the largest rank there is", async () => {
+      installLocalStorage();
+      const { useGlobalLinksStore } = await loadStore();
+      const store = useGlobalLinksStore.getState();
+      const a = store.addLink({ title: "A", url: "https://a.test" });
+      store.updateLink(a, { order: Number.MAX_VALUE });
+      const b = store.addLink({ title: "B", url: "https://b.test" });
+
+      const links = useGlobalLinksStore.getState().links;
+      expect(ids(links)).toEqual([a, b]);
+      expect(links[0]!.order).toBeLessThan(links[1]!.order);
+      expect(links.every((l) => Number.isFinite(l.order))).toBe(true);
     });
 
     it("ignores an update that tries to change a link's id, and moves a link given a new order", async () => {
@@ -354,6 +420,8 @@ describe("globalLinksStore", () => {
   });
 
   describe("across project views", () => {
+    const ids = (links: Array<{ id: string }>) => links.map((l) => l.id);
+
     function storedIds(backing: Map<string, string>): string[] {
       return (stored(backing) as { state: { links: Array<{ id: string }> } }).state.links.map(
         (l) => l.id
@@ -414,6 +482,67 @@ describe("globalLinksStore", () => {
         .links;
       expect(links.find((l) => l.id === b)!.enabled).toBe(false);
       expect(links.find((l) => l.id === a)!.title).toBe("Renamed");
+    });
+
+    it("settles two links added at the same rank in one order, whichever view writes next", async () => {
+      const backing = installLocalStorage();
+      const first = await loadStore();
+      const second = await loadStore();
+
+      const x = first.useGlobalLinksStore.getState().addLink({ title: "X", url: "https://x.test" });
+      const y = second.useGlobalLinksStore
+        .getState()
+        .addLink({ title: "Y", url: "https://y.test" });
+      const settled = storedIds(backing);
+      expect(settled).toEqual([x, y].sort());
+
+      first.useGlobalLinksStore.getState().updateLink(x, { title: "Renamed" });
+      expect(storedIds(backing)).toEqual(settled);
+    });
+
+    it("keeps a move between two tied links when a stale view later edits one of them", async () => {
+      const backing = installLocalStorage({
+        [KEY]: JSON.stringify({
+          state: {
+            links: [
+              {
+                id: "a",
+                title: "A",
+                url: "https://a.test",
+                icon: "globe",
+                enabled: true,
+                order: 0,
+              },
+              {
+                id: "b",
+                title: "B",
+                url: "https://b.test",
+                icon: "globe",
+                enabled: true,
+                order: 1,
+              },
+              {
+                id: "c",
+                title: "C",
+                url: "https://c.test",
+                icon: "globe",
+                enabled: true,
+                order: 1,
+              },
+            ],
+          },
+          version: 0,
+        }),
+      });
+      const mover = await loadStore();
+      const stale = await loadStore();
+      expect(ids(mover.useGlobalLinksStore.getState().links)).toEqual(["a", "b", "c"]);
+
+      mover.useGlobalLinksStore.getState().reorderLinks(0, 1);
+      expect(storedIds(backing)).toEqual(["b", "a", "c"]);
+
+      stale.useGlobalLinksStore.getState().updateLink("c", { title: "Renamed" });
+      expect(storedIds(backing)).toEqual(["b", "a", "c"]);
     });
 
     it("picks up a sibling view's change from a storage event", async () => {

@@ -107,19 +107,37 @@ describe("portal link actions", () => {
     expect(portal.updateLink).toHaveBeenCalledTimes(1);
   });
 
-  it("reorders built-in links among themselves and global links among themselves", async () => {
-    await run("portal.links.reorder", { fromIndex: 1, toIndex: 0 });
-    expect(portal.reorderLinks).toHaveBeenCalledWith(1, 0);
+  it.each([
+    ["a built-in move", 0, 1, "portal", [0, 1]],
+    ["a global move forward", 2, 4, "global", [0, 2]],
+    ["a global move back from the last", 4, 3, "global", [2, 1]],
+    ["the first global link to the top of its list", 3, 2, "global", [1, 0]],
+  ] as const)(
+    "routes %s to its own list, counted from that list's start",
+    async (_l, from, to, list, args) => {
+      global.links = [mine("user-a", 0), mine("user-b", 1), mine("user-c", 2)];
+      await run("portal.links.reorder", { fromIndex: from, toIndex: to });
+      const [target, other] = list === "portal" ? [portal, global] : [global, portal];
+      expect(target.reorderLinks).toHaveBeenCalledTimes(1);
+      expect(target.reorderLinks).toHaveBeenCalledWith(...args);
+      expect(other.reorderLinks).not.toHaveBeenCalled();
+    }
+  );
 
-    await run("portal.links.reorder", { fromIndex: 3, toIndex: 2 });
-    expect(global.reorderLinks).toHaveBeenCalledWith(1, 0);
-  });
-
-  it("refuses to move a link from one list into the other", async () => {
-    await run("portal.links.reorder", { fromIndex: 0, toIndex: 3 });
-    await run("portal.links.reorder", { fromIndex: 2, toIndex: 1 });
+  it.each([
+    ["built-in into global", 1, 2],
+    ["global into built-in", 2, 1],
+    ["global to a negative index", 3, -1],
+  ])("refuses a move from %s", async (_label, fromIndex, toIndex) => {
+    await run("portal.links.reorder", { fromIndex, toIndex });
     expect(portal.reorderLinks).not.toHaveBeenCalled();
     expect(global.reorderLinks).not.toHaveBeenCalled();
+  });
+
+  it("hands an out-of-range global index to the global list, which ignores it", async () => {
+    await run("portal.links.reorder", { fromIndex: 2, toIndex: 9 });
+    expect(global.reorderLinks).toHaveBeenCalledWith(0, 7);
+    expect(portal.reorderLinks).not.toHaveBeenCalled();
   });
 
   it("names a new tab opened at a global link's address after that link", async () => {

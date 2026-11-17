@@ -1,4 +1,11 @@
 import type { GlobalLink } from "../globalLinksStore";
+import { readLocalStorageItemSafely } from "./safeStorage";
+
+/**
+ * Links a person added for every project on this machine (#17242), kept apart
+ * from any surface that shows them so they outlive it.
+ */
+export const GLOBAL_LINKS_STORAGE_KEY = "daintree-global-links";
 
 /**
  * Where global links lived before they had a store of their own (#17242): the
@@ -62,4 +69,31 @@ export function readLegacyUserLinks(envelope: unknown): GlobalLink[] {
     links.push({ ...link, order: links.length });
   }
   return links;
+}
+
+/**
+ * The URLs of the person's own links as the global list last stored them, or
+ * null while that list has never been written (or can't be read), when the
+ * Portal's copy is still the person's list.
+ */
+export function readStoredGlobalLinkUrls(): string[] | null {
+  const raw = readLocalStorageItemSafely(GLOBAL_LINKS_STORAGE_KEY);
+  if (raw === null) return null;
+  let envelope: unknown;
+  try {
+    envelope = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!envelope || typeof envelope !== "object") return null;
+  const state = field(envelope, "state");
+  if (!state || typeof state !== "object") return null;
+  const stored = field(state, "links");
+  if (!Array.isArray(stored)) return null;
+  const urls: string[] = [];
+  for (const entry of stored) {
+    const link = sanitizeGlobalLink(entry, 0);
+    if (link) urls.push(link.url);
+  }
+  return urls;
 }

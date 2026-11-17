@@ -398,6 +398,50 @@ describe("portalStore persistence migration", () => {
     expect(links.some((l) => l.id === "user-grok")).toBe(false);
   });
 
+  it("follows the global list, once there is one, for which shipped services the person already has", async () => {
+    const userGrok = {
+      id: "user-grok",
+      type: "user",
+      title: "My Grok",
+      url: "https://www.grok.com",
+      icon: "globe",
+      enabled: true,
+      order: 1,
+    };
+    const portalBlob = JSON.stringify({
+      state: { links: [systemLink("claude", "https://claude.ai/new"), userGrok] },
+    });
+    const globalPayload = (urls: string[]) =>
+      JSON.stringify({
+        state: {
+          links: urls.map((url, order) => ({
+            id: `user-${order}`,
+            title: url,
+            url,
+            icon: "globe",
+            enabled: true,
+            order,
+          })),
+        },
+        version: 0,
+      });
+
+    installLocalStorageWith({
+      [STORAGE_KEY]: portalBlob,
+      "daintree-global-links": globalPayload(["https://docs.test"]),
+    });
+    const removed = (await import("../portalStore")).usePortalStore;
+    expect(removed.getState().links.some((l) => l.id === "system-grok")).toBe(true);
+
+    vi.resetModules();
+    installLocalStorageWith({
+      [STORAGE_KEY]: portalBlob,
+      "daintree-global-links": globalPayload(["https://grok.com/"]),
+    });
+    const kept = (await import("../portalStore")).usePortalStore;
+    expect(kept.getState().links.some((l) => l.id === "system-grok")).toBe(false);
+  });
+
   it("still runs the discovered→system merge migration after version check", async () => {
     const legacyBlob = JSON.stringify({
       state: {
@@ -659,9 +703,10 @@ describe("portalStore persistence migration", () => {
       store.getState().setWidth(620);
       vi.advanceTimersByTime(400);
 
-      const written: { state: { links: Array<{ id: string }> } } = JSON.parse(
+      const written: { state: { width: number; links: Array<{ id: string }> } } = JSON.parse(
         backing.get(STORAGE_KEY)!
       );
+      expect(written.state.width).toBe(620);
       expect(written.state.links).toContainEqual(mine);
       expect(written.state.links.filter((l) => l.id === "user-docs")).toHaveLength(1);
 

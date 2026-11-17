@@ -8,16 +8,13 @@ import {
 } from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import {
+  GLOBAL_LINKS_STORAGE_KEY,
   LEGACY_PORTAL_STORAGE_KEY,
   readLegacyUserLinks,
   sanitizeGlobalLink,
 } from "./persistence/globalLinksMigration";
 
-/**
- * Links a person added for every project on this machine (#17242), kept apart
- * from any surface that shows them so they outlive it.
- */
-export const GLOBAL_LINKS_STORAGE_KEY = "daintree-global-links";
+export { GLOBAL_LINKS_STORAGE_KEY };
 
 export interface GlobalLink {
   id: string;
@@ -55,24 +52,37 @@ interface GlobalLinksState extends GlobalLinksPersistedState {
 
 const PERSIST_VERSION = 0;
 
+/** By rank, ties by id, so every view settles on the same order whichever wrote last. */
 function sortedByOrder(links: readonly GlobalLink[]): GlobalLink[] {
-  return [...links].sort((a, b) => a.order - b.order);
+  return [...links].sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
 /** A rank between two neighbours in a sorted list, either of which may be missing. */
 function rankBetween(before: GlobalLink | undefined, after: GlobalLink | undefined): number {
-  if (before && after) return (before.order + after.order) / 2;
+  if (before && after) return before.order + (after.order - before.order) / 2;
   if (before) return before.order + 1;
   if (after) return after.order - 1;
   return 0;
 }
 
-/** Ranks the link at `index` between its neighbours, leaving every other link as it was. */
-function rankAt(links: GlobalLink[], index: number): GlobalLink[] {
+/**
+ * Ranks the link at `index` between its neighbours, leaving every other link
+ * as it was. When no rank fits strictly between them (tied neighbours, or a
+ * gap too fine to halve), the whole list is renumbered in its current order.
+ */
+function rankAt(links: readonly GlobalLink[], index: number): GlobalLink[] {
   const link = links[index];
-  if (!link) return links;
+  if (!link) return [...links];
+  const before = links[index - 1];
+  const after = links[index + 1];
+  const order = rankBetween(before, after);
+  const fits =
+    Number.isFinite(order) &&
+    (before === undefined || order > before.order) &&
+    (after === undefined || order < after.order);
+  if (!fits) return links.map((l, i) => (l.order === i ? l : { ...l, order: i }));
   const next = [...links];
-  next[index] = { ...link, order: rankBetween(links[index - 1], links[index + 1]) };
+  next[index] = { ...link, order };
   return next;
 }
 
@@ -114,10 +124,11 @@ function mergeLinks({
 
 const storage = createSafeJSONStorage<GlobalLinksPersistedState>({ mergeOnWrite: mergeLinks });
 
-/** Whether the key has ever been written; null when storage couldn't be read. */
-function hasStoredLinks(): boolean | null {
+/** Whether `key` holds a value; null when storage couldn't be read. */
+function isStored(key: string): boolean | null {
   try {
-    return globalThis.localStorage.getItem(GLOBAL_LINKS_STORAGE_KEY) !== null;
+    // storage-key: daintree-global-links portal-storage
+    return globalThis.localStorage.getItem(key) !== null;
   } catch {
     return null;
   }
@@ -132,7 +143,9 @@ function hasStoredLinks(): boolean | null {
  * or storage couldn't be read, which leaves the move for a later launch.
  */
 export function migrateLegacyGlobalLinks(): GlobalLink[] | null {
-  if (hasStoredLinks() !== false) return null;
+  if (isStored(GLOBAL_LINKS_STORAGE_KEY) !== false) return null;
+  // A read that failed is not an empty Portal list: leave the move for later.
+  if (isStored(LEGACY_PORTAL_STORAGE_KEY) === null) return null;
   const legacy = createSafeJSONStorage<unknown>().getItem(LEGACY_PORTAL_STORAGE_KEY);
   const links = readLegacyUserLinks(legacy instanceof Promise ? null : legacy);
   storage.setItem(GLOBAL_LINKS_STORAGE_KEY, { state: { links }, version: PERSIST_VERSION });
@@ -149,8 +162,8 @@ export const useGlobalLinksStore = create<GlobalLinksState>()(
 
       addLink: ({ title, url, icon, alwaysEnabled }) => {
         const id = `user-${crypto.randomUUID()}`;
-        set((s) => ({
-          links: [
+        set((s) => {
+          const links = [
             ...s.links,
             {
               id,
@@ -158,11 +171,12 @@ export const useGlobalLinksStore = create<GlobalLinksState>()(
               url,
               icon: icon ?? "globe",
               enabled: true,
-              order: rankBetween(s.links.at(-1), undefined),
+              order: 0,
               ...(alwaysEnabled ? { alwaysEnabled: true as const } : {}),
             },
-          ],
-        }));
+          ];
+          return { links: rankAt(links, links.length - 1) };
+        });
         return id;
       },
 

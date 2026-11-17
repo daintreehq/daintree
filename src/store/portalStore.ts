@@ -11,6 +11,7 @@ import {
 } from "@shared/types";
 import { useUIStore } from "./uiStore";
 import { createDebouncedSafeJSONStorage } from "./persistence/safeStorage";
+import { readStoredGlobalLinkUrls } from "./persistence/globalLinksMigration";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isProjectViewCached } from "@/lib/viewCacheState";
@@ -609,9 +610,13 @@ const portalStoreCreator: StateCreator<
       // Any persisted system links not in defaults are appended (custom system links).
       const defaultIds = new Set(DEFAULT_SYSTEM_LINKS.map((d) => d.id));
       // A shipped service the user already added by hand stays theirs: skip the
-      // new default rather than list the same chat twice.
+      // new default rather than list the same chat twice. Once their links have
+      // moved to the global list (#17242), that list is theirs, not this copy.
       const userUrls = new Set(
-        userLinks.map((l) => (typeof l.url === "string" ? normalizeLinkUrl(l.url) : ""))
+        (
+          readStoredGlobalLinkUrls() ??
+          userLinks.map((l) => (typeof l.url === "string" ? l.url : ""))
+        ).map(normalizeLinkUrl)
       );
       const normalizedSystemLinks = DEFAULT_SYSTEM_LINKS.filter(
         (d) => persistedSystemById.has(d.id) || !userUrls.has(normalizeLinkUrl(d.url))
