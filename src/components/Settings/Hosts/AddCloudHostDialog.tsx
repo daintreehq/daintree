@@ -646,8 +646,8 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
               <Field>
                 <FieldLabel>Name</FieldLabel>
                 <Input value={name} disabled={busy} onChange={(e) => setName(e.target.value)} />
-                <FieldDescription>
-                  Adding it doesn&apos;t start it or change its auto-stop
+                <FieldDescription data-testid="add-cloud-host-import-note">
+                  {`Adding it doesn't start it or change its auto-stop${providerStopSentence(lifetimeModel, provider.name) ? `. ${providerStopSentence(lifetimeModel, provider.name)}` : ""}`}
                 </FieldDescription>
               </Field>
             )}

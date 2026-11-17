@@ -508,7 +508,7 @@ describe("CloudMachineSection lifetime row", () => {
         { machine: "stopped", autoStopAt: null }
       )
     );
-    expect(lifetimeText()).toContain("applies from its next start");
+    expect(lifetimeText()).toContain("applies the next time Daintree starts it");
     expect(lifetimeChoice()?.hasAttribute("disabled")).toBe(false);
   });
 

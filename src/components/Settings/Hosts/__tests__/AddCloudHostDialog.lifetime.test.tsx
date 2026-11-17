@@ -215,6 +215,17 @@ describe("AddCloudHostDialog lifetime", () => {
     expect(await createAndSend()).toBeNull();
   });
 
+  it("says a provider sleeps idle machines when an existing one is added too", async () => {
+    const old = { resourceId: "vm_1", name: "old", machine: "stopped", boundHostId: null };
+    client.listResources.mockResolvedValue([{ ...old, vcpu: 4, memoryGB: 8 }]);
+    await open({ kind: "idle-sleep", idleSeconds: 1800 });
+    fireEvent.click(screen.getByRole("radio", { name: "Existing machine" }));
+    fireEvent.click(await screen.findByRole("radio", { name: /^old/ }));
+    expect(screen.getByTestId("add-cloud-host-import-note").textContent).toContain(
+      "sleep by itself after 30 minutes without activity"
+    );
+  });
+
   it("says a provider sleeps idle machines even when it doesn't say after how long", async () => {
     await open({ kind: "idle-sleep", idleSeconds: null });
     expect(lifetimeChoice()).toBeNull();

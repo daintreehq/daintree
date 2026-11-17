@@ -256,8 +256,8 @@ export function CloudMachineSection({
         } `
       : "Counted from each start. ";
     const rule = lifetime.canChangeWhileStopped
-      ? `${providerName} can't extend it while the machine runs; a change made while it's stopped applies from its next start.`
-      : `${providerName} set it when the machine was created, and can't extend or change it.`;
+      ? `${providerName} can't extend it while the machine runs; a change made while it's stopped applies the next time Daintree starts it.`
+      : `${providerName} sets it when the machine is created, and can't extend or change it.`;
     // The limit asked for; with none asked for, a deadline the provider reports anyway speaks for itself.
     const limit =
       status.lifetimeSeconds !== null
