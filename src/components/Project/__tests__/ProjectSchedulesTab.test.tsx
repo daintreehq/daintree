@@ -28,7 +28,13 @@ vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 const reveal = vi.hoisted(() => vi.fn());
 vi.mock("@/services/scheduledRunLanding", () => ({ revealRunTerminal: reveal }));
 const worktreeList = vi.hoisted(() => ({
-  current: [] as Array<{ id: string; path: string; name: string; isMainWorktree: boolean }>,
+  current: [] as Array<{
+    id: string;
+    path: string;
+    name: string;
+    branch?: string;
+    isMainWorktree: boolean;
+  }>,
   initialized: true,
   loading: false,
   reconnecting: false,
@@ -454,7 +460,7 @@ describe("ProjectSchedulesTab — a schedule in another worktree (#17467)", () =
     ...NIGHTLY,
     launch: { ...NIGHTLY.launch, worktreeId: FEATURE_ID },
   };
-  const MAIN = { id: "/repo", path: "/repo", name: "repo", isMainWorktree: true };
+  const MAIN = { id: "/repo", path: "/repo", name: "repo", branch: "main", isMainWorktree: true };
   const FEATURE = { id: FEATURE_ID, path: FEATURE_ID, name: "feature", isMainWorktree: false };
 
   afterEach(() => {
@@ -470,6 +476,8 @@ describe("ProjectSchedulesTab — a schedule in another worktree (#17467)", () =
     await act(async () => {
       fireEvent.click(open);
     });
+    // The list is gone once the history is up, so its badge can't answer for the history.
+    await screen.findByTestId("schedules-back");
   };
   const editSchedule = async () => {
     const edit = await screen.findByRole("button", { name: "Edit schedule" });
@@ -555,23 +563,33 @@ describe("ProjectSchedulesTab — a schedule in another worktree (#17467)", () =
     expect((await editSchedule()).textContent).toContain("Missing worktree");
   });
 
-  it("reads the main checkout's own id as the main checkout, never missing", async () => {
+  it("reads the main checkout's own id as the main checkout once the worktrees are known", async () => {
     client.list.mockResolvedValue(
       snapshot([{ ...NIGHTLY, launch: { ...NIGHTLY.launch, worktreeId: MAIN.id } }])
     );
     worktreeList.current = [MAIN, FEATURE];
-    renderTab();
+    worktreeList.reconnecting = true;
+    const view = renderTab();
+    expect(await screen.findByText("Worktree unconfirmed")).toBeTruthy();
 
+    worktreeList.reconnecting = false;
+    view.update({ onClose: vi.fn() });
     expect(await screen.findByText("Main checkout")).toBeTruthy();
     expect(screen.queryByText("Missing worktree")).toBeNull();
 
+    // Reconnecting again, so the history shows the id it was given, not a main checkout it was never given.
+    worktreeList.reconnecting = true;
+    view.update({ onClose: vi.fn() });
     await openHistory();
-    expect(await screen.findByText(/Main checkout/)).toBeTruthy();
-    expect(screen.queryByText(/Missing worktree/)).toBeNull();
+    expect(await screen.findByText(/Worktree unconfirmed/)).toBeTruthy();
 
-    const trigger = await editSchedule();
-    expect(trigger.textContent).toContain("Main checkout");
-    expect(trigger.textContent).not.toContain("Missing worktree");
+    worktreeList.reconnecting = false;
+    view.update({ onClose: vi.fn() });
+    expect(await screen.findByText(/Main checkout/)).toBeTruthy();
+    expect(screen.queryByText(/Worktree unconfirmed|Missing worktree/)).toBeNull();
+
+    // The stored id's own option, not the main-checkout choice (which names its branch).
+    expect((await editSchedule()).textContent).toBe("Main checkout");
   });
 
   it("opens the editor on an unconfirmed target while the worktrees are unknown", async () => {
