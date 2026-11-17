@@ -35,10 +35,7 @@ const FLOATING_CARD_HOSTS: Record<string, string> = {
   "src/components/Fleet/FleetRawInputNotice.tsx": "FLOATING_CARD_CLASS",
 };
 
-const OVERLAY_SHEET_HOSTS = [
-  "src/components/Layout/AppLayout.tsx",
-  "src/components/ThemeBrowser/ThemeBrowser.tsx",
-];
+const OVERLAY_SHEET_HOSTS = ["src/components/ThemeBrowser/ThemeBrowser.tsx"];
 
 function radiusStep(classes: string): string | null {
   const match = classes.match(/rounded-(?:\[var\(--radius-([a-z0-9]+)\)\]|([a-z0-9]+))/);

@@ -252,7 +252,6 @@ describe("AppLayout assistant push sidebar — issue #6619", () => {
     expect(source).toContain('removeProperty("--right-obstruction-offset")');
   });
 });
-});
 
 describe("AppLayout independent sidebar gestures — issue #6659", () => {
   let source: string;
