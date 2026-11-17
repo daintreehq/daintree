@@ -57,7 +57,9 @@ export function useCanopyInboxData({
   const everyHost = hostId === ALL_HOSTS_ID;
   const ownHostId = canopyOwnHostId();
   const hostName = everyHost ? ALL_HOSTS_LABEL : (hostRow?.name ?? hostId ?? "");
-  const remote = useRemoteCanopy(everyHost ? null : hostId, isOpen);
+  // A link that came back may have renamed its projects while it was away:
+  // that host's list is asked for again, and no other host's.
+  const remote = useRemoteCanopy(everyHost ? null : hostId, isOpen, retryHostProjects);
   // Every host listed, the window's own among them, each read on its own.
   const participantKey = everyHost ? (hostRows ?? []).map((row) => row.hostId).join("\u0000") : "";
   const participants = useMemo(
@@ -68,7 +70,7 @@ export function useCanopyInboxData({
     () => participants.filter((id) => id !== ownHostId),
     [participants, ownHostId]
   );
-  const remotes = useRemoteCanopies(remoteIds, isOpen && everyHost);
+  const remotes = useRemoteCanopies(remoteIds, isOpen && everyHost, retryHostProjects);
   const route = useMemo(
     () => (everyHost ? createAllHostsRoute(ownHostId, participants) : null),
     [everyHost, ownHostId, participants]
@@ -143,25 +145,9 @@ export function useCanopyInboxData({
   const hostProjects = useHostProjectLists(
     everyHost ? remoteIds : hostId === null ? NO_HOSTS : [hostId]
   );
-  // The link came back: its project names may have changed while it was away.
-  const hostEpochs = everyHost
-    ? remoteIds.map((id) => `${id}:${remotes.states.get(id)?.epoch ?? 0}`).join(" ")
-    : "";
   const recoveries = everyHost
     ? [...remotes.states.values()].reduce((sum, state) => sum + state.epoch, 0)
     : remote.epoch;
-  useEffect(() => {
-    if (hostId === null || recoveries === 0) return;
-    if (!everyHost) {
-      retryHostProjects(hostId);
-      return;
-    }
-    // Said again for exactly the hosts whose link came back.
-    for (const entry of hostEpochs.split(" ")) {
-      const cut = entry.lastIndexOf(":");
-      if (cut > 0 && Number(entry.slice(cut + 1)) > 0) retryHostProjects(entry.slice(0, cut));
-    }
-  }, [hostId, everyHost, recoveries, hostEpochs]);
 
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
