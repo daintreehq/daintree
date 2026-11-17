@@ -253,14 +253,37 @@ describe("where the stored token may go", () => {
     dispose();
   });
 
-  it("sends a token nowhere when a Data Center site has no record, marker or not", async () => {
-    // Before records were kept only Cloud could be configured.
+  it("adopts a pre-record token as Cloud even when a save has just written a Data Center site", async () => {
+    // A lazy first activation, from a save that wrote its site before the token.
     const { host, storage } = makeHost({ siteUrl: BASE });
-    replaying(host, "pat");
+    replaying(host, "legacy");
     const dispose = await activate(host);
+    expect(tokenMayGoTo("https://acme.atlassian.net")).toBe(true);
     expect(tokenMayGoTo(BASE)).toBe(false);
-    expect(tokenMayGoTo("https://acme.atlassian.net")).toBe(false);
-    expect(storage.credentialProvenance).toBeUndefined();
+    expect(storage.credentialProvenance).toEqual({
+      binding: "cloud",
+      tokenDigest: digestToken("legacy"),
+    });
+    dispose();
+  });
+
+  it("marks records as kept only after the replay's own record is written", async () => {
+    const { host, storageApi } = makeHost({ siteUrl: "https://acme.atlassian.net" });
+    replaying(host, "legacy");
+    const dispose = await activate(host);
+    expect(storageApi.set.mock.calls.map(([key]) => key)).toEqual([
+      "credentialProvenance",
+      "credentialProvenanceTracked",
+    ]);
+    dispose();
+  });
+
+  it("leaves records unmarked when the replay's record couldn't be written", async () => {
+    const { host, storage, storageApi } = makeHost({ siteUrl: "https://acme.atlassian.net" });
+    storageApi.set.mockRejectedValueOnce(new Error("ENOSPC"));
+    replaying(host, "legacy");
+    const dispose = await activate(host);
+    expect(storage).toEqual({});
     dispose();
   });
 
@@ -275,6 +298,23 @@ describe("where the stored token may go", () => {
     expect(getToken()).toBe("pat");
     expect(tokenMayGoTo("https://acme.atlassian.net")).toBe(false);
     expect(tokenMayGoTo(BASE)).toBe(false);
+    dispose();
+  });
+
+  it("drops a token a retired save delivers while the activation reads its records", async () => {
+    const { host, storageApi } = makeHost({ siteUrl: BASE });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    storageApi.get.mockImplementation(async () => {
+      await gate;
+      return undefined;
+    });
+    const activating = activate(host);
+    await Promise.resolve();
+    jiraForgeProvider.setCredentials?.({ kind: "bearer", value: "stray" });
+    release();
+    const dispose = await activating;
+    expect(getToken()).toBeNull();
     dispose();
   });
 

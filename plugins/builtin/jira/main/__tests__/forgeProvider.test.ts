@@ -211,6 +211,14 @@ describe("credentials", () => {
     });
   });
 
+  it("doesn't take a Data Center-shaped account for a Cloud sign-in", async () => {
+    route({ "/myself": () => json({ name: "ada", displayName: "Ada" }) });
+    await expect(jiraForgeProvider.validateToken("candidate")).resolves.toMatchObject({
+      valid: false,
+      error: "Jira didn't recognize this account",
+    });
+  });
+
   it("doesn't take an answer with no account for a sign-in", async () => {
     route({ "/myself": () => json({}) });
     await expect(jiraForgeProvider.validateToken("candidate")).resolves.toMatchObject({
@@ -1332,8 +1340,8 @@ describe("Server and Data Center", () => {
       ["8.14 by its numbers", { deploymentType: "Server", versionNumbers: [8, 14, 0] }],
       ["10.3 by its string", { deploymentType: "DataCenter", version: "10.3.1" }],
       [
-        "a malformed array with a usable string",
-        { deploymentType: "Server", versionNumbers: [9, "4", 0], version: "9.4.0" },
+        "a malformed array beside a usable string",
+        { deploymentType: "Server", versionNumbers: [7, "4", 0], version: "9.4.0" },
       ],
     ])("accepts %s", async (_name, info) => {
       routeDc({ "GET /serverInfo": () => json(info), "GET /myself": () => json(ADA_DC) });

@@ -11,7 +11,6 @@ import {
   setConnectionSettingsReader,
   setProjectKeyReader,
 } from "./forgeProvider.js";
-import { normalizeSiteUrl, deploymentOf } from "../shared/connection.js";
 import {
   resetTokenState,
   setMemoryToken,
@@ -39,48 +38,52 @@ function isProvenance(value: unknown): value is CredentialProvenance {
   return typeof binding === "string" && binding !== "" && typeof tokenDigest === "string";
 }
 
-function isDataCenterSite(value: unknown): boolean {
-  const siteUrl = normalizeSiteUrl(value);
-  return siteUrl !== null && deploymentOf(siteUrl) === "dataCenter";
-}
-
 /**
  * Wires the token's durable provenance. Loaded before registration, because the
  * host replays the stored token into `setCredentials` as part of it, and a token
- * read before its record would have nowhere it may go. Says whether records were
- * already being kept, so the caller marks them kept once the replay is done.
+ * read before its record would have nowhere it may go. The settings are no guide
+ * here: the first activation can come from a save that has already written the
+ * site it's about to check a new token against.
+ *
+ * Returns a step for once the replay is done: it marks records as kept, after
+ * the replay's own record (a pre-record token adopted as Cloud) has been
+ * written, so a failed write can't leave the mark without the record.
  */
-async function wireProvenance(host: PluginHostApi): Promise<boolean> {
+async function wireProvenance(host: PluginHostApi): Promise<() => Promise<void>> {
   let provenance: CredentialProvenance | null | "unknown";
   let tracked: boolean;
   try {
-    const [stored, marker, siteUrl] = await Promise.all([
+    const [stored, marker] = await Promise.all([
       host.storage.get<unknown>(CREDENTIAL_PROVENANCE_KEY),
       host.storage.get<unknown>(PROVENANCE_TRACKED_KEY),
-      host.settings.get<unknown>(SITE_URL_SETTING),
     ]);
     tracked = marker === true;
     if (stored !== undefined) provenance = isProvenance(stored) ? stored : "unknown";
-    // Before records were kept only Cloud could be configured, so a Data Center
-    // site with no record is a record that went missing.
-    else provenance = tracked || isDataCenterSite(siteUrl) ? "unknown" : null;
+    else provenance = tracked ? "unknown" : null;
   } catch {
     // Withholds the token rather than guessing where it belongs.
     provenance = "unknown";
     tracked = true;
   }
+  let lastWrite: Promise<boolean> = Promise.resolve(true);
   setProvenanceAccessors(
     () => provenance,
     (record) => {
       provenance = record;
-      void (
+      lastWrite = (
         record === null
           ? host.storage.delete(CREDENTIAL_PROVENANCE_KEY)
           : host.storage.set(CREDENTIAL_PROVENANCE_KEY, record)
-      ).catch(() => undefined);
+      ).then(
+        () => true,
+        () => false
+      );
     }
   );
-  return tracked;
+  return async () => {
+    if (tracked || !(await lastWrite)) return;
+    await host.storage.set(PROVENANCE_TRACKED_KEY, true).catch(() => undefined);
+  };
 }
 
 /**
@@ -139,7 +142,7 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
     return { siteUrl, email };
   });
   setProjectKeyReader(readProjectKey);
-  const tracked = await wireProvenance(host);
+  const markTracked = await wireProvenance(host);
   const disposeSettings = await Promise.all(
     [PROJECT_KEY_SETTING, SITE_URL_SETTING].map((key) =>
       host.settings.onDidChange(key, () => void refreshBranchClaims()).catch(() => () => undefined)
@@ -150,9 +153,7 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
   // and the replay.
   resetTokenState();
   const disposeForge = await host.registerForgeProvider({ id: "jira" }, jiraForgeProvider);
-  // After the replay, whose adoption of a pre-record token is written first:
-  // storage keeps writes in order.
-  if (!tracked) await host.storage.set(PROVENANCE_TRACKED_KEY, true).catch(() => undefined);
+  await markTracked();
   return () => {
     disposeForge();
     for (const dispose of disposeSettings) dispose();

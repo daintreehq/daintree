@@ -28,11 +28,10 @@ const ATLASSIAN_HOST_PATTERN = /(?:^|\.)atlassian\.net$/;
  * page. Anything else is taken as the base the person typed.
  */
 const JIRA_PAGE_PATTERN =
-  /\/(?:browse\/[A-Za-z][A-Za-z0-9_]*-\d+|projects\/[A-Z][A-Z0-9_]*|secure\/[A-Za-z]+\.jspa|rest\/api|plugins\/servlet|login\.jsp)(?:\/|$)/;
+  /\/(?:(?:browse\/[A-Za-z][A-Za-z0-9_]*-\d+|projects\/[A-Z][A-Z0-9_]*|secure\/[A-Za-z]+\.jspa|rest\/api\/(?:\d+|latest)|plugins\/servlet\/[^/]+)(?:\/|$)|login\.jsp$)/;
 
 /** The issue navigator, which only reads as a page when it carries a search. */
 const ISSUE_NAVIGATOR_PATTERN = /\/issues\/?$/;
-const NAVIGATOR_SEARCH_PATTERN = /[?&](?:jql|filter)=/;
 
 /** A scheme with no `//` after it (`https:/jira…`), which would read as a host named `https`. */
 const MALFORMED_SCHEME_PATTERN = /^[a-z][a-z0-9+.-]*:(?!\/\/)(?!\d)/i;
@@ -85,7 +84,9 @@ export function normalizeDataCenterUrl(value: unknown): string | null {
   if (host.endsWith(".") || ATLASSIAN_HOST_PATTERN.test(host)) return null;
   const page =
     JIRA_PAGE_PATTERN.exec(url.pathname) ??
-    (NAVIGATOR_SEARCH_PATTERN.test(url.search) ? ISSUE_NAVIGATOR_PATTERN.exec(url.pathname) : null);
+    (url.searchParams.has("jql") || url.searchParams.has("filter")
+      ? ISSUE_NAVIGATOR_PATTERN.exec(url.pathname)
+      : null);
   const path = (page ? url.pathname.slice(0, page.index) : url.pathname).replace(/\/+$/, "");
   if (!CONTEXT_PATH_PATTERN.test(path)) return null;
   const base = `${url.origin}${path}`;

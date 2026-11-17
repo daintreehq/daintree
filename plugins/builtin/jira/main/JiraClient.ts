@@ -163,6 +163,11 @@ export async function jiraRequest<T>(
      * one. A refusal is then the site's rule, not a verdict on the token.
      */
     anonymous?: boolean;
+    /**
+     * Asks about the site, not the credential (`serverInfo`), so an answer says
+     * nothing about whether the token is good and can't end a cooldown.
+     */
+    metadata?: boolean;
   } = {}
 ): Promise<T> {
   const connectionKey = connectionKeyOf(connection);
@@ -267,6 +272,8 @@ export async function jiraRequest<T>(
     throw new JiraApiError("Jira sent a response Daintree couldn't read", response.status);
   }
   // Jira answered the credential, so whatever the cooldown was about has passed.
-  if (!options.anonymous && cooldown?.connectionKey === connectionKey) cooldown = null;
+  if (!options.anonymous && !options.metadata && cooldown?.connectionKey === connectionKey) {
+    cooldown = null;
+  }
   return payload as T;
 }

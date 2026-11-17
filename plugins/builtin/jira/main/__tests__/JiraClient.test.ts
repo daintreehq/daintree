@@ -308,6 +308,17 @@ describe("jiraRequest", () => {
       await expect(jiraRequest(DATA_CENTER, "/myself")).resolves.toEqual({ name: "ada" });
     });
 
+    it("leaves the token's cooldown in place after an answer about the site", async () => {
+      fetchMock.mockResolvedValueOnce(json({}, { status: 401 }));
+      await jiraRequest(DATA_CENTER, "/myself").catch(() => undefined);
+      fetchMock.mockResolvedValueOnce(json({ deploymentType: "DataCenter" }));
+      await jiraRequest(DATA_CENTER, "/serverInfo", { metadata: true, ignoreCooldown: true });
+      await expect(jiraRequest(DATA_CENTER, "/myself")).rejects.toMatchObject({
+        credentialRejected: true,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
     it("leaves the token's cooldown in place after an anonymous answer", async () => {
       fetchMock.mockResolvedValueOnce(json({}, { status: 401 }));
       await jiraRequest(DATA_CENTER, "/myself").catch(() => undefined);

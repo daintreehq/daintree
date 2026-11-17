@@ -511,10 +511,14 @@ async function checkDataCenter(connection: JiraConnection): Promise<string | nul
     info = await jiraRequest<JiraServerInfo>(connection, "/serverInfo", {
       ignoreCooldown: true,
       anonymous: true,
+      metadata: true,
     });
   } catch (err) {
     if (!(err instanceof JiraApiError) || (err.status !== 401 && err.status !== 403)) throw err;
-    info = await jiraRequest<JiraServerInfo>(connection, "/serverInfo", { ignoreCooldown: true });
+    info = await jiraRequest<JiraServerInfo>(connection, "/serverInfo", {
+      ignoreCooldown: true,
+      metadata: true,
+    });
   }
   if (info.deploymentType === "Cloud") {
     return "That address is a Jira Cloud site. Choose Jira Cloud and use its atlassian.net address.";
