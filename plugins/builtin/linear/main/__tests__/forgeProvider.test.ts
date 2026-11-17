@@ -584,12 +584,19 @@ describe("assignment Undo history", () => {
   type User = { id: string; name: string; displayName: string; avatarUrl: string | null };
   type WriteFailure = "unavailable" | "refused" | "unsuccessful";
   const WRITE_FAILURES: WriteFailure[] = ["unavailable", "refused", "unsuccessful"];
+  const WRITE_FAILURE_MESSAGES: Record<WriteFailure, RegExp> = {
+    unavailable: /HTTP 503/,
+    refused: /Assignee can't be set/,
+    unsuccessful: /didn't update the issue's assignee/,
+  };
 
   /** Each issue's assignee in Linear, by number. */
   let assignees: Record<number, User | null>;
   let failNextWrite: WriteFailure | null;
   /** Holds an issue's writes, by number, until the promise settles. */
   let writeGates: Record<number, Promise<void>>;
+  /** Releases every gate a test opened, so a failed assertion can't leave the next test queued. */
+  let releaseAll: Array<() => void>;
   let beforeRead: (() => void) | null;
   let reads: number[];
   let writes: Array<string | null>;
@@ -608,6 +615,7 @@ describe("assignment Undo history", () => {
     assignees = { 42: GRACE, 43: LIN };
     failNextWrite = null;
     writeGates = {};
+    releaseAll = [];
     beforeRead = null;
     reads = [];
     writes = [];
@@ -664,18 +672,26 @@ describe("assignment Undo history", () => {
   function hold(number = 42): () => void {
     let release: () => void = () => undefined;
     writeGates[number] = new Promise((resolve) => (release = resolve));
-    return () => {
+    const releaseGate = () => {
       delete writeGates[number];
       release();
     };
+    releaseAll.push(releaseGate);
+    return releaseGate;
   }
+
+  afterEach(async () => {
+    for (const release of releaseAll) release();
+    // Let what they held finish while fetch is still the fake.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
 
   it.each(WRITE_FAILURES)(
     "still knows who to hand the issue back to after an Undo that came back %s",
     async (failure) => {
       await assign();
       failNextWrite = failure;
-      await expect(undo()).rejects.toThrow();
+      await expect(undo()).rejects.toThrow(WRITE_FAILURE_MESSAGES[failure]);
       expect(assignees[42]).toBe(VIEWER);
       await expect(undo()).resolves.toEqual(["grace"]);
       expect(assignees[42]).toBe(GRACE);
@@ -763,6 +779,8 @@ describe("assignment Undo history", () => {
     const failing = undo();
     await vi.waitFor(() => expect(writes).toHaveLength(2));
     const retry = undo();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(reads).toEqual([42, 42]);
     release();
     await expect(failing).rejects.toThrow(/HTTP 503/);
     await expect(retry).resolves.toEqual(["grace"]);
@@ -798,7 +816,7 @@ describe("assignment Undo history", () => {
     "remembers nothing from an assignment that came back %s",
     async (failure) => {
       failNextWrite = failure;
-      await expect(assign()).rejects.toThrow();
+      await expect(assign()).rejects.toThrow(WRITE_FAILURE_MESSAGES[failure]);
       expect(assignees[42]).toBe(GRACE);
       // Assigned in Linear instead: an unassign now only takes it off the viewer.
       assignees[42] = VIEWER;
