@@ -312,6 +312,13 @@ async function settle() {
   });
 }
 
+/** The link to a host came back: its viewer reads it again. */
+function resync(hostId: string) {
+  act(() => {
+    for (const listener of state.listeners) listener({ kind: "resync", hostId });
+  });
+}
+
 function channelsCalled(): string[] {
   return state.invoke.mock.calls.map((call) => `${String(call[0])} ${String(call[1])}`);
 }
@@ -864,6 +871,20 @@ describe("the Canopy host picker", () => {
     expect(state.release).toHaveBeenCalledWith("studio");
   });
 
+  it("asks the picked host for its projects again each time its link comes back", async () => {
+    installElectron();
+    useCanopyStore.setState({ hostId: "studio" });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    expect(state.retryHostProjects).not.toHaveBeenCalled();
+    resync("studio");
+    await settle();
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"]]);
+    resync("studio");
+    await settle();
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"], ["studio"]]);
+  });
+
   it("says the list is what the host last showed once its link drops", async () => {
     installElectron();
     useCanopyStore.setState({ hostId: "studio" });
@@ -1245,6 +1266,44 @@ describe("All hosts", () => {
     expect(cardOf("build", "shared-run")).not.toBeNull();
     saysNothingOf("studio-01");
     expect(summaryWords()).toBe("Nothing needs you");
+  });
+
+  it("asks again for the projects of only the host whose link came back (#17558)", async () => {
+    installElectron();
+    state.hosts = [host("studio", "studio-01"), host("build", "build-02")];
+    render(<CanopyView frame={frame} />);
+    await settle();
+    expect(state.retryHostProjects).not.toHaveBeenCalled();
+    resync("studio");
+    await settle();
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"]]);
+    // Another host coming back leaves studio's list, fresh or still on its way, alone.
+    resync("build");
+    await settle();
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"], ["build"]]);
+    resync("studio");
+    await settle();
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"], ["build"], ["studio"]]);
+  });
+
+  it("asks again for a host's projects when it comes back after leaving the list and rejoining", async () => {
+    installElectron();
+    state.hosts = [host("studio", "studio-01"), host("build", "build-02")];
+    const { rerender } = render(<CanopyView frame={frame} />);
+    await settle();
+    resync("studio");
+    await settle();
+    state.hosts = [host("build", "build-02")];
+    rerender(<CanopyView frame={frame} />);
+    await settle();
+    state.hosts = [host("studio", "studio-01"), host("build", "build-02")];
+    rerender(<CanopyView frame={frame} />);
+    await settle();
+    // Rejoining reads it afresh; only its link coming back again asks again.
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"]]);
+    resync("studio");
+    await settle();
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"], ["studio"]]);
   });
 
   it("says a host whose link failed can't be reached while its reads are still owed", async () => {
