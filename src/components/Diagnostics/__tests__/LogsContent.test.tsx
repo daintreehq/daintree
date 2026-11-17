@@ -39,6 +39,9 @@ vi.mock("react-virtuoso", async () => {
 
 const mockGetAll = vi.fn<() => Promise<LogEntry[]>>().mockResolvedValue([]);
 const mockGetSources = vi.fn<() => Promise<string[]>>().mockResolvedValue([]);
+const batchHandlers = vi.hoisted(() => ({
+  current: null as ((entries: LogEntry[]) => void) | null,
+}));
 
 vi.mock("@/clients", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
@@ -47,7 +50,10 @@ vi.mock("@/clients", async (importOriginal) => {
     logsClient: {
       getAll: () => mockGetAll(),
       getSources: () => mockGetSources(),
-      onBatch: () => () => {},
+      onBatch: (handler: (entries: LogEntry[]) => void) => {
+        batchHandlers.current = handler;
+        return () => {};
+      },
     },
     appClient: {
       getVersion: vi.fn().mockResolvedValue("1.0.0"),
@@ -183,6 +189,45 @@ describe("LogsContent — failed reads", () => {
     render(<LogsContent />);
 
     await waitFor(() => expect(useLogsStore.getState().logs.map((l) => l.id)).toEqual(["fresh"]));
+  });
+});
+
+describe("LogsContent — source list", () => {
+  beforeEach(() => {
+    mockGetAll.mockReset().mockResolvedValue([]);
+    mockGetSources.mockReset().mockResolvedValue([]);
+    batchHandlers.current = null;
+    useLogsStore.setState({ logs: [], filters: {}, autoScroll: true, expandedIds: new Set() });
+  });
+
+  it("lists a source once when a live batch carries it several times", async () => {
+    mockGetSources.mockResolvedValue(["main"]);
+    const onSourcesChange = vi.fn();
+    render(<LogsContent onSourcesChange={onSourcesChange} />);
+    await waitFor(() => expect(onSourcesChange).toHaveBeenCalledWith(["main"]));
+
+    act(() => {
+      batchHandlers.current?.([
+        makeLog("a", { source: "git" }),
+        makeLog("b", { source: "git" }),
+        makeLog("c", { source: "main" }),
+      ]);
+    });
+
+    expect(onSourcesChange).toHaveBeenLastCalledWith(["git", "main"]);
+  });
+
+  it("derives sources from the loaded entries when the sources read fails", async () => {
+    mockGetAll.mockResolvedValue([
+      makeLog("a", { source: "pty" }),
+      makeLog("b", { source: "git" }),
+      makeLog("c", { source: "pty" }),
+    ]);
+    mockGetSources.mockRejectedValue(new Error("sources unavailable"));
+    const onSourcesChange = vi.fn();
+    render(<LogsContent onSourcesChange={onSourcesChange} />);
+
+    await waitFor(() => expect(onSourcesChange).toHaveBeenLastCalledWith(["git", "pty"]));
   });
 });
 
