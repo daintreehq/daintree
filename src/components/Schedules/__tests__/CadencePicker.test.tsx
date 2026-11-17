@@ -73,12 +73,16 @@ describe("CadencePicker preview", () => {
   it("names the schedule's zone in the caption and the times together once the machine moves", () => {
     const move = stubMachineZone(ZONE);
     const { rerender } = render(picker(NOW));
+    rerender(picker(NOW + 2 * HOUR));
+    expect(shownRows()).toEqual(expectedRows(NOW + 2 * HOUR, "in 7 hours"));
+    expect(preview().textContent).not.toContain("where this schedule was made");
     const before = shownRows();
 
+    // The column is recomputed on the editor's clock tick, so the move shows with the next one.
     move("America/New_York");
-    rerender(picker(NOW + 2 * HOUR));
+    rerender(picker(NOW + 3 * HOUR));
     expect(preview().textContent).toContain(`Times in ${ZONE}, where this schedule was made`);
-    expect(shownRows()).toEqual(expectedRows(NOW + 2 * HOUR, "in 7 hours"));
+    expect(shownRows()).toEqual(expectedRows(NOW + 3 * HOUR, "in 6 hours"));
     expect(shownRows()[0]?.[1]).not.toBe(before[0]?.[1]);
   });
 });
