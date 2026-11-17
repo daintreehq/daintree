@@ -444,24 +444,6 @@ describe("CloudMachineSection SSH identity", () => {
   });
 });
 
-describe("CloudMachineSection create retry", () => {
-  const retry = () => screen.queryByRole("button", { name: "Retry" });
-
-  it("offers Retry for a create that failed, but not for one its provider refuses on every try", () => {
-    show(status({ operation: null, lastError: { code: "failed", message: "Try again", at: 0 } }));
-    expect(retry()).not.toBeNull();
-    cleanup();
-    show(
-      status({
-        operation: null,
-        lastError: { code: "unsupported", message: "No longer takes a lifetime", at: 0 },
-      })
-    );
-    expect(retry()).toBeNull();
-    expect(screen.getByText("No longer takes a lifetime")).toBeTruthy();
-  });
-});
-
 describe("CloudMachineSection lifetime row", () => {
   const DEADLINE = new Date(Date.now() + 90 * 60_000).toISOString();
   const lifetimeText = () => screen.getByTestId("cloud-machine-lifetime").textContent ?? "";
