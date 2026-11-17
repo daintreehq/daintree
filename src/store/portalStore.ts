@@ -663,6 +663,5 @@ export const usePortalStore = create<PortalState & PortalActions>()(portalStoreC
 registerPersistedStore({
   storeId: "portalStore",
   store: usePortalStore,
-  persistedStateType:
-    "Partial<PortalState> (links, width, tabs, activeTabId, defaultNewTabUrl)",
+  persistedStateType: "Partial<PortalState> (links, width, tabs, activeTabId, defaultNewTabUrl)",
 });
