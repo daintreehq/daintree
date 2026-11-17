@@ -46,17 +46,18 @@ function fieldUrl(field: DeclaredProjectLinkField, value: unknown): string | nul
 
 /**
  * The page a `repository` clone address browses to: `git+https://host/o/r.git`
- * is `https://host/o/r`. A `#committish` is dropped with the `.git`, since it
- * names a checkout, not a page.
+ * is `https://host/o/r`. On a clone address (a `git+` prefix or a `.git`
+ * path) a `#committish` names a checkout, not a place on the page, so it goes.
  */
 export function repositoryBrowseUrl(value: string): string | null {
-  const parsed = webAddress(value.trim().replace(/^git\+(?=https?:)/i, ""));
+  const trimmed = value.trim();
+  const cloneScheme = /^git\+(?=https?:)/i;
+  const parsed = webAddress(trimmed.replace(cloneScheme, ""));
   if (parsed === null) return null;
   const path = parsed.pathname.replace(/\/+$/, "");
-  if (/\.git$/i.test(path)) {
-    parsed.pathname = path.slice(0, -".git".length);
-    parsed.hash = "";
-  }
+  const cloneAddress = cloneScheme.test(trimmed) || /\.git$/i.test(path);
+  if (/\.git$/i.test(path)) parsed.pathname = path.slice(0, -".git".length);
+  if (cloneAddress) parsed.hash = "";
   return parsed.href.length > MAX_PROJECT_LINK_URL_LENGTH ? null : parsed.href;
 }
 

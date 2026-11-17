@@ -24,6 +24,7 @@ const h = vi.hoisted(() => ({
   polls: [] as Array<{ callback: () => void; intervalMs: number; enabled: boolean }>,
   worktreeState: null as WorktreeFixture | null,
   worktreeListeners: new Set<() => void>(),
+  observable: true,
   settings: {
     projectId: "p1" as string | null,
     settings: { links: [] as ProjectLink[] } as { links?: ProjectLink[] } | null,
@@ -43,6 +44,10 @@ vi.mock("@/store/projectStore", () => ({
 vi.mock("@/store/viewWorkspace", () => ({
   selectViewProject: () =>
     h.viewProjectId === null ? null : { id: h.viewProjectId, path: h.viewProjectPath },
+}));
+vi.mock("@/lib/viewCacheState", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/viewCacheState")>()),
+  isProjectViewObservable: () => h.observable,
 }));
 vi.mock("@/clients/projectClient", () => ({
   projectClient: { getDeclaredLinks: (projectId: string) => h.getDeclared(projectId) },
@@ -127,14 +132,24 @@ function dirsAt(at: number, previousAt: number | null, dirs: string[]): Worktree
   return { at, previousAt, dirs, run: "run-1" };
 }
 
-function rootWorktree(fsTick: number, dirs: WorktreeChangedDirs): WorktreeFixture {
+function rootWorktree(
+  fsTick: number,
+  dirs: WorktreeChangedDirs,
+  { gitTick = 1, otherTick = 1 }: { gitTick?: number; otherTick?: number } = {}
+): WorktreeFixture {
   return {
     worktrees: new Map([
-      ["wt-root", { id: "wt-root", path: "/repo", worktreeChanges: { lastUpdated: 1 } }],
+      ["wt-root", { id: "wt-root", path: "/repo", worktreeChanges: { lastUpdated: gitTick } }],
       ["wt-other", { id: "wt-other", path: "/repo-worktrees/feature" }],
     ]),
-    workingTreeChangedAtById: new Map([["wt-root", fsTick]]),
-    workingTreeChangedDirsById: new Map([["wt-root", dirs]]),
+    workingTreeChangedAtById: new Map([
+      ["wt-root", fsTick],
+      ["wt-other", otherTick],
+    ]),
+    workingTreeChangedDirsById: new Map([
+      ["wt-root", dirs],
+      ["wt-other", dirsAt(otherTick, null, [""])],
+    ]),
   };
 }
 
@@ -149,6 +164,7 @@ beforeEach(() => {
   h.getDeclared.mockImplementation(() => Promise.resolve([]));
   h.polls.length = 0;
   h.worktreeState = null;
+  h.observable = true;
   _resetDeclaredProjectLinksForTests();
   h.settings = { projectId: "p1", settings: { links: [] } };
   h.globalLinks = [];
@@ -274,6 +290,39 @@ describe("useLinksLauncherRefresh: declared links (#17252)", () => {
     act(() => setWorktreeState(rootWorktree(12, dirsAt(12, 11, ["", "src"]))));
     await flush();
     expect(h.getDeclared).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores a burst in another worktree", async () => {
+    h.worktreeState = rootWorktree(10, dirsAt(10, null, ["src"]));
+    renderHook(() => useLinksLauncherRefresh());
+    await flush();
+    act(() => setWorktreeState(rootWorktree(10, dirsAt(10, null, ["src"]), { otherTick: 50 })));
+    await flush();
+    expect(h.getDeclared).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-reads when only the root worktree's git status moved", async () => {
+    h.worktreeState = rootWorktree(10, dirsAt(10, null, ["src"]));
+    renderHook(() => useLinksLauncherRefresh());
+    await flush();
+    act(() => setWorktreeState(rootWorktree(10, dirsAt(10, null, ["src"]), { gitTick: 20 })));
+    await flush();
+    expect(h.getDeclared).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads nothing while the view can't be seen, leaving the catch-up to the poll", async () => {
+    h.observable = false;
+    h.worktreeState = rootWorktree(10, dirsAt(10, null, ["src"]));
+    renderHook(() => useLinksLauncherRefresh());
+    await flush();
+    act(() => setWorktreeState(rootWorktree(11, dirsAt(11, 10, [""]))));
+    await flush();
+    expect(h.getDeclared).not.toHaveBeenCalled();
+
+    h.observable = true;
+    h.polls.at(-1)!.callback();
+    await flush();
+    expect(h.getDeclared.mock.calls).toEqual([["p1"]]);
   });
 
   it("leaves the read to the poll when no worktree sits at the project's root", async () => {

@@ -109,6 +109,7 @@ describe("repositoryBrowseUrl (#17252)", () => {
     ["GIT+HTTPS://GitHub.com/acme/widget.GIT", "https://github.com/acme/widget"],
     ["git+http://git.internal/acme/widget.git", "http://git.internal/acme/widget"],
     ["https://github.com/acme/widget.git#main", "https://github.com/acme/widget"],
+    ["git+https://github.com/acme/widget#v1.2.0", "https://github.com/acme/widget"],
     ["https://github.com/acme/widget#readme", "https://github.com/acme/widget#readme"],
     ["  https://gitlab.com/acme/widget  ", "https://gitlab.com/acme/widget"],
   ])("browses %s at %s", (input, expected) => {

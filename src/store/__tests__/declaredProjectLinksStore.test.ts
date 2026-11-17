@@ -100,6 +100,81 @@ describe("refreshDeclaredProjectLinks (#17252)", () => {
     expect(useDeclaredProjectLinksStore.getState()).toEqual({ projectId: "p1", links: [] });
   });
 
+  it("still runs a read asked for while one that fails is out", async () => {
+    const first = refreshDeclaredProjectLinks("p1");
+    void refreshDeclaredProjectLinks("p1");
+    h.pending[0]!.reject(new Error("EIO"));
+    await settle();
+    expect(h.pending).toHaveLength(2);
+    h.pending[1]!.resolve([HOMEPAGE]);
+    await first;
+    expect(useDeclaredProjectLinksStore.getState()).toEqual({ projectId: "p1", links: [HOMEPAGE] });
+  });
+
+  it("keeps a project's newer read when its older one lands after a switch away and back", async () => {
+    const a1 = refreshDeclaredProjectLinks("a");
+    const b = refreshDeclaredProjectLinks("b");
+    const a2 = refreshDeclaredProjectLinks("a");
+    expect(h.pending.map((read) => read.projectId)).toEqual(["a", "b", "a"]);
+
+    h.pending[0]!.resolve([HOMEPAGE]);
+    await a1;
+    h.pending[1]!.resolve([]);
+    await b;
+    expect(useDeclaredProjectLinksStore.getState().projectId).toBeNull();
+
+    // The newer read for `a` is still the one out: asking again queues behind it.
+    void refreshDeclaredProjectLinks("a");
+    expect(h.pending).toHaveLength(3);
+    h.pending[2]!.resolve([REPOSITORY]);
+    await settle();
+    expect(useDeclaredProjectLinksStore.getState()).toEqual({
+      projectId: "a",
+      links: [REPOSITORY],
+    });
+    expect(h.pending).toHaveLength(4);
+    h.pending[3]!.resolve([REPOSITORY]);
+    await a2;
+  });
+
+  it("shows an address that changed in the file", async () => {
+    const first = refreshDeclaredProjectLinks("p1");
+    h.pending[0]!.resolve([HOMEPAGE]);
+    await first;
+    const moved = { ...HOMEPAGE, url: "https://widget.example.org/" };
+    const second = refreshDeclaredProjectLinks("p1");
+    h.pending[1]!.resolve([moved]);
+    await second;
+    expect(useDeclaredProjectLinksStore.getState().links).toEqual([moved]);
+  });
+
+  it("holds the list through an empty read while a newer read is queued behind it", async () => {
+    const first = refreshDeclaredProjectLinks("p1");
+    h.pending[0]!.resolve([HOMEPAGE]);
+    await first;
+    const held = useDeclaredProjectLinksStore.getState().links;
+
+    const midSave = refreshDeclaredProjectLinks("p1");
+    void refreshDeclaredProjectLinks("p1");
+    h.pending[1]!.resolve([]);
+    await settle();
+    expect(useDeclaredProjectLinksStore.getState().links).toBe(held);
+
+    h.pending[2]!.resolve([HOMEPAGE, REPOSITORY]);
+    await midSave;
+    expect(useDeclaredProjectLinksStore.getState().links).toEqual([HOMEPAGE, REPOSITORY]);
+  });
+
+  it("clears the list when the last read says the file declares nothing", async () => {
+    const first = refreshDeclaredProjectLinks("p1");
+    h.pending[0]!.resolve([HOMEPAGE]);
+    await first;
+    const cleared = refreshDeclaredProjectLinks("p1");
+    h.pending[1]!.resolve([]);
+    await cleared;
+    expect(useDeclaredProjectLinksStore.getState()).toEqual({ projectId: "p1", links: [] });
+  });
+
   it("leaves the list it holds in place when the file says the same again", async () => {
     const first = refreshDeclaredProjectLinks("p1");
     h.pending[0]!.resolve([HOMEPAGE]);

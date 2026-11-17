@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { DeclaredProjectLink } from "@shared/types";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { projectClient } from "@/clients/projectClient";
 import { logDebug } from "@/utils/logger";
 
@@ -43,7 +44,11 @@ let current: Read | null = null;
  * at a time: a request for the same project while one is out runs once more
  * after it, so a burst of edits costs two reads, not one per edit. A read for
  * another project supersedes it, and its answer is dropped. A failed read
- * keeps what was shown, since the file may only be slow to reach.
+ * keeps what was shown, since the file may only be slow to reach. An empty
+ * answer that would clear a list while another read is already queued waits
+ * for that read: an editor saving the file can be caught between truncating
+ * and writing it, and clearing the list would take the toolbar button, and an
+ * open launcher with it, away for a moment.
  */
 export async function refreshDeclaredProjectLinks(projectId: string): Promise<void> {
   if (current?.projectId === projectId) {
@@ -60,13 +65,15 @@ export async function refreshDeclaredProjectLinks(projectId: string): Promise<vo
         links = await projectClient.getDeclaredLinks(projectId);
       } catch (error) {
         logDebug("Couldn't read the project's package.json links", {
-          error: error instanceof Error ? error.message : String(error),
+          error: formatErrorMessage(error, "unknown error"),
         });
         continue;
       }
       if (current !== read) return;
       const state = useDeclaredProjectLinksStore.getState();
-      if (state.projectId === projectId && sameLinks(state.links, links)) continue;
+      const shown = state.projectId === projectId;
+      if (shown && sameLinks(state.links, links)) continue;
+      if (shown && links.length === 0 && state.links.length > 0 && read.again) continue;
       useDeclaredProjectLinksStore.setState({ projectId, links });
     } while (read.again && current === read);
   } finally {

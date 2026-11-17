@@ -44,16 +44,23 @@ describe("project-links:get-declared (#17252)", () => {
     cleanup();
   });
 
-  it("reads the package.json in the project's own registered folder", async () => {
-    projectStoreMock.getProjectById.mockReturnValue({ id: "p1", path: "/repos/widget" });
-    const result = await getDeclared({ projectId: "p1" });
-    expect(readMock.mock.calls).toEqual([["/repos/widget"]]);
+  const PROJECTS: Record<string, { id: string; path: string }> = {
+    p1: { id: "p1", path: "/repos/widget" },
+    p2: { id: "p2", path: "/repos/gadget" },
+  };
+
+  it("reads the package.json in the named project's own registered folder", async () => {
+    projectStoreMock.getProjectById.mockImplementation((id) => PROJECTS[id] ?? null);
+    const result = await getDeclared({ projectId: "p2" });
+    expect(projectStoreMock.getProjectById.mock.calls).toEqual([["p2"]]);
+    expect(readMock.mock.calls).toEqual([["/repos/gadget"]]);
     expect(result).toEqual([HOMEPAGE]);
   });
 
   it("declares nothing for a project this machine doesn't hold", async () => {
-    projectStoreMock.getProjectById.mockReturnValue(null);
+    projectStoreMock.getProjectById.mockImplementation((id) => PROJECTS[id] ?? null);
     const result = await getDeclared({ projectId: "gone" });
+    expect(projectStoreMock.getProjectById.mock.calls).toEqual([["gone"]]);
     expect(readMock).not.toHaveBeenCalled();
     expect(result).toEqual([]);
   });

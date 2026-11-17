@@ -23,6 +23,7 @@ import { selectViewProject } from "@/store/viewWorkspace";
 import { useProjectViewRevealed } from "@/hooks/useProjectViewRevealed";
 import { useSharedPollTick } from "@/hooks/useSharedPollTick";
 import { useFileChangeCount } from "@/hooks/useFileChangeCount";
+import { isProjectViewObservable } from "@/lib/viewCacheState";
 import { logError } from "@/utils/logger";
 
 export interface LinksLauncherLinks {
@@ -79,9 +80,10 @@ const MANIFEST_NAME = "package.json";
  * Keeps the view's package.json links following the file (#17252). Reads them
  * when the project lands, on every opening, when the watcher on the worktree
  * at the project's root says something in the root folder moved, and on a
- * slow poll while the view can be seen, which also catches up as soon as a
- * hidden view comes back. The read itself happens on the machine that holds
- * the project, so a Remote Host's project shows its own file.
+ * slow poll, all only while the view can be seen: the poll's ticker samples
+ * as soon as a hidden view comes back, which covers whatever it skipped. The
+ * read itself happens on the machine that holds the project, so a Remote
+ * Host's project shows its own file.
  */
 function useDeclaredProjectLinksRefresh(viewProjectId: string | null, refreshSeq: number): void {
   const projectPath = useViewProjectPath();
@@ -118,7 +120,7 @@ function useDeclaredProjectLinksRefresh(viewProjectId: string | null, refreshSeq
     true
   );
   const refresh = useCallback(() => {
-    if (viewProjectId === null) return;
+    if (viewProjectId === null || !isProjectViewObservable()) return;
     void refreshDeclaredProjectLinks(viewProjectId);
   }, [viewProjectId]);
   useEffect(() => {

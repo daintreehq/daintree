@@ -5,10 +5,27 @@ import type { DeclaredProjectLink } from "../../shared/types/projectLinks.js";
 import { declaredLinksFromPackageJson } from "../../shared/utils/declaredProjectLinks.js";
 import { readBoundedFromHandle } from "../utils/boundedRead.js";
 import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
-import { isProjectIoError, projectIo } from "./projectIoGate.js";
+import { projectIo } from "./projectIoGate.js";
 
 // A manifest bigger than this is generated output, not something a person wrote.
 const MAX_MANIFEST_BYTES = 512 * 1024;
+
+/**
+ * Errors that settle what the project declares: the file or a folder above it
+ * isn't there, isn't a file, or can't be read by this user. Anything else
+ * (`EIO`, `ESTALE`, `EMFILE`, the I/O gate giving up) may clear on the next
+ * read, so it rejects and the caller keeps the list it has.
+ */
+const SETTLED_CODES: ReadonlySet<string> = new Set([
+  "ENOENT",
+  "ENOTDIR",
+  "EISDIR",
+  "ELOOP",
+  "EACCES",
+  "EPERM",
+  "ENXIO",
+  "ENAMETOOLONG",
+]);
 
 const decoder = new TextDecoder("utf-8");
 
@@ -17,14 +34,32 @@ function isWithin(root: string, path: string): boolean {
   return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
+function errorCode(error: unknown): string | undefined {
+  if (error === null || typeof error !== "object") return undefined;
+  const { code } = error as { code?: unknown };
+  return typeof code === "string" ? code : undefined;
+}
+
+/**
+ * Close without waiting: `FileHandle.close()` waits for the handle's pending
+ * operations, so awaiting it after the gate gave up on a stalled read would
+ * hold the caller as long as the kernel holds the read.
+ */
+function closeLater(handle: Promise<FileHandle> | FileHandle): void {
+  void Promise.resolve(handle).then(
+    (opened) => opened.close().catch(() => undefined),
+    () => undefined
+  );
+}
+
 /**
  * The links the package.json at the project's root declares (#17252). Read
  * from disk on every call and never written: a missing, unreadable, oversized
  * or malformed file declares nothing. A manifest linked from outside the root
  * is refused, and the open is non-blocking so a FIFO standing at the path
- * can't hold it. Only a read the project I/O gate gave up on rejects, so the
- * caller keeps what it last showed and asks again later instead of emptying
- * the list for a slow disk.
+ * can't hold it. A failure that may pass (a stalled or busy disk, a full
+ * descriptor table) rejects instead, so the caller keeps what it last showed
+ * and asks again later rather than emptying the list.
  */
 export async function readDeclaredProjectLinks(
   projectRoot: string
@@ -46,23 +81,23 @@ export async function readDeclaredProjectLinks(
       );
     } catch (error) {
       // An open the gate stopped waiting for still lands; its descriptor is ours to close.
-      void opening?.then(
-        (late) => late.close().catch(() => undefined),
-        () => undefined
-      );
+      if (opening !== undefined) closeLater(opening);
       throw error;
     }
     try {
       const info = await io(() => handle.stat());
       if (!info.isFile()) return [];
+      // One worker at a time: the bounded read's calls run one after another.
       const bytes = await io(() => readBoundedFromHandle(handle, info.size, MAX_MANIFEST_BYTES));
       if (bytes === null) return [];
       return declaredLinksFromPackageJson(JSON.parse(stripUtf8Bom(decoder.decode(bytes))));
     } finally {
-      await handle.close().catch(() => undefined);
+      closeLater(handle);
     }
   } catch (error) {
-    if (isProjectIoError(error)) throw error;
-    return [];
+    if (error instanceof SyntaxError) return [];
+    const code = errorCode(error);
+    if (code !== undefined && SETTLED_CODES.has(code)) return [];
+    throw error;
   }
 }

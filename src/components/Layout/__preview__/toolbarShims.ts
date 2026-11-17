@@ -140,6 +140,9 @@ installPreviewShims({
     getCurrent: async () => PREVIEW_PROJECT,
     onSwitch: () => () => {},
   }),
+  // The links launcher reads the project's package.json links from mount;
+  // `undefined` from the inert shim isn't a list.
+  projectLinks: withFallback({ getDeclared: async () => [] }),
   // The links launcher holds the cross-worktree dev server list from mount;
   // `undefined` from the inert shim isn't a list, and it is iterated.
   devPreview: withFallback({

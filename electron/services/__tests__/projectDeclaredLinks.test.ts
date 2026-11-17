@@ -46,7 +46,7 @@ describe("readDeclaredProjectLinks (#17252)", () => {
   });
 
   it("reads a manifest saved with a byte order mark", async () => {
-    const root = await makeProject(`﻿${MANIFEST}`);
+    const root = await makeProject(`${String.fromCharCode(0xfeff)}${MANIFEST}`);
     await expect(readDeclaredProjectLinks(root)).resolves.toEqual(ALL_THREE);
   });
 

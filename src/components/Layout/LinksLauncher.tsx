@@ -192,8 +192,8 @@ export function LinksLauncherList({
     return (
       <div className="flex flex-col items-start gap-2 p-3">
         <p className="text-xs text-text-secondary">
-          Links you or the Assistant save for this project, and dev servers running in any worktree,
-          show here.
+          Links you or the Assistant save for this project, links in its package.json, and dev
+          servers running in any worktree show here.
         </p>
         <Button type="button" variant="outline" size="sm" onClick={onManage}>
           Add a project link

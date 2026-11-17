@@ -1078,17 +1078,19 @@ describe("links in the `…` menu", () => {
     render(<OverflowMenu />);
     await openMenu();
 
-    const groups = Array.from(document.querySelectorAll('[role="group"]'));
-    const declared = groups.find((group) => group.textContent?.startsWith("From package.json"));
-    expect(declared).toBeDefined();
-    expect(
-      within(declared as HTMLElement)
-        .getAllByRole("menuitem")
-        .map((item) => item.textContent)
-    ).toEqual(["Homepagewidget.example.dev, declared in the project's package.json"]);
+    const groups = screen.getAllByRole("group");
+    expect(groups.map((group) => group.querySelector('[role="menuitem"]')?.textContent)).toEqual([
+      "Local applocalhost",
+      "Homepagewidget.example.dev, declared in the project's package.json",
+      "Team docsdocs.example.org",
+    ]);
+    // Its provenance is read out, not only drawn.
+    const homepage = screen.getByRole("menuitem", {
+      name: /^Homepage\s*widget\.example\.dev, declared in the project's package\.json$/,
+    });
 
     await act(async () => {
-      fireEvent.click(screen.getAllByRole("menuitem")[1]!);
+      fireEvent.click(homepage);
     });
     await flush();
     expect(h.openLinkUrl).toHaveBeenCalledWith("https://widget.example.dev/");
