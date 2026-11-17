@@ -33,6 +33,12 @@ import type { SessionContext } from "./sessionContext.js";
 import { routeBindingMcpError, sessionGoneError } from "./sessionRouteErrors.js";
 import type { SessionServerDeps } from "./sessionServerDepsContract.js";
 
+// Addressed by agent type, so several terminals can answer it. Says how the
+// one that does is picked: the read names it (`terminalId`) rather than the
+// listing, which cannot (#17491).
+const AGENT_STATE_RESOURCE_DESCRIPTION =
+  "State as last seen on one terminal of this agent type (idle, working, waiting, etc.): the one whose record was written most recently, by a spawn or a state update. The payload's terminalId names it; with no terminal of the type tracked, state is null and there is no terminalId.";
+
 export function registerResourceHandlers(
   server: Server,
   session: SessionContext,
@@ -190,7 +196,9 @@ async function listConcreteResources(
   if (isResourcePermitted(tier, "scrollback") || isResourcePermitted(tier, "agentState")) {
     const terminals = await tryDispatchList("terminal.list", deps.dispatchAction, bindingListed);
     // The agent-state URI is addressed by agent type, so terminals running the
-    // same type all name one resource; list it once.
+    // same type all name one resource; list it once, named by the type. A
+    // terminal's title would claim one of them, while the read reports whichever
+    // was updated most recently (#17491).
     const listedAgentIds = new Set<string>();
     for (const term of terminals) {
       const id = readStringField(term, ["id", "terminalId"]);
@@ -208,9 +216,9 @@ async function listConcreteResources(
         listedAgentIds.add(agentId);
         resources.push({
           uri: `daintree://agent/${encodeURIComponent(agentId)}/state`,
-          name: `Agent state — ${label ?? agentId}`,
+          name: `Agent state — ${agentId}`,
           mimeType: "application/json",
-          description: "Current agent state-machine value (idle, working, waiting, etc.).",
+          description: AGENT_STATE_RESOURCE_DESCRIPTION,
         });
       }
     }
@@ -248,7 +256,7 @@ function listResourceTemplates(
       uriTemplate: "daintree://agent/{id}/state",
       name: "Agent state",
       mimeType: "application/json",
-      description: "Current agent state-machine value (idle, working, waiting, etc.).",
+      description: AGENT_STATE_RESOURCE_DESCRIPTION,
     });
   }
   return templates;

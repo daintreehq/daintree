@@ -1331,6 +1331,90 @@ describe("McpServerService", () => {
       expect(await read()).toEqual({ agentId: "agent-shared", state: null });
     });
 
+    // The listing names the type-addressed resource by its type, because the read
+    // reports whichever terminal of that type was updated last — a terminal's
+    // title in the name would claim a terminal the read may not return (#17491).
+    it("names a shared agent type's state resource by the type, whichever terminal the read reports", async () => {
+      const { events } = await import("../events.js");
+      const { getAgentAvailabilityStore } = await import("../AgentAvailabilityStore.js");
+      getAgentAvailabilityStore();
+      const transition = (terminalId: string, state: "working" | "waiting", timestamp: number) =>
+        events.emit("agent:state-changed", {
+          agentId: "agent-titled",
+          terminalId,
+          state,
+          previousState: "idle",
+          trigger: "output",
+          confidence: 1,
+          timestamp,
+        });
+      events.emit("agent:spawned", {
+        agentId: "agent-titled",
+        terminalId: "term-backend",
+        timestamp: 1_000,
+      });
+      events.emit("agent:spawned", {
+        agentId: "agent-titled",
+        terminalId: "term-frontend",
+        timestamp: 2_000,
+      });
+      // Enumeration order is Backend then Frontend; the first read lands on the
+      // first-enumerated terminal and the second on the last-enumerated one.
+      transition("term-frontend", "working", 3_000);
+      transition("term-backend", "waiting", 4_000);
+
+      const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => {
+        if (payload.actionId === "terminal.list") {
+          return {
+            ok: true,
+            result: [
+              { id: "term-backend", title: "Backend", agentId: "agent-titled" },
+              { id: "term-frontend", title: "Frontend", agentId: "agent-titled" },
+            ],
+          };
+        }
+        return { ok: true, result: [] };
+      });
+      const { window } = createMockWindow({
+        getManifest: manifestForResources,
+        dispatchAction: dispatchMock,
+      });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, fullHeaders);
+      transports.push(transport);
+
+      const listed = async () => {
+        const resources = (await client.listResources()).resources.filter(
+          (r) => r.uri === "daintree://agent/agent-titled/state"
+        );
+        expect(resources).toHaveLength(1);
+        return resources[0];
+      };
+      const readTerminalId = async () => {
+        const result = await client.readResource({ uri: "daintree://agent/agent-titled/state" });
+        const content = result.contents[0] as { text: string };
+        return JSON.parse(content.text).terminalId;
+      };
+
+      const before = await listed();
+      expect(before.name).toBe("Agent state — agent-titled");
+      expect(before.description).toContain("written most recently");
+      expect(before.description).toContain("terminalId");
+      expect(await readTerminalId()).toBe("term-backend");
+
+      transition("term-frontend", "waiting", 5_000);
+
+      const after = await listed();
+      expect(after.name).toBe(before.name);
+      expect(after.name).not.toMatch(/Backend|Frontend/);
+      expect(await readTerminalId()).toBe("term-frontend");
+
+      const template = (await client.listResourceTemplates()).resourceTemplates.find(
+        (t) => t.uriTemplate === "daintree://agent/{id}/state"
+      );
+      expect(template?.description).toBe(before.description);
+    });
+
     it("readResource on an unknown URI rejects as InvalidRequest", async () => {
       const { window } = createMockWindow({ getManifest: manifestForResources });
       await service.start(window);
