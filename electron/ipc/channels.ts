@@ -1781,6 +1781,7 @@ export const CHANNELS = {
   CLOUD_HOSTS_REFRESH_HOST: "cloud-hosts:refresh-host",
   CLOUD_HOSTS_DELETE_MACHINE: "cloud-hosts:delete-machine",
   CLOUD_HOSTS_SET_LIFETIME: "cloud-hosts:set-lifetime",
+  CLOUD_HOSTS_TRUST_HOST_KEY: "cloud-hosts:trust-host-key",
 
   // Remote Hosts: hostMode (shell).
   HOST_MODE_GET_STATUS: "host-mode:get-status",

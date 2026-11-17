@@ -47,6 +47,7 @@ import {
 import { CloudHostLifecycle } from "../cloud/CloudHostLifecycle.js";
 import { CloudSshFiles } from "../cloud/CloudSshFiles.js";
 import { initCloudHosts } from "../cloud/initCloudHosts.js";
+import { createCloudTransports } from "../cloud/cloudTransport.js";
 import type { CloudHostsStoreBackend } from "../cloud/CloudHostStore.js";
 import { hasPendingActivation } from "../../window/projectActivationClaims.js";
 import { confirmColdOpenAtMemoryPressure } from "../../services/projectOpenMemoryPressure.js";
@@ -848,34 +849,16 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     if (!cloudLifecycle) throw new UnusableConnectionError("Cloud hosts aren't ready yet", null);
     return cloudLifecycle;
   };
-  // One ssh transport per access generation: a machine's new address or key gets a fresh one.
-  const cloudTransports = new Map<string, { generation: string; transport: SshTransport }>();
-  const cloudTransportFor = (
-    bindingId: string,
-    ensureRunning?: (signal: AbortSignal) => Promise<boolean>
-  ): LinkTransport => ({
-    open: async (signal, options) => {
-      const lifecycle = requireCloudLifecycle();
-      const route = await lifecycle.ensureAccess(bindingId, signal, {
-        fresh: options?.fresh === true,
-      });
-      const generation = lifecycle.accessGeneration(bindingId) ?? "";
-      let entry = cloudTransports.get(bindingId);
-      if (!entry || entry.generation !== generation) {
-        entry = {
-          generation,
-          transport: new SshTransport({
-            target: route.target,
-            clientDir,
-            ensureRunning,
-            sshPath: route.sshPath,
-            sshConfigFiles: [route.configPath],
-          }),
-        };
-        cloudTransports.set(bindingId, entry);
-      }
-      return entry.transport.open(signal, options);
-    },
+  const cloudTransports = createCloudTransports({
+    access: requireCloudLifecycle,
+    ssh: (route, ensureRunning) =>
+      new SshTransport({
+        target: route.target,
+        clientDir,
+        ensureRunning,
+        sshPath: route.sshPath,
+        sshConfigFiles: [route.configPath],
+      }),
   });
   const wslKeepalive = new WslKeepalive();
   // Bound below: the sink needs the router's answer, the router needs the manager.
@@ -900,7 +883,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
             // update's reconnect) would hold the old distro after its release.
             { keepalive: wslKeepalive, isRetiring: (connection) => client.isRetiring(connection) },
             ensureRunning,
-            cloudTransportFor
+            cloudTransports.transportFor
           )
       );
     },
@@ -1002,7 +985,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
         run: defaultCommandRunner,
       }),
     forgetCloud: async (bindingId) => {
-      cloudTransports.delete(bindingId);
+      cloudTransports.forget(bindingId);
       await cloudFiles.forget(clientDir, bindingId);
     },
     platform: process.platform,

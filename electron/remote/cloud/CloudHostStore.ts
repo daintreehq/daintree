@@ -12,6 +12,7 @@ import {
   type CloudProvisioningSelection,
 } from "../../../shared/types/cloudHosts.js";
 import { isValidRemoteHostId, type HostId } from "../../../shared/types/remoteHosts.js";
+import { normalizeHostKey } from "./sshEndpoint.js";
 
 /**
  * Cloud accounts and the bindings that tie a Remote Host to a provider's
@@ -57,6 +58,12 @@ export interface StoredSshAccess {
   obtainedAt: number;
 }
 
+/** A server key, `type base64`, and when it was trusted or seen. */
+export interface StoredHostKey {
+  key: string;
+  at: number;
+}
+
 export interface StoredCloudObservation {
   machine: string;
   /** The machine's name in the provider's account. */
@@ -97,6 +104,14 @@ export interface StoredCloudBinding {
   intent: "run" | "stop" | null;
   observation: StoredCloudObservation | null;
   access: StoredSshAccess | null;
+  /**
+   * The server key the person confirmed, for a provider whose API can't vouch
+   * for one. Unlike `access` it outlives every stop and start: it is the
+   * machine's identity, and only the person replaces it.
+   */
+  trustedHostKey: StoredHostKey | null;
+  /** A key the machine presented that nobody has confirmed: its first, or one unlike the trusted key. */
+  offeredHostKey: StoredHostKey | null;
   lastError: CloudHostError | null;
   createdAt: number;
 }
@@ -223,6 +238,13 @@ function readAccess(raw: unknown): StoredSshAccess | null {
   return { user, host, port, hostKey, obtainedAt: num(value.obtainedAt) ?? 0 };
 }
 
+function readHostKey(raw: unknown): StoredHostKey | null {
+  const value = raw as Record<string, unknown> | null;
+  if (!value || typeof value !== "object") return null;
+  const key = normalizeHostKey(str(value.key));
+  return key ? { key, at: num(value.at) ?? 0 } : null;
+}
+
 function readObservation(raw: unknown): StoredCloudObservation | null {
   const value = raw as Record<string, unknown> | null;
   if (!value || typeof value.machine !== "string") return null;
@@ -323,6 +345,8 @@ function readBinding(raw: unknown): StoredCloudBinding | null {
     intent: value.intent === "run" || value.intent === "stop" ? value.intent : null,
     observation: readObservation(value.observation),
     access: readAccess(value.access),
+    trustedHostKey: readHostKey(value.trustedHostKey),
+    offeredHostKey: readHostKey(value.offeredHostKey),
     lastError: readError(value.lastError),
     createdAt: num(value.createdAt) ?? 0,
   };

@@ -43,4 +43,6 @@ export const cloudHostsClient = {
     window.electron.cloudHosts.deleteMachine({ hostId, resourceId }),
   setLifetime: (hostId: string, lifetimeHours: number | null): Promise<void> =>
     window.electron.cloudHosts.setLifetime({ hostId, lifetimeHours }),
+  trustHostKey: (hostId: string, fingerprint: string): Promise<void> =>
+    window.electron.cloudHosts.trustHostKey({ hostId, fingerprint }),
 };

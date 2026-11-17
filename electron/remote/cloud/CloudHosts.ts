@@ -96,6 +96,10 @@ export class CloudHosts {
     return this.lifecycle.setLifetime(hostId, lifetimeHours);
   }
 
+  trustHostKey(hostId: unknown, fingerprint: unknown): Promise<void> {
+    return this.lifecycle.trustHostKey(hostId, fingerprint);
+  }
+
   snapshot(): CloudHostsSnapshot {
     return {
       providers: this.deps.accounts.providerInfos(),

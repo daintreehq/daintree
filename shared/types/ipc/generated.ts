@@ -716,6 +716,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { hostId: string }];
     result: void;
   };
+  "cloud-hosts:trust-host-key": {
+    args: [payload: { hostId: string; fingerprint: string }];
+    result: void;
+  };
   "cloud-hosts:validate-account": {
     args: [payload: { accountId: string }];
     result: import("../cloudHosts.js").CloudAccountSummary;

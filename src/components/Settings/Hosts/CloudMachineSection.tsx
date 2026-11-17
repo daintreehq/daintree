@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Callout } from "@/components/ui/Callout";
 import { FactSeparator } from "@/components/ui/FactSeparator";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { useNow } from "@/hooks/useNow";
 import { cloudHostsClient } from "@/clients/cloudHostsClient";
+import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { cloudStatusFor, useCloudHosts } from "@/components/Hosts/cloud/cloudHostsState";
 import { useCloudMachineActions } from "@/components/Hosts/cloud/useCloudMachineActions";
 import {
@@ -26,10 +28,11 @@ import {
   CLOUD_LIFETIME_CHOICES,
   CLOUD_PROVISIONING_DIMENSIONS,
   type CloudHostCreatedFor,
+  type CloudHostKeyReview,
 } from "@shared/types/cloudHosts";
 import type { HostId, HostMetricsSummary } from "@shared/types/remoteHosts";
 import { SettingsSection } from "../SettingsSection";
-import { SettingsGroup, SettingsRow } from "../SettingsGroup";
+import { SettingsGroup, SettingsRow, SettingsRowActions } from "../SettingsGroup";
 import { SettingsSelect } from "../SettingsSelect";
 import { HostIdleTimeRow } from "./HostIdleTimeRow";
 
@@ -43,6 +46,54 @@ function errorText(err: unknown, fallback: string): string {
 function createdForLabel(mark: CloudHostCreatedFor): string {
   const where = `${mark.worktreeName} in ${mark.projectName}`;
   return mark.hostName === null ? where : `${where} on ${mark.hostName}`;
+}
+
+/**
+ * A host key the machine presented, for the person to compare and trust:
+ * once on a first connect, and again, as a warning, whenever it changes.
+ */
+function HostKeyReviewDetails({
+  review,
+  providerName,
+}: {
+  review: CloudHostKeyReview;
+  providerName: string;
+}) {
+  const presented = (
+    <span className="select-text break-all font-mono text-2xs">
+      {review.keyType} {review.fingerprint}
+    </span>
+  );
+  if (review.reason === "first-connect") {
+    return (
+      <div className="flex flex-col gap-1.5" data-testid="cloud-host-key-review">
+        <span>
+          {providerName} can&apos;t vouch for this machine&apos;s host key, so Daintree asks you
+          once. Compare it with the fingerprint {providerName} shows for the machine; once trusted,
+          Daintree refuses any other key.
+        </span>
+        {presented}
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-1.5" data-testid="cloud-host-key-review">
+      <Callout severity="warning" title="This machine's identity changed">
+        It presents a different host key from the one you trusted
+        {review.previousTrustedAt !== null
+          ? ` on ${new Date(review.previousTrustedAt).toLocaleDateString()}`
+          : ""}
+        , so Daintree won&apos;t connect. Trust the new key only if you expect the change, such as
+        after the machine was rebuilt.
+      </Callout>
+      <span className="select-text break-all font-mono text-2xs">
+        Trusted {review.previousFingerprint}
+      </span>
+      <span className="select-text break-all font-mono text-2xs">
+        Now {review.keyType} {review.fingerprint}
+      </span>
+    </div>
+  );
 }
 
 const LIFETIME_VALUES = CLOUD_LIFETIME_CHOICES.map((hours) =>
@@ -70,9 +121,10 @@ export function CloudMachineSection({
   const { snapshot } = useCloudHosts();
   const status = cloudStatusFor(snapshot, hostId);
   const machines = useCloudMachineActions();
-  const [busy, setBusy] = useState<"retry" | "lifetime" | null>(null);
+  const [busy, setBusy] = useState<"retry" | "lifetime" | "trust" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lifetimeError, setLifetimeError] = useState<string | null>(null);
+  const [trustError, setTrustError] = useState<string | null>(null);
   const now = useNow(status !== null);
   if (!status) return null;
   // An old reading is the last one, not the machine now: its facts say so.
@@ -134,6 +186,23 @@ export function CloudMachineSection({
     );
   };
   const running = status.machine === "running";
+  const review = status.hostKeyReview;
+
+  // Names the fingerprint shown, so a key that changed again since is refused; then dials with it.
+  const trustHostKey = (fingerprint: string) => {
+    setBusy("trust");
+    setTrustError(null);
+    cloudHostsClient.trustHostKey(hostId, fingerprint).then(
+      () => {
+        setBusy(null);
+        void remoteHostsClient.connect(hostId).catch(() => {});
+      },
+      (err: unknown) => {
+        setBusy(null);
+        setTrustError(errorText(err, "Couldn't trust the host key"));
+      }
+    );
+  };
 
   // What Daintree is doing to it, in its own words; the provider's raw state stays in diagnostics.
   const stateDetail = status.operation?.stage || null;
@@ -235,6 +304,26 @@ export function CloudMachineSection({
             </div>
           }
         />
+        {review && (
+          <SettingsRow
+            label={review.reason === "changed" ? "Host key changed" : "Confirm host key"}
+            layout="stacked"
+            description={<HostKeyReviewDetails review={review} providerName={providerName} />}
+            error={trustError ? <span role="alert">{trustError}</span> : undefined}
+            control={
+              <SettingsRowActions>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  loading={busy === "trust"}
+                  onClick={() => trustHostKey(review.fingerprint)}
+                >
+                  {review.reason === "changed" ? "Trust new key" : "Trust this key"}
+                </Button>
+              </SettingsRowActions>
+            }
+          />
+        )}
         <SettingsRow
           label="Account"
           description={`${providerName} · ${status.accountName}${status.ownership === "imported" ? " · Added from the account" : ""}`}

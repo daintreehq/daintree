@@ -1103,6 +1103,7 @@ export const CHANNEL_LOCALITY = {
   "cloud-hosts:replace-account-key": "shell",
   "cloud-hosts:retry-create": "shell",
   "cloud-hosts:set-lifetime": "shell",
+  "cloud-hosts:trust-host-key": "shell",
   "cloud-hosts:start-host": "shell",
   "cloud-hosts:stop-host": "shell",
   "cloud-hosts:validate-account": "shell",

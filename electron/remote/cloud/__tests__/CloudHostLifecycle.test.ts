@@ -9,8 +9,11 @@ import type {
   CloudHostImportRequest,
   CloudProviderId,
   CloudProvisioning,
+  CloudSshTransport,
+  CloudSshTrust,
 } from "../../../../shared/types/cloudHosts.js";
 import { TransportError, UnusableConnectionError } from "../../client/transport.js";
+import { hostKeyFingerprint } from "../sshEndpoint.js";
 import { BoatApiError } from "../boat/BoatClient.js";
 import { BoatProvider } from "../boat/BoatProvider.js";
 import { CloudAccountService } from "../CloudAccountService.js";
@@ -47,13 +50,27 @@ function resource(overrides: Partial<ProviderResource> = {}): ProviderResource {
   };
 }
 
-function fakeProvider(state: { machine: ProviderResource }): CloudProvider {
+function fakeProvider(
+  state: { machine: ProviderResource },
+  sshTrust?: CloudSshTrust,
+  transport?: CloudSshTransport
+): CloudProvider {
   const real = new BoatProvider(() => {
     throw new Error("unused");
   });
   return {
     id: "boat",
-    info: (platform) => real.info(platform),
+    info: (platform) => {
+      const info = real.info(platform);
+      return {
+        ...info,
+        capabilities: {
+          ...info.capabilities,
+          sshTrust: sshTrust ?? info.capabilities.sshTrust,
+          transport: transport ?? info.capabilities.transport,
+        },
+      };
+    },
     describeError: (error) => real.describeError(error),
     checkKey: vi.fn(async () => ({
       identity: "octocat",
@@ -108,7 +125,7 @@ function fakeProvider(state: { machine: ProviderResource }): CloudProvider {
     authorizeSsh: vi.fn(async () => ({
       user: "user",
       endpoint: { host: "203.0.113.10", port: 22001 },
-      hostKey: HOST_KEY,
+      hostKey: sshTrust === "confirm-on-first-connect" ? null : HOST_KEY,
     })),
   } as CloudProvider;
 }
@@ -131,11 +148,15 @@ async function setup(
     activity?: () => Activity;
     now?: () => number;
     adapt?: (provider: CloudProvider) => void;
+    sshTrust?: CloudSshTrust;
+    transport?: CloudSshTransport;
   } = {}
 ) {
   const state = { machine: resource(initial) };
-  const provider = fakeProvider(state);
+  const provider = fakeProvider(state, options.sshTrust, options.transport);
   options.adapt?.(provider);
+  /** What ssh-keyscan prints for the machine. */
+  const scan = { output: `[203.0.113.10]:22001 ${HOST_KEY}\n` };
   let backendValue: unknown;
   const backend = {
     get: () => backendValue,
@@ -148,7 +169,10 @@ async function setup(
   const hosts: HostDescriptor[] = [];
   const listeners = new Set<() => void>();
   const disconnect = vi.fn(async () => {});
-  const run = vi.fn(async (_cmd: string, args: string[]) => {
+  const run = vi.fn(async (cmd: string, args: string[]) => {
+    if (cmd.endsWith("ssh-keyscan")) {
+      return { code: 0, stdout: scan.output, stderr: "", spawnError: null, timedOut: false };
+    }
     const keyPath = args[args.length - 1]!;
     await fs.writeFile(keyPath, "PRIVATE");
     await fs.writeFile(`${keyPath}.pub`, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIClient daintree");
@@ -223,6 +247,7 @@ async function setup(
     files,
     run,
     restart,
+    scan,
   };
 }
 
@@ -350,6 +375,175 @@ describe("CloudHostLifecycle access", () => {
     await lifecycle.startMachine("build");
     await lifecycle.ensureAccess(bindingId);
     expect(provider.authorizeSsh).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("CloudHostLifecycle host keys confirmed on first connect", () => {
+  const NEW_KEY = `ssh-ed25519 ${Buffer.alloc(51, 7).toString("base64")}`;
+  const RSA_KEY = `ssh-rsa ${Buffer.alloc(64, 3).toString("base64")}`;
+
+  async function confirming(transport?: CloudSshTransport) {
+    const env = await setup(
+      { machine: "running" },
+      { sshTrust: "confirm-on-first-connect", transport }
+    );
+    await env.lifecycle.importMachine({
+      accountId: env.store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    const bindingId = env.store.bindings()[0]!.id;
+    return { ...env, bindingId };
+  }
+
+  const keyscans = (run: { mock: { calls: unknown[][] } }) =>
+    run.mock.calls.filter((call) => String(call[0]).endsWith("ssh-keyscan")).length;
+
+  async function pinnedKey(route: { configPath: string }): Promise<string> {
+    return fs.readFile(path.join(path.dirname(route.configPath), "known_hosts"), "utf8");
+  }
+
+  /** Trusts the key on offer and dials, as a person confirming the first connect does. */
+  async function trusted(env: Awaited<ReturnType<typeof confirming>>) {
+    await env.lifecycle.ensureAccess(env.bindingId).catch(() => {});
+    await env.lifecycle.trustHostKey("build", hostKeyFingerprint(HOST_KEY));
+    return env.lifecycle.ensureAccess(env.bindingId);
+  }
+
+  it("asks before trusting the first key, then pins exactly the key the person trusted", async () => {
+    const env = await confirming();
+    const { lifecycle, bindingId, files } = env;
+    const refused = await lifecycle.ensureAccess(bindingId).catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(UnusableConnectionError);
+    expect((refused as Error).message).toMatch(/confirm this machine's host key/i);
+    expect(await files.exists(bindingId)).toBe(false);
+    expect(lifecycle.statuses()[0]!.hostKeyReview).toMatchObject({
+      reason: "first-connect",
+      fingerprint: hostKeyFingerprint(HOST_KEY),
+      keyType: "ED25519",
+      previousFingerprint: null,
+    });
+
+    await lifecycle.trustHostKey("build", hostKeyFingerprint(HOST_KEY));
+    const route = await lifecycle.ensureAccess(bindingId);
+    expect(await pinnedKey(route)).toBe(`dtc-${bindingId} ${HOST_KEY}\n`);
+    expect(await fs.readFile(route.configPath, "utf8")).toContain("StrictHostKeyChecking yes");
+    const status = lifecycle.statuses()[0]!;
+    expect(status.hostKeyReview).toBeNull();
+    expect(status.hostKeyFingerprint).toBe(hostKeyFingerprint(HOST_KEY));
+  });
+
+  it("connects again on the trusted key after a restart and a stop and start", async () => {
+    const env = await confirming();
+    await trusted(env);
+    const { lifecycle: next } = env.restart(env.lifecycle);
+    env.state.machine = resource({ machine: "stopped", rawState: "archived" });
+    await next.startMachine("build");
+    // The machine also offers a key it would prefer; the one trusted is kept.
+    env.scan.output = `# 203.0.113.10:22001 SSH-2.0-OpenSSH_9.6\n203.0.113.10 ${RSA_KEY}\n[203.0.113.10]:22001 ${HOST_KEY}\n`;
+    const scansBefore = keyscans(env.run);
+    const route = await next.ensureAccess(env.bindingId);
+    expect(keyscans(env.run)).toBe(scansBefore + 1);
+    expect(await pinnedKey(route)).toBe(`dtc-${env.bindingId} ${HOST_KEY}\n`);
+    expect(next.statuses()[0]!.hostKeyReview).toBeNull();
+  });
+
+  it("refuses a changed key, says the identity changed, and keeps the old pin", async () => {
+    const env = await confirming();
+    const route = await trusted(env);
+    env.scan.output = `[203.0.113.10]:22001 ${NEW_KEY}\n`;
+    const refused = await env.lifecycle
+      .ensureAccess(env.bindingId, undefined, { fresh: true })
+      .catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(UnusableConnectionError);
+    expect((refused as Error).message).toMatch(/identity changed/i);
+    expect(env.lifecycle.statuses()[0]!.hostKeyReview).toMatchObject({
+      reason: "changed",
+      fingerprint: hostKeyFingerprint(NEW_KEY),
+      previousFingerprint: hostKeyFingerprint(HOST_KEY),
+    });
+    expect(env.store.bindings()[0]!.trustedHostKey?.key).toBe(HOST_KEY);
+    expect(await pinnedKey(route)).toBe(`dtc-${env.bindingId} ${HOST_KEY}\n`);
+    // Asking again never accepts it by itself.
+    await expect(env.lifecycle.ensureAccess(env.bindingId)).rejects.toBeInstanceOf(
+      UnusableConnectionError
+    );
+  });
+
+  it("pins a changed key only once the person trusts the fingerprint they were shown", async () => {
+    const env = await confirming();
+    await trusted(env);
+    env.scan.output = `[203.0.113.10]:22001 ${NEW_KEY}\n`;
+    await env.lifecycle.ensureAccess(env.bindingId, undefined, { fresh: true }).catch(() => {});
+    await expect(
+      env.lifecycle.trustHostKey("build", hostKeyFingerprint(HOST_KEY))
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(env.store.bindings()[0]!.trustedHostKey?.key).toBe(HOST_KEY);
+
+    const closeMaster = vi.spyOn(env.files, "closeMaster");
+    await env.lifecycle.trustHostKey("build", hostKeyFingerprint(NEW_KEY));
+    const route = await env.lifecycle.ensureAccess(env.bindingId);
+    expect(await pinnedKey(route)).toBe(`dtc-${env.bindingId} ${NEW_KEY}\n`);
+    // A master opened against the old key never carries the new connection.
+    expect(closeMaster).toHaveBeenCalled();
+    expect(env.lifecycle.accessGeneration(env.bindingId)).toContain(NEW_KEY);
+    expect(env.lifecycle.statuses()[0]!.hostKeyReview).toBeNull();
+  });
+
+  it("names the change when ssh itself refuses the key between looks", async () => {
+    const env = await confirming();
+    await trusted(env);
+    env.scan.output = `[203.0.113.10]:22001 ${NEW_KEY}\n`;
+    const refused = await env.lifecycle.recheckHostKey(env.bindingId).catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(UnusableConnectionError);
+    expect((refused as Error).message).toMatch(/identity changed/i);
+    expect(env.lifecycle.statuses()[0]!.hostKeyReview?.reason).toBe("changed");
+  });
+
+  it("retries a machine that presents no key yet instead of refusing it", async () => {
+    const env = await confirming();
+    env.scan.output = "";
+    const error = await env.lifecycle.ensureAccess(env.bindingId).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(TransportError);
+    expect(error).not.toBeInstanceOf(UnusableConnectionError);
+    expect(env.lifecycle.statuses()[0]!.hostKeyReview).toBeNull();
+  });
+
+  it("refuses a provider-command transport rather than dialling it directly", async () => {
+    const env = await confirming("provider-command");
+    await expect(env.lifecycle.ensureAccess(env.bindingId)).rejects.toBeInstanceOf(
+      UnusableConnectionError
+    );
+    expect(env.provider.authorizeSsh).not.toHaveBeenCalled();
+    expect(keyscans(env.run)).toBe(0);
+  });
+
+  it("leaves a provider that pins from its API alone", async () => {
+    const env = await setup({ machine: "running" });
+    await env.lifecycle.importMachine({
+      accountId: env.store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    const bindingId = env.store.bindings()[0]!.id;
+    await env.lifecycle.ensureAccess(bindingId);
+    await env.lifecycle.recheckHostKey(bindingId);
+    expect(keyscans(env.run)).toBe(0);
+    await expect(env.lifecycle.trustHostKey("build", "SHA256:x")).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+
+    // Its API naming no key is a failed setup, never a first-connect prompt.
+    vi.mocked(env.provider.authorizeSsh).mockResolvedValueOnce({
+      user: "user",
+      endpoint: { host: "203.0.113.10", port: 22001 },
+      hostKey: null,
+    });
+    await expect(
+      env.lifecycle.ensureAccess(bindingId, undefined, { fresh: true })
+    ).rejects.toBeInstanceOf(UnusableConnectionError);
+    expect(env.lifecycle.statuses()[0]!.lastError?.code).toBe("ssh-authorization");
+    expect(env.lifecycle.statuses()[0]!.hostKeyReview).toBeNull();
   });
 });
 

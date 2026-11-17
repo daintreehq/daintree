@@ -132,6 +132,15 @@ export const cloudHostsNamespace = defineIpcNamespace({
           field(payload, "lifetimeHours")
         )
     ),
+    // Names the fingerprint the person saw, so a key that changed again since is never pinned.
+    trustHostKey: op(
+      CLOUD_HOSTS_METHOD_CHANNELS.trustHostKey,
+      async (payload: { hostId: string; fingerprint: string }): Promise<void> =>
+        requireRemoteService("cloudHosts").trustHostKey(
+          field(payload, "hostId"),
+          field(payload, "fingerprint")
+        )
+    ),
   },
 });
 

@@ -70,6 +70,38 @@ export function normalizeHostKey(value: string | null | undefined): string | nul
   return `${match[1]} ${match[2]}`;
 }
 
+/** Strongest first: the key a first connect offers when the machine has several. */
+const KEY_TYPE_PREFERENCE = ["ssh-ed25519", "ecdsa-sha2-nistp", "ssh-rsa", "rsa-sha2-"];
+
+/**
+ * The server keys in what ssh-keyscan printed (`host type base64` per line,
+ * `#` comments), normalised, deduplicated and strongest first.
+ */
+export function parseKeyscanOutput(output: string): string[] {
+  const keys = new Set<string>();
+  for (const line of output.split(/\r?\n/)) {
+    const text = line.trim();
+    if (text.length === 0 || text.startsWith("#")) continue;
+    const parts = text.split(/\s+/);
+    const key = normalizeHostKey(parts.slice(1, 3).join(" "));
+    if (key) keys.add(key);
+  }
+  const rank = (key: string) => {
+    const index = KEY_TYPE_PREFERENCE.findIndex((prefix) => key.startsWith(prefix));
+    return index < 0 ? KEY_TYPE_PREFERENCE.length : index;
+  };
+  return [...keys].sort((a, b) => rank(a) - rank(b));
+}
+
+/** The key's algorithm as ssh-keygen -l names it: ED25519, ECDSA, RSA. */
+export function hostKeyTypeLabel(normalizedKey: string): string {
+  const type = normalizedKey.split(" ")[0] ?? "";
+  if (type === "ssh-ed25519") return "ED25519";
+  if (type.startsWith("ecdsa-")) return "ECDSA";
+  if (type === "ssh-rsa" || type.startsWith("rsa-")) return "RSA";
+  return type;
+}
+
 /** `SHA256:…` as ssh-keygen -l prints it. */
 export function hostKeyFingerprint(normalizedKey: string): string {
   const blob = Buffer.from(normalizedKey.split(" ")[1] ?? "", "base64");

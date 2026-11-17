@@ -12,6 +12,7 @@ import {
   type CloudHostError,
   type CloudHostErrorCode,
   type CloudHostImportRequest,
+  type CloudHostKeyReview,
   type CloudHostStatus,
   type CloudMachineState,
   type CloudOperation,
@@ -36,8 +37,18 @@ import {
   type StoredCloudObservation,
 } from "./CloudHostStore.js";
 import type { CloudSshFiles, CloudSshRoute } from "./CloudSshFiles.js";
-import { hostKeyFingerprint, formatSshEndpoint } from "./sshEndpoint.js";
-import type { CloudProvider, ProviderCredentials, ProviderResource } from "./provider.js";
+import {
+  formatSshEndpoint,
+  hostKeyFingerprint,
+  hostKeyTypeLabel,
+  type SshEndpoint,
+} from "./sshEndpoint.js";
+import type {
+  CloudProvider,
+  ProviderCredentials,
+  ProviderResource,
+  ProviderSshAccess,
+} from "./provider.js";
 
 /** How often a machine is asked about while Daintree changes it. */
 const TRANSITION_POLL_MS = 3_000;
@@ -58,6 +69,26 @@ const KEEPER_INTERVAL_MS = 60_000;
 /** The provider's own name, for messages: this layer never assumes which provider it is. */
 function nameOf(provider: CloudProvider): string {
   return provider.info(process.platform).name;
+}
+
+/** The provider can't vouch for a machine's host key, so the person confirms it. */
+function confirmsHostKeys(provider: CloudProvider): boolean {
+  return provider.info(process.platform).capabilities.sshTrust === "confirm-on-first-connect";
+}
+
+/** A presented key nobody has confirmed, as the person reviews it. */
+function hostKeyReviewOf(binding: StoredCloudBinding): CloudHostKeyReview | null {
+  const offered = binding.offeredHostKey;
+  if (!offered) return null;
+  const trusted = binding.trustedHostKey;
+  return {
+    reason: trusted ? "changed" : "first-connect",
+    fingerprint: hostKeyFingerprint(offered.key),
+    keyType: hostKeyTypeLabel(offered.key),
+    seenAt: offered.at,
+    previousFingerprint: trusted ? hostKeyFingerprint(trusted.key) : null,
+    previousTrustedAt: trusted?.at ?? null,
+  };
 }
 /**
  * What a failed read records (see inspectInto), which the next good answer
@@ -321,6 +352,8 @@ export class CloudHostLifecycle {
         const observation = binding.observation;
         const operation = this.operations.get(binding.id);
         const machineType = observation?.machineType ?? binding.creation?.machineType ?? null;
+        // A key the person trusted stays the machine's identity between the dials that pin it.
+        const pinnedKey = binding.access?.hostKey ?? binding.trustedHostKey?.key ?? null;
         return {
           hostId: binding.hostId,
           providerId: binding.providerId,
@@ -368,7 +401,8 @@ export class CloudHostLifecycle {
           lastEndpoint: binding.access
             ? `${binding.access.user}@${formatSshEndpoint({ host: binding.access.host, port: binding.access.port })}`
             : null,
-          hostKeyFingerprint: binding.access ? hostKeyFingerprint(binding.access.hostKey) : null,
+          hostKeyFingerprint: pinnedKey ? hostKeyFingerprint(pinnedKey) : null,
+          hostKeyReview: hostKeyReviewOf(binding),
           keptRunningAt: this.renewals.get(binding.id)?.ok
             ? this.renewals.get(binding.id)!.at
             : null,
@@ -456,6 +490,8 @@ export class CloudHostLifecycle {
       intent: "run",
       observation: null,
       access: null,
+      trustedHostKey: null,
+      offeredHostKey: null,
       lastError: null,
       createdAt: this.now(),
     };
@@ -695,6 +731,8 @@ export class CloudHostLifecycle {
       intent: null,
       observation: null,
       access: null,
+      trustedHostKey: null,
+      offeredHostKey: null,
       lastError: null,
       createdAt: this.now(),
     };
@@ -1081,15 +1119,22 @@ export class CloudHostLifecycle {
             : "The cloud machine isn't running.";
       throw new UnusableConnectionError(said, said);
     }
+    const confirmed = confirmsHostKeys(provider);
+    if (confirmed && provider.info(process.platform).capabilities.transport !== "direct") {
+      const said = `Daintree can't reach ${nameOf(provider)} machines through the provider's own connection yet.`;
+      throw new UnusableConnectionError(said, said);
+    }
     const access = binding.access;
     if (
       access &&
       this.now() - access.obtainedAt < ACCESS_TTL_MS &&
+      // A key confirmed by the person is pinned only while it is still the trusted one.
+      (!confirmed || access.hostKey === binding.trustedHostKey?.key) &&
       (await this.deps.files.exists(bindingId))
     ) {
       return this.deps.files.route(bindingId);
     }
-    let resolved;
+    let resolved: ProviderSshAccess;
     try {
       const publicKey = await this.deps.files.publicKey(binding.accountId);
       resolved = await provider.authorizeSsh(credentials, binding.resourceId!, publicKey);
@@ -1105,26 +1150,142 @@ export class CloudHostLifecycle {
       this.recordError(bindingId, { ...described, code: "ssh-authorization", message: said });
       throw new UnusableConnectionError(said, said);
     }
+    let hostKey: string;
+    if (confirmed) {
+      // Whatever the API said about the key, only the person's confirmation vouches for it.
+      hostKey = await this.confirmedHostKey(bindingId, resolved.endpoint);
+    } else if (resolved.hostKey) {
+      hostKey = resolved.hostKey;
+    } else {
+      const said = `SSH access couldn't be set up: ${nameOf(provider)} didn't say which host key the machine has.`;
+      this.recordError(bindingId, { code: "ssh-authorization", message: said, at: this.now() });
+      throw new UnusableConnectionError(said, said);
+    }
+    const pinned = { user: resolved.user, endpoint: resolved.endpoint, hostKey };
     // A master opened to the old address or key must not carry a dial to the new
     // one; the same route written again leaves a live link's master alone.
-    const generation = `${resolved.endpoint.host}:${resolved.endpoint.port}:${resolved.hostKey}`;
+    const generation = `${pinned.endpoint.host}:${pinned.endpoint.port}:${pinned.hostKey}`;
     const written = this.writtenRoutes.get(bindingId);
     if (written === undefined || written !== generation) {
       await this.deps.files.closeMaster(this.deps.clientDir, bindingId);
     }
-    const route = await this.deps.files.write(bindingId, binding.accountId, resolved);
+    const route = await this.deps.files.write(bindingId, binding.accountId, pinned);
     this.writtenRoutes.set(bindingId, generation);
     this.deps.store.updateBinding(bindingId, (current) => ({
       ...current,
       access: {
-        user: resolved.user,
-        host: resolved.endpoint.host,
-        port: resolved.endpoint.port,
-        hostKey: resolved.hostKey,
+        user: pinned.user,
+        host: pinned.endpoint.host,
+        port: pinned.endpoint.port,
+        hostKey: pinned.hostKey,
         obtainedAt: this.now(),
       },
     }));
     return route;
+  }
+
+  /**
+   * The key to pin for a provider that can't vouch for one: the person's
+   * trusted key, as long as the machine still presents it. A first key, or
+   * one unlike the trusted key, is kept for the person to review and the dial
+   * is refused; nothing here ever trusts a key by itself.
+   */
+  private async confirmedHostKey(bindingId: string, endpoint: SshEndpoint): Promise<string> {
+    let scanned: string[];
+    try {
+      scanned = await this.deps.files.scanHostKeys(endpoint);
+    } catch (error) {
+      const said = `Daintree couldn't read the machine's host key: ${error instanceof Error ? error.message : String(error)}`;
+      throw new UnusableConnectionError(said, said);
+    }
+    // Read after the scan: the person may have trusted a key while it ran.
+    const binding = this.deps.store.binding(bindingId);
+    if (!binding) {
+      throw new UnusableConnectionError("This cloud host isn't set up on this device", null);
+    }
+    const trusted = binding.trustedHostKey?.key ?? null;
+    if (trusted && scanned.includes(trusted)) {
+      if (binding.offeredHostKey) {
+        this.deps.store.updateBinding(bindingId, (current) => ({
+          ...current,
+          offeredHostKey: null,
+        }));
+      }
+      return trusted;
+    }
+    const candidate = scanned[0];
+    if (!candidate) {
+      // Most often an sshd still coming up: the link tries again.
+      throw new TransportError(
+        "The cloud machine didn't present a host key",
+        "The machine's SSH server didn't answer with a host key."
+      );
+    }
+    const type = candidate.split(" ")[0];
+    if (scanned.some((key) => key !== candidate && key.split(" ")[0] === type)) {
+      const said =
+        "The machine presented two different host keys of the same kind, so Daintree can't tell which is its own.";
+      throw new UnusableConnectionError(said, said);
+    }
+    this.deps.store.updateBinding(bindingId, (current) => ({
+      ...current,
+      access: null,
+      offeredHostKey:
+        current.offeredHostKey?.key === candidate
+          ? current.offeredHostKey
+          : { key: candidate, at: this.now() },
+    }));
+    const said = trusted
+      ? "This machine's identity changed: its host key isn't the one you trusted. Review the new key in the host's details before connecting."
+      : "Confirm this machine's host key in the host's details to connect.";
+    throw new UnusableConnectionError(said, said);
+  }
+
+  /**
+   * After ssh refused the machine's key on a dial: the key changed since it
+   * was last looked at. It is looked at again, so the refusal names the
+   * change and offers the new key for review; when the machine still presents
+   * the trusted key, ssh's own refusal stands.
+   */
+  async recheckHostKey(bindingId: string, signal?: AbortSignal): Promise<void> {
+    const binding = this.deps.store.binding(bindingId);
+    if (!binding) return;
+    if (this.deps.accounts.providerUnavailable(binding.providerId) !== null) return;
+    if (!confirmsHostKeys(this.deps.accounts.provider(binding.providerId))) return;
+    this.deps.store.updateBinding(bindingId, (current) => ({ ...current, access: null }));
+    await this.ensureAccess(bindingId, signal);
+  }
+
+  /**
+   * The person trusts the key a machine presented, by the fingerprint they
+   * were shown: a key that changed again since then is refused, never pinned
+   * unseen. The next dial pins it, on a fresh ssh master.
+   */
+  async trustHostKey(hostId: unknown, fingerprint: unknown): Promise<void> {
+    const binding = this.requireBindingForHost(hostId);
+    const provider = this.deps.accounts.provider(binding.providerId);
+    if (!confirmsHostKeys(provider)) {
+      throw invalid(
+        `${nameOf(provider)} vouches for its machines' host keys; there's none to confirm.`
+      );
+    }
+    const offered = binding.offeredHostKey;
+    if (!offered) throw invalid("There's no new host key to trust. Connect again to look at it.");
+    if (typeof fingerprint !== "string" || hostKeyFingerprint(offered.key) !== fingerprint) {
+      throw invalid(
+        "The machine's host key changed again since it was shown. Review the key it presents now."
+      );
+    }
+    this.deps.store.updateBinding(binding.id, (current) =>
+      current.offeredHostKey?.key === offered.key
+        ? {
+            ...current,
+            trustedHostKey: { key: offered.key, at: this.now() },
+            offeredHostKey: null,
+            access: null,
+          }
+        : current
+    );
   }
 
   /** A stable key for one resolution of access: a new one means a new transport. */
