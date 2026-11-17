@@ -1431,7 +1431,9 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     });
 
     // The owner computer signs it, and the relay commits it.
-    await expect(ownerAnswerPath(owner, relay).answerForPerson(answer, "host_owner_mac")).resolves.toEqual({
+    await expect(
+      ownerAnswerPath(owner, relay).answerForPerson(answer, "host_owner_mac")
+    ).resolves.toEqual({
       result: "submitted",
       answerId: answer.answerId,
       outcome: { status: "sent" },

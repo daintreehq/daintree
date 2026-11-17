@@ -195,9 +195,7 @@ export class QuestionBridge extends DecisionsBridge {
    * `answerForPerson`, from Daintree's view (#17101).
    */
   override answerQuestion(_input: AnswerQuestionInput): Promise<OwnerAnswerResult> {
-    return Promise.reject(
-      new BridgeError("forbidden", "an agent can't answer for the person")
-    );
+    return Promise.reject(new BridgeError("forbidden", "an agent can't answer for the person"));
   }
 
   override getAnswerResult(_answerId: string): Promise<OwnerAnswerResult | null> {

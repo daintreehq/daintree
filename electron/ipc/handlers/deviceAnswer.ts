@@ -351,7 +351,10 @@ const answerQuestionSchema = z
     answerId: answerIdSchema,
     expectedRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
     selectedOptionIds: z.array(z.string().min(1).max(64)).max(12),
-    text: z.string().max(16 * 1024).optional(),
+    text: z
+      .string()
+      .max(16 * 1024)
+      .optional(),
     explicitApproval: z.boolean().optional(),
     reason: z.string().max(2_000).optional(),
     reviewedAttachmentDigests: z.array(z.string().regex(/^[0-9a-f]{64}$/)).max(8),

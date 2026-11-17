@@ -990,7 +990,10 @@ describe("QuestionBridge", () => {
       live = liveBridge();
 
       await expect(
-        b.answerForPerson(payload(asked.questionId, { text: "For now.", explicitApproval: true }), HOST)
+        b.answerForPerson(
+          payload(asked.questionId, { text: "For now.", explicitApproval: true }),
+          HOST
+        )
       ).resolves.toEqual({
         result: "submitted",
         answerId: "answer_live_0001",

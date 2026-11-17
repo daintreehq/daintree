@@ -1394,7 +1394,6 @@ describe("decisions IPC", () => {
   });
 
   describe("the person's answer (#17101)", () => {
-
     it("passes the answer to Decisions once on, and hands back what it says", async () => {
       saved.value = { enabled: true };
       const refused: DecisionQuestionAnswerResult = { result: "refused", reason: "not-owner" };
