@@ -85,7 +85,8 @@ export function parseXml(source: string): XmlNode {
       i = end + 3;
       continue;
     }
-    if (source.startsWith("<!", lt)) throw new XmlParseError("Document type declarations aren't read");
+    if (source.startsWith("<!", lt))
+      throw new XmlParseError("Document type declarations aren't read");
     const gt = source.indexOf(">", lt + 1);
     if (gt === -1) throw new XmlParseError("Unterminated tag");
     const inner = source.slice(lt + 1, gt);

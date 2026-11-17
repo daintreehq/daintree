@@ -62,8 +62,12 @@ function captureLogs(app: ElectronApplication, sink: string[]): void {
   app.on("window", tap);
   try {
     const proc = app.process();
-    proc.stdout?.on("data", (chunk: Buffer) => sink.push(`[main:out] ${chunk.toString().trimEnd()}`));
-    proc.stderr?.on("data", (chunk: Buffer) => sink.push(`[main:err] ${chunk.toString().trimEnd()}`));
+    proc.stdout?.on("data", (chunk: Buffer) =>
+      sink.push(`[main:out] ${chunk.toString().trimEnd()}`)
+    );
+    proc.stderr?.on("data", (chunk: Buffer) =>
+      sink.push(`[main:err] ${chunk.toString().trimEnd()}`)
+    );
   } catch {
     // Already gone.
   }
@@ -75,7 +79,9 @@ async function shoot(page: Page, name: string): Promise<void> {
   await page
     .evaluate(() =>
       Promise.race([
-        Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => {}))),
+        Promise.all(
+          document.getAnimations().map((animation) => animation.finished.catch(() => {}))
+        ),
         new Promise((resolve) => setTimeout(resolve, 2_000)),
       ])
     )
@@ -148,7 +154,8 @@ test.describe.serial("Cloud hosts: an AWS EC2 instance as a Remote Host", () => 
     );
     test.setTimeout(300_000);
     run.root = await makeShortTempRoot("dsa-");
-    run.shotDir = process.env.DAINTREE_SHOT_DIR ?? path.resolve(process.cwd(), ".tmp/cloud-aws-shots");
+    run.shotDir =
+      process.env.DAINTREE_SHOT_DIR ?? path.resolve(process.cwd(), ".tmp/cloud-aws-shots");
     await fs.mkdir(run.shotDir, { recursive: true });
     run.sshd = await startPrivateSshd(run.root);
     run.ec2 = await startFakeEc2({ sshdRoot: run.root });
@@ -174,9 +181,13 @@ test.describe.serial("Cloud hosts: an AWS EC2 instance as a Remote Host", () => 
       window.electron.hostMode.setEnabled({ enabled: true, startAtLogin: false })
     );
     await expect
-      .poll(async () => (await run.a.window.evaluate(() => window.electron.hostMode.getStatus())).listening, {
-        timeout: 30_000,
-      })
+      .poll(
+        async () =>
+          (await run.a.window.evaluate(() => window.electron.hostMode.getStatus())).listening,
+        {
+          timeout: 30_000,
+        }
+      )
       .toBe(true);
 
     run.b = await launchApp({
@@ -247,7 +258,9 @@ test.describe.serial("Cloud hosts: an AWS EC2 instance as a Remote Host", () => 
 
     run.ec2.denied.clear();
     await dialog.getByRole("button", { name: "Check credentials" }).click();
-    await expect(dialog.getByRole("radio", { name: `AWS account ${FAKE_AWS_ACCOUNT}` })).toBeChecked();
+    await expect(
+      dialog.getByRole("radio", { name: `AWS account ${FAKE_AWS_ACCOUNT}` })
+    ).toBeChecked();
     await shoot(page, "connect-aws-checked");
     await dialog.getByRole("button", { name: "Connect account" }).click();
     await expect(dialog).toBeHidden();
@@ -255,7 +268,9 @@ test.describe.serial("Cloud hosts: an AWS EC2 instance as a Remote Host", () => 
     await expect(section).toContainText(`ending ${FAKE_AWS_ACCESS_KEY_ID.slice(-4)}`);
     await shoot(page, "settings-aws-account-connected");
 
-    const snapshot = JSON.stringify(await page.evaluate(() => window.electron.cloudHosts.getSnapshot()));
+    const snapshot = JSON.stringify(
+      await page.evaluate(() => window.electron.cloudHosts.getSnapshot())
+    );
     expect(snapshot).not.toContain(FAKE_AWS_SECRET);
     const config = await fs.readFile(path.join(run.shellUserData, "config.json"), "utf8");
     expect(config).not.toContain(FAKE_AWS_SECRET);
@@ -342,7 +357,9 @@ test.describe.serial("Cloud hosts: an AWS EC2 instance as a Remote Host", () => 
     await expect(confirm).toContainText("The disk is still billed for storage while it's stopped.");
     await shoot(page, "aws-stop-confirm");
     await confirm.getByRole("button", { name: "Stop machine" }).click();
-    await expect.poll(async () => (await cloudHost(page))?.machine, { timeout: 60_000 }).toBe("stopped");
+    await expect
+      .poll(async () => (await cloudHost(page))?.machine, { timeout: 60_000 })
+      .toBe("stopped");
     expect(await linkStatus(page)).not.toBe("connected");
     const stops = run.ec2.calls("StopInstances");
     expect(stops).toHaveLength(1);

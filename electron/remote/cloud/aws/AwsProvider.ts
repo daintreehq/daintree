@@ -115,7 +115,9 @@ export function awsCredentials(values: Readonly<CloudCredentialValues>): {
 }
 
 /** `us-east-2/i-0123…`, split; null for anything else. */
-export function parseEc2ResourceId(resourceId: string): { region: string; instanceId: string } | null {
+export function parseEc2ResourceId(
+  resourceId: string
+): { region: string; instanceId: string } | null {
   const match = RESOURCE_ID.exec(resourceId);
   if (!match || !isEc2InstanceId(match[2])) return null;
   return { region: match[1]!, instanceId: match[2]! };
@@ -163,7 +165,8 @@ export function ec2Resource(region: string, instance: Ec2Instance): ProviderReso
     labels: instance.tags,
     restricted: false,
     // A stop someone asked for isn't a failure; anything else that stopped it is AWS's word on why.
-    error: reason && machine !== "running" && !/^Client\.UserInitiated/.test(reason) ? reason : null,
+    error:
+      reason && machine !== "running" && !/^Client\.UserInitiated/.test(reason) ? reason : null,
   };
 }
 
@@ -176,7 +179,11 @@ export function ec2UserData(publicKey: string): string {
   return `#cloud-config\nssh_authorized_keys:\n  - ${JSON.stringify(publicKey)}\n`;
 }
 
-async function inBatches<T, R>(items: readonly T[], size: number, run: (item: T) => Promise<R>): Promise<R[]> {
+async function inBatches<T, R>(
+  items: readonly T[],
+  size: number,
+  run: (item: T) => Promise<R>
+): Promise<R[]> {
   const out: R[] = [];
   for (let i = 0; i < items.length; i += size) {
     out.push(...(await Promise.all(items.slice(i, i + size).map(run))));
@@ -357,14 +364,19 @@ export class AwsProvider implements CloudProvider {
       try {
         return await read();
       } catch (error) {
-        if (error instanceof AwsApiError && (error.kind === "unauthorized" || error.kind === "cancelled")) {
+        if (
+          error instanceof AwsApiError &&
+          (error.kind === "unauthorized" || error.kind === "cancelled")
+        ) {
           throw error;
         }
         return null;
       }
     };
     const [vpcId, image, instance] = await Promise.all([
-      verdicts.get("DescribeVpcs") === "allowed" ? optional(() => this.client.defaultVpcId(ctx)) : null,
+      verdicts.get("DescribeVpcs") === "allowed"
+        ? optional(() => this.client.defaultVpcId(ctx))
+        : null,
       verdicts.get("DescribeImages") === "allowed"
         ? optional(() => this.resolveImage(ctx, DEFAULT_EC2_IMAGE, "x86_64"))
         : null,
@@ -515,7 +527,10 @@ export class AwsProvider implements CloudProvider {
     if (options.label) {
       const eq = options.label.indexOf("=");
       if (eq <= 0) throw new AwsApiError("invalid-request", "Not a label filter", null, null, null);
-      filters.push({ name: `tag:${options.label.slice(0, eq)}`, values: [options.label.slice(eq + 1)] });
+      filters.push({
+        name: `tag:${options.label.slice(0, eq)}`,
+        values: [options.label.slice(eq + 1)],
+      });
     }
     const regions = await this.client.describeRegions(home);
     const found = await inBatches(regions, REGION_CONCURRENCY, async (region) => {
@@ -534,11 +549,21 @@ export class AwsProvider implements CloudProvider {
       try {
         const [instance] = await this.client.describeInstances(ctx, { instanceIds: [instanceId] });
         if (!instance) {
-          throw new AwsApiError("not-found", "No such instance", null, "InvalidInstanceID.NotFound", null);
+          throw new AwsApiError(
+            "not-found",
+            "No such instance",
+            null,
+            "InvalidInstanceID.NotFound",
+            null
+          );
         }
         return ec2Resource(region, instance);
       } catch (error) {
-        if (!(error instanceof AwsApiError) || error.kind !== "not-found" || attempt >= NOT_FOUND_RETRIES.length) {
+        if (
+          !(error instanceof AwsApiError) ||
+          error.kind !== "not-found" ||
+          attempt >= NOT_FOUND_RETRIES.length
+        ) {
           throw error;
         }
         await this.sleep(NOT_FOUND_RETRIES[attempt]!, ctx.signal);
@@ -546,7 +571,10 @@ export class AwsProvider implements CloudProvider {
     }
   }
 
-  async create(credentials: ProviderCredentials, request: ProviderCreateRequest): Promise<ProviderResource> {
+  async create(
+    credentials: ProviderCredentials,
+    request: ProviderCreateRequest
+  ): Promise<ProviderResource> {
     const region = request.provisioning.location;
     if (!isAwsRegion(region)) throw invalid("Choose a region for the machine.");
     const imageSpec = ec2Image(request.provisioning.image);
@@ -560,7 +588,8 @@ export class AwsProvider implements CloudProvider {
     const [existing] = await this.client.describeInstances(ctx, {
       filters: [{ name: "client-token", values: [request.idempotencyKey] }],
     });
-    if (existing && ec2MachineState(existing.state) !== "deleted") return ec2Resource(region, existing);
+    if (existing && ec2MachineState(existing.state) !== "deleted")
+      return ec2Resource(region, existing);
     const image = await this.resolveImage(ctx, imageSpec.id, type.architecture);
     const securityGroupId = await this.ensureSecurityGroup(ctx);
     try {
@@ -578,7 +607,8 @@ export class AwsProvider implements CloudProvider {
     } catch (error) {
       // The token already launched an instance with other parameters (a newer image since the
       // first send) that the lookup above didn't see yet: it is the one this create made.
-      if (!(error instanceof AwsApiError) || error.code !== "IdempotentParameterMismatch") throw error;
+      if (!(error instanceof AwsApiError) || error.code !== "IdempotentParameterMismatch")
+        throw error;
       for (const wait of [0, ...NOT_FOUND_RETRIES]) {
         if (wait > 0) await this.sleep(wait, ctx.signal);
         const [launched] = await this.client.describeInstances(ctx, {
@@ -597,7 +627,11 @@ export class AwsProvider implements CloudProvider {
   }
 
   /** The newest of Canonical's images for the release and architecture in this region. */
-  private async resolveImage(ctx: AwsRequestContext, imageId: string, architecture: Ec2Architecture) {
+  private async resolveImage(
+    ctx: AwsRequestContext,
+    imageId: string,
+    architecture: Ec2Architecture
+  ) {
     const spec = ec2Image(imageId);
     if (!spec) throw invalid("Choose an image for the machine.");
     const images = await this.client.describeImages(ctx, {
@@ -655,7 +689,12 @@ export class AwsProvider implements CloudProvider {
           vpcId,
           tags: { [DAINTREE_TAG]: "1" },
         });
-        group = { groupId, groupName: EC2_SECURITY_GROUP_NAME, vpcId, allowsSshFromAnywhere: false };
+        group = {
+          groupId,
+          groupName: EC2_SECURITY_GROUP_NAME,
+          vpcId,
+          allowsSshFromAnywhere: false,
+        };
       } catch (error) {
         // Another device made it first.
         if (!(error instanceof AwsApiError) || error.code !== "InvalidGroup.Duplicate") throw error;
@@ -677,7 +716,10 @@ export class AwsProvider implements CloudProvider {
     return this.afterTransition(credentials, resourceId, state);
   }
 
-  async stop(credentials: ProviderCredentials, resourceId: string): Promise<ProviderResource | null> {
+  async stop(
+    credentials: ProviderCredentials,
+    resourceId: string
+  ): Promise<ProviderResource | null> {
     const { region, instanceId } = requireResourceId(resourceId);
     const state = await this.client.stopInstance(this.ctx(credentials, region), instanceId);
     return this.afterTransition(credentials, resourceId, state);
@@ -713,11 +755,21 @@ export class AwsProvider implements CloudProvider {
     await this.client.terminateInstance(this.ctx(credentials, region), instanceId);
   }
 
-  async sshAccess(credentials: ProviderCredentials, resourceId: string): Promise<ProviderSshAccess> {
+  async sshAccess(
+    credentials: ProviderCredentials,
+    resourceId: string
+  ): Promise<ProviderSshAccess> {
     const { region, instanceId } = requireResourceId(resourceId);
     const ctx = this.ctx(credentials, region);
     const [instance] = await this.client.describeInstances(ctx, { instanceIds: [instanceId] });
-    if (!instance) throw new AwsApiError("not-found", "No such instance", null, "InvalidInstanceID.NotFound", null);
+    if (!instance)
+      throw new AwsApiError(
+        "not-found",
+        "No such instance",
+        null,
+        "InvalidInstanceID.NotFound",
+        null
+      );
     const endpoint = parseSshEndpoint(instance.publicIp ?? instance.publicDnsName ?? null);
     if (!endpoint) {
       throw new AwsApiError(
@@ -737,7 +789,10 @@ export class AwsProvider implements CloudProvider {
    * boot it may still be on its way, so it is waited for, briefly; any
    * failure to read the console leaves the person to confirm the key.
    */
-  private async consoleHostKey(ctx: AwsRequestContext, instance: Ec2Instance): Promise<string | null> {
+  private async consoleHostKey(
+    ctx: AwsRequestContext,
+    instance: Ec2Instance
+  ): Promise<string | null> {
     const startedAt = this.now();
     const createdAt = instance.createdAt ? Date.parse(instance.createdAt) : NaN;
     const fresh = Number.isFinite(createdAt) && startedAt - createdAt < CONSOLE_KEYS_WINDOW_MS;
@@ -788,7 +843,8 @@ export class AwsProvider implements CloudProvider {
           at,
         };
       case "forbidden":
-        if (error.code === "AccountMismatch") return { code: "permission", message: `${said}.`, at };
+        if (error.code === "AccountMismatch")
+          return { code: "permission", message: `${said}.`, at };
         return {
           code: "permission",
           message: error.action
@@ -797,16 +853,26 @@ export class AwsProvider implements CloudProvider {
           at,
         };
       case "billing":
-        return { code: "billing", message: `AWS needs something from the account first: ${said}`, at };
+        return {
+          code: "billing",
+          message: `AWS needs something from the account first: ${said}`,
+          at,
+        };
       case "rate-limited":
-        return { code: "rate-limited", message: "AWS is limiting requests from this account. Try again shortly.", at };
+        return {
+          code: "rate-limited",
+          message: "AWS is limiting requests from this account. Try again shortly.",
+          at,
+        };
       case "capacity":
         return { code: "capacity", message: `AWS can't run this machine right now: ${said}`, at };
       case "not-found":
         return {
           code: "not-found",
           message:
-            error.code === "InvalidAMIID.NotFound" ? `${said}.` : "AWS doesn't know this machine in this account.",
+            error.code === "InvalidAMIID.NotFound"
+              ? `${said}.`
+              : "AWS doesn't know this machine in this account.",
           at,
         };
       case "network":

@@ -106,7 +106,10 @@ export async function startFakeEc2(params: { sshdRoot: string }): Promise<FakeEc
   <rootDeviceName>/dev/sda1</rootDeviceName>
   <blockDeviceMapping><item><deviceName>/dev/sda1</deviceName><ebs><volumeId>vol-0e2e</volumeId><status>attached</status><attachTime>${launched}</attachTime><deleteOnTermination>true</deleteOnTermination></ebs></item></blockDeviceMapping>
   <tagSet>${Object.entries(instance.tags)
-    .map(([key, value]) => `<item><key>${xmlEscape(key)}</key><value>${xmlEscape(value)}</value></item>`)
+    .map(
+      ([key, value]) =>
+        `<item><key>${xmlEscape(key)}</key><value>${xmlEscape(value)}</value></item>`
+    )
     .join("")}</tagSet>
 </item>`;
   };
@@ -115,7 +118,8 @@ export async function startFakeEc2(params: { sshdRoot: string }): Promise<FakeEc
     const out: Array<{ name: string; values: string[] }> = [];
     for (let i = 1; p[`Filter.${i}.Name`] !== undefined; i++) {
       const values: string[] = [];
-      for (let j = 1; p[`Filter.${i}.Value.${j}`] !== undefined; j++) values.push(p[`Filter.${i}.Value.${j}`]!);
+      for (let j = 1; p[`Filter.${i}.Value.${j}`] !== undefined; j++)
+        values.push(p[`Filter.${i}.Value.${j}`]!);
       out.push({ name: p[`Filter.${i}.Name`]!, values });
     }
     return out;
@@ -131,7 +135,9 @@ export async function startFakeEc2(params: { sshdRoot: string }): Promise<FakeEc
 
   /** Cloud-init's `ssh_authorized_keys`, as the launch's user data lists them. */
   const authorizeFromUserData = async (userData: string) => {
-    const keys = [...userData.matchAll(/^\s*-\s*"(.+)"\s*$/gm)].map((m) => JSON.parse(`"${m[1]}"`) as string);
+    const keys = [...userData.matchAll(/^\s*-\s*"(.+)"\s*$/gm)].map(
+      (m) => JSON.parse(`"${m[1]}"`) as string
+    );
     const current = await fs.readFile(authorizedKeys, "utf8").catch(() => "");
     for (const key of keys) {
       if (!current.includes(key)) await fs.appendFile(authorizedKeys, `${key}\n`);
@@ -201,15 +207,22 @@ export async function startFakeEc2(params: { sshdRoot: string }): Promise<FakeEc
             if (p["InstanceId.1"] !== undefined) {
               found = here.filter((instance) => instance.id === p["InstanceId.1"]);
               if (found.length === 0) {
-                fail(400, "InvalidInstanceID.NotFound", `The instance ID '${p["InstanceId.1"]}' does not exist`);
+                fail(
+                  400,
+                  "InvalidInstanceID.NotFound",
+                  `The instance ID '${p["InstanceId.1"]}' does not exist`
+                );
                 return;
               }
             }
             for (const filter of filtersOf(p)) {
               found = found.filter((instance) => {
-                if (filter.name === "instance-state-name") return filter.values.includes(instance.state);
-                if (filter.name === "client-token") return filter.values.includes(instance.clientToken);
-                if (filter.name === "tag-key") return filter.values.some((key) => key in instance.tags);
+                if (filter.name === "instance-state-name")
+                  return filter.values.includes(instance.state);
+                if (filter.name === "client-token")
+                  return filter.values.includes(instance.clientToken);
+                if (filter.name === "tag-key")
+                  return filter.values.some((key) => key in instance.tags);
                 if (filter.name.startsWith("tag:")) {
                   return filter.values.includes(instance.tags[filter.name.slice(4)] ?? "");
                 }
@@ -229,14 +242,22 @@ export async function startFakeEc2(params: { sshdRoot: string }): Promise<FakeEc
             );
             return;
           case "DescribeVpcs":
-            send(200, `<DescribeVpcsResponse><vpcSet><item><vpcId>vpc-${region}</vpcId><isDefault>true</isDefault></item></vpcSet></DescribeVpcsResponse>`);
+            send(
+              200,
+              `<DescribeVpcsResponse><vpcSet><item><vpcId>vpc-${region}</vpcId><isDefault>true</isDefault></item></vpcSet></DescribeVpcsResponse>`
+            );
             return;
           case "DescribeSecurityGroups": {
             const filters = filtersOf(p);
             const name = filters.find((f) => f.name === "group-name")?.values[0];
             const vpc = filters.find((f) => f.name === "vpc-id")?.values[0];
-            const all = [...groups, { id: `sg-default-${region}`, name: "default", vpcId: `vpc-${region}`, ssh: false }];
-            const found = all.filter((group) => (!name || group.name === name) && (!vpc || group.vpcId === vpc));
+            const all = [
+              ...groups,
+              { id: `sg-default-${region}`, name: "default", vpcId: `vpc-${region}`, ssh: false },
+            ];
+            const found = all.filter(
+              (group) => (!name || group.name === name) && (!vpc || group.vpcId === vpc)
+            );
             send(
               200,
               `<DescribeSecurityGroupsResponse><securityGroupInfo>${found.map((group) => `<item><groupId>${group.id}</groupId><groupName>${group.name}</groupName><vpcId>${group.vpcId}</vpcId><ipPermissions>${group.ssh ? "<item><ipProtocol>tcp</ipProtocol><fromPort>22</fromPort><toPort>22</toPort><ipRanges><item><cidrIp>0.0.0.0/0</cidrIp></item></ipRanges></item>" : ""}</ipPermissions></item>`).join("")}</securityGroupInfo></DescribeSecurityGroupsResponse>`
@@ -246,7 +267,10 @@ export async function startFakeEc2(params: { sshdRoot: string }): Promise<FakeEc
           case "CreateSecurityGroup": {
             const id = `sg-0e2e${++counter}`;
             groups.push({ id, name: p.GroupName ?? "", vpcId: p.VpcId ?? "", ssh: false });
-            send(200, `<CreateSecurityGroupResponse><return>true</return><groupId>${id}</groupId></CreateSecurityGroupResponse>`);
+            send(
+              200,
+              `<CreateSecurityGroupResponse><return>true</return><groupId>${id}</groupId></CreateSecurityGroupResponse>`
+            );
             return;
           }
           case "AuthorizeSecurityGroupIngress": {
@@ -256,7 +280,10 @@ export async function startFakeEc2(params: { sshdRoot: string }): Promise<FakeEc
               return;
             }
             if (group) group.ssh = true;
-            send(200, `<AuthorizeSecurityGroupIngressResponse><return>true</return></AuthorizeSecurityGroupIngressResponse>`);
+            send(
+              200,
+              `<AuthorizeSecurityGroupIngressResponse><return>true</return></AuthorizeSecurityGroupIngressResponse>`
+            );
             return;
           }
           case "RunInstances": {
@@ -282,7 +309,10 @@ export async function startFakeEc2(params: { sshdRoot: string }): Promise<FakeEc
                 if (launched.state === "pending") launched.state = "running";
               });
             }
-            send(200, `<RunInstancesResponse><reservationId>r-0e2e</reservationId><ownerId>${FAKE_AWS_ACCOUNT}</ownerId><instancesSet>${instanceXml(instance)}</instancesSet></RunInstancesResponse>`);
+            send(
+              200,
+              `<RunInstancesResponse><reservationId>r-0e2e</reservationId><ownerId>${FAKE_AWS_ACCOUNT}</ownerId><instancesSet>${instanceXml(instance)}</instancesSet></RunInstancesResponse>`
+            );
             return;
           }
           case "StartInstances":
@@ -290,7 +320,11 @@ export async function startFakeEc2(params: { sshdRoot: string }): Promise<FakeEc
           case "TerminateInstances": {
             const instance = byId(p["InstanceId.1"]);
             if (!instance) {
-              fail(400, "InvalidInstanceID.NotFound", `The instance ID '${p["InstanceId.1"]}' does not exist`);
+              fail(
+                400,
+                "InvalidInstanceID.NotFound",
+                `The instance ID '${p["InstanceId.1"]}' does not exist`
+              );
               return;
             }
             const [moving, settled] =
@@ -300,7 +334,11 @@ export async function startFakeEc2(params: { sshdRoot: string }): Promise<FakeEc
                   ? ["stopping", "stopped"]
                   : ["shutting-down", "terminated"];
             if (action === "StartInstances" && instance.state !== "stopped") {
-              fail(400, "IncorrectInstanceState", `The instance '${instance.id}' is not in a state from which it can be started.`);
+              fail(
+                400,
+                "IncorrectInstanceState",
+                `The instance '${instance.id}' is not in a state from which it can be started.`
+              );
               return;
             }
             const previous = instance.state;
@@ -309,7 +347,10 @@ export async function startFakeEc2(params: { sshdRoot: string }): Promise<FakeEc
               if (instance.state === moving) instance.state = settled!;
             });
             const tag = `${action}Response`;
-            send(200, `<${tag}><instancesSet><item><instanceId>${instance.id}</instanceId><currentState><code>0</code><name>${instance.state}</name></currentState><previousState><code>0</code><name>${previous}</name></previousState></item></instancesSet></${tag}>`);
+            send(
+              200,
+              `<${tag}><instancesSet><item><instanceId>${instance.id}</instanceId><currentState><code>0</code><name>${instance.state}</name></currentState><previousState><code>0</code><name>${previous}</name></previousState></item></instancesSet></${tag}>`
+            );
             return;
           }
           case "CreateTags": {

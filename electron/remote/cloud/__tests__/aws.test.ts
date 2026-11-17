@@ -73,7 +73,13 @@ function fakeAws(options: FakeOptions = {}) {
   const denied = options.denied ?? new Set<string>();
   const instances: FakeInstance[] = [];
   const groups: Array<{ id: string; name: string; vpcId: string; ssh: boolean }> = [];
-  const calls: Array<{ service: string; region: string; action: string; params: URLSearchParams; headers: Headers }> = [];
+  const calls: Array<{
+    service: string;
+    region: string;
+    action: string;
+    params: URLSearchParams;
+    headers: Headers;
+  }> = [];
   let seq = 0;
   const instanceXml = (instance: FakeInstance) => `<item>
     <instanceId>${instance.id}</instanceId>
@@ -94,7 +100,8 @@ function fakeAws(options: FakeOptions = {}) {
     const out: Array<{ name: string; values: string[] }> = [];
     for (let i = 1; params.has(`Filter.${i}.Name`); i++) {
       const values: string[] = [];
-      for (let j = 1; params.has(`Filter.${i}.Value.${j}`); j++) values.push(params.get(`Filter.${i}.Value.${j}`)!);
+      for (let j = 1; params.has(`Filter.${i}.Value.${j}`); j++)
+        values.push(params.get(`Filter.${i}.Value.${j}`)!);
       out.push({ name: params.get(`Filter.${i}.Name`)!, values });
     }
     return out;
@@ -114,7 +121,11 @@ function fakeAws(options: FakeOptions = {}) {
     const headers = new Headers(init?.headers);
     calls.push({ service: service!, region: region!, action, params, headers });
     if (!headers.get("authorization")?.includes(`Credential=${VALUES.accessKeyId}/`)) {
-      return ec2Error("AuthFailure", "AWS was not able to validate the provided access credentials", 401);
+      return ec2Error(
+        "AuthFailure",
+        "AWS was not able to validate the provided access credentials",
+        401
+      );
     }
     if (service === "sts") {
       return xml(
@@ -129,15 +140,27 @@ function fakeAws(options: FakeOptions = {}) {
           403
         );
       }
-      return ec2Error("DryRunOperation", "Request would have succeeded, but DryRun flag is set.", 412);
+      return ec2Error(
+        "DryRunOperation",
+        "Request would have succeeded, but DryRun flag is set.",
+        412
+      );
     }
-    if (denied.has(action)) return ec2Error("UnauthorizedOperation", "You are not authorized to perform this operation.", 403);
+    if (denied.has(action))
+      return ec2Error(
+        "UnauthorizedOperation",
+        "You are not authorized to perform this operation.",
+        403
+      );
     const here = instances.filter((instance) => instance.region === region);
     switch (action) {
       case "DescribeRegions":
         return xml(
           `<DescribeRegionsResponse><regionInfo>${regions
-            .map((name) => `<item><regionName>${name}</regionName><regionEndpoint>ec2.${name}.amazonaws.com</regionEndpoint><optInStatus>opt-in-not-required</optInStatus></item>`)
+            .map(
+              (name) =>
+                `<item><regionName>${name}</regionName><regionEndpoint>ec2.${name}.amazonaws.com</regionEndpoint><optInStatus>opt-in-not-required</optInStatus></item>`
+            )
             .join("")}</regionInfo></DescribeRegionsResponse>`
         );
       case "DescribeInstances": {
@@ -145,25 +168,32 @@ function fakeAws(options: FakeOptions = {}) {
         if (params.has("InstanceId.1")) {
           const id = params.get("InstanceId.1")!;
           found = here.filter((instance) => instance.id === id);
-          if (found.length === 0) return ec2Error("InvalidInstanceID.NotFound", `The instance ID '${id}' does not exist`);
+          if (found.length === 0)
+            return ec2Error("InvalidInstanceID.NotFound", `The instance ID '${id}' does not exist`);
         }
         for (const filter of filtersOf(params)) {
           found = found.filter((instance) => {
-            if (filter.name === "instance-state-name") return filter.values.includes(instance.state);
+            if (filter.name === "instance-state-name")
+              return filter.values.includes(instance.state);
             if (filter.name === "client-token") return filter.values.includes(instance.clientToken);
-            if (filter.name.startsWith("tag:")) return filter.values.includes(instance.tags[filter.name.slice(4)] ?? "");
+            if (filter.name.startsWith("tag:"))
+              return filter.values.includes(instance.tags[filter.name.slice(4)] ?? "");
             if (filter.name === "tag-key") return filter.values.some((key) => key in instance.tags);
             return true;
           });
         }
         return xml(
           `<DescribeInstancesResponse><reservationSet>${found
-            .map((instance) => `<item><reservationId>r-1</reservationId><instancesSet>${instanceXml(instance)}</instancesSet></item>`)
+            .map(
+              (instance) =>
+                `<item><reservationId>r-1</reservationId><instancesSet>${instanceXml(instance)}</instancesSet></item>`
+            )
             .join("")}</reservationSet></DescribeInstancesResponse>`
         );
       }
       case "DescribeImages": {
-        const arch = filtersOf(params).find((filter) => filter.name === "architecture")?.values[0] ?? "x86_64";
+        const arch =
+          filtersOf(params).find((filter) => filter.name === "architecture")?.values[0] ?? "x86_64";
         return xml(
           `<DescribeImagesResponse><imagesSet>
             <item><imageId>ami-old-${arch}</imageId><name>ubuntu-noble-old</name><architecture>${arch}</architecture><creationDate>2026-01-01T00:00:00.000Z</creationDate><rootDeviceName>/dev/sda1</rootDeviceName></item>
@@ -179,7 +209,10 @@ function fakeAws(options: FakeOptions = {}) {
         const filters = filtersOf(params);
         const name = filters.find((filter) => filter.name === "group-name")?.values[0];
         const vpc = filters.find((filter) => filter.name === "vpc-id")?.values[0];
-        const all = [...groups, { id: `sg-default-${region}`, name: "default", vpcId: `vpc-${region}`, ssh: false }];
+        const all = [
+          ...groups,
+          { id: `sg-default-${region}`, name: "default", vpcId: `vpc-${region}`, ssh: false },
+        ];
         const found = all.filter((group) => group.name === name && group.vpcId === vpc);
         return xml(
           `<DescribeSecurityGroupsResponse><securityGroupInfo>${found
@@ -192,14 +225,24 @@ function fakeAws(options: FakeOptions = {}) {
       }
       case "CreateSecurityGroup": {
         const id = `sg-${++seq}`;
-        groups.push({ id, name: params.get("GroupName")!, vpcId: params.get("VpcId")!, ssh: false });
-        return xml(`<CreateSecurityGroupResponse><return>true</return><groupId>${id}</groupId></CreateSecurityGroupResponse>`);
+        groups.push({
+          id,
+          name: params.get("GroupName")!,
+          vpcId: params.get("VpcId")!,
+          ssh: false,
+        });
+        return xml(
+          `<CreateSecurityGroupResponse><return>true</return><groupId>${id}</groupId></CreateSecurityGroupResponse>`
+        );
       }
       case "AuthorizeSecurityGroupIngress": {
         const group = groups.find((entry) => entry.id === params.get("GroupId"));
-        if (group?.ssh) return ec2Error("InvalidPermission.Duplicate", "the specified rule already exists");
+        if (group?.ssh)
+          return ec2Error("InvalidPermission.Duplicate", "the specified rule already exists");
         if (group) group.ssh = true;
-        return xml(`<AuthorizeSecurityGroupIngressResponse><return>true</return></AuthorizeSecurityGroupIngressResponse>`);
+        return xml(
+          `<AuthorizeSecurityGroupIngressResponse><return>true</return></AuthorizeSecurityGroupIngressResponse>`
+        );
       }
       case "RunInstances": {
         const token = params.get("ClientToken")!;
@@ -219,17 +262,26 @@ function fakeAws(options: FakeOptions = {}) {
           };
           instances.push(instance);
         }
-        return xml(`<RunInstancesResponse><reservationId>r-1</reservationId><instancesSet>${instanceXml(instance)}</instancesSet></RunInstancesResponse>`);
+        return xml(
+          `<RunInstancesResponse><reservationId>r-1</reservationId><instancesSet>${instanceXml(instance)}</instancesSet></RunInstancesResponse>`
+        );
       }
       case "StartInstances":
       case "StopInstances":
       case "TerminateInstances": {
         const instance = here.find((entry) => entry.id === params.get("InstanceId.1"));
         if (!instance) return ec2Error("InvalidInstanceID.NotFound", "does not exist");
-        const next = action === "StartInstances" ? "pending" : action === "StopInstances" ? "stopping" : "shutting-down";
+        const next =
+          action === "StartInstances"
+            ? "pending"
+            : action === "StopInstances"
+              ? "stopping"
+              : "shutting-down";
         instance.state = next;
         const tag = action.replace("Instances", "InstancesResponse");
-        return xml(`<${tag}><instancesSet><item><instanceId>${instance.id}</instanceId><currentState><code>0</code><name>${next}</name></currentState></item></instancesSet></${tag}>`);
+        return xml(
+          `<${tag}><instancesSet><item><instanceId>${instance.id}</instanceId><currentState><code>0</code><name>${next}</name></currentState></item></instancesSet></${tag}>`
+        );
       }
       case "CreateTags": {
         const instance = here.find((entry) => entry.id === params.get("ResourceId.1"));
@@ -240,7 +292,10 @@ function fakeAws(options: FakeOptions = {}) {
         const instance = here.find((entry) => entry.id === params.get("InstanceId"))!;
         const latest = params.get("Latest") === "true";
         if (latest && options.nitro === false) {
-          return ec2Error("UnsupportedOperation", "This instance type does not support retrieving the latest console logs.");
+          return ec2Error(
+            "UnsupportedOperation",
+            "This instance type does not support retrieving the latest console logs."
+          );
         }
         const result = options.console?.(instance, latest) ?? null;
         if (result instanceof Response) return result;
@@ -332,7 +387,9 @@ describe("signAwsRequest", () => {
       now,
     });
     expect(headers["x-amz-security-token"]).toBe("FwoGZXIvYXdzEXAMPLETOKEN");
-    expect(headers.Authorization).toContain("SignedHeaders=content-type;host;x-amz-date;x-amz-security-token");
+    expect(headers.Authorization).toContain(
+      "SignedHeaders=content-type;host;x-amz-date;x-amz-security-token"
+    );
     expect(JSON.stringify(headers)).not.toContain(credentials.secretAccessKey);
   });
 });
@@ -370,18 +427,26 @@ describe("endpoints", () => {
   });
 
   it("honours an override only in a development build", () => {
-    expect(resolveAwsApiUrl(true, { DAINTREE_AWS_API_URL: "http://127.0.0.1:9" })).toBe(AWS_PRODUCTION_API_URL);
+    expect(resolveAwsApiUrl(true, { DAINTREE_AWS_API_URL: "http://127.0.0.1:9" })).toBe(
+      AWS_PRODUCTION_API_URL
+    );
     expect(resolveAwsApiUrl(false, { DAINTREE_AWS_API_URL: "http://127.0.0.1:9/aws/?q=1" })).toBe(
       "http://127.0.0.1:9/aws"
     );
-    expect(resolveAwsApiUrl(false, { DAINTREE_AWS_API_URL: "file:///etc" })).toBe(AWS_PRODUCTION_API_URL);
+    expect(resolveAwsApiUrl(false, { DAINTREE_AWS_API_URL: "file:///etc" })).toBe(
+      AWS_PRODUCTION_API_URL
+    );
     expect(resolveAwsApiUrl(false, {})).toBe(AWS_PRODUCTION_API_URL);
   });
 });
 
 describe("AwsClient", () => {
   const ctx = {
-    credentials: { accessKeyId: VALUES.accessKeyId, secretAccessKey: VALUES.secretAccessKey, sessionToken: null },
+    credentials: {
+      accessKeyId: VALUES.accessKeyId,
+      secretAccessKey: VALUES.secretAccessKey,
+      sessionToken: null,
+    },
     apiUrl: API,
     region: "us-east-2",
   };
@@ -403,22 +468,35 @@ describe("AwsClient", () => {
 
   it("types EC2 and STS error envelopes by code", async () => {
     const { client } = clientWith([
-      ec2Error("UnauthorizedOperation", "You are not authorized. Encoded authorization failure message: zzz", 403),
+      ec2Error(
+        "UnauthorizedOperation",
+        "You are not authorized. Encoded authorization failure message: zzz",
+        403
+      ),
       xml(
         `<ErrorResponse><Error><Type>Sender</Type><Code>InvalidClientTokenId</Code><Message>The security token included in the request is invalid.</Message></Error><RequestId>r</RequestId></ErrorResponse>`,
         403
       ),
     ]);
     const refused = await client.describeRegions(ctx).catch((error: unknown) => error);
-    expect(refused).toMatchObject({ kind: "forbidden", code: "UnauthorizedOperation", action: "DescribeRegions" });
+    expect(refused).toMatchObject({
+      kind: "forbidden",
+      code: "UnauthorizedOperation",
+      action: "DescribeRegions",
+    });
     expect((refused as Error).message).not.toContain("Encoded");
-    await expect(client.callerIdentity(ctx)).rejects.toMatchObject({ kind: "unauthorized", code: "InvalidClientTokenId" });
+    await expect(client.callerIdentity(ctx)).rejects.toMatchObject({
+      kind: "unauthorized",
+      code: "InvalidClientTokenId",
+    });
   });
 
   it("retries a throttled read and gives up on a refusal at once", async () => {
     const { client, seen } = clientWith([
       ec2Error("RequestLimitExceeded", "Request limit exceeded.", 503),
-      xml(`<DescribeRegionsResponse><regionInfo><item><regionName>us-east-2</regionName></item></regionInfo></DescribeRegionsResponse>`),
+      xml(
+        `<DescribeRegionsResponse><regionInfo><item><regionName>us-east-2</regionName></item></regionInfo></DescribeRegionsResponse>`
+      ),
     ]);
     expect(await client.describeRegions(ctx)).toEqual([{ name: "us-east-2", optInStatus: null }]);
     expect(seen).toEqual(["DescribeRegions", "DescribeRegions"]);
@@ -429,9 +507,15 @@ describe("AwsClient", () => {
       xml(
         `<DescribeInstancesResponse><reservationSet><item><instancesSet><item><instanceId>${id}</instanceId><instanceState><name>running</name></instanceState><launchTime>2026-11-18T09:00:00.000Z</launchTime><rootDeviceName>/dev/xvda</rootDeviceName><blockDeviceMapping><item><deviceName>/dev/sdf</deviceName><ebs><attachTime>2026-11-18T08:00:00.000Z</attachTime></ebs></item><item><deviceName>/dev/xvda</deviceName><ebs><attachTime>2026-11-01T00:00:00.000Z</attachTime></ebs></item></blockDeviceMapping></item></instancesSet></item></reservationSet>${token ? `<nextToken>${token}</nextToken>` : ""}</DescribeInstancesResponse>`
       );
-    const { client } = clientWith([page("i-0aaaaaaaaaaaaaaa1", "t2"), page("i-0aaaaaaaaaaaaaaa2", null)]);
+    const { client } = clientWith([
+      page("i-0aaaaaaaaaaaaaaa1", "t2"),
+      page("i-0aaaaaaaaaaaaaaa2", null),
+    ]);
     const found = await client.describeInstances(ctx, { filters: [] });
-    expect(found.map((instance) => instance.instanceId)).toEqual(["i-0aaaaaaaaaaaaaaa1", "i-0aaaaaaaaaaaaaaa2"]);
+    expect(found.map((instance) => instance.instanceId)).toEqual([
+      "i-0aaaaaaaaaaaaaaa1",
+      "i-0aaaaaaaaaaaaaaa2",
+    ]);
     expect(found[0]!.createdAt).toBe("2026-11-01T00:00:00.000Z");
   });
 
@@ -478,20 +562,28 @@ describe("EC2 helpers", () => {
       "-----END SSH HOST KEY KEYS-----",
     ].join("\r\n");
     expect(consoleHostKeys(output, normalizeHostKey)).toEqual([ED25519, ECDSA]);
-    expect(consoleHostKeys("-----BEGIN SSH HOST KEY KEYS-----\nssh-ed25519 AAAA", normalizeHostKey)).toEqual([]);
+    expect(
+      consoleHostKeys("-----BEGIN SSH HOST KEY KEYS-----\nssh-ed25519 AAAA", normalizeHostKey)
+    ).toEqual([]);
     expect(consoleHostKeys("booting", normalizeHostKey)).toEqual([]);
   });
 
   it("reads when a stop happened from its transition reason", () => {
-    expect(ec2TransitionTime("User initiated (2026-11-18 01:02:03 GMT)")).toBe("2026-11-18T01:02:03.000Z");
+    expect(ec2TransitionTime("User initiated (2026-11-18 01:02:03 GMT)")).toBe(
+      "2026-11-18T01:02:03.000Z"
+    );
     expect(ec2TransitionTime(null)).toBeNull();
   });
 
   it("checks the entered credentials' shape", () => {
     expect(awsCredentials({ ...VALUES, region: "US-EAST-2" }).region).toBe("us-east-2");
     expect(() => awsCredentials({ ...VALUES, region: "mars" })).toThrow(/region/);
-    expect(() => awsCredentials({ ...VALUES, accessKeyId: "ASIAIOSFODNN7EXAMPLE" })).toThrow(/session token/);
-    expect(() => awsCredentials({ ...VALUES, secretAccessKey: "short" })).toThrow(/secret access key/);
+    expect(() => awsCredentials({ ...VALUES, accessKeyId: "ASIAIOSFODNN7EXAMPLE" })).toThrow(
+      /session token/
+    );
+    expect(() => awsCredentials({ ...VALUES, secretAccessKey: "short" })).toThrow(
+      /secret access key/
+    );
   });
 
   it("puts only a one-line public key into user data", () => {
@@ -506,7 +598,9 @@ describe("EC2 helpers", () => {
     expect(awsIdentity(`arn:aws:sts::${ACCOUNT}:assumed-role/Dev/alice@example.com`)).toBe(
       `arn:aws:sts::${ACCOUNT}:assumed-role/Dev`
     );
-    expect(awsIdentity(`arn:aws:iam::${ACCOUNT}:user/dev`)).toBe(`arn:aws:iam::${ACCOUNT}:user/dev`);
+    expect(awsIdentity(`arn:aws:iam::${ACCOUNT}:user/dev`)).toBe(
+      `arn:aws:iam::${ACCOUNT}:user/dev`
+    );
   });
 
   it("names the region in a resource id", () => {
@@ -528,7 +622,12 @@ describe("AwsProvider", () => {
     expect(info.capabilities).toMatchObject({
       lifetime: { kind: "none" },
       sshTrust: "api-or-confirm",
-      provisioning: { location: "required", image: "required", network: "none", sshKey: "at-create" },
+      provisioning: {
+        location: "required",
+        image: "required",
+        network: "none",
+        sshKey: "at-create",
+      },
       persistence: { stoppedComputeBilled: false, stoppedStorageBilled: true, retentionDays: null },
       deletion: true,
     });
@@ -545,7 +644,9 @@ describe("AwsProvider", () => {
     const { provider } = setup();
     await expect(provider.checkCredentials(VALUES, API)).resolves.toEqual({
       identity: `arn:aws:iam::${ACCOUNT}:user/dev`,
-      scopes: [{ scope: { kind: "account", id: ACCOUNT, name: `AWS account ${ACCOUNT}` }, active: true }],
+      scopes: [
+        { scope: { kind: "account", id: ACCOUNT, name: `AWS account ${ACCOUNT}` }, active: true },
+      ],
     });
   });
 
@@ -577,10 +678,15 @@ describe("AwsProvider", () => {
   it("offers the enabled regions, defaulting to the credentials' own, and region-free images", async () => {
     const { provider, credentials } = setup();
     const catalog = await provider.catalog(credentials);
-    expect(catalog.provisioning?.location?.choices.map((choice) => choice.id)).toEqual(["eu-west-1", "us-east-2"]);
+    expect(catalog.provisioning?.location?.choices.map((choice) => choice.id)).toEqual([
+      "eu-west-1",
+      "us-east-2",
+    ]);
     expect(catalog.provisioning?.location?.defaultId).toBe("us-east-2");
     expect(catalog.provisioning?.image?.defaultId).toBe("ubuntu-24.04");
-    expect(catalog.provisioning?.image?.choices.every((choice) => choice.locations === null)).toBe(true);
+    expect(catalog.provisioning?.image?.choices.every((choice) => choice.locations === null)).toBe(
+      true
+    );
     expect(catalog.machineTypes.find((type) => type.id === "t4g.medium")).toMatchObject({
       vcpu: 2,
       memoryGB: 4,
@@ -591,23 +697,35 @@ describe("AwsProvider", () => {
   it("creates a tagged instance in the chosen region with the key in user data and SSH let in", async () => {
     const { provider, credentials, fake } = setup();
     const resource = await provider.create(credentials, CREATE);
-    expect(resource).toMatchObject({ name: "Build box", machine: "starting", machineType: "t3.large" });
+    expect(resource).toMatchObject({
+      name: "Build box",
+      machine: "starting",
+      machineType: "t3.large",
+    });
     expect(resource.resourceId).toMatch(/^eu-west-1\/i-0abc/);
     const run = fake.calls.find((call) => call.action === "RunInstances")!;
     expect(run.region).toBe("eu-west-1");
     expect(run.params.get("ImageId")).toBe("ami-new-x86_64");
     expect(run.params.get("ClientToken")).toBe(CREATE.idempotencyKey);
     expect(run.params.get("MetadataOptions.HttpTokens")).toBe("required");
-    expect(fake.instances[0]!.tags).toEqual({ daintree: "1", "daintree-binding": "bind-1", Name: "Build box" });
+    expect(fake.instances[0]!.tags).toEqual({
+      daintree: "1",
+      "daintree-binding": "bind-1",
+      Name: "Build box",
+    });
     expect(fake.instances[0]!.userData).toContain(JSON.stringify(CREATE.publicKey));
-    expect(fake.groups).toEqual([{ id: "sg-1", name: "daintree-ssh", vpcId: "vpc-eu-west-1", ssh: true }]);
+    expect(fake.groups).toEqual([
+      { id: "sg-1", name: "daintree-ssh", vpcId: "vpc-eu-west-1", ssh: true },
+    ]);
     expect(run.params.get("SecurityGroupId.1")).toBe("sg-1");
   });
 
   it("picks the Arm64 image for a Graviton type", async () => {
     const { provider, credentials, fake } = setup();
     await provider.create(credentials, { ...CREATE, machineType: "t4g.medium" });
-    expect(fake.calls.find((call) => call.action === "RunInstances")!.params.get("ImageId")).toBe("ami-new-arm64");
+    expect(fake.calls.find((call) => call.action === "RunInstances")!.params.get("ImageId")).toBe(
+      "ami-new-arm64"
+    );
   });
 
   it("finds a lost create by its client token instead of launching again", async () => {
@@ -620,7 +738,9 @@ describe("AwsProvider", () => {
     // And by its binding label, across every region.
     const found = await provider.list(credentials, { label: "daintree-binding=bind-1" });
     expect(found.map((entry) => entry.resourceId)).toEqual([first.resourceId]);
-    await expect(provider.list(credentials, { label: "daintree-binding=other" })).resolves.toEqual([]);
+    await expect(provider.list(credentials, { label: "daintree-binding=other" })).resolves.toEqual(
+      []
+    );
   });
 
   it("finds the launch a client token already made when its parameters changed since", async () => {
@@ -634,21 +754,31 @@ describe("AwsProvider", () => {
       if (action === "DescribeInstances" && ++lookups === 1) {
         return xml("<DescribeInstancesResponse><reservationSet/></DescribeInstancesResponse>");
       }
-      if (action === "RunInstances") return ec2Error("IdempotentParameterMismatch", "different parameters");
+      if (action === "RunInstances")
+        return ec2Error("IdempotentParameterMismatch", "different parameters");
       return original(input, init);
     };
     const retry = new AwsProvider({
       client: new AwsClient({ fetch: lagging as typeof fetch, sleep: async () => {} }),
       sleep: async () => {},
     });
-    await expect(retry.create(credentials, CREATE)).resolves.toMatchObject({ resourceId: first.resourceId });
+    await expect(retry.create(credentials, CREATE)).resolves.toMatchObject({
+      resourceId: first.resourceId,
+    });
   });
 
   it("lists only the machines Daintree created", async () => {
     const { provider, credentials, fake } = setup();
     const created = await provider.create(credentials, CREATE);
-    fake.instances.push({ ...fake.instances[0]!, id: "i-0fff0000000000001", tags: { Name: "theirs" }, clientToken: "x" });
-    expect((await provider.list(credentials)).map((entry) => entry.resourceId)).toEqual([created.resourceId]);
+    fake.instances.push({
+      ...fake.instances[0]!,
+      id: "i-0fff0000000000001",
+      tags: { Name: "theirs" },
+      clientToken: "x",
+    });
+    expect((await provider.list(credentials)).map((entry) => entry.resourceId)).toEqual([
+      created.resourceId,
+    ]);
   });
 
   it("asks again about an instance EC2 doesn't list yet", async () => {
@@ -680,32 +810,47 @@ describe("AwsProvider", () => {
     const { provider, credentials, fake } = setup();
     const { resourceId } = await provider.create(credentials, CREATE);
     fake.instances[0]!.state = "running";
-    await expect(provider.stop(credentials, resourceId)).resolves.toMatchObject({ machine: "stopping" });
+    await expect(provider.stop(credentials, resourceId)).resolves.toMatchObject({
+      machine: "stopping",
+    });
     fake.instances[0]!.state = "stopped";
     await expect(provider.inspect(credentials, resourceId)).resolves.toMatchObject({
       machine: "stopped",
       stoppedAt: "2026-11-18T01:02:03.000Z",
     });
-    await expect(provider.start(credentials, resourceId, {})).resolves.toMatchObject({ machine: "starting" });
+    await expect(provider.start(credentials, resourceId, {})).resolves.toMatchObject({
+      machine: "starting",
+    });
     await provider.rename(credentials, resourceId, "Renamed");
     expect(fake.instances[0]!.tags.Name).toBe("Renamed");
     await provider.delete(credentials, resourceId);
-    await expect(provider.inspect(credentials, resourceId)).resolves.toMatchObject({ machine: "deleted" });
-    expect(new Set(fake.calls.filter((call) => /Instances$|CreateTags/.test(call.action)).map((call) => call.region))).toEqual(
-      new Set(["eu-west-1"])
+    await expect(provider.inspect(credentials, resourceId)).resolves.toMatchObject({
+      machine: "deleted",
+    });
+    expect(
+      new Set(
+        fake.calls
+          .filter((call) => /Instances$|CreateTags/.test(call.action))
+          .map((call) => call.region)
+      )
+    ).toEqual(new Set(["eu-west-1"]));
+    expect(fake.calls.find((call) => call.action === "StopInstances")!.params.has("Force")).toBe(
+      false
     );
-    expect(fake.calls.find((call) => call.action === "StopInstances")!.params.has("Force")).toBe(false);
   });
 
   it("says a machine it doesn't know isn't found", async () => {
     const { provider, credentials } = setup();
-    const refused = await provider.inspect(credentials, "us-east-2/i-0abc0000000000999").catch((e: unknown) => e);
+    const refused = await provider
+      .inspect(credentials, "us-east-2/i-0abc0000000000999")
+      .catch((e: unknown) => e);
     expect(provider.describeError(refused)).toMatchObject({ code: "not-found" });
   });
 
   it("vouches for the key cloud-init printed to the console", async () => {
     const { provider, credentials, fake } = setup({
-      console: () => `-----BEGIN SSH HOST KEY KEYS-----\n${ECDSA} root@x\n${ED25519} root@x\n-----END SSH HOST KEY KEYS-----\n`,
+      console: () =>
+        `-----BEGIN SSH HOST KEY KEYS-----\n${ECDSA} root@x\n${ED25519} root@x\n-----END SSH HOST KEY KEYS-----\n`,
     });
     const { resourceId } = await provider.create(credentials, CREATE);
     fake.instances[0]!.state = "running";
@@ -719,11 +864,14 @@ describe("AwsProvider", () => {
   it("falls back to the posted console on an instance without the latest output", async () => {
     const { provider, credentials, fake } = setup({
       nitro: false,
-      console: () => `-----BEGIN SSH HOST KEY KEYS-----\n${ED25519} root@x\n-----END SSH HOST KEY KEYS-----\n`,
+      console: () =>
+        `-----BEGIN SSH HOST KEY KEYS-----\n${ED25519} root@x\n-----END SSH HOST KEY KEYS-----\n`,
     });
     const { resourceId } = await provider.create(credentials, CREATE);
     fake.instances[0]!.state = "running";
-    await expect(provider.sshAccess(credentials, resourceId)).resolves.toMatchObject({ hostKey: ED25519 });
+    await expect(provider.sshAccess(credentials, resourceId)).resolves.toMatchObject({
+      hostKey: ED25519,
+    });
   });
 
   it("waits briefly for a new machine's console, then leaves the key to the person", async () => {
@@ -731,34 +879,46 @@ describe("AwsProvider", () => {
     const { provider, credentials, fake } = setup({
       console: () => {
         reads += 1;
-        return reads < 3 ? "booting" : `-----BEGIN SSH HOST KEY KEYS-----\n${ED25519} root@x\n-----END SSH HOST KEY KEYS-----\n`;
+        return reads < 3
+          ? "booting"
+          : `-----BEGIN SSH HOST KEY KEYS-----\n${ED25519} root@x\n-----END SSH HOST KEY KEYS-----\n`;
       },
     });
     const { resourceId } = await provider.create(credentials, CREATE);
     fake.instances[0]!.state = "running";
-    await expect(provider.sshAccess(credentials, resourceId)).resolves.toMatchObject({ hostKey: ED25519 });
+    await expect(provider.sshAccess(credentials, resourceId)).resolves.toMatchObject({
+      hostKey: ED25519,
+    });
     expect(reads).toBe(3);
 
     const quiet = setup({ console: () => null });
     const created = await quiet.provider.create(quiet.credentials, CREATE);
     quiet.fake.instances[0]!.state = "running";
-    await expect(quiet.provider.sshAccess(quiet.credentials, created.resourceId)).resolves.toMatchObject({
+    await expect(
+      quiet.provider.sshAccess(quiet.credentials, created.resourceId)
+    ).resolves.toMatchObject({
       hostKey: null,
     });
     // An old machine's console isn't waited on.
     quiet.fake.instances[0]!.createdAt = "2020-01-01T00:00:00.000Z";
     const before = quiet.fake.calls.length;
-    await expect(quiet.provider.sshAccess(quiet.credentials, created.resourceId)).resolves.toMatchObject({
+    await expect(
+      quiet.provider.sshAccess(quiet.credentials, created.resourceId)
+    ).resolves.toMatchObject({
       hostKey: null,
     });
-    expect(quiet.fake.calls.slice(before).filter((call) => call.action === "GetConsoleOutput")).toHaveLength(1);
+    expect(
+      quiet.fake.calls.slice(before).filter((call) => call.action === "GetConsoleOutput")
+    ).toHaveLength(1);
   });
 
   it("leaves the key to the person when the console can't be read", async () => {
     const { provider, credentials, fake } = setup({ denied: new Set(["GetConsoleOutput"]) });
     const { resourceId } = await provider.create(credentials, CREATE);
     fake.instances[0]!.state = "running";
-    await expect(provider.sshAccess(credentials, resourceId)).resolves.toMatchObject({ hostKey: null });
+    await expect(provider.sshAccess(credentials, resourceId)).resolves.toMatchObject({
+      hostKey: null,
+    });
   });
 
   it("describes AWS's failures in the person's terms", () => {

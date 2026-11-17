@@ -35,7 +35,10 @@ const INSTANCE_ID = /^i-[0-9a-f]{8,17}$/;
  * an http(s) URL. Accounts record the origin they were connected against, so
  * a key saved against production is never sent to an override.
  */
-export function resolveAwsApiUrl(isPackaged: boolean, env: NodeJS.ProcessEnv = process.env): string {
+export function resolveAwsApiUrl(
+  isPackaged: boolean,
+  env: NodeJS.ProcessEnv = process.env
+): string {
   if (isPackaged) return AWS_PRODUCTION_API_URL;
   const override = env[AWS_API_URL_ENV]?.trim();
   if (!override) return AWS_PRODUCTION_API_URL;
@@ -61,7 +64,8 @@ export function awsEndpoint(apiUrl: string, service: "ec2" | "sts", region: stri
   if (!isAwsRegion(region)) {
     throw new AwsApiError("invalid-request", "Not an AWS region", null, null, null);
   }
-  if (apiUrl === AWS_PRODUCTION_API_URL) return new URL(`https://${service}.${region}.amazonaws.com/`);
+  if (apiUrl === AWS_PRODUCTION_API_URL)
+    return new URL(`https://${service}.${region}.amazonaws.com/`);
   return new URL(`${apiUrl}/${service}/${region}/`);
 }
 
@@ -131,7 +135,12 @@ const CONFLICT_CODES = new Set([
   "InvalidGroup.Duplicate",
   "InvalidPermission.Duplicate",
 ]);
-const SERVER_CODES = new Set(["InternalError", "InternalFailure", "ServiceUnavailable", "Unavailable"]);
+const SERVER_CODES = new Set([
+  "InternalError",
+  "InternalFailure",
+  "ServiceUnavailable",
+  "Unavailable",
+]);
 
 function kindFor(status: number, code: string | null): AwsErrorKind {
   if (code) {
@@ -338,7 +347,13 @@ export class AwsClient {
     const account = xmlText(result, "Account");
     const arn = xmlText(result, "Arn");
     if (!account || !/^\d{12}$/.test(account) || !arn) {
-      throw new AwsApiError("bad-response", "AWS didn't say which account these keys belong to", null, null, null);
+      throw new AwsApiError(
+        "bad-response",
+        "AWS didn't say which account these keys belong to",
+        null,
+        null,
+        null
+      );
     }
     return { account, arn, userId: xmlText(result, "UserId") };
   }
@@ -365,7 +380,8 @@ export class AwsClient {
   ): Promise<Ec2Instance[]> {
     const ids = query.instanceIds ?? [];
     for (const id of ids) {
-      if (!isEc2InstanceId(id)) throw new AwsApiError("invalid-request", "Not an EC2 instance id", null, null, null);
+      if (!isEc2InstanceId(id))
+        throw new AwsApiError("invalid-request", "Not an EC2 instance id", null, null, null);
     }
     const base: Params = [
       ...ids.map((id, i): [string, string] => [`InstanceId.${i + 1}`, id]),
@@ -433,7 +449,10 @@ export class AwsClient {
     return xmlText(xmlItems(root, "vpcSet")[0], "vpcId");
   }
 
-  async describeSecurityGroups(ctx: AwsRequestContext, filters: Ec2Filter[]): Promise<Ec2SecurityGroup[]> {
+  async describeSecurityGroups(
+    ctx: AwsRequestContext,
+    filters: Ec2Filter[]
+  ): Promise<Ec2SecurityGroup[]> {
     const root = await this.call(ctx, "ec2", "DescribeSecurityGroups", filterParams(filters), {
       retry: true,
     });
@@ -480,7 +499,13 @@ export class AwsClient {
     );
     const groupId = xmlText(root, "groupId");
     if (!groupId) {
-      throw new AwsApiError("bad-response", "AWS didn't return the new security group's id", null, null, null);
+      throw new AwsApiError(
+        "bad-response",
+        "AWS didn't return the new security group's id",
+        null,
+        null,
+        null
+      );
     }
     return groupId;
   }
@@ -547,9 +572,17 @@ export class AwsClient {
       // The client token makes a resend return the instance the first send made.
       { retry: true }
     );
-    const instance = parseInstance(xmlItems(root, "instancesSet")[0] ?? { name: "", children: [], text: "" });
+    const instance = parseInstance(
+      xmlItems(root, "instancesSet")[0] ?? { name: "", children: [], text: "" }
+    );
     if (!instance) {
-      throw new AwsApiError("bad-response", "AWS didn't describe the instance it launched", null, null, null);
+      throw new AwsApiError(
+        "bad-response",
+        "AWS didn't describe the instance it launched",
+        null,
+        null,
+        null
+      );
     }
     return instance;
   }
@@ -568,7 +601,11 @@ export class AwsClient {
     return parseStateChange(await this.instanceAction(ctx, "TerminateInstances", instanceId));
   }
 
-  async createTags(ctx: AwsRequestContext, resourceId: string, tags: Record<string, string>): Promise<void> {
+  async createTags(
+    ctx: AwsRequestContext,
+    resourceId: string,
+    tags: Record<string, string>
+  ): Promise<void> {
     await this.call(
       ctx,
       "ec2",
@@ -579,7 +616,11 @@ export class AwsClient {
   }
 
   /** The instance's console output, decoded; null when nothing has been posted yet. */
-  async consoleOutput(ctx: AwsRequestContext, instanceId: string, latest: boolean): Promise<string | null> {
+  async consoleOutput(
+    ctx: AwsRequestContext,
+    instanceId: string,
+    latest: boolean
+  ): Promise<string | null> {
     if (!isEc2InstanceId(instanceId)) {
       throw new AwsApiError("invalid-request", "Not an EC2 instance id", null, null, null);
     }
@@ -746,11 +787,23 @@ export class AwsClient {
 async function readBounded(response: Response): Promise<string> {
   const length = Number(response.headers.get("content-length"));
   if (Number.isFinite(length) && length > MAX_RESPONSE_BYTES) {
-    throw new AwsApiError("bad-response", "AWS's answer was too large", response.status, null, null);
+    throw new AwsApiError(
+      "bad-response",
+      "AWS's answer was too large",
+      response.status,
+      null,
+      null
+    );
   }
   const body = await response.arrayBuffer();
   if (body.byteLength > MAX_RESPONSE_BYTES) {
-    throw new AwsApiError("bad-response", "AWS's answer was too large", response.status, null, null);
+    throw new AwsApiError(
+      "bad-response",
+      "AWS's answer was too large",
+      response.status,
+      null,
+      null
+    );
   }
   return new TextDecoder().decode(body);
 }
