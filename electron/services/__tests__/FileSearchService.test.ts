@@ -697,9 +697,8 @@ describe("FileSearchService", () => {
     });
 
     it("fences a descendant load in flight when its ancestor is invalidated", async () => {
-      // The root is always in the invalidation set, so a root-scoped test passes
-      // even with the in-flight descendant loop deleted. Only a nested cwd
-      // exercises it.
+      // The in-flight scan has to match a cwd beneath the invalidated root, not
+      // only the root itself.
       const dir = makeTempDir();
       tempDirs.push(dir);
       const nested = path.join(dir, "src");
@@ -721,9 +720,127 @@ describe("FileSearchService", () => {
       expect(afterFence).toEqual(["fresh.ts"]);
     });
 
+    it("retains nothing for roots it was told about but never searched", async () => {
+      // The watcher reports every worktree it sees change, searched or not, and
+      // a long-lived main process sees many come and go.
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitClientMock.checkIsRepo.mockResolvedValue(true);
+      gitClientMock.revparse.mockResolvedValue(`${dir}\n`);
+      const pending = deferGitListing();
+
+      const service = await createService();
+      const baseline = service.getRetainedKeyCount();
+      const inFlight = service.search({ cwd: dir, query: "", limit: 5 });
+      await pending.reached;
+
+      const worktrees = Array.from({ length: 200 }, (_, i) =>
+        path.resolve(os.tmpdir(), `daintree-retired-worktree-${i}`)
+      );
+      const cwds = Array.from({ length: 200 }, (_, i) =>
+        path.resolve(os.tmpdir(), `daintree-retired-cwd-${i}`)
+      );
+      const retired = new Set([...worktrees, ...cwds]);
+
+      // Record every Map or Set the invalidations write a retired path into, so
+      // the check below covers structures `getRetainedKeyCount` doesn't know of.
+      const holders: Array<Map<unknown, unknown> | Set<unknown>> = [];
+      const mapSet = Map.prototype.set;
+      const setAdd = Set.prototype.add;
+      Map.prototype.set = function (this: Map<unknown, unknown>, key: unknown, value: unknown) {
+        if (typeof key === "string" && retired.has(key)) holders.push(this);
+        return mapSet.call(this, key, value);
+      } as typeof mapSet;
+      Set.prototype.add = function (this: Set<unknown>, value: unknown) {
+        if (typeof value === "string" && retired.has(value)) holders.push(this);
+        return setAdd.call(this, value);
+      } as typeof setAdd;
+      try {
+        for (let i = 0; i < worktrees.length; i++) {
+          service.invalidateUnder(worktrees[i]);
+          service.invalidate(cwds[i]);
+        }
+      } finally {
+        Map.prototype.set = mapSet;
+        Set.prototype.add = setAdd;
+      }
+
+      service.invalidateUnder(dir);
+      pending.release("stale.ts\0");
+      await inFlight;
+      service.sweep();
+
+      // A structure the service keeps collects the paths of many calls; a call's
+      // own scratch set holds at most its own path and is garbage once it
+      // returns, though `holders` keeps it reachable here.
+      const heldPerHolder = [...new Set(holders)].map(
+        (holder) => [...retired].filter((key) => holder.has(key)).length
+      );
+      expect(heldPerHolder.filter((held) => held > 1)).toEqual([]);
+      expect(service.getRetainedKeyCount()).toBe(baseline);
+    });
+
+    it("keeps a newer index when an invalidated load settles after it", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitClientMock.checkIsRepo.mockResolvedValue(true);
+      gitClientMock.revparse.mockResolvedValue(`${dir}\n`);
+      const first = deferGitListing();
+
+      const service = await createService();
+      const stale = service.search({ cwd: dir, query: "", limit: 5 });
+      await first.reached;
+      service.invalidateUnder(dir);
+
+      gitClientMock.raw.mockResolvedValue("fresh.ts\0");
+      await expect(service.search({ cwd: dir, query: "", limit: 5 })).resolves.toEqual([
+        "fresh.ts",
+      ]);
+
+      first.release("stale.ts\0");
+      await stale;
+
+      await expect(service.search({ cwd: dir, query: "", limit: 5 })).resolves.toEqual([
+        "fresh.ts",
+      ]);
+      expect(gitClientMock.raw).toHaveBeenCalledTimes(2);
+      expect(service.getRetainedKeyCount()).toBe(1);
+    });
+
+    it("keeps a newer load's index when an invalidated load settles before it", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitClientMock.checkIsRepo.mockResolvedValue(true);
+      gitClientMock.revparse.mockResolvedValue(`${dir}\n`);
+      const first = deferGitListing();
+
+      const service = await createService();
+      const stale = service.search({ cwd: dir, query: "", limit: 5 });
+      await first.reached;
+      service.invalidateUnder(dir);
+
+      const second = deferGitListing();
+      const fresh = service.search({ cwd: dir, query: "", limit: 5 });
+      await second.reached;
+      first.release("stale.ts\0");
+      await stale;
+      // Checked here, not only at the end: the newer load would paper over a
+      // stale commit by overwriting it when it lands. The one retained key is
+      // the newer load's own slot, which the stale one must not have taken.
+      expect(service.getCacheStats().size).toBe(0);
+      expect(service.getRetainedKeyCount()).toBe(1);
+      second.release("fresh.ts\0");
+      await expect(fresh).resolves.toEqual(["fresh.ts"]);
+
+      await expect(service.search({ cwd: dir, query: "", limit: 5 })).resolves.toEqual([
+        "fresh.ts",
+      ]);
+      expect(gitClientMock.raw).toHaveBeenCalledTimes(2);
+    });
+
     it("fences a load still settling when dispose runs", async () => {
-      // Disposal that only forgot the in-flight entry would let the load's
-      // completion reseed the cache — and rearm the sweep — after teardown.
+      // A load that completes after teardown must not reseed the cache — and
+      // rearm the sweep — for a service that has been disposed.
       const dir = makeTempDir();
       tempDirs.push(dir);
       gitClientMock.checkIsRepo.mockResolvedValue(true);
