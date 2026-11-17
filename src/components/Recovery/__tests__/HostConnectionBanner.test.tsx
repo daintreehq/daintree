@@ -2,6 +2,41 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { HostConnectionState } from "@shared/types/remoteHosts";
+import type { CloudHostStatus, CloudHostsSnapshot } from "@shared/types/cloudHosts";
+
+const { cloud, startHost } = vi.hoisted(() => {
+  const listeners = new Set<() => void>();
+  const cloud = {
+    snapshot: { providers: [], accounts: [], hosts: [] } as CloudHostsSnapshot,
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    /** A `cloud-changed` push reaching this window. */
+    push(snapshot: CloudHostsSnapshot) {
+      cloud.snapshot = snapshot;
+      for (const listener of [...listeners]) listener();
+    },
+  };
+  return { cloud, startHost: vi.fn<(hostId: string) => Promise<void>>() };
+});
+vi.mock("@/components/Hosts/cloud/cloudHostsState", async (importOriginal) => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    ...(await importOriginal<typeof import("@/components/Hosts/cloud/cloudHostsState")>()),
+    useCloudHosts: () => ({
+      snapshot: useSyncExternalStore(cloud.subscribe, () => cloud.snapshot),
+      loaded: true,
+      loadError: null,
+      refresh: () => Promise.resolve(),
+    }),
+  };
+});
+vi.mock("@/clients/cloudHostsClient", () => ({
+  cloudHostsClient: { startHost, refreshHost: vi.fn(() => Promise.resolve()) },
+}));
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
@@ -61,6 +96,8 @@ beforeAll(() => {
 beforeEach(() => {
   cleanup();
   connect.mockClear();
+  startHost.mockReset();
+  cloud.snapshot = { providers: [], accounts: [], hosts: [] };
   useHostConnectionStore.getState().reset();
   Object.defineProperty(window, "electron", {
     value: { remoteHosts: { connect } },
@@ -338,6 +375,142 @@ describe("HostConnectionBanner", () => {
       vi.advanceTimersByTime(400);
     });
     expect(screen.getByText("Checking with studio-01…")).toBeTruthy();
+  });
+});
+
+function machine(overrides: Partial<CloudHostStatus> = {}): CloudHostsSnapshot {
+  return {
+    providers: [],
+    accounts: [],
+    hosts: [
+      {
+        hostId: "studio-01",
+        providerId: "boat",
+        providerUnavailable: null,
+        accountId: "ca_0123456789",
+        accountName: "Personal",
+        resourceId: "bx_23456789",
+        machineName: "studio-01",
+        ownership: "created-by-daintree",
+        createdFor: null,
+        provisioning: null,
+        machine: "stopped",
+        rawState: "stopped",
+        machineType: "default",
+        vcpu: 4,
+        memoryGB: 8,
+        hourlyDollars: 0.036,
+        autoStopAt: null,
+        lifetimeSeconds: 7200,
+        stoppedAt: null,
+        stop: null,
+        lastSnapshotAt: null,
+        dataExpired: false,
+        operation: null,
+        lastError: null,
+        observedAt: Date.now(),
+        lastEndpoint: null,
+        hostKeyFingerprint: null,
+        hostKeyReview: null,
+        keptRunningAt: null,
+        ...overrides,
+      },
+    ],
+  };
+}
+
+const STARTING = { id: "op-1", kind: "starting", startedAt: 0, stage: "Starting the machine" } as const;
+
+describe("HostConnectionBanner on a stopped cloud machine (#17546)", () => {
+  /** A press on Start, with the start's reply held until the test lets it go. */
+  function pressStart(): () => Promise<void> {
+    let reply!: () => void;
+    startHost.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        reply = resolve;
+      })
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Start and reconnect" }));
+    expect(startHost).toHaveBeenCalledExactlyOnceWith("studio-01");
+    return async () => {
+      await act(async () => {
+        reply();
+        await Promise.resolve();
+      });
+    };
+  }
+
+  /** The provider's running observation, which the start waits for, reaching this window. */
+  function observeRunning() {
+    act(() => cloud.push(machine({ machine: "running", operation: STARTING })));
+  }
+
+  /** The dial is under way, its ssh handshake not yet answered. */
+  function dialUnderWay() {
+    act(() => seed({ status: "connecting", attempt: 1 }, { everConnected: false }));
+  }
+
+  beforeEach(() => {
+    seed({ status: "disconnected" }, { everConnected: false });
+    cloud.snapshot = machine();
+  });
+
+  // Each asks for the link once and neither starts it over: the second finds
+  // the first's dial under way and leaves it to finish (LinkClient.retryNow).
+  const ASKED_WITHOUT_RESTART = [[{ hostId: "studio-01" }], [{ hostId: "studio-01" }]];
+
+  it("never dials over its own dial when the running push lands before the start's reply", async () => {
+    render(<HostConnectionBanner />);
+    const reply = pressStart();
+    observeRunning();
+    expect(connect).toHaveBeenCalledExactlyOnceWith({ hostId: "studio-01" });
+    dialUnderWay();
+    await reply();
+    act(() => cloud.push(machine({ machine: "running" })));
+    expect(connect.mock.calls).toEqual(ASKED_WITHOUT_RESTART);
+  });
+
+  it("never dials over its own dial when the start's reply lands before the running push", async () => {
+    render(<HostConnectionBanner />);
+    const reply = pressStart();
+    await reply();
+    expect(connect).toHaveBeenCalledExactlyOnceWith({ hostId: "studio-01" });
+    dialUnderWay();
+    observeRunning();
+    act(() => cloud.push(machine({ machine: "running" })));
+    expect(connect.mock.calls).toEqual(ASKED_WITHOUT_RESTART);
+  });
+
+  it("dials a window waiting on a machine started elsewhere, without abandoning a dial under way", () => {
+    render(<HostConnectionBanner />);
+    act(() => cloud.push(machine({ operation: STARTING })));
+    expect(connect).not.toHaveBeenCalled();
+    observeRunning();
+    expect(connect).toHaveBeenCalledExactlyOnceWith({ hostId: "studio-01" });
+    dialUnderWay();
+    act(() => cloud.push(machine({ machine: "running" })));
+    expect(connect).toHaveBeenCalledOnce();
+  });
+
+  it("dials neither the host it left nor the one it moved to for a start made before the move", async () => {
+    render(<HostConnectionBanner />);
+    const reply = pressStart();
+    // Moved to another cloud host whose machine is already running: not a machine coming up.
+    act(() => {
+      seed({ status: "disconnected" }, { hostId: "mini", hostName: "mini", everConnected: false });
+      const [left] = machine().hosts;
+      const [movedTo] = machine({ hostId: "mini", machine: "running" }).hosts;
+      cloud.push({ providers: [], accounts: [], hosts: [left!, movedTo!] });
+    });
+    await reply();
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it("leaves a link that came back by itself alone", () => {
+    render(<HostConnectionBanner />);
+    act(() => seed({ status: "connected", rttMs: 20, handshake: HANDSHAKE }));
+    observeRunning();
+    expect(connect).not.toHaveBeenCalled();
   });
 });
 

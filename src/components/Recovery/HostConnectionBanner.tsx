@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
 import { useDeferredLoading, useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useNow } from "@/hooks/useNow";
-import { reconnectHost } from "@/hooks/useHostConnection";
+import { nudgeHostReconnect, reconnectHost } from "@/hooks/useHostConnection";
 import {
   HOST_LINK_SETTLE_MS,
   selectHostBannerVariant,
@@ -64,15 +64,24 @@ export function HostConnectionBanner() {
       setStartingMachine(false);
     }
   }, [startingMachine, variant, cloudMachine]);
-  // Started from elsewhere (the host menu, Settings) while this window waits: dial it now.
-  const lastMachine = useRef(cloudMachine);
+  // Started from here or elsewhere (the host menu, Settings) while this window
+  // waits: dial it now. The start's reply and every other window showing the
+  // host ask too, so none of them abandons a dial already under way (#17546).
+  const lastMachine = useRef({ hostId, machine: cloudMachine });
   useEffect(() => {
     const before = lastMachine.current;
-    lastMachine.current = cloudMachine;
-    if (cloudMachine === "running" && before !== null && before !== "running" && variant !== null) {
-      reconnectHost();
+    lastMachine.current = { hostId, machine: cloudMachine };
+    if (
+      hostId !== null &&
+      before.hostId === hostId &&
+      before.machine !== null &&
+      before.machine !== "running" &&
+      cloudMachine === "running" &&
+      variant !== null
+    ) {
+      nudgeHostReconnect(hostId);
     }
-  }, [cloudMachine, variant]);
+  }, [hostId, cloudMachine, variant]);
   const hostName = useHostConnectionStore((s) => s.hostName ?? s.hostId ?? "");
   const lastSeenAt = useHostConnectionStore((s) => s.lastSeenAt);
   const detail = useHostConnectionStore((s) =>
@@ -135,7 +144,7 @@ export function HostConnectionBanner() {
       setMachineError(null);
       cloudHostsClient.startHost(hostId).then(
         // Stays "starting" until the link is back (the effect above lets go of it).
-        () => reconnectHost(),
+        () => nudgeHostReconnect(hostId),
         (err: unknown) => {
           setStartingMachine(false);
           failed(err, "Couldn't start the machine", false);
