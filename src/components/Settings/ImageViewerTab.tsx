@@ -215,7 +215,10 @@ export function ImageViewerTab() {
     for (;;) {
       const running = saveInFlightRef.current;
       if (!running) return overwritten || hasPendingDraft ? handleSave() : undefined;
-      if (running.viewer.mode === draft.mode && running.viewer.customCommand === draft.customCommand)
+      if (
+        running.viewer.mode === draft.mode &&
+        running.viewer.customCommand === draft.customCommand
+      )
         return running.done;
       const failure = await running.done;
       if (failure) return failure;

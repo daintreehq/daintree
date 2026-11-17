@@ -223,10 +223,12 @@ describe("SettingsDialog closed over an Integrations draft", () => {
 
   it("waits for a Save still running, then saves the command edited since", async () => {
     let finishFirstSave!: () => void;
-    saveSettings.mockImplementationOnce(async (_projectId: string, next: Record<string, unknown>) => {
-      await new Promise<void>((resolve) => (finishFirstSave = resolve));
-      settingsFile = next;
-    });
+    saveSettings.mockImplementationOnce(
+      async (_projectId: string, next: Record<string, unknown>) => {
+        await new Promise<void>((resolve) => (finishFirstSave = resolve));
+        settingsFile = next;
+      }
+    );
     const onClose = await openOnIntegrations();
     chooseCustomViewer("gimp");
     const viewerSection = document.getElementById("image-viewer")!;
