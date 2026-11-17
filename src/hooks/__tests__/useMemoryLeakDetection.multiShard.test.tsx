@@ -10,7 +10,7 @@ vi.mock("@/store/panelStore", () => ({
 }));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: vi.fn() } }));
 
-import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
+import { CPU_HISTORY_SIZE, useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import {
   CONSECUTIVE_REQUIRED,
   MIN_MEMORY_KB,
@@ -76,6 +76,26 @@ describe("useMemoryLeakDetection across PTY shards (#17194)", () => {
 
     expect(aloneAt).toBe(ALERT_SAMPLE - 1);
     expect(besideAt).toBe(aloneAt);
+  });
+
+  it("counts a settled terminal's repeated polls, even when one batch object is reused", () => {
+    // Settle the store entry before the detector watches, so every flat poll
+    // below leaves the metrics map untouched.
+    unmount();
+    const store = useResourceMonitoringStore.getState();
+    const flat = { settled: sample(MIN_MEMORY_KB) };
+    for (let i = 0; i < CPU_HISTORY_SIZE; i++) store.updateMetrics(flat);
+    unmount = renderHook(() => useMemoryLeakDetection(true)).unmount;
+
+    const settledMap = useResourceMonitoringStore.getState().metrics;
+    for (let i = 0; i < STARTUP_SKIP_SAMPLES; i++) store.updateMetrics(flat);
+    expect(useResourceMonitoringStore.getState().metrics).toBe(settledMap);
+
+    for (let i = 1; i <= CONSECUTIVE_REQUIRED; i++) {
+      expect(leakAlertsFor("settled")).toBe(0);
+      store.updateMetrics({ settled: sample(MIN_MEMORY_KB + i * GROWTH_KB) });
+    }
+    expect(leakAlertsFor("settled")).toBe(1);
   });
 
   it("doesn't count another panel's removal as a sample for the rest", () => {

@@ -49,20 +49,20 @@ describe("resourceMonitoringStore.updateMetrics", () => {
   it("publishes every non-empty batch, settled or not, without replacing a settled map", () => {
     // The leak detector evaluates each published batch; its cadence must not
     // depend on whether a sample moved.
-    for (let i = 0; i < CPU_HISTORY_SIZE; i++) poll();
-    const settledMap = useResourceMonitoringStore.getState().metrics;
-
     const batches: unknown[] = [];
     const unsubscribe = useResourceMonitoringStore.subscribe((curr, prev) => {
       if (curr.lastBatch !== prev.lastBatch) batches.push(curr.lastBatch);
     });
+    for (let i = 0; i < CPU_HISTORY_SIZE; i++) poll();
+    const settledMap = useResourceMonitoringStore.getState().metrics;
+
     const reused = { t1: sample() };
     for (let i = 0; i < 3; i++) poll();
     for (let i = 0; i < 2; i++) useResourceMonitoringStore.getState().updateMetrics(reused);
     unsubscribe();
 
-    expect(batches).toHaveLength(5);
-    expect(new Set(batches).size).toBe(5);
+    expect(batches).toHaveLength(CPU_HISTORY_SIZE + 5);
+    expect(new Set(batches).size).toBe(CPU_HISTORY_SIZE + 5);
     expect(useResourceMonitoringStore.getState().lastBatch?.samples).toBe(reused);
     expect(useResourceMonitoringStore.getState().metrics).toBe(settledMap);
   });
