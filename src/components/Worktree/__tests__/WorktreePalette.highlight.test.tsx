@@ -130,6 +130,9 @@ describe("WorktreePalette custom titles", () => {
     const detail = option("t").querySelector<HTMLElement>("div.mt-0\\.5");
     expect(detail?.textContent).toContain("/repo/t");
     expect(headline("t")?.textContent).not.toContain("/repo/t");
+    expect(headline("t")!.compareDocumentPosition(detail!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
   });
 
   it("sets a custom title as a name, and an untitled linked worktree as the mono identifier", () => {

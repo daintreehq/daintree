@@ -27,11 +27,10 @@ export function tailStart(text: string): number {
   // an emoji in a custom title would draw as two broken glyphs, one each side.
   const badSeam = (at: number) =>
     isLowSurrogate(text.charCodeAt(at)) || /\s/.test(text[at - 1]! + text[at]!);
-  let split = text.length - TAIL_FALLBACK;
-  while (split < text.length - 1 && badSeam(split)) split++;
-  // Out of room to move on: a trailing emoji stays whole, in the tail.
-  if (isLowSurrogate(text.charCodeAt(split))) split--;
-  return split;
+  const fallback = text.length - TAIL_FALLBACK;
+  for (let at = fallback; at < text.length; at++) if (!badSeam(at)) return at;
+  for (let at = fallback - 1; at > 0; at--) if (!badSeam(at)) return at;
+  return isLowSurrogate(text.charCodeAt(fallback)) ? fallback - 1 : fallback;
 }
 
 /** Match ranges on a whole string, moved onto its `[start, end)` slice. */

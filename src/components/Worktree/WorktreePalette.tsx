@@ -85,8 +85,9 @@ function WorktreeListItem({
               // Only the family changes for a branch: the title keeps the
               // row's title size so it stays above the text-xs path line. Clipped,
               // not overflowing, when its kept tail is wider than what the
-              // qualifier leaves, so the two never overlap.
-              "text-sm font-medium text-text-primary overflow-hidden",
+              // qualifier leaves, so the two never overlap; from its start, since the
+              // end is what tells branch-like titles apart.
+              "text-sm font-medium text-text-primary justify-end overflow-hidden",
               isBranchTitled && "font-mono"
             )}
           />

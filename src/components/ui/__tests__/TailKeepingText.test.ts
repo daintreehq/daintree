@@ -32,13 +32,11 @@ describe("tailStart", () => {
 
   it("moves past whitespace that follows the emoji it just kept whole", () => {
     const text = "abcdefghijklm\u{1F600} abcdefghij";
-    const split = tailStart(text);
-    expect(isLowSurrogate(text, split)).toBe(false);
-    expect(/\s/.test(text[split - 1]! + text[split]!)).toBe(false);
+    expect(text.slice(tailStart(text))).toBe("bcdefghij");
   });
 
-  it("keeps a trailing emoji whole, in the tail, when there is no room to move on", () => {
+  it("keeps a trailing emoji whole, with the words before it, when no seam ahead is safe", () => {
     const text = "abcdefghijklmnop a b c d e \u{1F600}";
-    expect(text.slice(tailStart(text))).toBe("\u{1F600}");
+    expect(text.slice(tailStart(text))).toBe("p a b c d e \u{1F600}");
   });
 });

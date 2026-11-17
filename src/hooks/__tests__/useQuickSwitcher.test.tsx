@@ -502,6 +502,16 @@ describe("useQuickSwitcher custom worktree titles (#17503)", () => {
     expect(item?.displaced).toBeUndefined();
   });
 
+  it("says nothing displaced when a title is the worktree's own name and branch", () => {
+    const same = { id: "wt-same", name: "feature/same", branch: "feature/same", path: "/repo/s" };
+    setTitles({ "wt-same": "feature/same" });
+    seed(same);
+
+    const { result } = renderHook(() => useQuickSwitcher());
+
+    expect(result.current.results[0]?.displaced).toBeNull();
+  });
+
   it("falls back to the branch for a nameless worktree without a title", () => {
     seedWorktreeState({
       isInitialized: true,
