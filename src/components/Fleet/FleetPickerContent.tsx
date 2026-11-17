@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, type ReactElement } from "react";
+import { useCallback, useMemo, useRef, type ReactElement } from "react";
 import { Checkbox, CheckboxGlyph } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { POPOVER_ROW_HOVER_CLASS } from "@/components/ui/popoverHeader";
@@ -106,27 +106,21 @@ export function FleetPickerContent({
     eligibleTerminals.length > 0;
   const showSearchingOutput = useDohertyGate(awaitingOutputSearch);
 
-  // Retry unmounts or moves when its answer lands. If it held focus, hand focus
-  // to the search field instead of stranding it on <body>.
+  // Retry goes away when its answer lands (or the list changes under it). If it
+  // held focus as it left, hand focus to the search field rather than <body>,
+  // and only while the picker is still mounted.
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const retryHeldFocusRef = useRef(false);
-  const retryPlacement = outputSearchIncomplete
-    ? visibleTerminals.length > 0
-      ? "inline"
-      : "empty"
-    : null;
-  useEffect(() => {
-    if (!retryHeldFocusRef.current) return;
-    retryHeldFocusRef.current = false;
-    const active = document.activeElement;
-    if (active === null || active === document.body) searchInputRef.current?.focus();
-  }, [retryPlacement]);
-  const handleRetryFocus = useCallback(() => {
-    retryHeldFocusRef.current = true;
-  }, []);
-  const handleRetryBlur = useCallback((e: React.FocusEvent<HTMLButtonElement>) => {
-    // A removed element's blur has no destination; only a real move clears it.
-    if (e.relatedTarget !== null) retryHeldFocusRef.current = false;
+  const retryRef = useCallback((el: HTMLButtonElement | null) => {
+    if (el === null) return;
+    return () => {
+      // Ref cleanup runs before the node is removed, so focus is still readable.
+      if (document.activeElement !== el) return;
+      queueMicrotask(() => {
+        const input = searchInputRef.current;
+        const active = document.activeElement;
+        if (input?.isConnected && (active === null || active === document.body)) input.focus();
+      });
+    };
   }, []);
 
   // Row refs live in the hook so its keydown handler can move DOM focus on
@@ -211,8 +205,7 @@ export function FleetPickerContent({
             <RetryOutputSearchButton
               size="xs"
               onRetry={retryOutputSearch}
-              onFocus={handleRetryFocus}
-              onBlur={handleRetryBlur}
+              buttonRef={retryRef}
               testIdPrefix={testIdPrefix}
             />
           </div>
@@ -253,8 +246,7 @@ export function FleetPickerContent({
               <RetryOutputSearchButton
                 size="sm"
                 onRetry={retryOutputSearch}
-                onFocus={handleRetryFocus}
-                onBlur={handleRetryBlur}
+                buttonRef={retryRef}
                 testIdPrefix={testIdPrefix}
               />
             }
@@ -333,23 +325,20 @@ const SEARCHING_OUTPUT = "Searching recent output…";
 function RetryOutputSearchButton({
   size,
   onRetry,
-  onFocus,
-  onBlur,
+  buttonRef,
   testIdPrefix,
 }: {
   size: "xs" | "sm";
   onRetry: () => void;
-  onFocus: () => void;
-  onBlur: (e: React.FocusEvent<HTMLButtonElement>) => void;
+  buttonRef: React.RefCallback<HTMLButtonElement>;
   testIdPrefix: string;
 }): ReactElement {
   return (
     <Button
+      ref={buttonRef}
       variant="subtle"
       size={size}
       onClick={onRetry}
-      onFocus={onFocus}
-      onBlur={onBlur}
       aria-label="Retry output search"
       data-testid={`${testIdPrefix}-retry-output-search`}
     >

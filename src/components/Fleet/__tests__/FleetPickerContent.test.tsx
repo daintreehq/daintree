@@ -771,12 +771,18 @@ describe("FleetPickerContent + useFleetPicker", () => {
       matchEnd: 5,
     });
 
-    function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+    function deferred<T>(): {
+      promise: Promise<T>;
+      resolve: (v: T) => void;
+      reject: (e: Error) => void;
+    } {
       let resolve: (v: T) => void = () => {};
-      const promise = new Promise<T>((r) => {
-        resolve = r;
+      let reject: (e: Error) => void = () => {};
+      const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
       });
-      return { promise, resolve };
+      return { promise, resolve, reject };
     }
 
     beforeEach(() => {
@@ -873,15 +879,16 @@ describe("FleetPickerContent + useFleetPicker", () => {
       expect(screen.getByText("Searching recent output…", { selector: "p" })).toBeTruthy();
       expect(liveStatus()).toBe("Searching recent output…");
 
+      // The request itself failing is as unsearched as a shard missing.
       await act(async () => {
-        first.resolve({ matches: [], complete: false });
+        first.reject(new Error("ipc down"));
       });
       await advance(300);
       expect(screen.queryByText("No terminals match")).toBeNull();
       expect(incompleteShown()).toBe(1);
       expect(rowCount()).toBe(0);
 
-      search.mockRejectedValueOnce(new Error("ipc down"));
+      search.mockResolvedValueOnce({ matches: [], complete: false });
       await retry();
       await advance(300);
       expect(screen.queryByText("No terminals match")).toBeNull();
@@ -941,9 +948,11 @@ describe("FleetPickerContent + useFleetPicker", () => {
       await type("yyy");
       await advance(100);
       await retry();
+      const callsFor = (q: string) => search.mock.calls.filter(([query]) => query === q).length;
+      // Retry searched right away, and the superseded debounce sends nothing.
+      expect(callsFor("yyy")).toBe(1);
       await advance(400);
-
-      expect(search.mock.calls.filter(([q]) => q === "yyy")).toHaveLength(1);
+      expect(callsFor("yyy")).toBe(1);
     });
 
     it("keeps the newest of two overlapping retries", async () => {
@@ -1021,6 +1030,41 @@ describe("FleetPickerContent + useFleetPicker", () => {
 
       expect(screen.queryByTestId("fp-retry-output-search")).toBeNull();
       expect(document.activeElement).toBe(screen.getByTestId("fp-search"));
+    });
+
+    it("hands focus to the search field when the list empties under a focused Retry", async () => {
+      search.mockResolvedValueOnce({ matches: [], complete: false });
+      await open();
+      await typeAndSettle("omega");
+
+      const button = screen.getByTestId("fp-retry-output-search");
+      await act(async () => {
+        button.focus();
+      });
+      await act(async () => {
+        seedTerminals([]);
+      });
+      await advance(300);
+
+      expect(screen.getByText("Open a terminal in the grid to arm it")).toBeTruthy();
+      expect(document.activeElement).toBe(screen.getByTestId("fp-search"));
+    });
+
+    it("leaves focus alone when Retry goes away without holding it", async () => {
+      search.mockResolvedValueOnce({ matches: [], complete: false });
+      await open();
+      await typeAndSettle("alpha");
+      const elsewhere = screen.getAllByRole("treeitem")[0]!;
+      await act(async () => {
+        elsewhere.focus();
+      });
+
+      search.mockResolvedValueOnce({ matches: [], complete: true });
+      await retry();
+      await advance(0);
+
+      expect(screen.queryByTestId("fp-retry-output-search")).toBeNull();
+      expect(document.activeElement).toBe(elsewhere);
     });
 
     it("reads a bare match array from an older host as a complete answer", async () => {

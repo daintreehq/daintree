@@ -1247,6 +1247,29 @@ describe("terminal:search-semantic-buffers", () => {
     expect(envelope.data).toEqual({ matches: [matches[0]], complete: true });
   });
 
+  it("filters by the project the view is bound to when the search answers", async () => {
+    let answer: (r: { matches: typeof matches; complete: boolean }) => void = () => {};
+    ptyClient.searchSemanticBuffersAsync.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        })
+    );
+    const endpoint = remoteView("proj-1");
+    const pending = getIpcDispatcher().invokeForEndpoint(
+      { endpoint, client },
+      CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
+      ["token", false]
+    );
+    await vi.waitFor(() => expect(ptyClient.searchSemanticBuffersAsync).toHaveBeenCalled());
+    (endpoint as { projectId: string | null }).projectId = "proj-2";
+    answer({ matches, complete: true });
+
+    const envelope = await pending;
+    if (!envelope.ok) throw new Error(JSON.stringify(envelope.error));
+    expect(envelope.data).toEqual({ matches: [matches[1]], complete: true });
+  });
+
   it("answers a remote view with no project without searching any shard", async () => {
     ptyClient.searchSemanticBuffersAsync.mockClear();
     const none = await getIpcDispatcher().invokeForEndpoint(
