@@ -481,6 +481,8 @@ import {
   getDecisionQuestionSummaries,
   getDecisionQuestionSummariesByReference,
   cancelDecisionQuestionByReference,
+  cancelHostServedQuestion,
+  readHostServedQuestion,
   getDecisionsPaneState,
   getDecisionsPolicy,
   cancelSetupCheck,
@@ -517,6 +519,7 @@ import type { AnswerDelivery } from "../answerDelivery.js";
 import type {
   DecisionQuestionCancelResult,
   DecisionQuestionImagePartResult,
+  DecisionQuestionReference,
   DecisionQuestionList,
   DecisionQuestionListItem,
 } from "../../../../shared/types/decisionsQuestion.js";
@@ -717,14 +720,24 @@ describe("Decisions entry", () => {
     });
     const own = item(RELAY.hostId, "q_own_000001", "2026-11-02T10:05:00.000Z");
     const theirs = item("qhost_studio_0001", "q_host_00001", "2026-11-02T10:01:00.000Z");
+    const theirsLater = item("qhost_studio_0001", "q_host_00002", "2026-11-02T10:09:00.000Z");
+    const lab = item("qhost_lab_00001", "q_lab_000001", "2026-11-02T10:03:00.000Z");
+    const labHost: DecisionsHostQuestions = {
+      hostId: "lab",
+      name: "Lab",
+      connected: true,
+      questionHostId: "qhost_lab_00001",
+      questions: [lab],
+    };
     let hosts: DecisionsHostQuestions[] = [
       {
         hostId: "studio",
         name: "Studio",
         connected: true,
         questionHostId: "qhost_studio_0001",
-        questions: [theirs],
+        questions: [theirs, theirsLater],
       },
+      labHost,
     ];
     const changed = new Set<() => void>();
     const withdraw = setDecisionsHostsPort({
@@ -746,16 +759,20 @@ describe("Decisions entry", () => {
       statusView.send.mock.calls.filter(
         ([, message]) => (message as { name?: string }).name === "decisions:questions-changed"
       );
+    const studio = { hostId: "studio", name: "Studio", connected: true };
     try {
       publish([own]);
+      // Oldest first across every machine, each Host's named.
       expect(getDecisionQuestionList().questions).toEqual([
-        { ...theirs, remoteHost: { hostId: "studio", name: "Studio", connected: true } },
+        { ...theirs, remoteHost: studio },
+        { ...lab, remoteHost: { hostId: "lab", name: "Lab", connected: true } },
         own,
+        { ...theirsLater, remoteHost: studio },
       ]);
 
       // The Host's link goes: its questions stay, as not connected, and every window hears it.
       statusView.send.mockClear();
-      hosts = [{ ...hosts[0], connected: false }];
+      hosts = [{ ...hosts[0], questions: [theirs], connected: false }];
       for (const listener of changed) listener();
       expect(getDecisionQuestionList().questions[0]?.remoteHost).toEqual({
         hostId: "studio",
@@ -777,9 +794,15 @@ describe("Decisions entry", () => {
 
       // Nothing listed here means nothing at all, and the Hosts' changes are no longer followed.
       hosts = [{ ...hosts[0], questionHostId: "qhost_studio_0001", questions: [theirs] }];
+      for (const listener of changed) listener();
+      expect(getDecisionQuestionList().questions).toHaveLength(1);
+      const followed = [...changed];
       publish([], false);
       expect(getDecisionQuestionList().questions).toEqual([]);
       expect(changed.size).toBe(0);
+      // A Host's change already on its way when it stopped lists nothing.
+      for (const listener of followed) listener();
+      expect(getDecisionQuestionList().questions).toEqual([]);
     } finally {
       withdraw();
       setDecisionQuestions([]);
@@ -1438,11 +1461,13 @@ describe("Decisions entry", () => {
       it("says the Host isn't connected when its link is down or went under the read, and fails on any other answer", async () => {
         await running(null);
         let outcome: HostCallOutcome<unknown> = { ok: false, failure: "disconnected" };
+        const cancelHostQuestion = vi.fn((_reference: DecisionQuestionReference) =>
+          Promise.resolve(outcome as HostCallOutcome<DecisionQuestionCancelResult>)
+        );
         const withdraw = publishHostPort({
           readHostQuestion: (() =>
             Promise.resolve(outcome)) as DecisionsHostsPort["readHostQuestion"],
-          cancelHostQuestion: () =>
-            Promise.resolve(outcome as HostCallOutcome<DecisionQuestionCancelResult>),
+          cancelHostQuestion,
         });
         try {
           await expect(
@@ -1454,9 +1479,14 @@ describe("Decisions entry", () => {
             result: "host-not-connected",
           });
           outcome = { ok: false, failure: "outcome-unknown" };
+          // A cancel that went out may have been taken: it says so, and isn't sent again.
           await expect(cancelDecisionQuestionByReference({ reference: ON_HOST })).resolves.toEqual({
             result: "host-not-connected",
           });
+          // A read that went out and got no answer is a failed read, to retry.
+          await expect(
+            getDecisionQuestionContentByReference({ reference: ON_HOST })
+          ).rejects.toThrow(/outcome-unknown/);
           outcome = { ok: false, failure: "unexpected-answer" };
           await expect(
             getDecisionQuestionContentByReference({ reference: ON_HOST })
@@ -1465,9 +1495,31 @@ describe("Decisions entry", () => {
           await expect(cancelDecisionQuestionByReference({ reference: ON_HOST })).resolves.toEqual({
             result: "cancelling",
           });
+          expect(cancelHostQuestion.mock.calls).toEqual([[ON_HOST], [ON_HOST], [ON_HOST]]);
         } finally {
           withdraw();
         }
+      });
+
+      it("serves a Host's owner nothing over the link once this machine runs as an owner itself", async () => {
+        const questionContent = vi.fn(async () => ({ result: "not-found" as const }));
+        const questionSummaries = vi.fn(async () => []);
+        await running({ questionContent, questionSummaries });
+        const cancelQuestionByReference = vi.spyOn(
+          peekDecisionsService()!,
+          "cancelQuestionByReference"
+        );
+
+        await expect(readHostServedQuestion({ read: "content", reference: OWN })).resolves.toEqual({
+          result: "off",
+        });
+        await expect(
+          readHostServedQuestion({ read: "summaries", references: [OWN] })
+        ).resolves.toEqual({ result: "off" });
+        await expect(cancelHostServedQuestion(OWN)).resolves.toEqual({ result: "off" });
+        expect(questionContent).not.toHaveBeenCalled();
+        expect(questionSummaries).not.toHaveBeenCalled();
+        expect(cancelQuestionByReference).not.toHaveBeenCalled();
       });
 
       it("reads opening lines here and on each Host in one batch, in the order asked for", async () => {

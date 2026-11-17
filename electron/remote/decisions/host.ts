@@ -31,6 +31,7 @@ import {
 import {
   HostCancelQuestionPayloadSchema,
   HostQuestionReadSchema,
+  MAX_HOST_QUESTION_LIST_BYTES,
   MAX_HOST_QUESTIONS,
   type HostQuestionList,
   type HostQuestionRead,
@@ -71,11 +72,18 @@ const OFF = { result: "off" } as const;
 /** What a Shell this Host doesn't serve its questions to is told: a list of none. */
 const NO_QUESTIONS = { hostId: null, questions: [] } as const;
 
-/** The newest questions within what one message carries. */
+/** The newest questions within what one message carries, by count and by size. */
 function bounded(list: HostQuestionList): HostQuestionList {
-  return list.questions.length > MAX_HOST_QUESTIONS
-    ? { hostId: list.hostId, questions: list.questions.slice(-MAX_HOST_QUESTIONS) }
-    : list;
+  const kept: HostQuestionList["questions"] = [];
+  let bytes = 0;
+  for (let i = list.questions.length - 1; i >= 0 && kept.length < MAX_HOST_QUESTIONS; i--) {
+    const question = list.questions[i]!;
+    bytes += Buffer.byteLength(JSON.stringify(question)) + 1;
+    if (bytes > MAX_HOST_QUESTION_LIST_BYTES) break;
+    kept.push(question);
+  }
+  if (kept.length === list.questions.length) return list;
+  return { hostId: list.hostId, questions: kept.reverse() };
 }
 
 type OwnerOf = Pick<OwnerStateAnnouncement, "installationId" | "ownerDeviceId">;
@@ -332,7 +340,9 @@ export function installDecisionsHostWith(
       toldQuestions.set(session, JSON.stringify(sent));
       return sent;
     }
-    return made.readQuestion(payload);
+    const answer = await made.readQuestion(payload);
+    // What was read goes only to a session still served: its owner may have said otherwise meanwhile.
+    return servesQuestions(session) ? answer : OFF;
   };
 
   const cancelQuestion = async (

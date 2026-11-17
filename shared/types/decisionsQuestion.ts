@@ -47,9 +47,10 @@ export type DecisionQuestionCancelResult =
   | DecisionQuestionHostNotConnected;
 
 /**
- * The question is a Remote Host's (#17230) and this computer has no link to
- * that Host now, or lost it before the Host answered, so nothing was read or
- * done there.
+ * The question is a Remote Host's (#17230) and this computer had no link to
+ * that Host, so nothing was read or done there. For a cancel, also a link
+ * that went or timed out before the Host answered: it may or may not have
+ * been withdrawn.
  */
 export interface DecisionQuestionHostNotConnected {
   result: "host-not-connected";

@@ -917,6 +917,8 @@ export class DecisionsService {
           } catch (err) {
             // The next start tries again; the deletion stands either way.
             this.storeFailed = true;
+            // With no store there is nothing to list until the next start opens one.
+            this.unlistQuestions();
             console.warn("[Decisions] The store didn't reopen after deleting data:", err);
           }
         }

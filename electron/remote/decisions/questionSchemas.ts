@@ -15,11 +15,15 @@ import type {
  * reaches a window and names what an answer from this computer is signed for.
  */
 
-/**
- * The most questions one Host's list carries, its newest: a list at the
- * bounds below stays well inside the link's 16 MiB message.
- */
+/** The most questions one Host's list carries: its newest. */
 export const MAX_HOST_QUESTIONS = 2_000;
+/**
+ * The most one Host's list may take as JSON: its newest questions that fit,
+ * well inside the link's 16 MiB message whatever its questions' fields hold.
+ */
+export const MAX_HOST_QUESTION_LIST_BYTES = 4 * 1024 * 1024;
+/** The most of an image one read answers: the part size a Host's Decisions reads images in. */
+export const MAX_HOST_IMAGE_PART_BYTES = 8 * 1024 * 1024;
 /** The most references one read of opening lines names, as the IPC op allows. */
 export const MAX_HOST_SUMMARY_REFERENCES = 64;
 
@@ -72,7 +76,8 @@ export const HostQuestionItemSchema = z
     alias: Count,
     agentKind: z.string().max(64),
     projectLabel: z.string().max(512).nullable(),
-    worktreeId: z.string().max(256),
+    // A worktree's id can be its path.
+    worktreeId: z.string().max(4096),
     worktreeRoot: z.string().max(4096),
     requirement: Requirement,
     askedAt: Time,
@@ -221,7 +226,8 @@ const QuestionContentSchema = z
           .strict()
       )
       .max(32),
-    thread: z.array(ThreadEntrySchema).max(4_096),
+    // The whole thread as stored: the link's own message bound is what limits it.
+    thread: z.array(ThreadEntrySchema).max(100_000),
   })
   .strict() satisfies z.ZodType<DecisionQuestionContent>;
 

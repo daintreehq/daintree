@@ -41,6 +41,7 @@ import {
   HostQuestionListSchema,
   HostQuestionSummariesResultSchema,
   HostQuestionsChangedPayloadSchema,
+  MAX_HOST_IMAGE_PART_BYTES,
   type HostQuestionListPayload,
 } from "./questionSchemas.js";
 
@@ -129,17 +130,22 @@ function answersRead(read: DecisionsHostQuestionRead, answer: unknown): boolean 
       const result = answer as ImagePartResultLike;
       if (result.result !== "read") return true;
       const { part } = result;
+      // The part that starts where asked: as much as is left, up to one part, and none past the end.
+      const expected = Math.min(MAX_HOST_IMAGE_PART_BYTES, Math.max(0, part.size - part.offset));
       return (
         part.attachmentId === read.attachmentId &&
         part.offset === read.offset &&
-        part.offset + part.bytes.byteLength <= part.size
+        part.bytes.byteLength === expected
       );
     }
     case "summaries": {
       const result = answer as SummariesResultLike;
       if (result.result !== "read") return true;
       const asked = new Set(read.references.map((reference) => reference.questionId));
-      return result.summaries.every((summary) => asked.has(summary.questionId));
+      const answered = new Set(result.summaries.map((summary) => summary.questionId));
+      return (
+        answered.size === result.summaries.length && [...answered].every((id) => asked.has(id))
+      );
     }
   }
 }
@@ -285,6 +291,8 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   private readonly questionTurns = new Map<string, number>();
   /** Sessions whose Host answered a read of its questions UNSUPPORTED: from before #17230. */
   private readonly beforeQuestions = new WeakSet<DecisionsHostSession>();
+  /** The owner each session was last told of: a list it sends is that owner's, and only it. */
+  private readonly announcedOwners = new WeakMap<DecisionsHostSession, string>();
   private readonly questionListeners = new Set<() => void>();
   private readonly now: () => number;
 
@@ -362,9 +370,9 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       const report = this.questionReports.get(hostId);
       // Heard for another owner identity: none of this one's.
       if (!report || report.owner !== owner) continue;
-      // A Host this owner no longer enrolls asks nothing of it.
+      // Only a Host that reported itself enrolled by this owner, and still does.
       const runtime = this.reports.get(hostId)?.runtime.state;
-      if (runtime === "not-enrolled" || runtime === "revoked") continue;
+      if (runtime !== "running" && runtime !== "owner-off") continue;
       heard.push({
         hostId,
         name,
@@ -461,8 +469,12 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
         { timeoutMs: HOST_QUESTION_TIMEOUT_MS }
       );
     } catch (error) {
-      // A Host from before #17230 lists none; anything else is read again on the next announcement.
-      if (codeOf(error) === "UNSUPPORTED") this.beforeQuestions.add(session);
+      // A Host from before #17230 lists none, whatever an earlier build of it reported;
+      // anything else is read again on the next announcement.
+      if (codeOf(error) === "UNSUPPORTED") {
+        this.beforeQuestions.add(session);
+        if (this.questionReports.delete(hostId)) this.questionsChanged();
+      }
       return;
     }
     if (this.questionTurns.get(hostId) !== turn) return;
@@ -482,6 +494,10 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   ): void {
     const owner = ownerKeyOf(this.deps.ownerState());
     if (!session.isOpen || owner === null || payload.hostId === null) return;
+    // Heard over the Host's current link, for the owner that link was last told of.
+    if (this.deps.sessionFor(hostId) !== session || this.announcedOwners.get(session) !== owner) {
+      return;
+    }
     const questionHostId = payload.hostId;
     const questions: Omit<DecisionQuestionListItem, "remoteHost">[] = [];
     for (const raw of payload.questions) {
@@ -545,6 +561,8 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   private async announce(hostId: string, session: DecisionsHostSession): Promise<void> {
     const state = this.deps.ownerState();
     if (state === null) return;
+    const ownerKey = ownerKeyOf(state);
+    if (ownerKey !== null) this.announcedOwners.set(session, ownerKey);
     const turn = (this.announced.get(hostId) ?? 0) + 1;
     this.announced.set(hostId, turn);
     let raw: unknown;
@@ -598,6 +616,8 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     if (!session.isOpen) return;
     this.reports.set(hostId, { session, runtime, at: this.now() });
     this.changed();
+    // Whether its questions are listed follows what it reports of its enrollment.
+    if (this.questionReports.has(hostId)) this.questionsChanged();
   }
 
   private changed(): void {

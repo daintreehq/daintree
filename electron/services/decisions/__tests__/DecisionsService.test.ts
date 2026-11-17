@@ -1825,6 +1825,45 @@ describe("DecisionsService deleting local data", () => {
     }
   });
 
+  it("lists nothing once the store a failed deletion closed doesn't reopen (#17230)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "decisions-service-erase-unlist-"));
+    try {
+      const published: Array<{ count: number; listing: boolean }> = [];
+      let opens = 0;
+      const service = new DecisionsService({
+        keyFilePath: () => join(dir, "keys.bin"),
+        openStore: async () => {
+          opens += 1;
+          if (opens > 1) throw new Error("still locked");
+          return Object.assign(fakeStore(), {
+            listQuestions: vi.fn(async () => [row(1, { origin: { host_id: RELAY.hostId } })]),
+          });
+        },
+        openRows: async () => ({
+          erase: () => {
+            throw new Error("database is locked");
+          },
+          exist: () => true,
+        }),
+        forgetIdentity: () => on(RELAY),
+        publishQuestions: (questions, listing) =>
+          published.push({ count: questions.length, listing }),
+        connect: () => ({ start: () => {}, stop: () => {} }),
+      });
+      await service.start(on(RELAY));
+      await vi.waitFor(() => expect(published.at(-1)).toEqual({ count: 1, listing: true }));
+
+      await service.eraseLocalData();
+
+      expect(opens).toBe(2);
+      // Not listing at all, so no Remote Host's questions stay listed with no store here.
+      expect(published.at(-1)).toEqual({ count: 0, listing: false });
+      await service.stop();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("sweeps from the spool what no create names, as a lifetime starts and once a deletion reopens the store", async () => {
     const t = setup();
     const spool = join(t.dir, "spool");

@@ -40,8 +40,8 @@ export function installDecisionsHost(server: DecisionsSessionSource): () => Prom
           onChanged: (listener) => decisions.onDecisionsHostRuntimeChanged(listener),
           questions: () => decisions.decisionsHostQuestions(),
           onQuestionsChanged: (listener) => decisions.onDecisionsHostQuestionsChanged(listener),
-          readQuestion: (read) => decisions.readOwnDecisionQuestion(read),
-          cancelQuestion: (reference) => decisions.cancelOwnDecisionQuestion(reference),
+          readQuestion: (read) => decisions.readHostServedQuestion(read),
+          cancelQuestion: (reference) => decisions.cancelHostServedQuestion(reference),
         };
       },
     }

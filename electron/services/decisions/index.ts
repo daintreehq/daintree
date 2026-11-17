@@ -1153,16 +1153,28 @@ function hostRouteFor(reference: DecisionQuestionReference): DecisionsHostsPort 
 }
 
 /**
- * A Host's answer as a read answers: a link that is down, or that went
- * before the Host answered, says the Host isn't connected; any other failure
- * is a failed read.
+ * A Host's answer as a read answers: a link that was down before the read
+ * went out says the Host isn't connected; any other failure, a link that
+ * went or timed out under the read included, is a failed read to retry.
  */
 function answeredByHost<T>(answered: HostCallOutcome<T>): T | { result: "host-not-connected" } {
   if (answered.ok) return answered.value;
-  if (answered.failure === "disconnected" || answered.failure === "outcome-unknown") {
+  if (answered.failure === "disconnected") return { result: "host-not-connected" };
+  throw new Error(`The Remote Host didn't answer the read (${answered.failure})`);
+}
+
+/**
+ * A Host's answer to a cancel: as a read's, except that a link that went or
+ * timed out after the cancel went out says the Host isn't connected too, so
+ * the person is told it may not have been withdrawn, and nothing sends it again.
+ */
+function cancelledByHost(
+  answered: HostCallOutcome<DecisionQuestionCancelResult>
+): DecisionQuestionCancelResult {
+  if (!answered.ok && answered.failure === "outcome-unknown") {
     return { result: "host-not-connected" };
   }
-  throw new Error(`The Remote Host didn't answer the read (${answered.failure})`);
+  return answeredByHost(answered);
 }
 
 function summaryFromHost(
@@ -1171,7 +1183,7 @@ function summaryFromHost(
 ): DecisionQuestionSummary {
   const { questionId } = reference;
   if (!answered.ok) {
-    return answered.failure === "disconnected" || answered.failure === "outcome-unknown"
+    return answered.failure === "disconnected"
       ? { questionId, result: "host-not-connected" }
       : { questionId, result: "unreadable" };
   }
@@ -1227,16 +1239,24 @@ function readOwnQuestionSummaries(
   );
 }
 
+/** This machine runs as a Remote Host now: only then does its owner's Shell read its questions. */
+function servingAsHost(): boolean {
+  return service?.getRole() === "host";
+}
+
 /**
  * One of this Remote Host's own questions read by reference for the owner's
  * Shell that enrolled it (#17230): on this machine only, never routed on to
- * another. Never makes or starts the service.
+ * another, and only while this machine runs as a Host, so a machine that has
+ * since taken up an owner identity of its own never serves that owner's
+ * questions over the link. Never makes or starts the service.
  */
-export function readOwnDecisionQuestion(
+export async function readHostServedQuestion(
   read: DecisionsHostQuestionRead
 ): Promise<
   DecisionQuestionContentResult | DecisionQuestionImagePartResult | DecisionQuestionSummariesResult
 > {
+  if (!servingAsHost()) return { result: "off" };
   switch (read.read) {
     case "content":
       return readOwnQuestionContent(read.reference);
@@ -1291,16 +1311,23 @@ export async function cancelDecisionQuestionByReference(
   payload: CancelDecisionQuestionByReferencePayload
 ): Promise<DecisionQuestionCancelResult> {
   const onHost = hostRouteFor(payload.reference)?.cancelHostQuestion(payload.reference);
-  if (onHost) return answeredByHost(await onHost);
-  return cancelOwnDecisionQuestion(payload.reference);
+  if (onHost) return cancelledByHost(await onHost);
+  return cancelOwnQuestion(payload.reference);
 }
 
 /**
- * The person withdrawing one of this machine's own questions by reference:
- * for a Remote Host, on behalf of the owner's Shell that enrolled it
- * (#17230). Never routed on to another machine.
+ * The person withdrawing one of this Remote Host's own questions by
+ * reference, for the owner's Shell that enrolled it (#17230): only while
+ * this machine runs as a Host, and never routed on to another machine.
  */
-export function cancelOwnDecisionQuestion(
+export async function cancelHostServedQuestion(
+  reference: DecisionQuestionReference
+): Promise<DecisionQuestionCancelResult> {
+  if (!servingAsHost()) return { result: "off" };
+  return cancelOwnQuestion(reference);
+}
+
+function cancelOwnQuestion(
   reference: DecisionQuestionReference
 ): Promise<DecisionQuestionCancelResult> {
   return cancelling((running) => running.cancelQuestionByReference(reference));
