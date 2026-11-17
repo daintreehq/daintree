@@ -12,7 +12,7 @@ import { useUIStore } from "@/store/uiStore";
  * Rejects when the panel is gone or trashed, so the toast never says it
  * opened something it didn't.
  */
-async function goToPanel(panelId: string): Promise<void> {
+export async function goToPanel(panelId: string): Promise<void> {
   if (!(await navigateToNotificationSource({ panelId }))) {
     throw new Error("The terminal is no longer available");
   }

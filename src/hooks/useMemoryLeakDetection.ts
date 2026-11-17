@@ -5,8 +5,11 @@ import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 import { isElectronAvailable } from "@/hooks/useElectron";
 import { terminalClient } from "@/clients/terminalClient";
+import { goToPanel } from "@/lib/watchNotification";
+import { isTerminalRestarting } from "@/store/restartExitSuppression";
 import { clientErrorText } from "@/utils/clientAppError";
 import { logWarn } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import type { SpawnResult } from "@shared/types/pty-host";
 
@@ -213,9 +216,18 @@ export function useMemoryLeakDetection(enabled: boolean): void {
 
   useEffect(() => {
     if (!isElectronAvailable()) return;
-    return window.electron.events.on("terminal:memory-leak-restart-requested", (request) => {
-      void handleMemoryLeakRestartRequest(request);
-    });
+    const unsubscribe = window.electron.events.on(
+      "terminal:memory-leak-restart-requested",
+      (request) => {
+        safeFireAndForget(handleMemoryLeakRestartRequest(request), {
+          context: "Memory-leak auto-restart",
+        });
+      }
+    );
+    return () => {
+      unsubscribe();
+      reportedFailures.clear();
+    };
   }, []);
 }
 
@@ -229,8 +241,28 @@ export const SPAWN_ANSWER_WAIT_MS = 35_000;
 type RestartOutcome =
   | { kind: "restarted" }
   | { kind: "failed"; reason: string }
+  | { kind: "unconfirmed" }
   | { kind: "skipped" }
   | { kind: "gone" };
+
+/** An answer for a later restart than this one: the pane is no longer this attempt's. */
+const SUPERSEDED = "superseded";
+
+/**
+ * The failure this policy last reported per terminal, with the restart count it
+ * left the pane on. A failed validation leaves the old process running, so the
+ * host asks again every minute, and the same failure is reported once.
+ */
+const reportedFailures = new Map<string, { restartKey: number; reason: string }>();
+
+export function resetMemoryRestartReportsForTests(): void {
+  reportedFailures.clear();
+}
+
+function restartKeyOf(terminalId: string): number | undefined {
+  const panel = usePanelStore.getState().panelsById[terminalId];
+  return panel && isPtyPanel(panel) ? (panel.restartKey ?? 0) : undefined;
+}
 
 /**
  * The host's memory-leak policy picked this view to restart a terminal over its
@@ -251,19 +283,15 @@ export async function handleMemoryLeakRestartRequest(request: {
   if (!terminal || !isPtyPanel(terminal)) return;
   if (terminal.agentState === "waiting" || terminal.isInputLocked) return;
   // The restart under way reports through the pane, and this one would be
-  // refused; it must not take that one's outcome as its own.
-  if (terminal.isRestarting) return;
+  // refused; it must not take that one's outcome as its own. The marker is set
+  // before the store flag, across the restart's first await.
+  if (terminal.isRestarting || isTerminalRestarting(terminalId)) return;
 
-  const restartKey = terminal.restartKey ?? 0;
-  const replacing = () => {
-    const live = usePanelStore.getState().panelsById[terminalId];
-    return live !== undefined && isPtyPanel(live) && (live.restartKey ?? 0) !== restartKey;
-  };
   // Armed before the restart: the host's answer can arrive ahead of the
   // spawn's own reply.
-  const answer = listenForSpawnAnswer(terminalId, replacing);
+  const answer = listenForSpawnAnswer(terminalId, terminal.restartKey ?? 0);
   try {
-    const outcome = await restartForMemory(terminal, replacing, answer.result);
+    const outcome = await restartForMemory(terminal, answer.result);
     reportRestart(terminal, thresholdMb, outcome);
   } finally {
     answer.dispose();
@@ -272,8 +300,7 @@ export async function handleMemoryLeakRestartRequest(request: {
 
 async function restartForMemory(
   before: PtyPanelData,
-  replacing: () => boolean,
-  answer: Promise<SpawnResult>
+  answer: Promise<SpawnResult | typeof SUPERSEDED>
 ): Promise<RestartOutcome> {
   try {
     await usePanelStore.getState().restartTerminal(before.id);
@@ -286,7 +313,10 @@ async function restartForMemory(
   if (after.restartError && after.restartError !== before.restartError) {
     return { kind: "failed", reason: after.restartError.message };
   }
-  if (!replacing()) return { kind: "skipped" };
+  const restartKey = before.restartKey ?? 0;
+  const keyNow = after.restartKey ?? 0;
+  if (keyNow === restartKey) return { kind: "skipped" };
+  if (keyNow !== restartKey + 1) return { kind: "gone" };
   if (after.spawnError && after.spawnError !== before.spawnError) {
     return { kind: "failed", reason: after.spawnError.message };
   }
@@ -300,11 +330,10 @@ async function restartForMemory(
     }),
   ]);
   clearTimeout(timer);
-  if (result === null) {
-    return {
-      kind: "failed",
-      reason: "The terminal backend hasn't confirmed a replacement process.",
-    };
+  if (result === SUPERSEDED) return { kind: "gone" };
+  // Main's own report of a host that hasn't answered yet: the spawn may still land.
+  if (result === null || (!result.success && result.error?.code === "SPAWN_TIMEOUT")) {
+    return { kind: "unconfirmed" };
   }
   if (!result.success) {
     return { kind: "failed", reason: result.error?.message ?? "Failed to start terminal process" };
@@ -312,18 +341,25 @@ async function restartForMemory(
   return { kind: "restarted" };
 }
 
-/** The first spawn answer for the terminal once `counts` holds, until disposed. */
+/**
+ * The host's first answer for the terminal once this restart has moved the
+ * pane's restart count, until disposed. The process being replaced was
+ * answered for long before it ran over the threshold, and no other restart
+ * starts while this one runs, so an answer at this attempt's count is its own.
+ */
 function listenForSpawnAnswer(
   terminalId: string,
-  counts: () => boolean
-): { result: Promise<SpawnResult>; dispose: () => void } {
-  let settle: (result: SpawnResult) => void = () => {};
-  const result = new Promise<SpawnResult>((resolve) => {
+  restartKey: number
+): { result: Promise<SpawnResult | typeof SUPERSEDED>; dispose: () => void } {
+  let settle: (answer: SpawnResult | typeof SUPERSEDED) => void = () => {};
+  const result = new Promise<SpawnResult | typeof SUPERSEDED>((resolve) => {
     settle = resolve;
   });
   let unsubscribe: (() => void) | null = terminalClient.onSpawnResult((id, spawnResult) => {
-    if (id !== terminalId || !counts()) return;
-    settle(spawnResult);
+    if (id !== terminalId) return;
+    const keyNow = restartKeyOf(terminalId);
+    if (keyNow === restartKey) return;
+    settle(keyNow === restartKey + 1 ? spawnResult : SUPERSEDED);
     dispose();
   });
   function dispose(): void {
@@ -334,21 +370,24 @@ function listenForSpawnAnswer(
 }
 
 function reportRestart(before: PtyPanelData, thresholdMb: number, outcome: RestartOutcome): void {
-  if (outcome.kind === "gone") return;
   const terminalId = before.id;
-  // Closed while the host answered: there is nothing left to report on.
   const panel = usePanelStore.getState().panelsById[terminalId];
-  if (!panel || panel.location === "trash") return;
-
-  // The pane already shows this very failure from the last attempt; the host
-  // asks again every minute while the process stays over the threshold.
-  if (
-    outcome.kind === "failed" &&
-    (outcome.reason === before.restartError?.message ||
-      outcome.reason === before.spawnError?.message)
-  ) {
-    logWarn("[MemoryLeak] Auto-restart failed again", { terminalId, reason: outcome.reason });
+  // Closed, or taken over by another restart: there is nothing left to report on.
+  if (outcome.kind === "gone" || !panel || !isPtyPanel(panel) || panel.location === "trash") {
+    reportedFailures.delete(terminalId);
     return;
+  }
+
+  if (outcome.kind === "failed") {
+    const restartKey = panel.restartKey ?? 0;
+    const last = reportedFailures.get(terminalId);
+    reportedFailures.set(terminalId, { restartKey, reason: outcome.reason });
+    if (last?.restartKey === restartKey && last.reason === outcome.reason) {
+      logWarn("[MemoryLeak] Auto-restart failed again", { terminalId, reason: outcome.reason });
+      return;
+    }
+  } else {
+    reportedFailures.delete(terminalId);
   }
 
   const title = panel.title;
@@ -360,13 +399,17 @@ function reportRestart(before: PtyPanelData, thresholdMb: number, outcome: Resta
     // One standing outcome per terminal: a later one retires a stale failure.
     replaceKey: `memory-leak-restart-${terminalId}`,
     context: { panelId: terminalId, ...(worktreeId ? { worktreeId } : {}) },
+    // Named so a live leak warning this merges into (same correlationId) keeps
+    // none of its own buttons beside this outcome's.
+    action: undefined,
+    actions: undefined,
   };
   const goToTerminal = {
     label: "Go to terminal",
+    successLabel: "Opened",
     actionId: "panel.focus" as const,
     actionArgs: { panelId: terminalId },
-    onClick: () =>
-      void actionService.dispatch("panel.focus", { panelId: terminalId }, { source: "user" }),
+    onClick: () => goToPanel(terminalId),
   };
 
   switch (outcome.kind) {
@@ -385,8 +428,18 @@ function reportRestart(before: PtyPanelData, thresholdMb: number, outcome: Resta
         ...shared,
         type: "error",
         title: `Couldn't auto-restart \u2014 ${title}`,
-        message: `RSS exceeded ${threshold} threshold. ${outcome.reason}`,
-        inboxMessage: `Couldn't auto-restart ${title} over ${threshold}: ${outcome.reason}`,
+        message: outcome.reason,
+        inboxMessage: `Couldn't auto-restart ${title} after RSS exceeded ${threshold}: ${outcome.reason}`,
+        action: goToTerminal,
+      });
+      return;
+    case "unconfirmed":
+      notify({
+        ...shared,
+        type: "warning",
+        title: `Auto-restart unconfirmed \u2014 ${title}`,
+        message: "The terminal backend hasn't confirmed the replacement process yet.",
+        inboxMessage: `Auto-restart of ${title} unconfirmed after RSS exceeded ${threshold}`,
         action: goToTerminal,
       });
       return;
