@@ -10,7 +10,15 @@ import {
   SquareMenu,
   SquareTerminal,
 } from "lucide-react";
-import { FolderTree, Folders, History, Package, Plus, Telescope } from "@/components/icons";
+import {
+  FolderTree,
+  Folders,
+  History,
+  Link,
+  Package,
+  Plus,
+  Telescope,
+} from "@/components/icons";
 import { BUILT_IN_AGENT_IDS, isBuiltInAgentId } from "@shared/config/agentIds";
 import type { AnyToolbarButtonId, ToolbarPinnedState } from "@/../../shared/types/toolbar";
 // `@shared/...` because these are value imports — the type-only spelling above
@@ -108,6 +116,11 @@ export const TOOLBAR_BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, Toolbar
     label: "Repository activity",
     icon: GitPullRequest,
     description: "Issues, PRs, and commits",
+  },
+  "links-launcher": {
+    label: "Links",
+    icon: Link,
+    description: "This project's links and your own, opened in a browser or panel",
   },
   canopy: {
     label: "Canopy",

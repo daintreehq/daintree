@@ -16,6 +16,7 @@ import { registerLogActions } from "./definitions/logActions";
 import { registerNavigationActions } from "./definitions/navigationActions";
 import { registerSidebarActions } from "./definitions/sidebarActions";
 import { registerNotificationsActions } from "./definitions/notificationsActions";
+import { registerLinksActions } from "./definitions/linksActions";
 import { registerPanelActions } from "./definitions/panelActions";
 import { registerPreferencesActions } from "./definitions/preferencesActions";
 import { registerProjectActions } from "./definitions/projectActions";
@@ -94,6 +95,7 @@ export function createActionDefinitions(
   registerNavigationActions(actions, callbacks);
   registerSidebarActions(actions, callbacks);
   registerNotificationsActions(actions);
+  registerLinksActions(actions);
   registerAppActions(actions, callbacks);
   registerPreferencesActions(actions, callbacks);
   registerBrowserActions(actions, callbacks);

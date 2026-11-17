@@ -3,6 +3,7 @@ import type React from "react";
 import type { AnyToolbarButtonId } from "@shared/types/toolbar";
 import { useUIStore } from "@/store/uiStore";
 import { closePluginToolbarPopoverIfHidden } from "./PluginToolbarPopover";
+import { closeLinksLauncherForHiddenButton } from "./LinksLauncher";
 import type { ForgeStatsHandle } from "./ForgeStatsToolbarButton";
 
 export interface ToolbarOverflowEvictionInput {
@@ -42,6 +43,13 @@ export function useToolbarOverflowEviction({
     }
     if (overflowSet.has("notification-center")) {
       useUIStore.getState().closeNotificationCenter();
+    }
+    // Portaled like the copy-tree panel below; its links are rows of the `…`
+    // menu that took the button now.
+    if (overflowSet.has("links-launcher")) {
+      closeLinksLauncherForHiddenButton(
+        measuredRightOverflow.includes("links-launcher") ? "right" : "left"
+      );
     }
     // The panel is portaled to document.body, so the wrapper's `invisible
     // absolute` eviction styles never reach it — an open panel would strand on

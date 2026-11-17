@@ -152,6 +152,12 @@ import { useToolbarOverflowEviction } from "./useToolbarOverflowEviction";
 import { useToolbarCustomization } from "./useToolbarCustomization";
 import { useToolbarProjectPill } from "./useToolbarProjectPill";
 import { ForgeStatsPlaceholder } from "./ForgeStatsPlaceholder";
+import { LinksLauncherDetachedHost, LinksLauncherToolbarButton } from "./LinksLauncher";
+import {
+  hasLauncherLinks,
+  useLinksLauncherLinks,
+  useLinksLauncherRefresh,
+} from "@/hooks/useLinksLauncher";
 
 export { OVERFLOW_MENU_META } from "./ToolbarOverflowMenu";
 
@@ -842,6 +848,8 @@ export function Toolbar({
     ]
   );
   const pluginMetaById = usePluginRuntimeStore((s) => s.pluginMetaById);
+  useLinksLauncherRefresh();
+  const hasLinks = hasLauncherLinks(useLinksLauncherLinks());
 
   const buttonRegistry = useMemo<
     Record<string, { render: () => React.ReactNode; isAvailable: boolean }>
@@ -1219,6 +1227,12 @@ export function Toolbar({
         // haven't enabled developer tools (the default).
         isAvailable: showDeveloperTools || watcherDegraded || topologyWatcherDark,
       },
+      // Shown only with a link to open; the palette's `links.open` still opens
+      // the launcher without it (`LinksLauncherDetachedHost`).
+      "links-launcher": {
+        render: () => <LinksLauncherToolbarButton key="links-launcher" data-toolbar-item="" />,
+        isAvailable: hasLinks,
+      },
       "assistant-toggle": {
         render: () => <ToolbarAssistantButton key="assistant-toggle" data-toolbar-item="" />,
         isAvailable: true,
@@ -1333,6 +1347,7 @@ export function Toolbar({
       fileBrowserCombo,
       fileBrowserAriaShortcut,
       fileBrowserHintHover,
+      hasLinks,
     ]
   );
 
@@ -1967,6 +1982,7 @@ export function Toolbar({
                 rightMenuSeverity,
                 rightObservations
               )}
+              <LinksLauncherDetachedHost />
 
               {/* Fixed chrome outside the measured button row: it exists only
                   while a terminal host has output paused for memory (#12375),
