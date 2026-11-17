@@ -247,6 +247,14 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
 
   const handleTextareaKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      // An IME's Enter confirms a candidate and its Escape dismisses the
+      // candidate list, so neither is this field's shortcut. Chromium also
+      // reports keyCode 229 for the keydown that commits. Still kept from the
+      // pane's input bar behind the popover, but the IME gets the key.
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) {
+        if (e.key === "Enter" || e.key === "Escape") e.stopPropagation();
+        return;
+      }
       if (e.key === "Enter") {
         // Enter inside the override field must not bubble to the primary
         // pane's input bar — that handler would call
