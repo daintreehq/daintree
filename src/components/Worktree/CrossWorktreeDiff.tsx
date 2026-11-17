@@ -9,7 +9,12 @@ import {
   type ReactNode,
 } from "react";
 import { DiffStat } from "@/components/ui/DiffStat";
-import { GroupedVirtuoso, type GroupedVirtuosoHandle } from "react-virtuoso";
+import {
+  GroupedVirtuoso,
+  type CalculateViewLocation,
+  type GroupedVirtuosoHandle,
+  type ListItem,
+} from "react-virtuoso";
 import {
   GitCompare,
   ChevronLeft,
@@ -232,7 +237,10 @@ function FileGroupHeader({ dir, onClipped }: { dir: string; onClipped: (dir: str
     if (isTruncated) onClipped(dir);
   }, [isTruncated, dir, onClipped]);
   return (
-    <div className="flex items-center gap-1.5 bg-surface-sidebar px-1.5 py-1 text-2xs text-text-secondary">
+    <div
+      data-shelf-band=""
+      className="flex items-center gap-1.5 bg-surface-sidebar px-1.5 py-1 text-2xs text-text-secondary"
+    >
       <Folder className="h-3 w-3 shrink-0" aria-hidden="true" />
       {/* Cut from its start like the file paths, so the folder the files sit
           in survives; the whole path is disclosed whenever any of it is hidden. */}
@@ -251,34 +259,47 @@ function FileGroupHeader({ dir, onClipped }: { dir: string; onClipped: (dir: str
 }
 
 /**
- * How the windowed shelf lays the groups out for the virtualizer. Its handle
- * and item keys speak SLOT indices, which count a header ahead of every
- * directory's files, so the nth drawn file is not slot n: `slotByPosition`
- * is the bridge from the order the stepper and the roving keys use.
+ * How the windowed shelf lays the groups out for the virtualizer. Its two
+ * index spaces differ: `itemContent` and the handle's `scrollIntoView` take a
+ * file's position in the drawn order (the virtualizer adds the headers ahead of
+ * it itself), while `computeItemKey` is called with a SLOT, which counts a
+ * header ahead of every directory's files. So the keys are built in slot order.
  */
 interface ShelfLayout {
   counts: number[];
-  /** Position of each group's first file in the drawn order. */
-  starts: number[];
+  /** Position of each group's last file in the drawn order. */
+  lastPositions: number[];
   keysBySlot: string[];
-  slotByPosition: number[];
 }
 
 function layoutShelf(groups: FileGroup[]): ShelfLayout {
   const counts: number[] = [];
-  const starts: number[] = [];
+  const lastPositions: number[] = [];
   const keysBySlot: string[] = [];
-  const slotByPosition: number[] = [];
+  let position = 0;
   for (const group of groups) {
     counts.push(group.files.length);
-    starts.push(slotByPosition.length);
     keysBySlot.push(`group:${group.dir || "(root)"}`);
-    for (const file of group.files) {
-      slotByPosition.push(keysBySlot.length);
-      keysBySlot.push(`file:${fileKey(file)}`);
-    }
+    for (const file of group.files) keysBySlot.push(`file:${fileKey(file)}`);
+    position += group.files.length;
+    lastPositions.push(position - 1);
   }
-  return { counts, starts, keysBySlot, slotByPosition };
+  return { counts, lastPositions, keysBySlot };
+}
+
+/**
+ * Scrolls a row the virtualizer reveals upward to just below the sticky
+ * directory band rather than under it, where the default view location puts
+ * it. `bandHeight` is read at reveal time; rows going down are left to the
+ * default, and a row already clear of both edges is left where it is.
+ */
+function viewLocationBelowBand(bandHeight: () => number): CalculateViewLocation {
+  return ({ itemTop, itemBottom, viewportTop, viewportBottom, locationParams }) => {
+    const band = bandHeight();
+    if (itemTop < viewportTop + band) return { ...locationParams, align: "start", offset: -band };
+    if (itemBottom > viewportBottom) return { ...locationParams, align: "end" };
+    return null;
+  };
 }
 
 function ChangeSetSummary({ files }: { files: CrossWorktreeFile[] }) {
@@ -690,18 +711,19 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
 
   const listRef = useRef<HTMLDivElement | null>(null);
   const virtuosoRef = useRef<GroupedVirtuosoHandle | null>(null);
-  const revealRovingRow = useCallback(
-    (position: number) => {
-      const slot = shelfLayout?.slotByPosition[position];
-      if (slot === undefined) return;
-      virtuosoRef.current?.scrollIntoView({ index: slot, behavior: "auto" });
-    },
-    [shelfLayout]
-  );
+  const revealPosition = useCallback((position: number) => {
+    virtuosoRef.current?.scrollIntoView({
+      index: position,
+      behavior: "auto",
+      calculateViewLocation: viewLocationBelowBand(
+        () => listRef.current?.querySelector<HTMLElement>("[data-shelf-band]")?.offsetHeight ?? 0
+      ),
+    });
+  }, []);
   const roving = useRovingRows({
     keys: rovingKeys,
     preferredKey: selectedFile ? fileKey(selectedFile) : null,
-    reveal: revealRovingRow,
+    reveal: revealPosition,
     windowed,
     containerRef: listRef,
   });
@@ -769,32 +791,26 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
     };
   }, [isOpen, files, navigateFile]);
 
-  // Bumped the first time each mounted virtualizer reports a rendered range,
-  // the first moment it has measured anything: until then its scroll is a
-  // no-op, and measurement alone re-runs no effect. Without it a shelf put
-  // away and brought back mid-list would come up at the top.
+  // Bumped the first time each mounted virtualizer renders an item with a
+  // measured size: until then its scroll is a no-op (its first pass is an
+  // unmeasured probe), and measurement alone re-runs no effect. Without it a
+  // shelf put away and brought back mid-list would come up at the top. Re-armed
+  // below whenever the windowed list leaves the screen.
   const [measuredGeneration, setMeasuredGeneration] = useState(0);
   const awaitingMeasureRef = useRef(true);
-  const setVirtuoso = useCallback((handle: GroupedVirtuosoHandle | null) => {
-    virtuosoRef.current = handle;
-    if (!handle) awaitingMeasureRef.current = true;
-  }, []);
-  const handleRangeChanged = useCallback(() => {
-    if (!awaitingMeasureRef.current) return;
+  const handleItemsRendered = useCallback((items: ListItem<unknown>[]) => {
+    if (!awaitingMeasureRef.current || !items.some((item) => item.size > 0)) return;
     awaitingMeasureRef.current = false;
     setMeasuredGeneration((current) => current + 1);
   }, []);
 
   // Keep the open file's row in view while stepping with the keyboard.
   // Windowed, the row may not exist to be queried, so the virtualizer is asked
-  // for its slot instead; either way a row already in view is left alone.
-  const selectedSlot =
-    windowed && selectedFileIndex >= 0 ? shelfLayout?.slotByPosition[selectedFileIndex] : undefined;
+  // for it by position instead; either way a row already in view is left alone.
   useEffect(() => {
     if (!selectedFile) return;
     if (windowed) {
-      if (selectedSlot === undefined) return;
-      virtuosoRef.current?.scrollIntoView({ index: selectedSlot, behavior: "auto" });
+      if (selectedFileIndex >= 0) revealPosition(selectedFileIndex);
       return;
     }
     if (!listRef.current) return;
@@ -804,7 +820,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
     if (typeof row?.scrollIntoView === "function") {
       row.scrollIntoView({ behavior: "instant", block: "nearest" });
     }
-  }, [selectedFile, windowed, selectedSlot, measuredGeneration]);
+  }, [selectedFile, windowed, selectedFileIndex, revealPosition, measuredGeneration]);
 
   // Gated and floored: a fast comparison shows nothing, a slow one shows a
   // skeleton that stays long enough to read as one.
@@ -827,6 +843,13 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
   const showShelf =
     canCompare &&
     ((showListSkeleton && diffShowFileList) || (hasFiles && (diffShowFileList || !selectedFile)));
+
+  // The virtualizer mounts exactly while this holds; the next one to mount
+  // has to measure again before a reveal can land.
+  const windowedListShown = showShelf && listReady && windowed;
+  useEffect(() => {
+    if (!windowedListShown) awaitingMeasureRef.current = true;
+  }, [windowedListShown]);
 
   const rightPath = rightWorktree?.path;
 
@@ -1136,10 +1159,15 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                 shelfLayout &&
                 (windowed ? (
                   <GroupedVirtuoso
-                    ref={setVirtuoso}
+                    ref={virtuosoRef}
                     groupCounts={shelfLayout.counts}
                     style={{ height: "100%" }}
-                    rangeChanged={handleRangeChanged}
+                    // The rows rove the shelf's one tab stop; a focusable
+                    // scroller would be a second one.
+                    tabIndex={-1}
+                    // A row that focus scrolls in from above lands clear of the sticky band.
+                    className="overscroll-contain scroll-pt-7"
+                    itemsRendered={handleItemsRendered}
                     groupContent={(groupIndex) => (
                       <FileGroupHeader
                         dir={groups[groupIndex]?.dir ?? ""}
@@ -1150,9 +1178,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                       const file = files[position];
                       const group = groups[groupIndex];
                       if (!file || !group) return null;
-                      const lastInGroup =
-                        position ===
-                        (shelfLayout.starts[groupIndex] ?? 0) + group.files.length - 1;
+                      const lastInGroup = position === shelfLayout.lastPositions[groupIndex];
                       // The static path spaces rows with `gap-px` and groups
                       // with `mb-1.5`; the virtualizer places items itself and
                       // never sees either, so the space rides inside the item.

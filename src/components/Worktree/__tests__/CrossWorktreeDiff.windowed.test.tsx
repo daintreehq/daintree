@@ -12,16 +12,35 @@ import type { CrossWorktreeFile } from "@shared/types/ipc/git";
 // Driven as a value and a change event, not as a Radix popup.
 vi.mock("@/components/ui/select", () => import("@/components/ui/__tests__/nativeSelectMock"));
 
-const worktrees = new Map([
-  [
-    "wt-left",
-    { id: "wt-left", name: "helios", path: "/wt/left", branch: "main", isMainWorktree: true },
-  ],
-  [
-    "wt-right",
-    { id: "wt-right", name: "right", path: "/wt/right", branch: "feature", isMainWorktree: false },
-  ],
-]);
+// A new map per head move, as the store produces; a new compare head is what
+// refreshes the comparison in place.
+let worktrees = new Map<string, unknown>();
+function setCompareHead(headOid: string) {
+  worktrees = new Map<string, unknown>([
+    [
+      "wt-left",
+      {
+        id: "wt-left",
+        name: "helios",
+        path: "/wt/left",
+        branch: "main",
+        isMainWorktree: true,
+        worktreeChanges: { headOid: "base" },
+      },
+    ],
+    [
+      "wt-right",
+      {
+        id: "wt-right",
+        name: "right",
+        path: "/wt/right",
+        branch: "feature",
+        isMainWorktree: false,
+        worktreeChanges: { headOid },
+      },
+    ],
+  ]);
+}
 
 vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: (sel: (s: { worktrees: Map<string, unknown> }) => unknown) =>
@@ -89,6 +108,7 @@ vi.mock("react-virtuoso", async (importOriginal) => {
 const mockCompareWorktrees = vi.fn();
 
 beforeEach(() => {
+  setCompareHead("one");
   mockCompareWorktrees.mockReset();
   scrollIntoViewMock.mockClear();
   Object.defineProperty(window, "electron", {
@@ -103,12 +123,12 @@ beforeEach(() => {
  * order they are numbered, so the nth drawn file sits behind n / perGroup
  * group headers plus its own: slot = n + floor(n / perGroup) + 1.
  */
-function comparison(groupCount: number, perGroup: number): CrossWorktreeFile[] {
+function comparison(groupCount: number, perGroup: number, root = "src/mod"): CrossWorktreeFile[] {
   const files: CrossWorktreeFile[] = [];
   for (let g = 0; g < groupCount; g++) {
     for (let f = 0; f < perGroup; f++) {
       files.push({
-        path: `src/mod-${String(g).padStart(3, "0")}/file-${String(f).padStart(4, "0")}.ts`,
+        path: `${root}-${String(g).padStart(3, "0")}/file-${String(f).padStart(4, "0")}.ts`,
         status: "M",
         insertions: 2,
         deletions: 1,
@@ -118,7 +138,7 @@ function comparison(groupCount: number, perGroup: number): CrossWorktreeFile[] {
   return files.reverse();
 }
 
-function renderComparison(files: CrossWorktreeFile[]) {
+function respondWith(files: CrossWorktreeFile[]) {
   mockCompareWorktrees.mockImplementation((_path, _b1, _b2, filePath?: string) =>
     Promise.resolve(
       filePath === undefined
@@ -126,14 +146,31 @@ function renderComparison(files: CrossWorktreeFile[]) {
         : `diff --git a/${filePath} b/${filePath}\n@@ -1 +1 @@\n-old\n+new`
     )
   );
-  render(
+}
+
+function tree() {
+  return (
     <TooltipProvider>
       <VirtuosoMockContext.Provider value={{ itemHeight: 24, viewportHeight: 480 }}>
         <CrossWorktreeDiff isOpen onClose={vi.fn()} initialWorktreeId="wt-left" />
       </VirtuosoMockContext.Provider>
     </TooltipProvider>
   );
+}
+
+function renderComparison(files: CrossWorktreeFile[]) {
+  respondWith(files);
+  const view = render(tree());
   fireEvent.change(screen.getByLabelText("Compare"), { target: { value: "wt-right" } });
+  return view;
+}
+
+function drawnOrder(files: CrossWorktreeFile[]): string[] {
+  return groupComparisonFiles(files).flatMap((group) => group.files.map((f) => f.path));
+}
+
+function currentRow(): HTMLElement | undefined {
+  return fileRows().find((row) => row.getAttribute("aria-current") === "true");
 }
 
 function fileRows(): HTMLElement[] {
@@ -163,7 +200,7 @@ describe("CrossWorktreeDiff shelf with a large comparison (#17461)", () => {
     renderComparison(files);
     await waitFor(() => expect(fileRows().length).toBeGreaterThan(0));
 
-    const drawn = groupComparisonFiles(files).flatMap((group) => group.files.map((f) => f.path));
+    const drawn = drawnOrder(files);
     const mounted = fileRows().map((row) => row.dataset.filePath);
     expect(mounted).toEqual(drawn.slice(0, mounted.length));
     expect(screen.getAllByText("src/mod-000").length).toBeGreaterThan(0);
@@ -175,34 +212,65 @@ describe("CrossWorktreeDiff shelf with a large comparison (#17461)", () => {
     renderComparison(files);
     await waitFor(() => expect(position()).toBe(`1 of ${files.length}`));
 
+    const drawn = drawnOrder(files);
     for (let i = 1; i < files.length; i++) fireEvent.keyDown(window, { key: "]" });
     await waitFor(() => expect(position()).toBe(`${files.length} of ${files.length}`));
-    // The open file's row is asked for by its SLOT, which counts the band ahead
-    // of each directory's files.
-    const last = files.length - 1;
+    // The virtualizer is asked for the open file by its place in the drawn
+    // order, and the row it brings in is that file's.
     expect(scrollIntoViewMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ index: last + Math.floor(last / perGroup) + 1 })
+      expect.objectContaining({ index: files.length - 1 })
     );
+    await waitFor(() => expect(currentRow()?.dataset.filePath).toBe(drawn[files.length - 1]));
 
     fireEvent.keyDown(window, { key: "[" });
     await waitFor(() => expect(position()).toBe(`${files.length - 1} of ${files.length}`));
+    expect(currentRow()?.dataset.filePath).toBe(drawn[files.length - 2]);
   });
 
-  it("asks the virtualizer for the final file when End lands on a row that is not mounted", async () => {
-    const perGroup = 100;
-    const files = comparison(30, perGroup);
+  it("brings in and focuses the final file when End lands on a row that is not mounted", async () => {
+    const files = comparison(30, 100);
     renderComparison(files);
     await waitFor(() => expect(fileRows().length).toBeGreaterThan(0));
+    const drawn = drawnOrder(files);
+    expect(fileRows().some((row) => row.dataset.filePath === drawn.at(-1))).toBe(false);
 
     const stop = fileRows().find((row) => row.tabIndex === 0)!;
     stop.focus();
-    scrollIntoViewMock.mockClear();
     fireEvent.keyDown(stop, { key: "End" });
 
-    const last = files.length - 1;
-    expect(scrollIntoViewMock).toHaveBeenCalledWith(
-      expect.objectContaining({ index: last + Math.floor(last / perGroup) + 1 })
+    await waitFor(() =>
+      expect((document.activeElement as HTMLElement | null)?.dataset.filePath).toBe(drawn.at(-1))
     );
+    fireEvent.click(document.activeElement!);
+    await waitFor(() => expect(position()).toBe(`${files.length} of ${files.length}`));
+  });
+
+  it("keeps the shelf a single tab stop once it windows", async () => {
+    renderComparison(comparison(30, 100));
+    await waitFor(() => expect(fileRows().length).toBeGreaterThan(0));
+    const shelf = screen.getByTestId("cross-worktree-file-shelf");
+    expect(shelf.querySelectorAll('[tabindex="0"]')).toHaveLength(1);
+  });
+
+  it("reveals the open file where a refresh moved it, headers ahead of it included", async () => {
+    // The open file starts first in the shelf. The refresh adds 2,900 files in
+    // 290 directories that sort ahead of it, so its row moves to position 2,900
+    // with 290 more bands above it: a reveal that counted those bands as rows
+    // would land 290 rows past it, well outside the mounted window.
+    const original = comparison(4, 50);
+    const view = renderComparison(original);
+    const open = drawnOrder(original)[0]!;
+    await waitFor(() => expect(currentRow()?.dataset.filePath).toBe(open));
+
+    const refreshed = [...comparison(290, 10, "lib/pkg"), ...original];
+    respondWith(refreshed);
+    setCompareHead("two");
+    view.rerender(tree());
+
+    await waitFor(() => expect(position()).toBe(`2901 of ${refreshed.length}`));
+    expect(drawnOrder(refreshed)[2900]).toBe(open);
+    expect(scrollIntoViewMock).toHaveBeenLastCalledWith(expect.objectContaining({ index: 2900 }));
+    await waitFor(() => expect(currentRow()?.dataset.filePath).toBe(open));
   });
 
   it("still discloses the full path when a windowed row's directory band is shortened", async () => {
