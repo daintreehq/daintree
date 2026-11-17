@@ -6,6 +6,7 @@ import { OPERATION_LABEL } from "@/components/Git/repoOperationCopy";
 import { composeConflictAgentText, type ConflictAgentTextArgs } from "./conflictAgentText";
 
 const NO_TARGET_HINT = "Open an agent terminal, then try sending again.";
+const TOO_LARGE_HINT = "These conflicts are too large to send. Copy the file list into the agent.";
 
 type ConflictAgentHandoffProps = ConflictAgentTextArgs;
 
@@ -27,7 +28,10 @@ export function ConflictAgentHandoff(props: ConflictAgentHandoffProps) {
 
   const handleSend = () => {
     const text = composeConflictAgentText(props);
-    if (!text) return;
+    if (!text) {
+      setHint(TOO_LARGE_HINT);
+      return;
+    }
     if (
       openSendToAgentPaletteWithText({
         text,

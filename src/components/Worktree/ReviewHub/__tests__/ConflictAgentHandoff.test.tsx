@@ -81,4 +81,21 @@ describe("ConflictAgentHandoff", () => {
     expect(screen.queryByTestId("conflict-send-to-agent-hint")).toBeNull();
     expect(button.getAttribute("aria-describedby")).toBeNull();
   });
+
+  it("says so instead of staying silent when the text can't be made to fit", () => {
+    render(
+      <ConflictAgentHandoff
+        worktreePath={"/" + "$".repeat(7_000)}
+        operation="MERGING"
+        sides={{ ours: "current branch", theirs: "incoming changes" }}
+        rebase={null}
+        files={[{ path: "src/a.ts", kind: "both modified", hunkCount: 1, firstMarkerLine: 3 }]}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Send conflicts to agent" }));
+
+    expect(openSendToAgentMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId("conflict-send-to-agent-hint").textContent).toContain("too large");
+  });
 });
