@@ -78,12 +78,23 @@ vi.mock("../../services/PanelSuspectLedgerService.js", () => ({
   getPanelSuspectLedger: vi.fn(() => panelSuspectLedgerMock),
 }));
 
-const quitWarningMock = vi.hoisted(() => ({
-  getActiveAgentCount: vi.fn(() => 0),
-  showQuitWarning: vi.fn(() => Promise.resolve(true)),
-}));
+const quitWarningMock = vi.hoisted(() => {
+  const getActiveAgentCount = vi.fn(() => 0);
+  return {
+    getActiveAgentCount,
+    // The before-quit listener reads the split counts; most tests only set the total.
+    getActiveAgents: vi.fn(() => ({ activeAgents: getActiveAgentCount(), awaitingApproval: 0 })),
+    showQuitWarning: vi.fn((..._args: unknown[]): Promise<QuitDecision> => Promise.resolve("quit")),
+  };
+});
 
 vi.mock("../../utils/quitWarning.js", () => quitWarningMock);
+
+const backgroundAgentsMock = vi.hoisted(() => ({
+  hasOpenWindows: vi.fn(() => true),
+}));
+
+vi.mock("../backgroundAgents.js", () => backgroundAgentsMock);
 
 const agentStoreMock = vi.hoisted(() => ({
   getAgentsByAvailability: vi.fn(() => []),
@@ -404,6 +415,7 @@ const performanceTraceMock = vi.hoisted(() => ({
 vi.mock("../../utils/performanceTrace.js", () => performanceTraceMock);
 
 import type { ShutdownDeps } from "../shutdown.js";
+import type { QuitDecision } from "../../utils/quitWarning.js";
 import {
   CAPTURE_DELIVERY_BUDGET_MS,
   CAPTURE_PERSISTENCE_DRAIN_BUDGET_MS,
@@ -449,7 +461,8 @@ describe("registerShutdownHandler", () => {
     isSmokeTestMock.value = false;
     signalShutdownMock.isSignalShutdown.mockReturnValue(false);
     quitWarningMock.getActiveAgentCount.mockReturnValue(0);
-    quitWarningMock.showQuitWarning.mockResolvedValue(true);
+    quitWarningMock.showQuitWarning.mockResolvedValue("quit");
+    backgroundAgentsMock.hasOpenWindows.mockReturnValue(true);
     ccrConfigMock.stopWatching.mockResolvedValue(undefined);
     serviceRefsMock.setInitialState({});
     // A queued drain a failed test never consumed must not answer for the next one.
@@ -708,7 +721,7 @@ describe("registerShutdownHandler", () => {
 
   it("shows dialog when window exists, agents active, and user cancels", async () => {
     quitWarningMock.getActiveAgentCount.mockReturnValue(2);
-    quitWarningMock.showQuitWarning.mockResolvedValue(false);
+    quitWarningMock.showQuitWarning.mockResolvedValue("cancel");
 
     const mainWindow = {} as Electron.BrowserWindow;
     const { beforeQuitCb } = await setup({
@@ -727,7 +740,7 @@ describe("registerShutdownHandler", () => {
 
   it("asks before quitting when a Shell is attached, even with no agents working", async () => {
     quitWarningMock.getActiveAgentCount.mockReturnValue(0);
-    quitWarningMock.showQuitWarning.mockResolvedValue(false);
+    quitWarningMock.showQuitWarning.mockResolvedValue("cancel");
     const { setAttachedShellsProvider } = await import("../attachedShells.js");
     setAttachedShellsProvider(() => [{ clientName: "MacBook Pro" }]);
 
@@ -741,7 +754,8 @@ describe("registerShutdownHandler", () => {
       await beforeQuitCb(event);
 
       expect(quitWarningMock.showQuitWarning).toHaveBeenCalledWith(
-        { activeAgents: 0, attachedShells: [{ clientName: "MacBook Pro" }] },
+        { activeAgents: 0, awaitingApproval: 0, attachedShells: [{ clientName: "MacBook Pro" }] },
+        expect.anything(),
         expect.anything(),
         expect.anything()
       );
@@ -753,10 +767,10 @@ describe("registerShutdownHandler", () => {
 
   it("holds the shared confirmation flag while the quit dialog is open", async () => {
     const { isExitConfirmationPending } = await import("../attachedShells.js");
-    let answer: (confirmed: boolean) => void = () => {};
+    let answer: (decision: QuitDecision) => void = () => {};
     quitWarningMock.getActiveAgentCount.mockReturnValue(1);
     quitWarningMock.showQuitWarning.mockReturnValue(
-      new Promise<boolean>((resolve) => {
+      new Promise<QuitDecision>((resolve) => {
         answer = resolve;
       })
     );
@@ -768,7 +782,7 @@ describe("registerShutdownHandler", () => {
     });
     const pending = beforeQuitCb(makeEvent());
     expect(isExitConfirmationPending()).toBe(true);
-    answer(false);
+    answer("cancel");
     await pending;
     expect(isExitConfirmationPending()).toBe(false);
   });
@@ -883,28 +897,30 @@ describe("registerShutdownHandler", () => {
 
     async function setupOpenWarning() {
       const warning = {
-        answer: (_confirmed: boolean) => {},
+        answer: (_decision: QuitDecision) => {},
         fail: (_err: Error) => {},
       };
       quitWarningMock.getActiveAgentCount.mockReturnValue(1);
       quitWarningMock.showQuitWarning.mockImplementationOnce(
         () =>
-          new Promise<boolean>((resolve, reject) => {
+          new Promise<QuitDecision>((resolve, reject) => {
             warning.answer = resolve;
             warning.fail = reject;
           })
       );
       const coordinator = await import("../shutdownCoordinator.js");
       const startShutdown = vi.spyOn(coordinator, "startShutdown");
+      const keepAgentsRunning = vi.fn();
       const ctx = await setup({
         windowRegistry: {
           getPrimary: () => ({ browserWindow: {} as Electron.BrowserWindow }),
         } as unknown as ShutdownDeps["windowRegistry"],
+        keepAgentsRunning,
       });
       const userQuit = ctx.beforeQuitCb(makeEvent());
       expect(quitWarningMock.showQuitWarning).toHaveBeenCalledOnce();
       expect(coordinator.getActiveShutdown()).toBeNull();
-      return { ...ctx, coordinator, startShutdown, userQuit, warning };
+      return { ...ctx, coordinator, startShutdown, userQuit, warning, keepAgentsRunning };
     }
 
     function nextExit() {
@@ -913,16 +929,17 @@ describe("registerShutdownHandler", () => {
       });
     }
 
-    it.each([
-      ["Quit Anyway", true],
-      ["Cancel", false],
+    it.each<[string, QuitDecision | Error]>([
+      ["Quit Anyway", "quit"],
+      ["Cancel", "cancel"],
+      ["Keep Agents Running", "keep-running"],
       ["a failed dialog", new Error("message box failed")],
     ])(
       "lets a signal claim the shutdown at once, and the warning's late %s adds no second request",
       async (_answer, outcome) => {
         const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
         try {
-          const { beforeQuitCb, coordinator, startShutdown, userQuit, warning } =
+          const { beforeQuitCb, coordinator, startShutdown, userQuit, warning, keepAgentsRunning } =
             await setupOpenWarning();
           const { isExitConfirmationPending } = await import("../attachedShells.js");
           const exited = nextExit();
@@ -940,10 +957,12 @@ describe("registerShutdownHandler", () => {
           expect(startShutdown).toHaveBeenCalledExactlyOnceWith("app-quit", expect.any(Function));
           expect(crashRecoveryMock.takeBackup).toHaveBeenCalledOnce();
 
-          if (typeof outcome === "boolean") warning.answer(outcome);
+          if (typeof outcome === "string") warning.answer(outcome);
           else warning.fail(outcome);
           await userQuit;
           expect(isExitConfirmationPending()).toBe(false);
+          // The process is already shutting down: there are no agents left to keep.
+          expect(keepAgentsRunning).not.toHaveBeenCalled();
           await exited;
 
           expect(startShutdown).toHaveBeenCalledOnce();
@@ -969,15 +988,15 @@ describe("registerShutdownHandler", () => {
       expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalledOnce();
       expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledOnce();
 
-      warning.answer(true);
+      warning.answer("quit");
       await userQuit;
       expect(startShutdown).toHaveBeenCalledOnce();
       expect(appMock.exit).toHaveBeenCalledOnce();
     });
 
-    it.each([
-      ["Quit Anyway", true],
-      ["Cancel", false],
+    it.each<[string, QuitDecision]>([
+      ["Quit Anyway", "quit"],
+      ["Cancel", "cancel"],
     ])("does the same for a Windows session-end and a late %s", async (_answer, confirmed) => {
       const originalPlatform = process.platform;
       vi.doMock("../../projectMenuState.js", () => ({ refreshProjectMenuState: vi.fn() }));
@@ -1042,7 +1061,7 @@ describe("registerShutdownHandler", () => {
       expect(quitWarningMock.showQuitWarning).toHaveBeenCalledOnce();
       expect(startShutdown).not.toHaveBeenCalled();
 
-      warning.answer(false);
+      warning.answer("cancel");
       await userQuit;
 
       expect(startShutdown).not.toHaveBeenCalled();
@@ -1059,18 +1078,131 @@ describe("registerShutdownHandler", () => {
     });
   });
 
-  it("does not ask about attached Shells when there is no window to ask in", async () => {
+  it("asks about attached Shells with no window open, without a parent", async () => {
     const { setAttachedShellsProvider } = await import("../attachedShells.js");
     setAttachedShellsProvider(() => [{ clientName: "MacBook Pro" }]);
+    backgroundAgentsMock.hasOpenWindows.mockReturnValue(false);
+    quitWarningMock.showQuitWarning.mockResolvedValue("cancel");
 
     try {
       const { beforeQuitCb } = await setup();
       await beforeQuitCb(makeEvent());
 
-      expect(quitWarningMock.showQuitWarning).not.toHaveBeenCalled();
+      expect(quitWarningMock.showQuitWarning).toHaveBeenCalledExactlyOnceWith(
+        { activeAgents: 0, awaitingApproval: 0, attachedShells: [{ clientName: "MacBook Pro" }] },
+        expect.anything(),
+        null,
+        { offerKeepRunning: false }
+      );
+      expect(appMock.exit).not.toHaveBeenCalled();
     } finally {
       setAttachedShellsProvider(null);
     }
+  });
+
+  describe("Keep Agents Running", () => {
+    const withWindow = (keepAgentsRunning?: () => void): Partial<ShutdownDeps> => ({
+      windowRegistry: {
+        getPrimary: () => ({ browserWindow: {} as Electron.BrowserWindow }),
+      } as unknown as ShutdownDeps["windowRegistry"],
+      keepAgentsRunning,
+    });
+
+    it("closes the windows instead of shutting down when chosen", async () => {
+      quitWarningMock.getActiveAgentCount.mockReturnValue(2);
+      quitWarningMock.showQuitWarning.mockResolvedValue("keep-running");
+      const keepAgentsRunning = vi.fn();
+      const coordinator = await import("../shutdownCoordinator.js");
+      const startShutdown = vi.spyOn(coordinator, "startShutdown");
+      const { beforeQuitCb } = await setup(withWindow(keepAgentsRunning));
+      const event = makeEvent();
+
+      await beforeQuitCb(event);
+
+      expect(event.preventDefault).toHaveBeenCalled();
+      expect(quitWarningMock.showQuitWarning).toHaveBeenCalledWith(
+        expect.objectContaining({ activeAgents: 2 }),
+        expect.anything(),
+        expect.anything(),
+        { offerKeepRunning: true }
+      );
+      expect(keepAgentsRunning).toHaveBeenCalledOnce();
+      expect(startShutdown).not.toHaveBeenCalled();
+      expect(coordinator.getActiveShutdown()).toBeNull();
+      expect(deferredInitQueueMock.haltDeferredQueue).not.toHaveBeenCalled();
+      expect(openWindowsTrackerMock.freezeAndSnapshotOpenWindows).not.toHaveBeenCalled();
+      expect(appMock.exit).not.toHaveBeenCalled();
+    });
+
+    it("asks again at the next quit with no window open, and shuts down when told to", async () => {
+      quitWarningMock.getActiveAgentCount.mockReturnValue(1);
+      quitWarningMock.showQuitWarning.mockResolvedValueOnce("keep-running");
+      const keepAgentsRunning = vi.fn(() => backgroundAgentsMock.hasOpenWindows.mockReturnValue(false));
+      const { beforeQuitCb } = await setup({ keepAgentsRunning });
+
+      await beforeQuitCb(makeEvent());
+      expect(keepAgentsRunning).toHaveBeenCalledOnce();
+
+      quitWarningMock.showQuitWarning.mockResolvedValueOnce("quit");
+      const exited = new Promise<void>((resolve) => {
+        appMock.exit.mockImplementationOnce(() => resolve());
+      });
+      await beforeQuitCb(makeEvent());
+      await exited;
+
+      expect(quitWarningMock.showQuitWarning).toHaveBeenLastCalledWith(
+        expect.objectContaining({ activeAgents: 1 }),
+        expect.anything(),
+        null,
+        { offerKeepRunning: false }
+      );
+      expect(keepAgentsRunning).toHaveBeenCalledOnce();
+      expect(appMock.exit).toHaveBeenCalledWith(0);
+    });
+
+    it("isn't offered when nothing wires it up", async () => {
+      quitWarningMock.getActiveAgentCount.mockReturnValue(1);
+      quitWarningMock.showQuitWarning.mockResolvedValue("cancel");
+      const { beforeQuitCb } = await setup(withWindow());
+
+      await beforeQuitCb(makeEvent());
+
+      expect(quitWarningMock.showQuitWarning).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        { offerKeepRunning: false }
+      );
+    });
+
+    it("passes agents held on a permission prompt through to the warning", async () => {
+      quitWarningMock.getActiveAgents.mockReturnValueOnce({ activeAgents: 3, awaitingApproval: 1 });
+      quitWarningMock.showQuitWarning.mockResolvedValue("cancel");
+      const { beforeQuitCb } = await setup(withWindow(vi.fn()));
+
+      await beforeQuitCb(makeEvent());
+
+      expect(quitWarningMock.showQuitWarning).toHaveBeenCalledWith(
+        { activeAgents: 3, awaitingApproval: 1, attachedShells: [] },
+        expect.anything(),
+        expect.anything(),
+        { offerKeepRunning: true }
+      );
+    });
+  });
+
+  it("never asks where no dialog can show, and quits", async () => {
+    quitWarningMock.getActiveAgentCount.mockReturnValue(2);
+    const { beforeQuitCb } = await setup({ canShowDialogs: () => false });
+    const exited = new Promise<void>((resolve) => {
+      appMock.exit.mockImplementationOnce(() => resolve());
+    });
+
+    await beforeQuitCb(makeEvent());
+    await exited;
+
+    expect(quitWarningMock.showQuitWarning).not.toHaveBeenCalled();
+    expect(appMock.exit).toHaveBeenCalledWith(0);
   });
 
   it("halts the deferred init queue before the cleanup chain starts", async () => {
@@ -1120,7 +1252,7 @@ describe("registerShutdownHandler", () => {
   it("does not snapshot the open-window manifest when the quit is cancelled", async () => {
     // A cancelled quit must leave the manifest live — freezing is permanent.
     quitWarningMock.getActiveAgentCount.mockReturnValue(2);
-    quitWarningMock.showQuitWarning.mockResolvedValue(false);
+    quitWarningMock.showQuitWarning.mockResolvedValue("cancel");
 
     const mainWindow = {} as Electron.BrowserWindow;
     const { beforeQuitCb } = await setup({
@@ -1135,7 +1267,7 @@ describe("registerShutdownHandler", () => {
 
   it("does not halt the deferred init queue when the user cancels quit", async () => {
     quitWarningMock.getActiveAgentCount.mockReturnValue(2);
-    quitWarningMock.showQuitWarning.mockResolvedValue(false);
+    quitWarningMock.showQuitWarning.mockResolvedValue("cancel");
 
     const mainWindow = {} as Electron.BrowserWindow;
     const { beforeQuitCb } = await setup({
@@ -1152,7 +1284,7 @@ describe("registerShutdownHandler", () => {
 
   it("shows dialog when window exists, agents active, and user confirms", async () => {
     quitWarningMock.getActiveAgentCount.mockReturnValue(2);
-    quitWarningMock.showQuitWarning.mockResolvedValue(true);
+    quitWarningMock.showQuitWarning.mockResolvedValue("quit");
 
     const mainWindow = {} as Electron.BrowserWindow;
     const { beforeQuitCb } = await setup({
@@ -3096,9 +3228,9 @@ describe("registerShutdownHandler", () => {
 
     it("claims the shutdown itself when a quit confirmation was still open", async () => {
       quitWarningMock.getActiveAgentCount.mockReturnValue(2);
-      let answerDialog: (confirmed: boolean) => void = () => {};
+      let answerDialog: (decision: QuitDecision) => void = () => {};
       quitWarningMock.showQuitWarning.mockImplementationOnce(
-        () => new Promise<boolean>((resolve) => (answerDialog = resolve))
+        () => new Promise<QuitDecision>((resolve) => (answerDialog = resolve))
       );
       const mainWindow = {} as Electron.BrowserWindow;
       const { beforeQuitCb, coordinator, finishGroupStop } = await setupGroupStop({
@@ -3118,7 +3250,7 @@ describe("registerShutdownHandler", () => {
       expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalled();
       expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(0);
 
-      answerDialog(true);
+      answerDialog("quit");
       await userQuit;
       await vi.waitFor(() => expect(coordinator.getActiveShutdown()?.phase).toBe("handoff"), {
         timeout: 5_000,

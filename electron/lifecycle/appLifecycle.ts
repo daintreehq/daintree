@@ -255,10 +255,11 @@ export interface AppLifecycleOptions {
   windowRegistry?: WindowRegistry;
   /**
    * True while this process runs with or without windows: it serves as a
-   * Host, or an OS job started it windowless to run due schedules. Closing the
-   * last window then leaves it running on every platform, since remote
-   * Shells, working agents and scheduled runs still depend on it, and a
-   * relaunch with nothing on screen opens a window.
+   * Host, an OS job started it windowless to run due schedules, or the user
+   * quit with Keep Agents Running. Closing the last window then leaves it
+   * running on every platform, since remote Shells, working agents and
+   * scheduled runs still depend on it, and a relaunch with nothing on screen
+   * opens a window.
    */
   keepsRunningWithoutWindows?: () => boolean;
   /**

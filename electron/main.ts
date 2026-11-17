@@ -51,6 +51,7 @@ import {
   resolveLaunchIntent,
   resolveRestoreFallbackProjectId,
   shouldRestoreWindowFleet,
+  stripLaunchTargets,
   type LaunchIntent,
   type LaunchIntentSignals,
 } from "./lifecycle/launchIntent.js";
@@ -69,6 +70,10 @@ import {
 import { restoreFleetAfterCrash, setCrashFleetRestorer } from "./lifecycle/crashWindowRestore.js";
 import { initializeDatabaseForBoot } from "./lifecycle/databaseBoot.js";
 import { registerShutdownHandler, routeLastWindowCloseThroughQuit } from "./lifecycle/shutdown.js";
+import {
+  isKeepingAgentsRunning,
+  keepAgentsRunningWithoutWindows,
+} from "./lifecycle/backgroundAgents.js";
 import { setAttachedShellsProvider } from "./lifecycle/attachedShells.js";
 import { getActiveShutdown } from "./lifecycle/shutdownCoordinator.js";
 import {
@@ -172,7 +177,9 @@ import {
   clearPendingWindowRecreation,
   createWindowHoldingRecord,
   enableOpenWindowsSaves,
+  holdOpenWindowsSaves,
   initOpenWindowsTracker,
+  releaseOpenWindowsHold,
   resumeOpenWindowsSaves,
   saveBeforeLastWindowCloses,
   saveOpenWindowsNow,
@@ -1129,14 +1136,34 @@ if (!gotTheLock) {
     };
   }
 
+  // The next request to see the app (a Dock click, a relaunch) opens the
+  // windows a launch would, read when asked: a folder queued, a crash state,
+  // or what the request named since decides it. For a launch that started
+  // windowless, and after Keep Agents Running closed every window.
+  function armLaunchWindowRequest(argv: string[], releaseHeldSaves: () => void): void {
+    initialWindowRequest = createInitialWindowRequest({
+      openLaunchWindows: (request) => {
+        const { intent, fallbackProjectId } = resolveFirstWindowLaunch(
+          { ...readLaunchSignals(), argv },
+          request,
+          readLastActiveProjectIdSync()
+        );
+        return openLaunchWindows(intent, fallbackProjectId, { releaseHeldSaves });
+      },
+      createWindow: () => createWindow().then(() => {}),
+      isShuttingDown: () => getActiveShutdown() !== null,
+    });
+  }
+
   // The windows a launch opens: the restored fleet, a folder's window, or the
   // recovery window. At startup, or for a launch that started windowless, at
-  // the first request to see the app. `savesHeld` is a launch whose manifest
-  // stayed read-only until then.
+  // the first request to see the app. `releaseHeldSaves` is given when the
+  // manifest was kept from saves until then, and lets them go once a clean
+  // restore has replaced it.
   async function openLaunchWindows(
     launchIntent: LaunchIntent,
     fallbackProjectId: string | undefined,
-    { savesHeld }: { savesHeld: boolean }
+    { releaseHeldSaves }: { releaseHeldSaves?: () => void } = {}
   ): Promise<void> {
     const {
       hadManifest,
@@ -1220,8 +1247,8 @@ if (!gotTheLock) {
       resumeSaves: (persistNow) => {
         // A launch that held the manifest until now keeps it from a clean
         // restore on; a recovery leaves that to the crash restore.
-        if (savesHeld && persistNow && launchIntent !== "recovery" && !isShuttingDown()) {
-          enableOpenWindowsSaves();
+        if (releaseHeldSaves && persistNow && launchIntent !== "recovery" && !isShuttingDown()) {
+          releaseHeldSaves();
         }
         resumeOpenWindowsSaves(persistNow);
       },
@@ -1298,7 +1325,11 @@ if (!gotTheLock) {
     windowRegistry,
     onLastWindowClose: routeLastWindowCloseThroughQuit,
     keepsRunningWithoutWindows: () =>
-      hostModeLaunch || hostModeHandedOff || isHostModeEnabled() || dueScheduleLaunch,
+      hostModeLaunch ||
+      hostModeHandedOff ||
+      isHostModeEnabled() ||
+      dueScheduleLaunch ||
+      isKeepingAgentsRunning(),
     isLaunchSettled: () => launchSettled,
     canOpenWindows: () => !headlessOzone,
     onHostModeRequested: isRemoteHostSupported()
@@ -1452,6 +1483,17 @@ if (!gotTheLock) {
     setStopDiskSpaceMonitor,
     windowRegistry,
     stopRemoteHosts: () => remoteHostsLaunch?.stop() ?? Promise.resolve(),
+    keepAgentsRunning: () => {
+      keepAgentsRunningWithoutWindows({
+        holdOpenWindows: holdOpenWindowsSaves,
+        releaseOpenWindows: releaseOpenWindowsHold,
+        // The launch's own argv may name a folder it was opened on; reopening
+        // brings back the windows just closed, not that folder.
+        armReopen: () =>
+          armLaunchWindowRequest(stripLaunchTargets(process.argv), releaseOpenWindowsHold),
+      });
+    },
+    canShowDialogs: () => !headlessOzone,
   });
 
   // Before whenReady so the eagerly created persist:daintree / persist:portal
@@ -1550,27 +1592,14 @@ if (!gotTheLock) {
             : "[MAIN] Due-schedule launch — starting without a window"
         );
         if (windowsDeferred) {
-          initialWindowRequest = createInitialWindowRequest({
-            // Read when asked: a folder queued, a crash state, or what the
-            // request named since the start decides it.
-            openLaunchWindows: (request) => {
-              const { intent, fallbackProjectId } = resolveFirstWindowLaunch(
-                readLaunchSignals(),
-                request,
-                readLastActiveProjectIdSync()
-              );
-              return openLaunchWindows(intent, fallbackProjectId, { savesHeld: true });
-            },
-            createWindow: () => createWindow().then(() => {}),
-            isShuttingDown: () => getActiveShutdown() !== null,
-          });
+          armLaunchWindowRequest(process.argv, enableOpenWindowsSaves);
         }
         appLifecycle.onStartedWindowless();
         if ((await startHostRuntime({ windowRegistry })) === "exit-requested") return;
         ensurePowerMonitor();
         ensureFocusThrottle();
       } else {
-        await openLaunchWindows(launchIntent, fallbackProjectId, { savesHeld: false });
+        await openLaunchWindows(launchIntent, fallbackProjectId);
       }
       launchSettled = true;
       appLifecycle.onLaunchSettled();

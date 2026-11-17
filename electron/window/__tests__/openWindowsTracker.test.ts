@@ -33,9 +33,11 @@ import {
   createWindowHoldingRecord,
   enableOpenWindowsSaves,
   freezeAndSnapshotOpenWindows,
+  holdOpenWindowsSaves,
   initOpenWindowsTracker,
   markWindowRecreationSetupFailed,
   onPendingRemoteRestoreChanged,
+  releaseOpenWindowsHold,
   removePendingRemoteBackgroundRestores,
   resetOpenWindowsTrackerForTests,
   resumeOpenWindowsSaves,
@@ -793,6 +795,93 @@ describe("saveOpenWindowsNow", () => {
       saveOpenWindowsNow(1);
       expect(lastWritten()).toEqual([]);
     });
+  });
+});
+
+describe("the hold for Keep Agents Running", () => {
+  const platform = process.platform;
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: platform });
+  });
+
+  it.each(["darwin", "win32", "linux"])(
+    "keeps the fleet on screen when it was chosen, through every close and a later quit, on %s",
+    (value) => {
+      Object.defineProperty(process, "platform", { value });
+      const wins: FakeWindow[] = [
+        { windowId: 1, projectId: "a", views: [["c", 1]] },
+        { windowId: 2, projectId: "b" },
+      ];
+      initOpenWindowsTracker({ registry: makeRegistry(wins), readOnly: false });
+      setCanopyWindowOpen(true);
+      writeOpenWindowsManifest.mockClear();
+
+      holdOpenWindowsSaves();
+      expect(lastWritten()).toEqual([
+        { projectId: "a", backgroundProjectIds: ["c"] },
+        { projectId: "b" },
+      ]);
+      expect(lastWroteCanopyOpen()).toBe(true);
+      writeOpenWindowsManifest.mockClear();
+
+      // Every window closes one by one; macOS would otherwise write the empty set.
+      setCanopyWindowOpen(false);
+      saveBeforeLastWindowCloses(2);
+      saveOpenWindowsNow(2);
+      for (const win of wins) win.destroyed = true;
+      saveOpenWindowsNow(1);
+      scheduleOpenWindowsSave();
+      vi.runAllTimers();
+      // The user quits while windowless.
+      freezeAndSnapshotOpenWindows();
+
+      expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
+    }
+  );
+
+  it("saves again once the windows are back", () => {
+    initOpenWindowsTracker({
+      registry: makeRegistry([{ windowId: 1, projectId: "a" }]),
+      readOnly: false,
+    });
+    holdOpenWindowsSaves();
+    writeOpenWindowsManifest.mockClear();
+
+    releaseOpenWindowsHold();
+    scheduleOpenWindowsSave();
+    vi.runAllTimers();
+
+    expect(writeOpenWindowsManifest).toHaveBeenCalledTimes(1);
+  });
+
+  it("is lifted independently of the fan-out suppression around it", () => {
+    initOpenWindowsTracker({
+      registry: makeRegistry([{ windowId: 1, projectId: "a" }]),
+      readOnly: false,
+    });
+    holdOpenWindowsSaves();
+    writeOpenWindowsManifest.mockClear();
+
+    // A reopen restoring the fleet: the first window lifts the hold while the
+    // fan-out still suppresses, and only its resume writes.
+    suppressOpenWindowsSaves();
+    releaseOpenWindowsHold();
+    saveOpenWindowsNow();
+    expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
+    resumeOpenWindowsSaves(true);
+    expect(writeOpenWindowsManifest).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a read-only launch's manifest alone", () => {
+    initOpenWindowsTracker({
+      registry: makeRegistry([{ windowId: 1, projectId: "only-one" }]),
+      readOnly: true,
+    });
+    holdOpenWindowsSaves();
+    releaseOpenWindowsHold();
+    saveOpenWindowsNow();
+
+    expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
   });
 });
 

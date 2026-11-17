@@ -10,7 +10,13 @@ import { sealAndDrainCapturedSessionPersistence } from "../services/pty/agentSes
 import { isAssistantTerminalRecord } from "../services/assistantTerminal.js";
 import type { AssistantLaneSnapshot } from "../services/HelpSessionService.js";
 import { getLifecycleLedger } from "../services/pty/lifecycleLedger.js";
-import { getActiveAgentCount, showQuitWarning } from "../utils/quitWarning.js";
+import {
+  getActiveAgentCount,
+  getActiveAgents,
+  showQuitWarning,
+  type QuitDecision,
+} from "../utils/quitWarning.js";
+import { hasOpenWindows } from "./backgroundAgents.js";
 import {
   disposeAgentAvailabilityStore,
   getAgentAvailabilityStore,
@@ -113,6 +119,16 @@ export interface ShutdownDeps {
    * Injected by main.ts, the only place allowed to load the remote modules.
    */
   stopRemoteHosts?: () => Promise<void>;
+  /**
+   * Closes every window and leaves the process running with its agents, for
+   * the quit warning's Keep Agents Running. Without it the choice isn't offered.
+   */
+  keepAgentsRunning?: () => void;
+  /**
+   * False where no dialog can be shown (a Host on headless Chromium). The quit
+   * warning then never asks, with or without a window.
+   */
+  canShowDialogs?: () => boolean;
 }
 
 // Remote Hosts stop before the graceful kill so no remote frontend is still
@@ -126,11 +142,12 @@ let isConfirmingQuit = false;
 
 /**
  * Off macOS, closing the last window quits the app, but by the time
- * `before-quit` runs that window is gone and the warning about working agents
- * has nowhere to show, so Alt+F4 or the caption's close button quit without
- * it. Called from that window's `close` when closing it would quit: when the
- * warning has something to say, the close becomes a quit, which asks while the
- * window is still up and leaves it open if the answer is no.
+ * `before-quit` runs that window is gone: the warning about working agents
+ * would show with nothing behind it, never offer to keep them running, and a
+ * Cancel would leave no window on screen. Called from that window's `close`
+ * when closing it would quit: when the warning has something to say, the
+ * close becomes a quit, which asks while the window is still up and leaves it
+ * open if the answer is no.
  */
 export function routeLastWindowCloseThroughQuit(): boolean {
   if (process.platform === "darwin" || isE2EMode || isSmokeTest) return false;
@@ -184,8 +201,9 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
       return;
     }
 
-    const canShowDialog =
-      !isE2EMode && !isSignalShutdown() && deps.windowRegistry?.getPrimary()?.browserWindow != null;
+    // No window needs to be open: Cmd+Q from the Dock or menu bar with none
+    // open still ends every agent, so it asks without a parent.
+    const canShowDialog = !isE2EMode && !isSignalShutdown() && (deps.canShowDialogs?.() ?? true);
 
     // A signal never waits on an open confirmation, the quit warning's included:
     // it claims the shutdown now, and the warning's late answer finds it owned.
@@ -197,18 +215,19 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
     if (canShowDialog) {
       event.preventDefault();
 
-      const activeCount = getActiveAgentCount(getAgentAvailabilityStore());
+      const agents = getActiveAgents(getAgentAvailabilityStore());
       const attachedShells = getAttachedShells();
-      if (activeCount > 0 || attachedShells.length > 0) {
+      if (agents.activeAgents > 0 || attachedShells.length > 0) {
         isConfirmingQuit = true;
         setExitConfirmationPending(true);
-        let confirmed = false;
+        let decision: QuitDecision = "cancel";
         try {
           const primaryWindow = deps.windowRegistry?.getPrimary()?.browserWindow ?? null;
-          confirmed = await showQuitWarning(
-            { activeAgents: activeCount, attachedShells },
+          decision = await showQuitWarning(
+            { ...agents, attachedShells },
             dialog.showMessageBox,
-            primaryWindow
+            primaryWindow,
+            { offerKeepRunning: deps.keepAgentsRunning !== undefined && hasOpenWindows() }
           );
         } catch (error) {
           console.error("[MAIN] Error showing quit warning:", error);
@@ -219,7 +238,11 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
 
         // A signal claimed the shutdown while the warning was open, so its
         // answer no longer decides anything.
-        if (!confirmed || getActiveShutdown()) {
+        if (decision === "cancel" || getActiveShutdown()) {
+          return;
+        }
+        if (decision === "keep-running") {
+          deps.keepAgentsRunning?.();
           return;
         }
       }
