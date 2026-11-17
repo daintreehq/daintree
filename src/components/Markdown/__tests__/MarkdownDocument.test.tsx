@@ -651,6 +651,94 @@ describe("MarkdownDocument same-document links (#17335)", () => {
   });
 });
 
+describe("MarkdownDocument front matter (#17334)", () => {
+  const frontmatterBlocks = (container: HTMLElement) => [
+    ...container.querySelectorAll<HTMLElement>("[data-frontmatter]"),
+  ];
+
+  it("shows YAML front matter as its raw lines above the body, not as a rule and a heading", () => {
+    const yaml = [
+      "name: release-check",
+      "description: Checks the release branch",
+      "allowed-tools:",
+      "  - Bash(git log:*)",
+    ].join("\n");
+    const { container } = render(
+      <MarkdownDocument
+        {...FIXTURE_PROPS}
+        content={`---\n${yaml}\n---\n\n# Release check\n\nBody.`}
+      />
+    );
+
+    const [block, ...rest] = frontmatterBlocks(container);
+    expect(rest).toEqual([]);
+    expect(block?.dataset.frontmatter).toBe("yaml");
+    expect(block?.tagName).toBe("DIV");
+    // Raw and whole: the nested list keeps the indentation that makes it YAML.
+    expect(block?.textContent).toBe(yaml);
+    expect(container.querySelector(".markdown-document")?.firstElementChild).toBe(block);
+    expect(container.querySelector("hr")).toBeNull();
+    expect(screen.getAllByRole("heading").map((heading) => heading.textContent)).toEqual([
+      "Release check",
+    ]);
+  });
+
+  it("shows TOML front matter the same way", () => {
+    const { container } = render(
+      <MarkdownDocument {...FIXTURE_PROPS} content={'+++\ntitle = "Plan"\n+++\n\n# Plan'} />
+    );
+
+    const [block] = frontmatterBlocks(container);
+    expect(block?.dataset.frontmatter).toBe("toml");
+    expect(block?.textContent).toBe('title = "Plan"');
+    expect(screen.getAllByRole("heading").map((heading) => heading.textContent)).toEqual(["Plan"]);
+  });
+
+  it("never interprets a value: markup in it stays text", () => {
+    const { container } = render(
+      <MarkdownDocument
+        {...FIXTURE_PROPS}
+        content={"---\ndescription: <b>bold</b> **strong** [link](https://x.dev)\n---\n"}
+      />
+    );
+
+    const [block] = frontmatterBlocks(container);
+    expect(block?.textContent).toBe("description: <b>bold</b> **strong** [link](https://x.dev)");
+    expect(block?.querySelector("b, strong, a")).toBeNull();
+  });
+
+  it("leaves a fence that isn't front matter to Markdown", () => {
+    // Unclosed, and not on the first line: a rule each, as before.
+    for (const content of ["---\nname: x\n\n# Title", "\n---\nname: x\n---\n\n# Title"]) {
+      const { container, unmount } = render(
+        <MarkdownDocument {...FIXTURE_PROPS} content={content} />
+      );
+      expect(frontmatterBlocks(container)).toEqual([]);
+      expect(container.querySelector("hr")).not.toBeNull();
+      unmount();
+    }
+  });
+
+  it("draws nothing for blank front matter", () => {
+    const { container } = render(
+      <MarkdownDocument {...FIXTURE_PROPS} content={"---\n\n---\n\n# Title"} />
+    );
+
+    expect(frontmatterBlocks(container)).toEqual([]);
+    expect(container.querySelector("hr")).toBeNull();
+    expect(container.querySelector(".markdown-document")?.firstElementChild?.tagName).toBe("H1");
+  });
+
+  it("keeps heading ids and their lines past the front matter", () => {
+    const source = "---\ntitle: Risks\n---\n\n# Risks\n\n## Risks";
+    const { container } = render(<MarkdownDocument {...FIXTURE_PROPS} content={source} />);
+
+    const ids = [...container.querySelectorAll("[id^='user-content-']")].map((el) => el.id);
+    expect(ids).toEqual(["user-content-risks", "user-content-risks-1"]);
+    expect(ids.map((id) => markdownTargetLine(source, `#${id}`))).toEqual([5, 7]);
+  });
+});
+
 /**
  * The stylesheet is the half of the size control that no render test can see:
  * jsdom applies no author styles, so the whole feature — store, stepper,

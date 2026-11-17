@@ -10,7 +10,6 @@ import {
 } from "react";
 import ReactMarkdown from "react-markdown";
 import type { PluggableList } from "unified";
-import remarkGfm from "remark-gfm";
 import type { Nodes as HastNodes, RootContent as HastContent } from "hast";
 import type { GitStatus } from "@shared/types/git";
 import {
@@ -18,6 +17,7 @@ import {
   useMarkdownRenderPolicy,
 } from "@/components/Markdown/markdownRenderPolicy";
 import { MARKDOWN_FONT_SIZE_TOKEN } from "@/components/Markdown/MarkdownDocument";
+import { MARKDOWN_REMARK_PLUGINS } from "@/components/Markdown/markdownRemarkPlugins";
 import { MarkdownTableLabelPrefix } from "@/components/Markdown/MarkdownTable";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useScopedSelectAll } from "@/hooks/useScopedSelectAll";
@@ -436,7 +436,7 @@ function DiffBlock({
     () => (
       <MarkdownTableLabelPrefix value={TABLE_LABEL_PREFIX[kind]}>
         <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
+          remarkPlugins={MARKDOWN_REMARK_PLUGINS}
           rehypePlugins={rehypePlugins}
           urlTransform={urlTransform}
           components={components}

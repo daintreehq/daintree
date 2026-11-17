@@ -552,6 +552,45 @@ describe("RenderedMarkdownDiff", () => {
     );
   });
 
+  it("marks a changed front matter value inside the metadata block, not a heading (#17334)", () => {
+    const source = [
+      "---",
+      "name: release-check",
+      "description: Checks the release branch before tagging",
+      "---",
+      "",
+      "# Release check",
+      "",
+    ].join("\n");
+    const diff = patch([
+      "@@ -1,6 +1,6 @@",
+      " ---",
+      " name: release-check",
+      "-description: Checks the release branch",
+      "+description: Checks the release branch before tagging",
+      " ---",
+      " ",
+      " # Release check",
+    ]);
+
+    const { container } = renderDiff(diff, source);
+
+    expect(blockKinds(container)).toEqual(["removed", "added", "unchanged"]);
+    const added = container.querySelector(".rendered-markdown-diff__block--added [data-frontmatter]");
+    expect(visibleText(added)).toBe(
+      "name: release-check\ndescription: Checks the release branch before tagging"
+    );
+    expect(
+      [...(added?.querySelectorAll(".rendered-markdown-diff__inline--added") ?? [])].map(
+        visibleText
+      )
+    ).toEqual(["before tagging"]);
+    expect(container.querySelector("hr")).toBeNull();
+    expect([...container.querySelectorAll("h1, h2")].map((h) => h.textContent)).toEqual([
+      "Release check",
+    ]);
+  });
+
   it("keeps a footnote's text in the rendered output", () => {
     const source = "Text[^1].\n\n[^1]: The new note.\n";
     const diff = patch([

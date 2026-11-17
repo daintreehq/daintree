@@ -77,6 +77,23 @@
   font-family: var(--font-mono);
 }
 
+/* Front matter (markdownRemarkPlugins.ts): its raw lines, kept as written, in
+   a compact block above the body. A div rather than a <pre>, so the rendered
+   diff can mark a changed value inside it; pre-wrap keeps the lines and their
+   indentation, and long values wrap rather than scroll. */
+.markdown-document :where(.markdown-frontmatter) {
+  margin-block: 0 1.5em;
+  padding: 0.5em 0.75em;
+  border: 1px solid color-mix(in oklab, var(--color-border-default) 50%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--color-surface-sidebar) 60%, transparent);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* kbd: chip treatment; kills the plugin's --tw-prose-kbd-shadows box-shadow,
    the one prose token that can't take a theme color (it wants an RGB triplet). */
 .markdown-document :where(kbd) {

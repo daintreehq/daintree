@@ -1,16 +1,16 @@
 import { unified } from "unified";
 import remarkParse from "remark-parse";
-import remarkGfm from "remark-gfm";
 import remarkRehype from "remark-rehype";
 import type { Root as HastRoot, RootContent as HastContent } from "hast";
 import { markdownFragmentIds, rehypeHeadingIds } from "./headingIds";
+import { MARKDOWN_REMARK_PLUGINS } from "./markdownRemarkPlugins";
 
 // The rendered document's pipeline up to its ids (react-markdown builds the
 // same chain around `MarkdownDocument`'s plugins), so a heading's slug and its
 // `-1` come out exactly as the rendered side numbers them, footnotes included.
 const processor = unified()
   .use(remarkParse)
-  .use(remarkGfm)
+  .use(MARKDOWN_REMARK_PLUGINS)
   .use(remarkRehype, { allowDangerousHtml: true })
   .use(rehypeHeadingIds)
   .freeze();

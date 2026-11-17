@@ -2,9 +2,9 @@ import { parseDiff } from "react-diff-view";
 import type { HunkData } from "react-diff-view";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
-import remarkGfm from "remark-gfm";
 import type { Root, RootContent } from "mdast";
 import type { GitStatus } from "@shared/types/git";
+import { isFrontmatterNode, MARKDOWN_REMARK_PLUGINS } from "@/components/Markdown/markdownRemarkPlugins";
 import {
   inlineChangeRanges,
   MAX_INLINE_TOKENS,
@@ -347,7 +347,7 @@ export function reconstructMarkdownDocuments(
 
 // Frozen once: building the processor per parse re-runs plugin attachment for
 // every document, and both sides of every file go through it.
-const markdownProcessor = unified().use(remarkParse).use(remarkGfm).freeze();
+const markdownProcessor = unified().use(remarkParse).use(MARKDOWN_REMARK_PLUGINS).freeze();
 
 const REFERENCE_TYPES: ReadonlySet<string> = new Set([
   "linkReference",
@@ -489,6 +489,8 @@ export function parseMarkdownBlocks(source: string): ParsedMarkdown {
       continue;
     }
     if (node.type === "html") continue;
+    // Blank front matter renders nothing either (see `markdownRemarkPlugins`).
+    if (isFrontmatterNode(node) && !node.value.trim()) continue;
     const flattened = flattenText(node);
     blocks.push({
       type: node.type,

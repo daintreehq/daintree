@@ -330,6 +330,23 @@ describe("parseMarkdownBlocks", () => {
     expect(blocks[0]?.type).toBe("code");
     expect(blocks[0]?.text).toBe("const a = 1;\n");
   });
+
+  it("keeps front matter as one block of its raw lines, not a rule and a heading (#17334)", () => {
+    const { blocks } = parseMarkdownBlocks(
+      "---\nname: release-check\nallowed:\n  - Bash\n---\n\n# Release check\n"
+    );
+
+    expect(blocks.map((block) => block.type)).toEqual(["yaml", "heading"]);
+    expect(blocks[0]?.source).toBe("---\nname: release-check\nallowed:\n  - Bash\n---");
+    expect(blocks[0]?.text).toBe("name: release-check\nallowed:\n  - Bash");
+    expect(parseMarkdownBlocks('+++\ntitle = "x"\n+++\n').blocks[0]?.type).toBe("toml");
+  });
+
+  it("drops blank front matter, which renders nothing", () => {
+    const { blocks } = parseMarkdownBlocks("---\n\n---\n\n# Title\n");
+
+    expect(blocks.map((block) => block.type)).toEqual(["heading"]);
+  });
 });
 
 describe("diffMarkdownBlocks", () => {
@@ -355,6 +372,25 @@ describe("diffMarkdownBlocks", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(kinds(result.changes)).toEqual(["modified"]);
+  });
+
+  it("pairs a changed front matter value as one modified block, marking only that value", () => {
+    const frontmatter = (description: string) =>
+      `---\nname: release-check\ndescription: ${description}\n---\n\n# Release check\n`;
+    const result = diffMarkdownBlocks(
+      parse(frontmatter("Checks the release branch")),
+      parse(frontmatter("Checks the release branch before tagging"))
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(kinds(result.changes)).toEqual(["modified", "unchanged"]);
+    const [change] = result.changes;
+    if (change?.kind !== "modified") return;
+    expect(change.inline.old).toEqual([]);
+    expect(change.inline.new.map(({ start, end }) => change.new.text.slice(start, end))).toEqual([
+      "before tagging",
+    ]);
   });
 
   it("degrades a block that changed type into a removal plus an addition", () => {
