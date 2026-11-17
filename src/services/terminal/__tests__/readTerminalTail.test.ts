@@ -95,24 +95,37 @@ describe("readTerminalTail", () => {
     expect(tail(terminal)).toBe(`${CLIPPED_LINE_MARKER}\n${long.slice(30)}`);
   });
 
-  it("reads no row outside the last maxRows, however many blank ones there are", () => {
+  /** A 5,000-row buffer with `text(y)` on each row, and the rows a read asked for. */
+  function fakeBuffer(text: (y: number) => string) {
     const read = new Set<number>();
-    const blank: IBufferLine = {
-      isWrapped: false,
-      length: 80,
-      getCell: () => undefined,
-      translateToString: () => "",
-    };
     const buffer: Pick<IBuffer, "length" | "getLine"> = {
       length: 5000,
-      getLine: (y) => {
+      getLine: (y): IBufferLine => {
         read.add(y);
-        return blank;
+        return {
+          isWrapped: false,
+          length: 80,
+          getCell: () => undefined,
+          translateToString: () => text(y),
+        };
       },
     };
-    expect(readTerminalTail(buffer, 100, 400)).toBe("");
-    expect(read.size).toBe(400);
-    expect(Math.min(...read)).toBe(4600);
+    return { buffer, read };
+  }
+
+  it("reads no row outside the last maxRows, however many blank ones there are", () => {
+    const blank = fakeBuffer(() => "");
+    expect(readTerminalTail(blank.buffer, 100, 400)).toBe("");
+    expect(blank.read.size).toBe(400);
+    expect(Math.min(...blank.read)).toBe(4600);
+  });
+
+  it("counts the blank rows below the output against maxRows", () => {
+    const below = fakeBuffer((y) => (y < 4990 ? `row ${y}` : ""));
+    const lines = readTerminalTail(below.buffer, 1000, 400).split("\n");
+    expect(Math.min(...below.read)).toBe(4600);
+    expect(lines).toHaveLength(390);
+    expect(lines[0]).toBe("row 4600");
   });
 
   it("reads nothing from a blank screen", async () => {
