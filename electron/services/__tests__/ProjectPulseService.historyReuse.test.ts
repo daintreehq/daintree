@@ -11,9 +11,10 @@ interface RepoState {
   shallow: boolean;
   rootTimestamps: number[];
   commitTimestamps: number[];
-  // Awaited before the streak log answers, to hold a history load open.
-  streakGate?: () => Promise<void>;
+  // Awaited after a command has read the repo and before it answers, to hold it open.
+  gate?: (args: string[], signal?: AbortSignal) => Promise<void> | undefined;
   failRootWalk?: boolean;
+  failStreakLog?: boolean;
 }
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
@@ -44,12 +45,16 @@ function isShallowCheck(args: string[]): boolean {
   return args[0] === "rev-parse" && args.includes("--is-shallow-repository");
 }
 
+function isBranchLookup(args: string[]): boolean {
+  return args[0] === "rev-parse" && args.includes("--abbrev-ref");
+}
+
 function createRepo(state: RepoState) {
-  const raw = vi.fn(async (args: string[]): Promise<string> => {
+  const answer = (args: string[]): string => {
     if (args[0] === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") {
       return `${state.headSha}\n`;
     }
-    if (args[0] === "rev-parse" && args.includes("--abbrev-ref")) return `${state.branch}\n`;
+    if (isBranchLookup(args)) return `${state.branch}\n`;
     if (isShallowCheck(args)) return state.shallow ? "true\n" : "false\n";
     if (isRootWalk(args)) {
       if (state.failRootWalk) throw new Error("fatal: unable to read tree");
@@ -60,11 +65,17 @@ function createRepo(state: RepoState) {
       return state.commitTimestamps.filter((t) => t >= since).join("\n");
     }
     if (isStreakLog(args)) {
-      const commits = state.commitTimestamps.join("\n");
-      await state.streakGate?.();
-      return commits;
+      if (state.failStreakLog) throw new Error("fatal: unable to read commit");
+      return state.commitTimestamps.join("\n");
     }
     return "";
+  };
+  const raw = vi.fn(async (args: string[], signal?: AbortSignal): Promise<string> => {
+    const output = answer(args);
+    await state.gate?.(args, signal);
+    // Like simple-git, a command whose signal aborted while it ran rejects instead of answering.
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    return output;
   });
   const count = (predicate: (args: string[]) => boolean) =>
     raw.mock.calls.filter(([args]) => predicate(args)).length;
@@ -83,12 +94,28 @@ function pulseOptions(rangeDays: PulseRangeDays, extra: Record<string, unknown> 
   };
 }
 
-async function loadService(raw: (args: string[]) => Promise<string>) {
+async function loadService(raw: (args: string[], signal?: AbortSignal) => Promise<string>) {
   vi.doMock("../../utils/hardenedGit.js", () => ({
-    createStrictExitGit: () => ({ checkIsRepo: async () => true, raw }),
+    createStrictExitGit: (_cwd: string, signal?: AbortSignal) => ({
+      checkIsRepo: async () => true,
+      raw: (args: string[]) => raw(args, signal),
+    }),
   }));
   const { ProjectPulseService } = await import("../ProjectPulseService.js");
   return new ProjectPulseService();
+}
+
+function localDate(zone: string, at: Date): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(at);
+}
+
+// Another zone on the same local date, so a cache miss can only come from the zone itself.
+function otherZoneOnSameDay(at: Date): string {
+  const current = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const candidates = ["Europe/Paris", "Europe/London", "Africa/Cairo", "Asia/Dubai", "UTC"];
+  const zone = candidates.find((z) => z !== current && localDate(z, at) === localDate(current, at));
+  if (!zone) throw new Error(`no same-day zone for ${current}`);
+  return zone;
 }
 
 describe("ProjectPulseService range-independent history reuse", () => {
@@ -102,13 +129,14 @@ describe("ProjectPulseService range-independent history reuse", () => {
       branch: "main",
       shallow: false,
       rootTimestamps: [localNoon(2024, 9, 1)],
-      // A two-day streak ending yesterday (today is empty, Jan 12 is a gap), plus one commit
-      // that only the 120 and 180 day ranges reach.
+      // A two-day streak ending yesterday (today is empty, Jan 12 is a gap), plus the root commit
+      // and one more that only the 120 and 180 day ranges reach.
       commitTimestamps: [
         localNoon(2025, 0, 14),
         localNoon(2025, 0, 13),
         localNoon(2025, 0, 11),
         localNoon(2024, 9, 15),
+        localNoon(2024, 9, 1),
       ],
     };
   });
@@ -145,14 +173,17 @@ describe("ProjectPulseService range-independent history reuse", () => {
     for (const pulse of [p60, p120, p180]) {
       expect(pulse.currentStreakDays).toBe(2);
     }
-    // Oct 1 root: the 60-day range is fully inside the project, 120/180 are not.
+    // Oct 1 root, 107 days before Jan 15 inclusive: 60 days sit inside the project, 120 and 180
+    // reach back before it.
     expect(p60.projectAgeDays).toBe(60);
     expect(p120.projectAgeDays).toBe(107);
     expect(p180.projectAgeDays).toBe(107);
+    expect(p60.heatmap.filter((c) => c.isBeforeProject)).toHaveLength(0);
+    expect(p120.heatmap.filter((c) => c.isBeforeProject)).toHaveLength(13);
     expect(p180.heatmap.filter((c) => c.isBeforeProject)).toHaveLength(73);
     expect(p60.commitsInRange).toBe(3);
-    expect(p120.commitsInRange).toBe(4);
-    expect(p180.commitsInRange).toBe(4);
+    expect(p120.commitsInRange).toBe(5);
+    expect(p180.commitsInRange).toBe(5);
   });
 
   it("keeps reused history correct across midnight within the TTL", async () => {
@@ -176,6 +207,29 @@ describe("ProjectPulseService range-independent history reuse", () => {
     expect(after.heatmap.at(-1)).toMatchObject({ date: "2025-01-16", isToday: true });
   });
 
+  it("answers for the day a compute started in when midnight lands mid-compute", async () => {
+    vi.setSystemTime(new Date(2025, 0, 15, 23, 59, 50));
+    const gate = deferred();
+    state.gate = (args) => (isStreakLog(args) ? gate.promise : undefined);
+    const { raw, count } = createRepo(state);
+    const svc = await loadService(raw);
+
+    const started = svc.getPulse(pulseOptions(180));
+    await vi.advanceTimersByTimeAsync(20_000);
+    // After midnight the same range starts its own compute but shares the pending walk.
+    const afterMidnight = svc.getPulse(pulseOptions(180));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(count(isHeatmapLog)).toBe(2);
+    expect(count(isStreakLog)).toBe(1);
+
+    gate.resolve();
+    const [first, second] = await Promise.all([started, afterMidnight]);
+    expect(first.heatmap.at(-1)).toMatchObject({ date: "2025-01-15", isToday: true });
+    expect(first.currentStreakDays).toBe(2);
+    expect(second.heatmap.at(-1)).toMatchObject({ date: "2025-01-16", isToday: true });
+    expect(second.currentStreakDays).toBe(0);
+  });
+
   it("walks again when HEAD moves but not when only the branch name changes", async () => {
     const { raw, count } = createRepo(state);
     const svc = await loadService(raw);
@@ -195,9 +249,30 @@ describe("ProjectPulseService range-independent history reuse", () => {
     expect(count(isRootWalk)).toBe(2);
     expect(count(isStreakLog)).toBe(2);
     expect(moved.currentStreakDays).toBe(3);
-    // Both walks start from the resolved SHA rather than whatever HEAD is by then.
-    expect(count((args) => isRootWalk(args) && args.includes("cafef00d"))).toBe(1);
-    expect(count((args) => isStreakLog(args) && args.includes("cafef00d"))).toBe(1);
+    // Every walk starts from the resolved SHA rather than whatever HEAD is by then.
+    for (const isWalk of [isRootWalk, isStreakLog, isHeatmapLog]) {
+      expect(count((args) => isWalk(args) && args.includes("cafef00d"))).toBe(1);
+    }
+  });
+
+  it("starts a separate walk for a new HEAD while the old HEAD's walk is still running", async () => {
+    const gate = deferred();
+    state.gate = (args) =>
+      isStreakLog(args) && args.includes("deadbeef") ? gate.promise : undefined;
+    const { raw, count } = createRepo(state);
+    const svc = await loadService(raw);
+
+    const old = svc.getPulse(pulseOptions(60));
+    await vi.advanceTimersByTimeAsync(0);
+
+    state.headSha = "cafef00d";
+    state.commitTimestamps = [localNoon(2025, 0, 15), ...state.commitTimestamps];
+    const moved = await svc.getPulse(pulseOptions(120));
+    expect(count(isStreakLog)).toBe(2);
+    expect(moved.currentStreakDays).toBe(3);
+
+    gate.resolve();
+    expect((await old).currentStreakDays).toBe(2);
   });
 
   it("drops reused history on invalidate, for that worktree only", async () => {
@@ -239,6 +314,29 @@ describe("ProjectPulseService range-independent history reuse", () => {
     expect(next.currentStreakDays).toBe(3);
   });
 
+  it("walks afresh on forceRefresh rather than joining a walk that began before it", async () => {
+    const gate = deferred();
+    let streakLogs = 0;
+    state.gate = (args) => (isStreakLog(args) && streakLogs++ === 0 ? gate.promise : undefined);
+    const { raw, count } = createRepo(state);
+    const svc = await loadService(raw);
+
+    const ordinary = svc.getPulse(pulseOptions(60));
+    await vi.advanceTimersByTimeAsync(0);
+
+    state.commitTimestamps = [localNoon(2025, 0, 15), ...state.commitTimestamps];
+    const forced = await svc.getPulse(pulseOptions(120, { forceRefresh: true }));
+    expect(count(isStreakLog)).toBe(2);
+    expect(forced.currentStreakDays).toBe(3);
+
+    // The overtaken walk settles last: it must neither replace the forced facts nor drop them.
+    gate.resolve();
+    expect((await ordinary).currentStreakDays).toBe(2);
+    const next = await svc.getPulse(pulseOptions(180));
+    expect(count(isStreakLog)).toBe(2);
+    expect(next.currentStreakDays).toBe(3);
+  });
+
   it("expires a Pulse built on reused history when that history expires", async () => {
     const { raw, count } = createRepo(state);
     const svc = await loadService(raw);
@@ -259,29 +357,38 @@ describe("ProjectPulseService range-independent history reuse", () => {
     expect(count(isStreakLog)).toBe(2);
   });
 
-  it("does not keep a history load that partly failed", async () => {
-    state.failRootWalk = true;
-    const { raw, count } = createRepo(state);
-    const svc = await loadService(raw);
+  it.each([
+    { failing: "root walk", flag: "failRootWalk", beforeProject: false, streak: 2 },
+    // A failed streak walk leaves the streak unknown, never zero.
+    { failing: "streak log", flag: "failStreakLog", beforeProject: true, streak: undefined },
+  ] as const)(
+    "does not keep a history load whose $failing failed",
+    async ({ flag, beforeProject, streak }) => {
+      state[flag] = true;
+      const { raw, count } = createRepo(state);
+      const svc = await loadService(raw);
 
-    const degraded = await svc.getPulse(pulseOptions(180));
-    expect(degraded.heatmap.some((c) => c.isBeforeProject)).toBe(false);
-    expect(degraded.currentStreakDays).toBe(2);
+      // The walk that succeeded still serves this response.
+      const degraded = await svc.getPulse(pulseOptions(180));
+      expect(degraded.heatmap.some((c) => c.isBeforeProject)).toBe(beforeProject);
+      expect(degraded.currentStreakDays).toBe(streak);
 
-    state.failRootWalk = false;
-    const recovered = await svc.getPulse(pulseOptions(120));
-    expect(count(isRootWalk)).toBe(2);
-    expect(count(isStreakLog)).toBe(2);
-    expect(recovered.heatmap.some((c) => c.isBeforeProject)).toBe(true);
+      state[flag] = false;
+      const recovered = await svc.getPulse(pulseOptions(120));
+      expect(count(isRootWalk)).toBe(2);
+      expect(count(isStreakLog)).toBe(2);
+      expect(recovered.heatmap.some((c) => c.isBeforeProject)).toBe(true);
+      expect(recovered.currentStreakDays).toBe(2);
 
-    await svc.getPulse(pulseOptions(60));
-    expect(count(isRootWalk)).toBe(2);
-    expect(count(isStreakLog)).toBe(2);
-  });
+      await svc.getPulse(pulseOptions(60));
+      expect(count(isRootWalk)).toBe(2);
+      expect(count(isStreakLog)).toBe(2);
+    }
+  );
 
   it("shares one history load between ranges requested together", async () => {
     const gate = deferred();
-    state.streakGate = () => gate.promise;
+    state.gate = (args) => (isStreakLog(args) ? gate.promise : undefined);
     const { raw, count } = createRepo(state);
     const svc = await loadService(raw);
 
@@ -299,52 +406,112 @@ describe("ProjectPulseService range-independent history reuse", () => {
     expect(pulses.map((p) => p.currentStreakDays)).toEqual([2, 2, 2]);
   });
 
-  it("never caches a load that invalidate overtook, nor lets it evict the replacement", async () => {
-    const gates = [deferred(), deferred()];
-    let streakLogs = 0;
-    state.streakGate = () => gates[streakLogs++]?.promise ?? Promise.resolve();
+  it.each([
+    { label: "across ranges", ranges: [60, 120, 180], heatmapLogs: 3 },
+    { label: "within one range", ranges: [60, 60, 60], heatmapLogs: 2 },
+  ] as const)(
+    "never caches a compute that invalidate overtook, nor lets it evict the replacement ($label)",
+    async ({ ranges, heatmapLogs }) => {
+      const gates = [deferred(), deferred()];
+      let streakLogs = 0;
+      state.gate = (args) => (isStreakLog(args) ? gates[streakLogs++]?.promise : undefined);
+      const { raw, count } = createRepo(state);
+      const svc = await loadService(raw);
+
+      const stale = svc.getPulse(pulseOptions(ranges[0]));
+      await vi.advanceTimersByTimeAsync(0);
+      svc.invalidate("wt-1");
+
+      const replacement = svc.getPulse(pulseOptions(ranges[1]));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(count(isStreakLog)).toBe(2);
+
+      // The stale compute settles first; a request arriving after it must still join the
+      // replacement rather than start a third walk.
+      gates[0].resolve();
+      await stale;
+      const joined = svc.getPulse(pulseOptions(ranges[2]));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(count(isStreakLog)).toBe(2);
+      expect(count(isHeatmapLog)).toBe(heatmapLogs);
+
+      gates[1].resolve();
+      await Promise.all([replacement, joined]);
+
+      await svc.getPulse(pulseOptions(ranges[1]));
+      expect(count(isStreakLog)).toBe(2);
+      expect(count(isRootWalk)).toBe(2);
+    }
+  );
+
+  it("lets invalidate abort a compute that outlived the sibling it shared a controller with", async () => {
+    const gate = deferred();
+    let heatmapLogs = 0;
+    state.gate = (args) => (isHeatmapLog(args) && heatmapLogs++ === 1 ? gate.promise : undefined);
     const { raw, count } = createRepo(state);
     const svc = await loadService(raw);
 
-    const stale = svc.getPulse(pulseOptions(60));
-    await vi.advanceTimersByTimeAsync(0);
+    const first = svc.getPulse(pulseOptions(60));
+    const survivor = svc.getPulse(pulseOptions(120));
+    await first;
+
     svc.invalidate("wt-1");
+    gate.resolve();
+    // Its heatmap read was aborted, which is a cancellation, never zero activity.
+    await expect(survivor).rejects.toThrow("Project pulse read was cancelled");
 
-    const replacement = svc.getPulse(pulseOptions(120));
-    await vi.advanceTimersByTimeAsync(0);
+    // The survivor answered from before the invalidation, so it must not be served again.
+    await svc.getPulse(pulseOptions(120));
+    expect(count(isHeatmapLog)).toBe(3);
     expect(count(isStreakLog)).toBe(2);
-
-    // The stale load settles first; a request arriving after it must still join the replacement.
-    gates[0].resolve();
-    await stale;
-    const joined = svc.getPulse(pulseOptions(180));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(count(isStreakLog)).toBe(2);
-
-    gates[1].resolve();
-    await Promise.all([replacement, joined]);
-
-    await svc.getPulse(pulseOptions(60));
-    expect(count(isStreakLog)).toBe(2);
-    expect(count(isRootWalk)).toBe(2);
   });
 
-  it("walks again when the local time zone changes", async () => {
+  it("opens no history walk for a compute invalidate already aborted", async () => {
+    const branchGate = deferred();
+    const abortedWalk = deferred();
+    let branchLookups = 0;
+    state.gate = (args, signal) => {
+      if (isBranchLookup(args) && branchLookups++ === 0) return branchGate.promise;
+      if (isStreakLog(args) && signal?.aborted) return abortedWalk.promise;
+      return undefined;
+    };
+    const { raw } = createRepo(state);
+    const svc = await loadService(raw);
+
+    const stale = svc.getPulse(pulseOptions(60));
+    // Its heatmap read is aborted too, so it rejects as a cancellation rather than answering.
+    const staleSettled = expect(stale).rejects.toThrow("Project pulse read was cancelled");
+    await vi.advanceTimersByTimeAsync(0);
+    svc.invalidate("wt-1");
+    state.commitTimestamps = [localNoon(2025, 0, 15), ...state.commitTimestamps];
+
+    branchGate.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    // Had the aborted compute opened a walk, this request would join it and get its empty facts.
+    const replacement = svc.getPulse(pulseOptions(120));
+    await vi.advanceTimersByTimeAsync(0);
+    abortedWalk.resolve();
+
+    expect((await replacement).currentStreakDays).toBe(3);
+    await staleSettled;
+  });
+
+  it("misses both caches when the local time zone changes", async () => {
     const { raw, count } = createRepo(state);
     const svc = await loadService(raw);
 
     await svc.getPulse(pulseOptions(60));
 
     const machineZone = process.env.TZ;
-    const current = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    process.env.TZ = current === "Asia/Tokyo" ? "America/Los_Angeles" : "Asia/Tokyo";
+    process.env.TZ = otherZoneOnSameDay(new Date());
     try {
-      await svc.getPulse(pulseOptions(120));
+      await svc.getPulse(pulseOptions(60));
     } finally {
       if (machineZone === undefined) delete process.env.TZ;
       else process.env.TZ = machineZone;
     }
 
+    expect(count(isHeatmapLog)).toBe(2);
     expect(count(isRootWalk)).toBe(2);
     expect(count(isStreakLog)).toBe(2);
   });

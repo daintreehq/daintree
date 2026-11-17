@@ -17,7 +17,6 @@ interface ComputedPulse {
   pulse: ProjectPulse;
   headSha: string | null;
   headBranch: string | undefined;
-  day: string;
   historyLoadedAt: number;
   // False when a supplementary read failed and the pulse carries a fallback
   // for it: caching would pin that fallback until HEAD moves or the TTL ends.
@@ -30,6 +29,15 @@ interface CacheEntry {
   headSha: string | null;
   headBranch: string | undefined;
   day: string;
+  timeZone: string;
+}
+
+// The local day and zone a compute answers for, read once so its heatmap, streak, age and
+// cache tag all agree even when midnight or a zone change lands mid-compute.
+interface LocalCalendar {
+  todayMidnight: Date;
+  day: string;
+  timeZone: string;
 }
 
 // Range-independent facts about the history reachable from one HEAD: the project's start
@@ -150,6 +158,11 @@ function getLocalTimeZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone;
 }
 
+function readLocalCalendar(): LocalCalendar {
+  const todayMidnight = getLocalMidnight(new Date());
+  return { todayMidnight, day: formatLocalDay(todayMidnight), timeZone: getLocalTimeZone() };
+}
+
 function countStreakDays(commitDays: ReadonlySet<string>, todayMidnight: Date): number {
   // Count back from today, or from yesterday when today has no commits yet.
   const cursor = new Date(todayMidnight);
@@ -186,6 +199,9 @@ export class ProjectPulseService {
   private cache = new Map<string, CacheEntry>();
   private inFlight = new Map<string, Promise<ProjectPulse>>();
   private abortControllers = new Map<string, AbortController>();
+  // Concurrent computes for one worktree share its controller, which leaves abortControllers only
+  // when the last of them settles, so invalidate() can still abort one that outlives a sibling.
+  private controllerUsers = new WeakMap<AbortController, number>();
   private historyCache = new Map<string, HistoryEntry>();
   private historyInFlight = new Map<string, Promise<HistoryResult>>();
 
@@ -252,11 +268,14 @@ export class ProjectPulseService {
       // await above, deleting the entry. Use the freshly-fetched entry so
       // we don't serve data that was just invalidated.
       const fresh = this.cache.get(cacheKey);
+      const calendar = readLocalCalendar();
       if (
         fresh === cached &&
         probe.sha === cached.headSha &&
         probe.branch === cached.headBranch &&
-        cached.day === formatLocalDay(new Date())
+        cached.day === calendar.day &&
+        cached.timeZone === calendar.timeZone &&
+        Date.now() - cached.timestamp < CACHE_TTL_MS
       ) {
         logProjectPulseDebug("ProjectPulse cache hit", { cacheKey });
         return cached.pulse;
@@ -271,23 +290,27 @@ export class ProjectPulseService {
       });
     }
 
-    const existing = this.inFlight.get(cacheKey);
+    // A request after midnight or a zone change must not join a compute answering for the old one.
+    const calendar = readLocalCalendar();
+    const flightKey = `${cacheKey}:${calendar.day}:${calendar.timeZone}`;
+    const existing = this.inFlight.get(flightKey);
     if (existing) {
       return existing;
     }
 
     const { worktreeId } = options;
-    let controller = this.abortControllers.get(worktreeId);
-    if (!controller) {
-      controller = new AbortController();
-      this.abortControllers.set(worktreeId, controller);
-    }
+    const controller = this.abortControllers.get(worktreeId) ?? new AbortController();
+    this.abortControllers.set(worktreeId, controller);
+    this.controllerUsers.set(controller, (this.controllerUsers.get(controller) ?? 0) + 1);
 
     const promise = (async () => {
       try {
-        const { pulse, headSha, headBranch, day, historyLoadedAt, cacheable } =
-          await this.computePulse(options, controller!.signal);
-        if (cacheable && !controller!.signal.aborted) {
+        const { pulse, headSha, headBranch, historyLoadedAt, cacheable } = await this.computePulse(
+          options,
+          calendar,
+          controller.signal
+        );
+        if (cacheable && !controller.signal.aborted) {
           this.cache.set(cacheKey, {
             pulse,
             // A Pulse built on reused history expires with that history, so switching ranges
@@ -295,7 +318,8 @@ export class ProjectPulseService {
             timestamp: Math.min(Date.now(), historyLoadedAt),
             headSha,
             headBranch,
-            day,
+            day: calendar.day,
+            timeZone: calendar.timeZone,
           });
           this.pruneCache();
         }
@@ -312,18 +336,27 @@ export class ProjectPulseService {
         });
         throw error;
       } finally {
-        if (this.abortControllers.get(worktreeId) === controller) {
-          this.abortControllers.delete(worktreeId);
+        const users = (this.controllerUsers.get(controller) ?? 1) - 1;
+        if (users > 0) {
+          this.controllerUsers.set(controller, users);
+        } else {
+          this.controllerUsers.delete(controller);
+          if (this.abortControllers.get(worktreeId) === controller) {
+            this.abortControllers.delete(worktreeId);
+          }
         }
       }
     })();
 
-    this.inFlight.set(cacheKey, promise);
+    this.inFlight.set(flightKey, promise);
 
     try {
       return await promise;
     } finally {
-      this.inFlight.delete(cacheKey);
+      // An overtaken compute settling late must not drop the flight that replaced it.
+      if (this.inFlight.get(flightKey) === promise) {
+        this.inFlight.delete(flightKey);
+      }
     }
   }
 
@@ -366,6 +399,7 @@ export class ProjectPulseService {
 
   private async computePulse(
     options: GetProjectPulseOptions,
+    calendar: LocalCalendar,
     signal?: AbortSignal
   ): Promise<ComputedPulse> {
     const {
@@ -385,9 +419,7 @@ export class ProjectPulseService {
     // stderr, which the lenient profile resolves as an empty, zero-commit log.
     const git = await createStrictExitGit(worktreePath, signal);
     const startTime = Date.now();
-    // One calendar day for the whole compute, so the heatmap, streak and age agree across midnight.
-    const todayMidnight = getLocalMidnight(new Date(startTime));
-    const day = formatLocalDay(todayMidnight);
+    const { todayMidnight } = calendar;
 
     const isRepo = await git.checkIsRepo();
     if (!isRepo) {
@@ -403,10 +435,9 @@ export class ProjectPulseService {
       if (isNoCommitsError(errorMessage)) {
         logProjectPulseDebug("Repository has no commits, returning empty pulse", { worktreeId });
         return {
-          pulse: this.createEmptyPulse(options),
+          pulse: this.createEmptyPulse(options, todayMidnight),
           headSha: null,
           headBranch: undefined,
-          day,
           historyLoadedAt: startTime,
           cacheable: true,
         };
@@ -430,15 +461,19 @@ export class ProjectPulseService {
       branch = undefined;
     }
 
+    // Walks start from the SHA resolved above, so a checkout mid-compute can't mix two heads'
+    // commits into one Pulse or file another head's history under this SHA.
+    const rev = headSha ?? "HEAD";
+
     // Run operations in parallel for performance
     const [heatmapResult, recentCommitsResult, deltaResult, historyResult] =
       await Promise.allSettled([
-        this.computeHeatmap(git, rangeDays, todayMidnight),
-        includeRecentCommits ? this.getRecentCommits(git, 8) : Promise.resolve([]),
+        this.computeHeatmap(git, rangeDays, todayMidnight, rev),
+        includeRecentCommits ? this.getRecentCommits(git, 8, rev) : Promise.resolve([]),
         includeDelta && branch
           ? this.getBranchDelta(git, mainBranch, branch)
           : Promise.resolve(null),
-        this.getHistoryFacts(git, options, headSha, signal),
+        this.getHistoryFacts(git, options, headSha, calendar.timeZone, signal),
       ]);
 
     // HEAD resolved, so this repository has history: a failed read of it is a
@@ -512,7 +547,6 @@ export class ProjectPulseService {
       pulse,
       headSha,
       headBranch: branch,
-      day,
       historyLoadedAt: history?.loadedAt ?? startTime,
       cacheable,
     };
@@ -521,7 +555,8 @@ export class ProjectPulseService {
   private async computeHeatmap(
     git: SimpleGit,
     rangeDays: PulseRangeDays,
-    todayMidnight: Date
+    todayMidnight: Date,
+    rev: string
   ): Promise<HeatCell[]> {
     const dateCells = getDateCells(rangeDays, todayMidnight);
     const since = dateCells[0]?.date;
@@ -540,7 +575,13 @@ export class ProjectPulseService {
     // the window's real volume cut the oldest days out of the grid and the totals
     // while they still read as exact (#17455). One %ct line is 11 bytes, so a
     // window of 100,000 commits prints about 1MB.
-    const output = await git.raw(["log", `--since=${sinceEpochSeconds}`, "--pretty=format:%ct"]);
+    const output = await git.raw([
+      "log",
+      `--since=${sinceEpochSeconds}`,
+      "--pretty=format:%ct",
+      rev,
+      "--",
+    ]);
 
     // Walked in place rather than split, so a busy window never holds an array of
     // every timestamp string at once.
@@ -612,7 +653,7 @@ export class ProjectPulseService {
     return cells;
   }
 
-  private createEmptyPulse(options: GetProjectPulseOptions): ProjectPulse {
+  private createEmptyPulse(options: GetProjectPulseOptions, todayMidnight: Date): ProjectPulse {
     return {
       worktreeId: options.worktreeId,
       worktreePath: options.worktreePath,
@@ -620,7 +661,7 @@ export class ProjectPulseService {
       mainBranch: options.mainBranch,
       rangeDays: options.rangeDays,
       generatedAt: Date.now(),
-      heatmap: this.createEmptyHeatmap(options.rangeDays),
+      heatmap: this.createEmptyHeatmap(options.rangeDays, todayMidnight),
       commitsInRange: 0,
       activeDays: 0,
       projectAgeDays: 0,
@@ -629,12 +670,18 @@ export class ProjectPulseService {
     };
   }
 
-  private async getRecentCommits(git: SimpleGit, count: number): Promise<CommitItem[]> {
+  private async getRecentCommits(
+    git: SimpleGit,
+    count: number,
+    rev: string
+  ): Promise<CommitItem[]> {
     const output = await git.raw([
       "log",
       `-n`,
       `${count}`,
       "--pretty=format:%H\x1f%ct\x1f%an\x1f%s\x1e",
+      rev,
+      "--",
     ]);
 
     if (!output.trim()) {
@@ -762,15 +809,19 @@ export class ProjectPulseService {
     git: SimpleGit,
     options: GetProjectPulseOptions,
     headSha: string | null,
+    timeZone: string,
     signal?: AbortSignal
   ): Promise<HistoryResult> {
+    // A compute invalidate() already aborted must not open a flight a replacement could join: its
+    // walks fail and would hand the replacement empty facts.
+    signal?.throwIfAborted();
+
     if (!headSha) {
       const loadedAt = Date.now();
       return { ...(await this.loadHistoryFacts(git, "HEAD", options.worktreeId)), loadedAt };
     }
 
     const key = this.getHistoryKey(options.worktreeId, options.worktreePath);
-    const timeZone = getLocalTimeZone();
     const cached = this.historyCache.get(key);
     if (
       !options.forceRefresh &&
@@ -782,23 +833,32 @@ export class ProjectPulseService {
       return { facts: cached.facts, loadedAt: cached.timestamp, complete: true };
     }
 
+    // A forced refresh walks afresh rather than joining a walk that began before it; the identity
+    // checks below keep the superseded flight from publishing over it or evicting it.
     const inFlightKey = `${key}:${headSha}:${timeZone}`;
     const existing = this.historyInFlight.get(inFlightKey);
-    if (existing) {
+    if (existing && !options.forceRefresh) {
       return existing;
     }
 
     const loadedAt = Date.now();
-    const promise = (async (): Promise<HistoryResult> => {
+    const load = async (): Promise<HistoryResult> => {
       const { facts, complete } = await this.loadHistoryFacts(git, headSha, options.worktreeId);
       // invalidate() aborts the signal and drops this flight, so an aborted or superseded load
-      // never lands in the cache; a partial load is served once and walked again next time.
-      if (complete && !signal?.aborted && this.historyInFlight.get(inFlightKey) === promise) {
+      // never lands in the cache, nor do days formatted after a zone change; a partial load is
+      // served once and walked again next time.
+      if (
+        complete &&
+        !signal?.aborted &&
+        this.historyInFlight.get(inFlightKey) === promise &&
+        getLocalTimeZone() === timeZone
+      ) {
         this.historyCache.set(key, { headSha, timeZone, facts, timestamp: loadedAt });
         this.pruneHistoryCache();
       }
       return { facts, loadedAt, complete };
-    })();
+    };
+    const promise = load();
 
     this.historyInFlight.set(inFlightKey, promise);
     try {
@@ -861,6 +921,7 @@ export class ProjectPulseService {
       `--max-count=${MAX_COMMITS_FOR_STREAK}`,
       "--pretty=format:%ct",
       rev,
+      "--",
     ]);
 
     const commitDays = new Set<string>();
@@ -894,7 +955,7 @@ export class ProjectPulseService {
     // Merging unrelated histories leaves several reachable roots, and rev-list prints
     // them newest first, so the project's start is the earliest root timestamp rather
     // than whichever line comes first. Each line is "<committer timestamp> <sha>".
-    const rootsOut = await git.raw(["rev-list", "--max-parents=0", "--timestamp", rev]);
+    const rootsOut = await git.raw(["rev-list", "--max-parents=0", "--timestamp", rev, "--"]);
 
     let earliest: number | null = null;
     for (const line of rootsOut.split("\n")) {
