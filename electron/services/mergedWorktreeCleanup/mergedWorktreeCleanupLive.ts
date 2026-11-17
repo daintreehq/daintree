@@ -1,4 +1,5 @@
 import { lstat } from "node:fs/promises";
+import { webContents } from "electron";
 import { CHANNELS } from "../../ipc/channels.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 import { resolveForCwd } from "../../ipc/handlers/forgeResolution.js";
@@ -18,7 +19,7 @@ import {
   readPtyTerminalProcesses,
   terminalsInWorktree,
 } from "../mcp-server/worktreeProcessGuard.js";
-import type { MergedWorktreeReads } from "./evaluateMergedWorktrees.js";
+import type { HostRefusal, MergedWorktreeReads } from "./evaluateMergedWorktrees.js";
 import {
   MergedWorktreeCleanupService,
   type MergedWorktreeProject,
@@ -34,7 +35,34 @@ async function pathExists(target: string): Promise<boolean> {
   }
 }
 
-function readsFor(
+/**
+ * The same refusals the host makes for an unattended removal, read from the
+ * delete preview it already serves, for a host that is running. Teardown it
+ * would refuse to run; submodules git won't remove without `--force`.
+ */
+async function readHostRefusal(
+  project: MergedWorktreeProject,
+  worktreePath: string
+): Promise<HostRefusal | null> {
+  const preview = await getWorkspaceClientRef()?.getDeletePreview(
+    project.path,
+    project.id,
+    worktreePath
+  );
+  if (!preview) return null;
+  if (preview.teardown === "unreadable" || preview.risk === "unreadable") {
+    throw new Error("The workspace host couldn't read what deleting it would do");
+  }
+  if (preview.teardown && preview.teardown.phases.length > 0) return "teardown";
+  const risk = preview.risk;
+  if (risk && (risk.incomplete || risk.requiresMechanicalForce || risk.entries.length > 0)) {
+    return "submodules";
+  }
+  return null;
+}
+
+/** The reads one evaluation pass makes for `project`. Exported for tests. */
+export function createMergedWorktreeReads(
   project: MergedWorktreeProject,
   signal: AbortSignal,
   purpose: "sweep" | "preview"
@@ -57,9 +85,8 @@ function readsFor(
     readStatus: (worktreePath) => readWorktreeStatusObservation(worktreePath, signal),
     countTerminals: async (worktreePath) => {
       census ??= readPtyTerminalProcesses(getPtyClient());
-      const records = await census;
-      const census = await terminalsInWorktree(records, worktreePath, HOST_MATCH_OPTIONS);
-      return { count: census.terminals.length, complete: census.complete };
+      const placed = await terminalsInWorktree(await census, worktreePath, HOST_MATCH_OPTIONS);
+      return { count: placed.terminals.length, complete: placed.complete };
     },
     readSavedLayout: async () => {
       const state = await projectStore.getProjectState(project.id);
@@ -81,6 +108,7 @@ function readsFor(
         getPR: (prNumber) => impl.getPR(repoRef, prNumber, { fresh: purpose === "sweep" }),
       };
     },
+    readHostRefusal: (worktreePath) => readHostRefusal(project, worktreePath),
     now: Date.now,
   };
 }
@@ -97,18 +125,23 @@ export function getMergedWorktreeCleanupService(): MergedWorktreeCleanupService 
       if (!git) throw new Error("Not a git repository");
       return git.listWorktrees();
     },
-    readsFor,
-    removeWorktree: async (project, worktreeId, guard) => {
+    readsFor: createMergedWorktreeReads,
+    removeWorktree: async (project, worktreeId, guard, confirm) => {
       const client = getWorkspaceClientRef();
       if (!client) throw new Error("The workspace client isn't running");
-      await client.removeMergedWorktree(project.path, project.id, worktreeId, guard);
+      return client.removeMergedWorktree(project.path, project.id, worktreeId, guard, confirm);
     },
+    pathExists,
     loadReceipts: () => {
       const stored = store.get("mergedWorktreeRemovalReceipts");
       return Array.isArray(stored) ? stored : [];
     },
     saveReceipts: (receipts) => store.set("mergedWorktreeRemovalReceipts", receipts),
     announceReceipts: () => broadcastToRenderer(CHANNELS.MERGED_WORKTREE_CLEANUP_RECEIPTS_READY),
+    isLiveView: (id) => {
+      const contents = webContents.fromId(id);
+      return contents !== undefined && !contents.isDestroyed();
+    },
     logInfo: (message, context) => logInfo(message, context),
     logWarn: (message, context) => logWarn(message, context),
   });

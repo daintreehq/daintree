@@ -24,6 +24,8 @@ export type MergedWorktreeSkipReason =
   | "no-pr"
   | "pr-not-merged"
   | "head-moved"
+  | "teardown"
+  | "submodules"
   | "unverified";
 
 export interface MergedWorktreePR {
@@ -78,6 +80,12 @@ export interface MergedWorktreeCleanupPreview {
 /** A removal the rule made, kept until a window has put it in the notification inbox. */
 export interface MergedWorktreeRemovalReceipt {
   id: string;
+  /**
+   * Written before git is asked, so a removal whose answer is lost (a quit, a
+   * host that died) is still accounted for on the next start. Never handed to
+   * a view while set.
+   */
+  pending?: true;
   projectId: string;
   projectName: string;
   worktreePath: string;

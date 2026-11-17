@@ -93,11 +93,13 @@ describe("useMergedWorktreeReceiptBridge", () => {
     storage.withhold.add(mergedWorktreeReceiptEntryId("b"));
     renderHook(() => useMergedWorktreeReceiptBridge(true));
 
-    await vi.waitFor(() => expect(ackReceipts).toHaveBeenCalledWith({ ids: ["a"] }));
+    await vi.waitFor(() => expect(ackReceipts).toHaveBeenCalled());
+    expect(ackReceipts.mock.calls).toEqual([[{ ids: ["a"] }]]);
     const filed = entries().find((entry) => entry.id === mergedWorktreeReceiptEntryId("a"));
     expect(filed?.message).toContain("feature/a");
     expect(filed?.context).toEqual({ projectId: "project-1", eventKind: "git" });
     expect(filed?.seenAsToast).toBe(false);
+    expect(useNotificationHistoryStore.getState().unreadCount).toBeGreaterThan(0);
   });
 
   it("waits for the view's state before asking", async () => {
@@ -134,6 +136,19 @@ describe("useMergedWorktreeReceiptBridge", () => {
     expect(
       entries().filter((entry) => entry.id === mergedWorktreeReceiptEntryId("d"))
     ).toHaveLength(1);
+  });
+
+  it("files nothing from a take that lands after the view was parked", async () => {
+    let answer!: (receipts: MergedWorktreeRemovalReceipt[]) => void;
+    takeReceipts.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    renderHook(() => useMergedWorktreeReceiptBridge(true));
+    await vi.waitFor(() => expect(takeReceipts).toHaveBeenCalledTimes(1));
+
+    act(() => park?.());
+    await act(async () => answer([receipt("late")]));
+
+    expect(entries()).toEqual([]);
+    expect(ackReceipts).not.toHaveBeenCalled();
   });
 
   it("does nothing in a window driving a remote host", () => {

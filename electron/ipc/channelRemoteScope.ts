@@ -84,6 +84,8 @@ export const CHANNEL_REMOTE_SCOPE: Readonly<Record<string, RemoteScopeTarget>> =
   "worktree:get-available-branch": ROOT_FIELD,
   "worktree:get-default-path": ROOT_FIELD,
   "project:list-remotes": CWD_ARG,
+  "merged-worktree-cleanup:preview": PROJECT_FIELD,
+  "merged-worktree-cleanup:set-enabled": PROJECT_FIELD,
   "dev-preview:get-state": PROJECT_FIELD,
   "dev-preview:get-diagnostics": PROJECT_FIELD,
   "dev-preview:get-destructive-preview-meta": PROJECT_FIELD,

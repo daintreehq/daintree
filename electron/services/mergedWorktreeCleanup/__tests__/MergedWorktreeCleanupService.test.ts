@@ -1,22 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PR } from "../../../../shared/types/forge.js";
 import type { ProjectSettings } from "../../../../shared/types/project.js";
-import {
-  MERGED_WORKTREE_GRACE_MS,
-  type MergedWorktreeRemovalReceipt,
-} from "../../../../shared/types/mergedWorktreeCleanup.js";
+import type { MergedWorktreeRemovalReceipt } from "../../../../shared/types/mergedWorktreeCleanup.js";
 import type { ListedWorktree, MergedWorktreeReads } from "../evaluateMergedWorktrees.js";
 import {
   MERGED_WORKTREE_RECEIPT_CAP,
+  MERGED_WORKTREE_RECEIPT_LEASE_MS,
   MERGED_WORKTREE_SWEEP_AFTER_ENABLE_MS,
+  MERGED_WORKTREE_SWEEP_INTERVAL_MS,
   MERGED_WORKTREE_SWEEP_STARTUP_DELAY_MS,
   MergedWorktreeCleanupService,
   type MergedWorktreeCleanupDeps,
 } from "../MergedWorktreeCleanupService.js";
 
+const DAY = 24 * 60 * 60 * 1000;
 const HEAD = "c".repeat(40);
 const MERGED_AT = 1_700_000_000_000;
-const NOW = MERGED_AT + MERGED_WORKTREE_GRACE_MS + 60_000;
+const NOW = MERGED_AT + DAY + 60_000;
 const project = { id: "p1", path: "/repo", name: "Repo" };
 const listed: ListedWorktree[] = [
   { path: "/repo", branch: "develop", bare: false, isMainWorktree: true },
@@ -62,13 +62,14 @@ function cleanReads(getPR: () => Promise<PR | null> = async () => mergedPR()) {
     }),
     countTerminals: async () => ({ count: 0, complete: true }),
     readSavedLayout: async () => null,
-    resolveForge: async () => ({
-      findPRByBranch: async () => mergedPR(),
-      getPR,
-    }),
+    resolveForge: async () => ({ findPRByBranch: async () => mergedPR(), getPR }),
     now: () => NOW,
   });
 }
+
+/** A host that asks `confirm` first, as the real one does once it's ready. */
+const confirmingHost = () =>
+  vi.fn<MergedWorktreeCleanupDeps["removeWorktree"]>(async (_p, _id, _guard, confirm) => confirm());
 
 function setup(overrides: Partial<MergedWorktreeCleanupDeps> = {}) {
   let settings: ProjectSettings = { runCommands: [], removeMergedWorktrees: true };
@@ -81,12 +82,14 @@ function setup(overrides: Partial<MergedWorktreeCleanupDeps> = {}) {
     }),
     listWorktrees: vi.fn(async () => listed),
     readsFor: vi.fn(cleanReads()),
-    removeWorktree: vi.fn(async () => undefined),
+    removeWorktree: confirmingHost(),
+    pathExists: vi.fn(async () => true),
     loadReceipts: () => receipts,
     saveReceipts: vi.fn((next: MergedWorktreeRemovalReceipt[]) => {
       receipts = next;
     }),
     announceReceipts: vi.fn(),
+    isLiveView: vi.fn(() => true),
     now: () => NOW,
     logInfo: vi.fn(),
     logWarn: vi.fn(),
@@ -99,8 +102,25 @@ function setup(overrides: Partial<MergedWorktreeCleanupDeps> = {}) {
     setSettings: (next: ProjectSettings) => {
       settings = next;
     },
+    setReceipts: (next: MergedWorktreeRemovalReceipt[]) => {
+      receipts = next;
+    },
     receipts: () => receipts,
   };
+}
+
+function receipt(id: string, extra: Partial<MergedWorktreeRemovalReceipt> = {}) {
+  return {
+    id,
+    projectId: "p1",
+    projectName: "Repo",
+    worktreePath: `/wt/${id}`,
+    branch: "b",
+    prNumber: 1,
+    prUrl: "",
+    removedAt: 1,
+    ...extra,
+  } satisfies MergedWorktreeRemovalReceipt;
 }
 
 afterEach(() => {
@@ -108,25 +128,42 @@ afterEach(() => {
 });
 
 describe("MergedWorktreeCleanupService", () => {
-  it("removes a qualifying worktree without force or branch deletion, and records a receipt", async () => {
+  it("removes a qualifying worktree under the guard, and settles its receipt", async () => {
     const { service, deps, receipts } = setup();
     await service.sweep();
     expect(deps.removeWorktree).toHaveBeenCalledTimes(1);
-    expect(deps.removeWorktree).toHaveBeenCalledWith(project, "/wt/feature-x", {
-      expectedBranch: "feature/x",
-      expectedHead: HEAD,
-    });
+    expect(deps.removeWorktree).toHaveBeenCalledWith(
+      project,
+      "/wt/feature-x",
+      { expectedBranch: "feature/x", expectedHead: HEAD },
+      expect.any(Function)
+    );
     expect(receipts()).toEqual([
-      expect.objectContaining({
+      {
+        id: expect.any(String),
         projectId: "p1",
         projectName: "Repo",
         branch: "feature/x",
         prNumber: 7,
+        prUrl: "https://forge.test/o/r/pull/7",
         worktreePath: "/wt/feature-x",
         removedAt: NOW,
-      }),
+      },
     ]);
     expect(deps.announceReceipts).toHaveBeenCalledTimes(1);
+  });
+
+  it("records the receipt as pending before git is asked", async () => {
+    let seen: MergedWorktreeRemovalReceipt[] = [];
+    const harness = setup({
+      removeWorktree: vi.fn(async (_p, _id, _guard, confirm) => {
+        seen = harness.receipts();
+        return confirm();
+      }),
+    });
+    await harness.service.sweep();
+    expect(seen).toEqual([expect.objectContaining({ pending: true, branch: "feature/x" })]);
+    expect(harness.receipts()[0]).not.toHaveProperty("pending");
   });
 
   it("reads past the forge's caches for a sweep, and lets a preview use them", async () => {
@@ -150,38 +187,43 @@ describe("MergedWorktreeCleanupService", () => {
     expect(deps.removeWorktree).not.toHaveBeenCalled();
   });
 
-  it("judges the worktree again right before removing it", async () => {
+  it("judges the worktree again once the host is ready, and sends nothing when it no longer qualifies", async () => {
     let reads = 0;
-    const { service, deps } = setup({
-      readsFor: cleanReads(async () =>
-        ++reads === 1 ? mergedPR() : mergedPR({ headSha: "d".repeat(40) })
+    const { service, deps, receipts } = setup({
+      readsFor: vi.fn(
+        cleanReads(async () => (++reads === 1 ? mergedPR() : mergedPR({ headSha: "d".repeat(40) })))
       ),
     });
     await service.sweep();
     expect(reads).toBe(2);
-    expect(deps.removeWorktree).not.toHaveBeenCalled();
+    expect(await vi.mocked(deps.removeWorktree).mock.results[0]!.value).toBe(false);
+    expect(receipts()).toEqual([]);
+    expect(deps.announceReceipts).not.toHaveBeenCalled();
   });
 
-  it("stops before the removal when the switch goes off during the sweep", async () => {
+  it("stops before the removal when the switch goes off and on again during the sweep", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
     const { service, deps } = setup({
-      readsFor: cleanReads(async () => {
-        await gate;
-        return mergedPR();
-      }),
+      readsFor: vi.fn(
+        cleanReads(async () => {
+          await gate;
+          return mergedPR();
+        })
+      ),
     });
     const sweeping = service.sweep();
     await vi.waitFor(() => expect(deps.listWorktrees).toHaveBeenCalled());
     await service.setEnabled("p1", false);
+    await service.setEnabled("p1", true);
     release();
     await sweeping;
     expect(deps.removeWorktree).not.toHaveBeenCalled();
   });
 
-  it("records no receipt when the host refuses the removal", async () => {
+  it("drops the receipt when the host refuses and the checkout is still there", async () => {
     const { service, deps, receipts } = setup({
       removeWorktree: vi.fn(async () => Promise.reject(new Error("The worktree has changes"))),
     });
@@ -189,6 +231,48 @@ describe("MergedWorktreeCleanupService", () => {
     expect(receipts()).toEqual([]);
     expect(deps.announceReceipts).not.toHaveBeenCalled();
     expect(deps.logWarn).toHaveBeenCalled();
+  });
+
+  it("settles the receipt when the answer was lost but the checkout is gone", async () => {
+    const { service, deps, receipts } = setup({
+      removeWorktree: vi.fn(async () => Promise.reject(new Error("timed out"))),
+      pathExists: vi.fn(async () => false),
+    });
+    await service.sweep();
+    expect(receipts()).toEqual([expect.objectContaining({ branch: "feature/x" })]);
+    expect(receipts()[0]).not.toHaveProperty("pending");
+    expect(deps.announceReceipts).toHaveBeenCalledTimes(1);
+  });
+
+  it("settles pending receipts a previous run left from the disk, once", async () => {
+    const harness = setup({
+      pathExists: vi.fn(async (target: string) => target !== "/wt/gone"),
+      listWorktrees: vi.fn(async () => [listed[0]!]),
+    });
+    harness.setReceipts([
+      receipt("gone", { pending: true }),
+      receipt("kept", { pending: true }),
+      receipt("done"),
+    ]);
+    await harness.service.sweep();
+    expect(harness.receipts().map((entry) => [entry.id, entry.pending ?? false])).toEqual([
+      ["gone", false],
+      ["done", false],
+    ]);
+    expect(harness.deps.announceReceipts).toHaveBeenCalledTimes(1);
+    await harness.service.sweep();
+    expect(harness.deps.pathExists).toHaveBeenCalledTimes(2);
+  });
+
+  it("removes nothing while the receipts nobody has taken are full", async () => {
+    const harness = setup();
+    harness.setReceipts(
+      Array.from({ length: MERGED_WORKTREE_RECEIPT_CAP }, (_, index) => receipt(`r${index}`))
+    );
+    await harness.service.sweep();
+    expect(harness.deps.removeWorktree).not.toHaveBeenCalled();
+    expect(harness.receipts()).toHaveLength(MERGED_WORKTREE_RECEIPT_CAP);
+    expect(harness.receipts()[0]!.id).toBe("r0");
   });
 
   it("joins a sweep already running instead of starting a second", async () => {
@@ -218,51 +302,46 @@ describe("MergedWorktreeCleanupService", () => {
     expect(preview.error).toContain("not a git repository");
   });
 
-  it("keeps receipts until acked, and only the acked ones go", async () => {
-    const { service, receipts } = setup({
-      listWorktrees: vi.fn(async () => [
-        ...listed,
-        { path: "/wt/feature-y", branch: "feature/x", bare: false, isMainWorktree: false },
-      ]),
+  describe("receipts", () => {
+    it("hands out only settled receipts, and drops only the acked ones", () => {
+      const harness = setup();
+      harness.setReceipts([receipt("a"), receipt("b", { pending: true }), receipt("c")]);
+      expect(harness.service.takeReceipts(1).map((entry) => entry.id)).toEqual(["a", "c"]);
+      harness.service.ackReceipts(["a", "b"]);
+      expect(harness.receipts().map((entry) => entry.id)).toEqual(["b", "c"]);
     });
-    await service.sweep();
-    const taken = service.takeReceipts();
-    expect(taken).toHaveLength(2);
-    service.ackReceipts([taken[0]!.id]);
-    expect(receipts().map((receipt) => receipt.id)).toEqual([taken[1]!.id]);
+
+    it("holds receipts for the view that took them until it acks or the hold lapses", () => {
+      let at = NOW;
+      const live = new Set([1, 2]);
+      const harness = setup({ now: () => at, isLiveView: (id) => live.has(id) });
+      harness.setReceipts([receipt("a")]);
+      expect(harness.service.takeReceipts(1)).toHaveLength(1);
+      expect(harness.service.takeReceipts(2)).toEqual([]);
+      expect(harness.service.takeReceipts(1)).toHaveLength(1);
+      at += MERGED_WORKTREE_RECEIPT_LEASE_MS;
+      expect(harness.service.takeReceipts(2)).toHaveLength(1);
+      live.delete(2);
+      expect(harness.service.takeReceipts(1)).toHaveLength(1);
+    });
   });
 
-  it("caps the receipts it keeps, dropping the oldest", async () => {
-    const old = Array.from({ length: MERGED_WORKTREE_RECEIPT_CAP }, (_, index) => ({
-      id: `old-${index}`,
-      projectId: "p1",
-      projectName: "Repo",
-      worktreePath: `/wt/${index}`,
-      branch: "b",
-      prNumber: index,
-      prUrl: "",
-      removedAt: index,
-    }));
-    const harness = setup();
-    harness.deps.saveReceipts(old);
-    await harness.service.sweep();
-    const kept = harness.receipts();
-    expect(kept).toHaveLength(MERGED_WORKTREE_RECEIPT_CAP);
-    expect(kept[0]!.id).toBe("old-1");
-    expect(kept.at(-1)!.branch).toBe("feature/x");
-  });
-
-  it("waits out startup before its first sweep, and sweeps soon after the switch goes on", async () => {
+  it("waits out startup, sweeps on the hour, and soon after the switch goes on", async () => {
     vi.useFakeTimers();
-    const { service, deps } = setup();
+    const { service, deps, setSettings } = setup();
+    setSettings({ runCommands: [] });
     service.start();
-    await vi.advanceTimersByTimeAsync(MERGED_WORKTREE_SWEEP_STARTUP_DELAY_MS - 1);
+    await vi.advanceTimersByTimeAsync(MERGED_WORKTREE_SWEEP_STARTUP_DELAY_MS);
+    expect(deps.readSettings).toHaveBeenCalledTimes(1);
+    expect(deps.listWorktrees).not.toHaveBeenCalled();
+
+    await service.setEnabled("p1", true);
+    await vi.advanceTimersByTimeAsync(MERGED_WORKTREE_SWEEP_AFTER_ENABLE_MS - 1);
     expect(deps.listWorktrees).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     await vi.waitFor(() => expect(deps.listWorktrees).toHaveBeenCalledTimes(1));
 
-    await service.setEnabled("p1", true);
-    await vi.advanceTimersByTimeAsync(MERGED_WORKTREE_SWEEP_AFTER_ENABLE_MS);
+    await vi.advanceTimersByTimeAsync(MERGED_WORKTREE_SWEEP_INTERVAL_MS);
     await vi.waitFor(() => expect(deps.listWorktrees).toHaveBeenCalledTimes(2));
     await service.dispose();
   });

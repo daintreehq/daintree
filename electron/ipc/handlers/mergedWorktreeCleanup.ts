@@ -9,6 +9,7 @@ import type {
 import { AppError } from "../../utils/errorTypes.js";
 import { getShownAppWebContents } from "../../window/webContentsRegistry.js";
 import { defineIpcNamespace, op, opValidated } from "../define.js";
+import { getIpcDispatcher } from "../dispatcher.js";
 import type { IpcContext } from "../types.js";
 import { MERGED_WORKTREE_CLEANUP_METHOD_CHANNELS } from "./mergedWorktreeCleanup.preload.js";
 
@@ -23,9 +24,13 @@ async function service() {
   return getMergedWorktreeCleanupService();
 }
 
-// The receipts are this machine's removals, filed by this machine's own views.
+// The receipts are this machine's removals, filed by this machine's own views:
+// not a remote view, and not a local window bound to another host.
 function requireLocalView(ctx: IpcContext): void {
-  if (ctx.endpoint?.kind === "remote-view") {
+  if (
+    ctx.endpoint?.kind === "remote-view" ||
+    getIpcDispatcher().hostForSender(ctx.webContentsId) !== null
+  ) {
     throw new AppError({
       code: "UNSUPPORTED",
       message: "mergedWorktreeCleanup: receipts are for this machine's own windows",
@@ -62,7 +67,7 @@ export const mergedWorktreeCleanupNamespace = defineIpcNamespace({
         if (!getShownAppWebContents().some((contents) => contents.id === ctx.webContentsId)) {
           return [];
         }
-        return (await service()).takeReceipts();
+        return (await service()).takeReceipts(ctx.webContentsId);
       },
       { withContext: true }
     ),

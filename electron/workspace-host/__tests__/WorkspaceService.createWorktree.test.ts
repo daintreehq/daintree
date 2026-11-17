@@ -42,6 +42,14 @@ vi.mock("../../utils/git.js", () => ({
   }),
 }));
 
+const stampMocks = vi.hoisted(() => ({ write: vi.fn() }));
+vi.mock("../../utils/worktreeCreationStamp.js", () => ({
+  writeWorktreeCreationStamp: stampMocks.write,
+}));
+beforeEach(() => {
+  stampMocks.write.mockReset().mockResolvedValue(undefined);
+});
+
 vi.mock("../../utils/gitUtils.js", () => ({
   getGitDir: vi.fn().mockReturnValue("/test/worktree/.git"),
   getGitCommonDir: vi.fn().mockReturnValue(null),
@@ -281,6 +289,28 @@ describe("WorkspaceService.createWorktree", () => {
     // path is gone — the Worktree object is built directly from inputs.
     await flushAsyncTail();
     expect(listSpy).not.toHaveBeenCalled();
+  });
+
+  it("stamps the new worktree's own git directory as Daintree's, and a failed stamp fails nothing (#17321)", async () => {
+    stampMocks.write.mockRejectedValueOnce(new Error("EACCES"));
+
+    await service.createWorktree("req-stamp", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/stamped",
+      path: "/test/worktree",
+    });
+
+    expect(stampMocks.write).toHaveBeenCalledWith("/test/worktree/.git", {
+      createdAt: expect.any(Number),
+      branch: "feature/stamped",
+    });
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        requestId: "req-stamp",
+        success: true,
+      })
+    );
   });
 
   it("uses the real path as the created worktree id", async () => {

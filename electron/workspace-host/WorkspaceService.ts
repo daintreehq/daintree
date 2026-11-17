@@ -4076,13 +4076,15 @@ export class WorkspaceService {
   }
 
   /**
-   * The refusals an unattended removal (#17321) adds before anything stops or
-   * runs. Teardown is refused rather than run: the person consented to losing
-   * a checkout that holds nothing, not to a project script or resource
+   * What an unattended removal (#17321) re-checks before anything stops and
+   * again before each git attempt. A worktree whose delete would run teardown
+   * is refused, and teardown is never run for one: the person consented to
+   * losing a checkout that holds nothing, not to a project script or resource
    * teardown running with no one watching. The active worktree is refused
-   * because removing it switches a view the person may be looking at.
+   * because removing it switches a view the person may be looking at, and one
+   * still being set up is in use.
    */
-  private async refuseUnattendedRemoval(
+  private async assertUnattendedRemovalHolds(
     worktreeId: string,
     monitor: WorktreeMonitor,
     guard: UnattendedRemovalGuard
@@ -4095,6 +4097,9 @@ export class WorkspaceService {
     }
     if (monitor.branch !== guard.expectedBranch) {
       throw new Error("The worktree is no longer on the branch its PR merged");
+    }
+    if (monitor.lifecycleStatus?.state === "running" || monitor.setupStatus?.state === "running") {
+      throw new Error("The worktree is still being set up");
     }
     const teardown = await this.getDeleteTeardownPreview(worktreeId);
     if (teardown === null || teardown.phases.length > 0) {
@@ -4208,7 +4213,7 @@ export class WorkspaceService {
         if (force || deleteBranch || branchOptions.forceDeleteBranch) {
           throw new Error("An unattended removal never forces or deletes the branch");
         }
-        await this.refuseUnattendedRemoval(worktreeId, monitor, unattended);
+        await this.assertUnattendedRemovalHolds(worktreeId, monitor, unattended);
       }
 
       // Before every other guard and before teardown: no consent covers this,
@@ -4268,6 +4273,9 @@ export class WorkspaceService {
       }
 
       if (monitor.isCurrent) {
+        // Became active while the guards above awaited: never switch a view
+        // away for a removal no one asked for.
+        if (unattended) throw new Error("The worktree is the active one");
         let mainWorktreeId: string | undefined;
         for (const [id, m] of this.monitors) {
           if (m.isMainWorktree) {
@@ -4281,8 +4289,10 @@ export class WorkspaceService {
         this.setActiveWorktree(`${requestId}-auto-switch`, mainWorktreeId);
       }
 
-      attachmentsReserved = true;
-      await this.runLifecycleTeardown(worktreeId, monitor);
+      if (!unattended) {
+        attachmentsReserved = true;
+        await this.runLifecycleTeardown(worktreeId, monitor);
+      }
 
       // Mark the metadata-subdir basename pending so the watcher event our own
       // `git worktree remove` produces is recognized and dropped — without
@@ -4303,6 +4313,8 @@ export class WorkspaceService {
         // ENOTDIR) fall through so we don't skip the remove on transient
         // permission issues; the remove call's own errors will surface.
         if (await pathIsMissing(monitor.path)) {
+          // A prune is a recovery the person asks for; it never runs unattended.
+          if (unattended) throw new Error("The worktree's folder is already gone");
           // The checkout is gone, but its module repositories are not: they live
           // under `.git/worktrees/<id>/modules`, which survives a `rm -rf` of the
           // working tree and is destroyed by `worktree prune`. So commits made
@@ -4335,14 +4347,18 @@ export class WorkspaceService {
           // narrows the window rather than closing it; closing it needs a
           // prepare/commit host API, which is a separate change.
           const needsMechanicalForce = await this.guardSubmoduleDelete(monitor, worktreeId, force);
-          if (unattended) {
-            if (needsMechanicalForce) {
-              throw new Error("Git would need --force to remove the worktree's submodules");
-            }
-            await verifyUnattendedCheckout(monitor.path, unattended);
+          if (unattended && needsMechanicalForce) {
+            throw new Error("Git would need --force to remove the worktree's submodules");
           }
-          // Last, so no other await sits between it and the removal.
-          await this.guardNestedWorktreeDelete(monitor);
+          // An unattended removal re-reads the checkout after the nested scan,
+          // so nothing that scan awaited can change it unseen.
+          const lastChecks = async () => {
+            await this.guardNestedWorktreeDelete(monitor);
+            if (unattended)
+              await this.assertUnattendedRemovalHolds(worktreeId, monitor, unattended);
+          };
+          // Last, so no other await sits between them and the removal.
+          await lastChecks();
 
           const args = ["worktree", "remove"];
           if (force || needsMechanicalForce) {
@@ -4357,8 +4373,9 @@ export class WorkspaceService {
             args,
             monitor.path,
             // A lock retry waits up to seconds between attempts; a worktree
-            // nested in that window must stop the next one.
-            () => this.guardNestedWorktreeDelete(monitor)
+            // nested in that window, or a checkout changed in it, must stop
+            // the next one.
+            lastChecks
           );
           markHostPerformance("wtdelete.git-remove:end", { worktreeId });
           if (removeResult === "stale" && unattended) {

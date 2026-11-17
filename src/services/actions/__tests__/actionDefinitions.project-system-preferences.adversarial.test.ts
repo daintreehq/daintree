@@ -611,6 +611,24 @@ describe("project action hardening", () => {
     expect(saved).toHaveProperty("devServerCommand", "vite");
   });
 
+  it("project.saveSettings can't turn off a merged-worktree rule the user turned on", async () => {
+    mocks.projectClient.getSettings.mockResolvedValueOnce({
+      runCommands: [],
+      removeMergedWorktrees: true,
+    });
+    mocks.projectClient.saveSettings.mockResolvedValueOnce(undefined);
+    const { service } = buildService(registerProjectActions);
+
+    await service.dispatch(
+      "project.saveSettings",
+      { projectId: "project-1", settings: { removeMergedWorktrees: false } },
+      { source: "agent" }
+    );
+
+    const saved = mocks.projectClient.saveSettings.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(saved.removeMergedWorktrees).toBe(true);
+  });
+
   it("project.saveSettings stops an agent granting itself daintreeMcpSkipConfirmations", async () => {
     mocks.projectClient.getSettings.mockResolvedValueOnce({
       runCommands: [],

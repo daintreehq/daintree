@@ -1188,15 +1188,18 @@ export class WorkspaceClient extends EventEmitter {
    * Main's merged-worktree rule (#17321) removing one of a project's worktrees
    * under the unattended guard, through that project's own host, started here
    * when no window has started it. Project-scoped like {@link getDeletePreview}
-   * so a refusal never falls through to another project's host, and rejects
-   * with the host's reason.
+   * so a refusal never falls through to another project's host. `confirm` runs
+   * once the host is ready, right before the request goes, so a start that
+   * took a while can't carry a stale decision; false sends nothing. Resolves
+   * whether the removal went through, and rejects with the host's reason.
    */
   async removeMergedWorktree(
     projectPath: string,
     expectedProjectId: string,
     worktreeId: string,
-    guard: UnattendedRemovalGuard
-  ): Promise<void> {
+    guard: UnattendedRemovalGuard,
+    confirm: () => Promise<boolean>
+  ): Promise<boolean> {
     // Held before the prewarm: a host started for this has no window holding
     // it, and the pool would otherwise reclaim it mid-removal.
     const release = holdHostForMergedWorktreeRemoval(expectedProjectId);
@@ -1211,11 +1214,16 @@ export class WorkspaceClient extends EventEmitter {
       if (this.pool.entries.get(normalized) !== entry) {
         throw new Error("The project's workspace host restarted");
       }
+      if (!(await confirm())) return false;
+      if (this.pool.entries.get(normalized) !== entry) {
+        throw new Error("The project's workspace host restarted");
+      }
       const requestId = entry.host.generateRequestId();
       await entry.host.sendWithResponse(
         { type: "remove-merged-worktree", requestId, worktreeId, guard },
         MERGED_WORKTREE_REMOVAL_TIMEOUT_MS
       );
+      return true;
     } finally {
       release();
     }

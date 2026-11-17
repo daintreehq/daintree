@@ -89,6 +89,110 @@ describe("MergedWorktreeCleanupSection (#17321)", () => {
     expect(getByRole("switch").getAttribute("aria-checked")).toBe("true");
   });
 
+  it("turns the rule off through the same setter", async () => {
+    previewMock.mockResolvedValueOnce(preview(true)).mockResolvedValueOnce(preview(false));
+    const { findByText, getByRole } = render(<MergedWorktreeCleanupSection projectId="p1" />);
+    await findByText("What the next check removes");
+
+    await act(async () => {
+      fireEvent.click(getByRole("switch"));
+    });
+
+    expect(setEnabledMock).toHaveBeenCalledWith({ projectId: "p1", enabled: false });
+    await findByText("What it would remove");
+    expect(getByRole("switch").getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("keeps a saved switch on when the list after it fails to load", async () => {
+    previewMock
+      .mockResolvedValueOnce(preview(false))
+      .mockRejectedValueOnce(new Error("host restarting"));
+    const { findByText, getByRole } = render(<MergedWorktreeCleanupSection projectId="p1" />);
+    await findByText("feature/done");
+
+    await act(async () => {
+      fireEvent.click(getByRole("switch"));
+    });
+
+    await findByText(/host restarting/);
+    const toggle = getByRole("switch");
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(toggle.hasAttribute("disabled") || toggle.getAttribute("aria-disabled") === "true").toBe(
+      false
+    );
+  });
+
+  it("shows a failed save with a Retry that asks for the same value", async () => {
+    setEnabledMock.mockRejectedValueOnce(new Error("disk full"));
+    const { findByText, getByRole, getAllByText } = render(
+      <MergedWorktreeCleanupSection projectId="p1" />
+    );
+    await findByText("feature/done");
+
+    await act(async () => {
+      fireEvent.click(getByRole("switch"));
+    });
+    await findByText(/disk full/);
+    expect(getByRole("switch").getAttribute("aria-checked")).toBe("false");
+
+    await act(async () => {
+      fireEvent.click(getAllByText("Retry")[0]!);
+    });
+    expect(setEnabledMock.mock.calls).toEqual([
+      [{ projectId: "p1", enabled: true }],
+      [{ projectId: "p1", enabled: true }],
+    ]);
+  });
+
+  it("never shows a save that lands after a project switch on the next project", async () => {
+    let finishSave!: () => void;
+    setEnabledMock.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (finishSave = resolve))
+    );
+    previewMock.mockImplementation(async ({ projectId }) =>
+      projectId === "p2" ? { ...preview(false), worktrees: [] } : preview(false)
+    );
+    const { findByText, getByRole, rerender } = render(
+      <MergedWorktreeCleanupSection projectId="p1" />
+    );
+    await findByText("feature/done");
+    act(() => {
+      fireEvent.click(getByRole("switch"));
+    });
+
+    rerender(<MergedWorktreeCleanupSection projectId="p2" />);
+    await findByText("No worktrees qualify right now");
+    await act(async () => {
+      finishSave();
+    });
+
+    expect(getByRole("switch").getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("shows worktrees that couldn't be checked as a failure with Retry, not as nothing qualifying", async () => {
+    previewMock.mockResolvedValue({
+      enabled: true,
+      checkedAt: CHECKED_AT,
+      worktrees: [
+        {
+          worktreePath: "/wt/x",
+          branch: "feature/x",
+          status: "skipped",
+          reason: "unverified",
+          detail: "no auth",
+        },
+      ],
+    });
+    const { findByText, queryByText, getByText } = render(
+      <MergedWorktreeCleanupSection projectId="p1" />
+    );
+
+    await findByText("1 worktree couldn't be checked");
+    expect(getByText("Couldn't check: no auth")).toBeTruthy();
+    expect(getByText("Retry")).toBeTruthy();
+    expect(queryByText("No worktrees qualify right now")).toBeNull();
+  });
+
   it("shows a failed check as an error with a Retry, not as nothing to remove", async () => {
     previewMock.mockRejectedValueOnce(new Error("forge unreachable"));
     const { findByText, queryByText, getByText } = render(

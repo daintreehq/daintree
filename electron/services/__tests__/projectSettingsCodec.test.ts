@@ -187,6 +187,14 @@ describe("decode", () => {
     expect(result.settings.removeMergedWorktrees).toBe(expected);
   });
 
+  it.each(["false", "true", 1])(
+    "never reads a non-boolean removeMergedWorktrees (%s) as on",
+    (stored) => {
+      const result = decode({ runCommands: [], removeMergedWorktrees: stored });
+      expect(result.ok && result.settings.removeMergedWorktrees).not.toBe(true);
+    }
+  );
+
   it("carries a pre-split system tier's auto-confirm over as daintreeMcpSkipConfirmations", () => {
     const result = decode({ runCommands: [], daintreeMcpTier: "system" });
     if (!result.ok) throw new Error("expected ok");

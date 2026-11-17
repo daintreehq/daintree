@@ -23,6 +23,8 @@ const SKIP_REASON_LABELS: Record<MergedWorktreeSkipReason, string> = {
   "no-pr": "No PR found",
   "pr-not-merged": "PR not merged",
   "head-moved": "Has commits the PR didn't merge",
+  teardown: "Deleting it would run teardown steps",
+  submodules: "Has submodules git won't remove without force",
   unverified: "Couldn't check",
 };
 
@@ -59,14 +61,22 @@ function CandidateRow({ candidate, now }: { candidate: MergedWorktreeCandidate; 
 
 /**
  * The merged-worktree rule's switch and dry run (#17321). The switch writes
- * on its own, outside the settings form, and the list is what a sweep would
- * do right now: shown before the switch goes on and while it's on.
+ * on its own, outside the settings form, and keeps the value the last write or
+ * read confirmed, so a slow or failed list never shows it off. Everything
+ * tracked here is tagged with its project, so an answer that lands after a
+ * project switch never shows on the next project. The list is what a sweep
+ * would do right now: shown before the switch goes on and while it's on.
  */
 export function MergedWorktreeCleanupSection({ projectId }: { projectId: string }) {
   const [loaded, setLoaded] = useState<Loaded>({ projectId, state: "loading" });
   const [reloadCount, setReloadCount] = useState(0);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const [confirmed, setConfirmed] = useState<{ projectId: string; enabled: boolean } | null>(null);
+  const [saving, setSaving] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<{
+    projectId: string;
+    enabled: boolean;
+    message: string;
+  } | null>(null);
   const [showSkipped, setShowSkipped] = useState(false);
 
   useEffect(() => {
@@ -80,7 +90,9 @@ export function MergedWorktreeCleanupSection({ projectId }: { projectId: string 
     api
       .preview({ projectId })
       .then((preview) => {
-        if (!cancelled) setLoaded({ projectId, state: "loaded", preview });
+        if (cancelled) return;
+        setLoaded({ projectId, state: "loaded", preview });
+        setConfirmed({ projectId, enabled: preview.enabled });
       })
       .catch((error: unknown) => {
         if (!cancelled) {
@@ -98,26 +110,39 @@ export function MergedWorktreeCleanupSection({ projectId }: { projectId: string 
 
   const current = loaded.projectId === projectId ? loaded : null;
   const preview = current?.state === "loaded" ? current.preview : null;
-  const enabled = preview?.enabled ?? false;
-  const now = preview?.checkedAt ?? Date.now();
+  const enabledHere = confirmed?.projectId === projectId ? confirmed.enabled : null;
+  const enabled = enabledHere ?? false;
+  const savingHere = saving === projectId;
+  const saveErrorHere = saveError?.projectId === projectId ? saveError : null;
   const worktrees = preview?.worktrees ?? [];
   const removable = worktrees.filter((candidate) => candidate.status === "removable");
   const waiting = worktrees.filter((candidate) => candidate.status === "waiting");
-  const skipped = worktrees.filter((candidate) => candidate.status === "skipped");
+  const skipped = worktrees.filter(
+    (candidate) => candidate.status === "skipped" && candidate.reason !== "unverified"
+  );
+  const unverified = worktrees.filter(
+    (candidate) => candidate.status === "skipped" && candidate.reason === "unverified"
+  );
   const failure = current?.state === "failed" ? current.error : (preview?.error ?? null);
 
   const setEnabled = async (next: boolean) => {
     const api = window.electron?.mergedWorktreeCleanup;
     if (!api) return;
-    setSaving(true);
+    const target = projectId;
+    setSaving(target);
     setSaveError(null);
     try {
-      await api.setEnabled({ projectId, enabled: next });
+      await api.setEnabled({ projectId: target, enabled: next });
+      setConfirmed({ projectId: target, enabled: next });
       setReloadCount((count) => count + 1);
     } catch (error) {
-      setSaveError(formatErrorMessage(error, "Couldn't save the setting"));
+      setSaveError({
+        projectId: target,
+        enabled: next,
+        message: formatErrorMessage(error, "Couldn't save the setting"),
+      });
     } finally {
-      setSaving(false);
+      setSaving((pending) => (pending === target ? null : pending));
     }
   };
 
@@ -128,16 +153,27 @@ export function MergedWorktreeCleanupSection({ projectId }: { projectId: string 
       <SettingsGroup>
         <SettingsRow
           label="Remove worktrees once their PR has merged"
-          description="Checked every hour. A worktree goes 24 hours after its PR merged, only if Daintree created it, it's on the commit the PR merged, nothing is uncommitted, and no terminals or panels are open in it. Its branch is kept."
-          error={saveError ?? undefined}
+          description="Checked every hour. A worktree goes at least 24 hours after its PR merged, only if Daintree created it, it's on the commit the PR merged, nothing is uncommitted, and no terminals or panels are open in it. Git-ignored files in it, such as node_modules or a local .env, go with it. Its branch is kept."
+          error={saveErrorHere?.message}
+          errorAction={
+            saveErrorHere ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void setEnabled(saveErrorHere.enabled)}
+              >
+                Retry
+              </Button>
+            ) : undefined
+          }
           control={({ labelId, descriptionId }) => (
             <SettingsSwitch
               checked={enabled}
               onCheckedChange={(next) => void setEnabled(next)}
-              disabled={saving || preview === null}
+              disabled={savingHere || enabledHere === null}
               aria-labelledby={labelId}
               aria-describedby={descriptionId}
-              aria-invalid={saveError !== null ? true : undefined}
+              aria-invalid={saveErrorHere ? true : undefined}
             />
           )}
         />
@@ -174,15 +210,48 @@ export function MergedWorktreeCleanupSection({ projectId }: { projectId: string 
             )
           }
         />
-        {preview && !preview.error && removable.length === 0 && waiting.length === 0 && (
-          <SettingsEmptyRow>No worktrees qualify right now</SettingsEmptyRow>
-        )}
+        {preview &&
+          !preview.error &&
+          removable.length === 0 &&
+          waiting.length === 0 &&
+          unverified.length === 0 && (
+            <SettingsEmptyRow>No worktrees qualify right now</SettingsEmptyRow>
+          )}
         {(removable.length > 0 || waiting.length > 0) && (
           <ul className="divide-y divide-border-subtle" aria-label="Worktrees that qualify">
             {[...removable, ...waiting].map((candidate) => (
-              <CandidateRow key={candidate.worktreePath} candidate={candidate} now={now} />
+              <CandidateRow
+                key={candidate.worktreePath}
+                candidate={candidate}
+                now={preview?.checkedAt ?? 0}
+              />
             ))}
           </ul>
+        )}
+        {unverified.length > 0 && (
+          <>
+            <SettingsRow
+              label={`${pluralize(unverified.length, "worktree")} couldn't be checked`}
+              error="These are left alone until a check can read them"
+              errorAction={
+                <Button size="sm" variant="outline" onClick={refresh}>
+                  Retry
+                </Button>
+              }
+            />
+            <ul
+              className="divide-y divide-border-subtle"
+              aria-label="Worktrees that couldn't be checked"
+            >
+              {unverified.map((candidate) => (
+                <CandidateRow
+                  key={candidate.worktreePath}
+                  candidate={candidate}
+                  now={preview?.checkedAt ?? 0}
+                />
+              ))}
+            </ul>
+          </>
         )}
         {skipped.length > 0 && (
           <SettingsRow
@@ -202,7 +271,11 @@ export function MergedWorktreeCleanupSection({ projectId }: { projectId: string 
         {showSkipped && skipped.length > 0 && (
           <ul className="divide-y divide-border-subtle" aria-label="Skipped worktrees">
             {skipped.map((candidate) => (
-              <CandidateRow key={candidate.worktreePath} candidate={candidate} now={now} />
+              <CandidateRow
+                key={candidate.worktreePath}
+                candidate={candidate}
+                now={preview?.checkedAt ?? 0}
+              />
             ))}
           </ul>
         )}

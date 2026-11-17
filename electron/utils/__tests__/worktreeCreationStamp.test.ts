@@ -43,7 +43,8 @@ describe("worktreeCreationStamp", () => {
     ["not JSON", "daintree"],
     ["not an object", "42"],
     ["missing fields", JSON.stringify({ createdAt: 1 })],
-    ["a non-finite time", '{"createdAt":"soon","branch":"x"}'],
+    ["a time that isn't a number", '{"createdAt":"soon","branch":"x"}'],
+    ["a time that overflows", '{"createdAt":1e400,"branch":"x"}'],
   ])("rejects a stamp that is %s rather than read it either way", async (_label, text) => {
     await writeFile(path.join(gitDir, WORKTREE_CREATION_STAMP_FILE), text);
     await expect(readWorktreeCreationStamp(gitDir)).rejects.toThrow();

@@ -1122,6 +1122,8 @@ describe("ProjectSettingsManager caching", () => {
   describe("setRemoveMergedWorktrees (#17321)", () => {
     const readFromDisk = () =>
       new ProjectSettingsManager(tempDir, createMockStore()).getProjectSettings(projectId);
+    const readRawSettings = async (): Promise<unknown> =>
+      JSON.parse(await fs.readFile(path.join(tempDir, projectId, "settings.json"), "utf8"));
 
     it("turns the rule on and off, keeping every other field, and stores off as absent", async () => {
       await manager.saveProjectSettings(projectId, { runCommands: [], devServerCommand: "dev" });
@@ -1136,6 +1138,7 @@ describe("ProjectSettingsManager caching", () => {
       const settings = await readFromDisk();
       expect(settings.devServerCommand).toBe("dev");
       expect(settings.removeMergedWorktrees).toBeUndefined();
+      expect(JSON.stringify(await readRawSettings())).not.toContain("removeMergedWorktrees");
     });
 
     it("keeps the stored switch through whole saves that carry another value", async () => {

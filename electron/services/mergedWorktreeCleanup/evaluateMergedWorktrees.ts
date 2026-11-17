@@ -6,7 +6,7 @@ import {
   type MergedWorktreePR,
   type MergedWorktreeSkipReason,
 } from "../../../shared/types/mergedWorktreeCleanup.js";
-import { pathComparisonKey } from "../../../shared/utils/path.js";
+import { isPathInside, pathComparisonKey } from "../../../shared/utils/path.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type { WorktreeStatusObservation } from "../git/worktreeStatusObservation.js";
 import type { WorktreeCreationStamp } from "../../utils/worktreeCreationStamp.js";
@@ -18,11 +18,18 @@ export interface ListedWorktree {
   isMainWorktree: boolean;
 }
 
-/** The panels a project's saved layout holds, by the worktree and folder each was opened in. */
+/**
+ * The panels a project's saved layout holds, by the worktree, folder and
+ * worktree git directory each was opened in (the last survives a
+ * `git worktree move` that left the other two stale).
+ */
 export interface SavedLayout {
-  panels: ReadonlyArray<{ worktreeId?: string; cwd?: string }>;
+  panels: ReadonlyArray<{ worktreeId?: string; cwd?: string; worktreeGitDir?: string }>;
   activeWorktreeId?: string;
 }
+
+/** Why the project's workspace host would refuse the removal, read without changing anything. */
+export type HostRefusal = "teardown" | "submodules";
 
 /**
  * The two PR reads the rule needs from the project's code forge. A sweep's
@@ -50,6 +57,13 @@ export interface MergedWorktreeReads {
   readSavedLayout(): Promise<SavedLayout | null>;
   /** Rejects when the project's forge can't be reached or resolved. */
   resolveForge(): Promise<MergedWorktreeForge>;
+  /**
+   * The host's own refusal for a worktree that otherwise qualifies, so a dry
+   * run doesn't list one the host will turn down every time. Null when the
+   * host would go ahead, or when no host is running to ask; the removal
+   * itself is checked by the host either way.
+   */
+  readHostRefusal?(worktreePath: string): Promise<HostRefusal | null>;
   now(): number;
 }
 
@@ -76,11 +90,6 @@ function unverified(worktree: ListedWorktree, error: unknown, pr?: MergedWorktre
   });
 }
 
-function isInside(child: string, root: string): boolean {
-  const relative = path.relative(root, child);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
 /**
  * The local half: everything that needs no network. Returns the observed HEAD
  * for a worktree that passes, or the verdict for one that doesn't.
@@ -94,7 +103,8 @@ async function checkLocal(
   const worktreePath = path.resolve(worktree.path);
   try {
     if (!(await reads.pathExists(worktreePath))) return skipped(worktree, "missing");
-    const stamp = await reads.readStamp(await reads.readGitDir(worktreePath));
+    const gitDir = await reads.readGitDir(worktreePath);
+    const stamp = await reads.readStamp(gitDir);
     if (stamp === null) return skipped(worktree, "not-created-by-daintree");
 
     const status = await reads.readStatus(worktreePath);
@@ -122,14 +132,16 @@ async function checkLocal(
     const saved = await layout();
     const compare = { caseInsensitive: process.platform === "win32" };
     const key = pathComparisonKey(worktreePath, compare);
+    const gitDirKey = pathComparisonKey(gitDir, compare);
     if (saved?.activeWorktreeId && pathComparisonKey(saved.activeWorktreeId, compare) === key) {
       return skipped(worktree, "active");
     }
     const hasPanel = (saved?.panels ?? []).some(
       (panel) =>
         (panel.worktreeId !== undefined && pathComparisonKey(panel.worktreeId, compare) === key) ||
-        (panel.cwd !== undefined &&
-          isInside(pathComparisonKey(panel.cwd, compare), pathComparisonKey(worktreePath, compare)))
+        (panel.worktreeGitDir !== undefined &&
+          pathComparisonKey(panel.worktreeGitDir, compare) === gitDirKey) ||
+        (panel.cwd !== undefined && isPathInside(pathComparisonKey(panel.cwd, compare), key))
     );
     if (hasPanel) return skipped(worktree, "has-panels");
 
@@ -221,6 +233,21 @@ async function checkForge(
   }
 }
 
+async function checkHost(
+  worktree: ListedWorktree,
+  judged: MergedWorktreeCandidate,
+  reads: MergedWorktreeReads
+): Promise<MergedWorktreeCandidate> {
+  if (!reads.readHostRefusal) return judged;
+  const pr = judged.pr;
+  try {
+    const refusal = await reads.readHostRefusal(judged.worktreePath);
+    return refusal === null ? judged : skipped(worktree, refusal, pr ? { pr } : {});
+  } catch (error) {
+    return unverified(worktree, error, pr);
+  }
+}
+
 /**
  * Judge each of a project's linked worktrees against the rule. Every read
  * that can't answer leaves its worktree `unverified`, never removable. The
@@ -251,7 +278,8 @@ export async function evaluateMergedWorktrees(
       results.push(unverified(worktree, error));
       continue;
     }
-    results.push(await checkForge(worktree, local.headOid, resolved, reads.now()));
+    const judged = await checkForge(worktree, local.headOid, resolved, reads.now());
+    results.push(judged.status === "skipped" ? judged : await checkHost(worktree, judged, reads));
   }
   return results;
 }

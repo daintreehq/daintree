@@ -1,15 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PR } from "../../../../shared/types/forge.js";
-import { MERGED_WORKTREE_GRACE_MS } from "../../../../shared/types/mergedWorktreeCleanup.js";
 import {
   evaluateMergedWorktrees,
   type ListedWorktree,
   type MergedWorktreeReads,
 } from "../evaluateMergedWorktrees.js";
 
+// Independent of the production constant, so a changed grace fails here.
+const DAY = 24 * 60 * 60 * 1000;
 const HEAD = "a".repeat(40);
 const MERGED_AT = 1_700_000_000_000;
-const NOW = MERGED_AT + MERGED_WORKTREE_GRACE_MS + 1;
+const NOW = MERGED_AT + DAY + 1;
 const WT = "/repo-worktrees/feature-x";
 
 const main: ListedWorktree = {
@@ -41,7 +42,8 @@ function pr(overrides: Partial<PR> = {}): PR {
     headSha: HEAD,
     createdAt: MERGED_AT - 1000,
     updatedAt: MERGED_AT,
-    closedAt: MERGED_AT,
+    // Later than the merge, so a grace counted from the close would still wait.
+    closedAt: MERGED_AT + DAY,
     mergedAt: MERGED_AT,
     rawData: null,
     ...overrides,
@@ -99,12 +101,9 @@ describe("evaluateMergedWorktrees", () => {
   });
 
   it("waits until 24 hours after the forge's mergedAt, counted exactly", async () => {
-    const early = await judge({ now: () => MERGED_AT + MERGED_WORKTREE_GRACE_MS - 1 });
-    expect(early).toMatchObject({
-      status: "waiting",
-      removableAt: MERGED_AT + MERGED_WORKTREE_GRACE_MS,
-    });
-    const onTheDot = await judge({ now: () => MERGED_AT + MERGED_WORKTREE_GRACE_MS });
+    const early = await judge({ now: () => MERGED_AT + DAY - 1 });
+    expect(early).toMatchObject({ status: "waiting", removableAt: MERGED_AT + DAY });
+    const onTheDot = await judge({ now: () => MERGED_AT + DAY });
     expect(onTheDot.status).toBe("removable");
   });
 
@@ -157,7 +156,21 @@ describe("evaluateMergedWorktrees", () => {
     ).toMatchObject({ reason: "has-panels" });
     expect(
       await judge({
-        readSavedLayout: vi.fn(async () => ({ panels: [{ cwd: `${WT}-other` }] })),
+        readSavedLayout: vi.fn(async () => ({ panels: [{ cwd: `${WT}/..cache` }] })),
+      })
+    ).toMatchObject({ reason: "has-panels" });
+    expect(
+      await judge({
+        readSavedLayout: vi.fn(async () => ({
+          panels: [{ worktreeId: "/moved/away", worktreeGitDir: "/repo/.git/worktrees/feature-x" }],
+        })),
+      })
+    ).toMatchObject({ reason: "has-panels" });
+    expect(
+      await judge({
+        readSavedLayout: vi.fn(async () => ({
+          panels: [{ cwd: `${WT}-other`, worktreeGitDir: "/repo/.git/worktrees/other" }],
+        })),
       })
     ).toMatchObject({ status: "removable" });
     expect(
@@ -177,6 +190,12 @@ describe("evaluateMergedWorktrees", () => {
     ).toMatchObject({ reason: "pr-not-merged" });
     expect(
       await judge({ resolveForge: forge(pr(), pr({ state: "closed", merged: false })) })
+    ).toMatchObject({ reason: "pr-not-merged" });
+    expect(
+      await judge({ resolveForge: forge(pr(), pr({ state: "merged", merged: false })) })
+    ).toMatchObject({ reason: "pr-not-merged" });
+    expect(
+      await judge({ resolveForge: forge(pr(), pr({ state: "open", merged: true })) })
     ).toMatchObject({ reason: "pr-not-merged" });
     expect(
       await judge({ resolveForge: forge(pr(), pr({ headSha: "b".repeat(40) })) })
@@ -246,8 +265,9 @@ describe("evaluateMergedWorktrees", () => {
   });
 
   it("reads the forge only for worktrees that pass the local checks, and resolves it once", async () => {
+    const findPRByBranch = vi.fn(async () => pr());
     const resolveForge = vi.fn(async () => ({
-      findPRByBranch: vi.fn(async () => pr()),
+      findPRByBranch,
       getPR: vi.fn(async () => pr()),
     }));
     const dirty = { ...feature, path: "/repo-worktrees/dirty", branch: "feature/dirty" };
@@ -268,5 +288,34 @@ describe("evaluateMergedWorktrees", () => {
     );
     expect(results.map((result) => result.status)).toEqual(["removable", "skipped", "removable"]);
     expect(resolveForge).toHaveBeenCalledTimes(1);
+    expect(findPRByBranch.mock.calls).toEqual([["feature/x"], ["feature/x"]]);
+  });
+
+  describe("the host's own refusals", () => {
+    it("lists a worktree the host would refuse as skipped, keeping its PR", async () => {
+      const readHostRefusal = vi.fn(async () => "teardown" as const);
+      const result = await judge({ readHostRefusal });
+      expect(readHostRefusal).toHaveBeenCalledWith(WT);
+      expect(result).toMatchObject({ status: "skipped", reason: "teardown", pr: { number: 42 } });
+      expect(
+        await judge({ readHostRefusal: vi.fn(async () => "submodules" as const) })
+      ).toMatchObject({ reason: "submodules" });
+    });
+
+    it("keeps a worktree the host would take, or that no running host can be asked about", async () => {
+      expect((await judge({ readHostRefusal: vi.fn(async () => null) })).status).toBe("removable");
+      expect(
+        (await judge({ readHostRefusal: vi.fn(async () => null), now: () => MERGED_AT })).status
+      ).toBe("waiting");
+    });
+
+    it("leaves the worktree unverified when the host can't say, and asks only about ones that qualify", async () => {
+      expect(
+        await judge({ readHostRefusal: vi.fn(async () => Promise.reject(new Error("unreadable"))) })
+      ).toMatchObject({ reason: "unverified" });
+      const readHostRefusal = vi.fn(async () => null);
+      await judge({ readHostRefusal, readStamp: vi.fn(async () => null) });
+      expect(readHostRefusal).not.toHaveBeenCalled();
+    });
   });
 });
