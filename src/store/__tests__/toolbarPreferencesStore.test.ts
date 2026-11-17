@@ -1704,6 +1704,28 @@ describe("toolbarPreferencesStore", () => {
       expect(store.getState().launcher.alwaysShowDevServer).toBe(true);
     });
 
+    it.each([
+      ["leftButtons", "rightButtons", "terminal"],
+      ["rightButtons", "leftButtons", "canopy"],
+    ] as const)(
+      "keeps a default moved off its side when %s isn't a list",
+      async (bad, good, moved) => {
+        const layout = {
+          [bad]: "portal-toggle",
+          [good]: [moved],
+          pinnedButtons: { "copy-tree": false },
+        };
+        storageMock.setItem(STORAGE_KEY, JSON.stringify({ state: { layout }, version: 14 }));
+
+        const store = await loadStore();
+
+        expect(store.persist.hasHydrated()).toBe(true);
+        expect(store.getState().layout[good]).toContain(moved);
+        expect(store.getState().layout[bad]).not.toContain(moved);
+        expect(store.getState().layout.pinnedButtons).toEqual({ "copy-tree": false });
+      }
+    );
+
     it("drops a hidden Portal toggle carried through the v7→v8 pin migration (#17256)", async () => {
       storageMock.setItem(
         STORAGE_KEY,

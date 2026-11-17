@@ -735,6 +735,38 @@ describe("reserved contribution point warnings", () => {
       }
     });
 
+    it("registers a plugin's own command even when its id is spelled like a retired built-in", async () => {
+      await writePlugin("portal-links", {
+        name: "portal.links",
+        version: "1.0.0",
+        engines: { daintree: "^0.7.0" },
+        contributes: {
+          commands: [
+            {
+              id: "add",
+              title: "Add",
+              description: "Add a link",
+              category: "Links",
+              kind: "command",
+              danger: "safe",
+            },
+          ],
+          keybindings: [{ actionId: "portal.links.add", combo: "Cmd+Shift+5" }],
+        },
+      });
+
+      const service = new PluginService(tmpDir, "0.7.5");
+      await service.initialize();
+
+      expect(service.listPlugins().map((p) => p.manifest.name)).toContain("portal.links");
+      const own = getPluginKeybindings().filter((entry) => entry.pluginId === "portal.links");
+      expect(own.map((entry) => entry.item.actionId)).toEqual(["portal.links.add"]);
+      const lines =
+        service.getDiagnosticsSnapshot().plugins.find((p) => p.pluginId === "portal.links")
+          ?.logLines ?? [];
+      expect(lines.filter((l) => l.message.includes("no longer has"))).toEqual([]);
+    });
+
     it("loads a plugin whose only binding is retired, registering nothing", async () => {
       await writePlugin("retired-only", {
         name: "acme.retired-only",
