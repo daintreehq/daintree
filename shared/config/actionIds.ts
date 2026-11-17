@@ -387,6 +387,9 @@ export const BUILT_IN_ACTION_IDS = [
   "notifications.recent",
   "notifications.toggle",
 
+  // -- linksActions --
+  "links.open",
+
   // -- eventInspectorActions --
   "eventInspector.getEvents",
   "eventInspector.getFiltered",

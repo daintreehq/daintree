@@ -68,6 +68,7 @@ export {
   KeyRound, // forge credentials that stopped working — a key names what has to be fixed, and it shares a silhouette with nothing else here, so it survives forced colors
   Layers, // worktree overview (multiple worktrees, stacked)
   LayoutPanelTop, // workspace plugin category (panels, notes)
+  Link, // the toolbar's links launcher — the addresses saved with this project and the person's own
   Link2Off, // detach the issue linked to a worktree
   ListChecks, // bulk selection of forge rows — the preset picker that selects many issues or PRs at once
   MemoryStick, // a terminal host's own memory budget — the governor's app-wide output pause

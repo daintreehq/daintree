@@ -79,6 +79,10 @@ let linksRevision = 0;
 // cached settings: one queued during a first load reaches it through the queue,
 // and a whole-settings copy installed meanwhile holds no newer links.
 let cachedLinksRevision = 0;
+// Refresh reads of the project links, numbered as they start. Reads can
+// overlap (a view coming back as its launcher opens), and only the newest may
+// land: an older one landing first would count as a links change and drop it.
+let latestLinksRead = 0;
 
 // Patches made while a project's settings were still loading. The load in
 // flight may have read the settings before the write a patch records, so it
@@ -350,15 +354,17 @@ export async function changeProjectLinks(
  * change made from another view of the same project, or from that project's
  * other window, reaches only its own renderer, so a launchpad shown here reads
  * main's list first. Dropped when the cached links changed while the read was
- * out: whatever changed them is at least as new.
+ * out, since whatever changed them is at least as new, and when a later read
+ * started meanwhile, which answers instead.
  */
 export async function refreshCachedProjectLinks(projectId: string): Promise<void> {
   const state = useProjectSettingsStore.getState();
   if (state.projectId !== projectId || !state.settings) return;
   const revision = linksRevision;
+  const read = ++latestLinksRead;
   invalidateProjectSettingsCache(projectId);
   const settings = await projectClient.getSettings(projectId);
-  if (linksRevision !== revision) return;
+  if (read !== latestLinksRead || linksRevision !== revision) return;
   const current = useProjectSettingsStore.getState();
   if (current.projectId !== projectId || !current.settings) return;
   const links = settings.links ?? [];

@@ -12,6 +12,7 @@ import {
 import { TOOLBAR_CUSTOMIZE_ICON, TOOLBAR_CUSTOMIZE_LABEL } from "./toolbarMenuStrings";
 import { toolbarIconButtonClass } from "./toolbarItemClasses";
 import { PluginOverflowItem, type PluginTrayGroup } from "./PluginTrayButton";
+import { LinksLauncherOverflowItems } from "./LinksLauncher";
 import {
   PluginToolbarPopover,
   closePluginToolbarPopoverIfHidden,
@@ -410,6 +411,11 @@ export function OverflowMenu({
           </DropdownMenuItem>
         </DropdownMenuGroup>,
       ];
+    }
+    if (id === "links-launcher") {
+      // A popover off the `…` button would have to wait for this menu to
+      // close and hand it focus; the links are menu rows themselves instead.
+      return [<LinksLauncherOverflowItems key="links-launcher" />];
     }
     if (id === "plugin-tray") {
       // The tray's own dropdown can't be opened from here, and an

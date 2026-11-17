@@ -71,6 +71,7 @@ export type ToolbarButtonId =
   | "problems"
   | "notification-center"
   | "canopy"
+  | "links-launcher"
   | "assistant-toggle"
   | "portal-toggle";
 
@@ -363,6 +364,7 @@ export const TOOLBAR_BUTTON_PRIORITIES: Record<ToolbarButtonId, ToolbarButtonPri
   // Wide and informational: the stats capsule costs as much room as six icon
   // buttons, and its counts stay one click away in the `…` menu.
   "forge-stats": 4,
+  "links-launcher": 4,
   "plugin-tray": 4,
   "command-palette": 4,
   settings: 4,

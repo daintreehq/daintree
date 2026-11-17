@@ -53,6 +53,7 @@ const DEFAULT_LEFT_BUTTONS: ToolbarButtonId[] = ["launcher", "terminal", "file-b
 const DEFAULT_RIGHT_BUTTONS: ToolbarButtonId[] = [
   "voice-recording",
   "forge-stats",
+  "links-launcher",
   "plugin-tray",
   "canopy",
   "notification-center",

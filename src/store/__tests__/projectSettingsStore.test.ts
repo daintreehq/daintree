@@ -435,6 +435,28 @@ describe("projectSettingsStore", () => {
       expect(useProjectSettingsStore.getState().settings?.links).toEqual([]);
     });
 
+    it("lands the newest of two overlapping reads, whichever answers first", async () => {
+      const prod = { id: "b", title: "Prod", url: "https://prod.example.com/" };
+      useProjectSettingsStore.setState({
+        projectId: "project-a",
+        settings: { runCommands: [], links: [] },
+      });
+      const older = createDeferred<ProjectSettings>();
+      const newer = createDeferred<ProjectSettings>();
+      getSettingsMock.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+
+      const first = refreshCachedProjectLinks("project-a");
+      const second = refreshCachedProjectLinks("project-a");
+      older.resolve({ runCommands: [], links: [staging] });
+      await first;
+      // The older answer stands aside for the read still out.
+      expect(useProjectSettingsStore.getState().settings?.links).toEqual([]);
+      newer.resolve({ runCommands: [], links: [staging, prod] });
+      await second;
+
+      expect(useProjectSettingsStore.getState().settings?.links).toEqual([staging, prod]);
+    });
+
     it("keeps a links read through an unrelated settings write landing meanwhile", async () => {
       useProjectSettingsStore.setState({
         projectId: "project-a",
