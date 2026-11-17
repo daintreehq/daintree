@@ -272,8 +272,7 @@ export class PluginUpdateCheckService {
     // fresh ones, the same rule as the empty branch above (#17444).
     let updates = fresh;
     if (inconclusive && this.lastDetected && unchecked) {
-      const freshIds = new Set(fresh.map((u) => u.pluginId));
-      updates = [...fresh, ...uncheckedOffers(this.lastDetected.updates, unchecked, freshIds)];
+      updates = [...fresh, ...this.lastDetected.updates.filter((u) => unchecked.has(u.pluginId))];
     }
 
     const result: PluginBackgroundUpdateCheckResult = {
@@ -388,18 +387,9 @@ function keepUnchecked(
   cached: PluginBackgroundUpdateCheckResult,
   unchecked: ReadonlySet<string>
 ): PluginBackgroundUpdateCheckResult | null {
-  const updates = uncheckedOffers(cached.updates, unchecked);
+  const updates = cached.updates.filter((u) => unchecked.has(u.pluginId));
   if (updates.length === cached.updates.length) return cached;
   return updates.length === 0 ? null : { ...cached, updates, signature: computeSignature(updates) };
-}
-
-/** The cached offers for plugins a pass couldn't check, minus any it found a fresh offer for. */
-function uncheckedOffers(
-  cached: PluginBackgroundUpdateEntry[],
-  unchecked: ReadonlySet<string>,
-  freshIds?: ReadonlySet<string>
-): PluginBackgroundUpdateEntry[] {
-  return cached.filter((u) => unchecked.has(u.pluginId) && !freshIds?.has(u.pluginId));
 }
 
 /** Deterministic digest of the update set so repeated passes dedupe to one row. */
