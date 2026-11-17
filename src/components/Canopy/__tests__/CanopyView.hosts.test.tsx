@@ -885,15 +885,17 @@ describe("the Canopy host picker", () => {
     expect(state.retryHostProjects.mock.calls).toEqual([["studio"], ["studio"]]);
   });
 
-  it("asks nothing of a host picked again until its link comes back again", async () => {
+  it("doesn't ask a host picked again for its projects until its link comes back again", async () => {
     installElectron();
     useCanopyStore.setState({ hostId: "studio" });
     render(<CanopyView frame={frame} />);
     await settle();
     resync("studio");
     await settle();
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"]]);
     act(() => useCanopyStore.getState().setHostId(ALL_HOSTS_ID));
     await settle();
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"]]);
     act(() => useCanopyStore.getState().setHostId("studio"));
     await settle();
     // Its last recovery was asked about when it happened.
@@ -901,6 +903,22 @@ describe("the Canopy host picker", () => {
     resync("studio");
     await settle();
     expect(state.retryHostProjects.mock.calls).toEqual([["studio"], ["studio"]]);
+  });
+
+  it("asks a host for its projects when its link comes back in the same moment the panel leaves it", async () => {
+    installElectron();
+    useCanopyStore.setState({ hostId: "studio" });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    // One render takes both: the host's new epoch is never drawn under it.
+    act(() => {
+      for (const listener of state.listeners) listener({ kind: "resync", hostId: "studio" });
+      useCanopyStore.getState().setHostId(null);
+    });
+    await settle();
+    act(() => useCanopyStore.getState().setHostId("studio"));
+    await settle();
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"]]);
   });
 
   it("says the list is what the host last showed once its link drops", async () => {
@@ -1295,7 +1313,7 @@ describe("All hosts", () => {
     resync("studio");
     await settle();
     expect(state.retryHostProjects.mock.calls).toEqual([["studio"]]);
-    // Another host coming back leaves studio's list, fresh or still on its way, alone.
+    // Another host coming back asks nothing of studio.
     resync("build");
     await settle();
     expect(state.retryHostProjects.mock.calls).toEqual([["studio"], ["build"]]);
@@ -1314,10 +1332,14 @@ describe("All hosts", () => {
     state.hosts = [host("build", "build-02")];
     rerender(<CanopyView frame={frame} />);
     await settle();
+    expect(state.release).toHaveBeenCalledWith("studio");
+    state.invoke.mockClear();
     state.hosts = [host("studio", "studio-01"), host("build", "build-02")];
     rerender(<CanopyView frame={frame} />);
     await settle();
-    // Rejoining reads it afresh; only its link coming back again asks again.
+    // Rejoining opens a new viewer on it and reads its agents again, without
+    // asking for its projects; its link coming back again does.
+    expect(channelsCalled()).toContain("studio canopy:set-active");
     expect(state.retryHostProjects.mock.calls).toEqual([["studio"]]);
     resync("studio");
     await settle();

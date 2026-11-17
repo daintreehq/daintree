@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
@@ -57,7 +57,9 @@ export function useCanopyInboxData({
   const everyHost = hostId === ALL_HOSTS_ID;
   const ownHostId = canopyOwnHostId();
   const hostName = everyHost ? ALL_HOSTS_LABEL : (hostRow?.name ?? hostId ?? "");
-  const remote = useRemoteCanopy(everyHost ? null : hostId, isOpen);
+  // A link that came back may have renamed its projects while it was away:
+  // that host's list is asked for again, and no other host's.
+  const remote = useRemoteCanopy(everyHost ? null : hostId, isOpen, retryHostProjects);
   // Every host listed, the window's own among them, each read on its own.
   const participantKey = everyHost ? (hostRows ?? []).map((row) => row.hostId).join("\u0000") : "";
   const participants = useMemo(
@@ -68,7 +70,7 @@ export function useCanopyInboxData({
     () => participants.filter((id) => id !== ownHostId),
     [participants, ownHostId]
   );
-  const remotes = useRemoteCanopies(remoteIds, isOpen && everyHost);
+  const remotes = useRemoteCanopies(remoteIds, isOpen && everyHost, retryHostProjects);
   const route = useMemo(
     () => (everyHost ? createAllHostsRoute(ownHostId, participants) : null),
     [everyHost, ownHostId, participants]
@@ -146,27 +148,6 @@ export function useCanopyInboxData({
   const recoveries = everyHost
     ? [...remotes.states.values()].reduce((sum, state) => sum + state.epoch, 0)
     : remote.epoch;
-  // The link came back: its project names may have changed while it was away.
-  // Each host is asked once per recovery, and alone: another host's list, on
-  // its way or still fresh, stays as it is.
-  const handledEpochs = useRef<{ scope: HostId | null; epochs: ReadonlyMap<HostId, number> }>({
-    scope: null,
-    epochs: new Map(),
-  });
-  useEffect(() => {
-    const epochs = new Map<HostId, number>();
-    if (everyHost) for (const id of remoteIds) epochs.set(id, remotes.states.get(id)?.epoch ?? 0);
-    else if (hostId !== null) epochs.set(hostId, remote.epoch);
-    const handled = handledEpochs.current;
-    handledEpochs.current = { scope: hostId, epochs };
-    // A host picked again can still show the epoch it was left at, a recovery
-    // already asked about; every host read together counts afresh from zero.
-    if (handled.scope !== hostId && !everyHost) return;
-    const before = handled.scope === hostId ? handled.epochs : null;
-    for (const [id, epoch] of epochs) {
-      if (epoch > 0 && epoch !== (before?.get(id) ?? 0)) retryHostProjects(id);
-    }
-  }, [hostId, everyHost, remoteIds, remotes.states, remote.epoch]);
 
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {

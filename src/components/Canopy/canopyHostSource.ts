@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { canopyHostClient } from "@/clients/canopyHostClient";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { remoteHostOfView } from "@/services/terminal/remoteLoopbackLinks";
@@ -319,7 +319,8 @@ interface HostController {
  */
 function connectHost(
   hostId: HostId,
-  update: (change: (state: HeldState) => HeldState) => void
+  update: (change: (state: HeldState) => HeldState) => void,
+  recovered: () => void
 ): HostController {
   let live = true;
   // The newest snapshot applied; a host that came back may count from the start again.
@@ -369,8 +370,12 @@ function connectHost(
     );
   };
   const sayAgain = () => {
+    if (!live) return;
     change((state) => ({ ...state, epoch: state.epoch + 1 }));
     read();
+    // Told as it happens, not read off the epoch: a render can show the epoch
+    // under another host, or not at all.
+    recovered();
   };
   // Listening before the first read, so nothing pushed in between is missed.
   const off = canopyHostClient.onEvent((event) => {
@@ -410,21 +415,27 @@ function connectHost(
  */
 export function useRemoteCanopy(
   hostId: HostId | null,
-  active: boolean
+  active: boolean,
+  /** The host's link came back, or its reads were asked again: once each time. */
+  onRecovered?: (hostId: HostId) => void
 ): RemoteCanopyState & { retry: () => void } {
   const [held, setHeld] = useState<{ hostId: HostId; state: HeldState } | null>(null);
+  const recovered = useEffectEvent((id: HostId) => onRecovered?.(id));
   // Reads again on the panel's open viewer: a new one would drop what the host was told.
   const rereadRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (!active || hostId === null) return;
-    const controller = connectHost(hostId, (change) =>
-      setHeld((current) => {
-        // Another host's answers never land on this one's list.
-        const state = current?.hostId === hostId ? current.state : EMPTY;
-        const next = change(state);
-        return next === state && current?.hostId === hostId ? current : { hostId, state: next };
-      })
+    const controller = connectHost(
+      hostId,
+      (change) =>
+        setHeld((current) => {
+          // Another host's answers never land on this one's list.
+          const state = current?.hostId === hostId ? current.state : EMPTY;
+          const next = change(state);
+          return next === state && current?.hostId === hostId ? current : { hostId, state: next };
+        }),
+      () => recovered(hostId)
     );
     rereadRef.current = controller.reread;
     return () => {
@@ -451,9 +462,12 @@ export function useRemoteCanopy(
  */
 export function useRemoteCanopies(
   hostIds: readonly HostId[],
-  active: boolean
+  active: boolean,
+  /** One host's link came back, or its reads were asked again: that host alone, once each time. */
+  onRecovered?: (hostId: HostId) => void
 ): { states: ReadonlyMap<HostId, RemoteCanopyState>; retry: (hostId: HostId) => void } {
   const [held, setHeld] = useState<ReadonlyMap<HostId, HeldState>>(() => new Map());
+  const recovered = useEffectEvent((id: HostId) => onRecovered?.(id));
   const controllers = useRef(new Map<HostId, HostController>());
   const wanted = active ? [...new Set(hostIds)].sort().join("\u0000") : "";
 
@@ -484,13 +498,16 @@ export function useRemoteCanopies(
       if (open.has(hostId)) continue;
       open.set(
         hostId,
-        connectHost(hostId, (change) =>
-          setHeld((current) => {
-            const state = current.get(hostId) ?? EMPTY;
-            const next = change(state);
-            if (next === state && current.has(hostId)) return current;
-            return new Map(current).set(hostId, next);
-          })
+        connectHost(
+          hostId,
+          (change) =>
+            setHeld((current) => {
+              const state = current.get(hostId) ?? EMPTY;
+              const next = change(state);
+              if (next === state && current.has(hostId)) return current;
+              return new Map(current).set(hostId, next);
+            }),
+          () => recovered(hostId)
         )
       );
     }
