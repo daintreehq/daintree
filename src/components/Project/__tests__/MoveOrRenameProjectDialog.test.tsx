@@ -383,6 +383,24 @@ describe("MoveOrRenameProjectDialog", () => {
     }
   });
 
+  it("previews a 300-byte folder name on a macOS host", async () => {
+    setHostPlatformInfo({ platform: "darwin" });
+    try {
+      openMove();
+      render(<MoveOrRenameProjectDialog />);
+
+      fireEvent.change(screen.getByTestId("relocate-folder-input"), {
+        target: { value: "あ".repeat(100) },
+      });
+      await waitFor(() => expect(previewRelocation).toHaveBeenCalledTimes(1));
+      expect(previewRelocation).toHaveBeenCalledWith(
+        expect.objectContaining({ newPath: expect.stringMatching(/\/あ{100}$/) })
+      );
+    } finally {
+      _resetHostPlatformForTests();
+    }
+  });
+
   it("explains an unavailable primary in the footer status line", async () => {
     const status = () => screen.getByTestId("relocate-status").textContent?.trim() ?? "";
     previewRelocation.mockResolvedValue(
