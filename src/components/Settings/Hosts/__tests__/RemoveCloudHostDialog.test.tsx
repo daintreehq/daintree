@@ -65,7 +65,7 @@ function open(current: CloudHostStatus) {
   );
 }
 
-const dialogText = () => screen.getByRole("dialog").textContent ?? "";
+const dialogText = () => screen.getByRole("alertdialog").textContent ?? "";
 
 beforeEach(() => {
   cloudClient.deleteMachine.mockResolvedValue(undefined);
