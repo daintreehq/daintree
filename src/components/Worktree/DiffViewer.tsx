@@ -215,6 +215,18 @@ export interface DiffViewerProps {
    * without looking back at wherever the comparison was chosen.
    */
   sideLabels?: DiffViewerSideLabels;
+  /**
+   * Where a single renamed or copied file came from, named in its header. The
+   * host passes the exact path its file list holds; a pure move has no hunks,
+   * so without it the header would be a bare destination over an empty body.
+   */
+  origin?: DiffFileOrigin;
+}
+
+/** The source of a renamed or copied file. */
+export interface DiffFileOrigin {
+  kind: "renamed" | "copied";
+  path: string;
 }
 
 export interface DiffViewerSideLabels {
@@ -615,6 +627,7 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
     headerLeading,
     headerActions,
     sideLabels,
+    origin,
   },
   ref
 ) {
@@ -832,6 +845,7 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
           headerLeading={headerLeading}
           headerActions={headerActions}
           sideLabels={sideLabels}
+          origin={files.length === 1 ? origin : undefined}
         />
       ))}
     </div>
@@ -933,11 +947,15 @@ function HunkHeader({ hunk, gapStart, hiddenCount, onExpand, actions }: HunkHead
   );
 }
 
-/** A file header's path: the directory stepped down, the file name at full strength. */
-export function DiffFilePath({ path }: { path: string }) {
+/**
+ * A file header's path: the directory stepped down, the file name at full
+ * strength, and where a renamed or copied file came from.
+ */
+export function DiffFilePath({ path, origin }: { path: string; origin?: DiffFileOrigin }) {
   const slash = path.lastIndexOf("/");
+  const originText = origin ? `${origin.kind} from ${origin.path}` : null;
   return (
-    <TruncatedTooltip content={path}>
+    <TruncatedTooltip content={originText ? `${path} ${originText}` : path}>
       <span className="min-w-0 flex-1 truncate text-text-primary">
         {slash === -1 ? (
           path
@@ -946,6 +964,12 @@ export function DiffFilePath({ path }: { path: string }) {
             <span className="text-text-secondary">{path.slice(0, slash + 1)}</span>
             <span className="text-text-primary">{path.slice(slash + 1)}</span>
           </>
+        )}
+        {origin && (
+          <span className="text-text-secondary" data-testid="diff-file-origin">
+            {" "}
+            <span className="font-sans">{origin.kind} from</span> {origin.path}
+          </span>
         )}
       </span>
     </TruncatedTooltip>
@@ -1029,6 +1053,7 @@ interface FileDiffProps {
   headerLeading?: ReactNode;
   headerActions?: ReactNode;
   sideLabels?: DiffViewerSideLabels;
+  origin?: DiffFileOrigin;
 }
 
 const EMPTY_NOTES: readonly DiffNote[] = [];
@@ -1068,6 +1093,7 @@ function FileDiff({
   headerLeading,
   headerActions,
   sideLabels,
+  origin,
 }: FileDiffProps) {
   const relPath = getFilePath(file);
   const language = useMemo(() => {
@@ -1966,7 +1992,7 @@ function FileDiff({
             {headerLeading != null && headerLeading !== false && (
               <div className="-ml-1.5 flex shrink-0 items-center">{headerLeading}</div>
             )}
-            <DiffFilePath path={relPath} />
+            <DiffFilePath path={relPath} origin={origin} />
             {langLoadFailed && (
               <span
                 className="text-xs text-text-secondary"

@@ -33,7 +33,12 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import type { GitStatus } from "@shared/types";
 import type { CrossWorktreeDiffResult, CrossWorktreeFile } from "@shared/types/ipc/git";
 import { basename, dirname } from "@shared/utils/path";
-import { DiffFilePath, DiffViewer, type DiffViewerSideLabels } from "./DiffViewer";
+import {
+  DiffFilePath,
+  DiffViewer,
+  type DiffFileOrigin,
+  type DiffViewerSideLabels,
+} from "./DiffViewer";
 import { WorktreeSelector } from "./WorktreeSelector";
 import {
   WHOLE_FILE_CONTEXT_LINES,
@@ -119,6 +124,11 @@ export function groupComparisonFiles(files: CrossWorktreeFile[]): FileGroup[] {
 
 function isSameFile(a: CrossWorktreeFile, b: CrossWorktreeFile): boolean {
   return a.path === b.path && a.status === b.status;
+}
+
+function fileOrigin(file: CrossWorktreeFile): DiffFileOrigin | undefined {
+  if (!file.oldPath) return undefined;
+  return { kind: file.status === "C" ? "copied" : "renamed", path: file.oldPath };
 }
 
 /**
@@ -494,7 +504,8 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
             file.path,
             undefined,
             undefined,
-            WHOLE_FILE_CONTEXT_LINES
+            WHOLE_FILE_CONTEXT_LINES,
+            file.oldPath
           )
           .then((full) => (typeof full === "string" ? full : null))
           .catch(() => null);
@@ -512,7 +523,9 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
             rightBranch,
             file.path,
             undefined,
-            ignoreWhitespaceRef.current
+            ignoreWhitespaceRef.current,
+            undefined,
+            file.oldPath
           ),
           refresh && expandable ? readWholeFile() : null,
         ]);
@@ -612,7 +625,9 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
           const open = selectedFileRef.current;
           const kept = open ? res.files.find((f) => isSameFile(f, open)) : undefined;
           if (kept) {
-            void fetchFileDiff(kept, true);
+            // A destination now paired with another source is a different
+            // patch, so the old one can't stay on screen under the new origin.
+            void fetchFileDiff(kept, kept.oldPath === open?.oldPath);
           } else {
             fileDiffTokenRef.current++;
             setSelectedFile(null);
@@ -1058,7 +1073,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
           {selectedFile && !diffHeaderShown && (
             <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border-default bg-surface-sidebar px-3 py-1.5 font-mono text-xs">
               <div className="-ml-1.5 flex shrink-0 items-center">{fileListToggle}</div>
-              <DiffFilePath path={selectedFile.path} />
+              <DiffFilePath path={selectedFile.path} origin={fileOrigin(selectedFile)} />
               <div className="flex shrink-0 items-center gap-2 font-sans text-text-secondary">
                 {comparisonControls}
               </div>
@@ -1088,6 +1103,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                   ignoreWhitespace ? () => setDiffIgnoreWhitespace(false) : undefined
                 }
                 sideLabels={sideLabels}
+                origin={fileOrigin(selectedFile)}
                 headerLeading={fileListToggle}
                 headerActions={comparisonControls}
               />
