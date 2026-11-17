@@ -185,6 +185,9 @@ describe("IdleTerminalNotificationService", () => {
     sleptMs.sleeping = false;
     sleptMs.throws = false;
     suspendListeners.clear();
+    // Back to the fixture-reading default, so a held read a failed test never
+    // consumed can't answer the next test's read instead.
+    ptyManagerMock.getAllTerminalsWithCompletenessAsync.mockReset();
     snapshotHealth.degraded = false;
     assistantBackends.clear();
     liveTerminalIds.clear();
@@ -449,16 +452,24 @@ describe("IdleTerminalNotificationService", () => {
       expect(storeBacking.idleTerminalNotifiedAt).toEqual({ "proj-1": recent });
     });
 
-    it("drops a read that stop() overtook", async () => {
+    // Off and on again in Settings re-acquires the very same client, so only
+    // the stop itself can tell the old check apart.
+    it("drops a read that stop() overtook, even once a restart re-acquires the same client", async () => {
       setup();
       const release = holdNextRead();
       const service = makeService();
-      const check = runCheck(service);
-      service.stop();
-      release([makeTerminal()]);
-      await check;
+      try {
+        const check = runCheck(service);
+        service.updateConfig({ enabled: false });
+        service.updateConfig({ enabled: true });
+        expect((service as unknown as { ptyClient: unknown }).ptyClient).toBe(ptyManagerMock);
+        release([makeTerminal()]);
+        await check;
 
-      expect(broadcastToRendererMock).not.toHaveBeenCalled();
+        expect(broadcastToRendererMock).not.toHaveBeenCalled();
+      } finally {
+        service.stop();
+      }
     });
 
     it("drops a read that a new client overtook", async () => {
