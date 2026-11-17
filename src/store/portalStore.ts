@@ -1,7 +1,6 @@
 import { create, type StateCreator } from "zustand";
 import { persist } from "zustand/middleware";
 import type { PortalTab, PortalLink, PortalTabHistory } from "@shared/types";
-import { reinsert, type RemovedPosition } from "@/lib/undoToast";
 import { getPortalPlaceholderBounds } from "@/lib/portalBounds";
 import {
   DEFAULT_PORTAL_TABS,
@@ -12,6 +11,7 @@ import {
 } from "@shared/types";
 import { useUIStore } from "./uiStore";
 import { createDebouncedSafeJSONStorage } from "./persistence/safeStorage";
+import { readStoredGlobalLinkUrls } from "./persistence/globalLinksMigration";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isProjectViewCached } from "@/lib/viewCacheState";
@@ -29,7 +29,12 @@ interface PortalState {
   // Last history main reported for each live tab. A tab without an entry has
   // nowhere to go as far as the toolbar knows.
   tabHistory: Record<string, PortalTabHistory>;
+  /** The built-in web chats. A person's own links live in the global links store. */
   links: PortalLink[];
+  // The user links this payload held before they moved to the global links
+  // store (#17242), written back untouched so the migration's source survives
+  // a Portal write that lands before that store has read it. Never shown.
+  legacyUserLinks: PortalLink[];
   defaultNewTabUrl: string | null;
   // Opt-in cross-worktree dev-server dashboard, rendered below the active tab
   // inside the dock. Off by default so existing users don't get an unexpected
@@ -63,10 +68,7 @@ interface PortalActions {
   clearTabRestoreFailed: (id: string) => void;
   isTabCreated: (id: string) => boolean;
   reset: () => void;
-  addLink: (link: Omit<PortalLink, "id" | "order">) => void;
   removeLink: (id: string) => void;
-  /** Puts a removed link back where it was, id and all — the Undo for `removeLink`. */
-  restoreLink: (link: PortalLink, position: RemovedPosition) => void;
   updateLink: (id: string, updates: Partial<PortalLink>) => void;
   toggleLink: (id: string) => void;
   reorderLinks: (fromIndex: number, toIndex: number) => void;
@@ -84,6 +86,7 @@ const initialState: PortalState = {
   restoreFailedTabs: new Set<string>(),
   tabHistory: {},
   links: [...DEFAULT_SYSTEM_LINKS],
+  legacyUserLinks: [],
   defaultNewTabUrl: null,
   showDevDashboard: false,
 };
@@ -457,29 +460,13 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
     isTabCreated: (id) => get().createdTabs.has(id),
 
     reset: () =>
-      set({
+      set((s) => ({
         ...initialState,
+        legacyUserLinks: s.legacyUserLinks,
         createdTabs: new Set<string>(),
         restoreFailedTabs: new Set<string>(),
         tabHistory: {},
-      }),
-
-    addLink: (link) =>
-      set((s) => {
-        const maxOrder = s.links.reduce((max, l) => Math.max(max, l.order), -1);
-        return {
-          links: [
-            ...s.links,
-            {
-              ...link,
-              id: `user-${crypto.randomUUID()}`,
-              type: "user",
-              enabled: true,
-              order: maxOrder + 1,
-            },
-          ],
-        };
-      }),
+      })),
 
     removeLink: (id) =>
       set((s) => {
@@ -487,12 +474,6 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
         return {
           links: filtered.map((l, i) => ({ ...l, order: i })),
         };
-      }),
-
-    restoreLink: (link, position) =>
-      set((s) => {
-        if (s.links.some((l) => l.id === link.id)) return s;
-        return { links: reinsert(s.links, link, position).map((l, i) => ({ ...l, order: i })) };
       }),
 
     updateLink: (id, updates) =>
@@ -564,6 +545,11 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
   };
 };
 
+// Kept as stored, never read: only written back for the migration (#17242).
+function isStoredUserLink(link: object | null): link is PortalLink {
+  return !!link && typeof link === "object" && Reflect.get(link, "type") === "user";
+}
+
 function normalizeLinkUrl(url: string): string {
   try {
     const u = new URL(url);
@@ -584,7 +570,7 @@ const portalStoreCreator: StateCreator<
   version: 0,
   migrate: (persistedState) => persistedState as PortalState & PortalActions,
   partialize: (state) => ({
-    links: state.links,
+    links: [...state.links, ...state.legacyUserLinks],
     width: state.width,
     tabs: state.tabs,
     activeTabId: state.activeTabId,
@@ -595,6 +581,7 @@ const portalStoreCreator: StateCreator<
     const persisted = persistedState as Partial<PortalState>;
 
     let links = currentState.links;
+    let legacyUserLinks = currentState.legacyUserLinks;
     if (Array.isArray(persisted.links)) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const rawLinks = persisted.links as Array<Record<string, any>>;
@@ -623,9 +610,13 @@ const portalStoreCreator: StateCreator<
       // Any persisted system links not in defaults are appended (custom system links).
       const defaultIds = new Set(DEFAULT_SYSTEM_LINKS.map((d) => d.id));
       // A shipped service the user already added by hand stays theirs: skip the
-      // new default rather than list the same chat twice.
+      // new default rather than list the same chat twice. Once their links have
+      // moved to the global list (#17242), that list is theirs, not this copy.
       const userUrls = new Set(
-        userLinks.map((l) => (typeof l.url === "string" ? normalizeLinkUrl(l.url) : ""))
+        (
+          readStoredGlobalLinkUrls() ??
+          userLinks.map((l) => (typeof l.url === "string" ? l.url : ""))
+        ).map(normalizeLinkUrl)
       );
       const normalizedSystemLinks = DEFAULT_SYSTEM_LINKS.filter(
         (d) => persistedSystemById.has(d.id) || !userUrls.has(normalizeLinkUrl(d.url))
@@ -643,8 +634,8 @@ const portalStoreCreator: StateCreator<
       links = [
         ...normalizedSystemLinks.map((l) => ({ ...l, order: order++ })),
         ...extraSystemLinks.map((l) => ({ ...l, order: order++ })),
-        ...userLinks.map((l) => ({ ...l, order: order++ })),
       ] as PortalLink[];
+      legacyUserLinks = rawLinks.filter(isStoredUserLink);
     }
 
     const persistedTabs = Array.isArray(persisted.tabs)
@@ -661,6 +652,7 @@ const portalStoreCreator: StateCreator<
       ...currentState,
       ...persisted,
       links,
+      legacyUserLinks,
       tabs: persistedTabs,
       width:
         typeof persisted.width === "number"

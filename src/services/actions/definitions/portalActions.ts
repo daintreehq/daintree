@@ -3,6 +3,11 @@ import { z } from "zod";
 import { PORTAL_DEFAULT_WIDTH } from "@shared/types";
 import { getAIAgentInfo } from "@/lib/aiAgentDetection";
 import { usePortalStore } from "@/store/portalStore";
+import {
+  hasGlobalLink,
+  useGlobalLinksStore,
+  type GlobalLinkUpdate,
+} from "@/store/globalLinksStore";
 import { useUIStore } from "@/store/uiStore";
 import { logError } from "@/utils/logger";
 import { deriveEffectiveTier } from "../deriveEffectiveTier";
@@ -82,14 +87,8 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
         icon: string;
         alwaysEnabled?: boolean;
       };
-      usePortalStore.getState().addLink({
-        title,
-        url,
-        icon,
-        type: "user",
-        enabled: true,
-        alwaysEnabled,
-      });
+      // A person's own links live in the global links store (#17242), not the Portal's.
+      useGlobalLinksStore.getState().addLink({ title, url, icon, alwaysEnabled });
     },
   }));
 
@@ -105,7 +104,8 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
     argsSchema: z.object({ id: z.string() }),
     run: async (args: unknown) => {
       const { id } = args as { id: string };
-      usePortalStore.getState().removeLink(id);
+      if (hasGlobalLink(id)) useGlobalLinksStore.getState().removeLink(id);
+      else usePortalStore.getState().removeLink(id);
     },
   }));
 
@@ -128,8 +128,10 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
       }),
     }),
     run: async (args: unknown) => {
-      const { id, updates } = args as { id: string; updates: Record<string, unknown> };
-      usePortalStore.getState().updateLink(id, updates as any);
+      const { id, updates } = args as { id: string; updates: GlobalLinkUpdate };
+      // A global link's `order` ranks it among the global links only.
+      if (hasGlobalLink(id)) useGlobalLinksStore.getState().updateLink(id, updates);
+      else usePortalStore.getState().updateLink(id, updates);
     },
   }));
 
@@ -144,7 +146,8 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
     argsSchema: z.object({ id: z.string() }),
     run: async (args: unknown) => {
       const { id } = args as { id: string };
-      usePortalStore.getState().toggleLink(id);
+      if (hasGlobalLink(id)) useGlobalLinksStore.getState().toggleLink(id);
+      else usePortalStore.getState().toggleLink(id);
     },
   }));
 
@@ -159,7 +162,17 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
     argsSchema: z.object({ fromIndex: z.number().int().nonnegative(), toIndex: z.number().int() }),
     run: async (args: unknown) => {
       const { fromIndex, toIndex } = args as { fromIndex: number; toIndex: number };
-      usePortalStore.getState().reorderLinks(fromIndex, toIndex);
+      // Indexes run over the built-in links, then the global links, as the
+      // Portal lists them. The two lists keep their own order, so a move from
+      // one into the other changes nothing, as an out-of-range index doesn't.
+      const builtIn = usePortalStore.getState().links.length;
+      const fromGlobal = fromIndex >= builtIn;
+      if (fromGlobal !== toIndex >= builtIn) return;
+      if (fromGlobal) {
+        useGlobalLinksStore.getState().reorderLinks(fromIndex - builtIn, toIndex - builtIn);
+      } else {
+        usePortalStore.getState().reorderLinks(fromIndex, toIndex);
+      }
     },
   }));
 
@@ -194,7 +207,9 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
 
       if (state.defaultNewTabUrl) {
         const url = state.defaultNewTabUrl;
-        const link = state.links.find((l) => l.url === url);
+        const link =
+          state.links.find((l) => l.url === url) ??
+          useGlobalLinksStore.getState().links.find((l) => l.url === url);
         const agentInfo = getAIAgentInfo(url);
         const title = link?.title ?? agentInfo?.title ?? "New tab";
         const newTabId = state.createTab(url, title);

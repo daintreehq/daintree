@@ -32,7 +32,6 @@ vi.hoisted(() => {
 });
 
 import { usePortalStore } from "../portalStore";
-import { positionOf } from "@/lib/undoToast";
 import { useUIStore } from "../uiStore";
 import { PORTAL_MIN_WIDTH, PORTAL_MAX_WIDTH } from "@shared/types";
 
@@ -321,7 +320,7 @@ describe("portalStore persistence migration", () => {
     vi.restoreAllMocks();
   });
 
-  it("rehydrates a legacy unversioned blob and keeps user links", async () => {
+  it("rehydrates a legacy unversioned blob, leaving its user links to the global links store", async () => {
     const legacyBlob = JSON.stringify({
       state: {
         width: 600,
@@ -342,9 +341,8 @@ describe("portalStore persistence migration", () => {
 
     const { usePortalStore: store } = await import("../portalStore");
 
-    const userLinks = store.getState().links.filter((l) => l.type === "user");
-    expect(userLinks).toHaveLength(1);
-    expect(userLinks[0]!.id).toBe("user-1");
+    expect(store.getState().links.some((l) => l.type === "user")).toBe(false);
+    expect(store.getState().legacyUserLinks.map((l) => l.id)).toEqual(["user-1"]);
     expect(store.getState().width).toBe(600);
   });
 
@@ -397,8 +395,73 @@ describe("portalStore persistence migration", () => {
     const links = store.getState().links;
 
     expect(links.some((l) => l.id === "system-grok")).toBe(false);
-    const mine = links.find((l) => l.id === "user-grok");
-    expect(mine?.enabled).toBe(false);
+    expect(links.some((l) => l.id === "user-grok")).toBe(false);
+  });
+
+  it("follows the global list, once there is one, for which shipped services the person already has", async () => {
+    const userGrok = {
+      id: "user-grok",
+      type: "user",
+      title: "My Grok",
+      url: "https://www.grok.com",
+      icon: "globe",
+      enabled: true,
+      order: 1,
+    };
+    const portalBlob = JSON.stringify({
+      state: { links: [systemLink("claude", "https://claude.ai/new"), userGrok] },
+    });
+    const globalPayload = (urls: string[]) =>
+      JSON.stringify({
+        state: {
+          links: urls.map((url, order) => ({
+            id: `user-${order}`,
+            title: url,
+            url,
+            icon: "globe",
+            enabled: true,
+            order,
+          })),
+        },
+        version: 0,
+      });
+
+    installLocalStorageWith({
+      [STORAGE_KEY]: portalBlob,
+      "daintree-global-links": globalPayload(["https://docs.test"]),
+    });
+    const removed = (await import("../portalStore")).usePortalStore;
+    expect(removed.getState().links.some((l) => l.id === "system-grok")).toBe(true);
+
+    vi.resetModules();
+    installLocalStorageWith({
+      [STORAGE_KEY]: portalBlob,
+      "daintree-global-links": globalPayload(["https://grok.com/"]),
+    });
+    const kept = (await import("../portalStore")).usePortalStore;
+    expect(kept.getState().links.some((l) => l.id === "system-grok")).toBe(false);
+
+    // A corrupt global list recovers from its backup, as its own hydration does.
+    vi.resetModules();
+    installLocalStorageWith({
+      [STORAGE_KEY]: portalBlob,
+      "daintree-global-links": "{not json",
+      "daintree-global-links.__bak": globalPayload([]),
+    });
+    const recovered = (await import("../portalStore")).usePortalStore;
+    expect(recovered.getState().links.some((l) => l.id === "system-grok")).toBe(true);
+
+    // And a backup that still holds the person's Grok link keeps the default out.
+    vi.resetModules();
+    installLocalStorageWith({
+      [STORAGE_KEY]: JSON.stringify({
+        state: { links: [systemLink("claude", "https://claude.ai/new")] },
+      }),
+      "daintree-global-links": "{not json",
+      "daintree-global-links.__bak": globalPayload(["https://grok.com/"]),
+    });
+    const fromBackup = (await import("../portalStore")).usePortalStore;
+    expect(fromBackup.getState().links.some((l) => l.id === "system-grok")).toBe(false);
   });
 
   it("still runs the discovered→system merge migration after version check", async () => {
@@ -637,62 +700,52 @@ describe("portalStore persistence migration", () => {
       vi.useRealTimers();
     }
   });
-});
 
-describe("portalStore restoreLink", () => {
-  beforeEach(() => {
-    usePortalStore.getState().reset();
-  });
+  it("writes user links back untouched, so the global links store can still move them after a Portal write", async () => {
+    vi.useFakeTimers();
+    try {
+      const mine = {
+        id: "user-docs",
+        type: "user",
+        title: "Docs",
+        url: "https://docs.test",
+        icon: "globe",
+        enabled: false,
+        order: 9,
+      };
+      const backing = installLocalStorageWith({
+        [STORAGE_KEY]: JSON.stringify({
+          version: 0,
+          state: { links: [systemLink("claude", "https://claude.ai/new"), mine] },
+        }),
+      });
 
-  const add = (title: string) =>
-    usePortalStore.getState().addLink({
-      title,
-      url: `https://${title}.test`,
-      icon: "globe",
-      type: "user",
-      enabled: true,
-    });
+      const { usePortalStore: store } = await import("../portalStore");
+      store.getState().reset();
+      store.getState().setWidth(620);
+      vi.advanceTimersByTime(400);
 
-  it("undoes removeLink exactly: same id, same place, same order", () => {
-    add("a");
-    add("b");
-    const before = usePortalStore.getState().links;
-    const removed = before.find((l) => l.title === "a")!;
-    const position = positionOf(before, removed.id);
+      const written: { state: { width: number; links: Array<{ id: string }> } } = JSON.parse(
+        backing.get(STORAGE_KEY)!
+      );
+      expect(written.state.width).toBe(620);
+      expect(written.state.links).toContainEqual(mine);
+      expect(written.state.links.filter((l) => l.id === "user-docs")).toHaveLength(1);
 
-    usePortalStore.getState().removeLink(removed.id);
-    usePortalStore.getState().restoreLink(removed, position);
-
-    expect(usePortalStore.getState().links).toEqual(before);
-  });
-
-  it("restores the original order whichever of two removals is undone first", () => {
-    add("a");
-    add("b");
-    add("c");
-    const before = usePortalStore.getState().links;
-    const [a, b] = ["a", "b"].map((t) => before.find((l) => l.title === t)!);
-    for (const undoOrder of [
-      [a, b],
-      [b, a],
-    ]) {
-      const positions = new Map<string, ReturnType<typeof positionOf>>();
-      for (const link of [a!, b!]) {
-        positions.set(link.id, positionOf(usePortalStore.getState().links, link.id));
-        usePortalStore.getState().removeLink(link.id);
-      }
-      for (const link of undoOrder) {
-        usePortalStore.getState().restoreLink(link!, positions.get(link!.id)!);
-      }
-      expect(usePortalStore.getState().links.map((l) => l.id)).toEqual(before.map((l) => l.id));
+      const { useGlobalLinksStore } = await import("../globalLinksStore");
+      expect(useGlobalLinksStore.getState().links).toEqual([
+        {
+          id: "user-docs",
+          title: "Docs",
+          url: "https://docs.test",
+          icon: "globe",
+          enabled: false,
+          order: 0,
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
     }
-  });
-
-  it("does nothing when the link is already back", () => {
-    add("a");
-    const before = usePortalStore.getState().links;
-    usePortalStore.getState().restoreLink(before.at(-1)!, positionOf(before, before.at(-1)!.id));
-    expect(usePortalStore.getState().links).toEqual(before);
   });
 });
 

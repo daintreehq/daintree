@@ -138,6 +138,7 @@ const EXPECTED_STORE_IDS = [
   "projectHomeStore",
   "applicationNavigationStore",
   "sidebarViewStore",
+  "globalLinksStore",
 ] as const;
 
 const EXPECTED_STORAGE_KEYS: Record<(typeof EXPECTED_STORE_IDS)[number], string> = {
@@ -160,6 +161,7 @@ const EXPECTED_STORAGE_KEYS: Record<(typeof EXPECTED_STORE_IDS)[number], string>
   applicationNavigationStore: "daintree-application-navigation",
   // One key per workspace; a test view has none.
   sidebarViewStore: "daintree-sidebar-view:default",
+  globalLinksStore: "daintree-global-links",
 };
 
 describe("persisted store inventory", () => {
@@ -185,6 +187,7 @@ describe("persisted store inventory", () => {
       import("../../projectHomeStore"),
       import("../../applicationNavigationStore"),
       import("../../sidebarViewStore"),
+      import("../../globalLinksStore"),
     ]);
   });
 

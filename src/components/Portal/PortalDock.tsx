@@ -16,6 +16,8 @@ import {
 import { PortalDefaultNewTabSubmenu } from "./PortalDefaultNewTabSubmenu";
 import { PortalLaunchpad } from "./PortalLaunchpad";
 import { useProjectStore } from "@/store/projectStore";
+import { useGlobalLinksStore } from "@/store/globalLinksStore";
+import { withGlobalLinks } from "@/lib/portalLinks";
 import {
   refreshCachedProjectPortalLinks,
   useProjectSettingsStore,
@@ -132,9 +134,13 @@ export function PortalDock() {
     return () => useMacroFocusStore.getState().setRegionRef("portal", null);
   }, []);
 
+  const globalLinks = useGlobalLinksStore((s) => s.links);
   const enabledLinks = useMemo(
-    () => links.filter((l) => l.enabled).sort((a, b) => a.order - b.order),
-    [links]
+    () =>
+      withGlobalLinks(links, globalLinks)
+        .filter((l) => l.enabled)
+        .sort((a, b) => a.order - b.order),
+    [links, globalLinks]
   );
   // The links saved with this view's project, never another project's (#17091).
   const viewProjectId = useProjectStore(

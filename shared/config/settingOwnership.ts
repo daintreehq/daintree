@@ -278,6 +278,7 @@ export const SETTING_CATALOG = {
       "daintree-preferences": device,
       "daintree-toolbar-preferences": device,
       "portal-storage": device,
+      "daintree-global-links": device,
       "daintree-sidebar-view:*": devicePerHost,
       "daintree-worktree-filters*": deviceGlobalOrProject,
       "daintree-command-history": devicePerProject,
