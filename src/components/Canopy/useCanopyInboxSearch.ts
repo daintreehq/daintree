@@ -10,12 +10,27 @@ const SCREEN_SEARCH_DEBOUNCE_MS = 150;
 const NO_HITS: ReadonlySet<string> = new Set();
 const NO_HOSTS: readonly HostId[] = [];
 
-/** One ask's answer, host by host, and the hosts that couldn't search for it. */
+/**
+ * What one host has said to an ask. Its newest answer says whether it could
+ * search; its newest hits stand until a newer search finds others, so a host
+ * that couldn't search this time keeps what it found, and an older answer
+ * landing late never undoes a newer one.
+ */
+interface HostAnswer {
+  hits: ReadonlySet<string>;
+  /** When the search that found the hits was sent. */
+  hitsAt: number;
+  /** When the search behind its newest answer, hits or failure, was sent. */
+  heardAt: number;
+  failed: boolean;
+}
+
+/** One ask's answers, host by host. */
 interface ScreenHits {
   ask: string;
-  hosts: ReadonlyMap<HostId, ReadonlySet<string>>;
-  unsearched: readonly HostId[];
-  /** The Retry it was asked under: a Retry answered is said, even as it was before. */
+  hosts: ReadonlyMap<HostId, HostAnswer>;
+  heardAt: number;
+  /** The Retry the newest answer was asked under: a Retry answered is said, even as it was before. */
   retry: number;
 }
 
@@ -87,9 +102,7 @@ export function useCanopyInboxSearch({
       session.live = false;
     };
   }, [isOpen, screenAsk, searchScreens]);
-  // Answers land in the order they were asked: an older one never overwrites a newer.
   const sentRef = useRef(0);
-  const shownRef = useRef(0);
   // Asked again as screens are read anew, since a terminal's words move on.
   useEffect(() => {
     if (!isOpen || screenAsk === null) return;
@@ -98,23 +111,28 @@ export function useCanopyInboxSearch({
     const timer = setTimeout(() => {
       const sent = ++sentRef.current;
       void searchScreens(screenTargetsRef.current).then((outcomes) => {
-        if (!session?.live || sent < shownRef.current) return;
-        shownRef.current = sent;
+        if (!session?.live) return;
         setScreenHits((prior) => {
-          const earlier = prior?.ask === screenAsk ? prior.hosts : null;
-          const hosts = new Map<HostId, ReadonlySet<string>>();
-          const unsearched: HostId[] = [];
+          const same = prior?.ask === screenAsk ? prior : null;
+          const hosts = new Map(same?.hosts ?? []);
           for (const outcome of outcomes) {
-            if ("runIds" in outcome) {
-              hosts.set(outcome.hostId, new Set(outcome.runIds));
-              continue;
-            }
-            // A host that couldn't search this time keeps what it found for the
-            // very same ask, and is named for what it may be missing.
-            unsearched.push(outcome.hostId);
-            hosts.set(outcome.hostId, earlier?.get(outcome.hostId) ?? NO_HITS);
+            const was = hosts.get(outcome.hostId);
+            const newest = was === undefined || sent > was.heardAt;
+            const found = "runIds" in outcome && (was === undefined || sent > was.hitsAt);
+            hosts.set(outcome.hostId, {
+              hits: found ? new Set(outcome.runIds) : (was?.hits ?? NO_HITS),
+              hitsAt: found ? sent : (was?.hitsAt ?? 0),
+              heardAt: newest ? sent : was.heardAt,
+              failed: newest ? !("runIds" in outcome) : was.failed,
+            });
           }
-          return { ask: screenAsk, hosts, unsearched, retry };
+          const newest = same === null || sent > same.heardAt;
+          return {
+            ask: screenAsk,
+            hosts,
+            heardAt: newest ? sent : same.heardAt,
+            retry: newest ? retry : same.retry,
+          };
         });
       });
     }, SCREEN_SEARCH_DEBOUNCE_MS);
@@ -123,10 +141,18 @@ export function useCanopyInboxSearch({
   const current = screenHits !== null && screenHits.ask === screenAsk ? screenHits : null;
   const onScreen = useMemo(
     () =>
-      current === null ? null : new Set([...current.hosts.values()].flatMap((ids) => [...ids])),
+      current === null
+        ? null
+        : new Set([...current.hosts.values()].flatMap((answer) => [...answer.hits])),
     [current]
   );
-  const screenUnsearched = current?.unsearched ?? NO_HOSTS;
+  const screenUnsearched = useMemo(
+    () =>
+      current === null
+        ? NO_HOSTS
+        : [...current.hosts].filter(([, answer]) => answer.failed).map(([id]) => id),
+    [current]
+  );
   const screenRetry = current?.retry ?? 0;
   const retryScreenSearch = () => setRetries((count) => count + 1);
 

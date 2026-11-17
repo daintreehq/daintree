@@ -359,7 +359,7 @@ export function useCanopyInboxFilters({
       : searchGap === null
         ? found
         : `${found} so far. ${searchGap}`;
-  const announceKey = `${searchKey}|${unreadOnly}|${searchGap ?? ""}|${screenRetry}`;
+  const announceKey = `${searchKey}|${unreadOnly}|${searchGap ?? ""}|${workersShown ? screenRetry : ""}`;
   const announcedRef = useRef<string | null>(null);
   useEffect(() => {
     if (!searching) {

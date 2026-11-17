@@ -530,6 +530,13 @@ describe("CanopyView search", () => {
     useCanopyStore.setState({ snapshot });
     const canopy = installElectron(snapshot);
     canopy.searchScreens.mockRejectedValueOnce(new Error("Too many requests"));
+    let refuseRetry: (error: Error) => void = () => {};
+    canopy.searchScreens.mockImplementationOnce(
+      () =>
+        new Promise<string[]>((_resolve, reject) => {
+          refuseRetry = reject;
+        })
+    );
     canopy.searchScreens.mockImplementation(async (targets) =>
       targets.filter((target) => target.runId === "asking").map((target) => target.runId)
     );
@@ -560,12 +567,32 @@ describe("CanopyView search", () => {
     const retry = [...gap()!.querySelectorAll("button")].find((b) => b.textContent === "Retry")!;
     expect(document.activeElement).toBe(retry);
 
+    // A Retry on its way keeps the keyboard where it is; one that fails again is said again.
     await act(async () => {
       fireEvent.click(retry);
     });
     await screenSearchSettled();
     expect(canopy.searchScreens).toHaveBeenCalledTimes(2);
     expect(canopy.searchScreens.mock.calls[1]![0]).toEqual(asked);
+    expect(document.activeElement).toBe(retry);
+    await act(async () => {
+      refuseRetry(new Error("Too many requests"));
+    });
+    expect(gap()).not.toBeNull();
+    expect(document.activeElement).toBe(retry);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, UI_DOHERTY_THRESHOLD + 50));
+    });
+    expect(
+      said.filter((words) => words === "1 match so far. Couldn't search terminals")
+    ).toHaveLength(2);
+
+    await act(async () => {
+      fireEvent.click(retry);
+    });
+    await screenSearchSettled();
+    expect(canopy.searchScreens).toHaveBeenCalledTimes(3);
+    expect(canopy.searchScreens.mock.calls[2]![0]).toEqual(asked);
     expect(searchInput().value).toBe("dfat-xth8");
     expect(document.activeElement).toBe(searchInput());
     expect(gap()).toBeNull();
@@ -584,7 +611,10 @@ describe("CanopyView search", () => {
   it("keeps a terminal's matches when a later read of the same search fails, and says so", async () => {
     const canopy = installElectron();
     canopy.searchScreens.mockImplementationOnce(async () => ["asking"]);
-    canopy.searchScreens.mockRejectedValue(new Error("Too many requests"));
+    // Refused before any promise is made: still a host that couldn't search.
+    canopy.searchScreens.mockImplementation(() => {
+      throw new Error("Too many requests");
+    });
     const { container } = render(<CanopyView frame={frame} />);
     await frames();
     await search("segfault");
@@ -639,6 +669,49 @@ describe("CanopyView search", () => {
       answers[1]!(["asking"]);
     });
     expect(cards(container)).toHaveLength(0);
+
+    // A search for the query before says nothing once another is typed.
+    refresh(NOW + 3);
+    await screenSearchSettled();
+    await search("segv");
+    await screenSearchSettled();
+    expect(answers).toHaveLength(5);
+    await act(async () => {
+      answers[3]!(["asking"]);
+    });
+    expect(cards(container)).toHaveLength(0);
+    await act(async () => {
+      answers[4]!([]);
+    });
+    expect(cards(container)).toHaveLength(0);
+  });
+
+  it("keeps a host's earlier hit when a newer search of it failed first (#17594)", async () => {
+    const canopy = installElectron();
+    const answers: Array<{ resolve: (ids: string[]) => void; reject: (error: Error) => void }> = [];
+    canopy.searchScreens.mockImplementation(
+      () =>
+        new Promise<string[]>((resolve, reject) => {
+          answers.push({ resolve, reject });
+        })
+    );
+    const { container } = render(<CanopyView frame={frame} />);
+    await frames();
+    await search("segfault");
+    await screenSearchSettled();
+    act(() => useCanopyStore.setState({ snapshot: { ...canopySnapshot, refreshedAt: NOW + 1 } }));
+    await screenSearchSettled();
+    expect(answers).toHaveLength(2);
+    await act(async () => {
+      answers[1]!.reject(new Error("Too many requests"));
+    });
+    expect(cards(container)).toHaveLength(0);
+    // The older search found it: shown, and the newer failure still said.
+    await act(async () => {
+      answers[0]!.resolve(["asking"]);
+    });
+    expect(cards(container).map((card) => card.id)).toEqual(["canopy-card-asking"]);
+    expect(document.querySelector("[data-testid=canopy-search-incomplete]")).not.toBeNull();
   });
 
   it("selects the top terminal match, wherever the selection was before", async () => {
