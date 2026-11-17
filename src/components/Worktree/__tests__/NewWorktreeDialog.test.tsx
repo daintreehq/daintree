@@ -6,6 +6,7 @@ import { render, screen, cleanup, act, fireEvent, within } from "@testing-librar
 import { useState } from "react";
 import type { BranchInfo } from "@/types/electron";
 import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
+import { UI_SKELETON_FLOOR_MS, UI_SKELETON_GATE_MS } from "@/lib/animationUtils";
 
 vi.stubGlobal(
   "ResizeObserver",
@@ -18,6 +19,8 @@ vi.stubGlobal(
 
 const mockDispatch = vi.fn();
 /** The form's draft for another host, as the placement row would ask for it. */
+/** Lets a test keep the dialog's children mounted while closed, as AppDialog's exit does. */
+const dialogMock = vi.hoisted(() => ({ keepChildrenWhenClosed: false }));
 const placement = vi.hoisted(() => ({
   getDraft: null as null | (() => unknown),
   onCommitChange: null as null | ((commit: unknown) => void),
@@ -306,6 +309,7 @@ vi.mock("@/components/ui/AppDialog", () => {
   const Dialog = ({
     children,
     isOpen,
+    initialFocus,
   }: {
     children: React.ReactNode;
     isOpen: boolean;
@@ -313,8 +317,14 @@ vi.mock("@/components/ui/AppDialog", () => {
     onBeforeClose?: () => boolean;
     size?: string;
     dismissible?: boolean;
+    initialFocus?: string;
     "data-testid"?: string;
-  }) => (isOpen ? <div data-testid="new-worktree-dialog">{children}</div> : null);
+  }) =>
+    isOpen || dialogMock.keepChildrenWhenClosed ? (
+      <div data-testid="new-worktree-dialog" data-initial-focus={initialFocus}>
+        {children}
+      </div>
+    ) : null;
   Dialog.Header = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
   Dialog.Title = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
   Dialog.CloseButton = () => <button aria-label="Close" />;
@@ -1375,11 +1385,14 @@ describe("NewWorktreeDialog — branch list cache", () => {
     vi.clearAllMocks();
   });
 
-  it("shows the skeleton on first-ever open while branches load", async () => {
+  it("shows the skeleton on first-ever open once the load outlasts the onset gate", async () => {
     mockListBranches.mockReturnValue(new Promise(() => {}));
     renderDialog();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UI_SKELETON_GATE_MS);
+    });
 
-    expect(screen.getByRole("status")).toBeDefined();
+    expect(screen.getByRole("status", { name: "Loading branches" })).toBeDefined();
     expect(screen.queryByTestId("branch-name-input")).toBeNull();
   });
 
@@ -1529,8 +1542,363 @@ describe("NewWorktreeDialog — branch list cache", () => {
         rawData: null,
       },
     });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UI_SKELETON_GATE_MS);
+    });
 
-    expect(screen.getByRole("status")).toBeDefined();
+    expect(screen.getByRole("status", { name: "Loading branches" })).toBeDefined();
+    expect(screen.queryByTestId("branch-name-input")).toBeNull();
+  });
+});
+
+describe("NewWorktreeDialog — branch loading skeleton timing", () => {
+  const STEP_MS = 10;
+  const LOADING_HINT = "Loading branches…";
+  const observers: MutationObserver[] = [];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    delete document.body.dataset.performanceMode;
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockGetCurrentUser.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    for (const observer of observers.splice(0)) observer.disconnect();
+    cleanup();
+    dialogMock.keepChildrenWhenClosed = false;
+    delete document.body.dataset.performanceMode;
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  function resolveBranchesAfter(ms: number) {
+    mockListBranches.mockImplementation(
+      () => new Promise<BranchInfo[]>((resolve) => setTimeout(() => resolve(TEST_BRANCHES), ms))
+    );
+  }
+
+  const skeleton = () => screen.queryByRole("status", { name: "Loading branches" });
+  const branchInput = () => screen.queryByTestId("branch-name-input");
+  const loadingHint = () => screen.queryByText(LOADING_HINT) !== null;
+  const reservation = () => document.querySelector<HTMLElement>('[inert][aria-hidden="true"]');
+  const SKELETON_SELECTOR = '[role="status"][aria-label="Loading branches"]';
+  const FORM_SELECTOR = '[data-testid="branch-name-input"]';
+
+  async function advance(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  /** Steps the clock, recording each step what the branch area and footer showed. */
+  async function sample(totalMs: number, startAt = 0) {
+    const frames: { at: number; skeleton: boolean; form: boolean; hint: boolean }[] = [];
+    for (let at = STEP_MS; at <= totalMs; at += STEP_MS) {
+      await advance(STEP_MS);
+      frames.push({
+        at: startAt + at,
+        skeleton: skeleton() !== null,
+        form: branchInput() !== null,
+        hint: loadingHint(),
+      });
+    }
+    return frames;
+  }
+
+  /**
+   * Whether `selector` was mounted or unmounted while watching, including in a
+   * commit a later one in the same act() replaced: a removed subtree keeps its
+   * descendants, so the removal record still shows what was there. Assumes the
+   * selector's attributes don't change on a node React reuses.
+   */
+  function watchMounts(selector: string) {
+    let seen = false;
+    const scan = (records: MutationRecord[]) => {
+      for (const record of records) {
+        for (const node of [...record.addedNodes, ...record.removedNodes]) {
+          if (node instanceof Element && (node.matches(selector) || node.querySelector(selector)))
+            seen = true;
+        }
+      }
+    };
+    // Records are handed to the callback whenever microtasks run, and only the
+    // ones not yet delivered come back from takeRecords(), so both read them.
+    const observer = new MutationObserver(scan);
+    observer.observe(document.body, { childList: true, subtree: true });
+    observers.push(observer);
+    return () => {
+      scan(observer.takeRecords());
+      return seen;
+    };
+  }
+
+  it("never mounts the skeleton when branches resolve inside the onset gate", async () => {
+    const skeletonMounted = watchMounts(SKELETON_SELECTOR);
+    resolveBranchesAfter(UI_SKELETON_GATE_MS / 4);
+    renderDialog();
+
+    expect(skeleton()).toBeNull();
+    expect(branchInput()).toBeNull();
+    // The form's footprint is held, drawn by nothing and out of reach.
+    expect(reservation()?.textContent).toContain("Destination");
+    expect(loadingHint()).toBe(false);
+    // AppDialog is told to put initial focus on its surface while there is no field.
+    const dialog = screen.getByTestId("new-worktree-dialog");
+    expect(dialog.getAttribute("data-initial-focus")).toBe("surface");
+    const frames = await sample(UI_SKELETON_GATE_MS + UI_SKELETON_FLOOR_MS);
+
+    expect(skeletonMounted()).toBe(false);
+    expect(frames.filter((f) => f.skeleton || f.hint)).toEqual([]);
+    expect(frames.find((f) => f.form)?.at).toBeLessThanOrEqual(UI_SKELETON_GATE_MS);
+    expect(reservation()).toBeNull();
+    expect(dialog.getAttribute("data-initial-focus")).toBeNull();
+    expect(document.activeElement).toBe(branchInput());
+  });
+
+  it("never mounts the skeleton for a load that resolves a millisecond before the gate", async () => {
+    const skeletonMounted = watchMounts(SKELETON_SELECTOR);
+    resolveBranchesAfter(UI_SKELETON_GATE_MS - 1);
+    renderDialog();
+
+    await advance(UI_SKELETON_GATE_MS - 1);
+    expect(branchInput()).not.toBeNull();
+    await sample(UI_SKELETON_FLOOR_MS);
+
+    expect(skeletonMounted()).toBe(false);
+    expect(document.activeElement).toBe(branchInput());
+  });
+
+  it("never mounts the skeleton when the load settles in the batch the gate fires in", async () => {
+    const skeletonMounted = watchMounts(SKELETON_SELECTOR);
+    resolveBranchesAfter(UI_SKELETON_GATE_MS);
+    renderDialog();
+
+    // One act: the gate's timer and the load land in the same render.
+    await advance(UI_SKELETON_GATE_MS);
+    expect(branchInput()).not.toBeNull();
+    await sample(UI_SKELETON_FLOOR_MS);
+
+    expect(skeletonMounted()).toBe(false);
+    expect(branchInput()).not.toBeNull();
+  });
+
+  it("shows the skeleton at the gate and holds it to the millisecond of the floor", async () => {
+    const loadMs = UI_SKELETON_GATE_MS + 2 * STEP_MS;
+    resolveBranchesAfter(loadMs);
+    renderDialog();
+
+    await advance(UI_SKELETON_GATE_MS - 1);
+    expect(skeleton()).toBeNull();
+    expect(branchInput()).toBeNull();
+    await advance(1);
+    expect(skeleton()).not.toBeNull();
+
+    // The load settles 20ms in, in an act of its own so it commits then; the
+    // floor still runs from the skeleton's appearance.
+    await advance(loadMs - UI_SKELETON_GATE_MS);
+    expect(skeleton()).not.toBeNull();
+    await advance(UI_SKELETON_GATE_MS + UI_SKELETON_FLOOR_MS - loadMs - 1);
+    expect(skeleton()).not.toBeNull();
+    expect(branchInput()).toBeNull();
+    await advance(1);
+    expect(skeleton()).toBeNull();
+    expect(branchInput()).not.toBeNull();
+
+    await advance(0);
+    expect(document.activeElement).toBe(branchInput());
+  });
+
+  it("goes from held space to the skeleton to the form, with no form before the skeleton", async () => {
+    const formMounted = watchMounts(FORM_SELECTOR);
+    resolveBranchesAfter(UI_SKELETON_GATE_MS + 2 * STEP_MS);
+    renderDialog();
+
+    const beforeGate = await sample(UI_SKELETON_GATE_MS - STEP_MS);
+    expect(beforeGate.some((f) => f.skeleton || f.form || f.hint)).toBe(false);
+    // Not even the first commit of a cold open, before the bootstrap ran.
+    expect(formMounted()).toBe(false);
+
+    const frames = await sample(UI_SKELETON_FLOOR_MS + 12 * STEP_MS, UI_SKELETON_GATE_MS - STEP_MS);
+
+    const shown = frames.filter((f) => f.skeleton);
+    expect(shown[0]?.at).toBe(UI_SKELETON_GATE_MS);
+    // Never both, never neither once shown: the skeleton hands straight to the form.
+    expect(frames.some((f) => f.skeleton && f.form)).toBe(false);
+    expect(frames.filter((f) => !f.skeleton && !f.form)).toEqual([]);
+    // The footer says it's loading exactly while the skeleton does.
+    expect(frames.filter((f) => f.hint !== f.skeleton)).toEqual([]);
+    expect(document.activeElement).toBe(branchInput());
+  });
+
+  it("measures the floor from the skeleton's appearance, not from the load settling", async () => {
+    resolveBranchesAfter(UI_SKELETON_GATE_MS + UI_SKELETON_FLOOR_MS - 4 * STEP_MS);
+    renderDialog();
+
+    const frames = await sample(UI_SKELETON_GATE_MS + 2 * UI_SKELETON_FLOOR_MS);
+
+    expect(frames.find((f) => f.form)?.at).toBe(UI_SKELETON_GATE_MS + UI_SKELETON_FLOOR_MS);
+    expect(document.activeElement).toBe(branchInput());
+  });
+
+  it("swaps a load that outlasts the floor out the moment it resolves", async () => {
+    const loadMs = UI_SKELETON_GATE_MS + UI_SKELETON_FLOOR_MS + 15 * STEP_MS;
+    resolveBranchesAfter(loadMs);
+    renderDialog();
+
+    // Through the gate on its own: React holds an act()'s updates until it
+    // exits, so one long advance would commit the skeleton, and start its
+    // floor, only at the end of it.
+    await advance(UI_SKELETON_GATE_MS);
+    expect(skeleton()).not.toBeNull();
+    await advance(loadMs - UI_SKELETON_GATE_MS - 1);
+    expect(skeleton()).not.toBeNull();
+    expect(branchInput()).toBeNull();
+    await advance(1);
+    expect(skeleton()).toBeNull();
+    expect(branchInput()).not.toBeNull();
+  });
+
+  it("starts a fresh gate when reopened after a close mid-load", async () => {
+    mockListBranches.mockReturnValue(new Promise(() => {}));
+    const props = { onClose: vi.fn(), rootPath: "/test/root" };
+    const { rerender } = render(<NewWorktreeDialog isOpen={true} {...props} />);
+    await sample(UI_SKELETON_GATE_MS + 5 * STEP_MS);
+    expect(skeleton()).not.toBeNull();
+
+    rerender(<NewWorktreeDialog isOpen={false} {...props} />);
+    await advance(STEP_MS);
+    resolveBranchesAfter(UI_SKELETON_GATE_MS + 2 * STEP_MS);
+    const skeletonMounted = watchMounts(SKELETON_SELECTOR);
+    rerender(<NewWorktreeDialog isOpen={true} {...props} />);
+
+    // Neither the last opening's skeleton nor its floor carries over.
+    await advance(UI_SKELETON_GATE_MS - 1);
+    expect(skeletonMounted()).toBe(false);
+    await advance(1);
+    expect(skeleton()).not.toBeNull();
+    await sample(UI_SKELETON_FLOOR_MS);
+    expect(skeleton()).toBeNull();
+    await advance(0);
+    expect(document.activeElement).toBe(branchInput());
+  });
+
+  it("holds space again on a cold reopen after an opening that showed the form", async () => {
+    resolveBranchesAfter(UI_SKELETON_GATE_MS / 4);
+    const props = { onClose: vi.fn(), rootPath: "/test/root" };
+    const { rerender } = render(<NewWorktreeDialog isOpen={true} {...props} />);
+    await sample(UI_SKELETON_GATE_MS);
+    expect(branchInput()).not.toBeNull();
+
+    rerender(<NewWorktreeDialog isOpen={false} {...props} />);
+    await advance(STEP_MS);
+    clearBranchListCache();
+    resolveBranchesAfter(UI_SKELETON_GATE_MS + 2 * STEP_MS);
+    const formMounted = watchMounts(FORM_SELECTOR);
+    rerender(<NewWorktreeDialog isOpen={true} {...props} />);
+
+    expect(reservation()).not.toBeNull();
+    await advance(UI_SKELETON_GATE_MS - 1);
+    expect(formMounted()).toBe(false);
+    expect(reservation()).not.toBeNull();
+    await advance(1);
+    expect(skeleton()).not.toBeNull();
+  });
+
+  it.each([
+    ["clicking Create", () => fireEvent.click(screen.getByTestId("create-worktree-button"))],
+    ["Cmd+Enter", () => fireEvent.keyDown(window, { key: "Enter", metaKey: true })],
+    ["Ctrl+Enter", () => fireEvent.keyDown(window, { key: "Enter", ctrlKey: true })],
+  ])("holds %s back while the floor keeps the skeleton up", async (_name, submit) => {
+    resolveBranchesAfter(UI_SKELETON_GATE_MS + 2 * STEP_MS);
+    renderDialog();
+    await sample(UI_SKELETON_GATE_MS + 5 * STEP_MS);
+    expect(skeleton()).not.toBeNull();
+    const create = screen.getByTestId("create-worktree-button");
+    expect(create.getAttribute("aria-disabled")).toBe("true");
+
+    // A submit that got through would validate the empty name and leave its
+    // error waiting on the form.
+    await act(async () => submit());
+    await sample(UI_SKELETON_FLOOR_MS);
+    expect(branchInput()).not.toBeNull();
+    expect(create.getAttribute("aria-disabled")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    await act(async () => submit());
+    expect(screen.queryByRole("alert")).not.toBeNull();
+  });
+
+  it.each([
+    ["mid-load", null],
+    ["mid-floor", UI_SKELETON_GATE_MS + 2 * STEP_MS],
+  ])("keeps the skeleton through the exit when closed %s", async (_name, loadMs) => {
+    dialogMock.keepChildrenWhenClosed = true;
+    if (loadMs === null) mockListBranches.mockReturnValue(new Promise(() => {}));
+    else resolveBranchesAfter(loadMs);
+    const props = { onClose: vi.fn(), rootPath: "/test/root" };
+    const { rerender } = render(<NewWorktreeDialog isOpen={true} {...props} />);
+    await sample(UI_SKELETON_GATE_MS + 5 * STEP_MS);
+    expect(skeleton()).not.toBeNull();
+
+    const formMounted = watchMounts(FORM_SELECTOR);
+    rerender(<NewWorktreeDialog isOpen={false} {...props} />);
+    const frames = await sample(UI_SKELETON_FLOOR_MS);
+
+    expect(frames.filter((f) => !f.skeleton || !f.hint)).toEqual([]);
+    expect(formMounted()).toBe(false);
+    // Create is still mounted for the fade, and as held as it was at the close.
+    const create = screen.getByTestId("create-worktree-button");
+    expect(create.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("keeps the form up through the gate on a Retry after a failed load", async () => {
+    mockListBranches.mockRejectedValueOnce(new Error("not a git repository"));
+    renderDialog();
+    await sample(UI_SKELETON_GATE_MS);
+    const retry = screen.getByRole("button", { name: "Retry" });
+    expect(branchInput()).not.toBeNull();
+
+    resolveBranchesAfter(UI_SKELETON_GATE_MS / 4);
+    const formMounted = watchMounts(FORM_SELECTOR);
+    const skeletonMounted = watchMounts(SKELETON_SELECTOR);
+    await act(async () => {
+      fireEvent.click(retry);
+    });
+    expect(screen.getByTestId("create-worktree-button").getAttribute("aria-disabled")).toBe("true");
+    // On screen but out of reach: a field touched against the emptied list
+    // would keep the reloaded one from seeding the base.
+    expect(branchInput()?.closest("[inert]")).not.toBeNull();
+    const frames = await sample(UI_SKELETON_GATE_MS + UI_SKELETON_FLOOR_MS);
+
+    expect(frames.filter((f) => !f.form)).toEqual([]);
+    expect(branchInput()?.closest("[inert]")).toBeNull();
+    expect(formMounted()).toBe(false);
+    expect(skeletonMounted()).toBe(false);
+    expect(document.getElementById("base-branch")?.textContent).toContain("main");
+  });
+
+  it("swaps the skeleton out as soon as branches resolve in performance mode", async () => {
+    document.body.dataset.performanceMode = "true";
+    const loadMs = UI_SKELETON_GATE_MS + 2 * STEP_MS;
+    resolveBranchesAfter(loadMs);
+    renderDialog();
+
+    await advance(UI_SKELETON_GATE_MS);
+    expect(skeleton()).not.toBeNull();
+    await advance(loadMs - UI_SKELETON_GATE_MS - 1);
+    expect(skeleton()).not.toBeNull();
+    await advance(1);
+    expect(skeleton()).toBeNull();
+    expect(branchInput()).not.toBeNull();
+    await advance(0);
+    expect(document.activeElement).toBe(branchInput());
   });
 });
 
