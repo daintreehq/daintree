@@ -439,6 +439,7 @@ describe("SafeModeBanner", () => {
     fireEvent.click(trigger);
     expect(screen.getByText(/Clearing/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Restore on next launch/ })).toBeNull();
+    await useSafeModeStore.getState().clearQuarantinedPanel("p1");
 
     await act(async () => {
       resolveClear({ cleared: true });
@@ -460,6 +461,44 @@ describe("SafeModeBanner", () => {
     expect(again).toEqual({ cleared: true });
     expect(clearQuarantinedPanel).toHaveBeenCalledTimes(1);
     expect(useSafeModeStore.getState().clearStatus.p1).toBe("cleared");
+  });
+
+  it("keeps an in-flight clear deduped when safe mode is re-entered", async () => {
+    let resolveClear: (value: { cleared: boolean }) => void = () => {};
+    clearQuarantinedPanel.mockReset();
+    clearQuarantinedPanel.mockReturnValue(
+      new Promise<{ cleared: boolean }>((resolve) => {
+        resolveClear = resolve;
+      })
+    );
+    const panels = [{ id: "p1", kind: "terminal" as const, title: "Bad" }];
+    useSafeModeStore.getState().setSafeMode(true, { quarantinedPanels: panels });
+    const first = useSafeModeStore.getState().clearQuarantinedPanel("p1");
+    useSafeModeStore.getState().setSafeMode(true, { quarantinedPanels: panels });
+    await useSafeModeStore.getState().clearQuarantinedPanel("p1");
+    expect(clearQuarantinedPanel).toHaveBeenCalledTimes(1);
+
+    resolveClear({ cleared: true });
+    await first;
+    expect(useSafeModeStore.getState().clearStatus.p1).toBe("cleared");
+  });
+
+  it("ignores a clear that completes after safe mode was switched off", async () => {
+    let resolveClear: (value: { cleared: boolean }) => void = () => {};
+    clearQuarantinedPanel.mockReset();
+    clearQuarantinedPanel.mockReturnValue(
+      new Promise<{ cleared: boolean }>((resolve) => {
+        resolveClear = resolve;
+      })
+    );
+    useSafeModeStore.getState().setSafeMode(true, {
+      quarantinedPanels: [{ id: "p1", kind: "terminal", title: "Bad" }],
+    });
+    const pending = useSafeModeStore.getState().clearQuarantinedPanel("p1");
+    useSafeModeStore.getState().setSafeMode(false);
+    resolveClear({ cleared: true });
+    await pending;
+    expect(useSafeModeStore.getState().clearStatus).toEqual({});
   });
 
   it("clears restore progress when safe mode is switched off", async () => {

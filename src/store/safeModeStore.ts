@@ -33,6 +33,8 @@ interface SafeModeState extends SafeModeMeta {
   dismiss: () => void;
 }
 
+let clearEpoch = 0;
+
 export const useSafeModeStore = create<SafeModeState>((set, get) => ({
   safeMode: false,
   dismissed: false,
@@ -41,7 +43,11 @@ export const useSafeModeStore = create<SafeModeState>((set, get) => ({
   lastCrashAt: undefined,
   quarantinedPanels: undefined,
   clearStatus: {},
-  setSafeMode: (value, meta) =>
+  setSafeMode: (value, meta) => {
+    // Re-entering safe mode keeps `clearStatus`: a clear may be in flight, and
+    // dropping its dedupe entry would allow a second IPC that the ledger
+    // answers with `false`. Only leaving safe mode resets it.
+    if (!value) clearEpoch += 1;
     set(
       value
         ? {
@@ -50,7 +56,6 @@ export const useSafeModeStore = create<SafeModeState>((set, get) => ({
             skippedPanelCount: meta?.skippedPanelCount,
             lastCrashAt: meta?.lastCrashAt,
             quarantinedPanels: meta?.quarantinedPanels,
-            clearStatus: {},
           }
         : {
             safeMode: false,
@@ -61,13 +66,19 @@ export const useSafeModeStore = create<SafeModeState>((set, get) => ({
             quarantinedPanels: undefined,
             clearStatus: {},
           }
-    ),
+    );
+  },
   clearQuarantinedPanel: async (panelId) => {
     const current = get().clearStatus[panelId];
     if (current === "cleared") return { cleared: true };
     if (current === "clearing") return { cleared: false };
-    const setStatus = (status: QuarantineClearStatus) =>
+    const epoch = clearEpoch;
+    // A completion that lands after safe mode was left must not repopulate the
+    // status that reset just cleared.
+    const setStatus = (status: QuarantineClearStatus) => {
+      if (epoch !== clearEpoch) return;
       set((state) => ({ clearStatus: { ...state.clearStatus, [panelId]: status } }));
+    };
     setStatus("clearing");
     try {
       const result = await window.electron.app.clearQuarantinedPanel(panelId);
