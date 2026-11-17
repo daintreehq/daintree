@@ -1120,3 +1120,89 @@ describe("EditorService directory targets", () => {
     expect(shellMock.openPath).not.toHaveBeenCalled();
   });
 });
+
+// Neovim needs a TTY, and every launch here is detached with its streams
+// ignored, so a spawned nvim is a live process nobody can see (#17441).
+describe("EditorService terminal-only editors", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    originalPATH = process.env.PATH;
+    originalVISUAL = process.env.VISUAL;
+    originalEDITOR = process.env.EDITOR;
+    process.env.PATH = "/usr/local/bin";
+    delete process.env.VISUAL;
+    delete process.env.EDITOR;
+    setPlatform("linux");
+    mockExistingFiles([]);
+    shellMock.openPath.mockResolvedValue("");
+    mockExecaChildren(execaMock.execa, ["spawned"]);
+  });
+
+  afterEach(() => {
+    setPlatform(originalPlatform);
+    process.env.PATH = originalPATH;
+    if (originalVISUAL === undefined) delete process.env.VISUAL;
+    else process.env.VISUAL = originalVISUAL;
+    if (originalEDITOR === undefined) delete process.env.EDITOR;
+    else process.env.EDITOR = originalEDITOR;
+  });
+
+  function launchedBinaries(): string[] {
+    return execaMock.execa.mock.calls.map((call) => call[0] as string);
+  }
+
+  it("automatic selection passes over nvim to the next GUI editor", async () => {
+    // nvim ranks ahead of Sublime in the automatic order.
+    mockExistingFiles(["/usr/local/bin/nvim", "/usr/local/bin/subl"]);
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/file.ts", 12, 5, null);
+
+    expect(launchedBinaries()).toEqual(["/usr/local/bin/subl"]);
+    expect(shellMock.openPath).not.toHaveBeenCalled();
+  });
+
+  it("automatic selection with only nvim installed reaches the default app", async () => {
+    mockExistingFiles(["/usr/local/bin/nvim"]);
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/file.ts", 12, 5, null);
+
+    expect(execaMock.execa).not.toHaveBeenCalled();
+    expect(shellMock.openPath).toHaveBeenCalledWith("/abs/file.ts");
+  });
+
+  it("automatic selection on macOS with only nvim installed reaches `open -t`", async () => {
+    setPlatform("darwin");
+    mockExistingFiles(["/usr/local/bin/nvim"]);
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/file.ts", 12, 5, null);
+
+    expect(launchedBinaries()).toEqual(["open"]);
+    expect(execaMock.execa.mock.calls[0]![1]).toEqual(["-t", "/abs/file.ts"]);
+  });
+
+  it("an explicit Neovim choice never spawns nvim detached and says how to set one up", async () => {
+    mockExistingFiles(["/usr/local/bin/nvim", "/usr/local/bin/code"]);
+    const { openFile } = await loadModule();
+
+    const result = openFile("/abs/file.ts", 12, 5, { id: "neovim" });
+
+    await expect(result).rejects.toThrow(/terminal/i);
+    await expect(result).rejects.toThrow(/Custom/);
+    expect(launchedBinaries()).not.toContain("/usr/local/bin/nvim");
+    expect(shellMock.openPath).not.toHaveBeenCalled();
+  });
+
+  it("an explicit Neovim choice explains for a folder target too", async () => {
+    mockExistingFiles(["/usr/local/bin/nvim"]);
+    const { openFile } = await loadModule();
+
+    await expect(
+      openFile("/abs/worktrees/feature-x", undefined, undefined, { id: "neovim" }, true)
+    ).rejects.toThrow(/terminal/i);
+    expect(execaMock.execa).not.toHaveBeenCalled();
+  });
+});
