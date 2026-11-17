@@ -888,6 +888,11 @@ describe("getCIStatus", () => {
 
 describe("checks.getChecks", () => {
   const getChecks = (iid: number) => gitlabForgeProvider.checks!.getChecks(REPO, iid);
+
+  // Signed in by default: the commit statuses list is only read with a token.
+  beforeEach(async () => {
+    await connectAs("https://gitlab.com", "glpat-secret");
+  });
   const SHA = "c0ffee";
   const pipelineOf = (overrides: Record<string, unknown> = {}) => ({
     id: 77,
@@ -1235,8 +1240,9 @@ describe("checks.getChecks", () => {
     await expect(getChecks(3)).rejects.toThrow(/no commit/);
   });
 
-  it("lists the jobs of a public pipeline read without a token", async () => {
-    // GitLab serves the job lists anonymously but not the commit statuses.
+  it("lists a public pipeline's own jobs when read without a token", async () => {
+    // GitLab serves the job lists anonymously, but never the commit statuses.
+    gitlabForgeProvider.setCredentials?.(null);
     routeChecks({
       mr: mrWith({ status: "failed" }),
       jobs: pages({ "1": () => jsonResponse([{ id: 1, name: "rspec", status: "failed" }]) }),
@@ -1246,6 +1252,25 @@ describe("checks.getChecks", () => {
     const result = await getChecks(3);
 
     expect(result?.checks.map((check) => check.name)).toEqual(["rspec"]);
+    expect(requestedUrls().some((url) => url.includes("/statuses"))).toBe(false);
+  });
+
+  it("rejects a signed-in read whose statuses fail on a later page", async () => {
+    // A token that expires mid-read: the external check on page 1 must not be
+    // dropped in favour of a list that looks complete.
+    routeChecks({
+      mr: mrWith({ status: "failed" }),
+      jobs: pages({ "1": () => jsonResponse([{ id: 1, name: "rspec", status: "success" }]) }),
+      statuses: pages({
+        "1": () =>
+          jsonResponse([{ id: 500, name: "jenkins", status: "failed", pipeline_id: 77 }], {
+            headers: { "x-next-page": "2" },
+          }),
+        "2": () => jsonResponse({ message: "401 Unauthorized" }, { status: 401 }),
+      }),
+    });
+
+    await expect(getChecks(3)).rejects.toMatchObject({ status: 401 });
   });
 
   it("returns null for a merge request that doesn't exist", async () => {
@@ -1258,10 +1283,7 @@ describe("checks.getChecks", () => {
   // found, a list that fails is a read that failed, whatever the status.
   it.each(
     (["jobs", "bridges", "statuses"] as const).flatMap((list) =>
-      [401, 403, 404, 429]
-        // Covered below: a 401 on statuses alone is an anonymous read.
-        .filter((status) => list !== "statuses" || status !== 401)
-        .map((status) => [list, status] as const)
+      [401, 403, 404, 429].map((status) => [list, status] as const)
     )
   )("rejects when the %s list answers %i", async (list, status) => {
     routeChecks({

@@ -30,6 +30,7 @@ import {
   getRateLimitSnapshot,
   resetRateLimitSnapshots,
   resetReadFlights,
+  resolveRequestAuth,
   type QueryValue,
 } from "./GitLabClient.js";
 import { BoundedCache } from "./boundedCache.js";
@@ -614,6 +615,11 @@ export async function getChecksImpl(
     throw incomplete("GitLab reported a pipeline with no commit");
   }
   const base = `/projects/${projectId}/pipelines/${pipelineId}`;
+  // The commit statuses list wants a signed-in account even on a public
+  // project, where the job lists don't. A read that goes out without a token
+  // can only list the pipeline's own jobs; one that carries a token reads the
+  // statuses too, and any failure there rejects like the rest.
+  const signedIn = (await resolveRequestAuth(repo.host)).token !== null;
 
   const [jobs, bridges, statuses] = await Promise.all([
     listPipelineJobs(repo.host, `${base}/jobs`, { include_retried: false }, fresh, incomplete),
@@ -621,22 +627,18 @@ export async function getChecksImpl(
     // An external CI (Jenkins posting commit statuses) lands in the pipeline as
     // statuses neither job list returns. This list holds every kind, so only
     // the ones the job lists didn't already give are kept.
-    listPipelineJobs(
-      repo.host,
-      `/projects/${projectId}/repository/commits/${encodeURIComponent(sha)}/statuses`,
-      {
-        pipeline_id: pipelineId,
-        ...(typeof pipeline.ref === "string" && pipeline.ref ? { ref: pipeline.ref } : {}),
-      },
-      fresh,
-      incomplete
-    ).catch((err: unknown) => {
-      // This list wants a signed-in account even on a public project, where
-      // the job lists don't. A 401 here while both job lists read is a read
-      // that went out without a token, and all it can list is the jobs.
-      if (err instanceof GitLabApiError && err.status === 401) return [];
-      throw err;
-    }),
+    signedIn
+      ? listPipelineJobs(
+          repo.host,
+          `/projects/${projectId}/repository/commits/${encodeURIComponent(sha)}/statuses`,
+          {
+            pipeline_id: pipelineId,
+            ...(typeof pipeline.ref === "string" && pipeline.ref ? { ref: pipeline.ref } : {}),
+          },
+          fresh,
+          incomplete
+        )
+      : Promise.resolve<GitLabJob[]>([]),
   ]);
 
   const listed = new Set<number>();
