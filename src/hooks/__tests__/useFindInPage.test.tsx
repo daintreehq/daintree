@@ -38,6 +38,12 @@ afterEach(() => {
   focusWebviewPageMock.mockClear();
 });
 
+function isShortcutListener(
+  value: unknown
+): value is (payload: { panelId: string; shortcut: string }) => void {
+  return typeof value === "function";
+}
+
 interface MockWebview {
   findInPage: Mock;
   stopFindInPage: Mock;
@@ -1300,7 +1306,8 @@ describe("useFindInPage against Electron's find sessions", () => {
     act(() => result.current.open());
     act(() => result.current.setQuery("FIND"));
     flush();
-    const openBarShortcut = onFindShortcutMock.mock.calls.at(-1)![0];
+    const openBarShortcut = onFindShortcutMock.mock.calls.at(-1)?.[0];
+    if (!isShortcutListener(openBarShortcut)) throw new Error("no shortcut listener");
 
     act(() => {
       result.current.close();
