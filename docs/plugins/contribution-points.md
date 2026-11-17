@@ -923,7 +923,7 @@ Keybindings map a key combination to an action.
 | --- | --- | --- |
 | `actionId` | yes | Fully-qualified action ID, usually one your plugin declared. |
 | `combo` | yes | Normalized key combo string, same format as Daintree's default keybindings. Chords (`"Cmd+K Cmd+S"`) supported. |
-| `scope` | no | One of `"global"`, `"portal"`, `"worktreeGrid"`, `"dev-preview"`. Defaults to `"global"`. An unknown scope is rejected at the manifest gate. The former `"terminal"`, `"modal"`, and `"worktreeList"` scopes were removed — use `when` conditions instead (`"terminalFocused"`, `"modalOpen"`); worktree-list navigation keys are fixed and not bindable. |
+| `scope` | no | One of `"global"`, `"worktreeGrid"`, `"dev-preview"`. Defaults to `"global"`. `"portal"` is retired: a manifest declaring it still validates and loads, but the binding never fires and is not moved to another scope, and validation and the plugin's diagnostics log say so. An unknown scope is rejected at the manifest gate. The former `"terminal"`, `"modal"`, and `"worktreeList"` scopes were removed — use `when` conditions instead (`"terminalFocused"`, `"modalOpen"`); worktree-list navigation keys are fixed and not bindable. |
 | `description` | no | Human-readable description of what the binding does. |
 | `when` | no | Context expression gating when the binding is active. Evaluated live at each keydown against the context keys below; unknown identifiers evaluate falsy — which makes negated expressions permissive (a misspelled `!modalOpne` is always true), so double-check identifier spelling. Supports `&&`, `\|\|`, `!`, `==`, `!=`, and single-quoted string literals. |
 

@@ -1216,8 +1216,14 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
     },
     scope: {
       mode: "verbatim",
-      consumers: [{ file: "src/services/KeybindingService.ts", symbol: "KeybindingService" }],
-      note: "Gates the binding to the active key scope (defaulted to global in the hook).",
+      consumers: [
+        { file: "src/services/KeybindingService.ts", symbol: "KeybindingService" },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar → isRetiredPluginKeybindingScope",
+        },
+      ],
+      note: "Gates the binding to the active key scope (defaulted to global in the hook); a retired scope drops the binding instead.",
     },
     description: {
       mode: "verbatim",

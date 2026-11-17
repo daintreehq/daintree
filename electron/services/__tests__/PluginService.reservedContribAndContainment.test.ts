@@ -224,6 +224,7 @@ import {
   unregisterPluginToolbarButtons,
 } from "../../../shared/config/toolbarButtonRegistry.js";
 import { registerPluginMenuItem, unregisterPluginMenuItems } from "../pluginMenuRegistry.js";
+import { getPluginKeybindings } from "../pluginKeybindingRegistry.js";
 import {
   registerForgeProviders,
   unregisterForgeProviderImpls,
@@ -598,6 +599,38 @@ describe("reserved contribution point warnings", () => {
     );
     expect(registerToolbarButton).not.toHaveBeenCalled();
     expect(registerPluginMenuItem).not.toHaveBeenCalled();
+  });
+
+  it("loads a keybinding in the retired portal scope without registering or remapping it (#17245)", async () => {
+    await writePlugin("retired-scope", {
+      name: "acme.retired-scope",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        keybindings: [
+          { actionId: "nav.quickSwitcher", combo: "Cmd+Shift+7", scope: "portal" },
+          { actionId: "nav.quickSwitcher", combo: "Cmd+Shift+8", scope: "global" },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins().map((p) => p.manifest.name)).toContain("acme.retired-scope");
+    const combos = getPluginKeybindings()
+      .filter((entry) => entry.pluginId === "acme.retired-scope")
+      .map((entry) => ({ combo: entry.item.combo, scope: entry.item.scope }));
+    expect(combos).toEqual([{ combo: "Cmd+Shift+8", scope: "global" }]);
+    const logLines =
+      service.getDiagnosticsSnapshot().plugins.find((p) => p.pluginId === "acme.retired-scope")
+        ?.logLines ?? [];
+    expect(logLines).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        message: expect.stringMatching(/Cmd\+Shift\+7.*retired "portal" scope/),
+      })
+    );
   });
 
   it("does not warn when reserved arrays are explicitly present but empty", async () => {
