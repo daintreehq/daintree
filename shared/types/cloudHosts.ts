@@ -19,7 +19,7 @@ import type { HostId } from "./remoteHosts.js";
 export type CloudProviderId = BuiltInCloudProviderId | (string & {});
 
 /** The providers compiled into this build; the open union keeps their names autocompleting. */
-export type BuiltInCloudProviderId = "boat" | "agent37" | "digitalocean" | "gce";
+export type BuiltInCloudProviderId = "boat" | "agent37" | "digitalocean" | "gce" | "aws";
 
 /** Where a provider's id lives: Daintree's own bare names, or one plugin's namespace. */
 export type CloudProviderNamespace = { kind: "built-in" } | { kind: "plugin"; pluginId: string };
