@@ -464,8 +464,8 @@ export function ConflictPanel({
   } | null>(null);
   const [pendingMarkerConfirm, setPendingMarkerConfirm] = useState<{
     filePath: string;
-    // `null` when the re-read failed, so nothing is known either way.
-    hunkCount: number | null;
+    // `null` when the re-read couldn't say, so nothing is known either way.
+    found: { hunkCount: number; firstMarkerLine: number | null } | null;
   } | null>(null);
   const [isAborting, setIsAborting] = useState(false);
   const [isContinuing, setIsContinuing] = useState(false);
@@ -742,22 +742,31 @@ export function ConflictPanel({
       const handOffFocus = rowHasFocus(filePath);
       const unmoved = startUnmoved();
       setBusyFile(filePath);
-      let hunkCount: number | null;
+      // `false` is the only answer that stages without asking.
+      let hasMarkers: boolean | null = null;
+      let found: { hunkCount: number; firstMarkerLine: number | null } | null = null;
       try {
         const [entry] = await window.electron.git.scanConflictMarkers(worktreePath, [filePath]);
+        // The region count can't stand in for the verdict: an edit that drops a
+        // region's opener leaves its closer behind with no region to count.
         // The scanner answers `null` for any file it skipped. For a deletion
         // conflict that means there is no file to hold markers; for anything
         // else (oversized, unreadable) it means nobody looked.
-        hunkCount = entry?.hunkCount ?? (isDeletionConflict(filePath) ? 0 : null);
+        if (entry?.hasMarkers != null) {
+          hasMarkers = entry.hasMarkers;
+          found = { hunkCount: entry.hunkCount ?? 0, firstMarkerLine: entry.firstMarkerLine };
+        } else if (entry?.hunkCount == null && isDeletionConflict(filePath)) {
+          hasMarkers = false;
+        }
       } catch {
-        hunkCount = null;
+        hasMarkers = null;
       }
       // The re-read answered for a worktree this panel no longer shows: its
       // file is not the row on screen, so neither ask nor resolve.
       if (!unmoved()) return;
       setBusyFile((current) => (current === filePath ? null : current));
-      if (hunkCount !== 0) {
-        setPendingMarkerConfirm({ filePath, hunkCount });
+      if (hasMarkers !== false) {
+        setPendingMarkerConfirm({ filePath, found: hasMarkers ? found : null });
         return;
       }
       await markResolved(filePath, handOffFocus);
@@ -1110,25 +1119,33 @@ export function ConflictPanel({
         onClose={() => setPendingMarkerConfirm(null)}
         title={
           pendingMarkerConfirm
-            ? pendingMarkerConfirm.hunkCount === null
+            ? pendingMarkerConfirm.found === null
               ? `Mark '${splitPath(pendingMarkerConfirm.filePath).base}' resolved without checking?`
               : `Mark '${splitPath(pendingMarkerConfirm.filePath).base}' resolved?`
             : ""
         }
         description={
           pendingMarkerConfirm ? (
-            pendingMarkerConfirm.hunkCount === null ? (
+            pendingMarkerConfirm.found === null ? (
               <span>
                 Couldn&apos;t check{" "}
                 <span className="font-mono break-all">{pendingMarkerConfirm.filePath}</span> for
                 leftover conflict markers. Marking it resolved stages the file exactly as it is.
               </span>
+            ) : pendingMarkerConfirm.found.hunkCount > 0 ? (
+              <span>
+                <span className="font-mono break-all">{pendingMarkerConfirm.filePath}</span> still
+                has {pluralize(pendingMarkerConfirm.found.hunkCount, "conflict region")}. Marking
+                it resolved stages the conflict markers as file content.
+              </span>
             ) : (
               <span>
                 <span className="font-mono break-all">{pendingMarkerConfirm.filePath}</span> still
-                has {pendingMarkerConfirm.hunkCount} conflict{" "}
-                {pendingMarkerConfirm.hunkCount === 1 ? "region" : "regions"}. Marking it resolved
-                stages the conflict markers as file content.
+                has leftover conflict markers
+                {pendingMarkerConfirm.found.firstMarkerLine != null
+                  ? `, starting on line ${pendingMarkerConfirm.found.firstMarkerLine.toLocaleString()}`
+                  : ""}
+                . Marking it resolved stages them as file content.
               </span>
             )
           ) : (

@@ -793,4 +793,25 @@ describe("git-write staging handlers (real git)", () => {
       expect(resolveUndoReads(mark)).toEqual([]);
     });
   });
+
+  it("reports markers left behind with no opener apart from the region count", async () => {
+    fs.writeFileSync(path.join(repo, "orphan.ts"), "kept\n=======\nright\n>>>>>>> theirs\n");
+    fs.writeFileSync(path.join(repo, "clean.ts"), "resolved\n");
+    fs.writeFileSync(
+      path.join(repo, "region.ts"),
+      "a\n>>>>>>> stray\n<<<<<<< ours\nl\n=======\nr\n>>>>>>> theirs\n"
+    );
+
+    const entries = await handler(CHANNELS.GIT_SCAN_CONFLICT_MARKERS)(null, {
+      cwd: repo,
+      filePaths: ["orphan.ts", "clean.ts", "region.ts", "missing.ts"],
+    });
+
+    expect(entries).toEqual([
+      { path: "orphan.ts", hunkCount: 0, hasMarkers: true, firstMarkerLine: 4 },
+      { path: "clean.ts", hunkCount: 0, hasMarkers: false, firstMarkerLine: null },
+      { path: "region.ts", hunkCount: 1, hasMarkers: true, firstMarkerLine: 2 },
+      { path: "missing.ts", hunkCount: null, hasMarkers: null, firstMarkerLine: null },
+    ]);
+  });
 });
