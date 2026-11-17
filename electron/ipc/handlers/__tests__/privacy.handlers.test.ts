@@ -14,7 +14,7 @@ const ipcMainMock = vi.hoisted(() => {
 });
 
 const appMock = vi.hoisted(() => ({
-  getPath: vi.fn(() => "/tmp/user-data"),
+  getPath: vi.fn((name: string) => (name === "userData" ? "/tmp/user-data" : `/tmp/other-${name}`)),
   relaunch: vi.fn(),
   exit: vi.fn(),
 }));
@@ -212,7 +212,12 @@ describe("registerPrivacyHandlers", () => {
     const handler = ipcMainMock._handlers.get("privacy:open-data-folder");
     expect(handler).toBeDefined();
 
+    const settings = (await ipcMainMock._handlers.get("privacy:get-settings")!(null)) as {
+      dataFolderPath: string;
+    };
+
     await expect(handler!(null)).resolves.toEqual({ opened: true });
+    expect(openPathMock.openWithDefaultApp).toHaveBeenCalledWith(settings.dataFolderPath);
     expect(openPathMock.openWithDefaultApp).toHaveBeenCalledWith("/tmp/user-data");
     expect(shellMock.showItemInFolder).not.toHaveBeenCalled();
   });

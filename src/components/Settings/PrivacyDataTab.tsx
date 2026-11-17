@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { notify } from "@/lib/notify";
@@ -140,6 +140,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange, onClose }: Privac
   const [sessionRetentionFailure, setSessionRetentionFailure] = useState<FailedWrite>(null);
   const [cacheFailure, setCacheFailure] = useState<FailedWrite>(null);
   const [openFolderFailed, setOpenFolderFailed] = useState(false);
+  const openFolderInFlight = useRef(false);
   const [shortenPending, setShortenPending] = useState(false);
   const [shortenError, setShortenError] = useState<string | null>(null);
   const [clearHistoryPending, setClearHistoryPending] = useState(false);
@@ -302,12 +303,17 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange, onClose }: Privac
   };
 
   const handleOpenDataFolder = async () => {
+    // One request at a time, so a slow earlier refusal can't overwrite a later success.
+    if (openFolderInFlight.current) return;
+    openFolderInFlight.current = true;
     try {
       const { opened } = await window.electron.privacy.openDataFolder();
       setOpenFolderFailed(!opened);
     } catch (err) {
       logError("Failed to open the data folder", err);
       setOpenFolderFailed(true);
+    } finally {
+      openFolderInFlight.current = false;
     }
   };
 

@@ -310,6 +310,34 @@ describe("PrivacyDataTab", () => {
     expect(await screen.findByText(/Couldn't open the folder/)).toBeTruthy();
   });
 
+  it("ignores a second click while the first open is pending, so an old refusal can't outlive a success", async () => {
+    let resolveOpen!: (r: { opened: boolean }) => void;
+    const openDataFolder = vi.fn(
+      () => new Promise<{ opened: boolean }>((resolve) => (resolveOpen = resolve))
+    );
+    window.electron = {
+      privacy: createPrivacyApi({ openDataFolder }),
+      agentSessionHistory: createAgentSessionHistoryApi(),
+    } as unknown as typeof window.electron;
+
+    render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
+
+    const button = await screen.findByRole("button", { name: "Open folder" });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(openDataFolder).toHaveBeenCalledTimes(1);
+
+    resolveOpen({ opened: false });
+    expect(await screen.findByText(/Couldn't open the folder/)).toBeTruthy();
+
+    openDataFolder.mockResolvedValueOnce({ opened: true });
+    fireEvent.click(button);
+    await waitFor(() => expect(screen.queryByText(/Couldn't open the folder/)).toBeNull());
+    expect(openDataFolder).toHaveBeenCalledTimes(2);
+  });
+
   it("says beside the control when the open request itself fails", async () => {
     window.electron = {
       privacy: createPrivacyApi({
