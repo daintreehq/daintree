@@ -99,6 +99,7 @@ vi.mock("../PluginMcpSupervisor.js", () => ({
     callTool: vi.fn(),
     restart: vi.fn(),
     removeState: vi.fn(),
+    removeStatesWhere: vi.fn(),
     list: vi.fn(() => []),
     getStderr: vi.fn(() => ({ pluginId: "", serverId: "", lines: [], totalLines: 0 })),
   }),
