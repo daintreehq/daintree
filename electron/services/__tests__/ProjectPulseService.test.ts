@@ -214,18 +214,16 @@ describe("ProjectPulseService", () => {
         if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
         if (cmd !== "log") return "";
 
-        const sinceArg = args.find((a) => a.startsWith("--since="));
-        if (!sinceArg) return commitTimestamps.join("\n");
+        const sinceArgs = args.filter((a) => a.startsWith("--since="));
+        if (sinceArgs.length === 0) return commitTimestamps.join("\n");
 
         // Mirrors git: a bare calendar date borrows the current time of day, an epoch is exact.
-        const value = sinceArg.slice("--since=".length);
-        let cutoff: number;
-        if (/^\d+$/.test(value)) {
-          cutoff = Number(value);
-        } else {
+        const resolved = sinceArgs.map((arg) => {
+          const value = arg.slice("--since=".length);
+          if (/^\d+$/.test(value)) return Number(value);
           const [year, month, day] = value.split("-").map(Number);
           const clock = new Date();
-          cutoff = Math.floor(
+          return Math.floor(
             new Date(
               year,
               month - 1,
@@ -235,8 +233,10 @@ describe("ProjectPulseService", () => {
               clock.getSeconds()
             ).getTime() / 1000
           );
-        }
-        cutoffs.push(cutoff);
+        });
+        cutoffs.push(...resolved);
+        // Git keeps the last --since it is given.
+        const cutoff = resolved[resolved.length - 1];
         return commitTimestamps.filter((timestamp) => timestamp >= cutoff).join("\n");
       });
 
