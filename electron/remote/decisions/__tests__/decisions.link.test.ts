@@ -1497,6 +1497,7 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
     const { host, client } = await pair();
     const other = { ...OWNER, installationId: "inst_owner_9876543210" };
     let hold = false;
+    let lists = 0;
     let reading!: () => void;
     const readStarted = new Promise<void>((resolve) => (reading = resolve));
     let release!: (list: unknown) => void;
@@ -1504,6 +1505,7 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
       host,
       () => RUNNING,
       () => {
+        lists += 1;
         if (!hold) return { hostId: null, owner: null, questions: [] };
         reading();
         return new Promise((resolve) => (release = resolve));
@@ -1512,6 +1514,8 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
     const shell = shellOf([STUDIO]);
     shell.open(HOST, client);
     await vi.waitFor(() => expect(shell.client.runtimeOf(HOST)?.runtime).toEqual(RUNNING));
+    // The first owner's own read is answered before the hold goes on.
+    await vi.waitFor(() => expect(lists).toBe(1));
 
     // The owner here changes and says so; the Host's list for it is held while the earlier one's lands.
     hold = true;
