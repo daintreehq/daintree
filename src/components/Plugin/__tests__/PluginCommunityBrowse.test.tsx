@@ -8,6 +8,7 @@ import type {
   PluginCatalogListing,
 } from "@shared/types/plugin";
 import { PluginCommunityBrowse } from "../PluginCommunityBrowse";
+import { CAPABILITY_META } from "../capabilityMeta";
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
@@ -158,6 +159,34 @@ describe("PluginCommunityBrowse", () => {
     expect(
       install.hasAttribute("disabled") || install.getAttribute("aria-disabled") === "true"
     ).toBe(true);
+  });
+
+  it("explains a known capability through a keyboard-reachable tooltip, never a native title", async () => {
+    browseCatalog.mockResolvedValue(available([SESSION]));
+    renderBrowse();
+    await screen.findByRole("list", { name: "Capabilities" });
+
+    const capabilities = screen.getByRole("list", { name: "Capabilities" });
+    expect(capabilities.querySelector("[title]")).toBeNull();
+
+    const trigger = within(capabilities).getByText("Read app data").closest("[tabindex]");
+    expect(trigger).not.toBeNull();
+    expect(trigger?.getAttribute("tabindex")).toBe("0");
+
+    // The id and description live only in the tooltip, never in the badge.
+    expect(screen.queryByText("fs:user-data-read")).toBeNull();
+
+    await act(async () => {
+      (trigger as HTMLElement).focus();
+    });
+    const id = await screen.findByText("fs:user-data-read");
+    const tip = id.parentElement as HTMLElement;
+    expect(tip.textContent).toContain(CAPABILITY_META["fs:user-data-read"].description);
+    expect(capabilities.contains(tip)).toBe(false);
+
+    // A name this build doesn't know is already shown whole: nothing to explain.
+    const unknown = within(capabilities).getByText("future:thing");
+    expect(unknown.closest("[tabindex]")).toBeNull();
   });
 
   it("searches by id, repository and capability, and clears a search that matched nothing", async () => {

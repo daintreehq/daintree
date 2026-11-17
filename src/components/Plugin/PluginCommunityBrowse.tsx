@@ -16,6 +16,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { SearchField } from "@/components/ui/SearchField";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { TimeAgo } from "@/components/ui/TimeAgo";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { pluralize } from "@/lib/pluralize";
 import { CAPABILITY_META } from "./capabilityMeta";
 import { usePluginCatalogBrowse } from "./usePluginCatalogBrowse";
@@ -75,12 +76,35 @@ function ListingCapabilities({ capabilities }: { capabilities: readonly string[]
           ) : meta?.severity === "warning" ? (
             <AlertTriangle aria-hidden="true" className="text-status-warning" />
           ) : null;
+        if (!meta) {
+          return (
+            <li key={name}>
+              <Badge size="xs">
+                <span className="font-mono">{displaySafeText(name)}</span>
+              </Badge>
+            </li>
+          );
+        }
         return (
           <li key={name}>
-            <Badge size="xs" title={meta ? `${meta.description} (${name})` : name}>
-              {glyph}
-              {meta ? meta.label : <span className="font-mono">{displaySafeText(name)}</span>}
-            </Badge>
+            <Tooltip>
+              {/* A badge is not interactive, so the trigger takes the tab stop:
+                  the plain-language risk is a focus away, not hover-only. */}
+              <TooltipTrigger asChild>
+                <span
+                  tabIndex={0}
+                  className="inline-flex rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+                >
+                  <Badge size="xs">
+                    {glyph}
+                    {meta.label}
+                  </Badge>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                {meta.description} (<span className="font-mono">{name}</span>)
+              </TooltipContent>
+            </Tooltip>
           </li>
         );
       })}
