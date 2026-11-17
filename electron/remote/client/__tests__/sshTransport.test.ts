@@ -25,6 +25,7 @@ import {
   buildForwardArgs,
   buildMuxForwardArgs,
   buildProbeArgs,
+  buildSignInArgs,
   buildStreamLocalCheckArgs,
   controlPathFor,
   controlPathOption,
@@ -76,6 +77,25 @@ const COMMON = [
 ];
 
 describe("ssh argument construction", () => {
+  it("turns batch mode off only for a sign-in, which is otherwise the probe on the same master", () => {
+    const batch = [
+      buildProbeArgs("studio", "/cp/cm-%C"),
+      buildCatArgs("studio", "/cp/cm-%C", "/home/g/host.json"),
+      buildAttachArgs("studio", "/cp/cm-%C", "daintree --attach-stdio"),
+      buildStreamLocalCheckArgs("studio", "/cp/cm-%C", "/run/user/1/daintree/host.sock"),
+      buildForwardArgs("studio", "/tmp/l.sock", "/run/user/1/daintree/host.sock"),
+      remoteShellArgs("studio", "/cp/cm-%C", "true"),
+      scpArgs("studio", "/cp/cm-%C", "/tmp/a", "/tmp/b", "ssh"),
+    ];
+    for (const args of batch) {
+      expect(args.filter((arg) => arg.startsWith("BatchMode="))).toEqual(["BatchMode=yes"]);
+    }
+    const signIn = buildSignInArgs("studio", "/cp/cm-%C");
+    expect(signIn.filter((arg) => arg.startsWith("BatchMode="))).toEqual(["BatchMode=no"]);
+    const probe = buildProbeArgs("studio", "/cp/cm-%C");
+    expect(signIn.map((arg) => (arg === "BatchMode=no" ? "BatchMode=yes" : arg))).toEqual(probe);
+  });
+
   it("quotes the control path so ssh keeps a path with spaces as one value", () => {
     expect(controlPathOption("/Users/g/Library/Application Support/Daintree/rh/cm-%C")).toBe(
       'ControlPath="/Users/g/Library/Application Support/Daintree/rh/cm-%C"'

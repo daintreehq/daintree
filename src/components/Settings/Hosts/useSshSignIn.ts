@@ -24,11 +24,36 @@ export type SshSignInState =
  */
 export function useSshSignIn(onSignedIn: () => void) {
   const [state, setState] = useState<SshSignInState>({ phase: "idle" });
-  const attemptRef = useRef<string | null>(null);
+  // The running sign-in and its event subscription: nothing listens while none runs.
+  const runningRef = useRef<{ attemptId: string; off: () => void } | null>(null);
 
-  useEffect(() => {
+  /** Lets go of the running sign-in, cancelling it in main when asked to. */
+  const release = (cancel: boolean) => {
+    const running = runningRef.current;
+    runningRef.current = null;
+    if (!running) return;
+    running.off();
+    if (cancel) void remoteHostsClient.cancelSshSignIn(running.attemptId).catch(() => {});
+  };
+
+  // Leaving the surface stops a sign-in still running.
+  useEffect(
+    () => () => {
+      const running = runningRef.current;
+      runningRef.current = null;
+      if (!running) return;
+      running.off();
+      void remoteHostsClient.cancelSshSignIn(running.attemptId).catch(() => {});
+    },
+    []
+  );
+
+  const start = (connection: HostConnection) => {
+    release(true);
+    const attemptId = crypto.randomUUID();
+    // Listening before asking: the first prompt can arrive before anything else.
     const off = remoteHostsClient.onSshSignInEvent((event) => {
-      if (event.attemptId !== attemptRef.current) return;
+      if (event.attemptId !== attemptId) return;
       if (event.type === "prompt") {
         const prompt = { id: event.promptId, kind: event.kind, text: event.text };
         setState((current) => (current.phase === "signing-in" ? { ...current, prompt } : current));
@@ -40,23 +65,11 @@ export function useSshSignIn(onSignedIn: () => void) {
           : current
       );
     });
-    return () => {
-      off();
-      const attemptId = attemptRef.current;
-      attemptRef.current = null;
-      if (attemptId) void remoteHostsClient.cancelSshSignIn(attemptId).catch(() => {});
-    };
-  }, []);
-
-  const start = (connection: HostConnection) => {
-    const previous = attemptRef.current;
-    if (previous) void remoteHostsClient.cancelSshSignIn(previous).catch(() => {});
-    const attemptId = crypto.randomUUID();
-    attemptRef.current = attemptId;
+    runningRef.current = { attemptId, off };
     setState({ phase: "signing-in", connection, prompt: null });
     const settle = (next: SshSignInState, signedIn = false) => {
-      if (attemptRef.current !== attemptId) return;
-      attemptRef.current = null;
+      if (runningRef.current?.attemptId !== attemptId) return;
+      release(false);
       setState(next);
       if (signedIn) onSignedIn();
     };
@@ -82,7 +95,7 @@ export function useSshSignIn(onSignedIn: () => void) {
   };
 
   const answer = (promptId: string, text: string) => {
-    const attemptId = attemptRef.current;
+    const attemptId = runningRef.current?.attemptId;
     if (!attemptId) return;
     setState((current) =>
       current.phase === "signing-in" && current.prompt?.id === promptId
@@ -97,9 +110,7 @@ export function useSshSignIn(onSignedIn: () => void) {
 
   /** Stops a running sign-in (ssh is killed) or puts away a failed one. */
   const close = () => {
-    const attemptId = attemptRef.current;
-    attemptRef.current = null;
-    if (attemptId) void remoteHostsClient.cancelSshSignIn(attemptId).catch(() => {});
+    release(true);
     setState({ phase: "idle" });
   };
 

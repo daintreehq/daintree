@@ -7,6 +7,7 @@ import { walkEagerGraph } from "./import-budget-lib.mjs";
 const BOOTSTRAP = "electron/bootstrap.ts";
 const APP_BOOT = "electron/boot/appBoot.ts";
 const RELAY = "electron/remote/host/attachStdioCli.ts";
+const ASKPASS = "electron/remote/client/sshAskpassCli.ts";
 
 /**
  * bootstrap.ts turns on the V8 compile cache, so everything it imports
@@ -158,6 +159,26 @@ describe("bootstrap compile-cache boundary", () => {
     const chunks = new Set([
       ...staticChunks(metafile, chunkOf(metafile, BOOTSTRAP)),
       ...staticChunks(metafile, chunkOf(metafile, RELAY)),
+    ]);
+    expect(forbidden(emittedInputs(metafile, chunks))).toEqual([]);
+    expect(disallowedExternals(metafile, eager, chunks)).toEqual([]);
+  });
+
+  // ssh starts it once per prompt during a sign-in, and waits on it.
+  it("enters the --ssh-askpass helper without the boot or any package", () => {
+    const toHelper = metafile.inputs[BOOTSTRAP].imports.filter((edge) => edge.path === ASKPASS);
+    expect(toHelper.map((edge) => edge.kind)).toEqual(["dynamic-import"]);
+
+    const eager = new Set([
+      ...walkEagerGraph(metafile, BOOTSTRAP),
+      ...walkEagerGraph(metafile, ASKPASS),
+    ]);
+    expect(eager.has(ASKPASS)).toBe(true);
+    expect(forbidden(eager)).toEqual([]);
+
+    const chunks = new Set([
+      ...staticChunks(metafile, chunkOf(metafile, BOOTSTRAP)),
+      ...staticChunks(metafile, chunkOf(metafile, ASKPASS)),
     ]);
     expect(forbidden(emittedInputs(metafile, chunks))).toEqual([]);
     expect(disallowedExternals(metafile, eager, chunks)).toEqual([]);

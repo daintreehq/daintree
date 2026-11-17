@@ -339,8 +339,8 @@ export function HostConnectionBanner() {
   }
 
   if (variant === "access-denied" && hostId !== null) {
-    // Fixed outside Daintree (a key, known_hosts), then tried again; the
-    // host's details show the whole of what ssh said.
+    // Fixed outside Daintree (a key, known_hosts) or by a Sign in on the
+    // host's details, which also show the whole of what ssh said; then tried again.
     return (
       <InlineStatusBanner
         title={title}
