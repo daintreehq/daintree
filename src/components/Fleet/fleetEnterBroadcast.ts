@@ -86,7 +86,7 @@ export async function runManagedFleetBroadcast(
   draft: string,
   targetIds: string[],
   perTargetOverrides?: Record<string, string>,
-  opts?: { isRetry?: boolean; draftPreview?: string; imagePaths?: readonly string[] }
+  opts?: { isRetry?: boolean; imagePaths?: readonly string[] }
 ): Promise<FleetExecutionResult> {
   // A newer broadcast pre-empts the in-flight one — leaving a stale controller
   // would race two runs against the shared progress store. Abort then take over.
@@ -96,12 +96,10 @@ export async function runManagedFleetBroadcast(
   const stopWatchingFleet = cancelWhenFleetEmpties(controller);
   // Zero-target dispatches (every pane went ineligible between snapshot and
   // send) are structural no-ops — don't mint a run record for them.
-  // `draftPreview` lets the retry path (empty draft, payload in overrides)
-  // still label its run with the literal being replayed.
   const runId =
     targetIds.length > 0
       ? useFleetRunStore.getState().beginRun(targetIds, {
-          draft: opts?.draftPreview ?? draft,
+          draft,
           isRetry: opts?.isRetry,
         })
       : null;

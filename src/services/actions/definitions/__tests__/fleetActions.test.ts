@@ -796,24 +796,46 @@ describe("fleet.retryFailures", () => {
     expect(runManagedFleetBroadcast).not.toHaveBeenCalled();
   });
 
-  it("routes the recorded payload through the managed broadcast as per-target overrides", async () => {
+  it("retries the draft as typed, so each target's recipe variables fill in again (#17513)", async () => {
     // #9950: the retry must run through the primary broadcast path so it gets
-    // batching, progress, directing-state, and a working Cancel button —
-    // passing the already-substituted payload as overrides (empty draft)
-    // bypasses recipe substitution without re-resolving a verbatim literal.
+    // batching, progress, directing-state, and a working Cancel button. The
+    // draft goes with no override for an unedited target: an override would
+    // skip its variables and send `{{branch_name}}` as braces.
     useFleetFailureStore.setState({
       failedIds: new Set(["t1", "t2"]),
-      payload: "ls\r",
+      payload: "Review {{branch_name}}",
     });
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
     expect(runManagedFleetBroadcast).toHaveBeenCalledTimes(1);
-    const call = (runManagedFleetBroadcast as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(call).toBeDefined();
-    const [draft, targets, overrides] = call as [string, string[], Record<string, string>];
-    expect(draft).toBe("");
+    const [draft, targets, overrides, opts] = vi.mocked(runManagedFleetBroadcast).mock.calls[0]!;
+    expect(draft).toBe("Review {{branch_name}}");
     expect(targets.slice().sort()).toEqual(["t1", "t2"]);
-    expect(overrides).toEqual({ t1: "ls\r", t2: "ls\r" });
+    expect(overrides).toBeUndefined();
+    expect(opts).toMatchObject({ isRetry: true });
+  });
+
+  it("sends a deliberately literal edit back as it was, beside a draft that resolves (#17513)", async () => {
+    useFleetFailureStore.getState().recordFailure("Review {{branch_name}}", ["t1", "t2"], 0, {
+      perTargetOverrides: { t2: "Review {{branch_name}} as written" },
+    });
+    const registry = await buildRegistry();
+    await run(registry, "fleet.retryFailures");
+    const [draft, targets, overrides] = vi.mocked(runManagedFleetBroadcast).mock.calls[0]!;
+    expect(draft).toBe("Review {{branch_name}}");
+    expect(targets.slice().sort()).toEqual(["t1", "t2"]);
+    expect(overrides).toEqual({ t2: "Review {{branch_name}} as written" });
+  });
+
+  it("keeps an edit that matches the draft word for word as the target's own text (#17513)", async () => {
+    useFleetFailureStore.getState().recordFailure("Review {{branch_name}}", ["t1", "t2"], 0, {
+      perTargetOverrides: { t2: "Review {{branch_name}}" },
+    });
+    const registry = await buildRegistry();
+    await run(registry, "fleet.retryFailures");
+    const [draft, , overrides] = vi.mocked(runManagedFleetBroadcast).mock.calls[0]!;
+    expect(draft).toBe("Review {{branch_name}}");
+    expect(overrides).toEqual({ t2: "Review {{branch_name}}" });
   });
 
   it("sends each target its own text again, with the broadcast's images (#15600)", async () => {
@@ -825,9 +847,10 @@ describe("fleet.retryFailures", () => {
     await run(registry, "fleet.retryFailures");
     expect(runManagedFleetBroadcast).toHaveBeenCalledTimes(1);
     const [draft, targets, overrides, opts] = vi.mocked(runManagedFleetBroadcast).mock.calls[0]!;
-    expect(draft).toBe("");
+    expect(draft).toBe("look at /tmp/shot.png");
     expect(targets.slice().sort()).toEqual(["t1", "t2", "t3"]);
-    expect(overrides).toEqual({ t1: "look at /tmp/shot.png", t2: "described in words", t3: "" });
+    // Only what was edited goes back as its own text, an emptied one included.
+    expect(overrides).toEqual({ t2: "described in words", t3: "" });
     expect(opts).toMatchObject({ isRetry: true, imagePaths: ["/tmp/shot.png"] });
   });
 
@@ -863,14 +886,20 @@ describe("fleet.retryFailures", () => {
     useFleetFailureStore.setState({
       failedIds: new Set(["t1", "t2"]),
       payload: "ls\r",
+      perTargetOverrides: { t2: "ls -la\r" },
     });
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
     expect(runManagedFleetBroadcast).toHaveBeenCalledTimes(1);
     const call = (runManagedFleetBroadcast as ReturnType<typeof vi.fn>).mock.calls[0];
-    const [, targets, overrides] = call as [string, string[], Record<string, string>];
+    const [draft, targets, overrides] = call as [
+      string,
+      string[],
+      Record<string, string> | undefined,
+    ];
+    expect(draft).toBe("ls\r");
     expect(targets).toEqual(["t1"]);
-    expect(overrides).toEqual({ t1: "ls\r" });
+    expect(overrides).toBeUndefined();
   });
 
   it("keeps a locked pane's failure for after it's unlocked, while dismissing the retried one", async () => {

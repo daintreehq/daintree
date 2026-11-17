@@ -19,7 +19,7 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 export interface FleetFailureSnapshot {
   /** Per-target ids that rejected the broadcast. */
   failedIds: Set<string>;
-  /** The literal payload that should be re-fired on retry. */
+  /** The draft as typed, recipe variables unfilled, for a retry to resolve for each target again. */
   payload: string | null;
   /**
    * How many targets of the SAME broadcast failed permanently and were
@@ -32,8 +32,9 @@ export interface FleetFailureSnapshot {
   /** The composer's image chips the broadcast carried, attached again on retry. */
   imagePaths: readonly string[];
   /**
-   * The failed targets' own text where it differed from `payload`, so a retry
-   * sends each what it was sent, not an image or a token its edit took out.
+   * The failed targets' own edits, and only those: a target with none gets
+   * `payload` resolved again, so a retry sends each what it was sent, not an
+   * image or a token its edit took out.
    */
   perTargetOverrides: Readonly<Record<string, string>>;
 }
