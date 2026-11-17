@@ -1403,24 +1403,25 @@ describe("ProjectPulseService", () => {
   });
 
   describe("project age across DST changes (#17454)", () => {
-    type LocalDay = [year: number, monthIndex: number, day: number];
-    const noon = ([y, m, d]: LocalDay) => new Date(y, m, d, 12, 0, 0, 0);
+    type Moment = [year: number, monthIndex: number, day: number, hour: number, minute: number];
+    const at = ([y, m, d, h, min]: Moment) => new Date(y, m, d, h, min, 0, 0);
+    const midnightOf = ([y, m, d]: Moment) => new Date(y, m, d, 0, 0, 0, 0);
 
-    let machineZone: string | undefined;
+    let machineZone: string;
 
     beforeEach(() => {
-      machineZone = process.env.TZ;
+      // Deleting TZ does not reset the zone on every platform, so restore the resolved name.
+      machineZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     });
 
     afterEach(() => {
-      if (machineZone === undefined) delete process.env.TZ;
-      else process.env.TZ = machineZone;
+      process.env.TZ = machineZone;
     });
 
-    async function pulseFor(first: LocalDay, commitDays: LocalDay[], today: LocalDay) {
-      vi.setSystemTime(noon(today));
-      const firstTs = Math.floor(noon(first).getTime() / 1000);
-      const commitOutput = commitDays.map((d) => Math.floor(noon(d).getTime() / 1000)).join("\n");
+    async function pulseFor(first: Moment, commits: Moment[], today: Moment) {
+      vi.setSystemTime(at(today));
+      const firstTs = Math.floor(at(first).getTime() / 1000);
+      const commitOutput = commits.map((m) => Math.floor(at(m).getTime() / 1000)).join("\n");
 
       const raw = vi.fn(async (args: string[]) => {
         const cmd = args[0];
@@ -1448,63 +1449,65 @@ describe("ProjectPulseService", () => {
       });
     }
 
+    // The endpoint times straddle the UTC date line: the first commit lands on the next UTC
+    // date and today on an earlier one, so counting UTC dates instead of local ones comes up short.
     const cases: Array<{
       name: string;
       zone: string;
-      first: LocalDay;
-      commits: LocalDay[];
-      today: LocalDay;
+      first: Moment;
+      commits: Moment[];
+      today: Moment;
       midnightGapHours: number;
       ageDays: number;
     }> = [
       {
         name: "spring forward in America/New_York, a commit on each of three dates",
         zone: "America/New_York",
-        first: [2026, 2, 7],
+        first: [2026, 2, 7, 20, 30],
         commits: [
-          [2026, 2, 7],
-          [2026, 2, 8],
-          [2026, 2, 9],
+          [2026, 2, 7, 20, 30],
+          [2026, 2, 8, 12, 0],
+          [2026, 2, 9, 10, 0],
         ],
-        today: [2026, 2, 9],
+        today: [2026, 2, 9, 10, 0],
         midnightGapHours: 47,
         ageDays: 3,
       },
       {
         name: "fall back in America/New_York, a commit on each of three dates",
         zone: "America/New_York",
-        first: [2026, 9, 31],
+        first: [2026, 9, 31, 20, 30],
         commits: [
-          [2026, 9, 31],
-          [2026, 10, 1],
-          [2026, 10, 2],
+          [2026, 9, 31, 20, 30],
+          [2026, 10, 1, 12, 0],
+          [2026, 10, 2, 10, 0],
         ],
-        today: [2026, 10, 2],
+        today: [2026, 10, 2, 10, 0],
         midnightGapHours: 49,
         ageDays: 3,
       },
       {
         name: "a span that crosses the spring change but starts days before it",
         zone: "America/New_York",
-        first: [2026, 2, 1],
+        first: [2026, 2, 1, 20, 30],
         commits: [
-          [2026, 2, 1],
-          [2026, 2, 20],
+          [2026, 2, 1, 20, 30],
+          [2026, 2, 20, 10, 0],
         ],
-        today: [2026, 2, 20],
+        today: [2026, 2, 20, 10, 0],
         midnightGapHours: 19 * 24 - 1,
         ageDays: 20,
       },
       {
         name: "spring forward in a southern-hemisphere zone (Australia/Sydney, October)",
         zone: "Australia/Sydney",
-        first: [2026, 9, 3],
+        first: [2026, 9, 3, 10, 30],
         commits: [
-          [2026, 9, 3],
-          [2026, 9, 4],
-          [2026, 9, 5],
+          [2026, 9, 3, 10, 30],
+          [2026, 9, 4, 12, 0],
+          [2026, 9, 5, 10, 30],
         ],
-        today: [2026, 9, 5],
+        today: [2026, 9, 5, 10, 30],
         midnightGapHours: 47,
         ageDays: 3,
       },
@@ -1515,13 +1518,13 @@ describe("ProjectPulseService", () => {
       async ({ zone, first, commits, today, midnightGapHours, ageDays }) => {
         process.env.TZ = zone;
         // Guards the premise: the zone took effect and the midnights are not 24h multiples.
-        const gapMs = new Date(...today).getTime() - new Date(...first).getTime();
+        const gapMs = midnightOf(today).getTime() - midnightOf(first).getTime();
         expect(gapMs / (60 * 60 * 1000)).toBe(midnightGapHours);
 
         const pulse = await pulseFor(first, commits, today);
 
         expect(pulse.projectAgeDays).toBe(ageDays);
-        expect(pulse.activeDays).toBe(commits.length);
+        expect(pulse.activeDays).toBe(new Set(commits.map(([y, m, d]) => `${y}-${m}-${d}`)).size);
         // The strip and summary render activeDays/projectAgeDays, so the numerator can never exceed it.
         expect(pulse.activeDays).toBeLessThanOrEqual(pulse.projectAgeDays);
         // Cells the heatmap greys out agree with the age: exactly the last `ageDays` cells are live.

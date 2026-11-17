@@ -334,7 +334,6 @@ export class ProjectPulseService {
     if (firstCommitDate) {
       const firstCommitDay = formatLocalDay(firstCommitDate);
 
-      // Calendar days from the first commit's day through today, inclusive
       const daysSinceFirst = countInclusiveLocalDays(firstCommitDate, new Date());
       projectAgeDays = Math.min(daysSinceFirst, rangeDays);
 
