@@ -1,7 +1,7 @@
 import { setRawStoreValue } from "../../utils/storeValues.js";
+import { AUDIT_RING_RETENTION } from "../persistence/auditRingRetention.js";
 import { auditRingStore } from "../persistence/auditRingStore.js";
 import { store } from "../../store.js";
-import { PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../../../shared/types/ipc/pluginMcpAudit.js";
 import { PluginMcpAuditService } from "./PluginMcpAuditService.js";
 import { PluginMcpConsentService } from "./PluginMcpConsentService.js";
 import { PluginMcpConsentStore } from "./PluginMcpConsentStore.js";
@@ -16,7 +16,8 @@ let rateLimiterInstance: PluginMcpRateLimiter | null = null;
  * Plugin-MCP inbound audit log singleton. Config flags are wired to the
  * `pluginMcpAudit` electron-store slice (reading via `?? {}` defends against
  * forward-compat replays where an older schema version omits the slice); the
- * ring itself lives in SQLite `audit_rings`. The spread merge keeps a legacy
+ * ring itself lives in SQLite `audit_rings`, handed the ceiling because the
+ * service already trims it to the configured limit. The spread merge keeps a legacy
  * `pluginMcpAudit.auditLog` carryover intact until the boot import
  * (legacyAuditRingImport) moves it into SQLite.
  */
@@ -34,7 +35,7 @@ export function getPluginMcpAuditService(): PluginMcpAuditService {
           auditRingStore.writeAll(
             "pluginMcpAuditLog",
             records,
-            PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS,
+            AUDIT_RING_RETENTION.pluginMcpAuditLog.max,
             options
           ),
       }

@@ -8,16 +8,15 @@ import type {
   PluginActionAuditResult,
   PluginAuditConfig,
 } from "../../shared/types/ipc/pluginAudit.js";
-import {
-  PLUGIN_AUDIT_DEFAULT_MAX_RECORDS,
-  PLUGIN_AUDIT_MAX_RECORDS,
-  PLUGIN_AUDIT_MIN_RECORDS,
-  PLUGIN_AUDIT_SCHEMA_VERSION,
-} from "../../shared/types/ipc/pluginAudit.js";
+import { PLUGIN_AUDIT_SCHEMA_VERSION } from "../../shared/types/ipc/pluginAudit.js";
 import type { ActionSource, ActionDanger } from "../../shared/types/actions.js";
 import { events } from "./events.js";
 import type { TypedEventBus } from "./events.js";
 import { auditRingStore } from "./persistence/auditRingStore.js";
+import {
+  AUDIT_RING_RETENTION,
+  normalizeAuditRingMaxRecords,
+} from "./persistence/auditRingRetention.js";
 import { store } from "../store.js";
 
 const FLUSH_DEBOUNCE_MS = 1000;
@@ -51,11 +50,17 @@ export interface PluginAuditLogStore {
 // Persists the ring in SQLite `audit_rings` so config.json stays small and
 // audit appends never re-serialize it.
 // `auditEnabled` / `auditMaxRecords` stay in config.json (`plugins`), read via
-// the injected config closures.
+// the injected config closures. The service trims the ring to the configured
+// limit, so the store is handed the ceiling and keeps the whole snapshot.
 const defaultLogStore: PluginAuditLogStore = {
   read: () => auditRingStore.readAll("pluginAuditLog"),
   write: (records, options) =>
-    auditRingStore.writeAll("pluginAuditLog", records, PLUGIN_AUDIT_DEFAULT_MAX_RECORDS, options),
+    auditRingStore.writeAll(
+      "pluginAuditLog",
+      records,
+      AUDIT_RING_RETENTION.pluginAuditLog.max,
+      options
+    ),
 };
 
 /**
@@ -139,11 +144,7 @@ export class PluginActionAuditService {
   }
 
   normalizeMaxRecords(value: unknown): number {
-    const n = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : NaN;
-    if (!Number.isFinite(n)) return PLUGIN_AUDIT_DEFAULT_MAX_RECORDS;
-    if (n < PLUGIN_AUDIT_MIN_RECORDS) return PLUGIN_AUDIT_MIN_RECORDS;
-    if (n > PLUGIN_AUDIT_MAX_RECORDS) return PLUGIN_AUDIT_MAX_RECORDS;
-    return n;
+    return normalizeAuditRingMaxRecords("pluginAuditLog", value);
   }
 
   append(input: {
