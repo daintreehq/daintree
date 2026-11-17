@@ -3,6 +3,7 @@ import {
   consumeDeferredPaletteFocusRestore,
   deferPaletteFocusRestore,
 } from "@/components/ui/paletteFocusRestore";
+import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 
 /**
  * Where the links launcher hangs: its own toolbar button, or, when the action
@@ -31,18 +32,28 @@ interface LinksLauncherState {
    */
   closeFocus: (() => HTMLElement | null) | null;
   /**
-   * The action palette's own focus return, held for a detached opening the
-   * palette opened: the launcher has no control of its own to give focus back
-   * to, and the palette's opener is where the keyboard was. Spent by the close.
+   * Where a detached opening gives focus back, since the launcher has no
+   * control of its own there: the action palette's own focus return when the
+   * palette opened it, the `…` button when a row of that menu did. Spent by
+   * the close.
    */
-  paletteRestore: (() => void) | null;
+  detachedRestore: (() => void) | null;
+  /**
+   * The `…` menu, by side, whose row asked for the launcher: it opens once
+   * that menu has closed, since the menu would otherwise hand focus back to
+   * its button over the launcher's. Spent by that menu's close.
+   */
+  deferredFromOverflow: "left" | "right" | null;
   /** Open at `origin`; already open there, only read the links again. */
   open: (origin: LinksLauncherOrigin) => void;
   /** Close the launcher — only if it is still opening `seq`, when given. */
   close: (seq?: number, focus?: (() => HTMLElement | null) | null) => void;
   requestRefresh: () => void;
+  deferFromOverflow: (side: "left" | "right") => void;
+  /** Spend a deferred opening asked for by `side`'s `…` menu, if there is one. */
+  takeDeferredFromOverflow: (side: "left" | "right") => boolean;
   takeCloseFocus: () => (() => HTMLElement | null) | null;
-  takePaletteRestore: () => (() => void) | null;
+  takeDetachedRestore: () => (() => void) | null;
 }
 
 let nextSeq = 1;
@@ -52,7 +63,8 @@ export const useLinksLauncherStore = create<LinksLauncherState>((set, get) => ({
   opening: null,
   refreshSeq: 0,
   closeFocus: null,
-  paletteRestore: null,
+  detachedRestore: null,
+  deferredFromOverflow: null,
   open: (origin) =>
     set((s) =>
       // Already open there: the same opening, read again, keeping the focus
@@ -63,7 +75,7 @@ export const useLinksLauncherStore = create<LinksLauncherState>((set, get) => ({
             opening: { origin, seq: nextSeq++ },
             refreshSeq: s.refreshSeq + 1,
             closeFocus: null,
-            paletteRestore: null,
+            detachedRestore: null,
           }
     ),
   close: (seq, focus = null) => {
@@ -73,15 +85,21 @@ export const useLinksLauncherStore = create<LinksLauncherState>((set, get) => ({
     set({ opening: null, closeFocus: focus });
   },
   requestRefresh: () => set((s) => ({ refreshSeq: s.refreshSeq + 1 })),
+  deferFromOverflow: (side) => set({ deferredFromOverflow: side }),
+  takeDeferredFromOverflow: (side) => {
+    if (get().deferredFromOverflow !== side) return false;
+    set({ deferredFromOverflow: null });
+    return true;
+  },
   takeCloseFocus: () => {
     const { closeFocus } = get();
     if (closeFocus !== null) set({ closeFocus: null });
     return closeFocus;
   },
-  takePaletteRestore: () => {
-    const { paletteRestore } = get();
-    if (paletteRestore !== null) set({ paletteRestore: null });
-    return paletteRestore;
+  takeDetachedRestore: () => {
+    const { detachedRestore } = get();
+    if (detachedRestore !== null) set({ detachedRestore: null });
+    return detachedRestore;
   },
 }));
 
@@ -112,6 +130,26 @@ export function openLinksLauncher(): void {
       restore();
       return;
     }
-    useLinksLauncherStore.setState({ paletteRestore: restore });
+    useLinksLauncherStore.setState({ detachedRestore: restore });
+  });
+}
+
+/**
+ * Open the launcher detached for a row of `side`'s `…` menu, once that menu
+ * has closed: its button can't hold the launcher's popover, so the launcher
+ * hangs at the toolbar's trailing edge and gives focus back to that `…`
+ * button when it closes, while the button is still on screen.
+ */
+export function openLinksLauncherFromOverflow(side: "left" | "right"): void {
+  useLinksLauncherStore.getState().open("detached");
+  useLinksLauncherStore.setState({
+    detachedRestore: () => {
+      const trigger = document.querySelector<HTMLElement>(
+        `[data-toolbar-overflow-trigger][data-toolbar-overflow-side="${side}"][data-visible="true"]`
+      );
+      if (trigger === null) return;
+      armTooltipFocusSuppression();
+      trigger.focus({ preventScroll: true });
+    },
   });
 }

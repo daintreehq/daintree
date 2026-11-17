@@ -140,6 +140,12 @@ installPreviewShims({
     getCurrent: async () => PREVIEW_PROJECT,
     onSwitch: () => () => {},
   }),
+  // The links launcher holds the cross-worktree dev server list from mount;
+  // `undefined` from the inert shim isn't a list, and it is iterated.
+  devPreview: withFallback({
+    getAllSessions: async () => [],
+    onAllSessionsChanged: () => () => {},
+  }),
   // The bulk worktree run chip reads the run list on mount; `undefined` from
   // the inert shim isn't a list, and the chip iterates it.
   bulkWorktreeRuns: withFallback({

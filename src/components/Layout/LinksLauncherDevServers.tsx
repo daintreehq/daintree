@@ -1,13 +1,13 @@
-import { useMemo, type MouseEvent } from "react";
+import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { CircleStop, Play, RotateCw, ServerCog, X } from "lucide-react";
+import { CircleStop, Play, RotateCw, X } from "lucide-react";
 import type { DevPreviewSessionState, DevPreviewSessionStatus } from "@shared/types/ipc/devPreview";
 import { cn } from "@/lib/utils";
 import { SeverityMark } from "@/lib/statusSeverity";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
-import { useAllDevSessions } from "@/store/allDevSessionsStore";
 import { useProjectStore } from "@/store/projectStore";
 import { scratchName, useScratchStore } from "@/store/scratchStore";
 import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
@@ -33,12 +33,39 @@ const STATUS_PRESENTATION: Record<DevPreviewSessionStatus, { label: string; dotC
   "restored-stopped": { label: "Stopped", dotClass: "bg-server-stopped" },
 };
 
-// A plain "stopped" session has no row; "restored-stopped" stays visible because
-// it is an explicit restart offer the dashboard should surface.
-const HIDDEN_STATUSES: ReadonlySet<DevPreviewSessionStatus> = new Set(["stopped"]);
+export const DEV_SERVERS_HEADING = "Dev servers";
+
+/** What the launcher knows of every dev server on this machine. */
+export interface DevSessionsSnapshot {
+  sessions: DevPreviewSessionState[];
+  hydrated: boolean;
+  fetchError: boolean;
+}
+
+/**
+ * A plain "stopped" session has no row; "restored-stopped" stays listed
+ * because it is an explicit restart offer.
+ */
+export function listedDevSessions(sessions: DevPreviewSessionState[]): DevPreviewSessionState[] {
+  return sessions.filter((session) => session.status !== "stopped");
+}
+
+/**
+ * Whether the launcher has a dev servers section to show: a row, a first load
+ * still running (its skeleton), or a load that failed (said so). With none of
+ * those the section is left out rather than shown empty.
+ */
+export function hasDevServersSection({
+  sessions,
+  hydrated,
+  fetchError,
+}: DevSessionsSnapshot): boolean {
+  return !hydrated || fetchError || listedDevSessions(sessions).length > 0;
+}
+
 // "error" is stoppable: errored sessions have no terminal, so stop() takes the
 // no-terminal branch — transitions to "stopped" and clears the error, which is
-// the only way to dismiss an errored row from the dashboard.
+// the only way to dismiss an errored row from the list.
 const STOPPABLE_STATUSES: ReadonlySet<DevPreviewSessionStatus> = new Set([
   "starting",
   "installing",
@@ -102,13 +129,13 @@ function DevServerRow({
 
   const handleRestart = () => {
     safeFireAndForget(window.electron.devPreview.restart(target), {
-      context: "Restarting dev server from dashboard",
+      context: "Restarting dev server from the links launcher",
     });
   };
 
   const handleStop = () => {
     safeFireAndForget(window.electron.devPreview.stop(target), {
-      context: "Stopping dev server from dashboard",
+      context: "Stopping dev server from the links launcher",
     });
   };
 
@@ -117,7 +144,7 @@ function DevServerRow({
   const stopLabel = isDismissableError ? "Dismiss error" : "Stop";
 
   return (
-    <li className="group flex items-center gap-2.5 pl-3 pr-2 py-1.5 hover:bg-overlay-subtle transition-colors duration-150">
+    <li className="group flex items-center gap-2.5 rounded-[var(--radius-lg)] pl-3 pr-2 py-1.5 hover:bg-overlay-subtle transition-colors duration-150">
       {isError ? (
         <SeverityMark
           severity="error"
@@ -192,7 +219,7 @@ function DevServerRow({
   );
 }
 
-function summarize(sessions: DevPreviewSessionState[]): string {
+export function summarizeDevServers(sessions: DevPreviewSessionState[]): string {
   const running = sessions.filter((s) => s.status === "running").length;
   const failed = sessions.filter((s) => s.status === "error").length;
   const parts: string[] = [];
@@ -201,13 +228,21 @@ function summarize(sessions: DevPreviewSessionState[]): string {
   return parts.join(" · ");
 }
 
-export function DevServerDashboard({
-  onHide,
+/**
+ * The launcher's section listing every dev server across this machine's
+ * worktrees, with its status and its start or restart and stop (#17251).
+ * Renders nothing when {@link hasDevServersSection} says there is nothing to
+ * show, or while a first load is too young for its skeleton.
+ */
+export function LinksLauncherDevServers({
+  snapshot,
+  sectionId,
 }: {
-  onHide?: (event: MouseEvent<HTMLButtonElement>) => void;
+  snapshot: DevSessionsSnapshot;
+  sectionId: string;
 }) {
-  const { sessions: allSessions, hydrated, fetchError } = useAllDevSessions();
-  // Select only the names this dashboard renders: the worktrees Map identity
+  const { sessions: allSessions, hydrated, fetchError } = snapshot;
+  // Select only the names this list renders: the worktrees Map identity
   // changes on every polled git-status delta, but a flat Record of primitives
   // lets useShallow skip the re-render unless a relevant name changes.
   const worktreeNames = useWorktreeStore(
@@ -223,7 +258,7 @@ export function DevServerDashboard({
   );
   // A session with no worktree (a plain folder, a scratch) is named after its
   // workspace, from every project and scratch on this machine, since the
-  // dashboard lists other projects' servers too.
+  // list shows other projects' servers too.
   const projectNames = useProjectStore(
     useShallow((s) => {
       const names: Record<string, string> = {};
@@ -247,10 +282,7 @@ export function DevServerDashboard({
     })
   );
 
-  const visibleSessions = useMemo(
-    () => allSessions.filter((s) => !HIDDEN_STATUSES.has(s.status)),
-    [allSessions]
-  );
+  const visibleSessions = useMemo(() => listedDevSessions(allSessions), [allSessions]);
   // A worktree this view can't name (another project's, or one still loading)
   // is named from its id, which is its path — by the shortest trailing part
   // that no other unnamed row shares, so two "main" checkouts don't read, and
@@ -295,41 +327,25 @@ export function DevServerDashboard({
     return names;
   }, [visibleSessions, worktreeNames, fallbackNames, projectNames, scratchNames]);
 
-  const summary = summarize(visibleSessions);
+  const summary = summarizeDevServers(visibleSessions);
   const showSkeleton = useSkeletonFloor(useSkeletonGate(!hydrated));
+  if (!hasDevServersSection(snapshot) || (!hydrated && !showSkeleton)) return null;
+  const headingId = `${sectionId}-heading`;
 
   return (
-    <section
-      aria-label="Dev servers"
-      className="flex flex-col flex-shrink-0 max-h-[40%] min-h-0 border-t border-divider bg-surface-canvas"
-    >
-      <header className="flex items-center gap-2 h-9 shrink-0 pl-3 pr-2">
-        <ServerCog className="w-3.5 h-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
-        <h2 className="text-xs font-medium text-text-primary">Dev servers</h2>
+    <section aria-labelledby={headingId}>
+      <div className="flex min-w-0 items-baseline gap-2 px-3 pt-1.5 pb-1">
+        <h2 id={headingId} className={cn(LIST_LABEL_CLASS, "shrink-0")}>
+          {DEV_SERVERS_HEADING}
+        </h2>
         {summary && (
           <span className="min-w-0 truncate text-xs tabular-nums text-text-secondary">
             {summary}
           </span>
         )}
-        <div className="flex-1" />
-        {onHide && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={onHide}
-                aria-label="Hide dev servers"
-                className={actionClass}
-              >
-                <X className={PANE_TOOLBAR_ICON_CLASS} />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Hide dev servers</TooltipContent>
-          </Tooltip>
-        )}
-      </header>
+      </div>
       {showSkeleton ? (
-        <Skeleton label="Loading dev servers" className="flex flex-col gap-3 pl-3 pr-2 pt-1.5 pb-3">
+        <Skeleton label="Loading dev servers" className="flex flex-col gap-3 px-3 pt-1.5 pb-3">
           {[0, 1].map((i) => (
             <div key={i} className="flex items-center gap-2.5">
               <SkeletonBone immediate className="w-2 h-2 rounded-full" />
@@ -340,14 +356,10 @@ export function DevServerDashboard({
             </div>
           ))}
         </Skeleton>
-      ) : !hydrated ? null : visibleSessions.length === 0 ? (
-        <p className="px-3 pb-3 text-xs text-text-secondary">
-          {fetchError
-            ? "Couldn't load dev servers"
-            : "Open a Dev server panel in any worktree to start one"}
-        </p>
+      ) : visibleSessions.length === 0 ? (
+        <p className="px-3 pb-2 text-xs text-text-secondary">Couldn't load dev servers</p>
       ) : (
-        <ul className="flex flex-col min-h-0 overflow-y-auto pb-1">
+        <ul className="flex flex-col">
           {visibleSessions.map((session) => (
             <DevServerRow
               key={rowKey(session)}

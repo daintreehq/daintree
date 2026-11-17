@@ -2,7 +2,7 @@
 import { useState } from "react";
 import fs from "fs/promises";
 import path from "path";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PortalTab } from "@shared/types";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -177,6 +177,12 @@ describe("PortalToolbar tab strip — one way in", () => {
     first!.focus();
     fireEvent.keyDown(first!, { key: "ArrowRight" });
     expect(document.activeElement).toBe(second);
+  });
+
+  it("no longer offers the dev servers list, which lives in the links launcher", () => {
+    renderToolbar("a");
+    const row = screen.getByRole("toolbar", { name: "Portal controls" });
+    expect(within(row).queryByRole("button", { name: /dev servers/i })).toBeNull();
   });
 
   it("keeps unavailable controls in that order and inert when no page is open", () => {

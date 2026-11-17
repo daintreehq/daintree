@@ -6,7 +6,7 @@ import {
   type ComponentProps,
   type ReactNode,
 } from "react";
-import { Globe } from "lucide-react";
+import { Globe, ServerCog } from "lucide-react";
 import { Link } from "@/components/icons";
 import { linkHost } from "@shared/utils/projectLinks";
 import { Badge } from "@/components/ui/badge";
@@ -34,9 +34,18 @@ import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { opensInPanel, openLinkUrl } from "@/services/openLinkUrl";
+import { useAllDevSessions } from "@/store/allDevSessionsStore";
 import { useLinksLauncherStore } from "@/store/linksLauncherStore";
 import { usePanelStore } from "@/store/panelStore";
 import { logError } from "@/utils/logger";
+import {
+  DEV_SERVERS_HEADING,
+  LinksLauncherDevServers,
+  hasDevServersSection,
+  listedDevSessions,
+  summarizeDevServers,
+  type DevSessionsSnapshot,
+} from "./LinksLauncherDevServers";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { focusToolbarControl } from "./PluginToolbarPopover";
 import { toolbarIconButtonClass } from "./toolbarItemClasses";
@@ -156,23 +165,29 @@ function openProjectLinkSettings(): void {
   );
 }
 
-/** The launcher's list: this project's links, then the person's own. */
+/**
+ * The launcher's list: this project's links, then the person's own, then the
+ * dev servers across every worktree.
+ */
 export function LinksLauncherList({
   links,
+  devSessions,
   onOpen,
   onManage,
 }: {
   links: LinksLauncherLinks;
+  devSessions: DevSessionsSnapshot;
   onOpen: (url: string) => void;
   onManage: () => void;
 }) {
   const baseId = useId();
   const { projectLinks, globalLinks } = links;
-  if (!hasLauncherLinks(links)) {
+  if (!hasLauncherLinks(links) && !hasDevServersSection(devSessions)) {
     return (
       <div className="flex flex-col items-start gap-2 p-3">
         <p className="text-xs text-text-secondary">
-          Links you or the Assistant save for this project show here.
+          Links you or the Assistant save for this project, and dev servers running in any worktree,
+          show here.
         </p>
         <Button type="button" variant="outline" size="sm" onClick={onManage}>
           Add a project link
@@ -210,6 +225,7 @@ export function LinksLauncherList({
           ))}
         </LinkSection>
       )}
+      <LinksLauncherDevServers snapshot={devSessions} sectionId={`${baseId}-dev-servers`} />
     </div>
   );
 }
@@ -230,6 +246,9 @@ function LinksLauncherPopoverContent({
   onCloseAutoFocus: NonNullable<ComponentProps<typeof PopoverContent>["onCloseAutoFocus"]>;
 }) {
   const links = useLinksLauncherLinks();
+  // Read here rather than in the section, so a server leaving the list
+  // re-runs the focus repair below like a link leaving it does.
+  const devSessions = useAllDevSessions();
   const close = useLinksLauncherStore((s) => s.close);
   const contentRef = useRef<HTMLDivElement>(null);
   // The control inside that last held focus. Kept through its removal, which
@@ -237,7 +256,8 @@ function LinksLauncherPopoverContent({
   const focusedRef = useRef<Element | null>(null);
 
   // Each opening re-reads the project's links, and the list can change under
-  // the keyboard: the row it was on, or the empty state's button, goes away
+  // the keyboard: the row it was on, a dev server's Stop, or the empty state's
+  // button goes away
   // and focus falls to the page, where the next Tab starts from the top and
   // a palette closing behind the launcher would take it back.
   useLayoutEffect(() => {
@@ -267,6 +287,7 @@ function LinksLauncherPopoverContent({
     >
       <LinksLauncherList
         links={links}
+        devSessions={devSessions}
         onOpen={(url) => {
           close(seq ?? undefined);
           openLink(url);
@@ -298,11 +319,20 @@ export function LinksLauncherToolbarButton({
   const mine = opening?.origin === "button" ? opening : null;
 
   // Gone from the toolbar with the launcher open off it (its last link
-  // removed, the button hidden): nothing would draw that opening any more.
-  useEffect(
+  // removed, its last dev server stopped from inside it): nothing would draw
+  // that opening any more. A layout cleanup, so it still sees focus inside the
+  // launcher before its nodes go; that focus would otherwise fall to the page.
+  useLayoutEffect(
     () => () => {
       const current = useLinksLauncherStore.getState().opening;
-      if (current?.origin === "button") useLinksLauncherStore.getState().close(current.seq);
+      if (current?.origin !== "button") return;
+      const active = document.activeElement;
+      const focusInside = active instanceof Element && active.closest(`[${CONTENT_ATTR}]`) !== null;
+      useLinksLauncherStore.getState().close(current.seq);
+      if (!focusInside) return;
+      setTimeout(() => {
+        if (isFocusStranded()) enterFocusedPanel(usePanelStore.getState().focusedId);
+      }, 0);
     },
     []
   );
@@ -385,10 +415,10 @@ export function LinksLauncherDetachedHost() {
         onCloseAutoFocus={(event) => {
           event.preventDefault();
           setTimeout(() => {
-            const paletteRestore = useLinksLauncherStore.getState().takePaletteRestore();
+            const detachedRestore = useLinksLauncherStore.getState().takeDetachedRestore();
             if (!isFocusStranded()) return;
             // Back where the keyboard was before the palette opened, else the panel.
-            paletteRestore?.();
+            detachedRestore?.();
             if (isFocusStranded()) enterFocusedPanel(usePanelStore.getState().focusedId);
           }, 0);
         }}
@@ -400,10 +430,14 @@ export function LinksLauncherDetachedHost() {
 /**
  * The launcher's links inlined into a `…` menu its button went into, as menu
  * rows. Mounted with the menu's content, so each opening of the menu re-reads
- * this project's list the way an opening of the popover does.
+ * this project's list the way an opening of the popover does. Dev servers
+ * have controls of their own a menu row can't hold, so one row opens the
+ * launcher for them once the menu has closed.
  */
-export function LinksLauncherOverflowItems() {
+export function LinksLauncherOverflowItems({ side }: { side: "left" | "right" }) {
   const links = useLinksLauncherLinks();
+  const { sessions } = useAllDevSessions();
+  const listedServers = listedDevSessions(sessions);
   const focusRestore = useOverlayFocusRestore();
   useEffect(() => {
     useLinksLauncherStore.getState().requestRefresh();
@@ -447,6 +481,19 @@ export function LinksLauncherOverflowItems() {
               <DropdownMenuMeta aria-hidden={false}>{linkHost(link.url)}</DropdownMenuMeta>
             </DropdownMenuItem>
           ))}
+        </DropdownMenuGroup>
+      )}
+      {listedServers.length > 0 && (
+        <DropdownMenuGroup>
+          <DropdownMenuItem
+            onSelect={() => useLinksLauncherStore.getState().deferFromOverflow(side)}
+          >
+            <ServerCog className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate">{DEV_SERVERS_HEADING}…</span>
+            <DropdownMenuMeta aria-hidden={false}>
+              {summarizeDevServers(listedServers)}
+            </DropdownMenuMeta>
+          </DropdownMenuItem>
         </DropdownMenuGroup>
       )}
     </>

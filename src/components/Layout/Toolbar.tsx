@@ -155,6 +155,7 @@ import { ForgeStatsPlaceholder } from "./ForgeStatsPlaceholder";
 import { LinksLauncherDetachedHost, LinksLauncherToolbarButton } from "./LinksLauncher";
 import {
   hasLauncherLinks,
+  useHasLiveDevServer,
   useLinksLauncherLinks,
   useLinksLauncherRefresh,
 } from "@/hooks/useLinksLauncher";
@@ -850,6 +851,7 @@ export function Toolbar({
   const pluginMetaById = usePluginRuntimeStore((s) => s.pluginMetaById);
   useLinksLauncherRefresh();
   const hasLinks = hasLauncherLinks(useLinksLauncherLinks());
+  const hasLiveDevServer = useHasLiveDevServer();
 
   const buttonRegistry = useMemo<
     Record<string, { render: () => React.ReactNode; isAvailable: boolean }>
@@ -1227,11 +1229,12 @@ export function Toolbar({
         // haven't enabled developer tools (the default).
         isAvailable: showDeveloperTools || watcherDegraded || topologyWatcherDark,
       },
-      // Shown only with a link to open; the palette's `links.open` still opens
-      // the launcher without it (`LinksLauncherDetachedHost`).
+      // Shown only with a link to open or a dev server live somewhere; the
+      // palette's `links.open` still opens the launcher without either
+      // (`LinksLauncherDetachedHost`).
       "links-launcher": {
         render: () => <LinksLauncherToolbarButton key="links-launcher" data-toolbar-item="" />,
-        isAvailable: hasLinks,
+        isAvailable: hasLinks || hasLiveDevServer,
       },
       "assistant-toggle": {
         render: () => <ToolbarAssistantButton key="assistant-toggle" data-toolbar-item="" />,
@@ -1348,6 +1351,7 @@ export function Toolbar({
       fileBrowserAriaShortcut,
       fileBrowserHintHover,
       hasLinks,
+      hasLiveDevServer,
     ]
   );
 
