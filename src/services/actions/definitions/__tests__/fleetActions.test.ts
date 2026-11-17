@@ -114,6 +114,7 @@ function resetStores(): void {
     armOrder: [],
     armOrderById: {},
     lastArmedId: null,
+    crossHostTargets: [],
   });
   useFleetPendingActionStore.setState({ pending: null });
   useFleetFailureStore.getState().clear();
@@ -944,6 +945,63 @@ describe("fleet.retryFailures", () => {
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
     expect(useFleetFailureStore.getState().failedIds.size).toBe(0);
+  });
+
+  it("keeps the failure of another host's agent a cancelled retry never reached (#17514)", async () => {
+    const reached = "host-fleet:studio:r-1";
+    const unreached = "host-fleet:studio:r-2";
+    const removed = "host-fleet:studio:r-3";
+    seedPanels([makeAgent("t1")]);
+    useFleetArmingStore.getState().armIds(["t1"]);
+    for (const terminalId of ["r-1", "r-2", "r-3"]) {
+      useFleetArmingStore.getState().armCrossHostTarget({
+        key: `host-fleet:studio:${terminalId}`,
+        hostId: "studio",
+        hostName: "Studio",
+        terminalId,
+        title: terminalId,
+      });
+    }
+    // Cancelled after the first batch: the local pane and one remote agent were
+    // sent, and the other two remote agents' batch never went out. One of those
+    // left the fleet while the retry ran.
+    vi.mocked(runManagedFleetBroadcast).mockImplementationOnce(async () => {
+      expect(useFleetArmingStore.getState().crossHostTargets.map((t) => t.key)).toContain(removed);
+      useFleetArmingStore.getState().disarmCrossHostTarget(removed);
+      expect(useFleetArmingStore.getState().crossHostTargets.map((t) => t.key)).not.toContain(
+        removed
+      );
+      return {
+        total: 2,
+        successCount: 2,
+        failureCount: 0,
+        perTarget: [
+          { terminalId: "t1", status: "fulfilled" },
+          { terminalId: reached, status: "fulfilled" },
+        ],
+        failedIds: [],
+        permanentlyFailedIds: [],
+        transientlyFailedIds: [],
+        cancelled: true,
+        skippedCount: 2,
+      };
+    });
+    useFleetFailureStore.getState().recordFailure("ls\r", ["t1", reached, unreached, removed], 0, {
+      perTargetOverrides: { [unreached]: "ls -la\r", [removed]: "pwd\r" },
+    });
+    const registry = await buildRegistry();
+    await run(registry, "fleet.retryFailures");
+    expect(vi.mocked(runManagedFleetBroadcast).mock.calls[0]?.[1]).toEqual([
+      "t1",
+      reached,
+      unreached,
+      removed,
+    ]);
+    const s = useFleetFailureStore.getState();
+    expect([...s.failedIds]).toEqual([unreached]);
+    // Its Retry still sends what it was sent the first time.
+    expect(s.payload).toBe("ls\r");
+    expect(s.perTargetOverrides).toEqual({ [unreached]: "ls -la\r" });
   });
 
   it("leaves out, and keeps failed, another host's agent whose safe retry window has passed", async () => {

@@ -303,17 +303,16 @@ export const fleetActionRuns = {
       // left out rather than retried: its failure stays so it can be retried
       // once it's unlocked. One that left the fleet was left out for good, so
       // its failure goes rather than leaving a Retry that never reaches it.
+      // Another host's agent is armed beside this view's panes, not in
+      // `armedIds`, and one a cancel kept from its batch still needs its Retry.
       const sent = new Set(result.perTarget.map((t) => t.terminalId));
       const { panelsById } = usePanelStore.getState();
-      const { armedIds } = useFleetArmingStore.getState();
+      const { armedIds, crossHostTargets } = useFleetArmingStore.getState();
+      const isStillTarget = (id: string) =>
+        crossHostTargets.some((t) => t.key === id) ||
+        (armedIds.has(id) && isFleetArmEligible(getNarrowPanel(panelsById, id)));
       for (const id of targets) {
-        if (
-          !sent.has(id) &&
-          armedIds.has(id) &&
-          isFleetArmEligible(getNarrowPanel(panelsById, id))
-        ) {
-          continue;
-        }
+        if (!sent.has(id) && isStillTarget(id)) continue;
         if (!stillFailed.has(id) && !awaitingConfirmation.has(id)) {
           useFleetFailureStore.getState().dismissId(id);
         }
