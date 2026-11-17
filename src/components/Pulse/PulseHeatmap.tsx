@@ -1,11 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type {
-  CSSProperties,
-  FocusEvent,
-  KeyboardEvent,
-  MouseEvent,
-  PointerEvent,
-} from "react";
+import type { CSSProperties, FocusEvent, KeyboardEvent, MouseEvent, PointerEvent } from "react";
 import type { HeatCell, PulseRangeDays } from "@shared/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
