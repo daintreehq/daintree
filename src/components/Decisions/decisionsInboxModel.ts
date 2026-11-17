@@ -92,11 +92,6 @@ export function referenceKey(reference: DecisionQuestionReference): string {
   );
 }
 
-/** Whether two references name the same question. */
-export function sameReference(a: DecisionQuestionReference, b: DecisionQuestionReference): boolean {
-  return referenceKey(a) === referenceKey(b);
-}
-
 /** The question's state, in the chip's words. One sentence, sentence case, no period. */
 export function standingText(standing: DecisionQuestionStanding): string {
   switch (standing.kind) {
@@ -154,12 +149,12 @@ export function worktreeName(
 }
 
 /** Where the question was asked, as the row names it: the agent, then its project and worktree. */
-export function originText(parts: {
+export function originFacts(parts: {
   agent: string;
   project: string | null;
   worktree: string | null;
-}): string {
-  return [parts.agent, parts.project, parts.worktree].filter((part) => part !== null).join(" · ");
+}): string[] {
+  return [parts.agent, parts.project, parts.worktree].filter((part) => part !== null);
 }
 
 /** What the inbox says above its groups, or null when nothing needs saying. */
@@ -202,15 +197,31 @@ export interface ConnectionNotice {
   text: string;
 }
 
+/** Why a relay that is set up isn't connected to, as Settings → Decisions shows it. */
+const PROBLEMS: Record<NonNullable<DecisionsStatus["problem"]>, string> = {
+  keys: "This computer's Decisions keys couldn't be read, so it isn't connected to the relay.",
+  storage:
+    "The Decisions database on this computer couldn't be opened, so no questions can be read or kept.",
+  "other-relay":
+    "The Decisions database on this computer holds another relay's questions, so it isn't connected to this one.",
+};
+
 /**
  * What the inbox says while this computer isn't connected to its relay: that
- * none is set up yet, that the relay revoked it, or that it is connecting.
- * Null while connected, or before main has said.
+ * none is set up yet, why one that is can't be connected to, that the relay
+ * revoked it, or that it is connecting. Null while connected, or before main
+ * has said.
  */
 export function connectionNotice(
-  status: Pick<DecisionsStatus, "state" | "relayOrigin"> | null
+  status: Pick<DecisionsStatus, "state" | "relayOrigin" | "problem"> | null
 ): ConnectionNotice | null {
   if (status === null || status.state === "connected" || status.state === "off") return null;
+  if (status.problem !== undefined) {
+    return {
+      severity: "warning",
+      text: `${PROBLEMS[status.problem]} Settings → Decisions says what to do.`,
+    };
+  }
   if (status.relayOrigin === undefined) {
     return {
       severity: "info",

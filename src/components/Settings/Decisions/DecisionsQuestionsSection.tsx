@@ -143,16 +143,17 @@ export function DecisionsQuestionsSection({
           id="decisions-questions-inbox"
           label="Inbox"
           description="Every question your agents asked on this computer: what waits on you, what's being delivered, and what was decided"
-          control={
+          control={({ descriptionId }) => (
             <Button
               variant="outline"
               size="sm"
+              aria-describedby={descriptionId}
               onClick={showInbox}
               data-testid="decisions-inbox-open"
             >
-              Open
+              Open inbox
             </Button>
-          }
+          )}
         />
         <SettingsRow
           id="decisions-questions-attention"

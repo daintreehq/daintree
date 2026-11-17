@@ -21,6 +21,10 @@ afterEach(() => {
 describe("DecisionsInboxHost (#17231)", () => {
   it("loads nothing until the inbox is first opened, then mounts it", async () => {
     render(<DecisionsInboxHost />);
+    // Any import started on mount has had its chance to land.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
     expect(screen.queryByTestId("inbox-dialog")).toBeNull();
     expect(loaded).not.toHaveBeenCalled();
 

@@ -12,10 +12,9 @@ import {
   groupOf,
   inboxGroups,
   isAttention,
-  originText,
+  originFacts,
   referenceKey,
   resolveSelection,
-  sameReference,
   standingText,
   worktreeName,
 } from "../decisionsInboxModel";
@@ -67,19 +66,27 @@ describe("decisionsInboxModel", () => {
     const groups = inboxGroups([
       item("q1", { kind: "settled", outcome: "expired" }),
       item("q2", OPEN),
+      item("q5", { kind: "needs-attention", deliveryStatus: "needs-attention" }),
       item("q3", { kind: "to-type" }),
       item("q4", { kind: "queued" }),
     ]);
-    expect(groups.map((group) => group.id)).toEqual(["needs-you", "delivering", "history"]);
+    expect(groups.map((group) => group.id)).toEqual([
+      "needs-you",
+      "delivering",
+      "attention",
+      "history",
+    ]);
     expect(groups[0]!.items.map((entry) => entry.reference.questionId)).toEqual(["q2", "q4"]);
   });
 
   it("shows the most recently closed history first, by settled time else asked time", () => {
+    // Asked in the opposite order to the one they settled in.
     const groups = inboxGroups([
       item(
         "q1",
         { kind: "settled", outcome: "answered", handled: false },
         {
+          askedAt: "2026-11-02T09:00:00.000Z",
           settledAt: "2026-11-02T12:00:00.000Z",
         }
       ),
@@ -94,6 +101,7 @@ describe("decisionsInboxModel", () => {
         "q3",
         { kind: "settled", outcome: "expired" },
         {
+          askedAt: "2026-11-02T10:30:00.000Z",
           settledAt: "2026-11-02T11:00:00.000Z",
         }
       ),
@@ -165,6 +173,16 @@ describe("decisionsInboxModel", () => {
     }
   });
 
+  it("says a handled answer was handled, and never that a settled answer was typed in", () => {
+    const handled = standingText({ kind: "settled", outcome: "answered", handled: true });
+    const answered = standingText({ kind: "settled", outcome: "answered", handled: false });
+    expect(handled).toMatch(/handled/i);
+    expect(answered).not.toMatch(/handled/i);
+    // Settled says only that it was answered: how far the answer got isn't the list's to say.
+    expect(answered).not.toMatch(/typed/i);
+    expect(handled).not.toMatch(/typed/i);
+  });
+
   it("marks only what needs a person's decision about its delivery", () => {
     expect(isAttention({ kind: "needs-attention", deliveryStatus: "needs-attention" })).toBe(true);
     expect(isAttention({ kind: "send-failed" })).toBe(false);
@@ -182,18 +200,26 @@ describe("decisionsInboxModel", () => {
     expect(worktreeName({ worktreeRoot: "" }, null)).toBeNull();
   });
 
-  it("joins where a question was asked, leaving out what isn't known", () => {
-    expect(originText({ agent: "Claude", project: "Daintree", worktree: "main" })).toBe(
-      "Claude · Daintree · main"
-    );
-    expect(originText({ agent: "Codex", project: null, worktree: null })).toBe("Codex");
+  it("names where a question was asked by the facts that are known, in order", () => {
+    expect(originFacts({ agent: "Claude", project: "Daintree", worktree: "main" })).toEqual([
+      "Claude",
+      "Daintree",
+      "main",
+    ]);
+    expect(originFacts({ agent: "Codex", project: null, worktree: "w" })).toEqual(["Codex", "w"]);
   });
 
-  it("tells references apart by every part", () => {
-    const a = item("q1", OPEN).reference;
-    expect(sameReference(a, { ...a })).toBe(true);
-    expect(sameReference(a, { ...a, projectId: "p2" })).toBe(false);
-    expect(referenceKey(a)).not.toBe(referenceKey({ ...a, terminalId: "t2" }));
+  it("tells references apart by each of their four parts", () => {
+    const base = item("q1", OPEN).reference;
+    const keys = new Set([
+      referenceKey(base),
+      referenceKey({ ...base, hostId: "h2" }),
+      referenceKey({ ...base, projectId: "p2" }),
+      referenceKey({ ...base, terminalId: "t2" }),
+      referenceKey({ ...base, questionId: "q2" }),
+    ]);
+    expect(keys.size).toBe(5);
+    expect(referenceKey({ ...base })).toBe(referenceKey(base));
   });
 
   it("keeps the chosen question, else the one now in its place, else the opener's, else the first", () => {
@@ -221,14 +247,27 @@ describe("decisionsInboxModel", () => {
     expect(connectionNotice({ state: "off" })).toBeNull();
   });
 
-  it("tells no relay set up, a revoked computer and a dropped connection apart", () => {
+  it("tells no relay set up, a problem, a revoked computer and a dropped connection apart", () => {
+    const origin = "https://r.example";
     const none = connectionNotice({ state: "not-connected" });
-    const revoked = connectionNotice({ state: "revoked", relayOrigin: "https://r.example" });
-    const dropped = connectionNotice({ state: "reconnecting", relayOrigin: "https://r.example" });
-    const connecting = connectionNotice({ state: "connecting", relayOrigin: "https://r.example" });
-    expect(none).not.toBeNull();
-    expect(revoked?.severity).toBe("warning");
-    expect(dropped).toEqual(connecting);
-    expect(new Set([none?.text, revoked?.text, dropped?.text]).size).toBe(3);
+    const storage = connectionNotice({
+      state: "not-connected",
+      relayOrigin: origin,
+      problem: "storage",
+    });
+    const keys = connectionNotice({ state: "not-connected", relayOrigin: origin, problem: "keys" });
+    const revoked = connectionNotice({ state: "revoked", relayOrigin: origin });
+    const dropped = connectionNotice({ state: "reconnecting", relayOrigin: origin });
+    const connecting = connectionNotice({ state: "connecting", relayOrigin: origin });
+    const notices = [none, storage, keys, revoked, dropped];
+    for (const notice of notices) expect(notice).not.toBeNull();
+    expect(new Set(notices.map((notice) => notice!.text)).size).toBe(notices.length);
+    expect(connecting).toEqual(dropped);
+    // A problem or a revocation isn't something that waits for a reconnect.
+    for (const stopped of [storage, keys, revoked]) {
+      expect(stopped!.severity).toBe("warning");
+      expect(stopped!.text).not.toMatch(/reconnect/);
+    }
+    expect(dropped!.text).toMatch(/reconnect/);
   });
 });

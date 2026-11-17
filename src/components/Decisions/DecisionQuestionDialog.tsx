@@ -187,7 +187,10 @@ export function DecisionQuestionDialog() {
         initialFocus="surface"
         restoreFocusTo={restoreFocusTo}
         // Content is never kept past the close.
-        onCloseComplete={reader.release}
+        onCloseComplete={() => {
+          reader.release();
+          cancel.release();
+        }}
         data-testid="decision-question-dialog"
       >
         <AppDialog.Header>
@@ -236,7 +239,11 @@ export function DecisionQuestionDialog() {
           </AppDialog.Footer>
         )}
       </AppDialog>
-      <DecisionCancelDialog {...cancel.dialog} restoreFocusTo={() => cancelRef.current} />
+      <DecisionCancelDialog
+        key={cancel.generation}
+        {...cancel.dialog}
+        restoreFocusTo={() => cancelRef.current}
+      />
     </>
   );
 }

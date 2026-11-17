@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { DecisionsIcon, TriangleAlert } from "@/components/icons";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
+import { FactRun } from "@/components/ui/FactSeparator";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import {
@@ -40,12 +41,13 @@ import {
   emptyText,
   inboxGroups,
   isAttention,
-  originText,
+  originFacts,
   referenceKey,
   resolveSelection,
   standingText,
   worktreeName,
   type InboxChoice,
+  type InboxGroup,
 } from "./decisionsInboxModel";
 import {
   useDecisionQuestionReader,
@@ -59,38 +61,46 @@ const PANE_CHIP = '[data-testid="terminal-decisions-chip"]';
 /** The IPC read takes at most this many references at once. */
 const SUMMARY_BATCH = 64;
 
+/** While another project's question is shown, how often its terminal is looked for again. */
+const REACH_RECHECK_MS = 15_000;
+
 type ListRead =
   { state: "loading" } | { state: "failed" } | { state: "listed"; list: DecisionQuestionList };
 
+const LOADING: ListRead = { state: "loading" };
 const NO_LINES: ReadonlyMap<string, string | null> = new Map();
 const NO_WORKTREES = new Map<string, WorktreeSnapshot>();
 
-/** This computer's questions while the inbox is open and Decisions is on; `retry` watches afresh. */
-function useQuestionList(active: boolean): { read: ListRead; retry: () => void } {
-  const [read, setRead] = useState<ListRead>({ state: "loading" });
+/**
+ * This computer's questions while the inbox is open and Decisions is on, as
+ * this opening read them: a list from an earlier opening is never shown, so
+ * the first question picked is one this opening listed. `retry` watches afresh.
+ */
+function useQuestionList(active: boolean, opening: number): { read: ListRead; retry: () => void } {
+  const [read, setRead] = useState<{ opening: number; read: ListRead } | null>(null);
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     if (!active) return;
     return decisionsClient.watchQuestions(
-      (list) => setRead({ state: "listed", list }),
-      () => setRead({ state: "failed" })
+      (list) => setRead({ opening, read: { state: "listed", list } }),
+      () => setRead({ opening, read: { state: "failed" } })
     );
-  }, [active, attempt]);
+  }, [active, opening, attempt]);
   const retry = useCallback(() => {
-    setRead({ state: "loading" });
+    setRead(null);
     setAttempt((n) => n + 1);
   }, []);
-  return { read, retry };
+  return { read: read !== null && read.opening === opening ? read.read : LOADING, retry };
 }
 
-/** Decisions' status while the inbox is open, for what it says about the relay. */
-function useInboxStatus(active: boolean): DecisionsStatus | null {
-  const [status, setStatus] = useState<DecisionsStatus | null>(null);
+/** Decisions' status while the inbox is open, as this opening read it. */
+function useInboxStatus(active: boolean, opening: number): DecisionsStatus | null {
+  const [status, setStatus] = useState<{ opening: number; status: DecisionsStatus } | null>(null);
   useEffect(() => {
     if (!active) return;
-    return decisionsClient.watchStatus(setStatus);
-  }, [active]);
-  return active ? status : null;
+    return decisionsClient.watchStatus((next) => setStatus({ opening, status: next }));
+  }, [active, opening]);
+  return active && status !== null && status.opening === opening ? status.status : null;
 }
 
 /**
@@ -107,11 +117,16 @@ function useQuestionLines(
   const asked = useRef(new Set<string>());
   const opening = useRef(0);
 
+  // Anything still on its way belongs to the opening, or the mount, that ended.
+  const forget = useCallback(() => {
+    opening.current += 1;
+    asked.current = new Set();
+  }, []);
+  useEffect(() => forget, [forget]);
+
   useEffect(() => {
     if (!active) {
-      // Anything still on its way belongs to the opening that ended.
-      opening.current += 1;
-      asked.current = new Set();
+      forget();
       return;
     }
     const missing = items.filter((item) => !asked.current.has(referenceKey(item.reference)));
@@ -143,7 +158,7 @@ function useQuestionLines(
         });
       }
     })();
-  }, [active, items]);
+  }, [active, items, forget]);
 
   const release = useCallback(() => setLines(NO_LINES), []);
   return { lines, release };
@@ -152,13 +167,29 @@ function useQuestionLines(
 /** Where the terminal that asked can be gone to: in this view, or in another project's. */
 type TerminalReach = "here" | "elsewhere" | null;
 
+/** Whether this computer still runs another project's terminal, out of the trash. */
+async function runsTerminal(terminalId: string, projectId: string): Promise<boolean> {
+  const terminals = await terminalClient.getAll();
+  return terminals.some(
+    (terminal) =>
+      terminal.id === terminalId &&
+      terminal.projectId === projectId &&
+      terminal.isTrashed !== true &&
+      terminal.hasPty !== false
+  );
+}
+
 /**
  * Whether the terminal that asked the question is still open on this
- * computer. This view's own panels answer for this project; for another, the
- * terminals this computer runs. A Remote Host window's terminals are another
- * computer's, so from one it offers nothing.
+ * computer. This view's own panels answer for this project, as they change;
+ * for another, the terminals this computer runs, looked for again every few
+ * seconds. A Remote Host window's terminals are another computer's, so from
+ * one it offers nothing.
  */
-function useTerminalReach(item: DecisionQuestionListItem | null, active: boolean): TerminalReach {
+function useTerminalReach(
+  item: DecisionQuestionListItem | null,
+  active: boolean
+): { reach: TerminalReach; recheck: () => void } {
   const remote = isRemoteWindow();
   const terminalId = item?.reference.terminalId ?? null;
   const projectId = item?.reference.projectId ?? null;
@@ -170,41 +201,43 @@ function useTerminalReach(item: DecisionQuestionListItem | null, active: boolean
   });
   const key = item === null ? null : referenceKey(item.reference);
   const [found, setFound] = useState<{ key: string; open: boolean } | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     if (!active || remote || here || key === null || terminalId === null || projectId === null) {
       return;
     }
     let live = true;
-    terminalClient.getAll().then(
-      (terminals) => {
-        if (!live) return;
-        const open = terminals.some(
-          (terminal) =>
-            terminal.id === terminalId &&
-            terminal.projectId === projectId &&
-            terminal.isTrashed !== true &&
-            terminal.hasPty !== false
-        );
-        setFound({ key, open });
-      },
-      () => {
-        if (live) setFound({ key, open: false });
-      }
-    );
+    const look = () => {
+      runsTerminal(terminalId, projectId).then(
+        (open) => {
+          if (live) setFound({ key, open });
+        },
+        () => {
+          if (live) setFound({ key, open: false });
+        }
+      );
+    };
+    look();
+    const timer = setInterval(look, REACH_RECHECK_MS);
     return () => {
       live = false;
+      clearInterval(timer);
     };
-  }, [active, remote, here, key, terminalId, projectId]);
+  }, [active, remote, here, key, terminalId, projectId, attempt]);
 
-  if (item === null || remote) return null;
-  if (here) return openHere ? "here" : null;
-  return found !== null && found.key === key && found.open ? "elsewhere" : null;
+  const recheck = useCallback(() => setAttempt((n) => n + 1), []);
+  if (item === null || remote) return { reach: null, recheck };
+  if (here) return { reach: openHere ? "here" : null, recheck };
+  return {
+    reach: found !== null && found.key === key && found.open ? "elsewhere" : null,
+    recheck,
+  };
 }
 
 function ListSkeleton() {
   return (
-    <Skeleton label="Loading questions" className="flex flex-col gap-3 px-3 py-3">
+    <Skeleton label="Loading questions" className="flex flex-col gap-3 px-1 py-1">
       <SkeletonBone className="h-3 w-1/3" />
       <SkeletonBone className="h-9 w-full" />
       <SkeletonBone className="h-9 w-full" />
@@ -215,6 +248,7 @@ function ListSkeleton() {
 
 function InboxRow({
   item,
+  rowKey,
   line,
   origin,
   selected,
@@ -224,8 +258,9 @@ function InboxRow({
   onSelect,
 }: {
   item: DecisionQuestionListItem;
+  rowKey: string;
   line: string | null;
-  origin: string;
+  origin: readonly string[];
   selected: boolean;
   tabStop: boolean;
   rowRef: (element: HTMLElement | null) => void;
@@ -242,6 +277,7 @@ function InboxRow({
         tabIndex={tabStop ? 0 : -1}
         aria-current={selected || undefined}
         data-roving-row=""
+        data-inbox-key={rowKey}
         data-selected={selected ? "true" : undefined}
         onFocus={onFocus}
         onClick={onSelect}
@@ -278,9 +314,119 @@ function InboxRow({
           )}
           {standingText(item.standing)}
         </span>
-        <span className="w-full truncate text-2xs text-text-secondary">{origin}</span>
+        <span className="w-full truncate text-2xs text-text-secondary">
+          <FactRun facts={origin} />
+        </span>
       </button>
     </li>
+  );
+}
+
+/**
+ * The grouped list, one tab stop with the arrow keys moving it, mounted only
+ * while the dialog is: what it holds of the rows goes with the close.
+ */
+function InboxList({
+  groups,
+  lines,
+  originOf,
+  selectedKey,
+  onSelect,
+}: {
+  groups: readonly InboxGroup[];
+  lines: ReadonlyMap<string, string | null>;
+  originOf: (item: DecisionQuestionListItem) => readonly string[];
+  selectedKey: string | null;
+  onSelect: (key: string, index: number) => void;
+}) {
+  const listRef = useRef<HTMLDivElement>(null);
+  const labelId = useId();
+  const ordered = groups.flatMap((group) => group.items);
+  const keys = ordered.map((item) => referenceKey(item.reference));
+  const roving = useRovingRows({ keys, preferredKey: selectedKey, containerRef: listRef });
+  // The row the keyboard was on, until focus goes somewhere else on purpose.
+  const lastFocused = useRef<string | null>(null);
+  const shape = groups
+    .flatMap((group) => group.items.map((item) => `${group.id}:${referenceKey(item.reference)}`))
+    .join("\n");
+
+  // A row that moves to another group is a new element, and the old one took
+  // focus with it; the keyboard goes back to the row, or to the list's stop.
+  useLayoutEffect(() => {
+    const key = lastFocused.current;
+    const list = listRef.current;
+    if (key === null || list === null) return;
+    const focused = document.activeElement;
+    if (focused !== null && focused !== document.body && focused.isConnected) return;
+    const row =
+      list.querySelector<HTMLElement>(`[data-inbox-key="${CSS.escape(key)}"]`) ??
+      list.querySelector<HTMLElement>('[data-roving-row][tabindex="0"]');
+    row?.focus({ preventScroll: true });
+  }, [shape]);
+
+  return (
+    <div
+      ref={listRef}
+      onKeyDown={roving.onKeyDown}
+      tabIndex={roving.containerProps.tabIndex}
+      onFocus={roving.containerProps.onFocus}
+      onBlur={(event) => {
+        const next = event.relatedTarget;
+        if (next instanceof Node && !event.currentTarget.contains(next)) {
+          lastFocused.current = null;
+        }
+        roving.containerProps.onBlur(event);
+      }}
+      role="region"
+      aria-labelledby={labelId}
+      className="flex flex-col gap-3"
+      data-testid="decisions-inbox-groups"
+    >
+      <span id={labelId} className="sr-only">
+        Questions
+      </span>
+      {groups.map((group) => {
+        const headingId = `${labelId}-${group.id}`;
+        return (
+          <section
+            key={group.id}
+            aria-labelledby={headingId}
+            className="flex flex-col gap-0.5"
+            data-testid={`decisions-inbox-group-${group.id}`}
+          >
+            <h3
+              id={headingId}
+              className={cn(PALETTE_SECTION_LABEL_CLASS, "flex items-baseline gap-1.5 px-1")}
+            >
+              {group.title}
+              <span className="tabular-nums">{group.items.length.toLocaleString()}</span>
+            </h3>
+            <ul className="flex flex-col gap-0.5">
+              {group.items.map((item) => {
+                const key = referenceKey(item.reference);
+                return (
+                  <InboxRow
+                    key={key}
+                    item={item}
+                    rowKey={key}
+                    line={lines.get(key) ?? null}
+                    origin={originOf(item)}
+                    selected={key === selectedKey}
+                    tabStop={key === roving.tabStopKey}
+                    rowRef={roving.rowRef(key)}
+                    onFocus={() => {
+                      lastFocused.current = key;
+                      roving.onRowFocus(key);
+                    }}
+                    onSelect={() => onSelect(key, keys.indexOf(key))}
+                  />
+                );
+              })}
+            </ul>
+          </section>
+        );
+      })}
+    </div>
   );
 }
 
@@ -300,27 +446,29 @@ export function DecisionsInboxDialog() {
   const active = isOpen && on;
   useDecisionsReaderRetention(isOpen, close);
 
-  const { read: listRead, retry } = useQuestionList(active);
-  const status = useInboxStatus(active);
+  const { read: listRead, retry } = useQuestionList(active, request.seq);
+  const status = useInboxStatus(active, request.seq);
   const notice = connectionNotice(status);
   const questions = listRead.state === "listed" ? listRead.list.questions : null;
   const groups = questions === null ? [] : inboxGroups(questions);
   const ordered = groups.flatMap((group) => group.items);
   const { lines, release: releaseLines } = useQuestionLines(ordered, active);
 
+  const remote = isRemoteWindow();
   const projects = useProjectStore((state) => state.projects);
   const worktrees = useWorktreeStoreOptional((state) => state.worktrees, NO_WORKTREES);
   const viewWorkspace = getViewWorkspaceId();
-  const originOf = (item: DecisionQuestionListItem): string => {
+  // A Remote Host window's projects are another computer's, whatever their
+  // ids: a question there keeps the names it was asked under.
+  const originOf = (item: DecisionQuestionListItem): string[] => {
+    const local = !remote && item.reference.projectId === viewWorkspace;
     const project =
-      projects.find((candidate) => candidate.id === item.reference.projectId)?.name ??
+      (remote
+        ? undefined
+        : projects.find((candidate) => candidate.id === item.reference.projectId)?.name) ??
       item.projectLabel;
-    // Only this view's project knows its worktrees by name.
-    const known =
-      item.reference.projectId === viewWorkspace
-        ? (worktreeDisplayName(worktrees.get(item.worktreeId)) ?? null)
-        : null;
-    return originText({
+    const known = local ? (worktreeDisplayName(worktrees.get(item.worktreeId)) ?? null) : null;
+    return originFacts({
       agent: agentName(item.agentKind),
       project,
       worktree: worktreeName(item, known),
@@ -351,37 +499,21 @@ export function DecisionsInboxDialog() {
   const shownTarget = selectedKey !== null && target?.key === selectedKey ? target.target : null;
   const reader = useDecisionQuestionReader(shownTarget, active);
   const cancel = useQuestionCancel(shownTarget, reader, isOpen);
-  const reach = useTerminalReach(selected, active);
+  const { reach, recheck } = useTerminalReach(selected, active);
 
-  const listRef = useRef<HTMLDivElement>(null);
   const detailRef = useRef<HTMLElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
-  const keys = ordered.map((item) => referenceKey(item.reference));
-  const roving = useRovingRows({ keys, preferredKey: selectedKey, containerRef: listRef });
   const detailHeadingId = useId();
-  const listLabelId = useId();
 
-  // Where the person went from here: the close leaves focus to the terminal.
+  // Where the person went from this opening: the close hands focus to the
+  // terminal, and nothing of it outlives the opening it was asked in.
   const [handoff, setHandoff] = useState<{
+    seq: number;
     terminalId: string;
     projectId: string;
     reach: "here" | "elsewhere";
   } | null>(null);
-
-  // Opened before the list had loaded, focus waits on the dialog's surface; it
-  // goes to the question shown once there is one, unless the person already
-  // moved it to a control of their own.
-  const focusedOpening = useRef(-1);
-  useEffect(() => {
-    const list = listRef.current;
-    if (!isOpen || selectedKey === null || list === null) return;
-    if (focusedOpening.current === request.seq) return;
-    focusedOpening.current = request.seq;
-    const focused = document.activeElement;
-    // The surface, or nothing at all, holds the list rather than sitting in it.
-    if (!(focused instanceof HTMLElement) || !focused.contains(list)) return;
-    list.querySelector<HTMLElement>('[data-testid="decisions-inbox-row"][tabindex="0"]')?.focus();
-  }, [isOpen, selectedKey, request.seq]);
+  const going = handoff !== null && handoff.seq === request.seq ? handoff : null;
 
   const restoreFocusTo = useCallback((): HTMLElement | null => {
     const terminalId = request.terminalId;
@@ -396,19 +528,33 @@ export function DecisionsInboxDialog() {
 
   const goToTerminal = () => {
     if (selected === null || reach === null) return;
-    setHandoff({
-      terminalId: selected.reference.terminalId,
-      projectId: selected.reference.projectId,
-      reach,
-    });
-    close();
+    const { terminalId, projectId } = selected.reference;
+    const seq = request.seq;
+    if (reach === "here") {
+      setHandoff({ seq, terminalId, projectId, reach });
+      close();
+      return;
+    }
+    // Looked for again first: it may have closed since the last look.
+    runsTerminal(terminalId, projectId).then(
+      (open) => {
+        if (!open) {
+          recheck();
+          return;
+        }
+        if (useDecisionsInboxStore.getState().request.seq !== seq) return;
+        setHandoff({ seq, terminalId, projectId, reach });
+        close();
+      },
+      () => recheck()
+    );
   };
 
   const onCloseComplete = (restoreSkipped?: () => void) => {
     // Content is never kept past the close.
     reader.release();
+    cancel.release();
     releaseLines();
-    const going = handoff;
     setHandoff(null);
     if (going === null) return;
     const landed =
@@ -428,8 +574,8 @@ export function DecisionsInboxDialog() {
   };
 
   const showListSkeleton = useSkeletonGate(active && listRead.state === "loading");
-  const empty = listRead.state === "listed" ? emptyText(groups) : null;
-  const flatIndex = new Map(keys.map((key, index) => [key, index]));
+  // While the relay or the store is out of reach, an empty list says nothing about what was asked.
+  const empty = listRead.state === "listed" && notice === null ? emptyText(groups) : null;
 
   return (
     <>
@@ -440,8 +586,11 @@ export function DecisionsInboxDialog() {
         maxHeight="max-h-[min(52rem,88vh)]"
         className="h-[min(52rem,88vh)]"
         initialFocus="first"
+        // Once this opening's list is in, focus goes to its selected row.
+        focusResetKey={`${request.seq}:${listRead.state}`}
         restoreFocusTo={restoreFocusTo}
-        restoreFocusOnClose={handoff === null}
+        // Going to a panel of this view, the close leaves focus for the panel to take.
+        restoreFocusOnClose={going?.reach !== "here"}
         onCloseComplete={onCloseComplete}
         data-testid="decisions-inbox-dialog"
       >
@@ -452,19 +601,9 @@ export function DecisionsInboxDialog() {
         {/* Two columns that scroll on their own, so a plain element rather than the dialog's body column. */}
         <div className="flex min-h-0 flex-1 overflow-hidden border-t border-divider">
           <div
-            ref={listRef}
-            onKeyDown={roving.onKeyDown}
-            tabIndex={roving.containerProps.tabIndex}
-            onFocus={roving.containerProps.onFocus}
-            onBlur={roving.containerProps.onBlur}
             className="flex w-72 shrink-0 flex-col gap-3 overflow-y-auto overscroll-contain border-r border-divider px-2 py-3 lg:w-80"
-            aria-labelledby={listLabelId}
-            role="region"
             data-testid="decisions-inbox-list"
           >
-            <span id={listLabelId} className="sr-only">
-              Questions
-            </span>
             {notice !== null && (
               <Callout
                 severity={notice.severity}
@@ -494,49 +633,15 @@ export function DecisionsInboxDialog() {
                 {empty}
               </p>
             )}
-            {groups.map((group) => {
-              const headingId = `${listLabelId}-${group.id}`;
-              return (
-                <section
-                  key={group.id}
-                  aria-labelledby={headingId}
-                  className="flex flex-col gap-0.5"
-                  data-testid={`decisions-inbox-group-${group.id}`}
-                >
-                  <h3
-                    id={headingId}
-                    className={cn(PALETTE_SECTION_LABEL_CLASS, "flex items-baseline gap-1.5 px-1")}
-                  >
-                    {group.title}
-                    <span className="tabular-nums">{group.items.length.toLocaleString()}</span>
-                  </h3>
-                  <ul className="flex flex-col gap-0.5">
-                    {group.items.map((item) => {
-                      const key = referenceKey(item.reference);
-                      return (
-                        <InboxRow
-                          key={key}
-                          item={item}
-                          line={lines.get(key) ?? null}
-                          origin={originOf(item)}
-                          selected={key === selectedKey}
-                          tabStop={key === roving.tabStopKey}
-                          rowRef={roving.rowRef(key)}
-                          onFocus={() => roving.onRowFocus(key)}
-                          onSelect={() =>
-                            setChoice({
-                              seq: request.seq,
-                              key,
-                              index: flatIndex.get(key) ?? 0,
-                            })
-                          }
-                        />
-                      );
-                    })}
-                  </ul>
-                </section>
-              );
-            })}
+            {groups.length > 0 && (
+              <InboxList
+                groups={groups}
+                lines={lines}
+                originOf={originOf}
+                selectedKey={selectedKey}
+                onSelect={(key, index) => setChoice({ seq: request.seq, key, index })}
+              />
+            )}
           </div>
           <section
             ref={detailRef}
@@ -557,7 +662,9 @@ export function DecisionsInboxDialog() {
                     >
                       Question {aliasLabel(selected.alias)}
                     </h3>
-                    <p className="truncate text-xs text-text-secondary">{originOf(selected)}</p>
+                    <p className="truncate text-xs text-text-secondary">
+                      <FactRun facts={originOf(selected)} />
+                    </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     {reach !== null && (
@@ -590,6 +697,7 @@ export function DecisionsInboxDialog() {
         </div>
       </AppDialog>
       <DecisionCancelDialog
+        key={cancel.generation}
         {...cancel.dialog}
         // The button goes once the question stops waiting; the detail then takes focus.
         restoreFocusTo={() =>

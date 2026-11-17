@@ -245,6 +245,10 @@ export function useDecisionQuestionReader(
 export interface QuestionCancel {
   /** Asks about withdrawing the question shown now. */
   ask: () => void;
+  /** Forgets the question asked about: the surface has finished closing. */
+  release: () => void;
+  /** Rises with every release; key the surface's `DecisionCancelDialog` on it so its read goes too. */
+  generation: number;
   /** For the surface's `DecisionCancelDialog`, beside `restoreFocusTo`. */
   dialog: {
     target: DecisionCancelTarget | null;
@@ -269,6 +273,7 @@ export function useQuestionCancel(
   const [cancel, setCancel] = useState<{ target: DecisionCancelTarget; open: boolean } | null>(
     null
   );
+  const [generation, setGeneration] = useState(0);
   const key = target !== null ? targetKey(target) : null;
   // The withdrawal asked about, while this surface still shows that question.
   const cancelShown = cancel !== null && key === targetKey(cancel.target.question);
@@ -285,6 +290,11 @@ export function useQuestionCancel(
         open: true,
       });
     },
+    release: () => {
+      setCancel(null);
+      setGeneration((n) => n + 1);
+    },
+    generation,
     dialog: {
       target: cancel?.target ?? null,
       isOpen: isOpen && cancelShown && cancel.open,
