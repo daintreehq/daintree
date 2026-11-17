@@ -653,7 +653,11 @@ describe("DigitalOceanProvider", () => {
       const { provider, credentials } = providerWith([
         jsonResponse(200, ACCOUNT),
         jsonResponse(200, {
-          regions: ["nyc3", "ams3", "sgp1"].map((slug) => ({ slug, name: slug, available: true })),
+          regions: ["nyc3", "ams3", "sgp1", "lon1"].map((slug) => ({
+            slug,
+            name: slug,
+            available: true,
+          })),
           links: {},
         }),
         jsonResponse(200, { sizes, links: {} }),

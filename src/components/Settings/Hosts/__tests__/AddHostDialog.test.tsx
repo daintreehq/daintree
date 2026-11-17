@@ -1191,6 +1191,23 @@ describe("AddHostDialog", () => {
       expect(remoteHosts.probe).toHaveBeenCalledTimes(3);
     });
 
+    it("drops the check a trust queued when the running check gets in", async () => {
+      let answer: (result: HostProbeResult) => void = () => {};
+      remoteHosts
+        .probe!.mockResolvedValueOnce(turnedAway())
+        .mockImplementationOnce(
+          () => new Promise<HostProbeResult>((resolve) => (answer = resolve))
+        );
+      render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
+      await advance(0);
+      fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+      await advance(0);
+      fireEvent.click(screen.getByRole("button", { name: "Trust this key" }));
+      answer(probeResult({ connection: EXISTING.connection }));
+      await advance(60_000);
+      expect(remoteHosts.probe).toHaveBeenCalledTimes(2);
+    });
+
     it("stops checking when the dialog closes", async () => {
       remoteHosts.probe!.mockImplementation(async () => turnedAway());
       const view = render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
