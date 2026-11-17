@@ -880,6 +880,42 @@ describe("FileSearchService", () => {
     });
   });
 
+  describe("backslash queries", () => {
+    const realPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    afterEach(() => Object.defineProperty(process, "platform", realPlatform));
+
+    async function searchWith(platform: string, query: string): Promise<string[]> {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitClientMock.checkIsRepo.mockResolvedValue(true);
+      gitClientMock.revparse.mockResolvedValue(`${dir}\n`);
+      gitClientMock.raw.mockResolvedValue("src/components/Worktree/Card.tsx\0back\\slash.txt\0");
+      const service = await createService();
+      await service.search({ cwd: dir, query: "", limit: 10 });
+      Object.defineProperty(process, "platform", { value: platform });
+      try {
+        return await service.search({ cwd: dir, query, limit: 10 });
+      } finally {
+        Object.defineProperty(process, "platform", realPlatform);
+      }
+    }
+
+    it.each([
+      "src\\components\\Worktree",
+      ".\\src\\components\\Worktree",
+      "src/components/Worktree",
+    ])("resolves %s on Windows", async (query) => {
+      const result = await searchWith("win32", query);
+      expect(result).toContain("src/components/Worktree/Card.tsx");
+      expect(result).toEqual(await searchWith("win32", "src/components/Worktree"));
+    });
+
+    it("keeps a literal backslash match on POSIX", async () => {
+      expect(await searchWith("linux", "back\\slash")).toEqual(["back\\slash.txt"]);
+      expect(await searchWith("linux", "src\\components")).toEqual([]);
+    });
+  });
+
   describe("git ls-files NUL handling", () => {
     it("preserves filenames containing newlines and tabs via NUL-delimited output", async () => {
       const dir = makeTempDir();
