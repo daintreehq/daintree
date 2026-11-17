@@ -214,7 +214,18 @@ describe("filterSettings", () => {
   });
 
   it("matches the external editor entry for each JetBrains IDE", () => {
-    for (const query of ["IntelliJ IDEA", "PyCharm", "RubyMine", "JetBrains"]) {
+    for (const query of [
+      "JetBrains",
+      "WebStorm",
+      "IntelliJ IDEA",
+      "PhpStorm",
+      "PyCharm",
+      "GoLand",
+      "Rider",
+      "CLion",
+      "DataGrip",
+      "RubyMine",
+    ]) {
       const results = filterSettings(SETTINGS_SEARCH_INDEX, query);
       expect(
         results.some((r) => r.id === "editor-external"),

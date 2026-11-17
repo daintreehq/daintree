@@ -370,6 +370,13 @@ export function EditorIntegrationTab() {
 
   const availabilityMap = new Map(discoveredEditors.map((d) => [d.id, d]));
   const selectedTerminalCommand = terminalOnlyEditorCommand(selectedId);
+  // The legacy JetBrains choice is kept wherever it is already in use, never offered anew.
+  const offersLegacyJetBrains = [
+    selectedId,
+    acceptedDraft?.id,
+    preferredEditor?.id,
+    defaultEditor?.id,
+  ].includes(LEGACY_JETBRAINS_EDITOR_ID);
   // What a saved legacy JetBrains choice opens: the first of them the scan found.
   const firstFoundJetBrains = JETBRAINS_EDITOR_IDS.map((id) => availabilityMap.get(id)).find(
     (d) => d?.available
@@ -511,9 +518,8 @@ export function EditorIntegrationTab() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {/* The legacy JetBrains choice is kept, never offered anew. */}
                   {KNOWN_EDITOR_IDS.filter(
-                    (id) => id !== LEGACY_JETBRAINS_EDITOR_ID || id === selectedId
+                    (id) => id !== LEGACY_JETBRAINS_EDITOR_ID || offersLegacyJetBrains
                   ).map((id) => {
                     const available =
                       id === "custom"

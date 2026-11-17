@@ -95,6 +95,10 @@ vi.spyOn(fs.promises, "access").mockImplementation(async (p: fs.PathLike, m?: nu
   return realAccess(p, m);
 });
 
+// The JetBrains Toolbox scripts dir sits under the home directory; pointing it
+// into the fixture keeps an IDE installed on this machine out of the result.
+vi.spyOn(os, "homedir").mockReturnValue(root);
+
 // Linux keeps the run off the real /Applications bundles; on macOS every
 // editor also probes ~2 app-bundle dirs (IntelliJ IDEA, PyCharm: 4), which only adds work.
 Object.defineProperty(process, "platform", { value: "linux" });

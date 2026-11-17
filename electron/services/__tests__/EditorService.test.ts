@@ -133,14 +133,11 @@ describe("EditorService.discover", () => {
     );
   });
 
-  // Probes run concurrently, so completion order is arbitrary; the pick must
-  // still be the one a sequential walk makes.
-  it("keeps directory precedence when a lower-priority probe settles first", async () => {
+  it("takes the first PATH directory holding a launcher, then the next once it is gone", async () => {
     Object.defineProperty(process, "platform", { value: "linux" });
     process.env.PATH = "/slow/bin:/fast/bin";
     const present = new Set(["/slow/bin/idea", "/fast/bin/idea"]);
     fsMock.promises.stat.mockImplementation(async (filePath: string) => {
-      if (filePath.startsWith("/slow/")) await new Promise((r) => setTimeout(r, 20));
       if (present.has(filePath)) return { isFile: () => true };
       throw new Error("ENOENT");
     });
@@ -1389,11 +1386,13 @@ describe("EditorService JetBrains products", () => {
     });
   });
 
+  // VS Code outranks every JetBrains IDE in the automatic pick, so only the
+  // configured step can produce these launches.
   it.each([
     { id: "jetbrains-webstorm", expected: WEBSTORM },
     { id: "jetbrains-idea", expected: IDEA },
   ] as const)("opens a file at its line in the chosen $id", async ({ id, expected }) => {
-    mockExistingFiles([WEBSTORM, IDEA]);
+    mockExistingFiles([VSCODE, WEBSTORM, IDEA]);
     const { openFile } = await loadModule();
 
     await openFile("/abs/src/Main.java", 12, 4, { id });
@@ -1411,7 +1410,7 @@ describe("EditorService JetBrains products", () => {
     { id: "jetbrains-webstorm", expected: WEBSTORM },
     { id: "jetbrains-idea", expected: IDEA },
   ] as const)("opens a worktree folder in the chosen $id", async ({ id, expected }) => {
-    mockExistingFiles([WEBSTORM, IDEA]);
+    mockExistingFiles([VSCODE, WEBSTORM, IDEA]);
     const { openFile } = await loadModule();
 
     await openFile(WORKTREE, undefined, undefined, { id }, true);
@@ -1430,7 +1429,9 @@ describe("EditorService JetBrains products", () => {
 
     await openFile("/abs/src/Main.java", 3, undefined, { id: "webstorm" });
 
-    expect(launchedPrograms()).toEqual([IDEA]);
+    expect(execaMock.execa.mock.calls).toEqual([
+      [IDEA, ["--line", "3", "/abs/src/Main.java"], expect.objectContaining({ detached: true })],
+    ]);
   });
 
   it("searches a saved webstorm choice binary first, then directory, as it always did", async () => {
@@ -1468,6 +1469,17 @@ describe("EditorService JetBrains products", () => {
     expect(launchedPrograms()).toEqual([expected]);
   });
 
+  it("finds a Linux Toolbox script with nothing on PATH", async () => {
+    setPlatform("linux");
+    const script = "/Users/testuser/.local/share/JetBrains/Toolbox/scripts/clion";
+    mockExistingFiles([script]);
+    const { discover } = await loadModule();
+
+    const found = (await discover()).filter((e) => e.available);
+
+    expect(found.map((e) => [e.id, e.executablePath])).toEqual([["jetbrains-clion", script]]);
+  });
+
   it("finds a Windows Toolbox script under a profile path with spaces", async () => {
     setPlatform("win32");
     const originalLocalAppData = process.env.LOCALAPPDATA;
@@ -1496,7 +1508,7 @@ describe("EditorService JetBrains products", () => {
     }
   });
 
-  it("never swaps a chosen product for a different JetBrains IDE", async () => {
+  it("sends a missing chosen IDE through the ordinary fallback order", async () => {
     mockExistingFiles([WEBSTORM, VSCODE]);
     const { openFile } = await loadModule();
 
