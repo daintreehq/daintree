@@ -391,7 +391,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
         }}
       >
         {title && (
-          <div className="flex h-7 shrink-0 items-center justify-between gap-2 border-b border-tint/5 px-2">
+          <div className="flex h-7 shrink-0 items-center justify-between gap-2 border-b border-divider px-2">
             <span className={cn(PALETTE_SECTION_LABEL_CLASS, "min-w-0 truncate")}>{title}</span>
             {keyHints.length > 0 ? (
               <span
