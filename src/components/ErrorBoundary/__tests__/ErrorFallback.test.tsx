@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { ErrorFallback } from "../ErrorFallback";
 import { logsClient } from "@/clients/logsClient";
@@ -215,6 +215,22 @@ describe("ErrorFallback", () => {
       await screen.findByRole("alert");
       fireEvent.click(screen.getByText("View logs"));
       await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    });
+
+    it("ignores a stale failure that settles after a later successful retry", async () => {
+      vi.stubEnv("DEV", false);
+      let rejectFirst!: (e: Error) => void;
+      vi.mocked(logsClient.openFile)
+        .mockImplementationOnce(() => new Promise<void>((_, reject) => (rejectFirst = reject)))
+        .mockResolvedValueOnce(undefined);
+      render(<ErrorFallback {...baseProps} variant="section" />);
+      fireEvent.click(screen.getByText("View logs"));
+      fireEvent.click(screen.getByText("View logs"));
+      await waitFor(() => expect(logsClient.openFile).toHaveBeenCalledTimes(2));
+      await act(async () => {
+        rejectFirst(new Error("late"));
+      });
+      expect(screen.queryByRole("alert")).toBeNull();
     });
 
     it("shows no alert when the log opens", async () => {

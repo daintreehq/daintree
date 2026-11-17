@@ -51,7 +51,7 @@ function buildDetailsText(
   return lines.join("\n");
 }
 
-const LOGS_UNAVAILABLE_MESSAGE = "Couldn't open the log file. Try again, or reload the window.";
+const LOGS_UNAVAILABLE_MESSAGE = "Couldn't open the log file. Select View logs to try again.";
 
 // Direct IPC rather than actionService: this renders during startup crashes and
 // in auxiliary windows where renderer action definitions are never registered.
@@ -98,10 +98,14 @@ export function ErrorFallback({
     };
   }, []);
 
+  const logsRequestRef = useRef(0);
+
   const handleViewLogs = useCallback(() => {
+    const request = ++logsRequestRef.current;
     setLogsFailed(false);
     void openLogs().then((ok) => {
-      if (!ok && mountedRef.current) setLogsFailed(true);
+      // A slow failure from an earlier click must not overwrite a later success.
+      if (request === logsRequestRef.current && mountedRef.current) setLogsFailed(!ok);
     });
   }, []);
 
