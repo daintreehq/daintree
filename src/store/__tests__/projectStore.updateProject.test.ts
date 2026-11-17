@@ -378,6 +378,30 @@ describe("projectStore.updateProject rollback", () => {
     expect(useProjectStore.getState().currentProject).toBeNull();
   });
 
+  it("keeps an older pending edit on the current project when a reload preceded the failed write", async () => {
+    const calls = holdUpdates();
+    // Hold the missing-folder check so its follow-up reload can't replace the
+    // row again after the second write lands.
+    projectClientMock.checkMissing.mockReturnValueOnce(deferred<void>().promise);
+    const first = useProjectStore.getState().updateProject("a", { name: "Alpha 2" });
+
+    // The reload brings the list row back to Main's value; currentProject keeps
+    // the pending optimistic copy.
+    await useProjectStore.getState().loadProjects();
+    expect(project("a")?.name).toBe("Alpha");
+    expect(useProjectStore.getState().currentProject?.name).toBe("Alpha 2");
+
+    const second = useProjectStore.getState().updateProject("a", { name: "Alpha 3" });
+    calls[1]!.reject(new Error("nope"));
+    await failed(second);
+    expect(project("a")?.name).toBe("Alpha");
+    expect(useProjectStore.getState().currentProject?.name).toBe("Alpha 2");
+
+    calls[0]!.reject(new Error("nope"));
+    await failed(first);
+    expect(useProjectStore.getState().currentProject?.name).toBe("Alpha");
+  });
+
   it("restores a value the write explicitly cleared", async () => {
     useProjectStore.setState((state) => ({
       projects: state.projects.map((p) => (p.id === "a" ? { ...p, color: "#00ff00" } : p)),
