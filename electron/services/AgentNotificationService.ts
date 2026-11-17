@@ -9,7 +9,7 @@ import { isRemoteEndpointHandle } from "../ipc/endpoint.js";
 import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
 import type { NotificationSettings } from "../../shared/types/ipc/api.js";
 import { projectStore } from "./ProjectStore.js";
-import { getPtyClient } from "../window/serviceRefs.js";
+import { getPtyClient, getRunAttentionServiceRef } from "../window/serviceRefs.js";
 import { isHostThrowawayTerminalId } from "../../shared/config/hostThrowaway.js";
 import { PanelRecordIndex, type PanelRecord } from "./agentNotificationPanels.js";
 import { soundService } from "./SoundService.js";
@@ -546,13 +546,25 @@ class AgentNotificationService {
       }
     });
 
+    // Parking or snoozing takes a run out of attention until the user takes it
+    // back (#17192), so whatever is already up or on its way for it comes down
+    // now. Lifting either pages nothing by itself: the run's next transition does.
+    const unsubParkChanged = events.on("terminal:park-changed", (payload) => {
+      if (payload.parked) this.dismissPutAside(payload.id);
+    });
+    const unsubSnoozeChanged = events.on("terminal:snooze-changed", (payload) => {
+      if (payload.snoozed) this.dismissPutAside(payload.id);
+    });
+
     this.unsubscribers.push(
       unsubPersisted,
       unsubStateChanged,
       unsubSpawned,
       unsubDetected,
       unsubExited,
-      unsubKilled
+      unsubKilled,
+      unsubParkChanged,
+      unsubSnoozeChanged
     );
 
     this.seedActiveAgents();
@@ -726,6 +738,7 @@ class AgentNotificationService {
     // runtime-detected terminals share the same agentId value (e.g. both
     // detected as "claude"). #5773
     const key = terminalId ?? agentId ?? worktreeId ?? "agent";
+    const putAside = this.isPutAside(terminalId);
 
     // Cancel any pending completion timer for this agent when it leaves "completed"
     // (must run even when master toggle is off to prevent stale timers)
@@ -741,8 +754,9 @@ class AgentNotificationService {
       }
     }
 
-    // Track currently-waiting terminal IDs for escalation grouping
-    if (state === "waiting" && terminalId) {
+    // Track currently-waiting terminal IDs for escalation grouping. A run put
+    // aside stays out, so a sibling's grouped reminder never counts it.
+    if (state === "waiting" && terminalId && !putAside) {
       this.waitingTerminalIds.add(terminalId);
     }
 
@@ -782,8 +796,13 @@ class AgentNotificationService {
 
     // Schedule waiting escalation for docked agents (independent of watched status)
     // Suppress during spawn grace period — agents that initialize directly into waiting
-    // should not trigger escalation sounds.
-    if (state === "waiting" && terminalId && !this.isWithinSpawnGrace(agentId, terminalId)) {
+    // should not trigger escalation sounds. A run put aside gets no reminder.
+    if (
+      state === "waiting" &&
+      terminalId &&
+      !putAside &&
+      !this.isWithinSpawnGrace(agentId, terminalId)
+    ) {
       this.scheduleWaitingEscalation(
         terminalId,
         projectId,
@@ -797,6 +816,9 @@ class AgentNotificationService {
     if (state === "working" && previousState !== "working" && terminalId) {
       this.scheduleWorkingPulse(terminalId, projectId, settings);
     }
+
+    // Put aside: the cleanup above still ran, but no banner goes out for it.
+    if (putAside) return;
 
     // Skip if all OS notification types are disabled (off by default).
     if (!settings.completedEnabled && !settings.waitingEnabled) {
@@ -945,6 +967,7 @@ class AgentNotificationService {
     const { worktreeId, terminalId, agentId, ownerWebContentsId, turnStartedAt } = target;
     const timer = setTimeout(() => {
       this.completionTimers.delete(key);
+      if (this.isPutAside(terminalId)) return;
       const settings = this.settingsFor(this.emitOwner(terminalId, ownerWebContentsId), projectId);
       if (settings.enabled === false || !settings.completedEnabled) return;
       // The turn ended on a question for the person (#17232): its own notification says so.
@@ -1010,6 +1033,7 @@ class AgentNotificationService {
       // quick waiting → working → waiting flap still delivers once the
       // renderer's one-shot unwatch has stopped a second entry being buffered.
       if (item.terminalId && !this.waitingTerminalIds.has(item.terminalId)) return false;
+      if (this.isPutAside(item.terminalId)) return false;
       // Canopy already paged for this wait.
       if (item.terminalId && this.canopyAnnouncedIds.has(item.terminalId)) return false;
       // The view it goes to now may be another machine's, with its own choices.
@@ -1134,6 +1158,7 @@ class AgentNotificationService {
     // during the wait counts, and one moved out of the dock or closed doesn't.
     const timer = setTimeout(() => {
       this.waitingEscalationTimers.delete(terminalId);
+      if (this.isPutAside(terminalId)) return;
       const ownerWebContentsId = this.resolveOwner(terminalId);
       const currentSettings = this.settingsFor(ownerWebContentsId, projectId);
       if (currentSettings.enabled === false) return;
@@ -1150,7 +1175,8 @@ class AgentNotificationService {
         (id) =>
           this.panels.get(id)?.location === "dock" &&
           this.recipientOf(this.resolveOwner(id)) === recipient &&
-          this.projectOf(id) === projectId
+          this.projectOf(id) === projectId &&
+          !this.isPutAside(id)
       );
 
       if (!isRemoteNotificationOwner(ownerWebContentsId)) {
@@ -1231,6 +1257,8 @@ class AgentNotificationService {
     const projectId = this.projectOf(ask.terminalId);
     if (this.settingsFor(this.resolveOwner(ask.terminalId), projectId).enabled === false) return;
     if (this.isWithinBootGrace() || this.isWithinSpawnGrace(ask.agentId, ask.terminalId)) return;
+    // Canopy reads parks and snoozes from the fleet snapshot, which can trail a fresh one.
+    if (this.isPutAside(ask.terminalId)) return;
     if (this.announcedWaitingIds.has(ask.terminalId)) return;
     if (this.isCanopyInFront(canopyOpenIn)) return;
     this.loadPanelProject(ask.terminalId);
@@ -1397,6 +1425,32 @@ class AgentNotificationService {
     this.dropBufferedWaiting(terminalId);
     this.canopyAskBuffer = this.canopyAskBuffer.filter((ask) => ask.terminalId !== terminalId);
     notificationService.closeNotificationsForPanel(terminalId);
+  }
+
+  /**
+   * Parked or snoozed (#17192): the user took the run out of attention, so
+   * nothing pages for it until they take it back. Read live rather than
+   * mirrored, so a snooze that runs out stops applying with no event, as on
+   * every other surface. Before the attention service exists, nothing is.
+   */
+  private isPutAside(terminalId: string | undefined): boolean {
+    if (!terminalId) return false;
+    const attention = getRunAttentionServiceRef();
+    if (!attention) return false;
+    return attention.getParkRecord(terminalId) !== undefined || attention.isSnoozed(terminalId);
+  }
+
+  /** A run just put aside: its waiting alerts come down, and a finish still on its way is dropped. */
+  private dismissPutAside(terminalId: string): void {
+    this.dismissWaitingAlerts(terminalId);
+    const timer = this.completionTimers.get(terminalId);
+    if (timer) {
+      clearTimeout(timer);
+      this.completionTimers.delete(terminalId);
+    }
+    this.completionBurstBuffer = this.completionBurstBuffer.filter(
+      (item) => item.terminalId !== terminalId
+    );
   }
 
   private dropBufferedWaiting(terminalId: string): void {
