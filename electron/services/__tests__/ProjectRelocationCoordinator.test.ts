@@ -264,6 +264,24 @@ describe("ProjectRelocationCoordinator — managed move of an open project", () 
     expect(fsState.renameCalls).toHaveLength(0);
     expect(mockProjectStore.finalizeRelocatedPath).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["a stale missing status", "missing"],
+    ["a closed status", "closed"],
+  ])("moves a project holding nothing with %s as closed", async (_label, status) => {
+    mockProjectStore.getProjectById.mockReturnValue(makeProject({ status }));
+    const deps = makeDeps(makePvm(null));
+    const coordinator = new ProjectRelocationCoordinator();
+    configure(coordinator, deps);
+
+    await coordinator.relocate({ projectId: PROJECT_ID, mode: "move", newPath: NEW_ROOT });
+
+    expect(fsState.renameCalls).toEqual([{ from: OLD_ROOT, to: NEW_ROOT }]);
+    expect(mockProjectStore.finalizeRelocatedPath).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "closed" })
+    );
+    expect(deps.worktreeService.loadProject).not.toHaveBeenCalled();
+  });
 });
 
 describe("ProjectRelocationCoordinator — guard fork", () => {
@@ -315,6 +333,10 @@ describe("ProjectRelocationCoordinator — guard fork", () => {
 
     expect(deps.ptyClient.gracefulKillByProject).toHaveBeenCalled();
     expect(mockProjectStore.relocateProject).not.toHaveBeenCalled();
+    // Classified as shown, not merely held in the background.
+    expect(mockProjectStore.finalizeRelocatedPath).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "active" })
+    );
   });
 });
 
@@ -400,6 +422,53 @@ describe("ProjectRelocationCoordinator — reattaching a background project (#17
     await expect(reattach(deps)).rejects.toMatchObject({ reason: "assistant-active" });
     expect(deps.ptyClient.gracefulKillByProject).not.toHaveBeenCalled();
     expect(mockProjectStore.relocateProject).not.toHaveBeenCalled();
+  });
+
+  it("lands a held project as background whatever status its row was left in", async () => {
+    // A row the old closed-only shortcut wrote while the project's runtimes lived on.
+    mockProjectStore.getProjectById.mockReturnValue(makeProject({ status: "closed" }));
+    const deps = makeDeps(makePvm(OTHER_ID, [OTHER_ID, PROJECT_ID]));
+
+    await reattach(deps);
+
+    expect(mockProjectStore.finalizeRelocatedPath).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "background" })
+    );
+  });
+
+  it("decides routing and status before the first await, not from what is left later", async () => {
+    const deps = makeDeps(makePvm(OTHER_ID), { liveTerminalIds: [PROJECT_ID] });
+    // The project's last PTY exits while the destination check is in flight.
+    mockProjectStore.getProjectByPath.mockImplementation(async () => {
+      deps.ptyClient.getLiveWorkspaceIds.mockReturnValue(new Set());
+      return null;
+    });
+
+    await reattach(deps);
+
+    expect(mockProjectStore.relocateProject).not.toHaveBeenCalled();
+    expect(mockProjectStore.finalizeRelocatedPath).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "background" })
+    );
+  });
+
+  it("previews from the entry snapshot when a holding goes away mid-preview", async () => {
+    const deps = makeDeps(makePvm(OTHER_ID), { liveTerminalIds: [PROJECT_ID] });
+    deps.ptyClient.getProjectStats.mockResolvedValue({ terminalCount: 2 });
+    mockProjectStore.getProjectByPath.mockImplementation(async () => {
+      deps.ptyClient.getLiveWorkspaceIds.mockReturnValue(new Set());
+      return null;
+    });
+    const coordinator = new ProjectRelocationCoordinator();
+    configure(coordinator, deps);
+
+    const preview = await coordinator.previewRelocate({
+      projectId: PROJECT_ID,
+      mode: "reattach",
+      newPath: NEW_ROOT,
+    });
+
+    expect(preview.runningTerminalCount).toBe(2);
   });
 
   it("gives a missing project shown in a second window its open status back", async () => {

@@ -762,7 +762,8 @@ export class ProjectRelocationCoordinator {
  * project that went missing while still live gets its live status back:
  * `checkMissingProjects` marks any non-current project missing, and preserving
  * that would leave the relocated row unopenable. A background holder lands as
- * `"background"` so the next visit reopens it warm.
+ * `"background"` so the next visit goes through reopen, which loads the host at
+ * the new root and reuses the cached view when one survived the relocation.
  */
 function relocatedStatus(
   status: Project["status"],
