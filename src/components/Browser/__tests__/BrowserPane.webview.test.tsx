@@ -478,8 +478,7 @@ describe("BrowserPane webview lifecycle regression", () => {
     it("attaches at the page asked for since, when Retry forwards it after both forwards failed", async () => {
       window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
       const forward = vi.fn().mockRejectedValue(new Error("host gone"));
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (window as any).electron.portForwards = { forward };
+      Reflect.set(window.electron, "portForwards", { forward });
       const { container, getByRole } = render(<BrowserPane {...baseProps} />);
       await act(async () => {});
       await act(async () => {
@@ -536,8 +535,8 @@ describe("BrowserPane webview lifecycle regression", () => {
     });
 
     describe("stepping through saved history (#17220)", () => {
-      const lastToolbarProps = () =>
-        browserToolbarPropsSpy.mock.calls.at(-1)![0] as Record<string, unknown>;
+      const lastToolbarProps = (): { onStop: () => void } =>
+        browserToolbarPropsSpy.mock.calls.at(-1)![0];
       const lastHistory = () => terminalStoreState.setBrowserHistory.mock.calls.at(-1)![1];
 
       // Forwards each host port to the same port here; port 4000's forward is
@@ -643,7 +642,9 @@ describe("BrowserPane webview lifecycle regression", () => {
           forward
         );
 
-        act(() => pressForward());
+        act(() => {
+          pressForward();
+        });
         expect(forward).toHaveBeenCalledWith(
           expect.objectContaining({ hostId: "studio-01", remotePort: 4000, samePort: true })
         );
@@ -772,7 +773,9 @@ describe("BrowserPane webview lifecycle regression", () => {
 
         await act(async () => pressBack());
         webview.canGoBack.mockReturnValue(true);
-        act(() => pressBack());
+        act(() => {
+          pressBack();
+        });
         expect(webview.goBack).toHaveBeenCalledTimes(1);
 
         await act(async () => gate.resolve());
@@ -791,7 +794,7 @@ describe("BrowserPane webview lifecycle regression", () => {
         const { webview } = await renderRestored(restored, forward);
 
         await act(async () => pressBack());
-        act(() => (lastToolbarProps().onStop as () => void)());
+        act(() => lastToolbarProps().onStop());
 
         await act(async () => gate.resolve());
         expect(webview.loadURL).not.toHaveBeenCalled();
@@ -854,9 +857,9 @@ describe("BrowserPane webview lifecycle regression", () => {
         // Hidden behind another dock panel, evicted, then opened again.
         terminalStoreState.activeDockTerminalId = "another-panel";
         rerender(ui());
-        const onDestroy = (
-          window.electron.window.onDestroyHiddenWebviews as unknown as ReturnType<typeof vi.fn>
-        ).mock.calls.at(-1)![0] as (payload: { tier: 1 | 2 }) => void;
+        const onDestroy = vi
+          .mocked(window.electron.window.onDestroyHiddenWebviews)
+          .mock.calls.at(-1)![0];
         act(() => onDestroy({ tier: 1 }));
         // The replacement starts on its first load, as a fresh guest does.
         webviewInitiallyLoading = true;
@@ -1319,9 +1322,9 @@ describe("BrowserPane webview lifecycle regression", () => {
     function evict(rerender: (ui: React.ReactElement) => void, props: BrowserPaneProps) {
       terminalStoreState.activeDockTerminalId = "another-panel";
       rerender(<BrowserPane {...props} />);
-      const onDestroy = (
-        window.electron.window.onDestroyHiddenWebviews as unknown as ReturnType<typeof vi.fn>
-      ).mock.calls.at(-1)![0] as (payload: { tier: 1 | 2 }) => void;
+      const onDestroy = vi
+        .mocked(window.electron.window.onDestroyHiddenWebviews)
+        .mock.calls.at(-1)![0];
       act(() => onDestroy({ tier: 1 }));
     }
 
