@@ -548,9 +548,7 @@ export class CloudHostStore {
 
   removeMachineKey(id: string): void {
     this.mutate((raw) => {
-      raw.machineKeys = raw.machineKeys.filter(
-        (entry) => (entry as { id?: unknown })?.id !== id
-      );
+      raw.machineKeys = raw.machineKeys.filter((entry) => (entry as { id?: unknown })?.id !== id);
     });
   }
 

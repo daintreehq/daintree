@@ -137,7 +137,11 @@ function setup() {
   const hosts = {
     get: (hostId: string) =>
       hostId === HOST
-        ? ({ id: HOST, name: HOST, connection: { kind: "cloud", bindingId: BINDING } } as HostDescriptor)
+        ? ({
+            id: HOST,
+            name: HOST,
+            connection: { kind: "cloud", bindingId: BINDING },
+          } as HostDescriptor)
         : null,
   };
   const changed = vi.fn();
@@ -178,7 +182,11 @@ describe("CloudMachineKeys", () => {
       recordedFirst = env.store.machineKeys()[0];
       expect(resourceId).toBe(SANDBOX);
       expect(request.ttlDays).toBe(MACHINE_KEY_TTL_DAYS);
-      return { keyId: "sak_1", secret: "boat_live_machinesecret", expiresAt: env.clock.now + 30 * DAY };
+      return {
+        keyId: "sak_1",
+        secret: "boat_live_machinesecret",
+        expiresAt: env.clock.now + 30 * DAY,
+      };
     });
     await env.keys.arm(HOST, env.session);
 
@@ -292,7 +300,11 @@ describe("CloudMachineKeys", () => {
     const env = setup();
     env.machineKeys.issue.mockImplementationOnce(async () => {
       env.newSession();
-      return { keyId: "sak_1", secret: "boat_live_machinesecret", expiresAt: env.clock.now + 30 * DAY };
+      return {
+        keyId: "sak_1",
+        secret: "boat_live_machinesecret",
+        expiresAt: env.clock.now + 30 * DAY,
+      };
     });
     const first = env.session;
     await env.keys.arm(HOST, first);

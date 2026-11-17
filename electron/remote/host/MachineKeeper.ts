@@ -1,10 +1,7 @@
 import type { HostIdleObservation } from "../../../shared/types/hostIdle.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { lifetimeRenewalDue, stopUnderWay } from "../cloud/lifetimeRenewal.js";
-import type {
-  MachineKeeperArmRequest,
-  MachineKeeperStatus,
-} from "../cloud/machineKeeperLink.js";
+import type { MachineKeeperArmRequest, MachineKeeperStatus } from "../cloud/machineKeeperLink.js";
 import type { ProviderResource } from "../cloud/provider.js";
 
 /** What a failed request means for the key: try again later, or it no longer works. */
@@ -159,7 +156,9 @@ export class MachineKeeper {
     const generation = this.generation;
     const current = () => !this.disposed && this.generation === generation;
     if (this.now() >= held.expiresAt) {
-      this.drop("The key Daintree gave this machine expired. Connect to it from Daintree to renew it.");
+      this.drop(
+        "The key Daintree gave this machine expired. Connect to it from Daintree to renew it."
+      );
       return;
     }
     if (this.now() < this.retryAt) return;

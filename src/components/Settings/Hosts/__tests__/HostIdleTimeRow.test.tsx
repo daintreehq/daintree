@@ -162,7 +162,12 @@ describe("HostIdleTimeRow (#17357)", () => {
   it("says why the machine can't stop itself, until its host says it holds a key (#17361)", async () => {
     api.read.mockResolvedValue(snapshot(30));
     const lastWorkAt = Date.UTC(2026, 10, 17, 14, 2);
-    const idle = { idleAfterMinutes: 30, lastWorkAt, busy: false, idleEndsAt: lastWorkAt + 30 * 60_000 };
+    const idle = {
+      idleAfterMinutes: 30,
+      lastWorkAt,
+      busy: false,
+      idleEndsAt: lastWorkAt + 30 * 60_000,
+    };
     const problem = "This machine can't stop itself when idle: the key isn't allowed.";
     await renderRow({ idle, sampledAt: lastWorkAt + 60_000, selfStopProblem: problem });
     expect(document.body.textContent).toContain(

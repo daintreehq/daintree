@@ -494,7 +494,10 @@ describe("machine keys (#17361)", () => {
 
   it("asks for a key that can only read, renew and stop the one machine, sent once", async () => {
     const { client, calls } = clientWith([
-      created({ actions: ["sandbox.read", "sandbox.update", "sandbox.stop"], sandboxes: ["bx_23456789"] }),
+      created({
+        actions: ["sandbox.read", "sandbox.update", "sandbox.stop"],
+        sandboxes: ["bx_23456789"],
+      }),
     ]);
     const issued = await new BoatProvider(() => client).machineKeys.issue(
       credentials,
@@ -534,7 +537,10 @@ describe("machine keys (#17361)", () => {
       { actions: ["sandbox.read"], sandboxes: ["bx_23456789", "bx_otherother"] },
       { actions: ["sandbox.read"], sandboxes: ["bx_23456789"], environments: ["env_1"] },
     ]) {
-      const { client, calls } = clientWith([created(scope), jsonResponse(200, { ok: true, apiKeys: [] })]);
+      const { client, calls } = clientWith([
+        created(scope),
+        jsonResponse(200, { ok: true, apiKeys: [] }),
+      ]);
       await expect(
         new BoatProvider(() => client).machineKeys.issue(credentials, "bx_23456789", {
           name: "daintree-mk_1",
@@ -587,9 +593,9 @@ describe("machine keys (#17361)", () => {
 
   it("sends the machine's own stop once, where a person's stop retries", async () => {
     const once = clientWith([jsonResponse(500, { message: "oops" })]);
-    await expect(
-      once.client.stopSandbox(ctx, "bx_23456789", { once: true })
-    ).rejects.toMatchObject({ kind: "server" });
+    await expect(once.client.stopSandbox(ctx, "bx_23456789", { once: true })).rejects.toMatchObject(
+      { kind: "server" }
+    );
     expect(once.fetch).toHaveBeenCalledTimes(1);
   });
 
@@ -604,7 +610,9 @@ describe("machine keys (#17361)", () => {
       "lost"
     );
     for (const kind of ["network", "timeout", "server", "rate-limited", "conflict"] as const) {
-      expect(boatMachineKeyFailure(new BoatApiError(kind, "x", null, null, null)).kind).toBe("retry");
+      expect(boatMachineKeyFailure(new BoatApiError(kind, "x", null, null, null)).kind).toBe(
+        "retry"
+      );
     }
   });
 });

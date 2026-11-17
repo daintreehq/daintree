@@ -19,12 +19,7 @@ import { AppError } from "../../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { isSafeSshUser, normalizeHostKey, parseSshEndpoint } from "../sshEndpoint.js";
 import { BoatApiError, BoatClient, type BoatRequestContext } from "./BoatClient.js";
-import type {
-  BoatActionResponse,
-  BoatApiKey,
-  BoatLimits,
-  BoatSandbox,
-} from "./boatSchemas.js";
+import type { BoatActionResponse, BoatApiKey, BoatLimits, BoatSandbox } from "./boatSchemas.js";
 import { BOAT_SIZE_MULTIPLIERS, BOAT_SIZE_SPECS, boatMachineState } from "./boatState.js";
 
 const SIZE_ORDER = ["small", "default", "large", "xlarge"];
@@ -151,7 +146,10 @@ function scopedToMachine(key: BoatApiKey, resourceId: string): boolean {
   ) {
     return false;
   }
-  return scope.environments === undefined || (scope.environments !== "*" && scope.environments.length === 0);
+  return (
+    scope.environments === undefined ||
+    (scope.environments !== "*" && scope.environments.length === 0)
+  );
 }
 
 class BoatMachineKeys implements MachineKeyIssuer {

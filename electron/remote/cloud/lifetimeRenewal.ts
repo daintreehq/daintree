@@ -6,7 +6,11 @@ export const RENEW_MARGIN_MS = 30 * 60_000;
  * for a lifetime `lifetimeSeconds` long. The desktop's keeper and the
  * machine's own use the same rule, so neither renews what the other just did.
  */
-export function lifetimeRenewalDue(now: number, deadline: number, lifetimeSeconds: number): boolean {
+export function lifetimeRenewalDue(
+  now: number,
+  deadline: number,
+  lifetimeSeconds: number
+): boolean {
   const margin = Math.min(RENEW_MARGIN_MS, (lifetimeSeconds * 1000) / 2);
   return deadline - now <= margin;
 }

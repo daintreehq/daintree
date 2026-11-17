@@ -305,9 +305,9 @@ describe("idleClockSentence (#17357)", () => {
     expect(idleClockSentence(armed, base + 30 * 60_000)).toBe(
       `Idle since ${at(base)}. Its idle time ended ${at(base + 30 * 60_000)}, so it stops by itself.`
     );
-    expect(
-      idleClockSentence({ ...armed, busy: true, idleEndsAt: null }, base)
-    ).toMatch(/^In use now\. .*stops by itself once idle that long\.$/);
+    expect(idleClockSentence({ ...armed, busy: true, idleEndsAt: null }, base)).toMatch(
+      /^In use now\. .*stops by itself once idle that long\.$/
+    );
     // A host that doesn't say so keeps the clock's own words.
     expect(idleClockSentence({ ...idle, stopsWhenIdle: false }, base + 60_000)).toBe(
       idleClockSentence(idle, base + 60_000)

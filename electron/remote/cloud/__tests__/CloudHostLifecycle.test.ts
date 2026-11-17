@@ -2198,7 +2198,9 @@ describe("CloudHostLifecycle machine keys (#17361)", () => {
     await (
       env.lifecycle as unknown as { dropOrphanBindings(): Promise<void> }
     ).dropOrphanBindings();
-    expect(env.store.machineKeys()).toEqual([expect.objectContaining({ id: "mk_1", state: "revoke" })]);
+    expect(env.store.machineKeys()).toEqual([
+      expect.objectContaining({ id: "mk_1", state: "revoke" }),
+    ]);
     expect(machineKeys.revokePending).toHaveBeenCalled();
     env.lifecycle.dispose();
   });

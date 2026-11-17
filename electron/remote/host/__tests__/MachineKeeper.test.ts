@@ -45,7 +45,8 @@ function harness(options: { lifetimeSeconds?: number | null; busy?: boolean } = 
   const clock = { wall: Date.parse("2026-11-18T09:00:00Z"), mono: 1_000 };
   const now = () => clock.wall;
   let busy = options.busy ?? true;
-  const lifetimeSeconds = options.lifetimeSeconds === undefined ? 2 * 3600 : options.lifetimeSeconds;
+  const lifetimeSeconds =
+    options.lifetimeSeconds === undefined ? 2 * 3600 : options.lifetimeSeconds;
   // One machine both keepers act on, as Boat holds it.
   const machine: Machine = {
     state: "running",
@@ -319,7 +320,10 @@ describe("MachineKeeper", () => {
     await h.keeper.tick();
     h.advance(2 * HOUR);
     await h.pass();
-    expect(h.keeper.status()).toMatchObject({ grantId: null, problem: expect.stringMatching(/expired/) });
+    expect(h.keeper.status()).toMatchObject({
+      grantId: null,
+      problem: expect.stringMatching(/expired/),
+    });
     expect(h.driver.renew).not.toHaveBeenCalled();
   });
 

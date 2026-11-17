@@ -10,7 +10,8 @@ export function boatMachineKeyFailure(error: unknown): MachineKeeperFailure {
     case "unauthorized":
       return {
         kind: "lost",
-        problem: "Boat no longer accepts the key Daintree gave this machine. It may have been revoked.",
+        problem:
+          "Boat no longer accepts the key Daintree gave this machine. It may have been revoked.",
       };
     case "forbidden":
       return {
@@ -34,7 +35,8 @@ export function boatMachineDriver(
 ): MachineDriver {
   const ctx = (signal: AbortSignal) => ({ apiKey: request.secret, org: request.scope, signal });
   return {
-    inspect: async (signal) => boatResource(await client.getSandbox(ctx(signal), request.resourceId)),
+    inspect: async (signal) =>
+      boatResource(await client.getSandbox(ctx(signal), request.resourceId)),
     renew: async (lifetimeSeconds, signal) =>
       boatResource(
         await client.updateSandbox(ctx(signal), request.resourceId, { ttlSeconds: lifetimeSeconds })

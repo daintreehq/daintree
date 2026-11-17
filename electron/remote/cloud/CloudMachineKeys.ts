@@ -146,7 +146,12 @@ export class CloudMachineKeys {
   }
 
   /** The session still reaches this binding's machine: the one the host is bound to, and open. */
-  private reaches(hostId: HostId, bindingId: string, resourceId: string, session: LinkSession): boolean {
+  private reaches(
+    hostId: HostId,
+    bindingId: string,
+    resourceId: string,
+    session: LinkSession
+  ): boolean {
     if (this.disposed || !session.isOpen || this.deps.sessionFor(hostId) !== session) return false;
     const connection = this.deps.hosts.get(hostId)?.connection;
     if (connection?.kind !== "cloud" || connection.bindingId !== bindingId) return false;
@@ -154,7 +159,12 @@ export class CloudMachineKeys {
     return binding?.hostId === hostId && binding.resourceId === resourceId;
   }
 
-  private setProblem(bindingId: string, message: string, keyHint: string | null, retry: boolean): void {
+  private setProblem(
+    bindingId: string,
+    message: string,
+    keyHint: string | null,
+    retry: boolean
+  ): void {
     const before = this.problems.get(bindingId)?.message;
     this.problems.set(bindingId, { message, at: this.now(), keyHint, retry });
     if (retry) this.armRetryAt.set(bindingId, this.now() + RETRY_MS);
@@ -359,7 +369,9 @@ export class CloudMachineKeys {
       if (accountId !== undefined && key.accountId !== accountId) continue;
       const now = this.now();
       const abandoned =
-        key.state === "issuing" && !this.issuing.has(key.id) && now - key.createdAt > ISSUING_ABANDONED_MS;
+        key.state === "issuing" &&
+        !this.issuing.has(key.id) &&
+        now - key.createdAt > ISSUING_ABANDONED_MS;
       if ((key.state !== "revoke" && !abandoned) || this.issuing.has(key.id)) continue;
       if (accountId === undefined && (this.revokeRetryAt.get(key.id) ?? 0) > now) continue;
       // Off by itself already.
