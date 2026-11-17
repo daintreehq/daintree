@@ -139,6 +139,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange, onClose }: Privac
   const [logRetentionFailure, setLogRetentionFailure] = useState<FailedWrite>(null);
   const [sessionRetentionFailure, setSessionRetentionFailure] = useState<FailedWrite>(null);
   const [cacheFailure, setCacheFailure] = useState<FailedWrite>(null);
+  const [openFolderFailed, setOpenFolderFailed] = useState(false);
   const [shortenPending, setShortenPending] = useState(false);
   const [shortenError, setShortenError] = useState<string | null>(null);
   const [clearHistoryPending, setClearHistoryPending] = useState(false);
@@ -300,8 +301,14 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange, onClose }: Privac
     }
   };
 
-  const handleOpenDataFolder = () => {
-    window.electron.privacy.openDataFolder();
+  const handleOpenDataFolder = async () => {
+    try {
+      const { opened } = await window.electron.privacy.openDataFolder();
+      setOpenFolderFailed(!opened);
+    } catch (err) {
+      logError("Failed to open the data folder", err);
+      setOpenFolderFailed(true);
+    }
   };
 
   const handleClearCache = async () => {
@@ -530,9 +537,14 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange, onClose }: Privac
                     </TruncatedTooltip>
                   }
                   control={
-                    <Button variant="outline" size="sm" onClick={handleOpenDataFolder}>
+                    <Button variant="outline" size="sm" onClick={() => void handleOpenDataFolder()}>
                       Open folder
                     </Button>
+                  }
+                  error={
+                    openFolderFailed
+                      ? "Couldn't open the folder. It's at the path above"
+                      : undefined
                   }
                 />
                 <SettingsPresetGroup

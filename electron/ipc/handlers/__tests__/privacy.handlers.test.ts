@@ -21,6 +21,10 @@ const appMock = vi.hoisted(() => ({
 
 const shellMock = vi.hoisted(() => ({ showItemInFolder: vi.fn() }));
 
+const openPathMock = vi.hoisted(() => ({ openWithDefaultApp: vi.fn() }));
+
+vi.mock("../../../utils/openPath.js", () => openPathMock);
+
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
   app: appMock,
@@ -199,5 +203,27 @@ describe("registerPrivacyHandlers", () => {
 
     expect(telemetryServiceMock.setTelemetryLevel).not.toHaveBeenCalled();
     expect(utilsMock.typedBroadcast).not.toHaveBeenCalled();
+  });
+
+  it("PRIVACY_OPEN_DATA_FOLDER opens the data folder itself rather than revealing it in its parent", async () => {
+    openPathMock.openWithDefaultApp.mockResolvedValue("");
+    registerPrivacyHandlers();
+
+    const handler = ipcMainMock._handlers.get("privacy:open-data-folder");
+    expect(handler).toBeDefined();
+
+    await expect(handler!(null)).resolves.toEqual({ opened: true });
+    expect(openPathMock.openWithDefaultApp).toHaveBeenCalledWith("/tmp/user-data");
+    expect(shellMock.showItemInFolder).not.toHaveBeenCalled();
+  });
+
+  it("PRIVACY_OPEN_DATA_FOLDER reports an OS refusal instead of resolving as opened", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    openPathMock.openWithDefaultApp.mockResolvedValue("No application could open this file");
+    registerPrivacyHandlers();
+
+    const handler = ipcMainMock._handlers.get("privacy:open-data-folder");
+    await expect(handler!(null)).resolves.toEqual({ opened: false });
+    warn.mockRestore();
   });
 });

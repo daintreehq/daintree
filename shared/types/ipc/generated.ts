@@ -3658,7 +3658,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "privacy:open-data-folder": {
     args: [];
-    result: void;
+    result: { opened: boolean };
   };
   "privacy:reset-all-data": {
     args: [];
