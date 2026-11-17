@@ -56,7 +56,7 @@ function entry(pendingPlacement?: PendingHostPlacement): HostListEntry {
       assistantControlEnabled: false,
       ...(pendingPlacement ? { pendingPlacement } : {}),
     },
-    connection: { status: "unreachable", lastSeenAt: null, hostModeOff: true },
+    connection: { status: "unreachable", lastSeenAt: null, detail: null, hostModeOff: true },
     summary: null,
   };
 }

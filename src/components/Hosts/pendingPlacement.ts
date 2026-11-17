@@ -8,10 +8,8 @@ import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { requestHostSwitch } from "@/components/HostSwitch/hostSwitchRequests";
 import { openHostsSettingsTab } from "@/components/Settings/Hosts/hostSettingsRequests";
 import { requestHostUpdate } from "@/components/Settings/Hosts/hostUpdateRequests";
+import { closeSettingsThen } from "@/components/Settings/settingsCloseRequests";
 import { logWarn } from "@/utils/logger";
-
-/** Closes the Settings dialog, so the switch dialog never opens under it. */
-export const CLOSE_SETTINGS_EVENT = "daintree:close-settings";
 
 export type PlacementRequest = Omit<PendingHostPlacement, "requestedAt" | "failure">;
 
@@ -26,6 +24,8 @@ const keyOf = (hostId: HostId, placement: PendingHostPlacement) =>
 const askedHere = new Set<string>();
 /** Placements this view has handed to the switch dialog, so a late list never hands one twice. */
 const handedOff = new Set<string>();
+/** Placements waiting for Settings to close before they are handed over. */
+const resuming = new Set<string>();
 
 export function isUsableConnection(state: HostConnectionState): boolean {
   return state.status === "connected" || state.status === "driven-elsewhere";
@@ -98,7 +98,8 @@ export function placementReadyToResume(
       placement?.projectId === projectId &&
       isUsableConnection(host.connection) &&
       !isHostSetupOpen(hostId) &&
-      !handedOff.has(keyOf(hostId, placement))
+      !handedOff.has(keyOf(hostId, placement)) &&
+      !resuming.has(keyOf(hostId, placement))
     ) {
       return { hostId, placement };
     }
@@ -108,27 +109,35 @@ export function placementReadyToResume(
 
 /**
  * Carry a placement on into the switch dialog, on the branch its worktree
- * has checked out, and stop holding it: the dialog owns it from here. False
- * when no dialog host is mounted in this view to take it.
+ * has checked out, and stop holding it: the dialog owns it from here.
+ * Settings closes first, the way its own Close does, so the switch dialog
+ * never opens under it; `stillReady` is asked again once it has, and a
+ * placement that is no longer ready stays held for the next try.
  */
-export function resumePlacement(hostId: HostId, placement: PendingHostPlacement): boolean {
+export function resumePlacement(
+  hostId: HostId,
+  placement: PendingHostPlacement,
+  stillReady: () => boolean
+): void {
   const key = keyOf(hostId, placement);
-  if (handedOff.has(key)) return false;
-  const askFirst = placement.askFirst === true || !askedHere.has(key);
-  window.dispatchEvent(new CustomEvent(CLOSE_SETTINGS_EVENT));
-  const requestId = requestHostSwitch({
-    toHostId: hostId,
-    projectId: placement.projectId,
-    worktreePath: placement.worktreePath,
-    askFirst,
+  if (handedOff.has(key) || resuming.has(key)) return;
+  resuming.add(key);
+  closeSettingsThen((closed) => {
+    resuming.delete(key);
+    if (!closed || !stillReady()) return;
+    const requestId = requestHostSwitch({
+      toHostId: hostId,
+      projectId: placement.projectId,
+      worktreePath: placement.worktreePath,
+      askFirst: placement.askFirst === true || !askedHere.has(key),
+    });
+    if (requestId === null) return;
+    handedOff.add(key);
+    askedHere.delete(key);
+    cancelPlacement(hostId).catch((error: unknown) => {
+      logWarn("[Hosts] Couldn't clear a placement handed to the switch dialog", { error });
+    });
   });
-  if (requestId === null) return false;
-  handedOff.add(key);
-  askedHere.delete(key);
-  cancelPlacement(hostId).catch((error: unknown) => {
-    logWarn("[Hosts] Couldn't clear a placement handed to the switch dialog", { error });
-  });
-  return true;
 }
 
 const setupOpen = new Map<HostId, number>();
@@ -176,6 +185,7 @@ export function subscribeHostSetup(listener: () => void): () => void {
 export function _resetPendingPlacementsForTesting(): void {
   askedHere.clear();
   handedOff.clear();
+  resuming.clear();
   setupOpen.clear();
   setupListeners.clear();
   setupVersion = 0;

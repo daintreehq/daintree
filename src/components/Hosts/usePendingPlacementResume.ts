@@ -6,9 +6,11 @@ import {
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { isProjectViewObservable, subscribeProjectViewObservability } from "@/lib/viewCacheState";
 import { useProjectStore } from "@/store/projectStore";
-import { useHostList } from "./hostList";
+import { getHostListSnapshot, useHostList } from "./hostList";
 import {
   hostSetupVersion,
+  isHostSetupOpen,
+  isUsableConnection,
   placementReadyToResume,
   resumePlacement,
   subscribeHostSetup,
@@ -44,6 +46,28 @@ export function usePendingPlacementResume(): void {
     // A window on another host has no local worktree to place.
     if (projectId === null || !observable || switching || getViewHostId() !== null) return;
     const ready = placementReadyToResume(hosts, projectId);
-    if (ready) resumePlacement(ready.hostId, ready.placement);
+    if (!ready) return;
+    // Handed over after the commit: a StrictMode replay unregisters the dialog
+    // host in between, which would dismiss a request made in this pass.
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      // Asked again once Settings has closed: the host, the placement and this view may have moved on.
+      resumePlacement(ready.hostId, ready.placement, () => {
+        const entry = getHostListSnapshot().hosts.find(
+          (host) => host.descriptor.id === ready.hostId
+        );
+        return (
+          entry?.descriptor.pendingPlacement?.requestedAt === ready.placement.requestedAt &&
+          isUsableConnection(entry.connection) &&
+          !isHostSetupOpen(ready.hostId) &&
+          currentHostSwitchRequest() === null &&
+          isProjectViewObservable()
+        );
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [hosts, projectId, observable, switching, setupVersion]);
 }

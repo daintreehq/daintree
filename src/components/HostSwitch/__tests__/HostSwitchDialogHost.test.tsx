@@ -24,6 +24,7 @@ vi.mock("@/store/projectStore", () => ({
 }));
 vi.mock("@/components/Hosts/hostList", () => ({
   useHostList: () => ({ hosts: env.hosts, localSummary: null }),
+  getHostListSnapshot: () => ({ hosts: env.hosts, localSummary: null }),
 }));
 vi.mock("@/clients/remoteHostsClient", () => ({ remoteHostsClient: { update } }));
 
@@ -117,7 +118,17 @@ describe("HostSwitchDialogHost", () => {
             requestedAt: 1,
           },
         },
-        connection: { status: "driven-elsewhere" } as HostListEntry["connection"],
+        connection: {
+          status: "connected",
+          rttMs: null,
+          handshake: {
+            version: "1",
+            commit: "c",
+            protocolVersion: 1,
+            platform: "linux",
+            arch: "x64",
+          },
+        },
         summary: null,
       },
     ];

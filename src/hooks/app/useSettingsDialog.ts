@@ -98,14 +98,6 @@ export function useSettingsDialog() {
       window.removeEventListener("daintree:open-settings-tab", handleOpenSettingsTabEvent);
   }, [handleOpenSettingsTab]);
 
-  // A flow that started in Settings and carries on in a dialog of its own (a
-  // worktree placed once its host's setup finishes) closes it first.
-  useEffect(() => {
-    const close = () => setIsSettingsOpen(false);
-    window.addEventListener("daintree:close-settings", close);
-    return () => window.removeEventListener("daintree:close-settings", close);
-  }, []);
-
   return {
     isSettingsOpen,
     settingsTab,

@@ -160,14 +160,29 @@ describe("resource box handoff", () => {
         requestedAt: expect.any(Number),
       },
     });
-    // Held before setup opens, so finishing setup always finds it.
-    expect(client.update.mock.invocationCallOrder[0]).toBeLessThan(
-      requestHostUpdate.mock.invocationCallOrder[0]
-    );
     expect(requestHostUpdate).toHaveBeenCalledWith("dt-feature-x", "setup");
     expect(openHostsSettingsTab).toHaveBeenCalled();
     expect(requestHostSwitch).not.toHaveBeenCalled();
     expect(outcome).toEqual({ status: "setup", hostId: "dt-feature-x" });
+  });
+
+  it("opens setup only once the placement is held, so finishing setup always finds it", async () => {
+    client.probe.mockResolvedValue(probeResult({ hostModeListening: false }));
+    let held!: () => void;
+    client.update.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          held = () => resolve({});
+        })
+    );
+
+    const outcome = openResourceBoxOnHost(box);
+    await vi.waitFor(() => expect(client.update).toHaveBeenCalled());
+    expect(requestHostUpdate).not.toHaveBeenCalled();
+
+    held();
+    await expect(outcome).resolves.toEqual({ status: "setup", hostId: "dt-feature-x" });
+    expect(requestHostUpdate).toHaveBeenCalledWith("dt-feature-x", "setup");
   });
 
   it("opens Host setup when a listener answers but the link doesn't come up", async () => {

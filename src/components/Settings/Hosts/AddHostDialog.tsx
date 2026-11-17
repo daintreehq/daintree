@@ -402,29 +402,11 @@ function isUsable(state: HostConnectionState): boolean {
   return state.status === "connected" || state.status === "driven-elsewhere";
 }
 
-/** Why setup stopped, in the words the dialog shows; null while nothing has. */
-function setupFailureText({
-  error,
-  installError,
-  outcome,
-  probe,
-  hostLabel,
-}: {
-  error: string | null;
-  installError: string | null;
-  outcome: Outcome | null;
-  probe: HostProbeResult | null;
-  hostLabel: string;
-}): string | null {
-  if (installError) return installError;
-  if (error) return error;
-  if (outcome && outcome !== "skipped" && !isUsable(outcome)) {
-    return outcome.status === "unreachable" && outcome.detail
-      ? `Couldn't connect: ${outcome.detail}`
-      : `Couldn't connect to ${hostLabel}`;
-  }
-  if (probe && !probe.reachable) return probe.sshError ?? `Couldn't reach ${hostLabel}`;
-  return null;
+/** Why a connect at the end of setup didn't bring the link up, for the worktree waiting on it. */
+function connectFailureText(state: HostConnectionState, hostName: string): string {
+  return state.status === "unreachable" && state.detail
+    ? `Couldn't connect: ${state.detail}`
+    : `Couldn't connect to ${hostName}`;
 }
 
 function ErrorLine({ message }: { message: string }) {
@@ -736,6 +718,17 @@ export function AddHostDialog({
       ? null
       : (others.find((entry) => sameHostMachine(entry.descriptor.connection, typed)) ?? null);
 
+  /**
+   * A step that stopped, recorded on the worktree waiting for this setup from
+   * the step's own answer, so it lands even once the dialog has closed.
+   */
+  const noteFailure = (message: string) => {
+    if (existing === null || placement === null) return;
+    notePlacementFailure(existing.hostId, placement, message).catch((err: unknown) => {
+      logWarn("[Hosts] Couldn't record a setup failure on its pending placement", { err });
+    });
+  };
+
   const run = <T,>(
     work: () => Promise<T>,
     then: (value: T) => void,
@@ -751,12 +744,13 @@ export function AddHostDialog({
       },
       (err: unknown) => {
         setBusy(false);
-        failed(
+        const message =
           isClientAppError(err) && err.userMessage
             ? err.userMessage
-            : clientErrorText(err, "Something went wrong"),
-          err
-        );
+            : clientErrorText(err, "Something went wrong");
+        // A run the person stopped hasn't failed.
+        if (!(isClientAppError(err) && err.code === "CANCELLED")) noteFailure(message);
+        failed(message, err);
       }
     );
   };
@@ -815,6 +809,7 @@ export function AddHostDialog({
     run(
       () => remoteHostsClient.probe(connection),
       (result) => {
+        if (!result.reachable) noteFailure(result.sshError ?? `Couldn't reach ${hostLabel}`);
         setProbe(result);
         setLinuxPackage(result.install?.packaging === "deb" ? "deb" : "appimage");
         setApplying(null);
@@ -841,25 +836,6 @@ export function AddHostDialog({
     if (!isOpen || existingId === null) return undefined;
     return holdHostSetup(existingId);
   }, [isOpen, existingId]);
-
-  // A step that stopped is recorded on the worktree waiting for this setup, so
-  // it still says why once the dialog has closed. Each stop is recorded once.
-  const failure = setupFailureText({
-    error,
-    installError: installStopped ? null : installError,
-    outcome,
-    probe,
-    hostLabel,
-  });
-  const notedFailure = useRef<string | null>(null);
-  useEffect(() => {
-    if (existingId === null || placement === null || failure === null) return;
-    if (notedFailure.current === failure) return;
-    notedFailure.current = failure;
-    notePlacementFailure(existingId, placement, failure).catch((err: unknown) => {
-      logWarn("[Hosts] Couldn't record a setup failure on its pending placement", { err });
-    });
-  }, [existingId, placement, failure]);
 
   const loadPlan = (
     pkg: LinuxPackagePreference,
@@ -1008,6 +984,7 @@ export function AddHostDialog({
         setConnecting(false);
         if (!isUsable(state)) {
           setOutcome(state);
+          noteFailure(connectFailureText(state, host.name));
           return;
         }
         onClose();

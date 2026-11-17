@@ -11,6 +11,7 @@ import type {
 import type { HostListEntry } from "@shared/types/remoteHosts";
 import { useRemoteHostsStore } from "@/store/remoteHostsStore";
 import { AddHostDialog } from "../AddHostDialog";
+import { ClientAppError } from "@/utils/clientAppError";
 
 // Which kind of host this machine adds: ssh, or (a Windows Shell) WSL distros.
 const connectionKind = vi.hoisted(() => ({ value: "ssh" as "ssh" | "wsl" }));
@@ -886,7 +887,7 @@ describe("AddHostDialog", () => {
           failure: { message: expect.stringContaining("systemd refused"), at: expect.any(Number) },
         },
       });
-      // The list now carries the failure: nothing is written again for the same stop.
+      // The list now carries the failure: nothing is written again without another stop.
       const entry = known("studio", "studio", "greg@studio");
       entry.descriptor.pendingPlacement = {
         ...PLACEMENT,
@@ -894,6 +895,90 @@ describe("AddHostDialog", () => {
       };
       act(() => useRemoteHostsStore.getState().setHosts([entry]));
       expect(remoteHosts.update).toHaveBeenCalledOnce();
+    });
+
+    it("records a failed install, but not one the person stopped", async () => {
+      remoteHosts.probe!.mockResolvedValue(probeResult({ matchesClient: false }));
+      remoteHosts.install!.mockRejectedValueOnce(
+        new ClientAppError("CANCELLED", "stopped", "Stopped")
+      );
+      render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
+      fireEvent.click(await screen.findByRole("button", { name: "Review update" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Update studio" }));
+      await waitFor(() => expect(remoteHosts.install).toHaveBeenCalledOnce());
+      await act(async () => {});
+      expect(remoteHosts.update).not.toHaveBeenCalled();
+
+      cleanup();
+      remoteHosts.install!.mockRejectedValueOnce(new Error("No space left on device"));
+      render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
+      fireEvent.click(await screen.findByRole("button", { name: "Review update" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Update studio" }));
+      await waitFor(() =>
+        expect(remoteHosts.update).toHaveBeenCalledWith({
+          hostId: "studio",
+          pendingPlacement: expect.objectContaining({
+            failure: { message: expect.stringContaining("No space left"), at: expect.any(Number) },
+          }),
+        })
+      );
+    });
+
+    it("connects once an update has installed, where Done would otherwise only close", async () => {
+      remoteHosts.probe!.mockResolvedValue(probeResult({ matchesClient: false }));
+      remoteHosts.install!.mockResolvedValue({
+        status: "installed",
+        probe: probeResult(),
+        reconnected: null,
+      });
+      const onClose = vi.fn();
+      render(<AddHostDialog isOpen onClose={onClose} existing={EXISTING} />);
+      fireEvent.click(await screen.findByRole("button", { name: "Review update" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Update studio" }));
+      await screen.findByRole("heading", { name: /Updated studio to Daintree/ });
+      fireEvent.click(screen.getByRole("button", { name: "Done" }));
+      await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+      expect(remoteHosts.connect).toHaveBeenCalledWith({ hostId: "studio" });
+
+      // Nothing waiting: Done closes as it always has.
+      cleanup();
+      act(() =>
+        useRemoteHostsStore.getState().setHosts([known("studio", "studio", "greg@studio")])
+      );
+      remoteHosts.connect!.mockClear();
+      const closeOnly = vi.fn();
+      render(<AddHostDialog isOpen onClose={closeOnly} existing={EXISTING} />);
+      fireEvent.click(await screen.findByRole("button", { name: "Review update" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Update studio" }));
+      await screen.findByRole("heading", { name: /Updated studio to Daintree/ });
+      fireEvent.click(screen.getByRole("button", { name: "Done" }));
+      expect(closeOnly).toHaveBeenCalledOnce();
+      expect(remoteHosts.connect).not.toHaveBeenCalled();
+    });
+
+    it("records a connect that fails after the dialog has closed", async () => {
+      remoteHosts.probe!.mockResolvedValue(probeResult());
+      let answer!: (state: unknown) => void;
+      remoteHosts.connect!.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          })
+      );
+      const view = render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
+      fireEvent.click(await screen.findByRole("button", { name: "Connect" }));
+      await waitFor(() => expect(remoteHosts.connect).toHaveBeenCalled());
+      view.unmount();
+
+      await act(async () =>
+        answer({ status: "unreachable", lastSeenAt: null, detail: "Connection refused" })
+      );
+      expect(remoteHosts.update).toHaveBeenCalledWith({
+        hostId: "studio",
+        pendingPlacement: expect.objectContaining({
+          failure: { message: "Couldn't connect: Connection refused", at: expect.any(Number) },
+        }),
+      });
     });
 
     it("records a check that couldn't reach the host", async () => {

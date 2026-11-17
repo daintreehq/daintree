@@ -28,17 +28,35 @@ interface PendingPlacementNoticeProps {
 export function PendingPlacementNotice({ worktreeId, inGutter }: PendingPlacementNoticeProps) {
   const { hosts } = useHostList();
   const projectId = useProjectStore((state) => state.currentProject?.id ?? null);
-  const [cancelError, setCancelError] = useState<string | null>(null);
-  // Cancel removes this notice from under the button that was pressed.
-  const focusHandoffRef = useCardFocusHandoff<HTMLDivElement>();
   // A window on another host shows that host's worktrees, never one waiting here.
   const found =
     getViewHostId() === null ? placementForWorktree(hosts, projectId, worktreeId) : null;
   if (!found) return null;
+  return (
+    <WaitingNotice
+      hostId={found.host.descriptor.id}
+      hostName={found.host.descriptor.name}
+      failure={found.placement.failure?.message ?? null}
+      inGutter={inGutter}
+    />
+  );
+}
 
-  const hostId = found.host.descriptor.id;
-  const hostName = found.host.descriptor.name;
-  const failure = found.placement.failure ?? null;
+/** Its own component, so it unmounts when Cancel lands and hands focus back to the card. */
+function WaitingNotice({
+  hostId,
+  hostName,
+  failure,
+  inGutter,
+}: {
+  hostId: string;
+  hostName: string;
+  failure: string | null;
+  inGutter: boolean;
+}) {
+  const [cancelError, setCancelError] = useState<string | null>(null);
+  // Cancel removes this notice from under the button that was pressed.
+  const focusHandoffRef = useCardFocusHandoff<HTMLDivElement>();
 
   const handleSetUp = (event: MouseEvent) => {
     event.stopPropagation();
@@ -67,7 +85,7 @@ export function PendingPlacementNotice({ worktreeId, inGutter }: PendingPlacemen
       >
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <span className="break-words text-text-secondary select-text">
-            {failure ? failure.message : "It opens there once Daintree is set up and connected."}
+            {failure ?? "It opens there once Daintree is set up and connected."}
           </span>
           {cancelError && <span className="text-text-primary">{cancelError}</span>}
           <div className="flex flex-wrap items-center gap-2">

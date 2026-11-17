@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
-import { useEffect } from "react";
+import { StrictMode, useEffect } from "react";
 import type {
   HostConnectionState,
   HostDescriptor,
@@ -24,7 +24,10 @@ vi.mock("@/clients/remoteHostsClient", () => ({ remoteHostsClient: { update } })
 vi.mock("@/components/Settings/Hosts/hostUpdateRequests", () => ({ requestHostUpdate }));
 vi.mock("@/components/Settings/Hosts/hostSettingsRequests", () => ({ openHostsSettingsTab }));
 vi.mock("@/hooks/useHostConnection", () => ({ getViewHostId: () => env.viewHost }));
-vi.mock("../hostList", () => ({ useHostList: () => ({ hosts: env.hosts, localSummary: null }) }));
+vi.mock("../hostList", () => ({
+  useHostList: () => ({ hosts: env.hosts, localSummary: null }),
+  getHostListSnapshot: () => ({ hosts: env.hosts, localSummary: null }),
+}));
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: (selector: (state: { currentProject: { id: string } | null }) => unknown) =>
     selector({ currentProject: env.projectId ? { id: env.projectId } : null }),
@@ -44,7 +47,10 @@ import {
   registerHostSwitchDialogHost,
 } from "@/components/HostSwitch/hostSwitchRequests";
 import {
-  CLOSE_SETTINGS_EVENT,
+  onSettingsCloseRequest,
+  type SettingsCloseRequest,
+} from "@/components/Settings/settingsCloseRequests";
+import {
   _resetPendingPlacementsForTesting,
   cancelPlacement,
   holdHostSetup,
@@ -84,11 +90,11 @@ function hostEntry(
   return { descriptor, connection, summary: null };
 }
 
-const connected = {
+const connected: HostConnectionState = {
   status: "connected",
   rttMs: null,
-  handshake: {},
-} as unknown as HostConnectionState;
+  handshake: { version: "1", commit: "c", protocolVersion: 1, platform: "linux", arch: "x64" },
+};
 const disconnected: HostConnectionState = { status: "disconnected" };
 
 /** The view's switch dialog host: registered first, then the resume, as in HostSwitchDialogHost. */
@@ -98,13 +104,13 @@ function DialogHost() {
   return null;
 }
 
-function show(hosts: HostListEntry[], view: ReturnType<typeof render> | null = null) {
+/** Render, or re-render with a new list, and let the deferred handoff run. */
+async function show(hosts: HostListEntry[], view: ReturnType<typeof render> | null = null) {
   env.hosts = hosts;
-  if (view) {
-    view.rerender(<DialogHost />);
-    return view;
-  }
-  return render(<DialogHost />);
+  const shown = view ?? render(<DialogHost />);
+  if (view) view.rerender(<DialogHost />);
+  await act(async () => {});
+  return shown;
 }
 
 beforeEach(() => {
@@ -164,7 +170,8 @@ describe("pending placements", () => {
   });
 
   it("leaves a placement held when no switch dialog host is mounted to take it", () => {
-    expect(resumePlacement("box", { ...request, requestedAt: 1 })).toBe(false);
+    resumePlacement("box", { ...request, requestedAt: 1 }, () => true);
+    expect(currentHostSwitchRequest()).toBeNull();
     expect(update).not.toHaveBeenCalled();
   });
 });
@@ -173,19 +180,17 @@ describe("usePendingPlacementResume", () => {
   it("places the worktree once its host's setup finishes, without asking again", async () => {
     const placement = await holdPlacement("box", request, 1_000);
     update.mockClear();
-    const closed = vi.fn();
-    window.addEventListener(CLOSE_SETTINGS_EVENT, closed);
     const setupDone = holdHostSetup("box");
 
     // Setup is running: Daintree isn't up there yet.
-    const view = show([hostEntry("box", disconnected, placement)]);
+    const view = await show([hostEntry("box", disconnected, placement)]);
     expect(currentHostSwitchRequest()).toBeNull();
 
     // An update reconnects the host while its setup dialog is still open.
-    show([hostEntry("box", connected, placement)], view);
+    await show([hostEntry("box", connected, placement)], view);
     expect(currentHostSwitchRequest()).toBeNull();
 
-    act(() => setupDone());
+    await act(async () => setupDone());
 
     expect(currentHostSwitchRequest()).toMatchObject({
       toHostId: "box",
@@ -193,39 +198,97 @@ describe("usePendingPlacementResume", () => {
       worktreePath: request.worktreePath,
       askFirst: false,
     });
-    expect(closed).toHaveBeenCalledTimes(1);
     expect(update).toHaveBeenCalledWith({ hostId: "box", pendingPlacement: null });
-    window.removeEventListener(CLOSE_SETTINGS_EVENT, closed);
+  });
+
+  it("opens the switch dialog only once Settings has closed, and holds it while Settings stays", async () => {
+    const placement = await holdPlacement("box", request, 1_000);
+    update.mockClear();
+    const asked: SettingsCloseRequest[] = [];
+    const stop = onSettingsCloseRequest((closeRequest) => {
+      closeRequest.claim();
+      asked.push(closeRequest);
+    });
+
+    const view = await show([hostEntry("box", connected, placement)]);
+    expect(asked).toHaveLength(1);
+    expect(currentHostSwitchRequest()).toBeNull();
+
+    // Opened again before its exit finished: nothing is handed over, and a later try asks again.
+    await act(async () => asked[0]!.settle(false));
+    expect(currentHostSwitchRequest()).toBeNull();
+    expect(update).not.toHaveBeenCalled();
+
+    await show([hostEntry("box", connected, { ...placement })], view);
+    expect(asked).toHaveLength(2);
+    await act(async () => asked[1]!.settle(true));
+    expect(currentHostSwitchRequest()).toMatchObject({ toHostId: "box" });
+    expect(update).toHaveBeenCalledWith({ hostId: "box", pendingPlacement: null });
+    stop();
+  });
+
+  it("keeps the placement when the host dropped while Settings was closing", async () => {
+    const placement = await holdPlacement("box", request, 1_000);
+    update.mockClear();
+    const asked: SettingsCloseRequest[] = [];
+    const stop = onSettingsCloseRequest((closeRequest) => {
+      closeRequest.claim();
+      asked.push(closeRequest);
+    });
+    await show([hostEntry("box", connected, placement)]);
+
+    env.hosts = [hostEntry("box", disconnected, placement)];
+    await act(async () => asked[0]!.settle(true));
+
+    expect(currentHostSwitchRequest()).toBeNull();
+    expect(update).not.toHaveBeenCalled();
+    stop();
   });
 
   it("asks first for a placement found after a restart, or one an agent asked for", async () => {
     // Never asked for in this view: it was waiting when Daintree started.
     const restored = { ...request, requestedAt: 1_000 };
-    const view = show([hostEntry("box", connected, restored)]);
+    const view = await show([hostEntry("box", connected, restored)]);
     expect(currentHostSwitchRequest()).toMatchObject({ toHostId: "box", askFirst: true });
     view.unmount();
 
     const asked = await holdPlacement("mini", { ...request, askFirst: true }, 2_000);
-    show([hostEntry("mini", connected, asked)]);
+    await show([hostEntry("mini", connected, asked)]);
     expect(currentHostSwitchRequest()).toMatchObject({ toHostId: "mini", askFirst: true });
   });
 
   it("hands a placement over once, even while the list still shows it", async () => {
     const placement = await holdPlacement("box", request, 1_000);
-    const view = show([hostEntry("box", connected, placement)]);
+    const view = await show([hostEntry("box", connected, placement)]);
     const first = currentHostSwitchRequest();
     expect(first).not.toBeNull();
 
     act(() => dismissHostSwitchRequest(first!.id));
-    show([hostEntry("box", connected, { ...placement })], view);
+    await show([hostEntry("box", connected, { ...placement })], view);
     expect(currentHostSwitchRequest()).toBeNull();
+  });
+
+  it("survives StrictMode's effect replay with the request still open", async () => {
+    const placement = await holdPlacement("box", request, 1_000);
+    env.hosts = [hostEntry("box", connected, placement)];
+    render(
+      <StrictMode>
+        <DialogHost />
+      </StrictMode>
+    );
+    await act(async () => {});
+    expect(currentHostSwitchRequest()).toMatchObject({ toHostId: "box" });
   });
 
   it("never resumes a cancelled placement when its host comes up", async () => {
     const placement = await holdPlacement("box", request, 1_000);
-    const view = show([hostEntry("box", disconnected, placement)]);
+    const view = await show([hostEntry("box", disconnected, placement)]);
+    update.mockClear();
     await cancelPlacement("box");
-    show([hostEntry("box", connected)], view);
+    expect(update).toHaveBeenCalledWith({ hostId: "box", pendingPlacement: null });
+
+    // The list main sends back once the cancel has landed.
+    await show([hostEntry("box", connected)], view);
     expect(currentHostSwitchRequest()).toBeNull();
   });
 
@@ -233,10 +296,10 @@ describe("usePendingPlacementResume", () => {
     const placement = await holdPlacement("box", request, 1_000);
     const other = { ...request, projectId: "proj-2", requestedAt: 2_000 };
     env.observable = false;
-    show([hostEntry("studio", connected, other), hostEntry("box", connected, placement)]);
+    await show([hostEntry("studio", connected, other), hostEntry("box", connected, placement)]);
     expect(currentHostSwitchRequest()).toBeNull();
 
-    act(() => {
+    await act(async () => {
       env.observable = true;
       for (const listener of env.observers) listener(true);
     });
@@ -246,7 +309,7 @@ describe("usePendingPlacementResume", () => {
   it("does nothing in a window on another host", async () => {
     env.viewHost = "studio";
     const placement = await holdPlacement("box", request, 1_000);
-    show([hostEntry("box", connected, placement)]);
+    await show([hostEntry("box", connected, placement)]);
     expect(currentHostSwitchRequest()).toBeNull();
   });
 });

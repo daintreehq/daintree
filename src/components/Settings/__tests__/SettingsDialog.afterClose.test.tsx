@@ -34,6 +34,7 @@ vi.mock("../Decisions/DecisionsSettingsTab", () => ({
 }));
 
 import { SettingsDialog } from "../SettingsDialog";
+import { closeSettingsThen } from "../settingsCloseRequests";
 
 vi.stubGlobal("requestIdleCallback", () => 0);
 vi.stubGlobal("cancelIdleCallback", () => {});
@@ -163,5 +164,50 @@ describe("a tab's close with a follow-up", () => {
     rerender(dialog(false, onClose));
     await waitPastExit();
     expect(afterClose).toHaveBeenCalledOnce();
+  });
+});
+
+describe("a close asked for from outside Settings", () => {
+  it("closes as Close does, and carries on once the dialog has gone", async () => {
+    const onClose = vi.fn();
+    const { rerender } = await openEnvironment(onClose);
+    const next = vi.fn();
+
+    await act(async () => closeSettingsThen(next));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(next).not.toHaveBeenCalled();
+
+    rerender(dialog(false, onClose));
+    await waitFor(() => expect(next).toHaveBeenCalledExactlyOnceWith(true));
+  });
+
+  it("waits through an unsaved setting until Settings does close", async () => {
+    const onClose = vi.fn();
+    const { rerender } = await openEnvironment(onClose);
+    fireEvent.click(screen.getByRole("button", { name: /add variable/i }));
+    fireEvent.change(screen.getAllByLabelText(/^Name of variable \d+$/)[1]!, {
+      target: { value: "1BAD" },
+    });
+    const next = vi.fn();
+
+    await act(async () => closeSettingsThen(next));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(next).not.toHaveBeenCalled();
+
+    // The person settles the edit and closes Settings themselves.
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    await act(async () => {
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    });
+    expect(onClose).toHaveBeenCalledOnce();
+    rerender(dialog(false, onClose));
+    await waitFor(() => expect(next).toHaveBeenCalledExactlyOnceWith(true));
+  });
+
+  it("carries on at once when Settings isn't open", () => {
+    render(dialog(false, vi.fn()));
+    const next = vi.fn();
+    closeSettingsThen(next);
+    expect(next).toHaveBeenCalledExactlyOnceWith(true);
   });
 });

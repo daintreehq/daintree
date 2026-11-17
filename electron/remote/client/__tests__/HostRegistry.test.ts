@@ -418,6 +418,24 @@ describe("HostRegistry", () => {
       expect(registry.get("b")).not.toHaveProperty("pendingPlacement");
     });
 
+    it("keeps a long worktree path exactly, cutting only what is shown", () => {
+      const registry = new HostRegistry(memoryStore());
+      const host = registry.add({ name: "box", connection: { kind: "ssh", target: "box" } });
+      const path = `/repo/${"deep/".repeat(150)}feature `;
+      const saved = registry.update({
+        hostId: host.id,
+        pendingPlacement: {
+          ...placement,
+          worktreeId: path,
+          worktreePath: path,
+          label: "x".repeat(800),
+        },
+      }).pendingPlacement;
+      expect(saved?.worktreeId).toBe(path);
+      expect(saved?.worktreePath).toBe(path);
+      expect(saved?.label.length).toBeLessThan(800);
+    });
+
     it("drops the placement when the host is pointed at another machine", () => {
       const registry = new HostRegistry(memoryStore());
       const host = registry.add({ name: "box", connection: { kind: "ssh", target: "box" } });

@@ -127,6 +127,7 @@ import { HostLinkStatus } from "./Hosts/HostLinkStatus";
 import { requestHostSettings } from "./Hosts/hostSettingsRequests";
 import { hostEnvDrafts } from "./Hosts/hostEnvDrafts";
 import type { SettingsTabClose } from "./settingsTabClose";
+import { onSettingsCloseRequest, type SettingsCloseRequest } from "./settingsCloseRequests";
 import { availableSearchEntries, isSettingsTabAvailable } from "./settingsTabAvailability";
 
 let rememberedTab: SettingsTab = "general";
@@ -725,6 +726,19 @@ function SettingsDialogInner({
     return true;
   };
 
+  // A flow that started here and carries on in a dialog of its own (a worktree
+  // placed once its host's setup finishes) closes Settings the way Close does.
+  // An unsaved setting holds it, and the flow then waits for Settings to close.
+  const closeWaitersRef = useRef(new Set<(closed: boolean) => void>());
+  const answerCloseRequest = useEffectEvent((request: SettingsCloseRequest) => {
+    if (!isOpenRef.current) return;
+    request.claim();
+    void handleClose(request.settle).then((closing) => {
+      if (!closing) closeWaitersRef.current.add(request.settle);
+    });
+  });
+  useEffect(() => onSettingsCloseRequest((request) => answerCloseRequest(request)), []);
+
   // A plugin's setting lives in the plugin manager or Project settings → Plugins,
   // so it goes through the action `host.settings.open` uses instead of a tab here.
   const openPluginSetting = async (plugin: NonNullable<SettingsSearchEntry["plugin"]>) => {
@@ -1000,6 +1014,9 @@ function SettingsDialogInner({
         const afterClose = afterCloseRef.current;
         afterCloseRef.current = null;
         afterClose?.(true);
+        const waiters = [...closeWaitersRef.current];
+        closeWaitersRef.current.clear();
+        for (const settle of waiters) settle(true);
       }}
       size="4xl"
       // Search owns first focus (below), not the first tabbable — which was the scope

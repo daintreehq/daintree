@@ -312,7 +312,7 @@ export function readStoredHostConnection(entry: {
   return typeof entry.sshTarget === "string" ? sshConnection(entry.sshTarget) : null;
 }
 
-/** Longest text a pending placement keeps for a label or a failure; the rest is cut. */
+/** Longest a pending placement's label or failure is kept; the rest is cut. Ids and paths never are. */
 const MAX_PLACEMENT_TEXT = 500;
 
 /**
@@ -344,13 +344,18 @@ function placementText(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed.slice(0, MAX_PLACEMENT_TEXT) : null;
 }
 
+/** An id or a path, exactly as given: changing one would name another worktree. */
+function placementIdentity(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
 /** A stored or sent pending placement that still reads as one, or null. */
 export function readPendingPlacement(value: unknown): PendingHostPlacement | null {
   if (!value || typeof value !== "object") return null;
   const raw = value as Record<string, unknown>;
-  const projectId = placementText(raw.projectId);
-  const worktreeId = placementText(raw.worktreeId);
-  const worktreePath = placementText(raw.worktreePath);
+  const projectId = placementIdentity(raw.projectId);
+  const worktreeId = placementIdentity(raw.worktreeId);
+  const worktreePath = placementIdentity(raw.worktreePath);
   const label = placementText(raw.label);
   const requestedAt = raw.requestedAt;
   if (!projectId || !worktreeId || !worktreePath || !label) return null;
