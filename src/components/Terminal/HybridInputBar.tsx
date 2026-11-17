@@ -997,7 +997,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       syncedDraftRef.current = value;
     }, [terminalId, value, projectId, draftKey, setDraftInput, followsDriver, isFleetFollower]);
 
-    const { isApplyingExternalValueRef } = useFleetMirror({
+    const { isApplyingExternalValueRef, mirrorDraft } = useFleetMirror({
       editorViewRef,
       terminalId,
       projectId,
@@ -2489,6 +2489,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         if (next === lastEmittedValueRef.current) return false;
         lastEmittedValueRef.current = next;
         setValue(next);
+        mirrorDraft(next);
         return true;
       },
       consumeExternalValueFlag: () => {

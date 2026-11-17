@@ -99,6 +99,17 @@ describe("useFleetMirror", () => {
     expect(setDraft).toHaveBeenCalledWith("test draft");
   });
 
+  it("mirrors typing before the owner's value prop renders", () => {
+    const hook = render({ isFleetPrimary: true, value: "previous draft" });
+
+    act(() => {
+      hook.result.current.mirrorDraft("typed draft");
+      expect(draftOf("term-2")).toBe("typed draft");
+    });
+
+    expect(draftOf("term-1")).toBe("");
+  });
+
   /** Renders a primary of {term-1, term-2} whose fleet becomes `live` before its effects run. */
   function renderPrimaryOvertakenBy(live: string[], value: string) {
     return renderHook(() => {

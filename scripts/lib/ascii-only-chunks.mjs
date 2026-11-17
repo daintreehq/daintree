@@ -85,7 +85,8 @@ export function asciiOnlyOutputPlugin() {
     name: "ascii-only-output",
     setup(build) {
       const write = build.initialOptions.write !== false;
-      const workingDir = build.initialOptions.absWorkingDir ?? process.cwd();
+      // esbuild resolves symlinks in output paths, including macOS's /var.
+      const workingDir = fs.realpathSync(build.initialOptions.absWorkingDir ?? process.cwd());
       build.initialOptions.write = false;
       build.onEnd((result) => {
         if (result.errors.length > 0 || !result.outputFiles) return;

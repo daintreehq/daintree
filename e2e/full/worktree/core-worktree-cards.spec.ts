@@ -221,7 +221,9 @@ test.describe.serial("Core: Worktree Cards", () => {
         // The root is submenu triggers plus the destructive row — filesystem,
         // session and card-organization commands live one level down now.
         for (const name of ["Launch", "Open", "Panels", "Copy"]) {
-          await expect(window.getByRole("menuitem", { name })).toBeVisible({ timeout: T_SHORT });
+          await expect(window.getByRole("menuitem", { name, exact: true })).toBeVisible({
+            timeout: T_SHORT,
+          });
         }
 
         // Organize also renders on the sidebar main card (it can collapse);

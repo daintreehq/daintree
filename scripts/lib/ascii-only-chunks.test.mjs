@@ -100,7 +100,7 @@ describe("asciiOnlyOutputPlugin", () => {
   let dir;
 
   beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), "ascii-only-output-"));
+    dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ascii-only-output-")));
     fs.writeFileSync(
       path.join(dir, "wide.js"),
       [
@@ -176,6 +176,26 @@ describe("asciiOnlyOutputPlugin", () => {
     expect(wide).toContain("String.raw`→`");
     expect(hasTwoByteCharacters(wide.replace("String.raw`→`", ""))).toBe(false);
     expect(fs.readFileSync(path.join(dir, "out/narrow.js"), "utf8")).toContain("é");
+  });
+
+  it("updates metadata when the working directory is a symbolic link", async () => {
+    const source = path.join(dir, "source");
+    const linked = path.join(dir, "linked");
+    fs.mkdirSync(source);
+    fs.writeFileSync(path.join(source, "wide.js"), 'export const dash = /—/.test("—");');
+    fs.symlinkSync(source, linked, process.platform === "win32" ? "junction" : "dir");
+
+    const result = await build(
+      options({
+        absWorkingDir: linked,
+        entryPoints: ["wide.js"],
+        write: false,
+        plugins: [asciiOnlyOutputPlugin()],
+      })
+    );
+    const wide = result.outputFiles.find((file) => file.path.endsWith("wide.js"));
+    expect(hasTwoByteCharacters(wide.text)).toBe(false);
+    expect(result.metafile.outputs["out/wide.js"].bytes).toBe(wide.contents.byteLength);
   });
 
   it("fails the build, writing nothing, when a chunk cannot be re-printed", async () => {

@@ -762,16 +762,19 @@ test.describe("Core: File surfaces", () => {
       await expect(filePanes(ctx.window)).toHaveCount(1, { timeout: T_SHORT });
       await expect(tallPane.locator(".cm-content")).toBeVisible({ timeout: T_LONG });
 
-      // #11024: the pane body owns the scroll. Without the grid-item min-height
-      // fix the cell inflates to the file's intrinsic height, so the pane has no
-      // internal scroll and its client height explodes past the window.
+      // The editor owns the scroll below the metadata strip (#16917). The
+      // grid cell must stay bounded while the document scrolls inside it.
       await expect
         .poll(
           () =>
-            tallPane.evaluate((el) => ({
-              scrollsInternally: el.scrollHeight > el.clientHeight,
-              paneBounded: el.clientHeight <= window.innerHeight,
-            })),
+            tallPane.evaluate((el) => {
+              const scroller = el.querySelector("[data-code-viewer-scroll]");
+              return {
+                scrollsInternally:
+                  scroller instanceof HTMLElement && scroller.scrollHeight > scroller.clientHeight,
+                paneBounded: el.clientHeight <= window.innerHeight,
+              };
+            }),
           { timeout: T_MEDIUM }
         )
         .toEqual({ scrollsInternally: true, paneBounded: true });
