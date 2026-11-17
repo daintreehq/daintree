@@ -94,6 +94,8 @@ export function watchOwnedHostCleanup(options: OwnedHostCleanupOptions): () => v
   const probe = options.probe ?? lstat;
   const retryDelayMs = options.retryDelayMs ?? RETRY_DELAY_MS;
   const pending = new Set<string>();
+  /** Removals heard while that worktree's cleanup ran: checked once it's done. */
+  const removalsWaiting = new Set<string>();
   const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   let disposed = false;
 
@@ -158,6 +160,9 @@ export function watchOwnedHostCleanup(options: OwnedHostCleanupOptions): () => v
       } finally {
         pending.delete(worktreeId);
       }
+      if (removalsWaiting.delete(worktreeId) && !disposed) {
+        forgetOwned(worktreeId, () => isWorktreeGone(probe(worktreeId)));
+      }
       // Refused while installing or being re-pointed: the box is still gone, so
       // try again once that settles rather than leave a host nothing removes.
       if (refused.size > 0 && !disposed && attempt < MAX_RETRIES && !retryTimers.has(worktreeId)) {
@@ -172,6 +177,10 @@ export function watchOwnedHostCleanup(options: OwnedHostCleanupOptions): () => v
   };
 
   const stopRemove = events.on("sys:worktree:remove", ({ worktreeId }) => {
+    if (pending.has(worktreeId)) {
+      removalsWaiting.add(worktreeId);
+      return;
+    }
     forgetOwned(worktreeId, () => isWorktreeGone(probe(worktreeId)));
   });
   const stopTeardown = events.on("sys:worktree:resource-teardown", ({ worktreeId }) => {

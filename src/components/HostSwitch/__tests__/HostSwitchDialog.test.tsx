@@ -567,7 +567,12 @@ describe("HostSwitchDialog", () => {
       const options = switchToHost.mock.calls[0]![3] as {
         onLanded: () => void;
         onStayed: () => void;
+        focusIntent?: unknown;
       };
+      // It lands on that worktree, even in a window that already shows the project.
+      expect(options.focusIntent).toEqual(
+        worktreePath === null ? undefined : { intent: "focus-worktree", worktreeId: worktreePath }
+      );
       expect(onLanding).not.toHaveBeenCalled();
       options.onLanded();
       expect(onLanding).toHaveBeenLastCalledWith({ landed: true, worktreeOpened });

@@ -478,8 +478,15 @@ export function HostSwitchDialog({
       });
       return;
     }
-    if (landing) void switchToHost(result.hostId, newWindow, result.projectId, landing);
-    else void switchToHost(result.hostId, newWindow, result.projectId);
+    if (landing) {
+      // Lands on that worktree even in a window that already shows the project.
+      void switchToHost(result.hostId, newWindow, result.projectId, {
+        ...landing,
+        ...(result.worktreePath !== null
+          ? { focusIntent: { intent: "focus-worktree", worktreeId: result.worktreePath } }
+          : {}),
+      });
+    } else void switchToHost(result.hostId, newWindow, result.projectId);
   };
 
   /** The new-worktree dialog's worktree, created in the project now open on the host. */

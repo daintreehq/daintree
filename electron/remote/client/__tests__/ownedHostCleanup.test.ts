@@ -129,6 +129,28 @@ describe("watchOwnedHostCleanup", () => {
     await vi.waitFor(() => expect(clearPlacement).toHaveBeenCalledWith("feature-login"));
   });
 
+  it("checks a removal heard while the worktree's teardown is still removing its box", async () => {
+    const clearPlacement = vi.fn(async () => {});
+    let finishForget!: () => void;
+    const forget = vi.fn(() => new Promise<void>((resolve) => (finishForget = resolve)));
+    const onMachine = waiting("feature-login", "/wt/a");
+    onMachine.connection = { kind: "cloud", bindingId: "cb_0123456789ab" };
+    onMachine.pendingPlacement!.createdMachine = true;
+    stop = watchOwnedHostCleanup({
+      list: () => [host("box", "/wt/a"), onMachine],
+      forget,
+      clearPlacement,
+      probe: enoent,
+    });
+
+    finishTeardown("/wt/a");
+    await vi.waitFor(() => expect(forget).toHaveBeenCalledWith("box"));
+    removeWorktree("/wt/a");
+    expect(clearPlacement).not.toHaveBeenCalled();
+    finishForget();
+    await vi.waitFor(() => expect(clearPlacement).toHaveBeenCalledWith("feature-login"));
+  });
+
   it("keeps the host while the worktree's folder is still there", async () => {
     const forget = vi.fn(async () => {});
     const probe = vi.fn(async () => ({}));

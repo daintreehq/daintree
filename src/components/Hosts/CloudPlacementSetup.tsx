@@ -22,6 +22,27 @@ import {
   subscribeHostSetup,
 } from "./pendingPlacement";
 
+/**
+ * How long a setup asked for here may take to open before another machine's
+ * setup is asked for: Settings holds one request, and a second one sent before
+ * the first dialog took its own hold would replace it.
+ */
+const SETUP_HANDOFF_MS = 5_000;
+let lastAsked: { hostId: string; at: number } | null = null;
+
+function handingOff(): boolean {
+  if (!lastAsked) return false;
+  if (isHostSetupOpen(lastAsked.hostId) || Date.now() - lastAsked.at >= SETUP_HANDOFF_MS) {
+    lastAsked = null;
+    return false;
+  }
+  return true;
+}
+
+export function _resetCloudPlacementSetupForTesting(): void {
+  lastAsked = null;
+}
+
 const subscribeObservable = (listener: () => void) =>
   subscribeProjectViewObservability(() => listener());
 
@@ -51,12 +72,14 @@ export function CloudPlacementSetup() {
 
   useEffect(() => {
     if (projectId === null || getViewHostId() !== null) return;
+    // Asked first, so a setup seen open ends the handoff even while it stays open.
+    const handoff = handingOff();
     const { ready, stale } = cloudSetupReady(
       hosts,
       snapshot,
       projectId,
       isHostSetupOpen,
-      isAnyHostSetupOpen()
+      handoff || isAnyHostSetupOpen()
     );
     for (const hostId of stale) disarmCloudSetup(hostId);
     if (!ready || !observable || switching) return;
@@ -67,6 +90,7 @@ export function CloudPlacementSetup() {
       if (cancelled) return;
       if (!disarmCloudSetup(ready.hostId, ready.requestedAt)) return;
       retryPlacementSetup(ready.hostId);
+      lastAsked = { hostId: ready.hostId, at: Date.now() };
     });
     return () => {
       cancelled = true;

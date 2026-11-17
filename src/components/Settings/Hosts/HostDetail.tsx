@@ -159,7 +159,7 @@ export function HostDetail({
   const [cancellingPlacement, setCancellingPlacement] = useState(false);
   const cancelWaiting = () => {
     setPlacementError(null);
-    if (placement?.createdMachine && cloud) {
+    if (placement?.createdMachine) {
       setCancellingPlacement(true);
       return;
     }

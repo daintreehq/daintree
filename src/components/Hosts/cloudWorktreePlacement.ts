@@ -20,7 +20,7 @@ import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { notify } from "@/lib/notify";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import { getHostListSnapshot } from "./hostList";
-import { isUsableConnection, noteAskedHere, placementForWorktree } from "./pendingPlacement";
+import { isUsableConnection, noteAskedHere } from "./pendingPlacement";
 
 /** The host list's own limit on a name (`HostRegistry`), and the machine's with it. */
 const MAX_MACHINE_NAME_LENGTH = 64;
@@ -100,8 +100,15 @@ export async function startCloudWorktreePlacement(
   const hosts = getHostListSnapshot().hosts;
   // One machine per worktree: a Retry after an answer that never came back
   // finds the machine that was made, rather than asking for a second.
-  const waiting = placementForWorktree(hosts, input.projectId, input.worktreeId);
-  if (waiting?.placement.createdMachine) return waiting.host.descriptor.id;
+  const waiting = hosts.find((host) => {
+    const placement = host.descriptor.pendingPlacement;
+    return (
+      placement?.createdMachine === true &&
+      placement.projectId === input.projectId &&
+      placement.worktreeId === input.worktreeId
+    );
+  });
+  if (waiting) return waiting.descriptor.id;
   if (asking.has(input.worktreeId)) return null;
   asking.add(input.worktreeId);
   const name = cloudMachineName(input.branch, hosts);

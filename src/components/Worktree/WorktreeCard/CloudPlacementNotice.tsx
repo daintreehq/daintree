@@ -111,8 +111,13 @@ export function CloudPlacementNotice({
       "Couldn't retry"
     );
   };
+  // A host already usable needs no setup: the worktree is asked for there again.
   const setUp = (event: MouseEvent) =>
-    run(event, () => retryPlacementSetup(hostId), "Couldn't open setup");
+    run(
+      event,
+      () => (usable ? placeAgain(hostId, placement) : retryPlacementSetup(hostId)),
+      "Couldn't open setup"
+    );
   const details = (event: MouseEvent) =>
     run(
       event,
@@ -162,8 +167,10 @@ export function CloudPlacementNotice({
       body = stage.message;
       break;
     case "setup":
-      title = `Opens on ${hostName} after setup`;
-      body = "Its machine is running. It opens there once Daintree is set up and connected.";
+      title = usable ? `Ready to open on ${hostName}` : `Opens on ${hostName} after setup`;
+      body = usable
+        ? "Its machine is running and Daintree is set up there."
+        : "Its machine is running. It opens there once Daintree is set up and connected.";
       break;
     default:
       title = `Opens on ${hostName} after setup`;
@@ -207,7 +214,7 @@ export function CloudPlacementNotice({
                 onClick={setUp}
                 className="shadow-none inset-shadow-none"
               >
-                Set up…
+                {usable ? `Open on ${hostName}` : "Set up…"}
               </Button>
             )}
             {stage.kind === "machine" && !retryChecks && (

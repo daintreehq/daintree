@@ -47,7 +47,10 @@ import {
   type PlacementCommit,
   type PlacementDraft,
 } from "../WorktreePlacementRow";
-import { BOAT_PROVIDER } from "../../cloud/__tests__/cloudProviderFixtures";
+import {
+  BOAT_PROVIDER,
+  provider as providerWith,
+} from "../../cloud/__tests__/cloudProviderFixtures";
 
 const ROOT = "/Users/greg/Projects/daintree";
 const DRAFT: PlacementDraft = {
@@ -445,6 +448,38 @@ describe("WorktreePlacementRow new machine (#17359)", () => {
     expect(onCloudChange.mock.lastCall?.[0]!.machine()).toMatchObject({
       provisioning: { location: "sfo", image: null, network: null },
     });
+  });
+
+  it("names a stopped machine's billing, and leaves Cmd+Enter to the dialog's Create", async () => {
+    const billed = providerWith({ stoppedComputeBilled: true });
+    hostList.hosts = [];
+    cloud.snapshot = {
+      providers: [billed],
+      accounts: [{ ...ACCOUNT, providerId: billed.id }],
+      hosts: [],
+    };
+    getCatalog.mockResolvedValue({
+      ...CATALOG,
+      provisioning: { location: null, image: null, network: null },
+    });
+    renderRow();
+    await choose(screen.getByTestId("worktree-host-select"), /New machine · Personal/);
+    const review = await screen.findByTestId("worktree-machine-review");
+    expect(review.textContent).toContain(
+      "Acme keeps billing a stopped machine for compute until it's deleted."
+    );
+    const size = screen.getByTestId("worktree-machine-size");
+    const shortcut = new KeyboardEvent("keydown", {
+      key: "Enter",
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      size.dispatchEvent(shortcut);
+    });
+    expect(shortcut.defaultPrevented).toBe(true);
+    expect(screen.queryByRole("listbox")).toBeNull();
   });
 
   it("holds Create while the sizes can't be read, saying why", async () => {

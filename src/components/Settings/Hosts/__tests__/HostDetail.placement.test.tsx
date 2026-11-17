@@ -32,6 +32,7 @@ vi.mock("../AddHostDialog", () => ({
 }));
 
 import { HostDetail } from "../HostDetail";
+import { NOT_OPENED } from "@/components/Hosts/pendingPlacement";
 
 const PLACEMENT: PendingHostPlacement = {
   projectId: "proj-1",
@@ -95,6 +96,42 @@ describe("HostDetail with a worktree waiting on its setup", () => {
   it("opens straight into setup when asked for it, titled for setup", () => {
     render(<HostDetail entry={entry(PLACEMENT)} onBack={() => {}} openUpdate="setup" />);
     expect(screen.getByRole("dialog").textContent).toBe("Set up box");
+  });
+
+  it("asks what becomes of a machine made for the worktree before cancelling, even unread", async () => {
+    render(<HostDetail entry={entry({ ...PLACEMENT, createdMachine: true })} onBack={() => {}} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    });
+    expect(client.update).not.toHaveBeenCalled();
+    expect(screen.getByText("Stop opening 'feature-x' on box?")).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Keep machine" }));
+    });
+    expect(client.update).toHaveBeenCalledWith({ hostId: "box", pendingPlacement: null });
+  });
+
+  it("asks again for a machine-made placement whose switch didn't open it", async () => {
+    render(
+      <HostDetail
+        entry={entry({
+          ...PLACEMENT,
+          createdMachine: true,
+          failure: { message: NOT_OPENED, at: 2 },
+        })}
+        onBack={() => {}}
+      />
+    );
+    expect(screen.getByText(NOT_OPENED)).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const written = client.update.mock.calls.at(-1)?.[0] as {
+      pendingPlacement: PendingHostPlacement;
+    };
+    expect(written.pendingPlacement).not.toHaveProperty("failure");
+    expect(written.pendingPlacement.requestedAt).not.toBe(PLACEMENT.requestedAt);
   });
 
   it("shows no waiting row for a host nothing waits on", () => {
