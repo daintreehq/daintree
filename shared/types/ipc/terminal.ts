@@ -510,3 +510,6 @@ export interface SemanticSearchResult {
   matches: SemanticSearchMatch[];
   complete: boolean;
 }
+
+/** Most terminal ids one scoped semantic-buffer search accepts. */
+export const SEMANTIC_SEARCH_TERMINAL_IDS_MAX = 256;

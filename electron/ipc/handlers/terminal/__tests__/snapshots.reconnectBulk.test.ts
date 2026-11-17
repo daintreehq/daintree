@@ -1211,16 +1211,22 @@ describe("terminal:search-semantic-buffers", () => {
 
   const ptyClient = {
     searchSemanticBuffersAsync: vi.fn(
-      async (): Promise<{ matches: typeof matches; complete: boolean }> => ({
+      async (
+        _query: string,
+        _isRegex: boolean,
+        _ids?: readonly string[]
+      ): Promise<{ matches: typeof matches; complete: boolean }> => ({
         matches,
         complete: true,
       })
     ),
     getTerminalProjectId: (id: string) => owners[id] ?? null,
+    getTrackedTerminalIds: () => ["daintree-throwaway-run", ...Object.keys(owners)],
   };
   let dispose: (() => void) | undefined;
 
   beforeEach(() => {
+    ptyClient.searchSemanticBuffersAsync.mockClear();
     dispose = registerTerminalSnapshotHandlers({ ptyClient } as unknown as HandlerDependencies);
     // The plain envelope, as security setup installs it for real.
     getIpcDispatcher().setInvokeEnveloper(async (_channel, _args, run) => {
@@ -1247,7 +1253,7 @@ describe("terminal:search-semantic-buffers", () => {
     expect(envelope.data).toEqual({ matches: [matches[0]], complete: true });
   });
 
-  it("filters by the project the view is bound to when the search answers", async () => {
+  it("tells a view that rebound while the search ran that its new project went unsearched", async () => {
     let answer: (r: { matches: typeof matches; complete: boolean }) => void = () => {};
     ptyClient.searchSemanticBuffersAsync.mockImplementationOnce(
       () =>
@@ -1267,7 +1273,9 @@ describe("terminal:search-semantic-buffers", () => {
 
     const envelope = await pending;
     if (!envelope.ok) throw new Error(JSON.stringify(envelope.error));
-    expect(envelope.data).toEqual({ matches: [matches[1]], complete: true });
+    // Only proj-1's terminals were asked, so neither project's hits are shown
+    // and "no match" can't be claimed for proj-2.
+    expect(envelope.data).toEqual({ matches: [], complete: false });
   });
 
   it("answers a remote view with no project without searching any shard", async () => {
@@ -1337,6 +1345,86 @@ describe("terminal:search-semantic-buffers", () => {
     );
     expect(ptyClient.searchSemanticBuffersAsync).toHaveBeenCalledTimes(1);
     expect(overCap.ok && overCap.data).toEqual({ matches: [], complete: true });
+  });
+
+  describe("terminal scope (#17516)", () => {
+    async function remote(projectId: string | null, ...args: unknown[]) {
+      return getIpcDispatcher().invokeForEndpoint(
+        { endpoint: remoteView(projectId), client },
+        CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
+        args
+      );
+    }
+
+    async function local(...args: unknown[]) {
+      const call = (
+        ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }
+      ).mock.calls.find((c) => c[0] === CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS);
+      const handler = call?.[1] as (event: unknown, ...args: unknown[]) => Promise<unknown>;
+      return handler({ sender: { id: 7 }, senderFrame: { url: "app://daintree" } }, ...args);
+    }
+
+    const scopeSent = () => ptyClient.searchSemanticBuffersAsync.mock.calls.map((c) => c[2]);
+
+    it("scopes an older remote peer that sends no ids to its project before scanning", async () => {
+      const envelope = await remote("proj-1", "token", false);
+      expect(envelope.ok && envelope.data).toEqual({ matches: [matches[0]], complete: true });
+      expect(scopeSent()).toEqual([["mine"]]);
+    });
+
+    it("narrows a remote view's ids to its own project before scanning", async () => {
+      const envelope = await remote("proj-1", "token", false, ["theirs", "mine", "nobodys"]);
+      expect(envelope.ok && envelope.data).toEqual({ matches: [matches[0]], complete: true });
+      expect(scopeSent()).toEqual([["mine"]]);
+    });
+
+    it("never scans when none of a remote view's ids are its own", async () => {
+      const envelope = await remote("proj-1", "token", false, ["theirs", "nobodys"]);
+      // Nothing of its own to search, so nothing of its own went unsearched.
+      expect(envelope.ok && envelope.data).toEqual({ matches: [], complete: true });
+      expect(scopeSent()).toEqual([]);
+    });
+
+    it("drops the answer when the remote view rebinds to another project mid-scan", async () => {
+      const endpoint = remoteView("proj-1");
+      ptyClient.searchSemanticBuffersAsync.mockImplementationOnce(async () => {
+        (endpoint as { projectId: string | null }).projectId = "proj-2";
+        return { matches, complete: true };
+      });
+      const envelope = await getIpcDispatcher().invokeForEndpoint(
+        { endpoint, client },
+        CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
+        ["token", false, ["mine"]]
+      );
+      expect(envelope.ok && envelope.data).toEqual({ matches: [], complete: false });
+    });
+
+    it("searches exactly a local window's ids, whatever project they report", async () => {
+      const result = await local("token", false, [
+        "theirs",
+        "mine",
+        "theirs",
+        "daintree-throwaway-run",
+      ]);
+      expect(scopeSent()).toEqual([["theirs", "mine"]]);
+      // The shards' answer is trusted only for the ids that were asked about.
+      expect(result).toEqual({ matches: [matches[0], matches[1]], complete: true });
+    });
+
+    it("answers an empty local scope without scanning", async () => {
+      await expect(local("token", false, [])).resolves.toEqual({ matches: [], complete: true });
+      expect(scopeSent()).toEqual([]);
+    });
+
+    it.each([
+      ["a non-array", "mine"],
+      ["a non-string id", ["mine", 7]],
+      ["an empty id", [""]],
+      ["too many ids", Array.from({ length: 257 }, (_, i) => `t${i}`)],
+    ])("rejects %s scope", async (_label, ids) => {
+      await expect(local("token", false, ids)).rejects.toThrow(/Invalid terminal IDs/);
+      expect(scopeSent()).toEqual([]);
+    });
   });
 });
 
