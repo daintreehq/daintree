@@ -297,6 +297,8 @@ describe("terminal snapshots through the 0.4.0 bridge (#16230)", () => {
   it("declares pane snapshots to the relay, beside follow-ups, phone images and involvement hints", async () => {
     const h = await harness();
 
+    // The attempt is live once its bridge starts; the socket's signed ticket request lands after that.
+    await vi.waitFor(() => expect(h.relay.tickets).not.toHaveLength(0));
     const features = (h.relay.tickets[0] as { features?: string[] }).features;
     expect(features).toEqual([
       "involvement-v1",
