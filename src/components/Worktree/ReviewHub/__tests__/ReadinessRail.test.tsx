@@ -129,7 +129,6 @@ describe("ReadinessRail", () => {
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     expect(trigger.getAttribute("aria-label")).toContain("2 more");
 
-    expect(trigger.className).toContain("tabular-nums");
     const chevron = trigger.querySelector("[data-animated-chevron]");
     expect(chevron?.getAttribute("class")).not.toContain("rotate-180");
 

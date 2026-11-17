@@ -103,6 +103,7 @@ export function PrChecksPopover({
   const [sendHint, setSendHint] = useState<string | null>(null);
   const [showSettled, setShowSettled] = useState(false);
   const [mergeReloadKey, setMergeReloadKey] = useState(0);
+  const [retryInFlight, setRetryInFlight] = useState(false);
   // Lives outside the popover: opening the confirm moves focus out, which
   // closes the popover and would unmount a dialog mounted inside it.
   const [mergeRequest, setMergeRequest] = useState<PrMergeRequest | null>(null);
@@ -159,6 +160,7 @@ export function PrChecksPopover({
         suppressCloseFocusRef.current = false;
         setMergeStatusText("");
         setOutcomeAnnouncement("");
+        setRetryInFlight(false);
         runFetch();
         return;
       }
@@ -248,7 +250,9 @@ export function PrChecksPopover({
   const failingCount = state.kind === "loaded" ? state.rows.filter((r) => r.isFailure).length : 0;
   const cannotRead = state.kind === "error" || state.kind === "no-pr";
   const isReloading = state.kind === "loading";
-  const reloadLabel = cannotRead ? "Retry" : "Refresh";
+  // A Retry stays "Retry" through the read it started; `cannotRead` drops the
+  // moment the state turns to loading.
+  const reloadLabel = cannotRead || (isReloading && retryInFlight) ? "Retry" : "Refresh";
 
   return (
     <>
@@ -394,9 +398,10 @@ export function PrChecksPopover({
               variant="subtle"
               size="sm"
               data-testid="pr-checks-reload"
-              aria-disabled={isReloading || undefined}
+              aria-busy={isReloading || undefined}
               onClick={() => {
                 if (isReloading) return;
+                setRetryInFlight(cannotRead);
                 runFetch();
                 setMergeReloadKey((key) => key + 1);
               }}

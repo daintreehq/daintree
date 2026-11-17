@@ -17,7 +17,7 @@ function renderLine(isClearing: boolean, onClear = vi.fn()) {
           mark: {
             markedAt: 1,
             capturedAt: 1,
-            head: { kind: "unborn" },
+            head: { kind: "unborn", branch: "main" },
             base: { ref: null, tip: null },
             complete: true,
             pathCount: 0,

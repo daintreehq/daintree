@@ -393,7 +393,8 @@ describe("PrChecksPopover", () => {
     await waitFor(() => expect(getChecksMock).toHaveBeenCalledTimes(1));
 
     const reload = screen.getByTestId("pr-checks-reload");
-    expect(reload.getAttribute("aria-disabled")).toBe("true");
+    expect(reload.getAttribute("aria-busy")).toBe("true");
+    expect(reload.getAttribute("aria-disabled")).toBeNull();
     expect(reload.querySelector("[data-spinning]")).not.toBeNull();
     fireEvent.click(reload);
     expect(getChecksMock).toHaveBeenCalledTimes(1);
@@ -402,7 +403,26 @@ describe("PrChecksPopover", () => {
       first.resolve({ checks: [check()] });
     });
     await screen.findByTestId("pr-checks-list");
-    expect(screen.getByTestId("pr-checks-reload").getAttribute("aria-disabled")).toBeNull();
+    expect(screen.getByTestId("pr-checks-reload").getAttribute("aria-busy")).toBeNull();
+    expect(screen.getByTestId("pr-checks-reload").textContent).toBe("Refresh");
+  });
+
+  it("keeps the Retry label through the read a retry started", async () => {
+    getChecksMock.mockRejectedValueOnce(new Error("boom"));
+    renderPopover();
+    await openAndSettle();
+    await screen.findByTestId("pr-checks-error");
+
+    const pending = deferred<{ checks: ForgeCheckRun[] }>();
+    getChecksMock.mockReturnValueOnce(pending.promise);
+    fireEvent.click(screen.getByTestId("pr-checks-reload"));
+    expect(screen.getByTestId("pr-checks-reload").getAttribute("aria-busy")).toBe("true");
+    expect(screen.getByTestId("pr-checks-reload").textContent).toBe("Retry");
+
+    await act(async () => {
+      pending.resolve({ checks: [check()] });
+    });
+    await screen.findByTestId("pr-checks-list");
     expect(screen.getByTestId("pr-checks-reload").textContent).toBe("Refresh");
   });
 
