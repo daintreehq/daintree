@@ -254,6 +254,8 @@ describe("VoiceFileLinkResolver", () => {
         ok: true,
         json: async () => ({ output_text: JSON.stringify({ matched_file: matched }) }),
       } as unknown as Response);
+    const pick = (description: string, candidates: string[]) =>
+      new VoiceFileLinkResolver().pick({ description, apiKey: "sk-test", candidates });
 
     afterEach(() => {
       vi.unstubAllGlobals();
@@ -261,98 +263,60 @@ describe("VoiceFileLinkResolver", () => {
 
     it("does not insert the first of two equally strong matches", async () => {
       searchNaturalLanguageMock.mockResolvedValue(TIED);
-      const fetchMock = rerankReply(null);
+      const fetchMock = vi.fn();
       vi.stubGlobal("fetch", fetchMock);
 
       const resolver = new VoiceFileLinkResolver();
       const result = await resolver.resolve({ ...BASE_PAYLOAD, description: "user profile" });
 
       expect(result).toBeNull();
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it("leaves the choice to the reranker, which is told to decline a tie", async () => {
-      searchNaturalLanguageMock.mockResolvedValue(TIED);
-      const fetchMock = rerankReply("lib/UserProfile.tsx");
+    it("sees the tie whichever order the search listed the files in", async () => {
+      const fetchMock = vi.fn();
       vi.stubGlobal("fetch", fetchMock);
 
-      const resolver = new VoiceFileLinkResolver();
-      const result = await resolver.resolve({ ...BASE_PAYLOAD, description: "user profile" });
-
-      expect(result).toBe("lib/UserProfile.tsx");
-      const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as {
-        instructions: string;
-        input: string;
-      };
-      expect(body.instructions).toContain("equally well");
-      expect(body.input).toContain("app/UserProfile.tsx");
-      expect(body.input).toContain("lib/UserProfile.tsx");
-    });
-
-    it("sees the tie wherever the tied files sit in the list", async () => {
-      const fetchMock = rerankReply(null);
-      vi.stubGlobal("fetch", fetchMock);
-
-      const resolver = new VoiceFileLinkResolver();
-      const result = await resolver.pick({
-        description: "user profile",
-        apiKey: "sk-test",
-        candidates: ["src/Other.tsx", "lib/UserProfile.tsx", "app/UserProfile.tsx"],
-      });
-
-      expect(result).toBeNull();
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await expect(
+        pick("user profile", ["src/Other.tsx", "lib/UserProfile.tsx", "app/UserProfile.tsx"])
+      ).resolves.toBeNull();
+      await expect(
+        pick("user profile", ["app/UserProfile.tsx", "lib/UserProfile.tsx"])
+      ).resolves.toBeNull();
+      expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it("takes the file a directory in the description singles out, without asking the reranker", async () => {
       const fetchMock = vi.fn();
       vi.stubGlobal("fetch", fetchMock);
 
-      const resolver = new VoiceFileLinkResolver();
-      await expect(
-        resolver.pick({
-          description: "app user profile",
-          apiKey: "sk-test",
-          candidates: TIED,
-        })
-      ).resolves.toBe("app/UserProfile.tsx");
-      await expect(
-        resolver.pick({
-          description: "user profile in lib",
-          apiKey: "sk-test",
-          candidates: TIED,
-        })
-      ).resolves.toBe("lib/UserProfile.tsx");
+      await expect(pick("app user profile", TIED)).resolves.toBe("app/UserProfile.tsx");
+      await expect(pick("user profile in lib", TIED)).resolves.toBe("lib/UserProfile.tsx");
+      await expect(pick("lib user profile", [...TIED].reverse())).resolves.toBe(
+        "lib/UserProfile.tsx"
+      );
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it("takes the singled-out file even when the search listed it last", async () => {
+    it("sees a tie when the directory words fit both files alike", async () => {
       const fetchMock = vi.fn();
       vi.stubGlobal("fetch", fetchMock);
 
-      const resolver = new VoiceFileLinkResolver();
-      const result = await resolver.pick({
-        description: "lib user profile",
-        apiKey: "sk-test",
-        candidates: TIED,
-      });
-
-      expect(result).toBe("lib/UserProfile.tsx");
+      await expect(
+        pick("src user profile", ["src/app/UserProfile.tsx", "src/lib/UserProfile.tsx"])
+      ).resolves.toBeNull();
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it("still sees a tie when the directory words fit both files alike", async () => {
+    it("counts a directory word only when it is exactly what was said", async () => {
+      // "app" is not "application": both files stay at 2 of 3 tokens, below the
+      // confident bar, so the reranker is asked rather than a prefix deciding.
       const fetchMock = rerankReply(null);
       vi.stubGlobal("fetch", fetchMock);
 
-      const resolver = new VoiceFileLinkResolver();
-      const result = await resolver.pick({
-        description: "src user profile",
-        apiKey: "sk-test",
-        candidates: ["src/app/UserProfile.tsx", "src/lib/UserProfile.tsx"],
-      });
-
-      expect(result).toBeNull();
+      await expect(
+        pick("app user profile", ["application/UserProfile.tsx", "lib/UserProfile.tsx"])
+      ).resolves.toBeNull();
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
@@ -360,33 +324,41 @@ describe("VoiceFileLinkResolver", () => {
       const fetchMock = rerankReply(null);
       vi.stubGlobal("fetch", fetchMock);
 
-      const resolver = new VoiceFileLinkResolver();
-      const result = await resolver.pick({
-        description: "user profile",
-        apiKey: "sk-test",
-        candidates: ["user/profile/index.ts"],
-      });
-
-      expect(result).toBeNull();
+      await expect(pick("user profile", ["user/profile/index.ts"])).resolves.toBeNull();
       expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("weighs a name match above a directory match at the same coverage", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(pick("user profile", ["user/Profile.tsx", "src/UserProfile.tsx"])).resolves.toBe(
+        "src/UserProfile.tsx"
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it("keeps preferring a component over its test and stories siblings", async () => {
       const fetchMock = vi.fn();
       vi.stubGlobal("fetch", fetchMock);
 
-      const resolver = new VoiceFileLinkResolver();
-      const result = await resolver.pick({
-        description: "user profile",
-        apiKey: "sk-test",
-        candidates: [
+      await expect(
+        pick("user profile", [
           "src/UserProfile.test.tsx",
           "src/UserProfile.stories.tsx",
           "src/UserProfile.tsx",
-        ],
-      });
+        ])
+      ).resolves.toBe("src/UserProfile.tsx");
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
 
-      expect(result).toBe("src/UserProfile.tsx");
+    it("sees a tie between siblings that differ only by extension", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        pick("user profile", ["src/UserProfile.tsx", "src/UserProfile.css"])
+      ).resolves.toBeNull();
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
@@ -394,15 +366,23 @@ describe("VoiceFileLinkResolver", () => {
       const fetchMock = vi.fn();
       vi.stubGlobal("fetch", fetchMock);
 
-      const resolver = new VoiceFileLinkResolver();
-      const result = await resolver.pick({
-        description: "user profile",
-        apiKey: "sk-test",
-        candidates: ["app/UserProfile.tsx", "app/UserProfile.tsx"],
-      });
-
-      expect(result).toBe("app/UserProfile.tsx");
+      await expect(
+        pick("user profile", ["app/UserProfile.tsx", "app/UserProfile.tsx"])
+      ).resolves.toBe("app/UserProfile.tsx");
       expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("tells the reranker to decline a tie it is still asked about", async () => {
+      // One token short of the confident bar, so the reranker sees both files.
+      const fetchMock = rerankReply(null);
+      vi.stubGlobal("fetch", fetchMock);
+
+      await pick("profile page", ["app/Profile.tsx", "lib/Profile.tsx"]);
+
+      const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as {
+        instructions: string;
+      };
+      expect(body.instructions).toContain("equally well");
     });
   });
 

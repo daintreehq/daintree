@@ -22,6 +22,12 @@ interface PickRequest {
   signal?: AbortSignal;
 }
 
+interface PathFit {
+  score: number;
+  nameMatched: number;
+  extraWords: number;
+}
+
 const AI_RERANK_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -32,7 +38,8 @@ const AI_RERANK_SCHEMA = {
 } as const;
 
 /**
- * Resolves to null only when the search or reranker found no match. A lookup
+ * Resolves to null only when the search or reranker found no match, or when
+ * several files fit the description equally well. A lookup
  * that couldn't finish (a failed search, an API error, the rerank's own
  * timeout, an unreadable reply) rejects instead, so it isn't reported as a
  * miss (#14983). One its caller aborted resolves to null: the caller has
@@ -80,17 +87,18 @@ export class VoiceFileLinkResolver {
     if (tokens.length >= MIN_MATCHING_TOKENS) {
       const best = this.strongestMatches(tokens, candidates);
       if (best && best.score >= NL_CONFIDENCE_THRESHOLD) {
-        // Same-named files in different directories score alike: with nothing
-        // in the description to tell them apart, the first one the search
-        // happened to list is a guess, so the reranker gets to decline instead.
         if (best.paths.length === 1) {
           logDebug(`${P} High-confidence match`, { score: Number(best.score.toFixed(2)) });
           return best.paths[0];
         }
+        // Same-named files in different directories score alike. Nothing in the
+        // description tells them apart, so any one of them, the model's pick
+        // included, is a guess; a miss is reported and the spoken words stay.
         logDebug(`${P} Equally strong matches`, {
           score: Number(best.score.toFixed(2)),
           tied: best.paths.length,
         });
+        return null;
       }
     }
 
@@ -154,15 +162,13 @@ export class VoiceFileLinkResolver {
   /**
    * How well `file` fits the spoken tokens. The file's own name has to match at
    * least one, so a directory alone never selects a file. A token the name
-   * doesn't carry still counts when a directory does ("app user profile" names
-   * `app/UserProfile.tsx` over `lib/UserProfile.tsx`). `extraWords` is how much of
-   * the name the description left unsaid, which separates `UserProfile.tsx` from
-   * its `UserProfile.test.tsx` sibling.
+   * doesn't carry still counts when a directory word is exactly it ("app user
+   * profile" names `app/UserProfile.tsx` over `lib/UserProfile.tsx`). Past the
+   * score, a name match outweighs a directory match, and `extraWords` is how
+   * much of the name the description left unsaid, which separates
+   * `UserProfile.tsx` from its `UserProfile.test.tsx` sibling.
    */
-  private scorePath(
-    tokens: readonly string[],
-    file: string
-  ): { score: number; extraWords: number } | null {
+  private scorePath(tokens: readonly string[], file: string): PathFit | null {
     const lastSlash = file.lastIndexOf("/");
     const nameWords = this.splitWords(file.slice(lastSlash + 1).replace(/\.[^.]+$/, ""));
     const dirWords =
@@ -172,15 +178,20 @@ export class VoiceFileLinkResolver {
     let dirMatched = 0;
     for (const token of tokens) {
       if (nameWords.some((w) => this.wordMatches(w, token))) nameMatched++;
-      else if (dirWords.some((w) => this.wordMatches(w, token))) dirMatched++;
+      else if (dirWords.includes(token)) dirMatched++;
     }
     if (nameMatched === 0) return null;
 
     const sayable = nameWords.filter((w) => tokens.some((t) => this.wordMatches(w, t))).length;
     return {
       score: (nameMatched + dirMatched) / tokens.length,
+      nameMatched,
       extraWords: nameWords.length - sayable,
     };
+  }
+
+  private fitsBetter(a: PathFit, b: PathFit): number {
+    return a.score - b.score || a.nameMatched - b.nameMatched || b.extraWords - a.extraWords;
   }
 
   /** Every candidate that fits the tokens best, so a tie is seen rather than broken by list order. */
@@ -188,19 +199,13 @@ export class VoiceFileLinkResolver {
     tokens: readonly string[],
     candidates: readonly string[]
   ): { score: number; paths: string[] } | null {
-    let best: { score: number; extraWords: number; paths: Set<string> } | null = null;
+    let best: (PathFit & { paths: Set<string> }) | null = null;
     for (const file of candidates) {
       const fit = this.scorePath(tokens, file);
       if (!fit) continue;
-      if (
-        !best ||
-        fit.score > best.score ||
-        (fit.score === best.score && fit.extraWords < best.extraWords)
-      ) {
-        best = { ...fit, paths: new Set([file]) };
-      } else if (fit.score === best.score && fit.extraWords === best.extraWords) {
-        best.paths.add(file);
-      }
+      const order = best ? this.fitsBetter(fit, best) : 1;
+      if (order > 0) best = { ...fit, paths: new Set([file]) };
+      else if (order === 0) best!.paths.add(file);
     }
     return best && { score: best.score, paths: [...best.paths] };
   }
