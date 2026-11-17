@@ -693,7 +693,10 @@ describe("AppPalettePopover", () => {
         anchor.remove();
       });
 
-      it("leaves a pointer dismissal restoring nothing", () => {
+      // The two below pin only the close itself: whether focus comes back a
+      // task later is the shared policy's fallback, which this stubbed popover
+      // doesn't provide (`AppPalettePopover.closeFocus.test.tsx` drives it).
+      it("does not take a pointer dismissal straight back to the anchor", () => {
         const { anchor, ref } = mountAnchor();
         render(<Harness returnFocusRef={ref} />);
         act(() => contentProps.onPointerDownOutside?.());
@@ -703,7 +706,7 @@ describe("AppPalettePopover", () => {
         anchor.remove();
       });
 
-      it("restores nothing when the consumer claims the close", () => {
+      it("does not restore at close when the consumer claims it", () => {
         const { anchor, ref } = mountAnchor();
         render(<Harness returnFocusRef={ref} consumeCloseAutoFocusSuppression={() => true} />);
 

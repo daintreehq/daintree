@@ -557,7 +557,9 @@ describe("popover close-time focus policy", () => {
       content: captured.popoverContent as {
         onPointerDown: () => void;
         onPointerDownOutside: () => void;
-        onClick: (event: React.MouseEvent) => void;
+        // Capture phase on the popover: a row that stops its click must not
+        // hide the gesture.
+        onClickCapture: (event: React.MouseEvent) => void;
         onCloseAutoFocus: (event: {
           preventDefault: () => void;
           defaultPrevented: boolean;
@@ -570,7 +572,7 @@ describe("popover close-time focus policy", () => {
     const { trigger, content } = renderPopover();
     const focusSpy = vi.spyOn(trigger, "focus");
 
-    act(() => content.onClick(optionClick(1)));
+    act(() => content.onClickCapture(optionClick(1)));
     const event = closeEvent();
     act(() => content.onCloseAutoFocus(event));
 
@@ -588,7 +590,7 @@ describe("popover close-time focus policy", () => {
 
     const button = document.createElement("button");
     document.body.appendChild(button);
-    act(() => content.onClick({ target: button, detail: 1 } as unknown as React.MouseEvent));
+    act(() => content.onClickCapture({ target: button, detail: 1 } as unknown as React.MouseEvent));
     const event = closeEvent();
     act(() => content.onCloseAutoFocus(event));
 
@@ -640,6 +642,157 @@ describe("popover close-time focus policy", () => {
 
     expect(event.preventDefault).not.toHaveBeenCalled();
     expect(focusSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("stranded-focus fallback for a consumer that owns its restoration", () => {
+  // `AppPalettePopover` cancels the restoration on closes where something else
+  // is meant to take focus, and asks for this behind it so a modal click-away
+  // or a declined launch doesn't leave focus on `document.body` (#17202).
+  function renderOwnedPopover() {
+    let overlay: OverlayFocusRestore | null = null;
+    function Probe() {
+      overlay = useOverlayFocusRestore();
+      return null;
+    }
+    render(
+      <Popover>
+        <Probe />
+        <PopoverTrigger>trigger</PopoverTrigger>
+        <PopoverContent>body</PopoverContent>
+      </Popover>
+    );
+    return {
+      overlay: () => overlay!,
+      trigger: document.querySelector("button") as HTMLButtonElement,
+      content: captured.popoverContent as {
+        onPointerDownOutside: () => void;
+        onKeyDownCapture: () => void;
+        onClickCapture: (event: React.MouseEvent) => void;
+      },
+    };
+  }
+
+  function returnTarget() {
+    const target = document.createElement("button");
+    document.body.appendChild(target);
+    return target;
+  }
+
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("restores nothing until a task has passed, and nothing once focus is taken", () => {
+    const { overlay, trigger } = renderOwnedPopover();
+    const focusSpy = vi.spyOn(trigger, "focus");
+    const taker = returnTarget();
+
+    act(() => overlay().restoreIfStranded());
+    expect(focusSpy).not.toHaveBeenCalled();
+    taker.focus();
+    act(() => vi.runAllTimers());
+
+    expect(focusSpy).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(taker);
+    taker.remove();
+  });
+
+  it("falls back to the recorded trigger, ringed when no pointer was involved", () => {
+    const { overlay, trigger } = renderOwnedPopover();
+    const focusSpy = vi.spyOn(trigger, "focus");
+
+    act(() => overlay().restoreIfStranded());
+    act(() => vi.runAllTimers());
+
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
+  });
+
+  it("prefers the target it is handed over the trigger", () => {
+    const { overlay, trigger } = renderOwnedPopover();
+    const triggerSpy = vi.spyOn(trigger, "focus");
+    const target = returnTarget();
+    const targetSpy = vi.spyOn(target, "focus");
+
+    act(() => overlay().restoreIfStranded(target));
+    act(() => vi.runAllTimers());
+
+    expect(triggerSpy).not.toHaveBeenCalled();
+    expect(targetSpy).toHaveBeenCalledTimes(1);
+    target.remove();
+  });
+
+  it("reads the gesture when asked, so a later reset cannot turn a pointer pick ringed", () => {
+    const { overlay, trigger, content } = renderOwnedPopover();
+    const focusSpy = vi.spyOn(trigger, "focus");
+
+    act(() => content.onClickCapture(optionClick(1)));
+    act(() => {
+      overlay().restoreIfStranded();
+      overlay().deferToRadix();
+    });
+    act(() => vi.runAllTimers());
+
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true, focusVisible: false });
+  });
+
+  it("lets a keystroke supersede the pointer gesture before it", () => {
+    const { overlay, trigger, content } = renderOwnedPopover();
+    const focusSpy = vi.spyOn(trigger, "focus");
+
+    act(() => content.onClickCapture(optionClick(1)));
+    act(() => content.onKeyDownCapture());
+    act(() => overlay().restoreIfStranded());
+    act(() => vi.runAllTimers());
+
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
+  });
+
+  it("takes an explicit ring decision over the gesture", () => {
+    const { overlay, trigger } = renderOwnedPopover();
+    const focusSpy = vi.spyOn(trigger, "focus");
+
+    act(() => overlay().restoreIfStranded(null, true));
+    act(() => vi.runAllTimers());
+
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true, focusVisible: false });
+  });
+
+  it("keeps the ring it was told to keep, even after a pointer pick", () => {
+    const { overlay, trigger, content } = renderOwnedPopover();
+    const focusSpy = vi.spyOn(trigger, "focus");
+
+    act(() => content.onClickCapture(optionClick(1)));
+    act(() => overlay().restoreIfStranded(null, false));
+    act(() => vi.runAllTimers());
+
+    expect(focusSpy.mock.calls).toEqual([[{ preventScroll: true }]]);
+  });
+
+  it("resolves the recorded trigger when asked, not when the task runs", () => {
+    const { overlay, trigger } = renderOwnedPopover();
+    const triggerSpy = vi.spyOn(trigger, "focus");
+    const replacement = returnTarget();
+    const replacementSpy = vi.spyOn(replacement, "focus");
+
+    act(() => overlay().restoreIfStranded());
+    act(() => overlay().setRestoreTarget(replacement));
+    act(() => vi.runAllTimers());
+
+    expect(triggerSpy).toHaveBeenCalledTimes(1);
+    expect(replacementSpy).not.toHaveBeenCalled();
+    replacement.remove();
+  });
+
+  it("leaves a target that left the document alone", () => {
+    const { overlay } = renderOwnedPopover();
+    const target = returnTarget();
+    const targetSpy = vi.spyOn(target, "focus");
+
+    act(() => overlay().restoreIfStranded(target));
+    target.remove();
+    act(() => vi.runAllTimers());
+
+    expect(targetSpy).not.toHaveBeenCalled();
   });
 });
 

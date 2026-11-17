@@ -360,8 +360,8 @@ const PopoverContent = React.forwardRef<
       onPointerDownOutside,
       onInteractOutside,
       onFocusOutside,
-      onKeyDown,
-      onClick,
+      onKeyDownCapture,
+      onClickCapture,
       onCloseAutoFocus,
       motion = "overlay",
       ...props
@@ -427,12 +427,16 @@ const PopoverContent = React.forwardRef<
       onFocusOutside?.(event);
       guardFocusOutside(event);
     };
-    const handleKeyDown: React.KeyboardEventHandler<HTMLDivElement> = (event) => {
-      onKeyDown?.(event);
+    // Capture, not bubble: a row that stops its own click or Enter (the move
+    // picker's rows, the launcher's search box) would otherwise hide the
+    // gesture, and a close that hands focus off and never sees it arrive would
+    // restore with the wrong ring.
+    const handleKeyDownCapture: React.KeyboardEventHandler<HTMLDivElement> = (event) => {
+      onKeyDownCapture?.(event);
       focusRestore?.onContentKeyDown();
     };
-    const handleClick: React.MouseEventHandler<HTMLDivElement> = (event) => {
-      onClick?.(event);
+    const handleClickCapture: React.MouseEventHandler<HTMLDivElement> = (event) => {
+      onClickCapture?.(event);
       focusRestore?.onContentClick(event);
     };
     const handleCloseAutoFocus: NonNullable<PopoverContentProps["onCloseAutoFocus"]> = (event) => {
@@ -481,8 +485,8 @@ const PopoverContent = React.forwardRef<
             onPointerDownOutside={handlePointerDownOutside}
             onInteractOutside={handleInteractOutside}
             onFocusOutside={handleFocusOutside}
-            onKeyDown={handleKeyDown}
-            onClick={handleClick}
+            onKeyDownCapture={handleKeyDownCapture}
+            onClickCapture={handleClickCapture}
             onCloseAutoFocus={handleCloseAutoFocus}
             // Internal reposition trigger must win over any caller-supplied value.
             data-reposition-tick={repositionTick}

@@ -77,6 +77,19 @@ export interface OverlayFocusRestore {
    */
   deferToRadix: () => void;
   /**
+   * For a consumer that cancels the restoration itself on a close where
+   * something else is meant to take focus — a click-away, a launch moving focus
+   * to what it opened. Cancelling outright strands focus on `document.body`
+   * when nothing does, so this queues the same fallback the shared policy uses
+   * for its own: `target`, or the recorded restore target without one, takes
+   * focus a task later only if nothing else has. Ringless after a pointer
+   * gesture, ringed after the keyboard, unless `ringless` says which.
+   *
+   * Reads this opening's gestures when called, so call it before
+   * `deferToRadix()` clears them.
+   */
+  restoreIfStranded: (target?: HTMLElement | null, ringless?: boolean) => void;
+  /**
    * Mark the item being picked as a focus handoff (see "Handed off" above).
    * Call it from the item's own activation, before anything closes the overlay.
    */
@@ -187,6 +200,11 @@ export function useOverlayFocusRestoreValue(
       },
       resetForOpen,
       deferToRadix: resetForOpen,
+      restoreIfStranded: (target, ringless) => {
+        restoreFocusIfStranded(target ?? restoreTargetRef.current, {
+          ringless: ringless ?? (wasPointerCloseRef.current || wasPointerSelectRef.current),
+        });
+      },
       expectHandoff: () => {
         handoffRef.current = true;
       },
@@ -304,9 +322,10 @@ export function restoreFocusIfStranded(
     if (!isFocusStranded(strandedWithin)) return;
     if (!target?.isConnected) return;
     // Re-armed, not merely inherited: the arm at the top of the close handler
-    // disarms on its own zero-delay timer, which was queued BEFORE this one and
-    // therefore fires first. Without this the deferred focus lands unguarded
-    // and reopens the very tooltip the close suppressed.
+    // disarms on its own zero-delay timer, which can fire on either side of
+    // this one (a consumer queues it before that arm, the shared policy after).
+    // Without this the deferred focus can land unguarded and reopen the very
+    // tooltip the close suppressed.
     armTooltipFocusSuppression();
     target.focus(ringless ? { preventScroll: true, focusVisible: false } : { preventScroll: true });
   }, 0);

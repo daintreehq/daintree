@@ -176,7 +176,9 @@ export interface AppPalettePopoverContentProps extends Omit<
    *
    * This only decides whether the shell suppresses; it cannot manufacture a
    * restore Radix wasn't going to perform (non-modal content does not focus the
-   * trigger after an outside interaction).
+   * trigger after an outside interaction). A suppressed dismissal that left
+   * focus on nothing — every one on a modal palette, whose press never reaches
+   * what it hit — still gets it back, ringless, a task later.
    */
   restoreFocusOnPointerDismiss?: boolean;
   /**
@@ -195,6 +197,10 @@ export interface AppPalettePopoverContentProps extends Omit<
    * inside the content's exit animation cancels Radix's unmount, so that close
    * never reaches close-autofocus and an armed answer would survive to be spent
    * on the next dismissal.
+   *
+   * Suppression only waits for the handoff: if nothing has taken focus a task
+   * after the close (a launch that declined or was cancelled), focus comes back
+   * anyway, ringless after a pointer pick and ringed after a keyboard one.
    */
   consumeCloseAutoFocusSuppression?: () => boolean;
   /**
@@ -208,9 +214,10 @@ export interface AppPalettePopoverContentProps extends Omit<
    * of a `Trigger`. Radix only ever returns focus to a trigger, so without this
    * an anchor-only palette drops a keyboard dismissal on `document.body`.
    *
-   * Only claims the closes the shell would otherwise hand to Radix: an
+   * Claims the closes the shell would otherwise hand to Radix outright. An
    * activation that asked for suppression and a pointer dismissal (unless
-   * `restoreFocusOnPointerDismiss`) still restore nothing.
+   * `restoreFocusOnPointerDismiss`) come back here only if nothing else has
+   * taken focus a task later.
    */
   returnFocusRef?: React.RefObject<HTMLElement | null>;
 }
@@ -298,8 +305,19 @@ function AppPalettePopoverContent({
       // armed for the next one.
       const suppressRequested = consumeCloseAutoFocusSuppression?.() === true;
       onCloseAutoFocus?.();
-      if (suppressRequested || (!restoreFocusOnPointerDismiss && wasPointerCloseRef.current)) {
+      const pointerDismissed = !restoreFocusOnPointerDismiss && wasPointerCloseRef.current;
+      if (suppressRequested || pointerDismissed) {
         event.preventDefault();
+        // Cancelled because something else is meant to take focus: what the
+        // outside press landed on, or the surface the activation launched. A
+        // modal palette swallows that press, and a launch can decline, so
+        // whichever never happens would strand focus on `document.body`. The
+        // target takes it back a task later if so, ringless after the press.
+        // Queued before `deferToRadix()` below clears the gesture it reads.
+        focusRestore?.restoreIfStranded(
+          returnFocusRef?.current,
+          pointerDismissed ? true : undefined
+        );
       } else {
         const target = returnFocusRef?.current;
         if (target?.isConnected) {
@@ -315,8 +333,9 @@ function AppPalettePopoverContent({
       // are per-palette policy, not the popover primitive's default — so the
       // shared overlay policy is told to stand down for this close. It would
       // otherwise cancel the restoration a `restoreFocusOnPointerDismiss`
-      // palette explicitly asked to keep. Only the restoration is waived; the
-      // tooltip suppression the shared handler arms still runs.
+      // palette explicitly asked to keep. Only the immediate restoration is
+      // waived: the stranded-focus fallback queued above and the tooltip
+      // suppression the shared handler arms both still run.
       focusRestore?.deferToRadix();
       // Cleared on every close, not just the suppressed ones: a palette that
       // opts into restoration would otherwise stay armed after its first
