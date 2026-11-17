@@ -230,9 +230,9 @@ describe("showQuitWarning offering to keep agents running", () => {
     [2, "cancel"],
   ] as const)("answers button %i with %s", async (response, decision) => {
     const showMessageBox = box(response);
-    expect(
-      await showQuitWarning(agents(2), showMessageBox, null, { offerKeepRunning: true })
-    ).toBe(decision);
+    expect(await showQuitWarning(agents(2), showMessageBox, null, { offerKeepRunning: true })).toBe(
+      decision
+    );
   });
 
   it("puts the choice beside Quit, keeps Cancel the default, and never renders command links", async () => {
@@ -324,7 +324,11 @@ describe("showQuitWarning with attached Shells", () => {
   it("counts two unnamed machines instead of merging them into one", async () => {
     const showMessageBox = box(1);
     await showQuitWarning(
-      { activeAgents: 0, awaitingApproval: 0, attachedShells: [{ clientName: "" }, { clientName: " " }] },
+      {
+        activeAgents: 0,
+        awaitingApproval: 0,
+        attachedShells: [{ clientName: "" }, { clientName: " " }],
+      },
       showMessageBox
     );
     const opts = showMessageBox.mock.calls[0]![0];
@@ -363,10 +367,7 @@ describe("showUpdateWarning", () => {
 
   it("asks about working agents with the same count Quit shows", async () => {
     const showMessageBox = vi.fn().mockResolvedValue({ response: 1 });
-    const confirmed = await showUpdateWarning(
-      agents(2),
-      showMessageBox
-    );
+    const confirmed = await showUpdateWarning(agents(2), showMessageBox);
     const opts = showMessageBox.mock.calls[0]![0];
     expect(confirmed).toBe(false);
     expect(opts.title).toBe("Agents are working");

@@ -2322,7 +2322,10 @@ describe("AutoUpdaterService", () => {
       });
 
       afterEach(() => {
-        updateWarningMock.getActiveAgents.mockImplementation(() => ({ activeAgents: 0, awaitingApproval: 0 }));
+        updateWarningMock.getActiveAgents.mockImplementation(() => ({
+          activeAgents: 0,
+          awaitingApproval: 0,
+        }));
         updateWarningMock.showUpdateWarning.mockReset();
         setAttachedShellsProvider(null);
       });

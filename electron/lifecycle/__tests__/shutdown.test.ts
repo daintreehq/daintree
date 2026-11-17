@@ -1137,7 +1137,9 @@ describe("registerShutdownHandler", () => {
     it("asks again at the next quit with no window open, and shuts down when told to", async () => {
       quitWarningMock.getActiveAgentCount.mockReturnValue(1);
       quitWarningMock.showQuitWarning.mockResolvedValueOnce("keep-running");
-      const keepAgentsRunning = vi.fn(() => backgroundAgentsMock.hasOpenWindows.mockReturnValue(false));
+      const keepAgentsRunning = vi.fn(() =>
+        backgroundAgentsMock.hasOpenWindows.mockReturnValue(false)
+      );
       const { beforeQuitCb } = await setup({ keepAgentsRunning });
 
       await beforeQuitCb(makeEvent());
