@@ -61,11 +61,14 @@ function get(port: number, path: string, headers: Record<string, string> = {}): 
 }
 
 let previewResolution: PreviewResolution = { kind: "unknown-subdomain" };
+/** The host's preview answer waits on this, so a test can act while a lookup is out. */
+let previewHold: Promise<void> = Promise.resolve();
 
 beforeEach(async () => {
   dir = await makeTempDir();
   ({ host, client } = await openSessionPair(dir));
   previewResolution = { kind: "unknown-subdomain" };
+  previewHold = Promise.resolve();
   const uninstall = installHostPortService(
     {
       onSession(listener) {
@@ -75,7 +78,10 @@ beforeEach(async () => {
     },
     {
       scan: async () => [{ port: 5173, processName: "node", pid: 4242 }],
-      resolvePreview: async () => previewResolution,
+      resolvePreview: async () => {
+        await previewHold;
+        return previewResolution;
+      },
     }
   );
   cleanups.push(uninstall);
@@ -388,6 +394,109 @@ describe("dev preview through a forward", () => {
     expect(m.list()).toEqual([]);
   });
 
+  it("asks a forgotten host afresh for a preview it answered, with no forward open (#17207)", async () => {
+    const m = manager({ now: () => 1_000 });
+    previewResolution = { kind: "not-running", status: "stopped" };
+    const first = m.resolvePreview("dp-proj-panel");
+    await expect(first).resolves.toEqual({ kind: "not-running", status: "stopped" });
+    expect(m.resolvePreview("dp-proj-panel")).toBe(first);
+
+    await m.forgetHost(HOST);
+
+    const again = m.resolvePreview("dp-proj-panel");
+    expect(again).not.toBe(first);
+    await again;
+  });
+
+  it("lets a forgotten host's preview lookup still out land nowhere (#17207)", async () => {
+    const upstream = http.createServer((_req, res) => res.end("ok"));
+    const devServerPort = await listen(upstream);
+    cleanups.push(() => upstream.close());
+    const m = manager({ now: () => 1_000 });
+    let answer = () => {};
+    previewHold = new Promise((resolve) => (answer = resolve));
+    previewResolution = { kind: "ok", port: devServerPort, isHttps: false };
+
+    const lookup = m.resolvePreview("dp-proj-panel");
+    await m.forgetHost(HOST);
+    answer();
+
+    await expect(lookup).resolves.toBeNull();
+    expect(m.list()).toEqual([]);
+    expect(m.hasForwardsFor(HOST)).toBe(false);
+  });
+
+  it("lets a forgotten host's lookup land nowhere even once the preview cache was cleared (#17207)", async () => {
+    const upstream = http.createServer((_req, res) => res.end("ok"));
+    const devServerPort = await listen(upstream);
+    cleanups.push(() => upstream.close());
+    const m = manager({ now: () => 1_000 });
+    let answer = () => {};
+    previewHold = new Promise((resolve) => (answer = resolve));
+    previewResolution = { kind: "ok", port: devServerPort, isHttps: false };
+
+    const lookup = m.resolvePreview("dp-proj-panel");
+    // A session coming back clears every host's cached answers, this lookup's entry with them.
+    await m.reestablish(HOST);
+    await m.forgetHost(HOST);
+    answer();
+
+    await expect(lookup).resolves.toBeNull();
+    expect(m.list()).toEqual([]);
+    expect(m.hasForwardsFor(HOST)).toBe(false);
+  });
+
+  it("lets a forgotten host's lookup land nowhere when the forget comes as its forward opens (#17207)", async () => {
+    const upstream = http.createServer((_req, res) => res.end("ok"));
+    previewResolution = { kind: "ok", port: await listen(upstream), isHttps: false };
+    cleanups.push(() => upstream.close());
+    const forgot: { done: Promise<void> | null; port: number } = { done: null, port: 0 };
+    const m: PortForwardManager = manager({
+      now: () => 1_000,
+      onChange: ([opened]) => {
+        if (!opened || forgot.done) return;
+        forgot.port = opened.localPort;
+        forgot.done = m.forgetHost(HOST);
+      },
+    });
+
+    await expect(m.resolvePreview("dp-proj-panel")).resolves.toBeNull();
+    await forgot.done;
+    expect(m.list()).toEqual([]);
+    const free = net.createServer();
+    await new Promise<void>((resolve) => free.listen(forgot.port, "127.0.0.1", resolve));
+    await new Promise((resolve) => free.close(resolve));
+  });
+
+  it("keeps another host's lookup of a forgotten host's preview origin (#17207)", async () => {
+    const OTHER = "studio-02";
+    const upstream = http.createServer((_req, res) => res.end("ok"));
+    const devServerPort = await listen(upstream);
+    cleanups.push(() => upstream.close());
+    let owner = HOST;
+    const m = manager({
+      now: () => 1_000,
+      previewOwner: () => owner,
+      sessionFor: (hostId) =>
+        (hostId === HOST || hostId === OTHER) && client.isOpen ? client : null,
+      isKnownHost: (hostId) => hostId === HOST || hostId === OTHER,
+    });
+    previewResolution = { kind: "ok", port: devServerPort, isHttps: false };
+    await expect(m.resolvePreview("dp-proj-panel")).resolves.toMatchObject({ kind: "ok" });
+
+    // The origin is registered to another host now, and its lookup is still out: the last
+    // forward it resolved to is still the forgotten host's.
+    owner = OTHER;
+    let answer = () => {};
+    previewHold = new Promise((resolve) => (answer = resolve));
+    const lookup = m.resolvePreview("dp-proj-panel");
+    await m.forgetHost(HOST);
+    answer();
+
+    await expect(lookup).resolves.toMatchObject({ kind: "ok" });
+    expect(m.list()).toEqual([expect.objectContaining({ hostId: OTHER })]);
+  });
+
   it("asks nothing for a preview no view has claimed, or whose host isn't connected", () => {
     expect(manager({ previewOwner: () => null }).resolvePreview("dp-a-b")).toBeNull();
     expect(manager({ sessionFor: () => null }).resolvePreview("dp-a-b")).toBeNull();
@@ -632,6 +741,83 @@ describe("ssh -O forward on the ControlMaster", () => {
       "cancel",
       "forward",
     ]);
+  });
+
+  it("never adds a forgotten host's retired forward again on its next session (#17207)", async () => {
+    const calls: string[][] = [];
+    const spawn = (args: string[]): SshChild => {
+      calls.push(args);
+      const child = new FakeSshChild();
+      setImmediate(() => child.emit("exit", 0, null));
+      return child as unknown as SshChild;
+    };
+    let current: LinkSession | null = client;
+    const m = manager({
+      sessionFor: (hostId) => (hostId === HOST && current?.isOpen ? current : null),
+      sshMuxFor: () => ({ target: "studio-01", controlPath: "/tmp/rh/cm-abc" }),
+      spawn,
+    });
+    const probe = net.createServer();
+    const remotePort = await listen(probe);
+    await new Promise((resolve) => probe.close(resolve));
+    await m.forward({ hostId: HOST, remotePort, label: "API" });
+
+    // The old machine's master goes with its session; the forward waits to be added again.
+    client.close("re-pointed");
+    expect(m.list()).toEqual([]);
+    expect(m.hasForwardsFor(HOST)).toBe(true);
+
+    await m.forgetHost(HOST);
+    expect(m.hasForwardsFor(HOST)).toBe(false);
+
+    const next = await openSessionPair(dir);
+    cleanups.push(() => {
+      next.host.close("done");
+      next.client.close("done");
+    });
+    current = next.client;
+    await m.reestablish(HOST);
+    expect(m.list()).toEqual([]);
+    expect(
+      calls.filter((args) => args.includes("-O")).map((args) => args[args.indexOf("-O") + 1])
+    ).toEqual(["forward", "cancel"]);
+  });
+
+  it("never puts back a forward whose Stop ssh refused while its host was forgotten (#17207)", async () => {
+    const cancel: { refuse: (() => void) | null } = { refuse: null };
+    const spawn = (args: string[]): SshChild => {
+      const child = new FakeSshChild();
+      if (args.includes("cancel")) cancel.refuse = () => child.emit("exit", 255, null);
+      else setImmediate(() => child.emit("exit", 0, null));
+      return child as unknown as SshChild;
+    };
+    const m = manager({
+      sshMuxFor: () => ({ target: "studio-01", controlPath: "/tmp/rh/cm-abc" }),
+      spawn,
+    });
+    const probe = net.createServer();
+    const remotePort = await listen(probe);
+    await new Promise((resolve) => probe.close(resolve));
+    const forward = await m.forward({ hostId: HOST, remotePort });
+    const ipv6 = m.boundEndpointsFor(HOST).some((endpoint) => endpoint.address === "::1");
+
+    const stopping = m.stop(forward.forwardId);
+    await waitFor(() => cancel.refuse !== null, 3_000);
+    await m.forgetHost(HOST);
+    cancel.refuse!();
+
+    await expect(stopping).resolves.toBeUndefined();
+    expect(m.list()).toEqual([]);
+    expect(m.hasForwardsFor(HOST)).toBe(false);
+    // The IPv6 side this machine held for it is let go too.
+    if (ipv6) {
+      const free = net.createServer();
+      await new Promise<void>((resolve, reject) => {
+        free.once("error", reject);
+        free.listen(forward.localPort, "::1", () => resolve());
+      });
+      await new Promise((resolve) => free.close(resolve));
+    }
   });
 
   it("holds the IPv6 side of an ssh forward itself and relays it to the IPv4 side ssh holds", async () => {

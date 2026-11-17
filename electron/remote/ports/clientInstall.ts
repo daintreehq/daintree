@@ -56,6 +56,11 @@ export interface PortForwardService {
   release(payload: ReleasePortForwardsPayload, caller: PortForwardCaller): void;
   stop(forwardId: string): Promise<void>;
   listHostPorts(hostId: HostId): Promise<HostListeningPort[]>;
+  /**
+   * The host was removed or re-pointed: its forwards close, retired ones
+   * included, and its preview origins are no longer its.
+   */
+  forgetHost(hostId: HostId): Promise<void>;
 }
 
 declare module "../runtime.js" {
@@ -285,6 +290,46 @@ export function installPortForwardClient(deps: PortForwardClientDeps): () => Pro
     views.add(webContentsId);
     watchView(webContentsId);
   };
+  const hostOfWorktreeKey = (key: string): string => key.slice(0, key.indexOf("\u0000"));
+  /**
+   * The host's preview origins, and the session they were looked up on, were
+   * claimed for the machine it named until now: another under the same id
+   * must claim them afresh.
+   */
+  const forgetHostPreviews = (hostId: HostId): void => {
+    const subdomains = new Set<string>();
+    for (const [subdomain, project] of registeredPreviews) {
+      if (project.hostId !== hostId) continue;
+      registeredPreviews.delete(subdomain);
+      subdomains.add(subdomain);
+    }
+    for (const [subdomain, owner] of previewOwners) {
+      if (owner.hostId !== hostId) continue;
+      previewOwners.delete(subdomain);
+      subdomains.add(subdomain);
+    }
+    for (const [key, previews] of previewWorktrees) {
+      if (hostOfWorktreeKey(key) !== hostId) continue;
+      previewWorktrees.delete(key);
+      for (const subdomain of previews) subdomains.add(subdomain);
+    }
+    for (const subdomain of subdomains) {
+      // Still claimed means another host has it now: its views stay.
+      if (!registeredPreviews.has(subdomain) && !previewOwners.has(subdomain)) {
+        previewViews.delete(subdomain);
+      }
+    }
+    sessions.delete(hostId);
+  };
+  /** Hosts no longer in the list lose their previews as well as their forwards. */
+  const pruneUnknownHosts = (): void => {
+    const hostIds = new Set<HostId>(sessions.keys());
+    for (const project of registeredPreviews.values()) hostIds.add(project.hostId);
+    for (const owner of previewOwners.values()) hostIds.add(owner.hostId);
+    for (const key of previewWorktrees.keys()) hostIds.add(hostOfWorktreeKey(key));
+    for (const hostId of hostIds) if (!deps.isKnownHost(hostId)) forgetHostPreviews(hostId);
+    void forwards.pruneUnknownHosts();
+  };
 
   const service: PortForwardService = {
     list: () => forwards.list(),
@@ -302,6 +347,10 @@ export function installPortForwardClient(deps: PortForwardClientDeps): () => Pro
     },
     stop: (forwardId) => forwards.stop(forwardId),
     listHostPorts: (hostId) => forwards.listHostPorts(hostId),
+    forgetHost: async (hostId) => {
+      forgetHostPreviews(hostId);
+      await forwards.forgetHost(hostId);
+    },
   };
 
   const disposers = [
@@ -313,7 +362,7 @@ export function installPortForwardClient(deps: PortForwardClientDeps): () => Pro
       void forwards.reestablish(hostId);
     }),
     deps.onSessionOpened?.((hostId) => void forwards.reestablish(hostId)) ?? (() => {}),
-    deps.onHostsChanged?.(() => void forwards.pruneUnknownHosts()) ?? (() => {}),
+    deps.onHostsChanged?.(pruneUnknownHosts) ?? (() => {}),
     deps.addUseCheck?.((hostId) => forwards.hasForwardsFor(hostId)) ?? (() => {}),
     registerRemoteService("portForwards", service),
     observeForwardedInvokes(({ hostId, webContentsId, hostProjectId, channel, args }) => {

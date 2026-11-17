@@ -666,7 +666,7 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
 
 /**
  * Everything this device keeps under a host's id, cleared when the host is
- * removed. Its windows are already back on this machine by then, so its views
+ * removed or re-pointed. Its windows are already back on this machine by then, so its views
  * here are cached ones, discarded before the storage they could write back to
  * is cleared.
  */
@@ -730,6 +730,15 @@ const HOST_STATE_CLEANUPS: readonly HostStateCleanup[] = [
     run: (hostId) => broadcastLocal({ type: "host-forgotten", hostId }),
   },
   { name: "browser data", run: clearHostPartitions },
+  // Re-pointing keeps the id, so these go by it rather than by the host list (#17207).
+  {
+    name: "port forwards and previews",
+    run: (hostId) => getRemoteService("portForwards")?.forgetHost(hostId),
+  },
+  {
+    name: "assistant sender credential",
+    run: (hostId) => getRemoteService("hostControlLinkClient")?.forgetHost(hostId),
+  },
 ];
 
 /**

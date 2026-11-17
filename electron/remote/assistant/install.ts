@@ -522,6 +522,20 @@ export interface HostControlLinkClientInstallDeps {
   addUseCheck?(check: (hostId: HostId) => boolean): () => void;
   /** A host's name as this Shell shows it, for the line about retired sends. */
   hostName(hostId: HostId): string;
+  /**
+   * Whether the host is being removed or re-pointed: no credential is minted
+   * or presented for it meanwhile, since a link still up reaches the machine
+   * it named until now (#17207).
+   */
+  isRetiring?(hostId: HostId): boolean;
+}
+
+function retiringHost(hostId: HostId): AppError {
+  return new AppError({
+    code: "HOST_DISCONNECTED",
+    message: `Host ${hostId} is being removed or re-pointed`,
+    userMessage: "Couldn't reach this host while it is being changed. Try again in a moment.",
+  });
 }
 
 function openDatabase(): Database.Database | null {
@@ -573,9 +587,14 @@ export function installHostControlLinkClient(deps: HostControlLinkClientInstallD
     }
   };
   const offHosts = deps.onHostsChanged(forgetRemovedHosts);
+  const retiring = (hostId: HostId): boolean => deps.isRetiring?.(hostId) === true;
   const client = new HostControlLinkClient({
-    credential: (hostId) => credentials.credential(hostId),
-    existingCredential: (hostId) => credentials.existing(hostId),
+    credential: (hostId) => {
+      if (retiring(hostId)) throw retiringHost(hostId);
+      return credentials.credential(hostId);
+    },
+    existingCredential: (hostId) => (retiring(hostId) ? null : credentials.existing(hostId)),
+    forgetCredential: (hostId) => credentials.forget(hostId),
     session: deps.session,
     ...(deps.openSession ? { openSession: deps.openSession } : {}),
     onSessionOpened: deps.onSessionOpened,
