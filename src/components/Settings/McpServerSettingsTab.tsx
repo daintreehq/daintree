@@ -9,6 +9,7 @@ import { SeverityMark } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/CopyButton";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
@@ -741,7 +742,9 @@ export function McpServerSettingsTab() {
                 {activeBearers.map((bearer) => (
                   <li key={bearer.tokenHash} className="flex items-center gap-3 py-2 pl-9 pr-4">
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-xs text-text-primary">{bearer.userAgent}</div>
+                      <TruncatedTooltip content={bearer.userAgent} side="top">
+                        <div className="truncate text-xs text-text-primary">{bearer.userAgent}</div>
+                      </TruncatedTooltip>
                       <div className="text-2xs text-text-secondary">
                         <span className="font-mono">…{bearer.token4LastChars}</span>{" "}
                         <FactSeparator /> {pluralize(bearer.requestsSinceLaunch, "request")}{" "}
@@ -792,7 +795,9 @@ export function McpServerSettingsTab() {
                     className="flex items-center gap-3 py-2 pl-9 pr-4"
                   >
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-xs text-text-primary">{bearer.userAgent}</div>
+                      <TruncatedTooltip content={bearer.userAgent} side="top">
+                        <div className="truncate text-xs text-text-primary">{bearer.userAgent}</div>
+                      </TruncatedTooltip>
                       <div className="text-2xs text-text-secondary">
                         {pluralize(bearer.sessionCount, "session")} <FactSeparator />{" "}
                         {pluralize(bearer.requestsSinceLaunch, "request")} <FactSeparator />{" "}
@@ -960,15 +965,6 @@ export function McpServerSettingsTab() {
                       aria-invalid={portError ? true : undefined}
                       className={cn(SETTINGS_CONTROL_WIDTH.number, "font-mono tabular-nums")}
                     />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handlePortSave}
-                      disabled={portUnchanged}
-                      aria-label="Apply port"
-                    >
-                      Apply
-                    </Button>
                     {!portUnchanged && (
                       <Button
                         variant="outline"
@@ -980,6 +976,16 @@ export function McpServerSettingsTab() {
                         Discard
                       </Button>
                     )}
+                    <Button
+                      variant="contrast"
+                      size="sm"
+                      onClick={handlePortSave}
+                      disabled={portUnchanged}
+                      loading={isApplyingPort}
+                      aria-label="Apply port"
+                    >
+                      Apply
+                    </Button>
                   </>
                 )}
               />
@@ -1062,7 +1068,7 @@ export function McpServerSettingsTab() {
       <>
         <SettingsSection
           title="Audit log"
-          description="Every tool call over MCP, with its arguments summarised and anything that looks like a secret masked."
+          description="Every tool call over MCP, with its arguments summarised and anything that looks like a secret masked"
         >
           <SettingsGroup>
             <SettingsSwitchCard
@@ -1106,15 +1112,6 @@ export function McpServerSettingsTab() {
                     aria-invalid={maxRecordsError ? true : undefined}
                     className={cn(SETTINGS_CONTROL_WIDTH.number, "font-mono tabular-nums")}
                   />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => void handleMaxRecordsSave()}
-                    disabled={!auditConfigLoaded || maxRecordsUnchanged}
-                    aria-label="Apply max records"
-                  >
-                    Apply
-                  </Button>
                   {!maxRecordsUnchanged && (
                     <Button
                       variant="outline"
@@ -1126,6 +1123,16 @@ export function McpServerSettingsTab() {
                       Discard
                     </Button>
                   )}
+                  <Button
+                    variant="contrast"
+                    size="sm"
+                    onClick={() => void handleMaxRecordsSave()}
+                    disabled={!auditConfigLoaded || maxRecordsUnchanged}
+                    loading={isApplyingMaxRecords}
+                    aria-label="Apply max records"
+                  >
+                    Apply
+                  </Button>
                 </>
               )}
             />
