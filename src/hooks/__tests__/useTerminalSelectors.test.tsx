@@ -347,6 +347,27 @@ describe("useTerminalSelectors", () => {
       expect(result.current).toEqual(["after", "later"]);
     });
 
+    it("names the pane that took over when one stops waiting and another starts", () => {
+      setupEmptyWorktrees();
+      const blurTime = Date.now() - 60_000;
+      setupTerminals([
+        { id: "a", agentState: "waiting", location: "grid", lastStateChange: blurTime + 1 },
+        { id: "b", agentState: "working", location: "grid", lastStateChange: blurTime + 1 },
+      ]);
+      deliverAsks(["a"]);
+      const { result, rerender } = renderHook(() => useTerminalNotificationPanelIds(blurTime));
+      expect(result.current).toEqual(["a"]);
+
+      setupTerminals([
+        { id: "a", agentState: "working", location: "grid", lastStateChange: blurTime + 2 },
+        { id: "b", agentState: "waiting", location: "grid", lastStateChange: blurTime + 2 },
+      ]);
+      deliverAsks(["b"]);
+      rerender();
+
+      expect(result.current).toEqual(["b"]);
+    });
+
     it("names no panes while the window is focused", () => {
       setupEmptyWorktrees();
       setupTerminals([

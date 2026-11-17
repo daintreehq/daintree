@@ -367,7 +367,18 @@ class NotificationService {
   }
 
   updateNotifications(ownerWebContentsId: NotificationOwnerId, state: NotificationState): void {
+    const previous = this.statesByOwner.get(ownerWebContentsId);
     this.statesByOwner.set(ownerWebContentsId, state);
+    // Which panes wait only matters against a waiting question. With none, a
+    // swap at the same count moves no number, so it neither rewrites the titles
+    // nor postpones another view's pending change.
+    if (
+      this.questionPanes.size === 0 &&
+      previous !== undefined &&
+      previous.waitingPanelIds.length === state.waitingPanelIds.length
+    ) {
+      return;
+    }
 
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
@@ -469,10 +480,11 @@ class NotificationService {
       const ctx = this.registry.getByWebContentsId(ownerId);
       if (!ctx || ctx.browserWindow.isDestroyed()) continue;
       const workspaceKey = views?.get(ctx.windowId)?.workspaceOfOwner.get(ownerId);
-      let count = 0;
-      for (const panelId of state.waitingPanelIds) {
-        if (workspaceKey !== undefined && questions.has(paneKey(workspaceKey, panelId))) continue;
-        count += 1;
+      let count = state.waitingPanelIds.length;
+      if (workspaceKey !== undefined) {
+        for (const panelId of state.waitingPanelIds) {
+          if (questions.has(paneKey(workspaceKey, panelId))) count -= 1;
+        }
       }
       total += count;
       byWindow.set(ctx.windowId, (byWindow.get(ctx.windowId) ?? 0) + count);
@@ -505,16 +517,27 @@ class NotificationService {
       if (ctx.browserWindow.isDestroyed()) continue;
       const workspaces = new Set<string>();
       const workspaceOfOwner = new Map<NotificationOwnerId, string>();
+      // Read as possibly missing: Electron leaves a destroyed view's `webContents` undefined.
+      let entries: readonly {
+        projectId: string;
+        view: { webContents?: import("electron").WebContents };
+      }[];
       try {
-        for (const entry of ctx.services.projectViewManager?.getAllViews() ?? []) {
+        entries = ctx.services.projectViewManager?.getAllViews() ?? [];
+      } catch {
+        // A window tearing down can throw from its view manager; it holds nothing then.
+        continue;
+      }
+      for (const entry of entries) {
+        // One view torn down under a window never costs the window its other views.
+        try {
           const contents = entry.view.webContents;
-          if (contents.isDestroyed()) continue;
+          if (!contents || contents.isDestroyed()) continue;
           workspaces.add(entry.projectId);
           workspaceOfOwner.set(contents.id, entry.projectId);
+        } catch {
+          continue;
         }
-      } catch {
-        // A window tearing down can throw from any of these reads; it holds nothing then.
-        continue;
       }
       byWindow.set(ctx.windowId, { workspaces, workspaceOfOwner });
     }

@@ -37,8 +37,13 @@ async function getAgentNotificationService(): Promise<AgentNotificationSingleton
   return cachedAgentNotificationService;
 }
 
-/** More waiting panes than any view holds: a report past it is cut, never trusted whole. */
-const MAX_WAITING_PANELS = 1000;
+/**
+ * Entries read from one report, far past any view's panes: what a renderer
+ * gone wrong can make main scan is bounded, valid or not.
+ */
+const MAX_WAITING_PANEL_ENTRIES = 10_000;
+/** Longer than any panel id; one past it is dropped rather than kept in memory. */
+const MAX_PANEL_ID_LENGTH = 1024;
 
 /** A view's report of its waiting panes, each id once; null when it isn't one. */
 function readNotificationState(raw: unknown): NotificationState | null {
@@ -46,9 +51,10 @@ function readNotificationState(raw: unknown): NotificationState | null {
   const ids: unknown = (raw as { waitingPanelIds?: unknown }).waitingPanelIds;
   if (!Array.isArray(ids)) return null;
   const waitingPanelIds = new Set<string>();
-  for (const id of ids) {
-    if (waitingPanelIds.size >= MAX_WAITING_PANELS) break;
-    if (typeof id === "string" && id.length > 0) waitingPanelIds.add(id);
+  for (const id of ids.slice(0, MAX_WAITING_PANEL_ENTRIES)) {
+    if (typeof id === "string" && id.length > 0 && id.length <= MAX_PANEL_ID_LENGTH) {
+      waitingPanelIds.add(id);
+    }
   }
   return { waitingPanelIds: [...waitingPanelIds] };
 }

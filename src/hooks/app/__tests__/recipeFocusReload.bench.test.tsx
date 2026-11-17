@@ -233,4 +233,90 @@ describe("focus-driven work benchmark", () => {
       vi.useRealTimers();
     }
   });
+
+  it("sends a swap by the pending report's own deadline, never later", async () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = renderHook(() => useWindowNotifications());
+      act(() => {
+        window.dispatchEvent(new Event("blur"));
+      });
+      counts.waitingPanelIds = ["t-1"];
+      rerender();
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
+      counts.waitingPanelIds = ["t-2"];
+      rerender();
+      act(() => {
+        vi.advanceTimersByTime(101);
+      });
+
+      expect(updateBadgeMock).toHaveBeenCalledTimes(1);
+      expect(updateBadgeMock).toHaveBeenLastCalledWith({ waitingPanelIds: ["t-2"] });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("tells two panes from one whose id joins theirs", async () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = renderHook(() => useWindowNotifications());
+      act(() => {
+        window.dispatchEvent(new Event("blur"));
+      });
+      counts.waitingPanelIds = ["a\u0000b"];
+      rerender();
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+      counts.waitingPanelIds = ["a", "b"];
+      rerender();
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+
+      expect(updateBadgeMock).toHaveBeenLastCalledWith({ waitingPanelIds: ["a", "b"] });
+      expect(updateFaviconMock).toHaveBeenLastCalledWith(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["focus", "unmount"] as const)(
+    "never lets a pending report land after %s",
+    async (end) => {
+      vi.useFakeTimers();
+      try {
+        const { rerender, unmount } = renderHook(() => useWindowNotifications());
+        act(() => {
+          window.dispatchEvent(new Event("blur"));
+        });
+        counts.waitingPanelIds = ["t-1"];
+        rerender();
+        act(() => {
+          vi.advanceTimersByTime(100);
+        });
+
+        if (end === "focus") {
+          act(() => {
+            window.dispatchEvent(new Event("focus"));
+          });
+          counts.waitingPanelIds = [];
+          rerender();
+        } else {
+          unmount();
+        }
+        act(() => {
+          vi.advanceTimersByTime(400);
+        });
+
+        expect(updateBadgeMock).toHaveBeenCalledTimes(1);
+        expect(updateBadgeMock).toHaveBeenLastCalledWith({ waitingPanelIds: [] });
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
 });

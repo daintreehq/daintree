@@ -5,16 +5,17 @@ import { useTerminalNotificationPanelIds } from "@/hooks/useTerminalSelectors";
 const DEBOUNCE_MS = 300;
 const FOCUS_BLUR_DEBOUNCE_MS = 150;
 
-/** One report's panes, in order, as a comparable key; panel ids never hold a NUL. */
-function panesKey(panelIds: readonly string[]): string {
-  return panelIds.join("\0");
+function samePanes(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((panelId, index) => panelId === b[index]);
 }
 
+const NO_PANES: readonly string[] = [];
+
 export function useWindowNotifications(): void {
-  // The panes last reported, so a swap at the same count (one pane stops
-  // waiting as another starts) still reaches main, which counts each pane
-  // once with any Decisions question waiting in it (#17233).
-  const prevWaitingKeyRef = useRef("");
+  // The panes last seen, so a swap at the same count (one pane stops waiting
+  // as another starts) still reaches main, which counts each pane once with
+  // any Decisions question waiting in it (#17233). The pending send reads it.
+  const prevWaitingRef = useRef<readonly string[]>(NO_PANES);
   const windowFocusedRef = useRef(true);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const blurDimTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -43,7 +44,7 @@ export function useWindowNotifications(): void {
         debounceTimerRef.current = null;
       }
 
-      prevWaitingKeyRef.current = "";
+      prevWaitingRef.current = NO_PANES;
 
       if (faviconBadgedRef.current) {
         faviconBadgedRef.current = false;
@@ -84,10 +85,13 @@ export function useWindowNotifications(): void {
   }, []);
 
   useEffect(() => {
-    const key = panesKey(waitingPanelIds);
-    if (prevWaitingKeyRef.current !== key) {
-      prevWaitingKeyRef.current = key;
-      const waitingCount = waitingPanelIds.length;
+    const previous = prevWaitingRef.current;
+    if (!samePanes(previous, waitingPanelIds)) {
+      prevWaitingRef.current = waitingPanelIds;
+
+      // A swap at the same count rides on a send already pending rather than
+      // postponing it, so panes trading places can't hold a steady count back.
+      if (debounceTimerRef.current && previous.length === waitingPanelIds.length) return;
 
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
@@ -96,10 +100,12 @@ export function useWindowNotifications(): void {
 
       debounceTimerRef.current = setTimeout(() => {
         debounceTimerRef.current = null;
+        const panes = prevWaitingRef.current;
+        const waitingCount = panes.length;
 
         if (window.electron?.notification?.updateBadge) {
           sentBadgeCountRef.current = waitingCount;
-          window.electron.notification.updateBadge({ waitingPanelIds });
+          window.electron.notification.updateBadge({ waitingPanelIds: [...panes] });
         }
 
         if (!windowFocusedRef.current) {

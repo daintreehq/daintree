@@ -360,7 +360,7 @@ describe("notifications IPC adversarial", () => {
       });
     });
 
-    it("caps a runaway report of waiting panes", () => {
+    it("keeps every pane of a large report whole", () => {
       const ids = Array.from({ length: 5000 }, (_, i) => `t-${i}`);
       getListener(CHANNELS.NOTIFICATION_UPDATE)(
         fakeEvent(createSender(42)) as Electron.IpcMainEvent,
@@ -368,7 +368,42 @@ describe("notifications IPC adversarial", () => {
       );
 
       const [, state] = notificationServiceMock.updateNotifications.mock.calls[0]!;
-      expect(state.waitingPanelIds).toEqual(ids.slice(0, 1000));
+      expect(state.waitingPanelIds).toEqual(ids);
+    });
+
+    it("bounds what a runaway report makes it read, junk included", () => {
+      const junk = Array.from({ length: 20_000 }, () => 0);
+      getListener(CHANNELS.NOTIFICATION_UPDATE)(
+        fakeEvent(createSender(42)) as Electron.IpcMainEvent,
+        { waitingPanelIds: [...junk, "t-late"] }
+      );
+
+      expect(notificationServiceMock.updateNotifications).toHaveBeenCalledWith(42, {
+        waitingPanelIds: [],
+      });
+    });
+
+    it("drops an id longer than any panel's", () => {
+      getListener(CHANNELS.NOTIFICATION_UPDATE)(
+        fakeEvent(createSender(42)) as Electron.IpcMainEvent,
+        { waitingPanelIds: ["t-1", "x".repeat(5000)] }
+      );
+
+      expect(notificationServiceMock.updateNotifications).toHaveBeenCalledWith(42, {
+        waitingPanelIds: ["t-1"],
+      });
+    });
+
+    it("keeps a view's last report through a malformed one, and clears it on an empty one", () => {
+      const event = fakeEvent(createSender(42)) as Electron.IpcMainEvent;
+      getListener(CHANNELS.NOTIFICATION_UPDATE)(event, { waitingPanelIds: ["t-1"] });
+      getListener(CHANNELS.NOTIFICATION_UPDATE)(event, { waitingCount: 0 });
+      getListener(CHANNELS.NOTIFICATION_UPDATE)(event, { waitingPanelIds: [] });
+
+      expect(notificationServiceMock.updateNotifications.mock.calls).toEqual([
+        [42, { waitingPanelIds: ["t-1"] }],
+        [42, { waitingPanelIds: [] }],
+      ]);
     });
 
     it.each([null, 3, "t-1", {}, { waitingCount: 3 }, { waitingPanelIds: "t-1" }])(

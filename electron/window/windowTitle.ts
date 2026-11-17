@@ -24,6 +24,8 @@ export type ProjectTitleLookup = (projectId: string) => ProjectTitleRow | null;
 export interface TitleProjectViewManager {
   getActiveProjectId(): string | null;
   getOutgoingBridgeProjectId(): string | null;
+  /** Whether a switch still shows the outgoing view over the incoming one, an unbound one included. */
+  isSwitchBridged?(): boolean;
 }
 
 /**
@@ -50,8 +52,12 @@ export function resolveWindowProjectName(
   // A cold switch flips `activeProjectId` to the incoming project while the
   // outgoing view stays on screen as the anti-flash bridge. Answer with what is
   // actually painted, or the window renames itself before the user sees why.
-  const bridged = openProjectName(pvm.getOutgoingBridgeProjectId(), lookup);
-  return bridged ?? openProjectName(pvm.getActiveProjectId(), lookup);
+  const outgoing = pvm.getOutgoingBridgeProjectId();
+  const bridged = openProjectName(outgoing, lookup);
+  if (bridged) return bridged;
+  // Switching away from the project picker: the picker, which names nothing, is still painted.
+  if (outgoing === null && pvm.isSwitchBridged?.()) return null;
+  return openProjectName(pvm.getActiveProjectId(), lookup);
 }
 
 /**
