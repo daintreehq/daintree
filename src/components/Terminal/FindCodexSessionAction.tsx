@@ -9,7 +9,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
-import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
@@ -310,8 +309,6 @@ export function FindCodexSessionAction({ panelId, onOpenSession }: FindCodexSess
   // read here at render time.
   const [heldElsewhere, setHeldElsewhere] = useState<ReadonlySet<string>>(new Set());
   const showSpinner = useDohertyGate(isLoading);
-  // With motion off the spin never runs, so the refresh icon steps down to muted.
-  const skipMotion = useShouldSkipMotion();
   const addPanel = usePanelStore((state) => state.addPanel);
 
   const {
@@ -517,12 +514,7 @@ export function FindCodexSessionAction({ panelId, onOpenSession }: FindCodexSess
             className={POPOVER_HEADER_ACTION_CLASS}
             aria-label="Refresh sessions"
           >
-            <SpinningIcon
-              icon={RefreshCw}
-              active={isLoading}
-              className={cn(isLoading && skipMotion && "text-text-muted")}
-              aria-hidden
-            />
+            <SpinningIcon icon={RefreshCw} active={isLoading} aria-hidden />
           </Button>
         </div>
         {showSpinner && (result === null || result.status === "unavailable") ? (

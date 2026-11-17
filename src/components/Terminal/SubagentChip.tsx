@@ -43,7 +43,6 @@ import { logWarn } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { SUBAGENT_PROVIDERS, toSubagentProvider } from "@/clients/subagentProviders";
 import { useSubagents } from "@/hooks/useSubagents";
-import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { resolvePluginMarkdownPaths } from "@/components/Markdown/pluginMarkdownPaths";
 import {
   subagentAttentionRank,
@@ -581,9 +580,6 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
   const [transcriptCache] = useState<TranscriptCache>(() => new Map());
   // Which way focus should land after the level changes, and whether to ring it.
   const pendingFocus = useRef<{ to: "back" | "row"; id: string; visible: boolean } | null>(null);
-  // With motion off the spin never runs, so the icon steps down to muted — the one
-  // busy cue left once refresh stopped being natively disabled.
-  const skipMotion = useShouldSkipMotion();
   const { result, isLoading, refresh, refreshError, checkedAt } = useSubagents(terminalId, {
     provider: active,
     agentState,
@@ -705,12 +701,7 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
           className={POPOVER_HEADER_ACTION_CLASS}
           aria-label="Refresh subagents"
         >
-          <SpinningIcon
-            icon={RefreshCw}
-            active={isLoading}
-            className={cn(isLoading && skipMotion && "text-text-muted")}
-            aria-hidden
-          />
+          <SpinningIcon icon={RefreshCw} active={isLoading} aria-hidden />
         </Button>
       </TooltipTrigger>
       {/* How old the list is: a child's "Updated" is its own activity, not

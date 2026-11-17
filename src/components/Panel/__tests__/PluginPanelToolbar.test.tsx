@@ -73,6 +73,19 @@ describe("PluginPanelToolbar", () => {
     _resetRunningPluginActionsForTest();
   });
 
+  it("rings its buttons inside the header, whose clipped strip would cut an outset ring", () => {
+    renderToolbar();
+    const buttons = screen.getByRole("toolbar").querySelectorAll("button");
+    expect(buttons).toHaveLength(2);
+    for (const button of buttons) {
+      const offsets = button.className
+        .split(/\s+/)
+        .filter((token) => /^focus-visible:-?outline-offset-/.test(token));
+      // One offset survives the merge with Button's default, and it's inset.
+      expect(offsets).toEqual([expect.stringMatching(/^focus-visible:-outline-offset-/)]);
+    }
+  });
+
   it("draws nothing for a kind that declares no toolbar", () => {
     registerKind(undefined);
     renderToolbar();

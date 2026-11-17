@@ -108,6 +108,7 @@ interface UseEditorFactoryParams {
     onPopStash: () => boolean;
     onExpand: () => boolean;
     onHistorySearch: () => boolean;
+    onAutocompleteNote: () => boolean;
   } | null>;
   domEventHandlers: Extension;
   imagePasteExtension: Extension;
@@ -239,6 +240,7 @@ export function useEditorFactory({
           onPopStash: () => keymapHandlersRef.current?.onPopStash() ?? false,
           onExpand: () => keymapHandlersRef.current?.onExpand() ?? false,
           onHistorySearch: () => keymapHandlersRef.current?.onHistorySearch() ?? false,
+          onAutocompleteNote: () => keymapHandlersRef.current?.onAutocompleteNote() ?? false,
         })
       ),
       domEventHandlers,

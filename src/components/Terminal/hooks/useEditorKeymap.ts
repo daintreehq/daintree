@@ -45,6 +45,8 @@ interface LatestRefShape {
   uploadSurface?: string;
   /** ⌘↩ sends as Enter does, by this route (`HybridInputBarProps.modEnterSend`). */
   modEnterSend?: () => ComposerSendRoute;
+  /** The action of the note at the menu's foot, while one shows. */
+  autocompleteNoteAction?: () => void;
 }
 
 interface UseEditorKeymapParams {
@@ -88,6 +90,7 @@ interface KeymapHandlers {
   onPopStash: () => boolean;
   onExpand: () => boolean;
   onHistorySearch: () => boolean;
+  onAutocompleteNote: () => boolean;
 }
 
 export function useEditorKeymap({
@@ -402,6 +405,13 @@ export function useEditorKeymap({
     },
     onHistorySearch: () => {
       requestHistorySearch();
+      return true;
+    },
+    onAutocompleteNote: () => {
+      const latest = latestRef.current;
+      if (!latest || isComposingRef.current) return false;
+      if (!latest.isAutocompleteOpen || !latest.autocompleteNoteAction) return false;
+      latest.autocompleteNoteAction();
       return true;
     },
   });

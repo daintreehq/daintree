@@ -22,6 +22,8 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
+import { comboToAriaKeyshortcuts, describeChord } from "@/lib/kbdShortcut";
+import { isMac } from "@/lib/platform";
 import {
   AutocompleteMenu,
   autocompleteOptionId,
@@ -86,6 +88,54 @@ describe("AutocompleteMenu", () => {
       );
       expect(screen.getByRole("status").textContent).toContain("No matches");
       expect(screen.getByRole("status").textContent).toContain("Something to know");
+    });
+
+    it("is a button assistive tech can reach and press, named by its text", () => {
+      const onClick = vi.fn();
+      const hostClick = vi.fn();
+      render(
+        <div onClick={hostClick}>
+          <AutocompleteMenu
+            isOpen
+            items={rows}
+            selectedIndex={0}
+            onSelect={noop}
+            emptyMessage="No matches"
+            note={{ text: "Something to know", onClick }}
+          />
+        </div>
+      );
+
+      const note = screen.getByRole("button", { name: "Something to know" });
+      expect(note.getAttribute("aria-keyshortcuts")).toBeNull();
+      fireEvent.click(note);
+      expect(onClick).toHaveBeenCalledTimes(1);
+      // A host that refocuses its editor on click would take focus back from
+      // whatever the note opened.
+      expect(hostClick).not.toHaveBeenCalled();
+    });
+
+    it("shows, names and speaks the shortcut that runs it from the editor", () => {
+      const shortcut = "Cmd+Shift+,";
+      const mac = isMac();
+      const { container } = render(
+        <AutocompleteMenu
+          isOpen
+          items={[]}
+          selectedIndex={-1}
+          onSelect={noop}
+          emptyMessage="No matches"
+          note={{ text: "Something to know", onClick: noop, shortcut }}
+        />
+      );
+
+      // The chord on screen stays out of the button's name; the attribute carries it.
+      const note = screen.getByRole("button", { name: "Something to know" });
+      expect(note.getAttribute("aria-keyshortcuts")).toBe(comboToAriaKeyshortcuts(shortcut, mac));
+      expect(container.querySelector("[data-autocomplete-note] kbd")).not.toBeNull();
+      expect(screen.getByRole("status").textContent).toContain(
+        `Something to know, ${describeChord(shortcut, mac)}`
+      );
     });
 
     it("isn't drawn without one", () => {
