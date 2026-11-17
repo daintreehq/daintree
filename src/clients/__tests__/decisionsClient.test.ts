@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PaneDecisionState } from "@shared/types/decisions";
+import type { DecisionsStatus, PaneDecisionState } from "@shared/types/decisions";
 import type {
   DecisionQuestionImagePartResult,
   DecisionQuestionList,
@@ -308,6 +308,60 @@ describe("decisionsClient.getQuestionImage", () => {
       decisionsClient.getQuestionImage("pane-a", "q-1", "attach_0001", controller.signal)
     ).rejects.toThrow("closed");
     expect(getQuestionImage).toHaveBeenCalledOnce();
+  });
+});
+
+describe("decisionsClient.watchStatus read failure (#17231)", () => {
+  let rejectStatus: (err: Error) => void;
+  let pushStatus: (status: DecisionsStatus) => void;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    typedGlobal.window = {
+      electron: {
+        decisions: {
+          getStatus: vi.fn(
+            () => new Promise<DecisionsStatus>((_resolve, reject) => (rejectStatus = reject))
+          ),
+        },
+        events: {
+          on: vi.fn((name: string, callback: (status: DecisionsStatus) => void) => {
+            if (name === "decisions:status-changed") pushStatus = callback;
+            return () => {};
+          }),
+        },
+      },
+    };
+    ({ decisionsClient } = await import("../decisionsClient"));
+  });
+
+  afterEach(() => {
+    delete typedGlobal.window;
+  });
+
+  it("says a failed read only while no status has arrived, and never once stopped", async () => {
+    const failed = vi.fn();
+    decisionsClient.watchStatus(() => {}, failed);
+    rejectStatus(new Error("gone"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(failed).toHaveBeenCalledOnce();
+
+    const late = vi.fn();
+    decisionsClient.watchStatus(() => {}, late);
+    pushStatus({ state: "connected", revision: 1 });
+    rejectStatus(new Error("gone"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(late).not.toHaveBeenCalled();
+
+    const stoppedFirst = vi.fn();
+    const stop = decisionsClient.watchStatus(() => {}, stoppedFirst);
+    stop();
+    rejectStatus(new Error("gone"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(stoppedFirst).not.toHaveBeenCalled();
   });
 });
 

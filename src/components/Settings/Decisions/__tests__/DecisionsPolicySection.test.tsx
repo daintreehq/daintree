@@ -410,7 +410,9 @@ describe("Questions → Inbox (#17231)", () => {
     // The row's description reaches the button, so it isn't read out alone.
     const described = document.getElementById(button.getAttribute("aria-describedby") ?? "");
     expect(described?.closest("#decisions-questions-inbox")).not.toBeNull();
-    expect(described?.textContent?.length).toBeGreaterThan(0);
+    // The explanation, not the row's own label.
+    expect(described?.textContent).not.toBe("Inbox");
+    expect(described?.textContent).toMatch(/question/i);
     fireEvent.click(button);
     expect(useDecisionsInboxStore.getState().isOpen).toBe(true);
     expect(useDecisionsInboxStore.getState().request.terminalId).toBeNull();

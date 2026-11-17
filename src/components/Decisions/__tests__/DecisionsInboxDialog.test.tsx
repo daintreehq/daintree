@@ -448,6 +448,29 @@ describe("DecisionsInboxDialog", () => {
     expect(document.activeElement).toBe(rowNamed("q-2"));
   });
 
+  it("leaves the keyboard where it went when a row it left moves later", async () => {
+    open();
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    act(() => rowNamed("q-2").focus());
+    act(() => rowNamed("q-2").blur());
+    // The blur's own turn has passed before the list moves.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    push({
+      revision: 2,
+      questions: [
+        LIST.questions[0]!,
+        { ...LIST.questions[1]!, standing: { kind: "to-type" } },
+        LIST.questions[2]!,
+      ],
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("decisions-inbox-group-delivering").textContent).toContain("q-2")
+    );
+    expect(document.activeElement).not.toBe(rowNamed("q-2"));
+  });
+
   it("says when no relay is connected, and nothing once one is", async () => {
     getStatus.mockResolvedValue({ state: "not-connected", revision: 1 });
     open();
@@ -463,6 +486,20 @@ describe("DecisionsInboxDialog", () => {
     await waitFor(() => expect(screen.queryByTestId("decisions-inbox-connection")).toBeNull());
     // The questions this computer holds stay listed throughout.
     expect(rows()).toHaveLength(3);
+  });
+
+  it("waits for the relay's status before calling an empty list new, and not for good", async () => {
+    listQuestions.mockResolvedValue({ revision: 1, questions: [] });
+    let rejectStatus!: (error: Error) => void;
+    getStatus.mockImplementationOnce(
+      () => new Promise<DecisionsStatus>((_resolve, reject) => (rejectStatus = reject))
+    );
+    open();
+    await waitFor(() => expect(listQuestions).toHaveBeenCalled());
+    await act(async () => {});
+    expect(screen.queryByTestId("decisions-inbox-empty")).toBeNull();
+    await act(async () => rejectStatus(new Error("gone")));
+    await screen.findByTestId("decisions-inbox-empty");
   });
 
   it("doesn't call an empty list new while the store can't be read", async () => {
@@ -595,6 +632,21 @@ describe("DecisionsInboxDialog", () => {
         expect(screen.queryByTestId("decisions-inbox-go-to-terminal")).toBeNull()
       );
       expect(useDecisionsInboxStore.getState().isOpen).toBe(true);
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it("does nothing from a button pressed while the inbox is closing", async () => {
+      getAllTerminals.mockResolvedValue([
+        terminal({ id: "t9", projectId: "project-b", hasPty: true }),
+      ]);
+      open({ terminalId: "t9" });
+      const go = await screen.findByTestId("decisions-inbox-go-to-terminal");
+      const looks = getAllTerminals.mock.calls.length;
+      act(() => useDecisionsInboxStore.getState().close());
+      fireEvent.click(go);
+      await act(async () => {});
+      expect(getAllTerminals.mock.calls.length).toBe(looks);
+      await waitFor(() => expect(screen.queryByTestId("decisions-inbox-dialog")).toBeNull());
       expect(dispatch).not.toHaveBeenCalled();
     });
 

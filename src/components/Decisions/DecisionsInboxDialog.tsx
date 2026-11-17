@@ -97,14 +97,26 @@ function useQuestionList(
   return { read: read !== null && read.opening === opening ? read.read : LOADING, retry, release };
 }
 
-/** Decisions' status while the inbox is open, as this opening read it. */
-function useInboxStatus(active: boolean, opening: number): DecisionsStatus | null {
-  const [status, setStatus] = useState<{ opening: number; status: DecisionsStatus } | null>(null);
+/**
+ * Decisions' status while the inbox is open, as this opening read it. `known`
+ * once a status arrived or the read failed, so nothing waits on it for good.
+ */
+function useInboxStatus(
+  active: boolean,
+  opening: number
+): { status: DecisionsStatus | null; known: boolean } {
+  const [read, setRead] = useState<{ opening: number; status: DecisionsStatus | null } | null>(
+    null
+  );
   useEffect(() => {
     if (!active) return;
-    return decisionsClient.watchStatus((next) => setStatus({ opening, status: next }));
+    return decisionsClient.watchStatus(
+      (next) => setRead({ opening, status: next }),
+      () => setRead({ opening, status: null })
+    );
   }, [active, opening]);
-  return active && status !== null && status.opening === opening ? status.status : null;
+  const current = active && read !== null && read.opening === opening ? read : null;
+  return { status: current?.status ?? null, known: current !== null };
 }
 
 /**
@@ -205,6 +217,8 @@ function useTerminalReach(
   });
   const key = item === null ? null : referenceKey(item.reference);
   const [found, setFound] = useState<{ key: string; open: boolean } | null>(null);
+  // Rises when a click finds the terminal gone: the looks in flight are older, and are dropped.
+  const [epoch, setEpoch] = useState(0);
 
   useEffect(() => {
     if (!active || remote || here || key === null || terminalId === null || projectId === null) {
@@ -226,9 +240,12 @@ function useTerminalReach(
       live = false;
       clearTimeout(timer);
     };
-  }, [active, remote, here, key, terminalId, projectId]);
+  }, [active, remote, here, key, terminalId, projectId, epoch]);
 
-  const markGone = useCallback((gone: string) => setFound({ key: gone, open: false }), []);
+  const markGone = useCallback((gone: string) => {
+    setFound({ key: gone, open: false });
+    setEpoch((n) => n + 1);
+  }, []);
   if (item === null || remote) return { reach: null, markGone };
   if (here) return { reach: openHere ? "here" : null, markGone };
   return {
@@ -378,6 +395,15 @@ function InboxList({
         const next = event.relatedTarget;
         if (next instanceof Node && !event.currentTarget.contains(next)) {
           lastFocused.current = null;
+        } else if (next === null) {
+          // Focus left for nowhere: a row a regroup replaced is gone by the
+          // next task, and one still in place was blurred some other way.
+          const left = lastFocused.current;
+          setTimeout(() => {
+            if (left !== null && lastFocused.current === left && left.element.isConnected) {
+              lastFocused.current = null;
+            }
+          }, 0);
         }
         roving.containerProps.onBlur(event);
       }}
@@ -451,7 +477,7 @@ export function DecisionsInboxDialog() {
   useDecisionsReaderRetention(isOpen, close);
 
   const { read: listRead, retry, release: releaseList } = useQuestionList(active, request.seq);
-  const status = useInboxStatus(active, request.seq);
+  const { status, known: statusKnown } = useInboxStatus(active, request.seq);
   const notice = connectionNotice(status);
   const questions = listRead.state === "listed" ? listRead.list.questions : null;
   const groups = questions === null ? [] : inboxGroups(questions);
@@ -537,10 +563,17 @@ export function DecisionsInboxDialog() {
     return pane?.querySelector<HTMLElement>(PANE_CHIP) ?? pane;
   }, [request.terminalId]);
 
+  // Only while this opening is the one on screen: its button stays focusable through the exit.
+  const stillShowing = (seq: number): boolean => {
+    const state = useDecisionsInboxStore.getState();
+    return state.isOpen && state.request.seq === seq;
+  };
+
   const goToTerminal = () => {
     if (selected === null || reach === null) return;
     const { terminalId, projectId } = selected.reference;
     const seq = request.seq;
+    if (!stillShowing(seq)) return;
     if (reach === "here") {
       setHandoff({ seq, terminalId, projectId, reach });
       close();
@@ -550,7 +583,7 @@ export function DecisionsInboxDialog() {
     const attempt = ++navigation.current;
     const shownKey = referenceKey(selected.reference);
     const settle = (open: boolean) => {
-      if (attempt !== navigation.current) return;
+      if (attempt !== navigation.current || !stillShowing(seq)) return;
       if (!open) {
         markGone(shownKey);
         return;
@@ -587,7 +620,7 @@ export function DecisionsInboxDialog() {
   const showListSkeleton = useSkeletonGate(active && listRead.state === "loading");
   // Only once the relay is known to be reachable does an empty list say nothing was asked.
   const empty =
-    listRead.state === "listed" && status !== null && notice === null ? emptyText(groups) : null;
+    listRead.state === "listed" && statusKnown && notice === null ? emptyText(groups) : null;
 
   return (
     <>
