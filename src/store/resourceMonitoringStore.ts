@@ -126,6 +126,7 @@ export const useResourceMonitoringStore = create<ResourceMonitoringStore>((set) 
 
   removePanel: (id) =>
     set((state) => {
+      if (!state.metrics.has(id)) return state;
       const next = new Map(state.metrics);
       next.delete(id);
       return { metrics: next };
