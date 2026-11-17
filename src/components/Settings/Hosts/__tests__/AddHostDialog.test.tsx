@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type {
   DiscoveredHost,
   HostProbeResult,
@@ -230,6 +230,43 @@ describe("AddHostDialog", () => {
     expect(guidance.textContent).toContain(command);
     expect(screen.queryByText(/turn on\s+Remote Login/)).toBeNull();
     expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
+  });
+
+  it("offers a sign-in for a refused login, and checks again once ssh gets in", async () => {
+    remoteHosts.probe!.mockResolvedValueOnce(
+      probeResult({
+        reachable: false,
+        sshError: "greg@studio: Permission denied (publickey,keyboard-interactive).",
+        platform: null,
+        install: null,
+        hostModeListening: false,
+        matchesClient: null,
+      })
+    );
+    let finish: (result: { status: "signed-in" }) => void = () => {};
+    remoteHosts.startSshSignIn = vi.fn(
+      () => new Promise<{ status: "signed-in" }>((resolve) => (finish = resolve))
+    );
+    remoteHosts.onSshSignInEvent = vi.fn(() => () => {});
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    fireEvent.change(screen.getByPlaceholderText("user@devbox.local"), {
+      target: { value: "greg@studio" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+    const guidance = await screen.findByTestId("add-host-ssh-refusal");
+    fireEvent.click(within(guidance).getByRole("button", { name: "Sign in…" }));
+    await waitFor(() =>
+      expect(remoteHosts.startSshSignIn).toHaveBeenCalledWith({
+        attemptId: expect.any(String),
+        connection: { kind: "ssh", target: "greg@studio" },
+      })
+    );
+    expect(await screen.findByTestId("ssh-sign-in-dialog")).toBeTruthy();
+    // The check runs again only once ssh is in.
+    expect(remoteHosts.probe).toHaveBeenCalledTimes(1);
+    await act(async () => finish({ status: "signed-in" }));
+    await waitFor(() => expect(remoteHosts.probe).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByTestId("ssh-sign-in-dialog")).toBeNull());
   });
 
   it("shows a discovery failure with Retry rather than an empty scan", async () => {

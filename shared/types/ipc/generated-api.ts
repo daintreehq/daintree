@@ -1933,6 +1933,9 @@ export interface GeneratedElectronAPI {
     add(
       ...args: IpcInvokeMap["remote-hosts:add"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:add"]["result"]>;
+    answerSshSignIn(
+      ...args: IpcInvokeMap["remote-hosts:answer-ssh-sign-in"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:answer-ssh-sign-in"]["result"]>;
     bringBack(
       ...args: IpcInvokeMap["remote-hosts:bring-back"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:bring-back"]["result"]>;
@@ -1942,6 +1945,9 @@ export interface GeneratedElectronAPI {
     cancelPendingSwitch(
       ...args: IpcInvokeMap["remote-hosts:cancel-pending-switch"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:cancel-pending-switch"]["result"]>;
+    cancelSshSignIn(
+      ...args: IpcInvokeMap["remote-hosts:cancel-ssh-sign-in"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:cancel-ssh-sign-in"]["result"]>;
     checkAgentForwarding(
       ...args: IpcInvokeMap["remote-hosts:check-agent-forwarding"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:check-agent-forwarding"]["result"]>;
@@ -2008,6 +2014,9 @@ export interface GeneratedElectronAPI {
     startHostMode(
       ...args: IpcInvokeMap["remote-hosts:start-host-mode"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:start-host-mode"]["result"]>;
+    startSshSignIn(
+      ...args: IpcInvokeMap["remote-hosts:start-ssh-sign-in"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:start-ssh-sign-in"]["result"]>;
     switchWindowHost(
       ...args: IpcInvokeMap["remote-hosts:switch-window-host"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:switch-window-host"]["result"]>;

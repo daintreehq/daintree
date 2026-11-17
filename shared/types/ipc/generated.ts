@@ -3935,6 +3935,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./remoteHosts.js").AddHostPayload];
     result: import("../remoteHosts.js").HostDescriptor;
   };
+  "remote-hosts:answer-ssh-sign-in": {
+    args: [payload: import("./remoteHosts.js").AnswerSshSignInPayload];
+    result: boolean;
+  };
   "remote-hosts:bring-back": {
     args: [payload: { hostId: string }];
     result: {
@@ -3961,6 +3965,10 @@ export interface GeneratedIpcInvokeMap {
   };
   "remote-hosts:cancel-pending-switch": {
     args: [payload: import("./remoteHosts.js").CancelPendingSwitchPayload];
+    result: boolean;
+  };
+  "remote-hosts:cancel-ssh-sign-in": {
+    args: [payload: import("./remoteHosts.js").CancelSshSignInPayload];
     result: boolean;
   };
   "remote-hosts:check-agent-forwarding": {
@@ -4050,6 +4058,10 @@ export interface GeneratedIpcInvokeMap {
   "remote-hosts:start-host-mode": {
     args: [payload: import("./remoteHosts.js").HostSetupTarget];
     result: import("./remoteHosts.js").StartHostModeResult;
+  };
+  "remote-hosts:start-ssh-sign-in": {
+    args: [payload: import("./remoteHosts.js").StartSshSignInPayload];
+    result: import("./remoteHosts.js").SshSignInResult;
   };
   "remote-hosts:switch-window-host": {
     args: [payload: import("./remoteHosts.js").SwitchWindowHostPayload];

@@ -39,6 +39,10 @@ import type {
   PreparePluginViewPayload,
   SwitchWindowHostPayload,
   SwitchWindowHostResult,
+  AnswerSshSignInPayload,
+  CancelSshSignInPayload,
+  SshSignInResult,
+  StartSshSignInPayload,
   CancelPendingSwitchPayload,
   PendingHostSwitch,
   UpdateHostPayload,
@@ -210,6 +214,35 @@ export const remoteHostsNamespace = defineIpcNamespace({
       REMOTE_HOSTS_METHOD_CHANNELS.cancelInstall,
       async (payload: { opId: OperationId }): Promise<boolean> =>
         getRemoteService("hostSetup")?.cancelInstall(payload) ?? false
+    ),
+    // A person's Sign in to a host ssh refused a batch login: the only ssh that
+    // may prompt, its prompts sent to the view that asked and answered only
+    // from there (#17322).
+    startSshSignIn: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.startSshSignIn,
+      async (ctx: IpcContext, payload: StartSshSignInPayload): Promise<SshSignInResult> => {
+        const view = ctx.event?.sender;
+        if (!view) {
+          throw new AppError({
+            code: "UNSUPPORTED",
+            message: "Signing in to a host needs a window on this machine",
+          });
+        }
+        return requireRemoteService("sshSignIn").startFromView(view, payload);
+      },
+      { withContext: true }
+    ),
+    answerSshSignIn: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.answerSshSignIn,
+      async (ctx: IpcContext, payload: AnswerSshSignInPayload): Promise<boolean> =>
+        getRemoteService("sshSignIn")?.answer(ctx.webContentsId, payload) ?? false,
+      { withContext: true }
+    ),
+    cancelSshSignIn: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.cancelSshSignIn,
+      async (ctx: IpcContext, payload: CancelSshSignInPayload): Promise<boolean> =>
+        getRemoteService("sshSignIn")?.cancel(ctx.webContentsId, payload) ?? false,
+      { withContext: true }
     ),
     startHostMode: op(
       REMOTE_HOSTS_METHOD_CHANNELS.startHostMode,

@@ -1566,6 +1566,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
 export interface IpcEventMap {
   // Remote Hosts namespaces: one push channel each, carrying a discriminated union.
   "remote-hosts:event": import("./remoteHosts.js").RemoteHostsEvent;
+  "remote-hosts:ssh-sign-in-event": import("./remoteHosts.js").SshSignInEvent;
   "host-mode:event": import("./hostMode.js").HostModeEvent;
   "device-answer:event": import("./deviceAnswer.js").DeviceAnswerEvent;
   /** Every assistant persona as stored, after any write (#16213). */

@@ -168,9 +168,23 @@ export function controlPathOption(controlPath: string): string {
 
 export { isValidSshTarget };
 
+/**
+ * For every call that runs in batch mode. BatchMode is an option of the ssh
+ * Daintree runs, and the ssh a ProxyJump starts for the jump host never gets
+ * it, so on its own that hop could still ask (a desktop's askpass program)
+ * during a background dial. It inherits this environment, and with it never
+ * asks: a hop that needs an answer refuses, and a person's Sign in is how it
+ * gets one (`SshSignInService`).
+ */
+export const BATCH_SSH_ENV: Readonly<Record<string, string>> = { SSH_ASKPASS_REQUIRE: "never" };
+
 export function defaultSshSpawner(sshPath = sshExecutable()): SshSpawner {
   return (args) =>
-    spawn(sshPath, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true }) as SshChild;
+    spawn(sshPath, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      env: { ...process.env, ...BATCH_SSH_ENV },
+    }) as SshChild;
 }
 
 export function defaultSshStreamSpawner(sshPath = sshExecutable()): SshStreamSpawner {
@@ -178,6 +192,7 @@ export function defaultSshStreamSpawner(sshPath = sshExecutable()): SshStreamSpa
     spawn(sshPath, args, {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
+      env: { ...process.env, ...BATCH_SSH_ENV },
     }) as StreamCommandChild;
 }
 
@@ -278,11 +293,20 @@ const CONNECT_TIMEOUT = ["-o", "ConnectTimeout=10"];
 export const SSH_COMMAND_TIMEOUT_MS = 30_000;
 
 export function sshCommonArgs(controlPath: string, controlPersist = "10m"): string[] {
+  return sshMasterArgs(controlPath, controlPersist, false);
+}
+
+/**
+ * A sign-in may wait on a person: behind a ProxyJump the host's banner only
+ * arrives once the jump host has its answer, so the banner wait (which
+ * ConnectTimeout also bounds) is unbounded there; Cancel ends it.
+ */
+function sshMasterArgs(controlPath: string, controlPersist: string, interactive: boolean) {
   return [
     ...OWN_COMMAND_ARGS,
     "-o",
-    "BatchMode=yes",
-    ...CONNECT_TIMEOUT,
+    `BatchMode=${interactive ? "no" : "yes"}`,
+    ...(interactive ? ["-o", "ConnectTimeout=0"] : CONNECT_TIMEOUT),
     ...KEEPALIVE,
     ...NO_FORWARDING,
     "-o",
@@ -300,6 +324,86 @@ export const PROBE_COMMAND = 'echo; uname -s; id -u; echo "$HOME"';
 export function buildProbeArgs(target: string, controlPath: string, persist?: string): string[] {
   return [...sshCommonArgs(controlPath, persist), "--", target, PROBE_COMMAND];
 }
+
+/**
+ * The one call that may prompt: a person's Sign in, after a batch call was
+ * refused the login (`SshSignInService`). The probe with BatchMode off, so ssh
+ * asks its SSH_ASKPASS; it leaves the same master every other call rides,
+ * and each of those stays in batch mode.
+ */
+export function buildSignInArgs(target: string, controlPath: string, persist = "10m"): string[] {
+  return [...sshMasterArgs(controlPath, persist, true), "--", target, PROBE_COMMAND];
+}
+
+/**
+ * What ssh says when a ProxyJump or ProxyCommand hop closed the connection
+ * before the host's banner arrived. On a call that may start a master
+ * (ControlPersist), ssh sends that hop's stderr to /dev/null, so a jump host
+ * that refused the login says nothing more than this.
+ */
+const PROXY_CLOSED_EARLY = /Connection closed by UNKNOWN port 65535/;
+
+export function isProxyClosedEarly(stderr: string | null | undefined): boolean {
+  return PROXY_CLOSED_EARLY.test(stderr ?? "");
+}
+
+/** The lines the ssh in front adds once a hop gave up, which would push the hop's own words out of a short tail. */
+const PROXY_CLOSED_LINE =
+  /^(?:kex_exchange_identification: Connection closed|Connection closed by UNKNOWN port 65535)/;
+
+/** A diagnosis's stderr as the hop that refused wrote it: ssh's own failure (255) naming an access refusal, or null. */
+function hopRefusalFrom(code: number | null, stderr: string): string | null {
+  if (code !== SSH_FAILED || !isSshAccessDenied(stderr)) return null;
+  return stderr
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0 && !PROXY_CLOSED_LINE.test(line))
+    .join("\n");
+}
+
+/** ssh's own exit status when it fails, rather than a remote command's. */
+const SSH_FAILED = 255;
+
+/**
+ * The same login with no master involved (`ControlPath=none`), so the hops'
+ * own stderr reaches this side and a jump host's refusal is heard in its own
+ * words. Batch mode, and nothing run there.
+ */
+export function buildHopDiagnosisArgs(target: string): string[] {
+  return [
+    ...OWN_COMMAND_ARGS,
+    "-o",
+    "BatchMode=yes",
+    ...CONNECT_TIMEOUT,
+    ...NO_FORWARDING,
+    "-o",
+    "ControlPath=none",
+    "--",
+    target,
+    "true",
+  ];
+}
+
+/**
+ * When a batch call failed with only {@link isProxyClosedEarly} to say why:
+ * the hop's own refusal (authentication or host key), from one diagnosis run,
+ * or null when a hop didn't refuse the login.
+ */
+export async function hiddenHopRefusal(
+  run: CommandRunner,
+  sshPath: string,
+  target: string,
+  signal?: AbortSignal
+): Promise<string | null> {
+  const result = await run(sshPath, buildHopDiagnosisArgs(target), {
+    timeoutMs: SSH_COMMAND_TIMEOUT_MS,
+    env: BATCH_SSH_ENV,
+    ...(signal ? { signal } : {}),
+  });
+  return hopRefusalFrom(result.code, result.stderr);
+}
+
+/** How often a dial that keeps failing behind a proxy asks the hops again: each ask is one more login there. */
+const HOP_DIAGNOSIS_INTERVAL_MS = 5 * 60_000;
 
 const DISCOVERY_START = "@@dt:discovery";
 const DISCOVERY_END = "@@dt:discovery-end";
@@ -659,6 +763,13 @@ interface RunResult {
   stderr: string;
 }
 
+/** Where the last `cap` bytes start, moved past any UTF-8 continuation byte so no character is cut. */
+export function utf8TailStart(bytes: Buffer, cap: number): number {
+  let start = Math.max(0, bytes.byteLength - cap);
+  while (start > 0 && start < bytes.byteLength && (bytes[start]! & 0xc0) === 0x80) start++;
+  return start;
+}
+
 function collect(stream: Readable | null, cap: number, keepTail: boolean): () => string {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -666,14 +777,26 @@ function collect(stream: Readable | null, cap: number, keepTail: boolean): () =>
     const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
     chunks.push(buf);
     size += buf.byteLength;
-    while (keepTail && size > cap && chunks.length > 1) size -= chunks.shift()!.byteLength;
+    // The oldest bytes go first, never more than the excess: a refusal near the
+    // end of a long chunk survives the short lines that follow it.
+    while (keepTail && size > cap && chunks.length > 1) {
+      const excess = size - cap;
+      const oldest = chunks[0]!;
+      if (oldest.byteLength <= excess) {
+        chunks.shift();
+        size -= oldest.byteLength;
+      } else {
+        chunks[0] = oldest.subarray(excess);
+        size -= excess;
+      }
+    }
     if (!keepTail && size > cap) stream.destroy();
   });
   return () => {
     const all = Buffer.concat(chunks);
-    return (
-      keepTail ? all.subarray(Math.max(0, all.byteLength - cap)) : all.subarray(0, cap)
-    ).toString("utf8");
+    return (keepTail ? all.subarray(utf8TailStart(all, cap)) : all.subarray(0, cap)).toString(
+      "utf8"
+    );
   };
 }
 
@@ -751,6 +874,12 @@ export class SshTransport implements LinkTransport {
    * longer takes is the link's to notice (`remembered` on the connection).
    */
   private known: KnownHost | null = null;
+  /**
+   * When the hops were last asked why a dial through them closed early and
+   * had no refusal to report. Cleared by a refusal, a dial that got through,
+   * and a fresh dial, so only a proxy that is simply down is asked less often.
+   */
+  private lastHopDiagnosis: number | null = null;
 
   constructor(private readonly options: SshTransportOptions) {
     if (!isValidSshTarget(options.target)) {
@@ -780,6 +909,7 @@ export class SshTransport implements LinkTransport {
     if (options?.fresh) {
       this.known = null;
       this.streamLocal = "unverified";
+      this.lastHopDiagnosis = null;
     }
     let known = this.known;
     if (known && known.configStamp !== (await this.configStamp())) {
@@ -838,6 +968,18 @@ export class SshTransport implements LinkTransport {
         ) {
           throw new SshAccessError(error.detail ?? "");
         }
+        // A jump host's refusal is hidden on this call: ask it once more
+        // without a master, so a refused login parks the link (and offers a
+        // Sign in) instead of being retried against the jump host for good.
+        if (
+          error instanceof TransportError &&
+          !(error instanceof SshAccessError) &&
+          !signal.aborted &&
+          isProxyClosedEarly(error.detail)
+        ) {
+          const refusal = await this.hopRefusal(signal);
+          if (refusal !== null) throw new SshAccessError(refusal);
+        }
         throw error;
       }
     );
@@ -846,6 +988,7 @@ export class SshTransport implements LinkTransport {
       throw new TransportError("Unrecognised reply from the host", probe.stdout.trim() || null);
     }
     onReached();
+    this.lastHopDiagnosis = null;
     const location = remoteHostSocketLocation({
       ...remote,
       macAppDirName: this.options.macAppDirName,
@@ -873,6 +1016,28 @@ export class SshTransport implements LinkTransport {
       );
     }
     return this.reach(controlPath, info, null, configStamp, signal);
+  }
+
+  /**
+   * {@link hiddenHopRefusal} over this transport's own ssh, at most once per
+   * {@link HOP_DIAGNOSIS_INTERVAL_MS}: a proxy that is simply down would
+   * otherwise double every retry.
+   */
+  private async hopRefusal(signal: AbortSignal): Promise<string | null> {
+    const now = Date.now();
+    if (this.lastHopDiagnosis !== null && now - this.lastHopDiagnosis < HOP_DIAGNOSIS_INTERVAL_MS) {
+      return null;
+    }
+    let refusal: string | null = null;
+    try {
+      await this.run(buildHopDiagnosisArgs(this.options.target), signal);
+    } catch (error) {
+      refusal =
+        error instanceof SshExitError ? hopRefusalFrom(error.code, error.detail ?? "") : null;
+    }
+    // An abandoned ask says nothing, and mustn't hold off the dial that replaced it.
+    if (!signal.aborted) this.lastHopDiagnosis = refusal === null ? now : null;
+    return refusal;
   }
 
   private configStamp(): Promise<string> {

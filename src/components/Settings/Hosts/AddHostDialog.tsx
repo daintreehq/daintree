@@ -60,6 +60,8 @@ import { AddHostNotes } from "./AddHostNotes";
 import { WizardFooterActions, WizardStepBar, type WizardStepView } from "./AddHostWizardChrome";
 import { HostCommand } from "./HostCommand";
 import { SshRefusalHelp } from "./SshRefusalHelp";
+import { SshSignInDialog } from "./SshSignInDialog";
+import { useSshSignIn } from "./useSshSignIn";
 import {
   awaitFirstConnect,
   requestHostCopySettings,
@@ -507,6 +509,8 @@ export function AddHostDialog({
   const [target, setTarget] = useState(existing ? addressOf(existing.connection) : "");
   // What this dialog adds or updates.
   const connectionFor = () => makeConnection(target.trim());
+  // Signed in, ssh's master is up: the check rides it like any other call.
+  const signIn = useSshSignIn(() => check());
   const [name, setName] = useState(existing?.name ?? "");
   /** The user typed a name: a target typed or picked after that no longer renames the host. */
   const [nameEdited, setNameEdited] = useState(existing !== null);
@@ -1547,7 +1551,17 @@ export function AddHostDialog({
                 <code>wsl -d {wslCommandArg(target)}</code> opens a shell there.
               </p>
             ) : cloudExisting ? null : (
-              <SshRefusalHelp refusal={refusal} target={target} testId="add-host-ssh-refusal" />
+              <SshRefusalHelp
+                refusal={refusal}
+                target={target}
+                testId="add-host-ssh-refusal"
+                // Not while a check runs: its answer, not this one's, is the refusal to sign in past.
+                onSignIn={
+                  refusal === "login-refused" && !busy
+                    ? () => signIn.start(connectionFor())
+                    : undefined
+                }
+              />
             )}
           </>
         ) : (
@@ -2128,48 +2142,59 @@ export function AddHostDialog({
     ) : undefined;
 
   return (
-    <AppDialog
-      isOpen={isOpen}
-      onClose={onClose}
-      dismissible={!locked}
-      size="md"
-      initialFocus={screen === "discover" ? undefined : focusCancel ? "cancel" : "confirm"}
-      focusResetKey={screen}
-      data-testid="add-host-dialog"
-    >
-      <AppDialog.Header>
-        <AppDialog.Title>
-          {existing
-            ? `${existing.intent === "setup" ? "Set up" : "Update"} ${existing.name}`
-            : step === "discover"
-              ? "Add host"
-              : `Add ${hostLabel}`}
-        </AppDialog.Title>
-        <AppDialog.CloseButton />
-      </AppDialog.Header>
-      <AppDialog.Body>
-        {/* An existing host's flow branches on what the check finds: no fixed steps to show. */}
-        {!existing && step !== "done" && !finished && <WizardStepBar steps={steps} />}
-        {placement && existing && (
-          <Callout severity="info" className="mb-4">
-            When setup finishes, {placement.label} opens on {existing.name}.
-          </Callout>
-        )}
-        {body}
-        {error && <ErrorLine message={error} />}
-        {/* No role: the discovery list's own status line stays the dialog's one status. */}
-        <p aria-live="polite" aria-atomic="true" className="sr-only">
-          {announce}
-        </p>
-      </AppDialog.Body>
-      <AppDialog.Footer
-        // A step with an alternative and three actions wraps it onto its own row when narrow.
-        className="flex-wrap gap-y-3"
-        leadingAction={leading}
-        hint={hint ?? savedHint}
+    <>
+      <AppDialog
+        isOpen={isOpen}
+        onClose={onClose}
+        dismissible={!locked}
+        size="md"
+        initialFocus={screen === "discover" ? undefined : focusCancel ? "cancel" : "confirm"}
+        focusResetKey={screen}
+        data-testid="add-host-dialog"
       >
-        <WizardFooterActions dismiss={secondary} back={back} primary={primary} />
-      </AppDialog.Footer>
-    </AppDialog>
+        <AppDialog.Header>
+          <AppDialog.Title>
+            {existing
+              ? `${existing.intent === "setup" ? "Set up" : "Update"} ${existing.name}`
+              : step === "discover"
+                ? "Add host"
+                : `Add ${hostLabel}`}
+          </AppDialog.Title>
+          <AppDialog.CloseButton />
+        </AppDialog.Header>
+        <AppDialog.Body>
+          {/* An existing host's flow branches on what the check finds: no fixed steps to show. */}
+          {!existing && step !== "done" && !finished && <WizardStepBar steps={steps} />}
+          {placement && existing && (
+            <Callout severity="info" className="mb-4">
+              When setup finishes, {placement.label} opens on {existing.name}.
+            </Callout>
+          )}
+          {body}
+          {error && <ErrorLine message={error} />}
+          {/* No role: the discovery list's own status line stays the dialog's one status. */}
+          <p aria-live="polite" aria-atomic="true" className="sr-only">
+            {announce}
+          </p>
+        </AppDialog.Body>
+        <AppDialog.Footer
+          // A step with an alternative and three actions wraps it onto its own row when narrow.
+          className="flex-wrap gap-y-3"
+          leadingAction={leading}
+          hint={hint ?? savedHint}
+        >
+          <WizardFooterActions dismiss={secondary} back={back} primary={primary} />
+        </AppDialog.Footer>
+      </AppDialog>
+      {isOpen && (
+        <SshSignInDialog
+          hostLabel={hostLabel}
+          state={signIn.state}
+          onAnswer={signIn.answer}
+          onRetry={() => signIn.start(connectionFor())}
+          onClose={signIn.close}
+        />
+      )}
+    </>
   );
 }

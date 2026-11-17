@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { HostRestartImpact } from "@shared/types/ipc/remoteHosts";
+import type { HostConnectionState } from "@shared/types/remoteHosts";
 import {
   canWaitForIdle,
   connectionLabel,
   defaultHostName,
+  isLoginRefused,
   localNameSuggestion,
   removeHostOutcome,
   restartConfirmLabel,
@@ -232,8 +234,32 @@ describe("sshRefusalAdvice", () => {
   });
 
   it("stays quiet for other failures", () => {
+    // A command on the host saying it, after a login, isn't ssh's refusal.
+    expect(sshRefusalAdvice("Permission denied (restricted command)")).toBeNull();
     expect(sshRefusalAdvice(null)).toBeNull();
     expect(sshRefusalAdvice("ssh: connect to host studio port 22: Connection refused")).toBeNull();
+  });
+});
+
+describe("isLoginRefused", () => {
+  const parked = (detail: string | null, stoppedRetrying = true): HostConnectionState =>
+    stoppedRetrying
+      ? { status: "unreachable", lastSeenAt: null, detail, stoppedRetrying: true }
+      : { status: "unreachable", lastSeenAt: null, detail };
+
+  it("is a link parked on a refused login", () => {
+    expect(isLoginRefused(parked("greg@studio: Permission denied (publickey)."))).toBe(true);
+  });
+
+  it("isn't a host key, a link still retrying, or one that never reached the login", () => {
+    expect(isLoginRefused(parked("Host key verification failed."))).toBe(false);
+    expect(isLoginRefused(parked("greg@studio: Permission denied (publickey).", false))).toBe(
+      false
+    );
+    expect(isLoginRefused(parked("ssh: connect to host studio port 22: Connection refused"))).toBe(
+      false
+    );
+    expect(isLoginRefused({ status: "disconnected" })).toBe(false);
   });
 });
 

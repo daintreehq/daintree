@@ -85,7 +85,7 @@ import { RemoteHostsClient, type WindowControl } from "./RemoteHostsClient.js";
 import { watchOwnedHostCleanup } from "./ownedHostCleanup.js";
 import { RemoteRouterImpl, type SenderLookup } from "./RemoteRouter.js";
 import { answerReverseRequest } from "./reverseRequests.js";
-import { requireSupportedConnection } from "./connection.js";
+import { requireSupportedConnection, sshTargetOf } from "./connection.js";
 import { SshTransport, controlPathFor } from "./sshTransport.js";
 import { createCloudCommandChannel } from "./remoteShell.js";
 import { HostStarts } from "./hostStarts.js";
@@ -99,6 +99,7 @@ import { machineDisplayName } from "../../utils/machineName.js";
 import { detectClientBundle, downloadArtifact } from "./clientBuild.js";
 import { HostSetupService, RELEASE_FEED_PREFIXES } from "./HostSetupService.js";
 import { HostBringBackService } from "./HostBringBackService.js";
+import { SshSignInService } from "./SshSignInService.js";
 import { sendWakePacket, wakeRouteFor } from "./wakeOnLan.js";
 import { markEnteringFullScreen } from "../../window/fullScreenEntry.js";
 
@@ -107,6 +108,7 @@ declare module "../runtime.js" {
     remoteHostsClient: RemoteHostsClient;
     hostSetup: HostSetupService;
     hostBringBack: HostBringBackService;
+    sshSignIn: SshSignInService;
   }
 }
 
@@ -840,6 +842,20 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   const stopTitleRefresh = registry.onChange(refreshWindowTitles);
   const clientDir = path.join(app.getPath("userData"), "rh");
   const cloudFiles = new CloudSshFiles(path.join(clientDir, "cloud"), defaultCommandRunner);
+  // `client` is made below; a sign-in only starts once the app is up.
+  const signIn: SshSignInService = new SshSignInService({
+    clientDir,
+    run: defaultCommandRunner,
+    isRetiring: (connection) => client.isRetiring(connection),
+    // The askpass helper is this build run again: an unpackaged one needs its app folder.
+    helperCommand: () =>
+      app.isPackaged ? [process.execPath] : [process.execPath, app.getAppPath()],
+  });
+  // A sign-in to a host's old target stops once the host is removed or re-pointed.
+  const stopSignIn = (connection: HostConnection) => {
+    const target = sshTargetOf(connection);
+    if (target !== null) signIn.cancelTarget(target);
+  };
   const cloud = initCloudHosts({
     backend: store as unknown as CloudHostsStoreBackend,
     emit: broadcastLocal,
@@ -934,11 +950,13 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     listViews: () => getAllAppWebContents().map((wc) => wc.id),
     onFirstUse: hooks.onFirstUse,
     onForget: async (descriptor): Promise<void> => {
+      stopSignIn(descriptor.connection);
       await forgetHostState(descriptor.id, HOST_STATE_CLEANUPS);
       await setup.forgetArtifacts(descriptor);
     },
     // The id stays, so everything kept under it about the old machine goes, as on removal.
     onRetarget: async (before): Promise<void> => {
+      stopSignIn(before.connection);
       await forgetHostState(before.id, HOST_STATE_CLEANUPS);
       await setup.forgetArtifacts(before);
     },
@@ -1119,6 +1137,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   const unregisterWindowHosts = registerRemoteService("windowHosts", client);
   const unregisterSetup = registerRemoteService("hostSetup", setup);
   const unregisterBringBack = registerRemoteService("hostBringBack", bringBack);
+  const unregisterSignIn = registerRemoteService("sshSignIn", signIn);
   // Views restored before Remote Hosts started read an empty list, and nothing
   // else tells them the configured hosts until one is dialled or edited.
   broadcastLocal({ type: "hosts-changed", hosts: client.list() });
@@ -1142,6 +1161,9 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       unregisterWindowHosts();
       unregisterSetup();
       unregisterBringBack();
+      unregisterSignIn();
+      // Before the masters close at quit: one it was starting is then among them.
+      await signIn.dispose();
       cloudLifecycle?.dispose();
       cloud.dispose();
       // Before the links close: an attempt would read their closing as its host going.

@@ -262,6 +262,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   // Remote Hosts namespaces with a push channel.
   remoteHosts: GeneratedElectronAPI["remoteHosts"] & {
     onEvent(callback: (event: import("./remoteHosts.js").RemoteHostsEvent) => void): () => void;
+    onSshSignInEvent(
+      callback: (event: import("./remoteHosts.js").SshSignInEvent) => void
+    ): () => void;
   };
   hostMode: GeneratedElectronAPI["hostMode"] & {
     onEvent(callback: (event: import("./hostMode.js").HostModeEvent) => void): () => void;
