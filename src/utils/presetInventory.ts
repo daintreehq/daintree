@@ -33,6 +33,21 @@ export function presetInventoryState(
 }
 
 /**
+ * The project presets snapshot when it is this view's project's, else
+ * undefined. The store outlives a project switch, so a snapshot still naming
+ * the previous project must never be read as this one's.
+ */
+export function ownedProjectPresets<T>(
+  presets: T,
+  hydratedProjectId: string | null,
+  scope: PresetInventoryScope
+): T | undefined {
+  return scope.projectId !== undefined && hydratedProjectId === scope.projectId
+    ? presets
+    : undefined;
+}
+
+/**
  * One agent's CCR and project presets as this view holds them, with whether
  * each has loaded. A project snapshot is handed over only when it is this
  * project's, so another project's preset can never settle a launch here.
@@ -47,11 +62,13 @@ export function readLaunchPresetSources(
 } {
   const ccr = useCcrPresetsStore.getState();
   const project = useProjectPresetsStore.getState();
-  const ownsSnapshot =
-    scope.projectId !== undefined && project.hydratedProjectId === scope.projectId;
   return {
     ccrPresets: ccr.ccrPresetsByAgent[agentId],
-    projectPresets: ownsSnapshot ? project.presetsByAgent[agentId] : undefined,
+    projectPresets: ownedProjectPresets(
+      project.presetsByAgent[agentId],
+      project.hydratedProjectId,
+      scope
+    ),
     presetInventory: presetInventoryState(ccr.isInitialized, project.hydratedProjectId, scope),
   };
 }
