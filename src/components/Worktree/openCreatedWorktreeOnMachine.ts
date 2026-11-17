@@ -45,6 +45,12 @@ const FRESH_READ_INTERVAL_MS = 200;
  */
 const PORT_RETRIES = 5;
 const PORT_RETRY_MS = 1_000;
+/**
+ * How long a shown view waits for its port before asking anyway: a host that
+ * gave up restarting never attaches one, and the run then ends in an error
+ * with Try again rather than waiting for good.
+ */
+const PORT_WAIT_MS = 30_000;
 
 export interface CreatedWorktreeOnMachine {
   worktreeId: string;
@@ -154,17 +160,21 @@ function whenViewActive(): Promise<void> {
   });
 }
 
-/** Resolves once this view's worktree port is attached; at once when it is. */
+/** Resolves once this view's worktree port is attached, or {@link PORT_WAIT_MS} has passed. */
 function whenPortReady(): Promise<void> {
   if (worktreeClient.isPortReady()) return Promise.resolve();
   return new Promise((resolve) => {
     let settled = false;
-    const unsubscribe = worktreeClient.onPortReady(() => {
+    const finish = () => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
+      // Deferred: the port calls back at once from inside its own subscribe.
       queueMicrotask(() => unsubscribe());
       resolve();
-    });
+    };
+    const timer = setTimeout(finish, PORT_WAIT_MS);
+    const unsubscribe = worktreeClient.onPortReady(finish);
   });
 }
 

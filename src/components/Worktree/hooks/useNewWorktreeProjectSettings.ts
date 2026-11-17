@@ -29,6 +29,8 @@ export function useNewWorktreeProjectSettings({
   const [gitUsername, setGitUsername] = useState<string | null>(null);
   const [hostEnvironmentKeys, setHostEnvironmentKeys] = useState<string[]>([]);
   const [hostEnvironmentsAnswered, setHostEnvironmentsAnswered] = useState(false);
+  // Answered or failed: a failed read lists nothing more later, so nothing waits on it.
+  const [settingsAnswered, setSettingsAnswered] = useState(false);
 
   const { recipes, loadRecipes } = useRecipeStore();
   const currentProject = useProjectStore((s) => s.currentProject);
@@ -37,6 +39,7 @@ export function useNewWorktreeProjectSettings({
     if (!isOpen) {
       setProjectSettings(null);
       setGitUsername(null);
+      setSettingsAnswered(false);
       return;
     }
 
@@ -67,7 +70,10 @@ export function useNewWorktreeProjectSettings({
           }
         }
       })
-      .catch((err) => logError("Failed to load project settings", err));
+      .catch((err) => logError("Failed to load project settings", err))
+      .finally(() => {
+        if (currentProject?.id === requestedProjectId) setSettingsAnswered(true);
+      });
 
     if (recipes.length === 0 && currentProject?.id) {
       loadRecipes(currentProject.id).catch((err) => logError("Failed to load recipes", err));
@@ -116,6 +122,6 @@ export function useNewWorktreeProjectSettings({
     gitUsername,
     configuredBranchPrefix,
     resourceEnvironments,
-    environmentsLoaded: projectSettings !== null && hostEnvironmentsAnswered,
+    environmentsLoaded: settingsAnswered && hostEnvironmentsAnswered,
   };
 }

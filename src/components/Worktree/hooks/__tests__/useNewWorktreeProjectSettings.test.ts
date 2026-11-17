@@ -63,6 +63,37 @@ describe("useNewWorktreeProjectSettings — environments (#17358)", () => {
     await waitFor(() => expect(result.current.environmentsLoaded).toBe(true));
   });
 
+  it("is loaded when the settings read fails, rather than holding anything for good", async () => {
+    getSettings.mockRejectedValue(new Error("settings unreadable"));
+    hasResourceConfig.mockResolvedValue({ hasConfig: true, environmentKeys: ["cloud"] });
+
+    const { result } = renderHook(() => useNewWorktreeProjectSettings({ isOpen: true }));
+
+    await waitFor(() => expect(result.current.environmentsLoaded).toBe(true));
+    expect(Object.keys(result.current.resourceEnvironments ?? {})).toEqual(["cloud"]);
+  });
+
+  it("waits again for the host's answer each time the dialog opens", async () => {
+    getSettings.mockResolvedValue({});
+    hasResourceConfig.mockResolvedValue({ hasConfig: false });
+    const { result, rerender } = renderHook(
+      ({ isOpen }) => useNewWorktreeProjectSettings({ isOpen }),
+      { initialProps: { isOpen: true } }
+    );
+    await waitFor(() => expect(result.current.environmentsLoaded).toBe(true));
+
+    rerender({ isOpen: false });
+    expect(result.current.environmentsLoaded).toBe(false);
+    let answer!: (value: unknown) => void;
+    hasResourceConfig.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    rerender({ isOpen: true });
+    await waitFor(() => expect(result.current.projectSettings).not.toBeNull());
+    expect(result.current.environmentsLoaded).toBe(false);
+
+    answer({ hasConfig: false });
+    await waitFor(() => expect(result.current.environmentsLoaded).toBe(true));
+  });
+
   it("keeps Project settings' own answer from a host that doesn't list its environments", async () => {
     getSettings.mockResolvedValue({});
     hasResourceConfig.mockResolvedValue({ hasConfig: false });

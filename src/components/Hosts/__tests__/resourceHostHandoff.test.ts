@@ -337,6 +337,22 @@ describe("resource box handoff", () => {
     expect(outcome).toEqual({ status: "setup", hostId: "dt-feature-x" });
   });
 
+  it("asks first after setup when the view goes out of sight while the placement is written", async () => {
+    client.probe.mockResolvedValue(probeResult({ hostModeListening: false }));
+    let visible = true;
+    client.update.mockImplementation(async () => {
+      visible = false;
+      return {};
+    });
+
+    await openResourceBoxOnHost({ ...box, placeNow: () => visible });
+
+    expect(client.update).toHaveBeenCalledTimes(2);
+    expect(client.update.mock.calls[0]![0].pendingPlacement.askFirst).toBeUndefined();
+    expect(client.update.mock.calls[1]![0].pendingPlacement.askFirst).toBe(true);
+    expect(requestHostUpdate).toHaveBeenCalledWith("dt-feature-x", "setup");
+  });
+
   it("switches straight away when it can open now", async () => {
     client.probe.mockResolvedValue(probeResult({ hostModeListening: true }));
 

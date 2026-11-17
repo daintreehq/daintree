@@ -4778,6 +4778,7 @@ describe("NewWorktreeDialog — open on its environment's machine (#17358)", () 
 
   it("holds a Retry that was to open on its machine until the environments have loaded", async () => {
     projectSettingsFixture.environmentsLoaded = false;
+    projectSettingsFixture.value = null;
     const draft = retryDraft({
       baseBranch: "main",
       branchMode: "new",
@@ -4791,7 +4792,9 @@ describe("NewWorktreeDialog — open on its environment's machine (#17358)", () 
 
     await submit();
     expect(actionCalls("worktree.create")).toHaveLength(0);
+    expect(screen.getByText("Loading environments…")).toBeDefined();
 
+    projectSettingsFixture.value = { resourceEnvironments: { cloud: {}, staging: {} } };
     projectSettingsFixture.environmentsLoaded = true;
     view.rerender(
       <NewWorktreeDialog

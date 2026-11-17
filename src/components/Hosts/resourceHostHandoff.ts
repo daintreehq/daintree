@@ -180,7 +180,10 @@ export async function openResourceBoxOnHost(box: ResourceBox): Promise<ResourceH
   const setup = async (): Promise<ResourceHandoffOutcome> => {
     // Set up where nobody can see it, or behind another switch: the switch
     // that follows asks before it moves the window.
-    await hold(box.askFirst === true || (box.placeNow !== undefined && !box.placeNow()));
+    const askFirst = box.askFirst === true || (box.placeNow !== undefined && !box.placeNow());
+    await hold(askFirst);
+    // Hidden, or another switch begun, while the placement was written.
+    if (!askFirst && box.placeNow && !box.placeNow()) await hold(true);
     retryPlacementSetup(host.id);
     return { status: "setup", hostId: host.id };
   };

@@ -1599,6 +1599,8 @@ export function NewWorktreeDialog({
         </span>
       ) : cloudMachine?.blocked != null ? (
         <span className="truncate">{cloudMachine.blocked}</span>
+      ) : handoffAwaitingEnvironments ? (
+        <span className="truncate">Loading environments…</span>
       ) : footerBusy && (isCheckingBranch || isGeneratingPath) ? (
         <span className="truncate">
           {isCheckingBranch ? "Checking the branch name…" : "Generating the path…"}

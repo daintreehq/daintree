@@ -513,6 +513,29 @@ describe("openCreatedWorktreeOnMachine", () => {
     expect(outcome).toEqual({ status: "placing", hostId: "dt-feature-x" });
   });
 
+  it("stops asking after five retries for a port that never comes back, and says so", async () => {
+    vi.useFakeTimers();
+    try {
+      port.ready = false;
+      worktreeClient.resourceAction.mockRejectedValue(
+        new Error("[BrokerError|HOST_EXITED] Worktree port not ready")
+      );
+
+      const pending = openCreatedWorktreeOnMachine(request, { clock });
+      await vi.advanceTimersByTimeAsync(29_000);
+      expect(worktreeClient.resourceAction).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(6 * 30_000);
+      const outcome = await pending;
+
+      expect(worktreeClient.resourceAction).toHaveBeenCalledTimes(6);
+      expect(port.listeners.size).toBe(0);
+      expect(outcome).toMatchObject({ status: "error" });
+      expect(lastNotice()?.action?.label).toBe("Try again");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("never retries a status command that itself failed", async () => {
     worktreeClient.resourceAction.mockRejectedValue(
       new Error("[BrokerError|TIMEOUT] resource-action timed out")
