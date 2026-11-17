@@ -35,6 +35,7 @@ import {
   editorSearchPanelTheme,
 } from "@/components/FileViewer/editorSearchTheme";
 import { createEditorSearchPanel } from "@/components/FileViewer/editorSearchPanel";
+import { closeUndoOrdering } from "@/components/Terminal/inputEditorExtensions/closeUndoOrdering";
 import {
   getDaintreeEditorTheme,
   type EditorThemePolarity,
@@ -163,6 +164,8 @@ export function buildMarkdownEditorExtensions(options: {
     lineNumbers(),
     highlightSpecialChars(),
     history(),
+    // Typing newer than a panel close undoes before Cmd+Z reopens the panel (#17180).
+    closeUndoOrdering(),
     foldGutter(),
     drawSelection(),
     dropCursor(),

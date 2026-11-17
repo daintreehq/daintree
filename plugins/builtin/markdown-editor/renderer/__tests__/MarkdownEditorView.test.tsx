@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoreApi, UseBoundStore } from "zustand";
 import { EditorView } from "@codemirror/view";
 import { Text } from "@codemirror/state";
@@ -47,6 +47,13 @@ import { createFakeMain, type FakeMain } from "./testHost";
 import { whenPluginUiReady } from "@daintreehq/plugin-ui";
 import { installAppPluginKitHost } from "@/services/plugin/appPluginKitHost";
 import { formatBytes } from "@/lib/formatBytes";
+import {
+  hasEditsSinceClose,
+  nextCloseSeq,
+  resetCloseUndoOrderForTests,
+  subscribeCloseUndoEdits,
+  undoFieldText,
+} from "@/services/terminal/closeUndoOrder";
 
 // The app's own kit host, so the kit reaches the app services mocked here.
 installAppPluginKitHost();
@@ -501,6 +508,131 @@ describe("MarkdownEditorView (#12323)", () => {
     expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.draftText).toBe(
       "# Plan\n\nBody\n\nabc"
     );
+  });
+
+  describe("Undo against a closed panel (#17180)", () => {
+    // jsdom has no layout: undo scrolls the caret into view, and CodeMirror
+    // measures it through Range rects jsdom lacks.
+    const originalRangeRects = Object.getOwnPropertyDescriptor(Range.prototype, "getClientRects");
+    const originalRangeBounds = Range.prototype.getBoundingClientRect;
+    beforeAll(() => {
+      Object.defineProperty(Range.prototype, "getClientRects", {
+        configurable: true,
+        value: () => [],
+      });
+      Range.prototype.getBoundingClientRect = () => new DOMRect();
+    });
+    afterAll(() => {
+      if (originalRangeRects)
+        Object.defineProperty(Range.prototype, "getClientRects", originalRangeRects);
+      else delete (Range.prototype as Partial<Range>).getClientRects;
+      Range.prototype.getBoundingClientRect = originalRangeBounds;
+    });
+
+    beforeEach(() => {
+      resetCloseUndoOrderForTests();
+    });
+
+    it("undoes typing newer than a panel close before the close, and keeps older typing for after it", async () => {
+      await renderReady();
+      // Typed right before and right after the close, inside the grouping
+      // delay that would otherwise merge them into one undo step.
+      await type("\nolder");
+      const close = nextCloseSeq();
+      expect(hasEditsSinceClose(editorView().contentDOM, close)).toBe(false);
+      await type(" newer");
+      const cm = editorView();
+      expect(hasEditsSinceClose(cm.contentDOM, close)).toBe(true);
+
+      // What the undo-close key and Edit > Undo hand the press to.
+      await act(async () => {
+        undoFieldText(cm.contentDOM);
+      });
+      expect(cm.state.doc.toString()).toBe("# Plan\n\nBody\n\nolder");
+      // Back at the close: the next Undo reopens the panel.
+      expect(hasEditsSinceClose(cm.contentDOM, close)).toBe(false);
+
+      // The typing from before the close is still the editor's to undo.
+      await act(async () => {
+        undoFieldText(cm.contentDOM);
+      });
+      expect(cm.state.doc.toString()).toBe("# Plan\n\nBody\n");
+    });
+
+    it("tells Edit > Undo when the editor's undo history moves", async () => {
+      await renderReady();
+      const close = nextCloseSeq();
+      const changed = vi.fn();
+      const unsubscribe = subscribeCloseUndoEdits(changed);
+      try {
+        await type("\nafter");
+        expect(changed).toHaveBeenCalled();
+        expect(hasEditsSinceClose(editorView().contentDOM, close)).toBe(true);
+      } finally {
+        unsubscribe();
+      }
+    });
+  });
+
+  describe("Cmd+F under an app modal (#17180)", () => {
+    function appModal(): HTMLElement {
+      const modal = document.createElement("div");
+      modal.setAttribute("role", "dialog");
+      modal.setAttribute("aria-modal", "true");
+      document.body.appendChild(modal);
+      return modal;
+    }
+
+    it("leaves the editor's find bar closed while a modal above it holds the keyboard", async () => {
+      await renderReady();
+      const modal = appModal();
+      try {
+        const field = document.createElement("input");
+        modal.appendChild(field);
+        field.focus();
+        await act(async () => {
+          window.dispatchEvent(new Event("daintree:find-in-panel"));
+        });
+        expect(document.querySelector(".cm-search")).toBeNull();
+        expect(document.activeElement).toBe(field);
+      } finally {
+        modal.remove();
+      }
+    });
+
+    it("leaves it closed while the modal is open even if the editor still holds focus", async () => {
+      await renderReady();
+      await act(async () => {
+        editorView().focus();
+      });
+      const modal = appModal();
+      try {
+        await act(async () => {
+          window.dispatchEvent(new Event("daintree:find-in-panel"));
+        });
+        expect(document.querySelector(".cm-search")).toBeNull();
+      } finally {
+        modal.remove();
+      }
+    });
+
+    it("still opens it for an editor inside the modal that holds the keyboard", async () => {
+      const modal = appModal();
+      try {
+        render(view(), { container: modal });
+        await waitFor(() => expect(document.querySelector(".cm-content")).not.toBeNull());
+        await act(async () => {
+          editorView().focus();
+        });
+        await act(async () => {
+          window.dispatchEvent(new Event("daintree:find-in-panel"));
+        });
+        expect(document.querySelector(".cm-search")).not.toBeNull();
+      } finally {
+        cleanup();
+        modal.remove();
+      }
+    });
   });
 
   describe("Copy draft", () => {
