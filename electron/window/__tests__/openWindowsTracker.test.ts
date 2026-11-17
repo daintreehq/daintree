@@ -824,12 +824,14 @@ describe("the hold for Keep Agents Running", () => {
       expect(lastWroteCanopyOpen()).toBe(true);
       writeOpenWindowsManifest.mockClear();
 
-      // Every window closes one by one; macOS would otherwise write the empty set.
+      // Every window closes one by one; each close would otherwise drop it,
+      // and macOS would write the empty set at the last.
       setCanopyWindowOpen(false);
-      saveBeforeLastWindowCloses(2);
       saveOpenWindowsNow(2);
-      for (const win of wins) win.destroyed = true;
+      wins[1]!.destroyed = true;
+      saveBeforeLastWindowCloses(1);
       saveOpenWindowsNow(1);
+      wins[0]!.destroyed = true;
       scheduleOpenWindowsSave();
       vi.runAllTimers();
       // The user quits while windowless.
@@ -840,18 +842,21 @@ describe("the hold for Keep Agents Running", () => {
   );
 
   it("saves again once the windows are back", () => {
-    initOpenWindowsTracker({
-      registry: makeRegistry([{ windowId: 1, projectId: "a" }]),
-      readOnly: false,
-    });
+    const win: FakeWindow = { windowId: 1, projectId: "a" };
+    initOpenWindowsTracker({ registry: makeRegistry([win]), readOnly: false });
     holdOpenWindowsSaves();
     writeOpenWindowsManifest.mockClear();
+
+    win.projectId = "b";
+    scheduleOpenWindowsSave();
+    vi.runAllTimers();
+    expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
 
     releaseOpenWindowsHold();
     scheduleOpenWindowsSave();
     vi.runAllTimers();
 
-    expect(writeOpenWindowsManifest).toHaveBeenCalledTimes(1);
+    expect(lastWritten()).toEqual([{ projectId: "b" }]);
   });
 
   it("is lifted independently of the fan-out suppression around it", () => {

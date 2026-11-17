@@ -2354,6 +2354,20 @@ describe("AutoUpdaterService", () => {
         expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).toHaveBeenCalledTimes(1);
       });
 
+      it("asks about agents waiting for permission too, and stays staged when cancelled", async () => {
+        updateWarningMock.getActiveAgents.mockReturnValue({ activeAgents: 1, awaitingApproval: 1 });
+        updateWarningMock.showUpdateWarning.mockResolvedValue(false);
+
+        await expect(autoUpdaterService.confirmAndQuitAndInstall()).resolves.toBe(false);
+
+        expect(updateWarningMock.showUpdateWarning).toHaveBeenCalledWith(
+          { activeAgents: 1, awaitingApproval: 1, attachedShells: [] },
+          expect.anything(),
+          windowMock
+        );
+        expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).not.toHaveBeenCalled();
+      });
+
       it("asks once about both agents and attached Shells", async () => {
         setAttachedShellsProvider(() => [{ clientName: "MacBook Pro" }]);
         updateWarningMock.showUpdateWarning.mockResolvedValue(false);

@@ -88,7 +88,7 @@ export async function showQuitWarning(
   let detail: string;
   if (attachedShells.length === 0) {
     detail = keepRunning
-      ? `Keep Agents Running closes every window and leaves the agents running in the background; open ${PRODUCT_NAME} again to get back to them. Quitting stops them, and any unsaved progress may be lost.`
+      ? `Keep Agents Running closes every window and leaves these agents running in the background; open ${PRODUCT_NAME} again to get back to them. Quitting stops them, and any unsaved progress may be lost.`
       : "Quitting now will interrupt active agents. Any unsaved progress may be lost.";
   } else {
     detail =
@@ -96,7 +96,7 @@ export async function showQuitWarning(
         ? `${shellsLine} ${agentsWorking}, and quitting will interrupt them too.`
         : shellsLine;
     if (keepRunning) {
-      detail += ` Keep Agents Running closes every window instead, and the agents keep running with ${machines.object} still attached.`;
+      detail += ` Keep Agents Running closes every window instead, and these agents keep running with ${machines.object} still attached.`;
     }
   }
 

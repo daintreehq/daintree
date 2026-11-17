@@ -62,16 +62,21 @@ describe("getActiveAgentCount", () => {
     expect(getActiveAgentCount(store)).toBe(1);
   });
 
-  it("counts an agent held on a permission prompt, and no other kind of wait", () => {
+  it("counts an agent held on a permission prompt", () => {
     const store = mockStore([
       { agentId: "a1", state: "waiting", waitingReason: "approval" },
-      { agentId: "a2", state: "waiting", waitingReason: "question" },
-      { agentId: "a3", state: "waiting", waitingReason: "prompt" },
-      { agentId: "a4", state: "waiting", waitingReason: "error" },
-      { agentId: "a5", state: "idle" },
+      { agentId: "a2", state: "idle" },
     ]);
-    expect(getActiveAgentCount(store)).toBe(1);
+    expect(getActiveAgents(store)).toEqual({ activeAgents: 1, awaitingApproval: 1 });
   });
+
+  it.each<WaitingReason | undefined>(["question", "prompt", "error", undefined])(
+    "doesn't count a wait for %s",
+    (waitingReason) => {
+      const store = mockStore([{ agentId: "a1", state: "waiting", waitingReason }]);
+      expect(getActiveAgents(store)).toEqual({ activeAgents: 0, awaitingApproval: 0 });
+    }
+  );
 
   it("splits working agents from those waiting for permission", () => {
     const store = mockStore([
@@ -147,6 +152,13 @@ describe("getActiveAgentCount against a real store", () => {
 
     transition("waiting", "approval");
     expect(getActiveAgents(store)).toEqual({ activeAgents: 1, awaitingApproval: 1 });
+
+    transition("working");
+    expect(getActiveAgents(store)).toEqual({ activeAgents: 1, awaitingApproval: 0 });
+
+    transition("waiting", "approval");
+    transition("waiting");
+    expect(getActiveAgents(store)).toEqual({ activeAgents: 0, awaitingApproval: 0 });
 
     transition("waiting", "question");
     expect(getActiveAgentCount(store)).toBe(0);
@@ -235,6 +247,12 @@ describe("showQuitWarning offering to keep agents running", () => {
     );
   });
 
+  it.each([-1, 3, 1000])("treats an unknown answer (%i) as Cancel", async (response) => {
+    expect(await showQuitWarning(agents(1), box(response), null, { offerKeepRunning: true })).toBe(
+      "cancel"
+    );
+  });
+
   it("puts the choice beside Quit, keeps Cancel the default, and never renders command links", async () => {
     const showMessageBox = box(2);
     await showQuitWarning(agents(1), showMessageBox, null, { offerKeepRunning: true });
@@ -299,6 +317,7 @@ describe("showQuitWarning with attached Shells", () => {
     const confirmed = await showQuitWarning(
       {
         activeAgents: 0,
+        awaitingApproval: 0,
         attachedShells: [{ clientName: "MacBook Pro" }, { clientName: "Studio" }],
       },
       showMessageBox
@@ -382,7 +401,18 @@ describe("showUpdateWarning", () => {
   it("asks about agents waiting for permission with the same copy Quit shows", async () => {
     const showMessageBox = vi.fn().mockResolvedValue({ response: 1 });
     await showUpdateWarning(agents(1, 1), showMessageBox);
+    await showUpdateWarning(agents(3, 1), showMessageBox);
+    await showUpdateWarning(
+      { activeAgents: 2, awaitingApproval: 2, attachedShells: [{ clientName: "MacBook Pro" }] },
+      showMessageBox
+    );
     expect(showMessageBox.mock.calls[0]![0].message).toBe("1 agent is waiting for permission");
+    expect(showMessageBox.mock.calls[1]![0].message).toBe(
+      "2 agents are working and 1 is waiting for permission"
+    );
+    expect(showMessageBox.mock.calls[2]![0].detail).toContain(
+      "2 agents are waiting for permission, and restarting will interrupt them too"
+    );
   });
 
   it("mentions working agents beside the attached Shells in one dialog", async () => {
@@ -403,6 +433,7 @@ describe("showUpdateWarning", () => {
     await showUpdateWarning(
       {
         activeAgents: 0,
+        awaitingApproval: 0,
         attachedShells: [{ clientName: "MacBook Pro" }, { clientName: "MacBook Pro" }],
       },
       showMessageBox

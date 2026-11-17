@@ -328,7 +328,7 @@ const serviceRefsMock = vi.hoisted(() => {
   let ccr: { stopWatching: () => Promise<void> } | null = null;
   let resourceProfile: { stop: () => void } | null = null;
   let worktreePortBroker: { dispose: () => void } | null = null;
-  let watchdog: { dispose: () => void } | null = null;
+  let watchdog: { dispose: () => void; pause?: () => void; resume?: () => void } | null = null;
   let agentNotification: { dispose: () => void } | null = null;
   let autoUpdater: { dispose: () => void } | null = null;
   let windowsStoreNotifier: { dispose: () => void } | null = null;
@@ -1137,12 +1137,26 @@ describe("registerShutdownHandler", () => {
     it("asks again at the next quit with no window open, and shuts down when told to", async () => {
       quitWarningMock.getActiveAgentCount.mockReturnValue(1);
       quitWarningMock.showQuitWarning.mockResolvedValueOnce("keep-running");
-      const keepAgentsRunning = vi.fn(() =>
-        backgroundAgentsMock.hasOpenWindows.mockReturnValue(false)
-      );
-      const { beforeQuitCb } = await setup({ keepAgentsRunning });
+      let primary: Electron.BrowserWindow | null = {} as Electron.BrowserWindow;
+      const firstWindow = primary;
+      const keepAgentsRunning = vi.fn(() => {
+        primary = null;
+        backgroundAgentsMock.hasOpenWindows.mockReturnValue(false);
+      });
+      const { beforeQuitCb } = await setup({
+        windowRegistry: {
+          getPrimary: () => (primary ? { browserWindow: primary } : undefined),
+        } as unknown as ShutdownDeps["windowRegistry"],
+        keepAgentsRunning,
+      });
 
       await beforeQuitCb(makeEvent());
+      expect(quitWarningMock.showQuitWarning).toHaveBeenLastCalledWith(
+        expect.objectContaining({ activeAgents: 1 }),
+        expect.anything(),
+        firstWindow,
+        { offerKeepRunning: true }
+      );
       expect(keepAgentsRunning).toHaveBeenCalledOnce();
 
       quitWarningMock.showQuitWarning.mockResolvedValueOnce("quit");
@@ -1190,6 +1204,84 @@ describe("registerShutdownHandler", () => {
         expect.anything(),
         { offerKeepRunning: true }
       );
+    });
+  });
+
+  describe("the watchdog while the warning is open", () => {
+    const originalPlatform = process.platform;
+    afterEach(() => {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    });
+
+    function withWatchdog() {
+      const watchdog = { dispose: vi.fn(), pause: vi.fn(), resume: vi.fn() };
+      serviceRefsMock.setInitialState({ watchdog });
+      return watchdog;
+    }
+
+    it("is paused while a macOS alert with no window holds Main, and resumed once answered", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      const watchdog = withWatchdog();
+      quitWarningMock.getActiveAgentCount.mockReturnValue(1);
+      let answer: (decision: QuitDecision) => void = () => {};
+      let pausedFirst = false;
+      quitWarningMock.showQuitWarning.mockImplementationOnce(() => {
+        // Paused before the alert starts: nothing in Main runs while it is up.
+        pausedFirst = watchdog.pause.mock.calls.length === 1;
+        return new Promise<QuitDecision>((resolve) => (answer = resolve));
+      });
+      const { beforeQuitCb } = await setup();
+
+      const pending = beforeQuitCb(makeEvent());
+      expect(quitWarningMock.showQuitWarning).toHaveBeenCalledOnce();
+      expect(pausedFirst).toBe(true);
+      expect(watchdog.resume).not.toHaveBeenCalled();
+
+      answer("cancel");
+      await pending;
+      expect(watchdog.resume).toHaveBeenCalledOnce();
+    });
+
+    it("is resumed when the alert fails", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      const watchdog = withWatchdog();
+      quitWarningMock.getActiveAgentCount.mockReturnValue(1);
+      quitWarningMock.showQuitWarning.mockRejectedValueOnce(new Error("message box failed"));
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const { beforeQuitCb } = await setup();
+        await beforeQuitCb(makeEvent());
+      } finally {
+        consoleSpy.mockRestore();
+      }
+
+      expect(watchdog.pause).toHaveBeenCalledOnce();
+      expect(watchdog.resume).toHaveBeenCalledOnce();
+    });
+
+    it.each<[string, NodeJS.Platform, boolean]>([
+      ["hangs from a window on macOS", "darwin", true],
+      ["has no window off macOS, where the dialog doesn't hold Main", "linux", false],
+    ])("is left alone when the alert %s", async (_case, platform, withPrimary) => {
+      Object.defineProperty(process, "platform", { value: platform });
+      const watchdog = withWatchdog();
+      quitWarningMock.getActiveAgentCount.mockReturnValue(1);
+      quitWarningMock.showQuitWarning.mockResolvedValue("cancel");
+      const { beforeQuitCb } = await setup(
+        withPrimary
+          ? {
+              windowRegistry: {
+                getPrimary: () => ({ browserWindow: {} as Electron.BrowserWindow }),
+              } as unknown as ShutdownDeps["windowRegistry"],
+            }
+          : undefined
+      );
+
+      await beforeQuitCb(makeEvent());
+
+      expect(quitWarningMock.showQuitWarning).toHaveBeenCalledOnce();
+      expect(watchdog.pause).not.toHaveBeenCalled();
+      expect(watchdog.resume).not.toHaveBeenCalled();
     });
   });
 

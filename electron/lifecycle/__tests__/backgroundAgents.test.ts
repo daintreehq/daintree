@@ -32,6 +32,13 @@ function makeWindow(destroyed = false) {
   return { close: vi.fn(), isDestroyed: () => destroyed };
 }
 
+/** A window as `browser-window-created` hands it over, shown or not yet. */
+function createdWindow(visible: boolean) {
+  const win = Object.assign(new EventEmitter(), { isVisible: () => visible });
+  electronMock.app.emit("browser-window-created", {}, win);
+  return win;
+}
+
 function makeDeps() {
   return { holdOpenWindows: vi.fn(), releaseOpenWindows: vi.fn(), armReopen: vi.fn() };
 }
@@ -69,28 +76,67 @@ describe("keepAgentsRunningWithoutWindows", () => {
     expect(deps.releaseOpenWindows).not.toHaveBeenCalled();
   });
 
-  it("ends when a window opens again, and lets the manifest go once", () => {
+  it("ends when a window is on screen again, and lets the manifest go once", () => {
     const deps = makeDeps();
     electronMock.windows = [makeWindow()];
     keepAgentsRunningWithoutWindows(deps);
 
-    electronMock.app.emit("browser-window-created", {}, {});
+    createdWindow(true);
     expect(isKeepingAgentsRunning()).toBe(false);
     expect(deps.releaseOpenWindows).toHaveBeenCalledOnce();
 
-    electronMock.app.emit("browser-window-created", {}, {});
+    createdWindow(true);
     expect(deps.releaseOpenWindows).toHaveBeenCalledOnce();
     expect(electronMock.app.listenerCount("browser-window-created")).toBe(0);
   });
 
-  it("listens once however many times it is chosen before a window opens", () => {
+  it("waits for a window created hidden to show", () => {
+    const deps = makeDeps();
+    keepAgentsRunningWithoutWindows(deps);
+
+    const win = createdWindow(false);
+    expect(isKeepingAgentsRunning()).toBe(true);
+    expect(deps.releaseOpenWindows).not.toHaveBeenCalled();
+
+    win.emit("show");
+    expect(isKeepingAgentsRunning()).toBe(false);
+    expect(deps.releaseOpenWindows).toHaveBeenCalledOnce();
+  });
+
+  it("isn't ended by a hidden window that never shows, such as a PDF render", () => {
+    const deps = makeDeps();
+    keepAgentsRunningWithoutWindows(deps);
+
+    createdWindow(false);
+
+    expect(isKeepingAgentsRunning()).toBe(true);
+    expect(deps.releaseOpenWindows).not.toHaveBeenCalled();
+  });
+
+  it("listens once however many times it is chosen before a window shows", () => {
     keepAgentsRunningWithoutWindows(makeDeps());
     const second = makeDeps();
     keepAgentsRunningWithoutWindows(second);
 
     expect(electronMock.app.listenerCount("browser-window-created")).toBe(1);
-    electronMock.app.emit("browser-window-created", {}, {});
+    createdWindow(true);
     expect(isKeepingAgentsRunning()).toBe(false);
+    expect(second.releaseOpenWindows).toHaveBeenCalledOnce();
+  });
+
+  it("can't be ended by a window from an earlier cycle that shows late", () => {
+    const first = makeDeps();
+    keepAgentsRunningWithoutWindows(first);
+    const late = createdWindow(false);
+    createdWindow(true);
+
+    const second = makeDeps();
+    keepAgentsRunningWithoutWindows(second);
+    late.emit("show");
+
+    expect(isKeepingAgentsRunning()).toBe(true);
+    expect(first.releaseOpenWindows).toHaveBeenCalledOnce();
+    expect(second.releaseOpenWindows).not.toHaveBeenCalled();
   });
 
   it("does nothing once a shutdown owns the process", () => {
@@ -111,6 +157,8 @@ describe("keepAgentsRunningWithoutWindows", () => {
 
 describe("hasOpenWindows", () => {
   it("counts only windows that are still alive", () => {
+    electronMock.windows = [];
+    expect(hasOpenWindows()).toBe(false);
     electronMock.windows = [makeWindow(true)];
     expect(hasOpenWindows()).toBe(false);
     electronMock.windows = [makeWindow(true), makeWindow()];

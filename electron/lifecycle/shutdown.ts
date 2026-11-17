@@ -221,8 +221,17 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
         isConfirmingQuit = true;
         setExitConfirmationPending(true);
         let decision: QuitDecision = "cancel";
+        const primaryWindow = deps.windowRegistry?.getPrimary()?.browserWindow ?? null;
+        // With no window to hang a sheet from, Electron shows the macOS alert
+        // with runModal, which holds Main's event loop until it is answered.
+        // The watchdog would take that for a hang and kill the process, and
+        // every agent with it, while the user reads the question.
+        const stalledWatchdog =
+          primaryWindow === null && process.platform === "darwin"
+            ? getMainProcessWatchdogClientRef()
+            : null;
+        stalledWatchdog?.pause();
         try {
-          const primaryWindow = deps.windowRegistry?.getPrimary()?.browserWindow ?? null;
           decision = await showQuitWarning(
             { ...agents, attachedShells },
             dialog.showMessageBox,
@@ -232,6 +241,7 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
         } catch (error) {
           console.error("[MAIN] Error showing quit warning:", error);
         } finally {
+          stalledWatchdog?.resume();
           isConfirmingQuit = false;
           setExitConfirmationPending(false);
         }
