@@ -287,6 +287,18 @@ describe("toolbar copy visible", () => {
     );
   });
 
+  it("wraps Copy but not Clear when a filter hides every message", () => {
+    seedConsoleRow({ summaryText: "alpha event" });
+    renderPanel();
+    fireEvent.change(screen.getByLabelText("Filter console messages"), {
+      target: { value: "zzz-no-match" },
+    });
+    expect(getCopyVisibleButton().parentElement?.tagName).toBe("SPAN");
+    expect(screen.getByRole("button", { name: "Clear console" }).parentElement?.tagName).not.toBe(
+      "SPAN"
+    );
+  });
+
   it("drops the wrapper once the buttons are enabled", () => {
     seedConsoleRow({ summaryText: "one" });
     renderPanel();

@@ -246,6 +246,7 @@ export function BrowserToolbar({
   const selectOnFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [screenshotCopied, setScreenshotCopied] = useState(false);
   const screenshotCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const screenshotMountedRef = useRef(true);
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   // Set by the Escape that puts the address back, so the restored address does not
@@ -309,7 +310,9 @@ export function BrowserToolbar({
   // that outlives the mount sets state on a gone tree, and under vitest it can
   // fire after the jsdom environment is torn down ("window is not defined").
   useEffect(() => {
+    screenshotMountedRef.current = true;
     return () => {
+      screenshotMountedRef.current = false;
       if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
       if (screenshotCopiedTimerRef.current) clearTimeout(screenshotCopiedTimerRef.current);
       if (selectOnFocusTimerRef.current) clearTimeout(selectOnFocusTimerRef.current);
@@ -661,6 +664,7 @@ export function BrowserToolbar({
     } catch (err) {
       logError("Failed to capture screenshot", err);
     }
+    if (!screenshotMountedRef.current) return;
     if (screenshotCopiedTimerRef.current) clearTimeout(screenshotCopiedTimerRef.current);
     if (!success) {
       setScreenshotCopied(false);

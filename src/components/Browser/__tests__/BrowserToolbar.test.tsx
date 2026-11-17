@@ -406,6 +406,7 @@ describe("BrowserToolbar ARIA semantics", () => {
 
     it("announces once through the shared polite announcer, flips to a check, and reverts after the dwell", async () => {
       vi.useFakeTimers();
+      const announce = vi.spyOn(useAnnouncerStore.getState(), "announce");
       try {
         const onCaptureScreenshot = vi.fn(() => Promise.resolve(true));
         const { container, getByRole } = renderToolbar({
@@ -419,7 +420,8 @@ describe("BrowserToolbar ARIA semantics", () => {
         });
 
         expect(onCaptureScreenshot).toHaveBeenCalledOnce();
-        expect(useAnnouncerStore.getState().polite?.msg).toBe("Screenshot copied to clipboard");
+        expect(announce).toHaveBeenCalledTimes(1);
+        expect(announce).toHaveBeenCalledWith("Screenshot copied to clipboard", "polite");
         expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
         expect(hasCheck(button)).toBe(true);
 
@@ -432,7 +434,31 @@ describe("BrowserToolbar ARIA semantics", () => {
         });
         expect(hasCheck(button)).toBe(false);
       } finally {
+        announce.mockRestore();
         vi.useRealTimers();
+      }
+    });
+
+    it("does not announce when the toolbar unmounts before the capture settles", async () => {
+      const announce = vi.spyOn(useAnnouncerStore.getState(), "announce");
+      try {
+        let resolveCapture!: (ok: boolean) => void;
+        const onCaptureScreenshot = vi.fn(
+          () => new Promise<boolean>((resolve) => (resolveCapture = resolve))
+        );
+        const { getByRole, unmount } = renderToolbar({ onCaptureScreenshot, isWebviewReady: true });
+
+        await act(async () => {
+          fireEvent.click(getByRole("button", { name: SHOT }));
+        });
+        unmount();
+        await act(async () => {
+          resolveCapture(true);
+        });
+
+        expect(announce).not.toHaveBeenCalled();
+      } finally {
+        announce.mockRestore();
       }
     });
 
