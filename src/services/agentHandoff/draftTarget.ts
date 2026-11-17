@@ -63,10 +63,7 @@ export function resolveDraftRefusal(
   // In a live broadcast, Enter in an armed agent's draft goes to every armed
   // agent — the same two-member threshold `tryFleetBroadcastFromEditor` uses,
   // another host's agents included.
-  if (
-    inputs.armedIds.has(terminalId) &&
-    inputs.armedIds.size + inputs.crossHostTargetCount >= 2
-  ) {
+  if (inputs.armedIds.has(terminalId) && inputs.armedIds.size + inputs.crossHostTargetCount >= 2) {
     return "fleet-armed";
   }
   return null;

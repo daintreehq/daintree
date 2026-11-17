@@ -125,7 +125,10 @@ describe("draftAgentContext", () => {
   it("refuses an agent armed beside another host's agent (#17182)", () => {
     setPanels(agentPanel("a"));
     fleetState.armedIds = new Set(["a"]);
-    expect(draftAgentContext("a", { text: "body" })).toEqual({ status: "drafted", terminalId: "a" });
+    expect(draftAgentContext("a", { text: "body" })).toEqual({
+      status: "drafted",
+      terminalId: "a",
+    });
 
     fleetState.crossHostTargets = [{ key: "host-fleet:studio:r-1" }];
     expect(draftAgentContext("a", { text: "body" })).toEqual({

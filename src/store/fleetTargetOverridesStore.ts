@@ -148,7 +148,8 @@ export function subscribeFleetTargetOverridesPruning(): () => void {
   pruneAgainst(fleetTargetIds(useFleetArmingStore.getState()));
 
   return useFleetArmingStore.subscribe((state, prev) => {
-    if (state.armedIds === prev.armedIds && state.crossHostTargets === prev.crossHostTargets) return;
+    if (state.armedIds === prev.armedIds && state.crossHostTargets === prev.crossHostTargets)
+      return;
     pruneAgainst(fleetTargetIds(state));
   });
 }
