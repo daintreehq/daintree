@@ -587,21 +587,32 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
   /** The opening during whose read the person moved focus, which then stays theirs. */
   const focusMovedFor = useRef(0);
   useEffect(() => {
-    if (!isOpen || request.terminalId === null || focusedFor.current === request.seq) return;
+    if (!isOpen || request.terminalId === null || focusedFor.current === request.seq) {
+      return undefined;
+    }
     const seq = request.seq;
     if (readFor !== seq) {
-      // The dialog's own surface taking focus as it opens, or the list's
-      // place taking it from a click on no control, is not a move.
+      // Only a control in this modal counts as the person's move. Its own
+      // surface taking focus as it opens, the list's place taking it from a
+      // click on no control, the element focused as the opening began coming
+      // back with the window, and focus behind the modal (a popover handing it
+      // back to the chip that opened the list) are not.
+      const atOpening = document.activeElement;
       const onFocusIn = (event: FocusEvent) => {
+        const { target } = event;
         const body = bodyRef.current;
-        if (event.target instanceof Node && body !== null && event.target.contains(body)) return;
+        if (!(target instanceof Node) || body === null || target === atOpening) return;
+        if (target.contains(body) || !body.closest('[aria-modal="true"]')?.contains(target)) return;
         focusMovedFor.current = seq;
       };
       document.addEventListener("focusin", onFocusIn, true);
       return () => document.removeEventListener("focusin", onFocusIn, true);
     }
     focusedFor.current = seq;
-    if (focusMovedFor.current === seq) return;
+    // A control the refresh took away leaves focus on nothing, which no one chose.
+    const active = document.activeElement;
+    const kept = active !== null && active !== document.body;
+    if (focusMovedFor.current === seq && kept) return undefined;
     const target =
       loadError === null
         ? listRef.current?.querySelector<HTMLElement>(
@@ -614,6 +625,7 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
       // far as its action, the last answer's focus ring sat under the footer.
       target.closest<HTMLElement>("[data-question-id]")?.scrollIntoView({ block: "nearest" });
     } else bodyRef.current?.focus({ focusVisible: false } as FocusOptions);
+    return undefined;
   }, [isOpen, loadError, readFor, request]);
 
   // An item that left took the focus with it: the next one's first action

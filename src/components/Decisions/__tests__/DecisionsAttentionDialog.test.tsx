@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ReactElement } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type {
   DecisionsAnswerDestination,
@@ -391,12 +391,17 @@ describe("DecisionsAttentionDialog: Choose destination (#17560)", () => {
 describe("DecisionsAttentionDialog: an opening for a pane (#17562)", () => {
   /** Reads held until the test lets them land, oldest first. */
   let held: Array<() => void> = [];
+  /** A pane's Decisions state changing, as main pushes it to the open list. */
+  let pushPaneState: ((state: unknown) => void) | null = null;
 
-  function holdReads() {
+  /** Each read lists `listed` as it stood when the read began, or fails with `failure`. */
+  function holdReads(failure?: Error) {
     listAttention.mockImplementation(() => {
       const snapshot = listed;
-      return new Promise((resolve) => {
-        held.push(() => resolve({ result: "listed", items: snapshot }));
+      return new Promise((resolve, reject) => {
+        held.push(() =>
+          failure === undefined ? resolve({ result: "listed", items: snapshot }) : reject(failure)
+        );
       });
     });
   }
@@ -406,6 +411,12 @@ describe("DecisionsAttentionDialog: an opening for a pane (#17562)", () => {
       const pending = held;
       held = [];
       for (const land of pending) land();
+    });
+  }
+
+  async function landOldestRead() {
+    await act(async () => {
+      held.shift()?.();
     });
   }
 
@@ -437,26 +448,44 @@ describe("DecisionsAttentionDialog: an opening for a pane (#17562)", () => {
     await waitFor(() => expect(screen.queryByTestId("decisions-attention-dialog")).toBeNull());
   }
 
-  /** Reopened for pane 4 with its read held: the last opening's list shows meanwhile. */
-  async function reopenForPane4(rerender: (ui: ReactElement) => void) {
-    listed = [makeItem(3), makeItem(4)];
+  /**
+   * Reopened for pane 4 with its read held, listing `next` once it lands: the
+   * last opening's list, pane 3 alone, shows meanwhile, and the dialog's own
+   * surface holds focus.
+   */
+  async function reopenForPane4(
+    rerender: (ui: ReactElement) => void,
+    next = [makeItem(3), makeItem(4)]
+  ) {
+    listed = next;
     holdReads();
     openFor("pane-4");
     rerender(tree(true));
-    await listedRows(1);
+    await waitFor(() => expect(held).toHaveLength(1));
+    expect(
+      screen.getAllByTestId("decisions-attention-item").map((row) => row.dataset.questionId)
+    ).toEqual(["qid-3"]);
     await waitFor(() => expect(document.activeElement).toBe(surface()));
   }
 
   beforeEach(() => {
     listed = [];
     held = [];
+    pushPaneState = null;
     listAttention.mockReset();
     markAnswerHandled.mockReset();
     listAttention.mockImplementation(async () => ({ result: "listed", items: listed }));
     Object.defineProperty(window, "electron", {
       value: {
         decisions: { listAttention, markAnswerHandled },
-        terminal: { onDecisionState: () => () => {} },
+        terminal: {
+          onDecisionState: (callback: (state: unknown) => void) => {
+            pushPaneState = callback;
+            return () => {
+              pushPaneState = null;
+            };
+          },
+        },
       },
       configurable: true,
       writable: true,
@@ -503,13 +532,62 @@ describe("DecisionsAttentionDialog: an opening for a pane (#17562)", () => {
     expect(document.activeElement).toBe(chosen);
   });
 
+  it("lands on the answer when the control the person moved to went with the refresh", async () => {
+    const { rerender } = render(tree(false));
+    await closeAfterFirstOpening(rerender);
+    await reopenForPane4(rerender, [makeItem(4)]);
+
+    act(() => markButton(3).focus());
+    await landReads();
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Mark q-3 handled" })).toBeNull()
+    );
+
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
+  });
+
+  it("lands on the answer when focus went back behind the dialog during the read", async () => {
+    const { rerender } = render(tree(false));
+    await closeAfterFirstOpening(rerender);
+    await reopenForPane4(rerender);
+
+    // What a closing popover does when it hands focus back to the chip that opened the list.
+    const chip = document.createElement("button");
+    document.body.append(chip);
+    onTestFinished(() => chip.remove());
+    act(() => chip.focus());
+    await landReads();
+    await listedRows(2);
+
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
+  });
+
+  it("waits for the opening's latest read, not one a later read superseded", async () => {
+    const { rerender } = render(tree(false));
+    await closeAfterFirstOpening(rerender);
+    await reopenForPane4(rerender);
+
+    // A pane's push reads again for the same opening once its burst settles.
+    act(() => pushPaneState?.({}));
+    await waitFor(() => expect(held).toHaveLength(2));
+    await landOldestRead();
+    expect(screen.getAllByTestId("decisions-attention-item")).toHaveLength(1);
+    expect(document.activeElement).toBe(surface());
+
+    await landReads();
+    await listedRows(2);
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
+  });
+
   it("holds focus in the list's place, not a stale row, when the opening's read fails", async () => {
     const { rerender } = render(tree(false));
     await closeAfterFirstOpening(rerender);
 
-    listAttention.mockImplementation(() => Promise.reject(new Error("The relay went away")));
+    holdReads(new Error("The relay went away"));
     openFor("pane-3");
     rerender(tree(true));
+    await waitFor(() => expect(document.activeElement).toBe(surface()));
+    await landReads();
 
     await waitFor(() => expect(screen.getByText("The relay went away")).toBeTruthy());
     // The last opening's row for the pane is still on show beside the error.
