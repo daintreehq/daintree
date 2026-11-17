@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   IDLE_TIME_COUNTED,
   durationLabel,
   idleClockSentence,
 } from "@/components/Hosts/cloud/cloudHostLabels";
-import { clientErrorText } from "@/utils/clientAppError";
+import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
 import {
   DEFAULT_HOST_IDLE_MINUTES,
   HOST_IDLE_MINUTE_CHOICES,
@@ -79,28 +79,50 @@ export function HostIdleTimeRow({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Counts link drops: a reply to a read or change sent before one is dropped,
+  // or it would make an old reading editable on the next connect.
+  const linkEpoch = useRef(0);
 
-  const load = useCallback(
-    (): Promise<boolean> =>
-      window.electron.hostSettings.read({ hostId, keys: [KEY] }).then(
-        (snapshot) => {
-          setSetting(settingOf(snapshot));
-          setFresh(true);
+  const load = useCallback((): Promise<boolean> => {
+    const epoch = linkEpoch.current;
+    return window.electron.hostSettings.read({ hostId, keys: [KEY] }).then(
+      (snapshot) => {
+        if (linkEpoch.current !== epoch) return false;
+        setSetting(settingOf(snapshot));
+        setFresh(true);
+        setLoadError(null);
+        // Said of a value no longer shown; a change's own outcome is set after this.
+        setError(null);
+        return true;
+      },
+      (err: unknown) => {
+        if (linkEpoch.current !== epoch) return false;
+        // A host from before the setting refuses a read naming only it.
+        if (clientErrorCode(err) === "UNSUPPORTED") {
+          setSetting({ instanceId: "", leaf: null, unavailable: true });
           setLoadError(null);
-          return true;
-        },
-        (err: unknown) => {
-          setLoadError(clientErrorText(err, `Couldn't read the idle time on ${hostName}`));
           return false;
         }
-      ),
-    [hostId, hostName]
-  );
+        setLoadError(clientErrorText(err, `Couldn't read the idle time on ${hostName}`));
+        return false;
+      }
+    );
+  }, [hostId, hostName]);
 
   useEffect(() => {
-    if (connected) void load();
-    else setFresh(false);
+    if (connected) {
+      void load();
+      return undefined;
+    }
+    linkEpoch.current += 1;
+    setFresh(false);
+    return undefined;
   }, [connected, load]);
+
+  const retry = () => {
+    setLoadError(null);
+    void load();
+  };
 
   if (setting?.unavailable) {
     return (
@@ -114,7 +136,9 @@ export function HostIdleTimeRow({
   }
 
   const leaf = setting?.leaf ?? null;
-  if (setting === null || leaf === null) {
+  // A read that failed since the link came up leaves nothing to edit against.
+  const readFailed = connected && !fresh && loadError !== null;
+  if (setting === null || leaf === null || readFailed) {
     return (
       <SettingsRow
         label={LABEL}
@@ -124,14 +148,7 @@ export function HostIdleTimeRow({
         error={loadError ? <span role="alert">{loadError}</span> : undefined}
         control={
           connected && loadError ? (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setLoadError(null);
-                void load();
-              }}
-            >
+            <Button variant="outline" size="sm" onClick={retry}>
               Retry
             </Button>
           ) : undefined
@@ -146,6 +163,7 @@ export function HostIdleTimeRow({
     const minutes = Number(value);
     if (!live || saving || minutes === leaf.minutes) return;
     const instanceId = setting.instanceId;
+    const epoch = linkEpoch.current;
     setSaving(true);
     setError(null);
     window.electron.hostSettings
@@ -156,7 +174,15 @@ export function HostIdleTimeRow({
       })
       .then(
         (result) => {
+          if (linkEpoch.current !== epoch) {
+            setSaving(false);
+            return undefined;
+          }
+          const said = outcomeError(result);
+          // Unconfirmed, or answered by a host that restarted since it was read:
+          // what it holds now is read again before anything is edited against it.
           if (result.outcome === "unconfirmed" || result.instanceId !== instanceId) {
+            setFresh(false);
             return load().then((verified) => {
               if (result.outcome === "unconfirmed") {
                 setError(
@@ -164,18 +190,20 @@ export function HostIdleTimeRow({
                     ? `${result.hostName} didn't confirm the change. Its current value is shown.`
                     : `${result.hostName} didn't confirm the change, and its current value couldn't be read.`
                 );
+              } else {
+                setError(said);
               }
               setSaving(false);
             });
           }
           const answered = result.settings.find((entry) => entry.key === KEY);
           if (answered && typeof answered.value === "number") {
-            setSetting({
-              ...setting,
-              leaf: { minutes: answered.value, revision: answered.revision },
-            });
+            const next = { minutes: answered.value, revision: answered.revision };
+            setSetting((current) =>
+              current && current.instanceId === instanceId ? { ...current, leaf: next } : current
+            );
           }
-          setError(outcomeError(result));
+          setError(said);
           setSaving(false);
           return undefined;
         },

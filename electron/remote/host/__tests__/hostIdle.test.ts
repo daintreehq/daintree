@@ -71,6 +71,30 @@ describe("installHostIdle (#17357)", () => {
     dispose();
   });
 
+  it("reads the host's own agents: one waiting holds the clock, one that finished doesn't", async () => {
+    terminals.snapshot = {
+      terminals: [
+        { id: "a", detectedAgentId: "claude", agentState: "completed" },
+        { id: "b", detectedAgentId: "codex", agentState: "waiting" },
+      ],
+      degraded: false,
+    };
+    const dispose = installHostIdle({ servesViews: false });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getRemoteService("hostIdle")?.observation().busy).toBe(true);
+
+    terminals.snapshot = {
+      terminals: [
+        { id: "a", detectedAgentId: "claude", agentState: "completed" },
+        { id: "b", detectedAgentId: "codex", agentState: "idle" },
+      ],
+      degraded: false,
+    };
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(getRemoteService("hostIdle")?.observation().busy).toBe(false);
+    dispose();
+  });
+
   it("takes an agent starting to work from its event, before the next check", async () => {
     const dispose = installHostIdle({ servesViews: false });
     await vi.advanceTimersByTimeAsync(0);
@@ -78,8 +102,12 @@ describe("installHostIdle (#17357)", () => {
 
     bus.emit("agent:state-changed", { state: "idle", previousState: "completed" });
     expect(getRemoteService("hostIdle")?.observation().busy).toBe(false);
-    bus.emit("agent:state-changed", { state: "working", previousState: "idle" });
-    expect(getRemoteService("hostIdle")?.observation().busy).toBe(true);
+    for (const state of ["working", "waiting", "directing"]) {
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(getRemoteService("hostIdle")?.observation().busy).toBe(false);
+      bus.emit("agent:state-changed", { state, previousState: "idle" });
+      expect(getRemoteService("hostIdle")?.observation().busy).toBe(true);
+    }
     dispose();
   });
 

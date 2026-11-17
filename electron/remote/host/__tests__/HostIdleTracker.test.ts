@@ -73,6 +73,36 @@ describe("HostIdleTracker (#17357)", () => {
       busy: false,
       idleEndsAt: checkedAt + 30 * MINUTE,
     });
+
+    // Later checks that find no work leave the clock where it started.
+    await h.tracker.check();
+    h.advance(10 * MINUTE);
+    await h.tracker.check();
+    expect(h.tracker.observation()).toMatchObject({
+      lastWorkAt: checkedAt,
+      idleEndsAt: checkedAt + 30 * MINUTE,
+    });
+  });
+
+  it("counts the idle time from when a check that found no work finished, not when it began", async () => {
+    let release: () => void = () => {};
+    const h = harness({
+      read: () =>
+        new Promise<HostWorkReading>((resolve) => {
+          // A window still open when the read began closes before its last part is taken.
+          release = () => resolve({ agents: { active: 0, unreadable: 0 }, shellViews: false });
+        }),
+    });
+    const check = h.tracker.check();
+    h.advance(4_000);
+    const finishedAt = h.now.wall;
+    release();
+    await check;
+    expect(h.tracker.observation()).toMatchObject({
+      busy: false,
+      lastWorkAt: finishedAt,
+      idleEndsAt: finishedAt + 30 * MINUTE,
+    });
   });
 
   it.each([
@@ -185,6 +215,17 @@ describe("HostIdleTracker (#17357)", () => {
     release({ agents: { active: 0, unreadable: 0 }, shellViews: false });
     await second;
     expect(h.tracker.observation()).toMatchObject({ busy: true, lastWorkAt: notedAt });
+
+    // The same, with the event landing on the very tick the check began.
+    const third = h.tracker.check();
+    release({ agents: { active: 0, unreadable: 0 }, shellViews: false });
+    await third;
+    expect(h.tracker.observation().busy).toBe(false);
+    const fourth = h.tracker.check();
+    h.tracker.noteWork();
+    release({ agents: { active: 0, unreadable: 0 }, shellViews: false });
+    await fourth;
+    expect(h.tracker.observation().busy).toBe(true);
   });
 
   it("shares a check under way rather than reading twice", async () => {
@@ -215,6 +256,21 @@ describe("HostIdleTracker (#17357)", () => {
     expect(h.tracker.observation().idleEndsAt).toBeGreaterThan(checkedAt + 30 * MINUTE);
   });
 
+  it("never ends the idle time sooner for a wall clock stepped back, or a machine that slept", async () => {
+    const h = harness();
+    await h.tracker.check();
+    h.advance(5 * MINUTE);
+    h.stepWall(-60 * MINUTE);
+    // The wall clock says no time passed: the whole idle time is still ahead.
+    expect(h.tracker.observation().idleEndsAt).toBe(h.now.wall + 30 * MINUTE);
+
+    const slept = harness();
+    await slept.tracker.check();
+    // Asleep for an hour: the wall clock moved, the monotonic one didn't.
+    slept.stepWall(60 * MINUTE);
+    expect(slept.tracker.observation().idleEndsAt).toBe(slept.now.wall + 30 * MINUTE);
+  });
+
   it("checks on its own timer until disposed, and nothing after", async () => {
     vi.useFakeTimers();
     const h = harness();
@@ -228,6 +284,18 @@ describe("HostIdleTracker (#17357)", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(h.read).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("ends a read under way when disposed, leaving nothing armed and nothing changed", async () => {
+    vi.useFakeTimers();
+    const h = harness({ read: () => new Promise<HostWorkReading>(() => {}) });
+    const check = h.tracker.check();
+    expect(vi.getTimerCount()).toBe(1);
+
+    h.tracker.dispose();
+    await check;
+    expect(vi.getTimerCount()).toBe(0);
+    expect(h.tracker.observation()).toMatchObject({ busy: true, idleEndsAt: null });
   });
 
   it("starts busy: a host that just started hasn't been idle for any time", () => {

@@ -24,11 +24,6 @@ export interface HostIdleTrackerDeps {
   readTimeoutMs?: number;
 }
 
-type AgentTerminal = Pick<
-  CountableTerminal,
-  "hasPty" | "agentState" | "detectedAgentId" | "launchAgentId" | "everDetectedAgent"
->;
-
 /**
  * The agents in `terminals` that hold the idle clock. Every agent with a
  * process counts, the assistant's, a throwaway run's and a trashed pane's
@@ -36,7 +31,7 @@ type AgentTerminal = Pick<
  * the machine. An agent in a state that isn't one of the known ones can't be
  * read, and counts as work.
  */
-export function agentWorkOf(terminals: readonly AgentTerminal[]): {
+export function agentWorkOf(terminals: readonly CountableTerminal[]): {
   active: number;
   unreadable: number;
 } {
@@ -77,6 +72,10 @@ export class HostIdleTracker {
   private busy = true;
   private timer: ReturnType<typeof setInterval> | null = null;
   private reading: Promise<void> | null = null;
+  /** Ends the read under way as a failed one: set while it is out. */
+  private abandonRead: (() => void) | null = null;
+  /** Counts work noted outside a check, so a check can tell one came while it read. */
+  private workNoted = 0;
   private disposed = false;
 
   constructor(private readonly deps: HostIdleTrackerDeps) {
@@ -95,6 +94,7 @@ export class HostIdleTracker {
   /** Work seen outside a check: an agent that just started working or waiting. */
   noteWork(): void {
     if (this.disposed) return;
+    this.workNoted += 1;
     this.lastWork = this.clock();
     this.busy = true;
   }
@@ -131,24 +131,18 @@ export class HostIdleTracker {
     this.disposed = true;
     if (this.timer !== null) clearInterval(this.timer);
     this.timer = null;
+    this.abandonRead?.();
   }
 
   private async readOnce(): Promise<void> {
-    const startedAt = this.clock();
+    const noted = this.workNoted;
     let reading: HostWorkReading | null = null;
-    let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      reading = await Promise.race([
-        this.deps.read(),
-        new Promise<null>((resolve) => {
-          timeout = setTimeout(() => resolve(null), this.deps.readTimeoutMs ?? READ_TIMEOUT_MS);
-          timeout.unref?.();
-        }),
-      ]);
+      reading = await Promise.race([this.deps.read(), this.readDeadline()]);
     } catch {
       reading = null;
     } finally {
-      clearTimeout(timeout);
+      this.abandonRead?.();
     }
     if (this.disposed) return;
     if (reading === null || seesWork(reading)) {
@@ -157,12 +151,27 @@ export class HostIdleTracker {
       return;
     }
     // Work noted while this read was out is newer than what it saw.
-    if (this.lastWork.mono > startedAt.mono) return;
+    if (this.workNoted !== noted) return;
     if (this.busy) {
-      // The work was there until some time after the check that last saw it:
-      // the idle time is counted from the first check that found none.
-      this.lastWork = startedAt;
+      // The read's parts are taken at different moments during it, and the
+      // work may have ended only just before the last: the idle time counts
+      // from when the first check that found none finished.
+      this.lastWork = this.clock();
       this.busy = false;
     }
+  }
+
+  /** Resolves null once a read has taken too long, or is abandoned. */
+  private readDeadline(): Promise<null> {
+    return new Promise<null>((resolve) => {
+      const timeout = setTimeout(() => settle(), this.deps.readTimeoutMs ?? READ_TIMEOUT_MS);
+      timeout.unref?.();
+      const settle = () => {
+        clearTimeout(timeout);
+        if (this.abandonRead === settle) this.abandonRead = null;
+        resolve(null);
+      };
+      this.abandonRead = settle;
+    });
   }
 }

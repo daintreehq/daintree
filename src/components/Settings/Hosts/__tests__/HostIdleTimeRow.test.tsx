@@ -8,6 +8,7 @@ import type {
   HostSettingsUpdateResult,
 } from "@shared/types/hostSettings";
 import type { HostIdleObservation } from "@shared/types/hostIdle";
+import { clockTime } from "@/components/Hosts/cloud/cloudHostLabels";
 import { SettingsGroup } from "../../SettingsGroup";
 import { HostIdleTimeRow } from "../HostIdleTimeRow";
 
@@ -48,20 +49,40 @@ function result(
 async function renderRow(
   props: { connected?: boolean; idle?: HostIdleObservation; sampledAt?: number | null } = {}
 ) {
+  const tree = (connected: boolean) => (
+    <SettingsGroup>
+      <HostIdleTimeRow
+        hostId="boat-1"
+        hostName="Boat"
+        connected={connected}
+        idle={props.idle}
+        sampledAt={props.sampledAt ?? null}
+      />
+    </SettingsGroup>
+  );
+  let rendered: ReturnType<typeof render> | undefined;
   await act(async () => {
-    render(
-      <SettingsGroup>
-        <HostIdleTimeRow
-          hostId="boat-1"
-          hostName="Boat"
-          connected={props.connected ?? true}
-          idle={props.idle}
-          sampledAt={props.sampledAt ?? null}
-        />
-      </SettingsGroup>
-    );
+    rendered = render(tree(props.connected ?? true));
   });
+  return {
+    setConnected: async (connected: boolean) => {
+      await act(async () => {
+        rendered!.rerender(tree(connected));
+      });
+    },
+  };
 }
+
+function deferred<T>() {
+  let resolve: (value: T) => void = () => {};
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
+const isDisabled = (element: HTMLElement) =>
+  element.hasAttribute("disabled") || element.getAttribute("aria-disabled") === "true";
 
 const select = () => screen.getByRole("combobox", { name: "Idle after" });
 
@@ -125,16 +146,80 @@ describe("HostIdleTimeRow (#17357)", () => {
       sampledAt: lastWorkAt + 60_000,
     });
 
-    expect(document.body.textContent).toContain("Idle since");
-    expect(document.body.textContent).toContain("Its idle time ends");
+    expect(document.body.textContent).toContain(
+      `Idle since ${clockTime(new Date(lastWorkAt).toISOString())}. Its idle time ends ${clockTime(new Date(lastWorkAt + 30 * 60_000).toISOString())}.`
+    );
   });
 
-  it("names the update a host from before the setting needs, and offers no value", async () => {
-    api.read.mockResolvedValue(snapshot(null));
+  it("names the update a host from before the setting needs, from the refusal such a host gives", async () => {
+    // Asked only for a key it doesn't know, an older host's read is refused outright.
+    api.read.mockRejectedValue(
+      Object.assign(new Error("The host doesn't know that setting"), {
+        name: "AppError",
+        code: "UNSUPPORTED",
+      })
+    );
     await renderRow();
 
     expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     expect(document.body.textContent).toContain("Needs a newer Daintree on Boat");
+  });
+
+  it("keeps a reading from before a drop locked until a read after it answers", async () => {
+    const late = deferred<HostSettingsSnapshot>();
+    const again = deferred<HostSettingsSnapshot>();
+    api.read.mockResolvedValueOnce(snapshot(30));
+    api.read.mockReturnValueOnce(late.promise);
+    api.read.mockReturnValueOnce(again.promise);
+    const row = await renderRow();
+    expect(isDisabled(select())).toBe(false);
+
+    // Re-read on a reconnect, then dropped before the answer came.
+    await row.setConnected(false);
+    await row.setConnected(true);
+    await row.setConnected(false);
+    await act(async () => {
+      late.resolve(snapshot(60));
+    });
+    expect(select().textContent).toBe("30 minutes");
+
+    await row.setConnected(true);
+    expect(isDisabled(select())).toBe(true);
+    await act(async () => {
+      again.resolve(snapshot(120));
+    });
+    expect(select().textContent).toBe("2 hours");
+    expect(isDisabled(select())).toBe(false);
+  });
+
+  it("says a change didn't land when the host restarted since it was read, and shows its value", async () => {
+    api.read.mockResolvedValueOnce(snapshot(30));
+    api.read.mockResolvedValueOnce({ ...snapshot(45, "r-b"), instanceId: "launch-2" });
+    api.update.mockResolvedValue({ ...result("conflict", 45), instanceId: "launch-2" });
+    await renderRow();
+    await pick("4 hours");
+
+    expect(api.read).toHaveBeenCalledTimes(2);
+    expect(select().textContent).toBe("45 minutes");
+    expect(document.body.textContent).toContain("This changed on Boat since it was read");
+  });
+
+  it("offers Retry when a read after a reconnect fails, with nothing editable meanwhile", async () => {
+    api.read.mockResolvedValueOnce(snapshot(30));
+    api.read.mockRejectedValueOnce(new Error("link dropped"));
+    api.read.mockResolvedValueOnce(snapshot(60));
+    const row = await renderRow();
+    await row.setConnected(false);
+    await row.setConnected(true);
+
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain("link dropped");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+    expect(select().textContent).toBe("1 hour");
+    expect(isDisabled(select())).toBe(false);
   });
 
   it("reads nothing and offers nothing to change while the host isn't connected", async () => {

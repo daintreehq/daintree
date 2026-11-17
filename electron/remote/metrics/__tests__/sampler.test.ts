@@ -90,10 +90,14 @@ describe("HostMetricsSampler", () => {
   });
 
   it("carries the host's idle clock as it stands, and leaves out one it can't read (#17357)", async () => {
-    const idle = { idleAfterMinutes: 30, lastWorkAt: 5, busy: true, idleEndsAt: null };
-    await expect(
-      new HostMetricsSampler(sources({ idle: () => idle })).sample()
-    ).resolves.toMatchObject({ idle });
+    for (const idle of [
+      { idleAfterMinutes: 30, lastWorkAt: 5, busy: true, idleEndsAt: null },
+      { idleAfterMinutes: 30, lastWorkAt: 5, busy: false, idleEndsAt: 1_800_005 },
+    ]) {
+      await expect(
+        new HostMetricsSampler(sources({ idle: () => idle })).sample()
+      ).resolves.toMatchObject({ idle });
+    }
     // Not listening as a host, or a clock that threw: nothing is sent, never an idle host.
     expect(await new HostMetricsSampler(sources({ idle: () => null })).sample()).not.toHaveProperty(
       "idle"
