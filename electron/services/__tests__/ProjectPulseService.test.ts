@@ -241,7 +241,7 @@ describe("ProjectPulseService", () => {
       });
 
       vi.doMock("../../utils/hardenedGit.js", () => ({
-        createHardenedGit: () => createGitStub(raw),
+        createStrictExitGit: () => createGitStub(raw),
       }));
 
       const { ProjectPulseService } = await import("../ProjectPulseService.js");
