@@ -681,7 +681,11 @@ describe("a person's decline (#17234)", () => {
       "status: declined",
       "authorised: no",
     ]);
+    // Told plainly what it means for the agent, not just that a note is there.
     expect(lines[source + 3]).toMatch(/^note: /);
+    expect(lines[source + 3]).toMatch(/nothing was decided or approved/i);
+    expect(lines[source + 3]).toMatch(/stop waiting/i);
+    expect(lines[source + 3]).toMatch(/don't continue the gated step/i);
     expect(lines[source + 3]).not.toBe(LIBRARY_DECLINED_NOTE);
     expect(lines[source + 4]).toBe(DECISION_BLOCK_END);
     expect(section).toContain(markerFor(I1));

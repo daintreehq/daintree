@@ -128,9 +128,9 @@ A follow-up or reply you send from your phone is typed into the terminal that as
 
 ### Declining a question
 
-On your phone or tablet, **Dismiss** declines a question you won't answer, on questions from this computer and from a Remote Host alike. Declining closes the question, so its reminders stop, and it's never an answer: nothing is decided or approved.
+On your phone or tablet, **Dismiss** declines a question you won't answer. It's offered on a question still waiting for you once the Daintree that asked it handles declines, this computer and each Remote Host on its own, so a Host running an older Daintree doesn't offer it until it's updated. Declining closes the question, so its reminders stop, and it's never an answer: nothing is decided or approved.
 
-If the agent that asked is still running in the terminal that asked, Daintree types it a notice saying so, under the same rules as an answer (see [What gets typed](#what-gets-typed)). If it has gone, because that terminal was closed or relaunched or a different agent session is running there, Daintree tells it nothing: it never resumes a session to say you declined, and the decline never needs your attention. `get_decision` reports the question as `cancelled` with `closed_reason: declined`. The question leaves the pane chip, and Daintree's view of the question shows it as declined by you, apart from one withdrawn with `cancel_question` and one that expired. Daintree can't decline a question itself yet; your phone or tablet does.
+If the agent that asked is still running in the terminal that asked, Daintree types it a notice saying so, under the same rules as an answer (see [What gets typed](#what-gets-typed)). If it has gone, because that terminal was closed or relaunched or a different agent session is seen there, Daintree tells it nothing: it never resumes a session to say you declined, and the decline never needs your attention. `get_decision` reports the question as `cancelled` with `closed_reason: declined`. The question leaves the pane chip, and Daintree's view of the question shows it as declined by you, apart from one withdrawn with `cancel_question` and one that expired. Daintree can't decline a question itself yet; your phone or tablet does.
 
 ### How involved you want to be
 

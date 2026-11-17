@@ -308,6 +308,30 @@ function keepingCancelled(current: QuestionRow, patch: Partial<QuestionRow>): Pa
   return rest;
 }
 
+/**
+ * A create's receipt never takes a question back past a later event already
+ * applied to it (#17234): when the relay commits a create and a phone's
+ * decline or answer is applied before the create's response is read, as when
+ * a lost response has the create sent again, the library would record the
+ * question `open` at the create's older seq. A reopen is a later event, and
+ * still applies.
+ */
+function keepingLaterEvent(
+  current: QuestionRow,
+  patch: Partial<QuestionRow>
+): Partial<QuestionRow> {
+  if (
+    patch.local_status === undefined ||
+    patch.remote_event_seq == null ||
+    current.remote_event_seq == null ||
+    patch.remote_event_seq >= current.remote_event_seq
+  ) {
+    return patch;
+  }
+  const { local_status: _status, remote_event_seq: _seq, ...rest } = patch;
+  return rest;
+}
+
 function copyQuestionPatch(patch: Partial<QuestionRow>): Partial<QuestionRow> {
   assertNoLegacyContent(patch);
   const { legacy_content_json: _legacy, ...rest } = patch;
@@ -620,13 +644,24 @@ export class DaintreeLocalStore implements LocalStore {
   /**
    * Whether any answer or follow-up waits to be typed, or a typed one to be
    * reported to the relay. Reads three partial indexes, so it costs next to
-   * nothing when nothing waits.
+   * nothing when nothing waits. A person's decline (#17234) keeps its row
+   * `desktop-received` after delivery drops its notice for a run that has
+   * gone, so a cancelled row waits only while an entry is still to be typed.
    */
   hasPendingDelivery(): Promise<boolean> {
     return this.enqueue("read", () => {
       const waiting = this.st(
-        `SELECT 1 FROM decisions_questions
+        `SELECT 1 FROM decisions_questions AS q
          WHERE delivery_status IN ('desktop-received', 'pending-host') AND history_only = 0
+           AND CASE
+             WHEN local_status <> 'cancelled' THEN 1
+             WHEN json_valid(answers_json) THEN EXISTS (
+               SELECT 1 FROM json_each(q.answers_json) AS entry
+               WHERE json_extract(entry.value, '$.deliver') = 1
+                 AND json_extract(entry.value, '$.delivered') = 0
+             )
+             ELSE 1
+           END
          LIMIT 1`
       ).get();
       if (waiting !== undefined) return true;
@@ -1147,7 +1182,7 @@ export class DaintreeLocalStore implements LocalStore {
     if (!current) return null;
     const next: QuestionRow = {
       ...current,
-      ...keepingCancelled(current, patch),
+      ...keepingCancelled(current, keepingLaterEvent(current, patch)),
       question_id: current.question_id,
       origin: { ...current.origin, ...(patch.origin ?? {}) },
     };

@@ -9,6 +9,7 @@ import {
 } from "@daintreehq/decisions-client";
 import {
   HANDLED_ANSWERS_META_KEY,
+  answerNeedsAttention,
   answerPreviewOf,
   copiedAnswerText,
   heldFollowUps,
@@ -77,28 +78,29 @@ describe("needs attention", () => {
     );
   });
 
-  it("never takes a person's own decline, however its notice stopped, and still takes a withdrawal (#17234)", () => {
+  it("never asks a person about their own decline, however its notice stopped, and counts it handled (#17234)", () => {
     const declined = {
       local_status: "cancelled" as const,
       answers_json: serializeAnswers([entry(DECLINE)]),
     };
     for (const delivery_status of ["needs-attention", "delivery-uncertain"] as const) {
       const r = row(1, { ...declined, delivery_status });
-      expect(needsAttention(r)).toBe(false);
+      expect(answerNeedsAttention(r, new Map())).toBe(false);
       expect(threadNeedsAttention(r, new Map())).toBe(false);
-      // Not hidden as handled either: the list still shows it, as declined.
-      expect(isHandled(r, new Map())).toBe(false);
-      expect(withoutHandled([r], new Map([[r.question_id, 1]]))).toEqual([r]);
+      // Handled with nothing marked, so it keeps nothing of its question waiting.
+      expect(isHandled(r, new Map())).toBe(true);
+      expect(withoutHandled([r], new Map([[qid(9), 1]]))).toEqual([]);
     }
-    expect(
-      needsAttention(row(2, { local_status: "cancelled", delivery_status: "needs-attention" }))
-    ).toBe(true);
+    const withdrawn = row(2, { local_status: "cancelled", delivery_status: "needs-attention" });
+    expect(answerNeedsAttention(withdrawn, new Map())).toBe(true);
+    expect(isHandled(withdrawn, new Map())).toBe(false);
     // Declined, reopened, then withdrawn: the decline no longer closed it.
-    expect(
-      needsAttention(
-        row(3, { ...declined, question_revision: 2, delivery_status: "needs-attention" })
-      )
-    ).toBe(true);
+    const superseded = row(3, {
+      ...declined,
+      question_revision: 2,
+      delivery_status: "needs-attention",
+    });
+    expect(answerNeedsAttention(superseded, new Map())).toBe(true);
   });
 });
 

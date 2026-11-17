@@ -1736,6 +1736,8 @@ describe("AnswerDelivery, a person's decline (#17234)", () => {
       expect(h.client.submitted).toEqual([]);
       expect(h.failedReports()).toEqual([]);
       expect(await h.delivery.attentionItems()).toEqual([]);
+      // Nothing is left for the minute check to look for.
+      expect(await h.store.hasPendingDelivery()).toBe(false);
 
       await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
       expect(h.launches).toEqual([]);
@@ -1744,12 +1746,18 @@ describe("AnswerDelivery, a person's decline (#17234)", () => {
     }
   );
 
-  it("keeps it while the terminal's host can't be asked, then types it", async () => {
-    const h = setup({ ptyReady: false });
+  it("waits for a terminal's host that is only offline, never dropping it, then types it", async () => {
+    const h = setup();
+    // Held behind a line typed into the busy pane, then its host goes away.
+    h.works({ typed: true });
     await declined(h.store, Q1, 1);
-
     h.delivery.start();
     await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+    expect(h.client.submitted).toEqual([]);
+
+    h.pty.ready = false;
+    h.settles();
+    await until(async () => (await h.question(Q1))?.delivery_status === "pending-host");
     expect(await declineOf(h)).toMatchObject({ deliver: true, delivered: false });
     expect(h.client.submitted).toEqual([]);
     expect(await h.delivery.attentionItems()).toEqual([]);

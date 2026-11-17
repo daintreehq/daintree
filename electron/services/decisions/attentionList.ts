@@ -75,17 +75,11 @@ export async function markAnswerHandled(
   await store.setMeta(HANDLED_ANSWERS_META_KEY, JSON.stringify(next));
 }
 
-/**
- * Delivery stopped at a point where a person decides what happens next.
- * Imported history never does, and nor does a person's own decline (#17234):
- * a cancel drops every answer not yet typed, so its notice is all that could
- * have stopped, and it is news only for an agent still listening.
- */
+/** Delivery stopped at a point where a person decides what happens next. Imported history never does. */
 export function needsAttention(row: QuestionRow): boolean {
   return (
     !row.history_only &&
-    (row.delivery_status === "needs-attention" || row.delivery_status === "delivery-uncertain") &&
-    declineOf(row) === undefined
+    (row.delivery_status === "needs-attention" || row.delivery_status === "delivery-uncertain")
   );
 }
 
@@ -115,9 +109,19 @@ export function heldFollowUps(row: QuestionRow): StoredMessage[] {
     .sort((a, b) => a.event_seq - b.event_seq);
 }
 
-/** The question's answer needs a person, and they haven't marked it handled. */
+/**
+ * The question's answer needs a person, and they haven't marked it handled.
+ * A person's own decline (#17234) never does: a cancel drops every answer not
+ * yet typed, so its notice is all that could have stopped, and it is news only
+ * for an agent still listening. It counts as handled, so it shows nowhere a
+ * person acts and keeps nothing of the question waiting.
+ */
 export function answerNeedsAttention(row: QuestionRow, handled: HandledAnswers): boolean {
-  return needsAttention(row) && handled.get(row.question_id) !== answerRevision(row);
+  return (
+    needsAttention(row) &&
+    declineOf(row) === undefined &&
+    handled.get(row.question_id) !== answerRevision(row)
+  );
 }
 
 /** Its answer or a follow-up after it needs a person. */

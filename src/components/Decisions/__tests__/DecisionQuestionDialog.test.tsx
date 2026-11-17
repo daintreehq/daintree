@@ -731,10 +731,13 @@ describe("DecisionQuestionDialog", () => {
       body = screen.getByTestId("decision-question-content");
       const declined = statusOf(body);
       expect(declined).not.toBe(waiting);
+      // The person's own decline, never the model's or the desktop's.
       expect(declined).toMatch(/declined/i);
+      expect(declined).toMatch(/\byou\b/i);
       const [entry, ...rest] = screen.getAllByTestId("decision-thread-entry");
       expect(rest).toEqual([]);
       expect(entry!.textContent).toMatch(/declined/i);
+      expect(entry!.textContent).toMatch(/\byou\b/i);
       // It answers nothing, and says nothing is missing from it.
       expect(entry!.querySelectorAll("p")).toHaveLength(1);
       // Over, whatever its deadline would have said.
@@ -749,7 +752,9 @@ describe("DecisionQuestionDialog", () => {
       await waitFor(() =>
         expect(statusOf(screen.getByTestId("decision-question-content"))).not.toBe(declined)
       );
-      expect(statusOf(screen.getByTestId("decision-question-content"))).not.toMatch(/declined/i);
+      const withdrawn = statusOf(screen.getByTestId("decision-question-content"));
+      expect(withdrawn).not.toBe("");
+      expect(withdrawn).not.toMatch(/declined/i);
     } finally {
       delete QUESTIONS.qd;
     }

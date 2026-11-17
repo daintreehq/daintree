@@ -62,7 +62,7 @@ export const DECLINE: EntryOverrides = {
   action: "cancel",
   source: "human",
   sealed: null,
-  created_at: "2026-11-01T10:07:00.000Z",
+  created_at: "2026-11-01T11:07:00.000Z",
 };
 
 export function row(

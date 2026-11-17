@@ -517,17 +517,29 @@ describe("standingOf", () => {
         row(4, { ...declined, answers_json: answers({ ...DECLINE, deliver: false }) }),
         // Declined at revision 1, reopened, then withdrawn at revision 2.
         row(5, { ...declined, question_revision: 2 }),
+        // Declined, reopened, then declined again: settled at the decline that closed it.
+        row(6, {
+          ...declined,
+          question_revision: 2,
+          answers_json: answers(DECLINE, {
+            ...DECLINE,
+            entry_id: "decline-2",
+            revision: 2,
+            created_at: "2026-11-01T11:20:00.000Z",
+          }),
+        }),
       ],
       new Map(),
       HOST
     );
 
     expect(list.map((item) => [item.alias, item.standing, item.settledAt])).toEqual([
-      [1, { kind: "settled", outcome: "declined" }, "2026-11-01T10:07:00.000Z"],
-      [2, { kind: "settled", outcome: "declined" }, "2026-11-01T10:07:00.000Z"],
-      [3, { kind: "settled", outcome: "declined" }, "2026-11-01T10:07:00.000Z"],
-      [4, { kind: "settled", outcome: "declined" }, "2026-11-01T10:07:00.000Z"],
+      [1, { kind: "settled", outcome: "declined" }, "2026-11-01T11:07:00.000Z"],
+      [2, { kind: "settled", outcome: "declined" }, "2026-11-01T11:07:00.000Z"],
+      [3, { kind: "settled", outcome: "declined" }, "2026-11-01T11:07:00.000Z"],
+      [4, { kind: "settled", outcome: "declined" }, "2026-11-01T11:07:00.000Z"],
       [5, { kind: "settled", outcome: "withdrawn" }, null],
+      [6, { kind: "settled", outcome: "declined" }, "2026-11-01T11:20:00.000Z"],
     ]);
   });
 
