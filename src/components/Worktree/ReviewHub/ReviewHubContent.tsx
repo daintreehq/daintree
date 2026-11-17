@@ -1441,9 +1441,21 @@ export function ReviewHubContent({
     section: FileStageRowSection;
     button: HTMLButtonElement;
   } | null>(null);
+  // Whether this hub's layout effects are connected. An Activity hide (or a
+  // StrictMode replay) disconnects them parent-first, so this clears before the
+  // button's own cleanup reports: a record taken then could only be consumed
+  // on reveal, against whatever the hidden tree has since become.
+  const bulkHandoffLiveRef = useRef(false);
+  useLayoutEffect(() => {
+    bulkHandoffLiveRef.current = true;
+    return () => {
+      bulkHandoffLiveRef.current = false;
+      orphanedBulkFocusRef.current = null;
+    };
+  }, []);
   const handleBulkActionFocusOrphaned = useCallback(
     (section: FileStageRowSection, button: HTMLButtonElement) => {
-      orphanedBulkFocusRef.current = { section, button };
+      if (bulkHandoffLiveRef.current) orphanedBulkFocusRef.current = { section, button };
     },
     []
   );

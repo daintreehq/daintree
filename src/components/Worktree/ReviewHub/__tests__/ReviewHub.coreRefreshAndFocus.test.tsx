@@ -1285,7 +1285,9 @@ describe("ReviewHub", () => {
 
     it("leaves focus on <body> when the button it removes never held it", async () => {
       await renderWith(makeStatus({ staged: [entry("src/a.ts")], unstaged: [entry("src/b.ts")] }));
-      act(() => (document.activeElement as HTMLElement | null)?.blur());
+      act(() => {
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      });
       expect(document.activeElement).toBe(document.body);
 
       await refreshToAllStaged();
@@ -1301,17 +1303,16 @@ describe("ReviewHub", () => {
       // The button's unmount has already been recorded by the time React
       // detaches the node; focus moving here stands in for any other component
       // taking it later in the same commit.
-      const removeChild = Node.prototype.removeChild;
-      const removeSpy = vi.spyOn(Node.prototype, "removeChild").mockImplementation(function <
-        T extends Node,
-      >(this: Node, child: T): T {
+      const parent = button.parentElement!;
+      const removeChild = parent.removeChild.bind(parent);
+      parent.removeChild = <T extends Node>(child: T): T => {
         if (child === button) stagedFilter.focus();
-        return removeChild.call(this, child) as T;
-      });
+        return removeChild(child);
+      };
       try {
         await refreshToAllStaged();
       } finally {
-        removeSpy.mockRestore();
+        Reflect.deleteProperty(parent, "removeChild");
       }
 
       expect(button.isConnected).toBe(false);
@@ -1434,6 +1435,41 @@ describe("ReviewHub", () => {
       await act(async () => {});
 
       expect(button.isConnected).toBe(true);
+      expect(document.activeElement).toBe(document.body);
+    });
+
+    it("does not hand focus on when a stage finishing while the hub is hidden removes the button", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({ staged: [entry("src/a.ts")], unstaged: [entry("src/b.ts")] })
+      );
+      const hub = (mode: "visible" | "hidden") => (
+        <Activity mode={mode}>
+          <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+        </Activity>
+      );
+      const { rerender } = render(hub("visible"));
+      const button = await screen.findByTestId("review-hub-stage-section-button");
+      await act(async () => {});
+      let finishStage!: () => void;
+      stageAllMock.mockReturnValue(
+        new Promise<void>((resolve) => {
+          finishStage = resolve;
+        })
+      );
+      act(() => button.focus());
+      fireEvent.click(button);
+      await waitFor(() => expect(stageAllMock).toHaveBeenCalledWith(WORKTREE_PATH));
+
+      rerender(hub("hidden"));
+      getStagingStatusMock.mockResolvedValue(makeStatus({ staged: [], unstaged: [] }));
+      await act(async () => finishStage());
+      rerender(hub("visible"));
+      await waitFor(() =>
+        expect(screen.queryByTestId("review-hub-stage-section-button")).toBeNull()
+      );
+      await act(async () => {});
+
+      expect(button.isConnected).toBe(false);
       expect(document.activeElement).toBe(document.body);
     });
   });
