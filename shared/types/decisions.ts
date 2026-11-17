@@ -113,6 +113,15 @@ export interface DecisionsSettings {
    * Null until they first agree.
    */
   terminalSnapshotsConsentedAt: number | null;
+  /**
+   * Whether this computer, as the owner, tells the relay while the person is
+   * at it (#17240), so the relay briefly holds a new question's first phone
+   * push and sends none if it's answered here first. Reported only while
+   * desktop notifications are on, so the person is told here instead. On
+   * unless the person turns it off, so a setting saved before the field
+   * existed reads as on.
+   */
+  holdPhonePushes: boolean;
 }
 
 /**
@@ -200,6 +209,8 @@ export interface DecisionsStatus {
   consentedAt?: number;
   /** Terminal snapshots are on (#16228); absent while off. */
   terminalSnapshots?: true;
+  /** Holding phone pushes while the person is here is turned off (#17240); absent while on. */
+  holdPhonePushes?: false;
   /**
    * This computer's Decisions key file exists. Read only while on, from the
    * file's presence alone, so it never asks the keychain. With no relay set

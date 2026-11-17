@@ -45,7 +45,7 @@ describe("DesktopPresence", () => {
 
   it("reports present at once and again on every tick while the person stays", () => {
     const h = harness("present");
-    h.presenceReporter.start();
+    h.presenceReporter.update();
     expect(h.reports).toEqual([true]);
     vi.advanceTimersByTime(PRESENCE_TICK_MS);
     vi.advanceTimersByTime(PRESENCE_TICK_MS);
@@ -55,51 +55,76 @@ describe("DesktopPresence", () => {
 
   it.each(["away", "unknown"] as const)("reports %s as away, once", (presence) => {
     const h = harness("present");
-    h.presenceReporter.start();
+    h.presenceReporter.update();
     h.set(presence);
     vi.advanceTimersByTime(PRESENCE_TICK_MS * 3);
     expect(h.reports).toEqual([true, false]);
     h.presenceReporter.stop();
   });
 
-  it("reports away first when the person isn't there at start, and nothing more while they stay away", () => {
-    const h = harness("unknown");
-    h.presenceReporter.start();
-    vi.advanceTimersByTime(PRESENCE_TICK_MS * 2);
-    expect(h.reports).toEqual([false]);
-    h.presenceReporter.stop();
-  });
+  it.each(["away", "unknown"] as const)(
+    "reports nothing while the person is %s from the start, until they're back",
+    (presence) => {
+      const h = harness(presence);
+      h.presenceReporter.update();
+      vi.advanceTimersByTime(PRESENCE_TICK_MS * 2);
+      expect(h.reports).toEqual([]);
+      h.set("present");
+      vi.advanceTimersByTime(PRESENCE_TICK_MS);
+      expect(h.reports).toEqual([true]);
+      h.presenceReporter.stop();
+    }
+  );
 
-  it("reports present again as soon as a change says the person is back", () => {
-    const h = harness("away");
-    h.presenceReporter.start();
+  it("reports present as soon as a change says the person is back, without waiting for a tick", () => {
+    const h = harness("present");
+    h.presenceReporter.update();
+    h.set("away");
+    h.change();
     h.set("present");
     h.change();
-    expect(h.reports).toEqual([false, true]);
+    expect(h.reports).toEqual([true, false, true]);
     h.presenceReporter.stop();
   });
 
-  it("reports nothing present while it isn't allowed, ending a lease once when it stops being", () => {
+  it("runs nothing and reports nothing while it isn't allowed", () => {
     const h = harness("present");
     h.allow(false);
-    h.presenceReporter.start();
+    h.presenceReporter.update();
+    vi.advanceTimersByTime(PRESENCE_TICK_MS * 3);
+    h.presenceReporter.refresh();
+    expect(h.reports).toEqual([]);
+    expect(h.watching()).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("ends the lease once when it stops being allowed, and reads afresh when it is again", () => {
+    const h = harness("present");
+    h.presenceReporter.update();
+    h.allow(false);
+    h.presenceReporter.update();
     vi.advanceTimersByTime(PRESENCE_TICK_MS * 2);
-    expect(h.reports).toEqual([false]);
+    expect(h.reports).toEqual([true, false]);
+    expect(h.watching()).toBe(0);
 
     h.allow(true);
-    h.presenceReporter.refresh();
-    expect(h.reports).toEqual([false, true]);
-
-    h.allow(false);
-    h.presenceReporter.refresh();
-    vi.advanceTimersByTime(PRESENCE_TICK_MS * 2);
-    expect(h.reports).toEqual([false, true, false]);
+    h.presenceReporter.update();
+    expect(h.reports).toEqual([true, false, true]);
     h.presenceReporter.stop();
+  });
+
+  it("notices on its next tick that it stopped being allowed", () => {
+    const h = harness("present");
+    h.presenceReporter.update();
+    h.allow(false);
+    vi.advanceTimersByTime(PRESENCE_TICK_MS);
+    expect(h.reports).toEqual([true, false]);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("is away from suspend until resume, whatever the idle state says", () => {
     const h = harness("present");
-    h.presenceReporter.start();
+    h.presenceReporter.update();
     h.suspend();
     vi.advanceTimersByTime(PRESENCE_TICK_MS);
     expect(h.reports).toEqual([true, false]);
@@ -110,7 +135,7 @@ describe("DesktopPresence", () => {
 
   it("ends the lease it started on stop, then reads and listens no more", () => {
     const h = harness("present");
-    h.presenceReporter.start();
+    h.presenceReporter.update();
     expect(h.watching()).toBe(3);
     h.presenceReporter.stop();
     expect(h.reports).toEqual([true, false]);
@@ -118,13 +143,27 @@ describe("DesktopPresence", () => {
     vi.advanceTimersByTime(PRESENCE_TICK_MS * 3);
     h.presenceReporter.refresh();
     expect(h.reports).toEqual([true, false]);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("sends nothing on stop when it last reported away", () => {
-    const h = harness("away");
-    h.presenceReporter.start();
+    const h = harness("present");
+    h.presenceReporter.update();
+    h.set("away");
+    vi.advanceTimersByTime(PRESENCE_TICK_MS);
     h.presenceReporter.stop();
-    expect(h.reports).toEqual([false]);
+    expect(h.reports).toEqual([true, false]);
+  });
+
+  it("stays away through a change or a tick while asleep", () => {
+    const h = harness("present");
+    h.presenceReporter.update();
+    h.suspend();
+    h.change();
+    h.presenceReporter.update();
+    vi.advanceTimersByTime(PRESENCE_TICK_MS * 2);
+    expect(h.reports).toEqual([true, false]);
+    h.presenceReporter.stop();
   });
 
   it("carries on when a report throws, as a revoked bridge's does", () => {
@@ -142,7 +181,7 @@ describe("DesktopPresence", () => {
         onChange: () => () => {},
       },
     });
-    presence.start();
+    presence.update();
     vi.advanceTimersByTime(PRESENCE_TICK_MS);
     expect(report).toHaveBeenCalledTimes(2);
     presence.stop();

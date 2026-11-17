@@ -927,6 +927,17 @@ export const decisionsNamespace = defineIpcNamespace({
         return decisions.setDecisionsTerminalSnapshots(payload);
       }
     ),
+    // Holding a new question's phone push while the person is here (#17240).
+    setHoldPhonePushes: opValidated(
+      CHANNELS.DECISIONS_SET_HOLD_PHONE_PUSHES,
+      z.boolean(),
+      async (enabled: boolean): Promise<DecisionsStatus> => {
+        refuseWhileOff("change when your phone is notified");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.setDecisionsHoldPhonePushes(enabled);
+      }
+    ),
     // Saving and verifying a recovery kit (#16007). The save dialog belongs to
     // the window that asked; the kit is made and written in main, and the
     // passphrase goes no further than locking it.

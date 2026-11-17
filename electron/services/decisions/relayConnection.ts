@@ -42,6 +42,7 @@ import {
   type BridgeLock,
 } from "./relayTransport.js";
 import type { QuestionAttachments } from "./attachmentSpool.js";
+import { DesktopPresence, type DesktopPresenceOptions } from "./desktopPresence.js";
 import { watchNetwork } from "../../utils/networkWatch.js";
 import { logWarn } from "../../utils/logger.js";
 
@@ -164,6 +165,13 @@ export interface RelayConnectionOptions {
    * without them it declares nothing of them.
    */
   snapshots?: PaneSnapshotSources;
+  /**
+   * Whether the person is at this computer (#17240), told to every attempt's
+   * bridge while `allowed` says it may be, for the owner's connection only: a
+   * Remote Host never reports it. A change to what `allowed` reads reaches
+   * the connection through `presenceChanged`.
+   */
+  presence?: Omit<DesktopPresenceOptions, "report">;
   watchResume?: (onResume: () => void) => () => void;
   watchNetwork?: (onChange: (online: boolean) => void) => () => void;
   now?: () => number;
@@ -283,6 +291,7 @@ export class RelayConnection {
    */
   private readonly lock = newBridgeLock();
   private readonly snapshots: PaneSnapshots | null;
+  private readonly presence: DesktopPresence | null;
   private stopping: Promise<void> = Promise.resolve();
   /** Aborts the lifetime's own requests: delivery's reports to the relay. */
   private readonly lifetime = new AbortController();
@@ -298,6 +307,13 @@ export class RelayConnection {
     this.snapshots = options.snapshots
       ? new PaneSnapshots({ ...options.snapshots, store: this.store, now: this.now })
       : null;
+    this.presence =
+      options.presence && (options.role ?? "owner-desktop") === "owner-desktop"
+        ? new DesktopPresence({
+            ...options.presence,
+            report: (present) => this.reportPresence(present),
+          })
+        : null;
   }
 
   /** What the connection last observed; null before `start`. */
@@ -318,6 +334,14 @@ export class RelayConnection {
   /** The terminal snapshots switch may have turned (#16230). Out of turn is fine: it starts nothing else. */
   snapshotsChanged(): void {
     this.snapshots?.sharingChanged();
+  }
+
+  /**
+   * Whether presence may be reported may have changed (#17240): the switch,
+   * or desktop notifications. Out of turn is fine: it starts nothing else.
+   */
+  presenceChanged(): void {
+    if (!this.ended && this.identity !== null) this.presence?.update();
   }
 
   /**
@@ -438,6 +462,7 @@ export class RelayConnection {
         if (online) this.reconnectNow();
       })
     );
+    this.presence?.update();
     this.begin();
   }
 
@@ -580,6 +605,8 @@ export class RelayConnection {
       // Its inbox appends answers to the rows delivery marks delivered.
       bridge.ctx.lock = this.lock;
       attempt.bridge = bridge;
+      // Kept until it starts: a new bridge hears present now, not a tick later.
+      this.presence?.refresh();
       const started = bridge;
       attempt.offs.push(
         started.on("socket", (state) => this.onSocketState(attempt, state)),
@@ -801,6 +828,18 @@ export class RelayConnection {
     this.retryTimer.unref?.();
   }
 
+  /**
+   * Tells the current attempt's bridge, which keeps the relay's lease. Between
+   * attempts there is none to tell: the next one hears on being made. A
+   * revoked bridge would refuse it, and its revocation is handled already.
+   */
+  private reportPresence(present: boolean): void {
+    const current = this.current;
+    const bridge = current && !current.retired ? current.bridge : null;
+    if (this.ended || !bridge || bridge.state === "revoked") return;
+    bridge.reportPresence(present);
+  }
+
   private retire(attempt: Attempt): void {
     if (attempt.retired) return;
     attempt.retired = true;
@@ -835,6 +874,7 @@ export class RelayConnection {
     this.ended = true;
     this.clearRetry();
     this.snapshots?.stop();
+    this.presence?.stop();
     for (const off of this.watchers.splice(0)) off();
     // Reports to the relay stop now: a stalled one must not hold up the local
     // record of an answer being typed. A delivery's report is sent again next

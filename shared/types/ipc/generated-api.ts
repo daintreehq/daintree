@@ -613,6 +613,9 @@ export interface GeneratedElectronAPI {
     setEnabled(
       ...args: IpcInvokeMap["decisions:set-enabled"]["args"]
     ): Promise<IpcInvokeMap["decisions:set-enabled"]["result"]>;
+    setHoldPhonePushes(
+      ...args: IpcInvokeMap["decisions:set-hold-phone-pushes"]["args"]
+    ): Promise<IpcInvokeMap["decisions:set-hold-phone-pushes"]["result"]>;
     setModel(
       ...args: IpcInvokeMap["decisions:set-model"]["args"]
     ): Promise<IpcInvokeMap["decisions:set-model"]["result"]>;

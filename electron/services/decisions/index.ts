@@ -145,9 +145,11 @@ import {
 import type { AnswerDelivery, PaneSignal } from "./answerDelivery.js";
 import type {
   DecisionsDeliveryDeps,
+  DecisionsPresenceDeps,
   DecisionsService,
   DecisionsSnapshotDeps,
 } from "./DecisionsService.js";
+import { onNotificationSettingsWritten } from "../../utils/notificationSettingsPatch.js";
 import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
 import { buildDecisionsArchive, type DecisionsArchive } from "./dataExport.js";
 import {
@@ -809,6 +811,24 @@ const snapshotDeps: DecisionsSnapshotDeps = {
   watchPanes: watchSnapshotPanes,
 };
 
+/**
+ * Whether the person's presence may be reported now (#17240): Decisions on in
+ * this run, holding phone pushes on, and desktop notifications on, so a
+ * question held from the phone is shown here. Read from the store each time,
+ * so it answers false as soon as any of them is turned off.
+ */
+function presenceAllowed(): boolean {
+  const settings = readDecisionsSettings(store);
+  return (
+    !shutDown &&
+    settings.enabled &&
+    settings.holdPhonePushes &&
+    store.get("notificationSettings").enabled !== false
+  );
+}
+
+const presenceDeps: DecisionsPresenceDeps = { allowed: presenceAllowed };
+
 function serialize<T>(step: () => Promise<T>): Promise<T> {
   const run = transitions.then(step);
   transitions = run.catch(() => {});
@@ -838,12 +858,15 @@ export function getDecisionsService(): Promise<DecisionsService> {
           openDecisionsMcpRoute(source, sources, previousClosed),
         delivery: deliveryDeps,
         snapshots: snapshotDeps,
+        presence: presenceDeps,
         onDevicesChanged: publishDevicesChanged,
         diagnostics: setupDiagnostics,
         onModelChanged: publishModelChanged,
         checkDiskSpace,
         onStoreReplacing: cancelSetupCheckForStore,
       });
+      // Turning desktop notifications off ends presence at once, and on starts it.
+      onNotificationSettingsWritten(() => next.presenceChanged());
       next.onStatusChanged((event) => {
         // A Host enrolls no Hosts: only an owner's lifetime does.
         hostEnrollerFollows(next.getRole() === "host" ? "off" : event.status.state);
@@ -900,6 +923,7 @@ export async function getDecisionsStatus(): Promise<DecisionsStatus> {
     ...(settings.relayOrigin ? { relayOrigin: settings.relayOrigin } : {}),
     ...(settings.consentedAt !== null ? { consentedAt: settings.consentedAt } : {}),
     ...(settings.terminalSnapshots ? { terminalSnapshots: true } : {}),
+    ...(settings.holdPhonePushes ? {} : { holdPhonePushes: false }),
     ...(keyFile === true ? { keysStored: true } : {}),
     ...(kitVerifiedAt !== null ? { recoveryKitVerifiedAt: kitVerifiedAt } : {}),
     ...(checked !== null
@@ -1984,6 +2008,39 @@ export function setDecisionsTerminalSnapshots(
     service?.updateSettings(saved);
     service?.snapshotsChanged();
     getDecisionsHostsPort()?.announceOwnerState();
+    publishStatus();
+    return getDecisionsStatus();
+  });
+}
+
+/** Rises with each turn off of holding phone pushes, so a turn on queued before one never lands after it. */
+let holdPhonePushesOffs = 0;
+
+/**
+ * Turns holding phone pushes while the person is here on or off (#17240).
+ * Off is saved to the store before the queue, as terminal snapshots' is, so
+ * presence stops being reported the moment it's turned off; the service hears
+ * of the setting in turn.
+ */
+export function setDecisionsHoldPhonePushes(enabled: boolean): Promise<DecisionsStatus> {
+  const offs = enabled ? holdPhonePushesOffs : ++holdPhonePushesOffs;
+  if (!enabled) {
+    const current = readDecisionsSettings(store);
+    if (current.holdPhonePushes) {
+      writeDecisionsSettings(store, { ...current, holdPhonePushes: false });
+      service?.presenceChanged();
+    }
+  }
+  return serialize(async () => {
+    const current = readDecisionsSettings(store);
+    if (enabled) {
+      if (shutDown || !current.enabled) throw setupRefused();
+      // Turned off since this was asked for, here or in another window: the later off stands.
+      if (offs !== holdPhonePushesOffs) return getDecisionsStatus();
+    }
+    const saved = writeDecisionsSettings(store, { ...current, holdPhonePushes: enabled });
+    service?.updateSettings(saved);
+    service?.presenceChanged();
     publishStatus();
     return getDecisionsStatus();
   });

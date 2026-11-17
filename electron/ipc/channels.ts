@@ -1666,6 +1666,7 @@ export const CHANNELS = {
   DECISIONS_SET_AGENT_ASK_HUMAN: "decisions:set-agent-ask-human",
   // Whether the phone may show the asking pane's title, state and last lines (#16228).
   DECISIONS_SET_TERMINAL_SNAPSHOTS: "decisions:set-terminal-snapshots",
+  DECISIONS_SET_HOLD_PHONE_PUSHES: "decisions:set-hold-phone-pushes",
   // Which terminals a view's hybrid input holds a draft for, which an answer waits behind (#16282).
   DECISIONS_REPORT_COMPOSER_DRAFTS: "decisions:report-composer-drafts",
   // Saving a recovery kit through a save dialog, and verifying a saved one (#16007).

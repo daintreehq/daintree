@@ -64,51 +64,66 @@ export const electronPresenceWatchers: PresenceWatchers = {
  * observes them active; unknown, idle, a locked screen and sleep are all away.
  * A present answer is reported on every tick, since each one counts only for a
  * while; away is reported once, when the answer turns, so the lease ends then.
+ * Nothing runs, and nothing is reported, while `allowed` says no.
  */
 export class DesktopPresence {
   private timer: ReturnType<typeof setInterval> | null = null;
   private offs: Array<() => void> = [];
   private asleep = false;
-  /** The last answer reported; null before the first. */
-  private last: boolean | null = null;
+  /** The last answer reported: a lease may be current. A reporter that never said present has none to end. */
+  private last = false;
 
   constructor(private readonly o: DesktopPresenceOptions) {}
 
-  start(): void {
-    if (this.timer !== null) return;
-    const watch = this.o.watch ?? electronPresenceWatchers;
-    this.offs = [
-      watch.onSuspend(() => {
-        this.asleep = true;
-        this.refresh();
-      }),
-      watch.onResume(() => {
-        this.asleep = false;
-        this.refresh();
-      }),
-      watch.onChange(() => this.refresh()),
-    ];
-    this.timer = setInterval(() => this.refresh(), this.o.tickMs ?? PRESENCE_TICK_MS);
-    this.timer.unref?.();
+  /** Follows presence while `allowed` says yes and stops when it says no: whatever it reads may have changed. */
+  update(): void {
+    if (!this.o.allowed()) {
+      this.stop();
+      return;
+    }
+    if (this.timer === null) {
+      const watch = this.o.watch ?? electronPresenceWatchers;
+      this.offs = [
+        watch.onSuspend(() => {
+          this.asleep = true;
+          this.refresh();
+        }),
+        watch.onResume(() => {
+          this.asleep = false;
+          this.refresh();
+        }),
+        watch.onChange(() => this.refresh()),
+      ];
+      this.timer = setInterval(() => this.refresh(), this.o.tickMs ?? PRESENCE_TICK_MS);
+      this.timer.unref?.();
+    }
     this.refresh();
   }
 
-  /** Stops reading, ending a lease this started; a stop that comes with the bridge's ends it too. */
+  /** Stops following, ending a lease it may have started. */
   stop(): void {
-    if (this.timer !== null) clearInterval(this.timer);
+    if (this.timer === null) return;
+    clearInterval(this.timer);
     this.timer = null;
     for (const off of this.offs.splice(0)) off();
     this.asleep = false;
-    if (this.last === true) this.send(false);
-    this.last = null;
+    if (this.last) this.send(false);
+    this.last = false;
   }
 
-  /** Reads and reports now: something the answer depends on may have changed. */
+  /**
+   * Reads and reports now while following, as on a tick: present again, or
+   * away once when it turns. A new bridge asks for it, so it hears present at
+   * once rather than on the next tick.
+   */
   refresh(): void {
     if (this.timer === null) return;
-    const present =
-      !this.asleep && this.o.allowed() && (this.o.read ?? readUserPresence)() === "present";
-    if (present || this.last !== false) this.send(present);
+    if (!this.o.allowed()) {
+      this.stop();
+      return;
+    }
+    const present = !this.asleep && (this.o.read ?? readUserPresence)() === "present";
+    if (present || this.last) this.send(present);
     this.last = present;
   }
 

@@ -38,6 +38,7 @@ export const DECISIONS_METHOD_CHANNELS = {
   setDefaultQuestionExpiry: "decisions:set-default-question-expiry",
   setAgentAskHuman: "decisions:set-agent-ask-human",
   setTerminalSnapshots: "decisions:set-terminal-snapshots",
+  setHoldPhonePushes: "decisions:set-hold-phone-pushes",
   reportComposerDrafts: "decisions:report-composer-drafts",
   exportRecoveryKit: "decisions:export-recovery-kit",
   verifyRecoveryKit: "decisions:verify-recovery-kit",

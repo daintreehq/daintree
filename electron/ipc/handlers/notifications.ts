@@ -20,7 +20,10 @@ import { getIpcDispatcher } from "../dispatcher.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import type { NotificationSettings } from "../../../shared/types/ipc/api.js";
 import { typedHandle } from "../utils.js";
-import { sanitizeNotificationSettingsPatch } from "../../utils/notificationSettingsPatch.js";
+import {
+  notificationSettingsWritten,
+  sanitizeNotificationSettingsPatch,
+} from "../../utils/notificationSettingsPatch.js";
 import { shouldPlayUiFeedbackSound } from "../../utils/uiFeedbackSound.js";
 
 type SoundId = keyof typeof SoundServiceModule.SOUND_FILES;
@@ -177,6 +180,7 @@ export function registerNotificationHandlers(deps: HandlerDependencies): () => v
     // One write for the whole patch: a set per field rewrote and fsynced all of
     // config.json once per field.
     store.set("notificationSettings", { ...store.get("notificationSettings"), ...allowed });
+    notificationSettingsWritten();
   };
 
   const handlePlaySound = async (soundFile: unknown): Promise<void> => {
