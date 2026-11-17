@@ -785,7 +785,9 @@ describe("WindowsStoreNotifierService", () => {
       netMock.fetch.mockResolvedValueOnce(makeResponse({ body: "version: 1.0.0\n", etag: null }));
       await windowsStoreNotifierService._checkNowForTest();
 
-      expect(netMock.fetch.mock.calls[1][0]).toBe("https://updates.daintree.org/nightly/latest.yml");
+      expect(netMock.fetch.mock.calls[1][0]).toBe(
+        "https://updates.daintree.org/nightly/latest.yml"
+      );
       expect(getLatest()).toBeNull();
       expect(windowsStoreNotifierService.getLastDetectedUpdate()).toBeNull();
     });
