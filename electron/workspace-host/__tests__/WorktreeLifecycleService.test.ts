@@ -2399,7 +2399,9 @@ describe("WorktreeLifecycleService", () => {
           "/home/testuser",
           {
             isApproved: async (_root, fingerprint) => approved.has(fingerprint),
-            approve: async () => {},
+            approve: async (_root, fingerprints) => {
+              for (const fingerprint of fingerprints) approved.add(fingerprint);
+            },
           },
           (root) => (root === ROOT ? SAVED : null)
         );
@@ -2442,6 +2444,12 @@ describe("WorktreeLifecycleService", () => {
 
       it.each([
         ["no saved settings file", {}],
+        ["an unreadable saved settings file", { [SAVED]: "{ not json" }],
+        ["an empty saved environment map", { [SAVED]: { resourceEnvironments: {} } }],
+        [
+          "only invalid saved environments",
+          { [SAVED]: { resourceEnvironments: { cloud: { provision: "not-a-list" } } } },
+        ],
         [
           "saved settings without environments",
           { [SAVED]: { _schemaVersion: 1, runCommands: [] } },
@@ -2460,7 +2468,23 @@ describe("WorktreeLifecycleService", () => {
         expect(Object.keys(resolved!.environments)).toEqual(["home"]);
       });
 
-      it("still asks about repository environments when nothing was saved", async () => {
+      it("keeps the valid environments of a saved map that has an invalid one", async () => {
+        serveFiles({
+          [SAVED]: {
+            resourceEnvironments: { cloud: { provision: ["saved"] }, broken: { pause: 1 } },
+          },
+          "/home/testuser/.daintree/projects/_root/settings.json": {
+            resourceEnvironments: { home: { provision: ["home"] } },
+          },
+        });
+
+        const resolved = await service.resolveProjectResourceEnvironments(ROOT);
+
+        expect(n(resolved!.path)).toBe(SAVED);
+        expect(Object.keys(resolved!.environments)).toEqual(["cloud"]);
+      });
+
+      it("provisions repository environments only once they are approved", async () => {
         serveFiles({
           "/root/.daintree/settings.json": {
             resourceEnvironments: { cloud: { provision: ["terraform apply"] } },
@@ -2468,9 +2492,15 @@ describe("WorktreeLifecycleService", () => {
         });
         const monitor = makeMonitor({ worktreeMode: "cloud" });
 
-        const result = await service.runLifecycleSetup("wt-1", WT, makeCtx(monitor), true);
+        const before = await service.runLifecycleSetup("wt-1", WT, makeCtx(monitor), true);
+        expect(before).toEqual({ shouldProvision: false, needsApproval: true });
 
-        expect(result).toEqual({ shouldProvision: false, needsApproval: true });
+        await approveCurrentReview();
+        const after = await service.runLifecycleSetup("wt-1", WT, makeCtx(monitor), true);
+
+        expect(after).toEqual({ shouldProvision: true, needsApproval: false });
+        // Setup has no commands of its own: provisioning runs after it, in the host.
+        expect(mockSpawn).not.toHaveBeenCalled();
       });
 
       it("never reads another project's saved settings", async () => {

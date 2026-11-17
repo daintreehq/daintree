@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "events";
 import { randomBytes } from "crypto";
-import { mkdirSync, mkdtempSync, rmSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import os from "os";
 import path from "path";
 import type { SimpleGit } from "simple-git";
@@ -87,11 +87,30 @@ describe("WorkspaceService — resource environments saved in Project settings (
   let previousUserData: string | undefined;
   let projectId: string;
   let spawned: string[];
-  let service: WorkspaceService;
+  let service: WorkspaceService | undefined;
   let monitor: WorktreeMonitor;
+
+  function host(): WorkspaceService {
+    if (!service) throw new Error("WorkspaceService was not constructed");
+    return service;
+  }
+
+  /** The per-root settings file in the home folder, which every host read before #17354. */
+  function writeHomeSettings(settings: Record<string, unknown>) {
+    const dir = path.join(
+      root,
+      "home",
+      ".daintree",
+      "projects",
+      projectRoot.replace(/[/\\:*?"<>|]/g, "_")
+    );
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, "settings.json"), JSON.stringify(settings));
+  }
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    service = undefined;
     root = mkdtempSync(path.join(os.tmpdir(), "saved-environments-"));
     projectRoot = path.join(root, "repo");
     worktreePath = path.join(root, "repo-feature");
@@ -163,15 +182,18 @@ describe("WorkspaceService — resource environments saved in Project settings (
   });
 
   afterEach(() => {
-    service.dispose();
-    if (previousUserData === undefined) delete process.env.DAINTREE_USER_DATA;
-    else process.env.DAINTREE_USER_DATA = previousUserData;
-    vi.restoreAllMocks();
-    rmSync(root, { recursive: true, force: true });
+    try {
+      service?.dispose();
+    } finally {
+      if (previousUserData === undefined) delete process.env.DAINTREE_USER_DATA;
+      else process.env.DAINTREE_USER_DATA = previousUserData;
+      vi.restoreAllMocks();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("provisions the environment when a worktree is created on it", async () => {
-    const outcome = await service["setupCoordinator"].runLifecycleSetup(
+    const outcome = await host()["setupCoordinator"].runLifecycleSetup(
       worktreePath,
       worktreePath,
       projectRoot,
@@ -189,23 +211,76 @@ describe("WorkspaceService — resource environments saved in Project settings (
     ["resume", "cloud-resume"],
     ["status", "cloud-status"],
   ] as const)("answers %s", async (action, command) => {
-    await service.runResourceAction(`req-${action}`, worktreePath, action);
+    await host().runResourceAction(`req-${action}`, worktreePath, action);
 
     expect(spawned).toEqual([command]);
   });
 
   it("offers connect as soon as the worktree's monitor starts", async () => {
-    await service["initResourceConfigAsync"](monitor, worktreePath);
+    await host()["initResourceConfigAsync"](monitor, worktreePath);
 
     expect(monitor.hasResourceConfig).toBe(true);
     expect(monitor.resourceConnectCommand).toBe("ssh cloud.example");
   });
 
+  it.each(["local", "staging"])(
+    "offers a %s worktree the switch but none of another environment's commands",
+    async (mode) => {
+      monitor.setWorktreeMode(mode);
+
+      await host()["initResourceConfigAsync"](monitor, worktreePath);
+
+      expect(monitor.hasResourceConfig).toBe(true);
+      expect(monitor.resourceConnectCommand).toBeUndefined();
+      expect(monitor.hasStatusCommand).toBe(false);
+      expect(monitor.hasTeardownCommand).toBe(false);
+    }
+  );
+
   it("tears the environment down when the worktree is deleted", async () => {
-    await service["initResourceConfigAsync"](monitor, worktreePath);
-    await service["runLifecycleTeardown"](worktreePath, monitor, false);
+    await host()["initResourceConfigAsync"](monitor, worktreePath);
+    await host()["runLifecycleTeardown"](worktreePath, monitor, false);
 
     expect(spawned).toEqual(["cloud-teardown"]);
+  });
+
+  it("never reads the loaded project's saved settings for another root", async () => {
+    expect(
+      await host()["lifecycleService"].resolveProjectResourceEnvironments(path.join(root, "other"))
+    ).toBeNull();
+  });
+
+  describe("when the host finds no saved settings", () => {
+    beforeEach(() => {
+      writeHomeSettings({ resourceEnvironments: { cloud: { provision: ["home-provision"] } } });
+    });
+
+    it("still provisions an environment from the home settings file", async () => {
+      host()["projectId"] = randomBytes(32).toString("hex");
+
+      await host()["setupCoordinator"].runLifecycleSetup(
+        worktreePath,
+        worktreePath,
+        projectRoot,
+        true
+      );
+
+      expect(spawned).toEqual(["home-provision"]);
+    });
+
+    it("reads the home settings file when the host has no userData folder", async () => {
+      delete process.env.DAINTREE_USER_DATA;
+
+      await host()["setupCoordinator"].runLifecycleSetup(
+        worktreePath,
+        worktreePath,
+        projectRoot,
+        true
+      );
+
+      expect(host()["projectSettingsFilePath"](projectId)).toBeNull();
+      expect(spawned).toEqual(["home-provision"]);
+    });
   });
 
   it("is reported as configured by the resource probe", async () => {

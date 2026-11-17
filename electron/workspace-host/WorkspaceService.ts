@@ -1944,11 +1944,18 @@ export class WorkspaceService {
           const named = envKey !== "local" ? ownResource(envs, envKey) : undefined;
           if (named) {
             resourceConfig = named;
-          } else {
-            const keys = Object.keys(envs);
-            if (keys.length > 0) resourceConfig = envs[keys[0]];
+            resourceEnvironments = resolvedEnvs;
+          } else if (Object.keys(envs).length > 0) {
+            // The worktree can switch into one of the project's environments,
+            // but none is its own. Setup, actions and teardown resolve the
+            // environment by its exact key, so another one's commands are not
+            // published here: its Connect would reach a box this worktree
+            // doesn't own.
+            if (monitor.resourceEnvironmentEpoch !== environmentEpoch) return;
+            monitor.setHasResourceConfig(true);
+            if (monitor.isRunning && monitor.hasInitialStatus) this.emitUpdate(monitor);
+            return;
           }
-          if (resourceConfig) resourceEnvironments = resolvedEnvs;
         }
       }
       if (!resourceConfig) return;
