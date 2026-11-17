@@ -441,6 +441,14 @@ describe("WorkspaceService.deleteWorktree", () => {
           changedFileCount: 1,
           changes: [{ path: "src/app.ts", status: "modified", insertions: 5, deletions: 2 }],
         });
+        // Dirty enough that only `force` deletes it, so the run below is the
+        // forced delete of a dirty tree the limit has to hold for.
+        await service.deleteWorktree("req-limit-refused", "/test/worktree");
+        expect(mockSendEvent).toHaveBeenCalledWith(
+          expect.objectContaining({ type: "delete-worktree-result", success: false })
+        );
+        expect(runCommands).not.toHaveBeenCalled();
+        mockSendEvent.mockClear();
       }
       await service.deleteWorktree(`req-limit-${force}`, "/test/worktree", force);
       expect(mockSendEvent).toHaveBeenCalledWith(
