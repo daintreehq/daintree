@@ -2,6 +2,8 @@ import { useEffect, useId, useRef, useState } from "react";
 import { Plus, Globe, Search } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePortalStore } from "@/store/portalStore";
+import { useGlobalLinksStore, type GlobalLink } from "@/store/globalLinksStore";
+import { withGlobalLinks } from "@/lib/portalLinks";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { BrandMark } from "@/components/icons";
 import { actionService } from "@/services/ActionService";
@@ -82,7 +84,8 @@ function validateLink(name: string, url: string): LinkError | null {
 }
 
 export function PortalSettingsTab() {
-  const links = usePortalStore((s) => s.links);
+  const systemLinks = usePortalStore((s) => s.links);
+  const userLinks = useGlobalLinksStore((s) => s.links);
   const defaultNewTabUrl = usePortalStore((s) => s.defaultNewTabUrl);
   const [newLinkName, setNewLinkName] = useState("");
   const [newLinkUrl, setNewLinkUrl] = useState("");
@@ -143,9 +146,6 @@ export function PortalSettingsTab() {
   const hasError = Boolean(addError || customUrlError || editError);
   useSettingsTabValidation("portal", hasError);
 
-  const systemLinks = links.filter((l) => l.type === "system");
-  const userLinks = links.filter((l) => l.type === "user");
-
   const handleAddLink = async () => {
     if (pendingRef.current) return;
     const problem = validateLink(newLinkName, newLinkUrl);
@@ -192,10 +192,12 @@ export function PortalSettingsTab() {
 
   // Removed at once and offered back, not confirmed: a link is a name and a URL,
   // and Undo puts it back exactly where it was.
-  const handleRemoveLink = async (link: PortalLink) => {
+  const handleRemoveLink = async (linkId: string) => {
     if (pendingRef.current) return;
-    const position = positionOf(links, link.id);
-    const userIndex = userLinks.findIndex((l) => l.id === link.id);
+    const userIndex = userLinks.findIndex((l) => l.id === linkId);
+    const link = userLinks[userIndex];
+    if (!link) return;
+    const position = positionOf(userLinks, link.id);
     // The Remove button goes with the editor, so focus moves to the next custom
     // link, or the one before it, or the add field once none are left.
     const neighbour = userLinks[userIndex + 1] ?? userLinks[userIndex - 1];
@@ -221,7 +223,7 @@ export function PortalSettingsTab() {
       action: {
         label: "Undo",
         onClick: latestUndoOnly(`portal-link:${link.id}`, () =>
-          usePortalStore.getState().restoreLink(link, position)
+          useGlobalLinksStore.getState().restoreLink(link, position)
         ),
       },
     });
@@ -261,7 +263,9 @@ export function PortalSettingsTab() {
     closeEditor();
   };
 
-  const enabledLinks = links.filter((l) => l.enabled).sort((a, b) => a.order - b.order);
+  const enabledLinks = withGlobalLinks(systemLinks, userLinks)
+    .filter((l) => l.enabled)
+    .sort((a, b) => a.order - b.order);
 
   const isCustomUrl =
     defaultNewTabUrl !== null && !enabledLinks.some((l) => l.url === defaultNewTabUrl);
@@ -337,7 +341,7 @@ export function PortalSettingsTab() {
     setFocusNewTabSelect(true);
   };
 
-  const renderLinkRow = (link: (typeof links)[0], allowDelete: boolean) => {
+  const renderLinkRow = (link: PortalLink | GlobalLink, allowDelete: boolean) => {
     if (editingLinkId === link.id) {
       // Remove lives in the editor rather than on every row: at rest each row
       // keeps the same Edit + switch rail as the built-in links above it.
@@ -406,7 +410,7 @@ export function PortalSettingsTab() {
                   type="button"
                   variant="ghost-danger"
                   size="sm"
-                  onClick={() => void handleRemoveLink(link)}
+                  onClick={() => void handleRemoveLink(link.id)}
                   disabled={link.alwaysEnabled || pending !== null}
                 >
                   Remove link

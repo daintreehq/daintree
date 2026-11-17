@@ -121,7 +121,7 @@ describe("globalLinksStore", () => {
 
       const second = await loadStore();
       expect(second.useGlobalLinksStore.getState().links.map((l) => l.id)).toEqual(["user-b"]);
-      expect(stored(backing)).toMatchObject({ state: { links: [{ id: "user-b", order: 0 }] } });
+      expect(stored(backing)).toMatchObject({ state: { links: [{ id: "user-b" }] } });
     });
 
     it("records the move even when there was nothing to carry, so links added to the Portal later aren't pulled in", async () => {
@@ -203,44 +203,99 @@ describe("globalLinksStore", () => {
       const { useGlobalLinksStore } = await loadStore();
       expect(useGlobalLinksStore.getState().links.map((l) => l.id)).toEqual(["user-a"]);
       expect(backing.has(KEY)).toBe(false);
+
+      vi.restoreAllMocks();
+      const nextLaunch = await loadStore();
+      expect(nextLaunch.useGlobalLinksStore.getState().links.map((l) => l.id)).toEqual(["user-a"]);
+      expect(backing.has(KEY)).toBe(true);
+    });
+
+    it("leaves the move for a later launch when storage can't be read", async () => {
+      const backing = installLocalStorage({
+        [PORTAL_KEY]: portalPayload([portalLink("user-a", "user")]),
+      });
+      const realGet = globalThis.localStorage.getItem.bind(globalThis.localStorage);
+      vi.spyOn(globalThis.localStorage, "getItem").mockImplementation((key) => {
+        if (key === KEY) throw new Error("storage unavailable");
+        return realGet(key);
+      });
+
+      const first = await loadStore();
+      expect(first.migrateLegacyGlobalLinks()).toBeNull();
+      expect(backing.has(KEY)).toBe(false);
+
+      vi.restoreAllMocks();
+      const nextLaunch = await loadStore();
+      expect(nextLaunch.useGlobalLinksStore.getState().links.map((l) => l.id)).toEqual(["user-a"]);
+    });
+
+    it("reads an unversioned payload from an older release and keeps an always-on link always on", async () => {
+      installLocalStorage({
+        [PORTAL_KEY]: JSON.stringify({
+          state: { links: [portalLink("user-pinned", "user", { alwaysEnabled: true })] },
+        }),
+      });
+      const { useGlobalLinksStore } = await loadStore();
+      expect(useGlobalLinksStore.getState().links).toEqual([
+        {
+          id: "user-pinned",
+          title: "user-pinned",
+          url: "https://user-pinned.test/",
+          icon: "globe",
+          enabled: true,
+          order: 0,
+          alwaysEnabled: true,
+        },
+      ]);
     });
   });
 
   describe("editing", () => {
-    it("adds, edits, toggles, reorders and removes links, keeping order in step with the list", async () => {
+    const ids = (links: Array<{ id: string }>) => links.map((l) => l.id);
+
+    it("adds, edits, toggles, reorders and removes links", async () => {
       installLocalStorage();
       const { useGlobalLinksStore } = await loadStore();
       const store = useGlobalLinksStore.getState();
+      const links = () => useGlobalLinksStore.getState().links;
 
       const a = store.addLink({ title: "A", url: "https://a.test" });
       const b = store.addLink({ title: "B", url: "https://b.test", icon: "search" });
       const c = store.addLink({ title: "C", url: "https://c.test" });
-      expect(useGlobalLinksStore.getState().links.map((l) => [l.id, l.order])).toEqual([
-        [a, 0],
-        [b, 1],
-        [c, 2],
-      ]);
-      expect(useGlobalLinksStore.getState().links[1]).toMatchObject({
-        icon: "search",
-        enabled: true,
-      });
+      expect(ids(links())).toEqual([a, b, c]);
+      expect(links()[1]).toMatchObject({ icon: "search", enabled: true });
+      expect(links()[0]!.icon).toBe("globe");
 
       store.updateLink(a, { title: "Renamed", url: "https://renamed.test" });
       store.toggleLink(b);
       store.reorderLinks(2, 0);
-      expect(useGlobalLinksStore.getState().links.map((l) => [l.id, l.order])).toEqual([
-        [c, 0],
-        [a, 1],
-        [b, 2],
-      ]);
-      expect(useGlobalLinksStore.getState().links[1]!.title).toBe("Renamed");
-      expect(useGlobalLinksStore.getState().links[2]!.enabled).toBe(false);
+      expect(ids(links())).toEqual([c, a, b]);
+      expect(links()[1]).toMatchObject({ title: "Renamed", url: "https://renamed.test" });
+      expect(links()[2]!.enabled).toBe(false);
+
+      store.reorderLinks(0, 1);
+      expect(ids(links())).toEqual([a, c, b]);
 
       store.removeLink(a);
-      expect(useGlobalLinksStore.getState().links.map((l) => [l.id, l.order])).toEqual([
-        [c, 0],
-        [b, 1],
-      ]);
+      expect(ids(links())).toEqual([c, b]);
+    });
+
+    it("re-ranks only the link that moved", async () => {
+      installLocalStorage();
+      const { useGlobalLinksStore } = await loadStore();
+      const store = useGlobalLinksStore.getState();
+      const a = store.addLink({ title: "A", url: "https://a.test" });
+      const b = store.addLink({ title: "B", url: "https://b.test" });
+      const c = store.addLink({ title: "C", url: "https://c.test" });
+      const before = new Map(useGlobalLinksStore.getState().links.map((l) => [l.id, l]));
+
+      store.reorderLinks(2, 1);
+      store.removeLink(a);
+
+      const after = useGlobalLinksStore.getState().links;
+      expect(after.map((l) => l.id)).toEqual([c, b]);
+      expect(after.find((l) => l.id === b)).toBe(before.get(b));
+      expect(after.find((l) => l.id === c)).not.toBe(before.get(c));
     });
 
     it("puts a removed link back where it was", async () => {
@@ -258,11 +313,10 @@ describe("globalLinksStore", () => {
       store.restoreLink(removed, position);
       store.restoreLink(removed, position);
 
-      expect(useGlobalLinksStore.getState().links.map((l) => [l.title, l.order])).toEqual([
-        ["A", 0],
-        ["B", 1],
-        ["C", 2],
-      ]);
+      const restored = useGlobalLinksStore.getState().links;
+      expect(restored.map((l) => l.title)).toEqual(["A", "B", "C"]);
+      expect(restored[0]!.order).toBeLessThan(restored[1]!.order);
+      expect(restored[1]!.order).toBeLessThan(restored[2]!.order);
     });
 
     it("ignores an update that tries to change a link's id, and moves a link given a new order", async () => {
@@ -273,7 +327,20 @@ describe("globalLinksStore", () => {
       const b = store.addLink({ title: "B", url: "https://b.test" });
 
       store.updateLink(a, { id: "hijack", order: 5 } as never);
-      expect(useGlobalLinksStore.getState().links.map((l) => l.id)).toEqual([b, a]);
+      expect(ids(useGlobalLinksStore.getState().links)).toEqual([b, a]);
+    });
+
+    it("keeps a link added as always on switched on", async () => {
+      installLocalStorage();
+      const { useGlobalLinksStore } = await loadStore();
+      const store = useGlobalLinksStore.getState();
+      const pinned = store.addLink({ title: "P", url: "https://p.test", alwaysEnabled: true });
+
+      store.toggleLink(pinned);
+      expect(useGlobalLinksStore.getState().links[0]).toMatchObject({
+        enabled: true,
+        alwaysEnabled: true,
+      });
     });
 
     it("keeps the list across a restart", async () => {
@@ -287,6 +354,24 @@ describe("globalLinksStore", () => {
   });
 
   describe("across project views", () => {
+    function storedIds(backing: Map<string, string>): string[] {
+      return (stored(backing) as { state: { links: Array<{ id: string }> } }).state.links.map(
+        (l) => l.id
+      );
+    }
+
+    async function threeLinksInTwoViews() {
+      const backing = installLocalStorage();
+      const seed = await loadStore();
+      const store = seed.useGlobalLinksStore.getState();
+      const a = store.addLink({ title: "A", url: "https://a.test" });
+      const b = store.addLink({ title: "B", url: "https://b.test" });
+      const c = store.addLink({ title: "C", url: "https://c.test" });
+      const stale = await loadStore();
+      const sibling = await loadStore();
+      return { backing, stale, sibling, a, b, c };
+    }
+
     it("does not let a stale view drop a link a sibling added", async () => {
       const backing = installLocalStorage();
       const stale = await loadStore();
@@ -299,6 +384,36 @@ describe("globalLinksStore", () => {
         .map((l) => l.title)
         .sort();
       expect(titles).toEqual(["Sibling", "Stale"]);
+    });
+
+    it("does not bring back a link a sibling removed when a stale view removes another", async () => {
+      const { backing, stale, sibling, a, b, c } = await threeLinksInTwoViews();
+
+      sibling.useGlobalLinksStore.getState().removeLink(b);
+      stale.useGlobalLinksStore.getState().removeLink(a);
+
+      expect(storedIds(backing)).toEqual([c]);
+    });
+
+    it("does not bring back a link a sibling removed when a stale view reorders", async () => {
+      const { backing, stale, sibling, a, b, c } = await threeLinksInTwoViews();
+
+      sibling.useGlobalLinksStore.getState().removeLink(b);
+      stale.useGlobalLinksStore.getState().reorderLinks(2, 0);
+
+      expect(storedIds(backing)).toEqual([c, a]);
+    });
+
+    it("keeps a sibling's switch when a stale view edits another link", async () => {
+      const { backing, stale, sibling, a, b } = await threeLinksInTwoViews();
+
+      sibling.useGlobalLinksStore.getState().toggleLink(b);
+      stale.useGlobalLinksStore.getState().updateLink(a, { title: "Renamed" });
+
+      const links = (stored(backing) as { state: { links: Array<Record<string, unknown>> } }).state
+        .links;
+      expect(links.find((l) => l.id === b)!.enabled).toBe(false);
+      expect(links.find((l) => l.id === a)!.title).toBe("Renamed");
     });
 
     it("picks up a sibling view's change from a storage event", async () => {

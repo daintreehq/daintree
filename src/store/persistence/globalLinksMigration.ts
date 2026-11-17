@@ -7,59 +7,56 @@ import type { GlobalLink } from "../globalLinksStore";
  * the dock's removal still gets their links.
  */
 export const LEGACY_PORTAL_STORAGE_KEY = "portal-storage";
-export const LEGACY_PORTAL_BACKUP_KEY = `${LEGACY_PORTAL_STORAGE_KEY}.__bak`;
 
 const BUILT_IN_ID = /^(?:system|discovered)-/;
-const CORRUPT = Symbol("corrupt");
 
-function parse(raw: string | null): unknown {
-  if (raw === null) return null;
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch {
-    return CORRUPT;
-  }
+function field(value: object, key: string): unknown {
+  return Reflect.get(value, key);
 }
 
-function storedLinks(envelope: unknown): unknown[] {
-  if (!envelope || typeof envelope !== "object" || !("state" in envelope)) return [];
-  const { state } = envelope;
-  if (!state || typeof state !== "object" || !("links" in state)) return [];
-  return Array.isArray(state.links) ? state.links : [];
-}
-
-/** One stored link as the global list keeps it, or null when it can't be one. */
-export function sanitizeGlobalLink(value: unknown): Omit<GlobalLink, "order"> | null {
+/**
+ * One stored link as the global list keeps it, or null when it can't be one.
+ * `order` is its stored rank when it has one, `fallbackOrder` otherwise.
+ */
+export function sanitizeGlobalLink(value: unknown, fallbackOrder: number): GlobalLink | null {
   if (!value || typeof value !== "object") return null;
-  const { id, title, url, icon, enabled } = value as Record<string, unknown>;
+  const id = field(value, "id");
+  const url = field(value, "url");
   if (typeof id !== "string" || id === "") return null;
   if (typeof url !== "string" || url.trim() === "") return null;
+  const title = field(value, "title");
+  const icon = field(value, "icon");
+  const enabled = field(value, "enabled");
+  const order = field(value, "order");
   return {
     id,
     title: typeof title === "string" ? title : "",
     url,
     icon: typeof icon === "string" && icon !== "" ? icon : "globe",
     enabled: typeof enabled === "boolean" ? enabled : true,
+    order: typeof order === "number" && Number.isFinite(order) ? order : fallbackOrder,
+    ...(field(value, "alwaysEnabled") === true ? { alwaysEnabled: true as const } : {}),
   };
 }
 
 /**
- * The links a person added to the Portal, in the order the Portal showed them
- * after a launch (its hydration numbered links by array position, whatever
- * their stored `order`). Built-in web chats stay behind. A corrupt live payload
- * falls back to its backup copy, as the Portal's own hydration did.
+ * The links a person added to the Portal, from its parsed persisted envelope
+ * (versioned or not), in the order the Portal showed them after a launch: its
+ * hydration numbered links by array position, whatever their stored `order`.
+ * The built-in web chats stay behind.
  */
-export function readLegacyUserLinks(primaryRaw: string | null, backupRaw: string | null) {
-  let envelope = parse(primaryRaw);
-  if (envelope === CORRUPT) envelope = parse(backupRaw);
+export function readLegacyUserLinks(envelope: unknown): GlobalLink[] {
+  if (!envelope || typeof envelope !== "object") return [];
+  const state = field(envelope, "state");
+  if (!state || typeof state !== "object") return [];
+  const stored = field(state, "links");
+  if (!Array.isArray(stored)) return [];
 
   const seen = new Set<string>();
   const links: GlobalLink[] = [];
-  for (const entry of storedLinks(envelope)) {
-    if (!entry || typeof entry !== "object" || (entry as { type?: unknown }).type !== "user") {
-      continue;
-    }
-    const link = sanitizeGlobalLink(entry);
+  for (const entry of stored) {
+    if (!entry || typeof entry !== "object" || field(entry, "type") !== "user") continue;
+    const link = sanitizeGlobalLink(entry, links.length);
     if (!link || BUILT_IN_ID.test(link.id) || seen.has(link.id)) continue;
     seen.add(link.id);
     links.push({ ...link, order: links.length });

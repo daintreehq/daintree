@@ -1,14 +1,13 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { reinsert, type RemovedPosition } from "@/lib/undoToast";
-import { createSafeJSONStorage, readLocalStorageItemSafely } from "./persistence/safeStorage";
+import { createSafeJSONStorage } from "./persistence/safeStorage";
 import {
   mergeRecordByWriterDelta,
   type PersistWriteMergeContext,
 } from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import {
-  LEGACY_PORTAL_BACKUP_KEY,
   LEGACY_PORTAL_STORAGE_KEY,
   readLegacyUserLinks,
   sanitizeGlobalLink,
@@ -26,7 +25,14 @@ export interface GlobalLink {
   url: string;
   icon: string;
   enabled: boolean;
+  /**
+   * Rank in the list, lowest first. Ranks are sparse: a change moves only the
+   * link it touches, so a write merged link by link across views never reads
+   * an untouched link as edited.
+   */
   order: number;
+  /** A link that can't be switched off. */
+  alwaysEnabled?: true;
 }
 
 export type GlobalLinkUpdate = Partial<
@@ -38,7 +44,7 @@ interface GlobalLinksPersistedState {
 }
 
 interface GlobalLinksState extends GlobalLinksPersistedState {
-  addLink: (link: { title: string; url: string; icon?: string }) => string;
+  addLink: (link: { title: string; url: string; icon?: string; alwaysEnabled?: boolean }) => string;
   removeLink: (id: string) => void;
   /** Puts a removed link back where it was, id and all — the Undo for `removeLink`. */
   restoreLink: (link: GlobalLink, position: RemovedPosition) => void;
@@ -49,29 +55,41 @@ interface GlobalLinksState extends GlobalLinksPersistedState {
 
 const PERSIST_VERSION = 0;
 
-function numbered(links: readonly GlobalLink[]): GlobalLink[] {
-  return links.map((link, order) => (link.order === order ? link : { ...link, order }));
+function sortedByOrder(links: readonly GlobalLink[]): GlobalLink[] {
+  return [...links].sort((a, b) => a.order - b.order);
 }
 
-/** A stored list made safe to render: valid entries only, unique ids, by `order`. */
+/** A rank between two neighbours in a sorted list, either of which may be missing. */
+function rankBetween(before: GlobalLink | undefined, after: GlobalLink | undefined): number {
+  if (before && after) return (before.order + after.order) / 2;
+  if (before) return before.order + 1;
+  if (after) return after.order - 1;
+  return 0;
+}
+
+/** Ranks the link at `index` between its neighbours, leaving every other link as it was. */
+function rankAt(links: GlobalLink[], index: number): GlobalLink[] {
+  const link = links[index];
+  if (!link) return links;
+  const next = [...links];
+  next[index] = { ...link, order: rankBetween(links[index - 1], links[index + 1]) };
+  return next;
+}
+
+/** A stored list made safe to render: valid entries only, unique ids, by rank. */
 function readLinks(persisted: unknown): GlobalLink[] | null {
-  if (!persisted || typeof persisted !== "object" || !("links" in persisted)) return null;
-  const { links } = persisted;
-  if (!Array.isArray(links)) return null;
+  if (!persisted || typeof persisted !== "object") return null;
+  const stored: unknown = Reflect.get(persisted, "links");
+  if (!Array.isArray(stored)) return null;
   const seen = new Set<string>();
   const clean: GlobalLink[] = [];
-  for (const entry of links) {
-    const link = sanitizeGlobalLink(entry);
+  for (const entry of stored) {
+    const link = sanitizeGlobalLink(entry, clean.length);
     if (!link || seen.has(link.id)) continue;
     seen.add(link.id);
-    const order = (entry as { order?: unknown }).order;
-    clean.push({ ...link, order: typeof order === "number" ? order : clean.length });
+    clean.push(link);
   }
   return sortedByOrder(clean);
-}
-
-function sortedByOrder(links: GlobalLink[]): GlobalLink[] {
-  return [...links].sort((a, b) => a.order - b.order);
 }
 
 function byId(links: readonly GlobalLink[]): Record<string, GlobalLink> {
@@ -96,18 +114,27 @@ function mergeLinks({
 
 const storage = createSafeJSONStorage<GlobalLinksPersistedState>({ mergeOnWrite: mergeLinks });
 
+/** Whether the key has ever been written; null when storage couldn't be read. */
+function hasStoredLinks(): boolean | null {
+  try {
+    return globalThis.localStorage.getItem(GLOBAL_LINKS_STORAGE_KEY) !== null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Carries the links a person added to the Portal into this store, once: only
  * while the key has never been written, and writing it even when nothing came
- * over, so its presence is the record that the move happened. Returns what it
- * moved, or null when the move had already happened.
+ * over, so its presence is the record that the move happened. The Portal's
+ * payload is read with the same backup recovery its own hydration has, and is
+ * left in place. Returns what it moved, or null when there was nothing to do
+ * or storage couldn't be read, which leaves the move for a later launch.
  */
 export function migrateLegacyGlobalLinks(): GlobalLink[] | null {
-  if (readLocalStorageItemSafely(GLOBAL_LINKS_STORAGE_KEY) !== null) return null;
-  const links = readLegacyUserLinks(
-    readLocalStorageItemSafely(LEGACY_PORTAL_STORAGE_KEY),
-    readLocalStorageItemSafely(LEGACY_PORTAL_BACKUP_KEY)
-  );
+  if (hasStoredLinks() !== false) return null;
+  const legacy = createSafeJSONStorage<unknown>().getItem(LEGACY_PORTAL_STORAGE_KEY);
+  const links = readLegacyUserLinks(legacy instanceof Promise ? null : legacy);
   storage.setItem(GLOBAL_LINKS_STORAGE_KEY, { state: { links }, version: PERSIST_VERSION });
   return links;
 }
@@ -120,13 +147,21 @@ export const useGlobalLinksStore = create<GlobalLinksState>()(
     (set) => ({
       links: migratedLinks,
 
-      addLink: ({ title, url, icon }) => {
+      addLink: ({ title, url, icon, alwaysEnabled }) => {
         const id = `user-${crypto.randomUUID()}`;
         set((s) => ({
-          links: numbered([
+          links: [
             ...s.links,
-            { id, title, url, icon: icon ?? "globe", enabled: true, order: s.links.length },
-          ]),
+            {
+              id,
+              title,
+              url,
+              icon: icon ?? "globe",
+              enabled: true,
+              order: rankBetween(s.links.at(-1), undefined),
+              ...(alwaysEnabled ? { alwaysEnabled: true as const } : {}),
+            },
+          ],
         }));
         return id;
       },
@@ -134,13 +169,19 @@ export const useGlobalLinksStore = create<GlobalLinksState>()(
       removeLink: (id) =>
         set((s) => {
           if (!s.links.some((l) => l.id === id)) return s;
-          return { links: numbered(s.links.filter((l) => l.id !== id)) };
+          return { links: s.links.filter((l) => l.id !== id) };
         }),
 
       restoreLink: (link, position) =>
         set((s) => {
           if (s.links.some((l) => l.id === link.id)) return s;
-          return { links: numbered(reinsert(s.links, link, position)) };
+          const links = reinsert(s.links, link, position);
+          return {
+            links: rankAt(
+              links,
+              links.findIndex((l) => l.id === link.id)
+            ),
+          };
         }),
 
       updateLink: (id, updates) =>
@@ -152,7 +193,7 @@ export const useGlobalLinksStore = create<GlobalLinksState>()(
           if (url !== undefined) patch.url = url;
           if (icon !== undefined) patch.icon = icon;
           if (enabled !== undefined) patch.enabled = enabled;
-          if (order !== undefined) patch.order = order;
+          if (order !== undefined && Number.isFinite(order)) patch.order = order;
           return {
             links: sortedByOrder(s.links.map((l) => (l.id === id ? { ...l, ...patch } : l))),
           };
@@ -160,7 +201,7 @@ export const useGlobalLinksStore = create<GlobalLinksState>()(
 
       toggleLink: (id) =>
         set((s) => {
-          if (!s.links.some((l) => l.id === id)) return s;
+          if (!s.links.some((l) => l.id === id && !l.alwaysEnabled)) return s;
           return { links: s.links.map((l) => (l.id === id ? { ...l, enabled: !l.enabled } : l)) };
         }),
 
@@ -179,7 +220,7 @@ export const useGlobalLinksStore = create<GlobalLinksState>()(
           const [moved] = links.splice(fromIndex, 1);
           if (!moved) return s;
           links.splice(toIndex, 0, moved);
-          return { links: numbered(links) };
+          return { links: rankAt(links, toIndex) };
         }),
     }),
     {
@@ -202,10 +243,11 @@ export function hasGlobalLink(id: string): boolean {
 
 // A persist store hydrates once per view, and a cached view would keep showing
 // a link another view removed. Views share the storage partition, so the
-// sibling's write arrives as a `storage` event.
+// sibling's write arrives as a `storage` event. The listener lives as long as
+// the view's context, like the other cross-view stores'.
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("storage", (event) => {
-    if (event.key !== GLOBAL_LINKS_STORAGE_KEY) return;
+    if (event.key !== GLOBAL_LINKS_STORAGE_KEY && event.key !== null) return;
     void useGlobalLinksStore.persist.rehydrate();
   });
 }
@@ -213,5 +255,6 @@ if (typeof window !== "undefined" && typeof window.addEventListener === "functio
 registerPersistedStore({
   storeId: "globalLinksStore",
   store: useGlobalLinksStore,
-  persistedStateType: "{ links: GlobalLink[] } (id, title, url, icon, enabled, order)",
+  persistedStateType:
+    "{ links: GlobalLink[] } (id, title, url, icon, enabled, order, alwaysEnabled?)",
 });

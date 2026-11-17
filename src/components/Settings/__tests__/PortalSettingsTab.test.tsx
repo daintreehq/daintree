@@ -2,6 +2,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PortalLink } from "@shared/types/portal";
+import type { GlobalLink } from "@/store/globalLinksStore";
 import { DEFAULT_SYSTEM_LINKS } from "@shared/types";
 
 const dispatch = vi.fn();
@@ -36,11 +37,18 @@ const portal = vi.hoisted(() => ({
   links: [] as PortalLink[],
   defaultNewTabUrl: null as string | null,
 }));
-const restoreLink = vi.fn();
 vi.mock("@/store/portalStore", () => ({
   usePortalStore: Object.assign((selector: (s: typeof portal) => unknown) => selector(portal), {
-    getState: () => ({ ...portal, restoreLink }),
+    getState: () => portal,
   }),
+}));
+const globalLinks = vi.hoisted(() => ({ links: [] as GlobalLink[] }));
+const restoreLink = vi.fn();
+vi.mock("@/store/globalLinksStore", () => ({
+  useGlobalLinksStore: Object.assign(
+    (selector: (s: typeof globalLinks) => unknown) => selector(globalLinks),
+    { getState: () => ({ ...globalLinks, restoreLink }) }
+  ),
 }));
 const mockNotify = vi.fn();
 vi.mock("@/lib/notify", () => ({ notify: (...args: unknown[]) => mockNotify(...args) }));
@@ -48,12 +56,11 @@ vi.mock("@/lib/notify", () => ({ notify: (...args: unknown[]) => mockNotify(...a
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { PortalSettingsTab } from "../PortalSettingsTab";
 
-const DOCS: PortalLink = {
+const DOCS: GlobalLink = {
   id: "docs",
   title: "Team docs",
   url: "https://docs.example.com",
   icon: "globe",
-  type: "user",
   enabled: true,
   order: 0,
 };
@@ -80,7 +87,8 @@ beforeEach(() => {
   mockNotify.mockReset();
   restoreLink.mockReset();
   dispatch.mockResolvedValue({ ok: true, result: undefined });
-  portal.links = [DOCS];
+  portal.links = [];
+  globalLinks.links = [DOCS];
   portal.defaultNewTabUrl = null;
 });
 
@@ -207,8 +215,8 @@ describe("PortalSettingsTab custom new-tab URL", () => {
 
 describe("PortalSettingsTab while a save is in flight", () => {
   it("won't open a second editor, or close the first, until the save answers", async () => {
-    const other: PortalLink = { ...DOCS, id: "wiki", title: "Wiki", order: 1 };
-    portal.links = [DOCS, other];
+    const other: GlobalLink = { ...DOCS, id: "wiki", title: "Wiki", order: 1 };
+    globalLinks.links = [DOCS, other];
     let answer: (value: unknown) => void = () => {};
     renderTab();
     fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]!);
@@ -226,6 +234,33 @@ describe("PortalSettingsTab while a save is in flight", () => {
     expect(screen.getByRole("textbox", { name: "Link name" })).toBeTruthy();
 
     await act(async () => answer({ ok: true, result: undefined }));
+  });
+});
+
+describe("PortalSettingsTab new-tab choices", () => {
+  it("offers the enabled built-in links, then the enabled global links in their own order", () => {
+    const [first, second] = DEFAULT_SYSTEM_LINKS;
+    portal.links = [
+      { ...first!, order: 0 },
+      { ...second!, order: 1, enabled: false },
+    ];
+    globalLinks.links = [
+      { ...DOCS, id: "wiki", title: "Wiki", url: "https://wiki.example.com", order: 0 },
+      {
+        ...DOCS,
+        id: "off",
+        title: "Off",
+        url: "https://off.example.com",
+        order: 1,
+        enabled: false,
+      },
+      { ...DOCS, order: 2 },
+    ];
+    renderTab();
+
+    const select = screen.getByRole("combobox", { name: "New tabs open" }) as HTMLSelectElement;
+    const labels = [...select.options].map((o) => o.textContent);
+    expect(labels.slice(1, -1)).toEqual([first!.title, "Wiki", "Team docs"]);
   });
 });
 
@@ -295,10 +330,11 @@ describe("PortalSettingsTab custom new-tab URL failure", () => {
 });
 
 describe("PortalSettingsTab removing a link", () => {
-  const HANDBOOK: PortalLink = { ...DOCS, id: "handbook", title: "Handbook", order: 1 };
+  const HANDBOOK: GlobalLink = { ...DOCS, id: "handbook", title: "Handbook", order: 1 };
 
   it("removes at once and offers Undo rather than asking first", async () => {
-    portal.links = [...DEFAULT_SYSTEM_LINKS, DOCS, HANDBOOK];
+    portal.links = [...DEFAULT_SYSTEM_LINKS];
+    globalLinks.links = [DOCS, HANDBOOK];
     renderTab();
     fireEvent.click(screen.getAllByRole("button", { name: "Edit" }).at(-2)!);
     await act(async () => {
@@ -317,19 +353,17 @@ describe("PortalSettingsTab removing a link", () => {
     };
     expect(payload.action.label).toBe("Undo");
     payload.action.onClick();
-    expect(restoreLink).toHaveBeenCalledWith(DOCS, {
-      order: [...DEFAULT_SYSTEM_LINKS, DOCS, HANDBOOK].map((l) => l.id),
-    });
+    expect(restoreLink).toHaveBeenCalledWith(DOCS, { order: ["docs", "handbook"] });
   });
 
   it("moves focus to the next custom link's Edit button", async () => {
-    portal.links = [DOCS, HANDBOOK];
+    globalLinks.links = [DOCS, HANDBOOK];
     const { rerender } = renderTab();
     fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]!);
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Remove link" }));
     });
-    portal.links = [HANDBOOK];
+    globalLinks.links = [HANDBOOK];
     rerender(
       <TooltipProvider>
         <PortalSettingsTab />

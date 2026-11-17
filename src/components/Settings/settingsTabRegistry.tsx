@@ -1872,7 +1872,7 @@ export const SETTINGS_REGISTRY = [
     id: "portal",
     scope: "global",
     group: "Integrations",
-    settings: ["storage:portal-storage"],
+    settings: ["storage:portal-storage", "storage:daintree-global-links"],
     label: "Portal",
     headerTitle: "Portal links",
     icon: <PanelRight className="w-4 h-4" />,
