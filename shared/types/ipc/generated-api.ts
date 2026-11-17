@@ -2220,9 +2220,6 @@ export interface GeneratedElectronAPI {
     add(
       ...args: IpcInvokeMap["voice-dictionary:add"]["args"]
     ): Promise<IpcInvokeMap["voice-dictionary:add"]["result"]>;
-    addMany(
-      ...args: IpcInvokeMap["voice-dictionary:add-many"]["args"]
-    ): Promise<IpcInvokeMap["voice-dictionary:add-many"]["result"]>;
     addToProject(
       ...args: IpcInvokeMap["voice-dictionary:add-to-project"]["args"]
     ): Promise<IpcInvokeMap["voice-dictionary:add-to-project"]["result"]>;
@@ -2232,6 +2229,9 @@ export interface GeneratedElectronAPI {
     getProject(
       ...args: IpcInvokeMap["voice-dictionary:get-project"]["args"]
     ): Promise<IpcInvokeMap["voice-dictionary:get-project"]["result"]>;
+    importTerms(
+      ...args: IpcInvokeMap["voice-dictionary:import-terms"]["args"]
+    ): Promise<IpcInvokeMap["voice-dictionary:import-terms"]["result"]>;
     recordSuggestions(
       ...args: IpcInvokeMap["voice-dictionary:record-suggestions"]["args"]
     ): Promise<IpcInvokeMap["voice-dictionary:record-suggestions"]["result"]>;

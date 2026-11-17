@@ -80,6 +80,7 @@ function install(
   };
   const voiceDictionary = {
     add: vi.fn(),
+    importTerms: vi.fn(),
     remove: vi.fn(),
     update: vi.fn(),
     acceptSuggestion: vi.fn(),
@@ -1043,11 +1044,12 @@ describe("VoiceInputSettingsTab dictionary", () => {
     expect(api.setSettings).not.toHaveBeenCalled();
   });
 
-  it("adds pasted lines, comma lists and heard -> Term pairs as imports", async () => {
-    const add = vi
+  it("adds pasted lines, comma lists and heard -> Term pairs as one import", async () => {
+    const importTerms = vi
       .fn()
       .mockResolvedValue({ dictionary: [], suggestedDictionary: [], conflicts: [] });
-    install({}, {}, { add });
+    const add = vi.fn();
+    install({}, {}, { add, importTerms });
     render(<VoiceInputSettingsTab />);
     await openPage();
 
@@ -1056,15 +1058,15 @@ describe("VoiceInputSettingsTab dictionary", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
-    await waitFor(() => expect(add).toHaveBeenCalledTimes(3));
-    const imported = { source: "imported", heardAsConflict: "skip" };
-    expect(add).toHaveBeenNthCalledWith(1, { term: "Vite", heardAs: [], ...imported });
-    expect(add).toHaveBeenNthCalledWith(2, { term: "Daintree", heardAs: [], ...imported });
-    expect(add).toHaveBeenNthCalledWith(3, {
-      term: "Zustand",
-      heardAs: ["zoo stand", "zu stand"],
-      ...imported,
+    await waitFor(() => expect(importTerms).toHaveBeenCalledTimes(1));
+    expect(importTerms).toHaveBeenCalledWith({
+      entries: [
+        { term: "Vite", heardAs: [] },
+        { term: "Daintree", heardAs: [] },
+        { term: "Zustand", heardAs: ["zoo stand", "zu stand"] },
+      ],
     });
+    expect(add).not.toHaveBeenCalled();
   });
 
   it("adds heard -> Term as a rule on the term and shows it on the row", async () => {

@@ -17,8 +17,8 @@ export const DICTIONARY_CONTROL_CHARACTERS = /[\p{Cc}\p{Zl}\p{Zp}]/u;
 /** Heard-as phrases one add or edit can carry; main refuses a longer list. */
 export const MAX_DICTIONARY_HEARD_AS = 200;
 
-/** Terms one batched add can carry, so a paste crosses to main in one bounded write. */
-export const MAX_DICTIONARY_BATCH_TERMS = 500;
+/** Terms one paste imports: one bounded write to main, so a huge paste is trimmed, not queued. */
+export const MAX_DICTIONARY_IMPORT_TERMS = 500;
 
 /** Cap on the pending-suggestions queue; accepted words live in the dictionary. */
 export const MAX_SUGGESTED_WORDS = 50;

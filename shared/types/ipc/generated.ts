@@ -4936,16 +4936,6 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: import("./api.js").VoiceDictionaryChange;
   };
-  "voice-dictionary:add-many": {
-    args: [
-      __0: {
-        entries: { term: string; heardAs?: string[] | undefined }[];
-        source?: "manual" | "learned" | "imported" | undefined;
-        heardAsConflict?: "skip" | "reject" | "move" | undefined;
-      },
-    ];
-    result: import("./api.js").VoiceDictionaryChange;
-  };
   "voice-dictionary:add-to-project": {
     args: [
       __0: {
@@ -4966,6 +4956,10 @@ export interface GeneratedIpcInvokeMap {
   "voice-dictionary:get-project": {
     args: [__0: { projectId: string }];
     result: import("./api.js").VoiceDictionaryEntry[];
+  };
+  "voice-dictionary:import-terms": {
+    args: [__0: { entries: { term: string; heardAs?: string[] | undefined }[] }];
+    result: import("./api.js").VoiceDictionaryChange;
   };
   "voice-dictionary:record-suggestions": {
     args: [__0: { candidates: { word: string; original: string }[] }];

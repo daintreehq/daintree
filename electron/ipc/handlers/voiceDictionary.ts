@@ -19,8 +19,9 @@ import type {
 } from "../../../shared/types/ipc/api.js";
 import {
   DICTIONARY_CONTROL_CHARACTERS,
-  MAX_DICTIONARY_BATCH_TERMS,
   MAX_DICTIONARY_HEARD_AS,
+  MAX_DICTIONARY_IMPORT_TERMS,
+  MAX_DICTIONARY_TERM_LENGTH,
   acceptSuggestion,
   addDictionaryEntry,
   dismissSuggestion,
@@ -41,24 +42,28 @@ const heardAs = z.array(text).max(MAX_DICTIONARY_HEARD_AS);
 // What a heard-as phrase another entry has does to the change; refused by default.
 const heardAsConflict = z.enum(["reject", "skip", "move"]).optional();
 const editHeardAsConflict = z.enum(["reject", "move"]).optional();
-const source = z.enum(["manual", "learned", "imported"]).optional();
 
 const addSchema = z.object({
   term: text,
   heardAs: heardAs.optional(),
   // Source and time ride along only so an undone removal restores the entry as it was.
-  source,
+  source: z.enum(["manual", "learned", "imported"]).optional(),
   addedAt: z.number().finite().nonnegative().optional(),
   heardAsConflict,
 });
-// One paste's terms, added in order under one policy and source, so the import is one write.
-const addManySchema = z.object({
+// A paste arrives parsed and trimmed, so each phrase is held to the real length cap
+// here and the whole batch stays bounded.
+const importPhrase = z.string().max(MAX_DICTIONARY_TERM_LENGTH);
+const importSchema = z.object({
   entries: z
-    .array(z.object({ term: text, heardAs: heardAs.optional() }))
+    .array(
+      z.object({
+        term: importPhrase,
+        heardAs: z.array(importPhrase).max(MAX_DICTIONARY_HEARD_AS).optional(),
+      })
+    )
     .min(1)
-    .max(MAX_DICTIONARY_BATCH_TERMS),
-  source,
-  heardAsConflict,
+    .max(MAX_DICTIONARY_IMPORT_TERMS),
 });
 const removeSchema = z.object({ term: existing });
 const updateSchema = z.object({
@@ -173,18 +178,24 @@ export const voiceDictionaryNamespace = defineIpcNamespace({
           dictionary: addDictionaryEntry(state.dictionary, input, Date.now(), conflicts),
         }))
     ),
-    // Each term sees the ones before it, as a run of adds would, but a term
-    // main refuses (an empty or over-long phrase) leaves the whole batch unwritten.
-    addMany: opValidated(
-      VOICE_DICTIONARY_METHOD_CHANNELS.addMany,
-      addManySchema,
-      async ({ entries, source, heardAsConflict }): Promise<VoiceDictionaryChange> => {
+    // A paste in one write. Each term sees the ones before it, as a run of adds
+    // would, and a phrase another term has is left out and reported; a term main
+    // refuses (an empty phrase) leaves the whole paste unwritten.
+    importTerms: opValidated(
+      VOICE_DICTIONARY_METHOD_CHANNELS.importTerms,
+      importSchema,
+      async ({ entries }): Promise<VoiceDictionaryChange> => {
         const now = Date.now();
         return changeReporting((state, conflicts) => ({
           ...state,
           dictionary: entries.reduce(
             (dictionary, entry) =>
-              addDictionaryEntry(dictionary, { ...entry, source, heardAsConflict }, now, conflicts),
+              addDictionaryEntry(
+                dictionary,
+                { ...entry, source: "imported", heardAsConflict: "skip" },
+                now,
+                conflicts
+              ),
             state.dictionary
           ),
         }));

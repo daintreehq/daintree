@@ -30,6 +30,7 @@ const term = (value: string): VoiceDictionaryEntry => ({
 function install(dictionaryOverrides: Record<string, unknown>) {
   const voiceDictionary = {
     add: vi.fn(),
+    importTerms: vi.fn(),
     remove: vi.fn(),
     update: vi.fn(),
     acceptSuggestion: vi.fn(),
@@ -62,6 +63,21 @@ function mainLike(
     add: vi.fn(async (input: AddDictionaryEntryInput) =>
       answer((s, c) => ({ ...s, dictionary: addDictionaryEntry(s.dictionary, input, 1, c) }))
     ),
+    importTerms: vi.fn(async ({ entries }: { entries: AddDictionaryEntryInput[] }) =>
+      answer((s, c) => ({
+        ...s,
+        dictionary: entries.reduce(
+          (dictionary, entry) =>
+            addDictionaryEntry(
+              dictionary,
+              { ...entry, source: "imported", heardAsConflict: "skip" },
+              1,
+              c
+            ),
+          s.dictionary
+        ),
+      }))
+    ),
     update: vi.fn(
       async ({ term: key, changes }: { term: string; changes: DictionaryEntryChanges }) =>
         answer((s, c) => ({
@@ -78,7 +94,7 @@ function mainLike(
   };
 }
 
-const mainLikeAdd = (initial: VoiceDictionaryEntry[] = []) => mainLike(initial).add;
+const mainLikeImport = (initial: VoiceDictionaryEntry[] = []) => mainLike(initial).importTerms;
 
 // Stands in for the voice tab: shows whatever dictionary main returned.
 // With `retry`, a failed change resolves false and leaves a Retry button that runs it
@@ -148,9 +164,9 @@ describe("VoiceDictionaryPage", () => {
     expect(input.value).toBe("Zust");
   });
 
-  it("adds a paste up to the import cap and says how many it left out", async () => {
-    const add = mainLikeAdd();
-    install({ add });
+  it("adds a paste up to the import cap in one call and says how many it left out", async () => {
+    const importTerms = mainLikeImport();
+    install({ importTerms });
     const { container } = render(<Page />);
 
     const lines = Array.from({ length: MAX_DICTIONARY_IMPORT_TERMS + 2 }, (_, i) => `term${i}`);
@@ -162,12 +178,35 @@ describe("VoiceDictionaryPage", () => {
         `Added ${MAX_DICTIONARY_IMPORT_TERMS} terms. Left out 2 terms past the first ${MAX_DICTIONARY_IMPORT_TERMS}`
       )
     );
-    expect(add).toHaveBeenCalledTimes(MAX_DICTIONARY_IMPORT_TERMS);
+    expect(importTerms).toHaveBeenCalledTimes(1);
+    const [{ entries }] = importTerms.mock.calls[0]!;
+    expect(entries).toHaveLength(MAX_DICTIONARY_IMPORT_TERMS);
+    expect(entries.at(-1)).toEqual({ term: `term${MAX_DICTIONARY_IMPORT_TERMS - 1}`, heardAs: [] });
+  });
+
+  it("imports one term left from a paste in one call, ending the removal undo", async () => {
+    const main = mainLike([term("Vite")]);
+    install(main);
+    const { container } = render(<PageWith initial={[term("Vite")]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove Vite" }));
+    await screen.findByRole("button", { name: "Undo" });
+    fireEvent.change(addField(), { target: { value: `Daintree\n${"x".repeat(101)}` } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    await waitFor(() =>
+      expect(container.textContent).toContain(
+        "Added 1 term. Skipped 1 entry over 100 characters"
+      )
+    );
+    expect(main.importTerms).toHaveBeenCalledWith({ entries: [{ term: "Daintree", heardAs: [] }] });
+    expect(main.add).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
   });
 
   it("reports what a paste changed, not how many terms it held (#15233)", async () => {
     const stored = [term("Daintree"), { ...term("Zustand"), heardAs: ["zoo stand"] }];
-    install({ add: mainLikeAdd(stored) });
+    install({ importTerms: mainLikeImport(stored) });
     const { container } = render(<PageWith initial={stored} />);
 
     fireEvent.change(addField(), {
@@ -184,7 +223,7 @@ describe("VoiceDictionaryPage", () => {
 
   it("says a paste of terms already stored added nothing", async () => {
     const stored = [term("Daintree"), term("Zustand")];
-    install({ add: mainLikeAdd(stored) });
+    install({ importTerms: mainLikeImport(stored) });
     const { container } = render(<PageWith initial={stored} />);
 
     fireEvent.change(addField(), { target: { value: "Daintree, Zustand" } });
@@ -268,11 +307,12 @@ describe("VoiceDictionaryPage", () => {
           "Added 2 terms. Left out 1 heard-as phrase: “zoo stand” already belongs to Zustand"
         )
       );
-      expect(main.add).toHaveBeenCalledWith({
-        term: "Zoostand",
-        heardAs: ["zoo stand"],
-        source: "imported",
-        heardAsConflict: "skip",
+      expect(main.add).not.toHaveBeenCalled();
+      expect(main.importTerms).toHaveBeenCalledWith({
+        entries: [
+          { term: "Zoostand", heardAs: ["zoo stand"] },
+          { term: "Vite", heardAs: [] },
+        ],
       });
     });
 
@@ -381,12 +421,13 @@ describe("VoiceDictionaryPage", () => {
 
     it("reports a paste's left-out phrases once when the batch is retried", async () => {
       const main = mainLike([zustand]);
-      let calls = 0;
-      const add = vi.fn((input: AddDictionaryEntryInput) => {
-        calls++;
-        return calls === 2 ? Promise.reject(new Error("EROFS")) : main.add(input);
+      // The first paste lands in main but its answer is lost, so the retry runs it again.
+      const importTerms = vi.fn(async (input: { entries: AddDictionaryEntryInput[] }) => {
+        const answer = await main.importTerms(input);
+        if (importTerms.mock.calls.length === 1) throw new Error("EROFS");
+        return answer;
       });
-      install({ add });
+      install({ importTerms });
       const { container } = render(<PageWith initial={[zustand]} retry />);
 
       fireEvent.change(addField(), {
@@ -396,6 +437,7 @@ describe("VoiceDictionaryPage", () => {
       fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
 
       await waitFor(() => expect(container.textContent).toContain("Left out"));
+      expect(importTerms).toHaveBeenCalledTimes(2);
       expect(container.textContent).toContain(
         "Added 3 terms. Left out 2 heard-as phrases: “zoo stand” already belongs to Zustand"
       );

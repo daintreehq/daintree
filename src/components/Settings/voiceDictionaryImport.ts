@@ -1,12 +1,11 @@
 import {
-  MAX_DICTIONARY_BATCH_TERMS,
   MAX_DICTIONARY_HEARD_AS,
+  MAX_DICTIONARY_IMPORT_TERMS,
   MAX_DICTIONARY_TERM_LENGTH,
 } from "@shared/utils/voiceDictionary";
 import type { VoiceDictionaryEntry } from "@shared/types";
 
-/** Terms one paste adds: one batched write to main, so a huge paste is trimmed, not queued. */
-export const MAX_DICTIONARY_IMPORT_TERMS = MAX_DICTIONARY_BATCH_TERMS;
+export { MAX_DICTIONARY_IMPORT_TERMS };
 
 export interface ParsedDictionaryTerm {
   term: string;

@@ -31,7 +31,6 @@ import {
 import type {
   HeardAsConflict,
   SuggestedDictionaryEntry,
-  VoiceDictionaryChange,
   VoiceDictionaryEntry,
   VoiceDictionaryState,
 } from "@shared/types";
@@ -150,7 +149,7 @@ export function VoiceDictionaryPage({
       }
     }
     const before = entries;
-    const left: HeardAsConflict[] = [];
+    let left: HeardAsConflict[] = [];
     let outcome: DictionaryAddOutcome | undefined;
     draftRef.current?.focus();
     setRemoved([]);
@@ -158,25 +157,19 @@ export function VoiceDictionaryPage({
     void onChange(
       "The dictionary",
       async () => {
-        let state: VoiceDictionaryChange | undefined;
+        // A paste is one write to main, however many terms it holds.
+        const state = imported
+          ? await window.electron.voiceDictionary.importTerms({ entries: terms })
+          : await window.electron.voiceDictionary.add({
+              ...terms[0]!,
+              ...(move ? { heardAsConflict: "move" as const } : {}),
+            });
         // A retried batch reports from scratch.
-        left.length = 0;
-        for (const { term, heardAs } of terms) {
-          state = await window.electron.voiceDictionary.add({
-            term,
-            heardAs,
-            ...(imported
-              ? { source: "imported" as const, heardAsConflict: "skip" as const }
-              : move
-                ? { heardAsConflict: "move" as const }
-                : {}),
-          });
-          left.push(...state.conflicts);
-        }
+        left = state.conflicts;
         // Counted from what main kept, not from what was pasted: a term it
         // already had writes nothing (#15233).
-        outcome = summarizeDictionaryAdds(terms, before, state!.dictionary);
-        return state!;
+        outcome = summarizeDictionaryAdds(terms, before, state.dictionary);
+        return state;
       },
       () => {
         // Main refused a phrase another term took since this page last saw it: ask the same
