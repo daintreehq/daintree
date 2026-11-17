@@ -1633,10 +1633,12 @@ describe("PtyClient fabric", () => {
 
       const promise = client.searchSemanticBuffersAsync("done", false, ["b1", "a3"]);
 
-      const [requestA] = messagesOfType(shardA.child, "search-semantic-buffers");
-      const [requestB] = messagesOfType(shardB.child, "search-semantic-buffers");
-      expect(requestA).toEqual(expect.objectContaining({ terminalIds: ["a3"] }));
-      expect(requestB).toEqual(expect.objectContaining({ terminalIds: ["b1"] }));
+      const requestsA = messagesOfType(shardA.child, "search-semantic-buffers");
+      const requestsB = messagesOfType(shardB.child, "search-semantic-buffers");
+      expect(requestsA).toEqual([expect.objectContaining({ terminalIds: ["a3"] })]);
+      expect(requestsB).toEqual([expect.objectContaining({ terminalIds: ["b1"] })]);
+      const [requestA] = requestsA;
+      const [requestB] = requestsB;
       expect(messagesOfType(defaultShard().child, "search-semantic-buffers")).toHaveLength(0);
 
       const fromA = { terminalId: "a3", line: "a done", matchStart: 2, matchEnd: 6 };

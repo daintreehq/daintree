@@ -625,14 +625,58 @@ describe("FleetPickerContent + useFleetPicker", () => {
       });
       expect(captured.picker?.snippetMap.size).toBe(0);
 
+      // A cached hit and a reply still in flight when the last pane leaves.
+      let resolveThird!: (matches: unknown) => void;
+      search
+        .mockResolvedValueOnce({
+          matches: [{ terminalId: "t1", line: "deploy new", matchStart: 0, matchEnd: 6 }],
+          complete: true,
+        })
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveThird = resolve;
+            })
+        );
       await act(async () => {
-        seedTerminals([]);
+        fireEvent.change(screen.getByTestId("fp-search"), { target: { value: "deploys" } });
       });
       await act(async () => {
         vi.advanceTimersByTime(300);
       });
-      expect(search).toHaveBeenCalledTimes(2);
+      expect(captured.picker?.snippetMap.get("t1")?.line).toBe("deploy new");
+      await act(async () => {
+        seedTerminals([makeTerminal("t1"), makeTerminal("t4")]);
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(300);
+      });
+      expect(search).toHaveBeenCalledTimes(4);
+
+      await act(async () => {
+        seedTerminals([]);
+      });
+      expect(captured.picker?.snippetMap.size).toBe(0);
+      await act(async () => {
+        resolveThird({
+          matches: [{ terminalId: "t1", line: "deploy late", matchStart: 0, matchEnd: 6 }],
+          complete: true,
+        });
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(300);
+      });
+      expect(search).toHaveBeenCalledTimes(4);
+      expect(captured.picker?.snippetMap.size).toBe(0);
       expect(captured.picker?.visibleTerminals).toEqual([]);
+    });
+
+    it("keeps id boundaries and leaves empty ids out of the scope", async () => {
+      seedTerminals([makeTerminal(""), makeTerminal("a\x00b"), makeTerminal("t1")]);
+
+      await openAndType("cold-start", "deploy");
+
+      expect(search.mock.calls).toEqual([["deploy", false, ["a\x00b", "t1"]]]);
     });
 
     it("drops a hit when its pane leaves, so a restart doesn't inherit it", async () => {
@@ -655,10 +699,11 @@ describe("FleetPickerContent + useFleetPicker", () => {
       expect(captured.picker?.snippetMap.has("t1")).toBe(false);
       expect(captured.picker?.visibleTerminals).toEqual([]);
 
+      const callsBeforeRejoin = search.mock.calls.length;
       await act(async () => {
         vi.advanceTimersByTime(300);
       });
-      expect(search.mock.calls.at(-1)).toEqual(["deploy", false, ["t1", "t2"]]);
+      expect(search.mock.calls.slice(callsBeforeRejoin)).toEqual([["deploy", false, ["t1", "t2"]]]);
     });
 
     it("skips the search when no pane is eligible", async () => {
@@ -669,6 +714,21 @@ describe("FleetPickerContent + useFleetPicker", () => {
 
       expect(search).not.toHaveBeenCalled();
       expect(captured.picker?.visibleTerminals).toEqual([]);
+    });
+
+    it("keeps only the picker's panes from an unscoped reply", async () => {
+      seedTerminals(Array.from({ length: 257 }, (_, i) => makeTerminal(`t${i}`)));
+      search.mockResolvedValue({
+        matches: [
+          { terminalId: "t5", line: "deploy here", matchStart: 0, matchEnd: 6 },
+          { terminalId: "elsewhere", line: "deploy there", matchStart: 0, matchEnd: 6 },
+        ],
+        complete: true,
+      });
+
+      const captured = await openAndType("cold-start", "deploy");
+
+      expect([...(captured.picker?.snippetMap.keys() ?? [])]).toEqual(["t5"]);
     });
 
     it.each([

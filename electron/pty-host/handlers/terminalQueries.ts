@@ -149,10 +149,15 @@ export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
           return;
         }
       }
-      const scope: string[] | undefined = Array.isArray(msg.terminalIds)
-        ? msg.terminalIds
-        : undefined;
-      const terminals = scope ? scope.map((id) => ptyManager.getTerminal(id)) : ptyManager.getAll();
+      // Only an omitted scope scans the whole shard; a malformed one scans nothing.
+      const terminals =
+        msg.terminalIds === undefined
+          ? ptyManager.getAll()
+          : Array.isArray(msg.terminalIds)
+            ? msg.terminalIds.map((id: unknown) =>
+                typeof id === "string" ? ptyManager.getTerminal(id) : undefined
+              )
+            : [];
       for (const t of terminals) {
         if (!t) continue;
         const buffer = t.semanticBuffer;

@@ -70,7 +70,7 @@ describe("search-semantic-buffers match ranges", () => {
 });
 
 describe("search-semantic-buffers terminal scope (#17516)", () => {
-  function scopedSearch(buffers: Record<string, string[]>, query: string, terminalIds?: string[]) {
+  function scopedSearch(buffers: Record<string, string[]>, query: string, terminalIds?: unknown) {
     const sendEvent = vi.fn();
     const reads: string[] = [];
     const info = (id: string) => ({
@@ -88,7 +88,7 @@ describe("search-semantic-buffers terminal scope (#17516)", () => {
       requestId: "r1",
       query,
       isRegex: false,
-      ...(terminalIds ? { terminalIds } : {}),
+      ...(terminalIds !== undefined ? { terminalIds } : {}),
     });
     const [[event]] = sendEvent.mock.calls;
     return { matches: (event as { matches: SemanticSearchMatch[] }).matches, reads, getAll };
@@ -116,6 +116,13 @@ describe("search-semantic-buffers terminal scope (#17516)", () => {
 
   it("scans nothing for an empty scope", () => {
     const { matches, reads, getAll } = scopedSearch(buffers, "done", []);
+    expect(getAll).not.toHaveBeenCalled();
+    expect(reads).toEqual([]);
+    expect(matches).toEqual([]);
+  });
+
+  it("scans nothing for a malformed scope", () => {
+    const { matches, reads, getAll } = scopedSearch(buffers, "done", "a1");
     expect(getAll).not.toHaveBeenCalled();
     expect(reads).toEqual([]);
     expect(matches).toEqual([]);

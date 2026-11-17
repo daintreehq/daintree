@@ -396,8 +396,10 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
         .then((raw) => {
           if (currentRequestRef.current !== issueId) return;
           const result = readOutputSearchResult(raw);
+          // An unscoped reply (past the cap) also carries panes outside the picker.
+          const inScope = new Set(terminalIds);
           const next = new Map<string, SemanticSearchMatch>();
-          for (const m of result.matches) next.set(m.terminalId, m);
+          for (const m of result.matches) if (inScope.has(m.terminalId)) next.set(m.terminalId, m);
           setSnippetMap(next);
           setSnippetQuery(trimmed);
           setSettledOutputSearch({ query: trimmed, complete: result.complete });
