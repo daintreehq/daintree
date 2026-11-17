@@ -130,8 +130,18 @@ function pressOutside(target: Element) {
   fireEvent.click(target, { button: 0, detail: 1 });
 }
 
-/** Long enough for Radix's deferred close-autofocus and a task behind it. */
-const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+/**
+ * Drains Radix's close-autofocus, a task after the content unmounts, and the
+ * fallback it queues a task behind that. Chained rather than one long wait:
+ * each timer is queued only once the one before it fired, so a stalled event
+ * loop cannot resolve it ahead of the work it waits for.
+ */
+const settle = () =>
+  act(async () => {
+    for (let task = 0; task < 3; task += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  });
 
 const RINGLESS = { preventScroll: true, focusVisible: false };
 const RINGED = { preventScroll: true };
@@ -212,10 +222,11 @@ describe("modal palette dismissed by an outside press", () => {
 
     pressOutside(document.body);
     expect(dialog.isConnected).toBe(false);
-    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    await settle();
 
-    // Radix's own bare `.focus()`, not the shell's ringless fallback.
-    expect(focusTrigger).not.toHaveBeenCalledWith(RINGLESS);
+    // Radix's own bare `.focus()` and nothing behind it.
+    expect(focusTrigger.mock.calls).toEqual([[]]);
+    expect(document.activeElement).toBe(trigger);
   });
 });
 
@@ -297,9 +308,14 @@ describe("palette close that hands focus to what it launched", () => {
 describe("palette keyboard dismissal", () => {
   it("returns focus to the trigger on Escape, ring and all", async () => {
     const { dialog, input, trigger } = await openPalette();
+    const focusTrigger = vi.spyOn(trigger!, "focus");
 
     fireEvent.keyDown(input, { key: "Escape" });
     expect(dialog.isConnected).toBe(false);
-    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    await settle();
+
+    // Radix's bare `.focus()`, which Chromium rings, and no fallback behind it.
+    expect(focusTrigger.mock.calls).toEqual([[]]);
+    expect(document.activeElement).toBe(trigger);
   });
 });

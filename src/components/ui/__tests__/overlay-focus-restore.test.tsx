@@ -757,6 +757,32 @@ describe("stranded-focus fallback for a consumer that owns its restoration", () 
     expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true, focusVisible: false });
   });
 
+  it("keeps the ring it was told to keep, even after a pointer pick", () => {
+    const { overlay, trigger, content } = renderOwnedPopover();
+    const focusSpy = vi.spyOn(trigger, "focus");
+
+    act(() => content.onClickCapture(optionClick(1)));
+    act(() => overlay().restoreIfStranded(null, false));
+    act(() => vi.runAllTimers());
+
+    expect(focusSpy.mock.calls).toEqual([[{ preventScroll: true }]]);
+  });
+
+  it("resolves the recorded trigger when asked, not when the task runs", () => {
+    const { overlay, trigger } = renderOwnedPopover();
+    const triggerSpy = vi.spyOn(trigger, "focus");
+    const replacement = returnTarget();
+    const replacementSpy = vi.spyOn(replacement, "focus");
+
+    act(() => overlay().restoreIfStranded());
+    act(() => overlay().setRestoreTarget(replacement));
+    act(() => vi.runAllTimers());
+
+    expect(triggerSpy).toHaveBeenCalledTimes(1);
+    expect(replacementSpy).not.toHaveBeenCalled();
+    replacement.remove();
+  });
+
   it("leaves a target that left the document alone", () => {
     const { overlay } = renderOwnedPopover();
     const target = returnTarget();

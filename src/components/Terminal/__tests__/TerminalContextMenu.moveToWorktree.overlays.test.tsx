@@ -272,10 +272,9 @@ describe("TerminalContextMenu More worktrees…, through the real overlays", () 
     fireEvent.click(document.body);
 
     await waitFor(() => expect(searchField()).toBeNull());
-    await settle();
-    expect(paneFocus).toHaveBeenCalledTimes(1);
-    expect(paneFocus).toHaveBeenCalledWith({ preventScroll: true, focusVisible: false });
-    expect(document.activeElement).toBe(pane);
+    // The fallback runs a task behind Radix's own deferred close-autofocus.
+    await waitFor(() => expect(document.activeElement).toBe(pane));
+    expect(paneFocus.mock.calls).toEqual([[{ preventScroll: true, focusVisible: false }]]);
   });
 
   it("hands a plugin panel's worktree move to the picker (#12606)", async () => {

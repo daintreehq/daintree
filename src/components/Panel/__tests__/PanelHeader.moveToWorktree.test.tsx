@@ -205,7 +205,7 @@ describe("PanelHeader Move to worktree, through the real overlays", () => {
     expect(document.querySelector('[role="tooltip"]')).toBeNull();
   });
 
-  it("moves the panel from the keyboard and leaves focus off the button", async () => {
+  it("moves the panel from the keyboard and leaves focus off the departed button", async () => {
     const { unmount } = renderHeader();
     // A move takes the panel out of this grid, and its header with it.
     dispatchMock.mockImplementation(() => queueMicrotask(unmount));
