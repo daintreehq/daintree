@@ -143,6 +143,17 @@ describe("floating elevation contract", () => {
     }
   });
 
+  // A tint hairline under an inset tint ring reads as a double line on light
+  // themes, and forced colours drop the ring (it is a box-shadow) (#17272).
+  it("toasts and the re-entry summary frame with one theme border", () => {
+    for (const file of ["src/components/ui/toaster.tsx", "src/components/ui/ReEntrySummary.tsx"]) {
+      const source = read(file);
+      expect(source).toMatch(/"border border-border-default border-l-\[3px\]/);
+      expect(source).not.toMatch(/\bborder border-tint\//);
+      expect(source).not.toMatch(/\bring-inset\b/);
+    }
+  });
+
   it.each(OVERLAY_SHEET_HOSTS)(
     "%s lifts its overlay sheet with the shared sheet shadow",
     (file) => {
