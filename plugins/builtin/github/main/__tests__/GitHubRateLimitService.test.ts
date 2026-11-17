@@ -477,6 +477,13 @@ describe("GitHubRateLimitService", () => {
       expect(budget?.multiplier).toBe(1);
     });
 
+    it("reads a window with no limit as no budget, not an exhausted one (rate limiting off)", () => {
+      gitHubRateLimitService.updateFromGraphQL(graphQLData(0, 0));
+
+      expect(gitHubRateLimitService.shouldBlockRequest().blocked).toBe(false);
+      expect(gitHubRateLimitService._getBudgetStateForTests()).toBeNull();
+    });
+
     it("ignores missing rateLimit object", () => {
       gitHubRateLimitService.updateFromGraphQL({ repository: {} });
       expect(gitHubRateLimitService.shouldBlockRequest().blocked).toBe(false);

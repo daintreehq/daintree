@@ -1273,9 +1273,11 @@ interface CloneCapability {
      * (tooling installed and signed in, or a valid stored credential). Drives
      * the host's path selection; an unauthenticated probe also means the clone
      * dialog shows no provider sign-in recovery affordance beyond the standard
-     * auth-failure banner.
+     * auth-failure banner. `url` is the repository about to be cloned, for a
+     * provider whose sign-in is per host (a self-hosted instance beside the
+     * public one).
      */
-    probeAuth(signal?: AbortSignal): Promise<CloneAuthProbe>;
+    probeAuth(signal?: AbortSignal, url?: string): Promise<CloneAuthProbe>;
     /**
      * Rewrite a clone URL to carry the provider's credentials (e.g. an
      * embedded token). Return `null` when no authenticated URL is available;
