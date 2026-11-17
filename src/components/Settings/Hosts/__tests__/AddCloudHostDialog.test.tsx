@@ -147,7 +147,10 @@ function ec2Catalog(overrides: Partial<CloudCatalog> = {}): CloudCatalog {
         choices: [
           choice("ami-use1", "Ubuntu 24.04 (us-east-1)", ["us-east-1"]),
           choice("ami-euw1", "Ubuntu 24.04 (eu-west-1)", ["eu-west-1"]),
-          choice("ami-euw1-debian", "Debian 12 (eu-west-1)", ["eu-west-1"]),
+          {
+            ...choice("ami-euw1-debian", "Debian 12 (eu-west-1)", ["eu-west-1"]),
+            description: "Debian 12 bookworm, arm64",
+          },
         ],
       },
       network: {
@@ -248,7 +251,14 @@ describe("AddCloudHostDialog provisioning", () => {
   it("sends the image and subnet picked", async () => {
     open(ACME(), ec2Catalog());
     await waitFor(() => expect(shown("location")?.textContent).toBe("Europe (Ireland)"));
+    const described = () =>
+      (shown("image")!.getAttribute("aria-describedby") ?? "")
+        .split(" ")
+        .map((id) => document.getElementById(id)?.textContent)
+        .filter(Boolean);
+    expect(described()).toEqual([]);
     await choose(shown("image")!, "Debian 12 (eu-west-1)");
+    await waitFor(() => expect(described()).toEqual(["Debian 12 bookworm, arm64"]));
     await choose(shown("network")!, "eu-west-1a");
     await waitFor(() => expect(shown("network")?.textContent).toBe("eu-west-1a"));
     expect(shown("image")?.textContent).toBe("Debian 12 (eu-west-1)");
