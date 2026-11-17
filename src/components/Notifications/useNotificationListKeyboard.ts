@@ -200,6 +200,12 @@ export function useNotificationListKeyboard({
           // thread-level concept). The dropdown-open guard at the top of
           // this handler keeps subsequent j/k from double-navigating.
           if (e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
+          // Closing the menu restores focus to the row, so a held key would
+          // reopen it without a fresh press.
+          if (e.repeat) {
+            e.preventDefault();
+            return;
+          }
           // Filed rows don't snooze; the row menu doesn't offer it either.
           if (filter === "archived") return;
           const row = flatRows[activeIndex];
