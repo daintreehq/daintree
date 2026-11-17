@@ -159,6 +159,268 @@ describe("AuditRingStore", () => {
     ]);
   });
 
+  it("serializes only the appended record when a flushed full ring takes one more", async () => {
+    const records = Array.from({ length: 500 }, (_, i) => rec(`r${i}`));
+    store.writeAll("pluginAuditLog", records, 500);
+    await settle();
+
+    const stringify = vi.spyOn(JSON, "stringify");
+    store.writeAll("pluginAuditLog", [...records.slice(1), rec("r500")], 500);
+    const serialized = stringify.mock.calls.length;
+    stringify.mockRestore();
+    await settle();
+
+    expect(serialized).toBe(1);
+    expect(sentOps()[1]).toMatchObject({
+      op: "ringApply",
+      upserts: [{ recordId: "r500" }],
+      deletes: ["r0"],
+    });
+  });
+
+  describe("serialization reuse", () => {
+    type Nested = Record<string, unknown> & {
+      tools: string[] & { toJSON?: () => unknown };
+      auth: Record<string, unknown>;
+    };
+    const nested = (): Nested => ({
+      id: "a",
+      v: "a",
+      tools: ["read", "grep"],
+      auth: { tier: "workbench", grantId: "g1" },
+    });
+
+    function storedRecord(ring: string, recordId: string): string | undefined {
+      const row = harness
+        .db!.prepare("SELECT record FROM audit_rings WHERE ring = ? AND record_id = ?")
+        .get(ring, recordId) as { record: string } | undefined;
+      return row?.record;
+    }
+
+    function countSerializations(write: () => void): number {
+      const stringify = vi.spyOn(JSON, "stringify");
+      try {
+        write();
+        return stringify.mock.calls.length;
+      } finally {
+        stringify.mockRestore();
+      }
+    }
+
+    it("reuses an unchanged nested record without serializing it", async () => {
+      const records = [nested(), rec("b")];
+      store.writeAll("mcpAuditLog", records, 10);
+      await settle();
+
+      expect(countSerializations(() => store.writeAll("mcpAuditLog", records, 10))).toBe(0);
+      await settle();
+      expect(sentOps()).toHaveLength(1);
+    });
+
+    it.each<[string, (r: Nested) => void]>([
+      ["a changed value", (r) => (r.v = "changed")],
+      ["an added key", (r) => (r.extra = 1)],
+      ["a deleted trailing key", (r) => Reflect.deleteProperty(r, "auth")],
+      [
+        "a reordered key",
+        (r) => {
+          const v = r.v;
+          delete r.v;
+          r.v = v;
+        },
+      ],
+      ["an appended array element", (r) => r.tools.push("write")],
+      ["a replaced array element", (r) => (r.tools[1] = "write")],
+      ["a changed nested value", (r) => (r.auth.tier = "full")],
+      ["a deleted nested key", (r) => delete r.auth.grantId],
+      ["a toJSON hook on a nested array", (r) => (r.tools.toJSON = () => "hooked")],
+      [
+        "a non-enumerable toJSON hook",
+        (r) => Object.defineProperty(r, "toJSON", { value: () => ({ id: "a", hooked: true }) }),
+      ],
+    ])("persists %s made in place to a reused record", async (_name, mutate) => {
+      const records = [nested(), rec("b")];
+      const record = records[0] as Nested;
+      store.writeAll("mcpAuditLog", records, 10);
+      await settle();
+      opCounts();
+
+      mutate(record);
+      const serialized = countSerializations(() => store.writeAll("mcpAuditLog", records, 10));
+      await settle();
+
+      expect(serialized).toBe(1);
+      expect(opCounts()).toEqual({ update: 1 });
+      expect(storedRecord("mcpAuditLog", "a")).toBe(JSON.stringify(record));
+    });
+
+    it.each<[string, (record: Record<string, unknown>) => () => unknown, string[]]>([
+      [
+        "settles on a new value after its first read",
+        (record) => () => {
+          Object.defineProperty(record, "v", { value: "settled", enumerable: true });
+          return "first";
+        },
+        ["first", "settled"],
+      ],
+      [
+        "differs only on its second read",
+        () => {
+          let reads = 0;
+          return () => (++reads === 2 ? "second" : "first");
+        },
+        ["first", "first"],
+      ],
+    ])(
+      "never pairs a cached string with a different read of an accessor that %s",
+      async (_name, getter, stored) => {
+        store.writeAll("mcpAuditLog", [rec("b")], 10);
+        await settle();
+        const record = { id: "a" } as Record<string, unknown>;
+        Object.defineProperty(record, "v", {
+          enumerable: true,
+          configurable: true,
+          get: getter(record),
+        });
+
+        const persisted: unknown[] = [];
+        for (let flush = 0; flush < 2; flush++) {
+          store.writeAll("mcpAuditLog", [rec("b"), record], 10);
+          await settle();
+          persisted.push(JSON.parse(storedRecord("mcpAuditLog", "a")!).v);
+        }
+
+        expect(persisted).toEqual(stored);
+        expect(storedRecord("mcpAuditLog", "a")).toBe(JSON.stringify(record));
+      }
+    );
+
+    it("falls back to plain serialization when inspecting a record throws", async () => {
+      let reads = 0;
+      const record = { id: "a" } as Record<string, unknown>;
+      Object.defineProperty(record, "v", {
+        enumerable: true,
+        get() {
+          if (++reads === 1) throw new Error("first read fails");
+          return "ok";
+        },
+      });
+
+      store.writeAll("mcpAuditLog", [record], 10);
+      await settle();
+
+      expect(store.readAll("mcpAuditLog")).toEqual([{ id: "a", v: "ok" }]);
+    });
+
+    it("re-serializes records whose JSON depends on more than plain data on every flush", async () => {
+      const at = new Date(1000);
+      const records = [{ id: "a", at }, rec("b")];
+      store.writeAll("mcpAuditLog", records, 10);
+      await settle();
+      opCounts();
+
+      at.setTime(2000);
+      const serialized = countSerializations(() => store.writeAll("mcpAuditLog", records, 10));
+      await settle();
+
+      expect(serialized).toBe(1);
+      expect(opCounts()).toEqual({ update: 1 });
+      expect(storedRecord("mcpAuditLog", "a")).toBe(JSON.stringify(records[0]));
+    });
+
+    it("serializes every record afresh on a sync write, without trusting the cache", async () => {
+      const records = [rec("a"), rec("b"), rec("c")];
+      store.writeAll("mcpAuditLog", records, 10);
+      await settle();
+
+      records[1]!.v = "changed";
+      const syncSerialized = countSerializations(() =>
+        store.writeAll("mcpAuditLog", records, 10, { sync: true })
+      );
+      expect(syncSerialized).toBe(3);
+      expect(store.readAll<Rec>("mcpAuditLog").map((r) => r.v)).toEqual(["a", "changed", "c"]);
+
+      const backgroundSerialized = countSerializations(() =>
+        store.writeAll("mcpAuditLog", [...records, rec("d")], 10)
+      );
+      await settle();
+
+      // "b" changed after it was cached, so it is re-serialized once; "a" and
+      // "c" are reused.
+      expect(backgroundSerialized).toBe(2);
+      expect(sentOps().at(-1)).toEqual({
+        op: "ringApply",
+        ring: "mcpAuditLog",
+        upserts: [{ recordId: "d", record: JSON.stringify(rec("d")) }],
+        deletes: [],
+      });
+      expect(store.readAll<Rec>("mcpAuditLog").map((r) => r.v)).toEqual(["a", "changed", "c", "d"]);
+    });
+
+    it("updates every ring holding a shared record that changed in place", async () => {
+      const shared = rec("s");
+      store.writeAll("mcpAuditLog", [shared], 10);
+      store.writeAll("forgeAuditLog", [rec("f"), shared], 10);
+      await settle();
+
+      shared.v = "changed";
+      store.writeAll("mcpAuditLog", [shared], 10);
+      store.writeAll("forgeAuditLog", [rec("f"), shared], 10);
+      await settle();
+
+      expect(store.readAll<Rec>("mcpAuditLog").map((r) => r.v)).toEqual(["changed"]);
+      expect(store.readAll<Rec>("forgeAuditLog").map((r) => r.v)).toEqual(["f", "changed"]);
+    });
+
+    it("stores one object listed twice as two unkeyed rows, then resumes deltas once it is unique", async () => {
+      const twice = rec("t");
+      store.writeAll("mcpAuditLog", [twice, twice], 10);
+      await settle();
+      const first = sentOps()[0]!;
+      expect(first.op === "ringWriteAll" && first.rows.map((row) => row.recordId)).toEqual([
+        null,
+        null,
+      ]);
+      expect(store.readAll<Rec>("mcpAuditLog").map((r) => r.id)).toEqual(["t", "t"]);
+
+      store.writeAll("mcpAuditLog", [twice], 10);
+      await settle();
+      store.writeAll("mcpAuditLog", [twice, rec("u")], 10);
+      await settle();
+
+      expect(sentOps().map((op) => op.op)).toEqual(["ringWriteAll", "ringWriteAll", "ringApply"]);
+      expect(sentOps()[2]).toMatchObject({ upserts: [{ recordId: "u" }], deletes: [] });
+      expect(store.readAll<Rec>("mcpAuditLog").map((r) => r.id)).toEqual(["t", "u"]);
+    });
+
+    it("keeps a queued snapshot when a cached record turns circular, and recovers once it is repaired", async () => {
+      const held = holdWorker();
+      const b: Rec & { self?: unknown } = rec("b");
+      store.writeAll("mcpAuditLog", [rec("a")], 10);
+      store.writeAll("mcpAuditLog", [rec("a"), b], 10);
+
+      b.self = b;
+      store.writeAll("mcpAuditLog", [rec("x"), b], 10);
+      expect(console.warn).toHaveBeenCalledWith(
+        expect.stringContaining("writeAll failed"),
+        expect.any(TypeError)
+      );
+      held.shift()!.resolve(workerExecutes(sentOps()[0]!));
+      await settle();
+      held.shift()!.resolve(workerExecutes(sentOps()[1]!));
+      await settle();
+      expect(sentOps()[1]).toMatchObject({ op: "ringApply", upserts: [{ recordId: "b" }] });
+      expect(store.readAll<Rec>("mcpAuditLog")).toEqual([rec("a"), rec("b")]);
+
+      delete b.self;
+      b.v = "repaired";
+      store.writeAll("mcpAuditLog", [rec("a"), b], 10);
+      held.shift()!.resolve(workerExecutes(sentOps()[2]!));
+      await settle();
+      expect(store.readAll<Rec>("mcpAuditLog").map((r) => r.v)).toEqual(["a", "repaired"]);
+    });
+  });
+
   it("persists an in-place update as a single row update that keeps the record's position", async () => {
     const records = [rec("a"), rec("b"), rec("c")];
     store.writeAll("mcpAuditLog", records, 10);
