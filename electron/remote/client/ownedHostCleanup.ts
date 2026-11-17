@@ -37,6 +37,32 @@ async function isWorktreeGone(probe: Promise<unknown>): Promise<boolean> {
 }
 
 /**
+ * Whether a worktree's root on this device is gone: true only on ENOENT,
+ * false while it is there, and null when the probe failed or hung, which
+ * proves nothing either way.
+ */
+export async function worktreeRootGone(
+  worktreePath: string,
+  probe: (worktreePath: string) => Promise<unknown> = lstat
+): Promise<boolean | null> {
+  try {
+    await withTimeout(
+      probe(worktreePath),
+      WORKTREE_GONE_PROBE_TIMEOUT_MS,
+      "Worktree existence probe timed out"
+    );
+    return false;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException)?.code === "ENOENT" ? true : null;
+  }
+}
+
+/** Each worktree whose monitor went away: a hint that it may be gone, never proof. */
+export function onWorktreeMonitorRemoved(listener: (worktreeId: string) => void): () => void {
+  return events.on("sys:worktree:remove", ({ worktreeId }) => listener(worktreeId));
+}
+
+/**
  * A host added for a worktree's resource environment goes when its box does:
  * once that resource's teardown succeeds, or the worktree itself is deleted.
  * Removal is the same as Settings → Hosts': windows on it go home, the record

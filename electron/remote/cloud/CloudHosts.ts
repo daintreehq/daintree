@@ -8,6 +8,7 @@ import type {
   CloudHostStatus,
   CloudHostsSnapshot,
   CloudResourceSummary,
+  CloudWorktreeCleanupOutcome,
 } from "../../../shared/types/cloudHosts.js";
 import type { CloudAccountService } from "./CloudAccountService.js";
 import type { CloudHostStore } from "./CloudHostStore.js";
@@ -98,6 +99,22 @@ export class CloudHosts {
 
   trustHostKey(hostId: unknown, fingerprint: unknown): Promise<void> {
     return this.lifecycle.trustHostKey(hostId, fingerprint);
+  }
+
+  prepareWorktreeCleanup(worktree: unknown, machines: unknown): void {
+    this.lifecycle.prepareWorktreeCleanup(worktree, machines);
+  }
+
+  settleWorktreeCleanup(worktree: unknown, deleted: unknown): Promise<CloudWorktreeCleanupOutcome[]> {
+    return this.lifecycle.settleWorktreeCleanup(worktree, deleted);
+  }
+
+  retryWorktreeCleanup(hostId: unknown): Promise<void> {
+    return this.lifecycle.retryWorktreeCleanup(hostId);
+  }
+
+  dismissWorktreeCleanup(hostId: unknown): void {
+    this.lifecycle.dismissWorktreeCleanup(hostId);
   }
 
   snapshot(): CloudHostsSnapshot {

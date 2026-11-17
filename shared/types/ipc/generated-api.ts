@@ -340,6 +340,9 @@ export interface GeneratedElectronAPI {
     deleteMachine(
       ...args: IpcInvokeMap["cloud-hosts:delete-machine"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:delete-machine"]["result"]>;
+    dismissWorktreeCleanup(
+      ...args: IpcInvokeMap["cloud-hosts:dismiss-worktree-cleanup"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:dismiss-worktree-cleanup"]["result"]>;
     getCatalog(
       ...args: IpcInvokeMap["cloud-hosts:get-catalog"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:get-catalog"]["result"]>;
@@ -352,6 +355,9 @@ export interface GeneratedElectronAPI {
     listResources(
       ...args: IpcInvokeMap["cloud-hosts:list-resources"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:list-resources"]["result"]>;
+    prepareWorktreeCleanup(
+      ...args: IpcInvokeMap["cloud-hosts:prepare-worktree-cleanup"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:prepare-worktree-cleanup"]["result"]>;
     refreshHost(
       ...args: IpcInvokeMap["cloud-hosts:refresh-host"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:refresh-host"]["result"]>;
@@ -367,9 +373,15 @@ export interface GeneratedElectronAPI {
     retryCreate(
       ...args: IpcInvokeMap["cloud-hosts:retry-create"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:retry-create"]["result"]>;
+    retryWorktreeCleanup(
+      ...args: IpcInvokeMap["cloud-hosts:retry-worktree-cleanup"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:retry-worktree-cleanup"]["result"]>;
     setLifetime(
       ...args: IpcInvokeMap["cloud-hosts:set-lifetime"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:set-lifetime"]["result"]>;
+    settleWorktreeCleanup(
+      ...args: IpcInvokeMap["cloud-hosts:settle-worktree-cleanup"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:settle-worktree-cleanup"]["result"]>;
     startHost(
       ...args: IpcInvokeMap["cloud-hosts:start-host"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:start-host"]["result"]>;

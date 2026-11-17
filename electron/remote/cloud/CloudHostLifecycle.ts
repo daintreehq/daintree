@@ -4,6 +4,7 @@ import {
   CLOUD_PROVISIONING_DIMENSIONS,
   cloudChoiceFitsLocation,
   cloudLifetimeIsChosen,
+  cloudMarkNamesWorktree,
   cloudProvisioningArticleNoun,
   cloudProvisioningNoun,
   type CloudCatalog,
@@ -22,10 +23,14 @@ import {
   type CloudProviderId,
   type CloudProvisioningSelection,
   type CloudSshTrust,
+  type CloudWorktreeCleanupOutcome,
+  type CloudWorktreeCleanupRequest,
+  type CloudWorktreeRef,
 } from "../../../shared/types/cloudHosts.js";
 import {
   cloudConnection,
   isLocalHostId,
+  isValidRemoteHostId,
   type HostConnection,
   type HostDescriptor,
   type HostId,
@@ -39,6 +44,7 @@ import {
   type CloudHostStore,
   type StoredCloudBinding,
   type StoredCloudObservation,
+  type StoredWorktreeCleanup,
 } from "./CloudHostStore.js";
 import { findOnPath } from "../../utils/findOnPath.js";
 import type {
@@ -193,6 +199,14 @@ export interface CloudHostLifecycleDeps {
   findCommand?: (command: string) => Promise<string | null>;
   /** The keys machines renew and stop themselves with (#17361); absent where nothing issues them. */
   machineKeys?: Pick<CloudMachineKeys, "problemFor" | "tick" | "revokePending">;
+  /**
+   * Whether a worktree on this device is gone: true once its root reads as
+   * missing, false while it is there, null when that couldn't be told (a hung
+   * mount, a permission error). Only ever asked about a worktree on this device.
+   */
+  worktreeGone?(worktreePath: string): Promise<boolean | null>;
+  /** A worktree on this device may have been removed: a hint only, checked with `worktreeGone`. */
+  onWorktreeRemoved?(listener: (worktreeId: string) => void): () => void;
 }
 
 const PATH_LOOKUP_MS = 5_000;
@@ -404,6 +418,29 @@ function checkedCreatedFor(raw: CloudHostCreatedFor): CloudHostCreatedFor {
   return mark;
 }
 
+/** A worktree as the renderer names it, checked before it is compared with any mark. */
+function checkedWorktreeRef(raw: unknown): CloudWorktreeRef {
+  const value = raw as Record<string, unknown> | null;
+  const projectId = typeof value?.projectId === "string" ? value.projectId.trim() : "";
+  const worktreeId = typeof value?.worktreeId === "string" ? value.worktreeId.trim() : "";
+  // Missing is not "this device": only null or "local" says so.
+  const rawHostId = value?.hostId;
+  const hostId =
+    rawHostId === null || (typeof rawHostId === "string" && isLocalHostId(rawHostId))
+      ? null
+      : typeof rawHostId === "string" && isValidRemoteHostId(rawHostId)
+        ? rawHostId
+        : undefined;
+  if (!projectId || !worktreeId || hostId === undefined) {
+    throw invalid("The worktree being deleted is missing its project or path.");
+  }
+  return { hostId, projectId, worktreeId };
+}
+
+function sameWorktree(a: CloudWorktreeRef, b: CloudWorktreeRef): boolean {
+  return a.hostId === b.hostId && a.projectId === b.projectId && a.worktreeId === b.worktreeId;
+}
+
 function machineOf(binding: StoredCloudBinding): CloudMachineState {
   if (!binding.resourceId) return "not-created";
   return (binding.observation?.machine as CloudMachineState | undefined) ?? "unknown";
@@ -441,6 +478,9 @@ export class CloudHostLifecycle {
   private readonly reconciling = new Set<string>();
   /** Lookups a provider change overtook: a failure may be the old provider's, not the machine's. */
   private readonly reconcileOvertaken = new Set<string>();
+  /** Worktree cleanups carrying out now, which every caller joins. */
+  private readonly cleanupRuns = new Map<string, Promise<CloudWorktreeCleanupOutcome | null>>();
+  private stopWatchingWorktrees: (() => void) | null = null;
   private renewingAll = false;
   /**
    * Every request whose answer becomes an observation takes a ticket when it
@@ -467,6 +507,7 @@ export class CloudHostLifecycle {
   providersChanged(): void {
     if (this.disposed) return;
     for (const bindingId of this.reconciling) this.reconcileOvertaken.add(bindingId);
+    this.resumeDueCleanups();
     if (this.awaitingProvider.size === 0) return;
     void this.reconcileUnfinishedCreates(new Set(this.awaitingProvider));
   }
@@ -484,6 +525,10 @@ export class CloudHostLifecycle {
     this.keeperTimer.unref?.();
     this.markInterruptedCreates();
     void this.reconcileUnfinishedCreates();
+    this.stopWatchingWorktrees =
+      this.deps.onWorktreeRemoved?.((worktreeId) => void this.worktreeRemoved(worktreeId)) ?? null;
+    this.resumeDueCleanups();
+    void this.reconcileWaitingCleanups();
   }
 
   /**
@@ -510,6 +555,7 @@ export class CloudHostLifecycle {
     if (this.pollTimer) clearInterval(this.pollTimer);
     if (this.keeperTimer) clearInterval(this.keeperTimer);
     this.stopWatchingHosts?.();
+    this.stopWatchingWorktrees?.();
     for (const operation of this.operations.values()) operation.controller.abort();
   }
 
@@ -554,6 +600,16 @@ export class CloudHostLifecycle {
           machineName: observation?.name ?? binding.creation?.name ?? null,
           ownership: binding.ownership,
           createdFor: binding.createdFor,
+          worktreeCleanup: binding.worktreeCleanup
+            ? {
+                choice: binding.worktreeCleanup.choice,
+                phase:
+                  binding.worktreeCleanup.phase === "due"
+                    ? ("running" as const)
+                    : binding.worktreeCleanup.phase,
+                error: binding.worktreeCleanup.error,
+              }
+            : null,
           provisioning: binding.provisioning === "unreadable" ? null : binding.provisioning,
           machine: machineOf(binding),
           rawState: observation?.rawState ?? null,
@@ -680,6 +736,7 @@ export class CloudHostLifecycle {
       resourceId: null,
       ownership: "created-by-daintree",
       createdFor: mark,
+      worktreeCleanup: null,
       provisioning: picks,
       creation: {
         operationId: crypto.randomUUID(),
@@ -1023,6 +1080,7 @@ export class CloudHostLifecycle {
       resourceId: null,
       ownership: "imported",
       createdFor: null,
+      worktreeCleanup: null,
       provisioning: null,
       creation: null,
       lifetimeSeconds: null,
@@ -1251,26 +1309,359 @@ export class CloudHostLifecycle {
     if (resourceId && confirmResourceId !== resourceId && confirmed.resourceId !== null) {
       throw invalid("The machine to delete changed since you confirmed. Check it and try again.");
     }
-    if (resourceId) {
-      await this.deps.hosts.disconnect(confirmed.hostId).catch(() => {});
-      // A Stop or Start that claimed the machine while this waited gives way too.
-      await this.operateOver(binding.id, "deleting", async (signal) => {
-        const { provider, credentials } = await this.context(binding, signal);
-        // The provider may have been replaced while the operation waited.
-        this.requireDeletion(binding.providerId);
-        this.stage(binding.id, "Deleting the machine");
-        try {
-          await provider.delete(credentials, resourceId);
-        } catch (error) {
-          const described = provider.describeError(error);
-          if (described.code !== "not-found") {
-            this.recordError(binding.id, described);
-            throw this.deps.accounts.asAppError(provider, error);
-          }
+    if (resourceId) await this.sendDelete(binding, confirmed.hostId, resourceId);
+    await this.deps.hosts.forget(confirmed.hostId);
+  }
+
+  /** Lets go of the link and deletes this exact machine; one already gone counts as deleted. */
+  private async sendDelete(
+    binding: StoredCloudBinding,
+    hostId: HostId,
+    resourceId: string
+  ): Promise<void> {
+    await this.deps.hosts.disconnect(hostId).catch(() => {});
+    // A Stop or Start that claimed the machine while this waited gives way too.
+    await this.operateOver(binding.id, "deleting", async (signal) => {
+      const { provider, credentials } = await this.context(binding, signal);
+      // The provider may have been replaced while the operation waited.
+      this.requireDeletion(binding.providerId);
+      this.stage(binding.id, "Deleting the machine");
+      try {
+        await provider.delete(credentials, resourceId);
+      } catch (error) {
+        const described = provider.describeError(error);
+        if (described.code !== "not-found") {
+          this.recordError(binding.id, described);
+          throw this.deps.accounts.asAppError(provider, error);
         }
+      }
+    });
+  }
+
+  // --- With a worktree's delete -------------------------------------------
+
+  /**
+   * Writes down what the person chose for the machines made for a worktree,
+   * before that worktree's delete is sent: nothing is done to them until the
+   * worktree is gone. Each machine must carry this worktree's mark and be the
+   * one the person confirmed; any other is refused, so an unmarked machine is
+   * never touched. A machine of this worktree left out of the list is kept, and
+   * a choice an earlier attempt wrote for it is dropped.
+   */
+  prepareWorktreeCleanup(worktree: unknown, machines: unknown): void {
+    const ref = checkedWorktreeRef(worktree);
+    if (!Array.isArray(machines)) throw invalid("Choose what happens to each machine.");
+    const planned = new Map<string, StoredWorktreeCleanup>();
+    for (const raw of machines as Array<Partial<CloudWorktreeCleanupRequest> | null>) {
+      const choice = raw?.choice === "stop" || raw?.choice === "delete" ? raw.choice : null;
+      if (!choice) throw invalid("Choose what happens to each machine.");
+      const binding = this.requireBindingForHost(raw?.hostId);
+      if (
+        binding.ownership !== "created-by-daintree" ||
+        !cloudMarkNamesWorktree(binding.createdFor, ref)
+      ) {
+        throw invalid(
+          "That machine wasn't created for this worktree, so Daintree leaves it alone."
+        );
+      }
+      if (!binding.resourceId || raw?.resourceId !== binding.resourceId) {
+        throw invalid("The machine changed since you confirmed. Check it and try again.");
+      }
+      // Refused while its provider isn't registered, before anything is written.
+      this.deps.accounts.provider(binding.providerId);
+      if (choice === "delete") this.requireDeletion(binding.providerId);
+      if (planned.has(binding.id)) throw invalid("Choose once for each machine.");
+      planned.set(binding.id, {
+        choice,
+        resourceId: binding.resourceId,
+        worktree: ref,
+        phase: "waiting",
+        error: null,
+        requestedAt: this.now(),
       });
     }
-    await this.deps.hosts.forget(confirmed.hostId);
+    for (const binding of this.deps.store.bindings()) {
+      const current = binding.worktreeCleanup;
+      const next = planned.get(binding.id);
+      if (next) {
+        // A retried delete asks again: one already carrying out, or failed, stays as it is.
+        const same =
+          current !== null &&
+          current.phase !== "waiting" &&
+          current.choice === next.choice &&
+          current.resourceId === next.resourceId;
+        if (!same) {
+          this.deps.store.updateBinding(binding.id, (b) => ({ ...b, worktreeCleanup: next }));
+        }
+      } else if (current?.phase === "waiting" && sameWorktree(current.worktree, ref)) {
+        this.deps.store.updateBinding(binding.id, (b) => ({ ...b, worktreeCleanup: null }));
+      }
+    }
+  }
+
+  /**
+   * The worktree's delete settled, as its view heard it: `deleted` when the
+   * host that owns the worktree said it went. Its machines' stops and deletes
+   * run once the worktree is known to be gone, and this resolves when they're
+   * done. A worktree on this device is looked at, never taken on report. One
+   * still there leaves its machines as they are, and a later delete asks again.
+   */
+  async settleWorktreeCleanup(
+    worktree: unknown,
+    deleted: unknown
+  ): Promise<CloudWorktreeCleanupOutcome[]> {
+    const ref = checkedWorktreeRef(worktree);
+    const targets = this.deps.store
+      .bindings()
+      .filter((binding) => binding.worktreeCleanup?.phase !== "failed")
+      .filter((binding) => {
+        const cleanup = binding.worktreeCleanup;
+        return cleanup !== null && sameWorktree(cleanup.worktree, ref);
+      });
+    if (targets.length === 0) return [];
+    const waiting = targets.filter((binding) => binding.worktreeCleanup?.phase === "waiting");
+    if (waiting.length > 0) {
+      const gone = await this.worktreeIsGone(ref, deleted === true);
+      if (gone === false) {
+        for (const binding of waiting) this.disarmCleanup(binding.id, ref);
+      }
+      if (gone !== true) {
+        return this.joinCleanups(targets.filter((binding) => !waiting.includes(binding)));
+      }
+    }
+    return this.joinCleanups(targets);
+  }
+
+  /** A person's Retry of a stop or delete that failed. */
+  async retryWorktreeCleanup(hostId: unknown): Promise<void> {
+    const binding = this.requireBindingForHost(hostId);
+    const cleanup = binding.worktreeCleanup;
+    if (!cleanup) throw invalid("There's nothing left to do for this machine.");
+    if (cleanup.phase === "waiting") {
+      throw invalid("Its worktree isn't deleted yet. The machine is left as it is until it is.");
+    }
+    const outcome = await this.carryOutCleanup(binding.id);
+    if (outcome?.error) {
+      throw new AppError({
+        code: "OUTCOME_UNKNOWN",
+        message: outcome.error,
+        userMessage: outcome.error,
+      });
+    }
+  }
+
+  /** A person's Keep: the machine stays as it is, and its stop or delete is dropped. */
+  dismissWorktreeCleanup(hostId: unknown): void {
+    const binding = this.requireBindingForHost(hostId);
+    if (this.cleanupRuns.has(binding.id)) {
+      throw invalid("The machine's stop or delete is under way. Wait for it to finish.");
+    }
+    this.deps.store.updateBinding(binding.id, (current) => ({ ...current, worktreeCleanup: null }));
+  }
+
+  /**
+   * Whether the worktree is gone: one on this device is looked at, and only a
+   * missing root counts; one on another host is taken from that host's answer
+   * to the delete. Null when nothing can tell.
+   */
+  private async worktreeIsGone(
+    ref: CloudWorktreeRef,
+    reported: boolean | null
+  ): Promise<boolean | null> {
+    if (ref.hostId !== null) return reported;
+    if (!this.deps.worktreeGone) return null;
+    return this.deps.worktreeGone(ref.worktreeId).catch(() => null);
+  }
+
+  /** Drops a choice still waiting on this worktree: the delete it came with didn't happen. */
+  private disarmCleanup(bindingId: string, ref: CloudWorktreeRef): void {
+    this.deps.store.updateBinding(bindingId, (current) =>
+      current.worktreeCleanup?.phase === "waiting" &&
+      sameWorktree(current.worktreeCleanup.worktree, ref)
+        ? { ...current, worktreeCleanup: null }
+        : current
+    );
+  }
+
+  private async joinCleanups(
+    bindings: readonly StoredCloudBinding[]
+  ): Promise<CloudWorktreeCleanupOutcome[]> {
+    const outcomes = await Promise.all(bindings.map((binding) => this.carryOutCleanup(binding.id)));
+    return outcomes.filter((outcome): outcome is CloudWorktreeCleanupOutcome => outcome !== null);
+  }
+
+  /** A worktree on this device may have gone: its machines' choices run once its root is missing. */
+  private async worktreeRemoved(worktreeId: string): Promise<void> {
+    const waiting = this.deps.store
+      .bindings()
+      .filter(
+        (binding) =>
+          binding.worktreeCleanup?.phase === "waiting" &&
+          binding.worktreeCleanup.worktree.hostId === null &&
+          binding.worktreeCleanup.worktree.worktreeId === worktreeId
+      );
+    if (waiting.length === 0) return;
+    const ref = waiting[0]!.worktreeCleanup!.worktree;
+    if ((await this.worktreeIsGone(ref, null)) !== true || this.disposed) return;
+    for (const binding of waiting) void this.carryOutCleanup(binding.id);
+  }
+
+  /** Stops and deletes that were under way when Daintree last quit, and any a provider held up. */
+  private resumeDueCleanups(): void {
+    if (this.disposed) return;
+    for (const binding of this.deps.store.bindings()) {
+      if (binding.worktreeCleanup?.phase !== "due" || this.cleanupRuns.has(binding.id)) continue;
+      if (!binding.hostId || !this.deps.hosts.get(binding.hostId)) continue;
+      if (this.deps.accounts.providerUnavailable(binding.providerId)) continue;
+      void this.carryOutCleanup(binding.id);
+    }
+  }
+
+  /**
+   * Choices still waiting when Daintree last quit: whatever delete they came
+   * with ended with that run. A worktree on this device that's gone has its
+   * machines' choices carried out, and one still there drops them. One on
+   * another host can't be looked at from here, so the choice waits for the
+   * person's Retry, saying why.
+   */
+  private async reconcileWaitingCleanups(): Promise<void> {
+    const byWorktree = new Map<string, { ref: CloudWorktreeRef; bindingIds: string[] }>();
+    for (const binding of this.deps.store.bindings()) {
+      const cleanup = binding.worktreeCleanup;
+      if (cleanup?.phase !== "waiting" || !binding.hostId) continue;
+      if (!this.deps.hosts.get(binding.hostId)) continue;
+      const key = JSON.stringify([
+        cleanup.worktree.hostId,
+        cleanup.worktree.projectId,
+        cleanup.worktree.worktreeId,
+      ]);
+      const entry = byWorktree.get(key) ?? { ref: cleanup.worktree, bindingIds: [] };
+      entry.bindingIds.push(binding.id);
+      byWorktree.set(key, entry);
+    }
+    for (const { ref, bindingIds } of byWorktree.values()) {
+      if (ref.hostId !== null) {
+        for (const bindingId of bindingIds) {
+          this.failCleanup(bindingId, {
+            code: "outcome-unknown",
+            message:
+              "Daintree quit before it heard whether the worktree was deleted, so the machine was left as it was.",
+            at: this.now(),
+          });
+        }
+        continue;
+      }
+      const gone = await this.worktreeIsGone(ref, null);
+      if (this.disposed) return;
+      if (gone === false) {
+        for (const bindingId of bindingIds) this.disarmCleanup(bindingId, ref);
+      } else if (gone === true) {
+        for (const bindingId of bindingIds) void this.carryOutCleanup(bindingId);
+      }
+    }
+  }
+
+  private failCleanup(bindingId: string, error: CloudHostError): void {
+    this.deps.store.updateBinding(bindingId, (current) =>
+      current.worktreeCleanup
+        ? { ...current, worktreeCleanup: { ...current.worktreeCleanup, phase: "failed", error } }
+        : current
+    );
+  }
+
+  /** Runs a machine's stop or delete once, joined by every caller while it runs. */
+  private carryOutCleanup(bindingId: string): Promise<CloudWorktreeCleanupOutcome | null> {
+    const running = this.cleanupRuns.get(bindingId);
+    if (running) return running;
+    const run = this.runCleanup(bindingId).finally(() => {
+      if (this.cleanupRuns.get(bindingId) === run) this.cleanupRuns.delete(bindingId);
+    });
+    this.cleanupRuns.set(bindingId, run);
+    return run;
+  }
+
+  /**
+   * Carries out the stop or delete, written down as due before anything is
+   * sent, so a restart partway runs it again: a delete of a machine already
+   * gone counts as done, and a stop finds the machine stopped or stopping. A
+   * failure is kept with the choice for Retry, never retried by itself. A
+   * shutdown partway leaves it due.
+   */
+  private async runCleanup(bindingId: string): Promise<CloudWorktreeCleanupOutcome | null> {
+    const binding = this.deps.store.updateBinding(bindingId, (current) =>
+      current.worktreeCleanup
+        ? {
+            ...current,
+            worktreeCleanup: { ...current.worktreeCleanup, phase: "due", error: null },
+          }
+        : current
+    );
+    const cleanup = binding?.worktreeCleanup;
+    if (!binding || !cleanup || !binding.hostId) return null;
+    const hostId = binding.hostId;
+    const outcome = (error: string | null): CloudWorktreeCleanupOutcome => ({
+      hostId,
+      machineName: binding.observation?.name ?? cleanup.resourceId,
+      choice: cleanup.choice,
+      error,
+    });
+    const unavailable = this.deps.accounts.providerUnavailable(binding.providerId);
+    // Left due: it runs once its provider is back.
+    if (unavailable) return outcome(unavailable);
+    const startedAt = this.now();
+    try {
+      if (cleanup.choice === "delete") {
+        await this.sendDelete(binding, hostId, cleanup.resourceId);
+        await this.deps.hosts.forget(hostId);
+      } else {
+        await this.stopForCleanup(binding, hostId);
+      }
+      this.deps.store.updateBinding(bindingId, (current) => ({
+        ...current,
+        worktreeCleanup: null,
+      }));
+      return outcome(null);
+    } catch (error) {
+      if (this.disposed) return outcome("Daintree quit before it finished.");
+      const recorded = this.deps.store.binding(bindingId)?.lastError;
+      const message =
+        error instanceof AppError && error.userMessage
+          ? error.userMessage
+          : formatErrorMessage(error, "The provider didn't answer.");
+      const failure: CloudHostError =
+        recorded && recorded.at >= startedAt
+          ? recorded
+          : { code: "failed", message, at: this.now() };
+      this.failCleanup(bindingId, failure);
+      return outcome(failure.message);
+    }
+  }
+
+  /** A stop that finds the machine as a restart may have left it: stopped, stopping, or still up. */
+  private async stopForCleanup(binding: StoredCloudBinding, hostId: HostId): Promise<void> {
+    const { provider, credentials } = await this.context(binding);
+    let resource: ProviderResource;
+    try {
+      resource = await this.inspectInto(binding.id, provider, credentials);
+    } catch (error) {
+      throw this.deps.accounts.asAppError(provider, error);
+    }
+    if (resource.machine === "stopped" || resource.machine === "stopping") {
+      this.deps.store.updateBinding(binding.id, (current) => ({ ...current, intent: "stop" }));
+      if (resource.machine === "stopped") return;
+      await this.deps.hosts.disconnect(hostId).catch(() => {});
+      await this.operate(binding.id, "stopping", async (signal) => {
+        await this.waitFor(
+          binding.id,
+          "stopped",
+          STOP_DEADLINE_MS,
+          signal,
+          "Saving the disk and stopping"
+        );
+      });
+      return;
+    }
+    await this.stopMachine(hostId);
   }
 
   /**
