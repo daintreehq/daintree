@@ -149,9 +149,12 @@ export class AuditRingStore {
   ): void {
     let target: RingTarget;
     try {
-      // A sync write is the durability backstop, so it never trusts the cache.
-      target = toTarget(records, maxRecords, (record) =>
-        this.serialize(record, options?.sync !== true)
+      // A sync write is the durability backstop, so it serializes exactly as
+      // it always has and leaves the cache alone.
+      target = toTarget(
+        records,
+        maxRecords,
+        options?.sync ? (record) => JSON.stringify(record) : (record) => this.serialize(record)
       );
     } catch (error) {
       console.warn(`[AuditRingStore] writeAll failed for "${ring}":`, error);
@@ -177,22 +180,27 @@ export class AuditRingStore {
   /**
    * Owners update retained records in place (pre-auth coalescing) and records
    * can alias caller-owned objects, so identity alone cannot vouch for a
-   * cached string: it is reused only while the record still holds exactly the
-   * keys and values it was serialized from.
+   * cached string. The string is the JSON of a snapshot taken in a single
+   * read of the record, reused only while the record still reads exactly that
+   * snapshot; caching is best-effort, and anything the snapshot cannot vouch
+   * for takes the plain JSON.stringify path.
    */
-  private serialize(record: unknown, reuse: boolean): string {
+  private serialize(record: unknown): string {
     if (typeof record !== "object" || record === null) return JSON.stringify(record);
-    if (reuse) {
+    let shape: Shape | null;
+    try {
       const cached = this.serialized.get(record);
       if (cached && matchesShape(record, cached.shape)) return cached.json;
+      shape = shapeOf(record, 0);
+    } catch {
+      shape = null;
     }
-    const json = JSON.stringify(record);
-    const shape = shapeOf(record);
-    if (shape) {
-      this.serialized.set(record, { json, shape });
-    } else {
+    if (!shape) {
       this.serialized.delete(record);
+      return JSON.stringify(record);
     }
+    const json = JSON.stringify(materialize(shape));
+    this.serialized.set(record, { json, shape });
     return json;
   }
 
@@ -287,27 +295,35 @@ function recordIdOf(record: unknown): string | null {
   return typeof id === "string" && id.length > 0 ? id : null;
 }
 
-function isPlainObject(value: object): boolean {
-  const proto: unknown = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
+// Deeper data is serialized every time; it also keeps a cyclic record from
+// recursing until the stack overflows before JSON.stringify reports it.
+const MAX_SHAPE_DEPTH = 16;
+
+// JSON.stringify reads only own enumerable keys and primitive values of
+// these; anything else (class instances such as Date, a toJSON hook anywhere,
+// null-prototype objects, functions) is never cached.
+function isPlainObject(value: object): value is Record<string, unknown> {
+  return (
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype &&
+    !("toJSON" in value)
+  );
 }
 
 function isPlainArray(value: object): value is unknown[] {
-  return Array.isArray(value) && Object.getPrototypeOf(value) === Array.prototype;
+  return (
+    Array.isArray(value) && Object.getPrototypeOf(value) === Array.prototype && !("toJSON" in value)
+  );
 }
 
 const UNCACHEABLE = Symbol("uncacheable");
 
-/**
- * The Shape of plain JSON data, or null when JSON.stringify's output could
- * depend on more than own enumerable keys and primitive values (class
- * instances such as Date, toJSON, functions), which are never cached.
- */
-function shapeOf(value: object): Shape | null {
+function shapeOf(value: object, depth: number): Shape | null {
+  if (depth > MAX_SHAPE_DEPTH) return null;
   if (isPlainArray(value)) {
     const values = new Array<unknown>(value.length);
     for (let i = 0; i < value.length; i++) {
-      const item = shapeValue(value[i]);
+      const item = shapeValue(value[i], depth);
       if (item === UNCACHEABLE) return null;
       values[i] = item;
     }
@@ -317,14 +333,14 @@ function shapeOf(value: object): Shape | null {
   const keys = Object.keys(value);
   const values = new Array<unknown>(keys.length);
   for (let i = 0; i < keys.length; i++) {
-    const item = shapeValue((value as Record<string, unknown>)[keys[i]!]);
+    const item = shapeValue(value[keys[i]!], depth);
     if (item === UNCACHEABLE) return null;
     values[i] = item;
   }
   return { keys, values };
 }
 
-function shapeValue(value: unknown): unknown {
+function shapeValue(value: unknown, depth: number): unknown {
   switch (typeof value) {
     case "string":
     case "number":
@@ -332,7 +348,7 @@ function shapeValue(value: unknown): unknown {
     case "undefined":
       return value;
     case "object":
-      return value === null ? null : (shapeOf(value) ?? UNCACHEABLE);
+      return value === null ? null : (shapeOf(value, depth + 1) ?? UNCACHEABLE);
     default:
       return UNCACHEABLE;
   }
@@ -348,20 +364,13 @@ function matchesShape(value: object, shape: Shape): boolean {
     return true;
   }
   if (!isPlainObject(value)) return false;
-  // for-in walks own keys in Object.keys order without allocating; an
-  // inherited enumerable key only forces a re-serialization.
-  let i = 0;
-  for (const key in value) {
-    if (
-      i >= keys.length ||
-      key !== keys[i] ||
-      !matchesValue((value as Record<string, unknown>)[key], values[i])
-    ) {
-      return false;
-    }
-    i++;
+  const liveKeys = Object.keys(value);
+  if (liveKeys.length !== keys.length) return false;
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i]!;
+    if (liveKeys[i] !== key || !matchesValue(value[key], values[i])) return false;
   }
-  return i === keys.length;
+  return true;
 }
 
 function matchesValue(value: unknown, expected: unknown): boolean {
@@ -369,6 +378,20 @@ function matchesValue(value: unknown, expected: unknown): boolean {
     return typeof value === "object" && value !== null && matchesShape(value, expected as Shape);
   }
   return value === expected;
+}
+
+// Plain data rebuilt from a snapshot. Null-prototype objects, so an own
+// "__proto__" key stays an own key.
+function materialize(shape: Shape): unknown {
+  const { keys, values } = shape;
+  if (keys === null) return values.map(materializeValue);
+  const out = Object.create(null) as Record<string, unknown>;
+  for (let i = 0; i < keys.length; i++) out[keys[i]!] = materializeValue(values[i]);
+  return out;
+}
+
+function materializeValue(value: unknown): unknown {
+  return typeof value === "object" && value !== null ? materialize(value as Shape) : value;
 }
 
 function toTarget<T>(
