@@ -45,9 +45,12 @@ const PROPS: Props = {
 
 function setup(initial: Partial<Props> = {}) {
   let props: Props = { ...PROPS, ...initial };
-  const hook = renderHook((p: Props) => useReviewHubBaseBranch({ ...p, setSelectedBaseBranchFile }), {
-    initialProps: props,
-  });
+  const hook = renderHook(
+    (p: Props) => useReviewHubBaseBranch({ ...p, setSelectedBaseBranchFile }),
+    {
+      initialProps: props,
+    }
+  );
   const update = (next: Partial<Props>) => {
     props = { ...props, ...next };
     hook.rerender(props);
@@ -105,7 +108,13 @@ describe("useReviewHubBaseBranch", () => {
 
     await act(async () => update({ active: true }));
     expect(compareWorktreesMock).toHaveBeenCalledTimes(1);
-    expect(compareWorktreesMock).toHaveBeenCalledWith("/repo/wt", "main", "feature/x", undefined, true);
+    expect(compareWorktreesMock).toHaveBeenCalledWith(
+      "/repo/wt",
+      "main",
+      "feature/x",
+      undefined,
+      true
+    );
     expect(paths(hook.current.baseBranchFiles)).toEqual(["a.ts"]);
 
     await act(async () => update({ active: false }));
