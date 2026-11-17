@@ -406,6 +406,7 @@ describe("BrowserToolbar ARIA semantics", () => {
 
     it("announces once through the shared polite announcer, flips to a check, and reverts after the dwell", async () => {
       vi.useFakeTimers();
+      const realAnnounce = useAnnouncerStore.getState().announce;
       const announce = vi.spyOn(useAnnouncerStore.getState(), "announce");
       try {
         const onCaptureScreenshot = vi.fn(() => Promise.resolve(true));
@@ -435,11 +436,13 @@ describe("BrowserToolbar ARIA semantics", () => {
         expect(hasCheck(button)).toBe(false);
       } finally {
         announce.mockRestore();
+        useAnnouncerStore.setState({ announce: realAnnounce });
         vi.useRealTimers();
       }
     });
 
     it("does not announce when the toolbar unmounts before the capture settles", async () => {
+      const realAnnounce = useAnnouncerStore.getState().announce;
       const announce = vi.spyOn(useAnnouncerStore.getState(), "announce");
       try {
         let resolveCapture!: (ok: boolean) => void;
@@ -459,6 +462,7 @@ describe("BrowserToolbar ARIA semantics", () => {
         expect(announce).not.toHaveBeenCalled();
       } finally {
         announce.mockRestore();
+        useAnnouncerStore.setState({ announce: realAnnounce });
       }
     });
 
