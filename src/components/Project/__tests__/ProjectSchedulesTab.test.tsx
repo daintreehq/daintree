@@ -580,6 +580,7 @@ describe("ProjectSchedulesTab — a schedule in another worktree (#17467)", () =
     // Reconnecting again, so the history shows the id it was given, not a main checkout it was never given.
     worktreeList.reconnecting = true;
     view.update({ onClose: vi.fn() });
+    expect(screen.getByText("Worktree unconfirmed")).toBeTruthy();
     await openHistory();
     expect(await screen.findByText(/Worktree unconfirmed/)).toBeTruthy();
 
