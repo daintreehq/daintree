@@ -10,7 +10,7 @@ import {
 } from "../scenarios/windowsCensus";
 
 /**
- * PERF-409 itself can only run on Windows, and this repo's push/PR CI is Ubuntu
+ * PERF-409 itself can only run on Windows, and this repo's PR CI is Ubuntu
  * only — so the scenario's driving loop is never exercised by an automated run.
  * Its parsing, percentile and oracle logic live as pure functions precisely so
  * that much IS covered everywhere, which is the difference between a benchmark

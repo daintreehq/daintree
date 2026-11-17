@@ -12,7 +12,7 @@ paths:
 
 ## Unit tests (vitest)
 
-**NEVER run the full suite locally** (`npm test`, `npx vitest run` with no path). It takes 15-20 minutes and GitHub CI runs it on every PR in 6 shards. Run only the test files that cover what you changed: `npm test -- <path>`. This holds at every stage, including before a commit or PR, and overrides any skill or runbook step that says to run the whole suite. A failure CI finds outside your files gets fixed from the CI log.
+**NEVER run the full suite locally** (`npm test`, `npx vitest run` with no path). It takes 15-20 minutes; PR CI runs the test files the diff reaches, and the daily stabilization run covers the rest. Run only the test files that cover what you changed: `npm test -- <path>`. This holds at every stage, including before a commit or PR, and overrides any skill or runbook step that says to run the whole suite. The one exception is the `stabilize` skill on the stabilization machine, whose job is the whole suite. A failure CI finds outside your files gets fixed from the CI log.
 
 **No jest-dom in this repo.** Only `@testing-library/react` is installed, so `toBeInTheDocument`, `toHaveAttribute` and friends throw "Invalid Chai property". Use plain DOM reads.
 
@@ -49,9 +49,9 @@ Freeze behaviour is unobservable under Playwright's focus emulation — use `npm
 
 ## What CI actually runs
 
-On PRs and pushes: `npm run check` (split across the parallel `static` and `lint` jobs), vitest in 6 shards (the perf scenario liveness guard runs as its own `perf-liveness` job), and build + preload-backdoor check + smoke — Ubuntu only, no E2E. The one exception is `host-scripts-macos`, which runs `hostInstaller.realShell.test.ts` on a Mac runner because those scripts run on a Mac host's BSD userland. `ci-ok` is the sole required check.
+On PRs only, never on pushes to `develop` or `main`: `npm run check` (split across the parallel `static` and `lint` jobs), the unit tests the diff reaches in one `test` job (`vitest run --changed <base>`: every test file that imports a changed file, or the whole suite when a `package.json`, the Vitest/Vite config, or `vitest.setup.ts` and its imports change), and build + preload-backdoor check + smoke — Ubuntu only, no E2E. A test that reads a file through `fs` instead of importing it isn't selected; the daily stabilization run catches those. `host-scripts-macos` runs `hostInstaller.realShell.test.ts` on a Mac runner (those scripts run on a Mac host's BSD userland) only when the diff reaches that test, `packages` only when the diff touches the plugin packages or their direct inputs (a README alone doesn't count), and a docs-only diff runs `static` alone. Drafts run nothing until marked ready. `ci-ok` is the sole required check.
 
-Budget and perf scripts are intentionally out of CI pre-1.0 (dormancy note in `ci.yml`). `test-ratio` runs on PRs but is informational and always exits 0.
+Budget and perf scripts are intentionally out of CI pre-1.0 (dormancy note in `ci.yml`). `test-ratio` runs on a daily schedule and on manual dispatch, and is informational.
 
 **Performance benchmarks never run automatically.** `performance.yml` was deleted: no cron, no dispatch, no PR job. `scripts/perf/run.ts` requires `--scenario` with exactly one id, so there is no whole-matrix run to schedule. Do not add one back; the suite gates nothing, so a scheduled sweep produces numbers with no reader. Benchmarking work goes through `.agents/skills/optimize`, which a human invokes — a bare `npm run perf` gives you a reading, not a result.
 

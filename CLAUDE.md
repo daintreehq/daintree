@@ -31,7 +31,7 @@ Path-scoped rules in `.claude/rules/` load the detail for stores and persistence
 
 ## Definition of done
 
-1. **Never run the full unit suite locally** (bare `npm test` / `npx vitest run`: 15-20 minutes of a locked-up machine) — not mid-work, not before a commit or PR, not because a skill says to. `sx test-all` runs it remotely and is allowed. CI runs it in 6 shards and `ci-ok` is the gate. Locally, run only the tests covering your change, plus typecheck and lint; fix anything else from the CI log.
+1. **Never run the full unit suite locally** (bare `npm test` / `npx vitest run`: 15-20 minutes of a locked-up machine) — not mid-work, not before a commit or PR, not because a skill says to. `sx test-all` runs it remotely and is allowed, and the `stabilize` skill runs it on the stabilization machine, whose job that is. PR CI runs only the tests the diff reaches (Vitest `--changed`) behind `ci-ok`, and the daily stabilization run covers the whole suite. Locally, run only the tests covering your change, plus typecheck and lint; fix anything else from the CI log.
 2. **Never decide to run E2E yourself.** Run only the spec or bucket the user names, when they ask.
 3. Run `npm run check` (or `sx check`) for anything touching types, IPC, keybindings, plugin manifests, or lint-visible code. Otherwise scale verification to the change.
 4. Report the commands actually run and their real results, trusting exit codes over summaries: `prettier` prints "All files formatted correctly" while exiting 1, and `rtk` reports "No errors found" while `tsc` fails (use `rtk proxy` for anything you'll make a claim about).

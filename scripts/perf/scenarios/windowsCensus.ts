@@ -77,7 +77,7 @@ const execFileAsync = promisify(execFile);
  * PLATFORMS. Windows only. There is no census transport to compare anywhere
  * else — macOS and Linux run one `ps`, which this change does not touch — so
  * the scenario is declared `unsupported` and skipped rather than reported as a
- * zero. That also means it never runs in this repo's Ubuntu-only push/PR CI:
+ * zero. That also means it never runs in this repo's Ubuntu-only PR CI:
  * it is reachable through a manual `perf-ab.yml` dispatch on a Windows runner,
  * or by hand on a Windows machine. The pure functions below carry the parsing,
  * percentile and oracle logic precisely so THAT much is covered by a unit suite
