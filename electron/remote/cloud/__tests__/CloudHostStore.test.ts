@@ -232,6 +232,8 @@ describe("CloudHostStore provisioning", () => {
     expect(read(undefined)).toBeNull();
     expect(read({ ...last, image: 7 })).toBeNull();
     expect(read({ location: "eu-west-1" })).toBeNull();
+  });
+});
 
 describe("CloudHostStore accounts", () => {
   const account = {
