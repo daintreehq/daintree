@@ -59,10 +59,7 @@ function pathsOf(raw: Buffer): string[] {
 }
 
 /** What is staged on top of `baseOid` in the worktree at `cwd`. */
-export async function readStagedSnapshot(
-  cwd: string,
-  baseOid: string
-): Promise<GitStagedSnapshot> {
+export async function readStagedSnapshot(cwd: string, baseOid: string): Promise<GitStagedSnapshot> {
   const base = requireOid(baseOid);
   const { stdout } = await runGitForBytes(
     cwd,

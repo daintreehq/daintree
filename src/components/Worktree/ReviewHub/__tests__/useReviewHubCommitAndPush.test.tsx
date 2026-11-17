@@ -514,7 +514,9 @@ describe("useReviewHubCommitAndPush — held to the staged changes the confirm l
     expect(headMoved).not.toHaveBeenCalled();
     expect(setActionError).toHaveBeenLastCalledWith({
       title: "Couldn't commit changes",
-      detail: expect.stringMatching(/^This commit changed after it was reviewed: .*Nothing was committed or pushed/),
+      detail: expect.stringMatching(
+        /^This commit changed after it was reviewed: .*Nothing was committed or pushed/
+      ),
     });
   });
 

@@ -82,10 +82,7 @@ import {
 } from "../../services/git/conflictMarkerScan.js";
 import { EMPTY_TREE } from "../../services/git/reviewPoint/captureReviewPoint.js";
 import { isProjectIoError, projectIo } from "../../services/projectIoGate.js";
-import {
-  readCommitStagedIdentity,
-  readStagedSnapshot,
-} from "../../services/git/stagedSnapshot.js";
+import { readCommitStagedIdentity, readStagedSnapshot } from "../../services/git/stagedSnapshot.js";
 import { shouldPlayUiFeedbackSound } from "../../utils/uiFeedbackSound.js";
 import { resolveExecutableForSpawn } from "../../utils/windowsExecutable.js";
 import { getSanitizedProcessEnv } from "../../utils/gitEnv.js";
@@ -1155,7 +1152,11 @@ function readCommitReview(payload: {
   return { branch, headOid: headOid.toLowerCase(), stagedIdentity };
 }
 
-function commitReviewStaleError(cwd: string, branchName: string, detail: string): GitOperationError {
+function commitReviewStaleError(
+  cwd: string,
+  branchName: string,
+  detail: string
+): GitOperationError {
   const message = `This commit changed after it was reviewed: ${detail}. Nothing was committed or pushed. Commit and push again to review what is staged now.`;
   return new GitOperationError(
     "commit-review-stale",
@@ -1981,7 +1982,9 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       // The index can still change between the check above and git reading it,
       // so the caller is told what the commit really holds rather than trusting
       // the check. The commit has landed either way; a failed read is `null`.
-      ...(review ? { stagedIdentity: await readCommittedStagedIdentity(payload.cwd, committed) } : {}),
+      ...(review
+        ? { stagedIdentity: await readCommittedStagedIdentity(payload.cwd, committed) }
+        : {}),
     };
   };
   handlers.push(typedHandle(CHANNELS.GIT_COMMIT, handleCommit));
