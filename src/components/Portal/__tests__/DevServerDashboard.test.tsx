@@ -4,6 +4,7 @@ import {
   render as rtlRender,
   screen,
   fireEvent,
+  within,
   type RenderOptions,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +13,8 @@ import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 const useAllDevSessions =
   vi.fn<() => { sessions: DevPreviewSessionState[]; hydrated: boolean; fetchError: boolean }>();
 const useWorktreeStore = vi.fn();
+let projectsState: { projects: Array<{ id: string; name: string }> };
+let scratchesState: { scratches: Array<{ id: string; name: string }> };
 
 function mockSessions(
   sessions: DevPreviewSessionState[],
@@ -30,6 +33,14 @@ vi.mock("@/store/allDevSessionsStore", () => ({
 }));
 vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: (selector: (s: unknown) => unknown) => useWorktreeStore(selector),
+}));
+vi.mock("@/store/projectStore", () => ({
+  useProjectStore: (selector: (s: unknown) => unknown) => selector(projectsState),
+}));
+vi.mock("@/store/scratchStore", () => ({
+  useScratchStore: (selector: (s: unknown) => unknown) => selector(scratchesState),
+  scratchName: (scratches: Array<{ id: string; name: string }>, id: string | null) =>
+    scratches.find((scratch) => scratch.id === id)?.name ?? null,
 }));
 
 import { DevServerDashboard } from "../DevServerDashboard";
@@ -57,15 +68,23 @@ function session(overrides: Partial<DevPreviewSessionState> = {}): DevPreviewSes
   };
 }
 
+const SCRATCH_ID = "0b6c1e2a-3f4d-4a5b-8c6d-7e8f9a0b1c2d";
+
+let restart: ReturnType<typeof vi.fn>;
+let stop: ReturnType<typeof vi.fn>;
 let restartByWorktree: ReturnType<typeof vi.fn>;
 let stopDevServerByWorktree: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  restart = vi.fn(() => Promise.resolve());
+  stop = vi.fn(() => Promise.resolve());
   restartByWorktree = vi.fn(() => Promise.resolve());
   stopDevServerByWorktree = vi.fn(() => Promise.resolve());
   (globalThis as unknown as { window: Window }).window = Object.assign(globalThis.window ?? {}, {
-    electron: { devPreview: { restartByWorktree, stopDevServerByWorktree } },
+    electron: { devPreview: { restart, stop, restartByWorktree, stopDevServerByWorktree } },
   }) as unknown as Window;
+  projectsState = { projects: [{ id: "project-1", name: "Atlas" }] };
+  scratchesState = { scratches: [{ id: SCRATCH_ID, name: "Spike" }] };
   // Default: a worktree map resolving wt-1 -> "feature-foo".
   useWorktreeStore.mockImplementation((selector: (s: unknown) => unknown) =>
     selector({ worktrees: new Map([["wt-1", { id: "wt-1", name: "feature-foo" }]]) })
@@ -170,18 +189,20 @@ describe("DevServerDashboard", () => {
     for (const name of names) expect(name).not.toContain("/repos/");
   });
 
-  it("restarts the worktree dev server on click", () => {
+  it("restarts its own session on click", () => {
     mockSessions([session()]);
     render(<DevServerDashboard />);
     fireEvent.click(screen.getByLabelText("Restart dev server for feature-foo"));
-    expect(restartByWorktree).toHaveBeenCalledWith({ worktreeId: "wt-1" });
+    expect(restart).toHaveBeenCalledWith({ panelId: "panel-1", projectId: "project-1" });
+    expect(restartByWorktree).not.toHaveBeenCalled();
   });
 
-  it("stops the worktree dev server on click", () => {
+  it("stops its own session on click", () => {
     mockSessions([session()]);
     render(<DevServerDashboard />);
     fireEvent.click(screen.getByLabelText("Stop dev server for feature-foo"));
-    expect(stopDevServerByWorktree).toHaveBeenCalledWith({ worktreeId: "wt-1" });
+    expect(stop).toHaveBeenCalledWith({ panelId: "panel-1", projectId: "project-1" });
+    expect(stopDevServerByWorktree).not.toHaveBeenCalled();
   });
 
   it("offers to dismiss an errored session's error, which fires the stop call", () => {
@@ -190,22 +211,7 @@ describe("DevServerDashboard", () => {
     const stopButton = screen.getByLabelText("Dismiss error for feature-foo") as HTMLButtonElement;
     expect(stopButton.disabled).toBe(false);
     fireEvent.click(stopButton);
-    expect(stopDevServerByWorktree).toHaveBeenCalledWith({ worktreeId: "wt-1" });
-  });
-
-  it("disables both buttons when the session has no worktreeId", () => {
-    mockSessions([session({ status: "error", worktreeId: undefined })]);
-    render(<DevServerDashboard />);
-    const stopButton = screen.getByLabelText("Stop dev server for panel-1") as HTMLButtonElement;
-    const restartButton = screen.getByLabelText(
-      "Restart dev server for panel-1"
-    ) as HTMLButtonElement;
-    expect(stopButton.disabled).toBe(true);
-    expect(restartButton.disabled).toBe(true);
-    fireEvent.click(stopButton);
-    fireEvent.click(restartButton);
-    expect(stopDevServerByWorktree).not.toHaveBeenCalled();
-    expect(restartByWorktree).not.toHaveBeenCalled();
+    expect(stop).toHaveBeenCalledWith({ panelId: "panel-1", projectId: "project-1" });
   });
 
   it("offers start, never stop, for restored-stopped sessions", () => {
@@ -213,7 +219,7 @@ describe("DevServerDashboard", () => {
     render(<DevServerDashboard />);
     expect(screen.queryByLabelText("Stop dev server for feature-foo")).toBeNull();
     fireEvent.click(screen.getByLabelText("Start dev server for feature-foo"));
-    expect(restartByWorktree).toHaveBeenCalledWith({ worktreeId: "wt-1" });
+    expect(restart).toHaveBeenCalledWith({ panelId: "panel-1", projectId: "project-1" });
   });
 
   it("keeps Stop, not Dismiss, for an error whose server is still running", () => {
@@ -221,7 +227,205 @@ describe("DevServerDashboard", () => {
     render(<DevServerDashboard />);
     expect(screen.queryByLabelText("Dismiss error for feature-foo")).toBeNull();
     fireEvent.click(screen.getByLabelText("Stop dev server for feature-foo"));
-    expect(stopDevServerByWorktree).toHaveBeenCalledWith({ worktreeId: "wt-1" });
+    expect(stop).toHaveBeenCalledWith({ panelId: "panel-1", projectId: "project-1" });
+  });
+
+  describe("two dev previews in one worktree", () => {
+    const failed = () =>
+      session({ panelId: "p-app", status: "error", terminalId: null, url: null, error: null });
+    const running = () =>
+      session({ panelId: "p-storybook", terminalId: "t-2", url: "http://localhost:6006" });
+
+    function rows(): HTMLElement[] {
+      return screen.getAllByRole("listitem");
+    }
+
+    it("dismisses the failed row's error without stopping its running sibling", () => {
+      mockSessions([failed(), running()]);
+      render(<DevServerDashboard />);
+      const [failedRow] = rows();
+      fireEvent.click(within(failedRow!).getByRole("button", { name: /^Dismiss error for / }));
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(stop).toHaveBeenCalledWith({ panelId: "p-app", projectId: "project-1" });
+      expect(stopDevServerByWorktree).not.toHaveBeenCalled();
+    });
+
+    it("restarts and stops only the row that was clicked", () => {
+      mockSessions([failed(), running()]);
+      render(<DevServerDashboard />);
+      const [failedRow, runningRow] = rows();
+      fireEvent.click(within(failedRow!).getByRole("button", { name: /^Restart dev server for / }));
+      expect(restart).toHaveBeenLastCalledWith({ panelId: "p-app", projectId: "project-1" });
+      fireEvent.click(within(runningRow!).getByRole("button", { name: /^Stop dev server for / }));
+      expect(stop).toHaveBeenLastCalledWith({ panelId: "p-storybook", projectId: "project-1" });
+      fireEvent.click(
+        within(runningRow!).getByRole("button", { name: /^Restart dev server for / })
+      );
+      expect(restart).toHaveBeenLastCalledWith({ panelId: "p-storybook", projectId: "project-1" });
+      expect(restart).toHaveBeenCalledTimes(2);
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(restartByWorktree).not.toHaveBeenCalled();
+      expect(stopDevServerByWorktree).not.toHaveBeenCalled();
+    });
+
+    it("numbers the rows that share a worktree name, in every accessible name", () => {
+      // Snapshot order is the reverse of key order: numbers follow the key.
+      mockSessions([running(), failed()]);
+      render(<DevServerDashboard />);
+      const [runningRow, failedRow] = rows();
+      expect(within(failedRow!).getByText("feature-foo · panel 1")).toBeTruthy();
+      expect(within(runningRow!).getByText("feature-foo · panel 2")).toBeTruthy();
+      fireEvent.click(screen.getByLabelText("Dismiss error for feature-foo · panel 1"));
+      expect(stop).toHaveBeenLastCalledWith({ panelId: "p-app", projectId: "project-1" });
+      fireEvent.click(screen.getByLabelText("Restart dev server for feature-foo · panel 1"));
+      expect(restart).toHaveBeenLastCalledWith({ panelId: "p-app", projectId: "project-1" });
+      fireEvent.click(screen.getByLabelText("Stop dev server for feature-foo · panel 2"));
+      expect(stop).toHaveBeenLastCalledWith({ panelId: "p-storybook", projectId: "project-1" });
+      fireEvent.click(screen.getByLabelText("Restart dev server for feature-foo · panel 2"));
+      expect(restart).toHaveBeenLastCalledWith({
+        panelId: "p-storybook",
+        projectId: "project-1",
+      });
+    });
+
+    it("numbers a restored placeholder's Start like its siblings", () => {
+      mockSessions([session({ panelId: "p-app", status: "restored-stopped" }), running()]);
+      render(<DevServerDashboard />);
+      fireEvent.click(screen.getByLabelText("Start dev server for feature-foo · panel 1"));
+      expect(restart).toHaveBeenCalledWith({ panelId: "p-app", projectId: "project-1" });
+    });
+
+    it("keeps each row's number when the snapshot reorders", () => {
+      mockSessions([failed(), running()]);
+      const { rerender } = render(<DevServerDashboard />);
+      const before = within(rows()[0]!).getByText(/^feature-foo · panel /).textContent;
+      mockSessions([running(), failed()]);
+      rerender(<DevServerDashboard />);
+      const failedRow = rows().find((li) => within(li).queryByText("Error") !== null)!;
+      expect(within(failedRow).getByText(/^feature-foo · panel /).textContent).toBe(before);
+    });
+
+    it("orders by the whole key, project first, when names collide across projects", () => {
+      projectsState = {
+        projects: [
+          { id: "project-1", name: "Atlas" },
+          { id: "project-2", name: "Atlas" },
+        ],
+      };
+      mockSessions([
+        session({ projectId: "project-2", panelId: "p-a", worktreeId: undefined }),
+        session({ projectId: "project-1", panelId: "p-z", worktreeId: undefined }),
+      ]);
+      render(<DevServerDashboard />);
+      fireEvent.click(screen.getByLabelText("Restart dev server for Atlas · panel 1"));
+      expect(restart).toHaveBeenLastCalledWith({ panelId: "p-z", projectId: "project-1" });
+      fireEvent.click(screen.getByLabelText("Restart dev server for Atlas · panel 2"));
+      expect(restart).toHaveBeenLastCalledWith({ panelId: "p-a", projectId: "project-2" });
+    });
+
+    it("leaves a lone row in the worktree unnumbered", () => {
+      mockSessions([failed(), running(), session({ panelId: "p-other", worktreeId: "wt-2" })]);
+      useWorktreeStore.mockImplementation((selector: (s: unknown) => unknown) =>
+        selector({
+          worktrees: new Map([
+            ["wt-1", { id: "wt-1", name: "feature-foo" }],
+            ["wt-2", { id: "wt-2", name: "feature-bar" }],
+          ]),
+        })
+      );
+      render(<DevServerDashboard />);
+      expect(screen.getByText("feature-bar")).toBeTruthy();
+    });
+
+    it("starts a restored-stopped panel by its own id", () => {
+      mockSessions([session({ panelId: "p-app", status: "restored-stopped" }), running()]);
+      render(<DevServerDashboard />);
+      const [restoredRow] = rows();
+      fireEvent.click(within(restoredRow!).getByRole("button", { name: /^Start dev server for / }));
+      expect(restart).toHaveBeenCalledWith({ panelId: "p-app", projectId: "project-1" });
+    });
+  });
+
+  describe("a session with no worktree", () => {
+    it("names a plain folder's row after its project and keeps both controls working", () => {
+      mockSessions([session({ status: "running", worktreeId: undefined })]);
+      render(<DevServerDashboard />);
+      expect(screen.getByText("Atlas")).toBeTruthy();
+      expect(screen.queryByText("panel-1")).toBeNull();
+      const stopButton = screen.getByLabelText("Stop dev server for Atlas") as HTMLButtonElement;
+      const restartButton = screen.getByLabelText(
+        "Restart dev server for Atlas"
+      ) as HTMLButtonElement;
+      expect(stopButton.disabled).toBe(false);
+      expect(restartButton.disabled).toBe(false);
+      fireEvent.click(stopButton);
+      fireEvent.click(restartButton);
+      expect(stop).toHaveBeenCalledWith({ panelId: "panel-1", projectId: "project-1" });
+      expect(restart).toHaveBeenCalledWith({ panelId: "panel-1", projectId: "project-1" });
+    });
+
+    it("lets an errored worktree-less session be dismissed", () => {
+      mockSessions([
+        session({ status: "error", terminalId: null, url: null, worktreeId: undefined }),
+      ]);
+      render(<DevServerDashboard />);
+      fireEvent.click(screen.getByLabelText("Dismiss error for Atlas"));
+      expect(stop).toHaveBeenCalledWith({ panelId: "panel-1", projectId: "project-1" });
+    });
+
+    it("names a scratch workspace's row after the scratch", () => {
+      mockSessions([session({ projectId: SCRATCH_ID, worktreeId: undefined })]);
+      render(<DevServerDashboard />);
+      expect(screen.getByText("Spike")).toBeTruthy();
+      fireEvent.click(screen.getByLabelText("Restart dev server for Spike"));
+      expect(restart).toHaveBeenCalledWith({ panelId: "panel-1", projectId: SCRATCH_ID });
+    });
+
+    it("targets the right project when two projects' panels share a panel id", () => {
+      projectsState = {
+        projects: [
+          { id: "project-1", name: "Atlas" },
+          { id: "project-2", name: "Borealis" },
+        ],
+      };
+      mockSessions([
+        session({ worktreeId: undefined }),
+        session({ projectId: "project-2", worktreeId: undefined }),
+      ]);
+      render(<DevServerDashboard />);
+      fireEvent.click(screen.getByLabelText("Stop dev server for Borealis"));
+      expect(stop).toHaveBeenCalledWith({ panelId: "panel-1", projectId: "project-2" });
+      fireEvent.click(screen.getByLabelText("Restart dev server for Atlas"));
+      expect(restart).toHaveBeenCalledWith({ panelId: "panel-1", projectId: "project-1" });
+    });
+
+    it("starts a worktree-less restored-stopped session", () => {
+      mockSessions([session({ status: "restored-stopped", worktreeId: undefined })]);
+      render(<DevServerDashboard />);
+      fireEvent.click(screen.getByLabelText("Start dev server for Atlas"));
+      expect(restart).toHaveBeenCalledWith({ panelId: "panel-1", projectId: "project-1" });
+    });
+
+    it("calls an unknown project's row a workspace, never its raw panel id", () => {
+      projectsState = { projects: [] };
+      mockSessions([session({ panelId: "dev-preview-8f2c", worktreeId: undefined })]);
+      render(<DevServerDashboard />);
+      expect(screen.queryByText("dev-preview-8f2c")).toBeNull();
+      expect(screen.getByText("Workspace")).toBeTruthy();
+      const restartButton = screen.getByLabelText(
+        "Restart dev server for Workspace"
+      ) as HTMLButtonElement;
+      expect(restartButton.disabled).toBe(false);
+    });
+
+    it("calls a scratch whose name hasn't loaded a scratch workspace", () => {
+      scratchesState = { scratches: [] };
+      mockSessions([session({ projectId: SCRATCH_ID, worktreeId: undefined })]);
+      render(<DevServerDashboard />);
+      expect(screen.getByText("Scratch workspace")).toBeTruthy();
+      fireEvent.click(screen.getByLabelText("Stop dev server for Scratch workspace"));
+      expect(stop).toHaveBeenCalledWith({ panelId: "panel-1", projectId: SCRATCH_ID });
+    });
   });
 
   it("prefers the error's reason over the latest output", () => {

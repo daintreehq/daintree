@@ -8,6 +8,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useAllDevSessions } from "@/store/allDevSessionsStore";
+import { useProjectStore } from "@/store/projectStore";
+import { scratchName, useScratchStore } from "@/store/scratchStore";
+import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { worktreeLabels } from "@/lib/worktreeLabels";
 import { useSkeletonFloor, useSkeletonGate } from "@/hooks/useDeferredLoading";
@@ -64,22 +67,25 @@ function extractPort(session: DevPreviewSessionState): string | null {
   }
 }
 
+function rowKey(session: DevPreviewSessionState): string {
+  return `${session.projectId}:${session.panelId}`;
+}
+
 function DevServerRow({
   session,
-  worktreeName,
+  displayName,
 }: {
   session: DevPreviewSessionState;
-  worktreeName: string;
+  displayName: string;
 }) {
   const presentation = STATUS_PRESENTATION[session.status];
   const port = extractPort(session);
-  const worktreeId = session.worktreeId;
   const isError = session.status === "error";
   // A compile error keeps its terminal: stopping then kills a live watcher, so
   // only a process-less error is a pure dismissal.
   const isDismissableError = isError && !session.terminalId;
   const isStopped = STOPPED_STATUSES.has(session.status);
-  const canStop = worktreeId !== undefined && STOPPABLE_STATUSES.has(session.status);
+  const canStop = STOPPABLE_STATUSES.has(session.status);
   // The second line answers "is it up, and where": an error names its reason,
   // a server still coming up shows its progress, and a running one stops at
   // its port — routine log lines stay in the row's tooltip.
@@ -89,16 +95,19 @@ function DevServerRow({
       ? session.lastOutput
       : undefined;
 
+  // Each row is one panel's session: a worktree can hold several previews (an
+  // app beside its Storybook), and a plain folder or scratch has no worktree at
+  // all, so the row's own key is the only target that can't hit a sibling.
+  const target = { panelId: session.panelId, projectId: session.projectId };
+
   const handleRestart = () => {
-    if (!worktreeId) return;
-    safeFireAndForget(window.electron.devPreview.restartByWorktree({ worktreeId }), {
+    safeFireAndForget(window.electron.devPreview.restart(target), {
       context: "Restarting dev server from dashboard",
     });
   };
 
   const handleStop = () => {
-    if (!worktreeId) return;
-    safeFireAndForget(window.electron.devPreview.stopDevServerByWorktree({ worktreeId }), {
+    safeFireAndForget(window.electron.devPreview.stop(target), {
       context: "Stopping dev server from dashboard",
     });
   };
@@ -123,8 +132,8 @@ function DevServerRow({
         />
       )}
       <div className="flex flex-col min-w-0 flex-1">
-        <TruncatedTooltip content={worktreeName}>
-          <span className="truncate text-xs font-medium text-text-primary">{worktreeName}</span>
+        <TruncatedTooltip content={displayName}>
+          <span className="truncate text-xs font-medium text-text-primary">{displayName}</span>
         </TruncatedTooltip>
         {/* The log line rides the status line only: on the row it would be inherited
             by the action buttons, and on the name it would sit over that name's own
@@ -142,8 +151,7 @@ function DevServerRow({
             <button
               type="button"
               onClick={handleRestart}
-              disabled={!worktreeId}
-              aria-label={`${restartLabel} dev server for ${worktreeName}`}
+              aria-label={`${restartLabel} dev server for ${displayName}`}
               className={actionClass}
             >
               {isStopped ? (
@@ -164,8 +172,8 @@ function DevServerRow({
                 disabled={!canStop}
                 aria-label={
                   isDismissableError
-                    ? `Dismiss error for ${worktreeName}`
-                    : `Stop dev server for ${worktreeName}`
+                    ? `Dismiss error for ${displayName}`
+                    : `Stop dev server for ${displayName}`
                 }
                 className={actionClass}
               >
@@ -213,6 +221,31 @@ export function DevServerDashboard({
       return names;
     })
   );
+  // A session with no worktree (a plain folder, a scratch) is named after its
+  // workspace, from every project and scratch on this machine, since the
+  // dashboard lists other projects' servers too.
+  const projectNames = useProjectStore(
+    useShallow((s) => {
+      const names: Record<string, string> = {};
+      for (const session of allSessions) {
+        if (session.worktreeId) continue;
+        const name = s.projects.find((p) => p.id === session.projectId)?.name.trim();
+        if (name) names[session.projectId] = name;
+      }
+      return names;
+    })
+  );
+  const scratchNames = useScratchStore(
+    useShallow((s) => {
+      const names: Record<string, string> = {};
+      for (const session of allSessions) {
+        if (session.worktreeId) continue;
+        const name = scratchName(s.scratches, session.projectId)?.trim();
+        if (name) names[session.projectId] = name;
+      }
+      return names;
+    })
+  );
 
   const visibleSessions = useMemo(
     () => allSessions.filter((s) => !HIDDEN_STATUSES.has(s.status)),
@@ -233,6 +266,34 @@ export function DevServerDashboard({
       ]),
     [visibleSessions, worktreeNames]
   );
+
+  // Two previews in one worktree (or one workspace) share its name, so each
+  // takes a panel number, ordered by its key rather than its status or the
+  // snapshot's order so a row keeps its number as servers come and go.
+  const displayNames = useMemo(() => {
+    const groups = new Map<string, string[]>();
+    for (const session of visibleSessions) {
+      const name = session.worktreeId
+        ? (worktreeNames[session.worktreeId] ??
+          fallbackNames.get(session.worktreeId) ??
+          session.worktreeId)
+        : (projectNames[session.projectId] ??
+          scratchNames[session.projectId] ??
+          (isScratchWorkspaceId(session.projectId) ? "Scratch workspace" : "Workspace"));
+      const keys = groups.get(name);
+      if (keys) keys.push(rowKey(session));
+      else groups.set(name, [rowKey(session)]);
+    }
+    const names = new Map<string, string>();
+    for (const [name, keys] of groups) {
+      if (keys.length === 1) {
+        names.set(keys[0]!, name);
+        continue;
+      }
+      keys.sort().forEach((key, index) => names.set(key, `${name} · panel ${index + 1}`));
+    }
+    return names;
+  }, [visibleSessions, worktreeNames, fallbackNames, projectNames, scratchNames]);
 
   const summary = summarize(visibleSessions);
   const showSkeleton = useSkeletonFloor(useSkeletonGate(!hydrated));
@@ -289,15 +350,9 @@ export function DevServerDashboard({
         <ul className="flex flex-col min-h-0 overflow-y-auto pb-1">
           {visibleSessions.map((session) => (
             <DevServerRow
-              key={`${session.projectId}:${session.panelId}`}
+              key={rowKey(session)}
               session={session}
-              worktreeName={
-                session.worktreeId
-                  ? (worktreeNames[session.worktreeId] ??
-                    fallbackNames.get(session.worktreeId) ??
-                    session.worktreeId)
-                  : session.panelId
-              }
+              displayName={displayNames.get(rowKey(session)) ?? ""}
             />
           ))}
         </ul>

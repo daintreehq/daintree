@@ -186,11 +186,14 @@ export function installPortForwardClient(deps: PortForwardClientDeps): () => Pro
     }
     return true;
   };
-  /** Whether a call from `project` speaks for the origin: no other host or project has it. */
-  const ownsPreview = (subdomain: string, project: ViewProject): boolean => {
+  const isPreviewOwner = (subdomain: string, project: ViewProject): boolean | null => {
     const owner = registeredPreviews.get(subdomain) ?? previewOwners.get(subdomain);
-    return !owner || (owner.hostId === project.hostId && owner.projectId === project.projectId);
+    if (!owner) return null;
+    return owner.hostId === project.hostId && owner.projectId === project.projectId;
   };
+  /** Whether a call from `project` speaks for the origin: no other host or project has it. */
+  const ownsPreview = (subdomain: string, project: ViewProject): boolean =>
+    isPreviewOwner(subdomain, project) !== false;
   const showsProject = (webContentsId: number, owner: ViewProject): boolean => {
     const project = projectForView(webContentsId);
     return project?.hostId === owner.hostId && project.projectId === owner.projectId;
@@ -367,9 +370,10 @@ export function installPortForwardClient(deps: PortForwardClientDeps): () => Pro
     registerRemoteService("portForwards", service),
     observeForwardedInvokes(({ hostId, webContentsId, hostProjectId, channel, args }) => {
       if (!hostProjectId) return;
-      // The project comes from this machine's own view key, never from the request.
+      // A preview is registered to this machine's own view key, never to the request's project.
       const project: ViewProject = { hostId, projectId: hostProjectId };
-      const request = args[0] as { panelId?: unknown; worktreeId?: unknown } | null | undefined;
+      const request = args[0] as
+        { panelId?: unknown; projectId?: unknown; worktreeId?: unknown } | null | undefined;
       const worktreeId = typeof request?.worktreeId === "string" ? request.worktreeId : null;
       // A worktree's servers were stopped: its previews' panels look nothing up again.
       if (
@@ -403,9 +407,27 @@ export function installPortForwardClient(deps: PortForwardClientDeps): () => Pro
           for (const previews of previewWorktrees.values()) previews.delete(subdomain);
           forwards.releasePreview(subdomain);
           return;
-        case CHANNELS.DEV_PREVIEW_STOP:
-          if (ownsPreview(subdomain, project)) forwards.releasePreview(subdomain);
+        case CHANNELS.DEV_PREVIEW_STOP: {
+          // The dev server dashboard stops any project's server on the host from
+          // one view. The host has already stopped the session the request
+          // names, so that session's preview goes, never the sender's
+          // same-named panel.
+          const stoppedProjectId =
+            typeof request?.projectId === "string" && request.projectId.length > 0
+              ? request.projectId
+              : hostProjectId;
+          const stopped: ViewProject = { hostId, projectId: stoppedProjectId };
+          const stoppedSubdomain = buildDevPreviewSubdomain(stoppedProjectId, panelId);
+          // A view speaks for its own project's previews; another project's goes
+          // only while it is still recorded as that project's, since an origin
+          // with no record may be another host's.
+          const releasable =
+            stoppedProjectId === hostProjectId
+              ? ownsPreview(stoppedSubdomain, stopped)
+              : isPreviewOwner(stoppedSubdomain, stopped) === true;
+          if (releasable) forwards.releasePreview(stoppedSubdomain);
           return;
+        }
       }
     }),
     setRemoteDevPreviewResolver((subdomain) => forwards.resolvePreview(subdomain)),
