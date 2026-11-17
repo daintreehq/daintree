@@ -1549,6 +1549,26 @@ describe("ReviewHub", () => {
         });
       });
 
+      it("still reads what a superseded bulk write changed, without its banner", async () => {
+        await renderHub();
+        fireEvent.click(screen.getByTestId("file-stage-row-src/a.ts"), { metaKey: true });
+        let failUnstage!: (err: Error) => void;
+        unstageFilesMock.mockImplementationOnce(
+          () => new Promise<void>((_resolve, reject) => (failUnstage = reject))
+        );
+        stageFileMock.mockImplementationOnce(() => new Promise<void>(() => {}));
+        getStagingStatusMock.mockResolvedValue(
+          makeStatus({ staged: [row("src/b.ts")], unstaged: [row("src/a.ts"), row("src/x.ts")] })
+        );
+        fireEvent.click(screen.getByTestId("review-hub-unstage-section-button"));
+        fireEvent.click(screen.getByRole("button", { name: /Stage src\/x\.ts/i }));
+        await waitFor(() => expect(stageFileMock).toHaveBeenCalled());
+
+        await act(async () => failUnstage(new Error("Unstaged at least 1 of 2 files")));
+        await waitFor(() => expect(inSection(unstagedSection, "src/a.ts")).toBe(true));
+        expect(screen.queryByText("Couldn't unstage selected files")).toBeNull();
+      });
+
       it("shows what landed when an unstage selection fails partway", async () => {
         await renderWith(
           makeStatus({
