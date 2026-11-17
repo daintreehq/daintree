@@ -426,6 +426,25 @@ describe("PrChecksPopover", () => {
     expect(screen.getByTestId("pr-checks-reload").textContent).toBe("Refresh");
   });
 
+  it("does not carry a pending Retry's label into a fresh opening", async () => {
+    getChecksMock.mockRejectedValueOnce(new Error("boom"));
+    renderPopover();
+    await openAndSettle();
+    await screen.findByTestId("pr-checks-error");
+
+    getChecksMock.mockReturnValueOnce(deferred<{ checks: ForgeCheckRun[] }>().promise);
+    fireEvent.click(screen.getByTestId("pr-checks-reload"));
+    expect(screen.getByTestId("pr-checks-reload").textContent).toBe("Retry");
+
+    fireEvent.click(trigger());
+    getChecksMock.mockReturnValueOnce(deferred<{ checks: ForgeCheckRun[] }>().promise);
+    fireEvent.click(trigger());
+    await waitFor(() => expect(getChecksMock).toHaveBeenCalledTimes(3));
+    const reload = screen.getByTestId("pr-checks-reload");
+    expect(reload.getAttribute("aria-busy")).toBe("true");
+    expect(reload.textContent).toBe("Refresh");
+  });
+
   it("replaces the previous snapshot on reload rather than merging into it", async () => {
     getChecksMock.mockResolvedValueOnce({ checks: [check({ name: "old" })] });
     renderPopover();
