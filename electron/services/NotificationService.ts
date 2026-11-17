@@ -373,6 +373,15 @@ class NotificationService {
   }
 
   updateNotifications(ownerWebContentsId: NotificationOwnerId, state: NotificationState): void {
+    // A marked report only moves panes within the count its view last reported;
+    // one landing after focus cleared that report would bring back what was seen.
+    const previous = this.statesByOwner.get(ownerWebContentsId);
+    if (
+      state.membershipOnly === true &&
+      previous?.waitingPanelIds.length !== state.waitingPanelIds.length
+    ) {
+      return;
+    }
     this.statesByOwner.set(ownerWebContentsId, state);
     // Panes trading places are kept for the next pass but bring none of their
     // own with no question waiting, so with Decisions off every pass runs when

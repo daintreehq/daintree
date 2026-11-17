@@ -1488,6 +1488,20 @@ describe("NotificationService", () => {
         expect(electronMock.app.setBadgeCount).toHaveBeenCalledTimes(1);
       });
 
+      it("drops a swap that lands after focus cleared its view's report", async () => {
+        const win = windowWithViews(11);
+        notificationService.initialize(createRegistryMock([win]) as never);
+        await questionsLoaded();
+        notificationService.updateNotifications(11, waitingIn("terminal-a"));
+        vi.advanceTimersByTime(301);
+        win.trigger("focus");
+
+        notificationService.updateNotifications(11, swappedTo("terminal-b"));
+        notificationService.refreshTitles();
+
+        expect(win.setTitle).toHaveBeenLastCalledWith("Daintree");
+      });
+
       it("never lets a swap postpone another view's pending change", async () => {
         const win1 = windowWithViews(11);
         const win2 = windowWithViews(21);
