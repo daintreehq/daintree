@@ -164,6 +164,23 @@ describe("link messages", () => {
     ).toThrow();
   });
 
+  it("carries a host's idle clock, one that sends none, and a later build's wider idle time (#17357)", () => {
+    const idle = { idleAfterMinutes: 30, lastWorkAt: 10, busy: false, idleEndsAt: 1_800_010 };
+    expect(hostSummary({ idle }).idle).toEqual(idle);
+    expect(hostSummary({})).not.toHaveProperty("idle");
+    const busy = { ...idle, busy: true, idleEndsAt: null };
+    expect(hostSummary({ idle: busy }).idle).toEqual(busy);
+    // Bounds on what a host stores never reach the wire: a later one widening them still reads.
+    expect(hostSummary({ idle: { ...idle, idleAfterMinutes: 10_080 } }).idle).toMatchObject({
+      idleAfterMinutes: 10_080,
+    });
+    // A newer host's extra fields are dropped, not refused.
+    expect(hostSummary({ idle: { ...idle, heldBy: ["agents"] } }).idle).toEqual(idle);
+    for (const bad of [{ ...idle, idleAfterMinutes: 0 }, { ...idle, busy: "no" }, { busy: false }]) {
+      expect(() => hostSummary({ idle: bad })).toThrow();
+    }
+  });
+
   it("carries a summary's timing, and one from a host that sends none (#14462)", () => {
     const timed = hostSummary({ timing: { sampleAgeMs: 120, afterPing: 4 } }) as HostSummaryFrame;
     expect(timed.timing).toEqual({ sampleAgeMs: 120, afterPing: 4 });

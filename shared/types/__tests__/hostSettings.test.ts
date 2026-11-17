@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { HostSettingsPatchSchema, hostSettingRefusal, isHostSettingKey } from "../hostSettings.js";
+import {
+  DEFAULT_HOST_IDLE_MINUTES,
+  HOST_IDLE_MINUTES,
+  HOST_IDLE_MINUTE_CHOICES,
+  hostIdleMinutesOf,
+  isHostIdleMinutes,
+} from "../hostIdle.js";
 
 describe("the retired alt-screen setting (#16356)", () => {
   it("is no setting a host reads or takes, so a peer never asks one for it", () => {
@@ -139,5 +146,31 @@ describe("work settings on a host (#14706)", () => {
     ).not.toBeNull();
     expect(hostSettingRefusal("agentSettings.resumeOnRestart", "on-focus")).toBeNull();
     expect(hostSettingRefusal("agentSettings.resumeOnRestart", "sometimes")).not.toBeNull();
+  });
+});
+
+describe("a host's idle time (#17357)", () => {
+  it("takes a whole number of minutes within its bounds, and a patch carrying one", () => {
+    for (const minutes of [HOST_IDLE_MINUTES.min, 30, HOST_IDLE_MINUTES.max]) {
+      expect(hostSettingRefusal("hostIdle.idleAfterMinutes", minutes)).toBeNull();
+      expect(
+        HostSettingsPatchSchema.safeParse({ "hostIdle.idleAfterMinutes": minutes }).success
+      ).toBe(true);
+    }
+    for (const value of [HOST_IDLE_MINUTES.min - 1, HOST_IDLE_MINUTES.max + 1, 30.5, "30", null]) {
+      expect(hostSettingRefusal("hostIdle.idleAfterMinutes", value)).not.toBeNull();
+      expect(
+        HostSettingsPatchSchema.safeParse({ "hostIdle.idleAfterMinutes": value }).success
+      ).toBe(false);
+    }
+  });
+
+  it("offers only idle times a host would store, and folds a stored one out of bounds to the default", () => {
+    for (const minutes of HOST_IDLE_MINUTE_CHOICES) expect(isHostIdleMinutes(minutes)).toBe(true);
+    expect(isHostIdleMinutes(DEFAULT_HOST_IDLE_MINUTES)).toBe(true);
+    expect(hostIdleMinutesOf(HOST_IDLE_MINUTES.max)).toBe(HOST_IDLE_MINUTES.max);
+    for (const value of [undefined, 0, HOST_IDLE_MINUTES.max + 1, 12.5, "45"]) {
+      expect(hostIdleMinutesOf(value)).toBe(DEFAULT_HOST_IDLE_MINUTES);
+    }
   });
 });

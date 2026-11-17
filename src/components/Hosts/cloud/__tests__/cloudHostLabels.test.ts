@@ -6,6 +6,9 @@ import {
   canStopMachine,
   cloudChipStatus,
   cloudStatusLabel,
+  clockTime,
+  idleClockSentence,
+  IDLE_TIME_COUNTED,
   isObservationStale,
   formatHourly,
   lifetimeSentence,
@@ -175,5 +178,39 @@ describe("cloud host labels", () => {
     expect(machineSpecLabel(null, null)).toBe("Size unknown");
     expect(formatHourly(0.0361)).toBe("$0.036 an hour while running");
     expect(formatHourly(null)).toBe("Price not reported");
+  });
+});
+
+describe("idleClockSentence (#17357)", () => {
+  const at = (ms: number) => clockTime(new Date(ms).toISOString());
+  const base = Date.UTC(2026, 10, 17, 14, 2);
+
+  it("says what the idle time counts from when the host reports no clock", () => {
+    expect(idleClockSentence(undefined, null)).toBe(IDLE_TIME_COUNTED);
+  });
+
+  it("says the host is in use while its clock is held", () => {
+    const sentence = idleClockSentence(
+      { idleAfterMinutes: 30, lastWorkAt: base, busy: true, idleEndsAt: null },
+      base
+    );
+    expect(sentence.startsWith("In use now.")).toBe(true);
+    expect(sentence).not.toContain(at(base)!);
+  });
+
+  it("says since when it has been idle and when its idle time ends, by the host's own clock", () => {
+    const idle = {
+      idleAfterMinutes: 30,
+      lastWorkAt: base,
+      busy: false,
+      idleEndsAt: base + 30 * 60_000,
+    };
+    expect(idleClockSentence(idle, base + 60_000)).toBe(
+      `Idle since ${at(base)}. Its idle time ends ${at(base + 30 * 60_000)}.`
+    );
+    // Passed by the host's clock when it last looked, whatever this machine's says.
+    expect(idleClockSentence(idle, base + 30 * 60_000)).toBe(
+      `Idle since ${at(base)}. Its idle time ended ${at(base + 30 * 60_000)}.`
+    );
   });
 });

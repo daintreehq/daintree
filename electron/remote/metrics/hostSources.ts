@@ -27,6 +27,7 @@ import { getSanitizedProcessEnv } from "../../utils/gitEnv.js";
 import { createForgeObserver } from "./hostForges.js";
 import { nameLeases } from "./driverObservations.js";
 import { DriveLeaseHolderSchema } from "../link/schemas.js";
+import { getRemoteService } from "../runtime.js";
 import type { HostSampleSources, ObservedAgents, SampleReaders } from "./sampler.js";
 
 type ProjectInventory = ReturnType<typeof projectStore.getAllProjects>;
@@ -321,6 +322,8 @@ export function createHostSampleSources(now: () => number = Date.now): HostSampl
       return list;
     },
     forges,
+    // Looked up on every sample: the loop can outlive one listener and predate the next.
+    idle: () => getRemoteService("hostIdle")?.observation() ?? null,
     now,
   };
 }

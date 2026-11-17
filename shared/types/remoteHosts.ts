@@ -1,5 +1,6 @@
 import type { CrashCause, WatchdogKillReason } from "./ipc/crashRecovery.js";
 import type { HostWakeSetup } from "./hostWake.js";
+import type { HostIdleObservation } from "./hostIdle.js";
 import type { FolderMaterializeProgress } from "./ipc/fileTransfer.js";
 
 /**
@@ -582,6 +583,12 @@ export interface HostMetricsSummary {
    * read failed.
    */
   forges?: HostForgeObservation[] | null;
+  /**
+   * When the Host last saw work and when its idle time ends, by its own
+   * clock. Absent from a host that doesn't report it, and from one not
+   * listening as a host.
+   */
+  idle?: HostIdleObservation;
 }
 
 /**

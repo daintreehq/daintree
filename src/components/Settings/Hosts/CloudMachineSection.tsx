@@ -21,10 +21,11 @@ import {
 } from "@/components/Hosts/cloud/cloudHostLabels";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import { CLOUD_LIFETIME_CHOICES, type CloudHostCreatedFor } from "@shared/types/cloudHosts";
-import type { HostId } from "@shared/types/remoteHosts";
+import type { HostId, HostMetricsSummary } from "@shared/types/remoteHosts";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsGroup, SettingsRow } from "../SettingsGroup";
 import { SettingsSelect } from "../SettingsSelect";
+import { HostIdleTimeRow } from "./HostIdleTimeRow";
 
 function errorText(err: unknown, fallback: string): string {
   return isClientAppError(err) && err.userMessage
@@ -44,10 +45,22 @@ const LIFETIME_VALUES = CLOUD_LIFETIME_CHOICES.map((hours) =>
 
 /**
  * A cloud host's machine, on its details page: what the provider says it is
- * doing, Start and Stop, what it costs, when it stops by itself, and the
- * technical facts (machine id, address, host key) for support.
+ * doing, Start and Stop, what it costs, when it stops by itself, how long the
+ * host waits once idle, and the technical facts (machine id, address, host
+ * key) for support.
  */
-export function CloudMachineSection({ hostId, hostName }: { hostId: HostId; hostName: string }) {
+export function CloudMachineSection({
+  hostId,
+  hostName,
+  connected,
+  liveSummary,
+}: {
+  hostId: HostId;
+  hostName: string;
+  connected: boolean;
+  /** The host's latest summary while its link is up; null otherwise. */
+  liveSummary: HostMetricsSummary | null;
+}) {
   const { snapshot } = useCloudHosts();
   const status = cloudStatusFor(snapshot, hostId);
   const machines = useCloudMachineActions();
@@ -239,6 +252,14 @@ export function CloudMachineSection({ hostId, hostName }: { hostId: HostId; host
           options={lifetimeOptions}
           disabled={busy === "lifetime" || status.operation !== null}
           error={lifetimeError ?? undefined}
+        />
+        <HostIdleTimeRow
+          key={hostId}
+          hostId={hostId}
+          hostName={hostName}
+          connected={connected}
+          idle={liveSummary?.idle}
+          sampledAt={liveSummary?.sampledAt ?? null}
         />
         <SettingsRow
           label="Disk"

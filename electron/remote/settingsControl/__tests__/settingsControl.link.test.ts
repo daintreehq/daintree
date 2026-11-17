@@ -38,6 +38,7 @@ function fakeHost() {
     "idleBackgroundAutoClose.thresholdMinutes": 60,
     "idleBackgroundAutoClose.includeIdleShells": false,
     "idleBackgroundAutoClose.idleShellThresholdMinutes": 120,
+    "hostIdle.idleAfterMinutes": 30,
   };
   const box = { instanceId: "launch-1", canopyRevision: 0, writes: 0 };
   const leaves = (): HostSettingsLeaves => ({

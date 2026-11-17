@@ -4,6 +4,7 @@ import {
   type CloudHostStatus,
   type CloudProviderPersistence,
 } from "@shared/types/cloudHosts";
+import type { HostIdleObservation } from "@shared/types/hostIdle";
 
 /** "4 vCPU · 8 GB", or what is known of it. */
 export function machineSpecLabel(vcpu: number | null, memoryGB: number | null): string {
@@ -69,6 +70,28 @@ export function clockTime(iso: string | null): string | null {
   return Number.isNaN(at.getTime())
     ? null
     : at.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
+}
+
+/** What the host's idle time counts from, and where it is kept. */
+export const IDLE_TIME_COUNTED =
+  "Counted on the host from the last time an agent there was working or waiting, or a window showed it, so it runs with this device away";
+
+/**
+ * What a host's idle clock shows: in use, or idle since when and when its
+ * idle time ends. Both times are the host's own; `sampledAt` is when it last
+ * looked, so whether that time has passed is the host's call, not this
+ * machine's clock.
+ */
+export function idleClockSentence(
+  idle: HostIdleObservation | undefined,
+  sampledAt: number | null
+): string {
+  if (!idle) return IDLE_TIME_COUNTED;
+  if (idle.busy || idle.idleEndsAt === null) return `In use now. ${IDLE_TIME_COUNTED}.`;
+  const since = clockTime(new Date(idle.lastWorkAt).toISOString());
+  const ends = clockTime(new Date(idle.idleEndsAt).toISOString());
+  const ended = sampledAt !== null && idle.idleEndsAt <= sampledAt;
+  return `Idle since ${since}. Its idle time ${ended ? "ended" : "ends"} ${ends}.`;
 }
 
 /**
