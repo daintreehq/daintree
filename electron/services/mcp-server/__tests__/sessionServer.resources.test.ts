@@ -11,6 +11,7 @@ import { createSessionServer } from "../sessionServer.js";
 import { getAgentAvailabilityStore } from "../../AgentAvailabilityStore.js";
 import { events } from "../../events.js";
 import { fakeSessionStore, fakeDeps, makeMockTransport } from "./helpers/sessionServerFixture.js";
+import { RESOURCE_TEXT_MAX_BYTES } from "../shared.js";
 
 describe("Resource error envelope (integration through sessionServer)", () => {
   async function readResource(server: ReturnType<typeof createSessionServer>, uri: string) {
@@ -199,5 +200,104 @@ describe("Resource error envelope (integration through sessionServer)", () => {
     expect(parsed.state).toBe("working");
     expect(parsed).not.toHaveProperty("exitCode");
     store.clear();
+  });
+
+  describe("oversized JSON resources (#17490)", () => {
+    async function readText(uri: string, result: unknown): Promise<string> {
+      const deps = fakeDeps({
+        sessionStore: fakeSessionStore("full"),
+        dispatchAction: vi.fn().mockResolvedValue({ result: { ok: true, result } }),
+      });
+      const server = createSessionServer(`s-res-oversized-${uri}`, deps);
+      await server.connect(makeMockTransport());
+      const read = (await readResource(server, uri)) as {
+        contents: { uri: string; mimeType: string; text: string }[];
+      };
+      expect(read.contents[0].mimeType).toBe("application/json");
+      return read.contents[0].text;
+    }
+
+    function issueRow(n: number) {
+      return {
+        number: n,
+        title: `Issue ${n} ${"é".repeat(120)}`,
+        state: "OPEN",
+        url: `https://github.com/acme/repo/issues/${n}`,
+        author: "octocat",
+        assignees: ["octocat"],
+        labels: ["bug", "needs-triage"],
+        createdAt: 1_700_000_000_000 + n,
+        updatedAt: 1_700_000_100_000 + n,
+      };
+    }
+
+    it("keeps an over-budget issue page parseable, in budget, and marked partial", async () => {
+      const items = Array.from({ length: 400 }, (_, i) => issueRow(i + 1));
+      const page = { items, nextCursor: "cursor-2", hasMore: true, totalCount: 900 };
+      expect(Buffer.byteLength(JSON.stringify(page), "utf8")).toBeGreaterThan(
+        RESOURCE_TEXT_MAX_BYTES
+      );
+
+      const text = await readText("daintree://project/current/issues", page);
+
+      expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(RESOURCE_TEXT_MAX_BYTES);
+      const parsed = JSON.parse(text);
+      expect(parsed.items.length).toBeGreaterThan(0);
+      expect(parsed.items.length).toBeLessThan(items.length);
+      expect(parsed.items).toEqual(items.slice(0, parsed.items.length));
+      expect(parsed.nextCursor).toBe("cursor-2");
+      expect(parsed.hasMore).toBe(true);
+      expect(parsed.totalCount).toBe(900);
+      expect(parsed.truncated).toMatchObject({
+        omitted: { items: items.length - parsed.items.length },
+      });
+    });
+
+    it("keeps an over-budget pulse parseable, in budget, and marked partial", async () => {
+      const heatmap = Array.from({ length: 1_500 }, (_, i) => ({
+        date: `day-${String(i).padStart(4, "0")}`,
+        count: i % 7,
+        level: i % 5,
+      }));
+      const recentCommits = Array.from({ length: 10 }, (_, i) => ({
+        sha: `${i}`.padStart(40, "a"),
+        subject: `Commit ${i} ${"ü".repeat(200)}`,
+        authorName: "Dev",
+        timestamp: 1_700_000_000_000 - i,
+      }));
+      const pulse = {
+        worktreeId: "wt-1",
+        worktreePath: "/repo",
+        branch: "feature/x",
+        mainBranch: "main",
+        rangeDays: 60,
+        generatedAt: 1_700_000_000_000,
+        heatmap,
+        commitsInRange: 321,
+        activeDays: 40,
+        projectAgeDays: 900,
+        currentStreakDays: 3,
+        recentCommits,
+      };
+      expect(Buffer.byteLength(JSON.stringify(pulse), "utf8")).toBeGreaterThan(
+        RESOURCE_TEXT_MAX_BYTES
+      );
+
+      const text = await readText("daintree://worktree/wt-1/pulse", pulse);
+
+      expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(RESOURCE_TEXT_MAX_BYTES);
+      const parsed = JSON.parse(text);
+      expect(parsed.worktreeId).toBe("wt-1");
+      expect(parsed.commitsInRange).toBe(321);
+      expect(parsed.currentStreakDays).toBe(3);
+      expect(parsed.heatmap.length).toBeGreaterThan(0);
+      expect(parsed.heatmap.length).toBeLessThan(heatmap.length);
+      // The newest days are the ones kept.
+      expect(parsed.heatmap).toEqual(heatmap.slice(-parsed.heatmap.length));
+      expect(parsed.recentCommits).toEqual(recentCommits);
+      expect(parsed.truncated).toMatchObject({
+        omitted: { heatmap: heatmap.length - parsed.heatmap.length },
+      });
+    });
   });
 });
