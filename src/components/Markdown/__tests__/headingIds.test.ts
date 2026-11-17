@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Element as HastElement, Root as HastRoot } from "hast";
+import type { Element as HastElement, Root as HastRoot, RootContent } from "hast";
 import { markdownFragmentIds, MARKDOWN_ID_PREFIX, rehypeHeadingIds } from "../headingIds";
 
 function heading(tagName: string, ...children: HastElement["children"]): HastElement {
@@ -11,7 +11,7 @@ const text = (value: string) => ({ type: "text" as const, value });
 function ids(tree: HastRoot): unknown[] {
   rehypeHeadingIds()(tree);
   const found: unknown[] = [];
-  const visit = (node: HastRoot | HastElement["children"][number]) => {
+  const visit = (node: HastRoot | RootContent) => {
     if (node.type === "element" && /^h[1-6]$/.test(node.tagName)) found.push(node.properties.id);
     if ("children" in node) node.children.forEach(visit);
   };

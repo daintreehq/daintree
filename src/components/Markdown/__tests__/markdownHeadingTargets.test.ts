@@ -46,6 +46,20 @@ describe("markdownTargetLine (#17335)", () => {
     expect(markdownTargetLine(PLAN, "./other.md#risks")).toBeNull();
   });
 
+  it("reads each source afresh", () => {
+    expect(markdownTargetLine("## Risks\n", "#risks")).toBe(1);
+    expect(markdownTargetLine("Intro.\n\n## Risks\n", "#risks")).toBe(3);
+    expect(markdownTargetLine("## Other\n", "#risks")).toBeNull();
+  });
+
+  // GitHub's order: the prefixed reading first, so a heading that slugs to a
+  // footnote's id outranks the footnote, in Edit mode as in Rendered.
+  it("prefers a heading whose id is the fragment prefixed again", () => {
+    const source = "## user-content-fn-note\n\nClaim.[^note]\n\n[^note]: Source.\n";
+    expect(markdownTargetLine(source, "#user-content-fn-note")).toBe(1);
+    expect(markdownTargetLine(source, "#user-content-fnref-note")).toBe(3);
+  });
+
   it("counts lines the same in a CRLF document", () => {
     expect(markdownTargetLine(PLAN.replaceAll("\n", "\r\n"), "#risks-1")).toBe(11);
   });

@@ -447,17 +447,31 @@ describe("RenderedMarkdownDiff", () => {
     ]);
 
     const { container } = renderDiff(diff, source, { status: "added" });
+    // The view's own scroller, as a pane would be: jsdom has no layout, so it
+    // is a box that scrolls with every target well below its top.
+    container.style.overflowY = "auto";
+    Object.defineProperty(container, "clientHeight", { configurable: true, value: 400 });
+    Object.defineProperty(container, "scrollHeight", { configurable: true, value: 4000 });
+    container.getBoundingClientRect = () => ({ top: 0 }) as DOMRect;
+    for (const target of container.querySelectorAll("h2, [id]")) {
+      target.getBoundingClientRect = () => ({ top: 900 }) as DOMRect;
+    }
     const before = document.activeElement;
-    const links = [...container.querySelectorAll("a")];
+    const links = [
+      container.querySelector('a[href="#risks"]'),
+      container.querySelector("a[data-footnote-ref]"),
+      container.querySelector("a[data-footnote-backref]"),
+    ];
     for (const link of links) {
+      if (!link) throw new Error("a same-document link the fixture promises is missing");
       const click = new MouseEvent("click", { bubbles: true, cancelable: true });
       link.dispatchEvent(click);
       expect(click.defaultPrevented).toBe(true);
+      expect(container.scrollTop).toBe(0);
+      expect(document.activeElement).toBe(before);
     }
 
     expect(container.querySelector("h2")?.id).toBe("");
-    expect(links.map((link) => link.getAttribute("href"))).toContain("#risks");
-    expect(document.activeElement).toBe(before);
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 

@@ -497,6 +497,33 @@ describe("MarkdownDocument same-document links (#17335)", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
+  it("never falls back to another document for a heading this one lacks", () => {
+    const { getByTestId } = render(
+      <div>
+        <div data-testid="pane-a" style={{ overflowY: "auto" }}>
+          <MarkdownDocument {...FIXTURE_PROPS} content={"## Nowhere"} />
+        </div>
+        <div data-testid="pane-b" style={{ overflowY: "auto" }}>
+          <MarkdownDocument {...FIXTURE_PROPS} content={"[gone](#nowhere)\n\n## Risks"} />
+        </div>
+      </div>
+    );
+    const paneA = getByTestId("pane-a");
+    const paneB = getByTestId("pane-b");
+    stubPane(paneA, 0);
+    stubPane(paneB, 500);
+    const elsewhere = paneA.querySelector("h2")!;
+    placeAt(elsewhere, 900);
+    const before = document.activeElement;
+
+    screen.getByRole("link", { name: "gone" }).click();
+
+    expect(paneA.scrollTop).toBe(0);
+    expect(paneB.scrollTop).toBe(0);
+    expect(document.activeElement).toBe(before);
+    expect(elsewhere.hasAttribute("tabindex")).toBe(false);
+  });
+
   it("scrolls only the document's own pane, never a scroller around it", () => {
     const { getByTestId } = render(
       <div data-testid="app" style={{ overflowY: "auto" }}>

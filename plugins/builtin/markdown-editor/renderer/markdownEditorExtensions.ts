@@ -110,9 +110,11 @@ export const docUtf8Bytes = StateField.define<number>({
  * such link, not with the editor, and reads the buffer as it stands then.
  */
 export async function followHeadingLink(view: EditorView, href: string): Promise<void> {
+  const selection = view.state.selection;
   const { markdownTargetLine } = await import("@/components/Markdown/markdownHeadingTargets");
-  // Closed, or replaced by a reload, while the parser loaded.
-  if (!view.dom.isConnected) return;
+  // Closed or replaced by a reload while the parser loaded, or the reader has
+  // moved on: a late jump must not take the caret, or focus, back from them.
+  if (!view.dom.isConnected || !view.hasFocus || !view.state.selection.eq(selection)) return;
   const line = markdownTargetLine(view.state.doc.toString(), href);
   if (line === null || line > view.state.doc.lines) return;
   const position = view.state.doc.line(line).from;
@@ -121,7 +123,11 @@ export async function followHeadingLink(view: EditorView, href: string): Promise
     effects: EditorView.scrollIntoView(position, { y: "start" }),
     userEvent: "select",
   });
-  view.focus();
+}
+
+/** A link destination without the `<…>` CommonMark allows around it, which the URL node keeps. */
+function destination(view: EditorView, url: SyntaxNode): string {
+  return view.state.sliceDoc(url.from, url.to).replace(/^<([\s\S]*)>$/, "$1");
 }
 
 /** Walk up from the click position to the nearest link node and read its target. */
@@ -130,11 +136,11 @@ export function linkTargetAt(view: EditorView, pos: number): string | null {
   let node: SyntaxNode | null = tree.resolveInner(pos, 1);
   while (node) {
     if (node.name === "URL") {
-      return view.state.sliceDoc(node.from, node.to);
+      return destination(view, node);
     }
     if (node.name === "Link" || node.name === "Image") {
       const url = node.getChild("URL");
-      return url ? view.state.sliceDoc(url.from, url.to) : null;
+      return url ? destination(view, url) : null;
     }
     if (node.name === "Autolink") {
       // `<https://example.com>` — the angle brackets are marks, the text between is the URL.
