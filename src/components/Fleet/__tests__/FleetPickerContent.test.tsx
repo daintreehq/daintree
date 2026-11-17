@@ -760,7 +760,9 @@ describe("FleetPickerContent + useFleetPicker", () => {
   describe("output search completeness (#17517)", () => {
     type Match = { terminalId: string; line: string; matchStart: number; matchEnd: number };
     type SearchResult = { matches: Match[]; complete: boolean };
-    let search: ReturnType<typeof vi.fn<(q: string, isRegex: boolean) => Promise<SearchResult>>>;
+    // An older host answers with the bare match array.
+    type SearchFn = (q: string, isRegex: boolean) => Promise<SearchResult | Match[]>;
+    let search: ReturnType<typeof vi.fn<SearchFn>>;
 
     const hit = (terminalId: string): Match => ({
       terminalId,
@@ -779,7 +781,7 @@ describe("FleetPickerContent + useFleetPicker", () => {
 
     beforeEach(() => {
       vi.useFakeTimers();
-      search = vi.fn<(q: string, isRegex: boolean) => Promise<SearchResult>>();
+      search = vi.fn<SearchFn>();
       Object.assign(window, { electron: { terminal: { searchSemanticBuffers: search } } });
       seedTerminals([
         makeTerminal("t1", { title: "alpha" }),
@@ -1022,7 +1024,7 @@ describe("FleetPickerContent + useFleetPicker", () => {
     });
 
     it("reads a bare match array from an older host as a complete answer", async () => {
-      search.mockResolvedValueOnce([hit("t2")] as unknown as SearchResult);
+      search.mockResolvedValueOnce([hit("t2")]);
       await open();
       await typeAndSettle("omega");
 
