@@ -136,7 +136,8 @@ describe("git:checkout-ours-theirs on a modify/delete conflict (real git)", () =
       expect(git(repo, "diff", "--cached", "--name-status")).toBe("D\toriginal\n");
     });
 
-    it("keeps HEAD's modification", async () => {
+    it("keeps HEAD's modification over a hand edit", async () => {
+      fs.appendFileSync(path.join(repo, "original"), "hand edit\n");
       await takeSide("original", { resolution: "checkout", side: "ours" });
       expect(await conflictCodes()).toEqual([]);
       expect(read("original")).toBe("modified\n");
@@ -159,11 +160,20 @@ describe("git:checkout-ours-theirs on a modify/delete conflict (real git)", () =
       expect(git(repo, "ls-files", "--", "original")).toBe("");
     });
 
-    it("keeps the incoming modification", async () => {
+    it("keeps the incoming modification over a hand edit", async () => {
+      fs.appendFileSync(path.join(repo, "original"), "hand edit\n");
       await takeSide("original", { resolution: "checkout", side: "theirs" });
       expect(await conflictCodes()).toEqual([]);
       expect(read("original")).toBe("modified\n");
-      expect(git(repo, "diff", "--cached", "--name-status")).toBe("A\toriginal\n");
+      expect(git(repo, "show", ":original")).toBe("modified\n");
+    });
+
+    it("refuses a deletion of both, since the incoming side has the file", async () => {
+      const before = indexAndDisk("original");
+      await expect(takeSide("original", { resolution: "delete", side: "both" })).rejects.toThrow(
+        /has changed/
+      );
+      expect(indexAndDisk("original")).toEqual(before);
     });
   });
 
@@ -200,6 +210,71 @@ describe("git:checkout-ours-theirs on a modify/delete conflict (real git)", () =
       ).rejects.toThrow(/Invalid resolution/);
       expect(onDisk("original")).toBe(true);
     });
+  });
+
+  it("refuses a directory holding a conflict, which is not the conflicted path", async () => {
+    git(repo, "checkout", "-q", "main");
+    fs.mkdirSync(path.join(repo, "sub"));
+    fs.writeFileSync(path.join(repo, "sub/inner"), "base\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-q", "-m", "sub");
+    git(repo, "checkout", "-q", "-b", "sub-deleter");
+    git(repo, "rm", "-q", "sub/inner");
+    git(repo, "commit", "-q", "-m", "delete sub/inner");
+    git(repo, "checkout", "-q", "main");
+    fs.writeFileSync(path.join(repo, "sub/inner"), "edit\n");
+    git(repo, "commit", "-q", "-am", "modify sub/inner");
+    gitConflicting(repo, "merge", "--no-edit", "sub-deleter");
+
+    const before = indexAndDisk("sub/inner");
+    await expect(takeSide("sub", { resolution: "checkout", side: "ours" })).rejects.toThrow(
+      /has changed/
+    );
+    expect(indexAndDisk("sub/inner")).toEqual(before);
+    expect(await conflictCodes()).toEqual(["UD sub/inner"]);
+  });
+
+  it("resolves a rename/rename conflict: the original by deleting both, each new name by its side", async () => {
+    git(repo, "checkout", "-q", "-b", "left", "main");
+    git(repo, "mv", "original", "left");
+    git(repo, "commit", "-q", "-m", "rename to left");
+    git(repo, "checkout", "-q", "-b", "right", "main");
+    git(repo, "mv", "original", "right");
+    git(repo, "commit", "-q", "-m", "rename to right");
+    git(repo, "checkout", "-q", "left");
+    gitConflicting(repo, "merge", "--no-edit", "right");
+    expect(await conflictCodes()).toEqual(["AU left", "DD original", "UA right"]);
+
+    await takeSide("original", { resolution: "delete", side: "both" });
+    await takeSide("left", { resolution: "delete", side: "theirs" });
+    await takeSide("right", { resolution: "checkout", side: "theirs" });
+    expect(await conflictCodes()).toEqual([]);
+    expect(onDisk("original")).toBe(false);
+    expect(onDisk("left")).toBe(false);
+    expect(read("right")).toBe("base\n");
+    expect(git(repo, "ls-files")).toBe("right\n");
+  });
+
+  it("refuses to delete a submodule, which would take more than the one path", async () => {
+    git(repo, "checkout", "-q", "main");
+    const base = git(repo, "rev-parse", "HEAD").trim();
+    git(repo, "update-index", "--add", "--cacheinfo", `160000,${base},sub`);
+    git(repo, "commit", "-q", "-m", "add submodule");
+    const linked = git(repo, "rev-parse", "HEAD").trim();
+    git(repo, "checkout", "-q", "-b", "sub-deleter");
+    git(repo, "rm", "-q", "--cached", "sub");
+    git(repo, "commit", "-q", "-m", "drop submodule");
+    git(repo, "checkout", "-q", "main");
+    git(repo, "update-index", "--cacheinfo", `160000,${linked},sub`);
+    git(repo, "commit", "-q", "-m", "move submodule");
+    gitConflicting(repo, "merge", "--no-edit", "sub-deleter");
+    expect(await conflictCodes()).toEqual(["UD sub"]);
+
+    const before = git(repo, "ls-files", "--stage", "--", "sub");
+    await expect(takeSide("sub", { resolution: "delete", side: "theirs" })).rejects.toThrow(
+      /submodule/
+    );
+    expect(git(repo, "ls-files", "--stage", "--", "sub")).toBe(before);
   });
 
   it("deletes a file whose name is a glob pattern, and only that file", async () => {

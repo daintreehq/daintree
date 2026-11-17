@@ -710,12 +710,11 @@ export function ConflictPanel({
       : choice.side === "both"
         ? "Delete file"
         : `Delete file to match ${sideSource[choice.side]}`;
+  // Starts with the visible label, so the item answers to what it shows.
   const choiceAriaLabel = (choice: ConflictSideChoice, filePath: string): string =>
-    choice.resolution === "checkout"
-      ? `Use ${sideSource[choice.side]} for ${filePath} (${choice.side})`
-      : choice.side === "both"
-        ? `Delete ${filePath}, which neither side has`
-        : `Delete ${filePath} to match ${sideSource[choice.side]} (${choice.side})`;
+    choice.side === "both"
+      ? `${choiceLabel(choice)} ${filePath}`
+      : `${choiceLabel(choice)} for ${filePath} (${choice.side})`;
 
   const isRebaseMidSequence =
     isRebase &&

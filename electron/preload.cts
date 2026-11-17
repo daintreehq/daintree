@@ -2293,7 +2293,7 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.GIT_SCAN_CONFLICT_MARKERS, { cwd, filePaths }),
 
       checkoutOursTheirs: (cwd: string, filePath: string, choice: ConflictSideChoice) =>
-        _unwrappingInvoke(CHANNELS.GIT_CHECKOUT_OURS_THEIRS, { cwd, filePath, ...choice }),
+        _unwrappingInvoke(CHANNELS.GIT_CHECKOUT_OURS_THEIRS, { ...choice, cwd, filePath }),
 
       compareWorktrees: (
         cwd: string,

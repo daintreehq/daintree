@@ -2446,12 +2446,15 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     // may be stale. Check the stages it was based on, and refuse rather than run
     // the other operation: stage 2 is ours, stage 3 is theirs.
     const stages = new Set<string>();
+    let isSubmodule = false;
     const unmerged = await git.raw(["ls-files", "--unmerged", "-z", "--", payload.filePath]);
     for (const record of unmerged.split("\0")) {
       const tab = record.indexOf("\t");
       // A directory pathspec also matches its descendants.
       if (tab === -1 || record.slice(tab + 1) !== payload.filePath) continue;
-      stages.add(record.slice(0, tab).split(" ")[2] ?? "");
+      const [mode, , stage] = record.slice(0, tab).split(" ");
+      stages.add(stage ?? "");
+      if (mode === "160000") isSubmodule = true;
     }
     const sideStages = side === "both" ? ["2", "3"] : [side === "ours" ? "2" : "3"];
     const expectPresent = resolution === "checkout";
@@ -2462,6 +2465,13 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     }
 
     if (resolution === "delete") {
+      // On a submodule `git rm` also removes its checkout and edits
+      // `.gitmodules`, more than a confirm that names one file covers.
+      if (isSubmodule) {
+        throw new Error(
+          `${payload.filePath} is a submodule. Resolve its deletion with git in a terminal.`
+        );
+      }
       // `git rm` resolves the unmerged path as deleted and removes the file,
       // whatever edits it carries.
       await git.raw(["rm", "-q", "--", payload.filePath]);
