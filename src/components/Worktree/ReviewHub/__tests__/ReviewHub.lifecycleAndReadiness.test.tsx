@@ -576,7 +576,9 @@ describe("ReviewHub", () => {
         getStagingStatusMock.mockResolvedValue(
           makeStatus({
             staged: [],
-            unstaged: [{ path: "src/unrelated.ts", status: "modified", insertions: 1, deletions: 0 }],
+            unstaged: [
+              { path: "src/unrelated.ts", status: "modified", insertions: 1, deletions: 0 },
+            ],
             conflicted: ["src/app.ts"],
             conflictedFiles: [{ path: "src/app.ts", xy: "UU", label: "both modified" }],
             repoState,
