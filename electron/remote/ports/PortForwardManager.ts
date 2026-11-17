@@ -264,6 +264,8 @@ export class PortForwardManager {
   /** Latest lookup per subdomain; an older lookup that finishes later changes nothing. */
   private readonly previewGenerations = new Map<string, number>();
   private previewGeneration = 0;
+  /** How many times each host has been forgotten, so work begun before then can tell. */
+  private readonly forgets = new Map<HostId, number>();
   private readonly now: () => number;
   private readonly spawn: SshSpawner;
   private disposed = false;
@@ -523,7 +525,14 @@ export class PortForwardManager {
     this.forwards.delete(key);
     const hold = this.holds.get(key);
     this.holds.delete(key);
+    const forgets = this.forgets.get(forward.info.hostId) ?? 0;
     if (!(await this.teardown(forward))) {
+      if ((this.forgets.get(forward.info.hostId) ?? 0) !== forgets) {
+        // The host was forgotten meanwhile: nothing of its is to be kept, so it closes as forgetHost would.
+        if (forward.driver.kind === "ssh") await forward.driver.relay?.close();
+        this.emit();
+        return;
+      }
       // ssh still holds the port: keep it listed so it can be stopped again.
       this.forwards.set(key, forward);
       if (hold && !this.holds.has(key)) this.holds.set(key, hold);
@@ -559,18 +568,17 @@ export class PortForwardManager {
     for (const [key, spec] of this.lapsed) {
       if (spec.hostId === hostId) this.lapsed.delete(key);
     }
+    // A Stop still waiting on ssh must not put one back.
+    this.forgets.set(hostId, (this.forgets.get(hostId) ?? 0) + 1);
     const prefix = keyOf(hostId, 0).slice(0, -1);
     for (const key of [...this.holds.keys()]) if (key.startsWith(prefix)) this.holds.delete(key);
-    // Its previews' answers were the old machine's, and so is any lookup still out there.
-    const previews = new Set<string>();
     for (const [subdomain, key] of this.previewKeys) {
-      if (key.startsWith(prefix)) previews.add(subdomain);
+      if (key.startsWith(prefix)) this.previewKeys.delete(subdomain);
     }
+    // Its previews' answers were the old machine's, and so is a lookup of its
+    // still out there; another host's lookup of the same origin stands.
     for (const [subdomain, cached] of this.previewCache) {
-      if (cached.hostId === hostId) previews.add(subdomain);
-    }
-    for (const subdomain of previews) {
-      this.previewKeys.delete(subdomain);
+      if (cached.hostId !== hostId) continue;
       this.previewCache.delete(subdomain);
       this.previewGenerations.set(subdomain, ++this.previewGeneration);
     }

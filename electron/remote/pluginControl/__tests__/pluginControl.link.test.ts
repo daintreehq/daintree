@@ -121,10 +121,12 @@ describe("a Shell plugin's call over a real link (#16767)", () => {
     expect(result).toMatchObject({ ok: false, error: { code: "HOST_UNREACHABLE" } });
   });
 
-  it("proves itself with the credential kept once the link is up, never one read while it connected (#17207)", async () => {
-    const host = installOnHost();
-    const before = "o".repeat(43);
-    let secret = before;
+  /** A client whose session stays pending until the test opens it, and whose credential it sets meanwhile. */
+  function connectingClient(initial: string | null) {
+    const state: { secret: string | null; open: (session: LinkSession) => void } = {
+      secret: initial,
+      open: () => {},
+    };
     const sent: unknown[] = [];
     const call = links.client.call.bind(links.client);
     vi.spyOn(links.client, "call").mockImplementation((method, payload, options) => {
@@ -135,23 +137,49 @@ describe("a Shell plugin's call over a real link (#16767)", () => {
       hosts: () => [{ hostId: HOST_ID, name: "Studio", connection: { status: "disconnected" } }],
       listHostProjects: async () => [],
       connect: async () => undefined,
-      // Re-pointed while it connected: the old machine's secret was forgotten and a new one kept.
-      session: async () => {
-        secret = SHELL_SECRET;
-        return links.client;
-      },
-      credential: () => pluginCredentialFor(secret),
+      session: () => new Promise<LinkSession | null>((resolve) => (state.open = resolve)),
+      credential: () => (state.secret === null ? null : pluginCredentialFor(state.secret)),
     });
+    const dispatch = () =>
+      client.dispatch(
+        { hostId: HOST_ID, pluginId: "acme.beads" },
+        { projectId: PROJECT, actionId: "worktree.list", args: {} }
+      );
+    return { state, sent, dispatch };
+  }
 
-    await client.dispatch(
-      { hostId: HOST_ID, pluginId: "acme.beads" },
-      { projectId: PROJECT, actionId: "worktree.list", args: {} }
-    );
+  it("proves itself with the credential kept once the link is up, never one read while it connected (#17207)", async () => {
+    const host = installOnHost();
+    const before = "o".repeat(43);
+    const { state, sent, dispatch } = connectingClient(before);
 
+    const result = dispatch();
+    await new Promise((resolve) => setImmediate(resolve));
+    // Re-pointed while it connected: the old machine's secret was forgotten and a new one kept.
+    state.secret = SHELL_SECRET;
+    state.open(links.client);
+
+    expect(await result).toEqual({ ok: true, result: { worktrees: [] } });
     expect(sent).toEqual([
       expect.objectContaining({ credential: pluginCredentialFor(SHELL_SECRET) }),
     ]);
     expect(JSON.stringify(sent)).not.toContain(pluginCredentialFor(before));
+    host.dispose();
+  });
+
+  it("sends nothing when the credential is gone by the time the link is up (#17207)", async () => {
+    const host = installOnHost();
+    const { state, sent, dispatch } = connectingClient("o".repeat(43));
+
+    const result = dispatch();
+    await new Promise((resolve) => setImmediate(resolve));
+    // Being re-pointed: none is minted or presented until that settles.
+    state.secret = null;
+    state.open(links.client);
+
+    expect(await result).toMatchObject({ ok: false, error: { code: "HOST_UNREACHABLE" } });
+    expect(sent).toEqual([]);
+    expect(host.runWithoutView).not.toHaveBeenCalled();
     host.dispose();
   });
 

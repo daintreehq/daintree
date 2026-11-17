@@ -3251,6 +3251,33 @@ describe("RemoteHostsClient", () => {
       return { retarget, onRetarget };
     }
 
+    it("reads as retiring from its cleanup until the rebind settles, and only for that host (#17207)", async () => {
+      const seen: Array<{ at: string; retiring: boolean; other: boolean }> = [];
+      let retarget: RemoteHostsClient | null = null;
+      const note = (at: string) =>
+        seen.push({
+          at,
+          retiring: retarget!.isHostRetiring("studio-01"),
+          other: retarget!.isHostRetiring("studio-02"),
+        });
+      retarget = retargetClient(vi.fn(async () => void note("cleanup"))).retarget;
+      // The port forwards' prune runs on this change: the host must still read as retiring then.
+      const off = registry.onChange(() => note("rebind"));
+      expect(retarget.isHostRetiring("studio-01")).toBe(false);
+
+      await retarget.update({
+        hostId: "studio-01",
+        connection: { kind: "ssh", target: "newbox.example" },
+      });
+      off();
+
+      expect(seen).toEqual([
+        { at: "cleanup", retiring: true, other: false },
+        { at: "rebind", retiring: true, other: false },
+      ]);
+      expect(retarget.isHostRetiring("studio-01")).toBe(false);
+    });
+
     it("brings its windows home and clears the old machine's state before rebinding, without dialling", async () => {
       const { retarget, onRetarget } = retargetClient(
         vi.fn(async () => {
