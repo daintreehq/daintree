@@ -1,4 +1,4 @@
-import { useFleetArmingStore } from "./fleetArmingStore";
+import { selectFleetMemberCount, useFleetArmingStore } from "./fleetArmingStore";
 import { useTerminalInputStore } from "./terminalInputStore";
 
 const NO_FLEET: ReadonlySet<string> = new Set();
@@ -14,14 +14,17 @@ const NO_FLEET: ReadonlySet<string> = new Set();
  * left behind while it was torn down.
  */
 export function subscribeFleetDraftHoldRelease(): () => void {
-  // Mirroring needs a second armed pane: one left alone follows nothing.
-  const release = (armedIds: Set<string>) =>
+  // The same two-member threshold the composer mirrors at, agents on other
+  // hosts included; only this view's panes ever hold a draft.
+  const release = (state: ReturnType<typeof useFleetArmingStore.getState>) =>
     useTerminalInputStore
       .getState()
-      .releaseFleetDraftHolds(armedIds.size >= 2 ? armedIds : NO_FLEET);
+      .releaseFleetDraftHolds(selectFleetMemberCount(state) >= 2 ? state.armedIds : NO_FLEET);
 
-  release(useFleetArmingStore.getState().armedIds);
+  release(useFleetArmingStore.getState());
   return useFleetArmingStore.subscribe((state, prev) => {
-    if (state.armedIds !== prev.armedIds) release(state.armedIds);
+    if (state.armedIds !== prev.armedIds || state.crossHostTargets !== prev.crossHostTargets) {
+      release(state);
+    }
   });
 }

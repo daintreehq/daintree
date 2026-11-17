@@ -20,6 +20,7 @@ function resetStores() {
     armOrder: [],
     armOrderById: {},
     lastArmedId: null,
+    crossHostTargets: [],
   });
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
   useFleetResolutionPreviewStore.getState().clear();
@@ -245,6 +246,54 @@ describe("FleetDraftingPill", () => {
     expect(screen.getByTestId("fleet-drafting-pill-trigger").textContent).toMatch(
       /Mirroring to 1 peer/
     );
+  });
+
+  function armRemote(terminalId: string) {
+    useFleetArmingStore.getState().armCrossHostTarget({
+      key: crossHostTargetKey("studio", terminalId),
+      hostId: "studio",
+      hostName: "Studio",
+      terminalId,
+      title: terminalId,
+    });
+  }
+
+  it("counts an agent on another host as the lone pane's peer (#17182)", () => {
+    seedPanel(makeAgent("t-1"));
+    armAgent("t-1", 0);
+    usePanelStore.setState({ focusedId: "t-1" });
+
+    const { container } = render(<FleetDraftingPill />);
+    expect(container.firstChild).toBeNull();
+
+    act(() => armRemote("r-1"));
+    expect(screen.getByTestId("fleet-drafting-pill-trigger").textContent).toMatch(
+      /Mirroring to 1 peer$/
+    );
+  });
+
+  it("counts every reachable peer across a mix of this view's panes and another host's", () => {
+    seedPanel(makeAgent("t-1"));
+    seedPanel(makeAgent("t-2"));
+    seedPanel(makeAgent("t-3", { isInputLocked: true }));
+    armAgent("t-1", 0);
+    armAgent("t-2", 1);
+    armAgent("t-3", 2);
+    armRemote("r-1");
+    armRemote("r-2");
+    usePanelStore.setState({ focusedId: "t-1" });
+
+    render(<FleetDraftingPill />);
+    const trigger = () => screen.getByTestId("fleet-drafting-pill-trigger").textContent;
+    expect(trigger()).toMatch(/Mirroring to 3 peers/);
+
+    act(() =>
+      useFleetTargetOverridesStore.getState().setSkipped(crossHostTargetKey("studio", "r-2"), true)
+    );
+    expect(trigger()).toMatch(/Mirroring to 2 peers/);
+
+    act(() => useFleetTargetOverridesStore.getState().setSkipped("t-2", true));
+    expect(trigger()).toMatch(/Mirroring to 1 peer/);
   });
 
   it("leaves a locked peer out of the reach count and its row (#14964)", () => {

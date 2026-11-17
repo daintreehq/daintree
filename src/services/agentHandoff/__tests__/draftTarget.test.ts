@@ -44,6 +44,7 @@ function inputs(
     hybridInputEnabled: true,
     voiceSubmittingIds: new Set(),
     armedIds: new Set(),
+    crossHostTargetCount: 0,
     ...overrides,
   };
 }
@@ -113,6 +114,12 @@ describe("resolveDraftRefusal", () => {
       { armedIds: new Set(["a", "b"]) },
       "fleet-armed",
     ],
+    [
+      "an agent armed with another host's agent (#17182)",
+      [agentPanel("a")],
+      { armedIds: new Set(["a"]), crossHostTargetCount: 1 },
+      "fleet-armed",
+    ],
   ])("refuses %s", (_name, panels, overrides, reason) => {
     expect(resolveDraftRefusal(inputs(panels, overrides), "a")).toBe(reason);
   });
@@ -121,6 +128,17 @@ describe("resolveDraftRefusal", () => {
     const state = inputs([agentPanel("a"), agentPanel("b"), agentPanel("c")], {
       armedIds: new Set(["b", "c"]),
     });
+    expect(resolveDraftRefusal(state, "a")).toBeNull();
+    expect(
+      resolveDraftRefusal(
+        inputs([agentPanel("a")], { armedIds: new Set(), crossHostTargetCount: 2 }),
+        "a"
+      )
+    ).toBeNull();
+  });
+
+  it("does not refuse the only armed agent while nothing else is in the fleet", () => {
+    const state = inputs([agentPanel("a")], { armedIds: new Set(["a"]) });
     expect(resolveDraftRefusal(state, "a")).toBeNull();
   });
 

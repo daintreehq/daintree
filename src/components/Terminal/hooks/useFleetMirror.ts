@@ -3,7 +3,7 @@ import type { EditorView } from "@codemirror/view";
 import { Transaction } from "@codemirror/state";
 import { clearComposerHistory } from "../inputEditorExtensions/composerHistory";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
-import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { selectFleetMemberCount, useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetResolutionPreviewStore } from "@/store/fleetResolutionPreviewStore";
 import { useFleetTargetOverridesStore } from "@/store/fleetTargetOverridesStore";
 
@@ -38,15 +38,19 @@ export function useFleetMirror({
 }: UseFleetMirrorParams) {
   const isApplyingExternalValueRef = useRef(false);
   // Only the primary re-mirrors when membership changes; every other pane
-  // reads a constant, so a fleet change doesn't re-render its composer.
+  // reads a constant, so a fleet change doesn't re-render its composer. Another
+  // host's agents get no mirrored draft, but their preview rows rebuild here.
   const armedIds = useFleetArmingStore((s) => (isFleetPrimary ? s.armedIds : null));
+  const crossHostTargets = useFleetArmingStore((s) => (isFleetPrimary ? s.crossHostTargets : null));
 
   const mirrorDraft = useCallback(
     (draft: string) => {
       if (isolated || !isFleetPrimary || disabled) return false;
-      const liveArmedIds = useFleetArmingStore.getState().armedIds;
-      if (!liveArmedIds.has(terminalId) || liveArmedIds.size < 2) return false;
-      useTerminalInputStore.getState().mirrorFleetDraft(terminalId, draft, liveArmedIds, projectId);
+      const arming = useFleetArmingStore.getState();
+      if (!arming.armedIds.has(terminalId) || selectFleetMemberCount(arming) < 2) return false;
+      useTerminalInputStore
+        .getState()
+        .mirrorFleetDraft(terminalId, draft, arming.armedIds, projectId);
       return true;
     },
     [isolated, isFleetPrimary, disabled, terminalId, projectId]
@@ -56,7 +60,7 @@ export function useFleetMirror({
   // chain for every keystroke. This also covers membership and outside writes.
   useEffect(() => {
     if (mirrorDraft(value)) useFleetResolutionPreviewStore.getState().setDraft(value);
-  }, [mirrorDraft, value, armedIds]);
+  }, [mirrorDraft, value, armedIds, crossHostTargets]);
 
   // Follower ← primary: pull mirrored text into our local value + editor doc
   const externalDraftKey = projectId ? `${projectId}:${terminalId}` : terminalId;

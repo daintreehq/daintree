@@ -15,6 +15,17 @@ function resetArmingStore(): void {
     lastArmedId: null,
     broadcastSignal: 0,
     previewArmedIds: new Set<string>(),
+    crossHostTargets: [],
+  });
+}
+
+function armRemote(key: string): void {
+  useFleetArmingStore.getState().armCrossHostTarget({
+    key,
+    hostId: "studio",
+    hostName: "Studio",
+    terminalId: key.slice(key.lastIndexOf(":") + 1),
+    title: "remote",
   });
 }
 
@@ -189,6 +200,82 @@ describe("fleetTargetOverridesStore", () => {
         expect(state.payloadOverrides["ghost"]).toBeUndefined();
         expect(state.skippedIds.has("ghost")).toBe(false);
         expect(state.payloadOverrides["a"]).toBe("keep");
+      } finally {
+        unsub();
+      }
+    });
+
+    it("keeps another host's skips and overrides while local panes arm and disarm (#17182)", () => {
+      const R1 = "host-fleet:studio:r-1";
+      const R2 = "host-fleet:studio:r-2";
+      const overrides = useFleetTargetOverridesStore.getState();
+      useFleetArmingStore.getState().armId("a");
+      armRemote(R1);
+      armRemote(R2);
+      overrides.setSkipped(R1, true);
+      overrides.setPayloadOverride(R2, "for r-2");
+      overrides.setPayloadOverride("a", "for a");
+
+      const unsub = subscribeFleetTargetOverridesPruning();
+      try {
+        useFleetArmingStore.getState().armId("b");
+        let state = useFleetTargetOverridesStore.getState();
+        expect(state.skippedIds.has(R1)).toBe(true);
+        expect(state.payloadOverrides[R2]).toBe("for r-2");
+
+        useFleetArmingStore.getState().disarmId("b");
+        // The last local pane leaves; two agents on the other host remain.
+        useFleetArmingStore.getState().disarmId("a");
+        state = useFleetTargetOverridesStore.getState();
+        expect(state.payloadOverrides["a"]).toBeUndefined();
+        expect(state.skippedIds.has(R1)).toBe(true);
+        expect(state.payloadOverrides[R2]).toBe("for r-2");
+      } finally {
+        unsub();
+      }
+    });
+
+    it("drops another host's entry once that agent leaves the fleet", () => {
+      const R1 = "host-fleet:studio:r-1";
+      const R2 = "host-fleet:studio:r-2";
+      const overrides = useFleetTargetOverridesStore.getState();
+      useFleetArmingStore.getState().armId("a");
+      armRemote(R1);
+      armRemote(R2);
+      overrides.setSkipped(R1, true);
+      overrides.setPayloadOverride(R1, "for r-1");
+      overrides.setSkipped(R2, true);
+      overrides.setPayloadOverride("a", "for a");
+
+      const unsub = subscribeFleetTargetOverridesPruning();
+      try {
+        useFleetArmingStore.getState().disarmCrossHostTarget(R1);
+        let state = useFleetTargetOverridesStore.getState();
+        expect(state.skippedIds.has(R1)).toBe(false);
+        expect(state.payloadOverrides[R1]).toBeUndefined();
+        expect(state.skippedIds.has(R2)).toBe(true);
+        expect(state.payloadOverrides["a"]).toBe("for a");
+
+        useFleetArmingStore.getState().retainCrossHostTargetsFor(new Set());
+        state = useFleetTargetOverridesStore.getState();
+        expect(state.skippedIds.size).toBe(0);
+        expect(state.payloadOverrides).toEqual({ a: "for a" });
+      } finally {
+        unsub();
+      }
+    });
+
+    it("reconciles another host's stale entries on registration", () => {
+      const R1 = "host-fleet:studio:r-1";
+      const overrides = useFleetTargetOverridesStore.getState();
+      armRemote(R1);
+      overrides.setSkipped(R1, true);
+      overrides.setSkipped("host-fleet:studio:gone", true);
+
+      const unsub = subscribeFleetTargetOverridesPruning();
+      try {
+        const state = useFleetTargetOverridesStore.getState();
+        expect([...state.skippedIds]).toEqual([R1]);
       } finally {
         unsub();
       }

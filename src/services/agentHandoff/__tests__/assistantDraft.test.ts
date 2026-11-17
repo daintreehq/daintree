@@ -54,7 +54,7 @@ const {
 vi.mock("@/store/panelStore", () => ({ usePanelStore: asStore(panelState) }));
 vi.mock("@/store/terminalInputStore", () => ({ useTerminalInputStore: asStore(inputState) }));
 vi.mock("@/store/fleetArmingStore", () => ({
-  useFleetArmingStore: asStore({ armedIds: new Set<string>() }),
+  useFleetArmingStore: asStore({ armedIds: new Set<string>(), crossHostTargets: [] }),
 }));
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: asStore({ currentProject: { id: "proj-1" } }),

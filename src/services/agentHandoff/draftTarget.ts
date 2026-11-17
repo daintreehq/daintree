@@ -24,6 +24,8 @@ export interface DraftTargetInputs {
   hybridInputEnabled: boolean;
   voiceSubmittingIds: ReadonlySet<string>;
   armedIds: ReadonlySet<string>;
+  /** Agents on other hosts armed into this view's fleet, which a broadcast also reaches. */
+  crossHostTargetCount: number;
 }
 
 /**
@@ -59,8 +61,14 @@ export function resolveDraftRefusal(
   const composerRefusal = resolveComposerRefusal(inputs, panel, terminalId);
   if (composerRefusal !== null) return composerRefusal;
   // In a live broadcast, Enter in an armed agent's draft goes to every armed
-  // agent — the same two-armed threshold `tryFleetBroadcastFromEditor` uses.
-  if (inputs.armedIds.size >= 2 && inputs.armedIds.has(terminalId)) return "fleet-armed";
+  // agent — the same two-member threshold `tryFleetBroadcastFromEditor` uses,
+  // another host's agents included.
+  if (
+    inputs.armedIds.has(terminalId) &&
+    inputs.armedIds.size + inputs.crossHostTargetCount >= 2
+  ) {
+    return "fleet-armed";
+  }
   return null;
 }
 

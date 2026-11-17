@@ -68,7 +68,7 @@ import type {
   VoiceRecordingTarget,
   VoiceScratchRefusal,
 } from "@/store/voiceRecordingStore";
-import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { selectFleetMemberCount, useFleetArmingStore } from "@/store/fleetArmingStore";
 
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { VoiceInputButton } from "./VoiceInputButton";
@@ -2463,7 +2463,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const recordTypedTarget = () => {
       // A canopy view types to a terminal that may live in another project.
       if (isolated || agentId === undefined) return;
-      if (useFleetArmingStore.getState().armedIds.size >= 2) return;
+      if (selectFleetMemberCount(useFleetArmingStore.getState()) >= 2) return;
       const workspaceId = getViewWorkspaceId();
       if (workspaceId === null) return;
       useTerminalInputStore.getState().recordLastTypedAgentTarget(terminalId, workspaceId);
