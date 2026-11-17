@@ -44,9 +44,14 @@ function subcommand(args: readonly string[]): string | undefined {
 }
 
 // The fixture's own git: nothing inherited from the runner (a hook's
-// GIT_INDEX_FILE, a default hash or ref format) may reach the repositories.
+// GIT_INDEX_FILE, a default hash or ref format) may reach the repositories, and
+// its messages read as the handler's do. Windows matches env names in any case.
 const GIT_ENV: NodeJS.ProcessEnv = {
-  ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
+  ...Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith("GIT_"))
+  ),
+  LC_ALL: "C",
+  LANGUAGE: "",
   GIT_AUTHOR_NAME: "Test",
   GIT_AUTHOR_EMAIL: "test@example.test",
   GIT_COMMITTER_NAME: "Test",
@@ -65,7 +70,7 @@ function headDiffFailure(cwd: string): string {
     git(cwd, "diff", "--no-ext-diff", "--no-textconv", "HEAD", "--");
   } catch (error) {
     const stderr = String((error as { stderr?: unknown }).stderr ?? "").trim();
-    if (stderr) return stderr.split("\n")[0];
+    if (stderr) return stderr.split(/\r?\n/)[0];
   }
   throw new Error("expected git diff HEAD to fail with an error");
 }
@@ -199,7 +204,9 @@ describe("@diff:head working diff (real git)", () => {
     const diff = await headDiff();
 
     expect(diff).toContain("--- /dev/null\n+++ b/big.txt\n@@ -0,0 +1,600 @@\n+line 0\n");
-    expect(diff).toMatch(/\n\[Diff truncated — showing first 500 of \d+ lines\]$/);
+    const lines = diff.split("\n");
+    expect(lines).toHaveLength(501);
+    expect(lines[500]).toMatch(/^\[Diff truncated — showing first 500 of \d+ lines\]$/);
   });
 
   it("reads a tracked file named HEAD as a path, never as the revision", async () => {

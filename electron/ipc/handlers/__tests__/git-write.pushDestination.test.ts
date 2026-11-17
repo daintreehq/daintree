@@ -1674,14 +1674,14 @@ describe("git-write commit and working diff", () => {
       ] as const)("rethrows git's own error when %s", async (_case, answers) => {
         const strict = strictGit(answers);
 
-        await expect(headDiff()).rejects.toThrow("fatal: bad revision 'HEAD'");
+        await expect(headDiff()).rejects.toBe(headFailure);
         expect(strict.diff).not.toHaveBeenCalled();
       });
 
       it("rethrows git's own error when no strict git can be made", async () => {
         createStrictExitGitMock.mockRejectedValue(new Error("no git"));
 
-        await expect(headDiff()).rejects.toThrow("fatal: bad revision 'HEAD'");
+        await expect(headDiff()).rejects.toBe(headFailure);
       });
     });
 
