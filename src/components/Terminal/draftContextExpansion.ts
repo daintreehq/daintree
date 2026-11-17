@@ -69,6 +69,36 @@ export function shareContextReferenceResolutions(
   };
 }
 
+export type WorkingDiffReader = (cwd: string, type: DiffContextType) => Promise<string>;
+
+export const readWorkingDiff: WorkingDiffReader = (cwd, type) =>
+  window.electron.git.getWorkingDiff(cwd, type);
+
+/**
+ * A reader that asks main once per working directory and diff type, however
+ * many agents or tokens name it: every agent a fleet send reaches in one
+ * worktree gets the same snapshot, failure included, and the send stays clear
+ * of the channel's rate limit.
+ */
+export function shareWorkingDiffReads(
+  read: WorkingDiffReader = readWorkingDiff
+): WorkingDiffReader {
+  const held = new Map<string, Promise<string>>();
+  return (cwd, type) => {
+    const key = `${cwd}\0${type}`;
+    let reading = held.get(key);
+    if (!reading) {
+      try {
+        reading = read(cwd, type);
+      } catch (err) {
+        reading = Promise.reject(err);
+      }
+      held.set(key, reading);
+    }
+    return reading;
+  };
+}
+
 export type DraftContextKind = "terminal" | "selection" | "diff" | "notes" | "plugin";
 
 export interface DraftContextToken {
@@ -102,6 +132,8 @@ export interface DraftContextSource {
   terminalId: string;
   /** Where `@diff` is taken. */
   cwd: string;
+  /** Reads `@diff`; without one, each distinct diff is read once for this draft. */
+  readDiff?: WorkingDiffReader;
   resolveReferences?: ContextReferenceResolver;
   /**
    * Handed the notes `@notes` took, for the caller to clear once the text is
@@ -122,6 +154,7 @@ export async function expandDraftContext(
   {
     terminalId,
     cwd,
+    readDiff = shareWorkingDiffReads(),
     resolveReferences = resolveContextReferences,
     onDiffNotesTaken,
   }: DraftContextSource
@@ -173,7 +206,7 @@ export async function expandDraftContext(
   for (const token of diffTokens) {
     let replacement: string;
     try {
-      const raw = await window.electron.git.getWorkingDiff(cwd, token.diffType);
+      const raw = await readDiff(cwd, token.diffType);
       if (raw) {
         replacement = fenceTokenExpansion(raw, "diff");
       } else {
