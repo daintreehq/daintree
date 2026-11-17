@@ -336,8 +336,13 @@ describe("panelStatusBuffer — no-op frames", () => {
       activityStatus: "working",
       activityType: "interactive",
       lastCommand: "ls",
-      runtimeStatus: "exited",
     });
+    seedPanel("t1", {
+      flowStatus: "paused",
+      flowStatusTimestamp: 5,
+      heldDurationMs: 7,
+    });
+    seedPanel("t2", { runtimeStatus: "exited" });
 
     let copies = 0;
     const raw = usePanelStore.getState().panelsById;
@@ -350,7 +355,10 @@ describe("panelStatusBuffer — no-op frames", () => {
     usePanelStore.setState({ panelsById: proxied });
 
     enqueueActivityUpdate("t0", "h", "working", "interactive", "ls");
-    enqueueFlowStatusUpdate("t0", "paused", 5);
+    enqueueFlowStatusUpdate("t1", "paused", 5);
+    enqueueFlowStatusUpdate("t2", "paused", 9);
+    enqueueHeldDurationUpdate("t1", 7);
+    clearHeldDuration("t0");
     enqueueActivityUpdate("missing", "h", "working", "interactive", "ls");
     raf.flushAll();
 
@@ -358,7 +366,7 @@ describe("panelStatusBuffer — no-op frames", () => {
     expect(usePanelStore.getState().panelsById).toBe(proxied);
   });
 
-  it("copies once for several real changes in one frame", () => {
+  it("folds several real changes in one frame into one state update", () => {
     for (let i = 0; i < 3; i++) seedPanel(`t${i}`);
     let copies = 0;
     const proxied = new Proxy(usePanelStore.getState().panelsById, {
