@@ -344,23 +344,24 @@ describe("TerminalSearchBar", () => {
       expect(screen.getByRole("status").textContent).toContain("Search failed");
     });
 
-    it("keeps stepping available and retries the search on the next step", async () => {
+    it("keeps stepping available, explains the failure, and retries into a working search with counts", async () => {
       const mock = createMockManaged(true);
-      vi.mocked(terminalInstanceService.get).mockReturnValue(
-        mock as unknown as ReturnType<typeof terminalInstanceService.get>
-      );
-      vi.mocked(terminalInstanceService.ensureSearchAddon).mockImplementation(
-        async () => mock.searchAddon as never
-      );
-      // The mount effect's result subscription takes the first call, the
-      // search the second: both fail, then loading works again.
-      vi.mocked(terminalInstanceService.ensureSearchAddon)
-        .mockRejectedValueOnce(new Error("chunk failed to load"))
-        .mockRejectedValueOnce(new Error("chunk failed to load"));
+      let loadWorks = false;
+      vi.mocked(terminalInstanceService.ensureSearchAddon).mockImplementation(async () => {
+        if (!loadWorks) throw new Error("chunk failed to load");
+        return mock.searchAddon as never;
+      });
 
       await typeQuery("hello");
-      expect(screen.getByRole("status").textContent).toContain("Search failed");
+      const failed = screen.getByRole("status").textContent ?? "";
+      expect(failed).toContain("Search failed");
+      expect(failed).toContain("Press Enter to try again");
+      const input = screen.getByPlaceholderText("Find in terminal…");
+      const noteId = input.getAttribute("aria-describedby");
+      expect(noteId).toBeTruthy();
+      expect(document.getElementById(noteId!)?.textContent).toContain("Press Enter to try again");
 
+      loadWorks = true;
       const next = screen.getByLabelText("Next match");
       expect(next.hasAttribute("disabled")).toBe(false);
       await act(async () => {
@@ -368,7 +369,62 @@ describe("TerminalSearchBar", () => {
       });
 
       expect(mock.searchAddon.findNext).toHaveBeenCalledWith("hello", expect.anything());
-      expect(screen.getByRole("status").textContent).toBe("Found");
+      // The load that failed on open never subscribed, so the retry must.
+      await act(async () => {
+        mock._fireResults({ resultIndex: 0, resultCount: 3 });
+      });
+      expect(screen.getByRole("status").textContent).toBe("1 of 3");
+      expect(input.getAttribute("aria-describedby")).toBeNull();
+    });
+
+    it("does not let a late load failure overwrite a newer invalid pattern", async () => {
+      let rejectLoad!: (error: Error) => void;
+      vi.mocked(terminalInstanceService.ensureSearchAddon).mockImplementation(
+        () =>
+          new Promise((_, reject) => {
+            rejectLoad = reject;
+          })
+      );
+
+      await typeQuery("hello", true);
+      await act(() => {
+        fireEvent.change(screen.getByPlaceholderText("Find in terminal…"), {
+          target: { value: "[" },
+        });
+      });
+      await act(() => {
+        vi.advanceTimersByTime(150);
+      });
+      expect(screen.getByRole("status").textContent).toBe("Invalid regex");
+
+      await act(async () => rejectLoad(new Error("chunk failed to load")));
+
+      expect(screen.getByRole("status").textContent).toBe("Invalid regex");
+    });
+
+    it("does not let a late load failure resurface after the field is cleared", async () => {
+      let rejectLoad!: (error: Error) => void;
+      vi.mocked(terminalInstanceService.ensureSearchAddon).mockImplementation(
+        () =>
+          new Promise((_, reject) => {
+            rejectLoad = reject;
+          })
+      );
+
+      await typeQuery("hello");
+      await act(() => {
+        fireEvent.change(screen.getByPlaceholderText("Find in terminal…"), {
+          target: { value: "" },
+        });
+      });
+      await act(async () => rejectLoad(new Error("chunk failed to load")));
+      await act(() => {
+        fireEvent.change(screen.getByPlaceholderText("Find in terminal…"), {
+          target: { value: "h" },
+        });
+      });
+
+      expect(screen.getByRole("status").textContent).toBe("");
     });
 
     it("still reports a pattern the engine rejects as an invalid regex", async () => {
@@ -1163,6 +1219,7 @@ describe("TerminalSearchBar", () => {
       await act(async () => loadOnA.reject(new Error("addon failed to load")));
 
       expect(screen.queryByText("No matches")).toBeNull();
+      expect(screen.getByRole("status").textContent).not.toContain("Search failed");
       expect(managed.a.searchAddon.clearDecorations).not.toHaveBeenCalled();
     });
   });

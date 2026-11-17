@@ -100,23 +100,34 @@ export function TerminalSearchBar({
   // A parked dock pane keeps its bar open; its results live in the history.
   useEffect(() => target.pinHistory?.(), [target]);
 
+  // One result subscription per addon, made by whichever of the mount load or
+  // a search gets the addon first: a load that failed on open must not leave a
+  // later successful search without its counts.
+  const resultSubscriptionRef = useRef<{ addon: SearchAddon; dispose: () => void } | null>(null);
+  const subscribeToResults = useCallback((addon: SearchAddon) => {
+    if (!addon.onDidChangeResults || resultSubscriptionRef.current?.addon === addon) return;
+    resultSubscriptionRef.current?.dispose();
+    const subscription = addon.onDidChangeResults(({ resultIndex, resultCount }) => {
+      setMatchResults({ resultIndex, resultCount });
+    });
+    resultSubscriptionRef.current = { addon, dispose: () => subscription.dispose() };
+  }, []);
+
   useEffect(() => {
     let disposed = false;
-    let resultSubscription: { dispose: () => void } | null = null;
     void target
       .ensureSearchAddon()
       .then((addon) => {
-        if (disposed || !addon?.onDidChangeResults) return;
-        resultSubscription = addon.onDidChangeResults(({ resultIndex, resultCount }) => {
-          setMatchResults({ resultIndex, resultCount });
-        });
+        if (disposed || !addon) return;
+        subscribeToResults(addon);
       })
       .catch(() => {});
     return () => {
       disposed = true;
-      resultSubscription?.dispose();
+      resultSubscriptionRef.current?.dispose();
+      resultSubscriptionRef.current = null;
     };
-  }, [target]);
+  }, [target, subscribeToResults]);
 
   // Highlights stay on the terminal they were drawn on, so leaving it (a tab
   // switch, or the pane taking the bar away) clears them there: once the bar
@@ -125,7 +136,8 @@ export function TerminalSearchBar({
   const liveTargetRef = useRef<TerminalSearchTarget | null>(null);
   // The addon can load long after a search starts, and the field may be
   // cleared, retyped or turned into an invalid regex in between: only the
-  // newest search may draw (#17485).
+  // newest search may draw (#17485), and a load that fails late cannot paint
+  // "Search failed" over a newer state.
   const searchGenerationRef = useRef(0);
   useEffect(() => {
     liveTargetRef.current = target;
@@ -189,6 +201,7 @@ export function TerminalSearchBar({
             markUnavailable();
             return;
           }
+          subscribeToResults(searchAddon);
           try {
             const found =
               direction === "next"
@@ -215,7 +228,7 @@ export function TerminalSearchBar({
         }
       );
     },
-    [target, caseSensitive, regexEnabled, wholeWord]
+    [target, caseSensitive, regexEnabled, wholeWord, subscribeToResults]
   );
 
   const cancelPendingSearch = useCallback(() => {
