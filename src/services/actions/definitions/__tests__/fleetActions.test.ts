@@ -966,7 +966,11 @@ describe("fleet.retryFailures", () => {
     // sent, and the other two remote agents' batch never went out. One of those
     // left the fleet while the retry ran.
     vi.mocked(runManagedFleetBroadcast).mockImplementationOnce(async () => {
+      expect(useFleetArmingStore.getState().crossHostTargets.map((t) => t.key)).toContain(removed);
       useFleetArmingStore.getState().disarmCrossHostTarget(removed);
+      expect(useFleetArmingStore.getState().crossHostTargets.map((t) => t.key)).not.toContain(
+        removed
+      );
       return {
         total: 2,
         successCount: 2,
