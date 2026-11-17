@@ -330,11 +330,13 @@ describe.each(OWNERS)("$name ring keeps the configured history length", (owner) 
 
   it("keeps a raised history across a debounced flush and a restart", async () => {
     const raised = owner.defaultMax * 2;
+    const collected = owner.defaultMax + 200;
 
     let svc = await boot();
     svc.setMaxRecords(raised);
-    svc.append(owner.defaultMax + 200);
+    svc.append(collected);
     const before = svc.ids();
+    expect(before).toHaveLength(collected);
     // The setter's synchronous write left an acknowledged empty ring, so this
     // goes out as a keyed delta.
     await flushDebounced();
@@ -359,6 +361,7 @@ describe.each(OWNERS)("$name ring keeps the configured history length", (owner) 
     svc.setMaxRecords(raised);
     svc.append(owner.defaultMax + 200);
     const all = svc.ids();
+    expect(all).toHaveLength(owner.defaultMax + 200);
 
     // Lowered before this boot's ring has been read or written.
     svc = await boot();
