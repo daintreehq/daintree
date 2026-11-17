@@ -151,7 +151,12 @@ describe("HostIdleTracker (#17357)", () => {
   it("counts an agent the fleet leaves out of its tallies, and one still starting", () => {
     expect(
       agentWorkOf([
-        { id: "assistant", detectedAgentId: "claude", isAssistantTerminal: true, agentState: "working" },
+        {
+          id: "assistant",
+          detectedAgentId: "claude",
+          isAssistantTerminal: true,
+          agentState: "working",
+        },
         { id: "trashed", detectedAgentId: "codex", isTrashed: true, agentState: "waiting" },
         { id: "starting", launchAgentId: "gemini" },
       ])

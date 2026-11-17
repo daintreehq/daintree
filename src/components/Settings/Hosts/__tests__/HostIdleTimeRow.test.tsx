@@ -12,7 +12,9 @@ import { SettingsGroup } from "../../SettingsGroup";
 import { HostIdleTimeRow } from "../HostIdleTimeRow";
 
 const api = {
-  read: vi.fn<(payload: { hostId: string; keys?: HostSettingKey[] }) => Promise<HostSettingsSnapshot>>(),
+  read: vi.fn<
+    (payload: { hostId: string; keys?: HostSettingKey[] }) => Promise<HostSettingsSnapshot>
+  >(),
   update: vi.fn<(payload: HostSettingsUpdatePayload) => Promise<HostSettingsUpdateResult>>(),
 };
 
@@ -90,7 +92,10 @@ describe("HostIdleTimeRow (#17357)", () => {
     api.update.mockResolvedValue(result("applied", 120));
     await renderRow();
 
-    expect(api.read).toHaveBeenCalledWith({ hostId: "boat-1", keys: ["hostIdle.idleAfterMinutes"] });
+    expect(api.read).toHaveBeenCalledWith({
+      hostId: "boat-1",
+      keys: ["hostIdle.idleAfterMinutes"],
+    });
     expect(select().textContent).toBe("30 minutes");
     await pick("2 hours");
 

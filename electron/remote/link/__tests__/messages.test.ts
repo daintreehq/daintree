@@ -176,7 +176,11 @@ describe("link messages", () => {
     });
     // A newer host's extra fields are dropped, not refused.
     expect(hostSummary({ idle: { ...idle, heldBy: ["agents"] } }).idle).toEqual(idle);
-    for (const bad of [{ ...idle, idleAfterMinutes: 0 }, { ...idle, busy: "no" }, { busy: false }]) {
+    for (const bad of [
+      { ...idle, idleAfterMinutes: 0 },
+      { ...idle, busy: "no" },
+      { busy: false },
+    ]) {
       expect(() => hostSummary({ idle: bad })).toThrow();
     }
   });
