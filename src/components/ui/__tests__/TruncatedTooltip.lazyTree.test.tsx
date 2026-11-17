@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "@testing-library/react";
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -60,6 +60,47 @@ describe("TruncatedTooltip", () => {
     expect(getByText("Label")).toBe(before);
     expect(document.activeElement).toBe(before);
     expect(queryByTestId("tooltip-content")).toBeNull();
+  });
+
+  describe("measuring its own child", () => {
+    const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollWidth");
+    let reads = 0;
+
+    function countReads() {
+      reads = 0;
+      Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
+        configurable: true,
+        get(this: HTMLElement) {
+          if (this.dataset.label !== undefined) reads += 1;
+          return 0;
+        },
+      });
+    }
+
+    afterEach(() => {
+      if (original) Object.defineProperty(HTMLElement.prototype, "scrollWidth", original);
+      else delete (HTMLElement.prototype as unknown as Record<string, unknown>).scrollWidth;
+    });
+
+    it("measures the child when the caller leaves truncation to it", () => {
+      countReads();
+      render(
+        <TruncatedTooltip content="Full label">
+          <span data-label="">Label</span>
+        </TruncatedTooltip>
+      );
+      expect(reads).toBeGreaterThan(0);
+    });
+
+    it("leaves the child unmeasured when the caller says it is not truncated", () => {
+      countReads();
+      render(
+        <TruncatedTooltip content="Full label" isTruncated={false}>
+          <span data-label="">Label</span>
+        </TruncatedTooltip>
+      );
+      expect(reads).toBe(0);
+    });
   });
 
   it("mounts the tooltip tree once the text is truncated", () => {

@@ -80,10 +80,10 @@ const PATH = `${DIR}/FileStageRow.tsx`;
 describe("FileStageRow path tooltip", () => {
   const file: StagingFileEntry = { path: PATH, status: "modified", insertions: 1, deletions: 0 };
 
-  function renderRow() {
+  function renderRow(entry: StagingFileEntry = file) {
     return render(
       <FileStageRow
-        file={file}
+        file={entry}
         section="unstaged"
         isStaged={false}
         isSelected={false}
@@ -109,6 +109,12 @@ describe("FileStageRow path tooltip", () => {
   it("stays shut while the path fits", () => {
     renderRow();
     expect(tooltips()).not.toContain(PATH);
+  });
+
+  it("opens for a cut file at the repository root, which has no directory part", () => {
+    cutText("a-file-name-long-enough-to-be-cut.config.ts");
+    renderRow({ ...file, path: "a-file-name-long-enough-to-be-cut.config.ts" });
+    expect(tooltips()).toContain("a-file-name-long-enough-to-be-cut.config.ts");
   });
 
   it("adds no tab stop inside the row, which the listbox owns", () => {
@@ -262,6 +268,25 @@ describe("CommitPanel", () => {
   it("shows no destination tooltip while the status line fits", () => {
     renderPanel();
     expect(tooltips().filter((text) => text.includes("pushes to"))).toEqual([]);
+  });
+
+  it("discloses a cut destination while pushing", () => {
+    cut = (el) => el.textContent?.startsWith("Pushing to") === true;
+    renderPanel({ isPushing: true, pushTargetBranch: "origin/feature/a-very-long-branch-name" });
+    expect(tooltips()).toContain("Pushing to origin/feature/a-very-long-branch-name");
+  });
+
+  it("adds no tab stop for a cut destination", () => {
+    cut = statusLineCut;
+    renderPanel();
+    expect(screen.getByTestId("review-hub-commit-status").querySelector("[tabindex]")).toBeNull();
+  });
+
+  it("offers no tooltip for a blocker, which wraps instead of cutting", () => {
+    cut = (el) => (el.textContent ?? "").length > 0;
+    renderPanel({ commitMessage: "" });
+    const status = screen.getByTestId("review-hub-commit-status").textContent ?? "";
+    expect(tooltips().filter((text) => status.includes(text))).toEqual([]);
   });
 
   describe("push confirm file list", () => {

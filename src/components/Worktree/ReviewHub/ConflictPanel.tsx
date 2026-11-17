@@ -231,7 +231,8 @@ function splitPath(filePath: string): { dir: string; base: string } {
 
 // Each row's wrapper only lays its parts out: the directory and the file name
 // clip inside their own boxes, so each is measured where it clips. Neither label
-// takes a tab stop; the row's buttons are its focus targets.
+// takes a tab stop: a conflicted row's buttons name its file in full, and a long
+// resolved list would put a stop per cut path between its disclosure and Continue.
 
 function ConflictedFileLabel({
   path,

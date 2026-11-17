@@ -732,7 +732,7 @@ export function CommitPanel({
   // aria-describedby, and a blocked click lands focus on whatever it names.
   let statusTone: "neutral" | "warning" = "neutral";
   let statusContent: React.ReactNode;
-  let statusTitle: string | undefined;
+  let statusTooltip: string | undefined;
   if (isPushing) {
     statusContent = pushTarget ? (
       <>
@@ -741,7 +741,7 @@ export function CommitPanel({
     ) : (
       "Pushing…"
     );
-    statusTitle = pushTarget ? `Pushing to ${pushTarget}` : undefined;
+    statusTooltip = pushTarget ? `Pushing to ${pushTarget}` : undefined;
   } else if (isCommitting) {
     statusContent = `Committing ${pluralize(pendingCount, "file")}…`;
   } else if (isBlocked) {
@@ -769,7 +769,7 @@ export function CommitPanel({
       // footer, which describes this exact situation.
       `${stagedSummary} · no push destination · set an upstream to push`
     );
-    statusTitle = destinationLabel ? `${stagedSummary} · pushes to ${destinationLabel}` : undefined;
+    statusTooltip = destinationLabel ? `${stagedSummary} · pushes to ${destinationLabel}` : undefined;
   } else {
     statusContent = stagedSummary;
   }
@@ -887,7 +887,13 @@ export function CommitPanel({
         )}
         {/* A blocker wraps so every requirement stays readable at any width; the
             ready and pushing lines truncate a long destination instead. */}
-        <TruncatedTooltip content={statusTitle} disabled={statusTitle === undefined}>
+        {/* The buttons already describe themselves by this line, so a cut
+            destination is a pointer disclosure, not one more tab stop. */}
+        <TruncatedTooltip
+          content={statusTooltip}
+          disabled={statusTooltip === undefined}
+          focusable={false}
+        >
           <span className={cn("min-w-0", isBlocked && !isBusy ? "break-words" : "truncate")}>
             {statusContent}
           </span>
