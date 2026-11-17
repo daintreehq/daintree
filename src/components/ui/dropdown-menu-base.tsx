@@ -571,6 +571,12 @@ export type DropdownMenuItemProps = React.ComponentPropsWithoutRef<
    * action is unbound.
    */
   keybinding?: string;
+  /**
+   * The pick opens another surface (a dialog, a palette) that claims focus
+   * itself. Marks the close as a handoff so the trigger does not take focus
+   * back out of it when the exit animation finishes. See `expectHandoff`.
+   */
+  focusHandoff?: boolean;
 };
 
 /* Leading icons: mark the icon `data-menu-icon` and the text-only items in the
@@ -582,8 +588,9 @@ export type DropdownMenuItemProps = React.ComponentPropsWithoutRef<
 const DropdownMenuItemBase = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitiveType.Item>,
   Omit<DropdownMenuItemProps, "keybinding">
->(({ className, inset, destructive, onPointerMove, ...props }, ref) => {
+>(({ className, inset, destructive, focusHandoff, onSelect, onPointerMove, ...props }, ref) => {
   const radix = useRadixPrimitives();
+  const focusRestore = useOverlayFocusRestore();
   if (!radix) return null;
   const Item = radix.DropdownMenuPrimitive.Item;
   return (
@@ -597,6 +604,10 @@ const DropdownMenuItemBase = React.forwardRef<
         className
       )}
       {...props}
+      onSelect={(event) => {
+        if (focusHandoff) focusRestore?.expectHandoff();
+        onSelect?.(event);
+      }}
       onPointerMove={(event) => menuRowPointerMove(event, onPointerMove)}
     />
   );

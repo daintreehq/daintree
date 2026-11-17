@@ -505,12 +505,12 @@ export function HelpSessionTabs({
           {/* Hidden rather than disabled where the lane has nothing to restart, as the
               header's overflow item is. */}
           {canRestart && (
-            <DropdownMenuItem destructive onSelect={() => onRestart?.(activeTab.slot)}>
+            <DropdownMenuItem destructive onSelect={handOff(() => onRestart?.(activeTab.slot))}>
               <Eraser data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
               Clear conversation
             </DropdownMenuItem>
           )}
-          <DropdownMenuItem onSelect={() => onClose(activeTab.slot)}>
+          <DropdownMenuItem onSelect={handOff(() => onClose(activeTab.slot))}>
             <X data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
             Close session
           </DropdownMenuItem>

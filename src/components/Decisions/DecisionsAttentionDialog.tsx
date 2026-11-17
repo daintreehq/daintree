@@ -399,6 +399,7 @@ function AttentionItem({ item, worktreeName, busy, onResume, onChoose, onHandled
                 destinations.destinations.map((destination) => (
                   <DropdownMenuItem
                     key={destination.terminalId}
+                    focusHandoff
                     onSelect={() => onChoose(destination)}
                     className="flex-col items-start gap-0.5"
                   >

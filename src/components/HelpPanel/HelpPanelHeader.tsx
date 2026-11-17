@@ -323,7 +323,7 @@ export function HelpPanelHeader({
               one on a particular agent is (#13442). */}
             {canRestartConversation && (
               <>
-                <DropdownMenuItem destructive onSelect={onRestartConversation}>
+                <DropdownMenuItem destructive focusHandoff onSelect={onRestartConversation}>
                   <Eraser className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                   Clear conversation
                 </DropdownMenuItem>
@@ -344,7 +344,7 @@ export function HelpPanelHeader({
                   )}
                 </DropdownMenuItem>
               ))}
-            <DropdownMenuItem onSelect={onResumePastSession}>
+            <DropdownMenuItem focusHandoff onSelect={onResumePastSession}>
               <History className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
               Resume a past session…
             </DropdownMenuItem>
@@ -366,7 +366,7 @@ export function HelpPanelHeader({
             {canEndSession && (
               <>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem destructive onSelect={onEndSession}>
+                <DropdownMenuItem destructive focusHandoff onSelect={onEndSession}>
                   <CircleStop className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                   Stop assistant
                 </DropdownMenuItem>
