@@ -34,12 +34,20 @@ import {
   describeWaiting,
   describeWaitingMany,
 } from "../../shared/utils/waitingReasonDisplay.js";
+import type {
+  DecisionQuestionList,
+  DecisionQuestionListItem,
+} from "../../shared/types/decisionsQuestion.js";
 
 /** A view on a remote Shell owns it: that Shell presents it, sound included. */
 function isRemoteNotificationOwner(
   ownerId: NotificationOwnerId | undefined
 ): ownerId is NotificationOwnerId {
   return ownerId !== undefined && isRemoteEndpointHandle(ownerId);
+}
+
+function decisionQuestionReplaceKey(key: string): string {
+  return `decisions-question:${key}`;
 }
 
 const COMPLETION_DEBOUNCE_MS = 2000;
@@ -184,6 +192,19 @@ class AgentNotificationService {
     }
   > = [];
   private canopyAskTimer: NodeJS.Timeout | null = null;
+  /**
+   * When each agent's current turn began: the last time it went to work from
+   * anything else. A Decisions question asked since then is what ended the turn.
+   */
+  private turnStartedAt = new Map<string, number>();
+  /**
+   * When each terminal last asked a Decisions question this session, as the
+   * shared list (#17229) showed it. Kept when the list empties, so turning
+   * Decisions off doesn't bring back the banner its question replaced.
+   */
+  private decisionQuestionAskedAt = new Map<string, number>();
+  /** Stops following that list; its leaf is imported on demand, so this service adds no Decisions module to startup. */
+  private offDecisionQuestions: (() => void) | null = null;
   /** Tracks when each agent spawned to suppress sounds during the grace period */
   private agentSpawnTimestamps = new Map<string, number>();
   /** Timestamp when the service was initialized — sounds are suppressed during boot */
@@ -429,6 +450,16 @@ class AgentNotificationService {
     if (this.unsubscribers.length > 0) return;
 
     this.initializedAt = Date.now();
+    void import("./decisionsQuestionList.js").then(
+      ({ getDecisionQuestionList, onDecisionQuestionsChanged }) => {
+        if (this.unsubscribers.length === 0 || this.offDecisionQuestions !== null) return;
+        this.offDecisionQuestions = onDecisionQuestionsChanged((list) =>
+          this.noteDecisionQuestions(list)
+        );
+        this.noteDecisionQuestions(getDecisionQuestionList());
+      },
+      () => {}
+    );
 
     const unsubPersisted = projectStore.onProjectStatePersisted((workspaceId, state) =>
       this.panels.noteSaved(workspaceId, state)
@@ -446,6 +477,11 @@ class AgentNotificationService {
       const agentKey = payload.terminalId ?? payload.agentId;
       if (agentKey) {
         this.agentSpawnTimestamps.set(agentKey, Date.now());
+      }
+      // A new incarnation (a kill or exit cleared the last one's turn): what an earlier one
+      // asked under this terminal id ended none of its turns. A turn under way keeps its start.
+      if (payload.terminalId && !this.turnStartedAt.has(payload.terminalId)) {
+        this.turnStartedAt.set(payload.terminalId, Date.now());
       }
       // Its project's overrides, read now, are in by its first transition.
       if (payload.terminalId) this.loadPanelProject(payload.terminalId);
@@ -502,6 +538,7 @@ class AgentNotificationService {
       if (payload.terminalId) {
         this.agentSpawnTimestamps.delete(payload.terminalId);
         this.activeTerminalIds.delete(payload.terminalId);
+        this.turnStartedAt.delete(payload.terminalId);
         this.activeSeedTouched?.add(payload.terminalId);
         this.forgetPanelOwnership(payload.terminalId);
         this.projectByTerminal.delete(payload.terminalId);
@@ -657,6 +694,15 @@ class AgentNotificationService {
     if (state === "exited" && terminalId) this.projectByTerminal.delete(terminalId);
     this.checkAllClear(state, previousState, terminalId, projectId);
     if (state === previousState) return;
+    if (terminalId && ACTIVE_AGENT_STATES.has(state) && !ACTIVE_AGENT_STATES.has(previousState)) {
+      this.turnStartedAt.set(terminalId, payload.timestamp);
+    }
+    // The turn this transition ends, if it ends one; unknown, it began no earlier than this service.
+    const turnStartedAt = terminalId
+      ? (this.turnStartedAt.get(terminalId) ?? this.initializedAt)
+      : undefined;
+    // A natural exit's `agent:exited` comes before this last transition, which still needs the turn.
+    if (state === "exited" && terminalId) this.turnStartedAt.delete(terminalId);
     // The project as resolved, retained or saved: a natural exit has no live one to read.
     if (projectId) this.loadProject(projectId);
 
@@ -770,6 +816,7 @@ class AgentNotificationService {
         terminalId,
         agentId,
         ownerWebContentsId,
+        turnStartedAt,
       });
     } else if (
       state === "waiting" &&
@@ -887,17 +934,27 @@ class AgentNotificationService {
       terminalId?: string;
       agentId?: string;
       ownerWebContentsId?: NotificationOwnerId;
+      /** When the turn that finished began; a question asked since then replaces the banner. */
+      turnStartedAt?: number;
     }
   ): void {
     if (this.completionTimers.has(key)) {
       clearTimeout(this.completionTimers.get(key)!);
     }
 
-    const { worktreeId, terminalId, agentId, ownerWebContentsId } = target;
+    const { worktreeId, terminalId, agentId, ownerWebContentsId, turnStartedAt } = target;
     const timer = setTimeout(() => {
       this.completionTimers.delete(key);
       const settings = this.settingsFor(this.emitOwner(terminalId, ownerWebContentsId), projectId);
       if (settings.enabled === false || !settings.completedEnabled) return;
+      // The turn ended on a question for the person (#17232): its own notification says so.
+      if (
+        terminalId &&
+        turnStartedAt !== undefined &&
+        this.askedDecisionQuestionSince(terminalId, turnStartedAt)
+      ) {
+        return;
+      }
       const label = this.getLabel(agentId, terminalId);
       this.completionBurstBuffer.push({
         title: "Agent finished",
@@ -1249,6 +1306,78 @@ class AgentNotificationService {
     );
   }
 
+  /**
+   * Whether the terminal asked a Decisions question at or after `since`, in
+   * any state since: one answered or withdrawn before the banner would show
+   * still ended the turn.
+   */
+  private askedDecisionQuestionSince(terminalId: string, since: number): boolean {
+    return (this.decisionQuestionAskedAt.get(terminalId) ?? -Infinity) >= since;
+  }
+
+  /** Each terminal's latest question asked this session; earlier ones can't have ended a turn seen here. */
+  private noteDecisionQuestions(list: DecisionQuestionList): void {
+    for (const question of list.questions) {
+      const askedAt = Date.parse(question.askedAt);
+      if (!Number.isFinite(askedAt) || askedAt < this.initializedAt) continue;
+      const { terminalId } = question.reference;
+      const latest = this.decisionQuestionAskedAt.get(terminalId);
+      if (latest === undefined || askedAt > latest) {
+        this.decisionQuestionAskedAt.set(terminalId, askedAt);
+      }
+    }
+  }
+
+  /** Reads the question's project's alert overrides before it shows, as an agent's own event does. */
+  async prepareDecisionQuestion(projectId: string): Promise<void> {
+    await projectStore.loadNotificationOverrides(projectId).catch(() => {});
+  }
+
+  /**
+   * Whether a Decisions question asked in `projectId` may raise a desktop
+   * notification (#17232). Only turning notifications off silences one: it is
+   * the agent asking the person outright, so the per-event switches, quiet
+   * hours and a session mute that hold back the inferred alerts don't.
+   */
+  decisionQuestionNotificationsOn(projectId: string): boolean {
+    return projectStore.getEffectiveNotificationSettings(projectId).enabled !== false;
+  }
+
+  /**
+   * An agent asked the person a Decisions question (#17232): one native
+   * notification on this computer, naming the agent, its project and the
+   * question's opening line, whatever terminal asked and whether anyone
+   * watches it. Never sent to a remote Shell. A click opens the question.
+   */
+  notifyDecisionQuestion(
+    question: DecisionQuestionListItem,
+    openingLine: string | null,
+    key: string
+  ): void {
+    const { reference } = question;
+    const settings = projectStore.getEffectiveNotificationSettings(reference.projectId);
+    if (settings.enabled === false) return;
+    this.playNotificationSound(settings.soundEnabled, settings.waitingSoundFile);
+    const agent = getEffectiveRegistry()[question.agentKind]?.name?.trim() || "An agent";
+    const project =
+      question.projectLabel ?? projectStore.getProjectById(reference.projectId)?.name?.trim();
+    notificationService.showNativeNotification(
+      project ? `Question from ${agent} in ${project}` : `Question from ${agent}`,
+      openingLine ?? "Open it to read what was asked.",
+      {
+        silent: true,
+        category: "waiting",
+        replaceKey: decisionQuestionReplaceKey(key),
+        onClick: () => notificationService.openDecisionQuestion(reference),
+      }
+    );
+  }
+
+  /** Takes down a question's notification once it no longer waits for the person. */
+  closeDecisionQuestion(key: string): void {
+    notificationService.closeNotificationByKey(decisionQuestionReplaceKey(key));
+  }
+
   acknowledgeWaiting(terminalId: string): void {
     this.dismissWaitingAlerts(terminalId);
   }
@@ -1558,6 +1687,10 @@ class AgentNotificationService {
     this.completionBurstBuffer = [];
 
     this.waitingTerminalIds.clear();
+    this.turnStartedAt.clear();
+    this.offDecisionQuestions?.();
+    this.offDecisionQuestions = null;
+    this.decisionQuestionAskedAt.clear();
     this.agentSpawnTimestamps.clear();
     this.watchedPanelsByOwner.clear();
     this.ownersByPanel.clear();

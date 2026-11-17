@@ -15,6 +15,7 @@ const projectStoreMock = vi.hoisted(() => ({
   loadNotificationOverrides: vi.fn(async (_projectId: string) => {}),
   getCurrentProjectId: vi.fn(() => null),
   getProjectState: vi.fn(async () => null),
+  getProjectById: vi.fn<(projectId: string) => { name: string } | null>(() => null),
   onProjectStatePersisted: vi.fn(
     (listener: (workspaceId: string, state: { terminals: unknown[] } | null) => void) => {
       persistedListeners.add(listener);
@@ -32,6 +33,8 @@ const notificationServiceMock = vi.hoisted(() => ({
   getUserPresence: vi.fn<() => "present" | "away" | "unknown">(() => "present"),
   closeNotificationsForPanel: vi.fn(),
   isOwnerViewFocused: vi.fn<(owner: number | undefined) => boolean>(() => false),
+  closeNotificationByKey: vi.fn(),
+  openDecisionQuestion: vi.fn(),
 }));
 
 const soundServiceMock = vi.hoisted(() => ({
@@ -78,6 +81,9 @@ import {
 } from "../../ipc/endpointRegistry.js";
 import { setPtyClientRef } from "../../window/serviceRefs.js";
 import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
+import { setDecisionQuestions } from "../decisionsQuestionList.js";
+import { getEffectiveRegistry } from "../../../shared/config/agentRegistry.js";
+import type { DecisionQuestionListItem } from "../../../shared/types/decisionsQuestion.js";
 
 /** Stand-in for a project view's webContents id — the renderer that owns the watched panels. */
 const OWNER = 101;
@@ -4299,6 +4305,240 @@ describe("each project's own choices across a burst (#15635)", () => {
         );
         expect(projectStoreMock.loadNotificationOverrides).toHaveBeenCalledWith("project-c");
       }
+    );
+  });
+});
+
+describe("Decisions questions (#17232)", () => {
+  /** A question as the shared list names it, asked by `terminalId` at `askedAt` (ms). */
+  function question(
+    terminalId: string,
+    askedAt: number,
+    overrides: Partial<DecisionQuestionListItem> = {}
+  ): DecisionQuestionListItem {
+    return {
+      reference: { hostId: "host-1", projectId: PROJECT_ID, terminalId, questionId: "q-1" },
+      alias: 1,
+      agentKind: "claude",
+      projectLabel: "Daintree",
+      worktreeId: "wt-1",
+      worktreeRoot: "/repo",
+      requirement: "proxy-ok",
+      askedAt: new Date(askedAt).toISOString(),
+      expiresAt: null,
+      settledAt: null,
+      standing: { kind: "waiting", reason: "open" },
+      ...overrides,
+    };
+  }
+
+  /** The agent's turn: to work, then finished a moment later. */
+  function turn(work: () => void = () => {}) {
+    events.emit("agent:state-changed", makePayload("working", "idle"));
+    vi.advanceTimersByTime(1_000);
+    work();
+    events.emit("agent:state-changed", makePayload("completed", "working"));
+    vi.advanceTimersByTime(5_000);
+  }
+
+  const finished = () =>
+    notificationServiceMock.showWatchNotification.mock.calls.filter(
+      (call) => call[0] === "Agent finished"
+    );
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    osDndServiceMock.getState.mockReturnValue(undefined);
+    agentNotificationService.initialize();
+    await vi.dynamicImportSettled();
+    agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
+    mockStore({ completedEnabled: true });
+  });
+
+  afterEach(() => {
+    setDecisionQuestions([]);
+    agentNotificationService.dispose();
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+  });
+
+  it("replaces the Agent finished banner for a turn that asked a question", () => {
+    turn(() => setDecisionQuestions([question("term-1", Date.now())]));
+
+    expect(finished()).toHaveLength(0);
+  });
+
+  it("still replaces it once the question was answered before the banner would show", () => {
+    turn(() =>
+      setDecisionQuestions([
+        question("term-1", Date.now(), {
+          standing: { kind: "settled", outcome: "answered", handled: false },
+        }),
+      ])
+    );
+
+    expect(finished()).toHaveLength(0);
+  });
+
+  it("shows the banner for a turn after the one that asked", () => {
+    turn(() => setDecisionQuestions([question("term-1", Date.now())]));
+    expect(finished()).toHaveLength(0);
+
+    turn();
+
+    expect(finished()).toHaveLength(1);
+  });
+
+  it("keeps the banner replaced when Decisions turns off before it would show", () => {
+    events.emit("agent:state-changed", makePayload("working", "idle"));
+    vi.advanceTimersByTime(1_000);
+    setDecisionQuestions([question("term-1", Date.now())]);
+    events.emit("agent:state-changed", makePayload("completed", "working"));
+    // Turning Decisions off empties the list inside the banner's two-second wait.
+    setDecisionQuestions([]);
+    vi.advanceTimersByTime(5_000);
+
+    expect(finished()).toHaveLength(0);
+  });
+
+  it("keeps the banner replaced when the terminal is closed before it would show", () => {
+    events.emit("agent:state-changed", makePayload("working", "idle"));
+    vi.advanceTimersByTime(1_000);
+    setDecisionQuestions([question("term-1", Date.now())]);
+    events.emit("agent:state-changed", makePayload("completed", "working"));
+    events.emit("agent:killed", { terminalId: "term-1", agentId: "agent-1" } as never);
+    vi.advanceTimersByTime(5_000);
+
+    expect(finished()).toHaveLength(0);
+  });
+
+  it("shows the banner when the terminal comes back under its id and exits at once", () => {
+    turn(() => setDecisionQuestions([question("term-1", Date.now())]));
+    events.emit("agent:killed", { terminalId: "term-1", agentId: "agent-1" } as never);
+    vi.advanceTimersByTime(1_000);
+
+    // A failed spawn reports `exited` from `working` with no turn ever starting.
+    events.emit("agent:spawned", { terminalId: "term-1", agentId: "agent-1" } as never);
+    vi.advanceTimersByTime(10_000);
+    events.emit("agent:state-changed", makePayload("exited", "working"));
+    vi.advanceTimersByTime(5_000);
+
+    expect(finished()).toHaveLength(1);
+  });
+
+  it("keeps the banner replaced when a spawn is reported in the middle of the turn", () => {
+    turn(() => {
+      setDecisionQuestions([question("term-1", Date.now())]);
+      vi.advanceTimersByTime(1_000);
+      events.emit("agent:spawned", { terminalId: "term-1", agentId: "agent-1" } as never);
+    });
+
+    expect(finished()).toHaveLength(0);
+  });
+
+  it("shows a later turn's banner when the agent exits naturally after it", () => {
+    turn(() => setDecisionQuestions([question("term-1", Date.now())]));
+    events.emit("agent:state-changed", makePayload("working", "idle"));
+    vi.advanceTimersByTime(1_000);
+
+    // A natural exit tells `agent:exited` before the agent's last transition.
+    events.emit("agent:exited", { terminalId: "term-1", agentId: "agent-1" } as never);
+    events.emit("agent:state-changed", makePayload("exited", "working"));
+    vi.advanceTimersByTime(5_000);
+
+    expect(finished()).toHaveLength(1);
+  });
+
+  it("shows the banner when another terminal asked during the turn", () => {
+    turn(() => setDecisionQuestions([question("term-other", Date.now())]));
+
+    expect(finished()).toHaveLength(1);
+  });
+
+  it("shows a question from a terminal no view watches, naming the agent, its project and the opening line", () => {
+    agentNotificationService.syncWatchedPanels(OWNER, []);
+    const asked = question("term-unwatched", Date.now());
+
+    agentNotificationService.notifyDecisionQuestion(asked, "Ship the migration now?", "key-1");
+
+    expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+    const [title, body, options] = notificationServiceMock.showNativeNotification.mock.calls[0]!;
+    expect(title).toBe(`Question from ${getEffectiveRegistry().claude!.name} in Daintree`);
+    expect(body).toBe("Ship the migration now?");
+    // Never routed to a view on another machine: this computer shows it.
+    expect(options.ownerWebContentsId).toBeUndefined();
+
+    options.onClick();
+    expect(notificationServiceMock.openDecisionQuestion).toHaveBeenCalledWith(asked.reference);
+  });
+
+  it("names the project from its record when the question carries no label, and says how to read it without an opening line", () => {
+    projectStoreMock.getProjectById.mockReturnValue({ name: "Website" });
+
+    agentNotificationService.notifyDecisionQuestion(
+      question("term-1", Date.now(), { projectLabel: null, agentKind: "not-an-agent" }),
+      null,
+      "key-1"
+    );
+
+    const [title, body] = notificationServiceMock.showNativeNotification.mock.calls[0]!;
+    expect(title).toBe("Question from An agent in Website");
+    expect(body).toBe("Open it to read what was asked.");
+  });
+
+  it("gives each question its own banner, replaced by a re-send and taken down by the same key", () => {
+    const asked = question("term-1", Date.now());
+    agentNotificationService.notifyDecisionQuestion(asked, "Hi?", "k-1");
+    agentNotificationService.notifyDecisionQuestion(asked, "Hi?", "k-1");
+    agentNotificationService.notifyDecisionQuestion(asked, "Other?", "k-2");
+    const keys = notificationServiceMock.showNativeNotification.mock.calls.map(
+      (call) => call[2].replaceKey as string
+    );
+
+    agentNotificationService.closeDecisionQuestion("k-1");
+
+    expect(keys[0]).toBeTruthy();
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
+    expect(notificationServiceMock.closeNotificationByKey).toHaveBeenCalledWith(keys[0]);
+  });
+
+  it("is silenced by turning notifications off, and only by that", () => {
+    // Monday 23:00, inside 22:00 to 06:00 quiet hours, with the session muted and both alert switches off.
+    vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
+    mockStore({
+      completedEnabled: false,
+      waitingEnabled: false,
+      quietHoursEnabled: true,
+      quietHoursStartMin: 22 * 60,
+      quietHoursEndMin: 6 * 60,
+    });
+    agentNotificationService.setSessionMuteUntil(Date.now() + 60 * 60 * 1000);
+    expect(agentNotificationService.decisionQuestionNotificationsOn(PROJECT_ID)).toBe(true);
+    agentNotificationService.notifyDecisionQuestion(question("term-1", Date.now()), "Hi?", "k");
+    expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+
+    notificationServiceMock.showNativeNotification.mockClear();
+    mockStore({ enabled: false } as never);
+    expect(agentNotificationService.decisionQuestionNotificationsOn(PROJECT_ID)).toBe(false);
+    agentNotificationService.notifyDecisionQuestion(question("term-1", Date.now()), "Hi?", "k");
+    expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+  });
+
+  it("reads the question's project's alert overrides before it shows", async () => {
+    await agentNotificationService.prepareDecisionQuestion("project-cold");
+
+    expect(projectStoreMock.loadNotificationOverrides).toHaveBeenCalledWith("project-cold");
+  });
+
+  it("plays this computer's waiting sound with sound on", () => {
+    mockStore({ soundEnabled: true });
+
+    agentNotificationService.notifyDecisionQuestion(question("term-1", Date.now()), "Hi?", "k");
+
+    expect(soundServiceMock.playFile).toHaveBeenCalledWith(
+      DEFAULT_NOTIFICATION_SETTINGS.waitingSoundFile
     );
   });
 });

@@ -17,6 +17,7 @@ import { PluginPanelReloadConfirmDialog } from "@/components/Plugin/PluginPanelR
 import { useProjectRelocationStore } from "@/store/projectRelocationStore";
 import { ImportConfigDialogGate } from "@/components/Config/ImportConfigDialogGate";
 import { ProjectDialogHost } from "./ProjectDialogHost";
+import { DecisionQuestionHost } from "@/components/Decisions/DecisionQuestionHost";
 import { ChordIndicator } from "./ChordIndicator";
 
 import { AllClearOverlay } from "../AllClearOverlay";
@@ -1015,6 +1016,9 @@ export function AppLayout({
       {/* Not under the sidebar: these open from actions, the palette and
           keybindings too, so they must answer whatever the sidebar shows. */}
       {hasWorkspace && isHydrated && <ProjectDialogHost />}
+      {/* Outside the workspace gate: any window can show a question by its
+          reference, so a notification's click opens it wherever it lands (#17232). */}
+      {isHydrated && <DecisionQuestionHost followsOpenRequests />}
       <div
         {...(chromeInert ? { inert: true } : {})}
         className="flex-1 flex flex-col overflow-hidden"

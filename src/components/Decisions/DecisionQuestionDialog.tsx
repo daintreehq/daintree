@@ -9,7 +9,7 @@ import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { decisionsClient } from "@/clients/decisionsClient";
 import { useSkeletonGate } from "@/hooks/useDeferredLoading";
-import { useDecisionsOn } from "@/hooks/useDecisionsOn";
+import { useDecisionsSwitch } from "@/hooks/useDecisionsOn";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useDecisionsImageReviewStore } from "@/store/decisionsImageReviewStore";
 import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
@@ -282,7 +282,8 @@ export function DecisionQuestionDialog() {
   const close = useDecisionsQuestionViewStore((state) => state.close);
   const clearReviews = useDecisionsImageReviewStore((state) => state.clear);
   const announce = useAnnouncerStore((state) => state.announce);
-  const on = useDecisionsOn();
+  const decisionsSwitch = useDecisionsSwitch();
+  const on = decisionsSwitch === "on";
   const [tagged, setTagged] = useState<TaggedRead | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [cancel, setCancel] = useState<{ target: DecisionCancelTarget; open: boolean } | null>(
@@ -298,10 +299,11 @@ export function DecisionQuestionDialog() {
   const index = request?.index ?? 0;
   const key = target !== null ? targetKey(target) : null;
 
-  // Turning Decisions off takes the question off screen at once.
+  // Turning Decisions off takes the question off screen at once. Opened
+  // before main has answered (no pane in the view watches it), it waits.
   useEffect(() => {
-    if (!on && isOpen) close();
-  }, [on, isOpen, close]);
+    if (decisionsSwitch === "off" && isOpen) close();
+  }, [decisionsSwitch, isOpen, close]);
 
   // Nor does a record of which images were seen outlast Decisions being on.
   useEffect(() => {
