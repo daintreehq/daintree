@@ -307,6 +307,7 @@ describe("HostConnectionBanner", () => {
     const { unmount } = render(<HostConnectionBanner />);
     expect(screen.getByText(/^This machine runs an older version of Daintree/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Update this machine" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     unmount();
 
     seed({
@@ -317,6 +318,7 @@ describe("HostConnectionBanner", () => {
     render(<HostConnectionBanner />);
     expect(screen.getByText("studio-01 runs an older version of Daintree")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Update studio-01" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
   it("rechecks a host updated outside this window and lets the obsolete mismatch go once it connects", () => {
@@ -337,7 +339,8 @@ describe("HostConnectionBanner", () => {
     act(() => {
       seed({ status: "connecting", attempt: 1 });
     });
-    expect(screen.queryByText("studio-01 runs an older version of Daintree")).toBeNull();
+    // Held behind the settle window like any other drop.
+    expect(container.firstChild).toBeNull();
     act(() => {
       seed(behind);
     });

@@ -2038,6 +2038,28 @@ describe("LinkClient network change and focus (#16386)", () => {
     }
   });
 
+  it("asks a host that refused this build again on a person's Retry, and connects once it matches", async () => {
+    const hostOptions = { answerPings: true, protocolVersion: TEST_HANDSHAKE.protocolVersion + 1 };
+    const host = await welcomingHost(hostOptions);
+    try {
+      const link = linkTo(host.transport, {});
+      link.start();
+      await waitFor(() => link.getState().status === "version-mismatch");
+      link.retryNow({ restart: true });
+      await waitFor(() => host.hellos.length === 2);
+      await waitFor(() => link.getState().status === "version-mismatch");
+      // Updated from elsewhere while this link sat parked.
+      hostOptions.protocolVersion = TEST_HANDSHAKE.protocolVersion;
+      link.retryNow({ restart: true });
+      await waitFor(() => link.getState().status === "connected");
+      expect(host.hellos).toHaveLength(3);
+    } finally {
+      await client?.stop();
+      client = null;
+      await host.close();
+    }
+  });
+
   it("keeps a connected link that answers, and a focused window leaves it be", async () => {
     const host = await welcomingHost({ answerPings: true });
     try {
