@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi, beforeEach, beforeAll, afterAll } from "vitest";
+import { describe, expect, it, vi, beforeEach, beforeAll, afterAll, afterEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import type { ResumeSessionItem } from "@/services/resumeSessionItems";
@@ -24,6 +24,8 @@ const paletteState = {
   removedResults: [] as ResumeSessionItem[],
   removedVisible: false,
   toggleRemoved: vi.fn(),
+  loadFailed: false,
+  reload: vi.fn(),
 };
 
 vi.mock("@/hooks/useResumeSessionsPalette", () => ({
@@ -475,5 +477,42 @@ describe("ResumeSessionsPalette Escape", () => {
     pressEscape();
     expect(paletteState.close).toHaveBeenCalled();
     expect(paletteState.setQuery).not.toHaveBeenCalled();
+  });
+});
+
+// #17483 — an unreadable journal arrives as a failed load. It must read as a
+// failure with a way to retry, never as the "nothing closed yet" empty state.
+describe("ResumeSessionsPalette load states", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    paletteState.results = [];
+    paletteState.visibleResults = [];
+    paletteState.removedResults = [];
+    paletteState.totalResults = 0;
+    paletteState.isLoading = false;
+  });
+
+  afterEach(() => {
+    paletteState.loadFailed = false;
+  });
+
+  it("shows the error and a Retry that re-reads when the history couldn't be read", () => {
+    paletteState.loadFailed = true;
+    renderPalette();
+
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("Couldn't load closed sessions");
+    expect(screen.queryByText("No closed sessions yet")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(paletteState.reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the ordinary empty state for a history that read as empty", () => {
+    renderPalette();
+
+    expect(screen.getByText("No closed sessions yet")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 });
