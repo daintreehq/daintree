@@ -44,6 +44,7 @@ import {
   type PanelInstance,
 } from "@shared/types/panel";
 import { isForegroundDispatch } from "./dispatchSource";
+import { isOptimisticallyClosing } from "@/services/terminal/optimisticPanelCloseIds";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
 import { PANEL_LIMIT_ERROR_SUFFIX } from "./panelLimitError";
 import { paginate } from "@shared/utils/boundedOutput";
@@ -624,6 +625,10 @@ export const worktreeContextActionRuns: {
     // that a batch-pending browser would otherwise cause.
     const isReuseTarget = (panel: PanelInstance | undefined): panel is FileBrowserPanelData => {
       if (panel === undefined || !isFileBrowserPanel(panel)) return false;
+      // A grid close hides the panel at once and removes it later; one on its
+      // way out (including one whose close shared a reveal's Save answer) is
+      // not a browser to reveal into.
+      if (isOptimisticallyClosing(panel.id)) return false;
       // Matched against the surface that was ASKED for, not "anywhere":
       // reusing the grid browser for a dock request would leave the dock
       // empty after a gesture that named it, and moving the panel across

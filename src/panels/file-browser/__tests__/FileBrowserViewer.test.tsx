@@ -2032,24 +2032,48 @@ describe("plugin-contributed editing in the file browser", () => {
         panelId: "panel-a",
       });
       await screen.findByTestId("markdown-viewer-mock");
-      expect(currentViewMode()).toBe("rendered");
+      // A choice made in panel A that the switch must drop, not carry.
+      await clickMode("Source");
+      expect(currentViewMode()).toBe("source");
 
       requestReview("panel-b", "notes.md");
       viewer.rerender(viewerJsx("/repo/notes.md", { editorContext: context, panelId: "panel-b" }));
 
       expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
       expect(editorProps.at(-1)).toMatchObject({ panelId: "panel-b" });
+      // Still Edit once the request is settled into the viewer's own state.
+      await waitFor(() =>
+        expect(useFileBrowserDraftReviewStore.getState().byPanelId["panel-b"]).toBeUndefined()
+      );
+      expect(editChecked()).toBe("true");
     });
 
     it("leaves another panel's request alone", async () => {
       enabled = true;
       requestReview("panel-b", "notes.md");
+      const waiting = useFileBrowserDraftReviewStore.getState().byPanelId["panel-b"];
 
       renderViewer("/repo/notes.md", { editorContext: context, panelId: "panel-a" });
 
       await screen.findByTestId("markdown-viewer-mock");
       expect(screen.queryByTestId("plugin-editor")).toBeNull();
-      expect(useFileBrowserDraftReviewStore.getState().byPanelId["panel-b"]).toBeDefined();
+      expect(useFileBrowserDraftReviewStore.getState().byPanelId["panel-b"]).toBe(waiting);
+    });
+
+    it("keeps the request while a filter holds the draft's file out of the viewer", async () => {
+      // The pane still names the selection, but a hiding filter leaves the
+      // viewer with nothing to show; taking the request up there would spend
+      // it on a body with no editor.
+      enabled = true;
+      requestReview("panel-1", "notes.md");
+      const waiting = useFileBrowserDraftReviewStore.getState().byPanelId["panel-1"];
+
+      const viewer = renderViewer(null, { editorContext: context, relativePath: "notes.md" });
+
+      await act(async () => {});
+      expect(useFileBrowserDraftReviewStore.getState().byPanelId["panel-1"]).toBe(waiting);
+      viewer.rerender(viewerJsx("/repo/notes.md", { editorContext: context }));
+      expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
     });
 
     it("waits while the viewer shows a different file than the draft's", async () => {

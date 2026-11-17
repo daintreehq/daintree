@@ -393,10 +393,15 @@ export function FileBrowserViewer({
   // "Review draft" (#17197): a request for this panel's open file reads as an
   // Edit choice from the first render it is seen in, so the draft's recovery
   // banner is what appears rather than a frame of the default mode, and the
-  // effect below makes it the reader's own choice from then on.
+  // effect below makes it the reader's own choice from then on. It waits for
+  // the file to actually be on screen: a filter can hide the selection while
+  // the pane still names it.
   const draftReview = useFileBrowserDraftReviewStore((store) => store.byPanelId[panelId]);
   const draftReviewSeq =
-    draftReview !== undefined && relativePath !== null && draftReview.path === relativePath
+    draftReview !== undefined &&
+    filePath !== null &&
+    relativePath !== null &&
+    draftReview.path === relativePath
       ? draftReview.seq
       : null;
   const chosenMode: FileViewMode | null = draftReviewSeq !== null ? "edit" : explicitRenderMode;

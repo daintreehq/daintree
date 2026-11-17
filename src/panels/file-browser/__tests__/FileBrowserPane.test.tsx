@@ -3612,17 +3612,17 @@ describe("file browser document navigation guards", () => {
       const { useFileDocumentStore } = await import("@/store/fileDocumentStore");
       treeState.rows = [];
       mockPanel.browserSelectedPath = "docs/notes.md";
-      if (dirty) {
-        useFileDocumentStore.getState().setFileDocument("fb-1", {
-          identityKey: "notes",
-          fileName: "notes.md",
-          draftText: "draft",
-          dirty: true,
-          conflict: false,
-          save: async () => ({ status: "saved" as const }),
-          discard: async () => {},
-        });
-      }
+      // A clean projection stands in the other case: holding a document is not
+      // enough, only unsaved edits are.
+      useFileDocumentStore.getState().setFileDocument("fb-1", {
+        identityKey: "notes",
+        fileName: "notes.md",
+        draftText: dirty ? "draft" : null,
+        dirty,
+        conflict: false,
+        save: async () => ({ status: "saved" as const }),
+        discard: async () => {},
+      });
       renderPane();
 
       if (dirty) {

@@ -108,18 +108,23 @@ describe("showFileDraft (#15017)", () => {
     }
 
     it("asks the viewer for Edit on the draft's file before its tab comes forward", async () => {
-      panelState.panelsById = { fb: browser() };
+      panelState.panelsById = { fb: browser({ browserViewerCollapsed: true }) };
       panelState.getPanelGroup.mockReturnValue({ id: "g1" });
       let requestedWhenTabMoved: unknown;
+      let requestedWhenViewerOpened: unknown;
       panelState.setActiveTab.mockImplementation(() => {
         requestedWhenTabMoved = useFileBrowserDraftReviewStore.getState().byPanelId.fb;
+      });
+      panelState.setFileBrowserView.mockImplementation(() => {
+        requestedWhenViewerOpened = useFileBrowserDraftReviewStore.getState().byPanelId.fb;
       });
 
       await showFileDraft("fb");
 
-      // Already waiting when the tab switch mounts the viewer, so the first
-      // render it gets is the Edit one.
+      // Already waiting when the tab switch or the reopened column mounts the
+      // viewer, so the first render it gets is the Edit one.
       expect(requestedWhenTabMoved).toMatchObject({ path: "docs/notes.md" });
+      expect(requestedWhenViewerOpened).toMatchObject({ path: "docs/notes.md" });
       expect(useFileBrowserDraftReviewStore.getState().byPanelId.fb).toMatchObject({
         path: "docs/notes.md",
       });
@@ -140,18 +145,21 @@ describe("showFileDraft (#15017)", () => {
       });
     });
 
-    it("shows dotfiles when the toggle is hiding the draft or one of its folders", async () => {
-      panelState.panelsById = {
-        fb: browser({ browserSelectedPath: ".github/notes.md", browserHideDotfiles: true }),
-      };
+    it.each([".github/notes.md", "docs/.notes.md", "docs/.drafts/deep/notes.md"])(
+      "shows dotfiles when the toggle is hiding the draft or one of its folders: %s",
+      async (selected) => {
+        panelState.panelsById = {
+          fb: browser({ browserSelectedPath: selected, browserHideDotfiles: true }),
+        };
 
-      await showFileDraft("fb");
+        await showFileDraft("fb");
 
-      expect(panelState.setFileBrowserView).toHaveBeenCalledWith("fb", {
-        browserViewerCollapsed: false,
-        browserHideDotfiles: false,
-      });
-    });
+        expect(panelState.setFileBrowserView).toHaveBeenCalledWith("fb", {
+          browserViewerCollapsed: false,
+          browserHideDotfiles: false,
+        });
+      }
+    );
 
     it("judges dotfiles below the tree's root, not in the root itself", async () => {
       // A tree rooted at `.github` lists its children with dotfiles hidden.
@@ -171,8 +179,9 @@ describe("showFileDraft (#15017)", () => {
     });
 
     it("returns a tree scoped away from the draft to its base folder", async () => {
+      // A sibling that shares the root's prefix is still outside it.
       panelState.panelsById = {
-        fb: browser({ browserSelectedPath: "docs/notes.md", browserRootPath: "src" }),
+        fb: browser({ browserSelectedPath: "docs-old/notes.md", browserRootPath: "docs" }),
       };
 
       await showFileDraft("fb");

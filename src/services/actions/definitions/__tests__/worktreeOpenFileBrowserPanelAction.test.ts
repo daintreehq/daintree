@@ -686,7 +686,8 @@ describe("worktree.openFileBrowserPanel", () => {
         browserPanel("fb-existing", { worktreeId: "wt-1", browserSelectedPath: "docs/notes.md" }),
       ];
       seedDirtyDraft("fb-existing");
-      registerPanelCloseGuard("fb-existing", async () => "cancel");
+      const guard = vi.fn(async () => "cancel" as const);
+      registerPanelCloseGuard("fb-existing", guard);
 
       const error = await getAction()
         .run({ worktreeId: "wt-1", revealPath: "src/app.ts" }, {
@@ -694,8 +695,11 @@ describe("worktree.openFileBrowserPanel", () => {
         } as ActionContext)
         .catch((e: unknown) => e);
 
+      // Asked first — an unsuppressed agent dispatch may prompt — and the
+      // refusal says the prompt was cancelled, not that it was never shown.
+      expect(guard).toHaveBeenCalledTimes(1);
       expect(error).toBeInstanceOf(UnactionableTargetError);
-      expect(formatErrorMessage(error, "")).toMatch(/notes\.md/);
+      expect(formatErrorMessage(error, "")).toMatch(/prompt for 'notes\.md'.*was cancelled/);
       expect(setFileBrowserViewMock).not.toHaveBeenCalled();
       expect(activateTerminalMock).not.toHaveBeenCalled();
     });
@@ -724,6 +728,38 @@ describe("worktree.openFileBrowserPanel", () => {
       expect(setFileBrowserViewMock).not.toHaveBeenCalled();
       expect(activateTerminalMock).not.toHaveBeenCalled();
     });
+
+    it.each([
+      ["a clean document", false, "src/app.ts"],
+      ["the draft's own file", true, "docs/notes.md"],
+    ] as const)(
+      "still reveals under suppression when the move leaves no draft behind: %s",
+      async (_label, dirty, revealPath) => {
+        seedWorktree("wt-1");
+        panelsMock.byId = [
+          browserPanel("fb-existing", { worktreeId: "wt-1", browserSelectedPath: "docs/notes.md" }),
+        ];
+        if (dirty) seedDirtyDraft("fb-existing");
+        const guard = vi.fn(async () => "cancel" as const);
+        registerPanelCloseGuard("fb-existing", guard);
+        const { runWithMcpSpawnFocusSuppressed } = await import("@/store/mcpSpawnFocusGuard");
+
+        const result = await runWithMcpSpawnFocusSuppressed(async () =>
+          getAction().run({ worktreeId: "wt-1", revealPath }, {
+            dispatchSource: "agent",
+          } as ActionContext)
+        );
+
+        expect(guard).not.toHaveBeenCalled();
+        expect(setFileBrowserViewMock).toHaveBeenCalledWith(
+          "fb-existing",
+          expect.objectContaining({ browserSelectedPath: revealPath })
+        );
+        // Suppressed as before: the browser is updated, not pulled in front.
+        expect(activateTerminalMock).not.toHaveBeenCalled();
+        expect(result).toEqual({ panelId: "fb-existing" });
+      }
+    );
 
     it("lets only the latest of two reveals land on one answered prompt", async () => {
       seedWorktree("wt-1");
@@ -787,16 +823,25 @@ describe("worktree.openFileBrowserPanel", () => {
       });
     });
 
-    it("does not navigate or focus a browser that closed while the prompt was up", async () => {
+    it("does not navigate or focus a browser trashed while the prompt was up", async () => {
       seedWorktree("wt-1");
       panelsMock.byId = [
         browserPanel("fb-existing", { worktreeId: "wt-1", browserSelectedPath: "docs/notes.md" }),
       ];
       seedDirtyDraft("fb-existing");
-      registerPanelCloseGuard("fb-existing", async () => {
-        panelsMock.byId = [];
-        return "proceed";
+      const guard = vi.fn(async () => {
+        // Still a file-browser record, still listed — only the reuse rules
+        // the action re-checks after the wait can tell it is gone.
+        panelsMock.byId = [
+          browserPanel("fb-existing", {
+            worktreeId: "wt-1",
+            browserSelectedPath: "docs/notes.md",
+            location: "trash",
+          }),
+        ];
+        return "proceed" as const;
       });
+      registerPanelCloseGuard("fb-existing", guard);
 
       const error = await getAction()
         .run({ worktreeId: "wt-1", revealPath: "src/app.ts" }, {
@@ -804,10 +849,29 @@ describe("worktree.openFileBrowserPanel", () => {
         } as ActionContext)
         .catch((e: unknown) => e);
 
+      expect(guard).toHaveBeenCalledTimes(1);
       expect(error).toBeInstanceOf(UnactionableTargetError);
       expect(setFileBrowserViewMock).not.toHaveBeenCalled();
       expect(activateTerminalMock).not.toHaveBeenCalled();
       expect(addPanelMock).not.toHaveBeenCalled();
+    });
+
+    it("opens a fresh browser rather than revealing into one whose close is under way", async () => {
+      seedWorktree("wt-1");
+      panelsMock.byId = [browserPanel("fb-closing", { worktreeId: "wt-1" })];
+      const { replaceClosingIds } = await import("@/services/terminal/optimisticPanelCloseIds");
+      replaceClosingIds(new Set(["fb-closing"]));
+      try {
+        await getAction().run({ worktreeId: "wt-1", revealPath: "src/app.ts" }, {
+          dispatchSource: "user",
+        } as ActionContext);
+      } finally {
+        replaceClosingIds(new Set());
+      }
+
+      expect(setFileBrowserViewMock).not.toHaveBeenCalled();
+      expect(activateTerminalMock).not.toHaveBeenCalled();
+      expect(addPanelOptions()).toMatchObject({ browserSelectedPath: "src/app.ts" });
     });
 
     it("applies the reveal once the prompt lets it through", async () => {
