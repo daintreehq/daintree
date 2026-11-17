@@ -1,10 +1,20 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { Terminal as HeadlessTerminal } from "@xterm/headless";
 import { formatAgentContextBlock } from "@shared/utils/agentContextDrag";
 import type {
   ContextReference,
   ContextReferenceResolution,
 } from "@shared/types/pluginContextProvider";
+
+const screen = vi.hoisted(() => ({ terminal: null as null | { dispose(): void } }));
+vi.mock("@/services/terminal/terminalInstanceServiceAccessor", () => ({
+  peek: () => ({
+    get: () => (screen.terminal ? { terminal: screen.terminal } : undefined),
+    getCachedSelection: () => undefined,
+  }),
+}));
+
 import {
   expandDraftContext,
   listDraftContextTokens,
@@ -171,5 +181,67 @@ describe("shareWorkingDiffReads (#17480)", () => {
       if (original) Object.defineProperty(window, "electron", original);
       else Reflect.deleteProperty(window, "electron");
     }
+  });
+});
+
+describe("expandDraftContext @terminal", () => {
+  afterEach(() => {
+    screen.terminal?.dispose();
+    screen.terminal = null;
+  });
+
+  async function showing(cols: number, output: string, rows = 10): Promise<void> {
+    const terminal = new HeadlessTerminal({ cols, rows, scrollback: 1000, allowProposedApi: true });
+    await new Promise<void>((resolve) => terminal.write(output, resolve));
+    screen.terminal?.dispose();
+    screen.terminal = terminal;
+  }
+
+  /** What `@terminal` put between its fences. */
+  async function injected(): Promise<string> {
+    const expanded = await expandDraftContext("@terminal", { terminalId: "t1", cwd: "/repo" });
+    const lines = expanded.split("\n");
+    expect(lines[0]).toMatch(/^`{3,}$/);
+    expect(lines[lines.length - 1]).toBe(lines[0]);
+    return lines.slice(1, -1).join("\n");
+  }
+
+  const url = "https://example.com/a/very/long/path/without/any/breaks/index.html?q=1&r=2";
+
+  it("keeps a URL xterm wrapped across rows on one line, at any pane width", async () => {
+    const output = `$ cat link\r\n${url}\r\n$ `;
+    await showing(24, output);
+    const narrow = await injected();
+    await showing(160, output);
+    const wide = await injected();
+    expect(narrow).toBe(`$ cat link\n${url}\n$`);
+    expect(wide).toBe(narrow);
+  });
+
+  it("keeps a space that fell on the wrap boundary of a command", async () => {
+    // At 20 columns the space after the a's is the row's last cell.
+    const command = `echo ${"a".repeat(14)} bbbbbb`;
+    await showing(20, command);
+    expect(await injected()).toBe(command);
+    await showing(120, command);
+    expect(await injected()).toBe(command);
+  });
+
+  it("attaches the same lines at any width, even past a hundred wrapped rows", async () => {
+    const lines = Array.from(
+      { length: 60 },
+      (_, i) => `${String(i).padStart(2, "0")} ${"x".repeat(27)}`
+    );
+    // Three rows a line at ten columns: 180 rows in all.
+    await showing(10, lines.join("\r\n"));
+    const narrow = await injected();
+    await showing(120, lines.join("\r\n"));
+    expect(narrow).toBe(lines.join("\n"));
+    expect(await injected()).toBe(narrow);
+  });
+
+  it("keeps the line breaks the program wrote", async () => {
+    await showing(20, "first line\r\nsecond line\r\n\r\nafter a blank");
+    expect(await injected()).toBe("first line\nsecond line\n\nafter a blank");
   });
 });

@@ -1,4 +1,5 @@
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+import { readTerminalTail } from "@/services/terminal/readTerminalTail";
 import { usePluginContextProvidersStore } from "@/store/pluginContextProvidersStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type {
@@ -19,6 +20,11 @@ import {
 import { expandContextReferences } from "./contextReferenceExpansion";
 import { expandDiffNotesTokens } from "./diffNotesReference";
 import type { DiffNote } from "@/components/Worktree/diffNotes";
+
+// `@terminal` reads lines, not rows, so the pane's width doesn't change what it
+// attaches; the row cap bounds a read through very long wrapped lines.
+const TERMINAL_CONTEXT_LINES = 100;
+const TERMINAL_CONTEXT_ROWS = 400;
 
 /** The plugin this view believes holds `prefix`, for a placeholder when main can't be asked. */
 function activeProviderName(prefix: string): string | undefined {
@@ -182,14 +188,11 @@ export async function expandDraftContext(
     const managed = peekTerminalService()?.get(terminalId);
     let replacement: string;
     if (managed) {
-      const buffer = managed.terminal.buffer.active;
-      const start = Math.max(0, buffer.length - 100);
-      const lines: string[] = [];
-      for (let i = start; i < buffer.length; i++) {
-        const line = buffer.getLine(i);
-        if (line) lines.push(line.translateToString(true));
-      }
-      const content = lines.join("\n").trimEnd();
+      const content = readTerminalTail(
+        managed.terminal.buffer.active,
+        TERMINAL_CONTEXT_LINES,
+        TERMINAL_CONTEXT_ROWS
+      );
       replacement = content ? fenceTokenExpansion(content) : "[No terminal output]";
     } else {
       replacement = "[Terminal not available]";
