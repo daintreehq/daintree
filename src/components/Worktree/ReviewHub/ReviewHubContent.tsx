@@ -1235,12 +1235,28 @@ export function ReviewHubContent({
     selectionAnchorRef,
   ]);
 
+  const repoState = status?.repoState ?? "CLEAN";
+  const isOperationState =
+    repoState === "MERGING" ||
+    repoState === "REBASING" ||
+    repoState === "CHERRY_PICKING" ||
+    repoState === "REVERTING";
+
   useEffect(() => {
     if (!isOpen || !autoStageOnOpen) return;
     if (!status || !statusIsFresh) return;
     if (hasAutoStagedRef.current) return;
     if (status.staged.length > 0) {
       // Already staged from a prior session — skip and mark as handled.
+      hasAutoStagedRef.current = true;
+      return;
+    }
+    // `git add -A` would record every conflicted path as resolved, markers and
+    // all, and conflicts sit in neither list, so one unrelated edit was enough
+    // to set it off (#17552). Mid-operation there is no commit to prepare
+    // either. Consumed rather than deferred: a conflict cleared later in this
+    // opening must not trigger a repository-wide add the user never asked for.
+    if (status.conflicted.length > 0 || status.conflictedFiles.length > 0 || isOperationState) {
       hasAutoStagedRef.current = true;
       return;
     }
@@ -1272,6 +1288,7 @@ export function ReviewHubContent({
     autoStageOnOpen,
     status,
     statusIsFresh,
+    isOperationState,
     refresh,
     worktreePath,
     handleStageAll,
@@ -1733,12 +1750,6 @@ export function ReviewHubContent({
     diffMode === "base-branch"
       ? baseBranchRefreshing
       : diffMode === "working-tree" && isBackgroundRefreshing;
-  const repoState = status?.repoState ?? "CLEAN";
-  const isOperationState =
-    repoState === "MERGING" ||
-    repoState === "REBASING" ||
-    repoState === "CHERRY_PICKING" ||
-    repoState === "REVERTING";
   // The main worktree can sit on any branch, so nothing bounds the name: past
   // 20 characters the label ends early so the mode switch keeps its size in
   // the one-row header, and the full name becomes its accessible name. Cut at

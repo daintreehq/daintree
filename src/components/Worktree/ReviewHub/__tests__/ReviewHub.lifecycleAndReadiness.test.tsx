@@ -564,6 +564,114 @@ describe("ReviewHub", () => {
       expect(stageAllMock).not.toHaveBeenCalled();
     });
 
+    // #17552: conflict rows sit in neither ordinary list, so an unrelated
+    // unstaged edit used to let the one-shot `git add -A` resolve them.
+    it.each([
+      ["a merge", "MERGING", "conflict-panel"],
+      ["a rebase", "REBASING", "conflict-panel"],
+      ["a stash pop", "DIRTY", "conflict-worklist"],
+    ] as const)(
+      "leaves unresolved entries alone when opened in %s conflict",
+      async (_label, repoState, conflictSurface) => {
+        getStagingStatusMock.mockResolvedValue(
+          makeStatus({
+            staged: [],
+            unstaged: [
+              { path: "src/unrelated.ts", status: "modified", insertions: 1, deletions: 0 },
+            ],
+            conflicted: ["src/app.ts"],
+            conflictedFiles: [{ path: "src/app.ts", xy: "UU", label: "both modified" }],
+            repoState,
+          })
+        );
+        render(
+          <ReviewHubContent
+            isOpen={true}
+            worktreePath={WORKTREE_PATH}
+            onClose={vi.fn()}
+            autoStageOnOpen={true}
+          />
+        );
+        await waitFor(() => screen.getByTestId(conflictSurface));
+        await act(async () => {
+          capturedUpdateCallback!(makeWorktreeState());
+          await Promise.resolve();
+        });
+
+        expect(stageAllMock).not.toHaveBeenCalled();
+        expect(stageFilesMock).not.toHaveBeenCalled();
+        expect(stageFileMock).not.toHaveBeenCalled();
+        // Still on the worklist, with its explicit resolution control.
+        screen.getByRole("button", { name: "Mark src/app.ts as resolved" });
+      }
+    );
+
+    it("does not stage later in the same opening once the conflict clears", async () => {
+      const unrelated = {
+        path: "src/unrelated.ts",
+        status: "modified" as const,
+        insertions: 1,
+        deletions: 0,
+      };
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({
+          staged: [],
+          unstaged: [unrelated],
+          conflicted: ["src/app.ts"],
+          conflictedFiles: [{ path: "src/app.ts", xy: "UU", label: "both modified" }],
+        })
+      );
+      const props = { worktreePath: WORKTREE_PATH, onClose: vi.fn(), autoStageOnOpen: true };
+      const { rerender } = render(<ReviewHubContent isOpen={true} {...props} />);
+      await waitFor(() => screen.getByRole("button", { name: "Mark src/app.ts as resolved" }));
+
+      // Resolved outside the hub: the file is back to an ordinary state and the
+      // unrelated edit is still unstaged.
+      getStagingStatusMock.mockResolvedValue(makeStatus({ staged: [], unstaged: [unrelated] }));
+      await act(async () => {
+        capturedUpdateCallback!(makeWorktreeState());
+        await Promise.resolve();
+      });
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: "Mark src/app.ts as resolved" })).toBeNull()
+      );
+      expect(stageAllMock).not.toHaveBeenCalled();
+
+      // A fresh opening is a fresh decision.
+      rerender(<ReviewHubContent isOpen={false} {...props} />);
+      rerender(<ReviewHubContent isOpen={true} {...props} />);
+      await waitFor(() => expect(stageAllMock).toHaveBeenCalledWith(WORKTREE_PATH));
+      expect(stageAllMock).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(["MERGING", "REBASING", "CHERRY_PICKING", "REVERTING"] as const)(
+      "does not stage mid-operation (%s) even with no conflicts left",
+      async (repoState) => {
+        getStagingStatusMock.mockResolvedValue(
+          makeStatus({
+            staged: [],
+            unstaged: [
+              { path: "src/unrelated.ts", status: "modified", insertions: 1, deletions: 0 },
+            ],
+            repoState,
+          })
+        );
+        render(
+          <ReviewHubContent
+            isOpen={true}
+            worktreePath={WORKTREE_PATH}
+            onClose={vi.fn()}
+            autoStageOnOpen={true}
+          />
+        );
+        await waitFor(() => screen.getByTestId("conflict-panel"));
+        await act(async () => {
+          await Promise.resolve();
+        });
+        expect(stageAllMock).not.toHaveBeenCalled();
+      }
+    );
+
     it("does not stage when autoStageOnOpen is omitted", async () => {
       getStagingStatusMock.mockResolvedValue(
         makeStatus({
