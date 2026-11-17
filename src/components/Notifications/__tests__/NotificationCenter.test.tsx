@@ -1329,12 +1329,15 @@ describe("NotificationCenter — Needs attention pinned section", () => {
         seenAsToast: false,
       }),
     ]);
-    useNotificationHistoryStore.setState({
-      snoozedThreads: { "overdue-thread": Date.now() - 1000 },
-      unreadCount: 0,
+    // Mounted but closed, as during the exit animation of a reopen.
+    const { rerender } = render(<NotificationCenter open={false} onClose={vi.fn()} />);
+    const overdue = { "overdue-thread": Date.now() - 1000 };
+    act(() => {
+      useNotificationHistoryStore.setState({ snoozedThreads: overdue, unreadCount: 0 });
     });
+    expect(useNotificationHistoryStore.getState().snoozedThreads).toEqual(overdue);
 
-    render(<NotificationCenter open onClose={vi.fn()} />);
+    rerender(<NotificationCenter open onClose={vi.fn()} />);
 
     expect(useNotificationHistoryStore.getState().snoozedThreads).toEqual({});
     expect(useNotificationHistoryStore.getState().unreadCount).toBe(1);
