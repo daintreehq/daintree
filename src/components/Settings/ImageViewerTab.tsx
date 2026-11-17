@@ -160,16 +160,29 @@ export function ImageViewerTab() {
     }
   };
 
-  // A close that lands during a Save reports that Save's outcome, not a success
-  // for a write that can still fail.
-  const saveInFlightRef = useRef<Promise<SettingsFlushFailure | undefined> | null>(null);
+  // What a Save of the fields as they stand writes.
+  const draft: PersistedImageViewer = {
+    mode,
+    customCommand: mode === "custom" ? customCommand.trim() : "",
+  };
+
+  // One Save at a time, remembering what it writes: the fields stay editable while
+  // it runs, so a close may find a newer draft than the one on its way to disk.
+  const saveInFlightRef = useRef<{
+    viewer: PersistedImageViewer;
+    done: Promise<SettingsFlushFailure | undefined>;
+  } | null>(null);
   const handleSave = () => {
     if (!saveInFlightRef.current) {
-      saveInFlightRef.current = save().finally(() => {
-        saveInFlightRef.current = null;
-      });
+      const run = {
+        viewer: draft,
+        done: save().finally(() => {
+          if (saveInFlightRef.current === run) saveInFlightRef.current = null;
+        }),
+      };
+      saveInFlightRef.current = run;
     }
-    return saveInFlightRef.current;
+    return saveInFlightRef.current.done;
   };
 
   const accepted = persisted ?? SUGGESTED_VIEWER;
@@ -194,11 +207,23 @@ export function ImageViewerTab() {
     (accepted.mode !== mode ||
       (mode === "custom" && accepted.customCommand.trim() !== customCommand.trim()));
 
-  useSettingsTabFlush(
-    "integrations",
-    () => saveInFlightRef.current ?? (hasPendingDraft ? handleSave() : undefined),
-    hasPendingDraft || isSaving
-  );
+  // A close that lands during a Save reports that Save's outcome, not a success for
+  // a write that can still fail. Once a Save of something else lands, this draft is
+  // newer than what is on disk, whatever `persisted` says before it re-renders.
+  const flushDraft = async (): Promise<SettingsFlushFailure | undefined> => {
+    let overwritten = false;
+    for (;;) {
+      const running = saveInFlightRef.current;
+      if (!running) return overwritten || hasPendingDraft ? handleSave() : undefined;
+      if (running.viewer.mode === draft.mode && running.viewer.customCommand === draft.customCommand)
+        return running.done;
+      const failure = await running.done;
+      if (failure) return failure;
+      overwritten = true;
+    }
+  };
+
+  useSettingsTabFlush("integrations", flushDraft, hasPendingDraft || isSaving);
 
   if (!activeProjectId) {
     return (

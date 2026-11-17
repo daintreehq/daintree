@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "@shared/types/project";
 
@@ -219,6 +219,31 @@ describe("SettingsDialog closed over an Integrations draft", () => {
     expect(saveSettings).toHaveBeenCalledTimes(1);
     expect(settingsFile.preferredImageViewer).toEqual({ mode: "custom", customCommand: "gimp" });
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for a Save still running, then saves the command edited since", async () => {
+    let finishFirstSave!: () => void;
+    saveSettings.mockImplementationOnce(async (_projectId: string, next: Record<string, unknown>) => {
+      await new Promise<void>((resolve) => (finishFirstSave = resolve));
+      settingsFile = next;
+    });
+    const onClose = await openOnIntegrations();
+    chooseCustomViewer("gimp");
+    const viewerSection = document.getElementById("image-viewer")!;
+    fireEvent.click(within(viewerSection).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByRole("textbox", { name: "Command" }), {
+      target: { value: "feh" },
+    });
+
+    await pressEscape();
+    expect(onClose).not.toHaveBeenCalled();
+
+    await act(async () => finishFirstSave());
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(saveSettings).toHaveBeenCalledTimes(2);
+    expect(settingsFile.preferredImageViewer).toEqual({ mode: "custom", customCommand: "feh" });
   });
 
   it("keeps both drafts when the editor and the image viewer are pending together", async () => {

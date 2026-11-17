@@ -229,6 +229,109 @@ describe("ImageViewerTab flushed by a close", () => {
     expect((await flushing)[0]?.landOn).toBe("image-viewer");
   });
 
+  describe("with a newer draft than the Save still running", () => {
+    function holdFirstSave() {
+      let settle!: { resolve: () => void; reject: (reason: Error) => void };
+      vi.mocked(projectClient.saveSettings).mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            settle = { resolve, reject };
+          })
+      );
+      return () => settle;
+    }
+
+    function savedCommands() {
+      return vi
+        .mocked(projectClient.saveSettings)
+        .mock.calls.map(([, settings]) => settings.preferredImageViewer);
+    }
+
+    async function saveThenEdit(first: string, ...edits: string[]) {
+      chooseCustom(first);
+      fireEvent.click(screen.getByRole("button", { name: /save/i }));
+      await waitFor(() => expect(projectClient.saveSettings).toHaveBeenCalledTimes(1));
+      for (const value of edits) {
+        fireEvent.change(screen.getByRole("textbox", { name: "Command" }), {
+          target: { value },
+        });
+      }
+    }
+
+    it("writes the newest command once the earlier Save lands", async () => {
+      const firstSave = holdFirstSave();
+      const flush = await renderFlushable();
+      await saveThenEdit("gimp", "feh");
+
+      const flushing = flush();
+      await act(async () => firstSave().resolve());
+
+      await expect(flushing).resolves.toEqual([]);
+      expect(savedCommands()).toEqual([
+        { mode: "custom", customCommand: "gimp" },
+        { mode: "custom", customCommand: "feh" },
+      ]);
+      expect(screen.getByText("Custom (feh)")).toBeTruthy();
+    });
+
+    it("saves once when the edit comes back to what the running Save writes", async () => {
+      const firstSave = holdFirstSave();
+      const flush = await renderFlushable();
+      await saveThenEdit("gimp", "feh", " gimp ");
+
+      const flushing = flush();
+      await act(async () => firstSave().resolve());
+
+      await expect(flushing).resolves.toEqual([]);
+      expect(projectClient.saveSettings).toHaveBeenCalledTimes(1);
+    });
+
+    it("writes back the saved command the draft returned to, which the running Save replaces", async () => {
+      const firstSave = holdFirstSave();
+      const flush = await renderFlushable({
+        preferredImageViewer: { mode: "custom", customCommand: "feh" },
+      });
+      await saveThenEdit("gimp", "feh");
+
+      const flushing = flush();
+      await act(async () => firstSave().resolve());
+
+      await expect(flushing).resolves.toEqual([]);
+      expect(savedCommands()).toEqual([
+        { mode: "custom", customCommand: "gimp" },
+        { mode: "custom", customCommand: "feh" },
+      ]);
+    });
+
+    it("reports the running Save's failure and keeps the newer draft unsaved", async () => {
+      const firstSave = holdFirstSave();
+      const flush = await renderFlushable();
+      await saveThenEdit("gimp", "feh");
+
+      const flushing = flush();
+      await act(async () => firstSave().reject(new Error("disk full")));
+
+      expect((await flushing)[0]?.landOn).toBe("image-viewer");
+      expect(projectClient.saveSettings).toHaveBeenCalledTimes(1);
+      expect((screen.getByRole("textbox", { name: "Command" }) as HTMLInputElement).value).toBe(
+        "feh"
+      );
+    });
+
+    it("lands on the command field when the newer command is empty", async () => {
+      const firstSave = holdFirstSave();
+      const flush = await renderFlushable();
+      await saveThenEdit("gimp", "  ");
+
+      const flushing = flush();
+      await act(async () => firstSave().resolve());
+
+      expect((await flushing)[0]?.landOn).toBe("image-viewer-command");
+      expect(projectClient.saveSettings).toHaveBeenCalledTimes(1);
+      expect(screen.getByText("Enter the command that opens images")).toBeTruthy();
+    });
+  });
+
   it("writes nothing over a stored command that only differs by whitespace", async () => {
     const flush = await renderFlushable({
       preferredImageViewer: { mode: "custom", customCommand: " gimp " },
