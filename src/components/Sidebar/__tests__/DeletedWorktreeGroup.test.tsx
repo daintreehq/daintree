@@ -511,6 +511,72 @@ describe("DeletedWorktreeGroup", () => {
     expect(readout?.closest("button")).toBeNull();
   });
 
+  describe("countdown tooltips", () => {
+    // Keyboard focus opens a Radix tooltip with no hover delay.
+    function focusTooltip(timer: Element | null): string {
+      if (!(timer instanceof HTMLElement)) throw new Error("timer not rendered");
+      act(() => {
+        timer.focus();
+      });
+      return screen.getByRole("tooltip").textContent ?? "";
+    }
+
+    it("explains the group's next cleanup on the summary row", () => {
+      setPanels([
+        { id: "t1", worktreeId: "wt-1" },
+        { id: "t2", worktreeId: "wt-2" },
+      ]);
+      const now = Date.now();
+      const { container } = renderGroup([
+        makeDeleted("wt-1", "feature/alpha", now + 30_000),
+        makeDeleted("wt-2", "feature/beta", now + 50_000),
+      ]);
+
+      const timer = container.querySelector("[data-testid='deleted-worktree-group-countdown']");
+      expect(timer?.getAttribute("tabindex")).toBe("0");
+      expect(focusTooltip(timer)).toMatch(/^Next cleanup in \d+s$/);
+      expect(container.querySelector("[title]")).toBeNull();
+    });
+
+    it("explains a running member's timer in the rail", () => {
+      setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+      const { container } = renderGroup([
+        makeDeleted("wt-1", "feature/alpha", Date.now() + 40_000),
+      ]);
+
+      const timer = container.querySelector("[data-testid='deleted-worktree-member-countdown']");
+      expect(timer?.getAttribute("tabindex")).toBe("0");
+      expect(focusTooltip(timer)).toMatch(/^Closes automatically in \d+s$/);
+      expect(container.querySelector("[title]")).toBeNull();
+    });
+
+    it("says why a held member's timer is holding", () => {
+      setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+      const { container } = renderGroup([
+        {
+          ...makeDeleted("wt-1", "feature/alpha", Date.now() + 40_000),
+          holdReason: "agent",
+          heldRemainingMs: 33_000,
+        },
+      ]);
+
+      const timer = container.querySelector("[data-testid='deleted-worktree-member-countdown']");
+      expect(focusTooltip(timer)).toBe(
+        "Auto-close is paused while an agent here is still working, holding at 33s"
+      );
+    });
+
+    it("renders no native title on an expanded group's cards", () => {
+      setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+      useWorktreeSelectionStore.setState({ deletedWorktreeGroupExpanded: true });
+      const { container } = renderGroup([
+        makeDeleted("wt-1", "feature/alpha", Date.now() + 40_000),
+      ]);
+
+      expect(container.querySelector("[title]")).toBeNull();
+    });
+  });
+
   it("drops the summary timer when every member is held", () => {
     setPanels([
       { id: "t1", worktreeId: "wt-1" },
