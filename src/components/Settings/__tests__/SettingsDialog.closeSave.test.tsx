@@ -157,7 +157,13 @@ describe("SettingsDialog close with an unsaved edit on another machine (#17208)"
   const CONNECTED = {
     status: "connected",
     rttMs: 1,
-    handshake: { version: "1.0.0", commit: "abc", protocolVersion: 1, platform: "linux", arch: "x64" },
+    handshake: {
+      version: "1.0.0",
+      commit: "abc",
+      protocolVersion: 1,
+      platform: "linux",
+      arch: "x64",
+    },
   };
   const draft = (value: string): HostEnvDraft => ({
     rows: [{ id: "r1", key: "LANG", value }],
@@ -176,7 +182,9 @@ describe("SettingsDialog close with an unsaved edit on another machine (#17208)"
           scope: "host",
           instanceId: "launch-1",
           unavailable: [],
-          settings: [{ key: "globalEnvironmentVariables", value: { LANG: "C" }, revision: "r-env" }],
+          settings: [
+            { key: "globalEnvironmentVariables", value: { LANG: "C" }, revision: "r-env" },
+          ],
         }),
         update: vi.fn(),
       },
