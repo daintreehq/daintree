@@ -713,6 +713,8 @@ describe("PluginMcpSupervisor (issue #9233)", () => {
       spawner: () => fake.handle,
       killTree: () => {},
     });
+    const invalidated = vi.fn();
+    supervisor.onDidInvalidateTools(invalidated);
     const startPromise = supervisor.start({
       pluginId: "acme.demo",
       contributions: [{ id: "linear", name: "Linear", command: "node" }],
@@ -727,6 +729,8 @@ describe("PluginMcpSupervisor (issue #9233)", () => {
     expect(info?.lastError).toContain("unsupported protocol version");
     expect(info?.pid).toBeNull();
     expect(fake.killed).toBe(true);
+    // A failure, not a deliberate stop: the agent endpoint's backoff counts it.
+    expect(invalidated.mock.calls).toEqual([["acme.demo", "linear", "exited"]]);
   });
 
   it("terminates a server whose stdin is closed before initialize, leaving no handshake timer (#17212)", async () => {
@@ -1531,24 +1535,37 @@ describe("PluginMcpSupervisor state eviction on uninstall (issue #17212)", () =>
   }
 
   it("removeState drops every server of the uninstalled plugin and nothing else", async () => {
-    const uninstalled = makeFakeSubprocess({ pid: 1 });
+    const linear = makeFakeSubprocess({ pid: 1 });
+    const github = makeFakeSubprocess({ pid: 3 });
     const kept = makeFakeSubprocess({ pid: 2 });
-    const supervisor = supervisorOver([uninstalled, kept]);
-    await startReady(supervisor, "acme.demo", uninstalled);
+    const supervisor = supervisorOver([linear, github, kept]);
+    const started = supervisor.start({
+      pluginId: "acme.demo",
+      contributions: [contribution, { id: "github", name: "GitHub", command: "node" }],
+      resolveSettings: async () => "",
+    });
+    await Promise.all([linear.waitForStdinCount(1), github.waitForStdinCount(1)]);
+    linear.answerInitialize();
+    github.answerInitialize();
+    await started;
     await startReady(supervisor, "acme.demo-extra", kept);
-    uninstalled.emitStderr("token=abc leaked line\n");
+    linear.emitStderr("token=abc leaked line\n");
+    github.emitStderr("another leaked line\n");
     await flushMicrotasks();
+    expect(supervisor.list()).toHaveLength(3);
 
     await supervisor.shutdown({ pluginId: "acme.demo" });
     supervisor.removeState("acme.demo");
 
     expect(supervisor.list().map((info) => info.pluginId)).toEqual(["acme.demo-extra"]);
-    expect(supervisor.getStderr("acme.demo", "linear")).toEqual({
-      pluginId: "acme.demo",
-      serverId: "linear",
-      lines: [],
-      totalLines: 0,
-    });
+    for (const serverId of ["linear", "github"]) {
+      expect(supervisor.getStderr("acme.demo", serverId)).toEqual({
+        pluginId: "acme.demo",
+        serverId,
+        lines: [],
+        totalLines: 0,
+      });
+    }
     expect(supervisor.list()[0]?.status).toBe("ready");
     expect(kept.killed).toBe(false);
   });
@@ -1608,10 +1625,11 @@ describe("PluginMcpSupervisor state eviction on uninstall (issue #17212)", () =>
 
     supervisor.removeState("acme.demo");
     finishResolve("secret");
-    await started;
+    await flushMicrotasks();
 
     expect(spawner).not.toHaveBeenCalled();
     expect(supervisor.list()).toEqual([]);
+    await started;
   });
 
   it("does not resurrect a server evicted while restart() was taking it down", async () => {
@@ -1642,10 +1660,11 @@ describe("PluginMcpSupervisor state eviction on uninstall (issue #17212)", () =>
       await flushMicrotasks();
       supervisor.removeState("acme.demo");
       finishTree();
-      await restarted;
+      await flushMicrotasks();
 
       expect(spawner).toHaveBeenCalledTimes(1);
       expect(supervisor.list()).toEqual([]);
+      await restarted;
     } finally {
       if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
     }
@@ -1692,7 +1711,9 @@ describe("PluginMcpSupervisor state eviction on uninstall (issue #17212)", () =>
     vi.useFakeTimers();
     try {
       supervisor.notifySettingChanged("acme.demo", "apiToken", restart);
+      expect(vi.getTimerCount()).toBe(1);
       supervisor.removeState("acme.demo");
+      expect(vi.getTimerCount()).toBe(0);
       vi.advanceTimersByTime(5_000);
       expect(restart).not.toHaveBeenCalled();
     } finally {

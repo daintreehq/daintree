@@ -7363,25 +7363,30 @@ export class PluginService {
     manifestId: string,
     opts: { uninstall: boolean; purge: boolean }
   ): void {
-    for (const key of [...this.installedInstanceKeys]) {
-      if (pluginManifestIdFromInstanceKey(key) !== manifestId) continue;
-      this.installedInstanceEpochs.set(key, (this.installedInstanceEpochs.get(key) ?? 0) + 1);
-      this.dropInstalledInstance(key, opts.purge);
-    }
-    // Instances of a closed project are unloaded but keep their approvals; the
-    // code behind them is about to change or go, so those are purged too.
-    if (opts.purge) {
-      for (const projectId of this.projectInstanceStore.listForPackage(manifestId)) {
-        getPluginCapabilityConsentService().revokeAllForPlugin(
-          makeInstalledProjectInstanceKey(projectId, manifestId)
-        );
+    try {
+      for (const key of [...this.installedInstanceKeys]) {
+        if (pluginManifestIdFromInstanceKey(key) !== manifestId) continue;
+        this.installedInstanceEpochs.set(key, (this.installedInstanceEpochs.get(key) ?? 0) + 1);
+        this.dropInstalledInstance(key, opts.purge);
       }
-    }
-    if (opts.uninstall) {
-      this.projectInstanceStore.removePackage(manifestId);
-      this.projectInstancePackages.delete(manifestId);
-      this.forgetPackageInstanceLaunches(manifestId);
-      this.evictPackageInstanceMcpState(manifestId);
+      // Instances of a closed project are unloaded but keep their approvals; the
+      // code behind them is about to change or go, so those are purged too.
+      if (opts.purge) {
+        for (const projectId of this.projectInstanceStore.listForPackage(manifestId)) {
+          getPluginCapabilityConsentService().revokeAllForPlugin(
+            makeInstalledProjectInstanceKey(projectId, manifestId)
+          );
+        }
+      }
+      if (opts.uninstall) {
+        this.projectInstanceStore.removePackage(manifestId);
+        this.projectInstancePackages.delete(manifestId);
+        this.forgetPackageInstanceLaunches(manifestId);
+      }
+    } finally {
+      // The installer carries on deleting the package when this throws, so a
+      // failed store write must not leave the instances' MCP state behind.
+      if (opts.uninstall) this.evictPackageInstanceMcpState(manifestId);
     }
   }
 

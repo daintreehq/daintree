@@ -1131,7 +1131,8 @@ export class PluginMcpSupervisor {
   /**
    * {@link removeState} for every owner `match` accepts, such as each
    * per-project instance of an uninstalled package. A server not yet stopped is
-   * shut down first, so eviction never strands a process outside the map.
+   * shut down first, so eviction never strands a process or a pending
+   * settings-change restart outside the map.
    */
   removeStatesWhere(match: (pluginId: string) => boolean): void {
     for (const [key, state] of [...this.states]) {
@@ -1141,11 +1142,6 @@ export class PluginMcpSupervisor {
         void this.shutdownOne(key).catch((err) => {
           console.warn(`[PluginMcpSupervisor] shutdown of evicted "${key}" threw:`, err);
         });
-      }
-      const pendingTimer = this.settingChangeTimers.get(key);
-      if (pendingTimer) {
-        clearTimeout(pendingTimer);
-        this.settingChangeTimers.delete(key);
       }
       this.states.delete(key);
     }

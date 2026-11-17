@@ -529,6 +529,25 @@ describe("installed package instance mode (#14103)", () => {
     expect(owns(makeInstalledProjectInstanceKey(PROJECT_A, "acme.ledger-pro"))).toBe(false);
   });
 
+  it("evicts instance MCP state even when forgetting the enablements fails (#17212)", async () => {
+    const { service, seam } = await startService();
+    await service.setProjectInstanceEnabled(PROJECT_A, "/repo/a", PKG, true);
+    const store = (seam as unknown as { projectInstanceStore: { removePackage: () => void } })
+      .projectInstanceStore;
+    vi.spyOn(store, "removePackage").mockImplementation(() => {
+      throw new Error("disk full");
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await service.uninstallPlugin(PKG);
+
+    expect(mockPluginMcpSupervisor.removeStatesWhere).toHaveBeenCalledTimes(1);
+    const [owns] = mockPluginMcpSupervisor.removeStatesWhere.mock.calls[0] as [
+      (pluginId: string) => boolean,
+    ];
+    expect(owns(KEY_A)).toBe(true);
+  });
+
   it("keeps instance MCP state when the package is only disabled (#17212)", async () => {
     const { service } = await startService();
     await service.setProjectInstanceEnabled(PROJECT_A, "/repo/a", PKG, true);
