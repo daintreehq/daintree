@@ -26,6 +26,16 @@ function findRun(snapshot: FleetSnapshot | null | undefined, runId: string) {
 
 function notifyParkReleased(payload: ParkReleasedPayload, run: FleetRunRow | undefined): void {
   const title = run !== undefined ? composePilotRunTitle(run) : "A parked agent";
+  // One payload for the live click and the inbox's later dispatch. The
+  // worktree is where the open lands if the run exits during the switch.
+  const openArgs =
+    run !== undefined
+      ? {
+          runId: run.runId,
+          workspaceId: run.workspaceId,
+          ...(run.worktreeId !== undefined ? { worktreeId: run.worktreeId } : {}),
+        }
+      : undefined;
 
   // Neutral about the RUN's own state on purpose: the release says the
   // gate finished (or closed), not that the parked run is idle — it may
@@ -55,13 +65,13 @@ function notifyParkReleased(payload: ParkReleasedPayload, run: FleetRunRow | und
       ...(run !== undefined ? { projectId: run.workspaceId } : {}),
       ...(run?.worktreeId !== undefined ? { worktreeId: run.worktreeId } : {}),
     },
-    ...(run !== undefined
+    ...(openArgs !== undefined
       ? {
           action: {
             label: "Open",
             successLabel: "Opened",
             actionId: "pilot.openRun",
-            actionArgs: { runId: run.runId, workspaceId: run.workspaceId },
+            actionArgs: openArgs,
             // Awaited, and rejected on a failed dispatch, because
             // `successLabel` is a CLAIM: the toaster flashes "Opened" the
             // moment a synchronous handler returns, so discarding the
@@ -69,10 +79,7 @@ function notifyParkReleased(payload: ParkReleasedPayload, run: FleetRunRow | und
             // the ones where `pilot.openRun` was at that moment raising
             // "Couldn't open agent" beside it.
             onClick: async () => {
-              const result = await actionService.dispatch("pilot.openRun", {
-                runId: run.runId,
-                workspaceId: run.workspaceId,
-              });
+              const result = await actionService.dispatch("pilot.openRun", openArgs);
               // The action has already said why, in its own toast. This
               // rejection only tells the toaster not to claim success —
               // hence no message worth reading.

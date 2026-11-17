@@ -141,6 +141,26 @@ describe("useParkReleaseNotifications", () => {
     expect(getSnapshotMock).not.toHaveBeenCalled();
   });
 
+  it("opens the run with its worktree, from the toast and from the inbox alike", async () => {
+    // A run that exits while its project opens lands in its own worktree.
+    const { useParkReleaseNotifications, useFleetSnapshotStore } = await load();
+    useFleetSnapshotStore.setState({
+      snapshot: snapshotOf([seedRun({ worktreeId: "/repo/wt/alpha" })]),
+    });
+    dispatchMock.mockResolvedValue({ ok: true });
+    renderHook(() => useParkReleaseNotifications());
+
+    act(() => {
+      captured!({ id: "t1", gateRunId: "g1", reason: "gate-ready", timestamp: NOW });
+    });
+
+    const expected = { runId: "t1", workspaceId: "p1", worktreeId: "/repo/wt/alpha" };
+    const action = notifyArg(0).action as { actionArgs: unknown; onClick: () => Promise<void> };
+    expect(action.actionArgs).toEqual(expected);
+    await action.onClick();
+    expect(dispatchMock).toHaveBeenCalledWith("pilot.openRun", expected);
+  });
+
   it("says so when the gate closed rather than finished — and still carries the note", async () => {
     const { useParkReleaseNotifications, useFleetSnapshotStore } = await load();
     useFleetSnapshotStore.setState({
