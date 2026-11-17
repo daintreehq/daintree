@@ -22,6 +22,14 @@ interface PickRequest {
   signal?: AbortSignal;
 }
 
+/** Same file name, ignoring the directory and the extension: `app/User.tsx`, `lib/User.css`. */
+const isSameName = (a: string, b: string): boolean => a !== b && stemOf(a) === stemOf(b);
+const stemOf = (file: string): string =>
+  file
+    .slice(file.lastIndexOf("/") + 1)
+    .replace(/\.[^.]+$/, "")
+    .toLowerCase();
+
 interface PathFit {
   score: number;
   nameMatched: number;
@@ -87,6 +95,7 @@ export class VoiceFileLinkResolver {
     // Same-named files in different directories fit a description alike, and
     // nothing in it tells them apart: any one of them, the reranker's pick
     // included, is a guess. A miss is reported and the spoken words stay.
+    // Differently named files that merely score alike are for the reranker.
     const tied = best && best.paths.length > 1 ? new Set(best.paths) : null;
 
     if (best && tokens.length >= MIN_MATCHING_TOKENS && best.score >= NL_CONFIDENCE_THRESHOLD) {
@@ -109,8 +118,8 @@ export class VoiceFileLinkResolver {
       projectId,
       payload.signal
     );
-    if (matched && tied?.has(matched)) {
-      logDebug(`${P} Rerank chose among equally strong matches`, { tied: tied.size });
+    if (matched && tied?.has(matched) && [...tied].some((f) => isSameName(f, matched))) {
+      logDebug(`${P} Rerank chose among same-named matches`, { tied: tied.size });
       return null;
     }
     return matched;
@@ -166,34 +175,30 @@ export class VoiceFileLinkResolver {
   /**
    * How well `file` fits the spoken tokens. The file's own name has to match at
    * least one, so a directory alone never selects a file. A token the name
-   * doesn't carry still counts when it is the file's extension, or a directory
-   * word exactly ("app user profile" names `app/UserProfile.tsx` over
-   * `lib/UserProfile.tsx`). Past the score, a name or extension match outweighs
-   * a directory match, and `extraWords` is how much of the name the description
-   * never said outright, which separates `UserProfile.tsx` from its
-   * `UserProfile.test.tsx` and `UserProfiler.tsx` neighbours.
+   * doesn't carry still counts when a directory word is exactly it ("app user
+   * profile" names `app/UserProfile.tsx` over `lib/UserProfile.tsx`). Past the
+   * score, more name matches outweigh directory ones, and `extraWords` is how
+   * much of the name the description never said outright, which separates
+   * `UserProfile.tsx` from its `UserProfile.test.tsx` and `UserProfiler.tsx`
+   * neighbours.
    */
   private scorePath(tokens: readonly string[], file: string): PathFit | null {
     const lastSlash = file.lastIndexOf("/");
-    const base = file.slice(lastSlash + 1);
-    const extension = /\.([^.]+)$/.exec(base);
-    const nameWords = this.splitWords(extension ? base.slice(0, extension.index) : base);
+    const nameWords = this.splitWords(file.slice(lastSlash + 1).replace(/\.[^.]+$/, ""));
     const dirWords =
       lastSlash > 0 ? this.splitWords(file.slice(0, lastSlash).replace(/\//g, " ")) : [];
 
-    let wordMatched = 0;
-    let extensionMatched = 0;
+    let nameMatched = 0;
     let dirMatched = 0;
     for (const token of tokens) {
-      if (nameWords.some((w) => this.wordMatches(w, token))) wordMatched++;
-      else if (extension && token === extension[1].toLowerCase()) extensionMatched++;
+      if (nameWords.some((w) => this.wordMatches(w, token))) nameMatched++;
       else if (dirWords.includes(token)) dirMatched++;
     }
-    if (wordMatched === 0) return null;
+    if (nameMatched === 0) return null;
 
     return {
-      score: (wordMatched + extensionMatched + dirMatched) / tokens.length,
-      nameMatched: wordMatched + extensionMatched,
+      score: (nameMatched + dirMatched) / tokens.length,
+      nameMatched,
       extraWords: nameWords.filter((w) => !tokens.includes(w)).length,
     };
   }

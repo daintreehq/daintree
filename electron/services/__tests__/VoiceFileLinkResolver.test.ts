@@ -386,6 +386,33 @@ describe("VoiceFileLinkResolver", () => {
       expect(body.input).toContain("lib/Profile.tsx");
     });
 
+    it("takes a rerank pick among differently named files that merely score alike", async () => {
+      // One token, so nothing is auto-picked; both names start with it.
+      vi.stubGlobal("fetch", rerankReply("src/UserProfile.tsx"));
+
+      await expect(
+        pick("userprofile", ["src/UserProvider.tsx", "src/UserProfile.tsx"])
+      ).resolves.toBe("src/UserProfile.tsx");
+    });
+
+    it("leaves an exact multi-dot name to the reranker, not a tie of its reordered twin", async () => {
+      const fetchMock = rerankReply("docs/report.final.pdf");
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        pick("report.final.pdf", ["docs/final.report.pdf", "docs/report.final.pdf"])
+      ).resolves.toBe("docs/report.final.pdf");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("declines a rerank pick among same-named files that differ by extension", async () => {
+      vi.stubGlobal("fetch", rerankReply("src/Profile.css"));
+
+      await expect(
+        pick("profile page", ["src/Profile.tsx", "src/Profile.css"])
+      ).resolves.toBeNull();
+    });
+
     it("still takes a rerank pick from outside the tied files", async () => {
       vi.stubGlobal("fetch", rerankReply("src/pages/Settings.tsx"));
 
@@ -494,29 +521,6 @@ describe("VoiceFileLinkResolver", () => {
       await expect(
         pick("auth flow", ["src/AuthenticationAuthorizationFlow.tsx", "src/AuthFlowForm.tsx"])
       ).resolves.toBe("src/AuthFlowForm.tsx");
-      expect(fetchMock).not.toHaveBeenCalled();
-    });
-
-    it("takes the sibling whose extension was named", async () => {
-      const fetchMock = vi.fn();
-      vi.stubGlobal("fetch", fetchMock);
-
-      await expect(
-        pick("user profile css", ["src/UserProfile.tsx", "src/UserProfile.css"])
-      ).resolves.toBe("src/UserProfile.css");
-      expect(fetchMock).not.toHaveBeenCalled();
-    });
-
-    it("holds a named extension to the file's own, not a directory called the same", async () => {
-      const fetchMock = vi.fn();
-      vi.stubGlobal("fetch", fetchMock);
-
-      await expect(
-        pick("user profile settings tsx", [
-          "packages/tsx/UserProfileSettings.ts",
-          "src/UserProfileSettings.tsx",
-        ])
-      ).resolves.toBe("src/UserProfileSettings.tsx");
       expect(fetchMock).not.toHaveBeenCalled();
     });
   });
