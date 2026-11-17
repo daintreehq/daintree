@@ -7,7 +7,13 @@ import {
 } from "@shared/types/panel";
 import { rebaseAbsolutePath, rebaseMruEntry } from "@shared/utils/projectPathRelocation";
 import { usePanelStore } from "./panelStore";
-import { useWorktreeSelectionStore, type WorktreeMaximizeSnapshot } from "./worktreeStore";
+import type { TrashedTerminalGroupMetadata } from "./slices/panelRegistry/types";
+import {
+  isMruRecordingSuppressed,
+  persistMruList,
+  useWorktreeSelectionStore,
+  type WorktreeMaximizeSnapshot,
+} from "./worktreeStore";
 
 /**
  * Live in-memory rebase of a project VIEW's runtime path state after its folder
@@ -23,7 +29,8 @@ import { useWorktreeSelectionStore, type WorktreeMaximizeSnapshot } from "./work
  * discriminated union stays typed — `worktreeId` on every panel, `cwd` on
  * terminal/dev-preview panels, absolute `filePath` and `fileContainmentRoot` on
  * file panels. (Diff and file-browser paths are worktree-relative; browser
- * fields are URLs.)
+ * fields are URLs.) A PTY's conversation cwd stays put: it names where the CLI
+ * filed the session, which the folder move didn't carry along.
  */
 function rebasePanel(panel: PanelInstance, oldRoot: string, newRoot: string): PanelInstance {
   let next = panel;
@@ -31,6 +38,23 @@ function rebasePanel(panel: PanelInstance, oldRoot: string, newRoot: string): Pa
   if (next.worktreeId != null) {
     const worktreeId = rebaseAbsolutePath(next.worktreeId, oldRoot, newRoot);
     if (worktreeId !== next.worktreeId) next = { ...next, worktreeId };
+  }
+  if (typeof next.pendingDockWorktreeId === "string") {
+    const pendingDockWorktreeId = rebaseAbsolutePath(next.pendingDockWorktreeId, oldRoot, newRoot);
+    if (pendingDockWorktreeId !== next.pendingDockWorktreeId) {
+      next = { ...next, pendingDockWorktreeId };
+    }
+  }
+  if (isPtyPanel(next) && next.worktreeMoveNotice) {
+    const notice = next.worktreeMoveNotice;
+    const destinationWorktreeId = rebaseAbsolutePath(
+      notice.destinationWorktreeId,
+      oldRoot,
+      newRoot
+    );
+    if (destinationWorktreeId !== notice.destinationWorktreeId) {
+      next = { ...next, worktreeMoveNotice: { ...notice, destinationWorktreeId } };
+    }
   }
   if ((isPtyPanel(next) || isDevPreviewPanel(next)) && typeof next.cwd === "string") {
     const cwd = rebaseAbsolutePath(next.cwd, oldRoot, newRoot);
@@ -65,25 +89,40 @@ function rebaseIdSet(ids: Set<string>, oldRoot: string, newRoot: string): Set<st
 }
 
 /**
- * A new Map with every worktree-id key (and, through `rebaseValue`, every value
- * that carries one) rebased, or the same Map when nothing moved. Insertion order
- * is kept, so iteration-order readers see the same sequence under new keys.
+ * A new Map with keys and values passed through the given rebases, or the same
+ * Map when nothing moved. Insertion order is kept, so iteration-order readers see
+ * the same sequence under the new keys.
  */
-function rebaseIdKeyedMap<V>(
+function remapMap<V>(
   map: Map<string, V>,
-  oldRoot: string,
-  newRoot: string,
-  rebaseValue: (value: V) => V = (value) => value
+  rebaseKey: (key: string) => string,
+  rebaseValue: (value: V) => V
 ): Map<string, V> {
   let changed = false;
   const next = new Map<string, V>();
-  for (const [id, value] of map) {
-    const key = rebaseAbsolutePath(id, oldRoot, newRoot);
+  for (const [key, value] of map) {
+    const nextKey = rebaseKey(key);
     const nextValue = rebaseValue(value);
-    if (key !== id || nextValue !== value) changed = true;
-    next.set(key, nextValue);
+    if (nextKey !== key || nextValue !== value) changed = true;
+    next.set(nextKey, nextValue);
   }
   return changed ? next : map;
+}
+
+const unchanged = <T>(value: T): T => value;
+
+/** Trashed/backgrounded group members carry the group's worktree for its restore. */
+function rebaseGroupMember<T extends { groupMetadata?: TrashedTerminalGroupMetadata }>(
+  entry: T,
+  oldRoot: string,
+  newRoot: string
+): T {
+  const metadata = entry.groupMetadata;
+  if (!metadata || typeof metadata.worktreeId !== "string") return entry;
+  const worktreeId = rebaseAbsolutePath(metadata.worktreeId, oldRoot, newRoot);
+  return worktreeId === metadata.worktreeId
+    ? entry
+    : { ...entry, groupMetadata: { ...metadata, worktreeId } };
 }
 
 /** The layout snapshot is stamped with the worktree it was captured in. */
@@ -98,6 +137,9 @@ function rebaseLayoutSnapshot<T extends { worktreeId: string | undefined }>(
 }
 
 export function rebaseProjectViewRuntimePaths(oldRoot: string, newRoot: string): void {
+  const rebaseId = (id: string): string => rebaseAbsolutePath(id, oldRoot, newRoot);
+  const mruBefore = usePanelStore.getState().mruList;
+
   usePanelStore.setState((state) => {
     const patch: Partial<typeof state> = {};
 
@@ -141,6 +183,17 @@ export function rebaseProjectViewRuntimePaths(oldRoot: string, newRoot: string):
     }
     if (indexChanged) patch.panelIdsByWorktreeId = panelIdsByWorktreeId;
 
+    // Keyed by panel id; only the group metadata a restore rebuilds from moves.
+    const rebaseMember = <T extends { groupMetadata?: TrashedTerminalGroupMetadata }>(
+      entry: T
+    ): T => rebaseGroupMember(entry, oldRoot, newRoot);
+    const trashedTerminals = remapMap(state.trashedTerminals, unchanged, rebaseMember);
+    if (trashedTerminals !== state.trashedTerminals) patch.trashedTerminals = trashedTerminals;
+    const backgroundedTerminals = remapMap(state.backgroundedTerminals, unchanged, rebaseMember);
+    if (backgroundedTerminals !== state.backgroundedTerminals) {
+      patch.backgroundedTerminals = backgroundedTerminals;
+    }
+
     // `worktree:<id>` quick-switcher entries; the next selection persists this
     // whole list, so a stale entry would outlive the rewritten state.json one.
     const mruList = state.mruList.map((entry) => rebaseMruEntry(entry, oldRoot, newRoot));
@@ -165,23 +218,39 @@ export function rebaseProjectViewRuntimePaths(oldRoot: string, newRoot: string):
         ? snapshot
         : { ...snapshot, preMaximizeLayout };
     };
+    const crossDiffInitial = rebaseNullableId(
+      state.crossDiffDialog.initialWorktreeId,
+      oldRoot,
+      newRoot
+    );
     const next = {
       activeWorktreeId: rebaseNullableId(state.activeWorktreeId, oldRoot, newRoot),
       restoreWorktreeId: rebaseNullableId(state.restoreWorktreeId, oldRoot, newRoot),
       focusedWorktreeId: rebaseNullableId(state.focusedWorktreeId, oldRoot, newRoot),
-      expandedWorktrees: rebaseIdSet(state.expandedWorktrees, oldRoot, newRoot),
-      expandedTerminals: rebaseIdSet(state.expandedTerminals, oldRoot, newRoot),
-      lastFocusedTerminalByWorktree: rebaseIdKeyedMap(
-        state.lastFocusedTerminalByWorktree,
+      pendingWorktreeId: rebaseNullableId(state.pendingWorktreeId, oldRoot, newRoot),
+      // Fleet-scope exit writes these straight back into the selection.
+      _previousActiveWorktreeId: rebaseNullableId(
+        state._previousActiveWorktreeId,
         oldRoot,
         newRoot
       ),
-      maximizeByWorktree: rebaseIdKeyedMap(
-        state.maximizeByWorktree,
+      _previousRestoreWorktreeId: rebaseNullableId(
+        state._previousRestoreWorktreeId,
         oldRoot,
-        newRoot,
-        rebaseMaximize
+        newRoot
       ),
+      crossDiffDialog:
+        crossDiffInitial === state.crossDiffDialog.initialWorktreeId
+          ? state.crossDiffDialog
+          : { ...state.crossDiffDialog, initialWorktreeId: crossDiffInitial },
+      expandedWorktrees: rebaseIdSet(state.expandedWorktrees, oldRoot, newRoot),
+      expandedTerminals: rebaseIdSet(state.expandedTerminals, oldRoot, newRoot),
+      lastFocusedTerminalByWorktree: remapMap(
+        state.lastFocusedTerminalByWorktree,
+        rebaseId,
+        unchanged
+      ),
+      maximizeByWorktree: remapMap(state.maximizeByWorktree, rebaseId, rebaseMaximize),
     };
     const patch: Partial<typeof state> = {};
     for (const key of Object.keys(next) as (keyof typeof next)[]) {
@@ -189,4 +258,9 @@ export function rebaseProjectViewRuntimePaths(oldRoot: string, newRoot: string):
     }
     return Object.keys(patch).length > 0 ? patch : state;
   });
+
+  // Main already rewrote the saved list; sending the rebased one keeps this
+  // view's write bookkeeping on it and supersedes any held write of the old one.
+  const mruList = usePanelStore.getState().mruList;
+  if (mruList !== mruBefore && !isMruRecordingSuppressed()) void persistMruList(mruList);
 }
