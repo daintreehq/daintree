@@ -273,7 +273,7 @@ async function getPluginService(): Promise<PluginServiceSingleton> {
   return cachedPluginService;
 }
 import {
-  listAgentSessions,
+  listAgentSessionsOrThrow,
   clearAgentSessions,
   pruneAgentSessions,
   readSessionHistorySync,
@@ -1835,7 +1835,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
 
   const handleAgentSessionList = async (payload: { worktreeId?: string; projectId?: string }) => {
     const { app } = await import("electron");
-    return listAgentSessions(
+    return listAgentSessionsOrThrow(
       payload?.worktreeId,
       app.getPath("userData"),
       getAgentSessionRetentionDays(),

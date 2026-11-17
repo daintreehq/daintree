@@ -247,8 +247,8 @@ function normalizeRecords(parsed: unknown): AgentSessionRecord[] {
 }
 
 // In-memory copy of the parsed journal, keyed by resolved file path. The resume
-// palette calls listAgentSessions() -> readSessionHistorySync() on every open,
-// and that runs on Main's event loop. Main is the journal's only writer and
+// palette calls listAgentSessionsOrThrow() -> readSessionHistoryResultSync() on
+// every open, and that runs on Main's event loop. Main is the journal's only writer and
 // every writer replaces the entry with the array it just persisted, so once the
 // file has been read the entry IS the journal: a read never touches the disk
 // again, not even to stat it. A hand edit made while the app runs is therefore
@@ -378,8 +378,8 @@ function unreadableJournalError(error: unknown): Error {
 // NOTE: on a cache hit these readers return the cached array BY REFERENCE (that
 // shared-instance reuse is the whole point — a copy on every read would defeat
 // the cache). Callers MUST treat the result as read-only; never sort/push/splice
-// it in place. The production caller, listAgentSessions(), is safe: evictRecords()
-// only reads the input and returns freshly-built arrays.
+// it in place. The list callers (listAgentSessions, listAgentSessionsOrThrow) are
+// safe: evictRecords() only reads the input and returns freshly-built arrays.
 function readSessionHistoryResultSync(userData?: string): SessionHistoryReadResult {
   const filePath = getSessionHistoryPath(userData);
   if (!filePath) return { status: "ok", records: [] };
@@ -426,10 +426,12 @@ async function readSessionHistoryResult(userData?: string): Promise<SessionHisto
   }
 }
 
-// Read-only consumers (listAgentSessions and the MCP list action) collapse an
-// unreadable journal to `[]` — a transient failure degrades the displayed list
-// for one read without touching disk. The `unreadable` outcome is never cached,
-// so the next read re-attempts the file. The read-modify-write paths use
+// Tolerant read-only consumers (listAgentSessions, listBookmarks) collapse an
+// unreadable journal to `[]` — a transient failure degrades their result for
+// one read without touching disk. The `agent-session:list` IPC reads through
+// listAgentSessionsOrThrow instead, so its callers (the resume palette among
+// them) get a failure rather than "nothing closed". The `unreadable` outcome is never
+// cached, so the next read re-attempts the file. The read-modify-write paths use
 // readSessionHistoryResult directly and ABORT on `unreadable`.
 export function readSessionHistorySync(userData?: string): AgentSessionRecord[] {
   const result = readSessionHistoryResultSync(userData);
@@ -495,7 +497,38 @@ export function listAgentSessions(
   retentionDays?: AgentSessionRetentionDays,
   projectId?: string
 ): AgentSessionRecord[] {
-  const records = readSessionHistorySync(userData);
+  return scopeAgentSessions(readSessionHistorySync(userData), worktreeId, retentionDays, projectId);
+}
+
+/**
+ * The same list as {@link listAgentSessions}, except that a journal which exists
+ * but could not be read throws instead of reading as empty. The `agent-session:list`
+ * IPC uses it so the resume UI can tell "nothing closed" from "history unreadable"
+ * and offer a retry. The message is fixed: it crosses IPC to MCP clients, so it
+ * names no path. An absent journal is still an ordinary empty list.
+ */
+export function listAgentSessionsOrThrow(
+  worktreeId?: string,
+  userData?: string,
+  retentionDays?: AgentSessionRetentionDays,
+  projectId?: string
+): AgentSessionRecord[] {
+  const result = readSessionHistoryResultSync(userData);
+  if (result.status === "unreadable") {
+    throw new Error(
+      "The session history couldn't be read. It's left untouched on disk, so try again.",
+      { cause: result.error }
+    );
+  }
+  return scopeAgentSessions(result.records, worktreeId, retentionDays, projectId);
+}
+
+function scopeAgentSessions(
+  records: AgentSessionRecord[],
+  worktreeId: string | undefined,
+  retentionDays: AgentSessionRetentionDays | undefined,
+  projectId: string | undefined
+): AgentSessionRecord[] {
   const now = Date.now();
   const fresh = evictRecords(records, now, retentionDaysToMs(retentionDays));
 

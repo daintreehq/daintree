@@ -24,7 +24,16 @@ const paletteState = {
   removedResults: [] as ResumeSessionItem[],
   removedVisible: false,
   toggleRemoved: vi.fn(),
+  loadFailed: false,
+  reload: vi.fn(),
 };
+
+// Tests assign fields on the shared hook state; each one starts from this
+// snapshot so no test inherits the one before it, whatever the order.
+const initialPaletteState = { ...paletteState };
+beforeEach(() => {
+  Object.assign(paletteState, initialPaletteState);
+});
 
 vi.mock("@/hooks/useResumeSessionsPalette", () => ({
   useResumeSessionsPalette: () => paletteState,
@@ -475,5 +484,33 @@ describe("ResumeSessionsPalette Escape", () => {
     pressEscape();
     expect(paletteState.close).toHaveBeenCalled();
     expect(paletteState.setQuery).not.toHaveBeenCalled();
+  });
+});
+
+// #17483 — an unreadable journal arrives as a failed load. It must read as a
+// failure with a way to retry, never as the "nothing closed yet" empty state.
+describe("ResumeSessionsPalette load states", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("shows the error and a Retry that re-reads when the history couldn't be read", () => {
+    paletteState.loadFailed = true;
+    renderPalette();
+
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("Couldn't load closed sessions");
+    expect(screen.queryByText("No closed sessions yet")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(paletteState.reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the ordinary empty state for a history that read as empty", () => {
+    renderPalette();
+
+    expect(screen.getByText("No closed sessions yet")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 });
