@@ -552,17 +552,29 @@ describe("host status and host figures", () => {
     const links = () =>
       view.result.current.hosts.map((h) => `${h.descriptor.id}:${h.connection.status}`);
     await act(async () => {
-      newer.resolve([connectedHost("studio-01"), connectedHost("studio-02"), connectedHost("studio-03")]);
+      newer.resolve([
+        connectedHost("studio-01"),
+        connectedHost("studio-02"),
+        connectedHost("studio-03"),
+      ]);
       await newer.promise;
     });
     // studio-01 dropped before the newer read was asked for, so its answer stands.
-    expect(links()).toEqual(["studio-01:connected", "studio-02:disconnected", "studio-03:connected"]);
+    expect(links()).toEqual([
+      "studio-01:connected",
+      "studio-02:disconnected",
+      "studio-03:connected",
+    ]);
 
     await act(async () => {
       older.resolve([connectedHost("studio-01")]);
       await older.promise;
     });
-    expect(links()).toEqual(["studio-01:connected", "studio-02:disconnected", "studio-03:connected"]);
+    expect(links()).toEqual([
+      "studio-01:connected",
+      "studio-02:disconnected",
+      "studio-03:connected",
+    ]);
   });
 
   it("keeps only the summary heard for a link that dropped and came back during a read", async () => {
@@ -592,7 +604,11 @@ describe("host status and host figures", () => {
       await pending.promise;
     });
     const hosts = figures.result.current.hosts;
-    expect(hosts.map((h) => h.connection.status)).toEqual(["connected", "connected", "disconnected"]);
+    expect(hosts.map((h) => h.connection.status)).toEqual([
+      "connected",
+      "connected",
+      "disconnected",
+    ]);
     expect(hosts[0]?.connection).toMatchObject({ rttMs: 7 });
     expect(hosts.map((h) => h.summary?.sampledAt ?? null)).toEqual([6, null, null]);
     expect(status.count.renders).toBe(before);
