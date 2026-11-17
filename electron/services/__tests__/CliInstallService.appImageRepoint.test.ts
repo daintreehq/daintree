@@ -209,44 +209,98 @@ describe("CliInstallService — following a moved AppImage", () => {
     }
   );
 
-  // `daintree first second` used to open "first" and drop the rest, exiting 0.
-  // The stub AppImage records its argv, so a launch (or a refusal to launch) is
-  // observed rather than inferred from the script text.
-  it.skipIf(process.platform === "win32")(
-    "opens exactly one folder and refuses extra operands without launching",
-    async () => {
-      const service = await load();
-      const record = path.join(root, "argv");
-      const image = path.join(root, "Daintree.AppImage");
-      fs.writeFileSync(image, `#!/usr/bin/env bash\nprintf '%s\\0' "$@" > "${record}"\n`, {
-        mode: 0o755,
+  // `daintree first second` used to open "first" and drop the rest, exiting 0. A
+  // stub AppImage records its argv to a file of its own per invocation, so a
+  // launch (or a refusal to launch) is observed rather than inferred from the
+  // script text.
+  async function stubbedWrapper() {
+    const service = await load();
+    const image = path.join(root, "Daintree.AppImage");
+    fs.writeFileSync(
+      image,
+      `#!/usr/bin/env bash\nprintf '%s\\0' "$@" > "$DAINTREE_TEST_RECORD"\n`,
+      { mode: 0o755 }
+    );
+    const wrapper = path.join(root, "daintree-cli.sh");
+    fs.writeFileSync(wrapper, service.generateAppImageWrapper(image, "1.2.3"), { mode: 0o755 });
+    let runs = 0;
+    return (args: string[], cwd?: string) => {
+      const record = path.join(root, `argv-${runs++}`);
+      const result = spawnSync("bash", [wrapper, ...args], {
+        encoding: "utf8",
+        cwd,
+        env: { ...process.env, DAINTREE_TEST_RECORD: record },
       });
-      const wrapper = path.join(root, "daintree-cli.sh");
-      fs.writeFileSync(wrapper, service.generateAppImageWrapper(image, "1.2.3"), { mode: 0o755 });
+      return { status: result.status, stderr: result.stderr, record };
+    };
+  }
+
+  // The launch is backgrounded and the stub's redirect creates the file before it
+  // writes, so wait for the trailing NUL.
+  async function recordedArgv(record: string): Promise<string[]> {
+    const deadline = Date.now() + 5000;
+    let raw = "";
+    while (Date.now() < deadline && !raw.endsWith("\0")) {
+      raw = fs.existsSync(record) ? fs.readFileSync(record, "utf8") : "";
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return raw.split("\0").filter(Boolean);
+  }
+
+  it.skipIf(process.platform === "win32")(
+    "refuses extra operands without launching, while one folder still opens",
+    async () => {
+      const run = await stubbedWrapper();
       const first = path.join(root, "first folder");
       const second = path.join(root, "second");
       fs.mkdirSync(first);
       fs.mkdirSync(second);
 
-      const refused = spawnSync("bash", [wrapper, first, second], { encoding: "utf8" });
+      const refused = run([first, second]);
       expect(refused.status).toBe(2);
       expect(refused.stderr).toContain("expected one directory, got 2 arguments");
       expect(refused.stderr).toContain("Usage: daintree [directory]");
-      // A launch would be backgrounded, so give one time to show up.
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      expect(fs.existsSync(record)).toBe(false);
 
-      const accepted = spawnSync("bash", [wrapper, first], { encoding: "utf8" });
+      // The control: this stub and wrapper do record a launch, so the refused
+      // run's missing record means it never started the app.
+      const accepted = run([first]);
       expect(accepted.status).toBe(0);
-      // The launch is backgrounded; the recorder's redirect creates the file before
-      // writing it, so wait for the trailing NUL.
-      const deadline = Date.now() + 5000;
-      let raw = "";
-      while (Date.now() < deadline && !raw.endsWith("\0")) {
-        raw = fs.existsSync(record) ? fs.readFileSync(record, "utf8") : "";
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-      expect(raw.split("\0").filter(Boolean)).toEqual([`--cli-path=${fs.realpathSync(first)}`]);
+      expect(await recordedArgv(accepted.record)).toEqual([`--cli-path=${fs.realpathSync(first)}`]);
+      expect(fs.existsSync(refused.record)).toBe(false);
+    }
+  );
+
+  // With a missing first operand the cause is the operand count; "not a
+  // directory" (exit 1) would send the user to the wrong problem.
+  it.skipIf(process.platform === "win32")(
+    "counts operands before checking that the first one exists",
+    async () => {
+      const run = await stubbedWrapper();
+      const first = path.join(root, "first");
+      const second = path.join(root, "second");
+      fs.mkdirSync(first);
+      fs.mkdirSync(second);
+
+      const refused = run([path.join(root, "no-such-dir"), first, second]);
+      expect(refused.status).toBe(2);
+      expect(refused.stderr).toContain("got 3 arguments");
+      expect(refused.stderr).not.toContain("is not a directory");
+      expect(fs.existsSync(refused.record)).toBe(false);
+    }
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "opens the current directory when no operand is given",
+    async () => {
+      const run = await stubbedWrapper();
+      const project = path.join(root, "project");
+      fs.mkdirSync(project);
+
+      const accepted = run([], project);
+      expect(accepted.status).toBe(0);
+      expect(await recordedArgv(accepted.record)).toEqual([
+        `--cli-path=${fs.realpathSync(project)}`,
+      ]);
     }
   );
 
