@@ -71,8 +71,8 @@ describe("DiagnosticsPanel", () => {
     getDiagnosticsMock.mockResolvedValue(makeResult([]));
     render(<DiagnosticsPanel paneId="panel-1" projectId="project-1" status="stopped" />);
 
-    expect(await screen.findByText(/No lifecycle events yet/i)).toBeTruthy();
-    expect(screen.getByText(/Start the dev server/i)).toBeTruthy();
+    const empty = await screen.findByText(/No lifecycle events yet/i);
+    expect(empty.textContent).toMatch(/Start the dev server/i);
   });
 
   it("renders newest events first with summary fields", async () => {
@@ -145,11 +145,59 @@ describe("DiagnosticsPanel", () => {
     getDiagnosticsMock.mockRejectedValueOnce(new Error("ipc down"));
     render(<DiagnosticsPanel paneId="panel-1" projectId="project-1" status="running" />);
 
-    expect(await screen.findByText(/Couldn't load diagnostics/i)).toBeTruthy();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/Couldn't load diagnostics/i);
+    expect(alert.querySelector("[data-severity-glyph]")).not.toBeNull();
 
     getDiagnosticsMock.mockResolvedValue(makeResult([]));
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByText(/No lifecycle events yet/i)).toBeTruthy();
+  });
+
+  it("keeps the last snapshot and shows a glyphed retry banner when a refresh fails", async () => {
+    getDiagnosticsMock.mockResolvedValueOnce(makeResult([]));
+    render(<DiagnosticsPanel paneId="panel-1" projectId="project-1" status="running" />);
+    expect(await screen.findByText("Allocated port")).toBeTruthy();
+
+    getDiagnosticsMock.mockRejectedValueOnce(new Error("ipc down"));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh diagnostics" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/Couldn't refresh diagnostics/i);
+    expect(alert.querySelector("[data-severity-glyph]")).not.toBeNull();
+    expect(screen.getByText("Allocated port")).toBeTruthy();
+  });
+
+  it("gates the first-load skeleton and holds it for a minimum dwell", async () => {
+    let resolve!: (value: DevPreviewDiagnosticsResult) => void;
+    getDiagnosticsMock.mockReturnValue(
+      new Promise<DevPreviewDiagnosticsResult>((r) => {
+        resolve = r;
+      })
+    );
+    render(<DiagnosticsPanel paneId="panel-1" projectId="project-1" status="running" />);
+
+    // Under the onset gate nothing paints: no skeleton, no spinner.
+    expect(screen.queryByRole("status", { name: "Loading diagnostics" })).toBeNull();
+
+    const skeleton = await screen.findByRole("status", { name: "Loading diagnostics" });
+    expect(skeleton.querySelector("[data-skeleton-bone]")).not.toBeNull();
+
+    // Resolving right after onset must not tear the skeleton down in one frame.
+    resolve(makeResult([]));
+    await Promise.resolve();
+    expect(screen.queryByRole("status", { name: "Loading diagnostics" })).not.toBeNull();
+
+    expect(await screen.findByText("Allocated port")).toBeTruthy();
+    expect(screen.queryByRole("status", { name: "Loading diagnostics" })).toBeNull();
+  });
+
+  it("never paints a skeleton when the first load beats the onset gate", async () => {
+    getDiagnosticsMock.mockResolvedValue(makeResult([]));
+    render(<DiagnosticsPanel paneId="panel-1" projectId="project-1" status="running" />);
+
+    expect(await screen.findByText("Allocated port")).toBeTruthy();
+    expect(screen.queryByRole("status", { name: "Loading diagnostics" })).toBeNull();
   });
 
   it("degrades to the empty state when the bridge lacks getDiagnostics", () => {
@@ -170,6 +218,18 @@ describe("DiagnosticsPanel", () => {
     expect(await screen.findByText("Crash loop")).toBeTruthy();
     expect(screen.getByText("stopped auto-restart")).toBeTruthy();
     expect(screen.getByText(/fallback — fixed port was taken/i)).toBeTruthy();
+  });
+
+  it.each([
+    [1, "1 fast crash, backoff pending"],
+    [3, "3 fast crashes, backoff pending"],
+  ])("pluralizes the crash-loop count (%i)", async (count, expected) => {
+    getDiagnosticsMock.mockResolvedValue(
+      makeResult([], { crashLoop: { count, stopped: false, backoffPending: true } })
+    );
+    render(<DiagnosticsPanel paneId="panel-1" projectId="project-1" status="running" />);
+
+    expect(await screen.findByText(expected)).toBeTruthy();
   });
 });
 
