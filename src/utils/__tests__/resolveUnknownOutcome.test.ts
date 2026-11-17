@@ -24,11 +24,31 @@ function fakeClient(statuses: Array<OperationOutcome | Error>) {
   return { client, unsubscribe, emit: (event: OperationsEvent) => listener?.(event) };
 }
 
+/** A client whose first status read stays pending until the test answers it. */
+function pendingReadClient() {
+  const { client, unsubscribe, emit } = fakeClient([{ status: "unknown" }]);
+  let answer!: (reply: OperationOutcome | Error) => void;
+  client.getStatus.mockImplementationOnce(
+    () =>
+      new Promise<OperationOutcome>((resolve, reject) => {
+        answer = (reply) => (reply instanceof Error ? reject(reply) : resolve(reply));
+      })
+  );
+  return { client, unsubscribe, emit, answer: (reply: OperationOutcome | Error) => answer(reply) };
+}
+
 const succeeded: OperationOutcome = {
   status: "succeeded",
   result: { clonedPath: "/x" },
   settledAt: 5,
 };
+
+function settledEvent(opId: string, outcome: OperationOutcome): OperationsEvent {
+  return {
+    type: "settled",
+    record: { opId, kind: "git-clone", projectId: null, startedAt: 1, outcome },
+  };
+}
 
 describe("isUnknownOutcomeError", () => {
   it("recognises a dropped link and an unknown outcome, nothing else", () => {
@@ -98,6 +118,87 @@ describe("resolveUnknownOutcome", () => {
     });
 
     await expect(pending).resolves.toEqual(succeeded);
+  });
+
+  describe("a settlement that arrives while a status read is pending", () => {
+    it("wins over a stale running reply without waiting for the next poll", async () => {
+      const { client, emit, answer } = pendingReadClient();
+      const controller = new AbortController();
+      const pending = resolveUnknownOutcome("op-1", {
+        waitForConnected: async () => {},
+        client,
+        signal: controller.signal,
+        pollIntervalMs: 60_000,
+      });
+      const result: { value?: OperationOutcome } = {};
+      void pending.then((value) => (result.value = value)).catch(() => {});
+
+      await vi.waitFor(() => expect(client.getStatus).toHaveBeenCalledOnce());
+      emit(settledEvent("op-1", succeeded));
+      answer({ status: "running", progress: null });
+
+      try {
+        await vi.waitFor(() => expect(result.value).toEqual(succeeded), { timeout: 500 });
+        expect(client.getStatus).toHaveBeenCalledOnce();
+      } finally {
+        controller.abort();
+      }
+    });
+
+    it("wins over a stale unknown reply", async () => {
+      const { client, emit, answer } = pendingReadClient();
+      const pending = resolveUnknownOutcome("op-1", { waitForConnected: async () => {}, client });
+
+      await vi.waitFor(() => expect(client.getStatus).toHaveBeenCalledOnce());
+      emit(settledEvent("op-1", succeeded));
+      answer({ status: "unknown" });
+
+      await expect(pending).resolves.toEqual(succeeded);
+    });
+
+    it("wins over a drop during the read without waiting for the link", async () => {
+      const { client, emit, answer, unsubscribe } = pendingReadClient();
+      const controller = new AbortController();
+      const waitForConnected = vi
+        .fn<(signal?: AbortSignal) => Promise<void>>()
+        .mockResolvedValueOnce(undefined)
+        .mockImplementation(
+          (signal) =>
+            new Promise<void>((_resolve, reject) =>
+              signal?.addEventListener("abort", () => reject(new Error("aborted")))
+            )
+        );
+      const pending = resolveUnknownOutcome("op-1", {
+        waitForConnected,
+        client,
+        signal: controller.signal,
+      });
+      const result: { value?: OperationOutcome } = {};
+      void pending.then((value) => (result.value = value)).catch(() => {});
+
+      await vi.waitFor(() => expect(client.getStatus).toHaveBeenCalledOnce());
+      emit(settledEvent("op-1", succeeded));
+      answer(appError("HOST_DISCONNECTED"));
+
+      try {
+        await vi.waitFor(() => expect(result.value).toEqual(succeeded), { timeout: 500 });
+        expect(waitForConnected).toHaveBeenCalledOnce();
+        expect(unsubscribe).toHaveBeenCalledOnce();
+      } finally {
+        controller.abort();
+      }
+    });
+
+    it("ignores a settlement for another operation", async () => {
+      const { client, emit, answer } = pendingReadClient();
+      const pending = resolveUnknownOutcome("op-1", { waitForConnected: async () => {}, client });
+
+      await vi.waitFor(() => expect(client.getStatus).toHaveBeenCalledOnce());
+      emit(settledEvent("op-2", succeeded));
+      answer({ status: "unknown" });
+
+      await expect(pending).resolves.toEqual({ status: "unknown" });
+    });
   });
 
   it("hands back the running outcome once the settle timeout passes", async () => {
