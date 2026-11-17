@@ -705,6 +705,29 @@ describe("decodeNotificationOverrides (internal)", () => {
     ).toBeUndefined();
   });
 
+  it("keeps a well-formed imported sound id in every sound field, including the legacy alias", () => {
+    const id = "custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e6f";
+    expect(
+      __internal.decodeNotificationOverrides({
+        waitingSoundFile: id,
+        escalationSoundFile: id,
+        workingPulseSoundFile: id,
+      })
+    ).toEqual({ waitingSoundFile: id, escalationSoundFile: id, workingPulseSoundFile: id });
+    expect(__internal.decodeNotificationOverrides({ soundFile: id })).toEqual({
+      completedSoundFile: id,
+    });
+  });
+
+  it.each([
+    "custom:../../etc/passwd",
+    "custom:0B7C9A7E-4F1D-4C2A-9E3B-1A2B3C4D5E6F",
+    "custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e6f.wav",
+    "custom:",
+  ])("drops a malformed imported sound id %s", (value) => {
+    expect(__internal.decodeNotificationOverrides({ completedSoundFile: value })).toBeUndefined();
+  });
+
   it("clamps waitingEscalationDelayMs to [30s, 1h]", () => {
     expect(
       __internal.decodeNotificationOverrides({ waitingEscalationDelayMs: 1000 })

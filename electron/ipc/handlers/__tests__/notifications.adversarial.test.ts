@@ -41,6 +41,7 @@ const soundServiceMock = vi.hoisted(() => ({
 const soundModuleMock = vi.hoisted(() => ({
   soundService: soundServiceMock,
   ALLOWED_SOUND_FILES: new Set(["completed.mp3", "waiting.mp3", "escalation.mp3"]),
+  PLAYABLE_SOUND_FILES: new Set(["completed.mp3", "waiting.mp3", "escalation.mp3"]),
   SOUND_FILES: { click: "click.mp3", error: "error.mp3" },
   getSoundsDir: vi.fn(() => "/sounds"),
 }));

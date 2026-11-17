@@ -58,6 +58,19 @@ describe("sanitizeNotificationSettingsPatch", () => {
     expect(inRange).toBe(60_000);
   });
 
+  it("clamps the sound volume to 0-1 and drops a value that isn't a finite number", () => {
+    const volume = (raw: unknown) =>
+      sanitizeNotificationSettingsPatch({ soundVolume: raw }, ALLOWED).soundVolume;
+
+    expect(volume(0.35)).toBe(0.35);
+    expect(volume(0)).toBe(0);
+    expect(volume(4)).toBe(1);
+    expect(volume(-0.5)).toBe(0);
+    expect(volume(Number.NaN)).toBeUndefined();
+    expect(volume(Number.POSITIVE_INFINITY)).toBeUndefined();
+    expect(volume("0.5")).toBeUndefined();
+  });
+
   it("clamps quiet-hours minutes to a single day and floors fractions", () => {
     const result = sanitizeNotificationSettingsPatch(
       { quietHoursStartMin: -5, quietHoursEndMin: 99_999 },

@@ -72,7 +72,7 @@ export function isNotificationWav(bytes: Uint8Array): boolean {
 /** A picker label from a file name: no extension, one safe line, bounded length. */
 export function notificationSoundLabel(raw: unknown): string {
   if (typeof raw !== "string") return "";
-  const withoutExtension = raw.replace(/\.[^./\\]{1,8}$/, "");
+  const withoutExtension = raw.replace(/\.[a-z0-9]{1,8}$/i, "");
   return displaySafeText(withoutExtension)
     .replace(/\s+/g, " ")
     .trim()

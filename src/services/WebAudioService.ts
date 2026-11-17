@@ -12,6 +12,8 @@
  * stops fade through a per-voice GainNode to avoid DC-offset clicks.
  */
 
+import { customSoundFileName } from "@shared/types/ipc/notificationSounds";
+
 interface ActiveVoice {
   source: AudioBufferSourceNode;
   gainNode: GainNode;
@@ -25,9 +27,13 @@ const FADE_TAIL_SECONDS = 0.1;
 // session. Suspend once playback has been quiet this long; the next play
 // resumes before it schedules, so nothing is dropped.
 export const IDLE_SUSPEND_MS = 30_000;
+// Imports are ids into a user library that can grow, so only the most recently
+// played few stay decoded; the bundled set is small and fixed.
+const MAX_CACHED_CUSTOM_BUFFERS = 8;
 
 let audioContext: AudioContext | null = null;
 let soundsDir: string | null = null;
+let customSoundsDir: string | null = null;
 const bufferCache = new Map<string, AudioBuffer>();
 const activeVoices: ActiveVoice[] = [];
 let cancelGeneration = 0;
@@ -78,19 +84,43 @@ async function ensureSoundsDir(): Promise<string> {
   return soundsDir;
 }
 
+/** Where a sound's file lives: the bundled directory, or this device's imports for a custom id. */
+async function locate(soundFile: string): Promise<{ dir: string; file: string }> {
+  const customFile = customSoundFileName(soundFile);
+  if (customFile) {
+    customSoundsDir ??= await window.electron.notificationSounds.getCustomDir();
+    return { dir: customSoundsDir, file: customFile };
+  }
+  return { dir: await ensureSoundsDir(), file: soundFile };
+}
+
+function cacheBuffer(soundFile: string, buffer: AudioBuffer): void {
+  bufferCache.set(soundFile, buffer);
+  if (!customSoundFileName(soundFile)) return;
+  const custom = [...bufferCache.keys()].filter((key) => customSoundFileName(key) !== null);
+  for (const key of custom.slice(0, Math.max(0, custom.length - MAX_CACHED_CUSTOM_BUFFERS))) {
+    bufferCache.delete(key);
+  }
+}
+
 async function getBuffer(ctx: AudioContext, soundFile: string): Promise<AudioBuffer | null> {
   const cached = bufferCache.get(soundFile);
-  if (cached) return cached;
+  if (cached) {
+    // Re-inserted so the custom-buffer cap evicts the least recently played.
+    bufferCache.delete(soundFile);
+    bufferCache.set(soundFile, cached);
+    return cached;
+  }
 
   try {
-    const dir = await ensureSoundsDir();
-    const url = `daintree-file://?path=${encodeURIComponent(`${dir}/${soundFile}`)}&root=${encodeURIComponent(dir)}`;
+    const { dir, file } = await locate(soundFile);
+    const url = `daintree-file://?path=${encodeURIComponent(`${dir}/${file}`)}&root=${encodeURIComponent(dir)}`;
     const response = await fetch(url);
     if (!response.ok) return null;
 
     const arrayBuffer = await response.arrayBuffer();
     const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
-    bufferCache.set(soundFile, audioBuffer);
+    cacheBuffer(soundFile, audioBuffer);
     return audioBuffer;
   } catch {
     return null;
@@ -188,4 +218,5 @@ export function dispose(): void {
     audioContext = null;
   }
   soundsDir = null;
+  customSoundsDir = null;
 }
