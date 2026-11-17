@@ -150,10 +150,19 @@ export const EVENT_KIND_LABEL: Record<NotificationEventKind, string> = {
   connectivity: "connection notifications",
 };
 
-const EVENT_KIND_VALUES: ReadonlySet<string> = new Set(Object.keys(EVENT_KIND_LABEL));
+export type SilenceableEventKind = "completed" | "waiting" | "workingPulse" | "uiFeedback";
 
-export function isNotificationEventKind(v: string | undefined): v is NotificationEventKind {
-  return v !== undefined && EVENT_KIND_VALUES.has(v);
+/**
+ * True only for kinds backed by a persisted user-override setting, i.e. the
+ * ones `project.silenceNotificationKind` accepts. Routing-only kinds ("git",
+ * "host", ...) pass `NotificationEventKind` but have nothing to silence.
+ */
+const SILENCEABLE_EVENT_KINDS: ReadonlySet<string> = new Set(
+  Object.keys(EVENT_KIND_TO_SETTING_KEY)
+);
+
+export function isSilenceableEventKind(v: string | undefined): v is SilenceableEventKind {
+  return v !== undefined && SILENCEABLE_EVENT_KINDS.has(v);
 }
 
 const INTERRUPTION_TO_PRIORITY: Record<EventInterruption, NotificationPriority> = {

@@ -24,7 +24,7 @@ import type {
   NotificationHistoryEntry,
 } from "@/store/slices/notificationHistorySlice";
 import { actionService } from "@/services/ActionService";
-import { EVENT_KIND_LABEL, isNotificationEventKind, notify } from "@/lib/notify";
+import { EVENT_KIND_LABEL, isSilenceableEventKind, notify } from "@/lib/notify";
 import { projectIdFromPluginInstanceKey } from "@shared/types/plugin";
 import type { NotificationType } from "@/store/notificationStore";
 import { DURATION_150, DURATION_250 } from "@/lib/animationUtils";
@@ -809,7 +809,7 @@ function RowOptionsMenu({
     pluginProjectId ? s.projects.find((p) => p.id === pluginProjectId)?.name : undefined
   );
   const hasContextActions =
-    isNotificationEventKind(eventKind) || !!entry.context?.projectId || !!plugin;
+    isSilenceableEventKind(eventKind) || !!entry.context?.projectId || !!plugin;
   // Not on a filed row: the Snoozed tab never shows archived entries, so a
   // snooze set here vanished into neither tab.
   const supportsSnooze = !!entry.correlationId && !!onSnooze && !entry.archivedAt;
@@ -1085,11 +1085,11 @@ function RowOptionsMenu({
             {(hasTriageActions || supportsSnooze || supportsGoToSource) && hasContextActions && (
               <DropdownMenuSeparator />
             )}
-            {isNotificationEventKind(eventKind) && (
+            {isSilenceableEventKind(eventKind) && (
               <DropdownMenuItem
                 onSelect={() => {
                   const projectId = entry.context?.projectId;
-                  if (!isNotificationEventKind(eventKind)) return;
+                  if (!isSilenceableEventKind(eventKind)) return;
                   void actionService
                     .dispatch("project.silenceNotificationKind", { kind: eventKind, projectId })
                     .then(() => refreshProjectOverrides(projectId));

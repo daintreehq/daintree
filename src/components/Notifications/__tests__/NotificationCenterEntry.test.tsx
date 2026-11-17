@@ -942,6 +942,64 @@ describe("NotificationCenterEntry snooze keybinding", () => {
   });
 });
 
+describe("NotificationCenterEntry silence item gating (#17195)", () => {
+  async function openMenu() {
+    const trigger = screen.getByLabelText(/^Options for /);
+    await act(async () => {
+      fireEvent.pointerDown(trigger, { button: 0 });
+      fireEvent.pointerUp(trigger, { button: 0 });
+      fireEvent.click(trigger);
+    });
+  }
+
+  it.each(["completed", "waiting", "workingPulse", "uiFeedback"] as const)(
+    "offers Silence for the %s kind",
+    async (eventKind) => {
+      render(
+        <NotificationCenterEntry entry={makeEntry({ context: { projectId: "p1", eventKind } })} />
+      );
+      await openMenu();
+      expect(screen.getByText(/^Silence /)).toBeTruthy();
+    }
+  );
+
+  it.each(["agent", "git", "host", "recovery", "settings", "connectivity"] as const)(
+    "leaves Silence out for the routing-only %s kind but keeps Mute",
+    async (eventKind) => {
+      render(
+        <NotificationCenterEntry entry={makeEntry({ context: { projectId: "p1", eventKind } })} />
+      );
+      await openMenu();
+      expect(screen.queryByText(/^Silence /)).toBeNull();
+      expect(screen.getByText("Mute project notifications")).toBeTruthy();
+    }
+  );
+});
+
+describe("NotificationCenterEntry projectless silence gating (#17195)", () => {
+  it.each(["agent", "git", "host", "recovery", "settings", "connectivity"] as const)(
+    "renders no options trigger for a projectless routing-only %s row with nothing else to offer",
+    (eventKind) => {
+      render(<NotificationCenterEntry entry={makeEntry({ context: { eventKind } })} />);
+      expect(screen.queryByLabelText(/^Options for /)).toBeNull();
+    }
+  );
+
+  it.each(["completed", "waiting", "workingPulse", "uiFeedback"] as const)(
+    "keeps the options trigger when the projectless %s kind is the only action",
+    async (eventKind) => {
+      render(<NotificationCenterEntry entry={makeEntry({ context: { eventKind } })} />);
+      const trigger = screen.getByLabelText(/^Options for /);
+      await act(async () => {
+        fireEvent.pointerDown(trigger, { button: 0 });
+        fireEvent.pointerUp(trigger, { button: 0 });
+        fireEvent.click(trigger);
+      });
+      expect(screen.getByText(/^Silence /)).toBeTruthy();
+    }
+  );
+});
+
 describe("NotificationCenterEntry silence refresh", () => {
   it("re-reads the project's silences once a row-menu silence or mute lands", async () => {
     const load = vi

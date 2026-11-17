@@ -914,6 +914,68 @@ describe("Toast overflow menu", () => {
     expect(screen.queryByLabelText("Notification options")).toBeNull();
   });
 
+  it.each(["agent", "git", "host", "recovery", "settings", "connectivity"] as const)(
+    "renders no options trigger for a projectless routing-only %s toast",
+    async (eventKind) => {
+      render(<Toaster />);
+      await act(async () => {
+        addToast({ context: { eventKind }, duration: 0 });
+        vi.advanceTimersByTime(16);
+      });
+
+      expect(screen.queryByLabelText("Notification options")).toBeNull();
+    }
+  );
+
+  it.each(["agent", "git", "host", "recovery", "settings", "connectivity"] as const)(
+    "offers only Mute, never Silence, on a routing-only %s toast with a project",
+    async (eventKind) => {
+      render(<Toaster />);
+      await act(async () => {
+        addToast({ context: { projectId: "p1", eventKind }, duration: 0 });
+        vi.advanceTimersByTime(16);
+      });
+
+      const trigger = screen.getByLabelText("Notification options");
+      await act(async () => {
+        fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+        fireEvent.pointerUp(trigger, { button: 0 });
+        fireEvent.click(trigger);
+        vi.advanceTimersByTime(16);
+      });
+
+      expect(screen.queryByText(/^Silence /)).toBeNull();
+      expect(screen.getByText("Mute project notifications")).toBeTruthy();
+    }
+  );
+
+  it.each(["completed", "waiting", "workingPulse", "uiFeedback"] as const)(
+    "offers Silence on a projectless %s toast and dispatches the kind",
+    async (eventKind) => {
+      render(<Toaster />);
+      await act(async () => {
+        addToast({ context: { eventKind }, duration: 0 });
+        vi.advanceTimersByTime(16);
+      });
+
+      const trigger = screen.getByLabelText("Notification options");
+      await act(async () => {
+        fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+        fireEvent.pointerUp(trigger, { button: 0 });
+        fireEvent.click(trigger);
+        vi.advanceTimersByTime(16);
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByText(/^Silence /));
+      });
+      expect(dispatchMock).toHaveBeenCalledWith("project.silenceNotificationKind", {
+        kind: eventKind,
+        projectId: undefined,
+      });
+    }
+  );
+
   it("leaves out what a standalone root can't reach: the options and the overflow", async () => {
     render(<Toaster standalone />);
     await act(async () => {

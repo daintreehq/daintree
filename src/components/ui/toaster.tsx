@@ -48,7 +48,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { actionService } from "@/services/ActionService";
-import { EVENT_KIND_LABEL, isNotificationEventKind } from "@/lib/notify";
+import { EVENT_KIND_LABEL, isSilenceableEventKind } from "@/lib/notify";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { isScreenLocked, subscribeScreenLock } from "@/lib/powerPolicyState";
 import { COUNT_BADGE_CLASS } from "./badge";
@@ -707,7 +707,8 @@ function Toast({
         </div>
 
         {!standalone &&
-          (notification.context?.projectId || notification.context?.eventKind) &&
+          (notification.context?.projectId ||
+            isSilenceableEventKind(notification.context?.eventKind)) &&
           (() => {
             const eventKind = notification.context?.eventKind;
             return (
@@ -727,11 +728,11 @@ function Toast({
                   sideOffset={4}
                   className="z-[var(--z-toast-overlay)]"
                 >
-                  {isNotificationEventKind(eventKind) && (
+                  {isSilenceableEventKind(eventKind) && (
                     <DropdownMenuItem
                       onSelect={() => {
                         const projectId = notification.context?.projectId;
-                        if (!isNotificationEventKind(eventKind)) return;
+                        if (!isSilenceableEventKind(eventKind)) return;
                         handleDismiss();
                         void actionService.dispatch("project.silenceNotificationKind", {
                           kind: eventKind,
