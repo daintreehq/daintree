@@ -506,16 +506,19 @@ export function CommitPanel({
   // what the confirm showed moved under it, so the confirm's choices never ran.
   const handleCommitAndPush = useCallback(
     async (message: string, target: CommitPushTarget): Promise<"review-stale" | undefined> => {
-      if (!canCommit || actionsBusy) return;
-      if (actionInFlightRef.current) return;
+      if (!canCommit || actionsBusy) return undefined;
+      if (actionInFlightRef.current) return undefined;
       actionInFlightRef.current = true;
       setPendingCount(stagedCount);
       setPendingAction("commit-push");
       try {
         await onCommitAndPush(message, target);
+        return undefined;
       } catch (err) {
         // Error is handled by the parent via setActionError
-        if (readGitErrorFields(err).gitReason === "commit-review-stale") return "review-stale";
+        return readGitErrorFields(err).gitReason === "commit-review-stale"
+          ? "review-stale"
+          : undefined;
       } finally {
         setPendingAction(null);
         actionInFlightRef.current = false;
