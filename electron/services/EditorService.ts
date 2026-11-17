@@ -421,15 +421,22 @@ function buildCustomArgs(
 
 function envEditorBinaryName(binary: string): string {
   let name = path.basename(binary).toLowerCase();
-  if (process.platform === "win32" && name.endsWith(".exe")) {
-    name = name.slice(0, -".exe".length);
+  if (process.platform === "win32") {
+    name = name.replace(/\.(exe|cmd|bat)$/, "");
   }
   return name;
 }
 
+// A user who already wrote their own navigation flag (or an end-of-options
+// marker) has chosen the syntax, and appending ours could change its meaning.
+const USER_NAVIGATION_ARG = /^(--|-g|--goto(=.*)?|--line(=.*)?|--column(=.*)?)$/;
+
 async function tryEnvEditor(
   envEditor: string,
   filePath: string,
+  line: number | undefined,
+  col: number | undefined,
+  isDirectory: boolean,
   launchEditor: (binary: string, args: string[]) => Promise<boolean>
 ): Promise<boolean> {
   const tokens = tokenizeArgString(envEditor);
@@ -438,6 +445,13 @@ async function tryEnvEditor(
   // Skip terminal editors — spawning them detached + stdio:"ignore" produces an
   // invisible hung process. Fall through to GUI-capable fallbacks instead.
   if (TERMINAL_EDITORS.has(envEditorBinaryName(binary))) return false;
+  // A known GUI named by $VISUAL/$EDITOR gets the same location syntax as when
+  // it is picked from the list; the user's own flags stay ahead of it.
+  const binaryName = envEditorBinaryName(binary);
+  const def = KNOWN_EDITORS.find((e) => e.binaries.includes(binaryName));
+  if (def && line !== undefined && !extraArgs.some((arg) => USER_NAVIGATION_ARG.test(arg))) {
+    return launchEditor(binary, [...extraArgs, ...def.buildArgs(filePath, line, col, isDirectory)]);
+  }
   return launchEditor(binary, [...extraArgs, filePath]);
 }
 
@@ -539,7 +553,14 @@ export async function openFile(
   // VISUAL (e.g. VISUAL=vim) doesn't suppress a GUI-editor EDITOR (e.g. EDITOR=code).
   for (const envEditor of [process.env.VISUAL, process.env.EDITOR]) {
     if (!envEditor) continue;
-    const launched = await tryEnvEditor(envEditor, filePath, launchEditor);
+    const launched = await tryEnvEditor(
+      envEditor,
+      filePath,
+      targetLine,
+      targetCol,
+      isDirectory,
+      launchEditor
+    );
     if (launched) return;
   }
 

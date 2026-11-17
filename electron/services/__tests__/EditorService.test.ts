@@ -663,6 +663,65 @@ describe("EditorService adversarial", () => {
     expect(args).toEqual(["--goto", "/abs/file with spaces.ts:12:5"]);
   });
 
+  it("VISUAL=code opens the requested line and column", async () => {
+    process.env.VISUAL = "code";
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/file.ts", 37, 8);
+
+    expect(execaMock.execa).toHaveBeenCalledWith(
+      "code",
+      ["--goto", "/abs/file.ts:37:8"],
+      expect.objectContaining({ detached: true })
+    );
+  });
+
+  it("a known GUI named by absolute path in EDITOR keeps user flags and the location", async () => {
+    process.env.EDITOR = "/usr/local/bin/code --reuse-window";
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/file.ts", 37, 8);
+
+    expect(execaMock.execa).toHaveBeenCalledWith(
+      "/usr/local/bin/code",
+      ["--reuse-window", "--goto", "/abs/file.ts:37:8"],
+      expect.objectContaining({ detached: true })
+    );
+  });
+
+  it("leaves a user-written --goto alone", async () => {
+    process.env.VISUAL = "code --goto";
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/file.ts", 37, 8);
+
+    expect(execaMock.execa.mock.calls[0][1]).toEqual(["--goto", "/abs/file.ts"]);
+  });
+
+  it.each(["code --goto=false", "code --", "idea --line 12"])(
+    "leaves user navigation args in %s untouched",
+    async (visual) => {
+      process.env.VISUAL = visual;
+      const { openFile } = await loadModule();
+
+      await openFile("/abs/file.ts", 37, 8);
+
+      expect(execaMock.execa.mock.calls[0][1]).toEqual([
+        ...visual.split(" ").slice(1),
+        "/abs/file.ts",
+      ]);
+    }
+  );
+
+  it("opens a directory from VISUAL as a bare path", async () => {
+    process.env.VISUAL = "code";
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/dir", 37, 8, null, true);
+
+    expect(execaMock.execa.mock.calls[0][1]).toEqual(["/abs/dir"]);
+  });
+
   it("VISUAL='code --reuse-window' is split into binary + args", async () => {
     process.env.VISUAL = "code --reuse-window";
     const { openFile } = await loadModule();
