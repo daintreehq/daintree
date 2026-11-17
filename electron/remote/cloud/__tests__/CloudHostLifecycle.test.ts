@@ -425,9 +425,13 @@ describe("CloudHostLifecycle.create", () => {
     const request = { accountId: store.accounts()[0]!.id, name: "build", machineType: "default" };
     await lifecycle.create({ ...request, lifetimeHours: 2 });
     await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
-    await lifecycle.retryCreate("build").catch(() => {});
+    const firstSent = store.bindings()[0]?.creation?.sentAt;
+    expect(firstSent).toEqual(expect.any(Number));
+    await expect(lifecycle.retryCreate("build")).rejects.toThrow();
+    // The retry was sent and turned down: that says nothing of the first request's machine.
+    expect(provider.create).toHaveBeenCalledTimes(2);
     expect(lifecycle.statuses()[0]?.lastError?.code).toBe("outcome-unknown");
-    expect(store.bindings()[0]?.creation?.sentAt).not.toBeNull();
+    expect(store.bindings()[0]?.creation?.sentAt).toBe(firstSent);
   });
 
   it("refuses a size the account can't have before anything is sent", async () => {
