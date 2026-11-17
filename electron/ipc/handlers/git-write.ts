@@ -2313,9 +2313,8 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     }
     if (payload.filePaths.length === 0) return [];
 
-    // `g` flag is required for `matchAll`/`exec` iteration; the regex is local
-    // to this call so the shared `CONFLICT_MARKER_RE` (single-match, `/m`) is
-    // untouched. Counts only opening `<<<<<<<` markers — one per hunk.
+    // `g` flag is required for `exec` iteration. Counts only opening `<<<<<<<`
+    // markers — one per hunk.
     const HUNK_OPEN_RE = /^<{7}/gm;
 
     const scanOne = async (filePath: string): Promise<ConflictMarkerScanEntry> => {

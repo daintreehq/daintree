@@ -1366,21 +1366,57 @@ describe("git-write commit and working diff", () => {
     it.each([
       ["<<<<<<< HEAD", "start"],
       ["||||||| merged common ancestors", "ancestor"],
-      ["=======", "middle"],
       [">>>>>>> branch", "end"],
-    ])("throws for the %s marker line", async (markerLine) => {
+      ["<<<<<<<", "bare start"],
+      [">>>>>>>\r", "bare end before a CRLF"],
+      ["<<<<<<<\tHEAD", "start labelled after a tab"],
+    ])("throws for the %s marker line (%s)", async (markerLine) => {
       const git = makeFakeGit({
         diff: stagedDiff([{ path: "f.txt", content: `head\n${markerLine}\ntail\n` }]),
+      });
+      await expect(scan(git)).rejects.toThrow(/Unresolved conflict markers found in f\.txt/);
+    });
+
+    it("blocks a marker on the last line with no trailing newline", async () => {
+      const git = makeFakeGit({
+        diff: stagedDiff([{ path: "f.txt", content: "head\n>>>>>>> branch" }]),
       });
       await expect(scan(git)).rejects.toThrow(/Unresolved conflict markers/);
     });
 
-    it("does not block when markers are mid-line (line-anchored regex)", async () => {
-      // An indented `=======` should not trip the scan; ensures the `^` anchor
-      // in CONFLICT_MARKER_RE is doing its job.
+    it("reports the line of the first marker in a full region", async () => {
       const git = makeFakeGit({
-        diff: stagedDiff([{ path: "doc.md", content: "  =======\ninline <<<<<<< text\n" }]),
+        diff: stagedDiff([
+          {
+            path: "f.md",
+            content: "Title\n=======\nbody\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> b\n",
+          },
+        ]),
       });
+      await expect(scan(git)).rejects.toThrow(
+        "Unresolved conflict markers found in f.md (line 4). Resolve all conflicts before committing."
+      );
+    });
+
+    it("counts lines through CRLF endings", async () => {
+      const git = makeFakeGit({
+        diff: stagedDiff([{ path: "f.txt", content: "one\r\ntwo\r\n<<<<<<< HEAD\r\n" }]),
+      });
+      await expect(scan(git)).rejects.toThrow(/found in f\.txt \(line 3\)/);
+    });
+
+    it.each([
+      ["a lone divider", "=======\n"],
+      ["a Setext underline", "Release notes\n=============\n"],
+      ["a CRLF Setext underline", "Release notes\r\n=======\r\n"],
+      ["a divider with no trailing newline", "above\n======="],
+      ["an indented marker", "  <<<<<<< HEAD\n"],
+      ["a mid-line marker", "inline >>>>>>> text\n"],
+      ["a marker with text glued to it", "<<<<<<<HEAD\n"],
+      ["a run of eight", ">>>>>>>> branch\n"],
+      ["a run of six", "<<<<<< HEAD\n"],
+    ])("does not block %s", async (_name, content) => {
+      const git = makeFakeGit({ diff: stagedDiff([{ path: "doc.md", content }]) });
       await expect(scan(git)).resolves.toBeUndefined();
     });
 
