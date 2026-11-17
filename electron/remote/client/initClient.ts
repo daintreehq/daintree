@@ -1089,6 +1089,9 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   const stopOwnedHostCleanup = watchOwnedHostCleanup({
     list: () => registry.list(),
     forget: (hostId) => client.forget({ hostId }),
+    clearPlacement: async (hostId) => {
+      await client.update({ hostId, pendingPlacement: null });
+    },
   });
   cloudLifecycle = new CloudHostLifecycle({
     store: cloud.store,

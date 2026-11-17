@@ -313,6 +313,70 @@ export function readStoredHostConnection(entry: {
   return typeof entry.sshTarget === "string" ? sshConnection(entry.sshTarget) : null;
 }
 
+/** Longest a pending placement's label or failure is kept; the rest is cut. Ids and paths never are. */
+const MAX_PLACEMENT_TEXT = 500;
+
+/**
+ * A worktree waiting for a host's setup (install, Host mode, connect) to
+ * finish before it opens there (#17355). Kept on the host's record, so it
+ * survives a restart and goes when the host does; once the host is usable,
+ * the worktree's project view hands it to the host switch dialog.
+ */
+export interface PendingHostPlacement {
+  /** The local project the worktree belongs to. */
+  projectId: string;
+  /** The worktree's id in that project. */
+  worktreeId: string;
+  /** Where its branch is checked out: what the host switch places. */
+  worktreePath: string;
+  /** What the worktree is called where it shows: its branch or its name. */
+  label: string;
+  /** Epoch ms it was asked for; also tells one placement from the next on the same host. */
+  requestedAt: number;
+  /** Asked for by an agent or a plugin: the switch dialog asks before it moves the window. */
+  askFirst?: true;
+  /** The last setup step that failed, as it said; the placement stays pending through it. */
+  failure?: { message: string; at: number };
+}
+
+function placementText(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed.slice(0, MAX_PLACEMENT_TEXT) : null;
+}
+
+/** An id or a path, exactly as given: changing one would name another worktree. */
+function placementIdentity(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+/** A stored or sent pending placement that still reads as one, or null. */
+export function readPendingPlacement(value: unknown): PendingHostPlacement | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const projectId = placementIdentity(raw.projectId);
+  const worktreeId = placementIdentity(raw.worktreeId);
+  const worktreePath = placementIdentity(raw.worktreePath);
+  const label = placementText(raw.label);
+  const requestedAt = raw.requestedAt;
+  if (!projectId || !worktreeId || !worktreePath || !label) return null;
+  if (typeof requestedAt !== "number" || !Number.isFinite(requestedAt)) return null;
+  const placement: PendingHostPlacement = {
+    projectId,
+    worktreeId,
+    worktreePath,
+    label,
+    requestedAt,
+  };
+  if (raw.askFirst === true) placement.askFirst = true;
+  const failure = raw.failure as Record<string, unknown> | null | undefined;
+  const message = failure && typeof failure === "object" ? placementText(failure.message) : null;
+  if (message && typeof failure?.at === "number" && Number.isFinite(failure.at)) {
+    placement.failure = { message, at: failure.at };
+  }
+  return placement;
+}
+
 /** A host the user has added on this client. Device-owned; never synced. */
 export interface HostDescriptor {
   id: HostId;
@@ -342,6 +406,11 @@ export interface HostDescriptor {
    * its resource is torn down. Absent for every host the user added.
    */
   ownerWorktreeId?: string;
+  /**
+   * A worktree waiting for this host's setup to finish before it opens here;
+   * absent when none is. Dropped when the host is pointed at another target.
+   */
+  pendingPlacement?: PendingHostPlacement;
   /**
    * How this machine can wake the host from the network (#16170), as the
    * person recorded it; absent when nothing is set up. Dropped with the

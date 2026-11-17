@@ -200,7 +200,7 @@ export function useWorktreeActions({
     setConfirmDialog({
       isOpen: true,
       title: `Open '${label}' on ${sshTarget}?`,
-      description: `If ${sshTarget} isn't in your host list, it's added for this worktree and removed again when the worktree is deleted or its resource is torn down. If Daintree isn't running there, Host setup opens to install and start it; otherwise the host switch dialog places this branch there.`,
+      description: `If ${sshTarget} isn't in your host list, it's added for this worktree and removed again when the worktree is deleted or its resource is torn down. If Daintree isn't running there, Host setup opens to install and start it, and this branch is placed there once it finishes; otherwise the host switch dialog places it there now.`,
       confirmLabel: "Open on its machine",
       variant: "default",
       onConfirm: () => {

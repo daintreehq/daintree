@@ -42,7 +42,11 @@ import {
   takePendingHostSettings,
   type HostSettingsRequest,
 } from "./hostSettingsRequests";
-import { onHostUpdateRequest, takePendingHostUpdate } from "./hostUpdateRequests";
+import {
+  onHostUpdateRequest,
+  takePendingHostUpdateRequest,
+  type HostUpdateIntent,
+} from "./hostUpdateRequests";
 import {
   onHostPluginsRequest,
   takePendingHostPlugins,
@@ -122,19 +126,23 @@ export default function HostsSettingsTab() {
     );
   };
   // Each "Update …" request remounts the detail so its update flow opens again.
-  const [updateRequest, setUpdateRequest] = useState<{ hostId: HostId; seq: number } | null>(null);
+  const [updateRequest, setUpdateRequest] = useState<{
+    hostId: HostId;
+    intent: HostUpdateIntent;
+    seq: number;
+  } | null>(null);
   const [pluginsRequest, setPluginsRequest] = useState<
     (HostPluginsRequest & { seq: number }) | null
   >(null);
   const [copyRequest, setCopyRequest] = useState<{ hostId: HostId; seq: number } | null>(null);
 
   useEffect(() => {
-    const open = (hostId: HostId) => {
+    const open = (hostId: HostId, intent: HostUpdateIntent) => {
       setDetailHostId(hostId);
-      setUpdateRequest((prev) => ({ hostId, seq: (prev?.seq ?? 0) + 1 }));
+      setUpdateRequest((prev) => ({ hostId, intent, seq: (prev?.seq ?? 0) + 1 }));
     };
-    const pending = takePendingHostUpdate();
-    if (pending) open(pending);
+    const pending = takePendingHostUpdateRequest();
+    if (pending) open(pending.hostId, pending.intent);
     return onHostUpdateRequest(open);
   }, []);
 
@@ -217,7 +225,7 @@ export default function HostsSettingsTab() {
           }
           entry={detail}
           focusBackOnMount={focusBackFor === detail.descriptor.id}
-          openUpdate={openUpdate}
+          openUpdate={openUpdate ? updateRequest.intent : false}
           focusSection={focusPlugins ? pluginsRequest.sectionId : undefined}
           offerCopySettings={offerCopySettings}
           onBack={(viaKeyboard) => {

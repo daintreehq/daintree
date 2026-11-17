@@ -15,6 +15,8 @@ const MAX_RETRIES = 60;
 export interface OwnedHostCleanupOptions {
   list(): HostDescriptor[];
   forget(hostId: HostId): Promise<void>;
+  /** Drop the worktree waiting on a host's setup, leaving the host itself. */
+  clearPlacement?(hostId: HostId): Promise<void>;
   /** Resolves when the worktree's root still exists; rejects with ENOENT once it is gone. */
   probe?: (worktreePath: string) => Promise<unknown>;
   retryDelayMs?: number;
@@ -39,7 +41,8 @@ async function isWorktreeGone(probe: Promise<unknown>): Promise<boolean> {
  * once that resource's teardown succeeds, or the worktree itself is deleted.
  * Removal is the same as Settings → Hosts': windows on it go home, the record
  * is dropped, and its ssh master and cache are cleared. A host the user added
- * themselves carries no owner and is never touched.
+ * themselves carries no owner and is never removed, but a worktree waiting on
+ * its setup stops waiting when that worktree or its box goes.
  */
 export function watchOwnedHostCleanup(options: OwnedHostCleanupOptions): () => void {
   const probe = options.probe ?? lstat;
@@ -50,6 +53,17 @@ export function watchOwnedHostCleanup(options: OwnedHostCleanupOptions): () => v
 
   const ownedBy = (worktreeId: string) =>
     options.list().filter((host) => host.ownerWorktreeId === worktreeId);
+  // An owned host goes whole; only another host's record needs its placement dropped.
+  const waitingFor = (worktreeId: string) =>
+    options.clearPlacement
+      ? options
+          .list()
+          .filter(
+            (host) =>
+              host.pendingPlacement?.worktreeId === worktreeId &&
+              host.ownerWorktreeId !== worktreeId
+          )
+      : [];
 
   /**
    * `only` narrows a retry to the hosts the original cleanup was for: a host
@@ -64,12 +78,20 @@ export function watchOwnedHostCleanup(options: OwnedHostCleanupOptions): () => v
     const targets = () =>
       ownedBy(worktreeId).filter((host) => only === undefined || only.has(host.id));
     if (disposed || pending.has(worktreeId)) return;
-    if (targets().length === 0) return;
+    const placements = only === undefined;
+    if (targets().length === 0 && (!placements || waitingFor(worktreeId).length === 0)) return;
     pending.add(worktreeId);
     void (async () => {
       const refused = new Set<HostId>();
       try {
         if (confirm && !(await confirm())) return;
+        if (placements) {
+          for (const host of waitingFor(worktreeId)) {
+            await options.clearPlacement?.(host.id).catch((error: unknown) => {
+              logger.warn("Dropping a removed worktree's pending placement failed", { error });
+            });
+          }
+        }
         // Read again: the list may have changed while the folder was checked.
         for (const host of targets()) {
           await options.forget(host.id).catch((error: unknown) => {

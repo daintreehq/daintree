@@ -333,6 +333,121 @@ describe("HostRegistry", () => {
     expect(moved).not.toHaveProperty("wake");
   });
 
+  describe("pending placement (#17355)", () => {
+    const placement = {
+      projectId: "proj-1",
+      worktreeId: "/repo/worktrees/feature-x",
+      worktreePath: "/repo/worktrees/feature-x",
+      label: "feature-x",
+      requestedAt: 1_000,
+    };
+
+    it("keeps a worktree waiting on the host's setup across a restart, until it's removed", () => {
+      const store = memoryStore();
+      const registry = new HostRegistry(store);
+      const host = registry.add({ name: "box", connection: { kind: "ssh", target: "box" } });
+      registry.update({ hostId: host.id, pendingPlacement: { ...placement, askFirst: true } });
+      registry.update({ hostId: host.id, name: "feature box" });
+
+      const restarted = new HostRegistry(store);
+      expect(restarted.get(host.id)?.pendingPlacement).toEqual({ ...placement, askFirst: true });
+
+      expect(restarted.update({ hostId: host.id, pendingPlacement: null })).not.toHaveProperty(
+        "pendingPlacement"
+      );
+      expect(new HostRegistry(store).get(host.id)).not.toHaveProperty("pendingPlacement");
+    });
+
+    it("records a failure only on the placement it names", () => {
+      const registry = new HostRegistry(memoryStore());
+      const host = registry.add({ name: "box", connection: { kind: "ssh", target: "box" } });
+      registry.update({ hostId: host.id, pendingPlacement: placement });
+      const failure = { message: "Host mode didn't start", at: 2_000 };
+
+      registry.update({ hostId: host.id, pendingPlacement: { ...placement, failure } });
+      expect(registry.get(host.id)?.pendingPlacement?.failure).toEqual(failure);
+
+      // Replaced by a newer placement: the older one's failure doesn't land on it.
+      const newer = { ...placement, requestedAt: 3_000 };
+      registry.update({ hostId: host.id, pendingPlacement: newer });
+      registry.update({ hostId: host.id, pendingPlacement: { ...placement, failure } });
+      expect(registry.get(host.id)?.pendingPlacement).toEqual(newer);
+
+      // Cancelled: a late failure doesn't bring it back.
+      registry.update({ hostId: host.id, pendingPlacement: null });
+      registry.update({ hostId: host.id, pendingPlacement: { ...newer, failure } });
+      expect(registry.get(host.id)).not.toHaveProperty("pendingPlacement");
+    });
+
+    it("refuses a placement missing what it opens, and drops one a settings file mangled", () => {
+      const registry = new HostRegistry(
+        memoryStore({
+          hosts: [
+            {
+              id: "a",
+              name: "a",
+              connection: { kind: "ssh", target: "a" },
+              pendingPlacement: placement,
+            },
+            {
+              id: "b",
+              name: "b",
+              connection: { kind: "ssh", target: "b" },
+              pendingPlacement: { ...placement, worktreePath: "" },
+            },
+            {
+              id: "c",
+              name: "c",
+              connection: { kind: "ssh", target: "c" },
+              pendingPlacement: { ...placement, requestedAt: "soon" },
+            },
+          ],
+        })
+      );
+      expect(registry.list().map((host) => "pendingPlacement" in host)).toEqual([
+        true,
+        false,
+        false,
+      ]);
+      expect(() =>
+        registry.update({
+          hostId: "b",
+          pendingPlacement: { ...placement, projectId: " " },
+        })
+      ).toThrow(expect.objectContaining({ code: "VALIDATION" }));
+      expect(registry.get("b")).not.toHaveProperty("pendingPlacement");
+    });
+
+    it("keeps a long worktree path exactly, cutting only what is shown", () => {
+      const registry = new HostRegistry(memoryStore());
+      const host = registry.add({ name: "box", connection: { kind: "ssh", target: "box" } });
+      const path = `/repo/${"deep/".repeat(150)}feature `;
+      const saved = registry.update({
+        hostId: host.id,
+        pendingPlacement: {
+          ...placement,
+          worktreeId: path,
+          worktreePath: path,
+          label: "x".repeat(800),
+        },
+      }).pendingPlacement;
+      expect(saved?.worktreeId).toBe(path);
+      expect(saved?.worktreePath).toBe(path);
+      expect(saved?.label.length).toBeLessThan(800);
+    });
+
+    it("drops the placement when the host is pointed at another machine", () => {
+      const registry = new HostRegistry(memoryStore());
+      const host = registry.add({ name: "box", connection: { kind: "ssh", target: "box" } });
+      registry.update({ hostId: host.id, pendingPlacement: placement });
+      const moved = registry.update({
+        hostId: host.id,
+        connection: { kind: "ssh", target: "mini" },
+      });
+      expect(moved).not.toHaveProperty("pendingPlacement");
+    });
+  });
+
   it("forgets a host and reports changes", () => {
     const registry = new HostRegistry(memoryStore());
     const listener = vi.fn();

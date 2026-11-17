@@ -392,6 +392,24 @@ describe("HostsSettingsTab", () => {
     expect(await screen.findByText("Update studio-03")).toBeTruthy();
   });
 
+  it("opens a host's setup, titled for it, when that is what was asked for", async () => {
+    remoteHosts.list!.mockResolvedValue([entry("studio-03", "studio-03")]);
+    requestHostUpdate("studio-03", "setup");
+    render(
+      <TooltipProvider>
+        <HostsSettingsTab />
+      </TooltipProvider>
+    );
+    expect(await screen.findByText("Set up studio-03")).toBeTruthy();
+    expect(screen.queryByText("Update studio-03")).toBeNull();
+
+    // A later plain request is the host chip's "Update …" again.
+    act(() => requestHostUpdate("studio-03"));
+    expect(await screen.findByText("Update studio-03")).toBeTruthy();
+    act(() => requestHostUpdate("studio-03", "setup"));
+    expect(await screen.findByText("Set up studio-03")).toBeTruthy();
+  });
+
   it("opens a host's plugins when asked after its update flow was asked for", async () => {
     remoteHosts.list!.mockResolvedValue([entry("studio-03", "studio-03")]);
     render(
