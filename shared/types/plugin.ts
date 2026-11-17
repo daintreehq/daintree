@@ -636,6 +636,8 @@ export interface PluginSearchProviderInfo {
    * A shown provider of another plugin registered the same keyword first in
    * this project, so this one is refused, and would still be if it were
    * switched off and then on. A switched-off provider claims no keyword.
+   * Daintree's own file search holds its keyword (`files`) ahead of every
+   * plugin, and is named here as "Daintree".
    */
   keywordTakenBy?: string;
 }
