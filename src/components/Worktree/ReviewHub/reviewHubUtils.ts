@@ -298,23 +298,28 @@ export function getPushBannerConfig(
   return base;
 }
 
-const BASE_BRANCH_STATUS_CONFIG: Record<string, { label: string; bg: string; text: string }> = {
-  A: { label: "A", bg: "bg-status-success/15", text: "text-status-success-text" },
-  D: { label: "D", bg: "bg-status-error/15", text: "text-status-danger-text" },
-  M: { label: "M", bg: "bg-status-warning/15", text: "text-status-warning-text" },
-  R: { label: "R", bg: "bg-status-info/15", text: "text-status-info-text" },
-  C: { label: "C", bg: "bg-status-info/15", text: "text-status-info-text" },
-  U: { label: "U", bg: "bg-status-error/15", text: "text-status-danger-text" },
+const BASE_BRANCH_STATUS_CONFIG: Record<
+  string,
+  { label: string; word: string; bg: string; text: string }
+> = {
+  A: { label: "A", word: "Added", bg: "bg-status-success/15", text: "text-status-success-text" },
+  D: { label: "D", word: "Deleted", bg: "bg-status-error/15", text: "text-status-danger-text" },
+  M: { label: "M", word: "Modified", bg: "bg-status-warning/15", text: "text-status-warning-text" },
+  R: { label: "R", word: "Renamed", bg: "bg-status-info/15", text: "text-status-info-text" },
+  C: { label: "C", word: "Copied", bg: "bg-status-info/15", text: "text-status-info-text" },
+  U: { label: "U", word: "Unmerged", bg: "bg-status-error/15", text: "text-status-danger-text" },
 };
 
 export function getBaseBranchStatusConfig(status: string): {
   label: string;
+  word: string;
   bg: string;
   text: string;
 } {
   return (
     BASE_BRANCH_STATUS_CONFIG[status] ?? {
       label: status,
+      word: status,
       bg: "bg-tint/[0.06]",
       text: "text-text-primary",
     }
