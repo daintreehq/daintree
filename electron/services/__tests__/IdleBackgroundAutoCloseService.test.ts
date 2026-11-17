@@ -1039,6 +1039,18 @@ describe("IdleBackgroundAutoCloseService", () => {
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
     });
 
+    // Thirty minutes on the wall clock, twenty of them with the lid shut.
+    it("doesn't count time the machine spent asleep toward a zero-terminal project's threshold", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      sleptMs.value = 20 * 60 * 1000;
+      const service = makeService();
+      await runCheck(service);
+
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
+
     it("skips already-closed and missing projects", async () => {
       enable();
       projectStoreMock.getAllProjects.mockReturnValue([
@@ -1409,6 +1421,34 @@ describe("IdleBackgroundAutoCloseService", () => {
         await sweep;
 
         expectSurvived();
+      });
+
+      // The awake clock keeps running through a kill that stalls: a visit after
+      // the sweep began is still a visit when the re-check finally reads it.
+      it("survives a visit during a kill that outlasts the threshold", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          enable();
+          projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+          const kill = deferred<Array<{ id: string }>>();
+          ptyClientMock.gracefulKillByProject.mockReturnValueOnce(kill.promise);
+          const clock = makeClock();
+          const service = makeActivatableService(clock);
+
+          const sweep = runCheck(service);
+          await vi.waitFor(() =>
+            expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledTimes(1)
+          );
+          vi.setSystemTime(Date.now() + 1000);
+          leftScreen(clock, "proj-1");
+          vi.setSystemTime(Date.now() + THIRTY_MIN_MS);
+          kill.resolve([]);
+          await sweep;
+
+          expectSurvived();
+        } finally {
+          vi.useRealTimers();
+        }
       });
 
       it("survives when only a window reports it active after the kill", async () => {

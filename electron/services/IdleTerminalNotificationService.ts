@@ -12,6 +12,7 @@ import { getPtyClient, getWorkspaceClientRef } from "../window/serviceRefs.js";
 import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
+import { loadedHelpSessionService } from "./helpSessionRuntime.js";
 import { logInfo, logError } from "../utils/logger.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -54,6 +55,15 @@ type IdleTerminalInfo = Awaited<ReturnType<PtyClient["getAllTerminalsAsync"]>>[n
 function lastRealActivity(terminal: IdleTerminalInfo): number {
   const observed = Math.max(terminal.lastTypedInputAt ?? 0, terminal.lastOutputChangeAt ?? 0);
   return observed || terminal.spawnedAt || 0;
+}
+
+/**
+ * A terminal the reminder speaks for. A trashed one is already on its way out,
+ * and the Assistant's help PTY is not a pane the user left running: a live
+ * Assistant holds the whole project back instead (`hasLiveAssistantBackend`).
+ */
+function isReminderTerminal(terminal: IdleTerminalInfo): boolean {
+  return terminal.hasPty !== false && !terminal.isTrashed && !terminal.isAssistantTerminal;
 }
 
 /**
@@ -358,6 +368,54 @@ export class IdleTerminalNotificationService {
     return Math.max(thresholdMinutes, MIN_COOLDOWN_MINUTES) * 60 * 1000;
   }
 
+  /**
+   * Sleep-adjusted time since `timestamp`; zero when that can't be measured
+   * (#17222). A terminal used just before the lid closed overnight has not been
+   * idle all night.
+   */
+  private awakeSince(timestamp: number): number {
+    try {
+      const sleepService = getSystemSleepService();
+      if (sleepService.isSleeping()) return 0;
+      return sleepService.getAwakeTimeSince(timestamp);
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * A Daintree Assistant still running in this project, by its session binding
+   * and PTY liveness, as `IdleBackgroundAutoCloseService` gates its reclaim.
+   * The reminder's Sleep would end it, and an Assistant with a wakeup or
+   * sub-agent pending reads `idle` too, so its state can't clear it. Read
+   * without loading the service: unloaded means no session exists.
+   */
+  private hasLiveAssistantBackend(projectId: string): boolean {
+    const backends = loadedHelpSessionService()?.getAssistantBackends(projectId) ?? [];
+    return backends.some((backend) => this.ptyClient?.hasTerminal(backend.terminalId) === true);
+  }
+
+  /**
+   * Every shard's terminals, or `null` when the read can't be trusted: a shard
+   * that timed out answers `[]`, which would hide a busy agent and let an idle
+   * shell elsewhere in its project read as the whole project. Also `null` once
+   * `stop()` has cleared the client during the read.
+   */
+  private async readTerminals(): Promise<IdleTerminalInfo[] | null> {
+    const client = this.ptyClient;
+    if (!client) return null;
+    const snapshot = await client.getAllTerminalsWithCompletenessAsync();
+    if (this.ptyClient !== client) return null;
+    if (snapshot.degraded) {
+      logInfo("idle-terminal-notify-skip-degraded-snapshot", {
+        shardsFailed: snapshot.shardsFailed,
+        shardsTotal: snapshot.shardsTotal,
+      });
+      return null;
+    }
+    return snapshot.terminals;
+  }
+
   private async checkAndNotify(): Promise<void> {
     const config = this.getConfig();
     if (!config.enabled) return;
@@ -411,11 +469,13 @@ export class IdleTerminalNotificationService {
       return;
     }
 
-    if (!this.ptyClient) {
+    // An unreadable snapshot is no evidence that any project left its idle
+    // state, so the unexpired throttle entries stay as they are.
+    const allTerminals = await this.readTerminals();
+    if (!allTerminals) {
       if (notifiedChanged) store.set("idleTerminalNotifiedAt", notifiedAt);
       return;
     }
-    const allTerminals = await this.ptyClient.getAllTerminalsAsync();
 
     // Collected AFTER the pty-host round-trip, not before: the loop below runs
     // synchronously from here, so sampling visibility any earlier would let a
@@ -455,11 +515,11 @@ export class IdleTerminalNotificationService {
       if (optedOut.has(pid)) continue;
 
       // Any remaining non-qualifying reason (no terminals, active agent, recent
-      // activity) means the project has left the idle state, so its notified
-      // throttle is cleared — a later idle period then notifies fresh. The
+      // activity, a live Assistant) means the project has left the idle state,
+      // so its notified throttle is cleared — a later idle period then notifies fresh. The
       // explicit dismissal is deliberately NOT cleared here.
       const projectTerminals = allTerminals.filter(
-        (t) => t.projectId === pid && t.hasPty !== false
+        (t) => t.projectId === pid && isReminderTerminal(t)
       );
 
       const hasActiveAgent = projectTerminals.some(
@@ -470,11 +530,16 @@ export class IdleTerminalNotificationService {
         projectTerminals.length > 0 &&
         projectTerminals.every((t) => {
           const lastActivity = lastRealActivity(t);
-          if (!lastActivity) return false; // unknown activity — be conservative
-          return now - lastActivity >= thresholdMs;
+          // Unknown or later than this check: be conservative.
+          if (!lastActivity || lastActivity > now) return false;
+          return this.awakeSince(lastActivity) >= thresholdMs;
         });
 
-      const eligible = projectTerminals.length > 0 && !hasActiveAgent && allIdle;
+      const eligible =
+        projectTerminals.length > 0 &&
+        !hasActiveAgent &&
+        allIdle &&
+        !this.hasLiveAssistantBackend(pid);
       if (!eligible) {
         clearNotified(pid);
         continue;
@@ -494,7 +559,8 @@ export class IdleTerminalNotificationService {
         (max, t) => Math.max(max, lastRealActivity(t)),
         0
       );
-      const idleMinutes = newestActivity > 0 ? Math.floor((now - newestActivity) / 60000) : 0;
+      const idleMinutes =
+        newestActivity > 0 ? Math.floor(this.awakeSince(newestActivity) / 60000) : 0;
 
       qualifying.push({
         projectId: pid,

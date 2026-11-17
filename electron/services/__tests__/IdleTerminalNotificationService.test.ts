@@ -15,8 +15,37 @@ const projectStoreMock = vi.hoisted(() => ({
   >(() => []),
 }));
 
+/** How the terminal read went: a shard that timed out leaves the snapshot degraded. */
+const snapshotHealth = vi.hoisted(() => ({ degraded: false }));
+
+// `assistantBackends` maps a project to the terminal its help session bound;
+// `liveTerminalIds` backs PtyClient's spawn registry. A binding whose terminal
+// is not live models an Assistant that already exited.
+const assistantBackends = vi.hoisted(() => new Map<string, string>());
+const liveTerminalIds = vi.hoisted(() => new Set<string>());
+vi.mock("../helpSessionRuntime.js", () => ({
+  loadedHelpSessionService: () => ({
+    getAssistantBackends: (projectId: string) => {
+      const terminalId = assistantBackends.get(projectId);
+      return terminalId ? [{ terminalId, webContentsId: 42, slot: 0 }] : [];
+    },
+  }),
+}));
+
 const ptyManagerMock = vi.hoisted(() => ({
+  hasTerminal: vi.fn((id: string) => liveTerminalIds.has(id)),
   getAllTerminalsAsync: vi.fn<() => Promise<unknown[]>>(async () => []),
+  // Reads the same fixture the tests set on `getAllTerminalsAsync`, as the real
+  // client's two reads share one source.
+  getAllTerminalsWithCompletenessAsync: vi.fn(async () => {
+    const degraded = snapshotHealth.degraded;
+    return {
+      terminals: await ptyManagerMock.getAllTerminalsAsync(),
+      degraded,
+      shardsFailed: degraded ? 1 : 0,
+      shardsTotal: 2,
+    };
+  }),
   gracefulKillByProject: vi.fn(
     async () => [] as Array<{ id: string; agentSessionId: string | null }>
   ),
@@ -69,6 +98,17 @@ vi.mock("../pty/terminalSessionPersistence.js", () => ({
 
 vi.mock("../projectSleep.js", () => ({ sleepProject: sleepProjectMock }));
 
+/** Machine-sleep time to subtract from every awake reading, and whether it is asleep now. */
+const sleptMs = vi.hoisted(() => ({ value: 0, sleeping: false }));
+vi.mock("../SystemSleepService.js", () => ({
+  getSystemSleepService: () => ({
+    onSuspend: vi.fn(() => vi.fn()),
+    onWake: vi.fn(() => vi.fn()),
+    isSleeping: () => sleptMs.sleeping,
+    getAwakeTimeSince: (timestamp: number) => Math.max(0, Date.now() - timestamp - sleptMs.value),
+  }),
+}));
+
 const pluginWorkReader = vi.hoisted(() => vi.fn<(projectId: string) => unknown[]>(() => []));
 vi.mock("../plugin/projectPluginWork.js", () => ({
   loadProjectPluginWorkReader: async () => pluginWorkReader,
@@ -118,6 +158,11 @@ describe("IdleTerminalNotificationService", () => {
     vi.clearAllMocks();
     sleepProjectMock.mockReset().mockResolvedValue(slept(0));
     for (const k of Object.keys(storeBacking)) delete storeBacking[k];
+    sleptMs.value = 0;
+    sleptMs.sleeping = false;
+    snapshotHealth.degraded = false;
+    assistantBackends.clear();
+    liveTerminalIds.clear();
   });
 
   afterEach(() => {
@@ -187,10 +232,10 @@ describe("IdleTerminalNotificationService", () => {
       (service as unknown as { quietUntil: number | null }).quietUntil = null;
       (service as unknown as { wakeQuietUntil: number | null }).wakeQuietUntil = null;
 
-      ptyManagerMock.getAllTerminalsAsync.mockClear();
+      ptyManagerMock.getAllTerminalsWithCompletenessAsync.mockClear();
       await runCheck(service);
 
-      expect(ptyManagerMock.getAllTerminalsAsync).toHaveBeenCalled();
+      expect(ptyManagerMock.getAllTerminalsWithCompletenessAsync).toHaveBeenCalled();
       service.stop();
     });
   });
@@ -323,6 +368,185 @@ describe("IdleTerminalNotificationService", () => {
       setup();
       ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
         makeTerminal({ lastTypedInputAt: Date.now() - 5 * 60 * 1000 }),
+      ]);
+      const service = makeService();
+      await runCheck(service);
+      expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    });
+
+    // Two hours on the wall clock, but the lid was shut for ninety minutes of it.
+    it("doesn't count time the machine spent asleep toward the threshold", async () => {
+      setup();
+      sleptMs.value = 90 * 60 * 1000;
+      const service = makeService();
+      await runCheck(service);
+      expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    });
+
+    it("reports idle minutes the machine was awake for", async () => {
+      setup();
+      sleptMs.value = 45 * 60 * 1000;
+      const service = makeService();
+      await runCheck(service);
+
+      expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+      const [, payload] = broadcastToRendererMock.mock.calls[0];
+      expect(payload.projects[0].idleMinutes).toBeGreaterThanOrEqual(74);
+      expect(payload.projects[0].idleMinutes).toBeLessThanOrEqual(75);
+    });
+
+    // A shard that timed out may hold this project's busy agent; an empty
+    // answer from it says nothing about whether the project is idle.
+    it("skips the whole check when a pty-host shard didn't answer", async () => {
+      setup();
+      snapshotHealth.degraded = true;
+      const service = makeService();
+      await runCheck(service);
+
+      expect(broadcastToRendererMock).not.toHaveBeenCalled();
+      expect(storeBacking.idleTerminalNotifiedAt).toBeUndefined();
+    });
+
+    // A project that read as empty only because its shard was silent hasn't
+    // left the idle state, so its throttle must survive; expired entries still go.
+    it("keeps unexpired throttle entries on a degraded read and drops expired ones", async () => {
+      setup();
+      const recent = Date.now() - 10 * 60 * 1000;
+      storeBacking.idleTerminalNotifiedAt = {
+        "proj-1": recent,
+        "proj-gone": Date.now() - 3 * SIXTY_MIN_MS,
+      };
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([]);
+      snapshotHealth.degraded = true;
+      const service = makeService();
+      await runCheck(service);
+
+      expect(storeBacking.idleTerminalNotifiedAt).toEqual({ "proj-1": recent });
+    });
+
+    it("drops a read that stop() overtook", async () => {
+      setup();
+      let release!: () => void;
+      ptyManagerMock.getAllTerminalsWithCompletenessAsync.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = () =>
+              resolve({ terminals: [makeTerminal()], degraded: false, shardsFailed: 0, shardsTotal: 1 });
+          })
+      );
+      const service = makeService();
+      const check = runCheck(service);
+      service.stop();
+      release();
+      await check;
+
+      expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    });
+
+    it("leaves trashed terminals out of the count, the activity check and the idle time", async () => {
+      setup();
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal({ id: "t1" }),
+        makeTerminal({
+          id: "t-trashed",
+          isTrashed: true,
+          agentState: "working",
+          lastTypedInputAt: Date.now() - 5 * 60 * 1000,
+          lastOutputChangeAt: Date.now() - 5 * 60 * 1000,
+        }),
+      ]);
+      const service = makeService();
+      await runCheck(service);
+
+      expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+      const [, payload] = broadcastToRendererMock.mock.calls[0];
+      expect(payload.projects[0].terminalCount).toBe(1);
+      expect(payload.projects[0].idleMinutes).toBeGreaterThanOrEqual(119);
+    });
+
+    it("doesn't nudge while the machine reads as asleep", async () => {
+      setup();
+      sleptMs.sleeping = true;
+      const service = makeService();
+      await runCheck(service);
+      expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    });
+
+    it("treats activity stamped after the check began as recent", async () => {
+      setup();
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal({ lastTypedInputAt: Date.now() + 60 * 1000 }),
+      ]);
+      const service = makeService();
+      await runCheck(service);
+      expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    });
+
+    // The reminder's Sleep would end the Assistant, and one with a wakeup or
+    // sub-agent pending reads idle, so a live one holds the project back.
+    it("doesn't nudge a project with a live Assistant beside its idle shells", async () => {
+      setup();
+      assistantBackends.set("proj-1", "t-help");
+      liveTerminalIds.add("t-help");
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal({ id: "t1" }),
+        makeTerminal({ id: "t-help", isAssistantTerminal: true }),
+      ]);
+      const service = makeService();
+      await runCheck(service);
+      expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    });
+
+    it("holds the project on the Assistant's binding even when the snapshot omits its PTY", async () => {
+      setup();
+      assistantBackends.set("proj-1", "t-help");
+      liveTerminalIds.add("t-help");
+      const service = makeService();
+      await runCheck(service);
+      expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    });
+
+    it("isn't held by an Assistant binding whose PTY already exited", async () => {
+      setup();
+      assistantBackends.set("proj-1", "t-help");
+      const service = makeService();
+      await runCheck(service);
+      expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("lets a live Assistant hold only its own project", async () => {
+      storeBacking.idleTerminalNotify = { enabled: true, thresholdMinutes: 60 };
+      projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
+      projectStoreMock.getAllProjects.mockReturnValue([
+        makeProject("proj-1"),
+        makeProject("proj-2"),
+      ]);
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal({ id: "t1", projectId: "proj-1" }),
+        makeTerminal({ id: "t2", projectId: "proj-2" }),
+      ]);
+      assistantBackends.set("proj-1", "t-help");
+      liveTerminalIds.add("t-help");
+      const service = makeService();
+      await runCheck(service);
+
+      expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+      const [, payload] = broadcastToRendererMock.mock.calls[0];
+      expect(payload.projects.map((p: { projectId: string }) => p.projectId)).toEqual(["proj-2"]);
+    });
+
+    it("doesn't nudge a project whose only terminal is in the trash", async () => {
+      setup();
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([makeTerminal({ isTrashed: true })]);
+      const service = makeService();
+      await runCheck(service);
+      expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    });
+
+    it("doesn't nudge a project whose only terminal is its Assistant", async () => {
+      setup();
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal({ isAssistantTerminal: true }),
       ]);
       const service = makeService();
       await runCheck(service);
