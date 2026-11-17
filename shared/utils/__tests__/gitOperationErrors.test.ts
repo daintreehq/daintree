@@ -396,6 +396,7 @@ describe("getGitRecoveryHint", () => {
       "conflict-unresolved",
       "push-rejected-outdated",
       "push-rejected-policy",
+      "pull-rebase-review-stale",
       "pathspec-invalid",
       "lfs-missing",
       "lfs-quota-exceeded",
@@ -602,6 +603,9 @@ describe("getGitRecoveryAction", () => {
       label: "Review push",
       actionId: "git.push",
     });
+    // Same for a pull whose preview went stale (#17188): pulling again opens a
+    // fresh confirm, never a retry of the stale approval or a conflict panel.
+    expect(getGitRecoveryAction("pull-rebase-review-stale")?.actionId).toBe("git.pullRebase");
   });
 
   it("returns undefined for reasons without a CTA", () => {

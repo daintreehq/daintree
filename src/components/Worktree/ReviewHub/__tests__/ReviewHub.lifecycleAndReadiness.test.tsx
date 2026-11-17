@@ -1314,7 +1314,7 @@ describe("ReviewHub", () => {
         expect(useGitPullRebaseConfirmStore.getState().pendingConfirm?.cwd).toBe(WORKTREE_PATH)
       );
       expect(pullRebaseMock).not.toHaveBeenCalled();
-      useGitPullRebaseConfirmStore.getState().resolveConfirmation(false);
+      useGitPullRebaseConfirmStore.getState().resolveConfirmation(null);
     });
 
     it("surfaces failing PR CI with a click-through to the forge", async () => {

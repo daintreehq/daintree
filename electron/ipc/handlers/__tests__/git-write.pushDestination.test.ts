@@ -774,6 +774,42 @@ describe("list-rebase-commits — replay range", () => {
     expect(result.incoming).toHaveLength(1);
   });
 
+  // The commit the pull is held to (#17188). Read after every range read, so a
+  // commit landing mid-measurement surfaces as a refusal on submit rather than
+  // rows describing one commit approved under the name of another.
+  it("reports the branch's commit, read after the ranges it pins", async () => {
+    const git = makeRebaseGit([UPSTREAM_REF, LOCAL_REF]);
+
+    const result = (await listRebaseCommits(git)) as unknown as { headOid: string | null };
+
+    expect(result.headOid).toBe("0123456789abcdef0123456789abcdef01234567");
+    const order = (mock: ReturnType<typeof vi.fn>, pick: (argv: string[]) => boolean) =>
+      mock.mock.calls
+        .map((call: unknown[], i: number) => ({
+          argv: (call[0] ?? []) as string[],
+          at: mock.mock.invocationCallOrder[i]!,
+        }))
+        .filter(({ argv }) => pick(argv))
+        .map(({ at }) => at);
+    const headRead = Math.max(
+      ...order(git.raw, (argv) => argv[0] === "rev-parse" && argv[3] === `${LOCAL_REF}^{commit}`)
+    );
+    const measured = [
+      ...order(git.log, () => true),
+      ...order(git.raw, (argv) => argv[0] === "rev-list"),
+    ];
+    expect(measured.length).toBeGreaterThan(0);
+    expect(headRead).toBeGreaterThan(Math.max(...measured));
+  });
+
+  it("reports no commit when the branch can't be read, leaving nothing to approve", async () => {
+    const git = makeRebaseGit([UPSTREAM_REF]);
+
+    const result = (await listRebaseCommits(git)) as unknown as { headOid: string | null };
+
+    expect(result.headOid).toBeNull();
+  });
+
   it("never reaches the network to measure a replay set", async () => {
     const git = makeRebaseGit([UPSTREAM_REF]);
 
