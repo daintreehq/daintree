@@ -863,6 +863,25 @@ describe("agentActions adversarial", () => {
     });
   });
 
+  it("agent.browser hands its focus policy to the launcher, as agent.terminal does (#17221)", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await callAction(actions, "agent.terminal", { focusPolicy: "preserve" });
+    await callAction(actions, "agent.browser", { focusPolicy: "preserve" });
+
+    expect(callbacks.onLaunchAgent).toHaveBeenNthCalledWith(
+      1,
+      "terminal",
+      expect.objectContaining({ focusPolicy: "preserve" })
+    );
+    expect(callbacks.onLaunchAgent).toHaveBeenNthCalledWith(
+      2,
+      "browser",
+      expect.objectContaining({ focusPolicy: "preserve" })
+    );
+  });
+
   it("shortcut launch actions accept omitted args through ActionService dispatch", async () => {
     const { ActionService } = await import("../../../ActionService");
     const service = new ActionService();
