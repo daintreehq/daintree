@@ -916,6 +916,7 @@ describe("the Canopy host picker", () => {
       useCanopyStore.getState().setHostId(null);
     });
     await settle();
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"]]);
     act(() => useCanopyStore.getState().setHostId("studio"));
     await settle();
     expect(state.retryHostProjects.mock.calls).toEqual([["studio"]]);
@@ -1329,6 +1330,7 @@ describe("All hosts", () => {
     await settle();
     resync("studio");
     await settle();
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"]]);
     state.hosts = [host("build", "build-02")];
     rerender(<CanopyView frame={frame} />);
     await settle();

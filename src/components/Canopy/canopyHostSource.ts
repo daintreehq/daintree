@@ -1,9 +1,10 @@
-import { useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { canopyHostClient } from "@/clients/canopyHostClient";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { remoteHostOfView } from "@/services/terminal/remoteLoopbackLinks";
 import type { BulkTransport } from "@shared/utils/canopyBulkEnable";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import { useLatestGetter } from "@/hooks/useLatestGetter";
 import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
 import type { CanopyHostChannel } from "@shared/types/ipc/canopyHost";
 import type { CanopyRunTarget, CanopySnapshot, CanopyTrashOutcome } from "@shared/types/ipc/canopy";
@@ -420,7 +421,8 @@ export function useRemoteCanopy(
   onRecovered?: (hostId: HostId) => void
 ): RemoteCanopyState & { retry: () => void } {
   const [held, setHeld] = useState<{ hostId: HostId; state: HeldState } | null>(null);
-  const recovered = useEffectEvent((id: HostId) => onRecovered?.(id));
+  // Read when it happens, from a push or a Retry press: never a stale render's.
+  const recovered = useLatestGetter(onRecovered);
   // Reads again on the panel's open viewer: a new one would drop what the host was told.
   const rereadRef = useRef<(() => void) | null>(null);
 
@@ -435,14 +437,14 @@ export function useRemoteCanopy(
           const next = change(state);
           return next === state && current?.hostId === hostId ? current : { hostId, state: next };
         }),
-      () => recovered(hostId)
+      () => recovered()?.(hostId)
     );
     rereadRef.current = controller.reread;
     return () => {
       if (rereadRef.current === controller.reread) rereadRef.current = null;
       controller.dispose();
     };
-  }, [hostId, active]);
+  }, [hostId, active, recovered]);
 
   const state = hostId !== null && held?.hostId === hostId ? held.state : EMPTY;
   return {
@@ -467,7 +469,8 @@ export function useRemoteCanopies(
   onRecovered?: (hostId: HostId) => void
 ): { states: ReadonlyMap<HostId, RemoteCanopyState>; retry: (hostId: HostId) => void } {
   const [held, setHeld] = useState<ReadonlyMap<HostId, HeldState>>(() => new Map());
-  const recovered = useEffectEvent((id: HostId) => onRecovered?.(id));
+  // Read when it happens, from a push or a Retry press: never a stale render's.
+  const recovered = useLatestGetter(onRecovered);
   const controllers = useRef(new Map<HostId, HostController>());
   const wanted = active ? [...new Set(hostIds)].sort().join("\u0000") : "";
 
@@ -507,11 +510,11 @@ export function useRemoteCanopies(
               if (next === state && current.has(hostId)) return current;
               return new Map(current).set(hostId, next);
             }),
-          () => recovered(hostId)
+          () => recovered()?.(hostId)
         )
       );
     }
-  }, [wanted]);
+  }, [wanted, recovered]);
 
   useEffect(
     () => () => {
