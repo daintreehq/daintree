@@ -644,7 +644,7 @@ describe("ReviewHub", () => {
       expect(stageAllMock).toHaveBeenCalledTimes(1);
     });
 
-    it.each(["MERGING", "REBASING", "CHERRY_PICKING", "REVERTING"] as const)(
+    it.each(["MERGING", "REBASING", "CHERRY_PICKING", "REVERTING", "APPLYING_MAILBOX"] as const)(
       "does not stage mid-operation (%s) even with no conflicts left",
       async (repoState) => {
         getStagingStatusMock.mockResolvedValue(

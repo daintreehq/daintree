@@ -121,7 +121,14 @@ describe("composeConflictAgentText", () => {
   });
 
   it("keeps every character a shell would act on out of the prose, apostrophes included", () => {
-    for (const operation of [null, "MERGING", "REBASING", "CHERRY_PICKING", "REVERTING"] as const) {
+    for (const operation of [
+      null,
+      "MERGING",
+      "REBASING",
+      "CHERRY_PICKING",
+      "REVERTING",
+      "APPLYING_MAILBOX",
+    ] as const) {
       const text = composeConflictAgentText(
         base({
           operation,
