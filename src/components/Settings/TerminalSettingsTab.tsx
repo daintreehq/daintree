@@ -419,14 +419,17 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         if (osc52InFlight.current) return SAVE_SKIPPED;
         osc52InFlight.current = true;
         setOsc52Saving(true);
-        try {
-          if (!value) setOsc52ClipboardEnabled(false);
-          await window.electron.terminalConfig.setOsc52ClipboardEnabled(value);
-          setOsc52ClipboardEnabled(value);
-        } finally {
-          osc52InFlight.current = false;
-          setOsc52Saving(false);
-        }
+        if (!value) setOsc52ClipboardEnabled(false);
+        // A promise chain, not try/finally, which React Compiler can't lower;
+        // a synchronous throw from the bridge still settles it.
+        await Promise.resolve()
+          .then(() => window.electron.terminalConfig.setOsc52ClipboardEnabled(value))
+          .finally(() => {
+            osc52InFlight.current = false;
+            setOsc52Saving(false);
+          });
+        setOsc52ClipboardEnabled(value);
+        return undefined;
       },
       "Failed to persist OSC 52 clipboard setting",
       () => setOsc52ClipboardEnabled(previous)
