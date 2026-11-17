@@ -7,6 +7,8 @@ import { PANEL_LIMIT_DECLINED_REASON } from "@/services/actions/definitions/pane
 
 const recipes: TerminalRecipe[] = [];
 const duplicateRecipeMock = vi.fn<(id: string) => Promise<void>>();
+const updateRecipeMock =
+  vi.fn<(id: string, updates: { showInEmptyState?: boolean }) => Promise<void>>();
 interface NotifyPayload {
   type: string;
   title: string;
@@ -35,7 +37,8 @@ const recipeStoreState = {
     context?: unknown,
     options?: { spawnedBy?: string; terminalIndices?: number[] }
   ) => runRecipeWithResultsMock(recipeId, worktreePath, worktreeId, context, options),
-  updateRecipe: vi.fn(),
+  updateRecipe: (id: string, updates: { showInEmptyState?: boolean }) =>
+    updateRecipeMock(id, updates),
   deleteRecipe: vi.fn(),
   duplicateRecipe: (id: string) => duplicateRecipeMock(id),
   // Follows a shadowed row to the team recipe that overrides it, as the store does.
@@ -141,6 +144,7 @@ beforeEach(() => {
   addPanelMock.mockResolvedValue("panel-1");
   logErrorMock.mockReset();
   duplicateRecipeMock.mockReset().mockResolvedValue(undefined);
+  updateRecipeMock.mockReset().mockResolvedValue(undefined);
   notifyMock.mockReset();
   dispatchMock.mockReset();
   dispatchMock.mockResolvedValue({ ok: true, result: undefined });
@@ -1869,5 +1873,81 @@ describe("useRecipeRunner — duplicating a recipe (#17200)", () => {
     expect(duplicateRecipeMock).toHaveBeenCalledTimes(2);
     expect(duplicateRecipeMock).toHaveBeenLastCalledWith("team-1");
     expect(notifyMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useRecipeRunner — pin and unpin", () => {
+  const renderRunner = () =>
+    renderHook(() => useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" }));
+
+  it.each([
+    ["handlePin", true],
+    ["handleUnpin", false],
+  ] as const)("%s saves the preference without a toast on success", async (method, pinned) => {
+    recipes.push(makeRecipe({ id: "r1", name: "Build" }));
+    const { result } = renderRunner();
+
+    act(() => {
+      result.current[method]("r1");
+    });
+    await flush();
+
+    expect(updateRecipeMock).toHaveBeenCalledExactlyOnceWith("r1", { showInEmptyState: pinned });
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["handlePin", true],
+    ["handleUnpin", false],
+  ] as const)(
+    "%s surfaces a failed save naming the recipe, with one Retry for the same change",
+    async (method, pinned) => {
+      recipes.push(makeRecipe({ id: "r1", name: "Build" }));
+      updateRecipeMock.mockRejectedValueOnce(new Error("disk full"));
+      const { result } = renderRunner();
+
+      act(() => {
+        result.current[method]("r1");
+      });
+      await flush();
+
+      expect(logErrorMock).toHaveBeenCalledWith("Failed to update recipe pin", expect.any(Error));
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      const toast = notifyMock.mock.calls[0]![0];
+      expect(toast.type).toBe("error");
+      expect(toast.title).toBe("Couldn't update recipe pin");
+      expect(toast.message).toContain("Build");
+      expect(toast.message).toContain("disk full");
+      expect(toast.priority).toBe("high");
+      expect(toast.action?.label).toBe("Retry");
+
+      act(() => {
+        toast.action?.onClick();
+      });
+      await flush();
+
+      expect(updateRecipeMock).toHaveBeenCalledTimes(2);
+      expect(updateRecipeMock).toHaveBeenLastCalledWith("r1", { showInEmptyState: pinned });
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it("offers another Retry when the retried save fails too", async () => {
+    recipes.push(makeRecipe({ id: "r1", name: "Build" }));
+    updateRecipeMock.mockRejectedValue(new Error("disk full"));
+    const { result } = renderRunner();
+
+    act(() => {
+      result.current.handlePin("r1");
+    });
+    await flush();
+    act(() => {
+      notifyMock.mock.calls[0]![0].action?.onClick();
+    });
+    await flush();
+
+    expect(updateRecipeMock).toHaveBeenCalledTimes(2);
+    expect(notifyMock).toHaveBeenCalledTimes(2);
+    expect(notifyMock.mock.calls[1]![0].action?.label).toBe("Retry");
   });
 });
