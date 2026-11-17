@@ -118,6 +118,7 @@ vi.mock("../../../utils/fs.js", async (importOriginal) => {
     resilientAtomicWriteFile: async (
       ...args: Parameters<typeof actual.resilientAtomicWriteFile>
     ) => {
+      h.touch("write", args[0]);
       // One-shot: holds the next journal write before it touches the disk.
       const hold = h.armed.writeHold;
       if (hold && String(args[0]).endsWith("agent-session-history.json")) {
@@ -227,6 +228,7 @@ describe("agentSessionHistory — transient read faults (adversarial)", () => {
         { ...rec("b", "wt-2", "p2"), savedAt: now - 1000 },
       ]);
       const before = await rawOnDisk();
+      h.touches.length = 0;
       h.armed.read = { code };
 
       expect(() => listAgentSessionsOrThrow(undefined, userDataDir)).toThrow(
@@ -244,6 +246,8 @@ describe("agentSessionHistory — transient read faults (adversarial)", () => {
         listAgentSessionsOrThrow(undefined, userDataDir, undefined, "p2").map((r) => r.sessionId)
       ).toEqual(["b"]);
       expect(await rawOnDisk()).toBe(before);
+      // Neither the failed read nor the retry wrote the journal, even byte-for-byte.
+      expect(h.touches.filter((call) => call === "write")).toEqual([]);
     }
   );
 

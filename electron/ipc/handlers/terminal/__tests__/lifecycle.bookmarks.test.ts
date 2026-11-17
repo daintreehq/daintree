@@ -129,6 +129,7 @@ vi.mock("../../../utils.js", () => ({
   },
 }));
 
+import { app } from "electron";
 import { registerTerminalLifecycleHandlers } from "../lifecycle.js";
 
 const agentInfo = {
@@ -514,6 +515,7 @@ describe("bookmark mutator handlers", () => {
     m.listAgentSessionsOrThrow.mockReturnValueOnce(rows as never);
 
     await expect(list({}, {})).resolves.toBe(rows);
+    expect(app.getPath).toHaveBeenLastCalledWith("userData");
     expect(m.listAgentSessionsOrThrow).toHaveBeenLastCalledWith(
       undefined,
       "/tmp/test",
