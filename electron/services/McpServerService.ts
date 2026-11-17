@@ -1385,8 +1385,11 @@ export class McpServerService {
   }
 
   setAuditMaxRecords(max: number): { enabled: boolean; maxRecords: number } {
+    // The turn-outcome ring shares the setting. Read it under the limit it was
+    // kept with before the dispatch log saves the new one, or raising the limit
+    // on a cold ring would keep rows the old limit had already evicted.
+    this.turnOutcomeService.hydrate();
     const config = this.auditService.setMaxRecords(max);
-    // The turn-outcome ring shares the setting.
     this.turnOutcomeService.setMaxRecords(config.maxRecords);
     return config;
   }
