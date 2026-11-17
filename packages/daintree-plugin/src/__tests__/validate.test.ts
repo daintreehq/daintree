@@ -62,6 +62,30 @@ describe("runValidate", () => {
     expect(result.warnings.join("\n")).toMatch(/engines\.daintree omitted/);
   });
 
+  it("accepts a keybinding in the retired portal scope but warns it never fires (#17245)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      contributes: {
+        keybindings: [
+          { actionId: "nav.quickSwitcher", combo: "Cmd+Shift+8", scope: "global" },
+          { actionId: "nav.quickSwitcher", combo: "Cmd+Shift+7", scope: "portal" },
+          { actionId: "nav.quickSwitcher", combo: "Cmd+Shift+6" },
+        ],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+    const retired = result.warnings.filter((w) => w.includes("retired"));
+    expect(retired).toHaveLength(1);
+    expect(retired[0]).toMatch(/^keybindings\[1\] \("Cmd\+Shift\+7"\) uses the retired "portal"/);
+    expect(retired[0]).toMatch(/never fires/);
+    expect(result.warnings.indexOf(retired[0]!)).toBeLessThan(
+      result.warnings.findIndex((w) => w.startsWith("engines.daintree omitted"))
+    );
+  });
+
   it("accepts a deprecated experimental_* alias but warns to rename it (#10466)", async () => {
     await writeManifest({
       name: "acme.demo",

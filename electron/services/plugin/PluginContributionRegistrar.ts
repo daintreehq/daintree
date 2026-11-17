@@ -74,6 +74,10 @@ import {
   unregisterPluginKeybindings,
 } from "../pluginKeybindingRegistry.js";
 import {
+  isRetiredPluginKeybindingScope,
+  retiredKeybindingScopeMessage,
+} from "../../../shared/config/pluginKeybindingScopes.js";
+import {
   registerPluginContextMenuItem,
   unregisterPluginContextMenuItems,
 } from "../pluginContextMenuRegistry.js";
@@ -447,6 +451,10 @@ export class PluginContributionRegistrar {
     }
 
     for (const keybinding of manifest.contributes.keybindings) {
+      // A retired scope never activates, and moving the binding to another
+      // scope would fire the key where its author never bound it. It is
+      // dropped whole; the post-commit log below says why it is missing.
+      if (isRetiredPluginKeybindingScope(keybinding.scope)) continue;
       trackPluginExpression(pluginId, keybinding.when);
       registerPluginKeybinding(pluginId, {
         ...keybinding,
@@ -757,6 +765,16 @@ export class PluginContributionRegistrar {
           pluginId,
           "warn",
           `Forge provider "${provider.id}" is listed as unavailable: forge providers currently run only as built-in plugins, so host.registerForgeProvider() from an installed plugin binds no implementation.`
+        );
+      }
+    }
+    for (const [index, keybinding] of manifest.contributes.keybindings.entries()) {
+      if (isRetiredPluginKeybindingScope(keybinding.scope)) {
+        this.deps.recordPluginLog(
+          plugin,
+          pluginId,
+          "warn",
+          retiredKeybindingScopeMessage(index, keybinding.combo, keybinding.scope)
         );
       }
     }

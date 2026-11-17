@@ -12,6 +12,7 @@ import {
   DENY_PLUGIN_DISPATCH_ACTION_IDS,
 } from "../../../shared/config/actionIds.js";
 import { KEY_ACTION_VALUES } from "../../../shared/types/keymap.js";
+import { PLUGIN_KEYBINDING_SCOPES } from "../../../shared/config/pluginKeybindingScopes.js";
 import {
   FILE_EDITOR_MAX_PATH_PATTERNS,
   FileEditorPathPatternSchema,
@@ -60,14 +61,16 @@ export const KeybindingContributionSchema = z
   .object({
     actionId: z.string().min(1),
     combo: z.string().min(1),
-    // Closed to the renderer's KeyScope union (src/services/keybindingUtils.ts).
+    // Closed to the plugin scope vocabulary (shared/config/pluginKeybindingScopes.ts).
     // An unknown scope would never match the active scope and silently produce an
     // inert binding, so reject it at the manifest gate instead. Defaults to
-    // "global" in the renderer hook when omitted. The former "terminal",
-    // "modal", and "worktreeList" scopes were removed — they were never
-    // activated, so bindings declared under them could not fire.
+    // "global" in the renderer hook when omitted. A retired scope ("portal")
+    // still parses so existing manifests load; the binding is dropped and the
+    // advisories say why. The former "terminal", "modal", and "worktreeList"
+    // scopes were removed outright — they were never activated, so bindings
+    // declared under them could not fire.
     scope: z
-      .enum(["global", "portal", "worktreeGrid", "dev-preview"], {
+      .enum(PLUGIN_KEYBINDING_SCOPES, {
         error: (issue) => {
           switch (issue.input) {
             case "terminal":

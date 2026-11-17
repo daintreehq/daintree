@@ -6,6 +6,10 @@ import { PLUGIN_ICON_IDS, isPluginIconId } from "../../shared/config/pluginIconI
 import { isBuiltInAgentId } from "../../shared/config/agentIds.js";
 import { isPluginCustomIconRef } from "../../shared/config/pluginCustomIcon.js";
 import { collectPluginManifestAssets } from "../../shared/config/pluginManifestAssets.js";
+import {
+  isRetiredPluginKeybindingScope,
+  retiredKeybindingScopeMessage,
+} from "../../shared/config/pluginKeybindingScopes.js";
 
 /**
  * Advisory checks that run *after* a manifest has parsed. Everything here is
@@ -65,8 +69,8 @@ async function warnIfTargetMissing(
 
 /**
  * Every advisory a parsed manifest earns, in a stable order: deprecated
- * aliases, engine range, command discoverability, unbridged MCP servers, icon
- * ids, then build targets.
+ * aliases, retired keybinding scopes, engine range, command discoverability,
+ * unbridged MCP servers, icon ids, then build targets.
  * Order is part of the contract — the CLI prints them in sequence and the
  * fixtures assert on the first one.
  */
@@ -88,6 +92,14 @@ export async function collectManifestAdvisories({
           `contributes.${deprecated} is deprecated — rename it to contributes.${canonical}`
         );
       }
+    }
+  }
+
+  // The schema accepts a retired scope so the manifest still loads; the host
+  // then drops the binding, and this is how the author learns why.
+  for (const [index, keybinding] of manifest.contributes.keybindings.entries()) {
+    if (isRetiredPluginKeybindingScope(keybinding.scope)) {
+      warnings.push(retiredKeybindingScopeMessage(index, keybinding.combo, keybinding.scope));
     }
   }
 
