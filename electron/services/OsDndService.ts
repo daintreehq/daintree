@@ -128,8 +128,9 @@ class OsDndService {
   /**
    * Current DND state once the initial macOS probe has settled, for callers
    * that should not mistake an in-flight probe for "unknown" (renderer
-   * hydration). Still resolves `undefined` when the probe could not read the
-   * state, or if the service is disposed while waiting.
+   * hydration). A live transition during the probe wins over its result.
+   * Still resolves `undefined` when the probe could not read the state and
+   * no live transition arrived, or if the service is disposed while waiting.
    */
   async getStateWhenReady(): Promise<boolean | undefined> {
     const probe = this.probe;
@@ -212,10 +213,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * `true` when any assertion names a Focus mode, `false` only when every store
- * was read and holds no assertion, and `undefined` for any shape this does
- * not recognise (an empty `data` included), so a format change reads as
- * unknown rather than as "off".
+ * `true` when any `storeAssertionRecords` entry names a mode under
+ * `assertionDetails.assertionDetailsModeIdentifier`; `false` only when
+ * `data` is a non-empty array of objects none of which holds a record; and
+ * `undefined` for every other shape (an empty `data`, a non-array records
+ * value, a record without a readable mode).
  */
 function readFocusAssertions(json: string): boolean | undefined {
   let root: unknown;

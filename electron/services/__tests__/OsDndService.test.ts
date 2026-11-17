@@ -126,10 +126,32 @@ function focusAssertions(modeIdentifier: string): string {
 const ACTIVE = focusAssertions("com.apple.focus.work");
 
 // Ending a Focus drops `storeAssertionRecords` rather than emptying it.
-const INACTIVE = JSON.stringify({
-  data: [{ storeInvalidationRecords: [{ invalidationReason: "user-action" }] }],
-  header: { timestamp: 784393200.5, version: 2 },
-});
+function inactiveAssertions(invalidations: number): string {
+  return JSON.stringify({
+    data: [
+      {
+        storeInvalidationRecords: Array.from({ length: invalidations }, (_, index) => ({
+          invalidationAssertion: {
+            assertionUUID: `8C1D0A54-6A43-4C4B-9F57-${String(index).padStart(12, "0")}`,
+            assertionStartDateTimestamp: 784393200.5 + index,
+            assertionDetails: {
+              assertionDetailsIdentifier: "com.apple.control-center.focus",
+              assertionDetailsModeIdentifier: "com.apple.focus.work",
+              assertionDetailsReason: "user-action",
+            },
+          },
+          invalidationDate: 784396800.5 + index,
+          invalidationReason: "user-action",
+        })),
+      },
+    ],
+    header: { timestamp: 784393200.5, version: 2 },
+  });
+}
+
+const INACTIVE = inactiveAssertions(1);
+// Invalidation history accumulates, so the probe's output cap must hold it.
+const INACTIVE_LONG_HISTORY = inactiveAssertions(200);
 
 function execError(message: string, extra: Record<string, unknown> = {}): Error {
   return Object.assign(new Error(message), extra);
@@ -192,7 +214,7 @@ describe("OsDndService — macOS", () => {
     expect(encoding).toBe("utf8");
     expect(timeout).toBeGreaterThan(0);
     expect(timeout).toBeLessThanOrEqual(5000);
-    expect(maxBuffer).toBeGreaterThan(0);
+    expect(maxBuffer).toBeGreaterThanOrEqual(Buffer.byteLength(INACTIVE_LONG_HISTORY));
     expect(maxBuffer).toBeLessThanOrEqual(1024 * 1024);
     // Unknown until the probe settles: the sync audio gate treats this as
     // "do not gate".
@@ -214,7 +236,26 @@ describe("OsDndService — macOS", () => {
     ["a store whose records are not an array", { storeAssertionRecords: {} }],
   ])("an active assertion after %s still reports Focus on", async (_case, sibling) => {
     const active = JSON.parse(ACTIVE) as { data: unknown[] };
-    const svc = await initializeWithProbe(JSON.stringify({ data: [sibling, ...active.data] }));
+    const svc = await initializeWithProbe(
+      JSON.stringify({ data: [sibling, ...active.data, { storeAssertionRecords: [] }] })
+    );
+    expect(svc.getState()).toBe(true);
+  });
+
+  it("an active assertion after a malformed record in the same store reports Focus on", async () => {
+    const svc = await initializeWithProbe(
+      JSON.stringify({
+        data: [
+          {
+            storeAssertionRecords: [
+              null,
+              { assertionDetails: null },
+              { assertionDetails: { assertionDetailsModeIdentifier: "com.apple.focus.work" } },
+            ],
+          },
+        ],
+      })
+    );
     expect(svc.getState()).toBe(true);
   });
 
@@ -228,6 +269,7 @@ describe("OsDndService — macOS", () => {
       "no store holds assertions",
       JSON.stringify({ data: [{}, { storeAssertionRecords: [] }], header: { version: 2 } }),
     ],
+    ["only a long invalidation history remains", INACTIVE_LONG_HISTORY],
   ])("a readable file where %s reports Focus off", async (_case, stdout) => {
     const svc = getOsDndService();
     svc.initialize();
@@ -243,6 +285,14 @@ describe("OsDndService — macOS", () => {
   it.each([
     // A non-FDA read of the TCC-protected DB can surface as a missing file.
     ["plutil cannot open the file", execError("Command failed", { code: 1 })],
+    [
+      "plutil cannot be spawned",
+      execError("spawn /usr/bin/plutil ENOENT", {
+        code: "ENOENT",
+        errno: -2,
+        syscall: "spawn /usr/bin/plutil",
+      }),
+    ],
     [
       "plutil times out",
       execError("Command failed", { killed: true, signal: "SIGTERM", code: null }),
@@ -268,14 +318,35 @@ describe("OsDndService — macOS", () => {
     ["empty output", ""],
     ["whitespace-only output", "  \n"],
     ["output that is not JSON", "com.apple.focus.work\n"],
+    ["a null root", "null"],
     ["a JSON array root", "[]"],
     ["a root without a data array", JSON.stringify({ header: { version: 2 } })],
     ["a data value that is not an array", JSON.stringify({ data: {} })],
     ["an empty data array", JSON.stringify({ data: [] })],
     ["a store that is not an object", JSON.stringify({ data: ["store"] })],
+    ["a null store", JSON.stringify({ data: [null] })],
+    ["a store that is an array", JSON.stringify({ data: [[]] })],
     [
       "assertion records that are not an array",
       JSON.stringify({ data: [{ storeAssertionRecords: {} }] }),
+    ],
+    ["null assertion records", JSON.stringify({ data: [{ storeAssertionRecords: null }] })],
+    [
+      "a malformed store followed by an empty one",
+      JSON.stringify({ data: [{ storeAssertionRecords: {} }, {}] }),
+    ],
+    ["a null record", JSON.stringify({ data: [{ storeAssertionRecords: [null] }] })],
+    [
+      "a record with null details",
+      JSON.stringify({ data: [{ storeAssertionRecords: [{ assertionDetails: null }] }] }),
+    ],
+    [
+      "a record with a numeric mode identifier",
+      JSON.stringify({
+        data: [
+          { storeAssertionRecords: [{ assertionDetails: { assertionDetailsModeIdentifier: 1 } }] },
+        ],
+      }),
     ],
     [
       "a record whose mode identifier is not under assertionDetails",
@@ -320,7 +391,7 @@ describe("OsDndService — macOS", () => {
   it("a live transition after an unknown probe sets the state", async () => {
     const svc = getOsDndService();
     svc.initialize();
-    await settleProbe("", execError("Command failed", { code: 1 }));
+    await settleProbe(ACTIVE, execError("Command failed", { code: 1 }));
     expect(svc.getState()).toBeUndefined();
 
     const listener = vi.fn();
@@ -336,7 +407,7 @@ describe("OsDndService — macOS", () => {
     const ready = svc.getStateWhenReady();
 
     systemPreferencesMock.__fireByName("_NSDoNotDisturbEnabledNotification");
-    await settleProbe("", execError("Command failed", { killed: true, signal: "SIGTERM" }));
+    await settleProbe(INACTIVE, execError("Command failed", { killed: true, signal: "SIGTERM" }));
 
     expect(svc.getState()).toBe(true);
     await expect(ready).resolves.toBe(true);

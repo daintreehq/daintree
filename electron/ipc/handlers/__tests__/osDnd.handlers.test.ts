@@ -121,7 +121,7 @@ describe("os-dnd IPC on macOS", () => {
     cleanup = registerOsDndHandlers({} as HandlerDependencies);
     const hydration = invokeGetState();
 
-    await settleProbe("", Object.assign(new Error("Command failed"), { code: 1 }));
+    await settleProbe(ACTIVE_ASSERTIONS, Object.assign(new Error("Command failed"), { code: 1 }));
     await expect(hydration).resolves.toBeUndefined();
     expect(broadcastMock).not.toHaveBeenCalled();
 
