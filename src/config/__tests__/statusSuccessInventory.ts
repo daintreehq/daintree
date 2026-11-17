@@ -355,9 +355,10 @@ export const STATUS_SUCCESS_INVENTORY = {
     {
       category: "domain",
       signature: "text-status-success",
-      anchor: "↑{ahead}",
+      anchor: "ahead`}",
       expectedOccurrences: 1,
-      rationale: "Ahead-arrow count against the upstream, as the sidebar card paints it",
+      rationale:
+        "Ahead arrow of the drift count, as the sidebar card paints it; the figure is neutral",
     },
   ],
   "src/components/ui/Callout.tsx": [
