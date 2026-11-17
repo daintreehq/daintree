@@ -159,11 +159,48 @@ describe("WorktreeAttachmentChips", () => {
     expect(device.textContent).toBe("");
   });
 
-  it("disables the holder's controls while a request for it is outstanding", () => {
-    renderChips([{ ...base, heldHere: true, holderWorktreeId: "/wt/a", busy: true }]);
+  it("marks the holder's controls aria-disabled while a request is outstanding, keeping focus and blocking activation", () => {
+    const onAction = renderChips([
+      { ...base, heldHere: true, holderWorktreeId: "/wt/a", busy: true },
+    ]);
     fireEvent.click(screen.getByRole("button", { name: "tunnel attachment: Attached" }));
-    expect((screen.getByRole("button", { name: "Detach" }) as HTMLButtonElement).disabled).toBe(
-      true
+    const check = screen.getByRole("button", { name: "Check status" }) as HTMLButtonElement;
+    const detach = screen.getByRole("button", { name: "Detach" }) as HTMLButtonElement;
+    for (const button of [check, detach]) {
+      expect(button.disabled).toBe(false);
+      expect(button.getAttribute("aria-disabled")).toBe("true");
+    }
+    check.focus();
+    fireEvent.click(check);
+    fireEvent.click(detach);
+    expect(document.activeElement).toBe(check);
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it("keeps focus on the same Check status button when a request starts", () => {
+    const onAction = vi.fn();
+    const held: WorktreeAttachment = { ...base, heldHere: true, holderWorktreeId: "/wt/a" };
+    const tree = (attachment: WorktreeAttachment) => (
+      <TooltipProvider>
+        <WorktreeAttachmentChips attachments={[attachment]} onAction={onAction} />
+      </TooltipProvider>
+    );
+    const { rerender } = render(tree(held));
+    fireEvent.click(screen.getByRole("button", { name: "tunnel attachment: Attached" }));
+    const check = screen.getByRole("button", { name: "Check status" });
+    check.focus();
+    rerender(tree({ ...held, busy: true }));
+    const after = screen.getByRole("button", { name: "Check status" });
+    expect(after).toBe(check);
+    expect(document.activeElement).toBe(check);
+    expect(after.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("leaves the holder's controls enabled when no request is outstanding", () => {
+    renderChips([{ ...base, heldHere: true, holderWorktreeId: "/wt/a" }]);
+    fireEvent.click(screen.getByRole("button", { name: "tunnel attachment: Attached" }));
+    expect(screen.getByRole("button", { name: "Check status" }).hasAttribute("aria-disabled")).toBe(
+      false
     );
   });
 

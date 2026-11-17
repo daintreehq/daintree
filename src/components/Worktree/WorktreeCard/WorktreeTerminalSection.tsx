@@ -665,7 +665,11 @@ export function WorktreeTerminalSection({
       className={cn(DISCLOSURE_BUTTON, isExpanded && !inline && DISCLOSURE_BUTTON_LABELLED)}
     >
       <ChevronRight
-        className={cn("h-3 w-3 shrink-0 text-text-secondary", isExpanded && "rotate-90")}
+        data-animated-chevron
+        className={cn(
+          "h-3 w-3 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
+          isExpanded && "rotate-90"
+        )}
         aria-hidden="true"
       />
       {/* The open trigger drops the summary glyph in both variants. It led a

@@ -371,7 +371,11 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
             className={cn(DISCLOSURE_BUTTON, isExpanded && DISCLOSURE_BUTTON_LABELLED)}
           >
             <ChevronRight
-              className={cn("h-3 w-3 shrink-0 text-text-secondary", isExpanded && "rotate-90")}
+              data-animated-chevron
+              className={cn(
+                "h-3 w-3 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
+                isExpanded && "rotate-90"
+              )}
               aria-hidden="true"
             />
             {isExpanded &&
