@@ -1284,6 +1284,10 @@ describe("Decisions entry", () => {
         onHostsChanged: () => () => {},
         runtimeOf: () => null,
         announceOwnerState,
+        hostQuestions: () => [],
+        onHostQuestionsChanged: () => () => {},
+        readHostQuestion: () => null,
+        cancelHostQuestion: () => null,
       });
       try {
         saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
@@ -1881,6 +1885,10 @@ describe("Decisions entry", () => {
         onHostsChanged: () => () => {},
         runtimeOf: () => null,
         announceOwnerState,
+        hostQuestions: () => [],
+        onHostQuestionsChanged: () => () => {},
+        readHostQuestion: () => null,
+        cancelHostQuestion: () => null,
       });
       try {
         saved.value = { enabled: true, consentedAt: 5 };
@@ -3852,6 +3860,10 @@ describe("Decisions entry", () => {
         onHostsChanged: () => () => {},
         runtimeOf: () => null,
         announceOwnerState,
+        hostQuestions: () => [],
+        onHostQuestionsChanged: () => () => {},
+        readHostQuestion: () => null,
+        cancelHostQuestion: () => null,
       });
       try {
         saved.value = { consentedAt: 5, ...RELAY };
@@ -3894,6 +3906,10 @@ describe("Decisions entry", () => {
         onHostsChanged: () => () => {},
         runtimeOf: () => null,
         announceOwnerState: vi.fn(),
+        hostQuestions: () => [],
+        onHostQuestionsChanged: () => () => {},
+        readHostQuestion: () => null,
+        cancelHostQuestion: () => null,
       };
       const withdraw = setDecisionsHostsPort(port);
       return {

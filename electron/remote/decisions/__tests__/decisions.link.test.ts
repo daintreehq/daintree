@@ -509,6 +509,10 @@ describe("an enrolled Host's own Decisions over its link (#16022)", () => {
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
+      questions: () => null,
+      onQuestionsChanged: () => () => {},
+      readQuestion: async () => ({ result: "not-running" }),
+      cancelQuestion: async () => ({ result: "not-running" }),
     };
     const load = vi.fn(async () => lifetime);
     return {

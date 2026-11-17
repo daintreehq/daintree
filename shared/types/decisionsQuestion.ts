@@ -43,7 +43,17 @@ export type DecisionQuestionCancelResult =
   | { result: "cancelling" }
   | { result: "refused"; reason: DecisionQuestionCancelRefusal }
   | { result: "off" }
-  | { result: "not-running" };
+  | { result: "not-running" }
+  | DecisionQuestionHostNotConnected;
+
+/**
+ * The question is a Remote Host's (#17230) and this computer has no link to
+ * that Host now, or lost it before the Host answered, so nothing was read or
+ * done there.
+ */
+export interface DecisionQuestionHostNotConnected {
+  result: "host-not-connected";
+}
 
 export type DecisionQuestionCancelRefusal = "answered" | "expired" | "publish-failed" | "not-found";
 
@@ -194,13 +204,18 @@ export type DecisionQuestionContentResult =
   | { result: "off" }
   | { result: "not-running" }
   | { result: "not-found" }
-  | { result: "unreadable" };
+  | { result: "unreadable" }
+  | DecisionQuestionHostNotConnected;
 
-/** One question's opening line, or why there is none. */
+/**
+ * One question's opening line, or why there is none: `host-not-connected`
+ * for a Remote Host's question while this computer has no link to the Host.
+ */
 export type DecisionQuestionSummary =
   | { questionId: string; result: "read"; line: string | null }
   | { questionId: string; result: "not-found" }
-  | { questionId: string; result: "unreadable" };
+  | { questionId: string; result: "unreadable" }
+  | { questionId: string; result: "host-not-connected" };
 
 /** The opening lines of a pane's questions, in the order they were asked for, each id once. */
 export type DecisionQuestionSummariesResult =
@@ -259,7 +274,8 @@ type DecisionQuestionImageRead<Read> =
   | { result: "off" }
   | { result: "not-running" }
   | { result: "not-found" }
-  | { result: "unreadable" };
+  | { result: "unreadable" }
+  | DecisionQuestionHostNotConnected;
 
 /** One part of an image, as one read over IPC answers. */
 export type DecisionQuestionImagePartResult = DecisionQuestionImageRead<{
@@ -338,6 +354,13 @@ export interface DecisionQuestionListItem {
   replyRequest: string | null;
   /** What delivery stopped on while it needs a person (#17235); null otherwise. */
   stall: DecisionQuestionStall | null;
+  /**
+   * The enrolled Remote Host that asked (#17230), by the id and name this
+   * computer's host list gives it, and whether this computer has a link to it
+   * now; absent for this computer's own questions. A Host that isn't
+   * connected keeps the questions it last reported, as it last reported them.
+   */
+  remoteHost?: DecisionQuestionRemoteHost;
 }
 
 /**
@@ -358,9 +381,16 @@ export interface DecisionQuestionStall {
   reason: string;
 }
 
+export interface DecisionQuestionRemoteHost {
+  hostId: string;
+  name: string;
+  connected: boolean;
+}
+
 /**
- * Every question this computer's Decisions holds, oldest first. Empty while
- * Decisions is off or its store is closed. `revision` only rises, so a read
+ * Every question this computer's Decisions holds, and those its enrolled
+ * Remote Hosts last reported (#17230), oldest first. Empty while Decisions is
+ * off or its store is closed. `revision` only rises, so a read
  * and a push can be ordered.
  */
 export interface DecisionQuestionList {

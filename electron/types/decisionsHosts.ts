@@ -7,6 +7,14 @@
  */
 
 import type { DecisionsHostRuntimeObservation } from "../../shared/types/decisionsHosts.js";
+import type {
+  DecisionQuestionCancelResult,
+  DecisionQuestionContentResult,
+  DecisionQuestionImagePartResult,
+  DecisionQuestionListItem,
+  DecisionQuestionReference,
+  DecisionQuestionSummariesResult,
+} from "../../shared/types/decisionsQuestion.js";
 
 /** The most a Host's or the library's own words may run to, wherever they are shown. */
 export const MAX_HOST_DETAIL_LENGTH = 300;
@@ -150,4 +158,55 @@ export interface DecisionsHostsPort {
   runtimeOf(hostId: string): DecisionsHostRuntimeObservation | null;
   /** Tells every connected Host now whether Decisions is on here, as the setting says. */
   announceOwnerState(): void;
+  /**
+   * Every Host's questions as it last reported them to this computer's owner
+   * (#17230), connected or not. A Host whose questions name an id another
+   * Host's also name is left out, so neither can stand in for the other.
+   */
+  hostQuestions(): DecisionsHostQuestions[];
+  /** A Host's questions, its connection or its name changed. */
+  onHostQuestionsChanged(listener: () => void): () => void;
+  /**
+   * Reads one of a Host's questions on the Host whose questions name
+   * `questionHostId`; null when no Host's do.
+   */
+  readHostQuestion<R extends DecisionsHostQuestionRead>(
+    questionHostId: string,
+    read: R
+  ): Promise<HostCallOutcome<DecisionsHostQuestionAnswer<R>>> | null;
+  /** Withdraws one of a Host's questions on that Host; null when no Host's questions name it. */
+  cancelHostQuestion(
+    reference: DecisionQuestionReference
+  ): Promise<HostCallOutcome<DecisionQuestionCancelResult>> | null;
 }
+
+/** One Host's questions, as this computer last heard them (#17230). */
+export interface DecisionsHostQuestions {
+  /** The Host by the id and name this computer's host list gives it. */
+  hostId: string;
+  name: string;
+  /** This computer has a link to the Host now, the one it last heard the list over. */
+  connected: boolean;
+  /** The id the Host's questions name it by: each one's `reference.hostId`. */
+  questionHostId: string;
+  questions: Omit<DecisionQuestionListItem, "remoteHost">[];
+}
+
+/** One of a Host's questions read on the Host by its reference (#17230). */
+export type DecisionsHostQuestionRead =
+  | { read: "content"; reference: DecisionQuestionReference }
+  | {
+      read: "image";
+      reference: DecisionQuestionReference;
+      attachmentId: string;
+      offset: number;
+    }
+  | { read: "summaries"; references: DecisionQuestionReference[] };
+
+export type DecisionsHostQuestionAnswer<R extends DecisionsHostQuestionRead> = R extends {
+  read: "content";
+}
+  ? DecisionQuestionContentResult
+  : R extends { read: "image" }
+    ? DecisionQuestionImagePartResult
+    : DecisionQuestionSummariesResult;

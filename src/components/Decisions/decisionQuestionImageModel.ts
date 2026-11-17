@@ -56,6 +56,7 @@ const FAILURE_TEXT: Record<QuestionImageFailure, string> = {
   "timed-out": "Fetching this image took too long.",
   off: "Decisions is off on the computer that owns this terminal.",
   "not-running": "Decisions isn't connected to its relay right now.",
+  "host-not-connected": "The Remote Host that asked this question isn't connected right now.",
   "not-found": "This image is no longer kept for this question.",
   unreadable: "This question couldn't be opened on this computer.",
   failed: "This image couldn't be read.",
@@ -76,6 +77,7 @@ export function canRetryImage(failure: QuestionImageFailure): boolean {
     case "fetch-failed":
     case "timed-out":
     case "not-running":
+    case "host-not-connected":
     case "failed":
       return true;
     default:
