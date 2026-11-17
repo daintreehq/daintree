@@ -148,7 +148,9 @@ describe("a Shell plugin's call over a real link (#16767)", () => {
       { projectId: PROJECT, actionId: "worktree.list", args: {} }
     );
 
-    expect(sent).toEqual([expect.objectContaining({ credential: pluginCredentialFor(SHELL_SECRET) })]);
+    expect(sent).toEqual([
+      expect.objectContaining({ credential: pluginCredentialFor(SHELL_SECRET) }),
+    ]);
     expect(JSON.stringify(sent)).not.toContain(pluginCredentialFor(before));
     host.dispose();
   });

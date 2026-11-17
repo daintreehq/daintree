@@ -682,10 +682,9 @@ describe("ssh -O forward on the ControlMaster", () => {
     current = next.client;
     await m.reestablish(HOST);
     expect(m.list()).toEqual([]);
-    expect(calls.filter((args) => args.includes("-O")).map((args) => args[args.indexOf("-O") + 1])).toEqual([
-      "forward",
-      "cancel",
-    ]);
+    expect(
+      calls.filter((args) => args.includes("-O")).map((args) => args[args.indexOf("-O") + 1])
+    ).toEqual(["forward", "cancel"]);
   });
 
   it("holds the IPv6 side of an ssh forward itself and relays it to the IPv4 side ssh holds", async () => {
