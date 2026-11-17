@@ -1204,6 +1204,30 @@ describe("McpServerSettingsTab", () => {
       expect(window.electron.mcpServer.setPort).not.toHaveBeenCalled();
     });
 
+    it("places Discard before Apply in a dirty row", async () => {
+      await renderFlushable({});
+      typePort("9021");
+      const discard = screen.getByRole("button", { name: "Discard port" });
+      const apply = screen.getByRole("button", { name: "Apply port" });
+      expect(
+        discard.compareDocumentPosition(apply) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+    });
+
+    it("marks Apply busy while the port is being written", async () => {
+      const setPort = vi.fn(
+        () => new Promise(() => {})
+      ) as unknown as typeof window.electron.mcpServer.setPort;
+      await renderFlushable({ setPort });
+      typePort("9021");
+      fireEvent.click(screen.getByRole("button", { name: "Apply port" }));
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Apply port" }).getAttribute("aria-busy")).toBe(
+          "true"
+        )
+      );
+    });
+
     it("offers Discard only for a changed field, and discarding leaves nothing to apply", async () => {
       const flush = await renderFlushable({
         setPort: vi.fn().mockRejectedValue(new Error("disk full")),
