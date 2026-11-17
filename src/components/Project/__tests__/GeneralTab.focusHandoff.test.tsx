@@ -33,6 +33,7 @@ vi.mock("@/components/icons", () => ({ FolderGit2: () => null, McpServerIcon: ()
 vi.mock("../ProjectGroupSettingsRow", () => ({ ProjectGroupSettingsRow: () => null }));
 vi.mock("../ProjectLinksSection", () => ({ ProjectLinksSection: () => null }));
 
+import type { Project } from "@shared/types";
 import { GeneralTab } from "../GeneralTab";
 
 function Harness() {
@@ -40,7 +41,9 @@ function Harness() {
   const [svg, setSvg] = useState<string | undefined>('<svg xmlns="http://www.w3.org/2000/svg"/>');
   return (
     <GeneralTab
-      currentProject={{ id: "test-project", path: "/tmp/p", name: "p", emoji: "", lastOpened: 0 } as never}
+      currentProject={
+        { id: "test-project", path: "/tmp/p", name: "p", emoji: "", lastOpened: 0 } as never
+      }
       name=""
       onNameChange={vi.fn()}
       emoji=""
