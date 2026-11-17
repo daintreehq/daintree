@@ -233,9 +233,11 @@ describe("useReviewHubCommitAndPush — tip moves (#17196)", () => {
 
 describe("useReviewHubCommitAndPush — first commit (#17588)", () => {
   const ROOT: GitCommitResult = { ...COMMITTED, parentOids: [] };
+  // Not the root commit's OID: what is pushed is what the review approved,
+  // which may include a commit that landed before the review read the branch.
   const FIRST_PUSH = {
     branch: "main",
-    headOid: ROOT.oid!,
+    headOid: "b".repeat(40),
     destination: { remote: "origin", branch: "main" },
   };
   const APPROVED: GitPushConfirmResult = { confirmed: true, review: FIRST_PUSH };
@@ -298,6 +300,7 @@ describe("useReviewHubCommitAndPush — first commit (#17588)", () => {
       await done;
     });
     expect(requestConfirmation).toHaveBeenCalledWith(PATH, { yieldToPending: true });
+    expect(push).toHaveBeenCalledTimes(1);
     expect(push).toHaveBeenCalledWith(PATH, undefined, undefined, FIRST_PUSH);
   });
 
@@ -394,14 +397,24 @@ describe("useReviewHubCommitAndPush — first commit (#17588)", () => {
     expect(push).not.toHaveBeenCalled();
   });
 
-  it("never takes over a push review that another worktree already has open", async () => {
-    commit.mockResolvedValue(ROOT);
-    const store = useGitPushConfirmStore.getState();
-    let other: GitPushConfirmResult | null = null;
-    void store.requestConfirmation("/other").then((answer) => (other = answer));
+  it("never takes over a push review opened elsewhere while the commit ran", async () => {
+    const landed = deferred<GitCommitResult>();
+    commit.mockReturnValue(landed.promise);
     const { result } = renderFirstPushHook();
+    let done!: Promise<void>;
+    act(() => {
+      done = result.current.handleCommitThenReviewPush("Initial commit");
+    });
+    await act(async () => {});
+    let other: GitPushConfirmResult | null = null;
+    void useGitPushConfirmStore
+      .getState()
+      .requestConfirmation("/other")
+      .then((answer) => (other = answer));
 
-    await act(() => result.current.handleCommitThenReviewPush("Initial commit"));
+    await act(async () => landed.resolve(ROOT));
+    expect(useGitPushConfirmStore.getState().pendingConfirm?.cwd).toBe("/other");
+    await act(() => done);
 
     expect(commit).toHaveBeenCalledTimes(1);
     expect(useGitPushConfirmStore.getState().pendingConfirm?.cwd).toBe("/other");
