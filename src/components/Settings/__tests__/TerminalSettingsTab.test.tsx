@@ -256,6 +256,30 @@ describe("TerminalSettingsTab OSC 52 clipboard switch", () => {
     expect(useOsc52ClipboardStore.getState().enabled).toBe(true);
   });
 
+  it("takes one save at a time, so a late failure can't undo a newer success", async () => {
+    let finishSave = () => {};
+    setOsc52ClipboardEnabled.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        finishSave = resolve;
+      })
+    );
+    renderSubtab("clipboard");
+    await act(async () => {
+      fireEvent.click(osc52Switch());
+    });
+    await act(async () => {
+      fireEvent.click(osc52Switch());
+    });
+    expect(setOsc52ClipboardEnabled).toHaveBeenCalledTimes(1);
+
+    await act(async () => finishSave());
+    expect(useOsc52ClipboardStore.getState().enabled).toBe(true);
+    await act(async () => {
+      fireEvent.click(osc52Switch());
+    });
+    expect(setOsc52ClipboardEnabled).toHaveBeenLastCalledWith(false);
+  });
+
   it("stays off when the save is refused", async () => {
     setOsc52ClipboardEnabled.mockRejectedValueOnce(new Error("IPC down"));
     renderSubtab("clipboard");

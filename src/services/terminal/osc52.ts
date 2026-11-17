@@ -12,12 +12,16 @@ import type { ManagedTerminal } from "./types";
  */
 export const OSC52_GESTURE_WINDOW_MS = 3000;
 
-/**
- * The clipboard text write travels inside the IPC envelope's default 1 MiB
- * budget, so a larger copy could never land; refused here with a reason
- * instead of failing in transit.
- */
+/** No copy decodes past this; refused before decoding a larger payload. */
 export const OSC52_MAX_TEXT_BYTES = 1024 * 1024;
+
+/**
+ * The clipboard write rides the IPC envelope's default 1 MiB budget, which
+ * main measures as the UTF-8 bytes of `JSON.stringify(args)`, so escaping
+ * counts: a copy that can't fit is refused here with a reason instead of
+ * failing in transit.
+ */
+export const OSC52_MAX_ENVELOPE_BYTES = 1024 * 1024;
 
 /**
  * Stamps a real key press or click in the pane, the only thing that opens its
@@ -89,6 +93,9 @@ export function parseOsc52(data: string): Osc52Request {
     return { kind: "invalid", reason: "malformed" };
   }
   if (text === "") return { kind: "ignore" };
+  if (new TextEncoder().encode(JSON.stringify([text])).length > OSC52_MAX_ENVELOPE_BYTES) {
+    return { kind: "invalid", reason: "too-large" };
+  }
   return { kind: "write", text };
 }
 

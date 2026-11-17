@@ -8,6 +8,7 @@ import {
   type Osc52Verdict,
 } from "./osc52";
 import { useOsc52ClipboardStore } from "@/store/osc52ClipboardStore";
+import { isProjectViewObservable } from "@/lib/viewCacheState";
 import { usePanelStore } from "@/store/panelStore";
 import {
   useNotificationStore,
@@ -26,7 +27,17 @@ import { logWarn } from "@/utils/logger";
  * write, honoured or blocked, gets a notice naming the pane and showing what
  * it carried, so an overwrite is never silent.
  */
-export function handleOsc52(managed: ManagedTerminal, data: string): void {
+export type Osc52Pane = Pick<
+  ManagedTerminal,
+  | "id"
+  | "runtimeAgentId"
+  | "isFocused"
+  | "lastUserGestureAt"
+  | "isSerializedRestoreInProgress"
+  | "scrollbackRestoreState"
+>;
+
+export function handleOsc52(managed: Osc52Pane, data: string): void {
   if (!useOsc52ClipboardStore.getState().enabled) return;
   // Runtime identity, read per sequence: a shell an agent is detected in
   // stops being honoured at once. Agent output is the untrusted source.
@@ -40,7 +51,9 @@ export function handleOsc52(managed: ManagedTerminal, data: string): void {
   if (request.kind === "ignore") return;
 
   const verdict = judgeOsc52Write({
-    focused: managed.isFocused && document.visibilityState !== "hidden",
+    // A cached project view keeps its pane focused and keeps parsing, but
+    // nobody can see the notice there.
+    focused: managed.isFocused && isProjectViewObservable(),
     lastGestureAt: managed.lastUserGestureAt,
     now: performance.now(),
   });
@@ -57,7 +70,7 @@ export function handleOsc52(managed: ManagedTerminal, data: string): void {
       title: `Couldn't copy from ${paneName(paneId)}`,
       message:
         request.reason === "too-large"
-          ? "The program sent more than 1 MB of text, which is over the clipboard limit."
+          ? "The program sent more text than one copy can carry (about 1 MB)."
           : "The program sent text that isn't valid base64-encoded UTF-8.",
     });
     return;

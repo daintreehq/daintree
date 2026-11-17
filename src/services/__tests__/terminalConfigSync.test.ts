@@ -249,7 +249,9 @@ describe("terminalConfigSync (#14699)", () => {
     await settle();
     expect(useOsc52ClipboardStore.getState().enabled).toBe(true);
 
-    client.push(device({ osc52ClipboardEnabled: "yes" as unknown as boolean }));
+    const malformed: Config = {};
+    Reflect.set(malformed, "osc52ClipboardEnabled", "yes");
+    client.push(device(malformed));
     expect(useOsc52ClipboardStore.getState().enabled).toBe(false);
 
     client.push(host({ osc52ClipboardEnabled: true }));

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   OSC52_GESTURE_WINDOW_MS,
+  OSC52_MAX_ENVELOPE_BYTES,
   OSC52_MAX_TEXT_BYTES,
   judgeOsc52Write,
   noteOsc52Gesture,
@@ -52,13 +53,21 @@ describe("parseOsc52", () => {
     expect(parseOsc52(`c;${latin1}`)).toEqual({ kind: "invalid", reason: "malformed" });
   });
 
-  it("refuses text over the cap and accepts text at it", () => {
-    const atCap = "a".repeat(OSC52_MAX_TEXT_BYTES);
-    expect(parseOsc52(`c;${b64(atCap)}`)).toEqual({ kind: "write", text: atCap });
-    expect(parseOsc52(`c;${b64(`${atCap}a`)}`)).toEqual({
-      kind: "invalid",
-      reason: "too-large",
-    });
+  it("accepts the largest copy the IPC envelope carries and refuses one byte more", () => {
+    // Main measures `JSON.stringify(args)`: `["` and `"]` wrap the text.
+    const fits = "a".repeat(OSC52_MAX_ENVELOPE_BYTES - 4);
+    expect(parseOsc52(`c;${b64(fits)}`)).toEqual({ kind: "write", text: fits });
+    expect(parseOsc52(`c;${b64(`${fits}a`)}`)).toEqual({ kind: "invalid", reason: "too-large" });
+  });
+
+  it("counts escaping toward the envelope, not just the text's bytes", () => {
+    const newlines = "\n".repeat(600 * 1024);
+    expect(parseOsc52(`c;${b64(newlines)}`)).toEqual({ kind: "invalid", reason: "too-large" });
+  });
+
+  it("refuses a payload past the decode cap before decoding it", () => {
+    const payload = "A".repeat(Math.ceil(((OSC52_MAX_TEXT_BYTES + 3) * 4) / 3) + 8);
+    expect(parseOsc52(`c;${payload}`)).toEqual({ kind: "invalid", reason: "too-large" });
   });
 });
 

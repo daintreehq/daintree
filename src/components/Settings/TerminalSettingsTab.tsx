@@ -160,6 +160,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
   const setResourceMonitoringEnabled = useResourceMonitoringStore((state) => state.setEnabled);
   const osc52ClipboardEnabled = useOsc52ClipboardStore((state) => state.enabled);
   const setOsc52ClipboardEnabled = useOsc52ClipboardStore((state) => state.setEnabled);
+  const [osc52Saving, setOsc52Saving] = useState(false);
 
   const twoPaneSplitConfig = useTwoPaneSplitStore((state) => state.config);
   const setTwoPaneSplitEnabled = useTwoPaneSplitStore((state) => state.setEnabled);
@@ -402,15 +403,21 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
   };
 
   // Turning it off takes effect at once; turning it on waits for the save, so
-  // a refused save never leaves programs writing the clipboard here.
+  // a refused save never leaves programs writing the clipboard here. One save
+  // at a time, so a late failure can't roll back over a newer success.
   const setOsc52Clipboard = (value: boolean) => {
     const previous = osc52ClipboardEnabled;
     void persist(
       "clipboard",
       async () => {
-        if (!value) setOsc52ClipboardEnabled(false);
-        await window.electron.terminalConfig.setOsc52ClipboardEnabled(value);
-        setOsc52ClipboardEnabled(value);
+        setOsc52Saving(true);
+        try {
+          if (!value) setOsc52ClipboardEnabled(false);
+          await window.electron.terminalConfig.setOsc52ClipboardEnabled(value);
+          setOsc52ClipboardEnabled(value);
+        } finally {
+          setOsc52Saving(false);
+        }
       },
       "Failed to persist OSC 52 clipboard setting",
       () => setOsc52ClipboardEnabled(previous)
@@ -923,6 +930,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 title="Let programs copy to the clipboard (OSC 52)"
                 subtitle={`Lets tmux, Neovim, Zellij and fzf copy text from a shell, including over SSH and on a remote host. A copy lands only in the focused panel within ${OSC52_GESTURE_WINDOW_MS / 1000} seconds of a key press or click in it, never from an agent panel, and every copy shows a notice with its start and length. Default: Off.`}
                 isEnabled={osc52ClipboardEnabled}
+                disabled={osc52Saving}
                 onChange={() => setOsc52Clipboard(!osc52ClipboardEnabled)}
                 isModified={osc52ClipboardEnabled}
                 onReset={() => setOsc52Clipboard(false)}
