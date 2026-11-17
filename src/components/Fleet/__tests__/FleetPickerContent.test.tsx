@@ -1054,17 +1054,15 @@ describe("FleetPickerContent + useFleetPicker", () => {
       search.mockResolvedValueOnce({ matches: [], complete: false });
       await open();
       await typeAndSettle("alpha");
-      const elsewhere = screen.getAllByRole("treeitem")[0]!;
-      await act(async () => {
-        elsewhere.focus();
-      });
+      // Nothing holds focus, so only the held-focus check keeps the handoff out.
+      expect(document.activeElement).toBe(document.body);
 
       search.mockResolvedValueOnce({ matches: [], complete: true });
       await retry();
       await advance(0);
 
       expect(screen.queryByTestId("fp-retry-output-search")).toBeNull();
-      expect(document.activeElement).toBe(elsewhere);
+      expect(document.activeElement).toBe(document.body);
     });
 
     it("reads a bare match array from an older host as a complete answer", async () => {
