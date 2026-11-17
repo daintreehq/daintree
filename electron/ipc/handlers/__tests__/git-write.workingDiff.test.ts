@@ -211,15 +211,14 @@ describe("@diff:head working diff (real git)", () => {
     expect(diff).toContain("--- /dev/null\n+++ b/a.txt\n@@ -0,0 +1 @@\n+old\n");
   });
 
-  it("reads a malformed branch ref as no commit yet, as git status does", async () => {
+  it("reports git's own error when the branch ref is malformed", async () => {
     initRepo();
     write("a.txt", "one\n");
     git(repo, "add", "a.txt");
     git(repo, "commit", "-q", "-m", "base");
     fs.writeFileSync(path.join(repo, ".git", "refs", "heads", "main"), "garbage\n");
-    expect(git(repo, "status", "--porcelain=v2", "--branch")).toContain("# branch.oid (initial)");
 
-    expect(await headDiff()).toContain("--- /dev/null\n+++ b/a.txt\n");
+    await expect(headDiff()).rejects.toThrow(/bad revision 'HEAD'/);
   });
 
   it("reports git's own error when HEAD names a commit git can't read", async () => {
