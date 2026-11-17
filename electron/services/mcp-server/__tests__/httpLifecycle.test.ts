@@ -2136,6 +2136,26 @@ describe("HttpLifecycle", () => {
       expect(lc.findHelpBearerHash("help-token-xyz")).toBeNull();
     });
 
+    it("revokeApiKeySessions ends the key's sessions and drops only its register row (#17213)", () => {
+      const deps = fakeDeps();
+      const revokeSessionsByCredential = vi.fn(() => 0);
+      Object.assign(deps.sessionStore, { revokeSessionsByCredential });
+      const lc = new HttpLifecycle(deps);
+      const handle = lc as unknown as BearerTestHandle;
+      // A row with no live session behind it: a revoke by credential finds
+      // nothing to close, so only the explicit eviction can clear it.
+      handle.touchBearer("Bearer old-key-1234", "Claude/1", "sess-gone", "external");
+      handle.touchBearer("Bearer help-token-xyz", "Help/1", "sess-help", "core");
+
+      lc.revokeApiKeySessions("old-key-1234");
+
+      expect(revokeSessionsByCredential).toHaveBeenCalledWith(
+        sessionCredentialDigest("Bearer old-key-1234")
+      );
+      expect(lc.getBearerSessionIds(hashOf("Bearer old-key-1234"))).toBeNull();
+      expect(lc.getBearerSessionIds(hashOf("Bearer help-token-xyz"))).toEqual(["sess-help"]);
+    });
+
     it("coalesces two sessions onto one entry and only drops it when both close", () => {
       const lc = new HttpLifecycle(fakeDeps());
       const handle = lc as unknown as BearerTestHandle;

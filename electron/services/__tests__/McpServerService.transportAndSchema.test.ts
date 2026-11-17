@@ -966,48 +966,68 @@ describe("McpServerService", () => {
     // Headers first, body held back: the handshake is admitted and its rows
     // written, but the SDK cannot initialize (and file) the session until the
     // body arrives, by which time the key has rotated.
-    let send: (() => void) | null = null;
-    const response = new Promise<{ status: number }>((resolve, reject) => {
-      const req = http.request(
-        {
-          host: "127.0.0.1",
-          port,
-          path: "/mcp",
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${oldKey}`,
-            "Content-Type": "application/json",
-            Accept: "application/json, text/event-stream",
-          },
+    let resolveResponse!: (value: { status: number; sessionId: string | undefined }) => void;
+    let rejectResponse!: (err: unknown) => void;
+    const response = new Promise<{ status: number; sessionId: string | undefined }>(
+      (resolve, reject) => {
+        resolveResponse = resolve;
+        rejectResponse = reject;
+      }
+    );
+    // Observed early so a failure before the await below can't go unhandled.
+    response.catch(() => {});
+    const req = http.request(
+      {
+        host: "127.0.0.1",
+        port,
+        path: "/mcp",
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${oldKey}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
         },
-        (res) => {
-          res.resume();
-          res.on("end", () => resolve({ status: res.statusCode ?? 0 }));
-        }
-      );
-      req.on("error", reject);
-      req.flushHeaders();
-      send = () =>
-        req.end(
-          JSON.stringify({
-            jsonrpc: "2.0",
-            id: 1,
-            method: "initialize",
-            params: {
-              protocolVersion: "2025-03-26",
-              capabilities: {},
-              clientInfo: { name: "late-initialize", version: "1.0.0" },
-            },
+      },
+      (res) => {
+        const header = res.headers["mcp-session-id"];
+        res.resume();
+        res.on("end", () =>
+          resolveResponse({
+            status: res.statusCode ?? 0,
+            sessionId: Array.isArray(header) ? header[0] : header,
           })
         );
-    });
-    await vi.waitFor(() => {
-      expect(service._sessionTierMap.size).toBe(1);
-    });
+      }
+    );
+    req.on("error", rejectResponse);
+    try {
+      req.flushHeaders();
+      await vi.waitFor(() => {
+        expect(service._sessionTierMap.size).toBe(1);
+      });
+      expect(service._httpSessions.size).toBe(0);
 
-    await service.rotateApiKey();
-    send!();
-    await response;
+      await service.rotateApiKey();
+      req.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-03-26",
+            capabilities: {},
+            clientInfo: { name: "late-initialize", version: "1.0.0" },
+          },
+        })
+      );
+      // The SDK did initialize it: this is the late-registration path, not a
+      // refused handshake that never filed anything.
+      const answered = await response;
+      expect(answered.status).toBe(200);
+      expect(answered.sessionId).toBeTruthy();
+    } finally {
+      req.destroy();
+    }
 
     await vi.waitFor(() => {
       expect(service._httpSessions.size).toBe(0);

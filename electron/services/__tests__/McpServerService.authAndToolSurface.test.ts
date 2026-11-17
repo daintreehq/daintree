@@ -562,10 +562,16 @@ describe("McpServerService", () => {
     expect(initialKey).toMatch(/^daintree_[a-f0-9]+$/);
     expect(storeState.mcpServer.apiKey).toBe(initialKey);
 
+    // No session is open, so no teardown pushes on rotation's behalf: open
+    // views still hear about it (#17213).
+    const snapshots: unknown[] = [];
+    const unsubscribe = service.onRuntimeStateChange((snapshot) => snapshots.push(snapshot));
     const rotatedKey = await service.rotateApiKey();
+    unsubscribe();
     expect(rotatedKey).not.toBe(initialKey);
     expect(service.getStatus().apiKey).toBe(rotatedKey);
     expect(storeState.mcpServer.apiKey).toBe(rotatedKey);
+    expect(snapshots).toEqual([service.getRuntimeState()]);
   });
 
   it("auto-generates a bearer token on first start and keeps it across stop/start", async () => {
@@ -708,6 +714,13 @@ describe("McpServerService", () => {
 
     const oldKey = service.getStatus().apiKey;
     expect(oldKey).toMatch(/^daintree_[a-f0-9]+$/);
+    // Open before the failed rotation: the key it holds is still the key, so
+    // nothing may close it (#17213).
+    const open = await connectClient(service.currentPort!);
+    transports.push(open.transport);
+    await vi.waitFor(() => {
+      expect(service.listActiveClients()).toHaveLength(1);
+    });
 
     // Force the next mcpServer store write to throw so we exercise
     // rotateApiKey's rollback path. Rotation must not leak the half-applied
@@ -720,6 +733,9 @@ describe("McpServerService", () => {
     await expect(service.rotateApiKey()).rejects.toThrow("store write failed");
 
     expect(service.getStatus().apiKey).toBe(oldKey);
+    expect(service.listActiveClients()).toHaveLength(1);
+    expect(service.listActiveBearers()).toHaveLength(1);
+    await expect(open.client.listTools()).resolves.toBeDefined();
     const port = service.currentPort!;
     const oldStatus = await new Promise<number>((resolve, reject) => {
       const req = http.request(
