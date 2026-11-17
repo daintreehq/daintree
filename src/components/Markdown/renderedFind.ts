@@ -178,6 +178,21 @@ export function createFindPainter() {
   let paintedIndex = -1;
   let paintedForced = false;
   let paintedInto: { matches: Highlight; active: Highlight } | null = null;
+
+  // From the entries it painted into, not the registry's: those may have been
+  // replaced since, or the Highlight API withdrawn.
+  const unpaint = () => {
+    if (!paintedInto) return;
+    const previous = painted[paintedIndex];
+    if (!paintedForced) {
+      for (const range of painted) if (range !== previous) paintedInto.matches.delete(range);
+    }
+    if (previous) paintedInto.active.delete(previous);
+    painted = [];
+    paintedIndex = -1;
+    paintedInto = null;
+  };
+
   return {
     /** `activeIndex` is the current match in `ranges`; -1 for none. */
     paint(ranges: readonly Range[], activeIndex: number) {
@@ -185,7 +200,6 @@ export function createFindPainter() {
       const active = sharedHighlight(FIND_CURRENT_HIGHLIGHT, 1);
       if (!matches || !active) return;
       const forced = forcedColors();
-      const previous = painted[paintedIndex];
       const current = ranges[activeIndex];
       if (
         ranges === painted &&
@@ -193,6 +207,7 @@ export function createFindPainter() {
         matches === paintedInto?.matches &&
         active === paintedInto.active
       ) {
+        const previous = painted[paintedIndex];
         if (current === previous) return;
         if (previous) {
           active.delete(previous);
@@ -203,13 +218,7 @@ export function createFindPainter() {
           active.add(current);
         }
       } else {
-        // From the entries it painted into, which the registry may have replaced since.
-        if (paintedInto) {
-          if (!paintedForced) {
-            for (const range of painted) if (range !== previous) paintedInto.matches.delete(range);
-          }
-          if (previous) paintedInto.active.delete(previous);
-        }
+        unpaint();
         if (!forced) for (const range of ranges) if (range !== current) matches.add(range);
         if (current) active.add(current);
       }
@@ -218,9 +227,8 @@ export function createFindPainter() {
       paintedForced = forced;
       paintedInto = { matches, active };
     },
-    clear() {
-      this.paint([], -1);
-    },
+    /** Removes this painter's ranges; a painter that painted nothing touches nothing. */
+    clear: unpaint,
   };
 }
 

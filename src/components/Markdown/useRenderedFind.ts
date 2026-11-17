@@ -180,9 +180,11 @@ export function useRenderedFind(root: HTMLElement | null): RenderedFindState {
     };
   }, [isOpen, root, query]);
 
+  // `close()` clears at once, but a refresh committed just before it can still
+  // flush its paint afterwards; the closed render clears that too.
   useEffect(() => {
-    if (!isOpen) return;
-    painterOf(painterRef).paint(result.ranges, activeIndex);
+    if (isOpen) painterOf(painterRef).paint(result.ranges, activeIndex);
+    else painterOf(painterRef).clear();
   }, [isOpen, result, activeIndex]);
 
   // Forced colours decide whether the other matches are painted at all.
