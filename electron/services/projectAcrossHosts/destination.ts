@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DestinationCheck } from "../../../shared/types/ipc/projectMatch.js";
 import { normalizeGitRemoteUrls } from "../../../shared/utils/gitRemoteUrl.js";
-import { validateFolderName } from "../../../shared/utils/folderName.js";
+import { folderNameLengthError, validateFolderName } from "../../../shared/utils/folderName.js";
 import { parseConfigRemotes } from "./gitOps.js";
 
 const MAX_SUFFIX = 50;
@@ -16,7 +16,9 @@ async function nextFreeSibling(target: string): Promise<string | null> {
   const parent = path.dirname(target);
   const base = path.basename(target);
   for (let n = 2; n <= MAX_SUFFIX; n++) {
-    const candidate = path.join(parent, `${base}-${n}`);
+    const name = `${base}-${n}`;
+    if (folderNameLengthError(name)) continue;
+    const candidate = path.join(parent, name);
     const stat = await fs.lstat(candidate).catch(() => null);
     if (!stat) return candidate;
   }
@@ -44,7 +46,9 @@ export async function checkDestination(
   if (!path.isAbsolute(target)) return invalid("Use a full path, starting from /.");
   const resolved = path.resolve(target);
   if (path.parse(resolved).root === resolved) return invalid("Pick a folder, not the disk root.");
-  const nameError = validateFolderName(path.basename(resolved));
+  const leaf = path.basename(resolved);
+  // The validator trims; a leading space is still part of the name written.
+  const nameError = validateFolderName(leaf) ?? folderNameLengthError(leaf);
   if (nameError) return invalid(nameError);
 
   const stat = await fs.lstat(resolved).catch(() => null);

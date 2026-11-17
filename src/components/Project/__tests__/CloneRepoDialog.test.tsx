@@ -191,6 +191,7 @@ vi.mock("@/components/ui/select", () => import("@/components/ui/__tests__/native
 vi.mock("@/store/projectGroupsStore", () => import("@/store/__tests__/projectGroupsStoreMock"));
 
 import { CloneRepoDialog } from "../CloneRepoDialog";
+import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 import { useProjectGroupsStore } from "@/store/projectGroupsStore";
 import { makeProjectGroup } from "@/store/__tests__/projectGroupsStoreMock";
 
@@ -601,6 +602,26 @@ describe("CloneRepoDialog", () => {
     const describedBy = name.getAttribute("aria-describedby");
     expect(describedBy && document.getElementById(describedBy)?.textContent).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("flags a 300-byte folder name on a Linux host and accepts one within 255 bytes", () => {
+    setHostPlatformInfo({ platform: "linux" });
+    try {
+      render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+      const name = screen.getByLabelText(/^name$/i);
+
+      fireEvent.change(name, { target: { value: "あ".repeat(100) } });
+      expect(name.getAttribute("aria-invalid")).toBe("true");
+      const describedBy = name.getAttribute("aria-describedby");
+      expect(describedBy && document.getElementById(describedBy)?.textContent).toContain(
+        "255 bytes max"
+      );
+
+      fireEvent.change(name, { target: { value: "あ".repeat(85) } });
+      expect(name.getAttribute("aria-invalid")).not.toBe("true");
+    } finally {
+      _resetHostPlatformForTests();
+    }
   });
 
   it("names the URL as the blocker once it stops being clonable, even with a destination set", async () => {

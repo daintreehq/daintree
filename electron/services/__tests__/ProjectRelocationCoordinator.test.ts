@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // --- Mocks (hoisted so vi.mock factories can reference them) ---------------
 
@@ -704,6 +704,67 @@ describe("ProjectRelocationCoordinator — case-only rename", () => {
       coordinator.relocate({ projectId: PROJECT_ID, mode: "move", newPath: CASE_ROOT })
     ).rejects.toMatchObject({ reason: "destination-exists" });
     expect(fsState.renameCalls).toEqual([]);
+  });
+
+  describe("destination folder-name length", () => {
+    const platform = process.platform;
+
+    afterEach(() => {
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    });
+
+    it("rejects a name over 255 characters before anything is stopped", async () => {
+      const coordinator = new ProjectRelocationCoordinator();
+      configure(coordinator, makeDeps(makePvm(PROJECT_ID)));
+
+      await expect(
+        coordinator.relocate({
+          projectId: PROJECT_ID,
+          mode: "move",
+          newPath: `/vol/projects/${"a".repeat(256)}`,
+        })
+      ).rejects.toMatchObject({ reason: "invalid-destination" });
+      expect(fsState.renameCalls).toEqual([]);
+    });
+
+    it("rejects a 300-byte multibyte name on Linux, in the preview as well", async () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      const newPath = `/vol/projects/${"あ".repeat(100)}`;
+      const coordinator = new ProjectRelocationCoordinator();
+      configure(coordinator, makeDeps(makePvm(PROJECT_ID)));
+
+      await expect(
+        coordinator.relocate({ projectId: PROJECT_ID, mode: "move", newPath })
+      ).rejects.toMatchObject({ reason: "invalid-destination" });
+      expect(fsState.renameCalls).toEqual([]);
+
+      const preview = await coordinator.previewRelocate({
+        projectId: PROJECT_ID,
+        mode: "move",
+        newPath,
+      });
+      expect(preview.blockers.map((blocker) => blocker.reason)).toEqual(["invalid-destination"]);
+    });
+
+    it("moves to a multibyte name that fits in 255 bytes on Linux", async () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      const newPath = `/vol/projects/${"あ".repeat(85)}`;
+      const coordinator = new ProjectRelocationCoordinator();
+      configure(coordinator, makeDeps(makePvm(PROJECT_ID)));
+
+      await coordinator.relocate({ projectId: PROJECT_ID, mode: "move", newPath });
+      expect(fsState.renameCalls).toEqual([{ from: OLD_ROOT, to: newPath }]);
+    });
+
+    it("moves to the same 300-byte name where names are counted in characters", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+      const newPath = `/vol/projects/${"あ".repeat(100)}`;
+      const coordinator = new ProjectRelocationCoordinator();
+      configure(coordinator, makeDeps(makePvm(PROJECT_ID)));
+
+      await coordinator.relocate({ projectId: PROJECT_ID, mode: "move", newPath });
+      expect(fsState.renameCalls).toEqual([{ from: OLD_ROOT, to: newPath }]);
+    });
   });
 
   it("blocks an existing non-case-variant destination (unchanged behavior)", async () => {

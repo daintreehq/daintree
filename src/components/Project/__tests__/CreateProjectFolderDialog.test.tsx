@@ -1,10 +1,11 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import type { ReactNode, ButtonHTMLAttributes } from "react";
 import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
+import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 
 const {
   createProjectFolderMock,
@@ -220,6 +221,51 @@ describe("CreateProjectFolderDialog validation", () => {
     expect(
       screen.getByRole("button", { name: "Create folder" }).getAttribute("aria-disabled")
     ).toBe("true");
+  });
+});
+
+describe("CreateProjectFolderDialog name length on a Linux host", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getHomeDirMock.mockResolvedValue("/Users/test");
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: { system: { getHomeDir: getHomeDirMock } },
+    });
+    setHostPlatformInfo({ platform: "linux" });
+  });
+
+  afterEach(() => {
+    _resetHostPlatformForTests();
+  });
+
+  it("flags a 300-byte name while it is typed and accepts a multibyte name within 255 bytes", async () => {
+    await renderDialog();
+
+    fireEvent.change(folderInput(), { target: { value: "あ".repeat(100) } });
+    expect(folderInput().getAttribute("aria-invalid")).toBe("true");
+    const describedBy = folderInput().getAttribute("aria-describedby");
+    expect(describedBy && document.getElementById(describedBy)?.textContent).toContain(
+      "255 bytes max"
+    );
+    expect(
+      screen.getByRole("button", { name: "Create folder" }).getAttribute("aria-disabled")
+    ).toBe("true");
+
+    fireEvent.change(folderInput(), { target: { value: "あ".repeat(85) } });
+    expect(folderInput().getAttribute("aria-invalid")).not.toBe("true");
+    expect(
+      screen.getByRole("button", { name: "Create folder" }).getAttribute("aria-disabled")
+    ).not.toBe("true");
+  });
+
+  it("accepts the same 300-byte name on a macOS host", async () => {
+    setHostPlatformInfo({ platform: "darwin" });
+    await renderDialog();
+
+    fireEvent.change(folderInput(), { target: { value: "あ".repeat(100) } });
+    expect(folderInput().getAttribute("aria-invalid")).not.toBe("true");
   });
 });
 
