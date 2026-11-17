@@ -79,9 +79,6 @@ let portalLinksRevision = 0;
 // cached settings: one queued during a first load reaches it through the queue,
 // and a whole-settings copy installed meanwhile holds no newer links.
 let cachedLinksRevision = 0;
-// Bumped when the cached settings are replaced wholesale rather than written
-// over, so a load can tell the cache it started with from a new one.
-let cacheGeneration = 0;
 
 // Patches made while a project's settings were still loading. The load in
 // flight may have read the settings before the write a patch records, so it
@@ -139,7 +136,6 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
     const request = ++latestLoadRequest;
     const revisionAtStart = settingsRevision;
     const linksRevisionAtStart = portalLinksRevision;
-    const generationAtStart = cacheGeneration;
 
     try {
       const [data, detected] = await Promise.all([
@@ -153,20 +149,14 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
       }
 
       const current = get().settings;
-      const kept = settingsRevision !== revisionAtStart ? current : null;
-      let settings = applyPatchesAwaitingLoad(projectId, kept ?? data, revisionAtStart);
+      let settings = applyPatchesAwaitingLoad(
+        projectId,
+        settingsRevision !== revisionAtStart && current ? current : data,
+        revisionAtStart
+      );
       // Links main returned while this read was out are at least as new as it.
       if (cachedLinksRevision > linksRevisionAtStart && current) {
         settings = withPortalLinks(settings, current.portalLinks);
-      } else if (
-        kept &&
-        isRevalidation &&
-        cacheGeneration === generationAtStart &&
-        portalLinksRevision === linksRevisionAtStart
-      ) {
-        // A whole-settings write onto settings already cached kept their links,
-        // which this read is newer than: another window may have changed them.
-        settings = withPortalLinks(settings, data.portalLinks);
       }
       const savedCommandStrings = new Set(settings.runCommands?.map((c) => c.command) || []);
       const newDetected = detected.filter((d) => !savedCommandStrings.has(d.command));
@@ -243,7 +233,6 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
   },
 
   reset: () => {
-    cacheGeneration++;
     patchesAwaitingLoad.clear();
     set(initialState);
   },
@@ -408,7 +397,6 @@ export function snapshotProjectSettings(projectId: string): void {
 }
 
 export function prePopulateProjectSettings(projectId: string): void {
-  cacheGeneration++;
   const snapshot = settingsSnapshotCache.get(projectId);
   if (!snapshot) {
     // No cached settings — reset and let loadSettings fetch fresh
