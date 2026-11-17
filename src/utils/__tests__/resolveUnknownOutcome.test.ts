@@ -43,6 +43,17 @@ const succeeded: OperationOutcome = {
   settledAt: 5,
 };
 
+/**
+ * The promise's own result if it settles within the current task's microtasks,
+ * otherwise a marker: the resolver must answer without waiting on any timer.
+ */
+function beforeNextTask<T>(pending: Promise<T>): Promise<T | "still pending"> {
+  return Promise.race([
+    pending,
+    new Promise<"still pending">((resolve) => setTimeout(() => resolve("still pending"), 0)),
+  ]);
+}
+
 function settledEvent(opId: string, outcome: OperationOutcome): OperationsEvent {
   return {
     type: "settled",
@@ -130,30 +141,39 @@ describe("resolveUnknownOutcome", () => {
         signal: controller.signal,
         pollIntervalMs: 60_000,
       });
-      const result: { value?: OperationOutcome } = {};
-      void pending.then((value) => (result.value = value)).catch(() => {});
 
       await vi.waitFor(() => expect(client.getStatus).toHaveBeenCalledOnce());
       emit(settledEvent("op-1", succeeded));
       answer({ status: "running", progress: null });
 
       try {
-        await vi.waitFor(() => expect(result.value).toEqual(succeeded), { timeout: 500 });
+        await expect(beforeNextTask(pending)).resolves.toEqual(succeeded);
         expect(client.getStatus).toHaveBeenCalledOnce();
       } finally {
         controller.abort();
       }
     });
 
-    it("wins over a stale unknown reply", async () => {
+    it.each([
+      ["succeeded", succeeded],
+      [
+        "failed",
+        {
+          status: "failed",
+          error: { code: "E", message: "boom" },
+          settledAt: 6,
+        } as OperationOutcome,
+      ],
+      ["cancelled", { status: "cancelled", settledAt: 7 } as OperationOutcome],
+    ])("wins over a stale unknown reply when it %s", async (_label, settlement) => {
       const { client, emit, answer } = pendingReadClient();
       const pending = resolveUnknownOutcome("op-1", { waitForConnected: async () => {}, client });
 
       await vi.waitFor(() => expect(client.getStatus).toHaveBeenCalledOnce());
-      emit(settledEvent("op-1", succeeded));
+      emit(settledEvent("op-1", settlement));
       answer({ status: "unknown" });
 
-      await expect(pending).resolves.toEqual(succeeded);
+      await expect(pending).resolves.toEqual(settlement);
     });
 
     it("wins over a drop during the read without waiting for the link", async () => {
@@ -173,15 +193,13 @@ describe("resolveUnknownOutcome", () => {
         client,
         signal: controller.signal,
       });
-      const result: { value?: OperationOutcome } = {};
-      void pending.then((value) => (result.value = value)).catch(() => {});
 
       await vi.waitFor(() => expect(client.getStatus).toHaveBeenCalledOnce());
       emit(settledEvent("op-1", succeeded));
       answer(appError("HOST_DISCONNECTED"));
 
       try {
-        await vi.waitFor(() => expect(result.value).toEqual(succeeded), { timeout: 500 });
+        await expect(beforeNextTask(pending)).resolves.toEqual(succeeded);
         expect(waitForConnected).toHaveBeenCalledOnce();
         expect(unsubscribe).toHaveBeenCalledOnce();
       } finally {
