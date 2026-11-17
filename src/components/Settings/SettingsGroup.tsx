@@ -184,6 +184,8 @@ interface SettingsRowProps {
   disabledReason?: ReactNode;
   /** Field-level problem, under the control. */
   error?: ReactNode;
+  /** A trailing control on the error's line, such as a Retry for a save that failed. */
+  errorAction?: ReactNode;
   id?: string;
   className?: string;
   /** Row click target — only switch rows use it, and only outside the control itself. */
@@ -207,6 +209,7 @@ export function SettingsRow({
   disabled: ownDisabled = false,
   disabledReason,
   error,
+  errorAction,
   id,
   className,
   onRowClick,
@@ -332,7 +335,11 @@ export function SettingsRow({
         renderedControl && <div className="min-w-0">{renderedControl}</div>
       )}
       {error && (
-        <SettingsInlineError id={errorId} className={cn(layout === "inline" && "basis-full")}>
+        <SettingsInlineError
+          id={errorId}
+          className={cn(layout === "inline" && "basis-full")}
+          action={errorAction}
+        >
           {error}
         </SettingsInlineError>
       )}

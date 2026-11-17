@@ -84,6 +84,50 @@ describe("DictationVocabularySection", () => {
     expect(api.removeFromProject).toHaveBeenCalledWith({ projectId: "p1", term: "Daintree" });
   });
 
+  describe("focus after removing a term", () => {
+    const remove = async (term: string, remaining: VoiceDictionaryEntry[]) => {
+      api.removeFromProject.mockResolvedValueOnce(remaining);
+      fireEvent.click(await screen.findByRole("button", { name: `Remove ${term}` }));
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: `Remove ${term}` })).toBeNull()
+      );
+    };
+    const removeButton = (term: string) => screen.getByRole("button", { name: `Remove ${term}` });
+
+    beforeEach(() => {
+      api.getProject.mockResolvedValue([entry("Alpha"), entry("Beta"), entry("Gamma")]);
+    });
+
+    it("moves focus to the next term's remove button when a middle term goes", async () => {
+      render(<DictationVocabularySection projectId="p1" />);
+      await remove("Beta", [entry("Alpha"), entry("Gamma")]);
+      expect(document.activeElement).toBe(removeButton("Gamma"));
+    });
+
+    it("moves focus to the term before when the last term goes", async () => {
+      render(<DictationVocabularySection projectId="p1" />);
+      await remove("Gamma", [entry("Alpha"), entry("Beta")]);
+      expect(document.activeElement).toBe(removeButton("Beta"));
+    });
+
+    it("moves focus to the term field when the only term goes", async () => {
+      api.getProject.mockResolvedValue([entry("Alpha")]);
+      render(<DictationVocabularySection projectId="p1" />);
+      await remove("Alpha", []);
+      expect(document.activeElement).toBe(termInput());
+    });
+
+    it("leaves focus alone when the removal fails", async () => {
+      api.removeFromProject.mockRejectedValueOnce(new Error("disk full"));
+      render(<DictationVocabularySection projectId="p1" />);
+      const button = await screen.findByRole("button", { name: "Remove Beta" });
+      button.focus();
+      fireEvent.click(button);
+      expect(await screen.findByText("Couldn't save that change")).toBeTruthy();
+      expect(document.activeElement).toBe(button);
+    });
+  });
+
   it("keeps the draft and offers a retry when a change fails", async () => {
     api.addToProject.mockRejectedValueOnce(new Error("disk full"));
     api.addToProject.mockResolvedValueOnce(changed([entry("Daintree")]));
