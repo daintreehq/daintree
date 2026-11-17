@@ -796,8 +796,12 @@ export class CloudHostLifecycle {
       if (binding.creation) return this.retryCreate(hostId);
       throw invalid("This host has no machine yet.");
     }
-    this.deps.store.updateBinding(binding.id, (current) => ({ ...current, intent: "run" }));
-    await this.operate(binding.id, "starting", (signal) => this.runStart(binding.id, signal));
+    await this.operate(
+      binding.id,
+      "starting",
+      (signal) => this.runStart(binding.id, signal),
+      () => this.deps.store.updateBinding(binding.id, (current) => ({ ...current, intent: "run" }))
+    );
   }
 
   private async runStart(bindingId: string, signal: AbortSignal): Promise<void> {
@@ -861,10 +865,17 @@ export class CloudHostLifecycle {
       running.controller.abort();
       await running.promise.catch(() => {});
     }
-    this.deps.store.updateBinding(binding.id, (current) => ({ ...current, intent: "stop" }));
-    await this.settleRenewal(binding.id);
-    await this.deps.hosts.disconnect(binding.hostId).catch(() => {});
-    await this.operate(binding.id, "stopping", (signal) => this.runStop(binding.id, signal));
+    // The stop holds the machine before it waits on anything, so a Start meanwhile is refused.
+    await this.operate(
+      binding.id,
+      "stopping",
+      async (signal) => {
+        await this.settleRenewal(binding.id);
+        await this.deps.hosts.disconnect(binding.hostId).catch(() => {});
+        await this.runStop(binding.id, signal);
+      },
+      () => this.deps.store.updateBinding(binding.id, (current) => ({ ...current, intent: "stop" }))
+    );
   }
 
   private async runStop(bindingId: string, signal: AbortSignal): Promise<void> {
@@ -1331,10 +1342,16 @@ export class CloudHostLifecycle {
 
   // --- Operations and observation ----------------------------------------
 
+  /**
+   * Runs `work` as the machine's one operation, or joins the same kind under
+   * way. `accepted` runs only when a new operation is admitted, before any of
+   * its work: a refused or joining caller changes nothing it records.
+   */
   private operate(
     bindingId: string,
     kind: CloudOperationKind,
-    work: (signal: AbortSignal) => Promise<void>
+    work: (signal: AbortSignal) => Promise<void>,
+    accepted?: () => void
   ): Promise<void> {
     const running = this.operations.get(bindingId);
     if (running) {
@@ -1347,6 +1364,7 @@ export class CloudHostLifecycle {
     }
     if (this.disposed)
       return Promise.reject(new AppError({ code: "CANCELLED", message: "Stopping" }));
+    accepted?.();
     const controller = new AbortController();
     const operation = {
       id: crypto.randomUUID(),

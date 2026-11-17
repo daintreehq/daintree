@@ -1138,6 +1138,51 @@ describe("CloudHostLifecycle lifetime keeper", () => {
     const sent = vi.mocked(provider.renewLifetime).mock.calls.map((call) => call[2]);
     expect(sent).toEqual([7200, 3600]);
   });
+
+  it("keeps a Stop's intent when a Start it refused arrives while the stop fails (#17549)", async () => {
+    const { lifecycle, provider, store } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    let fail: (error: Error) => void = () => {};
+    vi.mocked(provider.stop).mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (fail = reject))
+    );
+    const stopping = lifecycle.stopMachine("build");
+    await vi.waitFor(() => expect(provider.stop).toHaveBeenCalled());
+    await expect(lifecycle.startMachine("build")).rejects.toThrow(
+      /stopping operation is under way/
+    );
+    fail(new BoatApiError("server", "down", 500, null, null));
+    await expect(stopping).rejects.toThrow();
+    expect(store.bindings()[0]!.intent).toBe("stop");
+    // The provider still reports it running after the failed stop: the keeper leaves it to stop.
+    await lifecycle.renewDue();
+    expect(provider.renewLifetime).not.toHaveBeenCalled();
+    expect(provider.start).not.toHaveBeenCalled();
+  });
+
+  it("leaves the intent and the link alone when a delete under way refuses a Stop", async () => {
+    const { lifecycle, provider, store, disconnect } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    await lifecycle.startMachine("build");
+    expect(store.bindings()[0]!.intent).toBe("run");
+    let fail: (error: Error) => void = () => {};
+    vi.mocked(provider.delete).mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (fail = reject))
+    );
+    const deleting = lifecycle.deleteMachine("build", "bx_23456789");
+    await vi.waitFor(() => expect(provider.delete).toHaveBeenCalled());
+    const linksDropped = disconnect.mock.calls.length;
+    await expect(lifecycle.stopMachine("build")).rejects.toThrow(/deleting operation is under way/);
+    expect(disconnect).toHaveBeenCalledTimes(linksDropped);
+    fail(new BoatApiError("server", "down", 500, null, null));
+    await expect(deleting).rejects.toThrow();
+    expect(store.bindings()[0]!.intent).toBe("run");
+    expect(provider.stop).not.toHaveBeenCalled();
+  });
 });
 
 describe("CloudHostLifecycle worktree marks", () => {
