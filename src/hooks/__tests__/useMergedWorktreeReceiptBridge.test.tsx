@@ -131,9 +131,9 @@ describe("useMergedWorktreeReceiptBridge", () => {
     await vi.waitFor(() => expect(ackReceipts).toHaveBeenCalledTimes(1));
     act(() => ready?.());
     await vi.waitFor(() => expect(ackReceipts).toHaveBeenCalledTimes(2));
-    expect(entries().filter((entry) => entry.id === mergedWorktreeReceiptEntryId("d"))).toHaveLength(
-      1
-    );
+    expect(
+      entries().filter((entry) => entry.id === mergedWorktreeReceiptEntryId("d"))
+    ).toHaveLength(1);
   });
 
   it("does nothing in a window driving a remote host", () => {

@@ -21,7 +21,10 @@ describe("worktreeCreationStamp", () => {
 
   it("reads back what was written", async () => {
     await writeWorktreeCreationStamp(gitDir, { createdAt: 123, branch: "feature/x" });
-    expect(await readWorktreeCreationStamp(gitDir)).toEqual({ createdAt: 123, branch: "feature/x" });
+    expect(await readWorktreeCreationStamp(gitDir)).toEqual({
+      createdAt: 123,
+      branch: "feature/x",
+    });
   });
 
   it("reads no stamp as null", async () => {
@@ -30,7 +33,9 @@ describe("worktreeCreationStamp", () => {
 
   it("never overwrites a stamp already there", async () => {
     await writeWorktreeCreationStamp(gitDir, { createdAt: 1, branch: "a" });
-    await expect(writeWorktreeCreationStamp(gitDir, { createdAt: 2, branch: "b" })).rejects.toThrow();
+    await expect(
+      writeWorktreeCreationStamp(gitDir, { createdAt: 2, branch: "b" })
+    ).rejects.toThrow();
     expect(await readWorktreeCreationStamp(gitDir)).toEqual({ createdAt: 1, branch: "a" });
   });
 

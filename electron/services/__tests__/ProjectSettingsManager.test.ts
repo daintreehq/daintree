@@ -1139,7 +1139,10 @@ describe("ProjectSettingsManager caching", () => {
     });
 
     it("keeps the stored switch through whole saves that carry another value", async () => {
-      await manager.saveProjectSettings(projectId, { runCommands: [], removeMergedWorktrees: true });
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        removeMergedWorktrees: true,
+      });
       expect((await readFromDisk()).removeMergedWorktrees).toBeUndefined();
 
       await manager.setRemoveMergedWorktrees(projectId, true);

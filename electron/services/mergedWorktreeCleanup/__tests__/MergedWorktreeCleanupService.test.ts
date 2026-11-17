@@ -134,10 +134,12 @@ describe("MergedWorktreeCleanupService", () => {
     await service.preview("p1");
     expect(vi.mocked(deps.readsFor).mock.calls.map((call) => call[2])).toEqual(["preview"]);
     await service.sweep();
-    expect(vi.mocked(deps.readsFor).mock.calls.slice(1).map((call) => call[2])).toEqual([
-      "sweep",
-      "sweep",
-    ]);
+    expect(
+      vi
+        .mocked(deps.readsFor)
+        .mock.calls.slice(1)
+        .map((call) => call[2])
+    ).toEqual(["sweep", "sweep"]);
   });
 
   it("reads nothing past the settings for a project that hasn't opted in", async () => {

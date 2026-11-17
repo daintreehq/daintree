@@ -234,9 +234,7 @@ export class MergedWorktreeCleanupService {
       if (candidate.status !== "removable") continue;
       // Judged again, alone and fresh, right before it goes: the first pass
       // read every worktree, and the forge read may now be minutes old.
-      const worktree = listed.find(
-        (entry) => path.resolve(entry.path) === candidate.worktreePath
-      );
+      const worktree = listed.find((entry) => path.resolve(entry.path) === candidate.worktreePath);
       if (!worktree) continue;
       const [current] = await evaluateMergedWorktrees(
         [worktree],

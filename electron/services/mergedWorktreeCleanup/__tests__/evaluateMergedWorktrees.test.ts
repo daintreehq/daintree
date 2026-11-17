@@ -12,7 +12,12 @@ const MERGED_AT = 1_700_000_000_000;
 const NOW = MERGED_AT + MERGED_WORKTREE_GRACE_MS + 1;
 const WT = "/repo-worktrees/feature-x";
 
-const main: ListedWorktree = { path: "/repo", branch: "develop", bare: false, isMainWorktree: true };
+const main: ListedWorktree = {
+  path: "/repo",
+  branch: "develop",
+  bare: false,
+  isMainWorktree: true,
+};
 const feature: ListedWorktree = {
   path: WT,
   branch: "feature/x",
@@ -133,8 +138,9 @@ describe("evaluateMergedWorktrees", () => {
   );
 
   it("skips a worktree any terminal record sits in, and one the census couldn't place", async () => {
-    expect(await judge({ countTerminals: vi.fn(async () => ({ count: 1, complete: true })) }))
-      .toMatchObject({ reason: "has-terminals" });
+    expect(
+      await judge({ countTerminals: vi.fn(async () => ({ count: 1, complete: true })) })
+    ).toMatchObject({ reason: "has-terminals" });
     expect(
       await judge({ countTerminals: vi.fn(async () => ({ count: 0, complete: false })) })
     ).toMatchObject({ reason: "unverified" });

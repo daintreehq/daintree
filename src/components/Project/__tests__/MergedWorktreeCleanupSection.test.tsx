@@ -37,7 +37,8 @@ function preview(enabled: boolean): MergedWorktreeCleanupPreview {
   };
 }
 
-const previewMock = vi.fn<(payload: { projectId: string }) => Promise<MergedWorktreeCleanupPreview>>();
+const previewMock =
+  vi.fn<(payload: { projectId: string }) => Promise<MergedWorktreeCleanupPreview>>();
 const setEnabledMock = vi.fn<(payload: { projectId: string; enabled: boolean }) => Promise<void>>();
 
 beforeEach(() => {

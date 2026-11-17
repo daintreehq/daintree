@@ -104,7 +104,11 @@ async function checkLocal(
       });
     }
     const outstanding =
-      status.staged + status.unstaged + status.untracked + status.conflicted + status.hiddenFromStatus;
+      status.staged +
+      status.unstaged +
+      status.untracked +
+      status.conflicted +
+      status.hiddenFromStatus;
     if (outstanding > 0) return skipped(worktree, "has-changes");
 
     const terminals = await reads.countTerminals(worktreePath);

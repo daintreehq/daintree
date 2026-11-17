@@ -15,9 +15,7 @@ import { MERGED_WORKTREE_CLEANUP_METHOD_CHANNELS } from "./mergedWorktreeCleanup
 const ProjectIdSchema = z.string().min(1).max(200);
 const PreviewSchema = z.object({ projectId: ProjectIdSchema }).strict();
 const SetEnabledSchema = z.object({ projectId: ProjectIdSchema, enabled: z.boolean() }).strict();
-const AckReceiptsSchema = z
-  .object({ ids: z.array(z.string().min(1).max(200)).max(1000) })
-  .strict();
+const AckReceiptsSchema = z.object({ ids: z.array(z.string().min(1).max(200)).max(1000) }).strict();
 
 async function service() {
   const { getMergedWorktreeCleanupService } =
