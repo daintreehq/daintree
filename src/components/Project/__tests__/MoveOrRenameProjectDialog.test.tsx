@@ -367,7 +367,8 @@ describe("MoveOrRenameProjectDialog", () => {
       });
       expect(confirmButton().getAttribute("aria-disabled")).toBe("true");
       // Past the preview debounce with the bad name still in the field.
-      await new Promise((r) => setTimeout(r, 400));
+      const PAST_PREVIEW_DEBOUNCE_MS = 400;
+      await new Promise((r) => setTimeout(r, PAST_PREVIEW_DEBOUNCE_MS));
       expect(previewRelocation).not.toHaveBeenCalled();
 
       fireEvent.change(screen.getByTestId("relocate-folder-input"), {
