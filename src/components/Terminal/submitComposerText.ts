@@ -3,6 +3,7 @@ import { composerHoldClient } from "@/clients/composerHoldClient";
 import { getTerminalInputBlock } from "@/services/terminal/inputGate";
 import { claimComposerSendSeq, noteLastComposerSend } from "@/store/lastComposerSendStore";
 import { logWarn } from "@/utils/logger";
+import { noteSubmissionHeld } from "./diffNotesDelivery";
 import { isImageAttachmentPath, MAX_SUBMIT_IMAGE_PATHS } from "@shared/utils/imageAttachmentInput";
 import type { ComposerHoldResult, HeldComposerSend } from "@shared/types/ipc/composerHold";
 
@@ -112,6 +113,8 @@ export async function submitPaneComposerText(
       const answer = await requestComposerHold(id, text, imagePaths);
       if (answer?.held === true) {
         hold.onHeld(answer.send);
+        // Main types it later under its own token: the notes it carries go with it.
+        if (submissionToken !== undefined) noteSubmissionHeld(submissionToken, answer.send);
         noteLastComposerSend(id, answer.send.text, answer.send.imagePaths, seq);
         return true;
       }

@@ -193,9 +193,10 @@ export interface SendTextOptions {
    *
    * `submissionToken` is given for a send carrying `@notes`, whose notes clear
    * only once the terminal reports that token written. An adapter that holds
-   * text back for later submits it under the token when it delivers it, and
-   * resolves only then, so a hold that is withdrawn or dropped leaves the notes
-   * pending.
+   * text back for later either submits it under the token when it delivers it,
+   * resolving only then, or hands the token to `noteSubmissionHeld`, so the
+   * notes follow the held send. Either way a hold that is withdrawn or dropped
+   * leaves the notes pending.
    */
   submit?: (text: string, submissionToken?: string) => Promise<ComposerSubmitOutcome>;
   /**
