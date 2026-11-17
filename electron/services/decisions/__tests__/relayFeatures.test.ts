@@ -61,7 +61,7 @@ async function clients() {
 }
 
 describe("DaintreeRelayClient (#16229)", () => {
-  // Every feature a 0.7.0 bridge can ask to declare, follow-ups and snapshots included.
+  // Every feature a 0.8.0 bridge can ask to declare, follow-ups and snapshots included.
   const asked: readonly ProtocolFeature[] = bridgeFeatures({
     followUps: true,
     snapshots: { onRefresh: () => {} },
@@ -96,9 +96,13 @@ describe("DaintreeRelayClient (#16229)", () => {
     ]);
   });
 
-  it("leaves the release's person declines undeclared until Daintree handles them (#17234)", async () => {
+  it("leaves person declines and the owner desktop's follow-ups and declines undeclared until Daintree handles them (#17234, #17238, #17239)", async () => {
     const { sent, daintree } = await clients();
-    const unhandled = ["person-declines-v1"] as const;
+    const unhandled = [
+      "person-declines-v1",
+      "owner-desktop-messages-v1",
+      "owner-desktop-declines-v1",
+    ] as const;
     for (const feature of unhandled) expect(asked).toContain(feature);
 
     await daintree.events(5, 10, asked);
@@ -113,7 +117,8 @@ describe("DaintreeRelayClient (#16229)", () => {
 
   it("declares nothing for a feature a later bridge asks for that Daintree doesn't handle", async () => {
     const { sent, daintree } = await clients();
-    const later = ["voice-notes-v1" as ProtocolFeature];
+    // Presence waits for #17240; the voice note is one no release has.
+    const later: ProtocolFeature[] = ["presence-v1", "voice-notes-v1" as ProtocolFeature];
 
     await daintree.events(5, 10, later);
     await daintree.socketTicket(later);

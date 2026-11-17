@@ -116,7 +116,7 @@ An agent asks with `ask_human`: a self-contained question, optional context, up 
 
 Screenshots are given as paths relative to the folder the agent's terminal was launched in, and must stay inside it once symlinks are followed. Each must be a PNG, JPEG or WebP image of up to 20 MiB, 64 MiB in total per question; SVG is refused.
 
-`get_decision` reads back a question this terminal asked, and `cancel_question` withdraws one that's no longer needed. An agent sees only the questions its own terminal asked.
+`get_decision` reads back a question this terminal asked, with its answers and follow-ups in order, and `cancel_question` withdraws one that's no longer needed. An agent sees only the questions its own terminal asked. Each of your follow-ups in it says where you sent it from, `sent_from: phone` (or `computer`, for one written on this computer, which Daintree can't send yet); the agent's own say none.
 
 ### Follow-ups
 
@@ -130,7 +130,7 @@ A follow-up or reply you send from your phone is typed into the terminal that as
 
 On your phone you can say how involved you want to be: **involve early**, where an agent asks while it's still exploring the options, or **recommend**, where it consults a number of other agents you choose, tries to get them to agree, and brings you their recommendation or their disagreement. A temporary setting goes back to your normal one when it ends. Agents are told, when they connect, to read it with `get_involvement` before they prepare a question and again just before `ask_human`, so a change on your phone reaches agents that are already running, with no relaunch, as soon as this computer has read and checked it. In `ask_human` an agent can say how it prepared (how many agents it consulted and whether they agreed), which your phone shows as the agent's own account.
 
-`get_involvement` reads the copy this computer last checked with the relay; it never asks you anything and sends nothing to your phone. While the relay connection is retrying, agents get that copy marked as possibly out of date. Before this computer has read one, with nothing set, or with a relay older than 0.7.0, they're told none is available. Either way an agent then uses its normal behaviour. The setting never changes what an agent may do or what needs your approval: a question that needs you still comes to you straight away, and agents agreeing is a recommendation, not an answer. Agents on a Remote Host read it through that Host's own connection. Daintree can't show or change it yet; your phone does both.
+`get_involvement` reads the copy this computer last checked with the relay; it never asks you anything and sends nothing to your phone. While the relay connection is retrying, agents get that copy marked as possibly out of date. Before this computer has read one, with nothing set, or with a relay older than 0.7.0, they're told none is available. Either way an agent then uses its normal behaviour. Agents aren't told which device you set it on. The setting never changes what an agent may do or what needs your approval: a question that needs you still comes to you straight away, and agents agreeing is a recommendation, not an answer. Agents on a Remote Host read it through that Host's own connection. Daintree can't show or change it yet; your phone does both.
 
 ## Answers
 

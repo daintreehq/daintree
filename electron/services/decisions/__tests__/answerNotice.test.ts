@@ -743,6 +743,25 @@ describe("parseDecisionNotice, follow-ups (#16231)", () => {
     expect(parse(text)).toBeNull();
   });
 
+  // Daintree types every follow-up as sent from the phone, so one from the computer is refused whole until #17238.
+  it("refuses a follow-up the person sent from their computer rather than type it as a phone's", () => {
+    const fromComputer = noticeChunk([answer(), followUp({ onComputer: true })]);
+    expect(fromComputer).toContain("source: human\nsent_from: computer\n");
+    expect(parseDecisionNotice(fromComputer)).toBeNull();
+    const [, fromPhone] = thread(noticeChunk([answer(), followUp({ onComputer: false })]));
+    expect(fromPhone).toEqual({
+      kind: "followup",
+      questionId: Q1,
+      alias: 4,
+      messageId: M1,
+      injectionId: I2,
+      question: "Which sidebar should ship? Compact or classic.",
+      answered: true,
+      text: "Keep the old icons, though.",
+      images: [],
+    });
+  });
+
   it("takes two messages of one question, and follow-ups to different questions", () => {
     const blocks = thread(
       noticeChunk([

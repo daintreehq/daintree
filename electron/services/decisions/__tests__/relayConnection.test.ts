@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   DecisionsBridge,
+  INVOLVEMENT_META,
   MemoryKeyStore,
   MemoryLocalStore,
   loadIdentity,
@@ -20,6 +21,8 @@ import {
   generateEpochKeyBytes,
   issueDeviceCert,
   serializeDeviceKeys,
+  signObject,
+  verifyObject,
   type DeviceKeys,
 } from "@daintreehq/decisions-crypto";
 import { pendingRotationOf } from "../keyRotation.js";
@@ -28,6 +31,10 @@ import {
   type DeviceCert,
   type InvolvementRecord,
 } from "@daintreehq/decisions-protocol";
+import {
+  LEGACY_PHONE_INVOLVEMENT_START,
+  legacyPhoneInvolvementRead,
+} from "@daintreehq/decisions-protocol/fixtures";
 
 vi.mock("electron", () => ({
   app: {
@@ -1721,6 +1728,10 @@ describe("get_involvement over a connection (#17228)", () => {
     let preference: InvolvementRecord | null = null;
     let held: Promise<void> = Promise.resolve();
     const declared: unknown[] = [];
+    /** Every request Daintree made, as `METHOD /path`. */
+    const requests: string[] = [];
+    /** What `/info` advertises; null answers it as the stock fake does, with a 404. */
+    let advertised: string[] | null = null;
     const json = (body: unknown) =>
       new Response(JSON.stringify(body), {
         status: 200,
@@ -1730,6 +1741,19 @@ describe("get_involvement over a connection (#17228)", () => {
       (fetchImpl: RelayFetch): RelayFetch =>
       async (url, init) => {
         const { pathname } = new URL(url);
+        requests.push(`${init.method ?? "GET"} ${pathname}`);
+        if (pathname === "/api/v1/info" && advertised !== null) {
+          return json({
+            name: "daintree-decisions",
+            protocol_min: 1,
+            protocol_max: 1,
+            worker_version: "0.7.0",
+            claimed: true,
+            claim_configured: true,
+            voice: { xai: false, anthropic: false, openai: false },
+            features: advertised,
+          });
+        }
         if (pathname === "/api/v1/devices") return json(devices);
         if (pathname === "/api/v1/involvement" && (init.method ?? "GET") === "GET") {
           await held;
@@ -1746,6 +1770,14 @@ describe("get_involvement over a connection (#17228)", () => {
     return {
       wrapFetch,
       declared,
+      requests,
+      phone,
+      advertise(features: string[]): void {
+        advertised = features;
+      },
+      serve(record: InvolvementRecord | null): void {
+        preference = record;
+      },
       holdReads(): () => void {
         let release!: () => void;
         held = new Promise((resolve) => {
@@ -1769,6 +1801,47 @@ describe("get_involvement over a connection (#17228)", () => {
         });
       },
     };
+  }
+
+  /**
+   * A record as a 0.7.0 phone signs it: the fields that release builds,
+   * written out here so no 0.8.0 builder shapes it.
+   */
+  async function signedOn070Phone(
+    phone: DeviceKeys,
+    revision: number,
+    override: InvolvementRecord["override"]
+  ): Promise<InvolvementRecord> {
+    return (await signObject(phone.signing.privateKey, {
+      v: 1,
+      type: "involvement.preference",
+      installation_id: RELAY.installationId,
+      revision,
+      normal_mode: "recommend",
+      consult_count: 3,
+      override,
+      created_at: new Date().toISOString(),
+      signer_device_id: PHONE,
+    })) as InvolvementRecord;
+  }
+
+  /** A 0.7.0 phone's own reading of a record: `ready` only for one it would have set itself. */
+  function readOn070Phone(phone: DeviceKeys, record: InvolvementRecord) {
+    return legacyPhoneInvolvementRead(
+      LEGACY_PHONE_INVOLVEMENT_START,
+      { preference: record, received_at: record.created_at },
+      {
+        installationId: RELAY.installationId,
+        signer: (deviceId) =>
+          deviceId === PHONE
+            ? {
+                role: "phone",
+                revoked: false,
+                verify: (r) => verifyObject(phone.signing.publicKey, r),
+              }
+            : null,
+      }
+    );
   }
 
   /** The relay's hint that the preference changed: question-free, it only says to read again. */
@@ -1880,5 +1953,125 @@ describe("get_involvement over a connection (#17228)", () => {
     });
     await vi.waitFor(() => expect(h.relay.questions).toHaveLength(1));
     expect(asked.status).toBe("queued");
+  });
+
+  it("serves a 0.7.0 phone's preference through a 0.7.0 relay as agents read it before 0.8.0, and sends that relay nothing 0.8.0 added (#17433)", async () => {
+    const relay = await relayWithPreference();
+    // Every feature a 0.7.0 relay can advertise; none of 0.8.0's.
+    const releasedBy070 = [
+      "thread-messages-v1",
+      "phone-images-v1",
+      "pane-snapshots-v1",
+      "owner-desktop-answers-v1",
+      "involvement-v1",
+      "person-declines-v1",
+    ];
+    relay.advertise(releasedBy070);
+    // 0.8.0's host APIs, on every bridge the connection makes: none of them is Daintree's to call yet.
+    const hostApis = (
+      ["reportPresence", "setInvolvementPreference", "declineQuestion", "sendFollowUp"] as const
+    ).map((name) => vi.spyOn(DecisionsBridge.prototype, name));
+    const until = new Date(Date.now() + 60 * 60_000).toISOString();
+    const record = await signedOn070Phone(relay.phone, 4, { mode: "involve-early", until });
+    await expect(readOn070Phone(relay.phone, record)).resolves.toMatchObject({
+      status: "ready",
+      revision: 4,
+      problem: null,
+    });
+    relay.serve(record);
+    let source: QuestionSource | null = null;
+    const h = await harness({
+      wrapFetch: relay.wrapFetch,
+      overrides: { onQuestionsReady: (ready) => (source = ready) },
+    });
+    teardown.push(() => h.connection.stop());
+    h.connection.start();
+    await connectLive(h);
+    const bridge = new QuestionBridge({
+      source: source as unknown as QuestionSource,
+      isCurrent: () => true,
+    });
+
+    await vi.waitFor(async () =>
+      expect(await bridge.getInvolvement()).toMatchObject({ status: "available", stale: false })
+    );
+    const view = await bridge.getInvolvement();
+    // The fields an agent read on 0.7.0, and no more: where it was set is the person's own display.
+    expect(view).toEqual({
+      status: "available",
+      mode: "involve-early",
+      normalMode: "recommend",
+      consultCount: 3,
+      revision: 4,
+      overrideActive: true,
+      until,
+      setAt: record.created_at,
+      lastSyncedAt: expect.any(String),
+      stale: false,
+    });
+
+    await bridge.registerQuestion({
+      origin: QUESTION_ORIGIN,
+      input: { question: "Still asking?" },
+    });
+    await vi.waitFor(() => expect(h.relay.questions).toHaveLength(1));
+    expect(h.statuses.at(-1)?.state).toBe("connected");
+    expect(relay.declared.length).toBeGreaterThan(0);
+    for (const features of relay.declared) {
+      for (const feature of (features as string[] | undefined) ?? []) {
+        expect(releasedBy070).toContain(feature);
+      }
+    }
+    for (const api of hostApis) expect(api).not.toHaveBeenCalled();
+    expect(relay.requests).not.toContain("PUT /api/v1/presence");
+    expect(relay.requests).not.toContain("PUT /api/v1/involvement");
+  });
+
+  it("answers from the verified copy a 0.7.0 Daintree kept, and still refuses an older record against it (#17433)", async () => {
+    const relay = await relayWithPreference();
+    const kept = await signedOn070Phone(relay.phone, 2, null);
+    const syncedAt = Date.now() - 60_000;
+    const store = new MemoryLocalStore();
+    // The copy exactly as 0.7.0 stored it: no record of where the preference was set.
+    await store.setMeta(
+      INVOLVEMENT_META,
+      JSON.stringify({ record: kept, high_water: 2, synced_at: syncedAt })
+    );
+    // The relay hands back an older revision, as a rolled-back relay would.
+    relay.serve(await signedOn070Phone(relay.phone, 1, null));
+    const release = relay.holdReads();
+    let source: QuestionSource | null = null;
+    const h = await harness({
+      store,
+      wrapFetch: relay.wrapFetch,
+      overrides: { onQuestionsReady: (ready) => (source = ready) },
+    });
+    teardown.push(release, () => h.connection.stop());
+    h.connection.start();
+    await vi.waitFor(() => expect(source).not.toBeNull());
+    const bridge = new QuestionBridge({
+      source: source as unknown as QuestionSource,
+      isCurrent: () => true,
+    });
+
+    const fromCopy = {
+      status: "available",
+      mode: "recommend",
+      consultCount: 3,
+      revision: 2,
+      setAt: kept.created_at,
+      lastSyncedAt: new Date(syncedAt).toISOString(),
+      stale: true,
+    };
+    await expect(bridge.getInvolvement()).resolves.toMatchObject(fromCopy);
+
+    release();
+    await connectLive(h);
+    await vi.waitFor(async () =>
+      expect(await store.listAudit(50)).toContainEqual(
+        expect.objectContaining({ event: "involvement.refused", result: "rollback" })
+      )
+    );
+    await expect(bridge.getInvolvement()).resolves.toMatchObject(fromCopy);
   });
 });
