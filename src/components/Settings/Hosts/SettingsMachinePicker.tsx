@@ -7,6 +7,8 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { deviceOwnerLabel } from "@/hooks/useSettingsOwner";
 import { cn } from "@/lib/utils";
 
@@ -47,18 +49,31 @@ export function hostLinkNote(state: HostConnectionState): string | null {
 /**
  * A machine's name in a tight spot. Fleet machines are told apart by their
  * ends (studio-01, …-eu-02.internal), so when it doesn't fit, the middle goes
- * and the end stays, at whatever width there is. The whole name is the title.
+ * and the end stays, at whatever width there is. The whole name is a tooltip
+ * once something is cut. Pointer-only: every spot this sits in is a button, a
+ * nav label or a heading that already carries the full name for assistive tech.
  */
 export function HostNameText({ name, className }: { name: string; className?: string }) {
   const tailLength = name.length > 16 ? Math.min(12, Math.floor(name.length / 2)) : 0;
+  const { ref, isTruncated } = useTruncationDetection();
   if (tailLength === 0) {
-    return <span className={cn("min-w-0 truncate", className)}>{name}</span>;
+    return (
+      <TruncatedTooltip content={name} isTruncated={isTruncated} focusable={false}>
+        <span ref={ref} className={cn("min-w-0 truncate", className)}>
+          {name}
+        </span>
+      </TruncatedTooltip>
+    );
   }
   return (
-    <span className={cn("flex min-w-0", className)} title={name}>
-      <span className="min-w-0 truncate">{name.slice(0, -tailLength)}</span>
-      <span className="shrink-0 whitespace-pre">{name.slice(-tailLength)}</span>
-    </span>
+    <TruncatedTooltip content={name} isTruncated={isTruncated} focusable={false}>
+      <span className={cn("flex min-w-0", className)}>
+        <span ref={ref} className="min-w-0 truncate">
+          {name.slice(0, -tailLength)}
+        </span>
+        <span className="shrink-0 whitespace-pre">{name.slice(-tailLength)}</span>
+      </span>
+    </TruncatedTooltip>
   );
 }
 
