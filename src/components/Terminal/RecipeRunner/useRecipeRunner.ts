@@ -635,6 +635,8 @@ export function useRecipeRunner({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // Confirming an IME candidate sends Enter (or 229) to the input, not the list.
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
       const next = keyBelongsToField(e) ? null : stepListboxCursor(e.key, focusedIndex, totalItems);
       if (next !== null) {
         e.preventDefault();

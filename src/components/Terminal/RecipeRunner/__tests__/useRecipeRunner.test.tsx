@@ -1727,6 +1727,43 @@ describe("useRecipeRunner — keyboard edit follows the same ownership rule as t
   });
 });
 
+describe("useRecipeRunner — IME composition", () => {
+  it("leaves a composing Enter to the input and still runs on a plain one", () => {
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+    const { container } = render(
+      <div tabIndex={0} onKeyDown={(e) => result.current.handleKeyDown(e)} />
+    );
+    const node = container.firstChild!;
+    const composing = new KeyboardEvent("keydown", {
+      key: "Enter",
+      isComposing: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      node.dispatchEvent(composing);
+    });
+    expect(composing.defaultPrevented).toBe(false);
+    const legacy = new KeyboardEvent("keydown", {
+      key: "Enter",
+      keyCode: 229,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      node.dispatchEvent(legacy);
+    });
+    expect(legacy.defaultPrevented).toBe(false);
+    const plain = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    act(() => {
+      node.dispatchEvent(plain);
+    });
+    expect(plain.defaultPrevented).toBe(true);
+  });
+});
+
 describe("useRecipeRunner — a live query never hides recipes behind a vanished filter", () => {
   it("keeps the filterable list while a query is active, whatever the count", () => {
     for (let i = 0; i < 7; i++) recipes.push(makeRecipe({ id: `r${i}`, name: `Recipe ${i}` }));
