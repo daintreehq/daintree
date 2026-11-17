@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSkeletonDisplayFloor, useSkeletonGate } from "@/hooks/useDeferredLoading";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -222,24 +223,25 @@ const SKELETON_SUMMARY_LABEL_WIDTHS = ["w-14", "w-20", "w-16", "w-24"] as const;
 const SKELETON_TIMELINE_ROWS = 6;
 
 // Mirrors the loaded layout (summary grid, then timeline rows) so the swap to
-// real content doesn't shift anything.
+// real content doesn't shift anything. Bones are immediate: the onset gate and
+// display floor live on the caller.
 function DiagnosticsSkeleton() {
   return (
     <Skeleton label="Loading diagnostics">
       <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 border-b border-overlay px-3 py-2">
         {SKELETON_SUMMARY_LABEL_WIDTHS.map((width, i) => (
           <div key={i} className="contents">
-            <SkeletonBone className={cn("h-3", width)} />
-            <SkeletonBone className={cn("h-3", i % 2 === 0 ? "w-1/2" : "w-2/3")} />
+            <SkeletonBone immediate className={cn("h-3", width)} />
+            <SkeletonBone immediate className={cn("h-3", i % 2 === 0 ? "w-1/2" : "w-2/3")} />
           </div>
         ))}
       </div>
       <div className="flex flex-col gap-1.5 px-3 py-2">
         {Array.from({ length: SKELETON_TIMELINE_ROWS }, (_, i) => (
           <div key={i} className="flex items-center gap-2">
-            <SkeletonBone className="h-3 w-14 shrink-0" />
-            <SkeletonBone className="h-3 w-24 shrink-0" />
-            <SkeletonBone className="h-3 min-w-0 flex-1" />
+            <SkeletonBone immediate className="h-3 w-14 shrink-0" />
+            <SkeletonBone immediate className="h-3 w-24 shrink-0" />
+            <SkeletonBone immediate className="h-3 min-w-0 flex-1" />
           </div>
         ))}
       </div>
@@ -306,9 +308,11 @@ export function DiagnosticsPanel({ paneId, projectId, status }: DiagnosticsPanel
   }, []);
 
   // Only the first load has nothing to show; a refresh keeps the last snapshot
-  // on screen rather than blanking it. The skeleton's bones carry their own
-  // onset delay, so a fast load never flashes one.
+  // on screen rather than blanking it. The gate keeps a fast load from flashing
+  // a skeleton; the floor keeps a skeleton that did appear from tearing down
+  // in the same frame.
   const isFirstLoad = isPending && result === null && !loadFailed;
+  const showSkeleton = useSkeletonDisplayFloor(useSkeletonGate(isFirstLoad));
 
   const session = result?.session ?? null;
   const proxy = result?.proxy ?? null;
@@ -338,8 +342,8 @@ export function DiagnosticsPanel({ paneId, projectId, status }: DiagnosticsPanel
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {isFirstLoad ? (
-          <DiagnosticsSkeleton />
+        {isFirstLoad || showSkeleton ? (
+          showSkeleton && <DiagnosticsSkeleton />
         ) : loadFailed && result === null ? (
           <div className="p-3">
             <Callout

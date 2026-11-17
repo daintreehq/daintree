@@ -168,7 +168,7 @@ describe("DiagnosticsPanel", () => {
     expect(screen.getByText("Allocated port")).toBeTruthy();
   });
 
-  it("renders a skeleton, not a spinner, while the first load is pending", async () => {
+  it("gates the first-load skeleton and holds it for a minimum dwell", async () => {
     let resolve!: (value: DevPreviewDiagnosticsResult) => void;
     getDiagnosticsMock.mockReturnValue(
       new Promise<DevPreviewDiagnosticsResult>((r) => {
@@ -177,10 +177,25 @@ describe("DiagnosticsPanel", () => {
     );
     render(<DiagnosticsPanel paneId="panel-1" projectId="project-1" status="running" />);
 
-    const skeleton = screen.getByRole("status", { name: "Loading diagnostics" });
+    // Under the onset gate nothing paints: no skeleton, no spinner.
+    expect(screen.queryByRole("status", { name: "Loading diagnostics" })).toBeNull();
+
+    const skeleton = await screen.findByRole("status", { name: "Loading diagnostics" });
     expect(skeleton.querySelector("[data-skeleton-bone]")).not.toBeNull();
 
+    // Resolving right after onset must not tear the skeleton down in one frame.
     resolve(makeResult([]));
+    await Promise.resolve();
+    expect(screen.queryByRole("status", { name: "Loading diagnostics" })).not.toBeNull();
+
+    expect(await screen.findByText("Allocated port")).toBeTruthy();
+    expect(screen.queryByRole("status", { name: "Loading diagnostics" })).toBeNull();
+  });
+
+  it("never paints a skeleton when the first load beats the onset gate", async () => {
+    getDiagnosticsMock.mockResolvedValue(makeResult([]));
+    render(<DiagnosticsPanel paneId="panel-1" projectId="project-1" status="running" />);
+
     expect(await screen.findByText("Allocated port")).toBeTruthy();
     expect(screen.queryByRole("status", { name: "Loading diagnostics" })).toBeNull();
   });
