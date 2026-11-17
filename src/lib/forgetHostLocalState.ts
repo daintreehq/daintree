@@ -2,11 +2,11 @@ import { parseHostScopedKey, type HostId } from "@shared/types/remoteHosts";
 import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
 import { forgetCrossHostTargetsOf } from "@/components/Fleet/crossHostFleet";
 import { forgetBuildMismatchNotices } from "@/components/Hosts/buildMismatchNotice";
+import { forgetHostFigures } from "@/components/Hosts/hostList";
 import { forgetHostProjects } from "@/components/Hosts/hostProjects";
 import { hostEnvDrafts } from "@/components/Settings/Hosts/hostEnvDrafts";
 import { QUICK_RUN_KEY_PREFIXES } from "@/components/Project/quickRunStorageKeys";
 import { useCommandHistoryStore } from "@/store/commandHistoryStore";
-import { useHostMetricsStore } from "@/store/hostMetricsStore";
 import { backupKeyFor } from "@/store/persistence/safeStorage";
 import { SIDEBAR_VIEW_KEY_PREFIX } from "@/store/sidebarViewStore";
 import { useTwoPaneSplitStore } from "@/store/twoPaneSplitStore";
@@ -99,10 +99,10 @@ export function forgetHostLocalState(hostId: HostId): void {
   const ratios = withoutHost(useTwoPaneSplitStore.getState().ratioByWorktreeId, hostId);
   if (ratios) useTwoPaneSplitStore.setState({ ratioByWorktreeId: ratios });
   forgetBuildMismatchNotices(hostId);
-  hostEnvDrafts.delete(hostId);
+  hostEnvDrafts.forget(hostId);
   forgetCrossHostTargetsOf(hostId);
   forgetHostProjects(hostId);
-  useHostMetricsStore.getState().forget(hostId);
+  forgetHostFigures(hostId);
 }
 
 /** Every view clears a host's state here when the host is removed from this device. */

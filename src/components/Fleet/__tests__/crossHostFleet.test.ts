@@ -223,6 +223,29 @@ describe("cross-host fleet targets", () => {
     expect(submitFleet.mock.calls[2]![0].opId).not.toBe(oldOpId);
   });
 
+  it("records no unconfirmed submit to a host forgotten while it was out", async () => {
+    const key = crossHostTargetKey("studio-01", "t1");
+    let reject!: (error: Error) => void;
+    submitFleet.mockImplementationOnce(
+      () => new Promise<void>((_resolve, fail) => (reject = fail))
+    );
+    const out = submitCrossHostTarget(key, "go");
+
+    forgetCrossHostTargetsOf("studio-01");
+    reject(new Error("[AppError|HOST_DISCONNECTED] Link dropped"));
+    await expect(out).rejects.toBeTruthy();
+
+    expect(crossHostSafeRetryDeadline(key, "go")).toBeNull();
+    armCrossHostTarget({
+      hostId: "studio-01",
+      hostName: "studio-01",
+      terminalId: "t1",
+      title: "Claude",
+    });
+    await submitCrossHostTarget(key, "go", { retry: true });
+    expect(submitFleet.mock.calls[1]![0].opId).not.toBe(submitFleet.mock.calls[0]![0].opId);
+  });
+
   it("sends another host's agent the draft as typed, as its preview shows", async () => {
     await executeFleetBroadcast("on {{branch_name}}", resolveFleetBroadcastTargetIds());
     expect(submitFleet).toHaveBeenCalledWith({

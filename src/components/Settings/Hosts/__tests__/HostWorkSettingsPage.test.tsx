@@ -258,6 +258,26 @@ describe("HostWorkSettingsPage (#14167, #14706)", () => {
     });
     expect(screen.getByRole("button", { name: "Save" }).getAttribute("aria-disabled")).toBe("true");
   });
+
+  it("keeps an unsaved environment edit for the page's return, but never once the host is another machine", async () => {
+    await renderSection();
+    const value = () => screen.getByRole("textbox", { name: /^Value of / });
+    fireEvent.change(value(), { target: { value: "C.UTF-8" } });
+    expect(hostEnvDrafts.get("studio-01")?.rows[0]?.value).toBe("C.UTF-8");
+
+    // Re-pointed while this page is still mounted: its edit was the old machine's.
+    act(() => hostEnvDrafts.forget("studio-01"));
+    expect(hostEnvDrafts.get("studio-01")).toBeUndefined();
+    fireEvent.change(value(), { target: { value: "en_US.UTF-8" } });
+    expect(hostEnvDrafts.get("studio-01")).toBeUndefined();
+
+    // A page opened on the new machine starts from what it reads and keeps its own edit.
+    cleanup();
+    await renderSection();
+    expect(value()).toHaveProperty("value", "C");
+    fireEvent.change(value(), { target: { value: "POSIX" } });
+    expect(hostEnvDrafts.get("studio-01")?.rows[0]?.value).toBe("POSIX");
+  });
 });
 
 // Obviously fake, and short of the long-opaque fallback so the vendor shapes are what match.

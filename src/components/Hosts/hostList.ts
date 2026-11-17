@@ -2,6 +2,7 @@ import { useEffect, useSyncExternalStore } from "react";
 import {
   LOCAL_HOST_ID,
   type HostConnectionState,
+  type HostId,
   type HostListEntry,
   type HostMetricsSummary,
 } from "@shared/types/remoteHosts";
@@ -34,6 +35,14 @@ let statusSnapshot: HostListSnapshot = EMPTY;
 const listeners = new Set<() => void>();
 let stop: (() => void) | null = null;
 let generation = 0;
+
+/**
+ * When each host was last forgotten (removed, or re-pointed at another
+ * machine), in forget order. Main drops a host's history only once the list
+ * itself changes, so a seed asked for before then can still carry it.
+ */
+let forgetSequence = 0;
+const forgottenAt = new Map<HostId, number>();
 
 let figuresDemand = 0;
 let stopWatchingView: (() => void) | null = null;
@@ -187,15 +196,18 @@ function followFigures(): () => void {
   const live = () => current === figuresGeneration;
   const off = api.onEvent(applyMetricsEvent);
   announceFollowing(api, true);
-  const seed = () =>
-    api
+  const seed = () => {
+    const askedAt = forgetSequence;
+    return api
       .getSnapshots()
-      .then((snapshots) => {
+      .then((all) => {
         if (!live()) return;
+        const snapshots = all.filter((entry) => (forgottenAt.get(entry.hostId) ?? 0) <= askedAt);
         useHostMetricsStore.getState().seed(snapshots);
         applySeed(snapshots);
       })
       .catch((error: unknown) => logWarn("[Hosts] Couldn't read host summaries", { error }));
+  };
   const inUse = window.electron?.remoteHosts?.isInUse;
   if (typeof inUse === "function") {
     void inUse()
@@ -224,6 +236,21 @@ function setFollowingFigures(on: boolean): void {
   useHostMetricsStore.getState().reset();
   if (snapshot.localSummary !== null || snapshot.hosts.some((h) => h.summary !== null)) {
     publish({ hosts: withFollowedFigures(snapshot.hosts), localSummary: null });
+  }
+}
+
+/**
+ * Drop a removed or re-pointed host's figures: its summary and load history,
+ * and anything a seed already on its way still carries of the old machine.
+ */
+export function forgetHostFigures(hostId: HostId): void {
+  forgottenAt.set(hostId, ++forgetSequence);
+  useHostMetricsStore.getState().forget(hostId);
+  if (snapshot.hosts.some((h) => h.descriptor.id === hostId && h.summary !== null)) {
+    publish({
+      ...snapshot,
+      hosts: snapshot.hosts.map((h) => (h.descriptor.id === hostId ? { ...h, summary: null } : h)),
+    });
   }
 }
 
@@ -345,6 +372,7 @@ export function _resetHostListForTesting(): void {
   stopFigures?.();
   stopFigures = null;
   figuresDemand = 0;
+  forgottenAt.clear();
   snapshot = EMPTY;
   statusSnapshot = EMPTY;
 }

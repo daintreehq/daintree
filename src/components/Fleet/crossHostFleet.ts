@@ -67,6 +67,7 @@ export function forgetCrossHostTargetsOf(hostId: HostId): void {
     if (target.hostId !== hostId) kept.add(target.hostId);
   }
   useFleetArmingStore.getState().retainCrossHostTargetsFor(kept);
+  forgottenHosts.set(hostId, (forgottenHosts.get(hostId) ?? 0) + 1);
   // Host ids never hold a colon, so this prefix names that host's targets alone.
   const prefix = crossHostTargetKey(hostId, "");
   for (const key of [...unresolved.keys()]) if (key.startsWith(prefix)) unresolved.delete(key);
@@ -92,6 +93,13 @@ interface UnconfirmedSubmit {
 }
 
 const unresolved = new Map<string, UnconfirmedSubmit>();
+
+/**
+ * How many times each host was forgotten. A submit still out when its host
+ * was forgotten went to the old machine, so its unconfirmed outcome is never
+ * recorded against the new one.
+ */
+const forgottenHosts = new Map<HostId, number>();
 
 function isUnknownOutcome(error: unknown): boolean {
   return (
@@ -148,6 +156,7 @@ export async function submitCrossHostTarget(
   }
   const opId = reuse?.opId ?? crypto.randomUUID();
   const firstSentAt = reuse?.firstSentAt ?? Date.now();
+  const forgets = forgottenHosts.get(target.hostId) ?? 0;
   try {
     await window.electron.hostMetrics.submitFleet({
       hostId: target.hostId,
@@ -157,8 +166,10 @@ export async function submitCrossHostTarget(
     });
     forgetOwnRecord(key, opId);
   } catch (error) {
-    if (isUnknownOutcome(error)) unresolved.set(key, { opId, text, firstSentAt });
-    else forgetOwnRecord(key, opId);
+    if (!isUnknownOutcome(error)) forgetOwnRecord(key, opId);
+    else if ((forgottenHosts.get(target.hostId) ?? 0) === forgets) {
+      unresolved.set(key, { opId, text, firstSentAt });
+    }
     throw error;
   }
 }
@@ -170,5 +181,6 @@ function forgetOwnRecord(key: string, opId: string): void {
 
 export function _resetCrossHostFleetForTesting(): void {
   unresolved.clear();
+  forgottenHosts.clear();
   useFleetArmingStore.setState({ crossHostTargets: [] });
 }

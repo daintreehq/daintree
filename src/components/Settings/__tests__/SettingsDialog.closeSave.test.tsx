@@ -11,7 +11,10 @@ vi.mock("@/hooks/useProjectSettingsForm", () => ({
     saveNow: async () => {},
   }),
 }));
-vi.mock("@/components/Hosts/hostList", () => ({ useHostList: () => ({ hosts: [] }) }));
+const hostList = vi.hoisted(() => ({ hosts: [] as unknown[] }));
+vi.mock("@/components/Hosts/hostList", () => ({
+  useHostList: () => ({ hosts: hostList.hosts }),
+}));
 vi.mock("../pluginSettingsSearch", () => ({ usePluginSettingsSearchIndex: () => [] }));
 vi.mock("../GeneralTab", () => ({ GeneralTab: () => <p>General page</p> }));
 vi.mock("@/clients", async (importOriginal) => ({
@@ -20,7 +23,9 @@ vi.mock("@/clients", async (importOriginal) => ({
 }));
 
 import { SettingsDialog } from "../SettingsDialog";
+import { hostEnvDrafts, type HostEnvDraft } from "../Hosts/hostEnvDrafts";
 import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
+import { useSettingsTargetStore } from "@/store/settingsTargetStore";
 
 // jsdom has neither; the dialog preloads tabs at idle and measures its scroll shadows.
 vi.stubGlobal("requestIdleCallback", () => 0);
@@ -145,6 +150,81 @@ describe("SettingsDialog close with a draft that didn't save", () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(panel("environment").classList.contains("hidden")).toBe(true);
     expect(window.electron.globalEnv.set).not.toHaveBeenCalled();
+  });
+});
+
+describe("SettingsDialog close with an unsaved edit on another machine (#17208)", () => {
+  const CONNECTED = {
+    status: "connected",
+    rttMs: 1,
+    handshake: { version: "1.0.0", commit: "abc", protocolVersion: 1, platform: "linux", arch: "x64" },
+  };
+  const draft = (value: string): HostEnvDraft => ({
+    rows: [{ id: "r1", key: "LANG", value }],
+    base: { record: { LANG: "C" }, revision: "r-env" },
+    movedUnder: false,
+  });
+
+  beforeEach(() => {
+    hostList.hosts = [{ descriptor: { id: "host-b", name: "Host B" }, connection: CONNECTED }];
+    window.electron = {
+      ...window.electron,
+      hostSettings: {
+        read: vi.fn().mockResolvedValue({
+          hostId: "host-b",
+          hostName: "Host B",
+          scope: "host",
+          instanceId: "launch-1",
+          unavailable: [],
+          settings: [{ key: "globalEnvironmentVariables", value: { LANG: "C" }, revision: "r-env" }],
+        }),
+        update: vi.fn(),
+      },
+    };
+  });
+
+  afterEach(() => {
+    hostList.hosts = [];
+    hostEnvDrafts.clear();
+    useSettingsTargetStore.getState().setHostId(null);
+  });
+
+  it("holds the close on a remaining host's edit when the first edit left was a removed host's", async () => {
+    // host-a was removed while its edit was waiting, so it is no longer offered.
+    hostEnvDrafts.set("host-a", draft("from A"));
+    hostEnvDrafts.set("host-b", draft("C.UTF-8"));
+    const onClose = await openOnEnvironment();
+
+    await pressEscape();
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(useSettingsTargetStore.getState().hostId).toBe("host-b");
+    await screen.findByText("Save or discard these changes to close Settings");
+    const values = screen
+      .getAllByLabelText<HTMLInputElement>(/^Value of /)
+      .map((input) => input.value);
+    expect(values).toContain("C.UTF-8");
+    expect(hostEnvDrafts.get("host-b")?.rows[0]?.value).toBe("C.UTF-8");
+  });
+
+  it("opens a fresh page on a host re-pointed while its page was showing", async () => {
+    hostEnvDrafts.set("host-b", draft("C.UTF-8"));
+    const onClose = await openOnEnvironment();
+    await pressEscape();
+    await screen.findByText("Save or discard these changes to close Settings");
+
+    act(() => hostEnvDrafts.forget("host-b"));
+
+    await waitFor(() => {
+      expect(screen.queryByText("Save or discard these changes to close Settings")).toBeNull();
+    });
+    const values = screen
+      .getAllByLabelText<HTMLInputElement>(/^Value of /)
+      .map((input) => input.value);
+    expect(values).not.toContain("C.UTF-8");
+    expect(hostEnvDrafts.get("host-b")).toBeUndefined();
+    await pressEscape();
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
 
