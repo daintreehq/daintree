@@ -250,11 +250,15 @@ describe("answering a question from the view (#17102)", () => {
     expect(option("Reject").disabled).toBe(true);
     const hintBefore = screen.getByTestId("decision-answer-composer").textContent;
 
-    act(() => useDecisionsImageReviewStore.getState().markShown("t1", "q1", "x", images[0]!.sha256));
+    act(() =>
+      useDecisionsImageReviewStore.getState().markShown("t1", "q1", "x", images[0]!.sha256)
+    );
     expect(option("Approve").disabled).toBe(true);
     expect(screen.getByTestId("decision-answer-composer").textContent).not.toBe(hintBefore);
 
-    act(() => useDecisionsImageReviewStore.getState().markShown("t1", "q1", "y", images[1]!.sha256));
+    act(() =>
+      useDecisionsImageReviewStore.getState().markShown("t1", "q1", "y", images[1]!.sha256)
+    );
     expect(option("Approve").disabled).toBe(false);
     fireEvent.click(option("Reject"));
     await act(async () => fireEvent.click(send()));

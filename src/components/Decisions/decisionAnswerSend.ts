@@ -13,7 +13,11 @@ import type {
   DecisionQuestionAnswerResult,
 } from "@shared/types/decisionsQuestion";
 import { answerPayload, composeVerdict, isAnswerable } from "./decisionComposeModel";
-import { questionOf, readTargetContent, type DecisionQuestionTarget } from "./decisionQuestionTarget";
+import {
+  questionOf,
+  readTargetContent,
+  type DecisionQuestionTarget,
+} from "./decisionQuestionTarget";
 
 /**
  * Sending the person's answer from the question view (#17102), and following

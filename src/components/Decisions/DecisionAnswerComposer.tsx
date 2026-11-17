@@ -74,7 +74,9 @@ export function answerComposerMode(
   // Taken already, and read back before this view knew of it.
   if (
     submission !== null &&
-    question.thread.some((entry) => entry.type === "answer" && entry.entryId === submission.answerId)
+    question.thread.some(
+      (entry) => entry.type === "answer" && entry.entryId === submission.answerId
+    )
   ) {
     return "progress";
   }
@@ -346,7 +348,9 @@ export function DecisionAnswerComposer({ question, target, onMoved }: DecisionAn
               onChange={(event) => edit({ text: event.target.value })}
               onKeyDown={(event) => {
                 if (event.key !== "Enter" || event.repeat || event.nativeEvent.isComposing) return;
-                const mod = isMac() ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+                const mod = isMac()
+                  ? event.metaKey && !event.ctrlKey
+                  : event.ctrlKey && !event.metaKey;
                 if (!mod || event.altKey || event.shiftKey) return;
                 event.preventDefault();
                 send();

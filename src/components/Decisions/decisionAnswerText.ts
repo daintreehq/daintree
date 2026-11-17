@@ -94,7 +94,11 @@ export function attemptText(phase: AnswerPhase): string | null {
  * the relay, and then typed into the asking terminal, as the question's own
  * record shows once its thread holds this answer.
  */
-export function progressText(phase: AnswerPhase, question: DecisionQuestionContent, answerId: string): string {
+export function progressText(
+  phase: AnswerPhase,
+  question: DecisionQuestionContent,
+  answerId: string
+): string {
   const inThread = question.thread.some(
     (entry) => entry.type === "answer" && entry.entryId === answerId
   );
