@@ -277,6 +277,37 @@ describe("useReviewHubStatus failed reads", () => {
     expect(result.current.loading).toBe(false);
   });
 
+  it("lets an older read that succeeds after a newer failure restore the list", async () => {
+    marks.available = false;
+    const opening = deferred<StagingStatus>();
+    getStagingStatus.mockReturnValueOnce(opening.promise);
+    const { result } = renderStatus();
+    act(() => result.current.beginOpen());
+
+    const background = deferred<StagingStatus>();
+    getStagingStatus.mockReturnValueOnce(background.promise);
+    act(() => result.current.readWithCapture());
+    const foreground = deferred<StagingStatus>();
+    getStagingStatus.mockReturnValueOnce(foreground.promise);
+    act(() => void result.current.refresh());
+
+    // A rejection (the host's rate limit, say) carries no status to order by.
+    await act(async () => foreground.reject(new Error("rate limited")));
+    expect(result.current.loadError).toBe("rate limited");
+    expect(result.current.loading).toBe(false);
+    expect(result.current.statusIsFresh).toBe(false);
+
+    await act(async () => background.resolve(newer));
+    expect(result.current.status?.currentBranch).toBe("newer");
+    expect(result.current.loadError).toBeNull();
+    expect(result.current.statusIsFresh).toBe(true);
+    expect(result.current.isBackgroundRefreshing).toBe(false);
+
+    // The opening's read, superseded by Refresh, lands last and changes nothing.
+    await act(async () => opening.resolve(status));
+    expect(result.current.status?.currentBranch).toBe("newer");
+  });
+
   it("keeps a held Refresh's failure for another worktree out of the open one", async () => {
     marks.available = false;
     const { result, rerender } = renderHook(

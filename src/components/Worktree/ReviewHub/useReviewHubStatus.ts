@@ -140,21 +140,24 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
       const publishSeq = ++publishSeqRef.current;
       const readSeq = beginStagingStatusRead();
       const capture = captureForRead(worktreePath);
+      // A failure answers to the same request, order and worktree as a success,
+      // so it can't cover a newer read's status. It takes no place in the order:
+      // an older read still running may yet restore the list a rejection hid.
+      const mayShow = () =>
+        refreshIdRef.current === requestId &&
+        publishSeq > publishedSeqRef.current &&
+        isOpenPath(worktreePath);
       try {
         const result = await window.electron.git.getStagingStatus(worktreePath);
         rememberStagingStatus(worktreePath, result, readSeq);
-        if (
-          refreshIdRef.current === requestId &&
-          publishSeq > publishedSeqRef.current &&
-          isOpenPath(worktreePath)
-        ) {
+        if (mayShow()) {
           publishedSeqRef.current = publishSeq;
           setStatusIsFresh(true);
           setStatus(result);
           setStatusCapture(capture);
         }
       } catch (err) {
-        if (refreshIdRef.current === requestId) {
+        if (mayShow()) {
           setLoadError(formatErrorMessage(err, "Failed to load staging status"));
         }
       } finally {
