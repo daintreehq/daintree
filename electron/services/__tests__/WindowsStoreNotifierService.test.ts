@@ -775,19 +775,44 @@ describe("WindowsStoreNotifierService", () => {
       });
     });
 
+    function dismiss(version: string): void {
+      const call = ipcMainMock.handle.mock.calls.find(
+        ([ch]) => ch === CHANNELS.STORE_UPDATE_DISMISS
+      );
+      call![1]({ senderFrame: { url: "app://daintree/index.html" } }, version);
+    }
+
+    function transientError(): Error {
+      return Object.assign(new Error("Manifest fetch failed: HTTP 503"), { statusCode: 503 });
+    }
+
     it("drops the former channel's offer when the new feed has no newer version", async () => {
-      netMock.fetch.mockResolvedValueOnce(makeResponse({ body: "version: 1.2.0\n", etag: null }));
+      netMock.fetch.mockResolvedValueOnce(
+        makeResponse({ body: "version: 1.2.0\n", etag: '"stable-etag"' })
+      );
       windowsStoreNotifierService.initialize();
       await windowsStoreNotifierService._checkNowForTest();
       expect(getLatest()).toEqual({ version: "1.2.0", storeUrl: MS_STORE_FALLBACK_URL });
 
       channel = "nightly";
-      netMock.fetch.mockResolvedValueOnce(makeResponse({ body: "version: 1.0.0\n", etag: null }));
-      await windowsStoreNotifierService._checkNowForTest();
-
+      const nightly = deferredResponse();
+      netMock.fetch.mockReturnValueOnce(nightly.promise);
+      const nightlyCheck = windowsStoreNotifierService._checkNowForTest();
       expect(netMock.fetch.mock.calls[1][0]).toBe(
         "https://updates.daintree.org/nightly/latest.yml"
       );
+
+      // Back on stable before any reply: only the clear on observing the
+      // switch can be what hides the offer and its validator now.
+      channel = "stable";
+      expect(getLatest()).toBeNull();
+      dismiss("1.2.0");
+      expect(storeMock.set).not.toHaveBeenCalledWith("storeNotifierEtag", expect.any(String));
+
+      channel = "nightly";
+      nightly.resolve(makeResponse({ body: "version: 1.0.0\n", etag: null }));
+      await nightlyCheck;
+
       expect(getLatest()).toBeNull();
       expect(windowsStoreNotifierService.getLastDetectedUpdate()).toBeNull();
     });
@@ -804,6 +829,19 @@ describe("WindowsStoreNotifierService", () => {
       expect(getLatest()).toEqual({ version: "1.2.0", storeUrl: MS_STORE_FALLBACK_URL });
     });
 
+    it("keeps the offer and its pending ETag across a same-feed 304", async () => {
+      netMock.fetch
+        .mockResolvedValueOnce(makeResponse({ body: "version: 1.2.0\n", etag: '"stable-etag"' }))
+        .mockResolvedValueOnce(makeResponse({ status: 304 }));
+      windowsStoreNotifierService.initialize();
+      await windowsStoreNotifierService._checkNowForTest();
+      await windowsStoreNotifierService._checkNowForTest();
+
+      expect(getLatest()).toEqual({ version: "1.2.0", storeUrl: MS_STORE_FALLBACK_URL });
+      dismiss("1.2.0");
+      expect(storeMock.set).toHaveBeenCalledWith("storeNotifierEtag", '"stable-etag"');
+    });
+
     it("discards a late former-feed response that lands after the new feed's check", async () => {
       const stable = deferredResponse();
       netMock.fetch.mockReturnValueOnce(stable.promise);
@@ -814,6 +852,9 @@ describe("WindowsStoreNotifierService", () => {
       netMock.fetch.mockResolvedValueOnce(makeResponse({ body: "version: 1.0.0\n", etag: null }));
       await windowsStoreNotifierService._checkNowForTest();
 
+      // Even back on its own channel, a reply the nightly check superseded
+      // stays discarded.
+      channel = "stable";
       stable.resolve(makeResponse({ body: "version: 1.2.0\n", etag: '"stable-etag"' }));
       await lateCheck;
 
@@ -834,10 +875,8 @@ describe("WindowsStoreNotifierService", () => {
       expect(broadcastMock).not.toHaveBeenCalled();
       expect(getLatest()).toBeNull();
 
-      const dismissCall = ipcMainMock.handle.mock.calls.find(
-        ([ch]) => ch === CHANNELS.STORE_UPDATE_DISMISS
-      );
-      dismissCall![1]({ senderFrame: { url: "app://daintree/index.html" } }, "1.2.0");
+      channel = "stable";
+      dismiss("1.2.0");
       expect(storeMock.set).not.toHaveBeenCalledWith("storeNotifierEtag", '"stable-etag"');
     });
 
@@ -849,16 +888,17 @@ describe("WindowsStoreNotifierService", () => {
       await windowsStoreNotifierService._checkNowForTest();
 
       channel = "nightly";
-      const dismissCall = ipcMainMock.handle.mock.calls.find(
-        ([ch]) => ch === CHANNELS.STORE_UPDATE_DISMISS
-      );
-      dismissCall![1]({ senderFrame: { url: "app://daintree/index.html" } }, "1.2.0");
-
+      dismiss("1.2.0");
       expect(storeMock.set).toHaveBeenCalledWith("lastNotifiedStoreVersion", "1.2.0");
+
+      // The skipped validator is spent, not parked for a later dismiss.
+      channel = "stable";
+      dismiss("1.2.0");
       expect(storeMock.set).not.toHaveBeenCalledWith("storeNotifierEtag", expect.any(String));
     });
 
     it("lets only the newest same-feed check publish when an older reply lands last", async () => {
+      channel = "nightly";
       const older = deferredResponse();
       const newer = deferredResponse();
       netMock.fetch.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
@@ -878,10 +918,7 @@ describe("WindowsStoreNotifierService", () => {
       });
       expect(getLatest()).toEqual({ version: "1.3.0", storeUrl: MS_STORE_FALLBACK_URL });
 
-      const dismissCall = ipcMainMock.handle.mock.calls.find(
-        ([ch]) => ch === CHANNELS.STORE_UPDATE_DISMISS
-      );
-      dismissCall![1]({ senderFrame: { url: "app://daintree/index.html" } }, "1.3.0");
+      dismiss("1.3.0");
       expect(storeMock.set).toHaveBeenCalledWith("storeNotifierEtag", '"newer"');
     });
 
@@ -904,6 +941,45 @@ describe("WindowsStoreNotifierService", () => {
       expect(getLatest()).toEqual({ version: "1.3.0", storeUrl: MS_STORE_FALLBACK_URL });
     });
 
+    it("discards a check that was in flight when notifications were turned off and on", async () => {
+      const pending = deferredResponse();
+      netMock.fetch.mockReturnValueOnce(pending.promise);
+      windowsStoreNotifierService.initialize();
+      const check = windowsStoreNotifierService._checkNowForTest();
+
+      const setCall = ipcMainMock.handle.mock.calls.find(
+        ([ch]) => ch === CHANNELS.STORE_UPDATE_SET_SETTINGS
+      );
+      setCall![1]({ senderFrame: { url: "app://daintree/index.html" } }, false);
+      setCall![1]({ senderFrame: { url: "app://daintree/index.html" } }, true);
+      pending.resolve(makeResponse({ body: "version: 1.2.0\n", etag: null }));
+      await check;
+
+      expect(broadcastMock).not.toHaveBeenCalled();
+      expect(getLatest()).toBeNull();
+    });
+
+    it("discards a check that was in flight when the service was disposed", async () => {
+      const pending = deferredResponse();
+      netMock.fetch.mockReturnValueOnce(pending.promise);
+      const check = windowsStoreNotifierService._checkNowForTest();
+
+      windowsStoreNotifierService.dispose();
+      pending.resolve(makeResponse({ body: "version: 1.2.0\n", etag: null }));
+      await check;
+
+      expect(broadcastMock).not.toHaveBeenCalled();
+      expect(windowsStoreNotifierService.getLastDetectedUpdate()).toBeNull();
+    });
+
+    it("schedules a retry for the current check's transient failure", async () => {
+      netMock.fetch.mockRejectedValueOnce(transientError());
+      await windowsStoreNotifierService._checkNowForTest();
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+      expect(netMock.fetch).toHaveBeenCalledTimes(2);
+    });
+
     it("schedules no retry for a transient failure from a superseded check", async () => {
       let rejectOlder!: (err: unknown) => void;
       netMock.fetch
@@ -916,11 +992,64 @@ describe("WindowsStoreNotifierService", () => {
       const olderCheck = windowsStoreNotifierService._checkNowForTest();
       await windowsStoreNotifierService._checkNowForTest();
 
-      rejectOlder(Object.assign(new Error("Manifest fetch failed: HTTP 503"), { statusCode: 503 }));
+      rejectOlder(transientError());
       await olderCheck;
       await vi.advanceTimersByTimeAsync(10 * 60_000);
 
       expect(netMock.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      ["a success", makeResponse({ body: "version: 1.0.0\n", etag: null })],
+      ["a permanent failure", makeResponse({ status: 404 })],
+    ])("keeps the newer check's retry when a superseded check settles with %s", async (_l, res) => {
+      const older = deferredResponse();
+      netMock.fetch.mockReturnValueOnce(older.promise).mockRejectedValueOnce(transientError());
+      const olderCheck = windowsStoreNotifierService._checkNowForTest();
+      await windowsStoreNotifierService._checkNowForTest();
+
+      older.resolve(res);
+      await olderCheck;
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+      expect(netMock.fetch).toHaveBeenCalledTimes(3);
+    });
+
+    it("gives the new feed a fresh retry budget after a switch", async () => {
+      // Jitter factor 1.0: retries wait exactly 30s, then 120s.
+      vi.spyOn(Math, "random").mockReturnValue(0.5);
+      netMock.fetch.mockRejectedValue(transientError());
+      await windowsStoreNotifierService._checkNowForTest();
+
+      channel = "nightly";
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(netMock.fetch).toHaveBeenCalledTimes(2);
+      expect(netMock.fetch.mock.calls[1][0]).toBe(
+        "https://updates.daintree.org/nightly/latest.yml"
+      );
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(netMock.fetch).toHaveBeenCalledTimes(3);
+    });
+
+    it("cancels a waiting retry when a scheduled check starts, so it can't supersede it", async () => {
+      const scheduled = deferredResponse();
+      netMock.fetch
+        .mockRejectedValueOnce(transientError())
+        .mockReturnValueOnce(scheduled.promise)
+        .mockResolvedValueOnce(makeResponse({ status: 404 }));
+      await windowsStoreNotifierService._checkNowForTest();
+
+      const scheduledCheck = windowsStoreNotifierService._checkNowForTest();
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(netMock.fetch).toHaveBeenCalledTimes(2);
+
+      scheduled.resolve(makeResponse({ body: "version: 1.2.0\n", etag: null }));
+      await scheduledCheck;
+      expect(windowsStoreNotifierService.getLastDetectedUpdate()).toEqual({
+        version: "1.2.0",
+        storeUrl: MS_STORE_FALLBACK_URL,
+      });
     });
   });
 });
