@@ -711,6 +711,37 @@ describe("preview binding", () => {
       );
     });
 
+    it("takes a refusal as the answer after a few about documents already left", async () => {
+      const answers: Array<(result: ElementPickerWorkspaceOpenResult) => void> = [];
+      host.openWith = () => new Promise((resolve) => answers.push(resolve));
+      await mountBound();
+      // A page that reloads during every check.
+      for (let epoch = 1; epoch <= 4; epoch++) {
+        await waitFor(() => expect(answers).toHaveLength(epoch));
+        await act(async () => host.documentReady(epoch));
+        await act(async () => answers[epoch - 1]!(REFUSED));
+      }
+      await waitFor(() =>
+        expect(session().getSnapshot().workspace).toMatchObject({ reason: "served-elsewhere" })
+      );
+      expect(answers).toHaveLength(4);
+    });
+
+    it("tells a pick made before main answered where its page is served from", async () => {
+      const answers: Array<(result: ElementPickerWorkspaceOpenResult) => void> = [];
+      host.openWith = () => new Promise((resolve) => answers.push(resolve));
+      await mountBound();
+      await waitFor(() => expect(answers).toHaveLength(1));
+      // Nothing to trace: published at once, before the workspace is known.
+      await act(async () => host.select(0, [PAGE_NODE]));
+      await waitFor(() => expect(session().getSnapshot().selection.status).toBe("ready"));
+      await act(async () => answers[0]!(REFUSED));
+      await waitFor(() => {
+        const state = session().getSnapshot().selection;
+        expect(state.status === "ready" && state.selection.servedFrom).toBe("/repo/wt-b");
+      });
+    });
+
     it("won't trace a page another worktree serves: the click still selects, nothing resolves", async () => {
       host.openWith = () => REFUSED;
       await mountBound();

@@ -38,6 +38,8 @@ const LISTENER_REUSE_MS = 1_000;
 const MAX_LISTENER_SCANS = 2;
 /** Ports with a scan running or remembered at once. */
 const MAX_LISTENER_LOOKUPS = 16;
+/** How long a scan holds its slot before its callers are told it can't say. */
+const LISTENER_SCAN_DEADLINE_MS = 6_000;
 
 /**
  * Workspaces one view may hold. A panel holds one; past this the oldest goes,
@@ -402,12 +404,20 @@ export class ElementPickerWorkspaceService {
     if (running >= MAX_LISTENER_SCANS || others >= MAX_LISTENER_LOOKUPS) {
       return Promise.resolve(null);
     }
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     const lookup: { listeners: Promise<PortListener[] | null>; settledAt: number | null } = {
-      listeners: find(port)
-        .catch(() => null)
-        .finally(() => {
-          lookup.settledAt = Date.now();
+      // A read that never returns frees the slot at the deadline: its callers
+      // can't say, and the scan's own late answer goes nowhere.
+      listeners: Promise.race([
+        find(port).catch(() => null),
+        new Promise<null>((resolve) => {
+          deadline = setTimeout(() => resolve(null), LISTENER_SCAN_DEADLINE_MS);
+          deadline.unref?.();
         }),
+      ]).finally(() => {
+        clearTimeout(deadline);
+        lookup.settledAt = Date.now();
+      }),
       settledAt: null,
     };
     this.listenerLookups.set(port, lookup);

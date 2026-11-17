@@ -446,42 +446,90 @@ describe("ElementPickerWorkspaceService.open for a browser page", () => {
     expect(host.releaseWorkspace).toHaveBeenCalledWith(opened.workspaceId);
   });
 
-  it("shares a running scan, reuses a finished one only for resolves, and only for a moment", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
+  it("shares a running scan between the opens that ask meanwhile, verdict and all", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
     const findListeners = vi.fn(async (_port: number) => {
       await gate;
-      return [{ pid: 4242, cwd: path.join(root, "single") }];
+      return [{ pid: 4242, cwd: path.join(root, "multi") }];
     });
-    const { svc } = service({ findListeners });
+    const { svc, host } = service({ findListeners });
     const owner = { projectId: PROJECT, endpoint: new FakeEndpoint(1) };
     const opening = [1, 2, 3].map(() =>
       svc.open(owner, openRequest({ worktreeId: "wt-single" }), { pageUrl: PAGE })
     );
     await vi.waitFor(() => expect(findListeners).toHaveBeenCalledTimes(1));
-    // A slow scan: the moment it answers for starts when it finishes.
-    vi.setSystemTime(Date.now() + 3_000);
     release();
-    const opened = await Promise.all(opening);
-    for (const result of opened) expect(result.status).toBe("ready");
+    for (const result of await Promise.all(opening)) {
+      expect(result).toMatchObject({ status: "unavailable", serverWorktreeId: "wt-multi" });
+    }
     expect(findListeners).toHaveBeenCalledTimes(1);
+    expect(host.registerWorkspace).not.toHaveBeenCalled();
+  });
 
-    const first = opened[0]!;
-    if (first.status !== "ready") throw new Error("expected a workspace");
-    const request = { workspaceId: first.workspaceId, requestId: "r1" } as never;
+  it("reuses a finished scan for resolves only, for a second from when it finished", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    let from = "single";
+    let release: (() => void) | null = null;
+    const findListeners = vi.fn(async (_port: number) => {
+      if (release === null) {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+      return [{ pid: 4242, cwd: path.join(root, from) }];
+    });
+    const { svc, host } = service({ findListeners });
+    const owner = { projectId: PROJECT, endpoint: new FakeEndpoint(1) };
+    const opening = svc.open(owner, openRequest({ worktreeId: "wt-single" }), { pageUrl: PAGE });
+    await vi.waitFor(() => expect(release).not.toBeNull());
+    // A slow scan: the second it answers for starts when it finishes.
+    vi.setSystemTime(Date.now() + 3_000);
+    release!();
+    const opened = await opening;
+    if (opened.status !== "ready") throw new Error("expected a workspace");
+    const request = { workspaceId: opened.workspaceId, requestId: "r1" } as never;
     const serving = { pageUrlOf: () => PAGE };
+
+    // Another worktree takes the port. A resolve inside the second still has
+    // the finished scan's word; an open is a new document and looks again.
+    from = "multi";
     vi.setSystemTime(Date.now() + 900);
     await svc.resolve(owner, request, serving);
+    expect(host.resolve).toHaveBeenCalledTimes(1);
     expect(findListeners).toHaveBeenCalledTimes(1);
-    // An open is a new document: it never takes a finished scan's word.
-    await svc.open(owner, openRequest({ worktreeId: "wt-single" }), { pageUrl: PAGE });
+    await expect(
+      svc.open(owner, openRequest({ worktreeId: "wt-single" }), { pageUrl: PAGE })
+    ).resolves.toMatchObject({ status: "unavailable", serverWorktreeId: "wt-multi" });
     expect(findListeners).toHaveBeenCalledTimes(2);
+
     vi.setSystemTime(Date.now() + 1_100);
-    await svc.resolve(owner, request, serving);
+    await expect(svc.resolve(owner, request, serving)).rejects.toMatchObject({
+      message: ELEMENT_PICKER_WORKSPACE_CLOSED,
+    });
     expect(findListeners).toHaveBeenCalledTimes(3);
+  });
+
+  it("frees a scan's slot at its deadline, and its callers open as asked", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const findListeners = vi.fn((port: number) =>
+      port === 5175
+        ? Promise.resolve([{ pid: 1, cwd: path.join(root, "multi") }])
+        : new Promise<PortListener[]>(() => undefined)
+    );
+    const { svc } = service({ findListeners });
+    const owner = { projectId: PROJECT, endpoint: new FakeEndpoint(1) };
+    const at = (port: number) =>
+      svc.open(owner, openRequest({ worktreeId: "wt-single" }), {
+        pageUrl: `http://localhost:${port}/`,
+      });
+    const hung = [at(5173), at(5174)];
+    await vi.waitFor(() => expect(findListeners).toHaveBeenCalledTimes(2));
+    await vi.advanceTimersByTimeAsync(6_000);
+    for (const result of await Promise.all(hung)) expect(result.status).toBe("ready");
+    await expect(at(5175)).resolves.toMatchObject({ status: "unavailable" });
   });
 
   it("can't say past a few scans at once, and opens as asked", async () => {
