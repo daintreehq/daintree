@@ -151,6 +151,8 @@ describe("SoundService", () => {
 
     expect(mockSendToOneVisibleRenderer).toHaveBeenCalledTimes(1);
     expect(mockPlaySound).toHaveBeenCalledTimes(1);
+    expect(mockBroadcastToRenderer).not.toHaveBeenCalled();
+    expect(mockBroadcastToVisibleRenderers).not.toHaveBeenCalled();
   });
 
   it("falls back to native playback for previews and pulses when delivery fails", () => {
@@ -162,6 +164,8 @@ describe("SoundService", () => {
 
     expect(mockSendToOneVisibleRenderer).toHaveBeenCalledTimes(2);
     expect(mockPlaySound).toHaveBeenCalledTimes(2);
+    expect(mockBroadcastToRenderer).not.toHaveBeenCalled();
+    expect(mockBroadcastToVisibleRenderers).not.toHaveBeenCalled();
   });
 
   it("does not play natively when a renderer received the trigger", () => {
