@@ -300,12 +300,31 @@ describe("MemoryLeakAutoRestartService", () => {
       expect(h.deliver).not.toHaveBeenCalled();
     });
 
-    it("is dropped when the threshold is raised and lowered again with no batch or check between", async () => {
-      const { h, settle } = await pendingDecision();
-      h.policy.thresholdMb = THRESHOLD_MB * 2;
+    it("is dropped when the threshold is raised to a newer sample and lowered again with no batch or check between", async () => {
+      const h = harness();
+      let answer: (read: MemoryLeakTerminalRead) => void = () => {};
+      h.readTerminal.mockImplementationOnce(
+        () => new Promise<MemoryLeakTerminalRead>((resolve) => (answer = resolve))
+      );
+      await h.sample(UNDER_KB * 3, "t1", AUTO_RESTART_STARTUP_SAMPLES);
+      await h.sample(UNDER_KB * 1.5);
+      h.policy.thresholdMb = THRESHOLD_MB * 1.5;
       h.service.policyChanged();
       h.policy.thresholdMb = THRESHOLD_MB;
       h.service.policyChanged();
+      answer({ projectId: "p1" });
+      await flush();
+      expect(h.deliver).not.toHaveBeenCalled();
+    });
+
+    it("is dropped when a policy write can't be read back, without failing the write", async () => {
+      const { h, settle } = await pendingDecision();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      h.readPolicy.mockImplementationOnce(() => {
+        throw new Error("store unreadable");
+      });
+      expect(() => h.service.policyChanged()).not.toThrow();
+      expect(warn).toHaveBeenCalledTimes(1);
       settle();
       await flush();
       expect(h.deliver).not.toHaveBeenCalled();
@@ -416,6 +435,7 @@ describe("MemoryLeakAutoRestartService", () => {
       });
       expect(isCurrent()).toBe(false);
       expect(warn).toHaveBeenCalledTimes(1);
+      expect(isCurrent()).toBe(false);
 
       h.clock.now = AUTO_RESTART_RETRY_MS;
       await h.sample(OVER_KB);

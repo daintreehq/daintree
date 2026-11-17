@@ -196,7 +196,22 @@ describe("the host's own setters for named settings (#14167)", () => {
       leaves.write({ "sessionRestore.enabled": false });
       expect(policyChanged).not.toHaveBeenCalled();
 
+      for (const leaf of [
+        { "terminalConfig.resourceMonitoringEnabled": false },
+        { "terminalConfig.memoryLeakDetectionEnabled": false },
+        { "terminalConfig.memoryLeakAutoRestartThresholdMb": 4096 },
+      ]) {
+        stored.set.mockClear();
+        policyChanged.mockClear();
+        seen.length = 0;
+        leaves.write(leaf);
+        expect(policyChanged).toHaveBeenCalledTimes(1);
+        expect(seen).toEqual([1]);
+      }
+
       stored.set.mockClear();
+      policyChanged.mockClear();
+      seen.length = 0;
       leaves.write({
         "terminalConfig.memoryLeakDetectionEnabled": false,
         "terminalConfig.memoryLeakAutoRestartThresholdMb": 4096,

@@ -298,7 +298,9 @@ describe("terminalConfig handlers", () => {
 
     it("tells the memory-leak auto-restart of each policy write once it has landed (#17598)", async () => {
       const landed: unknown[] = [];
-      const policyChanged = vi.fn(() => landed.push({ ...storeState.data.terminalConfig }));
+      const policyChanged = vi.fn(() =>
+        landed.push(structuredClone(storeState.data.terminalConfig))
+      );
       setActiveMemoryLeakAutoRestart({ policyChanged } as unknown as MemoryLeakAutoRestartService);
       try {
         registerTerminalConfigHandlers({ ptyClient: { setResourceMonitoring: vi.fn() } } as never);

@@ -97,19 +97,27 @@ export class MemoryLeakAutoRestartService {
    * The policy was written. Every decision it no longer backs is dropped now
    * rather than at its next check, which might find the change already undone:
    * a policy turned off and on, or a threshold raised and lowered again, before
-   * a pending lookup or thaw settles.
+   * a pending lookup or thaw settles. A policy that can't be read drops them
+   * all, without failing the settings write that called this.
    */
   policyChanged(): void {
     if (this.disposed) return;
-    const policy = this.deps.readPolicy();
-    if (!policy.enabled) {
-      this.tracks.clear();
-      return;
+    try {
+      const policy = this.deps.readPolicy();
+      if (policy.enabled) {
+        const thresholdKb = policy.thresholdMb * 1024;
+        for (const track of this.tracks.values()) {
+          if (track.memoryKb <= thresholdKb) track.decision = null;
+        }
+        return;
+      }
+    } catch (err) {
+      console.warn(
+        "[MemoryLeak] Dropped pending auto-restarts: policy unreadable:",
+        formatErrorMessage(err, "unknown")
+      );
     }
-    const thresholdKb = policy.thresholdMb * 1024;
-    for (const track of this.tracks.values()) {
-      if (track.memoryKb <= thresholdKb) track.decision = null;
-    }
+    this.tracks.clear();
   }
 
   private handleBatch(metrics: TerminalResourceBatchPayload): void {
