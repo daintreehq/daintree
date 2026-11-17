@@ -2919,7 +2919,8 @@ describe("CloudHostLifecycle stale inspections (#17548)", () => {
     const newer = store.binding(bindingId)!;
     expect(newer.observation?.machine).toBe("stopped");
 
-    tick(1_000);
+    // Past the stop's deadline: the newer word must count before the deadline does.
+    tick(16 * 60_000);
     round.resolve(resource({ machine: "stopping", rawState: "archiving" }));
     await stopping;
     expect(provider.inspect).toHaveBeenCalledTimes(2);
