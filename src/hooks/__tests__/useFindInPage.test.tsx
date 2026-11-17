@@ -1294,6 +1294,26 @@ describe("useFindInPage against Electron's find sessions", () => {
     expect(result.current.isPending).toBe(false);
   });
 
+  it("searches on reopen after a guest step slipped in as the bar closed", () => {
+    const { webview, flush } = createSessionWebview(() => 3);
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+    act(() => result.current.open());
+    act(() => result.current.setQuery("FIND"));
+    flush();
+    const openBarShortcut = onFindShortcutMock.mock.calls.at(-1)![0];
+
+    act(() => {
+      result.current.close();
+      openBarShortcut({ panelId: "panel-1", shortcut: "next" });
+    });
+    flush();
+    expect(webview.stopFindInPage).toHaveBeenCalledTimes(2);
+
+    act(() => result.current.open());
+    flush();
+    expect(result.current.matchCount).toBe(3);
+  });
+
   it("is not pending once the query is emptied, and drops replies still in flight", () => {
     const { webview, flush } = createSessionWebview(() => 3);
     let renders = 0;

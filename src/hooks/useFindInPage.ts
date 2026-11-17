@@ -263,11 +263,21 @@ export function useFindInPage(
       prev.webviewElement !== webviewElement || prev.isWebviewReady !== isWebviewReady;
     const reopened = isOpen && !prev.isOpen;
     resumeTargetRef.current = { webviewElement, isWebviewReady, isOpen };
-    if (!isOpen || (!targetChanged && !reopened)) return;
+    if (!isOpen) {
+      // A guest's queued step or a navigation can still reach the open bar's
+      // listeners after close(), and ask the page again. Its reply has no
+      // listener now, and the recorded request would make a reopen skip ahead.
+      if (prev.isOpen && latestRequestRef.current) {
+        safeStopFind();
+        forgetAnswer();
+      }
+      return;
+    }
+    if (!targetChanged && !reopened) return;
     if (isWebviewReady && latestRequestRef.current?.webview === webviewElement) return;
     forgetAnswer();
     if (query && !isComposingRef.current) safeFind(query, { findNext: true });
-  }, [webviewElement, isWebviewReady, isOpen, query, forgetAnswer, safeFind]);
+  }, [webviewElement, isWebviewReady, isOpen, query, forgetAnswer, safeFind, safeStopFind]);
 
   // Listen for daintree:find-in-panel (Cmd+F from keybinding when renderer has focus)
   useEffect(() => {
