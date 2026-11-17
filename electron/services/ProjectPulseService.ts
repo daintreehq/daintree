@@ -1,5 +1,5 @@
 import type { SimpleGit } from "simple-git";
-import { createHardenedGit } from "../utils/hardenedGit.js";
+import { createStrictExitGit } from "../utils/hardenedGit.js";
 import { existsSync } from "fs";
 import { logDebug, logError } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -59,6 +59,22 @@ const NO_COMMITS_PATTERNS = [
 function isNoCommitsError(errorMessage: string): boolean {
   const lower = errorMessage.toLowerCase();
   return NO_COMMITS_PATTERNS.some((p) => lower.includes(p));
+}
+
+// The public message is fixed: git's own text can quote partial output, and
+// the renderer reads "no commits yet" in an error as an unborn repository.
+// The reason stays in the cause and the local log.
+function historyReadError(
+  what: string,
+  reason: unknown,
+  signal: AbortSignal | undefined,
+  worktreeId: string
+): Error {
+  if (signal?.aborted) {
+    return new Error("Project pulse read was cancelled", { cause: reason });
+  }
+  logError(`Failed to read ${what}`, reason, { worktreeId });
+  return new Error(`Failed to read ${what}`, { cause: reason });
 }
 
 function logProjectPulseDebug(message: string, context?: Record<string, unknown>): void {
@@ -239,7 +255,7 @@ export class ProjectPulseService {
       return { sha: PROBE_MISSING_PATH_SENTINEL, branch: undefined };
     }
     try {
-      const git = await createHardenedGit(worktreePath);
+      const git = await createStrictExitGit(worktreePath);
       const shaOut = await git.raw(["rev-parse", "--verify", "HEAD"]);
       const sha = shaOut.trim() || null;
       let branch: string | undefined;
@@ -280,7 +296,9 @@ export class ProjectPulseService {
       throw new Error(`Worktree path does not exist: ${worktreePath}`);
     }
 
-    const git = await createHardenedGit(worktreePath, signal);
+    // Strict: a git killed before it wrote anything exits non-zero with no
+    // stderr, which the lenient profile resolves as an empty, zero-commit log.
+    const git = await createStrictExitGit(worktreePath, signal);
     const startTime = Date.now();
 
     const isRepo = await git.checkIsRepo();
@@ -338,18 +356,12 @@ export class ProjectPulseService {
     // failure, never zero activity. The heatmap backs the commit total, the
     // active days and the coach line, so without it there is no pulse to show.
     if (heatmapResult.status === "rejected") {
-      throw new Error(
-        `Failed to read commit history: ${formatErrorMessage(heatmapResult.reason, "git log failed")}`,
-        { cause: heatmapResult.reason }
-      );
+      throw historyReadError("commit history", heatmapResult.reason, signal, worktreeId);
     }
     // Only asked for by callers that read the list; an empty one would claim
     // there are no commits.
     if (recentCommitsResult.status === "rejected") {
-      throw new Error(
-        `Failed to read recent commits: ${formatErrorMessage(recentCommitsResult.reason, "git log failed")}`,
-        { cause: recentCommitsResult.reason }
-      );
+      throw historyReadError("recent commits", recentCommitsResult.reason, signal, worktreeId);
     }
     const heatmap = heatmapResult.value;
     const recentCommits = recentCommitsResult.value;
@@ -363,10 +375,7 @@ export class ProjectPulseService {
       firstCommitDate = firstCommitResult.value;
     } else {
       cacheable = false;
-      logError("Failed to get first commit date", {
-        error: formatErrorMessage(firstCommitResult.reason, "git rev-list failed"),
-        worktreeId,
-      });
+      logError("Failed to get first commit date", firstCommitResult.reason, { worktreeId });
     }
     // Unknown, not zero: the streak is optional, so consumers leave it out.
     let currentStreakDays: number | undefined;
@@ -374,8 +383,7 @@ export class ProjectPulseService {
       currentStreakDays = fullStreakResult.value;
     } else {
       cacheable = false;
-      logError("Failed to get commit timestamps for full streak", {
-        error: formatErrorMessage(fullStreakResult.reason, "git log failed"),
+      logError("Failed to get commit timestamps for full streak", fullStreakResult.reason, {
         worktreeId,
       });
     }

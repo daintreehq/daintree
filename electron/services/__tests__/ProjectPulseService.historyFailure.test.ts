@@ -34,7 +34,7 @@ function isStreakLog(args: string[]): boolean {
 
 async function loadService(raw: (args: string[]) => Promise<string>) {
   vi.doMock("../../utils/hardenedGit.js", () => ({
-    createHardenedGit: () => ({ checkIsRepo: async () => true, raw }),
+    createStrictExitGit: () => ({ checkIsRepo: async () => true, raw }),
   }));
   const { ProjectPulseService } = await import("../ProjectPulseService.js");
   return new ProjectPulseService();
@@ -135,22 +135,52 @@ describe("ProjectPulseService history read failures", () => {
   });
 
   it("fails instead of listing no commits when requested recent commits can't be read", async () => {
+    let recentFails = true;
     const raw = vi.fn(async (args: string[]) => {
       if (args[0] === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") {
         return "deadbeef\n";
       }
       if (args[0] === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
-      if (args[0] === "log" && args[1] === "-n") throw new Error("fatal: bad object HEAD");
+      if (args[0] === "log" && args[1] === "-n") {
+        if (recentFails) throw new Error("fatal: bad object HEAD");
+        return `abc123\x1f${daysAgoSeconds(1)}\x1fAda\x1fFix the thing\x1e`;
+      }
       if (args[0] === "log") return HISTORY;
       return "";
     });
     const svc = await loadService(raw);
+    const withRecent = { ...OPTS, includeRecentCommits: true };
 
-    await expect(svc.getPulse({ ...OPTS, includeRecentCommits: true })).rejects.toThrow(
-      /recent commits/i
-    );
+    await expect(svc.getPulse(withRecent)).rejects.toThrow("Failed to read recent commits");
     // A caller that doesn't read the list never runs the failing query.
     expect((await svc.getPulse(OPTS)).commitsInRange).toBe(3);
+
+    recentFails = false;
+    const recovered = await svc.getPulse(withRecent);
+    expect(recovered.recentCommits.map((c) => c.sha)).toEqual(["abc123"]);
+  });
+
+  it("keeps git's own text out of the error a failed history read rejects with", async () => {
+    const raw = vi.fn(async (args: string[]) => {
+      if (args[0] === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") {
+        return "deadbeef\n";
+      }
+      if (args[0] === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
+      // HEAD went unborn between the probe and the log: the renderer reads
+      // this phrase as a new repository and would stop retrying.
+      if (isHeatmapLog(args)) {
+        throw new Error("fatal: your current branch 'main' does not have any commits yet");
+      }
+      return "";
+    });
+    const svc = await loadService(raw);
+
+    const error = await svc.getPulse(OPTS).then(
+      () => null,
+      (e: unknown) => e as Error
+    );
+    expect(error?.message).toBe("Failed to read commit history");
+    expect((error?.cause as Error | undefined)?.message).toMatch(/does not have any commits yet/);
   });
 
   it("keeps the full-window age when the root read fails, and reads it again next time", async () => {

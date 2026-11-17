@@ -28,7 +28,11 @@ vi.mock("../PulseHeatmap", () => ({
   ),
   getPulseHeatLevelBackground: () => "transparent",
 }));
-vi.mock("../PulseSummary", () => ({ PulseSummary: () => null }));
+vi.mock("../PulseSummary", () => ({
+  PulseSummary: ({ pulse }: { pulse: ProjectPulse }) => (
+    <div data-testid="pulse-summary">{pulse.commitsInRange}</div>
+  ),
+}));
 vi.mock("../PulseHealthSignals", () => ({ PulseHealthSignals: () => null }));
 
 import { usePulseStore } from "@/store/pulseStore";
@@ -76,6 +80,10 @@ async function answer(request: { resolve: (value: unknown) => void }, pulse: Pro
   await act(async () => {
     request.resolve({ ok: true, result: pulse });
   });
+}
+
+function summaryText() {
+  return screen.queryByTestId("pulse-summary")?.textContent ?? null;
 }
 
 async function fail(request: { resolve: (value: unknown) => void }) {
@@ -250,7 +258,10 @@ describe("ProjectPulseCard first load", () => {
     await fail(first);
     expect(screen.getByRole("alert").textContent).toContain("Unable to load activity data");
     expect(screen.queryByTestId("pulse-heatmap")).toBeNull();
+    expect(summaryText()).toBeNull();
     expect(screen.queryByText(/new repository/i)).toBeNull();
+    // The alert speaks for it; the card's own region adds nothing.
+    expect(liveRegionText()).toBe("");
 
     const retry = nextRequest();
     fireEvent.click(screen.getByRole("button", { name: "Retry now" }));
@@ -258,7 +269,7 @@ describe("ProjectPulseCard first load", () => {
 
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByTestId("pulse-heatmap")).toBeTruthy();
-    expect(usePulseStore.getState().getPulse("wt1")?.commitsInRange).toBe(7);
+    expect(summaryText()).toBe("7");
   });
 
   it("renders the header at once and holds the body empty until the skeleton gate", () => {
@@ -372,7 +383,7 @@ describe("ProjectPulseCard background refresh", () => {
     expect(liveRegionText()).toBe("");
   });
 
-  it("keeps the last snapshot but says the refresh failed when a refresh fails", async () => {
+  it("keeps the last snapshot but marks the footer when a refresh fails", async () => {
     const request = nextRequest();
     render(<ProjectPulseCard worktreeId="wt1" />);
 
@@ -382,20 +393,61 @@ describe("ProjectPulseCard background refresh", () => {
 
     await fail(request);
     expect(screen.getByTestId("pulse-heatmap")).toBeTruthy();
-    expect(liveRegionText()).toBe("Couldn't refresh pulse data");
+    expect(summaryText()).toBe("2");
     const footer = screen.getByTestId("pulse-last-updated");
-    expect(footer.textContent).toContain("Couldn't refresh");
-    expect(footer.getAttribute("aria-label")).toMatch(/^Retry — couldn't refresh/);
+    const visible = footer.textContent ?? "";
+    expect(visible).toContain("Couldn't refresh");
+    const name = footer.getAttribute("aria-label") ?? "";
+    expect(name).toMatch(/^Retry/);
+    expect(name.toLowerCase()).toContain(visible.toLowerCase());
+    // A retry is still scheduled, so the region stays quiet for now.
+    expect(usePulseStore.getState().getRetryCount("wt1")).toBe(1);
+    expect(liveRegionText()).toBe("");
   });
 
-  it("retries a failed refresh from the same footer button and restores the counts", async () => {
+  it("announces a failed refresh once, when the store has stopped retrying", async () => {
     const failed = nextRequest();
     render(<ProjectPulseCard worktreeId="wt1" />);
     focusProbe();
     await fail(failed);
 
+    // The store's backoff: 2s, 4s, 8s, then it gives up.
+    for (const delay of [2000, 4000, 8000]) {
+      expect(liveRegionText()).toBe("");
+      const retry = nextRequest();
+      advance(delay);
+      expect(usePulseStore.getState().isLoading("wt1")).toBe(true);
+      await fail(retry);
+    }
+
+    expect(usePulseStore.getState().getRetryCount("wt1")).toBe(0);
+    expect(liveRegionText()).toBe("Couldn't refresh pulse data");
+    expect(screen.getByTestId("pulse-last-updated").textContent).toContain("Couldn't refresh");
+    expect(summaryText()).toBe("2");
+  });
+
+  it("announces a failed manual refresh, which schedules no retry", async () => {
+    const failed = nextRequest();
+    render(<ProjectPulseCard worktreeId="wt1" />);
+    fireEvent.click(screen.getByTestId("pulse-last-updated"));
+    await fail(failed);
+
+    expect(usePulseStore.getState().getRetryCount("wt1")).toBe(0);
+    expect(liveRegionText()).toBe("Couldn't refresh pulse data");
+  });
+
+  it("retries a failed refresh from the same footer button and restores the counts", async () => {
+    render(<ProjectPulseCard worktreeId="wt1" />);
     const footer = screen.getByTestId("pulse-last-updated");
     footer.focus();
+
+    const failed = nextRequest();
+    focusProbe();
+    await fail(failed);
+    expect(screen.getByTestId("pulse-last-updated")).toBe(footer);
+    expect(document.activeElement).toBe(footer);
+    expect(summaryText()).toBe("2");
+
     const retry = nextRequest();
     fireEvent.click(footer);
     expect(dispatchMock).toHaveBeenLastCalledWith(
@@ -407,8 +459,18 @@ describe("ProjectPulseCard background refresh", () => {
     expect(screen.getByTestId("pulse-last-updated")).toBe(footer);
     expect(document.activeElement).toBe(footer);
 
-    await answer(retry, makePulse(60, { commitsInRange: 5, activeDays: 2 }));
-    expect(usePulseStore.getState().getPulse("wt1")?.commitsInRange).toBe(5);
+    await answer(
+      retry,
+      makePulse(60, {
+        heatmap: [
+          { date: "2026-11-11", count: 3, level: 3 },
+          { date: "2026-11-12", count: 2, level: 2 },
+        ],
+        commitsInRange: 5,
+        activeDays: 2,
+      })
+    );
+    expect(summaryText()).toBe("5");
     expect(footer.textContent).toContain("Updated");
     expect(footer.textContent).not.toContain("Couldn't refresh");
     expect(liveRegionText()).toBe("Pulse data updated");

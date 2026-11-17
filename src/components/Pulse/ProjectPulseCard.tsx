@@ -230,6 +230,13 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
   const lastFocusProbeRef = useRef(0);
   const minuteTick = useGlobalMinuteTicker();
   const heatmapScrollerRef = useRef<HTMLDivElement>(null);
+  // Read by the settle effect without being one of its triggers: a count
+  // change alone must not rerun it and drop the manual-refresh press feedback.
+  // Declared before it, so it holds the count of the render being settled.
+  const retryCountRef = useRef(retryCount);
+  useEffect(() => {
+    retryCountRef.current = retryCount;
+  }, [retryCount]);
 
   // Declared before the settle effect so a worktree switch drops the baseline
   // (and any "Refreshing" said about the last worktree) before that effect
@@ -259,7 +266,9 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     const changed = settled !== null && previous !== null && !isSamePulseData(previous, settled);
     // A failure with a snapshot still up is said here: the error row that
     // announces a failure with nothing to show never renders in that case.
-    const refreshFailed = !!error && !!pulse;
+    // While the store still has a retry scheduled the footer carries it alone,
+    // so one failed probe and its backoff retries are announced once, at the end.
+    const refreshFailed = !!error && !!pulse && retryCountRef.current === 0;
     setRefreshAnnouncement(
       changed ? "Pulse data updated" : refreshFailed ? "Couldn't refresh pulse data" : ""
     );
@@ -407,9 +416,10 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
             // Not `disabled`: pressing it would drop keyboard focus to the page.
             aria-disabled={isLoading}
             className="pulse-control mt-2 -ml-2.5 text-2xs aria-disabled:cursor-not-allowed"
+            // Each name contains its visible label, for speech input.
             aria-label={
               refreshFailed
-                ? `Retry — couldn't refresh, last updated ${updatedLabel}`
+                ? `Retry — couldn't refresh · updated ${updatedLabel}`
                 : `Refresh — last updated ${updatedLabel}`
             }
             data-testid="pulse-last-updated"
