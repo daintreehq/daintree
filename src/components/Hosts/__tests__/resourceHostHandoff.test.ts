@@ -324,6 +324,19 @@ describe("resource box handoff", () => {
     expect(outcome).toEqual({ status: "waiting", hostId: "dt-feature-x" });
   });
 
+  it("opens Host setup with the switch after it set to ask first when it can't open now", async () => {
+    client.probe.mockResolvedValue(probeResult({ hostModeListening: false }));
+
+    const outcome = await openResourceBoxOnHost({ ...box, placeNow: () => false });
+
+    expect(client.update).toHaveBeenCalledWith({
+      hostId: "dt-feature-x",
+      pendingPlacement: expect.objectContaining({ askFirst: true }),
+    });
+    expect(requestHostUpdate).toHaveBeenCalledWith("dt-feature-x", "setup");
+    expect(outcome).toEqual({ status: "setup", hostId: "dt-feature-x" });
+  });
+
   it("switches straight away when it can open now", async () => {
     client.probe.mockResolvedValue(probeResult({ hostModeListening: true }));
 

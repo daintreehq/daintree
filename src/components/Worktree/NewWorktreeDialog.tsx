@@ -309,7 +309,7 @@ export function NewWorktreeDialog({
   const [currentUser, setCurrentUser] = useState<string | undefined>(undefined);
   const [currentUserAvatar, setCurrentUserAvatar] = useState<string | undefined>(undefined);
 
-  const { projectSettings, configuredBranchPrefix, resourceEnvironments } =
+  const { projectSettings, configuredBranchPrefix, resourceEnvironments, environmentsLoaded } =
     useNewWorktreeProjectSettings({ isOpen });
 
   const hasAnyEnvironments = usableEnvironmentKeys(resourceEnvironments).length > 0;
@@ -1498,8 +1498,12 @@ export function NewWorktreeDialog({
     };
   };
   const placementPending = placement?.status === "pending";
+  // A Retry that was to open on its machine waits for the list that says
+  // whether it still can: submitted before, it would start its agent here.
+  const handoffAwaitingEnvironments = openOnMachineFor !== null && !environmentsLoaded;
   const submitDisabled =
     placementPending ||
+    handoffAwaitingEnvironments ||
     (placement?.unavailable ?? null) !== null ||
     (cloudMachine?.blocked ?? null) !== null ||
     formNotReady ||

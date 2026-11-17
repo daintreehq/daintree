@@ -47,6 +47,20 @@ describe("useNewWorktreeProjectSettings — environments (#17358)", () => {
     await waitFor(() =>
       expect(Object.keys(result.current.resourceEnvironments ?? {})).toEqual(["cloud", "gpu"])
     );
+    await waitFor(() => expect(result.current.environmentsLoaded).toBe(true));
+  });
+
+  it("isn't loaded until the host has answered, or failed to", async () => {
+    getSettings.mockResolvedValue({});
+    let answer!: (value: unknown) => void;
+    hasResourceConfig.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+
+    const { result } = renderHook(() => useNewWorktreeProjectSettings({ isOpen: true }));
+
+    await waitFor(() => expect(result.current.projectSettings).not.toBeNull());
+    expect(result.current.environmentsLoaded).toBe(false);
+    answer({ hasConfig: false });
+    await waitFor(() => expect(result.current.environmentsLoaded).toBe(true));
   });
 
   it("keeps Project settings' own answer from a host that doesn't list its environments", async () => {

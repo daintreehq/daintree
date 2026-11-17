@@ -2,9 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostDescriptor } from "@shared/types/remoteHosts";
 
 const dispatch = vi.hoisted(() => vi.fn());
+const port = vi.hoisted(() => ({ ready: true, listeners: new Set<() => void>() }));
 const worktreeClient = vi.hoisted(() => ({
   getAllWithStatus: vi.fn(),
   resourceAction: vi.fn(),
+  isPortReady: () => port.ready,
+  onPortReady: (listener: () => void) => {
+    port.listeners.add(listener);
+    return () => port.listeners.delete(listener);
+  },
 }));
 const hostsClient = vi.hoisted(() => ({
   probe: vi.fn(),
@@ -132,6 +138,8 @@ describe("openCreatedWorktreeOnMachine", () => {
     view.observable = true;
     view.cached = false;
     view.listeners.clear();
+    port.ready = true;
+    port.listeners.clear();
     switches.current = null;
     switches.request.mockReturnValue(1);
     store.worktrees = new Map([
@@ -466,11 +474,9 @@ describe("openCreatedWorktreeOnMachine", () => {
     expect(lastNotice()?.message).toContain("Permission denied (publickey).");
   });
 
-  it("waits out a cached view before asking the status, and asks again after its port was retired", async () => {
+  it("waits out a cached view and its port's return before asking the status", async () => {
     view.cached = true;
-    worktreeClient.resourceAction.mockImplementationOnce(async () => {
-      throw new Error("[BrokerError|HOST_EXITED] Worktree port retired");
-    });
+    port.ready = false;
 
     const pending = openCreatedWorktreeOnMachine(request, { clock });
     await vi.waitFor(() => expect(view.listeners.size).toBe(1));
@@ -478,11 +484,44 @@ describe("openCreatedWorktreeOnMachine", () => {
 
     view.cached = false;
     for (const listener of [...view.listeners]) listener();
+    await vi.waitFor(() => expect(port.listeners.size).toBe(1));
+    expect(worktreeClient.resourceAction).not.toHaveBeenCalled();
+
+    port.ready = true;
+    for (const listener of [...port.listeners]) listener();
     const outcome = await pending;
 
-    expect(worktreeClient.resourceAction).toHaveBeenCalledTimes(2);
+    expect(worktreeClient.resourceAction).toHaveBeenCalledTimes(1);
     expect(view.listeners.size).toBe(0);
+    expect(port.listeners.size).toBe(0);
     expect(outcome).toEqual({ status: "placing", hostId: "dt-feature-x" });
+  });
+
+  it("asks again, a second apart, when the port went away under the status run", async () => {
+    worktreeClient.resourceAction
+      .mockImplementationOnce(async () => {
+        throw new Error("[BrokerError|HOST_EXITED] Worktree port retired");
+      })
+      .mockImplementationOnce(async () => {
+        throw new Error("[BrokerError|HOST_EXITED] Worktree port not ready");
+      });
+
+    const outcome = await openCreatedWorktreeOnMachine(request, { clock });
+
+    expect(worktreeClient.resourceAction).toHaveBeenCalledTimes(3);
+    expect(sleeps).toEqual([1_000, 1_000]);
+    expect(outcome).toEqual({ status: "placing", hostId: "dt-feature-x" });
+  });
+
+  it("never retries a status command that itself failed", async () => {
+    worktreeClient.resourceAction.mockRejectedValue(
+      new Error("[BrokerError|TIMEOUT] resource-action timed out")
+    );
+
+    const outcome = await openCreatedWorktreeOnMachine(request, { clock });
+
+    expect(worktreeClient.resourceAction).toHaveBeenCalledTimes(1);
+    expect(outcome).toMatchObject({ status: "error" });
   });
 
   it("stops quietly when the worktree is deleted while setup runs", async () => {
@@ -516,6 +555,15 @@ describe("openCreatedWorktreeOnMachine", () => {
 
     expect(outcome).toEqual({ status: "gone" });
     expect(hostsClient.probe).not.toHaveBeenCalled();
+  });
+
+  it("never takes the host's row for a new worktree made at the same path", async () => {
+    hostRow = { ...hostRow, generation: 2 };
+
+    const outcome = await openCreatedWorktreeOnMachine(request, { clock });
+
+    expect(outcome).toEqual({ status: "gone" });
+    expect(worktreeClient.resourceAction).not.toHaveBeenCalled();
   });
 
   it("stops quietly when the worktree is switched to another environment", async () => {

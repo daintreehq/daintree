@@ -313,6 +313,7 @@ const projectSettingsFixture = vi.hoisted(() => ({
   } | null,
   /** What the hook lists in place of Project settings' none: a settings file's, read by the host. */
   hostEnvironments: undefined as Record<string, object> | undefined,
+  environmentsLoaded: true,
 }));
 vi.mock("@/components/Worktree/hooks/useNewWorktreeProjectSettings", () => ({
   useNewWorktreeProjectSettings: () => ({
@@ -320,6 +321,7 @@ vi.mock("@/components/Worktree/hooks/useNewWorktreeProjectSettings", () => ({
     configuredBranchPrefix: "",
     resourceEnvironments:
       projectSettingsFixture.value?.resourceEnvironments ?? projectSettingsFixture.hostEnvironments,
+    environmentsLoaded: projectSettingsFixture.environmentsLoaded,
   }),
 }));
 
@@ -4505,6 +4507,7 @@ describe("NewWorktreeDialog — open on its environment's machine (#17358)", () 
   afterEach(() => {
     machineHandoff.offered = false;
     projectSettingsFixture.hostEnvironments = undefined;
+    projectSettingsFixture.environmentsLoaded = true;
     recipeFixtures.recipes = [];
     firstAgentFixtures.lastAgentByProject = {};
     recipePickerCalls.selected = null;
@@ -4631,9 +4634,7 @@ describe("NewWorktreeDialog — open on its environment's machine (#17358)", () 
     expect(detail?.textContent).toContain("it's added for this worktree and removed with it");
     expect(detail?.textContent).toContain("Host setup opens to install and start it first");
     expect(screen.getByTestId("first-agent-picker").getAttribute("data-disabled")).toBe("true");
-    expect(
-      (document.getElementById("recipe-selector-trigger") as HTMLButtonElement | null)?.disabled
-    ).toBe(true);
+    expect(document.getElementById("recipe-selector-trigger")?.hasAttribute("disabled")).toBe(true);
     expect((screen.getByTestId("first-agent-prompt") as HTMLTextAreaElement).disabled).toBe(true);
   });
 
@@ -4773,6 +4774,41 @@ describe("NewWorktreeDialog — open on its environment's machine (#17358)", () 
     expect(machineHandoff.open).toHaveBeenCalledWith(
       expect.objectContaining({ worktreeId: "new-wt-id", environment: "cloud" })
     );
+  });
+
+  it("holds a Retry that was to open on its machine until the environments have loaded", async () => {
+    projectSettingsFixture.environmentsLoaded = false;
+    const draft = retryDraft({
+      baseBranch: "main",
+      branchMode: "new",
+      worktreeMode: "cloud",
+      agentId: "claude",
+      openOnMachine: true,
+    });
+    const onClose = vi.fn();
+    const view = renderDialog({ restoreDraft: draft, onClose });
+    await advanceTimersGradually(800);
+
+    await submit();
+    expect(actionCalls("worktree.create")).toHaveLength(0);
+
+    projectSettingsFixture.environmentsLoaded = true;
+    view.rerender(
+      <NewWorktreeDialog
+        isOpen={true}
+        onClose={onClose}
+        rootPath="/test/root"
+        restoreDraft={draft}
+      />
+    );
+    await advanceTimersGradually(100);
+    await submit();
+
+    expect(machineHandoff.open).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(actionCalls("agent.launch")).toHaveLength(0);
   });
 
   it("drops the choice on a Retry whose environment is no longer listed", async () => {

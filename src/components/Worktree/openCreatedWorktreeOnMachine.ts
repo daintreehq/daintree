@@ -1,5 +1,4 @@
 import type { WorktreeSetupState, WorktreeState } from "@shared/types";
-import type { WorktreeSnapshot } from "@shared/types/workspace-host";
 import { worktreeClient } from "@/clients";
 import { currentHostSwitchRequest } from "@/components/HostSwitch/hostSwitchRequests";
 import {
@@ -39,8 +38,13 @@ const STATUS_RECHECK_MS = 10_000;
  */
 const FRESH_READ_ATTEMPTS = 10;
 const FRESH_READ_INTERVAL_MS = 200;
-/** A status run cut off by this view's port being retired is asked again, this many times. */
-const PORT_RETRIES = 2;
+/**
+ * A status run cut off by this view's port going away is asked again, this
+ * many times, a second apart: a view shown again gets its port back a moment
+ * after it's shown.
+ */
+const PORT_RETRIES = 5;
+const PORT_RETRY_MS = 1_000;
 
 export interface CreatedWorktreeOnMachine {
   worktreeId: string;
@@ -104,10 +108,13 @@ function trackWorktree(worktreeId: string, environment: string): Tracker {
     // mode; after it has had it, none is Local.
     return mode === undefined && !hadEnvironment;
   };
-  const sameMonitor = (row: WorktreeSnapshot): boolean => {
-    if (row.generation === undefined) return true;
-    generation ??= row.generation;
-    return row.generation === generation;
+  // The host stamps each monitor it builds for a path; a new one is a new worktree there.
+  const sameMonitor = (row: object): boolean => {
+    const stamp =
+      "generation" in row && typeof row.generation === "number" ? row.generation : undefined;
+    if (stamp === undefined) return true;
+    generation ??= stamp;
+    return stamp === generation;
   };
   return {
     isCurrent: () => {
@@ -116,7 +123,8 @@ function trackWorktree(worktreeId: string, environment: string): Tracker {
       seen = true;
       return sameMonitor(row) && inEnvironment(row.worktreeMode);
     },
-    matches: (row) => row.worktreeMode === environment && inEnvironment(row.worktreeMode),
+    matches: (row) =>
+      sameMonitor(row) && row.worktreeMode === environment && inEnvironment(row.worktreeMode),
   };
 }
 
@@ -146,22 +154,41 @@ function whenViewActive(): Promise<void> {
   });
 }
 
+/** Resolves once this view's worktree port is attached; at once when it is. */
+function whenPortReady(): Promise<void> {
+  if (worktreeClient.isPortReady()) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const unsubscribe = worktreeClient.onPortReady(() => {
+      if (settled) return;
+      settled = true;
+      queueMicrotask(() => unsubscribe());
+      resolve();
+    });
+  });
+}
+
 /**
  * A resource action goes over this view's worktree port, which main retires
- * while the view is cached (another project in front): the run waits for the
- * view to come back rather than failing, and one the retirement cut off is
- * asked again.
+ * while the view is cached (another project in front) and attaches again a
+ * moment after it's shown: the run waits for both rather than failing, and
+ * one the port's going cut off is asked again. Resolves with when the run
+ * that answered started, which its answer is stamped after.
  */
-async function runStatus(worktreeId: string): Promise<void> {
+async function runStatus(worktreeId: string, tracker: Tracker, clock: Clock): Promise<number> {
   for (let attempt = 0; ; attempt++) {
     await whenViewActive();
+    await whenPortReady();
+    if (!tracker.isCurrent()) throw new Gone();
+    const startedAt = Date.now();
     try {
       await worktreeClient.resourceAction(worktreeId, "status");
-      return;
+      return startedAt;
     } catch (err) {
       if (attempt >= PORT_RETRIES || !isClientBrokerError(err) || err.code !== "HOST_EXITED") {
         throw err;
       }
+      await clock.sleep(PORT_RETRY_MS);
     }
   }
 }
@@ -240,8 +267,7 @@ async function findMachine(
     if (!before.hasStatusCommand) return { status: "no-status-command" };
     // Asked now even when a poll has answered: only a status run after
     // provisioning says what this box is.
-    const since = Date.now();
-    await runStatus(worktreeId);
+    const since = await runStatus(worktreeId, tracker, clock);
     const after = await readStatusAnswer(worktreeId, since, tracker, clock);
     const status = after.resourceStatus;
     if (status?.ssh) {
@@ -297,7 +323,7 @@ async function runHandoff(
         title: "Waiting to open on its machine",
         message: `Setup is waiting for you to approve its commands. ${request.label} opens on its machine once setup finishes.`,
         correlationId: request.worktreeId,
-        context: { worktreeId: request.worktreeId },
+        context: { worktreeId: request.worktreeId, eventKind: "connectivity" },
       });
     },
     clock
@@ -339,7 +365,11 @@ function once(run: () => void): () => void {
 
 function report(request: CreatedWorktreeOnMachine, outcome: MachineHandoffOutcome): void {
   const { worktreeId, label, environment } = request;
-  const base = { correlationId: worktreeId, context: { worktreeId } } as const;
+  // As the other notices about getting a project onto a host are.
+  const base = {
+    correlationId: worktreeId,
+    context: { worktreeId, eventKind: "connectivity" },
+  } as const;
   // On the grid bar, like an agent handed back after setup: the dialog that
   // asked is long closed, and an inbox row can't carry the action.
   const handBack = { placement: "grid-bar", urgent: true, duration: 0 } as const;

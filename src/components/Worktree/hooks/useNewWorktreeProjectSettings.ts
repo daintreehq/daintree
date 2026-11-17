@@ -16,6 +16,8 @@ export interface UseNewWorktreeProjectSettingsResult {
    * file, which it falls back to in the same order.
    */
   resourceEnvironments: Record<string, unknown> | undefined;
+  /** Both lists have answered (or failed), so `resourceEnvironments` is the whole of it. */
+  environmentsLoaded: boolean;
 }
 
 export function useNewWorktreeProjectSettings({
@@ -26,6 +28,7 @@ export function useNewWorktreeProjectSettings({
   const [projectSettings, setProjectSettings] = useState<ProjectSettings | null>(null);
   const [gitUsername, setGitUsername] = useState<string | null>(null);
   const [hostEnvironmentKeys, setHostEnvironmentKeys] = useState<string[]>([]);
+  const [hostEnvironmentsAnswered, setHostEnvironmentsAnswered] = useState(false);
 
   const { recipes, loadRecipes } = useRecipeStore();
   const currentProject = useProjectStore((s) => s.currentProject);
@@ -72,6 +75,7 @@ export function useNewWorktreeProjectSettings({
   }, [isOpen, currentProject, recipes.length, loadRecipes]);
 
   useEffect(() => {
+    setHostEnvironmentsAnswered(false);
     if (!isOpen || !currentProject) {
       setHostEnvironmentKeys([]);
       return;
@@ -83,7 +87,10 @@ export function useNewWorktreeProjectSettings({
         if (current) setHostEnvironmentKeys(environmentKeys ?? []);
       })
       // Project settings' own list still stands.
-      .catch((err) => logError("Failed to read the host's resource environments", err));
+      .catch((err) => logError("Failed to read the host's resource environments", err))
+      .finally(() => {
+        if (current) setHostEnvironmentsAnswered(true);
+      });
     return () => {
       current = false;
     };
@@ -104,5 +111,11 @@ export function useNewWorktreeProjectSettings({
     return "";
   }, [projectSettings, gitUsername]);
 
-  return { projectSettings, gitUsername, configuredBranchPrefix, resourceEnvironments };
+  return {
+    projectSettings,
+    gitUsername,
+    configuredBranchPrefix,
+    resourceEnvironments,
+    environmentsLoaded: projectSettings !== null && hostEnvironmentsAnswered,
+  };
 }
