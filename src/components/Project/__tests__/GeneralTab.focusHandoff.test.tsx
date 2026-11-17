@@ -42,7 +42,13 @@ function Harness() {
   return (
     <GeneralTab
       currentProject={
-        { id: "test-project", path: "/tmp/p", name: "p", emoji: "", lastOpened: 0 } as never
+        {
+          id: "test-project",
+          path: "/tmp/p",
+          name: "p",
+          emoji: "",
+          lastOpened: 0,
+        } satisfies Partial<Project> as Project
       }
       name=""
       onNameChange={vi.fn()}
