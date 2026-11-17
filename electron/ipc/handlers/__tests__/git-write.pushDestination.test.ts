@@ -1424,6 +1424,7 @@ describe("git-write commit and working diff", () => {
       ["an indented marker", "  <<<<<<< HEAD\n"],
       ["a mid-line marker", "inline >>>>>>> text\n"],
       ["a marker with text glued to it", "<<<<<<<HEAD\n"],
+      ["a wide run with text glued to it", ">>>>>>>>nested quote\n"],
       ["a run followed by a vertical tab", "<<<<<<<\vHEAD\n"],
       ["a run of six", "<<<<<< HEAD\n"],
     ])("does not block %s", async (_name, content) => {

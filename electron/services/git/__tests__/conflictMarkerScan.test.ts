@@ -235,7 +235,7 @@ describe("scanStagedFilesForConflictMarkers (real git)", () => {
   it("finds a diff3 base marker in a CRLF file stored byte for byte", async () => {
     // `-text` keeps git from normalising the CRs away, whatever the user's
     // global attributes or autocrlf say.
-    fs.writeFileSync(path.join(repoDir, ".git", "info", "attributes"), "crlf.txt -text\n");
+    write(".git/info/attributes", "crlf.txt -text\n");
     write("crlf.txt", "one\r\n||||||| base\r\ntwo\r\n");
     git(["add", "crlf.txt"]);
 
