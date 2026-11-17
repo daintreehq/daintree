@@ -311,11 +311,15 @@ const projectSettingsFixture = vi.hoisted(() => ({
     defaultWorktreeRecipeId?: string;
     resourceEnvironments?: Record<string, object>;
   } | null,
+  /** What the hook lists in place of Project settings' none: a settings file's, read by the host. */
+  hostEnvironments: undefined as Record<string, object> | undefined,
 }));
 vi.mock("@/components/Worktree/hooks/useNewWorktreeProjectSettings", () => ({
   useNewWorktreeProjectSettings: () => ({
     projectSettings: projectSettingsFixture.value,
     configuredBranchPrefix: "",
+    resourceEnvironments:
+      projectSettingsFixture.value?.resourceEnvironments ?? projectSettingsFixture.hostEnvironments,
   }),
 }));
 
@@ -4500,6 +4504,8 @@ describe("NewWorktreeDialog — open on its environment's machine (#17358)", () 
 
   afterEach(() => {
     machineHandoff.offered = false;
+    projectSettingsFixture.hostEnvironments = undefined;
+    recipeFixtures.recipes = [];
     firstAgentFixtures.lastAgentByProject = {};
     recipePickerCalls.selected = null;
     projectSettingsFixture.value = null;
@@ -4571,6 +4577,7 @@ describe("NewWorktreeDialog — open on its environment's machine (#17358)", () 
     await pickEnvironment("cloud");
     await chooseOpenOnMachine();
 
+    const placedSubmit = vi.fn();
     await act(async () => {
       placement.onCommitChange?.({
         hostId: "studio-02",
@@ -4579,12 +4586,33 @@ describe("NewWorktreeDialog — open on its environment's machine (#17358)", () 
         status: "idle",
         unavailable: null,
         relativePath: null,
-        submit: vi.fn(),
+        submit: placedSubmit,
       });
     });
 
     expect(screen.queryByTestId("open-on-machine")).toBeNull();
-    expect(screen.getByTestId("first-agent-picker").getAttribute("data-disabled")).toBe("true");
+    await submit();
+    expect(placedSubmit).toHaveBeenCalledTimes(1);
+    expect(actionCalls("worktree.create")).toHaveLength(0);
+    expect(machineHandoff.open).not.toHaveBeenCalled();
+  });
+
+  it("lists a settings file's environments when Project settings has none, and offers it there", async () => {
+    projectSettingsFixture.value = {};
+    projectSettingsFixture.hostEnvironments = { cloud: {} };
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await pickEnvironment("cloud");
+    await chooseOpenOnMachine();
+    await submit();
+
+    expect(actionCalls("worktree.create")[0]?.[1]).toMatchObject({
+      options: { provisionResource: true, worktreeMode: "cloud" },
+    });
+    expect(machineHandoff.open).toHaveBeenCalledWith(
+      expect.objectContaining({ environment: "cloud" })
+    );
   });
 
   it("names what Create will do and turns the agent and recipe off here", async () => {
@@ -4593,12 +4621,15 @@ describe("NewWorktreeDialog — open on its environment's machine (#17358)", () 
     await advanceTimersGradually(500);
     await pickEnvironment("cloud");
     expect(screen.getByTestId("first-agent-picker").getAttribute("data-disabled")).toBeNull();
+    expect((screen.getByTestId("first-agent-prompt") as HTMLTextAreaElement).disabled).toBe(false);
 
     await chooseOpenOnMachine();
 
-    expect(screen.getByTestId("open-on-machine-detail").textContent).toContain(
-      "Once cloud's status names its ssh machine"
-    );
+    const toggle = screen.getByRole("checkbox", { name: "Open on its machine" });
+    const detail = document.getElementById(toggle.getAttribute("aria-describedby") ?? "");
+    expect(detail?.textContent).toContain("Once cloud's status names its ssh machine");
+    expect(detail?.textContent).toContain("it's added for this worktree and removed with it");
+    expect(detail?.textContent).toContain("Host setup opens to install and start it first");
     expect(screen.getByTestId("first-agent-picker").getAttribute("data-disabled")).toBe("true");
     expect(
       (document.getElementById("recipe-selector-trigger") as HTMLButtonElement | null)?.disabled
@@ -4639,21 +4670,82 @@ describe("NewWorktreeDialog — open on its environment's machine (#17358)", () 
     );
   });
 
-  it("creates as before when it isn't chosen", async () => {
+  it("creates as before when it isn't chosen, starting the agent here", async () => {
+    firstAgentFixtures.lastAgentByProject = { "test-project": "claude" };
     renderDialog();
     await advanceTimersGradually(500);
     await nameBranch();
     await pickEnvironment("cloud");
     await submit();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
 
     expect(actionCalls("worktree.create")).toHaveLength(1);
     expect(machineHandoff.open).not.toHaveBeenCalled();
+    expect(actionCalls("agent.launch")).toHaveLength(1);
     expect(mockAddPendingCreation.mock.calls.at(-1)?.[1]).not.toHaveProperty("openOnMachine");
+  });
+
+  it("never remembers an agent or recipe that was off because the worktree left", async () => {
+    recipeFixtures.recipes = [{ id: "global-work", name: "Work", terminals: [] }];
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("pick-agent-claude"));
+    });
+    await act(async () => {
+      fireEvent.click(document.getElementById("recipe-selector-option-2")!);
+    });
+    await pickEnvironment("cloud");
+    await chooseOpenOnMachine();
+    await submit();
+
+    expect(machineHandoff.open).toHaveBeenCalledTimes(1);
+    expect(mockSetLastAgent).not.toHaveBeenCalled();
+    expect(mockSetLastRecipe).not.toHaveBeenCalled();
+  });
+
+  it("names the branch the host made, not the one asked for", async () => {
+    mockDispatch.mockImplementation(async (actionId: string) =>
+      actionId === "worktree.create"
+        ? { ok: true, result: { worktreeId: "new-wt-id", branch: "feature/test-2" } }
+        : { ok: true, result: undefined }
+    );
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await pickEnvironment("cloud");
+    await chooseOpenOnMachine();
+    await submit();
+
+    expect(machineHandoff.open).toHaveBeenCalledWith(
+      expect.objectContaining({ label: "feature/test-2" })
+    );
+  });
+
+  it("starts no handoff when the create fails", async () => {
+    mockDispatch.mockImplementation(async (actionId: string) =>
+      actionId === "worktree.create"
+        ? { ok: false, error: { message: "Branch already exists" } }
+        : { ok: true, result: undefined }
+    );
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await pickEnvironment("cloud");
+    await chooseOpenOnMachine();
+    await submit();
+
+    expect(actionCalls("worktree.create")).toHaveLength(1);
+    expect(machineHandoff.open).not.toHaveBeenCalled();
   });
 
   it("asks again after a switch to another environment", async () => {
     renderDialog();
     await advanceTimersGradually(500);
+    await nameBranch();
     await pickEnvironment("cloud");
     await chooseOpenOnMachine();
     expect(screen.getByTestId("open-on-machine").getAttribute("aria-checked")).toBe("true");
@@ -4661,6 +4753,8 @@ describe("NewWorktreeDialog — open on its environment's machine (#17358)", () 
     await pickEnvironment("staging");
 
     expect(screen.getByTestId("open-on-machine").getAttribute("aria-checked")).toBe("false");
+    await submit();
+    expect(machineHandoff.open).not.toHaveBeenCalled();
   });
 
   it("keeps the choice through a Retry", async () => {
@@ -4679,5 +4773,21 @@ describe("NewWorktreeDialog — open on its environment's machine (#17358)", () 
     expect(machineHandoff.open).toHaveBeenCalledWith(
       expect.objectContaining({ worktreeId: "new-wt-id", environment: "cloud" })
     );
+  });
+
+  it("drops the choice on a Retry whose environment is no longer listed", async () => {
+    renderDialog({
+      restoreDraft: retryDraft({
+        baseBranch: "main",
+        branchMode: "new",
+        worktreeMode: "gone-env",
+        openOnMachine: true,
+      }),
+    });
+    await advanceTimersGradually(800);
+
+    expect(screen.queryByTestId("open-on-machine")).toBeNull();
+    await submit();
+    expect(machineHandoff.open).not.toHaveBeenCalled();
   });
 });

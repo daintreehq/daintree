@@ -200,7 +200,9 @@ export function NewWorktreeDialog({
   const [selectedExistingBranch, setSelectedExistingBranch] = useState<string | null>(null);
   const [recentBranchNames, setRecentBranchNames] = useState<string[]>([]);
   const [worktreeMode, setWorktreeMode] = useState<string>("local");
-  const [openOnMachine, setOpenOnMachine] = useState(false);
+  // The environment whose machine the worktree is to open on, so the choice
+  // never carries over to another environment however the pick changes.
+  const [openOnMachineFor, setOpenOnMachineFor] = useState<string | null>(null);
   const isCreatingRef = useRef(false);
   const baseBranchTouchedRef = useRef(false);
   // Set once the bootstrap has run for this open, so a Retry refetches the
@@ -307,9 +309,9 @@ export function NewWorktreeDialog({
   const [currentUser, setCurrentUser] = useState<string | undefined>(undefined);
   const [currentUserAvatar, setCurrentUserAvatar] = useState<string | undefined>(undefined);
 
-  const { projectSettings, configuredBranchPrefix } = useNewWorktreeProjectSettings({ isOpen });
+  const { projectSettings, configuredBranchPrefix, resourceEnvironments } =
+    useNewWorktreeProjectSettings({ isOpen });
 
-  const resourceEnvironments = projectSettings?.resourceEnvironments;
   const hasAnyEnvironments = usableEnvironmentKeys(resourceEnvironments).length > 0;
 
   const persistedDefaultRecipeId = projectSettings?.defaultWorktreeRecipeId;
@@ -565,7 +567,7 @@ export function NewWorktreeDialog({
       setBranchMode(restoredExisting ? "existing" : "new");
       setSelectedExistingBranch(restoredExisting ? restoreDraft.branch : null);
       setWorktreeMode(restoreDraft?.worktreeMode ?? "local");
-      setOpenOnMachine(restoreDraft?.openOnMachine === true);
+      setOpenOnMachineFor(restoreDraft?.openOnMachine ? (restoreDraft.worktreeMode ?? null) : null);
     }
     // resetErrors() is NOT called here — touched refs are managed by individual hooks
 
@@ -846,7 +848,13 @@ export function NewWorktreeDialog({
   // box gets a name is known only from its status once it's provisioned,
   // whichever file or setting the environment came from.
   const machineHandoffOffered =
-    worktreeMode !== "local" && !placementElsewhere && !!projectId && canOfferResourceBoxHandoff();
+    worktreeMode !== "local" &&
+    !placementElsewhere &&
+    !!projectId &&
+    // A Retry's environment that's no longer listed has no row to show the choice in.
+    usableEnvironmentKeys(resourceEnvironments).includes(worktreeMode) &&
+    canOfferResourceBoxHandoff();
+  const openOnMachine = openOnMachineFor !== null && openOnMachineFor === worktreeMode;
   // Leaving for the box, nothing starts here: an agent or a layout started
   // now would run on this machine, not on the one the worktree opens on.
   const openOnMachineChosen = machineHandoffOffered && openOnMachine;
@@ -863,7 +871,7 @@ export function NewWorktreeDialog({
   // while closed, so the subscription exists only while `active`: a store
   // selector would run on every status flush of a streaming agent (#17053).
   const cloneStartsAgent = useCloneStartsAgent(
-    isOpen && selectedRecipeId === CLONE_LAYOUT_ID && !!activeWorktreeId,
+    isOpen && selectedRecipeId === CLONE_LAYOUT_ID && !!activeWorktreeId && !openOnMachineChosen,
     activeWorktreeId
   );
   // The layout's own agent wins, so the dialog's agent and its prompt never
@@ -978,8 +986,9 @@ export function NewWorktreeDialog({
 
     // Picks become the project's remembered setup only when they create
     // something: a discarded dialog leaves the next one as this one opened.
-    // An untouched field keeps following whatever seeded it.
-    if (projectId && !snapCloudMachine) {
+    // An untouched field keeps following whatever seeded it, and one that
+    // was off because the worktree leaves for its machine wasn't used.
+    if (projectId && !snapCloudMachine && !snapOpenOnMachine) {
       if (errors.touchedFields.recipe) {
         setLastSelectedWorktreeRecipeIdByProject(projectId, snapRecipeId);
       }
@@ -1185,7 +1194,8 @@ export function NewWorktreeDialog({
             worktreeId,
             projectId: snapProjectId,
             environment: snapWorktreeMode,
-            label: fullBranchName,
+            // What the host made, which a name taken meanwhile can differ from.
+            label: createdBranch || fullBranchName,
           });
         } else if (snapRecipeId === CLONE_LAYOUT_ID && snapSourceWorktreeId) {
           const notifyCloneFailed = (cloneErr: unknown) => {
@@ -2022,7 +2032,9 @@ export function NewWorktreeDialog({
                               <OpenOnMachineToggle
                                 worktreeMode={worktreeMode}
                                 checked={openOnMachine}
-                                onCheckedChange={setOpenOnMachine}
+                                onCheckedChange={(checked) =>
+                                  setOpenOnMachineFor(checked ? worktreeMode : null)
+                                }
                               />
                             )}
                           </div>
@@ -2031,11 +2043,7 @@ export function NewWorktreeDialog({
                     >
                       <EnvironmentRadioGroup
                         worktreeMode={worktreeMode}
-                        onChange={(mode) => {
-                          setWorktreeMode(mode);
-                          // Asked of one environment's box, not whichever is picked next.
-                          setOpenOnMachine(false);
-                        }}
+                        onChange={setWorktreeMode}
                         resourceEnvironments={resourceEnvironments}
                         hasAnyEnvironments={hasAnyEnvironments}
                         describedBy={

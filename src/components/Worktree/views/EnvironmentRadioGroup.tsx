@@ -95,9 +95,10 @@ export function OpenOnMachineToggle({
           className="text-xs text-balance text-text-secondary"
           data-testid="open-on-machine-detail"
         >
-          Once {worktreeMode}&apos;s status names its ssh machine, the machine is added as a host,
-          set up if Daintree isn&apos;t running there, and this branch opens on it. The recipe and
-          agent don&apos;t start on this machine.
+          Once {worktreeMode}&apos;s status names its ssh machine, this branch opens there. If the
+          machine isn&apos;t in your host list, it&apos;s added for this worktree and removed with
+          it. If Daintree isn&apos;t running there, Host setup opens to install and start it first.
+          The recipe and agent don&apos;t start on this machine.
         </p>
       )}
     </div>

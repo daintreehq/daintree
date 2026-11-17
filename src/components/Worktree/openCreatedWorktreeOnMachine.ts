@@ -1,18 +1,21 @@
 import type { WorktreeSetupState, WorktreeState } from "@shared/types";
+import type { WorktreeSnapshot } from "@shared/types/workspace-host";
 import { worktreeClient } from "@/clients";
-import {
-  currentHostSwitchRequest,
-  subscribeHostSwitchRequests,
-} from "@/components/HostSwitch/hostSwitchRequests";
+import { currentHostSwitchRequest } from "@/components/HostSwitch/hostSwitchRequests";
 import {
   openResourceBoxOnHost,
   type ResourceHandoffOutcome,
 } from "@/components/Hosts/resourceHostHandoff";
 import { notify } from "@/lib/notify";
-import { isProjectViewObservable, subscribeProjectViewObservability } from "@/lib/viewCacheState";
+import {
+  isProjectViewCached,
+  isProjectViewObservable,
+  subscribeProjectViewLifecycle,
+} from "@/lib/viewCacheState";
 import { actionService } from "@/services/ActionService";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
-import { clientErrorText } from "@/utils/clientAppError";
+import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
+import { isClientBrokerError } from "@/utils/clientBrokerError";
 
 /**
  * How long a new worktree waits on its setup (provisioning included) before
@@ -30,6 +33,14 @@ const WAIT_SLICE_MS = 25_000;
 /** A setup waiting for approval reads as settled, so it is asked about again on a timer. */
 const APPROVAL_RECHECK_MS = 3_000;
 const STATUS_RECHECK_MS = 10_000;
+/**
+ * Main hands concurrent list reads the same answer for a moment after it
+ * resolves, so the status run's own answer can take a read or two to show.
+ */
+const FRESH_READ_ATTEMPTS = 10;
+const FRESH_READ_INTERVAL_MS = 200;
+/** A status run cut off by this view's port being retired is asked again, this many times. */
+const PORT_RETRIES = 2;
 
 export interface CreatedWorktreeOnMachine {
   worktreeId: string;
@@ -43,7 +54,7 @@ export interface CreatedWorktreeOnMachine {
 export type MachineHandoffOutcome =
   | ResourceHandoffOutcome
   | { status: "setup-failed" }
-  | { status: "still-running" }
+  | { status: "still-running"; awaitingApproval: boolean }
   | { status: "no-status-command" }
   | { status: "no-machine"; lastStatus: string | null }
   | { status: "gone" }
@@ -64,49 +75,118 @@ interface Options {
   clock?: Clock;
 }
 
+/** The worktree went away, or out of its environment: nothing is left to hand off. */
+class Gone extends Error {}
+
+interface Tracker {
+  /** The view's row still stands for this worktree, in this environment. */
+  isCurrent: () => boolean;
+  /** A row read from the host is this worktree, in this environment. */
+  matches: (row: WorktreeState) => boolean;
+}
+
 /**
- * Whether the worktree is still the one this handoff is for. A row that
- * hasn't reached the store yet counts: its snapshot can trail the create's
- * reply. Once seen, its removal or a switch to another environment ends it.
+ * Pinned to the worktree as it was created. A row that hasn't reached the
+ * store yet counts: its snapshot can trail the create's reply. Once seen,
+ * its removal, a new monitor at the same path, or a switch to another
+ * environment ends it.
  */
-function trackWorktree(worktreeId: string, environment: string): () => boolean {
+function trackWorktree(worktreeId: string, environment: string): Tracker {
   let seen = false;
-  return () => {
-    const row = getCurrentViewStoreOrNull()?.getState().worktrees.get(worktreeId);
-    if (!row) return !seen;
-    seen = true;
-    return row.worktreeMode === undefined || row.worktreeMode === environment;
+  let hadEnvironment = false;
+  let generation: number | undefined;
+  const inEnvironment = (mode: string | undefined): boolean => {
+    if (mode === environment) {
+      hadEnvironment = true;
+      return true;
+    }
+    // A first snapshot can come before the create gives the worktree its
+    // mode; after it has had it, none is Local.
+    return mode === undefined && !hadEnvironment;
+  };
+  const sameMonitor = (row: WorktreeSnapshot): boolean => {
+    if (row.generation === undefined) return true;
+    generation ??= row.generation;
+    return row.generation === generation;
+  };
+  return {
+    isCurrent: () => {
+      const row = getCurrentViewStoreOrNull()?.getState().worktrees.get(worktreeId);
+      if (!row) return !seen;
+      seen = true;
+      return sameMonitor(row) && inEnvironment(row.worktreeMode);
+    },
+    matches: (row) => row.worktreeMode === environment && inEnvironment(row.worktreeMode),
   };
 }
 
-/** The host's own row, read after a step rather than the store's, which can trail it. */
+/**
+ * The host's own row. Absent from a list the host answered is gone; absent
+ * from one it couldn't answer (`gitBacked: null`, its process restarting)
+ * is unknown, and said as a failure rather than taken for a deletion.
+ */
 async function readHostRow(worktreeId: string): Promise<WorktreeState | null> {
-  const { worktrees } = await worktreeClient.getAllWithStatus();
-  return worktrees.find((worktree) => worktree.id === worktreeId) ?? null;
+  const { worktrees, gitBacked } = await worktreeClient.getAllWithStatus();
+  const row = worktrees.find((worktree) => worktree.id === worktreeId) ?? null;
+  if (row === null && gitBacked === null) {
+    throw new Error("Couldn't read the worktree from the workspace host.");
+  }
+  return row;
+}
+
+/** Resolves once main has this view showing again; at once when it is. */
+function whenViewActive(): Promise<void> {
+  if (!isProjectViewCached()) return Promise.resolve();
+  return new Promise((resolve) => {
+    const unsubscribe = subscribeProjectViewLifecycle(() => {
+      if (isProjectViewCached()) return;
+      unsubscribe();
+      resolve();
+    });
+  });
+}
+
+/**
+ * A resource action goes over this view's worktree port, which main retires
+ * while the view is cached (another project in front): the run waits for the
+ * view to come back rather than failing, and one the retirement cut off is
+ * asked again.
+ */
+async function runStatus(worktreeId: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    await whenViewActive();
+    try {
+      await worktreeClient.resourceAction(worktreeId, "status");
+      return;
+    } catch (err) {
+      if (attempt >= PORT_RETRIES || !isClientBrokerError(err) || err.code !== "HOST_EXITED") {
+        throw err;
+      }
+    }
+  }
 }
 
 type SetupWait =
   | { kind: "ready" }
   | { kind: "failed" }
-  | { kind: "still-running" }
-  | { kind: "gone" }
+  | { kind: "still-running"; awaitingApproval: boolean }
   | { kind: "error"; message: string };
 
 async function waitForSetup(
   worktreeId: string,
   deadline: number,
-  isCurrent: () => boolean,
+  tracker: Tracker,
   onNeedsApproval: () => void,
   clock: Clock
 ): Promise<SetupWait> {
   for (;;) {
-    if (!isCurrent()) return { kind: "gone" };
+    if (!tracker.isCurrent()) throw new Gone();
     const timeoutMs = Math.max(0, Math.min(WAIT_SLICE_MS, deadline - clock.now()));
     const result = await actionService.dispatch<{
       setupState: WorktreeSetupState | "unknown";
       timedOut: boolean;
     }>("worktree.waitUntilReady", { worktreeId, timeoutMs }, { source: "user" });
-    if (!isCurrent()) return { kind: "gone" };
+    if (!tracker.isCurrent()) throw new Gone();
     if (!result.ok) return { kind: "error", message: result.error.message };
     const { setupState, timedOut } = result.result;
     if (setupState === "ready") return { kind: "ready" };
@@ -115,70 +195,86 @@ async function waitForSetup(
     if (setupState === "needs-approval") {
       onNeedsApproval();
       const remaining = deadline - clock.now();
-      if (remaining <= 0) return { kind: "still-running" };
+      if (remaining <= 0) return { kind: "still-running", awaitingApproval: true };
       await clock.sleep(Math.min(APPROVAL_RECHECK_MS, remaining));
       continue;
     }
     if (!timedOut) {
       return { kind: "error", message: "Couldn't confirm the worktree's setup finished." };
     }
-    if (clock.now() >= deadline) return { kind: "still-running" };
+    if (clock.now() >= deadline) return { kind: "still-running", awaitingApproval: false };
   }
 }
 
-function handoffCanShow(): boolean {
-  return isProjectViewObservable() && currentHostSwitchRequest() === null;
+/** The host's row once it carries a status answer from `since` on. */
+async function readStatusAnswer(
+  worktreeId: string,
+  since: number,
+  tracker: Tracker,
+  clock: Clock
+): Promise<WorktreeState> {
+  for (let attempt = 1; ; attempt++) {
+    const row = await readHostRow(worktreeId);
+    if (!row || !tracker.matches(row)) throw new Gone();
+    if ((row.resourceStatus?.lastCheckedAt ?? 0) >= since) return row;
+    if (attempt >= FRESH_READ_ATTEMPTS) {
+      throw new Error("The status command finished, but its answer didn't reach Daintree.");
+    }
+    await clock.sleep(FRESH_READ_INTERVAL_MS);
+  }
 }
 
-/**
- * Resolves once this view can be seen with no other switch under way; true
- * when that meant waiting. Nobody watching means nobody to move: the switch
- * then asks before it moves the window.
- */
-function whenHandoffCanShow(): Promise<boolean> {
-  if (handoffCanShow()) return Promise.resolve(false);
-  return new Promise((resolve) => {
-    const subscriptions: Array<() => void> = [];
-    const check = () => {
-      if (!handoffCanShow()) return;
-      for (const unsubscribe of subscriptions) unsubscribe();
-      resolve(true);
-    };
-    subscriptions.push(subscribeProjectViewObservability(check));
-    subscriptions.push(subscribeHostSwitchRequests(check));
-  });
-}
+type Machine = { sshTarget: string; worktreePath: string; checkedAt: number };
 
 async function findMachine(
-  request: CreatedWorktreeOnMachine,
-  isCurrent: () => boolean,
+  worktreeId: string,
+  tracker: Tracker,
   clock: Clock
 ): Promise<
-  | { kind: "found"; sshTarget: string; worktreePath: string }
-  | Extract<MachineHandoffOutcome, { status: "no-status-command" | "no-machine" | "gone" }>
+  Machine | Extract<MachineHandoffOutcome, { status: "no-status-command" | "no-machine" }>
 > {
   const settleBy = clock.now() + MACHINE_HANDOFF_STATUS_SETTLE_MS;
   for (;;) {
-    const before = await readHostRow(request.worktreeId);
-    if (!before || !isCurrent()) return { status: "gone" };
+    const before = await readHostRow(worktreeId);
+    if (!before || !tracker.matches(before)) throw new Gone();
     if (!before.hasStatusCommand) return { status: "no-status-command" };
     // Asked now even when a poll has answered: only a status run after
     // provisioning says what this box is.
-    await worktreeClient.resourceAction(request.worktreeId, "status");
-    const after = await readHostRow(request.worktreeId);
-    if (!after || !isCurrent()) return { status: "gone" };
-    const sshTarget = after.resourceStatus?.ssh;
-    if (sshTarget) return { kind: "found", sshTarget, worktreePath: after.path };
-    const lastStatus = after.resourceStatus?.lastStatus ?? null;
-    const remaining = settleBy - clock.now();
+    const since = Date.now();
+    await runStatus(worktreeId);
+    const after = await readStatusAnswer(worktreeId, since, tracker, clock);
+    const status = after.resourceStatus;
+    if (status?.ssh) {
+      return {
+        sshTarget: status.ssh,
+        worktreePath: after.path,
+        checkedAt: status.lastCheckedAt ?? since,
+      };
+    }
+    const lastStatus = status?.lastStatus ?? null;
     // An ssh target is only believed of a ready box, so a ready one without
-    // it won't name one by being asked again.
-    if (lastStatus?.trim().toLowerCase() === "ready" || remaining <= 0) {
+    // it won't name one by being asked again, and an ask that couldn't
+    // finish inside the window isn't started.
+    if (
+      lastStatus?.trim().toLowerCase() === "ready" ||
+      settleBy - clock.now() <= STATUS_RECHECK_MS
+    ) {
       return { status: "no-machine", lastStatus };
     }
-    await clock.sleep(Math.min(STATUS_RECHECK_MS, remaining));
-    if (!isCurrent()) return { status: "gone" };
+    await clock.sleep(STATUS_RECHECK_MS);
+    if (!tracker.isCurrent()) throw new Gone();
   }
+}
+
+/**
+ * Still the same machine, as the view's store sees it. A store that hasn't
+ * caught up with the status run yet has no target to go by; one that has,
+ * and holds none or another, saw it withdrawn (a pause, a teardown).
+ */
+function stillReports(worktreeId: string, machine: Machine): boolean {
+  const status = getCurrentViewStoreOrNull()?.getState().worktrees.get(worktreeId)?.resourceStatus;
+  if (status?.ssh !== undefined) return status.ssh === machine.sshTarget;
+  return (status?.lastCheckedAt ?? 0) < machine.checkedAt;
 }
 
 async function runHandoff(
@@ -187,12 +283,12 @@ async function runHandoff(
 ): Promise<MachineHandoffOutcome> {
   const clock = options.clock ?? realClock;
   const deadline = clock.now() + (options.budgetMs ?? MACHINE_HANDOFF_SETUP_BUDGET_MS);
-  const isCurrent = trackWorktree(request.worktreeId, request.environment);
+  const tracker = trackWorktree(request.worktreeId, request.environment);
   let toldApproval = false;
   const setup = await waitForSetup(
     request.worktreeId,
     deadline,
-    isCurrent,
+    tracker,
     () => {
       if (toldApproval) return;
       toldApproval = true;
@@ -206,40 +302,32 @@ async function runHandoff(
     },
     clock
   );
-  if (setup.kind === "ready") {
-    // Falls through to finding the machine.
-  } else if (setup.kind === "failed") {
-    return { status: "setup-failed" };
-  } else if (setup.kind === "error") {
-    return { status: "error", message: setup.message };
-  } else {
-    return { status: setup.kind };
+  if (setup.kind === "failed") return { status: "setup-failed" };
+  if (setup.kind === "error") return { status: "error", message: setup.message };
+  if (setup.kind === "still-running") {
+    return { status: "still-running", awaitingApproval: setup.awaitingApproval };
   }
 
-  const machine = await findMachine(request, isCurrent, clock);
-  if (!("kind" in machine)) return machine;
+  const machine = await findMachine(request.worktreeId, tracker, clock);
+  if ("status" in machine) return machine;
 
-  const waited = await whenHandoffCanShow();
-  if (!isCurrent()) return { status: "gone" };
+  const stillCurrent = () => tracker.isCurrent() && stillReports(request.worktreeId, machine);
+  if (!stillCurrent()) throw new Gone();
   return openResourceBoxOnHost({
     worktreeId: request.worktreeId,
     worktreePath: machine.worktreePath,
     projectId: request.projectId,
     sshTarget: machine.sshTarget,
     label: request.label,
-    askFirst: waited,
-    isCurrent: () => {
-      if (!isCurrent()) return false;
-      const row = getCurrentViewStoreOrNull()?.getState().worktrees.get(request.worktreeId);
-      // A store that hasn't caught up yet has no ssh; another target, or none
-      // after a pause it has seen, is a different machine.
-      const reported = row?.resourceStatus?.ssh;
-      return reported === undefined || reported === machine.sshTarget;
-    },
+    askFirst: false,
+    isCurrent: stillCurrent,
+    // Nobody watching, or another switch under way: the worktree waits on
+    // the host, and the switch dialog asks before it moves the window.
+    placeNow: () => isProjectViewObservable() && currentHostSwitchRequest() === null,
   });
 }
 
-/** Run once from a toast's action, so a double click can't start two handoffs. */
+/** Run once from a notice's action, so a double click can't start two handoffs. */
 function once(run: () => void): () => void {
   let fired = false;
   return () => {
@@ -253,13 +341,13 @@ function report(request: CreatedWorktreeOnMachine, outcome: MachineHandoffOutcom
   const { worktreeId, label, environment } = request;
   const base = { correlationId: worktreeId, context: { worktreeId } } as const;
   // On the grid bar, like an agent handed back after setup: the dialog that
-  // asked is long closed, and quiet hours would leave an inbox row that can't
-  // carry the action.
+  // asked is long closed, and an inbox row can't carry the action.
   const handBack = { placement: "grid-bar", urgent: true, duration: 0 } as const;
   const again = once(() => void openCreatedWorktreeOnMachine(request));
   switch (outcome.status) {
     case "placing":
     case "setup":
+    case "waiting":
     case "gone":
       return;
     case "setup-failed":
@@ -273,10 +361,12 @@ function report(request: CreatedWorktreeOnMachine, outcome: MachineHandoffOutcom
     case "still-running":
       notify({
         ...base,
+        ...handBack,
         type: "warning",
         title: "Not opened on its machine yet",
-        message: `Setup is still running, so ${label} stays on this machine for now.`,
-        ...handBack,
+        message: outcome.awaitingApproval
+          ? `Setup is still waiting for you to approve its commands, so ${label} stays on this machine for now.`
+          : `Setup is still running, so ${label} stays on this machine for now.`,
         action: { label: "Keep waiting", onClick: again },
       });
       return;
@@ -291,24 +381,24 @@ function report(request: CreatedWorktreeOnMachine, outcome: MachineHandoffOutcom
     case "no-machine":
       notify({
         ...base,
+        ...handBack,
         type: "warning",
         title: "Not opened on its machine",
         message:
           outcome.lastStatus === null
             ? `${environment}'s status didn't name an ssh machine, so ${label} stays on this machine.`
             : `${environment}'s status said "${outcome.lastStatus}" without an ssh machine, so ${label} stays on this machine.`,
-        ...handBack,
         action: { label: "Check again", onClick: again },
       });
       return;
     case "error":
       notify({
         ...base,
+        ...handBack,
         type: "error",
         priority: "high",
         title: "Couldn't open on its machine",
         message: `${outcome.message} ${label} stays on this machine.`,
-        duration: 0,
         action: { label: "Try again", onClick: again },
       });
       return;
@@ -320,8 +410,9 @@ function report(request: CreatedWorktreeOnMachine, outcome: MachineHandoffOutcom
  * environment provisions, as a Remote Host: once setup (and so the provision)
  * has finished, its status is asked for the box's ssh target and the box is
  * opened through the same handoff as the environment popover's Open on its
- * machine, Host setup included. Anything short of that leaves the worktree
- * on this machine and says why. Never rejects.
+ * machine, Host setup included. Anything else short of that leaves the
+ * worktree on this machine and says why; a worktree deleted or moved to
+ * another environment meanwhile ends it quietly. Never rejects.
  */
 export async function openCreatedWorktreeOnMachine(
   request: CreatedWorktreeOnMachine,
@@ -331,10 +422,14 @@ export async function openCreatedWorktreeOnMachine(
   try {
     outcome = await runHandoff(request, options);
   } catch (err) {
-    outcome = {
-      status: "error",
-      message: clientErrorText(err, "Opening the worktree on its machine failed."),
-    };
+    // The handoff's own stop for a worktree that went while it worked.
+    outcome =
+      err instanceof Gone || clientErrorCode(err) === "CANCELLED"
+        ? { status: "gone" }
+        : {
+            status: "error",
+            message: clientErrorText(err, "Opening the worktree on its machine failed."),
+          };
   }
   try {
     report(request, outcome);

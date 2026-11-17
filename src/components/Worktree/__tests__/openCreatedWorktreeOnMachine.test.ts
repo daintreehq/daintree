@@ -18,11 +18,11 @@ const notify = vi.hoisted(() => vi.fn());
 const switches = vi.hoisted(() => ({
   request: vi.fn(),
   current: null as object | null,
-  listeners: new Set<() => void>(),
 }));
 const view = vi.hoisted(() => ({
   observable: true,
-  listeners: new Set<(observable: boolean) => void>(),
+  cached: false,
+  listeners: new Set<() => void>(),
 }));
 const requestHostUpdate = vi.hoisted(() => vi.fn());
 const openHostsSettingsTab = vi.hoisted(() => vi.fn());
@@ -35,14 +35,11 @@ vi.mock("@/lib/notify", () => ({ notify }));
 vi.mock("@/components/HostSwitch/hostSwitchRequests", () => ({
   requestHostSwitch: switches.request,
   currentHostSwitchRequest: () => switches.current,
-  subscribeHostSwitchRequests: (listener: () => void) => {
-    switches.listeners.add(listener);
-    return () => switches.listeners.delete(listener);
-  },
 }));
 vi.mock("@/lib/viewCacheState", () => ({
   isProjectViewObservable: () => view.observable,
-  subscribeProjectViewObservability: (listener: (observable: boolean) => void) => {
+  isProjectViewCached: () => view.cached,
+  subscribeProjectViewLifecycle: (listener: () => void) => {
     view.listeners.add(listener);
     return () => view.listeners.delete(listener);
   },
@@ -69,17 +66,20 @@ const request = {
   label: "feature/x",
 };
 
-/** What the host reports for the worktree; the status command fills in `resourceStatus`. */
+/** What the host reports for the worktree; each status run replaces `resourceStatus`. */
 let hostRow: Record<string, unknown>;
 /** What each status run reports, in order; the last one repeats. */
 let statusRuns: Array<Record<string, unknown>>;
 /** What each `worktree.waitUntilReady` answers, in order; the last one repeats. */
 let setupAnswers: Array<{ setupState: string; timedOut: boolean }>;
+/** The fake clock: every wait the handoff makes moves it on. */
 let now: number;
+const sleeps: number[] = [];
 
 const clock = {
   now: () => now,
   sleep: async (ms: number) => {
+    sleeps.push(ms);
     now += ms;
   },
 };
@@ -112,17 +112,31 @@ function lastNotice() {
     | undefined;
 }
 
+/** The store catching up with the host's row, as a worktree-update would. */
+function storeCatchesUp(overrides: Record<string, unknown> = {}) {
+  store.worktrees.set(WORKTREE_ID, {
+    id: WORKTREE_ID,
+    worktreeMode: hostRow.worktreeMode,
+    resourceStatus: hostRow.resourceStatus,
+    generation: 1,
+    ...overrides,
+  });
+}
+
 describe("openCreatedWorktreeOnMachine", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     _resetPendingPlacementsForTesting();
     now = 0;
+    sleeps.length = 0;
     view.observable = true;
+    view.cached = false;
     view.listeners.clear();
     switches.current = null;
-    switches.listeners.clear();
     switches.request.mockReturnValue(1);
-    store.worktrees = new Map([[WORKTREE_ID, { id: WORKTREE_ID, worktreeMode: "cloud" }]]);
+    store.worktrees = new Map([
+      [WORKTREE_ID, { id: WORKTREE_ID, worktreeMode: "cloud", generation: 1 }],
+    ]);
     hostRow = {
       id: WORKTREE_ID,
       path: WORKTREE_ID,
@@ -142,7 +156,7 @@ describe("openCreatedWorktreeOnMachine", () => {
     }));
     worktreeClient.resourceAction.mockImplementation(async () => {
       const run = statusRuns.length > 1 ? statusRuns.shift()! : statusRuns[0]!;
-      hostRow = { ...hostRow, resourceStatus: run };
+      hostRow = { ...hostRow, resourceStatus: { ...run, lastCheckedAt: Date.now() } };
     });
     hostsClient.probe.mockResolvedValue({
       reachable: true,
@@ -156,20 +170,13 @@ describe("openCreatedWorktreeOnMachine", () => {
     );
     hostsClient.connectAndSettle.mockResolvedValue({ status: "connected" });
     hostsClient.update.mockResolvedValue({});
+    hostsClient.forget.mockResolvedValue(undefined);
   });
 
   it("waits for setup, asks the box's status, and places the branch on it", async () => {
     const outcome = await openCreatedWorktreeOnMachine(request, { clock });
 
-    expect(dispatch).toHaveBeenCalledWith(
-      "worktree.waitUntilReady",
-      expect.objectContaining({ worktreeId: WORKTREE_ID }),
-      { source: "user" }
-    );
     expect(worktreeClient.resourceAction).toHaveBeenCalledWith(WORKTREE_ID, "status");
-    expect(dispatch.mock.invocationCallOrder[0]).toBeLessThan(
-      worktreeClient.resourceAction.mock.invocationCallOrder[0]!
-    );
     expect(hostsClient.add).toHaveBeenCalledWith({
       name: "dt-feature-x",
       connection: { kind: "ssh", target: "dt-feature-x" },
@@ -185,13 +192,57 @@ describe("openCreatedWorktreeOnMachine", () => {
     expect(notify).not.toHaveBeenCalled();
   });
 
-  it("asks the status even when the box already named one, and goes by the fresh answer", async () => {
-    hostRow = { ...hostRow, resourceStatus: { lastStatus: "ready", ssh: "old-box" } };
-    statusRuns = [{ lastStatus: "ready", ssh: "dt-feature-x" }];
+  it("asks nothing of the box until setup has finished", async () => {
+    let finishSetup!: () => void;
+    dispatch.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishSetup = () =>
+            resolve({ ok: true, result: { setupState: "ready", timedOut: false } });
+        })
+    );
+
+    const pending = openCreatedWorktreeOnMachine(request, { clock });
+    await vi.waitFor(() => expect(finishSetup).toBeTypeOf("function"));
+    await Promise.resolve();
+    expect(worktreeClient.getAllWithStatus).not.toHaveBeenCalled();
+    expect(worktreeClient.resourceAction).not.toHaveBeenCalled();
+
+    finishSetup();
+    await expect(pending).resolves.toEqual({ status: "placing", hostId: "dt-feature-x" });
+  });
+
+  it("goes by the status run's own answer, never a list read from before it", async () => {
+    hostRow = {
+      ...hostRow,
+      resourceStatus: { lastStatus: "ready", ssh: "old-box", lastCheckedAt: 1 },
+    };
+    // Main answers the first reads after the run from its earlier list.
+    const stale = { ...hostRow };
+    let staleReads = 2;
+    worktreeClient.getAllWithStatus.mockImplementation(async () => {
+      const calls = worktreeClient.resourceAction.mock.calls.length;
+      if (calls > 0 && staleReads > 0) {
+        staleReads -= 1;
+        return { worktrees: [stale], gitBacked: true };
+      }
+      return { worktrees: [hostRow], gitBacked: true };
+    });
 
     await openCreatedWorktreeOnMachine(request, { clock });
 
+    expect(staleReads).toBe(0);
+    expect(hostsClient.probe).toHaveBeenCalledTimes(1);
     expect(hostsClient.probe).toHaveBeenCalledWith({ kind: "ssh", target: "dt-feature-x" });
+  });
+
+  it("says so when the status answer never reaches the host's list", async () => {
+    worktreeClient.resourceAction.mockResolvedValue(undefined);
+
+    const outcome = await openCreatedWorktreeOnMachine(request, { clock });
+
+    expect(outcome).toMatchObject({ status: "error" });
+    expect(hostsClient.probe).not.toHaveBeenCalled();
   });
 
   it("holds the worktree on a box that needs setup and opens that setup", async () => {
@@ -205,19 +256,19 @@ describe("openCreatedWorktreeOnMachine", () => {
 
     expect(hostsClient.update).toHaveBeenCalledWith({
       hostId: "dt-feature-x",
-      pendingPlacement: expect.objectContaining({
+      pendingPlacement: {
         projectId: "proj-1",
         worktreeId: WORKTREE_ID,
         worktreePath: WORKTREE_ID,
         label: "feature/x",
-      }),
+        requestedAt: expect.any(Number),
+      },
     });
-    const held = hostsClient.update.mock.calls[0]![0].pendingPlacement;
-    expect(held.askFirst).toBeUndefined();
     expect(requestHostUpdate).toHaveBeenCalledWith("dt-feature-x", "setup");
     expect(openHostsSettingsTab).toHaveBeenCalled();
     expect(switches.request).not.toHaveBeenCalled();
     expect(outcome).toEqual({ status: "setup", hostId: "dt-feature-x" });
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it("leaves the worktree here after a failed provision, touching no host", async () => {
@@ -246,19 +297,49 @@ describe("openCreatedWorktreeOnMachine", () => {
     expect(hostsClient.probe).not.toHaveBeenCalled();
   });
 
-  it("waits through a command approval once, then carries on", async () => {
+  it("reports a setup state it can't read as an error, touching no host", async () => {
+    setupAnswers = [{ setupState: "unknown", timedOut: false }];
+
+    const outcome = await openCreatedWorktreeOnMachine(request, { clock });
+
+    expect(outcome).toMatchObject({ status: "error" });
+    expect(worktreeClient.resourceAction).not.toHaveBeenCalled();
+    expect(lastNotice()?.action?.label).toBe("Try again");
+  });
+
+  it("reports a wait the action refused, touching no host", async () => {
+    dispatch.mockResolvedValue({ ok: false, error: { message: "Worktree not found" } });
+
+    const outcome = await openCreatedWorktreeOnMachine(request, { clock });
+
+    expect(outcome).toEqual({ status: "error", message: "Worktree not found" });
+    expect(hostsClient.probe).not.toHaveBeenCalled();
+  });
+
+  it("re-asks a setup waiting for approval on a timer, says so once, then carries on", async () => {
     setupAnswers = [
       { setupState: "needs-approval", timedOut: false },
       { setupState: "needs-approval", timedOut: false },
-      { setupState: "running", timedOut: true },
       { setupState: "ready", timedOut: false },
     ];
 
     const outcome = await openCreatedWorktreeOnMachine(request, { clock });
 
     expect(outcome).toEqual({ status: "placing", hostId: "dt-feature-x" });
+    expect(dispatch).toHaveBeenCalledTimes(3);
+    expect(sleeps).toEqual([3_000, 3_000]);
     const told = notify.mock.calls.filter(([n]) => n.title === "Waiting to open on its machine");
     expect(told).toHaveLength(1);
+  });
+
+  it("says a setup still waiting for approval at the end is waiting for approval", async () => {
+    setupAnswers = [{ setupState: "needs-approval", timedOut: false }];
+
+    const outcome = await openCreatedWorktreeOnMachine(request, { clock, budgetMs: 10_000 });
+
+    expect(outcome).toEqual({ status: "still-running", awaitingApproval: true });
+    expect(lastNotice()?.message).toContain("waiting for you to approve its commands");
+    expect(lastNotice()?.action?.label).toBe("Keep waiting");
   });
 
   it("hands the wait back when setup outlasts the budget, and Keep waiting starts again", async () => {
@@ -266,7 +347,8 @@ describe("openCreatedWorktreeOnMachine", () => {
 
     const outcome = await openCreatedWorktreeOnMachine(request, { clock, budgetMs: 60_000 });
 
-    expect(outcome).toEqual({ status: "still-running" });
+    expect(outcome).toEqual({ status: "still-running", awaitingApproval: false });
+    expect(now).toBe(60_000);
     expect(hostsClient.probe).not.toHaveBeenCalled();
     const notice = lastNotice()!;
     expect(notice).toMatchObject({ placement: "grid-bar" });
@@ -301,7 +383,7 @@ describe("openCreatedWorktreeOnMachine", () => {
     expect(lastNotice()?.action?.label).toBe("Check again");
   });
 
-  it("asks a booting box again until it names its machine", async () => {
+  it("asks a booting box again every 10 seconds until it names its machine", async () => {
     statusRuns = [
       { lastStatus: "starting" },
       { lastStatus: "starting" },
@@ -311,30 +393,63 @@ describe("openCreatedWorktreeOnMachine", () => {
     const outcome = await openCreatedWorktreeOnMachine(request, { clock });
 
     expect(worktreeClient.resourceAction).toHaveBeenCalledTimes(3);
+    expect(sleeps).toEqual([10_000, 10_000]);
     expect(outcome).toEqual({ status: "placing", hostId: "dt-feature-x" });
   });
 
-  it("gives up on a box that never says ready, naming what it said", async () => {
+  it("gives up on a box that never says ready, starting no run past two minutes", async () => {
     statusRuns = [{ lastStatus: "starting" }];
+    const startedAt: number[] = [];
+    const run = worktreeClient.resourceAction.getMockImplementation()!;
+    worktreeClient.resourceAction.mockImplementation(async (...args: unknown[]) => {
+      startedAt.push(now);
+      return run(...args);
+    });
 
     const outcome = await openCreatedWorktreeOnMachine(request, { clock });
 
     expect(outcome).toEqual({ status: "no-machine", lastStatus: "starting" });
+    expect(startedAt).toHaveLength(12);
+    expect(Math.max(...startedAt)).toBeLessThan(120_000);
     expect(lastNotice()?.message).toContain('said "starting"');
   });
 
-  it("reports a failed status run with Try again, adding no host", async () => {
+  it("reports a failed status run, never falling back to a machine named before it", async () => {
+    hostRow = {
+      ...hostRow,
+      resourceStatus: { lastStatus: "ready", ssh: "old-box", lastCheckedAt: 1 },
+    };
     worktreeClient.resourceAction.mockRejectedValue(new Error("status exited 1"));
 
     const outcome = await openCreatedWorktreeOnMachine(request, { clock });
 
     expect(outcome).toEqual({ status: "error", message: "status exited 1" });
+    expect(hostsClient.probe).not.toHaveBeenCalled();
     expect(hostsClient.add).not.toHaveBeenCalled();
     expect(lastNotice()).toMatchObject({
       type: "error",
       title: "Couldn't open on its machine",
+      placement: "grid-bar",
       action: { label: "Try again" },
     });
+  });
+
+  it("reports a host list it couldn't read rather than taking it for a deletion", async () => {
+    worktreeClient.getAllWithStatus.mockResolvedValue({ worktrees: [], gitBacked: null });
+
+    const outcome = await openCreatedWorktreeOnMachine(request, { clock });
+
+    expect(outcome).toMatchObject({ status: "error" });
+    expect(lastNotice()?.type).toBe("error");
+  });
+
+  it("stops quietly when the host's list no longer has the worktree", async () => {
+    worktreeClient.getAllWithStatus.mockResolvedValue({ worktrees: [], gitBacked: true });
+
+    const outcome = await openCreatedWorktreeOnMachine(request, { clock });
+
+    expect(outcome).toEqual({ status: "gone" });
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it("reports ssh's refusal from the probe, adding no host", async () => {
@@ -349,6 +464,25 @@ describe("openCreatedWorktreeOnMachine", () => {
     expect(outcome).toMatchObject({ status: "error" });
     expect(hostsClient.add).not.toHaveBeenCalled();
     expect(lastNotice()?.message).toContain("Permission denied (publickey).");
+  });
+
+  it("waits out a cached view before asking the status, and asks again after its port was retired", async () => {
+    view.cached = true;
+    worktreeClient.resourceAction.mockImplementationOnce(async () => {
+      throw new Error("[BrokerError|HOST_EXITED] Worktree port retired");
+    });
+
+    const pending = openCreatedWorktreeOnMachine(request, { clock });
+    await vi.waitFor(() => expect(view.listeners.size).toBe(1));
+    expect(worktreeClient.resourceAction).not.toHaveBeenCalled();
+
+    view.cached = false;
+    for (const listener of [...view.listeners]) listener();
+    const outcome = await pending;
+
+    expect(worktreeClient.resourceAction).toHaveBeenCalledTimes(2);
+    expect(view.listeners.size).toBe(0);
+    expect(outcome).toEqual({ status: "placing", hostId: "dt-feature-x" });
   });
 
   it("stops quietly when the worktree is deleted while setup runs", async () => {
@@ -368,6 +502,22 @@ describe("openCreatedWorktreeOnMachine", () => {
     expect(notify).not.toHaveBeenCalled();
   });
 
+  it("never carries on for a new worktree made at the same path meanwhile", async () => {
+    setupAnswers = [
+      { setupState: "running", timedOut: true },
+      { setupState: "ready", timedOut: false },
+    ];
+    dispatch.mockImplementationOnce(async () => {
+      store.worktrees.set(WORKTREE_ID, { id: WORKTREE_ID, worktreeMode: "cloud", generation: 2 });
+      return { ok: true, result: { setupState: "running", timedOut: true } };
+    });
+
+    const outcome = await openCreatedWorktreeOnMachine(request, { clock });
+
+    expect(outcome).toEqual({ status: "gone" });
+    expect(hostsClient.probe).not.toHaveBeenCalled();
+  });
+
   it("stops quietly when the worktree is switched to another environment", async () => {
     store.worktrees.set(WORKTREE_ID, { id: WORKTREE_ID, worktreeMode: "gpu" });
 
@@ -378,6 +528,49 @@ describe("openCreatedWorktreeOnMachine", () => {
     expect(notify).not.toHaveBeenCalled();
   });
 
+  it("stops, taking back the host it added, when the worktree goes Local during the probe", async () => {
+    hostsClient.connectAndSettle.mockImplementation(async () => {
+      store.worktrees.set(WORKTREE_ID, { id: WORKTREE_ID, generation: 1 });
+      return { status: "connected" };
+    });
+
+    const outcome = await openCreatedWorktreeOnMachine(request, { clock });
+
+    expect(outcome).toEqual({ status: "gone" });
+    expect(hostsClient.forget).toHaveBeenCalledWith("dt-feature-x");
+    expect(switches.request).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("stops when the box is paused while it connects", async () => {
+    hostsClient.connectAndSettle.mockImplementation(async () => {
+      // The store has the status run's answer, then the pause that took the target away.
+      storeCatchesUp();
+      storeCatchesUp({
+        resourceStatus: { ...(hostRow.resourceStatus as object), ssh: undefined, pausedAt: 5 },
+      });
+      return { status: "connected" };
+    });
+
+    const outcome = await openCreatedWorktreeOnMachine(request, { clock });
+
+    expect(outcome).toEqual({ status: "gone" });
+    expect(switches.request).not.toHaveBeenCalled();
+  });
+
+  it("carries on while the store hasn't caught up with the status run", async () => {
+    store.worktrees.set(WORKTREE_ID, {
+      id: WORKTREE_ID,
+      worktreeMode: "cloud",
+      generation: 1,
+      resourceStatus: { lastStatus: "provisioning", lastCheckedAt: 0 },
+    });
+
+    const outcome = await openCreatedWorktreeOnMachine(request, { clock });
+
+    expect(outcome).toEqual({ status: "placing", hostId: "dt-feature-x" });
+  });
+
   it("waits for a row still on its way to the store rather than calling it deleted", async () => {
     store.worktrees.clear();
 
@@ -386,34 +579,46 @@ describe("openCreatedWorktreeOnMachine", () => {
     expect(outcome).toEqual({ status: "placing", hostId: "dt-feature-x" });
   });
 
-  it("waits for the view to be seen, then asks before moving the window", async () => {
+  it("holds the worktree on the host, to ask first, when nobody can see this view", async () => {
     view.observable = false;
 
-    const pending = openCreatedWorktreeOnMachine(request, { clock });
-    await vi.waitFor(() => expect(view.listeners.size).toBe(1));
-    expect(hostsClient.probe).not.toHaveBeenCalled();
+    const outcome = await openCreatedWorktreeOnMachine(request, { clock });
 
-    view.observable = true;
-    for (const listener of [...view.listeners]) listener(true);
-    const outcome = await pending;
-
-    expect(view.listeners.size).toBe(0);
-    expect(switches.listeners.size).toBe(0);
-    expect(switches.request).toHaveBeenCalledWith(expect.objectContaining({ askFirst: true }));
-    expect(outcome).toEqual({ status: "placing", hostId: "dt-feature-x" });
+    expect(switches.request).not.toHaveBeenCalled();
+    expect(hostsClient.update).toHaveBeenCalledWith({
+      hostId: "dt-feature-x",
+      pendingPlacement: expect.objectContaining({ worktreeId: WORKTREE_ID, askFirst: true }),
+    });
+    expect(requestHostUpdate).not.toHaveBeenCalled();
+    expect(outcome).toEqual({ status: "waiting", hostId: "dt-feature-x" });
+    expect(notify).not.toHaveBeenCalled();
   });
 
-  it("never replaces a switch already under way", async () => {
-    switches.current = { id: 7 };
+  it("never replaces a switch that started while the box connected", async () => {
+    hostsClient.connectAndSettle.mockImplementation(async () => {
+      switches.current = { id: 7 };
+      return { status: "connected" };
+    });
 
-    const pending = openCreatedWorktreeOnMachine(request, { clock });
-    await vi.waitFor(() => expect(switches.listeners.size).toBe(1));
+    const outcome = await openCreatedWorktreeOnMachine(request, { clock });
+
     expect(switches.request).not.toHaveBeenCalled();
+    expect(outcome).toEqual({ status: "waiting", hostId: "dt-feature-x" });
+  });
 
-    switches.current = null;
-    for (const listener of [...switches.listeners]) listener();
-    await pending;
+  it("stops quietly when the handoff itself is cancelled for a worktree that went", async () => {
+    let checks = 0;
+    hostsClient.connectAndSettle.mockImplementation(async () => {
+      checks += 1;
+      store.worktrees.delete(WORKTREE_ID);
+      return { status: "connected" };
+    });
 
-    expect(switches.request).toHaveBeenCalledWith(expect.objectContaining({ askFirst: true }));
+    const outcome = await openCreatedWorktreeOnMachine(request, { clock });
+
+    expect(checks).toBe(1);
+    expect(outcome).toEqual({ status: "gone" });
+    expect(hostsClient.forget).toHaveBeenCalledWith("dt-feature-x");
+    expect(notify).not.toHaveBeenCalled();
   });
 });

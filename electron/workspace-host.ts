@@ -283,7 +283,8 @@ async function handleWorktreePortRequest(
 
       case "has-resource-config": {
         const hasConfig = await workspaceService.hasResourceConfig(msg.payload.rootPath);
-        result = { hasConfig };
+        const environmentKeys = await workspaceService.resourceEnvironmentKeys();
+        result = { hasConfig, environmentKeys };
         break;
       }
 

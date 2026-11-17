@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
-import { projectClient } from "@/clients";
+import { projectClient, worktreeClient } from "@/clients";
+import { usableEnvironmentKeys } from "@/lib/resourceEnvironments";
 import { logError } from "@/utils/logger";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -9,6 +10,12 @@ export interface UseNewWorktreeProjectSettingsResult {
   projectSettings: ProjectSettings | null;
   gitUsername: string | null;
   configuredBranchPrefix: string;
+  /**
+   * The environments a worktree can be created in: Project settings' own,
+   * or, when it has none, the ones the workspace host reads from a settings
+   * file, which it falls back to in the same order.
+   */
+  resourceEnvironments: Record<string, unknown> | undefined;
 }
 
 export function useNewWorktreeProjectSettings({
@@ -18,6 +25,7 @@ export function useNewWorktreeProjectSettings({
 }): UseNewWorktreeProjectSettingsResult {
   const [projectSettings, setProjectSettings] = useState<ProjectSettings | null>(null);
   const [gitUsername, setGitUsername] = useState<string | null>(null);
+  const [hostEnvironmentKeys, setHostEnvironmentKeys] = useState<string[]>([]);
 
   const { recipes, loadRecipes } = useRecipeStore();
   const currentProject = useProjectStore((s) => s.currentProject);
@@ -63,6 +71,30 @@ export function useNewWorktreeProjectSettings({
     }
   }, [isOpen, currentProject, recipes.length, loadRecipes]);
 
+  useEffect(() => {
+    if (!isOpen || !currentProject) {
+      setHostEnvironmentKeys([]);
+      return;
+    }
+    let current = true;
+    worktreeClient
+      .hasResourceConfig(currentProject.path)
+      .then(({ environmentKeys }) => {
+        if (current) setHostEnvironmentKeys(environmentKeys ?? []);
+      })
+      // Project settings' own list still stands.
+      .catch((err) => logError("Failed to read the host's resource environments", err));
+    return () => {
+      current = false;
+    };
+  }, [isOpen, currentProject]);
+
+  const resourceEnvironments = useMemo(() => {
+    const saved = projectSettings?.resourceEnvironments;
+    if (usableEnvironmentKeys(saved).length > 0 || hostEnvironmentKeys.length === 0) return saved;
+    return Object.fromEntries(hostEnvironmentKeys.map((key) => [key, {}]));
+  }, [projectSettings, hostEnvironmentKeys]);
+
   const configuredBranchPrefix = useMemo(() => {
     if (!projectSettings) return "";
     const mode = projectSettings.branchPrefixMode ?? "none";
@@ -72,5 +104,5 @@ export function useNewWorktreeProjectSettings({
     return "";
   }, [projectSettings, gitUsername]);
 
-  return { projectSettings, gitUsername, configuredBranchPrefix };
+  return { projectSettings, gitUsername, configuredBranchPrefix, resourceEnvironments };
 }

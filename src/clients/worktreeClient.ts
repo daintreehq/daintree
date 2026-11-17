@@ -300,7 +300,9 @@ export const worktreeClient = {
     });
   },
 
-  hasResourceConfig: (rootPath: string): Promise<{ hasConfig: boolean }> => {
+  hasResourceConfig: (
+    rootPath: string
+  ): Promise<{ hasConfig: boolean; environmentKeys?: string[] }> => {
     return window.electron.worktreePort.request("has-resource-config", { rootPath });
   },
 } as const;
