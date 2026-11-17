@@ -31,6 +31,7 @@ import {
   expandDraftContext,
   listDraftContextTokens,
   shareContextReferenceResolutions,
+  shareWorkingDiffReads,
 } from "@/components/Terminal/draftContextExpansion";
 import { draftIsOnlyNotesTokens } from "@/components/Terminal/hybridInputParsing";
 import { isDiffNotesTarget } from "@/components/Terminal/diffNotesReference";
@@ -286,12 +287,14 @@ function imagesNamedBy(
  * Each agent here gets the context its own text names, from itself: `@diff`
  * from its own working directory, `@notes` from its own worktree, `@terminal`
  * and `@selection` from its own screen, as a send from its own composer would.
- * Plugin context is asked for once and handed to every agent alike.
+ * Plugin context is asked for once and handed to every agent alike, and each
+ * working directory's diff is read once for every agent in it (#17480).
  */
 async function expandSubmissionContext(
   submissions: ResolvedSubmission[]
 ): Promise<ResolvedSubmission[]> {
   const resolveReferences = shareContextReferenceResolutions();
+  const readDiff = shareWorkingDiffReads();
   const { panelsById } = usePanelStore.getState();
   return Promise.all(
     submissions.map(async (submission) => {
@@ -302,6 +305,7 @@ async function expandSubmissionContext(
       const payload = await expandDraftContext(submission.payload, {
         terminalId: submission.terminalId,
         cwd,
+        readDiff,
         resolveReferences,
         onDiffNotesTaken: (taken) => notes.push(...taken),
       });

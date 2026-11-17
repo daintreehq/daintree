@@ -5,7 +5,12 @@ import type {
   ContextReference,
   ContextReferenceResolution,
 } from "@shared/types/pluginContextProvider";
-import { listDraftContextTokens, shareContextReferenceResolutions } from "../draftContextExpansion";
+import {
+  expandDraftContext,
+  listDraftContextTokens,
+  shareContextReferenceResolutions,
+  shareWorkingDiffReads,
+} from "../draftContextExpansion";
 
 describe("listDraftContextTokens", () => {
   it("names each distinct token once, in the order the draft has them", () => {
@@ -79,5 +84,92 @@ describe("shareContextReferenceResolutions", () => {
     await expect(shared([ref])).rejects.toThrow("main gone");
     await expect(shared([ref])).rejects.toThrow("main gone");
     expect(resolve).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("shareWorkingDiffReads (#17480)", () => {
+  const readDiff = async (cwd: string, type: string) => `diff ${type} in ${cwd}`;
+
+  it("reads once per working directory and diff type, however many ask", async () => {
+    const read = vi.fn(readDiff);
+    const shared = shareWorkingDiffReads(read);
+
+    const answers = await Promise.all([
+      shared("/wt/a", "unstaged"),
+      shared("/wt/a", "unstaged"),
+      shared("/wt/a", "staged"),
+      shared("/wt/b", "unstaged"),
+    ]);
+    await shared("/wt/a", "unstaged");
+
+    expect(read.mock.calls).toEqual([
+      ["/wt/a", "unstaged"],
+      ["/wt/a", "staged"],
+      ["/wt/b", "unstaged"],
+    ]);
+    expect(answers).toEqual([
+      "diff unstaged in /wt/a",
+      "diff unstaged in /wt/a",
+      "diff staged in /wt/a",
+      "diff unstaged in /wt/b",
+    ]);
+  });
+
+  it("hands every asker the same failure, before and after it settles", async () => {
+    const failures: Array<() => Promise<string>> = [
+      async () => {
+        throw new Error("rate limited");
+      },
+      () => {
+        throw new Error("no bridge");
+      },
+    ];
+    for (const fail of failures) {
+      const read = vi.fn(fail);
+      const shared = shareWorkingDiffReads(read);
+      const caught = (reading: Promise<string>) => reading.catch((err: unknown) => err);
+      const [first, second] = await Promise.all([
+        caught(shared("/wt/a", "head")),
+        caught(shared("/wt/a", "head")),
+      ]);
+      const late = await caught(shared("/wt/a", "head"));
+      expect(first).toBeInstanceOf(Error);
+      expect(second).toBe(first);
+      expect(late).toBe(first);
+      expect(read).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("starts fresh for each sharer, so the next send reads the diff again", async () => {
+    const read = vi.fn(readDiff).mockResolvedValueOnce("+ first").mockResolvedValueOnce("+ second");
+    expect(await shareWorkingDiffReads(read)("/wt/a", "unstaged")).toBe("+ first");
+    expect(await shareWorkingDiffReads(read)("/wt/a", "unstaged")).toBe("+ second");
+  });
+
+  it("reads a draft's repeated @diff once when no reader is handed in", async () => {
+    let reads = 0;
+    const getWorkingDiff = vi.fn(
+      async (cwd: string, type: string) => `${type} in ${cwd} #${++reads}`
+    );
+    const original = Object.getOwnPropertyDescriptor(window, "electron");
+    Object.assign(window, { electron: { git: { getWorkingDiff } } });
+    try {
+      const out = await expandDraftContext("@diff then @diff:staged then @diff", {
+        terminalId: "t1",
+        cwd: "/wt/a",
+      });
+      expect(getWorkingDiff.mock.calls).toEqual([
+        ["/wt/a", "unstaged"],
+        ["/wt/a", "staged"],
+      ]);
+      expect(out.split("unstaged in /wt/a #1")).toHaveLength(3);
+      expect(out).toContain("staged in /wt/a #2");
+
+      const next = await expandDraftContext("@diff", { terminalId: "t1", cwd: "/wt/a" });
+      expect(next).toContain("unstaged in /wt/a #3");
+    } finally {
+      if (original) Object.defineProperty(window, "electron", original);
+      else Reflect.deleteProperty(window, "electron");
+    }
   });
 });
