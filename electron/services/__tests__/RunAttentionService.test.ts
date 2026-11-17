@@ -57,13 +57,15 @@ function gateBecomesReady(
   gateId: string,
   state = "waiting",
   previousState = "working",
-  timestamp = NOW + 1_000
+  timestamp = NOW + 1_000,
+  trigger?: string
 ) {
   eventEmitter.emit("agent:state-changed", {
     terminalId: gateId,
     state,
     previousState,
     timestamp,
+    ...(trigger !== undefined ? { trigger } : {}),
   });
 }
 
@@ -278,6 +280,73 @@ describe("RunAttentionService", () => {
     service.dispose();
   });
 
+  it("releases as gate-closed when a ready gate is killed without going through trash", () => {
+    const service = makeService();
+    service.park("t1", { note: "after the reviewer finishes", gateRunId: "gate" });
+
+    // The gate was waiting when it was killed: no busy edge ever comes, so its
+    // PTY exit is the only signal that it is gone.
+    service.handleTerminalExit("gate");
+
+    expect(service.getParkRecord("t1")).toBeUndefined();
+    expect(emittedOf("terminal:park-released")).toEqual([
+      {
+        id: "t1",
+        gateRunId: "gate",
+        note: "after the reviewer finishes",
+        reason: "gate-closed",
+        timestamp: NOW,
+      },
+    ]);
+    service.dispose();
+  });
+
+  it("releases a busy gate killed directly as gate-closed, not gate-ready", () => {
+    const service = makeService();
+    service.park("t1", { gateRunId: "gate" });
+
+    // A kill lands as working → idle with an `exit` trigger, ahead of the PTY's
+    // exit. That edge is the kill, not the gate finishing its work.
+    gateBecomesReady("gate", "idle", "working", NOW + 1_000, "exit");
+    gateBecomesReady("gate", "idle", "directing", NOW + 1_000, "exit");
+    expect(service.getParkRecord("t1")).toBeDefined();
+
+    service.handleTerminalExit("gate");
+
+    expect(service.getParkRecord("t1")).toBeUndefined();
+    expect(emittedOf("terminal:park-released")).toEqual([
+      { id: "t1", gateRunId: "gate", reason: "gate-closed", timestamp: NOW },
+    ]);
+    service.dispose();
+  });
+
+  it("still releases as gate-ready when a busy gate's agent exits and its shell lives on", () => {
+    const service = makeService();
+    service.park("t1", { gateRunId: "gate" });
+
+    gateBecomesReady("gate", "exited", "working", NOW + 1_000, "exit");
+
+    expect(emittedOf("terminal:park-released")).toEqual([
+      { id: "t1", gateRunId: "gate", reason: "gate-ready", timestamp: NOW },
+    ]);
+    service.dispose();
+  });
+
+  it("ignores a terminal exit for a terminal no park is gated on", () => {
+    const persistence = makePersistence();
+    const service = makeService(persistence);
+    service.park("t1", { gateRunId: "gate" });
+    persistence.save.mockClear();
+
+    // The parked run's own exit is not its gate closing.
+    service.handleTerminalExit("t1");
+    service.handleTerminalExit("other");
+
+    expect(service.getParkRecord("t1")).toBeDefined();
+    expect(persistence.save).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
   it("keeps the park when the parked run ITSELF is trashed — trash is restorable", () => {
     const service = makeService();
     service.park("t1", { note: "keep me" });
@@ -353,6 +422,7 @@ describe("RunAttentionService", () => {
     // across the restart, and no new intent can be recorded mid-teardown.
     gateBecomesReady("gate");
     eventEmitter.emit("terminal:trashed", { id: "gate", expiresAt: NOW + 1000 });
+    service.handleTerminalExit("gate");
     expect(service.getParkRecord("t1")).toBeDefined();
     expect(() => service.park("t2")).toThrow();
     expect(() => service.unpark("t1")).toThrow();
