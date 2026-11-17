@@ -120,10 +120,7 @@ import {
   resolveRecipeRunConfirmation,
   useRecipeRunConfirmStore,
 } from "@/store/recipeRunConfirmStore";
-import {
-  RecipeChangedSinceShownError,
-  recipeApprovalDigest,
-} from "@/utils/recipeApprovalDigest";
+import { RecipeChangedSinceShownError, recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 
 const dispatchMock = vi.mocked(actionService.dispatch);
 
@@ -1236,7 +1233,10 @@ describe("useRecipeRunner — a confirmed recipe that changed before it started 
       if (e instanceof CustomEvent) opened.push(e.detail.recipeId);
     };
     window.addEventListener("daintree:open-recipe-editor", listener);
-    return { opened, stop: () => window.removeEventListener("daintree:open-recipe-editor", listener) };
+    return {
+      opened,
+      stop: () => window.removeEventListener("daintree:open-recipe-editor", listener),
+    };
   }
 
   it("says why the approved run started nothing and opens the current recipe for review", async () => {
@@ -1256,7 +1256,7 @@ describe("useRecipeRunner — a confirmed recipe that changed before it started 
     expect(result.current.changedRecipe).toEqual({
       recipeId: "r1",
       recipeName: "Review",
-      reviewable: true,
+      current: "editable",
     });
     expect(result.current.spawnFailureSummary).toBeNull();
     expect(logErrorMock).not.toHaveBeenCalled();
@@ -1270,7 +1270,8 @@ describe("useRecipeRunner — a confirmed recipe that changed before it started 
     } finally {
       editor.stop();
     }
-    expect(result.current.changedRecipe).toBeNull();
+    // Still there when the editor closes, so focus has its Review to go back to.
+    expect(result.current.changedRecipe).not.toBeNull();
 
     // Trying again asks about what the recipe is now, and that run starts.
     act(() => {
@@ -1303,8 +1304,18 @@ describe("useRecipeRunner — a confirmed recipe that changed before it started 
     expect(result.current.changedRecipe).toEqual({
       recipeId: "mine",
       recipeName: "Dev",
-      reviewable: true,
+      current: "editable",
     });
+    const editor = editorRequests();
+    try {
+      act(() => {
+        result.current.reviewChangedRecipe();
+      });
+      // The row's id: the editor follows it to the team recipe, as a run would.
+      expect(editor.opened).toEqual(["mine"]);
+    } finally {
+      editor.stop();
+    }
   });
 
   it("offers no editor for a plugin's recipe, whose content its plugin owns", async () => {
@@ -1330,7 +1341,7 @@ describe("useRecipeRunner — a confirmed recipe that changed before it started 
     expect(result.current.changedRecipe).toEqual({
       recipeId: "acme.tools.rel",
       recipeName: "Release",
-      reviewable: false,
+      current: "plugin",
     });
     const editor = editorRequests();
     try {
@@ -1343,10 +1354,10 @@ describe("useRecipeRunner — a confirmed recipe that changed before it started 
     }
   });
 
-  it("opens no blank draft when the recipe is gone by the time review is asked for", async () => {
+  it("keeps the explanation but opens no blank draft once the recipe is deleted", async () => {
     recipes.push(needsPr());
     refuseChangedRecipes();
-    const { result } = renderHook(() =>
+    const { result, rerender } = renderHook(() =>
       useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
     );
     act(() => {
@@ -1356,7 +1367,13 @@ describe("useRecipeRunner — a confirmed recipe that changed before it started 
     await answer(true);
     expect(result.current.changedRecipe).not.toBeNull();
 
-    recipes.length = 0;
+    // Deleted since: the store publishes a new list without it.
+    recipeStoreState.recipes = [];
+    rerender();
+    expect(result.current.changedRecipe).toMatchObject({
+      recipeName: "Review",
+      current: "missing",
+    });
     const editor = editorRequests();
     try {
       act(() => {
@@ -1366,7 +1383,6 @@ describe("useRecipeRunner — a confirmed recipe that changed before it started 
     } finally {
       editor.stop();
     }
-    expect(result.current.changedRecipe).toBeNull();
   });
 
   it("replaces a retry's failure banner, whose terminals belong to the old recipe", async () => {

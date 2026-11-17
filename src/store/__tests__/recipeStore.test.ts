@@ -5524,6 +5524,31 @@ describe("plugin recipe panels, variables and agent tools (#13797)", () => {
     expect(addTerminalMock).not.toHaveBeenCalled();
   });
 
+  it("refuses when the row the dialog showed now resolves to another recipe (#17447)", async () => {
+    const terminals = [{ type: "terminal" as const, command: "npm run dev", env: {} }];
+    const local = { id: "local-dev", name: "Dev", projectId: "p", terminals, createdAt: 0 };
+    const team = { id: "team-dev", name: "Dev", scope: "inrepo" as const, terminals, createdAt: 0 };
+    // Same terminals, so only the id says a team recipe took the row over.
+    useRecipeStore.setState({
+      recipes: [{ ...local, shadowedBy: "Dev" }, team],
+      inRepoRecipes: [team],
+    });
+
+    await expect(
+      useRecipeStore.getState().runRecipeWithResults(
+        "local-dev",
+        "/repo/wt",
+        "wt-1",
+        {},
+        {
+          expectedRecipe: { id: "local-dev", terminalsDigest: recipeApprovalDigest(terminals) },
+        }
+      )
+    ).rejects.toThrow(RecipeChangedSinceShownError);
+    expect(addTerminalMock).not.toHaveBeenCalled();
+    expect(useRecipeStore.getState().recipes.every((r) => r.lastUsedAt === undefined)).toBe(true);
+  });
+
   it("won't save a recipe that uses plugin-only features as a team recipe", async () => {
     useRecipeStore.setState({ currentProjectId: "project-1" });
     useRecipeStore.getState().setPluginRecipes([pluginRecipe()]);
