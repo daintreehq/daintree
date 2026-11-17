@@ -54,6 +54,7 @@ import {
 import { resolveGitDirFromFs } from "../../utils/gitUtils.js";
 import { parsePorcelainV1Z } from "../../services/git/fileMutation.js";
 import { withTimeout } from "../../utils/withTimeout.js";
+import { runExclusive } from "../../utils/keyedMutex.js";
 import {
   resolveExistingBaseCompareTarget,
   type ExistingBaseCompareTarget,
@@ -1558,28 +1559,38 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
    * One git write per batch of pathspecs, so a large selection never overflows
    * the OS command line. Batches run in order and stop at the first failure.
    * The batches before it have landed, so the error names how many paths git
-   * confirmed. A failure before any batch landed passes through unchanged.
+   * confirmed; "at least", because a failed `add` can still stage some of its
+   * own batch. A failure before any batch landed passes through unchanged.
+   *
+   * Plural writes to one worktree run one at a time: two interleaving their
+   * batches could leave an index that neither order of the two would.
    */
-  const writeInBatches = async (
+  const writeInBatches = (
+    cwd: string,
     paths: string[],
     verb: "Staged" | "Unstaged",
     write: (batch: string[]) => Promise<unknown>
-  ): Promise<void> => {
-    let confirmed = 0;
-    for (const batch of batchPathsForArgv(paths)) {
+  ): Promise<void> =>
+    runExclusive(`git-index-batches:${cwd}`, async () => {
+      let confirmed = 0;
       try {
-        await write(batch);
-      } catch (err) {
-        if (confirmed === 0) throw err;
-        const reason = formatErrorMessage(err, "Git failed without a message");
-        throw new Error(
-          `${verb} ${confirmed} of ${paths.length} files before Git stopped: ${reason}`,
-          { cause: err }
-        );
+        for (const batch of batchPathsForArgv(paths)) {
+          try {
+            await write(batch);
+          } catch (err) {
+            if (confirmed === 0) throw err;
+            const reason = formatErrorMessage(err, "Git failed without a message");
+            throw new Error(
+              `${verb} at least ${confirmed} of ${paths.length} files before Git stopped: ${reason}`,
+              { cause: err }
+            );
+          }
+          confirmed += batch.length;
+        }
+      } finally {
+        invalidateStagingDiffStatCache(cwd);
       }
-      confirmed += batch.length;
-    }
-  };
+    });
 
   const handleStageFiles = async (payload: { cwd: string; filePaths: string[] }): Promise<void> => {
     checkRateLimit(CHANNELS.GIT_STAGE_FILES, 10, 10_000);
@@ -1588,11 +1599,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
 
     // Strict exit: a batch only counts as confirmed when git exits 0.
     const git = await createStrictExitGit(payload.cwd);
-    try {
-      await writeInBatches(paths, "Staged", (batch) => git.add(["--", ...batch]));
-    } finally {
-      invalidateStagingDiffStatCache(payload.cwd);
-    }
+    await writeInBatches(payload.cwd, paths, "Staged", (batch) => git.add(["--", ...batch]));
   };
   handlers.push(typedHandle(CHANNELS.GIT_STAGE_FILES, handleStageFiles));
 
@@ -1604,20 +1611,18 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     validateCwd(payload?.cwd);
     const paths = validateFilePaths(payload?.filePaths);
 
+    // The probe keeps the default client, where a probe that dies silently
+    // reads as a commit: `reset` then fails loudly on a truly unborn branch,
+    // where taking `rm --cached` on a born one would stage deletions.
+    const hasHead = await hasHeadCommit(await createHardenedGit(payload.cwd), payload.cwd);
     const git = await createStrictExitGit(payload.cwd);
-
-    const hasHead = await hasHeadCommit(git, payload.cwd);
     // Both forms replay cleanly over paths an earlier, partly failed run
     // already unstaged: `reset` matches nothing silently, and `rm` is told to.
     const write = hasHead
       ? (batch: string[]) => git.reset(["HEAD", "--", ...batch])
       : (batch: string[]) => git.raw(["rm", "--cached", "--ignore-unmatch", "-q", "--", ...batch]);
-    try {
-      const targets = hasHead ? await withStagedRenamePartners(payload.cwd, paths) : paths;
-      await writeInBatches(targets, "Unstaged", write);
-    } finally {
-      invalidateStagingDiffStatCache(payload.cwd);
-    }
+    const targets = hasHead ? await withStagedRenamePartners(payload.cwd, paths) : paths;
+    await writeInBatches(payload.cwd, targets, "Unstaged", write);
   };
   handlers.push(typedHandle(CHANNELS.GIT_UNSTAGE_FILES, handleUnstageFiles));
 

@@ -139,8 +139,6 @@ const DIALOG_MIN_BODY_HEIGHT = "min-h-[22rem]";
 /** Ragged widths so the loading rows read as file paths, not as a table. */
 const SKELETON_FILE_ROW_WIDTHS = ["w-64", "w-48", "w-56"] as const;
 
-const NO_STAGING_ROWS: readonly StagingFileEntry[] = [];
-
 /**
  * The hub selection a diff was opened or retargeted for, compared by identity:
  * the working-tree pick and base-branch file are replaced on every gesture, and
@@ -1172,7 +1170,7 @@ export function ReviewHubContent({
     refresh,
     derivedStaged,
     derivedUnstaged,
-    unstaged: status?.unstaged ?? NO_STAGING_ROWS,
+    unstaged: status?.unstaged ?? null,
     selectedPaths,
     selectionSection,
     setActionError,

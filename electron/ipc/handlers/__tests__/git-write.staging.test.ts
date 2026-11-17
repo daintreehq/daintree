@@ -504,7 +504,7 @@ describe("git-write staging handlers (real git)", () => {
 
       expect(error.message).toMatch(
         new RegExp(
-          `^Staged ${batches[0]!.length} of ${selection.length} files before Git stopped: `
+          `^Staged at least ${batches[0]!.length} of ${selection.length} files before Git stopped: `
         )
       );
       expect(error.message).toContain("did not match any files");
@@ -515,6 +515,57 @@ describe("git-write staging handlers (real git)", () => {
       writeAll([missing], "new\n");
       await handler(CHANNELS.GIT_STAGE_FILES)(null, { cwd: repo, filePaths: selection });
       expect(indexed("diff", "--cached", "--name-only")).toEqual([...selection].sort());
+    });
+
+    it("claims no more than git confirmed when a failed add still stages part of its batch", async () => {
+      commitFiles({ "keep.txt": "base\n" });
+      const selection = longSelection();
+      const batches = batchPathsForArgv(selection);
+      expect(batches.length).toBeGreaterThanOrEqual(3);
+      writeAll(selection, "new\n");
+      // An ignored path makes `add` stage the rest of its batch and exit 1.
+      const ignored = batches[1]![0]!;
+      fs.writeFileSync(path.join(repo, ".git", "info", "exclude"), `/${ignored}\n`);
+
+      const error = await rejection(
+        handler(CHANNELS.GIT_STAGE_FILES)(null, { cwd: repo, filePaths: selection })
+      );
+
+      expect(error.message).toMatch(
+        new RegExp(
+          `^Staged at least ${batches[0]!.length} of ${selection.length} files before Git stopped: `
+        )
+      );
+      const staged = indexed("diff", "--cached", "--name-only");
+      expect(staged).toEqual([...batches[0]!, ...batches[1]!.slice(1)].sort());
+    });
+
+    it("runs overlapping writes to one worktree one after the other", async () => {
+      const selection = longSelection();
+      const batchCount = batchPathsForArgv(selection).length;
+      expect(batchCount).toBeGreaterThanOrEqual(3);
+      writeAll(selection, "base\n");
+      git(repo, "add", ".");
+      git(repo, "commit", "-q", "-m", "base");
+      writeAll(selection, "changed\n");
+
+      const mark = spawned.length;
+      await Promise.all([
+        handler(CHANNELS.GIT_STAGE_FILES)(null, { cwd: repo, filePaths: selection }),
+        handler(CHANNELS.GIT_UNSTAGE_FILES)(null, { cwd: repo, filePaths: selection }),
+      ]);
+
+      const writes = spawnedSince(mark)
+        .map(subcommand)
+        .filter((command) => command === "add" || command === "reset");
+      const run = (command: string) => Array<string>(batchCount).fill(command);
+      const stagedFirst = writes[0] === "add";
+      expect(writes).toEqual(
+        stagedFirst ? [...run("add"), ...run("reset")] : [...run("reset"), ...run("add")]
+      );
+      expect(indexed("diff", "--cached", "--name-only")).toEqual(
+        stagedFirst ? [] : [...selection].sort()
+      );
     });
 
     it("passes a first-batch failure through unchanged, with nothing staged", async () => {
@@ -549,7 +600,7 @@ describe("git-write staging handlers (real git)", () => {
 
       expect(error.message).toMatch(
         new RegExp(
-          `^Unstaged ${batches[0]!.length} of ${selection.length} files before Git stopped: `
+          `^Unstaged at least ${batches[0]!.length} of ${selection.length} files before Git stopped: `
         )
       );
       expect(indexed("ls-files")).toEqual(batches.slice(1).flat().sort());
@@ -558,6 +609,15 @@ describe("git-write staging handlers (real git)", () => {
       await handler(CHANNELS.GIT_UNSTAGE_FILES)(null, { cwd: repo, filePaths: selection });
       expect(indexed("ls-files")).toEqual([]);
     });
+  });
+
+  it("refuses a path holding a NUL before running any git", async () => {
+    fs.writeFileSync(path.join(repo, "a.txt"), "a\n");
+    const mark = spawned.length;
+    await expect(
+      handler(CHANNELS.GIT_STAGE_FILES)(null, { cwd: repo, filePaths: ["a.txt", "b\0.txt"] })
+    ).rejects.toThrow("Invalid file path in filePaths");
+    expect(spawnedSince(mark)).toEqual([]);
   });
 
   it("reads churn by exact path, with no root probe and no config read", async () => {
