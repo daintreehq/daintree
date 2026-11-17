@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ReactNode } from "react";
 import { CrossWorktreeDiff } from "../CrossWorktreeDiff";
@@ -160,25 +160,30 @@ describe("CrossWorktreeDiff when the chosen pair can no longer be compared", () 
   });
 
   it.each([
-    ["compare", "Choose a compare worktree on a branch", "wt-right"],
-    ["base", "Choose a base worktree on a branch", "wt-left"],
+    ["compare", "Compare", "Choose a compare worktree on a branch", "wt-right"],
+    ["base", "Base", "Choose a base worktree on a branch", "wt-left"],
   ])(
     "clears the comparison when the %s side detaches but still carries its last branch name",
-    async (_side, title, detachedId) => {
+    async (_side, pickerLabel, title, detachedId) => {
       const view = await openComparison();
       const calls = mockCompareWorktrees.mock.calls.length;
 
-      const retained = (wt: Snapshot) => (wt.id === detachedId ? { ...wt, isDetached: true } : wt);
+      // A new head, as a checkout to another commit brings: with the retained
+      // branch still accepted, this would refresh the comparison.
+      const retained = (wt: Snapshot) =>
+        wt.id === detachedId
+          ? { ...wt, isDetached: true, worktreeChanges: { headOid: "bbb" } }
+          : wt;
       setWorktrees(retained(LEFT()), retained(RIGHT()));
       view.rerender(tree());
 
       expect(await screen.findByText(title)).toBeTruthy();
       expect(screen.getByText(new RegExp(`${detachedId} has a detached HEAD`))).toBeTruthy();
       expectNothingStale();
-      const option = screen.getAllByRole("option", { name: `${detachedId} (detached)` });
-      expect(option.length).toBeGreaterThan(0);
-      for (const o of option) expect((o as HTMLOptionElement).disabled).toBe(true);
-      view.rerender(tree());
+      const option = within(screen.getByLabelText(pickerLabel)).getByRole("option", {
+        name: `${detachedId} (detached)`,
+      });
+      expect((option as HTMLOptionElement).disabled).toBe(true);
       expect(mockCompareWorktrees.mock.calls.length).toBe(calls);
     }
   );
