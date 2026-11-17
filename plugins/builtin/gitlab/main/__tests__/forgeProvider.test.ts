@@ -1114,7 +1114,12 @@ describe("checks.getChecks", () => {
           }),
         "2": () => jsonResponse([{ id: firstId + 1, name: `${prefix}-2`, status: "success" }]),
       });
-    routeChecks({ mr: mrWith(), jobs: twoPages("job", 1), bridges: twoPages("bridge", 10) });
+    routeChecks({
+      mr: mrWith(),
+      jobs: twoPages("job", 1),
+      bridges: twoPages("bridge", 10),
+      statuses: twoPages("external", 20),
+    });
 
     const result = await getChecks(3);
 
@@ -1123,6 +1128,8 @@ describe("checks.getChecks", () => {
       "job-2",
       "bridge-1",
       "bridge-2",
+      "external-1",
+      "external-2",
     ]);
   });
 
@@ -1228,6 +1235,19 @@ describe("checks.getChecks", () => {
     await expect(getChecks(3)).rejects.toThrow(/no commit/);
   });
 
+  it("lists the jobs of a public pipeline read without a token", async () => {
+    // GitLab serves the job lists anonymously but not the commit statuses.
+    routeChecks({
+      mr: mrWith({ status: "failed" }),
+      jobs: pages({ "1": () => jsonResponse([{ id: 1, name: "rspec", status: "failed" }]) }),
+      statuses: () => jsonResponse({ message: "401 Unauthorized" }, { status: 401 }),
+    });
+
+    const result = await getChecks(3);
+
+    expect(result?.checks.map((check) => check.name)).toEqual(["rspec"]);
+  });
+
   it("returns null for a merge request that doesn't exist", async () => {
     routeChecks({ mr: () => jsonResponse({ message: "404 Not found" }, { status: 404 }) });
 
@@ -1238,7 +1258,10 @@ describe("checks.getChecks", () => {
   // found, a list that fails is a read that failed, whatever the status.
   it.each(
     (["jobs", "bridges", "statuses"] as const).flatMap((list) =>
-      [401, 403, 404, 429].map((status) => [list, status] as const)
+      [401, 403, 404, 429]
+        // Covered below: a 401 on statuses alone is an anonymous read.
+        .filter((status) => list !== "statuses" || status !== 401)
+        .map((status) => [list, status] as const)
     )
   )("rejects when the %s list answers %i", async (list, status) => {
     routeChecks({

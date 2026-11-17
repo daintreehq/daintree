@@ -630,7 +630,13 @@ export async function getChecksImpl(
       },
       fresh,
       incomplete
-    ),
+    ).catch((err: unknown) => {
+      // This list wants a signed-in account even on a public project, where
+      // the job lists don't. A 401 here while both job lists read is a read
+      // that went out without a token, and all it can list is the jobs.
+      if (err instanceof GitLabApiError && err.status === 401) return [];
+      throw err;
+    }),
   ]);
 
   const listed = new Set<number>();
