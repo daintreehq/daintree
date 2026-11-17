@@ -198,6 +198,23 @@ describe("QuestionNotifier", () => {
     warn.mockRestore();
   });
 
+  it("shows a saved claim without waiting on writes queued after it", async () => {
+    const store = recorded();
+    store.setMeta
+      .mockImplementationOnce(async (key: string, value: string) => {
+        store.meta.set(key, value);
+      })
+      .mockImplementationOnce(() => new Promise<void>(() => {}));
+    const list = questionList();
+    const { notifier: made, show } = notifier(store, list);
+    await made.start();
+
+    list.publish([question("q-1")]);
+    // Another question's write queues behind it, and never finishes.
+    list.publish([question("q-1"), question("q-2")]);
+    await vi.waitFor(() => expect(shownIds(show)).toEqual(["q-1"]));
+  });
+
   it("shows a claim a later write saved after an earlier one failed", async () => {
     const store = recorded();
     let fail!: () => void;

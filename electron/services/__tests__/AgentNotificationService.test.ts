@@ -4413,6 +4413,20 @@ describe("Decisions questions (#17232)", () => {
     expect(finished()).toHaveLength(0);
   });
 
+  it("shows the banner when the terminal comes back under its id and exits at once", () => {
+    turn(() => setDecisionQuestions([question("term-1", Date.now())]));
+    events.emit("agent:killed", { terminalId: "term-1", agentId: "agent-1" } as never);
+    vi.advanceTimersByTime(1_000);
+
+    // A failed spawn reports `exited` from `working` with no turn ever starting.
+    events.emit("agent:spawned", { terminalId: "term-1", agentId: "agent-1" } as never);
+    vi.advanceTimersByTime(10_000);
+    events.emit("agent:state-changed", makePayload("exited", "working"));
+    vi.advanceTimersByTime(5_000);
+
+    expect(finished()).toHaveLength(1);
+  });
+
   it("shows a later turn's banner when the agent exits naturally after it", () => {
     turn(() => setDecisionQuestions([question("term-1", Date.now())]));
     events.emit("agent:state-changed", makePayload("working", "idle"));

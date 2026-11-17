@@ -204,12 +204,12 @@ export class QuestionNotifier implements QuestionNotifications {
 
   private async deliver(asked: DecisionQuestionListItem): Promise<void> {
     const key = questionKey(asked.reference);
-    // Every write queued meanwhile too: a later snapshot may save the claim an earlier one failed to.
+    // Until a saved snapshot holds the claim: a later one may save what an earlier one failed to.
     let writes: Promise<void>;
     do {
       writes = this.writing;
       await writes;
-    } while (writes !== this.writing);
+    } while (!this.saved.has(key) && writes !== this.writing);
     if (this.stopped) return;
     if (!this.saved.has(key)) {
       // Shown unsaved, a restart would show it again; the list's next change claims it afresh.
