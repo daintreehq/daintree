@@ -193,6 +193,11 @@ describe("fleet.retryFailures — recipe variables after a failed write (#17513)
       ["/tmp/shot.png"]
     );
     await flush();
+    expect(writes()).toEqual([
+      { id: "beta", text: "Review feature/beta /tmp/shot.png", images: ["/tmp/shot.png"] },
+      { id: "literal", text: "", images: [] },
+      { id: "origin", text: "Review feature/alpha /tmp/shot.png", images: ["/tmp/shot.png"] },
+    ]);
     expect([...useFleetFailureStore.getState().failedIds].sort()).toEqual(["beta", "literal"]);
 
     writesNowSucceed();
