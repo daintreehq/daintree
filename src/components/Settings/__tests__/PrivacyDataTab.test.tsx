@@ -811,6 +811,23 @@ describe("PrivacyDataTab", () => {
       expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     });
 
+    it("brings the Retry back when the older write for the same value fails too", async () => {
+      const writes = deferredWrites();
+      await renderTab("storage", { privacy: { setLogRetention: writes.send } });
+
+      fireEvent.click(logRetentionOption("90 days"));
+      fireEvent.click(logRetentionOption("7 days"));
+      fireEvent.click(logRetentionOption("90 days"));
+      await writes.settle(2, new Error("IPC fail"));
+      await writes.settle(1, new Error("IPC fail"));
+      await writes.settle(0, new Error("IPC fail"));
+
+      expect(isChecked(logRetentionOption("30 days"))).toBe(true);
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      expect(writes.send).toHaveBeenCalledTimes(4);
+      expect(writes.send).toHaveBeenLastCalledWith(90);
+    });
+
     it("keeps the newer session retention when the older write fails after it saved", async () => {
       const writes = deferredWrites();
       await renderTab("storage", { sessions: { setRetentionDays: writes.send } });
