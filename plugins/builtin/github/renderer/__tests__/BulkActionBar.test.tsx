@@ -111,6 +111,32 @@ describe("BulkActionBar", () => {
     expect(onClear).toHaveBeenCalledTimes(1);
   });
 
+  it("pluralizes the count and the create button, with digit grouping", () => {
+    const { rerender } = render(
+      <BulkActionBar
+        mode="issue"
+        selectedIssues={[makeIssue(1)]}
+        selectedPRs={[]}
+        selectedCount={1}
+        onClear={vi.fn()}
+      />
+    );
+    expect(screen.getByText(/issue selected/).textContent).toBe("1 issue selected");
+    expect(screen.getByRole("button", { name: "Create worktree" })).toBeTruthy();
+
+    rerender(
+      <BulkActionBar
+        mode="issue"
+        selectedIssues={[makeIssue(1)]}
+        selectedPRs={[]}
+        selectedCount={1204}
+        onClear={vi.fn()}
+      />
+    );
+    expect(screen.getByText(/issues selected/).textContent).toBe("1,204 issues selected");
+    expect(screen.getByRole("button", { name: "Create worktrees" })).toBeTruthy();
+  });
+
   it("opens bulk-create dialog with issues in issue mode", () => {
     const onClear = vi.fn();
     const issues = [makeIssue(1), makeIssue(2)];

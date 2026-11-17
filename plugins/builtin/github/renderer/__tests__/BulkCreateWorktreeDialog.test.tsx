@@ -490,6 +490,19 @@ describe("BulkCreateWorktreeDialog", () => {
     onComplete: vi.fn(),
   };
 
+  it("names the worktree count on the confirm button with tabular figures", () => {
+    const { rerender } = render(<BulkCreateWorktreeDialog {...defaultProps} />);
+    const confirm = screen.getByTestId("bulk-create-confirm-button");
+    expect(confirm.textContent).toContain("Create 3 worktrees");
+    expect(confirm.className).toContain("tabular-nums");
+
+    rerender(<BulkCreateWorktreeDialog {...defaultProps} selectedIssues={[makeIssue(1)]} />);
+    expect(screen.getByTestId("bulk-create-confirm-button").textContent).toContain(
+      "Create 1 worktree"
+    );
+    expect(screen.getByTestId("bulk-create-confirm-button").textContent).not.toContain("worktrees");
+  });
+
   it("creates worktrees using direct client calls", async () => {
     const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(

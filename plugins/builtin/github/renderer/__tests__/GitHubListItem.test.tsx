@@ -128,6 +128,19 @@ afterEach(() => {
 });
 
 describe("GitHubListItem", () => {
+  it("styles the title with current tokens and keeps its tooltip for truncation only", () => {
+    render(<GitHubListItem item={baseIssue} type="issue" onCreateWorktree={vi.fn()} />);
+    const title = screen.getByRole("button", { name: "Fix the thing" });
+    expect(title.className).toContain("text-text-primary");
+    expect(title.className).toContain("rounded-[var(--radius-sm)]");
+    expect(title.className).not.toContain("text-foreground");
+    expect(title.className).not.toMatch(/\brounded-sm\b/);
+    // A title that fits in full has nothing more to say: no duplicate tooltip
+    // copy beside it, and no extra tab stop on the button.
+    expect(screen.getAllByText("Fix the thing")).toHaveLength(1);
+    expect(title.getAttribute("tabindex")).toBe("-1");
+  });
+
   it("opens the forge from the title, leaving the row to the worktree", () => {
     // The title is the resource's name, so it goes to where the resource
     // lives. Creating a worktree off a click on the text was the complaint.
