@@ -111,16 +111,28 @@ export function SystemRequirementsSection({
       )}
 
       {allDone && hasFatalFailure && (
-        <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-error tabular-nums">
+        <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-error">
           <CircleX className="w-3.5 h-3.5" />
-          Action required: {readyCount} of {totalCount} tools ready
+          <span>
+            Action required:{" "}
+            <span className="tabular-nums">
+              {readyCount} of {totalCount}
+            </span>{" "}
+            tools ready
+          </span>
         </span>
       )}
 
       {allDone && !hasFatalFailure && hasWarning && (
-        <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-warning tabular-nums">
+        <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-warning">
           <AlertTriangle className="w-3.5 h-3.5" />
-          Warning: {readyCount} of {totalCount} tools ready
+          <span>
+            Warning:{" "}
+            <span className="tabular-nums">
+              {readyCount} of {totalCount}
+            </span>{" "}
+            tools ready
+          </span>
         </span>
       )}
     </>
