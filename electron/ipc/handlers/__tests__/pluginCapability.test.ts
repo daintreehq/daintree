@@ -828,15 +828,21 @@ describe("pluginCapability consent bridge — where a local plugin's prompt may 
     // The window's app view is already the incoming project's, while the
     // outgoing one stays on screen, not yet cached, until the incoming paints.
     const switching = openWindow("proj-b");
+    // Registered to the window under the same project, but not the view its
+    // manager is bridging, so it is not what the window shows.
+    const stray = makeWebContents();
     const outgoing = makeWebContents();
-    looseViews.push(outgoing);
-    registerWebContents(outgoing as never, switching.win as never);
-    registerProjectView("proj-a", outgoing as never);
+    looseViews.push(stray, outgoing);
+    for (const wc of [stray, outgoing]) {
+      registerWebContents(wc as never, switching.win as never);
+      registerProjectView("proj-a", wc as never);
+    }
     bridging = { windowId: switching.win.id, projectId: "proj-a", webContentsId: outgoing.id };
 
     const settled = startProjectGatedCall("proj-a");
 
     expect(switching.appWebContents.send).not.toHaveBeenCalled();
+    expect(stray.send).not.toHaveBeenCalled();
     expect(outgoing.send).toHaveBeenCalledTimes(1);
     await approveIn(outgoing);
     await expect(settled).resolves.toEqual({ ok: true });
