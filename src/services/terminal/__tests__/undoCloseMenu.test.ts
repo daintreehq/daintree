@@ -47,10 +47,11 @@ const { keybindingService } = await import("@/services/KeybindingService");
 const history = await import("../panelCloseHistory");
 const { trackNativeFieldEdits, resetCloseUndoOrderForTests } = await import("../closeUndoOrder");
 const { undoCloseMenuState, startUndoCloseMenuPublisher } = await import("../undoCloseMenu");
+const { undoCloseTakesKey } = await import("../undoCloseKey");
 const { PLUGIN_STYLE_OWNER_ATTRIBUTE } = await import("@/services/plugin/pluginStyleOwner");
 const { registerPanelCoreActions } =
   await import("@/services/actions/definitions/panelCoreActions");
-const { EditorState } = await import("@codemirror/state");
+const { EditorState, Transaction } = await import("@codemirror/state");
 const { EditorView } = await import("@codemirror/view");
 const { markdown, markdownLanguage } = await import("@codemirror/lang-markdown");
 const { buildMarkdownEditorExtensions } =
@@ -121,12 +122,15 @@ function focusMarkdownEditor(doc: string): InstanceType<typeof EditorView> {
   return view;
 }
 
-function typeInEditor(view: InstanceType<typeof EditorView>, text: string) {
+// Stamped with `time`, so typing a moment apart stays inside the delay that
+// merges it into one undo step however long the run pauses between.
+function typeInEditor(view: InstanceType<typeof EditorView>, text: string, time: number) {
   const at = view.state.doc.length;
   view.dispatch({
     changes: { from: at, insert: text },
     selection: { anchor: at + text.length },
     userEvent: "input.type",
+    annotations: Transaction.time.of(time),
   });
 }
 
@@ -400,20 +404,19 @@ describe("the publisher", () => {
 describe("panel.undoClose chosen from Edit > Undo", () => {
   // jsdom has no layout: undo scrolls the caret into view, and CodeMirror
   // measures it through Range rects jsdom lacks.
-  const originalRangeRects = Object.getOwnPropertyDescriptor(Range.prototype, "getClientRects");
-  const originalRangeBounds = Range.prototype.getBoundingClientRect;
+  const rangeStubs = { getClientRects: () => [], getBoundingClientRect: () => new DOMRect() };
+  const originals = new Map<string, PropertyDescriptor | undefined>();
   beforeAll(() => {
-    Object.defineProperty(Range.prototype, "getClientRects", {
-      configurable: true,
-      value: () => [],
-    });
-    Range.prototype.getBoundingClientRect = () => new DOMRect();
+    for (const [name, value] of Object.entries(rangeStubs)) {
+      originals.set(name, Object.getOwnPropertyDescriptor(Range.prototype, name));
+      Object.defineProperty(Range.prototype, name, { configurable: true, value });
+    }
   });
   afterAll(() => {
-    if (originalRangeRects)
-      Object.defineProperty(Range.prototype, "getClientRects", originalRangeRects);
-    else delete (Range.prototype as Partial<Range>).getClientRects;
-    Range.prototype.getBoundingClientRect = originalRangeBounds;
+    for (const [name, descriptor] of originals) {
+      if (descriptor) Object.defineProperty(Range.prototype, name, descriptor);
+      else Reflect.deleteProperty(Range.prototype, name);
+    }
   });
 
   it("reopens the close it named", async () => {
@@ -443,19 +446,20 @@ describe("panel.undoClose chosen from Edit > Undo", () => {
   it("takes a Markdown editor's typing since the close back first, then the close, then older typing (#17180)", async () => {
     const editor = focusMarkdownEditor("# Plan\n");
     try {
-      // Typed right before and right after the close, inside the grouping
-      // delay that would otherwise merge them into one undo step.
-      typeInEditor(editor, "older");
+      typeInEditor(editor, "older", 1000);
       seed("a");
       userClose(["a"]);
-      typeInEditor(editor, " newer");
+      typeInEditor(editor, " newer", 1001);
       expect(document.activeElement).toBe(editor.contentDOM);
+      // Cmd+Z goes on to the editor rather than reopening, as Edit > Undo does.
+      expect(undoCloseTakesKey(editor.contentDOM, false, true)).toBe(false);
       expect(undoCloseMenuState()).toBeNull();
 
       await undoCloseAction().run(undefined, { dispatchSource: "menu" });
       expect(editor.state.doc.toString()).toBe("# Plan\nolder");
       expect(locationOf("a")).toBe("trash");
 
+      expect(undoCloseTakesKey(editor.contentDOM, false, true)).toBe(true);
       expect(undoCloseMenuState()).toEqual({ count: 1, title: "a" });
       await undoCloseAction().run(undefined, { dispatchSource: "menu" });
       expect(locationOf("a")).toBe("grid");

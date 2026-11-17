@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoreApi, UseBoundStore } from "zustand";
 import { EditorView } from "@codemirror/view";
-import { Text } from "@codemirror/state";
+import { Text, Transaction } from "@codemirror/state";
 
 const { dispatchMock } = vi.hoisted(() => ({
   dispatchMock: vi.fn(async () => ({ ok: true, result: undefined })),
@@ -513,21 +513,32 @@ describe("MarkdownEditorView (#12323)", () => {
   describe("Undo against a closed panel (#17180)", () => {
     // jsdom has no layout: undo scrolls the caret into view, and CodeMirror
     // measures it through Range rects jsdom lacks.
-    const originalRangeRects = Object.getOwnPropertyDescriptor(Range.prototype, "getClientRects");
-    const originalRangeBounds = Range.prototype.getBoundingClientRect;
+    const rangeStubs = { getClientRects: () => [], getBoundingClientRect: () => new DOMRect() };
+    const originals = new Map<string, PropertyDescriptor | undefined>();
     beforeAll(() => {
-      Object.defineProperty(Range.prototype, "getClientRects", {
-        configurable: true,
-        value: () => [],
-      });
-      Range.prototype.getBoundingClientRect = () => new DOMRect();
+      for (const [name, value] of Object.entries(rangeStubs)) {
+        originals.set(name, Object.getOwnPropertyDescriptor(Range.prototype, name));
+        Object.defineProperty(Range.prototype, name, { configurable: true, value });
+      }
     });
     afterAll(() => {
-      if (originalRangeRects)
-        Object.defineProperty(Range.prototype, "getClientRects", originalRangeRects);
-      else delete (Range.prototype as Partial<Range>).getClientRects;
-      Range.prototype.getBoundingClientRect = originalRangeBounds;
+      for (const [name, descriptor] of originals) {
+        if (descriptor) Object.defineProperty(Range.prototype, name, descriptor);
+        else Reflect.deleteProperty(Range.prototype, name);
+      }
     });
+
+    // Typing stamped a moment apart, well inside the delay that would merge it
+    // into one undo step, however long the run actually pauses between.
+    async function typeAt(text: string, time: number) {
+      const cm = editorView();
+      await act(async () => {
+        cm.dispatch({
+          changes: { from: cm.state.doc.length, insert: text },
+          annotations: Transaction.time.of(time),
+        });
+      });
+    }
 
     beforeEach(() => {
       resetCloseUndoOrderForTests();
@@ -535,12 +546,10 @@ describe("MarkdownEditorView (#12323)", () => {
 
     it("undoes typing newer than a panel close before the close, and keeps older typing for after it", async () => {
       await renderReady();
-      // Typed right before and right after the close, inside the grouping
-      // delay that would otherwise merge them into one undo step.
-      await type("\nolder");
+      await typeAt("\nolder", 1000);
       const close = nextCloseSeq();
       expect(hasEditsSinceClose(editorView().contentDOM, close)).toBe(false);
-      await type(" newer");
+      await typeAt(" newer", 1001);
       const cm = editorView();
       expect(hasEditsSinceClose(cm.contentDOM, close)).toBe(true);
 
@@ -607,6 +616,7 @@ describe("MarkdownEditorView (#12323)", () => {
       });
       const modal = appModal();
       try {
+        expect(document.activeElement).toBe(editorView().contentDOM);
         await act(async () => {
           window.dispatchEvent(new Event("daintree:find-in-panel"));
         });
