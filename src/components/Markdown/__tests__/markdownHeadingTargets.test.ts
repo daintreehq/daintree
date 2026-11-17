@@ -33,6 +33,16 @@ describe("markdownTargetLine (#17335)", () => {
     expect(markdownTargetLine(PLAN, "#use-slug-here--now")).toBe(14);
   });
 
+  it("never counts front matter, whose `#` lines are YAML comments (#17334)", () => {
+    const source = ["---", "# Risks", "title: Plan", "---", "", "# Risks", "", "## Risks"];
+
+    expect(markdownTargetLine(source.join("\n"), "#risks")).toBe(6);
+    expect(markdownTargetLine(source.join("\n"), "#risks-1")).toBe(8);
+    expect(markdownTargetLine(source.join("\r\n"), "#risks-1")).toBe(8);
+    expect(markdownTargetLine(`\uFEFF${source.join("\n")}`, "#risks")).toBe(6);
+    expect(markdownTargetLine(source.join("\n"), "#risks-2")).toBeNull();
+  });
+
   it("takes a link written with the prefix, and footnotes by their ids", () => {
     expect(markdownTargetLine(PLAN, "#user-content-risks-1")).toBe(11);
     expect(markdownTargetLine(PLAN, "#user-content-fn-note")).toBe(18);

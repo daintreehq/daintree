@@ -1,4 +1,7 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Component, type ReactNode } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, render } from "@testing-library/react";
@@ -550,6 +553,100 @@ describe("RenderedMarkdownDiff", () => {
     expect(visibleText(container.querySelector("li .rendered-markdown-diff__inline--added"))).toBe(
       "leaps"
     );
+  });
+
+  it("marks a changed front matter value inside the metadata block, not a heading (#17334)", () => {
+    const source = [
+      "---",
+      "name: release-check",
+      "description: Checks the release branch before tagging",
+      "---",
+      "",
+      "# Release check",
+      "",
+    ].join("\n");
+    const diff = patch([
+      "@@ -1,6 +1,6 @@",
+      " ---",
+      " name: release-check",
+      "-description: Checks the release branch",
+      "+description: Checks the release branch before tagging",
+      " ---",
+      " ",
+      " # Release check",
+    ]);
+
+    const { container } = renderDiff(diff, source);
+
+    expect(blockKinds(container)).toEqual(["removed", "added", "unchanged"]);
+    const added = container.querySelector(
+      ".rendered-markdown-diff__block--added [data-frontmatter]"
+    );
+    expect(visibleText(added)).toBe(
+      "name: release-check\ndescription: Checks the release branch before tagging"
+    );
+    expect(
+      [...(added?.querySelectorAll(".rendered-markdown-diff__inline--added") ?? [])].map(
+        visibleText
+      )
+    ).toEqual(["before tagging"]);
+    expect(container.querySelector("hr")).toBeNull();
+    expect([...container.querySelectorAll("h1, h2")].map((h) => h.textContent)).toEqual([
+      "Release check",
+    ]);
+  });
+
+  it("renders a later block that opens with a fence as the document does, not as front matter", () => {
+    const source = 'Body.\n\n+++\nname = "new"\n+++\n';
+    const diff = patch([
+      "@@ -1,5 +1,5 @@",
+      " Body.",
+      " ",
+      " +++",
+      '-name = "old"',
+      '+name = "new"',
+      " +++",
+    ]);
+
+    const { container } = renderDiff(diff, source);
+
+    expect(container.querySelector("[data-frontmatter]")).toBeNull();
+    expect(
+      visibleText(container.querySelector(".rendered-markdown-diff__block--added p"))
+    ).toContain('name = "new"');
+  });
+
+  it("strikes a deleted front matter block whole, keeping its lines visible", () => {
+    const source = "# Release check\n";
+    const diff = patch([
+      "@@ -1,5 +1,1 @@",
+      "----",
+      "-name: release-check",
+      "----",
+      "-",
+      " # Release check",
+    ]);
+
+    const { container } = renderDiff(diff, source);
+
+    const removed = container.querySelector(".rendered-markdown-diff__block--removed");
+    expect(removed?.getAttribute("data-whole")).toBe("true");
+    const metadata = removed?.querySelector("[data-frontmatter]");
+    expect(metadata?.textContent).toBe("name: release-check");
+
+    // jsdom applies no imported stylesheet, so the rule that strikes a deleted
+    // block's text goes in by hand to see that it reaches the metadata too.
+    const style = document.createElement("style");
+    style.textContent = readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "../RenderedMarkdownDiff.css"),
+      "utf8"
+    );
+    document.head.append(style);
+    try {
+      expect(metadata && getComputedStyle(metadata).textDecoration).toContain("line-through");
+    } finally {
+      style.remove();
+    }
   });
 
   it("keeps a footnote's text in the rendered output", () => {

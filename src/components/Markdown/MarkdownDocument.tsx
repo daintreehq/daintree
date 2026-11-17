@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, type CSSProperties } from "react";
 import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { rehypeHeadingIds } from "./headingIds";
 import { MarkdownImageCacheBust, useMarkdownRenderPolicy } from "./markdownRenderPolicy";
+import { MARKDOWN_REMARK_PLUGINS } from "./markdownRemarkPlugins";
 import { rehypeTableHeadings } from "./MarkdownTable";
 import { ANCHOR_TOP_GAP, followMarkdownFragment } from "./renderedMarkdownAnchors";
 import { useScopedSelectAll, type SelectAllScope } from "@/hooks/useScopedSelectAll";
@@ -37,7 +37,6 @@ export const MARKDOWN_FONT_SIZE_TOKEN = {
 /** `MarkdownDocument.css` reads this; declaring it here is what applies the rung. */
 type MarkdownFontStyle = CSSProperties & Record<"--markdown-font-size", string>;
 
-const REMARK_PLUGINS = [remarkGfm];
 const REHYPE_PLUGINS = [rehypeHeadingIds, rehypeTableHeadings];
 
 export interface MarkdownDocumentProps {
@@ -85,9 +84,10 @@ export interface MarkdownDocumentProps {
 /**
  * Read-only rendered view of a markdown document. Shared by the markdown
  * panel and the file viewer dialog. GFM (tables, task lists, strikethrough,
- * autolinks) is on; raw HTML embedded in the markdown is intentionally never
- * rendered — there is no rehype-raw in the pipeline and `skipHtml` drops the
- * raw nodes entirely. That is the safety boundary that lets this render
+ * autolinks) is on, and YAML or TOML front matter shows as its raw lines in a
+ * compact block above the body (`markdownRemarkPlugins`). Raw HTML embedded in
+ * the markdown is intentionally never rendered — there is no rehype-raw in the
+ * pipeline and `skipHtml` drops the raw nodes entirely. That is the safety boundary that lets this render
  * arbitrary repo files inside an Electron renderer without a sanitizer.
  *
  * Headings get GitHub's ids (`user-content-<slug>`), so a table of contents
@@ -151,7 +151,7 @@ export function MarkdownDocument({
   const rendered = useMemo(
     () => (
       <ReactMarkdown
-        remarkPlugins={REMARK_PLUGINS}
+        remarkPlugins={MARKDOWN_REMARK_PLUGINS}
         rehypePlugins={REHYPE_PLUGINS}
         urlTransform={urlTransform}
         components={components}
