@@ -657,6 +657,7 @@ describe("rendererStoreOrchestrator", () => {
         );
         for (const id of ids) {
           expect(detect(id, "early")).toBe(true);
+          expect(__test_getArtifactsFor(id)).toHaveLength(1);
           usePanelStore.getState().removePanel(id);
           expect(__test_getArtifactsFor(id)).toBeUndefined();
         }
@@ -686,7 +687,10 @@ describe("rendererStoreOrchestrator", () => {
       expect(__test_getArtifactsFor("term-1")).toHaveLength(1);
 
       usePanelStore.getState().trashPanel("term-1");
-      expect(usePanelStore.getState().trashedTerminals.has("term-1")).toBe(true);
+      const trashed = usePanelStore.getState();
+      expect(trashed.trashedTerminals.has("term-1")).toBe(true);
+      expect(trashed.panelsById["term-1"]?.location).toBe("trash");
+      expect(trashed.panelIds).toContain("term-1");
       usePanelStore.getState().removePanel("term-1");
 
       const state = usePanelStore.getState();
@@ -700,6 +704,7 @@ describe("rendererStoreOrchestrator", () => {
     it("takes packets for a reused id as soon as its panel is registered again", () => {
       addPanels(panel("term-1", "terminal"));
       expect(detect("term-1", "old")).toBe(true);
+      expect(__test_getArtifactsFor("term-1")!.map((artifact) => artifact.id)).toEqual(["old"]);
       usePanelStore.getState().removePanel("term-1");
       expect(__test_getArtifactsFor("term-1")).toBeUndefined();
       expect(detect("term-1")).toBe(false);

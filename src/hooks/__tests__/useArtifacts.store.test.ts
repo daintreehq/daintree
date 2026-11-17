@@ -123,12 +123,15 @@ describe("useArtifacts module-level store teardown", () => {
       expect(__test_simulateArtifactDetected(`churn-${i}`, [makeArtifact({ id: `c${i}` })])).toBe(
         true
       );
+      expect(__test_getArtifactsFor(`churn-${i}`)).toHaveLength(1);
       unregister(`churn-${i}`);
       removeArtifactsForTerminal(`churn-${i}`);
+      expect(__test_getArtifactsFor(`churn-${i}`)).toBeUndefined();
     }
     __test_simulateArtifactDetected("t1", [makeArtifact()]);
 
     expect(__test_getArtifactStoreSize()).toBe(1);
+    expect(__test_getArtifactsFor("t1")).toHaveLength(1);
     for (let i = 0; i < 100; i++) {
       expect(__test_simulateArtifactDetected(`churn-${i}`, [makeArtifact()])).toBe(false);
     }
@@ -137,6 +140,7 @@ describe("useArtifacts module-level store teardown", () => {
 
   it("takes a reused id's new packets, not its old ones, once its panel is registered again", () => {
     __test_simulateArtifactDetected("t1", [makeArtifact({ id: "old" })]);
+    expect(__test_getArtifactsFor("t1")!.map((artifact) => artifact.id)).toEqual(["old"]);
     unregister("t1");
     removeArtifactsForTerminal("t1");
     expect(__test_simulateArtifactDetected("t1", [makeArtifact({ id: "late" })])).toBe(false);
@@ -300,6 +304,7 @@ describe("useArtifacts module-level store teardown", () => {
         Array.from({ length: MAX_ARTIFACTS_PER_TERMINAL }, (_, i) => makeArtifact({ id: `a${i}` }))
       );
     });
+    expect(__test_getArtifactsFor("live-cap")).toHaveLength(MAX_ARTIFACTS_PER_TERMINAL);
     act(() => {
       result.current.clearArtifacts();
     });
