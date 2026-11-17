@@ -42,7 +42,7 @@ const FORWARDED_CONTENT_CLASS: Record<string, string> = {
 const TOOLTIP_ONLY_FILES = [
   "src/components/HelpPanel/HelpSessionTabs.tsx",
   "src/components/Terminal/VoiceInputButton.tsx",
-  "src/components/Portal/DevServerDashboard.tsx",
+  "src/components/Layout/LinksLauncherDevServers.tsx",
   "src/components/Settings/EnvVarEditor.tsx",
   "src/components/Settings/AgentScopeEditor/CustomPresetChrome.tsx",
   "src/components/Settings/AgentScopeEditor/FallbackChainEditor.tsx",

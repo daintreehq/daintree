@@ -1,5 +1,7 @@
 import { useCallback, useEffect } from "react";
 import type { ProjectLink } from "@shared/types";
+import type { DevPreviewSessionStatus } from "@shared/types/ipc/devPreview";
+import { acquireAllDevSessions, useAllDevSessionsStore } from "@/store/allDevSessionsStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useGlobalLinksStore, type GlobalLink } from "@/store/globalLinksStore";
 import { refreshCachedProjectLinks, useProjectSettingsStore } from "@/store/projectSettingsStore";
@@ -61,4 +63,31 @@ export function useLinksLauncherRefresh(): void {
     if (settingsCached) refresh();
   }, [settingsCached, refreshSeq, refresh]);
   useProjectViewRevealed(refresh, { enabled: settingsCached });
+}
+
+/**
+ * A dev server in one of these states brings the launcher's button up on its
+ * own (#17251): coming up, up, going down, or failed. A stopped one, or one
+ * restored stopped after a relaunch, waits in the list for the launcher to be
+ * opened some other way.
+ */
+const LIVE_DEV_STATUSES: ReadonlySet<DevPreviewSessionStatus> = new Set([
+  "starting",
+  "installing",
+  "running",
+  "stopping",
+  "error",
+]);
+
+/**
+ * Whether any dev server on this machine is live. Holds the cross-worktree
+ * session subscription for as long as it is mounted, which is the toolbar's
+ * life, so a server started anywhere shows the button before the launcher
+ * has ever been opened.
+ */
+export function useHasLiveDevServer(): boolean {
+  useEffect(() => acquireAllDevSessions(), []);
+  return useAllDevSessionsStore((s) =>
+    s.sessions.some((session) => LIVE_DEV_STATUSES.has(session.status))
+  );
 }

@@ -30,7 +30,6 @@ const SURVIVORS: Record<string, string> = {
   // glyphs. Their copy ticks follow the neutral rule; the buttons are the
   // toolbar's own.
   "src/components/Portal/PortalToolbar.tsx": "portal toolbar and its tab strip",
-  "src/components/Portal/DevServerDashboard.tsx": "portal toolbar family",
   // Tab strips close their tabs with the tab's own control — one shared
   // `DocumentTabClose` for the grid, dock, portal and assistant strips.
   "src/components/ui/document-tab.tsx": "document tab close",

@@ -22,7 +22,6 @@ import { refreshCachedProjectLinks, useProjectSettingsStore } from "@/store/proj
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { useProjectViewRevealed } from "@/hooks/useProjectViewRevealed";
 import { selectViewProject } from "@/store/viewWorkspace";
-import { DevServerDashboard } from "./DevServerDashboard";
 import { PortalTabSkeleton } from "./PortalTabSkeleton";
 import { PortalTabRestoreError } from "./PortalTabRestoreError";
 import { useSkeletonGate, useSkeletonFloor } from "@/hooks/useDeferredLoading";
@@ -97,8 +96,6 @@ export function PortalDock() {
     setWidth,
     setOpen,
     defaultNewTabUrl,
-    showDevDashboard,
-    toggleDevDashboard,
   } = usePortalStore(
     useShallow((s) => ({
       width: s.width,
@@ -111,13 +108,10 @@ export function PortalDock() {
       setWidth: s.setWidth,
       setOpen: s.setOpen,
       defaultNewTabUrl: s.defaultNewTabUrl,
-      showDevDashboard: s.showDevDashboard,
-      toggleDevDashboard: s.toggleDevDashboard,
     }))
   );
   const contentRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLElement>(null);
-  const devServersButtonRef = useRef<HTMLButtonElement>(null);
   const pageFocusedRef = useRef(false);
   const [isResizing, setIsResizing] = useState(false);
   const [isSwitching, setIsSwitching] = useState(false);
@@ -534,23 +528,6 @@ export function PortalDock() {
     []
   );
 
-  // Hiding the dashboard unmounts the button that hid it, so the toolbar toggle
-  // that shows it again takes focus first: ringless after a click, the way a
-  // pointer close restores focus everywhere else.
-  const handleHideDevDashboard = useCallback(
-    (event: React.MouseEvent<HTMLButtonElement>) => {
-      const toggle = devServersButtonRef.current;
-      if (toggle?.isConnected && event.currentTarget.contains(document.activeElement)) {
-        armTooltipFocusSuppression();
-        toggle.focus(
-          event.detail > 0 ? { preventScroll: true, focusVisible: false } : { preventScroll: true }
-        );
-      }
-      toggleDevDashboard();
-    },
-    [toggleDevDashboard]
-  );
-
   const { setOpen: setMenuOpen, afterClose } = useNativeViewMenu("portal-dock-menu");
 
   return (
@@ -607,7 +584,6 @@ export function PortalDock() {
             onOpenTabExternal={handleOpenTabExternal}
             onReloadTab={handleReloadTab}
             enabledLinks={enabledLinks}
-            devServersButtonRef={devServersButtonRef}
           />
           <div
             ref={contentRef}
@@ -636,7 +612,6 @@ export function PortalDock() {
               <div className="flex-1 bg-surface-sidebar" />
             )}
           </div>
-          {showDevDashboard && <DevServerDashboard onHide={handleHideDevDashboard} />}
         </aside>
       </ContextMenuTrigger>
       {/* A sibling of the dock in the React tree, not a child, so its focus

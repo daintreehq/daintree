@@ -866,7 +866,7 @@ async function capturePortal(run: Run): Promise<void> {
       const chrome = back.locator("xpath=ancestor::div[contains(@class,'h-10')][1]/..");
       await expect(region.getByRole("button", { name: "New tab" })).toBeVisible();
       await expect(region.getByRole("button", { name: "Close portal" })).toBeVisible();
-      await expect(region.getByRole("button", { name: "Dev servers" })).toBeVisible();
+      await expect(region.getByRole("button", { name: "Dev servers" })).toHaveCount(0);
       await snap(page, "portal-toolbar", theme, [chrome], { pad: 0 });
     } finally {
       await dispatchAction(page, "portal.closeAllTabs").catch(() => {});

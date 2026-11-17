@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { openLinksLauncher, useLinksLauncherStore } from "../linksLauncherStore";
+import {
+  openLinksLauncher,
+  openLinksLauncherFromOverflow,
+  useLinksLauncherStore,
+} from "../linksLauncherStore";
 import {
   consumeDeferredPaletteFocusRestore,
   deferPaletteFocusRestore,
@@ -21,7 +25,8 @@ beforeEach(() => {
     opening: null,
     refreshSeq: 0,
     closeFocus: null,
-    paletteRestore: null,
+    detachedRestore: null,
+    deferredFromOverflow: null,
   });
   notePaletteOpening();
 });
@@ -91,9 +96,9 @@ describe("openLinksLauncher from the action palette", () => {
     // The palette's exit hands its restore to the launcher instead of running it.
     consumeDeferredPaletteFocusRestore()?.(restore);
     expect(restore).not.toHaveBeenCalled();
-    const held = useLinksLauncherStore.getState().takePaletteRestore();
+    const held = useLinksLauncherStore.getState().takeDetachedRestore();
     expect(held).toBe(restore);
-    expect(useLinksLauncherStore.getState().takePaletteRestore()).toBeNull();
+    expect(useLinksLauncherStore.getState().takeDetachedRestore()).toBeNull();
   });
 
   it("gives the palette's return back at once when the launcher closed first", () => {
@@ -104,7 +109,7 @@ describe("openLinksLauncher from the action palette", () => {
 
     consumeDeferredPaletteFocusRestore()?.(restore);
     expect(restore).toHaveBeenCalledTimes(1);
-    expect(useLinksLauncherStore.getState().paletteRestore).toBeNull();
+    expect(useLinksLauncherStore.getState().detachedRestore).toBeNull();
   });
 
   it("leaves the palette's return alone when the launcher opens at its button", () => {
@@ -115,7 +120,7 @@ describe("openLinksLauncher from the action palette", () => {
 
     consumeDeferredPaletteFocusRestore()?.(restore);
     expect(restore).toHaveBeenCalledTimes(1);
-    expect(useLinksLauncherStore.getState().paletteRestore).toBeNull();
+    expect(useLinksLauncherStore.getState().detachedRestore).toBeNull();
   });
 
   it("keeps the held return when it is opened again while open", () => {
@@ -130,11 +135,53 @@ describe("openLinksLauncher from the action palette", () => {
 
     expect(useLinksLauncherStore.getState().opening).toBe(opening);
     expect(useLinksLauncherStore.getState().refreshSeq).toBe(2);
-    expect(useLinksLauncherStore.getState().takePaletteRestore()).toBe(restore);
+    expect(useLinksLauncherStore.getState().takeDetachedRestore()).toBe(restore);
   });
 
   it("arms nothing when no palette is closing", () => {
     openLinksLauncher();
     expect(consumeDeferredPaletteFocusRestore()).toBeNull();
+  });
+});
+
+describe("opening from a `…` menu row", () => {
+  function overflowTrigger(side: "left" | "right", visible: boolean): HTMLButtonElement {
+    const trigger = document.createElement("button");
+    trigger.setAttribute("data-toolbar-overflow-trigger", "");
+    trigger.setAttribute("data-toolbar-overflow-side", side);
+    trigger.setAttribute("data-visible", String(visible));
+    document.body.appendChild(trigger);
+    return trigger;
+  }
+
+  it.each([
+    ["left", "right"],
+    ["right", "left"],
+  ] as const)("is spent only by the %s menu that asked for it", (side, other) => {
+    const store = useLinksLauncherStore.getState();
+    store.deferFromOverflow(side);
+    expect(store.takeDeferredFromOverflow(other)).toBe(false);
+    expect(store.takeDeferredFromOverflow(side)).toBe(true);
+    expect(store.takeDeferredFromOverflow(side)).toBe(false);
+  });
+
+  it.each(["left", "right"] as const)(
+    "opens detached and gives focus back to the %s `…` button",
+    (side) => {
+      const left = overflowTrigger("left", true);
+      const right = overflowTrigger("right", true);
+      openLinksLauncherFromOverflow(side);
+
+      expect(useLinksLauncherStore.getState().opening?.origin).toBe("detached");
+      useLinksLauncherStore.getState().takeDetachedRestore()?.();
+      expect(document.activeElement).toBe(side === "left" ? left : right);
+    }
+  );
+
+  it("gives focus to nothing when that `…` button has gone", () => {
+    overflowTrigger("right", false);
+    openLinksLauncherFromOverflow("right");
+    useLinksLauncherStore.getState().takeDetachedRestore()?.();
+    expect(document.activeElement).toBe(document.body);
   });
 });

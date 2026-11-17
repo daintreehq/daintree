@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useSyncExternalStore } from "react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ProjectLink } from "@shared/types";
+import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 import type { GlobalLink } from "@/store/globalLinksStore";
 import { primeRadix } from "@/components/ui/radix-loader";
 
@@ -15,13 +17,52 @@ const h = vi.hoisted(() => ({
     projectLinks: [] as ProjectLink[],
     globalLinks: [] as GlobalLink[],
   },
+  devSessions: {
+    sessions: [] as DevPreviewSessionState[],
+    hydrated: true,
+    fetchError: false,
+  },
   listeners: new Set<() => void>(),
+  restart: vi.fn((_target: unknown) => Promise.resolve()),
+  stop: vi.fn((_target: unknown) => Promise.resolve()),
 }));
+
+function notify(): void {
+  for (const listener of h.listeners) listener();
+}
 
 /** Replace what the launcher lists, as a refresh landing would. */
 function setLinks(next: typeof h.links): void {
   h.links = next;
-  for (const listener of h.listeners) listener();
+  notify();
+}
+
+/** Replace the dev servers, as a pushed snapshot would. */
+function setDevSessions(sessions: DevPreviewSessionState[]): void {
+  h.devSessions = { sessions, hydrated: true, fetchError: false };
+  notify();
+}
+
+function devSession(overrides: Partial<DevPreviewSessionState> = {}): DevPreviewSessionState {
+  return {
+    panelId: "panel-1",
+    projectId: "project-1",
+    worktreeId: "wt-1",
+    status: "running",
+    url: "http://localhost:3000",
+    predictedUrl: "http://localhost:3000",
+    error: null,
+    terminalId: "t-1",
+    isRestarting: false,
+    generation: 1,
+    updatedAt: 1,
+    ...overrides,
+  };
+}
+
+function subscribe(listener: () => void): () => void {
+  h.listeners.add(listener);
+  return () => h.listeners.delete(listener);
 }
 
 vi.mock("@/services/ActionService", () => ({
@@ -45,17 +86,25 @@ vi.mock("@/store/panelStore", () => ({
 vi.mock("@/hooks/useLinksLauncher", async () => {
   const { useSyncExternalStore } = await import("react");
   return {
-    useLinksLauncherLinks: () =>
-      useSyncExternalStore(
-        (listener) => {
-          h.listeners.add(listener);
-          return () => h.listeners.delete(listener);
-        },
-        () => h.links
-      ),
+    useLinksLauncherLinks: () => useSyncExternalStore(subscribe, () => h.links),
     hasLauncherLinks: (l: typeof h.links) => l.projectLinks.length > 0 || l.globalLinks.length > 0,
   };
 });
+vi.mock("@/store/allDevSessionsStore", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return { useAllDevSessions: () => useSyncExternalStore(subscribe, () => h.devSessions) };
+});
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStore: (selector: (s: unknown) => unknown) =>
+    selector({ worktrees: new Map([["wt-1", { id: "wt-1", name: "feature-foo" }]]) }),
+}));
+vi.mock("@/store/projectStore", () => ({
+  useProjectStore: (selector: (s: unknown) => unknown) => selector({ projects: [] }),
+}));
+vi.mock("@/store/scratchStore", () => ({
+  useScratchStore: (selector: (s: unknown) => unknown) => selector({ scratches: [] }),
+  scratchName: () => null,
+}));
 
 const {
   LinksLauncherToolbarButton,
@@ -91,6 +140,10 @@ async function flush() {
 
 const launcher = () => document.querySelector<HTMLElement>('[data-testid="links-launcher"]');
 
+function headings(): Array<string | null> {
+  return Array.from(launcher()?.querySelectorAll("h2") ?? []).map((h2) => h2.textContent);
+}
+
 /** Accessible name and description of a row, read off its id references. */
 function describeRow(row: HTMLElement): { name: string; description: string } {
   const text = (ids: string | null) =>
@@ -116,12 +169,17 @@ beforeEach(() => {
   h.dispatch.mockClear();
   h.openLinkUrl.mockClear();
   h.enterFocusedPanel.mockClear();
+  h.restart.mockClear();
+  h.stop.mockClear();
   h.links = { projectLinks: [STAGING, LOCAL], globalLinks: [DOCS] };
+  h.devSessions = { sessions: [], hydrated: true, fetchError: false };
+  Reflect.set(window, "electron", { devPreview: { restart: h.restart, stop: h.stop } });
   useLinksLauncherStore.setState({
     opening: null,
     refreshSeq: 0,
     closeFocus: null,
-    paletteRestore: null,
+    detachedRestore: null,
+    deferredFromOverflow: null,
   });
 });
 
@@ -265,6 +323,147 @@ describe("links launcher button", () => {
     closeLinksLauncherForHiddenButton("left");
     expect(useLinksLauncherStore.getState().opening?.origin).toBe("detached");
   });
+
+  it("gives focus inside it to the focused panel when it leaves the toolbar while open", async () => {
+    const { unmount } = render(<LinksLauncherToolbarButton />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Links" }));
+    });
+    await flush();
+    act(() => rows()[0]!.focus());
+
+    unmount();
+    expect(h.enterFocusedPanel).not.toHaveBeenCalled();
+    await flush();
+
+    expect(useLinksLauncherStore.getState().opening).toBeNull();
+    expect(h.enterFocusedPanel).toHaveBeenCalledWith("t1");
+  });
+
+  it("leaves focus outside it alone when it leaves the toolbar while open", async () => {
+    const elsewhere = document.createElement("input");
+    document.body.appendChild(elsewhere);
+    try {
+      const { unmount } = render(<LinksLauncherToolbarButton />);
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Links" }));
+      });
+      await flush();
+      act(() => elsewhere.focus());
+
+      unmount();
+      await flush();
+
+      expect(h.enterFocusedPanel).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(elsewhere);
+    } finally {
+      elsewhere.remove();
+    }
+  });
+});
+
+describe("dev servers in the launcher", () => {
+  async function openLauncher() {
+    render(<LinksLauncherToolbarButton />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Links" }));
+    });
+    await flush();
+  }
+
+  it("lists them after the links, each with its own controls", async () => {
+    h.devSessions.sessions = [
+      devSession(),
+      devSession({ panelId: "panel-2", status: "stopped", worktreeId: "wt-2" }),
+    ];
+    await openLauncher();
+
+    expect(headings()).toEqual(["Project links", "Your links", "Dev servers"]);
+    expect(within(launcher()!).getByText("1 running")).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(
+        within(launcher()!).getByRole("button", { name: "Stop dev server for feature-foo" })
+      );
+    });
+    expect(h.stop).toHaveBeenCalledWith({ panelId: "panel-1", projectId: "project-1" });
+    // A plain stopped server has no row.
+    expect(within(launcher()!).queryByText("wt-2")).toBeNull();
+    // Acting on a server keeps the launcher open.
+    expect(launcher()).not.toBeNull();
+  });
+
+  it("shows them alone, with no prompt to add a link, when there are no links", async () => {
+    h.links = { projectLinks: [], globalLinks: [] };
+    h.devSessions.sessions = [devSession({ status: "error", terminalId: null })];
+    await openLauncher();
+
+    expect(headings()).toEqual(["Dev servers"]);
+    expect(within(launcher()!).queryByRole("button", { name: "Add a project link" })).toBeNull();
+    expect(
+      within(launcher()!).getByRole("button", { name: "Dismiss error for feature-foo" })
+    ).toBeTruthy();
+  });
+
+  it("leaves the section out when no server is listed", async () => {
+    h.devSessions.sessions = [devSession({ status: "stopped" })];
+    await openLauncher();
+    expect(headings()).toEqual(["Project links", "Your links"]);
+  });
+
+  it("keeps the keyboard in the list when the server it was on stops", async () => {
+    h.links = { projectLinks: [], globalLinks: [DOCS] };
+    h.devSessions.sessions = [devSession()];
+    await openLauncher();
+    const stop = within(launcher()!).getByRole("button", {
+      name: "Stop dev server for feature-foo",
+    });
+    act(() => stop.focus());
+
+    await act(async () => {
+      setDevSessions([devSession({ status: "stopped", terminalId: null })]);
+    });
+
+    expect(headings()).toEqual(["Your links"]);
+    expect(document.activeElement).toBe(rows()[0]);
+  });
+
+  it("hands focus to the focused panel when stopping the last server takes the button away", async () => {
+    h.links = { projectLinks: [], globalLinks: [] };
+    h.devSessions.sessions = [devSession()];
+    // The toolbar's own rule: shown only with a link or a live server.
+    function Toolbar() {
+      const { sessions } = useSyncExternalStore(subscribe, () => h.devSessions);
+      const live = sessions.some((s) => s.status !== "stopped" && s.status !== "restored-stopped");
+      return live ? <LinksLauncherToolbarButton /> : null;
+    }
+    render(<Toolbar />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Links" }));
+    });
+    await flush();
+    const stop = within(launcher()!).getByRole("button", {
+      name: "Stop dev server for feature-foo",
+    });
+    act(() => stop.focus());
+
+    await act(async () => {
+      setDevSessions([devSession({ status: "stopping" })]);
+    });
+    // Going down keeps the keyboard where it was.
+    expect(document.activeElement).toBe(stop);
+    expect(stop.getAttribute("aria-disabled")).toBe("true");
+    expect((stop as HTMLButtonElement).disabled).toBe(false);
+
+    await act(async () => {
+      setDevSessions([devSession({ status: "stopped", terminalId: null })]);
+    });
+    await flush();
+
+    expect(screen.queryByRole("button", { name: "Links" })).toBeNull();
+    expect(launcher()).toBeNull();
+    expect(useLinksLauncherStore.getState().opening).toBeNull();
+    expect(h.enterFocusedPanel).toHaveBeenCalledWith("t1");
+  });
 });
 
 describe("detached launcher", () => {
@@ -302,7 +501,7 @@ describe("detached launcher", () => {
       render(<LinksLauncherDetachedHost />);
       await act(async () => {
         useLinksLauncherStore.getState().open("detached");
-        useLinksLauncherStore.setState({ paletteRestore: () => opener.focus() });
+        useLinksLauncherStore.setState({ detachedRestore: () => opener.focus() });
       });
       await flush();
       act(() => rows()[0]!.focus());
@@ -316,7 +515,7 @@ describe("detached launcher", () => {
       expect(launcher()).toBeNull();
       expect(document.activeElement).toBe(opener);
       expect(h.enterFocusedPanel).not.toHaveBeenCalled();
-      expect(useLinksLauncherStore.getState().paletteRestore).toBeNull();
+      expect(useLinksLauncherStore.getState().detachedRestore).toBeNull();
     } finally {
       opener.remove();
     }
@@ -350,7 +549,7 @@ describe("links in the `…` menu", () => {
           <button type="button">More</button>
         </DropdownMenuTrigger>
         <DropdownMenuContent>
-          <LinksLauncherOverflowItems />
+          <LinksLauncherOverflowItems side="right" />
         </DropdownMenuContent>
       </DropdownMenu>
     );
@@ -383,5 +582,39 @@ describe("links in the `…` menu", () => {
     });
     await flush();
     expect(h.openLinkUrl).toHaveBeenCalledWith("http://localhost:3000/");
+  });
+
+  it("offers one row for the dev servers, which asks for the launcher once the menu closes", async () => {
+    h.links = { projectLinks: [], globalLinks: [DOCS] };
+    h.devSessions.sessions = [
+      devSession(),
+      devSession({ panelId: "panel-2", worktreeId: "wt-2", status: "error", terminalId: null }),
+    ];
+    render(<OverflowMenu />);
+    await openMenu();
+
+    const items = screen.getAllByRole("menuitem");
+    expect(items.map((item) => item.textContent)).toEqual([
+      "Team docsdocs.example.org",
+      "Dev servers…1 running · 1 failed",
+    ]);
+    // No server's own controls inside the menu.
+    expect(screen.queryByRole("button", { name: /dev server for/ })).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(items[1]!);
+    });
+    await flush();
+
+    expect(useLinksLauncherStore.getState().deferredFromOverflow).toBe("right");
+    expect(useLinksLauncherStore.getState().opening).toBeNull();
+    expect(h.openLinkUrl).not.toHaveBeenCalled();
+  });
+
+  it("has no dev servers row while none is listed", async () => {
+    h.devSessions.sessions = [devSession({ status: "stopped" })];
+    render(<OverflowMenu />);
+    await openMenu();
+    expect(screen.queryByRole("menuitem", { name: /Dev servers/ })).toBeNull();
   });
 });

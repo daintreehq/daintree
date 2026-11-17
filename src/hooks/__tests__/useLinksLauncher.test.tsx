@@ -2,6 +2,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import type { ProjectLink } from "@shared/types";
+import type {
+  DevPreviewAllSessionsPayload,
+  DevPreviewSessionState,
+  DevPreviewSessionStatus,
+} from "@shared/types/ipc/devPreview";
 import type { GlobalLink } from "@/store/globalLinksStore";
 
 const h = vi.hoisted(() => ({
@@ -36,8 +41,10 @@ vi.mock("@/hooks/useProjectViewRevealed", () => ({
   },
 }));
 
-const { useLinksLauncherLinks, useLinksLauncherRefresh, hasLauncherLinks } =
+const { useLinksLauncherLinks, useLinksLauncherRefresh, hasLauncherLinks, useHasLiveDevServer } =
   await import("../useLinksLauncher");
+const { _resetAllDevSessionsForTests, acquireAllDevSessions, useAllDevSessionsStore } =
+  await import("@/store/allDevSessionsStore");
 const { useLinksLauncherStore } = await import("@/store/linksLauncherStore");
 
 function globalLink(id: string, enabled: boolean): GlobalLink {
@@ -102,5 +109,97 @@ describe("useLinksLauncherRefresh", () => {
     act(() => useLinksLauncherStore.getState().open("detached"));
     expect(h.refresh).not.toHaveBeenCalled();
     expect(h.revealed.at(-1)!.enabled).toBe(false);
+  });
+});
+
+describe("useHasLiveDevServer", () => {
+  let push: ((payload: DevPreviewAllSessionsPayload) => void) | null;
+  let resolveFirstLoad: (sessions: DevPreviewSessionState[]) => void;
+  const getAllSessions = vi.fn(
+    () =>
+      new Promise<DevPreviewSessionState[]>((resolve) => {
+        resolveFirstLoad = resolve;
+      })
+  );
+  const unsubscribe = vi.fn();
+
+  function server(status: DevPreviewSessionStatus, panelId = "panel-1"): DevPreviewSessionState {
+    return {
+      panelId,
+      projectId: "p1",
+      worktreeId: "wt-1",
+      status,
+      url: null,
+      predictedUrl: null,
+      error: null,
+      terminalId: null,
+      isRestarting: false,
+      generation: 1,
+      updatedAt: 1,
+    };
+  }
+
+  beforeEach(() => {
+    _resetAllDevSessionsForTests();
+    push = null;
+    getAllSessions.mockClear();
+    unsubscribe.mockClear();
+    Reflect.set(window, "electron", {
+      devPreview: {
+        getAllSessions,
+        onAllSessionsChanged: (callback: (payload: DevPreviewAllSessionsPayload) => void) => {
+          push = callback;
+          return unsubscribe;
+        },
+      },
+    });
+  });
+
+  it("reads every dev server from mount, before anything opens the launcher", async () => {
+    const { result } = renderHook(() => useHasLiveDevServer());
+    expect(getAllSessions).toHaveBeenCalledOnce();
+    expect(result.current).toBe(false);
+
+    await act(async () => resolveFirstLoad([server("running")]));
+    expect(result.current).toBe(true);
+  });
+
+  it.each([
+    ["starting", true],
+    ["installing", true],
+    ["running", true],
+    ["stopping", true],
+    ["error", true],
+    ["restored-stopped", false],
+    ["stopped", false],
+  ] as const)("counts a %s server as live: %s", (status, live) => {
+    const { result } = renderHook(() => useHasLiveDevServer());
+    // Wherever it sits among servers that aren't live, in any project.
+    act(() => push!({ sessions: [server("stopped", "other"), server(status)] }));
+    expect(result.current).toBe(live);
+    act(() =>
+      push!({ sessions: [{ ...server(status), projectId: "p2" }, server("stopped", "other")] })
+    );
+    expect(result.current).toBe(live);
+    act(() => push!({ sessions: [] }));
+    expect(result.current).toBe(false);
+  });
+
+  it("keeps the list when the launcher's own read of it comes and goes", () => {
+    const { result } = renderHook(() => useHasLiveDevServer());
+    act(() => push!({ sessions: [server("running")] }));
+
+    const release = acquireAllDevSessions();
+    release();
+
+    expect(unsubscribe).not.toHaveBeenCalled();
+    expect(useAllDevSessionsStore.getState().sessions).toHaveLength(1);
+    expect(result.current).toBe(true);
+  });
+
+  it("lets go of the subscription when the toolbar goes", () => {
+    const { unmount } = renderHook(() => useHasLiveDevServer());
+    unmount();
+    expect(unsubscribe).toHaveBeenCalledOnce();
   });
 });

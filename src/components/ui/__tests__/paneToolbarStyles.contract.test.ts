@@ -20,7 +20,7 @@ const PANE_TOOLBAR_FILES = [
   "src/components/Browser/BrowserToolbar.tsx",
   "src/components/Browser/ViewportControls.tsx",
   "src/components/Portal/PortalToolbar.tsx",
-  "src/components/Portal/DevServerDashboard.tsx",
+  "src/components/Layout/LinksLauncherDevServers.tsx",
   "src/components/Notifications/NotificationCenter.tsx",
   "src/components/Markdown/MarkdownTextSizeControl.tsx",
   "src/panels/file-browser/FileBrowserViewOptions.tsx",

@@ -13,6 +13,7 @@ import { TOOLBAR_CUSTOMIZE_ICON, TOOLBAR_CUSTOMIZE_LABEL } from "./toolbarMenuSt
 import { toolbarIconButtonClass } from "./toolbarItemClasses";
 import { PluginOverflowItem, type PluginTrayGroup } from "./PluginTrayButton";
 import { LinksLauncherOverflowItems } from "./LinksLauncher";
+import { openLinksLauncherFromOverflow, useLinksLauncherStore } from "@/store/linksLauncherStore";
 import {
   PluginToolbarPopover,
   closePluginToolbarPopoverIfHidden,
@@ -211,6 +212,7 @@ export function OverflowMenu({
       // Dropped on reopen: a menu reopened inside its exit animation never ran
       // the close hook that spends it.
       takeDeferredPopover(popoverOrigin);
+      useLinksLauncherStore.getState().takeDeferredFromOverflow(side);
       setRepoStats(forgeStatsRef.current?.stats ?? null);
       // Same reason PluginTrayButton refreshes on open: a dev-attached plugin
       // registers its buttons without broadcasting provenance, so its display
@@ -415,7 +417,7 @@ export function OverflowMenu({
     if (id === "links-launcher") {
       // A popover off the `…` button would have to wait for this menu to
       // close and hand it focus; the links are menu rows themselves instead.
-      return [<LinksLauncherOverflowItems key="links-launcher" />];
+      return [<LinksLauncherOverflowItems key="links-launcher" side={side} />];
     }
     if (id === "plugin-tray") {
       // The tray's own dropdown can't be opened from here, and an
@@ -677,6 +679,13 @@ export function OverflowMenu({
           align={side === "left" ? "start" : "end"}
           sideOffset={4}
           onCloseAutoFocus={(e) => {
+            if (useLinksLauncherStore.getState().takeDeferredFromOverflow(side)) {
+              // The launcher takes focus into itself, and gives it back to this
+              // button when it closes.
+              e.preventDefault();
+              openLinksLauncherFromOverflow(side);
+              return;
+            }
             const pendingPopover = takeDeferredPopover(popoverOrigin);
             if (pendingPopover !== null) {
               // The popover takes focus into itself; returning it to the button

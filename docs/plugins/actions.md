@@ -354,7 +354,6 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `portal.setDefaultNewTab` | Set default new tab | safe | `url` |
 | `portal.tabs.reorder` | Reorder portal tabs | safe | `fromIndex`, `toIndex` |
 | `portal.toggle` | Toggle portal | safe | — |
-| `portal.toggleDevDashboard` | Toggle dev server dashboard | safe | — |
 | `portal.width.set` | Set portal width | safe | `width` |
 
 ## preferences

@@ -413,22 +413,6 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
     },
   }));
 
-  actions.set("portal.toggleDevDashboard", () => ({
-    id: "portal.toggleDevDashboard",
-    title: "Toggle dev server dashboard",
-    description:
-      "Show or hide the dashboard that lists dev servers across every worktree. This changes what the user sees and starts or stops no server itself. Because it toggles rather than sets, calling it blind can hide a view the user is reading.",
-    paletteDescription: "Show or hide the dashboard of dev servers across every worktree",
-    category: "portal",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    keywords: ["dev", "server", "dashboard", "preview", "worktree", "ports"],
-    run: async () => {
-      usePortalStore.getState().toggleDevDashboard();
-    },
-  }));
-
   actions.set("portal.setDefaultNewTab", () => ({
     id: "portal.setDefaultNewTab",
     title: "Set default new tab",

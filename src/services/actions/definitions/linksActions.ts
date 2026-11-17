@@ -1,13 +1,13 @@
 import type { ActionRegistry } from "../actionTypes";
 import { openLinksLauncher } from "@/store/linksLauncherStore";
 
-/** The toolbar's links launcher, reachable from the palette as well as its button (#17249). */
+/** The toolbar's links launcher, reachable from the palette as well as its button (#17249, #17251). */
 export function registerLinksActions(actions: ActionRegistry): void {
   actions.set("links.open", () => ({
     id: "links.open",
     title: "Open links",
     description:
-      "Show the links saved with this project and your own links in a list beside the toolbar.",
+      "Show this project's links, your own links, and dev servers across worktrees beside the toolbar.",
     category: "ui",
     kind: "command",
     danger: "safe",
@@ -15,7 +15,18 @@ export function registerLinksActions(actions: ActionRegistry): void {
     // A view's own popover: an agent has the project link tools for the list itself.
     mcpVisibility: "hidden",
     nonRepeatable: true,
-    keywords: ["links", "bookmarks", "urls", "staging", "production", "dashboard"],
+    keywords: [
+      "links",
+      "bookmarks",
+      "urls",
+      "staging",
+      "production",
+      "dashboard",
+      "dev",
+      "server",
+      "preview",
+      "ports",
+    ],
     run: async () => {
       openLinksLauncher();
     },
