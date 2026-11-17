@@ -89,12 +89,15 @@ export function RemoveCloudHostDialog({
   // A machine made for a worktree is expected to go with it; removing the host
   // by hand leaves it in the account, so the dialog names what stays. Its
   // existence is claimed only from a fresh reading: an unknown or old one may
-  // predate a delete made on the provider.
+  // predate a delete made on the provider. Its age counts even mid-operation,
+  // when reads may be failing while the operation waits.
   const keptMachine =
     ready && created && !deleting && status.createdFor !== null && status.machine !== "deleted"
       ? {
           name: status.machineName ?? openedFor.resourceId,
-          seen: status.machine !== "unknown" && !isObservationStale(status, now),
+          seen:
+            status.machine !== "unknown" &&
+            !isObservationStale({ ...status, operation: null }, now),
         }
       : null;
 

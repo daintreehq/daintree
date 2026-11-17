@@ -109,10 +109,16 @@ describe("RemoveCloudHostDialog for a machine made for a worktree", () => {
     expect(dialogText()).not.toContain("still exists");
   });
 
-  it("qualifies an old reading the same way", () => {
-    open(status({ machine: "running", observedAt: 0 }));
-    expect(dialogText()).toContain("removing it doesn't delete its machine 'feature-login-box'");
-    expect(dialogText()).not.toContain("still exists");
+  it("qualifies an old reading the same way, even while an operation waits on it", () => {
+    for (const operation of [
+      null,
+      { id: "op", kind: "starting" as const, startedAt: 0, stage: "Starting the machine" },
+    ]) {
+      open(status({ machine: "starting", observedAt: 0, operation }));
+      expect(dialogText()).toContain("removing it doesn't delete its machine 'feature-login-box'");
+      expect(dialogText()).not.toContain("still exists");
+      cleanup();
+    }
   });
 
   it("doesn't claim a machine the provider reported deleted still exists", () => {
