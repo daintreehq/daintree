@@ -58,10 +58,6 @@ export function ContextSectionHeader({
   // A main worktree is named after its folder, usually the project's own name.
   const worktree = resolvedWorktree && resolvedWorktree !== project ? resolvedWorktree : undefined;
   const host = hostName?.trim() || undefined;
-  const label =
-    [host, project, worktree, worktreeUnavailable ? "unavailable" : undefined]
-      .filter(Boolean)
-      .join(" · ") || APP_SOURCE_LABEL;
   const hasUnread = unreadIds.length > 0;
   return (
     // Sticky, so the place a row belongs to stays on screen while you read

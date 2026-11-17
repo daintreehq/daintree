@@ -112,6 +112,36 @@ describe("ProjectPluginTrustBanner", () => {
     expect(document.querySelector("[title]")).toBeNull();
   });
 
+  describe("name disclosure", () => {
+    const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollWidth");
+    afterEach(() => {
+      if (original) Object.defineProperty(HTMLElement.prototype, "scrollWidth", original);
+      else delete (HTMLElement.prototype as unknown as Record<string, unknown>).scrollWidth;
+    });
+
+    // jsdom has no layout, so a clipped name is simulated through its scrollWidth.
+    function clip(text: string) {
+      Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
+        configurable: true,
+        get(this: HTMLElement) {
+          return this.textContent === text ? 500 : 0;
+        },
+      });
+    }
+
+    it("makes a clipped name a tab stop, and leaves a name that fits alone", () => {
+      clip("Long Name");
+      renderBanner();
+      openPrompt([{ id: "a.long", displayName: "Long Name" }]);
+      expect(screen.getByText("Long Name").getAttribute("tabindex")).toBe("0");
+
+      cleanup();
+      renderBanner();
+      openPrompt([{ id: "a.short", displayName: "Short" }]);
+      expect(screen.getByText("Short").hasAttribute("tabindex")).toBe(false);
+    });
+  });
+
   it("falls back to the plugin id when the manifest's name has nothing visible in it", () => {
     renderBanner();
     openPrompt([{ id: "acme.dashboard", displayName: "   " }]);

@@ -8,6 +8,7 @@ import type {
   PluginCatalogListing,
 } from "@shared/types/plugin";
 import { PluginCommunityBrowse } from "../PluginCommunityBrowse";
+import { CAPABILITY_META } from "../capabilityMeta";
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
@@ -172,11 +173,16 @@ describe("PluginCommunityBrowse", () => {
     expect(trigger).not.toBeNull();
     expect(trigger?.getAttribute("tabindex")).toBe("0");
 
+    // The id and description live only in the tooltip, never in the badge.
+    expect(screen.queryByText("fs:user-data-read")).toBeNull();
+
     await act(async () => {
       (trigger as HTMLElement).focus();
     });
-    const tip = await screen.findAllByText(/user-data-read/);
-    expect(tip.length).toBeGreaterThan(0);
+    const id = await screen.findByText("fs:user-data-read");
+    const tip = id.parentElement as HTMLElement;
+    expect(tip.textContent).toContain(CAPABILITY_META["fs:user-data-read"].description);
+    expect(capabilities.contains(tip)).toBe(false);
 
     // A name this build doesn't know is already shown whole: nothing to explain.
     const unknown = within(capabilities).getByText("future:thing");

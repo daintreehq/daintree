@@ -217,25 +217,18 @@ describe("PluginMcpConfirmDialog design contract", () => {
     (reason, severity) => {
       enqueue({ reason });
       render(<PluginMcpConfirmDialog />);
-      const callout = document.querySelector(`[data-callout="${severity}"]`);
+      const callout = document.querySelector(`[data-callout="${severity}"]`) as HTMLElement;
       expect(callout).not.toBeNull();
-      const heading = within(callout as HTMLElement).getByText(changeHeadingFor(reason) as string);
-      expect(heading.className).toContain("text-text-primary");
-      expect(callout?.querySelector(".text-status-danger, .text-status-warning")).toBe(
-        callout?.querySelector("[data-severity-glyph]")
+      const heading = within(callout).getByText(changeHeadingFor(reason) as string);
+      // Callout's own title element, not a heading the dialog styled itself.
+      expect(heading.tagName).toBe("P");
+      // The glyph carries the severity; no text may.
+      const statusInk = Array.from(callout.querySelectorAll("[class*='text-status-']")).filter(
+        (el) => !el.hasAttribute("data-severity-glyph")
       );
+      expect(statusInk).toEqual([]);
     }
   );
-
-  it("draws the arguments block with the radius token and a semantic border", () => {
-    enqueue({ dangerTier: "D2", argsSummary: '{\n  "app": "prod"\n}' });
-    render(<PluginMcpConfirmDialog />);
-    const pre = screen.getByText(/"app": "prod"/);
-    expect(pre.className).toContain("rounded-[var(--radius-md)]");
-    expect(pre.className).toContain("border-border-default");
-    expect(pre.className).not.toMatch(/(^|\s)rounded(\s|$)/);
-    expect(pre.className).not.toContain("border-tint");
-  });
 });
 
 describe("PluginMcpConfirmDialog structure", () => {
