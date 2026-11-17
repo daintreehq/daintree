@@ -267,15 +267,11 @@ describe("useLinksLauncherRefresh: declared links (#17252)", () => {
     await flush();
     expect(h.getDeclared).toHaveBeenCalledTimes(1);
 
-    act(() =>
-      setWorktreeState(rootWorktree(11, dirsAt(11, 10, ["src/lib"])))
-    );
+    act(() => setWorktreeState(rootWorktree(11, dirsAt(11, 10, ["src/lib"]))));
     await flush();
     expect(h.getDeclared).toHaveBeenCalledTimes(1);
 
-    act(() =>
-      setWorktreeState(rootWorktree(12, dirsAt(12, 11, ["", "src"])))
-    );
+    act(() => setWorktreeState(rootWorktree(12, dirsAt(12, 11, ["", "src"]))));
     await flush();
     expect(h.getDeclared).toHaveBeenCalledTimes(2);
   });
@@ -285,9 +281,7 @@ describe("useLinksLauncherRefresh: declared links (#17252)", () => {
     h.worktreeState = rootWorktree(10, dirsAt(10, null, [""]));
     renderHook(() => useLinksLauncherRefresh());
     await flush();
-    act(() =>
-      setWorktreeState(rootWorktree(11, dirsAt(11, 10, [""])))
-    );
+    act(() => setWorktreeState(rootWorktree(11, dirsAt(11, 10, [""]))));
     await flush();
     expect(h.getDeclared).toHaveBeenCalledTimes(1);
   });

@@ -18,8 +18,11 @@ vi.mock("@/clients/projectClient", () => ({
   },
 }));
 
-const { refreshDeclaredProjectLinks, useDeclaredProjectLinksStore, _resetDeclaredProjectLinksForTests } =
-  await import("../declaredProjectLinksStore");
+const {
+  refreshDeclaredProjectLinks,
+  useDeclaredProjectLinksStore,
+  _resetDeclaredProjectLinksForTests,
+} = await import("../declaredProjectLinksStore");
 
 const HOMEPAGE: DeclaredProjectLink = {
   field: "homepage",
@@ -75,7 +78,10 @@ describe("refreshDeclaredProjectLinks (#17252)", () => {
     h.pending[0]!.resolve([HOMEPAGE]);
     await forA;
 
-    expect(useDeclaredProjectLinksStore.getState()).toEqual({ projectId: "b", links: [REPOSITORY] });
+    expect(useDeclaredProjectLinksStore.getState()).toEqual({
+      projectId: "b",
+      links: [REPOSITORY],
+    });
   });
 
   it("keeps what it showed when a read fails, and reads again when asked", async () => {

@@ -61,9 +61,7 @@ describe("declaredLinksFromPackageJson (#17252)", () => {
     ).toEqual([]);
     expect(declaredLinksFromPackageJson({ repository: "acme/widget" })).toEqual([]);
     expect(declaredLinksFromPackageJson({ repository: "github:acme/widget" })).toEqual([]);
-    expect(declaredLinksFromPackageJson({ repository: "git://github.com/acme/w.git" })).toEqual(
-      []
-    );
+    expect(declaredLinksFromPackageJson({ repository: "git://github.com/acme/w.git" })).toEqual([]);
     expect(declaredLinksFromPackageJson({ homepage: "javascript:alert(1)" })).toEqual([]);
   });
 

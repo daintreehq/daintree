@@ -26,7 +26,9 @@ function isWithin(root: string, path: string): boolean {
  * caller keeps what it last showed and asks again later instead of emptying
  * the list for a slow disk.
  */
-export async function readDeclaredProjectLinks(projectRoot: string): Promise<DeclaredProjectLink[]> {
+export async function readDeclaredProjectLinks(
+  projectRoot: string
+): Promise<DeclaredProjectLink[]> {
   const io = <T>(request: () => Promise<T>): Promise<T> => projectIo.run(projectRoot, request);
   try {
     const realRoot = await io(() => realpath(projectRoot));
