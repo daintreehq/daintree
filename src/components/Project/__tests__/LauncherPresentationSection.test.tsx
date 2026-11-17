@@ -389,13 +389,30 @@ describe("LauncherPresentationSection keyboard reordering", () => {
     expect(setLauncherGroupOrder).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["Move Panels up", "Move Agents up"])(
-    "names the %s arrow in a tooltip, at the end of the list too",
-    async (name) => {
-      await renderSection();
-      act(() => screen.getByLabelText(name).focus());
-      const tip = await screen.findByRole("tooltip", { hidden: true }, { timeout: 3000 });
-      expect(tip.textContent).toBe("Move up");
-    }
-  );
+  // React restores a keyed row's focus across its own relocation, so only an
+  // activation that never focused the arrow shows the moved group is followed.
+  it.each([
+    ["panels", "Move Panels up"],
+    [`plugin:${TOOLS}`, "Move Tools down"],
+  ])("follows %s after a click that left focus elsewhere", async (id, name) => {
+    await renderSection();
+    const before = drawnOrder();
+    await act(async () => {
+      fireEvent.click(groupRow(id).getByLabelText(name), { detail: 1 });
+    });
+    expect(drawnOrder()).not.toEqual(before);
+    expect(focusedButton().getAttribute("aria-label")).toBe(name);
+  });
+
+  it.each([
+    ["Move Panels up", "Move up"],
+    ["Move Agents up", "Move up"],
+    ["Move Tools down", "Move down"],
+    ["Move Recipes down", "Move down"],
+  ])("names the %s arrow in a tooltip, at the end of the list too", async (name, tooltip) => {
+    await renderSection();
+    act(() => screen.getByLabelText(name).focus());
+    const tip = await screen.findByRole("tooltip", { hidden: true }, { timeout: 3000 });
+    expect(tip.textContent).toBe(tooltip);
+  });
 });

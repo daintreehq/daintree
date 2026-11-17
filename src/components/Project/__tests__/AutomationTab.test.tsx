@@ -107,6 +107,20 @@ describe("AutomationTab — run command reordering", () => {
     expect(drawn).toEqual(["build", "deploy", "test"]);
   });
 
+  // React restores a keyed row's focus across its own relocation, so only an
+  // activation that never focused the arrow shows the moved command is followed.
+  it.each([
+    ["Move test up", ["test", "build", "deploy"]],
+    ["Move test down", ["build", "deploy", "test"]],
+  ])("follows the command after %s from a click that left focus elsewhere", async (name, order) => {
+    render(<Harness names={["build", "test", "deploy"]} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name }), { detail: 1 });
+    });
+    expect(drawn).toEqual(order);
+    expect(focusedButton().getAttribute("aria-label")).toBe(name);
+  });
+
   it.each([
     ["Move test up", "Move up"],
     ["Move test down", "Move down"],
