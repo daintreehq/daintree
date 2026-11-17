@@ -1398,6 +1398,7 @@ describe("McpServerService", () => {
 
       const before = await listed();
       expect(before.name).toBe("Agent state — agent-titled");
+      expect(before.description).toContain("written most recently");
       expect(before.description).toContain("terminalId");
       expect(await readTerminalId()).toBe("term-backend");
 

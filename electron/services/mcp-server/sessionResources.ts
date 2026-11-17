@@ -37,7 +37,7 @@ import type { SessionServerDeps } from "./sessionServerDepsContract.js";
 // one that does is picked: the read names it (`terminalId`) rather than the
 // listing, which cannot (#17491).
 const AGENT_STATE_RESOURCE_DESCRIPTION =
-  "State as last seen on one terminal of this agent type (idle, working, waiting, etc.): the one updated most recently by a spawn or state change. The payload's terminalId names it.";
+  "State as last seen on one terminal of this agent type (idle, working, waiting, etc.): the one whose record was written most recently, by a spawn or a state update. The payload's terminalId names it; with no terminal of the type tracked, state is null and there is no terminalId.";
 
 export function registerResourceHandlers(
   server: Server,
