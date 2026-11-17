@@ -158,6 +158,19 @@ const {
 } = await import("@/components/Terminal/uploads/pendingUploads");
 const { _resetComposerSnapshotsForTesting, keepComposerSnapshot, takeComposerSnapshot } =
   await import("@/lib/composerRemount");
+const {
+  __test_getArtifactStoreSize,
+  __test_getArtifactsFor,
+  __test_resetArtifactStore,
+  __test_simulateArtifactDetected,
+} = await import("@/hooks/useArtifacts");
+
+const lateArtifact = {
+  id: "late",
+  type: "code" as const,
+  content: "late",
+  extractedAt: 0,
+};
 
 describe("rendererStoreOrchestrator", () => {
   beforeEach(async () => {
@@ -596,6 +609,92 @@ describe("rendererStoreOrchestrator", () => {
     usePanelStore.getState().removePanel("term-1");
 
     expect(clearSpy).toHaveBeenCalledWith("term-1");
+  });
+
+  describe("artifacts of panels this view no longer holds (#17577)", () => {
+    const panel = (id: string, kind: "terminal" | "browser" | "dev-preview"): PanelInstance =>
+      ({
+        id,
+        kind,
+        title: id,
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+        location: "grid",
+      }) as PanelInstance;
+    const addPanels = (...panels: PanelInstance[]) => {
+      const state = usePanelStore.getState();
+      usePanelStore.setState({
+        panelsById: {
+          ...state.panelsById,
+          ...Object.fromEntries(panels.map((added) => [added.id, added])),
+        },
+        panelIds: [...state.panelIds, ...panels.map((added) => added.id)],
+      });
+    };
+    const detect = (id: string) => __test_simulateArtifactDetected(id, [lateArtifact]);
+
+    beforeEach(() => {
+      __test_resetArtifactStore();
+    });
+
+    afterEach(() => {
+      __test_resetArtifactStore();
+    });
+
+    it("turns away late packets for every retired id, keeping only live panels' entries", () => {
+      addPanels(panel("kept", "terminal"));
+      expect(detect("kept")).toBe(true);
+
+      for (let i = 0; i < 40; i++) {
+        addPanels(
+          panel(`term-${i}`, "terminal"),
+          panel(`browser-${i}`, "browser"),
+          panel(`preview-${i}`, "dev-preview")
+        );
+        expect(detect(`term-${i}`)).toBe(true);
+        usePanelStore.getState().removePanel(`term-${i}`);
+        usePanelStore.getState().removePanel(`browser-${i}`);
+        usePanelStore.getState().removePanel(`preview-${i}`);
+      }
+
+      for (let i = 0; i < 40; i++) {
+        expect(detect(`term-${i}`)).toBe(false);
+        expect(detect(`browser-${i}`)).toBe(false);
+        expect(detect(`preview-${i}`)).toBe(false);
+      }
+      expect(__test_getArtifactStoreSize()).toBe(1);
+      expect(__test_getArtifactsFor("kept")).toHaveLength(1);
+    });
+
+    it("holds a trashed terminal's packets back, takes them after restore, and drops them once it is removed", () => {
+      addPanels(panel("term-1", "terminal"));
+      expect(detect("term-1")).toBe(true);
+
+      usePanelStore.getState().trashPanel("term-1");
+      expect(__test_getArtifactsFor("term-1")).toBeUndefined();
+      expect(detect("term-1")).toBe(false);
+
+      usePanelStore.getState().restoreTerminal("term-1");
+      expect(detect("term-1")).toBe(true);
+      expect(__test_getArtifactsFor("term-1")).toHaveLength(1);
+
+      usePanelStore.getState().trashPanel("term-1");
+      usePanelStore.getState().removePanel("term-1");
+      expect(detect("term-1")).toBe(false);
+      expect(__test_getArtifactStoreSize()).toBe(0);
+    });
+
+    it("takes packets for a reused id as soon as its panel is registered again", () => {
+      addPanels(panel("term-1", "terminal"));
+      usePanelStore.getState().removePanel("term-1");
+      expect(detect("term-1")).toBe(false);
+
+      addPanels(panel("term-1", "terminal"));
+
+      expect(detect("term-1")).toBe(true);
+      expect(__test_getArtifactsFor("term-1")).toHaveLength(1);
+    });
   });
 
   it("keeps a panel's last message through the trash and forgets it once removed (#16746)", () => {

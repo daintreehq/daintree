@@ -11,10 +11,37 @@ import {
   __test_getArtifactStoreSize,
   __test_getArtifactsFor,
   __test_subscribeArtifactStore,
-  __test_isTombstoned,
   __test_simulateArtifactDetected,
 } from "@/hooks/useArtifacts";
+import { setPanelStoreAccessor, type PanelStoreSnapshot } from "@/store/storeAccessors";
 import type { Artifact } from "@shared/types";
+
+type RegisteredPanel = PanelStoreSnapshot["panelsById"][string];
+let registry: Record<string, RegisteredPanel> = {};
+
+/** Registers panels in this view's panel store, the registry detections are checked against. */
+function register(...ids: string[]): void {
+  for (const id of ids) {
+    registry[id] = { id, kind: "terminal", title: id, location: "grid" } as RegisteredPanel;
+  }
+}
+
+function unregister(id: string): void {
+  delete registry[id];
+}
+
+function moveTo(id: string, location: RegisteredPanel["location"]): void {
+  registry[id] = { ...registry[id]!, location };
+}
+
+beforeEach(() => {
+  registry = {};
+  setPanelStoreAccessor(() => ({
+    panelsById: registry,
+    panelIds: Object.keys(registry),
+    tabGroups: new Map(),
+  }));
+});
 
 function makeArtifact(overrides: Partial<Artifact> = {}): Artifact {
   return {
@@ -30,6 +57,7 @@ function makeArtifact(overrides: Partial<Artifact> = {}): Artifact {
 describe("useArtifacts module-level store teardown", () => {
   beforeEach(() => {
     __test_resetArtifactStore();
+    register("t1", "t2", "live-1", "live-cap", "ghost");
   });
 
   it("shrinks the store when a terminal is removed", () => {
@@ -44,30 +72,68 @@ describe("useArtifacts module-level store teardown", () => {
     expect(__test_getArtifactsFor("t2")).toHaveLength(1);
   });
 
-  it("tombstones the id so in-flight ARTIFACT_DETECTED packets are dropped", () => {
+  it("turns away a packet that lands after its terminal's panel is removed", () => {
     __test_seedArtifactStore("t1", [makeArtifact({ id: "a1" })]);
 
+    unregister("t1");
     removeArtifactsForTerminal("t1");
-    expect(__test_isTombstoned("t1")).toBe(true);
 
-    // Simulate the production `artifactClient.onDetected` handler firing
-    // after teardown — the tombstone must block re-insertion.
+    // The production `artifactClient.onDetected` handler firing after teardown.
     const accepted = __test_simulateArtifactDetected("t1", [makeArtifact({ id: "a-late" })]);
     expect(accepted).toBe(false);
     expect(__test_getArtifactStoreSize()).toBe(0);
   });
 
-  it("tombstone does not block other terminals' packets", () => {
+  it("keeps taking another live terminal's packets", () => {
     __test_seedArtifactStore("t1", [makeArtifact({ id: "a1" })]);
     __test_seedArtifactStore("t2", [makeArtifact({ id: "b1" })]);
 
+    unregister("t1");
     removeArtifactsForTerminal("t1");
-    expect(__test_isTombstoned("t1")).toBe(true);
-    expect(__test_isTombstoned("t2")).toBe(false);
 
     const accepted = __test_simulateArtifactDetected("t2", [makeArtifact({ id: "b2" })]);
     expect(accepted).toBe(true);
     expect(__test_getArtifactsFor("t2")).toHaveLength(2);
+  });
+
+  it("holds a trashed terminal's packets back and takes them again once it is restored", () => {
+    moveTo("t1", "trash");
+    expect(__test_simulateArtifactDetected("t1", [makeArtifact({ id: "a-trash" })])).toBe(false);
+    expect(__test_getArtifactsFor("t1")).toBeUndefined();
+
+    moveTo("t1", "dock");
+    expect(__test_simulateArtifactDetected("t1", [makeArtifact({ id: "a-back" })])).toBe(true);
+    expect(__test_getArtifactsFor("t1")!.map((artifact) => artifact.id)).toEqual(["a-back"]);
+  });
+
+  it("turns away packets for terminals another view holds, without storing them", () => {
+    expect(__test_simulateArtifactDetected("elsewhere", [makeArtifact()])).toBe(false);
+    expect(__test_simulateArtifactDetected("constructor", [makeArtifact()])).toBe(false);
+    expect(__test_getArtifactStoreSize()).toBe(0);
+  });
+
+  it("remembers nothing about a retired id, so churn leaves only live terminals' entries", () => {
+    for (let i = 0; i < 100; i++) {
+      register(`churn-${i}`);
+      __test_simulateArtifactDetected(`churn-${i}`, [makeArtifact({ id: `c${i}` })]);
+      unregister(`churn-${i}`);
+      removeArtifactsForTerminal(`churn-${i}`);
+    }
+    __test_simulateArtifactDetected("t1", [makeArtifact()]);
+
+    expect(__test_getArtifactStoreSize()).toBe(1);
+    expect(__test_simulateArtifactDetected("churn-0", [makeArtifact()])).toBe(false);
+
+    register("churn-0");
+    expect(__test_simulateArtifactDetected("churn-0", [makeArtifact()])).toBe(true);
+  });
+
+  it("keeps every packet in a renderer with no panel registry wired", async () => {
+    vi.resetModules();
+    const fresh = await import("@/hooks/useArtifacts");
+
+    expect(fresh.__test_simulateArtifactDetected("anywhere", [makeArtifact()])).toBe(true);
+    expect(fresh.__test_getArtifactsFor("anywhere")).toHaveLength(1);
   });
 
   it("notifies subscribers with an empty array for the removed terminal", () => {
@@ -104,12 +170,11 @@ describe("useArtifacts module-level store teardown", () => {
     expect(listener).toHaveBeenNthCalledWith(1, "t1", []);
     expect(listener).toHaveBeenNthCalledWith(2, "t1", []);
     expect(__test_getArtifactStoreSize()).toBe(0);
-    expect(__test_isTombstoned("t1")).toBe(true);
 
     unsubscribe();
   });
 
-  it("does not tombstone the live terminal on user-initiated clearArtifacts, so newly detected artifacts still appear (#10023 regression)", () => {
+  it("keeps detecting for a live terminal after a user-initiated clearArtifacts (#10023 regression)", () => {
     const { result } = renderHook(() => useArtifacts("live-1"));
 
     // Seed a detection so there is something to clear, mirroring a running agent.
@@ -124,8 +189,6 @@ describe("useArtifacts module-level store teardown", () => {
     });
     expect(result.current.artifacts).toHaveLength(0);
     expect(__test_getArtifactsFor("live-1")).toBeUndefined();
-    // The terminal must NOT be tombstoned — it is still mounted and running.
-    expect(__test_isTombstoned("live-1")).toBe(false);
 
     // A new artifact detected after the clear must land, not be silently dropped.
     let accepted = false;
@@ -272,6 +335,7 @@ describe("useHasArtifacts", () => {
     releases = [];
     onDetected.mockClear();
     vi.stubGlobal("electron", { artifact: { onDetected } });
+    register("t1", "t2");
   });
 
   afterEach(() => {
@@ -323,13 +387,17 @@ describe("useHasArtifacts", () => {
     expect(result.current).toBe(false);
   });
 
-  it("clears the teardown tombstone for a terminal id that mounts again", () => {
+  it("collects a reused id's first batch once its panel is registered again", () => {
+    unregister("t1");
     removeArtifactsForTerminal("t1");
-    expect(__test_isTombstoned("t1")).toBe(true);
+    const { result } = renderHook(() => useHasArtifacts("t1"));
+    act(() => detected?.({ terminalId: "t1", artifacts: [makeArtifact()] }));
+    expect(result.current).toBe(false);
 
-    renderHook(() => useHasArtifacts("t1"));
+    register("t1");
+    act(() => detected?.({ terminalId: "t1", artifacts: [makeArtifact()] }));
 
-    expect(__test_isTombstoned("t1")).toBe(false);
+    expect(result.current).toBe(true);
   });
 
   it("shares one detection subscription with the overlay and drops it with the last owner", () => {
