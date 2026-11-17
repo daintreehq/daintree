@@ -41,6 +41,7 @@ import { GIT_REMOTE_COMMIT_PREVIEW_MAX } from "../../../shared/types/git.js";
 import {
   validateCwd,
   createHardenedGit,
+  createStrictExitGit,
   createAuthenticatedGit,
   createContinueGit,
   createStrictExitGit,
@@ -2273,7 +2274,10 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     let resolveUndoPaths: string[] | undefined;
     if (staged.length > 0 && repoState !== "CLEAN" && repoState !== "DIRTY") {
       try {
-        resolveUndoPaths = parseResolveUndoPaths(await git.raw(RESOLVE_UNDO_ARGS)) ?? undefined;
+        // A git that died partway must not pass for a shorter list of resolutions.
+        const strictGit = await createStrictExitGit(cwd);
+        resolveUndoPaths =
+          parseResolveUndoPaths(await strictGit.raw(RESOLVE_UNDO_ARGS)) ?? undefined;
       } catch {
         // Left out, so the panel names the staged paths without claiming a split.
       }

@@ -8,7 +8,7 @@
 export const RESOLVE_UNDO_ARGS = ["ls-files", "--resolve-undo", "-z"];
 
 // "<mode> <object name> <stage>\t<path>", one record per stage git still holds.
-const RESOLVE_UNDO_HEADER = /^[0-7]+ [0-9a-f]+ [123]$/;
+const RESOLVE_UNDO_HEADER = /^[0-7]{6} (?:[0-9a-f]{40}|[0-9a-f]{64}) [123]$/;
 
 /**
  * The paths whose conflict the index still remembers resolving: the ones

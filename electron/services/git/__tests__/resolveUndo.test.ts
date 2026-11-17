@@ -41,13 +41,16 @@ describe("parseResolveUndoPaths", () => {
     ["a record with no path", `100644 ${OID} 2\t\0`],
     ["a stage outside 1-3", record(0, "a.txt")],
     ["a header that is not a mode, object name and stage", "not a header\ta.txt\0"],
+    ["a mode that is not six octal digits", `7 ${OID} 2\ta.txt\0`],
+    ["an object name that is abbreviated", "100644 de98044 2\ta.txt\0"],
     ["one good record beside a bad one", record(2, "a.txt") + "garbage\0"],
   ])("reports nothing for %s", (_label, raw) => {
     expect(parseResolveUndoPaths(raw)).toBeNull();
   });
 });
 
-describe("resolve-undo against real git", () => {
+// Control characters in a file name cannot be created on Windows.
+describe.skipIf(process.platform === "win32")("resolve-undo against real git", () => {
   let root: string;
   let repo: string;
 
@@ -103,7 +106,7 @@ describe("resolve-undo against real git", () => {
 
   it("lists a resolution and not a path git merged without a conflict", () => {
     expect(git(repo, ...RESOLVE_UNDO_ARGS)).toBe("");
-    expect(git(repo, "ls-files", "-z", "--stage", "--", "clean.txt")).toContain(" 0\tclean.txt\0");
+    expect(git(repo, "diff", "--cached", "--name-only", "--", "clean.txt")).toBe("clean.txt\n");
 
     write("tab\tfile.txt", "resolved\n");
     write("new\nline.txt", "resolved\n");

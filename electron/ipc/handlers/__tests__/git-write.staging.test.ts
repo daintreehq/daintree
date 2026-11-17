@@ -479,5 +479,23 @@ describe("git-write staging handlers (real git)", () => {
       expect("resolveUndoPaths" in conflictOnly).toBe(false);
       expect(resolveUndoReads(mark)).toEqual([]);
     });
+
+    it("reads nothing for a stash pop's conflict, which has no operation behind it", async () => {
+      commitFiles({ "conf.txt": "a\nb\nc\n", "other.txt": "base\n" });
+      fs.writeFileSync(path.join(repo, "conf.txt"), "a\nstash\nc\n");
+      fs.writeFileSync(path.join(repo, "other.txt"), "stashed\n");
+      git(repo, "stash", "push", "-q");
+      fs.writeFileSync(path.join(repo, "conf.txt"), "a\nhead\nc\n");
+      git(repo, "commit", "-qam", "head");
+      expect(() => git(repo, "stash", "pop")).toThrow();
+
+      const mark = spawned.length;
+      const status = await stagingStatus();
+      expect(status.repoState).toBe("DIRTY");
+      expect(status.conflictedFiles.map((f) => f.path)).toEqual(["conf.txt"]);
+      expect(status.staged.map((f) => f.path)).toEqual(["other.txt"]);
+      expect("resolveUndoPaths" in status).toBe(false);
+      expect(resolveUndoReads(mark)).toEqual([]);
+    });
   });
 });
