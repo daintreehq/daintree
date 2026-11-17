@@ -28,7 +28,7 @@ import { EVENT_KIND_LABEL, isSilenceableEventKind, notify } from "@/lib/notify";
 import { projectIdFromPluginInstanceKey } from "@shared/types/plugin";
 import type { NotificationType } from "@/store/notificationStore";
 import { DURATION_150, DURATION_250 } from "@/lib/animationUtils";
-import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
+import { copyWithToast } from "@/lib/copyWithToast";
 import {
   formatNotificationCountAriaLabel,
   formatNotificationCountGlyph,
@@ -856,9 +856,6 @@ function RowOptionsMenu({
     });
     return () => cancelAnimationFrame(frame);
   }, [open, snoozeOnly]);
-  const { copy: copyCorrelationId } = useCopyWithFeedback({
-    announcement: "Correlation ID copied",
-  });
   const [reportInFlight, setReportInFlight] = useState(false);
 
   // Programmatic open from the parent's `h` keybinding. Open exactly once
@@ -887,7 +884,7 @@ function RowOptionsMenu({
 
   const handleCopyCorrelationId = () => {
     if (!entry.correlationId) return;
-    void copyCorrelationId(entry.correlationId);
+    copyWithToast("Correlation ID", entry.correlationId);
   };
 
   // The one row-menu item that takes you somewhere else. It only marks the
