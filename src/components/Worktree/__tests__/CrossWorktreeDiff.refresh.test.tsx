@@ -355,16 +355,20 @@ describe("CrossWorktreeDiff with a renamed file", () => {
     const view = render(tree());
     await openFile(view, "src/new.ts");
 
+    const list = deferred();
     const diff = deferred<string>();
     mockCompareWorktrees.mockImplementation((_path, _b1, _b2, filePath?: string) =>
-      filePath === undefined ? Promise.resolve(listResponse()) : diff.promise
+      filePath === undefined ? list.promise : diff.promise
     );
+    const readsBefore = diffCalls("src/new.ts").length;
     setWorktrees({}, { worktreeChanges: { headOid: "iii" } });
     view.rerender(tree());
+    await waitFor(() => expect(listCalls().length).toBe(2));
 
-    await waitFor(() => expect(diffCalls("src/new.ts").length).toBe(3));
-    expect(screen.getByTestId("diff-viewer").textContent).toBe("diff v1");
+    await act(async () => list.resolve(listResponse()));
+    expect(diffCalls("src/new.ts").length).toBe(readsBefore + 1);
     expect(diffCalls("src/new.ts").at(-1)?.[7]).toBe("src/old.ts");
+    expect(screen.getByTestId("diff-viewer").textContent).toBe("diff v1");
 
     await act(async () => diff.resolve("diff v2"));
     expect(screen.getByTestId("diff-viewer").textContent).toBe("diff v2");

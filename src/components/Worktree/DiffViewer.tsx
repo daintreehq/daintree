@@ -1608,7 +1608,8 @@ function FileDiff({
     return () => {
       region.removeEventListener("wheel", onWheel);
     };
-  }, [isCenteredSplit]);
+    // The region mounts and unmounts with these, not just with the layout.
+  }, [isCenteredSplit, isCollapsed, hasHunks]);
 
   // Keep the centered indent in sync when the scroll system mounts/unmounts or
   // content changes under a non-zero offset (wrap toggle round-trip, collapse,

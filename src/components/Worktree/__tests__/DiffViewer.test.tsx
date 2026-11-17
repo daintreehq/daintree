@@ -2134,9 +2134,9 @@ index 0123456..abcdefg 100644
   });
 
   it("names the host's exact source, not the patch's quoted spelling of it", () => {
-    const quoted = String.raw`diff --git "a/src/o"ld.ts" b/src/new.ts
+    const quoted = String.raw`diff --git "a/src/o\"ld.ts" b/src/new.ts
 similarity index 100%
-rename from "src/o"ld.ts"
+rename from "src/o\"ld.ts"
 rename to src/new.ts
 `;
     render(wrap(<DiffViewer diff={quoted} origin={{ kind: "renamed", path: 'src/o"ld.ts' }} />));
