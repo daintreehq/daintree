@@ -2053,6 +2053,8 @@ describe("LinkClient network change and focus (#16386)", () => {
       link.retryNow({ restart: true });
       await waitFor(() => link.getState().status === "connected");
       expect(host.hellos).toHaveLength(3);
+      // Each Retry dials afresh rather than trusting what the refused link learned.
+      expect(host.opened.slice(1).map((opened) => opened?.fresh)).toEqual([true, true]);
     } finally {
       await client?.stop();
       client = null;
