@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Issue } from "@shared/types/forge";
+import type { Issue, PR } from "@shared/types/forge";
 import type {
   BulkWorktreeRunCommand,
   BulkWorktreeRunSnapshot,
@@ -11,6 +11,8 @@ import type {
 const mockWorktreeCreate = vi.fn();
 const mockGetAvailableBranch = vi.fn(async (_root: string, branch: string) => branch);
 const mockGetDefaultPath = vi.fn(async (_root: string, branch: string) => `/worktrees/${branch}`);
+const mockListBranches = vi.fn();
+const mockFetchPRBranch = vi.fn();
 const mockRunRecipe = vi.fn();
 const mockAssignIssue = vi.fn();
 const mockGetCurrentUser = vi.fn();
@@ -22,7 +24,8 @@ vi.mock("@/clients", () => ({
     create: (...args: unknown[]) => mockWorktreeCreate(...args),
     getAvailableBranch: (root: string, branch: string) => mockGetAvailableBranch(root, branch),
     getDefaultPath: (root: string, branch: string) => mockGetDefaultPath(root, branch),
-    listBranches: vi.fn(async () => []),
+    listBranches: (...args: unknown[]) => mockListBranches(...args),
+    fetchPRBranch: (...args: unknown[]) => mockFetchPRBranch(...args),
   },
   forgeClient: {
     assignIssue: (...args: unknown[]) => mockAssignIssue(...args),
@@ -73,7 +76,7 @@ import {
   useBulkCreateRunStore,
   type BulkCreateRunInput,
 } from "../components/bulkCreateRunner";
-import type { PlannedWorktree } from "../components/bulkCreateUtils";
+import { planPRWorktrees, type PlannedWorktree } from "../components/bulkCreateUtils";
 import { BULK_RUN_HEARTBEAT_MS } from "@shared/types/ipc/bulkWorktreeRuns";
 import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import type { RecipeTerminal } from "@shared/types";
@@ -167,6 +170,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockRunRecipe.mockReset();
   mockWorktreeCreate.mockReset();
+  mockListBranches.mockReset().mockResolvedValue([]);
+  mockFetchPRBranch.mockReset().mockResolvedValue(undefined);
   _resetBulkCreateRunsForTests();
   for (const key of Object.keys(panelsById)) delete panelsById[key];
   for (const key of Object.keys(recipesById)) delete recipesById[key];
@@ -512,5 +517,170 @@ describe("bulk create runner", () => {
       terminalIndices: [1],
       expectedRecipe: digestOf(edited),
     });
+  });
+});
+
+describe("bulk create runner — PR mode", () => {
+  const pr = (n: number, overrides: Partial<PR> = {}): PR =>
+    ({
+      number: n,
+      title: `Fix thing ${n}`,
+      body: "",
+      state: "open",
+      url: `https://github.com/acme/app/pull/${n}`,
+      headRef: `fix-${n}`,
+      baseRef: "main",
+      ...overrides,
+    }) as unknown as PR;
+
+  const prInput = (prs: PR[]): BulkCreateRunInput =>
+    input([], { mode: "pr", plan: planPRWorktrees(prs, new Set()), base: null });
+
+  const branch = (name: string, remote?: string) => ({
+    name,
+    current: false,
+    commit: "c0",
+    remote,
+  });
+
+  const created = () => mockWorktreeCreate.mock.calls.map(([options]) => options);
+
+  beforeEach(() => {
+    installBridge();
+    mockWorktreeCreate.mockImplementation(async (options: { newBranch: string }) => ({
+      worktreeId: `wt-${options.newBranch}`,
+      branch: options.newBranch,
+    }));
+  });
+
+  it("builds from the one remote that carries the head, whatever that remote is called", async () => {
+    mockListBranches.mockResolvedValue([branch("upstream/fix-1", "upstream")]);
+
+    const { done } = startBulkCreateRun(prInput([pr(1)]));
+    await done;
+
+    expect(mockFetchPRBranch).not.toHaveBeenCalled();
+    expect(created()).toEqual([
+      expect.objectContaining({
+        baseBranch: "upstream/fix-1",
+        newBranch: "fix-1",
+        fromRemote: true,
+        useExistingBranch: false,
+      }),
+    ]);
+  });
+
+  it("fetches the PR ref instead of guessing when two remotes carry the head", async () => {
+    mockListBranches
+      .mockResolvedValueOnce([
+        branch("origin/fix-1", "origin"),
+        branch("upstream/fix-1", "upstream"),
+      ])
+      .mockResolvedValue([branch("fix-1")]);
+
+    const { runId, done } = startBulkCreateRun(prInput([pr(1)]));
+    await done;
+
+    expect(mockFetchPRBranch).toHaveBeenCalledWith("/repo", 1, "fix-1");
+    expect(created()).toEqual([
+      expect.objectContaining({
+        baseBranch: "fix-1",
+        newBranch: "fix-1",
+        fromRemote: false,
+        useExistingBranch: true,
+      }),
+    ]);
+    expect(runOf(runId).progress.items.get(1)?.stage).toBe("succeeded");
+  });
+
+  it("matches the remote name exactly, so a nested branch doesn't stand in for the head", async () => {
+    mockListBranches
+      .mockResolvedValueOnce([branch("origin/feature/fix-1", "origin")])
+      .mockResolvedValue([branch("fix-1")]);
+
+    const { done } = startBulkCreateRun(prInput([pr(1)]));
+    await done;
+
+    expect(mockFetchPRBranch).toHaveBeenCalledWith("/repo", 1, "fix-1");
+    expect(created()[0]).toMatchObject({ baseBranch: "fix-1", useExistingBranch: true });
+  });
+
+  it("reuses a local branch of the head's name before fetching, as the single-PR dialog does", async () => {
+    mockListBranches.mockResolvedValue([
+      branch("origin/fix-1", "origin"),
+      branch("upstream/fix-1", "upstream"),
+      branch("fix-1"),
+    ]);
+
+    const { done } = startBulkCreateRun(prInput([pr(1)]));
+    await done;
+
+    expect(mockFetchPRBranch).not.toHaveBeenCalled();
+    expect(created()[0]).toMatchObject({ baseBranch: "fix-1", useExistingBranch: true });
+  });
+
+  it("fails an item whose fetch leaves no local branch, and creates nothing for it", async () => {
+    mockListBranches.mockResolvedValue([]);
+
+    const { runId, done } = startBulkCreateRun(prInput([pr(1)]));
+    await done;
+
+    expect(mockFetchPRBranch).toHaveBeenCalledTimes(1);
+    expect(mockWorktreeCreate).not.toHaveBeenCalled();
+    expect(runOf(runId).progress.items.get(1)).toMatchObject({
+      stage: "failed",
+      error: 'Branch "fix-1" could not be fetched from the remote.',
+    });
+  });
+
+  it("hands the host the source PR on a remote build, so the card has its headline at once", async () => {
+    mockListBranches.mockResolvedValue([branch("origin/fix-1", "origin")]);
+
+    const { done } = startBulkCreateRun(
+      prInput([pr(1, { body: "Fixes #9", title: "Stop the leak" })])
+    );
+    await done;
+
+    expect(created()[0]).toMatchObject({
+      sourcePrNumber: 1,
+      sourcePrTitle: "Stop the leak",
+      sourcePrUrl: "https://github.com/acme/app/pull/1",
+      sourcePrState: "open",
+      sourcePrLinkedIssueNumber: 9,
+    });
+  });
+
+  it("hands the host the source PR on a fetched build too, and keeps it when the host suffixes the branch", async () => {
+    mockListBranches
+      .mockResolvedValueOnce([
+        branch("origin/fix-2", "origin"),
+        branch("upstream/fix-2", "upstream"),
+      ])
+      .mockResolvedValue([branch("fix-2")]);
+    mockWorktreeCreate.mockResolvedValue({ worktreeId: "wt-2", branch: "fix-2-2" });
+
+    const { runId, done } = startBulkCreateRun(prInput([pr(2, { title: "Collides" })]));
+    await done;
+
+    expect(created()[0]).toMatchObject({
+      newBranch: "fix-2",
+      sourcePrNumber: 2,
+      sourcePrTitle: "Collides",
+      sourcePrUrl: "https://github.com/acme/app/pull/2",
+      sourcePrState: "open",
+    });
+    expect(runOf(runId).progress.items.get(2)).toMatchObject({
+      stage: "succeeded",
+      resolvedBranch: "fix-2-2",
+    });
+  });
+
+  it("leaves issue worktrees without any source PR", async () => {
+    const { done } = startBulkCreateRun(input([1]));
+    await done;
+
+    const [options] = created();
+    expect(options).not.toHaveProperty("sourcePrNumber");
+    expect(options).not.toHaveProperty("sourcePrUrl");
   });
 });

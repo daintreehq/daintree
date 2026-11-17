@@ -4,6 +4,7 @@ import { worktreeClient, forgeClient, agentSettingsClient, systemClient } from "
 import { bulkWorktreeRunsClient } from "@/clients/bulkWorktreeRunsClient";
 import { patchIssueAssigneeCache } from "@/lib/forgeResourceCache";
 import { linkProviderIssue } from "@/utils/linkProviderIssue";
+import { buildSourcePrOptions, findUnambiguousPrRemoteBranch } from "@/utils/prWorktreeSource";
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { useRecipeStore, type RecipeSpawnResults } from "@/store/recipeStore";
@@ -788,9 +789,15 @@ async function runBatch(
               // PR mode: resolve branch from headRefName. The initial
               // listBranches snapshot is hoisted into `sharedBranches`
               // above; only refetch after a fetchPRBranch mutation.
+              const sourcePr = planned.item;
+              if (!("headRef" in sourcePr)) {
+                throw new Error(`Planned item #${itemNumber} is not a pull request.`);
+              }
               const branches = sharedBranches ?? (await worktreeClient.listBranches(rootPath));
-              const remoteBranchName = `origin/${planned.headRefName}`;
-              const remoteBranch = branches.find((b) => b.name === remoteBranchName);
+              // Same guard as the single-PR dialog: a head name two remotes
+              // both carry can't be trusted, so it falls through to the
+              // PR-number fetch below.
+              const remoteBranch = findUnambiguousPrRemoteBranch(branches, planned.headRefName);
               const localBranch = branches.find((b) => b.name === planned.headRefName && !b.remote);
 
               let createFromRemote = false;
@@ -799,7 +806,7 @@ async function runBatch(
 
               if (remoteBranch) {
                 createFromRemote = true;
-                createBaseBranch = remoteBranchName;
+                createBaseBranch = remoteBranch.name;
               } else if (localBranch) {
                 createUseExisting = true;
                 createBaseBranch = localBranch.name;
@@ -837,6 +844,9 @@ async function runBatch(
                 path,
                 fromRemote: createFromRemote,
                 useExistingBranch: createUseExisting,
+                // The host seeds the card's linked PR from these at creation
+                // (#8888), so a fork or collision-suffixed branch keeps its PR.
+                ...buildSourcePrOptions(sourcePr),
               });
 
               if (!created?.worktreeId) {

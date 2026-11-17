@@ -38,7 +38,7 @@ import { useRecipeStore } from "@/store/recipeStore";
 import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logError } from "@/utils/logger";
-import { extractClosingIssueNumber } from "@/utils/closingIssueRef";
+import { buildSourcePrOptions, findUnambiguousPrRemoteBranch } from "@/utils/prWorktreeSource";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore, type PendingCreationDraft } from "@/store/worktreeStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -128,19 +128,6 @@ export function clearBranchListCache(): void {
 function isHostAbsolutePath(path: string): boolean {
   if (!isHostWindows()) return path.startsWith("/");
   return /^[A-Za-z]:[\\/]/.test(path) || /^[\\/]{2}[^\\/]/.test(path);
-}
-
-/** Collapse the normalized forge PR state to the workspace-host form (declined folds into closed). */
-function normalizeSourcePrState(state: PR["state"]): "open" | "closed" | "merged" {
-  switch (state) {
-    case "merged":
-      return "merged";
-    case "closed":
-    case "declined":
-      return "closed";
-    default:
-      return "open";
-  }
 }
 
 const noopSubscribe = () => () => {};
@@ -589,20 +576,8 @@ export function NewWorktreeDialog({
         setBranches(branchList);
 
         if (initialPR?.headRef) {
-          // Any remote may carry the PR head — on a fork layout the forge is
-          // `upstream`, not `origin` (#11747). Matched as an exact
-          // `<remote>/<headRef>` rather than a suffix, so a head named `x`
-          // can't match `origin/feature/x`.
-          const remoteCandidates = branchList.filter(
-            (b) => b.remote && b.name === `${b.remote}/${initialPR.headRef}`
-          );
-          // A branch name is not a PR identity. When two remotes both carry the
-          // name they may be different commits, and this component has no way
-          // to tell which repo the PR belongs to — picking either could build
-          // the worktree from the wrong commit. Fall through to the PR-number
-          // fetch, which is authoritative. One match is unambiguous enough to
-          // keep the fast path (and is the single-remote case).
-          const remoteBranch = remoteCandidates.length === 1 ? remoteCandidates[0] : undefined;
+          // Ambiguous or absent remotes fall through to the PR-number fetch.
+          const remoteBranch = findUnambiguousPrRemoteBranch(branchList, initialPR.headRef);
           const localBranch = branchList.find((b) => b.name === initialPR.headRef && !b.remote);
           if (remoteBranch) {
             setBaseBranch(remoteBranch.name);
@@ -968,18 +943,7 @@ export function NewWorktreeDialog({
           useExistingBranch,
           provisionResource: snapWorktreeMode !== "local" || undefined,
           worktreeMode: snapWorktreeMode,
-          // #8888: when created from the PR dropdown, capture the source PR so
-          // the host seeds the worktree's linked PR (and closing issue) eagerly
-          // instead of waiting for branch-name polling to rediscover it.
-          ...(snapInitialPR
-            ? {
-                sourcePrNumber: snapInitialPR.number,
-                sourcePrTitle: snapInitialPR.title,
-                sourcePrUrl: snapInitialPR.url,
-                sourcePrState: normalizeSourcePrState(snapInitialPR.state),
-                sourcePrLinkedIssueNumber: extractClosingIssueNumber(snapInitialPR.body),
-              }
-            : {}),
+          ...(snapInitialPR ? buildSourcePrOptions(snapInitialPR) : {}),
         };
 
         const actionResult = await actionService.dispatch(
