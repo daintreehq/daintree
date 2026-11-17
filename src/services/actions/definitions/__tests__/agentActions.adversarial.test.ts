@@ -902,24 +902,22 @@ describe("agentActions adversarial", () => {
     });
   });
 
-  it("agent.browser hands its focus policy to the launcher, as agent.terminal does (#17221)", async () => {
-    const callbacks = makeCallbacks();
-    const actions = setupActions(callbacks);
+  it.each(["auto", "preserve", "take", undefined] as const)(
+    "agent.browser hands focus policy %s to the launcher, as agent.terminal does (#17221)",
+    async (focusPolicy) => {
+      const callbacks = makeCallbacks();
+      const actions = setupActions(callbacks);
 
-    await callAction(actions, "agent.terminal", { focusPolicy: "preserve" });
-    await callAction(actions, "agent.browser", { focusPolicy: "preserve" });
+      await callAction(actions, "agent.terminal", { focusPolicy });
+      await callAction(actions, "agent.browser", { focusPolicy });
 
-    expect(callbacks.onLaunchAgent).toHaveBeenNthCalledWith(
-      1,
-      "terminal",
-      expect.objectContaining({ focusPolicy: "preserve" })
-    );
-    expect(callbacks.onLaunchAgent).toHaveBeenNthCalledWith(
-      2,
-      "browser",
-      expect.objectContaining({ focusPolicy: "preserve" })
-    );
-  });
+      const [terminalCall, browserCall] = vi.mocked(callbacks.onLaunchAgent).mock.calls;
+      expect(terminalCall?.[0]).toBe("terminal");
+      expect(terminalCall?.[1]?.focusPolicy).toBe(focusPolicy);
+      expect(browserCall?.[0]).toBe("browser");
+      expect(browserCall?.[1]?.focusPolicy).toBe(focusPolicy);
+    }
+  );
 
   it("shortcut launch actions accept omitted args through ActionService dispatch", async () => {
     const { ActionService } = await import("../../../ActionService");

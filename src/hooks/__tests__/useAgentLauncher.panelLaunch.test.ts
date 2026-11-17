@@ -9,10 +9,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { runWithMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
 
-const addPanel = vi.fn();
+const addPanel = vi.fn<(options: Record<string, unknown>, commit?: unknown) => Promise<string>>();
 
 vi.mock("@/store/panelStore", () => {
-  const state = { addPanel: (...args: unknown[]) => addPanel(...args), panelsById: {} };
+  const state = {
+    addPanel: (options: Record<string, unknown>, commit?: unknown) => addPanel(options, commit),
+    panelsById: {},
+  };
   const usePanelStore = Object.assign((selector: (s: typeof state) => unknown) => selector(state), {
     getState: () => state,
   });
@@ -77,8 +80,9 @@ vi.mock("@/clients", () => ({
   terminalClient: { getHostAgentLimit: vi.fn() },
 }));
 
+const readViewDevServerCommand = vi.hoisted(() => vi.fn());
 vi.mock("@/utils/devServerCommand", () => ({
-  readViewDevServerCommand: vi.fn().mockResolvedValue("npm run dev"),
+  readViewDevServerCommand: () => readViewDevServerCommand(),
 }));
 
 vi.mock("@/utils/logger", () => ({
@@ -98,15 +102,22 @@ async function launch(kind: string, options?: LaunchOptions): Promise<Record<str
     await result.current.launchAgent(kind, options);
   });
   expect(addPanel).toHaveBeenCalledOnce();
-  return addPanel.mock.calls[0]?.[0] as Record<string, unknown>;
+  const added = addPanel.mock.calls[0]?.[0];
+  if (!added) throw new Error("addPanel was not called");
+  return added;
 }
 
-describe.each(["browser", "dev-preview"] as const)(
-  "useAgentLauncher — a %s launch keeps the caller's options (#17221)",
-  (kind) => {
+describe.each([
+  { kind: "browser", namesItself: false },
+  { kind: "dev-preview", namesItself: true },
+] as const)(
+  "useAgentLauncher — a $kind launch keeps the caller's options (#17221)",
+  ({ kind, namesItself }) => {
     beforeEach(() => {
       addPanel.mockReset();
       addPanel.mockResolvedValue(`${kind}-1`);
+      readViewDevServerCommand.mockReset();
+      readViewDevServerCommand.mockResolvedValue(undefined);
       Reflect.set(window, "electron", {});
     });
 
@@ -160,26 +171,37 @@ describe.each(["browser", "dev-preview"] as const)(
 
     it("keeps the default title for a name with nothing printable in it", async () => {
       const options = await launch(kind, { name: " \t\n " });
-      const defaults = await (async () => {
-        addPanel.mockClear();
-        return launch(kind);
-      })();
+      addPanel.mockClear();
+      const defaults = await launch(kind);
 
+      // A browser leaves its title to the panel store; a dev preview names itself.
+      if (namesItself) {
+        expect(defaults.title).toEqual(expect.stringMatching(/\S/));
+      } else {
+        expect(defaults).not.toHaveProperty("title");
+      }
       expect(options.title).toBe(defaults.title);
       expect(options).not.toHaveProperty("titleMode");
     });
 
-    it("carries persistence and exit handling to the panel", async () => {
-      const options = await launch(kind, { excludeFromPersistence: true, removeOnExit: true });
+    it.each([
+      [{ excludeFromPersistence: true }, { excludeFromPersistence: true, removeOnExit: undefined }],
+      [{ removeOnExit: true }, { excludeFromPersistence: undefined, removeOnExit: true }],
+      [{ excludeFromPersistence: false }, { excludeFromPersistence: false }],
+    ])("carries persistence and exit handling to the panel: %o", async (given, expected) => {
+      const options = await launch(kind, given);
 
-      expect(options).toMatchObject({ kind, excludeFromPersistence: true, removeOnExit: true });
+      expect(options).toMatchObject({ kind, ...expected });
     });
 
-    it("carries the spawn source to the panel", async () => {
-      const options = await launch(kind, { spawnedBy: "assistant" });
+    it.each(["assistant", "mcp", undefined] as const)(
+      "carries the spawn source %s to the panel",
+      async (spawnedBy) => {
+        const options = await launch(kind, { spawnedBy });
 
-      expect(options).toMatchObject({ kind, spawnedBy: "assistant" });
-    });
+        expect(options.spawnedBy).toBe(spawnedBy);
+      }
+    );
 
     it("leaves the panel unowned by the launching plugin, like a plain shell", async () => {
       const options = await launch(kind, { launchedByPluginId: "acme.orchestrator" });
@@ -193,6 +215,8 @@ describe("useAgentLauncher — a dev-preview launch keeps its own fields under c
   beforeEach(() => {
     addPanel.mockReset();
     addPanel.mockResolvedValue("dev-preview-1");
+    readViewDevServerCommand.mockReset();
+    readViewDevServerCommand.mockResolvedValue("pnpm dev --port 4123");
     Reflect.set(window, "electron", {});
   });
 
@@ -203,9 +227,10 @@ describe("useAgentLauncher — a dev-preview launch keeps its own fields under c
   it("still carries the project's dev-server command beside a custom name", async () => {
     const options = await launch("dev-preview", { name: "API preview", focusPolicy: "preserve" });
 
+    expect(readViewDevServerCommand).toHaveBeenCalledOnce();
     expect(options).toMatchObject({
       kind: "dev-preview",
-      devCommand: "npm run dev",
+      devCommand: "pnpm dev --port 4123",
       title: "API preview",
       focusPolicy: "preserve",
     });
