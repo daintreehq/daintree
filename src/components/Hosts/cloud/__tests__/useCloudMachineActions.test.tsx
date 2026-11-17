@@ -102,6 +102,15 @@ describe("useCloudMachineActions confirms by what the provider declares (#17346)
     );
   });
 
+  it("says a stopped machine bills only for its disk where the provider declares it", () => {
+    show(status(), provider({ stoppedComputeBilled: false, stoppedStorageBilled: true }));
+    act(() => actions!.requestStop("build", "build"));
+    expect(dialogText()).not.toContain("billing for the machine stops");
+    expect(dialogText()).toContain(
+      "Terminals, agents and anything else running on it end. Acme bills only for its disk while it's stopped. Files on its disk are kept for when you start it again; caches and memory aren't."
+    );
+  });
+
   it("points to the console from the Stop confirm when Daintree can't delete there", () => {
     show(status(), provider({ stoppedComputeBilled: true, deletion: false }));
     act(() => actions!.requestStop("build", "build"));

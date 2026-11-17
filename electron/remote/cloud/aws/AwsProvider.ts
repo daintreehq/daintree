@@ -272,7 +272,7 @@ export class AwsProvider implements CloudProvider {
       capabilities: {
         persistence: {
           kept: "Files on its disk",
-          lost: "Memory and running processes",
+          lost: "memory and running processes",
           retentionDays: null,
           saveRetryBilled: false,
           stoppedComputeBilled: false,
