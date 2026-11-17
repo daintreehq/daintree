@@ -295,6 +295,22 @@ describe("CrossWorktreeDiff refreshing an open file's hidden context", () => {
     expect(viewer().dataset.source).toBe("source a.ts v2");
   });
 
+  it("refreshes without expansion when the two reads describe different blobs", async () => {
+    const view = await openComparison();
+    const header = (index: string) => `diff --git a/a.ts b/a.ts\nindex ${index} 100644\n`;
+    respondWith((_file, context) =>
+      Promise.resolve(
+        context
+          ? header("abc1234..9990000") + wholeFile("source a.ts from a newer commit")
+          : header("abc1234..def5678") + "@@ -1 +1 @@\n-old\n+source a.ts v2"
+      )
+    );
+
+    await refresh(view);
+    await waitFor(() => expect(viewer().textContent).toContain("+source a.ts v2"));
+    expect(viewer().dataset.source).toBe("");
+  });
+
   it("holds a refreshed source back until its patch lands", async () => {
     const view = await openComparison();
     const patch = deferred<string>();

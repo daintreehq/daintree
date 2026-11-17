@@ -48,10 +48,10 @@ describe("committedSourceForPatch", () => {
     ).toBeNull();
   });
 
-  it("matches the same blobs abbreviated to different lengths", () => {
+  it("drops a source whose id only extends the patch's abbreviation", () => {
     expect(
-      committedSourceForPatch(wholeFile("abc1234..def5678a"), patch("abc1234a..def5678"))
-    ).toBe(SOURCE);
+      committedSourceForPatch(wholeFile("abc1234..def5678a"), patch("abc1234..def5678"))
+    ).toBeNull();
   });
 
   it("reads the source when the diffs carry no blob ids to compare", () => {

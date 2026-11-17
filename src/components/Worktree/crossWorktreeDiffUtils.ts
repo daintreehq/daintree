@@ -78,17 +78,15 @@ function diffBlobIds(diff: string): [string, string] | null {
   return match ? [match[1]!, match[2]!] : null;
 }
 
-/** Each git read abbreviates ids on its own, so one can run longer than the other. */
-function sameBlob(a: string, b: string): boolean {
-  return a.startsWith(b) || b.startsWith(a);
-}
-
 /**
  * The compare side's committed text for `patch`, out of a whole-file diff of
  * the same file read separately. Each read resolves the branches on its own,
  * so a commit landing between them leaves the two describing different blobs,
  * and that source would reveal lines the patch never compared: the viewer's
- * hunk check only sees the lines both share. Null when they disagree.
+ * hunk check only sees the lines both share. Null when they disagree. Ids are
+ * compared exactly: a newer blob can extend an older one's abbreviation, but
+ * a later read can only print the same abbreviation for the same blob, so a
+ * length that differs costs the expanders rather than trusting a prefix.
  */
 export function committedSourceForPatch(fullDiff: string | null, patch: string): string | null {
   if (fullDiff === null) return null;
@@ -97,7 +95,7 @@ export function committedSourceForPatch(fullDiff: string | null, patch: string):
   if (
     patchBlobs &&
     fullBlobs &&
-    !(sameBlob(patchBlobs[0], fullBlobs[0]) && sameBlob(patchBlobs[1], fullBlobs[1]))
+    (patchBlobs[0] !== fullBlobs[0] || patchBlobs[1] !== fullBlobs[1])
   ) {
     return null;
   }
