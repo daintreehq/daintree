@@ -825,6 +825,29 @@ describe("Review Hub review marks (#14585)", () => {
       push.mockRestore();
     });
 
+    it("opens a deleted file's diff as deleted (#17582)", async () => {
+      useReviewMarksStore.setState({ marks: { [WT]: summary(2) }, revision: 2, loaded: true });
+      const result = comparable(["src/own.ts", "src/gone.ts"], 0);
+      if (result.state !== "comparable") throw new Error("expected comparable");
+      result.files[1]!.status = "deleted";
+      bridge.compare.mockResolvedValue({ status: "compared", markRevision: 2, result });
+      const dialogs = usePanelDialogStore.getState();
+      const open = vi.spyOn(dialogs, "openPanelDialog").mockResolvedValue("diff-panel");
+      const push = vi.spyOn(dialogs, "pushPanelDialog").mockResolvedValue("diff-panel");
+      renderHub();
+      fireEvent.click(await screen.findByTestId("review-hub-review-mark-open"));
+      await screen.findByTestId("since-review-files-branch");
+
+      const rows = screen.getAllByTestId("since-review-file-row");
+      fireEvent.click(rows.find((row) => row.textContent?.includes("gone.ts"))!);
+
+      await waitFor(() => expect(open.mock.calls.length + push.mock.calls.length).toBe(1));
+      const options = (open.mock.calls[0] ?? push.mock.calls[0])![0];
+      expect(options).toMatchObject({ filePath: "src/gone.ts", fileStatus: "deleted" });
+      open.mockRestore();
+      push.mockRestore();
+    });
+
     // The selection is the hub's record of the open diff; a move resets it, and
     // dropping it closes the diff the previous worktree opened (#16793).
     it("closes a since-review diff opened for the previous worktree when the hub moves", async () => {

@@ -214,6 +214,21 @@ export interface ReviewHubContentProps {
 
 const selectNoProviderHealth = () => null;
 
+const BASE_BRANCH_STATUS: Record<string, GitStatus> = {
+  A: "added",
+  D: "deleted",
+  M: "modified",
+  R: "renamed",
+  C: "copied",
+  U: "conflicted",
+};
+
+// The panel keys its file actions and diff mode on this status, and stepping
+// reads it from the change set, so the open path must map it the same way.
+function baseBranchGitStatus(status: string): GitStatus {
+  return BASE_BRANCH_STATUS[status] ?? "modified";
+}
+
 /**
  * Self-contained Review & Commit surface. All staging-status fetches,
  * subscriptions, push/pull-rebase IPC, and UI interaction state live in this
@@ -722,17 +737,9 @@ export function ReviewHubContent({
 
   const baseBranchChangeSet = useMemo((): DiffChangeSetEntry[] | undefined => {
     if (!sortedBaseBranchFiles) return undefined;
-    const statusMap: Record<string, GitStatus> = {
-      A: "added",
-      D: "deleted",
-      M: "modified",
-      R: "renamed",
-      C: "copied",
-      U: "conflicted",
-    };
     return sortedBaseBranchFiles.map((file) => ({
       path: file.path,
-      status: statusMap[file.status] ?? "modified",
+      status: baseBranchGitStatus(file.status),
       insertions: file.insertions,
       deletions: file.deletions,
       viewedKey: `base:${file.path}`,
@@ -872,7 +879,7 @@ export function ReviewHubContent({
         diffPanelId,
         selectedBaseBranchFile,
         selectedBaseBranchFile.path,
-        "modified",
+        baseBranchGitStatus(selectedBaseBranchFile.status),
         viewedKey
       );
       return;
@@ -880,7 +887,7 @@ export function ReviewHubContent({
     void openDiffDialog(store, {
       kind: "diff",
       filePath: selectedBaseBranchFile.path,
-      fileStatus: "modified",
+      fileStatus: baseBranchGitStatus(selectedBaseBranchFile.status),
       diffSource: "base-branch",
       baseBranch: mainBranch,
       changeSet: changeSetsRef.current.baseBranch,
@@ -914,12 +921,15 @@ export function ReviewHubContent({
     if (!selectedSinceReviewPath) return;
     const store = usePanelDialogStore.getState();
     const viewedKey = `since-review:${selectedSinceReviewPath}`;
+    const fileStatus =
+      changeSetsRef.current.sinceReview?.find((entry) => entry.path === selectedSinceReviewPath)
+        ?.status ?? "modified";
     if (diffPanelId) {
       retargetHubDiff(
         diffPanelId,
         selectedSinceReviewPath,
         selectedSinceReviewPath,
-        "modified",
+        fileStatus,
         viewedKey
       );
       return;
@@ -927,7 +937,7 @@ export function ReviewHubContent({
     void openDiffDialog(store, {
       kind: "diff",
       filePath: selectedSinceReviewPath,
-      fileStatus: "modified",
+      fileStatus,
       diffSource: "since-review",
       changeSet: changeSetsRef.current.sinceReview,
       title: basename(selectedSinceReviewPath),
