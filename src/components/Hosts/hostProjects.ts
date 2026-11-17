@@ -5,7 +5,11 @@ import type { HostProjectSummary } from "@shared/types/ipc/remoteHosts";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { logWarn } from "@/utils/logger";
 import { hasRemoteHosts, useHostList } from "./hostList";
-import { _resetHostWorktreesForTesting, pruneHostWorktrees } from "./hostWorktrees";
+import {
+  _resetHostWorktreesForTesting,
+  forgetHostWorktrees,
+  pruneHostWorktrees,
+} from "./hostWorktrees";
 import {
   buildHostMenuRows,
   describeHostMenuState,
@@ -162,6 +166,16 @@ export function retryHostProjects(hostId: HostId): void {
     entry?.request?.outcome === "failed" || entry?.request?.afterFailure === true;
   if (entry?.request) setEntry(hostId, { lastGood: entry.lastGood, request: null });
   requestHostProjects(hostId, Date.now(), afterFailure);
+}
+
+/**
+ * A host removed or re-pointed at another machine: its lists, and any answer
+ * still on its way, are the old machine's. Its id may stay in the host list,
+ * so the list-driven prune never reaches them.
+ */
+export function forgetHostProjects(hostId: HostId): void {
+  if (entries.has(hostId)) setEntry(hostId, null);
+  forgetHostWorktrees(hostId);
 }
 
 /**

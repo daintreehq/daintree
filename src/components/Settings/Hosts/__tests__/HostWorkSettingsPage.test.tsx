@@ -258,6 +258,24 @@ describe("HostWorkSettingsPage (#14167, #14706)", () => {
     });
     expect(screen.getByRole("button", { name: "Save" }).getAttribute("aria-disabled")).toBe("true");
   });
+
+  it("keeps an unsaved environment edit for the page's return, but never once the host is another machine", async () => {
+    const value = () => screen.getByRole("textbox", { name: /^Value of / });
+    // Twice over: each re-point is another machine, not only the first.
+    for (const edit of ["C.UTF-8", "POSIX"]) {
+      await renderSection();
+      expect(value()).toHaveProperty("value", "C");
+      fireEvent.change(value(), { target: { value: edit } });
+      expect(hostEnvDrafts.get("studio-01")?.rows[0]?.value).toBe(edit);
+
+      // Re-pointed while this page is still mounted: its edit was the old machine's.
+      act(() => hostEnvDrafts.forget("studio-01"));
+      expect(hostEnvDrafts.get("studio-01")).toBeUndefined();
+      fireEvent.change(value(), { target: { value: "en_US.UTF-8" } });
+      expect(hostEnvDrafts.get("studio-01")).toBeUndefined();
+      cleanup();
+    }
+  });
 });
 
 // Obviously fake, and short of the long-opaque fallback so the vendor shapes are what match.

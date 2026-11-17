@@ -6,6 +6,12 @@ import { useTwoPaneSplitStore } from "@/store/twoPaneSplitStore";
 import { useUrlHistoryStore } from "@/store/urlHistoryStore";
 import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
 import { backupKeyFor } from "@/store/persistence/safeStorage";
+import {
+  _resetCrossHostFleetForTesting,
+  armCrossHostTarget,
+  getArmedCrossHostTargets,
+} from "@/components/Fleet/crossHostFleet";
+import { hostEnvDrafts, type HostEnvDraft } from "@/components/Settings/Hosts/hostEnvDrafts";
 
 const LOCAL = "a".repeat(64);
 
@@ -131,5 +137,42 @@ describe("installForgetHostLocalState", () => {
     expect(useUrlHistoryStore.getState().entries).not.toHaveProperty("studio:p1");
     dispose();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("forgetHostLocalState: what the host's id still holds in memory", () => {
+  const HOSTS = ["studio", "studio-2"];
+  const draft = (value: string): HostEnvDraft => ({
+    rows: [{ id: "r1", key: "TOKEN", value }],
+    base: { record: {}, revision: "r1" },
+    movedUnder: false,
+  });
+
+  beforeEach(() => {
+    localStorage.clear();
+    _resetCrossHostFleetForTesting();
+    hostEnvDrafts.clear();
+  });
+
+  afterEach(() => {
+    _resetCrossHostFleetForTesting();
+    hostEnvDrafts.clear();
+  });
+
+  it("clears the host's unsaved environment edit and armed agents, and no other host's", () => {
+    for (const hostId of HOSTS) {
+      armCrossHostTarget({ hostId, hostName: hostId, terminalId: "t1", title: "Claude" });
+      hostEnvDrafts.set(hostId, draft(hostId));
+    }
+    const identity = hostEnvDrafts.identity("studio");
+
+    forgetHostLocalState("studio");
+
+    expect(getArmedCrossHostTargets().map((t) => t.hostId)).toEqual(["studio-2"]);
+    expect(hostEnvDrafts.get("studio")).toBeUndefined();
+    expect(hostEnvDrafts.identity("studio")).not.toBe(identity);
+    // The remaining host's edit is still the one a close holds on.
+    expect(hostEnvDrafts.get("studio-2")).toEqual(draft("studio-2"));
+    expect(hostEnvDrafts.firstUnsaved(() => true)).toBe("studio-2");
   });
 });

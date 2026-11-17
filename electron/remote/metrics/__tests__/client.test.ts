@@ -1160,6 +1160,27 @@ describe("HostMetricsClient", () => {
     h.client.dispose();
   });
 
+  it("forgets a host's history ahead of the host list, and still drops a later address change", () => {
+    const h = harness([descriptor("studio-01"), descriptor("studio-02")]);
+    h.client.start();
+    h.client.record("studio-01", summary(1));
+    h.client.record("studio-02", summary(2));
+
+    h.client.forgetHistory("studio-01");
+    expect(h.client.latest("studio-01")).toBeNull();
+    expect(h.client.getSnapshots().map((s) => s.hostId)).toEqual(["studio-02"]);
+
+    // Recorded between the forget and the list's change, then dropped by it.
+    h.client.record("studio-01", summary(3));
+    h.setHosts([
+      { ...descriptor("studio-01"), connection: { kind: "ssh", target: "elsewhere" } },
+      descriptor("studio-02"),
+    ]);
+    expect(h.client.latest("studio-01")).toBeNull();
+    expect(h.client.latest("studio-02")?.sampledAt).toBe(2);
+    h.client.dispose();
+  });
+
   it("drops a host's history when its SSH target changes to another machine", () => {
     const h = harness([descriptor("studio-01")]);
     h.client.start();

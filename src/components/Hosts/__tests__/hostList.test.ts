@@ -359,6 +359,51 @@ describe("host status and host figures", () => {
     expect(useHostMetricsStore.getState().history.size).toBe(0);
   });
 
+  it("forgets a host's figures, including what a seed already on its way carries of it", async () => {
+    list.mockResolvedValue([connectedHost("studio-01"), connectedHost("studio-02")]);
+    const seed = deferred<HostMetricsSnapshot[]>();
+    getSnapshots.mockReturnValue(seed.promise);
+    const figures = renderHook(() => useHostFigures());
+    await settle();
+    act(() => {
+      emitMetrics({ type: "summary", summary: summary("studio-01", 5) });
+      emitMetrics({ type: "summary", summary: summary("studio-02", 6) });
+    });
+
+    // Re-pointed at another machine: the id stays in the list, the figures go.
+    act(() => emit?.({ type: "host-forgotten", hostId: "studio-01" }));
+    const sampled = () => figures.result.current.hosts.map((h) => h.summary?.sampledAt ?? null);
+    const history = (hostId: string) =>
+      useHostMetricsStore
+        .getState()
+        .history.get(hostId)
+        ?.map((entry) => entry.sampledAt);
+    expect(sampled()).toEqual([null, 6]);
+    expect(history("studio-01")).toBeUndefined();
+    expect(history("studio-02")).toEqual([6]);
+
+    await act(async () => {
+      seed.resolve([
+        { hostId: "studio-01", history: [summary("studio-01", 3)] },
+        { hostId: "studio-02", history: [summary("studio-02", 4)] },
+      ]);
+      await seed.promise;
+    });
+    expect(sampled()).toEqual([null, 6]);
+    expect(history("studio-01")).toBeUndefined();
+    expect(history("studio-02")).toEqual([6, 4]);
+
+    // The new machine's own summaries land as usual, and so does a later seed.
+    act(() => emitMetrics({ type: "summary", summary: summary("studio-01", 9) }));
+    expect(history("studio-01")).toEqual([9]);
+    figures.unmount();
+    getSnapshots.mockResolvedValue([{ hostId: "studio-01", history: [summary("studio-01", 10)] }]);
+    const again = renderHook(() => useHostFigures());
+    await settle();
+    expect(again.result.current.hosts[0]?.summary?.sampledAt).toBe(10);
+    expect(history("studio-01")).toEqual([10]);
+  });
+
   it("holds no summary a list brings while nothing follows figures, and ignores an equal list", async () => {
     list.mockResolvedValue([reporting("studio-01", 3)]);
     const status = counted(() => useHostList());

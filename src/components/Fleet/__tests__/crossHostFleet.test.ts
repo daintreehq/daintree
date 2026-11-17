@@ -15,6 +15,7 @@ import {
   confirmCrossHostResend,
   crossHostSafeRetryDeadline,
   crossHostTargetKey,
+  forgetCrossHostTargetsOf,
   needsCrossHostResendConfirmation,
   getArmedCrossHostTargets,
   retainCrossHostTargetsFor,
@@ -178,6 +179,83 @@ describe("cross-host fleet targets", () => {
       "local-1",
       crossHostTargetKey("studio-02", "t1"),
     ]);
+  });
+
+  it("drops a re-pointed host's agents and unconfirmed submits, keeping a longer id's", async () => {
+    armCrossHostTarget({
+      hostId: "studio-0",
+      hostName: "studio-0",
+      terminalId: "t1",
+      title: "Gemini",
+    });
+    const lost = () =>
+      submitFleet.mockRejectedValueOnce(
+        new Error("[AppError|OUTCOME_UNKNOWN] Couldn't confirm fleet submit")
+      );
+    const forgotten = crossHostTargetKey("studio-0", "t1");
+    const kept = crossHostTargetKey("studio-01", "t1");
+    lost();
+    await expect(submitCrossHostTarget(forgotten, "go")).rejects.toBeTruthy();
+    lost();
+    await expect(submitCrossHostTarget(kept, "go")).rejects.toBeTruthy();
+    const forgottenOpId = submitFleet.mock.calls[0]![0].opId;
+    const keptOpId = submitFleet.mock.calls[1]![0].opId;
+
+    forgetCrossHostTargetsOf("studio-0");
+
+    // The host list still names studio-0, so only the forget can take its agent out.
+    expect(getArmedCrossHostTargets().map((t) => t.hostId)).toEqual(["studio-01", "studio-02"]);
+    expect(resolveFleetBroadcastTargetIds()).toEqual([
+      "local-1",
+      kept,
+      crossHostTargetKey("studio-02", "t1"),
+    ]);
+    expect(crossHostSafeRetryDeadline(forgotten, "go")).toBeNull();
+    expect(crossHostSafeRetryDeadline(kept, "go")).not.toBeNull();
+    await submitCrossHostTarget(kept, "go", { retry: true });
+    expect(submitFleet.mock.calls[2]![0].opId).toBe(keptOpId);
+
+    // Armed again on the new machine, a retry is a fresh send, never the old machine's opId.
+    armCrossHostTarget({
+      hostId: "studio-0",
+      hostName: "studio-0",
+      terminalId: "t1",
+      title: "Gemini",
+    });
+    await submitCrossHostTarget(forgotten, "go", { retry: true });
+    expect(submitFleet.mock.calls[3]![0].opId).not.toBe(forgottenOpId);
+  });
+
+  it("records no unconfirmed submit to a host forgotten while it was out, however often", async () => {
+    const key = crossHostTargetKey("studio-01", "t1");
+    const opIds: string[] = [];
+    for (let cycle = 0; cycle < 2; cycle += 1) {
+      let reject!: (error: Error) => void;
+      submitFleet.mockImplementationOnce(
+        () => new Promise<void>((_resolve, fail) => (reject = fail))
+      );
+      const out = submitCrossHostTarget(key, "go", { retry: true });
+      opIds.push(submitFleet.mock.calls.at(-1)![0].opId!);
+
+      forgetCrossHostTargetsOf("studio-01");
+      reject(new Error("[AppError|HOST_DISCONNECTED] Link dropped"));
+      await expect(out).rejects.toBeTruthy();
+
+      expect(crossHostSafeRetryDeadline(key, "go")).toBeNull();
+      armCrossHostTarget({
+        hostId: "studio-01",
+        hostName: "studio-01",
+        terminalId: "t1",
+        title: "Claude",
+      });
+    }
+    expect(opIds[1]).not.toBe(opIds[0]);
+    // A submit that is lost now, with no forget after it, is still kept for a retry.
+    submitFleet.mockRejectedValueOnce(
+      new Error("[AppError|OUTCOME_UNKNOWN] Couldn't confirm fleet submit")
+    );
+    await expect(submitCrossHostTarget(key, "go")).rejects.toBeTruthy();
+    expect(crossHostSafeRetryDeadline(key, "go")).not.toBeNull();
   });
 
   it("sends another host's agent the draft as typed, as its preview shows", async () => {

@@ -312,6 +312,11 @@ function SettingsDialogInner({
   const target =
     machineOptions.find((option) => option.hostId !== null && option.hostId === targetHostId) ??
     null;
+  // Bumped when the picked host is removed or re-pointed: its page remounts,
+  // since what it holds is the old machine's.
+  const targetIdentity = useSyncExternalStore(hostEnvDrafts.subscribe, () =>
+    target?.hostId ? hostEnvDrafts.identity(target.hostId) : 0
+  );
   const showingDevicePage = useSettingsTargetStore((s) => s.showingDevicePage);
   const setShowingDevicePage = useSettingsTargetStore((s) => s.setShowingDevicePage);
   // Another machine's work settings own the page; this machine's device pages stay listed.
@@ -665,8 +670,10 @@ function SettingsDialogInner({
       return false;
     }
     // A host's unsaved environment edit holds the close the same way, on that host's page.
-    const unsavedHost = hostEnvDrafts.firstUnsaved();
-    if (unsavedHost && machineOptions.some((option) => option.hostId === unsavedHost)) {
+    const unsavedHost = hostEnvDrafts.firstUnsaved((hostId) =>
+      machineOptions.some((option) => option.hostId === hostId)
+    );
+    if (unsavedHost) {
       setSearchQuery("");
       setHiddenSettingBanner(null);
       if (activeScope !== "global") {
@@ -1323,7 +1330,7 @@ function SettingsDialogInner({
                   onInteract={markPanelInteracted}
                 >
                   <HostWorkSettingsPage
-                    key={target.hostId}
+                    key={`${target.hostId}:${targetIdentity}`}
                     hostId={target.hostId}
                     hostName={target.name}
                     connected={target.connected}
