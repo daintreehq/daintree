@@ -64,6 +64,9 @@ export class PluginUpdateCheckService {
   // `lastCheckedAt` stays a record of the last pass that actually answered.
   private consecutiveFailedPasses = 0;
   private retryNotBefore = 0;
+  // Bumped by stop(): a pass still in flight across an off/on toggle must not arm
+  // a backoff on the service the user just re-enabled.
+  private generation = 0;
 
   getSettings(): PluginBackgroundUpdateCheckSettings {
     const raw = store.get("pluginBackgroundUpdateCheck");
@@ -161,6 +164,7 @@ export class PluginUpdateCheckService {
   }
 
   stop(): void {
+    this.generation += 1;
     this.resetRetryBackoff();
     if (this.checkInterval) {
       clearInterval(this.checkInterval);
@@ -208,7 +212,9 @@ export class PluginUpdateCheckService {
   async maybeRunDue(context: "Initial" | "Periodic" | "Resume"): Promise<void> {
     if (this.disposed || this.inFlight) return;
     if (!this.getSettings().enabled) return;
-    if (Date.now() < this.retryNotBefore) return;
+    // A wait longer than the ceiling can only mean the wall clock moved backwards.
+    const retryWaitMs = this.retryNotBefore - Date.now();
+    if (retryWaitMs > 0 && retryWaitMs <= RETRY_MAX_MS) return;
 
     try {
       if (powerMonitor.getSystemIdleTime() < IDLE_THRESHOLD_S) return;
@@ -247,6 +253,7 @@ export class PluginUpdateCheckService {
     // pass couldn't fully determine status (import/list threw, or a per-plugin
     // fetch failed), so a partial-failure pass doesn't clear a valid cache.
     // `failedEntirely` is the narrower case where nothing was learned at all.
+    const generation = this.generation;
     let outcome: PassOutcome | null;
     try {
       outcome = await this.collectUpdates();
@@ -270,7 +277,7 @@ export class PluginUpdateCheckService {
     // entry it already cleared.
     if (this.disposed || !this.getSettings().enabled) return;
 
-    if (outcome.failedEntirely) this.scheduleRetry(context);
+    if (outcome.failedEntirely && generation === this.generation) this.scheduleRetry(context);
 
     const { updates: fresh, inconclusive, unchecked } = outcome;
     if (fresh.length === 0) {
