@@ -8,10 +8,11 @@ import { OS_DND_METHOD_CHANNELS } from "./osDnd.preload.js";
 export function registerOsDndHandlers(_deps: HandlerDependencies): () => void {
   // Initialize during handler registration so the macOS probe is already in
   // flight when the first renderer hydrates. `initialize()` only starts the
-  // probe; `getState` awaits it, so hydration still gets a probed boolean
-  // without the cold start blocking on plutil (#16809). The matching deferred
-  // task (electron/window/globalServicesInit.ts) is idempotent and remains in
-  // place for symmetry with sibling services.
+  // probe; `getState` awaits it, so hydration gets the probe's answer (still
+  // `undefined` when it could not read the state) without the cold start
+  // blocking on plutil (#16809). The matching deferred task
+  // (electron/window/globalServicesInit.ts) is idempotent and remains in place
+  // for symmetry with sibling services.
   const osDndService = initializeOsDndService();
 
   const namespace = defineIpcNamespace({
