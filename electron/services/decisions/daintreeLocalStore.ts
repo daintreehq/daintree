@@ -656,7 +656,9 @@ export class DaintreeLocalStore implements LocalStore {
          WHERE delivery_status IN ('desktop-received', 'pending-host') AND history_only = 0
            AND CASE
              WHEN local_status <> 'cancelled' THEN 1
-             WHEN json_valid(answers_json) THEN EXISTS (
+             WHEN NOT json_valid(answers_json) THEN 1
+             WHEN json_type(answers_json) <> 'array' THEN 1
+             ELSE EXISTS (
                SELECT 1 FROM json_each(q.answers_json) AS entry
                WHERE CASE
                  WHEN entry.type = 'object' THEN
@@ -665,7 +667,6 @@ export class DaintreeLocalStore implements LocalStore {
                  ELSE 1
                END
              )
-             ELSE 1
            END
          LIMIT 1`
       ).get();

@@ -913,7 +913,7 @@ describe("DaintreeLocalStore ordering and failures", () => {
     expect(await store.hasPendingDelivery()).toBe(false);
 
     // Entries that can't be read are taken as waiting, and never fail the read.
-    for (const unreadable of ["not json", '["damaged"]', "[5]", '{"deliver":true}']) {
+    for (const unreadable of ["not json", '["damaged"]', "[5]", '{"deliver":true}', "{}", '"x"']) {
       await store.updateQuestion("q1", { answers_json: unreadable });
       expect(await store.hasPendingDelivery()).toBe(true);
     }
