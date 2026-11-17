@@ -303,6 +303,89 @@ describe("TerminalSearchBar", () => {
     expect(liveRegion.textContent).toBe("No matches");
   });
 
+  describe("when the search addon cannot load", () => {
+    async function typeQuery(value: string, regex = false) {
+      renderSearchBar();
+      const input = screen.getByPlaceholderText("Find in terminal…");
+      if (regex) {
+        await act(() => {
+          fireEvent.click(screen.getByLabelText("Use regular expression"));
+        });
+      }
+      await act(() => {
+        fireEvent.change(input, { target: { value } });
+      });
+      await act(() => {
+        vi.advanceTimersByTime(150);
+      });
+    }
+
+    it("reports a rejected load as unavailable, not as no matches or an invalid regex", async () => {
+      vi.mocked(terminalInstanceService.ensureSearchAddon).mockRejectedValue(
+        new Error("chunk failed to load")
+      );
+
+      await typeQuery("hello", true);
+
+      const liveRegion = screen.getByRole("status");
+      expect(liveRegion.textContent).toContain("Search failed");
+      expect(liveRegion.textContent).not.toContain("No matches");
+      expect(liveRegion.textContent).not.toContain("Invalid regex");
+      expect(
+        screen.getByPlaceholderText("Find in terminal…").getAttribute("aria-invalid")
+      ).not.toBe("true");
+    });
+
+    it("reports a missing addon as unavailable", async () => {
+      vi.mocked(terminalInstanceService.ensureSearchAddon).mockResolvedValue(null);
+
+      await typeQuery("hello");
+
+      expect(screen.getByRole("status").textContent).toContain("Search failed");
+    });
+
+    it("keeps stepping available and retries the search on the next step", async () => {
+      const mock = createMockManaged(true);
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+      vi.mocked(terminalInstanceService.ensureSearchAddon).mockImplementation(
+        async () => mock.searchAddon as never
+      );
+      // The mount effect's result subscription takes the first call, the
+      // search the second: both fail, then loading works again.
+      vi.mocked(terminalInstanceService.ensureSearchAddon)
+        .mockRejectedValueOnce(new Error("chunk failed to load"))
+        .mockRejectedValueOnce(new Error("chunk failed to load"));
+
+      await typeQuery("hello");
+      expect(screen.getByRole("status").textContent).toContain("Search failed");
+
+      const next = screen.getByLabelText("Next match");
+      expect(next.hasAttribute("disabled")).toBe(false);
+      await act(async () => {
+        fireEvent.click(next);
+      });
+
+      expect(mock.searchAddon.findNext).toHaveBeenCalledWith("hello", expect.anything());
+      expect(screen.getByRole("status").textContent).toBe("Found");
+    });
+
+    it("still reports a pattern the engine rejects as an invalid regex", async () => {
+      const mock = createMockManaged(true);
+      mock.searchAddon.findNext.mockImplementation(() => {
+        throw new Error("Invalid regular expression: /a(/: Unterminated group");
+      });
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+
+      await typeQuery("a", true);
+
+      expect(screen.getByRole("status").textContent).toBe("Invalid regex");
+    });
+  });
+
   it('announces "Invalid regex" for invalid regex patterns', async () => {
     const mock = createMockManaged(true);
     vi.mocked(terminalInstanceService.get).mockReturnValue(

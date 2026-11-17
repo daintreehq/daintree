@@ -1,7 +1,7 @@
 import type { ISearchOptions } from "@xterm/addon-search";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
-export type SearchStatus = "idle" | "found" | "none" | "invalidRegex";
+export type SearchStatus = "idle" | "found" | "none" | "invalidRegex" | "unavailable";
 
 type SearchDecorationOptions = NonNullable<ISearchOptions["decorations"]>;
 

@@ -174,30 +174,46 @@ export function TerminalSearchBar({
         effectiveWholeWord
       );
 
-      void target
-        .ensureSearchAddon()
-        .then((searchAddon) => {
-          if (!searchAddon || !isCurrent()) return;
-          const found =
-            direction === "next"
-              ? searchAddon.findNext(term, options)
-              : searchAddon.findPrevious(term, options);
+      // A load that fails or finds no terminal says nothing about the query, so
+      // it reads as the search being unavailable (and retryable), never as "No
+      // matches" or "Invalid regex".
+      const markUnavailable = () => {
+        setSearchStatus("unavailable");
+        setMatchResults(null);
+      };
 
-          if (!found) {
-            searchAddon.clearDecorations();
-            setMatchResults(null);
-          }
-          setSearchStatus(found ? "found" : "none");
-        })
-        .catch((error: unknown) => {
+      void target.ensureSearchAddon().then(
+        (searchAddon) => {
           if (!isCurrent()) return;
-          setSearchStatus(effectiveRegexEnabled ? "invalidRegex" : "none");
-          setMatchResults(null);
-          if (effectiveRegexEnabled && error instanceof Error) {
-            setRegexError(describeRegexError(error.message));
+          if (!searchAddon) {
+            markUnavailable();
+            return;
           }
-          target.getSearchAddon()?.clearDecorations();
-        });
+          try {
+            const found =
+              direction === "next"
+                ? searchAddon.findNext(term, options)
+                : searchAddon.findPrevious(term, options);
+
+            if (!found) {
+              searchAddon.clearDecorations();
+              setMatchResults(null);
+            }
+            setSearchStatus(found ? "found" : "none");
+          } catch (error: unknown) {
+            setSearchStatus(effectiveRegexEnabled ? "invalidRegex" : "none");
+            setMatchResults(null);
+            if (effectiveRegexEnabled && error instanceof Error) {
+              setRegexError(describeRegexError(error.message));
+            }
+            target.getSearchAddon()?.clearDecorations();
+          }
+        },
+        () => {
+          if (!isCurrent()) return;
+          markUnavailable();
+        }
+      );
     },
     [target, caseSensitive, regexEnabled, wholeWord]
   );
@@ -407,6 +423,7 @@ export function TerminalSearchBar({
     if (!searchTerm || searchStatus === "idle") return "";
     if (searchStatus === "invalidRegex") return "Invalid regex";
     if (searchStatus === "none") return "No matches";
+    if (searchStatus === "unavailable") return "Search failed";
     if (matchResults && matchResults.resultCount > 0) {
       const countLabel = formatCount(matchResults.resultCount);
       return matchResults.resultIndex >= 0
@@ -421,6 +438,7 @@ export function TerminalSearchBar({
 
   // Nothing to step through with no query, no matches or a pattern that does
   // not compile — the same rule the browser's find bar applies.
+  // A failed load stays steppable: stepping is how the search is retried.
   const canStep = Boolean(searchTerm) && searchStatus !== "none" && searchStatus !== "invalidRegex";
 
   const atHighlightLimit =
@@ -429,13 +447,20 @@ export function TerminalSearchBar({
     matchResults.resultCount >= SEARCH_HIGHLIGHT_LIMIT;
 
   const limitNote = `Highlights and stepping stop at ${SEARCH_HIGHLIGHT_LIMIT} matches`;
+  const unavailableNote = "Find could not load. Press Enter to try again.";
+  const statusNote = atHighlightLimit
+    ? limitNote
+    : searchStatus === "unavailable" && searchTerm
+      ? unavailableNote
+      : null;
 
   // Radix describes the wrapper it anchors to, not the input, so the invalid
-  // reason travels to the input explicitly; the cap note goes the same way,
-  // since its tooltip hangs off the count, which takes no focus.
+  // reason travels to the input explicitly; the status note (the cap, or a
+  // failed load) goes the same way, since its tooltip hangs off the count,
+  // which takes no focus.
   const describedByIds = [
     searchStatus === "invalidRegex" && regexError ? regexErrorId : null,
-    atHighlightLimit ? limitNoteId : null,
+    statusNote ? limitNoteId : null,
   ]
     .filter(Boolean)
     .join(" ");
@@ -483,7 +508,7 @@ export function TerminalSearchBar({
         {regexError}
       </span>
       <span id={limitNoteId} className="sr-only">
-        {atHighlightLimit ? limitNote : ""}
+        {statusNote ?? ""}
       </span>
 
       <FindBarToggle
@@ -515,7 +540,7 @@ export function TerminalSearchBar({
       </FindBarToggle>
 
       {/* The slot is always mounted at one width, so the field never moves. */}
-      {atHighlightLimit ? (
+      {statusNote ? (
         <Tooltip>
           <TooltipTrigger asChild>
             <span
@@ -528,7 +553,7 @@ export function TerminalSearchBar({
               {statusText}
             </span>
           </TooltipTrigger>
-          <TooltipContent side="bottom">{limitNote}</TooltipContent>
+          <TooltipContent side="bottom">{statusNote}</TooltipContent>
         </Tooltip>
       ) : (
         <span data-terminal-search-status className={countClass}>
@@ -537,7 +562,7 @@ export function TerminalSearchBar({
       )}
 
       <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-        {statusText}
+        {statusNote && searchStatus === "unavailable" ? `${statusText}. ${statusNote}` : statusText}
       </span>
 
       <FindBarButton
