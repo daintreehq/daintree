@@ -57,6 +57,10 @@ const CONSOLE_KEYS_WAIT_MS = 90_000;
 const CONSOLE_POLL_MS = 5_000;
 /** Instance states that still hold a machine: a listing leaves out the terminated. */
 const LIVE_STATES = ["pending", "running", "stopping", "stopped"];
+/** The tag every machine Daintree creates carries (the lifecycle's marker label). */
+const DAINTREE_TAG = "daintree";
+/** Waits before asking again about an instance EC2 doesn't list yet. */
+const NOT_FOUND_RETRIES = [2_000, 4_000];
 
 /**
  * The permissions creating and managing machines needs, each with the DryRun
@@ -92,7 +96,7 @@ export function awsCredentials(values: Readonly<CloudCredentialValues>): {
 } {
   const accessKeyId = values.accessKeyId;
   const secretAccessKey = values.secretAccessKey;
-  const sessionToken = values.sessionToken ?? null;
+  const sessionToken = values.sessionToken?.trim() || null;
   const region = values.region?.toLowerCase();
   if (typeof accessKeyId !== "string" || !ACCESS_KEY_ID.test(accessKeyId)) {
     throw invalid("That doesn't look like an access key ID: it's letters and digits, like AKIA….");
@@ -115,6 +119,15 @@ export function parseEc2ResourceId(resourceId: string): { region: string; instan
   const match = RESOURCE_ID.exec(resourceId);
   if (!match || !isEc2InstanceId(match[2])) return null;
   return { region: match[1]!, instanceId: match[2]! };
+}
+
+/**
+ * Who the keys sign in as, stable across sessions: an assumed role's session
+ * name changes with every set of temporary keys, so it is dropped.
+ */
+export function awsIdentity(arn: string): string {
+  const match = /^(arn:[\w-]+:sts::\d{12}:assumed-role\/[^/]+)\/.+$/.exec(arn);
+  return match ? match[1]! : arn;
 }
 
 export function ec2ResourceId(region: string, instanceId: string): string {
@@ -267,7 +280,7 @@ export class AwsProvider implements CloudProvider {
         },
         typicalStartSeconds: 60,
         lifetime: { kind: "none" },
-        sshTrust: "confirm-on-first-connect",
+        sshTrust: "api-or-confirm",
         transport: "direct",
         tunnel: null,
         provisioning: {
@@ -313,10 +326,10 @@ export class AwsProvider implements CloudProvider {
       });
     }
     return {
-      identity: identity.arn,
+      identity: awsIdentity(identity.arn),
       scopes: [
         {
-          scope: { kind: "personal", id: identity.account, name: `AWS account ${identity.account}` },
+          scope: { kind: "account", id: identity.account, name: `AWS account ${identity.account}` },
           active: true,
         },
       ],
@@ -421,7 +434,7 @@ export class AwsProvider implements CloudProvider {
         null
       );
     }
-    return { identity: identity.arn };
+    return { identity: awsIdentity(identity.arn) };
   }
 
   async catalog(credentials: ProviderCredentials): Promise<ProviderCatalog> {
@@ -473,12 +486,20 @@ export class AwsProvider implements CloudProvider {
     };
   }
 
+  /**
+   * The machines Daintree created in the account, in every enabled region:
+   * only they run the image, user and key a cloud host connects with, so an
+   * instance it didn't create is never offered as one.
+   */
   async list(
     credentials: ProviderCredentials,
     options: { label?: string } = {}
   ): Promise<ProviderResource[]> {
     const home = this.ctx(credentials);
-    const filters = [{ name: "instance-state-name", values: LIVE_STATES }];
+    const filters = [
+      { name: "instance-state-name", values: LIVE_STATES },
+      { name: "tag-key", values: [DAINTREE_TAG] },
+    ];
     if (options.label) {
       const eq = options.label.indexOf("=");
       if (eq <= 0) throw new AwsApiError("invalid-request", "Not a label filter", null, null, null);
@@ -495,11 +516,22 @@ export class AwsProvider implements CloudProvider {
 
   async inspect(credentials: ProviderCredentials, resourceId: string): Promise<ProviderResource> {
     const { region, instanceId } = requireResourceId(resourceId);
-    const [instance] = await this.client.describeInstances(this.ctx(credentials, region), {
-      instanceIds: [instanceId],
-    });
-    if (!instance) throw new AwsApiError("not-found", "No such instance", null, "InvalidInstanceID.NotFound", null);
-    return ec2Resource(region, instance);
+    const ctx = this.ctx(credentials, region);
+    // EC2 reads are eventually consistent: an instance just launched can be missing for a moment.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const [instance] = await this.client.describeInstances(ctx, { instanceIds: [instanceId] });
+        if (!instance) {
+          throw new AwsApiError("not-found", "No such instance", null, "InvalidInstanceID.NotFound", null);
+        }
+        return ec2Resource(region, instance);
+      } catch (error) {
+        if (!(error instanceof AwsApiError) || error.kind !== "not-found" || attempt >= NOT_FOUND_RETRIES.length) {
+          throw error;
+        }
+        await this.sleep(NOT_FOUND_RETRIES[attempt]!, ctx.signal);
+      }
+    }
   }
 
   async create(credentials: ProviderCredentials, request: ProviderCreateRequest): Promise<ProviderResource> {
@@ -519,17 +551,37 @@ export class AwsProvider implements CloudProvider {
     if (existing && ec2MachineState(existing.state) !== "deleted") return ec2Resource(region, existing);
     const image = await this.resolveImage(ctx, imageSpec.id, type.architecture);
     const securityGroupId = await this.ensureSecurityGroup(ctx);
-    const instance = await this.client.runInstance(ctx, {
-      imageId: image.imageId,
-      instanceType: type.id,
-      clientToken: request.idempotencyKey,
-      securityGroupId,
-      userData: ec2UserData(request.publicKey),
-      rootDeviceName: image.rootDeviceName ?? "/dev/sda1",
-      rootVolumeGiB: EC2_ROOT_VOLUME_GIB,
-      tags: { ...request.labels, Name: request.name },
-    });
-    return ec2Resource(region, instance);
+    try {
+      const instance = await this.client.runInstance(ctx, {
+        imageId: image.imageId,
+        instanceType: type.id,
+        clientToken: request.idempotencyKey,
+        securityGroupId,
+        userData: ec2UserData(request.publicKey),
+        rootDeviceName: image.rootDeviceName ?? "/dev/sda1",
+        rootVolumeGiB: EC2_ROOT_VOLUME_GIB,
+        tags: { ...request.labels, Name: request.name },
+      });
+      return ec2Resource(region, instance);
+    } catch (error) {
+      // The token already launched an instance with other parameters (a newer image since the
+      // first send) that the lookup above didn't see yet: it is the one this create made.
+      if (!(error instanceof AwsApiError) || error.code !== "IdempotentParameterMismatch") throw error;
+      for (const wait of [0, ...NOT_FOUND_RETRIES]) {
+        if (wait > 0) await this.sleep(wait, ctx.signal);
+        const [launched] = await this.client.describeInstances(ctx, {
+          filters: [{ name: "client-token", values: [request.idempotencyKey] }],
+        });
+        if (launched) return ec2Resource(region, launched);
+      }
+      throw new AwsApiError(
+        "server",
+        "AWS says this create already launched an instance, and doesn't list it yet",
+        null,
+        error.code,
+        error.requestId
+      );
+    }
   }
 
   /** The newest of Canonical's images for the release and architecture in this region. */
@@ -589,7 +641,7 @@ export class AwsProvider implements CloudProvider {
           name: EC2_SECURITY_GROUP_NAME,
           description: "SSH to machines Daintree creates",
           vpcId,
-          tags: { daintree: "1" },
+          tags: { [DAINTREE_TAG]: "1" },
         });
         group = { groupId, groupName: EC2_SECURITY_GROUP_NAME, vpcId, allowsSshFromAnywhere: false };
       } catch (error) {

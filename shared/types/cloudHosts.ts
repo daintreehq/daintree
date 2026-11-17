@@ -117,10 +117,14 @@ export function cloudLifetimeIsChosen(model: CloudLifetimeModel): boolean {
  * Where the trust in a machine's SSH server key comes from.
  * - `pinned-from-api`: the provider's authenticated API returns it, so it is pinned before any dial.
  * - `confirm-on-first-connect`: nothing vouches for it; the person confirms its fingerprint once.
+ * - `api-or-confirm`: the provider's authenticated API reports the key when it can (EC2's console
+ *   output, which can lag boot); that report is trusted for a first connect when the machine
+ *   presents exactly it, and otherwise the person confirms the fingerprint once. Direct only.
  * - `provider-tunnel`: the provider's own tunnel authenticates the machine, whose key may change
  *   when it is rebuilt or moved.
  */
-export type CloudSshTrust = "pinned-from-api" | "confirm-on-first-connect" | "provider-tunnel";
+export type CloudSshTrust =
+  "pinned-from-api" | "confirm-on-first-connect" | "api-or-confirm" | "provider-tunnel";
 
 /**
  * How the desktop reaches the machine's sshd: straight to an address, or
@@ -219,11 +223,12 @@ export interface CloudProviderInfo {
 
 /**
  * What an account bills: the person's own wallet, an organization they belong
- * to, the one workspace a provider binds each key to, or a cloud project
- * (Google Cloud's unit of billing and access).
+ * to, the one workspace a provider binds each key to, a cloud project (Google
+ * Cloud's unit of billing and access), or the provider's account itself (an
+ * AWS account), with no wallet to choose.
  */
 export interface CloudBillingScope {
-  kind: "personal" | "organization" | "workspace" | "project";
+  kind: "personal" | "organization" | "workspace" | "project" | "account";
   /** The provider's id for it: what every request names. */
   id: string;
   name: string;

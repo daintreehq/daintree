@@ -121,6 +121,8 @@ const CAPACITY_CODES = new Set([
   "InsufficientHostCapacity",
   "InstanceLimitExceeded",
   "VcpuLimitExceeded",
+  // An instance type the region or zone doesn't offer.
+  "Unsupported",
 ]);
 const CONFLICT_CODES = new Set([
   "IncorrectInstanceState",
@@ -483,7 +485,7 @@ export class AwsClient {
     return groupId;
   }
 
-  /** Lets SSH in from everywhere; a rule that's already there counts as done. */
+  /** Lets SSH in from every IPv4 address; a rule that's already there counts as done. */
   async allowSshFromAnywhere(ctx: AwsRequestContext, groupId: string): Promise<void> {
     try {
       await this.call(
@@ -497,8 +499,6 @@ export class AwsClient {
           ["IpPermissions.1.ToPort", "22"],
           ["IpPermissions.1.IpRanges.1.CidrIp", "0.0.0.0/0"],
           ["IpPermissions.1.IpRanges.1.Description", "SSH"],
-          ["IpPermissions.1.Ipv6Ranges.1.CidrIpv6", "::/0"],
-          ["IpPermissions.1.Ipv6Ranges.1.Description", "SSH"],
         ],
         { retry: true }
       );

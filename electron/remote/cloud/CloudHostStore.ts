@@ -223,7 +223,8 @@ function readScope(raw: unknown): CloudBillingScope | null {
     (value.kind !== "personal" &&
       value.kind !== "organization" &&
       value.kind !== "workspace" &&
-      value.kind !== "project")
+      value.kind !== "project" &&
+      value.kind !== "account")
   ) {
     return null;
   }

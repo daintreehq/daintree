@@ -62,6 +62,8 @@ export function sshDeclarationProblem(
     return null;
   }
   if (transport !== "provider-command") return `Unknown SSH transport ${JSON.stringify(transport)}`;
+  // Its key check scans the machine's own address, which a tunnel hides.
+  if (sshTrust === "api-or-confirm") return "Trusting the API's key or a confirmation needs a direct transport";
   if (!tunnel) return "A provider-command transport needs a tunnel";
   return tunnelProblem(tunnel);
 }
