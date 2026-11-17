@@ -494,6 +494,7 @@ async function listPipelineJobs(
 ): Promise<GitLabJob[]> {
   const jobs: GitLabJob[] = [];
   const seenPages = new Set<string>();
+  const seenIds = new Set<number>();
   let page = "1";
   for (let i = 0; i < MAX_CHECK_PAGES; i++) {
     seenPages.add(page);
@@ -503,7 +504,17 @@ async function listPipelineJobs(
       query: { ...query, per_page: CHECKS_PAGE_SIZE, page },
       ...(fresh ? { fresh: true } : {}),
     });
-    jobs.push(...result.items);
+    for (const job of result.items) {
+      const id = job && typeof job === "object" ? job.id : undefined;
+      // Offset pages over a list that changed between reads: a retry adds an
+      // attempt at the top, so an entry read already comes round again while
+      // the job it pushed down is never read at all.
+      if (typeof id === "number") {
+        if (seenIds.has(id)) throw incomplete("the pipeline changed mid-read");
+        seenIds.add(id);
+      }
+      jobs.push(job);
+    }
     let next = result.nextCursor;
     // A full page with no next page may be a proxy that dropped GitLab's
     // pagination headers rather than the last page; the next page settles it.
@@ -521,9 +532,9 @@ async function listPipelineJobs(
 /**
  * GitLab names every job in a pipeline uniquely, so two entries sharing a name
  * are attempts of one job: a retried trigger job (the bridges list documents no
- * `include_retried`), or a job a retry shifted across a page boundary mid-read.
- * The newer attempt replaces the older in place. Entries without ids to compare
- * are all kept, since dropping one would hide a check.
+ * `include_retried`), or a job retried between the job and status reads. The
+ * newer attempt replaces the older in place. Entries without ids to compare are
+ * all kept, since dropping one would hide a check.
  */
 function latestAttempts(jobs: readonly GitLabJob[]): GitLabJob[] {
   const out: GitLabJob[] = [];
@@ -547,9 +558,8 @@ function latestAttempts(jobs: readonly GitLabJob[]): GitLabJob[] {
 }
 
 /**
- * Per-job CI detail for one merge request: every job and trigger job in its
- * head pipeline, the latest attempt of each (GitLab leaves retried attempts out
- * of these lists by default).
+ * Per-job CI detail for one merge request: every job, trigger job and external
+ * commit status in its head pipeline, the latest attempt of each.
  *
  * `null` only when the merge request doesn't exist, and `{ checks: [] }` only
  * when GitLab says it has no pipeline. Anything else that stops a complete read
@@ -599,15 +609,44 @@ export async function getChecksImpl(
     pipeline.project_id > 0
       ? String(pipeline.project_id)
       : encodeProjectId(repo);
+  const sha = pipeline.sha;
+  if (typeof sha !== "string" || !sha) {
+    throw incomplete("GitLab reported a pipeline with no commit");
+  }
   const base = `/projects/${projectId}/pipelines/${pipelineId}`;
 
-  const [jobs, bridges] = await Promise.all([
+  const [jobs, bridges, statuses] = await Promise.all([
     listPipelineJobs(repo.host, `${base}/jobs`, { include_retried: false }, fresh, incomplete),
     listPipelineJobs(repo.host, `${base}/bridges`, {}, fresh, incomplete),
+    // An external CI (Jenkins posting commit statuses) lands in the pipeline as
+    // statuses neither job list returns. This list holds every kind, so only
+    // the ones the job lists didn't already give are kept.
+    listPipelineJobs(
+      repo.host,
+      `/projects/${projectId}/repository/commits/${encodeURIComponent(sha)}/statuses`,
+      {
+        pipeline_id: pipelineId,
+        ...(typeof pipeline.ref === "string" && pipeline.ref ? { ref: pipeline.ref } : {}),
+      },
+      fresh,
+      incomplete
+    ),
   ]);
 
+  const listed = new Set<number>();
+  for (const job of [...jobs, ...bridges]) {
+    if (job && typeof job === "object" && typeof job.id === "number") listed.add(job.id);
+  }
+  const external = statuses.filter((status) => {
+    if (!status || typeof status !== "object") return true;
+    if (typeof status.id === "number" && listed.has(status.id)) return false;
+    // GitLab before 17.9 ignores `pipeline_id` and answers for every pipeline
+    // on the commit.
+    return status.pipeline_id === undefined || status.pipeline_id === pipelineId;
+  });
+
   const checks: CheckRun[] = [];
-  for (const job of latestAttempts([...jobs, ...bridges])) {
+  for (const job of latestAttempts([...jobs, ...bridges, ...external])) {
     const check = gitlabJobToCheckRun(job);
     if (!check) throw incomplete("GitLab returned a job with no name");
     checks.push(check);

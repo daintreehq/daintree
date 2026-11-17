@@ -63,6 +63,7 @@ const fakeImpl = vi.hoisted(() => ({
 }));
 
 const resolveForCwdMock = vi.hoisted(() => vi.fn());
+const registryImplMock = vi.hoisted(() => vi.fn((_namespaceId: string): unknown => fakeImpl));
 const activateImplMock = vi.hoisted(() =>
   vi.fn(async (_namespaceId: string): Promise<unknown> => fakeImpl)
 );
@@ -147,7 +148,7 @@ vi.mock("../../../store.js", () => ({
 }));
 
 vi.mock("../../../services/forgeProviderRegistry.js", () => ({
-  getForgeProviderImpl: () => fakeImpl,
+  getForgeProviderImpl: (namespaceId: string) => registryImplMock(namespaceId),
   getRegisteredForgeProviders: () => registeredProvidersMock,
 }));
 
@@ -343,15 +344,23 @@ describe("forge handlers — rate limiting", () => {
       getInvokeHandler(CHANNELS.FORGE_GET_PULL_REQUEST_TERM)({}, payload);
     const withTerm = (term: unknown) => Object.assign(fakeImpl, { pullRequestTerm: term });
 
-    it("answers a registered provider's own word, activating it first", async () => {
-      withTerm("merge-request");
-      try {
-        await expect(ask({ providerId: "fake-plugin.fake" })).resolves.toBe("merge-request");
-        expect(activateImplMock).toHaveBeenCalledWith("fake-plugin.fake");
-        expect(resolveForCwdMock).not.toHaveBeenCalled();
-      } finally {
-        withTerm(undefined);
-      }
+    it("answers a registered provider's own word, read only once it is activated", async () => {
+      // A lazy plugin binds its impl during activation, so a read ahead of it
+      // finds nothing and would answer the default.
+      let activated = false;
+      registryImplMock.mockImplementationOnce(() =>
+        activated ? { ...fakeImpl, pullRequestTerm: "merge-request" } : undefined
+      );
+      activateImplMock.mockImplementationOnce(async () => {
+        await Promise.resolve();
+        activated = true;
+        return fakeImpl;
+      });
+
+      await expect(ask({ providerId: "fake-plugin.fake" })).resolves.toBe("merge-request");
+      expect(activateImplMock).toHaveBeenCalledWith("fake-plugin.fake");
+      expect(registryImplMock).toHaveBeenCalledWith("fake-plugin.fake");
+      expect(resolveForCwdMock).not.toHaveBeenCalled();
     });
 
     it.each([undefined, "change-request", 7])(
@@ -1044,6 +1053,7 @@ describe("forge handlers — rate limiting", () => {
 
         await expect(invoke(handler)).rejects.toThrow("Rate limit exceeded");
         expect(resolveForCwdMock).not.toHaveBeenCalled();
+        expect(activateImplMock).not.toHaveBeenCalled();
       }
     );
 

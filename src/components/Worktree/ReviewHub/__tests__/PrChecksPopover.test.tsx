@@ -930,7 +930,12 @@ describe("PrChecksPopover", () => {
 
   describe("named the way GitLab names a merge request (#17216)", () => {
     const MR_URL = "https://gitlab.com/group/project/-/merge_requests/42";
-    const renderMR = () => renderPopover({ prUrl: MR_URL, prTerm: "merge-request" });
+    const renderMR = () =>
+      renderPopover({
+        prUrl: MR_URL,
+        prTerm: "merge-request",
+        triggerDescription: "Merge request !42 open — CI failing",
+      });
     // The popover's one polite region; a banner inside it is a status too.
     const statusRegion = () =>
       document.querySelector('[role="status"][aria-live="polite"]')?.textContent ?? "";
@@ -945,15 +950,21 @@ describe("PrChecksPopover", () => {
       renderMR();
 
       await openAndSettle();
-      expect(screen.getByTestId("pr-checks-popover").getAttribute("aria-label")).toBe(
-        "CI checks for merge request !42"
-      );
+      const popover = screen.getByTestId("pr-checks-popover");
+      expect(popover.getAttribute("aria-label")).toBe("CI checks for merge request !42");
+      await waitFor(() => expect(popover.textContent).toContain("rspec"));
+      expandSettled();
+      expect(popover.textContent).toContain("lint");
       fireEvent.click(await screen.findByTestId("pr-checks-send"));
 
       const [{ text, sourceLabel }] = openSendToAgentMock.mock.calls[0]!;
       expect(sourceLabel).toBe("MR !42");
       expect(text).toContain("merge request 42");
       expect(text).not.toMatch(/pull request/i);
+      const payload = JSON.parse(text.slice(text.indexOf("{\n"), text.lastIndexOf("}") + 1)) as {
+        checks: Array<{ name: string }>;
+      };
+      expect(payload.checks.map((entry) => entry.name)).toEqual(["rspec"]);
     });
 
     it("says the checks couldn't be read and links out to the merge request", async () => {

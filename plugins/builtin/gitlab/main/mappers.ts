@@ -212,7 +212,7 @@ function jobOutcome(job: GitLabJob): Pick<CheckRun, "status" | "conclusion"> {
 }
 
 /**
- * One job or trigger job from a pipeline's job lists → {@link CheckRun}.
+ * One job, trigger job or external commit status from a pipeline → {@link CheckRun}.
  * `null` for an entry with no name, which the caller treats as an unreadable
  * check rather than one to leave out.
  */
@@ -220,17 +220,17 @@ export function gitlabJobToCheckRun(job: GitLabJob): CheckRun | null {
   if (!job || typeof job !== "object") return null;
   if (typeof job.name !== "string" || !job.name.trim()) return null;
   // A trigger job's own page has no log; the pipeline it started is where its
-  // result lives.
-  const downstreamUrl = job.downstream_pipeline?.web_url;
-  const detailsUrl =
-    typeof downstreamUrl === "string" && downstreamUrl ? downstreamUrl : job.web_url;
+  // result lives. An external status links wherever its CI put the result.
+  const detailsUrl = [job.downstream_pipeline?.web_url, job.web_url, job.target_url].find(
+    (url): url is string => typeof url === "string" && url.length > 0
+  );
   return {
     name: job.name,
     ...jobOutcome(job),
     // An allowed failure never fails the pipeline, so it can't hold up a merge.
     // GitLab says nothing either way about whether any other job does.
     ...(job.allow_failure === true ? { required: false } : {}),
-    ...(typeof detailsUrl === "string" && detailsUrl ? { detailsUrl } : {}),
+    ...(detailsUrl ? { detailsUrl } : {}),
     ...(typeof job.stage === "string" && job.stage.trim() ? { workflow: job.stage } : {}),
     rawData: job,
   };

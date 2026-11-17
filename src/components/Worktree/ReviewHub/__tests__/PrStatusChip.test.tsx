@@ -2,13 +2,16 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, cleanup, fireEvent } from "@testing-library/react";
+import { render, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { primeRadix } from "@/components/ui/radix-loader";
 import type { CIStatusState, NormalizedPRState } from "@shared/types/forge";
 import type { ForgeNewPRLink } from "@shared/types/ipc/forge";
 
+const getChecksMock = vi.hoisted(() => vi.fn());
+
 vi.mock("@/clients/forgeClient", () => ({
   forgeClient: {
-    getChecks: vi.fn(),
+    getChecks: getChecksMock,
     getPR: vi.fn(() => Promise.resolve(null)),
     getRepoMetadata: vi.fn(() => Promise.resolve(null)),
   },
@@ -16,7 +19,10 @@ vi.mock("@/clients/forgeClient", () => ({
 
 import { PrStatusChip } from "../PrStatusChip";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 function triggerDescription(trigger: HTMLElement): string {
   const id = trigger.getAttribute("aria-describedby");
@@ -97,10 +103,25 @@ describe("PrStatusChip", () => {
     expect(triggerDescription(trigger)).toMatch(/^Pull request #42 open — CI passing — /);
   });
 
-  it.each<NormalizedPRState>(["open", "merged", "closed"])(
+  it.each<[NormalizedPRState, string]>([
+    ["open", "open"],
+    ["merged", "merged"],
+    ["closed", "closed"],
+    ["declined", "closed"],
+  ])(
     "names a GitLab merge request the way GitLab does when it is %s",
-    (prState) => {
-      const { getByRole, getByTestId } = render(
+    async (prState, stateWord) => {
+      await primeRadix();
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        }
+      );
+      getChecksMock.mockResolvedValue({ checks: [] });
+      const { getByRole, findByTestId } = render(
         <PrStatusChip
           hasRemote
           worktreePath="/tmp/wt"
@@ -122,12 +143,19 @@ describe("PrStatusChip", () => {
           }}
         />
       );
-      const trigger = getByTestId("pr-checks-trigger");
 
-      expect(trigger.textContent).toMatch(/^Merge request!42/);
-      expect(trigger.textContent).not.toMatch(/#42|Pull request/);
-      expect(triggerDescription(trigger)).toMatch(new RegExp(`^Merge request !42 ${prState} — CI`));
+      // jsdom joins the chip's spans without the spaces a browser lays out.
+      const trigger = getByRole("button", {
+        name: new RegExp(`^Merge request\\s*!42\\s*${stateWord}\\s*failing\\s*show CI checks$`),
+      });
+      expect(triggerDescription(trigger)).toBe(`Merge request !42 ${stateWord} — CI failing`);
       getByRole("button", { name: "View merge request !42" });
+
+      fireEvent.click(trigger);
+      await waitFor(() => expect(getChecksMock).toHaveBeenCalled());
+      expect((await findByTestId("pr-checks-popover")).getAttribute("aria-label")).toBe(
+        "CI checks for merge request !42"
+      );
     }
   );
 

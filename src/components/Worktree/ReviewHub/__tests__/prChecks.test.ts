@@ -409,6 +409,9 @@ describe("composePrChecksAgentText", () => {
     expect(text).toContain("on merge request 42.");
     expect(text).toContain('Merge request: "https://gitlab.com/o/r/-/merge_requests/42"');
     expect(text).not.toMatch(/pull request|\bPR\b|gh run view|!/);
+    expect(text).toContain(
+      "fetch them yourself from each check's detailsUrl, and check the results still match the MR's current head."
+    );
     expect(parsePayload(text).checks.map((entry) => entry.name)).toEqual(["rspec"]);
   });
 
