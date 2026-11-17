@@ -655,7 +655,51 @@ describe("useRecipeRunner — retry after the recipe changes (#17446)", () => {
     expect(hook.result.current.spawnFailureSummary).toBeNull();
   });
 
-  it("keeps the retry target when a partial retry fails again", async () => {
+  it("retries what is still failing against the recipe that first ran", async () => {
+    recipes.push(makeRecipe({ id: "r1", name: "Pipeline", terminals: [install, lint, deploy] }));
+    const ran = { id: "r1", terminalsDigest: recipeApprovalDigest([install, lint, deploy]) };
+    runRecipeWithResultsMock.mockResolvedValueOnce({
+      spawned: [{ index: 0, terminalId: "t-0" }],
+      failed: [
+        { index: 1, error: "spawn ENOENT" },
+        { index: 2, error: "spawn ENOENT" },
+      ],
+    });
+    const hook = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+    act(() => {
+      hook.result.current.handleRun("r1");
+    });
+    await flush();
+
+    runRecipeWithResultsMock.mockResolvedValueOnce({
+      spawned: [{ index: 1, terminalId: "t-1" }],
+      failed: [{ index: 2, error: "spawn ENOENT" }],
+    });
+    act(() => {
+      hook.result.current.handleRetryFailed();
+    });
+    await flush();
+    expect(runRecipeWithResultsMock.mock.calls[1]?.[4]).toEqual({
+      spawnedBy: "recipe",
+      terminalIndices: [1, 2],
+      expectedRecipe: ran,
+    });
+
+    runRecipeWithResultsMock.mockResolvedValueOnce({ spawned: [], failed: [] });
+    act(() => {
+      hook.result.current.handleRetryFailed();
+    });
+    await flush();
+    expect(runRecipeWithResultsMock.mock.calls[2]?.[4]).toEqual({
+      spawnedBy: "recipe",
+      terminalIndices: [2],
+      expectedRecipe: ran,
+    });
+  });
+
+  it("withdraws a partial retry's Retry once the recipe changes", async () => {
     const hook = await failSecondStep();
     runRecipeWithResultsMock.mockResolvedValueOnce({
       spawned: [],
@@ -675,6 +719,97 @@ describe("useRecipeRunner — retry after the recipe changes (#17446)", () => {
     });
     await flush();
     expect(runRecipeWithResultsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a shadowed row through its own id, pinned to the team recipe that ran", async () => {
+    recipes.push(
+      makeRecipe({
+        id: "local",
+        name: "Pipeline",
+        shadowedBy: "Pipeline",
+        terminals: [install, lint, deploy],
+      }),
+      makeRecipe({
+        id: "inrepo-pipeline",
+        name: "Pipeline",
+        scope: "inrepo",
+        terminals: [install, lint, deploy],
+      })
+    );
+    runRecipeWithResultsMock.mockResolvedValue({
+      spawned: [{ index: 0, terminalId: "t-0" }],
+      failed: [{ index: 1, error: "spawn ENOENT" }],
+    });
+    const hook = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+    act(() => {
+      hook.result.current.handleRun("local");
+    });
+    await flush();
+
+    act(() => {
+      hook.result.current.handleRetryFailed();
+    });
+    await flush();
+    expect(runRecipeWithResultsMock).toHaveBeenLastCalledWith(
+      "local",
+      "/tmp",
+      "wt-1",
+      expect.anything(),
+      {
+        spawnedBy: "recipe",
+        terminalIndices: [1],
+        expectedRecipe: {
+          id: "inrepo-pipeline",
+          terminalsDigest: recipeApprovalDigest([install, lint, deploy]),
+        },
+      }
+    );
+
+    // Renamed out from under the team recipe, the row launches itself again:
+    // the same steps, but not the recipe that ran.
+    recipes[0] = { ...recipes[0]!, name: "My pipeline", shadowedBy: undefined };
+    hook.rerender();
+    expect(hook.result.current.canRetryFailed).toBe(false);
+  });
+
+  it("pins the steps that ran even when the recipe changes before the run settles", async () => {
+    recipes.push(makeRecipe({ id: "r1", name: "Pipeline", terminals: [install, lint, deploy] }));
+    let settle: (results: RecipeSpawnResults) => void = () => {};
+    runRecipeWithResultsMock.mockReturnValueOnce(
+      new Promise<RecipeSpawnResults>((resolve) => {
+        settle = resolve;
+      })
+    );
+    const hook = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+    act(() => {
+      hook.result.current.handleRun("r1");
+    });
+
+    recipes[0] = { ...recipes[0]!, terminals: [install, deploy, lint] };
+    hook.rerender();
+    await act(async () => {
+      settle({
+        spawned: [
+          { index: 0, terminalId: "t-0" },
+          { index: 2, terminalId: "t-2" },
+        ],
+        failed: [{ index: 1, error: "spawn ENOENT" }],
+      });
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(hook.result.current.spawnFailureSummary?.failures[0]?.displayName).toBe("Lint");
+    expect(hook.result.current.canRetryFailed).toBe(false);
+    act(() => {
+      hook.result.current.handleRetryFailed();
+    });
+    await flush();
+    expect(runRecipeWithResultsMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1043,6 +1178,7 @@ describe("useRecipeRunner — missing variables hold the run (#15022)", () => {
         expectedRecipe: { id: "r1", terminalsDigest: recipeApprovalDigest(recipes[0]!.terminals) },
       }
     );
+    await flush();
   });
 });
 

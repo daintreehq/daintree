@@ -70,6 +70,7 @@ vi.stubGlobal(
 );
 
 import { useRecipeStore } from "@/store/recipeStore";
+import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { RecipeRunner } from "../RecipeRunner";
 
 const install: RecipeTerminal = { type: "terminal", title: "Install", command: "npm ci", env: {} };
@@ -136,8 +137,9 @@ describe("RecipeRunner retry banner after the recipe changes (#17446)", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("brings Retry back when the steps are restored", async () => {
+  it("brings Retry back when the steps are restored, and it retries the step that failed", async () => {
     await failLint();
+    const ran = { id: "r1", terminalsDigest: recipeApprovalDigest([install, lint, deploy]) };
 
     act(() => {
       useRecipeStore.setState({ recipes: [pipeline([install, deploy])] });
@@ -147,7 +149,32 @@ describe("RecipeRunner retry banner after the recipe changes (#17446)", () => {
     act(() => {
       useRecipeStore.setState({ recipes: [pipeline([install, lint, deploy])] });
     });
-    expect(screen.getByRole("button", { name: "Retry failed terminals" })).toBeTruthy();
     expect(screen.getByTestId("recipe-spawn-failure-banner").textContent).toContain("spawn ENOENT");
+
+    run.mockResolvedValueOnce({ spawned: [{ index: 1, terminalId: "t-1" }], failed: [] });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry failed terminals" }));
+      await Promise.resolve();
+    });
+    expect(run).toHaveBeenLastCalledWith("r1", "/repo", "wt-1", expect.anything(), {
+      spawnedBy: "recipe",
+      terminalIndices: [1],
+      expectedRecipe: ran,
+    });
+    expect(screen.queryByTestId("recipe-spawn-failure-banner")).toBeNull();
+  });
+
+  it("keeps the failure report when the last recipe is deleted", async () => {
+    await failLint();
+
+    act(() => {
+      useRecipeStore.setState({ recipes: [] });
+    });
+
+    expect(screen.getByTestId("recipe-runner-empty")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry failed terminals" })).toBeNull();
+    const banner = screen.getByTestId("recipe-spawn-failure-banner");
+    expect(banner.textContent).toContain("Lint");
+    expect(banner.textContent).toContain("changed or was removed");
   });
 });

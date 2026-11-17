@@ -112,16 +112,67 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
     />
   );
 
+  // Mounted at the same place in both branches, so deleting the last recipe
+  // keeps the failure report, and the banner keeps focus when Retry leaves.
+  const banners = (
+    <>
+      {runner.spawnFailureSummary && (
+        <div className="mb-3" data-testid="recipe-spawn-failure-banner">
+          <InlineStatusBanner
+            icon={XCircle}
+            title={formatFailureTitle(runner.spawnFailureSummary)}
+            description={
+              runner.canRetryFailed
+                ? runner.spawnFailureSummary.failures[0]?.error
+                : STALE_RETRY_DESCRIPTION
+            }
+            severity="error"
+            action={
+              runner.canRetryFailed
+                ? {
+                    id: "retry-failed",
+                    label: "Retry failed",
+                    icon: RefreshCw,
+                    variant: "primary",
+                    onClick: runner.handleRetryFailed,
+                    title: "Retry the terminals that failed to start",
+                    ariaLabel: "Retry failed terminals",
+                    loading: runner.isRetryingFailed,
+                  }
+                : undefined
+            }
+            onClose={runner.dismissSpawnFailures}
+          />
+        </div>
+      )}
+      {runner.unresolvedVars.length > 0 && (
+        <div className="mb-3" data-testid="recipe-unresolved-vars-banner">
+          <InlineStatusBanner
+            title={formatUnresolvedVarsTitle(runner.unresolvedVars)}
+            description="Plugin variables only get values when their plugin runs the recipe, so these launched empty."
+            severity="warning"
+            role="status"
+            actions={[]}
+            onClose={runner.dismissUnresolvedVars}
+          />
+        </div>
+      )}
+    </>
+  );
+
   if (runner.recipes.length === 0) {
     return (
       <>
-        <RecipeRunnerEmpty
-          onCreate={runner.handleCreate}
-          createButtonRef={createButtonRef}
-          suggestions={runner.suggestions}
-          onRunSuggestion={runner.handleRunSuggestion}
-          disabled={!defaultCwd}
-        />
+        <div className="w-full">
+          {banners}
+          <RecipeRunnerEmpty
+            onCreate={runner.handleCreate}
+            createButtonRef={createButtonRef}
+            suggestions={runner.suggestions}
+            onRunSuggestion={runner.handleRunSuggestion}
+            disabled={!defaultCwd}
+          />
+        </div>
         {deleteDialog}
       </>
     );
@@ -136,47 +187,7 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
   return (
     <>
       <div className="w-full">
-        {runner.spawnFailureSummary && (
-          <div className="mb-3" data-testid="recipe-spawn-failure-banner">
-            <InlineStatusBanner
-              icon={XCircle}
-              title={formatFailureTitle(runner.spawnFailureSummary)}
-              description={
-                runner.canRetryFailed
-                  ? runner.spawnFailureSummary.failures[0]?.error
-                  : STALE_RETRY_DESCRIPTION
-              }
-              severity="error"
-              action={
-                runner.canRetryFailed
-                  ? {
-                      id: "retry-failed",
-                      label: "Retry failed",
-                      icon: RefreshCw,
-                      variant: "primary",
-                      onClick: runner.handleRetryFailed,
-                      title: "Retry the terminals that failed to start",
-                      ariaLabel: "Retry failed terminals",
-                      loading: runner.isRetryingFailed,
-                    }
-                  : undefined
-              }
-              onClose={runner.dismissSpawnFailures}
-            />
-          </div>
-        )}
-        {runner.unresolvedVars.length > 0 && (
-          <div className="mb-3" data-testid="recipe-unresolved-vars-banner">
-            <InlineStatusBanner
-              title={formatUnresolvedVarsTitle(runner.unresolvedVars)}
-              description="Plugin variables only get values when their plugin runs the recipe, so these launched empty."
-              severity="warning"
-              role="status"
-              actions={[]}
-              onClose={runner.dismissUnresolvedVars}
-            />
-          </div>
-        )}
+        {banners}
         {runner.showSearch ? (
           <RecipeRunnerList
             sections={runner.sections}
