@@ -704,6 +704,7 @@ describe("executeFleetBroadcast — context tokens (#14953)", () => {
       ["/wt/a", "staged"],
       ["/wt/a", "head"],
     ]);
+    expect([...sentBy().keys()].sort()).toEqual(["a", "b"]);
     for (const payload of sentBy().values()) {
       expect(payload.split("[Error fetching diff: rate limited]")).toHaveLength(3);
       expect(payload).toContain("diff head in /wt/a");
@@ -711,10 +712,15 @@ describe("executeFleetBroadcast — context tokens (#14953)", () => {
   });
 
   it("reads the diff again for the next broadcast (#17480)", async () => {
+    getWorkingDiff.mockResolvedValueOnce("+ first").mockResolvedValueOnce("+ second");
     seedPanels([makeAgent("a", { cwd: "/wt/a" })]);
     await executeFleetBroadcast("Review @diff", ["a"]);
     await executeFleetBroadcast("Review @diff", ["a"]);
     expect(getWorkingDiff).toHaveBeenCalledTimes(2);
+    const sent = submitMock.mock.calls.map(([, payload]) => payload as string);
+    expect(sent).toHaveLength(2);
+    expect(sent[0]).toContain("+ first");
+    expect(sent[1]).toContain("+ second");
   });
 
   it("takes @terminal and @selection from each agent's own screen", async () => {

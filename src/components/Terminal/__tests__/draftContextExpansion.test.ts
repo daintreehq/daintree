@@ -156,5 +156,8 @@ describe("shareWorkingDiffReads (#17480)", () => {
     ]);
     expect(out.split("diff unstaged in /wt/a")).toHaveLength(3);
     expect(out).toContain("diff staged in /wt/a");
+
+    await expandDraftContext("@diff", { terminalId: "t1", cwd: "/wt/a" });
+    expect(getWorkingDiff).toHaveBeenCalledTimes(3);
   });
 });
