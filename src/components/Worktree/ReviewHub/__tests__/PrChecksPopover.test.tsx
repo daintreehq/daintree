@@ -109,6 +109,12 @@ function deferred<T>() {
 }
 
 describe("PrChecksPopover", () => {
+  it("holds a 24px hit box for the trigger without growing the header", () => {
+    renderPopover();
+    expect(trigger().className).toContain("min-h-6");
+    expect(trigger().className).toContain("-my-0.5");
+  });
+
   it("reads nothing until the disclosure is opened", async () => {
     renderPopover();
     fireEvent.pointerEnter(trigger());

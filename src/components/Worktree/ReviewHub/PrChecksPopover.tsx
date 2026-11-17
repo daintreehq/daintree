@@ -261,7 +261,9 @@ export function PrChecksPopover({
           // otherwise close the whole hub out from under the dialog.
           {...{ [PR_CHECKS_OPEN_ATTR]: open || mergeRequest !== null ? "true" : undefined }}
           className={cn(
-            "group/pr-checks inline-flex items-center rounded-sm cursor-pointer",
+            // min-h-6 is the 24px target (WCAG 2.5.8); -my-0.5 hands the height back
+            // so the header does not grow.
+            "group/pr-checks inline-flex items-center min-h-6 -my-0.5 rounded-sm cursor-pointer",
             FOCUS_RING
           )}
         >

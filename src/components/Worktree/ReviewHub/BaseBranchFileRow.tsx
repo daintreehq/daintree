@@ -6,6 +6,7 @@ import type { CrossWorktreeFile } from "@shared/types/ipc/git";
 import type { FileDecoration } from "@shared/types/forge";
 import { cn } from "@/lib/utils";
 import { PathTail } from "@/components/ui/PathTail";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { getBaseBranchStatusConfig } from "./reviewHubUtils";
 
@@ -102,23 +103,40 @@ export function BaseBranchFileRow({
             <DiffStat insertions={insertions} deletions={deletions} />
           </div>
         )}
-        {hasBadge && (
-          <button
-            type="button"
-            onClick={onBadgeClick}
-            aria-label={badgeLabel}
-            disabled={!onBadgeClick}
-            className={cn(
-              "shrink-0 inline-flex ml-2 rounded-full",
-              onBadgeClick ? "cursor-pointer" : "cursor-default",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
-            )}
-          >
-            <Badge size="xs" tone="warning" shape="pill" className="tabular-nums">
-              {unresolvedDecoration!.badge}
+        {hasBadge &&
+          (onBadgeClick ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                {/* min-h-6 min-w-6 is the 24px target (WCAG 2.5.8); -my-1 hands the
+                    extra height back so the row does not grow. */}
+                <button
+                  type="button"
+                  onClick={onBadgeClick}
+                  aria-label={badgeLabel}
+                  className={cn(
+                    "shrink-0 inline-flex items-center justify-center ml-1 -my-1 min-h-6 min-w-6 rounded-full cursor-pointer",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+                  )}
+                >
+                  <Badge size="xs" tone="warning" shape="pill" className="tabular-nums">
+                    {unresolvedDecoration!.badge}
+                  </Badge>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{badgeLabel}</TooltipContent>
+            </Tooltip>
+          ) : (
+            <Badge
+              size="xs"
+              tone="warning"
+              shape="pill"
+              className="ml-2 tabular-nums"
+              data-testid="base-branch-file-row-badge"
+            >
+              <span aria-hidden="true">{unresolvedDecoration!.badge}</span>
+              <span className="sr-only">{badgeLabel}</span>
             </Badge>
-          </button>
-        )}
+          ))}
       </div>
     </TruncatedTooltip>
   );

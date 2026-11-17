@@ -39,7 +39,7 @@ interface ReviewMarkLineProps {
 const NOTICE_FILES = 3;
 
 const LINE_ACTION_CLASS =
-  "shrink-0 inline-flex items-center gap-1 text-text-secondary hover:text-text-primary";
+  "shrink-0 inline-flex items-center justify-center gap-1 min-h-6 min-w-6 -my-1 text-text-secondary hover:text-text-primary";
 
 /**
  * The quiet line under Review Hub's header once a worktree has a review mark
