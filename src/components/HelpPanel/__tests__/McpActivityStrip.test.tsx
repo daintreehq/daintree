@@ -46,6 +46,10 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 import { McpActivityStrip } from "../McpActivityStrip";
+import {
+  OverlayFocusRestoreContext,
+  type OverlayFocusRestore,
+} from "@/components/ui/overlay-focus-restore";
 import { groupCallsByTurn } from "../RecentCallsPopover";
 import type { McpToolActivityState } from "@/controllers/HelpSessionController";
 import { __resetHelpSessionControllersForTests } from "@/controllers/helpSessionControllerRegistry";
@@ -463,6 +467,21 @@ describe("McpActivityStrip", () => {
       { source: "user" }
     );
     expect(screen.queryByTestId("popover-content")).toBeNull();
+  });
+
+  it("hands focus to Settings when the audit log link closes the popover", async () => {
+    const expectHandoff = vi.fn();
+    render(
+      <OverlayFocusRestoreContext.Provider
+        value={{ expectHandoff } as unknown as OverlayFocusRestore}
+      >
+        <McpActivityStrip sessionId="session-a" activity={null} />
+      </OverlayFocusRestoreContext.Provider>
+    );
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /open full audit log/i }));
+
+    expect(expectHandoff).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the rows it already read when a refresh fails", async () => {

@@ -126,6 +126,25 @@ export function useQuestionLines(
 
 const NO_LINES: ReadonlyMap<string, string> = new Map();
 
+// A component of its own because only something under the Popover root can reach its focus policy.
+function ReviewAnswersButton({ onReview }: { onReview: () => void }) {
+  const focusRestore = useOverlayFocusRestore();
+  return (
+    <Button
+      variant="outline"
+      size="xs"
+      onClick={() => {
+        // The attention dialog takes focus; the popover mustn't take it back.
+        focusRestore?.expectHandoff();
+        onReview();
+      }}
+      data-testid="terminal-decisions-review"
+    >
+      Review answers
+    </Button>
+  );
+}
+
 function DecisionRow({
   item,
   line,
@@ -406,17 +425,12 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
               <div className="flex justify-end border-t border-divider px-3 py-2">
                 {/* The answers that need a person are acted on in the list, which
                 also holds those whose pane is gone. */}
-                <Button
-                  variant="outline"
-                  size="xs"
-                  onClick={() => {
+                <ReviewAnswersButton
+                  onReview={() => {
                     setOpen(false);
                     openAttention(terminalId);
                   }}
-                  data-testid="terminal-decisions-review"
-                >
-                  Review answers
-                </Button>
+                />
               </div>
             )}
           </PopoverContent>
