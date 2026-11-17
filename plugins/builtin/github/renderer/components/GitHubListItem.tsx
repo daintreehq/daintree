@@ -458,17 +458,17 @@ export function GitHubListItem({
             {/* At 450px most titles truncate. The elaborate tooltips used to
                 be on the trivia while the one line you actually need to read
                 had none. */}
-            <TruncatedTooltip content={item.title} side="bottom" focusable={false}>
+            {/* Keyed on the title: a refresh can swap in a longer one without resizing
+                the button, so the resize observer never re-reads it, and the
+                tooltip would keep a hover from before the clip. A remount does
+                both. The button never holds focus (see below). */}
+            <TruncatedTooltip key={item.title} content={item.title} side="bottom" focusable={false}>
               {/* The title is the resource's own name, so it goes where the
                   resource lives. The row around it is about running the work
                   locally; the text itself is the link out to the forge. */}
               <button
                 type="button"
                 tabIndex={-1}
-                // A refresh can swap in a longer title without resizing the
-                // button, so the resize observer never re-reads it; remounting
-                // re-measures. The button never holds focus (below).
-                key={item.title}
                 // Chromium focuses a native button on pointer press even at
                 // tabIndex -1. This grid keeps DOM focus in the search input
                 // and points `aria-activedescendant` at the row, so letting

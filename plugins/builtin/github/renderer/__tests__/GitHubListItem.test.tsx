@@ -141,23 +141,32 @@ describe("GitHubListItem", () => {
     expect(title.getAttribute("tabindex")).toBe("-1");
   });
 
-  it("reveals the title in a tooltip only while it is clipped", () => {
-    const widths = vi.spyOn(HTMLElement.prototype, "scrollWidth", "get");
-    const client = vi.spyOn(HTMLElement.prototype, "clientWidth", "get");
+  it("reveals the title in a tooltip only while it is clipped, re-reading it on a rename", () => {
+    // Width follows the text, against a fixed box: a refresh that swaps in a
+    // longer title clips it without any resize for an observer to report.
+    const scroll = vi
+      .spyOn(HTMLElement.prototype, "scrollWidth", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        return (this.textContent ?? "").length * 10;
+      });
+    const client = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(200);
     try {
-      widths.mockReturnValue(400);
-      client.mockReturnValue(200);
-      const { unmount } = render(
+      const { rerender } = render(
         <GitHubListItem item={baseIssue} type="issue" onCreateWorktree={vi.fn()} />
       );
-      expect(screen.getAllByText("Fix the thing").length).toBeGreaterThan(1);
-      unmount();
-
-      widths.mockReturnValue(200);
-      render(<GitHubListItem item={baseIssue} type="issue" onCreateWorktree={vi.fn()} />);
       expect(screen.getAllByText("Fix the thing")).toHaveLength(1);
+
+      const longTitle = "Fix the thing that clips once a refresh renames it";
+      rerender(
+        <GitHubListItem
+          item={{ ...baseIssue, title: longTitle }}
+          type="issue"
+          onCreateWorktree={vi.fn()}
+        />
+      );
+      expect(screen.getAllByText(longTitle).length).toBeGreaterThan(1);
     } finally {
-      widths.mockRestore();
+      scroll.mockRestore();
       client.mockRestore();
     }
   });
