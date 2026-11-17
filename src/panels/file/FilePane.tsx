@@ -33,6 +33,7 @@ import { diffFontStyle } from "@/components/Worktree/diffFontSize";
 import { useDiffContent } from "@/panels/diff/useDiffContent";
 import type { DiffSubject } from "@/panels/diff/diffContentCache";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { UnsavedChangesDot } from "@/components/ui/UnsavedChangesDot";
 import { Skeleton, SkeletonBone, SkeletonHint, SkeletonText } from "@/components/ui/Skeleton";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -679,13 +680,7 @@ export function FilePane({
   // draft is standing on a file that moved, which is the one fact the chrome
   // should carry — the editor's banner carries the rest.
   const dirtyIndicator = isDirty ? (
-    <span
-      role="img"
-      aria-label={hasConflict ? "Unsaved changes, file changed on disk" : "Unsaved changes"}
-      title={hasConflict ? "Unsaved changes — file changed on disk" : "Unsaved changes"}
-      data-testid="file-pane-dirty"
-      className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-text-secondary"
-    />
+    <UnsavedChangesDot conflict={hasConflict} data-testid="file-pane-dirty" />
   ) : undefined;
 
   const copyableContents = loadState === "loaded" ? content : null;

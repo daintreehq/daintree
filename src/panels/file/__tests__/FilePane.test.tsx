@@ -4568,7 +4568,7 @@ describe("FilePane edit mode (#12323)", () => {
       });
     });
     expect(screen.getByTestId("file-pane-dirty").getAttribute("aria-label")).toBe(
-      "Unsaved changes, file changed on disk"
+      "Unsaved changes — file changed on disk"
     );
   });
 
