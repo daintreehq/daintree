@@ -171,6 +171,12 @@ export interface CloudHostLifecycleDeps {
    * Daintree's own observations; passive polling never counts as use.
    */
   activity?(hostId: HostId): { connected: boolean; busy: boolean; shown: boolean } | null;
+  /**
+   * The host's machine was seen running again after a stop: it rebooted, so
+   * whatever was last found about starting Daintree there no longer stands.
+   * Called before the change reaches any view, ahead of the dials it prompts.
+   */
+  onMachineStarted?(hostId: HostId): void;
   now?: () => number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   /** Where a tunnel's command is on this device's PATH; null when it isn't there. */
@@ -1827,6 +1833,7 @@ export class CloudHostLifecycle {
     extra?: (binding: StoredCloudBinding) => StoredCloudBinding
   ): boolean {
     if (this.overtaken(bindingId, ticket)) return false;
+    let started = false;
     const written = this.deps.store.updateBinding(bindingId, (current) => {
       const before = current.observation;
       // Any stop, or a start seen from outside, may bring a new address or
@@ -1836,6 +1843,7 @@ export class CloudHostLifecycle {
         (before !== null && before.machine !== "running") ||
         (before?.stoppedAt ?? null) !== resource.stoppedAt;
       if (restarted) this.renewals.delete(bindingId);
+      started = restarted && resource.machine === "running";
       const next: StoredCloudBinding = {
         ...current,
         access: restarted ? null : current.access,
@@ -1846,6 +1854,7 @@ export class CloudHostLifecycle {
     // A binding forgotten while the request was out keeps no mark behind.
     if (!written) return false;
     this.observedTicket.set(bindingId, ticket);
+    if (started && written.hostId) this.deps.onMachineStarted?.(written.hostId);
     return true;
   }
 

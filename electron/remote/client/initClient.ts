@@ -1110,6 +1110,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       onChange: (listener) => registry.onChange(listener),
     },
     changed: () => cloud.cloudHosts.changed(),
+    // The dials a start prompts nudge the link, which leaves the hold a person's Retry would clear.
+    onMachineStarted: (hostId) => recheckStart(hostId),
     activity: (hostId) => {
       const state = manager.connectionState(hostId);
       // Only a summary that came on this link, and lately: one kept from before

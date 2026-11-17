@@ -188,6 +188,7 @@ async function setup(
     findCommand?: (command: string) => Promise<string | null>;
     lifetime?: CloudLifetimeModel;
     sshKey?: "at-create" | "after-create";
+    onMachineStarted?: (hostId: string) => void;
   } = {}
 ) {
   const state = { machine: resource(initial) };
@@ -280,6 +281,7 @@ async function setup(
       changed: () => {},
       sleep: async () => {},
       activity: options.activity,
+      onMachineStarted: options.onMachineStarted,
       now: options.now,
       findCommand: options.findCommand,
     });
@@ -1015,6 +1017,48 @@ describe("CloudHostLifecycle start, stop, import and removal", () => {
       vi.mocked(provider.stop).mock.invocationCallOrder[0]!
     );
     expect(lifecycle.statuses()[0]!.machine).toBe("stopped");
+  });
+
+  // What was last found about starting Daintree there went with the reboot (#17546).
+  it("says once that a machine it started came up, before the start answers", async () => {
+    let answered = false;
+    const answeredWhenTold: boolean[] = [];
+    const onMachineStarted = vi.fn(() => answeredWhenTold.push(answered));
+    const { lifecycle, store } = await setup({ machine: "stopped" }, { onMachineStarted });
+    await lifecycle.importMachine({
+      accountId: store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    await lifecycle.refresh("build");
+    expect(onMachineStarted).not.toHaveBeenCalled();
+    await lifecycle.startMachine("build").then(() => (answered = true));
+    expect(onMachineStarted).toHaveBeenCalledExactlyOnceWith("build");
+    expect(answeredWhenTold).toEqual([false]);
+    await lifecycle.refresh("build");
+    expect(onMachineStarted).toHaveBeenCalledOnce();
+  });
+
+  it("says a machine came up when a stop and start were only observed, and not for one that never stopped", async () => {
+    const onMachineStarted = vi.fn();
+    const { lifecycle, store, state } = await setup({}, { onMachineStarted });
+    await lifecycle.importMachine({
+      accountId: store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    await lifecycle.refresh("build");
+    expect(onMachineStarted).not.toHaveBeenCalled();
+    // Stopped and started again between two looks: only its stop time says so.
+    state.machine = resource({ machine: "running", stoppedAt: "2026-11-14T10:00:00Z" });
+    await lifecycle.refresh("build");
+    expect(onMachineStarted).toHaveBeenCalledExactlyOnceWith("build");
+    state.machine = resource({ machine: "stopped", stoppedAt: "2026-11-14T11:00:00Z" });
+    await lifecycle.refresh("build");
+    state.machine = resource({ machine: "running", stoppedAt: null });
+    await lifecycle.refresh("build");
+    await lifecycle.refresh("build");
+    expect(onMachineStarted).toHaveBeenCalledTimes(2);
   });
 
   it("drops a save failure it saw on the way once the stop completes", async () => {
