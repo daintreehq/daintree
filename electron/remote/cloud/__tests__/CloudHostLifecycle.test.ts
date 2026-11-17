@@ -819,8 +819,13 @@ describe("CloudHostLifecycle worktree marks", () => {
     });
 
   it("writes the mark with the create, before the host is added or the provider asked", async () => {
-    const { lifecycle, provider, store, state, account } = await setup();
+    const { lifecycle, provider, store, state, account, hosts } = await setup();
     const put = vi.spyOn(store, "putBinding");
+    const hostsAtWrite: number[] = [];
+    put.mockImplementation(function (this: CloudHostStore, binding) {
+      hostsAtWrite.push(hosts.length);
+      return CloudHostStore.prototype.putBinding.call(this, binding);
+    });
     let markedWhenSent: unknown = null;
     vi.mocked(provider.create).mockImplementationOnce(async (_c, sent) => {
       markedWhenSent = store.bindings()[0]?.createdFor;
@@ -829,6 +834,7 @@ describe("CloudHostLifecycle worktree marks", () => {
     });
     await lifecycle.create(request(account.id), MARK);
     expect(put.mock.calls[0]?.[0]).toMatchObject({ hostId: null, createdFor: MARK });
+    expect(hostsAtWrite[0]).toBe(0);
     await vi.waitFor(() => expect(provider.create).toHaveBeenCalled());
     expect(markedWhenSent).toEqual(MARK);
     await vi.waitFor(() => expect(lifecycle.statuses()[0]?.resourceId).toBe("bx_23456789"));
@@ -878,15 +884,22 @@ describe("CloudHostLifecycle worktree marks", () => {
     next.lifecycle.dispose();
   });
 
-  it("keeps the mark through a restart after the machine exists", async () => {
-    const { lifecycle, account, restart } = await setup();
+  it("keeps the mark, and the name last reported, through a restart after the machine exists", async () => {
+    const { lifecycle, state, account, restart } = await setup();
     await lifecycle.create(request(account.id), MARK);
     await vi.waitFor(() =>
       expect(lifecycle.statuses()[0]).toMatchObject({ machine: "running", operation: null })
     );
+    // Renamed on the provider since: the next reading carries the new name.
+    state.machine = resource({ name: "renamed-box" });
+    await lifecycle.refresh("build");
+    expect(lifecycle.statuses()[0]?.machineName).toBe("renamed-box");
     const next = restart(lifecycle);
     expect(next.store.bindings()[0]?.creation).toBeNull();
-    expect(next.lifecycle.statuses()[0]?.createdFor).toEqual(MARK);
+    expect(next.lifecycle.statuses()[0]).toMatchObject({
+      createdFor: MARK,
+      machineName: "renamed-box",
+    });
     next.lifecycle.dispose();
   });
 
@@ -898,12 +911,15 @@ describe("CloudHostLifecycle worktree marks", () => {
     expect(lifecycle.statuses()[0]?.createdFor).toBeNull();
 
     const other = await setup();
+    const put = vi.spyOn(other.store, "putBinding");
     await other.lifecycle.importMachine({
       accountId: other.account.id,
       resourceId: "bx_23456789",
       name: "imported",
       createdFor: MARK,
     } as CloudHostImportRequest);
+    // The write itself, not only the reader, leaves the mark out.
+    expect(put.mock.calls[0]?.[0]).toMatchObject({ ownership: "imported", createdFor: null });
     expect(other.store.bindings()[0]).toMatchObject({ ownership: "imported", createdFor: null });
     expect(other.lifecycle.statuses()[0]?.createdFor).toBeNull();
   });

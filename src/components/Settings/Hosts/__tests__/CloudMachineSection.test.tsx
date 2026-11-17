@@ -92,15 +92,15 @@ describe("CloudMachineSection created-for row", () => {
         operation: null,
         createdFor: {
           hostId: "studio",
-          projectId: "0f1e2d3c",
-          worktreeId: "/home/me/app-worktrees/feature-login",
-          projectName: "app",
-          worktreeName: "feature/login",
+          projectId: "9a8b7c6d",
+          worktreeId: "/home/me/api-worktrees/fix-auth",
+          projectName: "api",
+          worktreeName: "fix/auth",
           hostName: "Studio",
         },
       })
     );
-    expect(createdFor()).toBe("feature/login in app on Studio");
+    expect(createdFor()).toBe("fix/auth in api on Studio");
   });
 
   it("has no row for a machine made from Settings or imported", () => {

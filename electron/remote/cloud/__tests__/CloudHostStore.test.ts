@@ -99,6 +99,7 @@ describe("CloudHostStore worktree marks", () => {
   it("drops a mark missing part of the worktree's identity, keeping the binding", () => {
     for (const broken of [
       { ...LOCAL_MARK, projectId: "" },
+      { ...LOCAL_MARK, projectName: "" },
       { ...LOCAL_MARK, worktreeId: 42 },
       { ...LOCAL_MARK, hostId: undefined },
       { ...LOCAL_MARK, hostId: "local" },

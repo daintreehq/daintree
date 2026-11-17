@@ -100,6 +100,21 @@ describe("RemoveCloudHostDialog for a machine made for a worktree", () => {
     expect(dialogText()).toContain("deleted from Boat");
   });
 
+  it("says only that removing the host doesn't delete a machine it can't see", () => {
+    // A 404 on refresh leaves the machine unknown: it may have been deleted on the provider.
+    open(status({ machine: "unknown", lastError: { code: "not-found", message: "gone", at: 0 } }));
+    expect(dialogText()).toContain(
+      "removing it doesn't delete its machine 'feature-login-box' from your Boat account (Personal)"
+    );
+    expect(dialogText()).not.toContain("still exists");
+  });
+
+  it("qualifies an old reading the same way", () => {
+    open(status({ machine: "running", observedAt: 0 }));
+    expect(dialogText()).toContain("removing it doesn't delete its machine 'feature-login-box'");
+    expect(dialogText()).not.toContain("still exists");
+  });
+
   it("doesn't claim a machine the provider reported deleted still exists", () => {
     open(status({ machine: "deleted" }));
     expect(dialogText()).not.toContain("still exists");
