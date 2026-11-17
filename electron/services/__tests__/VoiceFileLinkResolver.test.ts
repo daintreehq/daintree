@@ -352,14 +352,14 @@ describe("VoiceFileLinkResolver", () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it("sees a tie between siblings that differ only by extension", async () => {
-      const fetchMock = vi.fn();
+    it("leaves siblings that differ only by extension to the reranker", async () => {
+      const fetchMock = rerankReply("src/UserProfile.css");
       vi.stubGlobal("fetch", fetchMock);
 
       await expect(
         pick("user profile", ["src/UserProfile.tsx", "src/UserProfile.css"])
-      ).resolves.toBeNull();
-      expect(fetchMock).not.toHaveBeenCalled();
+      ).resolves.toBe("src/UserProfile.css");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
     it("counts the same path listed twice as one match", async () => {
@@ -405,12 +405,57 @@ describe("VoiceFileLinkResolver", () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
-    it("declines a rerank pick among same-named files that differ by extension", async () => {
-      vi.stubGlobal("fetch", rerankReply("src/Profile.css"));
+    it("takes a rerank pick the description names among files that share a stem", async () => {
+      vi.stubGlobal("fetch", rerankReply(".env.local"));
+
+      await expect(pick("env local", [".env.production", ".env.local"])).resolves.toBe(
+        ".env.local"
+      );
+    });
+
+    it("declines a rerank pick whose same-named twin fits as well, even below a stronger match", async () => {
+      // ProfileView.test.tsx fits best (2 of 3 tokens) but the reranker passed it over.
+      const fetchMock = rerankReply("app/Profile.tsx");
+      vi.stubGlobal("fetch", fetchMock);
 
       await expect(
-        pick("profile page", ["src/Profile.tsx", "src/Profile.css"])
+        pick("profile view implementation", [
+          "src/ProfileView.test.tsx",
+          "app/Profile.tsx",
+          "lib/Profile.tsx",
+        ])
       ).resolves.toBeNull();
+    });
+
+    it("takes a rerank pick whose same-named twin fits the description worse", async () => {
+      vi.stubGlobal("fetch", rerankReply("lib/Profile.tsx"));
+
+      await expect(pick("profile page lib", ["app/Profile.tsx", "lib/Profile.tsx"])).resolves.toBe(
+        "lib/Profile.tsx"
+      );
+    });
+
+    it("gives a spoken extension no directory credit, so a folder called the same can't win", async () => {
+      const fetchMock = rerankReply("src/UserProfileSettings.tsx");
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        pick("user profile settings tsx", [
+          "packages/tsx/UserProfileSettings.ts",
+          "src/UserProfileSettings.tsx",
+        ])
+      ).resolves.toBe("src/UserProfileSettings.tsx");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("still reads a directory name that no candidate has as an extension", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        pick("user profile css", ["src/UserProfile.tsx", "packages/css/UserProfile.tsx"])
+      ).resolves.toBe("packages/css/UserProfile.tsx");
+      expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it("still takes a rerank pick from outside the tied files", async () => {
@@ -421,8 +466,8 @@ describe("VoiceFileLinkResolver", () => {
       ).resolves.toBe("src/pages/Settings.tsx");
     });
 
-    it("sees a tie among files whose names differ past the words spoken", async () => {
-      const fetchMock = vi.fn();
+    it("leaves a tie among differently named files to the reranker", async () => {
+      const fetchMock = rerankReply("lib/UserProfileView.tsx");
       vi.stubGlobal("fetch", fetchMock);
 
       await expect(
@@ -431,8 +476,8 @@ describe("VoiceFileLinkResolver", () => {
           "src/Profile.tsx",
           "lib/UserProfileView.tsx",
         ])
-      ).resolves.toBeNull();
-      expect(fetchMock).not.toHaveBeenCalled();
+      ).resolves.toBe("lib/UserProfileView.tsx");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
     it("sees the tie when a repeated path comes first", async () => {
