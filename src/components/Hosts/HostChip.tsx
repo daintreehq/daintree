@@ -52,8 +52,11 @@ import {
   canStopMachine,
   cloudCostFacts,
   cloudChipStatus,
+  cloudProviderFor,
   cloudStatusLabel,
   isObservationStale,
+  stoppedBillingFact,
+  type CloudProviderTerms,
 } from "./cloud/cloudHostLabels";
 import { useNow } from "@/hooks/useNow";
 import { formatTimeAgo } from "@/utils/timeAgo";
@@ -256,12 +259,15 @@ function HostMenuItem({
   row,
   onPick,
   cloud = null,
+  provider = null,
   now = 0,
 }: {
   row: HostMenuRow;
   onPick: (row: HostMenuRow, newWindow: boolean) => void;
   /** A cloud host's machine: while its link is down, what the machine is doing says more. */
   cloud?: CloudHostStatus | null;
+  /** Its provider's declaration, which says whether a stopped machine still bills. */
+  provider?: CloudProviderTerms | null;
   /** The clock its reading is judged against. */
   now?: number;
 }) {
@@ -279,16 +285,21 @@ function HostMenuItem({
         ? `checked ${formatTimeAgo(cloud.observedAt, now)}`
         : "never checked"
       : null;
+  // A stopped machine that still bills says so, in either section.
+  const billingFact =
+    machineDown && cloud.operation === null ? stoppedBillingFact(cloud, provider) : null;
   // A running cloud machine's row says what it costs and when it stops, beside the link.
   const note = machineDown
-    ? [staleAge, canStartMachine(cloud) ? "Opening it starts the machine" : null]
+    ? [billingFact, staleAge, canStartMachine(cloud) ? "Opening it starts the machine" : null]
         .filter(Boolean)
         .join(" · ") || null
     : cloud !== null
       ? // An old reading's cost and stop time are the last reported, and say so.
         (stale
-          ? ["last reported", ...cloudCostFacts(cloud), staleAge].filter(Boolean).join(" · ")
-          : cloudCostFacts(cloud).join(" · ")) || described.note
+          ? ["last reported", ...cloudCostFacts(cloud, provider), staleAge]
+              .filter(Boolean)
+              .join(" · ")
+          : cloudCostFacts(cloud, provider).join(" · ")) || described.note
       : described.note;
   // A link that has gone wrong carries the chip's own warning mark and full
   // ink; connecting and not connected stay quiet, and connected never goes green.
@@ -312,7 +323,9 @@ function HostMenuItem({
       {away ? (
         <AwayHostLabel
           row={row}
-          machineState={machineDown ? [state, staleAge].filter(Boolean).join(" · ") : null}
+          machineState={
+            machineDown ? [state, billingFact, staleAge].filter(Boolean).join(" · ") : null
+          }
         />
       ) : (
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -422,7 +435,8 @@ export function HostChip() {
   const cloudNews = useCloudLifecycleNews(
     cloudHosts,
     (hostId) =>
-      hostList.hosts.find((entry) => entry.descriptor.id === hostId)?.descriptor.name ?? hostId
+      hostList.hosts.find((entry) => entry.descriptor.id === hostId)?.descriptor.name ?? hostId,
+    cloudProviders
   );
 
   if (!visible) return null;
@@ -465,7 +479,9 @@ export function HostChip() {
   // A window on a cloud machine that isn't running says so, not that it can't log in.
   const windowMachineDown =
     windowCloud !== null && (windowCloud.machine !== "running" || windowCloud.operation !== null);
-  const statusText = windowMachineDown ? cloudChipStatus(windowCloud) : hostChipStatusText(status);
+  const statusText = windowMachineDown
+    ? cloudChipStatus(windowCloud, cloudProviderFor(cloudProviders, windowCloud))
+    : hostChipStatusText(status);
   // How far away the host feels, while the link is healthy: a quiet reading
   // that steps up to full ink once typing would lag. Any state word replaces it.
   const latency =
@@ -643,6 +659,7 @@ export function HostChip() {
                 row={row}
                 onPick={pick}
                 cloud={cloudFor(row.hostId)}
+                provider={cloudProviderFor(cloudProviders, cloudFor(row.hostId))}
                 now={now}
               />
             ))}
@@ -655,6 +672,7 @@ export function HostChip() {
                 row={row}
                 onPick={pick}
                 cloud={cloudFor(row.hostId)}
+                provider={cloudProviderFor(cloudProviders, cloudFor(row.hostId))}
                 now={now}
               />
             )}
@@ -753,7 +771,7 @@ export function HostChip() {
                   // The price beside both verbs: what it costs now, or what starting it costs.
                   const detail = [
                     cloudStatusLabel(cloud, stale),
-                    ...cloudCostFacts(cloud),
+                    ...cloudCostFacts(cloud, cloudProviderFor(cloudProviders, cloud)),
                     cloud.accountName,
                     stale || checkable
                       ? cloud.observedAt !== null

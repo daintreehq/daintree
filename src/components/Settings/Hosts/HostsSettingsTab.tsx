@@ -31,6 +31,7 @@ import {
   canStartMachine,
   canStopMachine,
   cloudCostFacts,
+  cloudProviderFor,
   cloudStatusLabel,
   isObservationStale,
   machineSpecLabel,
@@ -93,7 +94,8 @@ export default function HostsSettingsTab() {
   // stop finishing is heard whichever is showing, and never twice.
   const cloudNews = useCloudLifecycleNews(
     cloudSnapshot.hosts,
-    (hostId) => hosts.find((entry) => entry.descriptor.id === hostId)?.descriptor.name ?? hostId
+    (hostId) => hosts.find((entry) => entry.descriptor.id === hostId)?.descriptor.name ?? hostId,
+    cloudSnapshot.providers
   );
   const cloudAnnouncer = (
     <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
@@ -345,7 +347,10 @@ export default function HostsSettingsTab() {
                                 [
                                   cloudStatusLabel(cloud, stale),
                                   machineDown ? null : connectionLabel(connection),
-                                  ...cloudCostFacts(cloud),
+                                  ...cloudCostFacts(
+                                    cloud,
+                                    cloudProviderFor(cloudSnapshot.providers, cloud)
+                                  ),
                                 ]
                                   .filter((fact): fact is string => fact !== null)
                                   .map((fact, index) => (
@@ -518,6 +523,10 @@ export default function HostsSettingsTab() {
           name={removeCloud.name}
           status={cloudStatusFor(cloudSnapshot, removeCloud.hostId)}
           providerName={providerName(cloudStatusFor(cloudSnapshot, removeCloud.hostId)?.providerId)}
+          provider={cloudProviderFor(
+            cloudSnapshot.providers,
+            cloudStatusFor(cloudSnapshot, removeCloud.hostId)
+          )}
           onClose={() => setRemoveCloud(null)}
         />
       )}

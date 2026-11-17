@@ -47,6 +47,8 @@ import {
   canStartMachine,
   formatHourly,
   stopKeepsSentence,
+  stoppedBillingFact,
+  stoppedBillingSentence,
   hourlyShort,
   lifetimeLabel,
   machineSpecLabel,
@@ -303,8 +305,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     body = (
       <div className="space-y-3">
         <p className="text-sm text-text-secondary">
-          Connect a cloud provider account first. Daintree uses its API key to create, start, stop
-          and delete machines; the account pays for them.
+          {`Connect a cloud provider account first. Daintree uses its API key to create, start${usable.every((entry) => entry.capabilities.deletion) ? ", stop and delete" : " and stop"} machines; the account pays for them.`}
         </p>
         <div className="flex flex-wrap gap-2">
           {usable.map((entry) => (
@@ -353,7 +354,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
         )}
         {stoppedImport && status && (
           <p className="text-sm text-text-secondary">
-            {`Start it now to set up Daintree there${hourlyShort(status.hourlyDollars) ? `; it bills ${status.accountName} ${hourlyShort(status.hourlyDollars)} while it runs` : ""}. Or leave it stopped and start it from the host menu when you need it.`}
+            {`Start it now to set up Daintree there${hourlyShort(status.hourlyDollars) ? `; it bills ${status.accountName} ${hourlyShort(status.hourlyDollars)} while it runs` : ""}. Or leave it stopped and start it from the host menu when you need it.${stoppedBillingSentence(provider) ? ` ${stoppedBillingSentence(provider)}` : ""}`}
           </p>
         )}
         {failed && status?.lastError && (
@@ -560,7 +561,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
                 {lifetimeHours === null
                   ? "It runs until you stop it."
                   : `It stops by itself ${lifetimeLabel(lifetimeHours).toLowerCase()} after starting unless it's in use here.`}{" "}
-                {`Stopping ends what runs on it. ${stopKeepsSentence(provider.capabilities.persistence)}`}
+                {`Stopping ends what runs on it.${stoppedBillingSentence(provider) ? ` ${stoppedBillingSentence(provider)}` : ""} ${stopKeepsSentence(provider.capabilities.persistence)}`}
               </p>
             )}
           </>
@@ -609,7 +610,13 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
                           ? "A teammate's private machine"
                           : resource.dataExpired
                             ? "Its saved disk was deleted"
-                            : `${cloudMachineLabel(resource.machine)} · ${machineSpecLabel(resource.vcpu, resource.memoryGB)}`
+                            : [
+                                cloudMachineLabel(resource.machine),
+                                machineSpecLabel(resource.vcpu, resource.memoryGB),
+                                stoppedBillingFact(resource, provider),
+                              ]
+                                .filter(Boolean)
+                                .join(" · ")
                     }
                   />
                 ))}

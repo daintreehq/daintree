@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
-import type { CloudHostStatus, CloudHostsSnapshot } from "@shared/types/cloudHosts";
+import type {
+  CloudHostStatus,
+  CloudHostsSnapshot,
+  CloudProviderInfo,
+} from "@shared/types/cloudHosts";
 
 const { cloud } = vi.hoisted(() => ({
   cloud: { snapshot: { providers: [], accounts: [], hosts: [] } as CloudHostsSnapshot },
@@ -25,6 +29,7 @@ vi.mock("@/clients/cloudHostsClient", () => ({
 }));
 
 import { CloudMachineSection } from "../CloudMachineSection";
+import { BOAT_PROVIDER, provider } from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
 
 function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
   return {
@@ -161,5 +166,47 @@ describe("CloudMachineSection provisioning rows", () => {
     expect(screen.queryByTestId("cloud-machine-location")).toBeNull();
     expect(screen.queryByTestId("cloud-machine-image")).toBeNull();
     expect(screen.queryByTestId("cloud-machine-network")).toBeNull();
+  });
+});
+
+describe("CloudMachineSection stopped billing (#17346)", () => {
+  const billing = () => screen.queryByTestId("cloud-machine-stopped-billing")?.textContent ?? null;
+  const stopped = status({
+    resourceId: "bx_23456789",
+    machine: "stopped",
+    operation: null,
+    hourlyDollars: 0.036,
+    observedAt: Date.now(),
+  });
+
+  function showWith(current: CloudHostStatus, declared: CloudProviderInfo) {
+    cloud.snapshot = {
+      providers: [declared],
+      accounts: [],
+      hosts: [{ ...current, providerId: declared.id }],
+    };
+    return render(
+      <CloudMachineSection hostId="build" hostName="build" connected={false} liveSummary={null} />
+    );
+  }
+
+  it("says nothing more for Boat, whose stop ends the bill", () => {
+    showWith(stopped, BOAT_PROVIDER);
+    expect(billing()).toBeNull();
+    expect(screen.getByTestId("cloud-machine-state").textContent).toContain(
+      "Stopped · $0.036/h when started"
+    );
+  });
+
+  it("says a stopped machine still bills, beside it and beside Stop", () => {
+    const billed = provider({ stoppedComputeBilled: true, deletion: true });
+    showWith(stopped, billed);
+    expect(screen.getByTestId("cloud-machine-state").textContent).toContain(
+      "Stopped · still billing"
+    );
+    expect(billing()).toContain("To stop paying for it, remove the host and delete its machine.");
+    cleanup();
+    showWith(status({ resourceId: "bx_23456789", machine: "running", operation: null }), billed);
+    expect(billing()).toContain("Acme keeps billing a stopped machine for compute");
   });
 });

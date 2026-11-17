@@ -117,6 +117,7 @@ export interface CloudProvider {
     lifetimeSeconds: number | null
   ): Promise<ProviderResource>;
   rename(credentials: ProviderCredentials, resourceId: string, name: string): Promise<void>;
+  /** Called only while the provider's capabilities declare `deletion`. */
   delete(credentials: ProviderCredentials, resourceId: string): Promise<void>;
   authorizeSsh(
     credentials: ProviderCredentials,

@@ -11,6 +11,7 @@ import {
   canStopMachine,
   clockTime,
   cloudCostFacts,
+  cloudProviderFor,
   cloudStateWord,
   diskSentence,
   durationLabel,
@@ -18,6 +19,7 @@ import {
   isObservationStale,
   lifetimeLabel,
   machineSpecLabel,
+  stoppedBillingSentence,
 } from "@/components/Hosts/cloud/cloudHostLabels";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import {
@@ -77,8 +79,13 @@ export function CloudMachineSection({
   const stale = status.machine !== "unknown" && isObservationStale(status, now);
   const checkedAt =
     status.observedAt !== null ? clockTime(new Date(status.observedAt).toISOString()) : null;
-  const provider = snapshot.providers.find((entry) => entry.id === status.providerId);
+  const provider = cloudProviderFor(snapshot.providers, status);
   const providerName = provider?.name ?? status.providerId;
+  // Beside Stop, and beside a stopped machine: a provider that bills it stopped says so.
+  const stoppedBilling =
+    status.machine === "stopped" || canStopMachine(status)
+      ? stoppedBillingSentence(provider)
+      : null;
   const actionError = machines.errorFor(hostId) ?? error;
   const shownError =
     actionError ?? (status.operation === null ? (status.lastError?.message ?? null) : null);
@@ -137,35 +144,42 @@ export function CloudMachineSection({
         <SettingsRow
           label="Machine"
           description={
-            <span data-testid="cloud-machine-state">
-              {[
-                stale
-                  ? `Last reported ${cloudStateWord(status).toLowerCase()}`
-                  : cloudStateWord(status),
-                stateDetail,
-                ...cloudCostFacts(status),
-              ]
-                .filter((fact): fact is string => Boolean(fact))
-                .join(" · ")}
-              {status.machine === "stopped" && status.stoppedAt && (
-                <>
-                  {" "}
-                  <FactSeparator />{" "}
-                  <TimeAgo prefix="stopped " timestamp={Date.parse(status.stoppedAt)} />
-                </>
+            <>
+              <span data-testid="cloud-machine-state">
+                {[
+                  stale
+                    ? `Last reported ${cloudStateWord(status).toLowerCase()}`
+                    : cloudStateWord(status),
+                  stateDetail,
+                  ...cloudCostFacts(status, provider),
+                ]
+                  .filter((fact): fact is string => Boolean(fact))
+                  .join(" · ")}
+                {status.machine === "stopped" && status.stoppedAt && (
+                  <>
+                    {" "}
+                    <FactSeparator />{" "}
+                    <TimeAgo prefix="stopped " timestamp={Date.parse(status.stoppedAt)} />
+                  </>
+                )}
+                {status.observedAt !== null && (
+                  <>
+                    {" "}
+                    <FactSeparator />{" "}
+                    <TimeAgo
+                      prefix={status.machine === "unknown" ? "last asked " : "checked "}
+                      timestamp={status.observedAt}
+                      now={now}
+                    />
+                  </>
+                )}
+              </span>
+              {stoppedBilling && (
+                <span className="block" data-testid="cloud-machine-stopped-billing">
+                  {stoppedBilling}
+                </span>
               )}
-              {status.observedAt !== null && (
-                <>
-                  {" "}
-                  <FactSeparator />{" "}
-                  <TimeAgo
-                    prefix={status.machine === "unknown" ? "last asked " : "checked "}
-                    timestamp={status.observedAt}
-                    now={now}
-                  />
-                </>
-              )}
-            </span>
+            </>
           }
           error={shownError ? <span role="alert">{shownError}</span> : undefined}
           control={

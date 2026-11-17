@@ -22,7 +22,9 @@ import { cloudStatusFor, useCloudHosts } from "@/components/Hosts/cloud/cloudHos
 import {
   canStartMachine,
   clockTime,
+  cloudProviderFor,
   isObservationStale,
+  stoppedBillingSentence,
 } from "@/components/Hosts/cloud/cloudHostLabels";
 import { cloudHostsClient } from "@/clients/cloudHostsClient";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
@@ -171,6 +173,11 @@ export function HostConnectionBanner() {
           ? "last reported stopped"
           : "is stopped";
     const unknownReason = cloud.lastError?.message.replace(/\.$/, "") ?? null;
+    // A provider that bills a stopped machine says so where its stop is shown.
+    const stoppedBilling =
+      cloud.machine === "stopped"
+        ? stoppedBillingSentence(cloudProviderFor(cloudSnapshot.providers, cloud))
+        : null;
     const checkAction = {
       id: "check-machine",
       label: "Check status",
@@ -196,7 +203,7 @@ export function HostConnectionBanner() {
             : machineUnknown
               ? // Not proof it stopped: a refused key reads the same as a deleted machine.
                 `${unknownReason ? `${unknownReason}. ` : ""}It may still be running and billing ${cloud.accountName}${checkedAt ? `; last asked ${checkedAt}` : ""}.`
-              : `${stale && checkedAt ? `Last checked ${checkedAt}. ` : ""}Start it to work here again. It bills ${cloud.accountName}${cloud.hourlyDollars !== null ? ` about $${cloud.hourlyDollars.toFixed(3)} an hour` : ""} while it runs.`)
+              : `${stale && checkedAt ? `Last checked ${checkedAt}. ` : ""}Start it to work here again. It bills ${cloud.accountName}${cloud.hourlyDollars !== null ? ` about $${cloud.hourlyDollars.toFixed(3)} an hour` : ""} while it runs.${stoppedBilling ? ` ${stoppedBilling}` : ""}`)
         }
         severity="warning"
         role="status"
