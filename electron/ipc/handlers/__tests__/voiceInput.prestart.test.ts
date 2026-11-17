@@ -71,6 +71,8 @@ const shared = vi.hoisted(() => ({
   correctionDictionary: null as string[] | null,
   /** The heard-as rules the correction service was last handed. */
   correctionHeardAs: undefined as unknown,
+  /** When set, a project vocabulary read answers only once it settles. */
+  vocabularyGate: null as null | Promise<void>,
   /** When set, the names a start gathers, in place of reading them. */
   names: null as null | Promise<{ hosts: string[]; projects: string[]; worktrees: string[] }>,
   /** The worktree a start finds the terminal in, gathered with `names`. */
@@ -207,6 +209,7 @@ vi.mock("../../../services/ProjectStore.js", () => ({
 
 vi.mock("../../../services/projectVoiceDictionary.js", () => ({
   readProjectVoiceDictionary: vi.fn(async (id: string) => {
+    if (shared.vocabularyGate) await shared.vocabularyGate;
     const terms = shared.vocabularies[id];
     if (!terms) throw new Error("Project not found");
     return terms.map((term) =>
@@ -822,6 +825,7 @@ describe("voiceInput — keyterm target", () => {
     shared.vocabularies = { "proj-a": ["PtyClient"], "proj-b": ["BravoTerm"] };
     shared.correctionDictionary = null;
     shared.correctionHeardAs = undefined;
+    shared.vocabularyGate = null;
     shared.names = null;
     shared.worktree = null;
     shared.repoNames = [];
@@ -1009,6 +1013,26 @@ describe("voiceInput — keyterm target", () => {
           payload: { sessionId: currentSessionId, vocabulary: PROJECT },
         },
       ]);
+    });
+
+    it("gives a vocabulary still being read at the stop time to land before the session ends", async () => {
+      let release!: () => void;
+      shared.vocabularyGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
+      shared.eventCallback!({ type: "complete", text: "fix patty client" });
+      const stopping = stop();
+      await Promise.resolve();
+      expect(vocabularyPushes()).toEqual([]);
+
+      release();
+      await stopping;
+      const channels = received.map((m) => m.channel);
+      expect(channels.indexOf("voice-input:session-vocabulary")).toBeGreaterThan(-1);
+      expect(channels.indexOf("voice-input:session-vocabulary")).toBeLessThan(
+        channels.indexOf("voice-input:session-ended")
+      );
     });
 
     it("keeps to the user's rules, and sends no vocabulary, for a dictation with none", async () => {

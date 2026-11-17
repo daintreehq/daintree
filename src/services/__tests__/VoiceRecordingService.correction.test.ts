@@ -1532,6 +1532,31 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
         expect(cleanups()).toEqual(["Zustand: @src/router.ts and Zustand now"]);
       });
 
+      it("keeps the link with the session's project rules, and catches their phrase split around it", async () => {
+        dictionary = [rule("ptyclient", "pity client")];
+        const { service, voiceStore, dictate, say, resolveFiles, draft } = await setup();
+        correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+        dictate(
+          "panel-1",
+          "PtyClient: link to the router",
+          "patty client: link to the router",
+          "t1"
+        );
+        callbacks.vocabulary!({
+          sessionId: voiceStore.getState().panelBuffers["panel-1"]!.dictationSessionId!,
+          vocabulary: [rule("PtyClient", "patty client")],
+        });
+        say("and patty");
+        say("client now");
+        resolveFiles("panel-1", "t1", router);
+        expect(draft("panel-1")).toBe("PtyClient: @src/router.ts and patty client now");
+        await service.stop();
+
+        expect(draft("panel-1")).toBe("PtyClient: @src/router.ts and PtyClient now");
+        expect(cleanups()).toEqual(["PtyClient: @src/router.ts and PtyClient now"]);
+      });
+
       it("never rewrites a term the rules already wrote in the same utterance", async () => {
         dictionary = [rule("bee", "ay"), rule("sea", "bee")];
         const { service, dictate, resolveFiles, draft } = await setup();

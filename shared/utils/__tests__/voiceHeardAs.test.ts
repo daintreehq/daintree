@@ -136,6 +136,21 @@ describe("sessionHeardAsRules", () => {
     expect(rewrite("run just now")).toBe("run JustFile now");
   });
 
+  it("keeps the project's rules within the cap, and the newest global ones in what is left", () => {
+    const global = Array.from({ length: MAX_HEARD_AS_RULES }, (_, i) =>
+      entry(`Term${i}`, [`form ${i}`])
+    );
+    const rules = sessionHeardAsRules(global, [entry("PtyClient", ["patty client"])]);
+
+    expect(rules).toHaveLength(MAX_HEARD_AS_RULES);
+    expect(rules[0]).toEqual({ heard: "patty client", term: "PtyClient" });
+    expect(rules[1]).toEqual({ heard: "form 1", term: "Term1" });
+    expect(rules.at(-1)).toEqual({
+      heard: `form ${MAX_HEARD_AS_RULES - 1}`,
+      term: `Term${MAX_HEARD_AS_RULES - 1}`,
+    });
+  });
+
   it("is the global rules alone with no project vocabulary", () => {
     const global = [entry("Zustand", ["zoo stand"])];
     expect(sessionHeardAsRules(global, [])).toEqual(collectHeardAsRules(global));
