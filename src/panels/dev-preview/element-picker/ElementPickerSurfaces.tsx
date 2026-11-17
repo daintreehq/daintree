@@ -1355,7 +1355,7 @@ function ResolvingHeader({ skeleton, resolving }: { skeleton: boolean; resolving
       {skeleton ? (
         <IdentitySkeleton label={slow ? "Finding the source — still working…" : undefined} />
       ) : (
-        <div className="h-20" aria-hidden="true" />
+        <div className="h-21" aria-hidden="true" />
       )}
     </div>
   );

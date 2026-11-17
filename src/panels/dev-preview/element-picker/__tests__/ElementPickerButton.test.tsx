@@ -11,10 +11,18 @@ import { ElementPickerButton } from "../ElementPickerButton";
 afterEach(cleanup);
 
 function renderButton(active: boolean, onToggle = vi.fn()) {
-  const context = {} as Parameters<typeof ElementPickerButton>[0];
   render(
     <TooltipProvider>
-      <ElementPickerButton {...context} active={active} onToggle={onToggle} />
+      <ElementPickerButton
+        panelId="panel-1"
+        projectId={null}
+        worktreeId={null}
+        worktreePath={null}
+        url=""
+        isWebviewReady={false}
+        active={active}
+        onToggle={onToggle}
+      />
     </TooltipProvider>
   );
   return { button: screen.getByRole("button", { name: "Element Picker" }), onToggle };

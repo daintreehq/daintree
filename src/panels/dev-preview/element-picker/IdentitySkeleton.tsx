@@ -18,7 +18,7 @@ export function IdentitySkeleton({ label }: { label?: string }) {
       label={label ?? "Finding the source for this element"}
       className="flex flex-col gap-1"
     >
-      {/* 28 / 24 / 20: the identity's three rows, so the sections below land
+      {/* 28 / 24 / 24: the identity's three rows, so the sections below land
           in the same place when the answer arrives. */}
       {/* `immediate`, because the wait is already known to have passed the gate:
           the drawer only mounts this past 400ms, and the delayed pulse would
@@ -31,7 +31,7 @@ export function IdentitySkeleton({ label }: { label?: string }) {
       <div className="flex h-6 items-center">
         <SkeletonBone immediate heightPx={11} className="w-48 rounded-[var(--radius-sm)]" />
       </div>
-      <div className="flex h-5 items-center">
+      <div className="flex h-6 items-center">
         <SkeletonBone immediate heightPx={11} className="w-28 rounded-[var(--radius-sm)]" />
       </div>
     </Skeleton>
