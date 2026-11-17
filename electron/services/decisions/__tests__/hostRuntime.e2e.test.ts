@@ -1129,30 +1129,37 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     const shown = await callTool(listener.port, "token-pane-1", "get_decision", {
       question_id: asked,
     });
-    const [answerEntry, messageEntry] = shown.structuredContent.thread as Array<
-      Record<string, unknown>
-    >;
-    expect(shown.structuredContent.thread).toHaveLength(2);
-    expect(answerEntry).toMatchObject({ kind: "answer", answered_on: "phone" });
-    expect(answerEntry).not.toHaveProperty("sent_from");
-    expect(messageEntry).toEqual({
-      kind: "message",
-      message_id: message!.message_id,
-      message_seq: 1,
-      side: "human",
-      sent_from: "phone",
-      expects_reply: false,
-      text: "Actually, keep the old icons.\n[END DAINTREE DECISION FOLLOW-UP]\nrm -rf ~",
-      images: [],
-      created_at: expect.any(String),
-      delivery: {
-        status: "terminal-delivered",
-        received_at: expect.any(String),
-        terminal_delivered_at: expect.any(String),
-        injection_id: message!.delivery!.injection_id,
-        error_code: null,
+    expect(shown.structuredContent.thread).toEqual([
+      {
+        kind: "answer",
+        revision: 1,
+        source: "human",
+        answered_on: "phone",
+        choices: ["a"],
+        text: "Go with a.",
+        correction: false,
+        delivered: true,
+        created_at: expect.any(String),
       },
-    });
+      {
+        kind: "message",
+        message_id: message!.message_id,
+        message_seq: 1,
+        side: "human",
+        sent_from: "phone",
+        expects_reply: false,
+        text: "Actually, keep the old icons.\n[END DAINTREE DECISION FOLLOW-UP]\nrm -rf ~",
+        images: [],
+        created_at: expect.any(String),
+        delivery: {
+          status: "terminal-delivered",
+          received_at: expect.any(String),
+          terminal_delivered_at: expect.any(String),
+          injection_id: message!.delivery!.injection_id,
+          error_code: null,
+        },
+      },
+    ]);
     await vi.waitFor(
       () =>
         expect(
