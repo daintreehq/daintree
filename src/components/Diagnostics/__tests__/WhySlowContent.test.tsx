@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, fireEvent, cleanup } from "@testing-library/react";
 import { WhySlowContent, describeSlowdowns, isAllClear } from "../WhySlowContent";
 import type { WhySlowSnapshot } from "@shared/types/whySlow";
 import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
 import { useProjectStore } from "@/store/projectStore";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 
 const getWhySlowSnapshot = vi.fn();
 vi.mock("@/clients/systemClient", () => ({
@@ -779,5 +780,157 @@ describe("host memory pause findings", () => {
     const quiet = { ...base(), pty: makeQuietPty() };
     expect(isAllClear(quiet)).toBe(true);
     expect(isAllClear(quiet, { active: true, paused: false, stalled: false })).toBe(false);
+  });
+});
+
+describe("WhySlowContent refresh button", () => {
+  const BUTTON_NAME = "Refresh diagnostics snapshot";
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  async function mountLoaded() {
+    vi.useFakeTimers();
+    getWhySlowSnapshot.mockResolvedValueOnce(makeSnapshot({ timestamp: Date.now() }));
+    render(<WhySlowContent />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    return screen.getByRole("button", { name: BUTTON_NAME });
+  }
+
+  const spinning = (button: HTMLElement) => button.querySelector("[data-spinning]") !== null;
+
+  beforeEach(() => {
+    getWhySlowSnapshot.mockReset();
+    logError.mockReset();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("stays focusable and spinning through a manual read, and ignores presses while it is in flight", async () => {
+    const button = await mountLoaded();
+    const read = deferred<WhySlowSnapshot>();
+    getWhySlowSnapshot.mockReturnValueOnce(read.promise);
+
+    button.focus();
+    fireEvent.click(button);
+
+    expect(button.hasAttribute("disabled")).toBe(false);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(document.activeElement).toBe(button);
+    // The user's own press is feedback, so it spins without waiting out the gate.
+    expect(spinning(button)).toBe(true);
+
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(getWhySlowSnapshot).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      read.resolve(makeSnapshot({ timestamp: Date.now() }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(getWhySlowSnapshot).toHaveBeenCalledTimes(2);
+    expect(button.getAttribute("aria-disabled")).toBeNull();
+    expect(screen.getByRole("button", { name: BUTTON_NAME })).toBe(button);
+    expect(document.activeElement).toBe(button);
+  });
+
+  it("keeps the button, and its focus, across a background poll", async () => {
+    const button = await mountLoaded();
+    const read = deferred<WhySlowSnapshot>();
+    getWhySlowSnapshot.mockReturnValueOnce(read.promise);
+    button.focus();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+
+    expect(getWhySlowSnapshot).toHaveBeenCalledTimes(2);
+    expect(button.hasAttribute("disabled")).toBe(false);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(document.activeElement).toBe(button);
+
+    // A press during the poll is vetoed rather than queued behind it, and does
+    // not turn the poll into one the user asked for.
+    fireEvent.click(button);
+    expect(getWhySlowSnapshot).toHaveBeenCalledTimes(2);
+    expect(spinning(button)).toBe(false);
+
+    await act(async () => {
+      read.resolve(makeSnapshot({ timestamp: Date.now() }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(button.getAttribute("aria-disabled")).toBeNull();
+    expect(document.activeElement).toBe(button);
+    expect(getWhySlowSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not spin for a background poll that settles inside the Doherty gate", async () => {
+    const button = await mountLoaded();
+    const read = deferred<WhySlowSnapshot>();
+    getWhySlowSnapshot.mockReturnValueOnce(read.promise);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UI_DOHERTY_THRESHOLD - 50);
+    });
+    expect(spinning(button)).toBe(false);
+
+    await act(async () => {
+      read.resolve(makeSnapshot({ timestamp: Date.now() }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // The gate was cancelled by the settle, so it can't open late.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UI_DOHERTY_THRESHOLD);
+    });
+    expect(spinning(button)).toBe(false);
+  });
+
+  it("spins once a background poll outlasts the Doherty gate", async () => {
+    const button = await mountLoaded();
+    getWhySlowSnapshot.mockReturnValueOnce(deferred<WhySlowSnapshot>().promise);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(spinning(button)).toBe(false);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UI_DOHERTY_THRESHOLD);
+    });
+    expect(spinning(button)).toBe(true);
+  });
+
+  it("does not carry a finished manual press over to the next background poll", async () => {
+    const button = await mountLoaded();
+    getWhySlowSnapshot.mockResolvedValueOnce(makeSnapshot({ timestamp: Date.now() }));
+    fireEvent.click(button);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    getWhySlowSnapshot.mockReturnValueOnce(deferred<WhySlowSnapshot>().promise);
+    // Past the spinner's own finishing turn, then onto the next poll tick.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(getWhySlowSnapshot).toHaveBeenCalledTimes(3);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UI_DOHERTY_THRESHOLD - 50);
+    });
+    expect(spinning(button)).toBe(false);
   });
 });

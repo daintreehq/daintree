@@ -4,6 +4,8 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { FactSeparator } from "@/components/ui/FactSeparator";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { useTelemetryPreviewStore } from "@/store/telemetryPreviewStore";
 import { telemetryPreviewClient } from "@/clients";
@@ -117,10 +119,22 @@ function TelemetryDetail({ event }: DetailProps) {
             </div>
             <p className="font-mono text-xs text-text-primary break-words">{event.label}</p>
             <div className="flex items-center gap-2 text-2xs text-text-secondary font-mono">
-              <span title={new Date(event.timestamp).toISOString()}>
-                {new Date(event.timestamp).toLocaleDateString()} {formatClockTime(event.timestamp)}
-              </span>
-              <span aria-hidden>•</span>
+              <Tooltip autoDismiss={false}>
+                <TooltipTrigger asChild>
+                  <time
+                    dateTime={new Date(event.timestamp).toISOString()}
+                    tabIndex={0}
+                    className="tabular-nums whitespace-nowrap rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+                  >
+                    {new Date(event.timestamp).toLocaleDateString()}{" "}
+                    {formatClockTime(event.timestamp)}
+                  </time>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {new Date(event.timestamp).toISOString()}
+                </TooltipContent>
+              </Tooltip>
+              <FactSeparator />
               <span>ID {event.id.slice(0, 8)}</span>
             </div>
           </div>

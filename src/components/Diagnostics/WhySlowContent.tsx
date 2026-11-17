@@ -13,6 +13,7 @@ import type { HostMemoryPauseSnapshot } from "@shared/types/pty-host";
 import { HOST_MEMORY_PAUSE_COPY } from "@/lib/hostMemoryPauseCopy";
 import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { MetricTile, type MetricTone } from "./MetricTile";
 import { DiagnosticsNotice } from "./DiagnosticsNotice";
 import { pluralize } from "@/lib/pluralize";
@@ -314,6 +315,12 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
   const [snapshot, setSnapshot] = useState<WhySlowSnapshot | null>(null);
   const [error, setError] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  // Set by the user's own press, which spins at once as press feedback.
+  // Background polls wait out the Doherty gate instead, so a fast one never
+  // flashes the glyph every five seconds.
+  const [manualRefresh, setManualRefresh] = useState(false);
+  const refreshGateOpen = useDohertyGate(isRefreshing);
+  const refreshSpinning = isRefreshing && (manualRefresh || refreshGateOpen);
   const hostMemory = useHostMemoryPauseStore((s) => s.snapshot);
   const mountedRef = useRef(true);
   const inFlightRef = useRef<Promise<void> | null>(null);
@@ -339,22 +346,30 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
       }
       setError(true);
     } finally {
-      if (mountedRef.current) setIsRefreshing(false);
+      if (mountedRef.current) {
+        setIsRefreshing(false);
+        setManualRefresh(false);
+      }
     }
   }, []);
 
-  const refresh = useCallback(() => {
-    // Skip if a fetch is already in flight so the poll interval can't stack
-    // overlapping requests when a snapshot is slow to return.
-    if (inFlightRef.current) return inFlightRef.current;
-    // Cleared off the returned promise, not inside the fetch, so a fetch that
-    // settles synchronously can't clear the slot before it is claimed.
-    const run: Promise<void> = fetchSnapshot().finally(() => {
-      if (inFlightRef.current === run) inFlightRef.current = null;
-    });
-    inFlightRef.current = run;
-    return run;
-  }, [fetchSnapshot]);
+  const refresh = useCallback(
+    (manual = false) => {
+      // Skip if a fetch is already in flight so the poll interval can't stack
+      // overlapping requests when a snapshot is slow to return. Checked before
+      // the manual flag so a press can't promote a background poll into one.
+      if (inFlightRef.current) return inFlightRef.current;
+      if (manual) setManualRefresh(true);
+      // Cleared off the returned promise, not inside the fetch, so a fetch that
+      // settles synchronously can't clear the slot before it is claimed.
+      const run: Promise<void> = fetchSnapshot().finally(() => {
+        if (inFlightRef.current === run) inFlightRef.current = null;
+      });
+      inFlightRef.current = run;
+      return run;
+    },
+    [fetchSnapshot]
+  );
 
   useEffect(() => {
     mountedRef.current = true;
@@ -458,11 +473,16 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
             <Button
               variant="subtle"
               size="xs"
-              onClick={() => void refresh()}
-              disabled={isRefreshing}
+              onClick={() => {
+                if (!isRefreshing) void refresh(true);
+              }}
+              // Not `disabled`: that would dim the button and drop keyboard focus
+              // to the page on every press and every poll.
+              aria-disabled={isRefreshing || undefined}
+              aria-busy={isRefreshing || undefined}
               aria-label="Refresh diagnostics snapshot"
             >
-              <SpinningIcon icon={RefreshCw} active={isRefreshing} />
+              <SpinningIcon icon={RefreshCw} active={refreshSpinning} />
               Refresh
             </Button>
           ) : null}

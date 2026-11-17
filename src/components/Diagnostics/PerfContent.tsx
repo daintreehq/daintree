@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { RefreshCw } from "lucide-react";
@@ -7,9 +7,14 @@ import { FactSeparator } from "@/components/ui/FactSeparator";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { TimeAgo } from "@/components/ui/TimeAgo";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { MetricTile, type MetricTone } from "./MetricTile";
 import { DiagnosticsNotice } from "./DiagnosticsNotice";
 import { useProjectStore } from "@/store/projectStore";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
+import { pluralize } from "@/lib/pluralize";
 import {
   startLivePerfCapture,
   stopLivePerfCapture,
@@ -25,16 +30,6 @@ export interface PerfContentProps {
 function formatNumber(value: number | null, fractionDigits = 0): string {
   if (value === null) return "—";
   return value.toFixed(fractionDigits);
-}
-
-function formatRelative(timestamp: number | null): string {
-  if (timestamp === null) return "";
-  const diff = Date.now() - timestamp;
-  if (diff < 5_000) return "just now";
-  if (diff < 60_000) return `${Math.round(diff / 1000)}s ago`;
-  if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h ago`;
-  return `on ${new Date(timestamp).toLocaleDateString()}`;
 }
 
 function LiveMetricsBar() {
@@ -94,13 +89,21 @@ const MODE_LABEL: Record<PerfMode, string> = {
   soak: "Soak",
 };
 
+// The ring sits inside the cell: the truncating box clips an outside outline.
+const CLIPPED_CELL_CLASS =
+  "block truncate focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary";
+
 // No error tint on an outside-reference row. The perf suite reports numbers and
 // gates nothing, so a measurement past a reference value is information, not a
 // fault — styling it as an error is a claim the harness no longer makes.
 function ResultRow({ row }: { row: PerfSummaryRow }) {
   return (
     <tr className="border-b border-divider">
-      <td className="max-w-0 truncate px-3 py-1 text-xs text-text-primary">{row.name}</td>
+      <td className="px-3 py-1 text-xs text-text-primary">
+        <TruncatedTooltip content={row.name}>
+          <span className={CLIPPED_CELL_CLASS}>{row.name}</span>
+        </TruncatedTooltip>
+      </td>
       <td className="px-3 py-1 text-2xs text-text-secondary">{MODE_LABEL[row.mode] ?? row.mode}</td>
       <td className="px-3 py-1 text-right text-xs tabular-nums text-text-primary">
         {row.p95Ms.toFixed(1)}
@@ -112,8 +115,10 @@ function ResultRow({ row }: { row: PerfSummaryRow }) {
           <span className="text-2xs text-text-secondary">Within reference</span>
         )}
       </td>
-      <td className="max-w-0 truncate px-3 py-1 text-2xs text-text-secondary">
-        {row.referenceNotes ?? ""}
+      <td className="px-3 py-1 text-2xs text-text-secondary">
+        <TruncatedTooltip content={row.referenceNotes ?? ""}>
+          <span className={CLIPPED_CELL_CLASS}>{row.referenceNotes ?? ""}</span>
+        </TruncatedTooltip>
       </td>
     </tr>
   );
@@ -194,6 +199,30 @@ export function PerfContent({ className }: PerfContentProps) {
       }))
     );
 
+  // The user's own press spins at once as press feedback; the reads that mount
+  // and project changes start wait out the Doherty gate. Each press is its own
+  // object, keyed by project, so a read that outlives a switch can't make the
+  // next project's load spin early and an older press can't clear a newer one.
+  const [manualRequest, setManualRequest] = useState<{ path: string } | null>(null);
+  const refreshGateOpen = useDohertyGate(isLoadingSummaries);
+  const refreshSpinning =
+    isLoadingSummaries &&
+    ((projectPath !== null && manualRequest?.path === projectPath) || refreshGateOpen);
+  const now = useGlobalMinuteClock();
+
+  // `.finally` rather than try/finally: a try without a catch is a React Compiler
+  // bailout for the whole component.
+  const handleManualRefresh = useCallback(() => {
+    // The live store, not the rendered flag: two presses can land before a
+    // commit, and the store raises its flag synchronously.
+    if (!projectPath || usePerfMetricsStore.getState().isLoadingSummaries) return;
+    const request = { path: projectPath };
+    setManualRequest(request);
+    void refreshSummaries(projectPath).finally(() => {
+      setManualRequest((current) => (current === request ? null : current));
+    });
+  }, [projectPath, refreshSummaries]);
+
   useEffect(() => {
     startLivePerfCapture();
     return () => stopLivePerfCapture();
@@ -245,7 +274,7 @@ export function PerfContent({ className }: PerfContentProps) {
             {showRows ? (
               <span className="font-normal">
                 {" "}
-                <FactSeparator /> {sortedRows.length} scenarios
+                <FactSeparator /> {pluralize(sortedRows.length, "scenario")}
                 {outsideCount > 0 ? `, ${outsideCount} outside reference` : ""}
               </span>
             ) : null}
@@ -253,18 +282,21 @@ export function PerfContent({ className }: PerfContentProps) {
           <div className="flex items-center gap-2">
             {showRows && generatedAt !== null ? (
               <span className="text-2xs tabular-nums text-text-secondary">
-                Generated {formatRelative(generatedAt)}
+                <TimeAgo timestamp={generatedAt} now={now} prefix="Generated " />
               </span>
             ) : null}
             {projectPath && !summaryLoadError ? (
               <Button
                 variant="subtle"
                 size="xs"
-                onClick={() => void refreshSummaries(projectPath)}
-                disabled={isLoadingSummaries}
+                onClick={handleManualRefresh}
+                // Not `disabled`: that would dim the button and drop keyboard focus
+                // to the page.
+                aria-disabled={isLoadingSummaries || undefined}
+                aria-busy={isLoadingSummaries || undefined}
                 aria-label="Re-read benchmark results"
               >
-                <SpinningIcon icon={RefreshCw} active={isLoadingSummaries} />
+                <SpinningIcon icon={RefreshCw} active={refreshSpinning} />
                 Refresh
               </Button>
             ) : null}
