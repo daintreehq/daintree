@@ -96,6 +96,7 @@ let useWorktreeSelectionStore: (typeof import("../worktreeStore"))["useWorktreeS
 let useProjectStore: (typeof import("../projectStore"))["useProjectStore"];
 let rebaseProjectViewRuntimePaths: (typeof import("../rebaseProjectViewRuntimePaths"))["rebaseProjectViewRuntimePaths"];
 let persistMruList: (typeof import("../worktreeStore"))["persistMruList"];
+let suppressMruRecording: (typeof import("../worktreeStore"))["suppressMruRecording"];
 let hostOwnedWrites: typeof import("../persistence/hostOwnedWrites");
 let panelPersistence: (typeof import("../persistence/panelPersistence"))["panelPersistence"];
 
@@ -107,7 +108,8 @@ beforeEach(async () => {
   vi.resetModules();
 
   ({ usePanelStore } = await import("../panelStore"));
-  ({ useWorktreeSelectionStore, persistMruList } = await import("../worktreeStore"));
+  ({ useWorktreeSelectionStore, persistMruList, suppressMruRecording } =
+    await import("../worktreeStore"));
   ({ useProjectStore } = await import("../projectStore"));
   ({ rebaseProjectViewRuntimePaths } = await import("../rebaseProjectViewRuntimePaths"));
   hostOwnedWrites = await import("../persistence/hostOwnedWrites");
@@ -242,17 +244,28 @@ describe("live project relocation (#17184)", () => {
     expect(useWorktreeSelectionStore.getState().restoreWorktreeId).toBe(NEW);
   });
 
-  it("supersedes an old-root MRU write held for the host link, so it never replays", async () => {
-    hostOwnedWrites.holdHostOwnedWrites();
-    void persistMruList([`worktree:${OLD}`]);
-    await drain();
-    expect(hostOwnedWrites.hasDeferredHostOwnedWrite("app-state:mruList")).toBe(true);
+  it.each([
+    ["while selections are recorded", false],
+    ["while hydration suppresses MRU recording", true],
+  ])(
+    "supersedes an old-root MRU write held for the host link, so it never replays (%s)",
+    async (_label, suppressed) => {
+      hostOwnedWrites.holdHostOwnedWrites();
+      void persistMruList([`worktree:${OLD}`]);
+      await drain();
+      expect(hostOwnedWrites.hasDeferredHostOwnedWrite("app-state:mruList")).toBe(true);
 
-    rebaseProjectViewRuntimePaths(OLD, NEW);
-    await drain();
-    hostOwnedWrites.releaseHostOwnedWrites();
-    await drain();
+      suppressMruRecording(suppressed);
+      try {
+        rebaseProjectViewRuntimePaths(OLD, NEW);
+      } finally {
+        suppressMruRecording(false);
+      }
+      await drain();
+      hostOwnedWrites.releaseHostOwnedWrites();
+      await drain();
 
-    expect(mruWrites()).toEqual([[`worktree:${NEW}`]]);
-  });
+      expect(mruWrites()).toEqual([[`worktree:${NEW}`]]);
+    }
+  );
 });
