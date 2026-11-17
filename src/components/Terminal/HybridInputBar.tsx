@@ -2852,6 +2852,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           onAdd={addHeldBackAttachments}
           className="mb-1.5"
         />
+        {/* On the band with the other strips, not above it: there the pane's
+            app canvas showed between the terminal and the composer (#17278). */}
+        <DictionaryLearnPrompt
+          terminalId={voiceId}
+          projectId={voiceProjectId}
+          onReturnFocus={focusEditor}
+          className="mb-1.5"
+        />
         {/* Outside the shell, which is busy for the whole wait: a live region
             inside it would hold its announcements until the send. */}
         {!isExpanded && voiceSubmitAnnouncer}
@@ -3283,11 +3291,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             focusEditor();
           }}
         >
-          <DictionaryLearnPrompt
-            terminalId={voiceId}
-            projectId={voiceProjectId}
-            onReturnFocus={focusEditor}
-          />
           {barContent}
         </div>
         {activeTemplate && (

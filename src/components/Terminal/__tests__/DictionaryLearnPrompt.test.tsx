@@ -6,6 +6,12 @@ import { useDictionaryLearnPromptStore } from "@/store/dictionaryLearnPromptStor
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import type { HeardAsConflict, VoiceDictionaryChange, VoiceDictionaryState } from "@shared/types";
 
+// jsdom has no layout, so whether the words are cut is the test's to say.
+const truncation = vi.hoisted(() => ({ truncated: false }));
+vi.mock("@/hooks/useTruncationDetection", () => ({
+  useTruncationDetection: () => ({ ref: () => {}, isTruncated: truncation.truncated }),
+}));
+
 const saved = (conflicts: HeardAsConflict[] = []): VoiceDictionaryChange => ({
   dictionary: [],
   suggestedDictionary: [],
@@ -28,6 +34,7 @@ beforeEach(() => {
   dismissSuggestion.mockClear();
   useTerminalInputStore.setState({ draftInputs: new Map() });
   useDictionaryLearnPromptStore.setState({ prompts: new Map() });
+  truncation.truncated = false;
 });
 
 afterEach(() => {
@@ -43,6 +50,21 @@ const offer = () =>
   });
 
 const settle = () => act(async () => {});
+
+const PAST_HOVER_DELAY_MS = 1_000;
+
+const hover = (element: HTMLElement) =>
+  act(() => {
+    fireEvent.pointerMove(element, { pointerType: "mouse" });
+    vi.advanceTimersByTime(PAST_HOVER_DELAY_MS);
+  });
+
+const words = (text: string) => {
+  const status = screen.getByRole("status");
+  const span = [...status.querySelectorAll("span")].find((el) => el.textContent?.startsWith(text));
+  if (!span) throw new Error(`no words starting "${text}" on the line`);
+  return span;
+};
 
 describe("DictionaryLearnPrompt", () => {
   it("offers the pair and adds it on Add", async () => {
@@ -285,6 +307,59 @@ describe("DictionaryLearnPrompt", () => {
     act(() => useTerminalInputStore.getState().setDraftInput("t1", "n"));
     expect(screen.queryByRole("status")).toBeNull();
     expect(dismissSuggestion).not.toHaveBeenCalled();
+  });
+
+  it("reads a cut offer in full on hover, before it is answered", () => {
+    truncation.truncated = true;
+    render(<DictionaryLearnPrompt terminalId="t1" />);
+    offer();
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    hover(words("Learn"));
+
+    expect(screen.getByRole("tooltip").textContent).toBe(
+      "Learn \u201cZustand\u201d for \u201czoo stand\u201d?"
+    );
+    expect(acceptSuggestion).not.toHaveBeenCalled();
+  });
+
+  it("reads a cut failure in full on hover", async () => {
+    truncation.truncated = true;
+    acceptSuggestion.mockRejectedValueOnce(new Error("disk full"));
+    render(<DictionaryLearnPrompt terminalId="t1" />);
+    offer();
+    fireEvent.click(screen.getByText("Add"));
+    await settle();
+
+    hover(words("Couldn"));
+
+    expect(screen.getByRole("tooltip").textContent).toBe("Couldn't add \u201cZustand\u201d");
+  });
+
+  it("lets the keyboard reach cut words, and holds the line while they are read", () => {
+    truncation.truncated = true;
+    render(<DictionaryLearnPrompt terminalId="t1" />);
+    offer();
+    const cut = words("Learn");
+    expect(cut.tabIndex).toBe(0);
+
+    act(() => cut.focus());
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+
+    expect(screen.getByRole("status")).toBeTruthy();
+  });
+
+  it("adds neither a tooltip nor a tab stop to words that fit", () => {
+    render(<DictionaryLearnPrompt terminalId="t1" />);
+    offer();
+    const fits = words("Learn");
+
+    hover(fits);
+
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(fits.hasAttribute("tabindex")).toBe(false);
   });
 
   it("clears by itself after a few seconds", () => {

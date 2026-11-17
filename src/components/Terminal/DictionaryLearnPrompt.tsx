@@ -1,7 +1,9 @@
 import { useEffect, useEffectEvent, useRef, useState } from "react";
-import type { FocusEvent } from "react";
+import type { FocusEvent, ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { DismissButton } from "@/components/ui/DismissButton";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { cn } from "@/lib/utils";
 import {
   useDictionaryLearnPromptStore,
   type DictionaryLearnPrompt as LearnOffer,
@@ -42,6 +44,16 @@ interface DictionaryLearnPromptProps {
   projectId?: string;
   /** Takes the keyboard back to the composer when the line goes while it had focus. */
   onReturnFocus?: () => void;
+  className?: string;
+}
+
+/** The line's words: cut to fit a narrow pane, and read in full on hover or focus before answering. */
+function Message({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <TruncatedTooltip content={children} side="top" align="start">
+      <span className={cn("min-w-0 flex-1 truncate", className)}>{children}</span>
+    </TruncatedTooltip>
+  );
 }
 
 /**
@@ -55,6 +67,7 @@ export function DictionaryLearnPrompt({
   terminalId,
   projectId,
   onReturnFocus,
+  className,
 }: DictionaryLearnPromptProps) {
   const prompt = useDictionaryLearnPromptStore((s) => s.prompts.get(terminalId));
   const hasDraft = useTerminalInputStore((s) => s.getDraftInput(terminalId, projectId) !== "");
@@ -150,7 +163,13 @@ export function DictionaryLearnPrompt({
       ref={rootRef}
       role="status"
       aria-live="polite"
-      className="mb-1 flex items-center gap-2 px-1 text-xs text-text-secondary"
+      // It sits on the composer's band, which takes the terminal's palette, so
+      // it brings an app surface of its own for its app inks and controls to
+      // read on whatever the pair of themes, as the upload chips beside it do.
+      className={cn(
+        "flex min-w-0 cursor-default items-center gap-2 rounded-[var(--radius-md)] border border-border-default bg-surface-panel-elevated py-0.5 pl-2.5 pr-0.5 text-xs text-text-secondary",
+        className
+      )}
       onPointerEnter={() => adopt({ hovered: true })}
       onPointerLeave={() => adopt({ hovered: false })}
       onFocus={() => adopt({ focused: true })}
@@ -158,10 +177,10 @@ export function DictionaryLearnPrompt({
     >
       {failedAnswer ? (
         <>
-          <span className="min-w-0 flex-1 truncate text-status-error">
+          <Message className="text-status-error">
             Couldn&apos;t {failedAnswer === "acceptSuggestion" ? "add" : "dismiss"} &ldquo;
             {prompt.word}&rdquo;
-          </span>
+          </Message>
           <Button size="xs" variant="outline" onClick={() => resolve(failedAnswer)}>
             Retry
           </Button>
@@ -172,9 +191,9 @@ export function DictionaryLearnPrompt({
         </>
       ) : current.leftOut.length > 0 ? (
         <>
-          <span className="min-w-0 flex-1 truncate">
+          <Message>
             Added &ldquo;{prompt.word}&rdquo;, but {describeHeardAsConflicts(current.leftOut)}
-          </span>
+          </Message>
           <DismissButton
             aria-label={`Dismiss the note about \u201c${prompt.word}\u201d`}
             onClick={() => dismiss(prompt)}
@@ -182,10 +201,10 @@ export function DictionaryLearnPrompt({
         </>
       ) : (
         <>
-          <span className="min-w-0 flex-1 truncate">
+          <Message>
             Learn &ldquo;{prompt.word}&rdquo;
             {prompt.utterance ? <> for &ldquo;{prompt.utterance}&rdquo;</> : null}?
-          </span>
+          </Message>
           <Button
             size="xs"
             variant="ghost"
