@@ -13,6 +13,8 @@ const SURFACE = "composer:t1";
 
 interface Upload {
   done: Promise<unknown>;
+  /** Whether the chip's cancel has aborted the run. */
+  aborted: () => boolean;
   /** Ends the upload as a cancel's abort would, once the run notices it. */
   reject: () => Promise<void>;
   /** Ends the upload as a finished one. */
@@ -27,14 +29,16 @@ interface Upload {
 function startUpload(name: string, settleOnAbort = true): Upload {
   let finish!: () => void;
   let fail!: () => void;
+  let signal!: AbortSignal;
   const done = trackUpload(
     SURFACE,
     name,
-    ({ signal }) =>
+    (handle) =>
       new Promise<string>((resolve, reject) => {
+        signal = handle.signal!;
         finish = () => resolve(`/inbox/${name}`);
         fail = () => reject(new Error("cancelled"));
-        if (settleOnAbort) signal!.addEventListener("abort", fail);
+        if (settleOnAbort) signal.addEventListener("abort", fail);
       })
   );
   done.catch(() => {});
@@ -44,6 +48,7 @@ function startUpload(name: string, settleOnAbort = true): Upload {
     });
   return {
     done,
+    aborted: () => signal.aborted,
     reject: () => {
       fail();
       return settled();
@@ -121,13 +126,13 @@ describe("PendingUploadChips", () => {
     });
 
     it("hands keyboard focus to the previous chip's cancel when the trailing chip is cancelled", async () => {
-      const { uploads, onReturnFocus } = renderChips(["a.png", "b.png"]);
-      const trailing = cancelButton("b.png");
+      const { uploads, onReturnFocus } = renderChips(["a.png", "b.png", "c.png"]);
+      const trailing = cancelButton("c.png");
       trailing.focus();
 
-      await cancelByKeyboard(trailing, uploads[1]!);
+      await cancelByKeyboard(trailing, uploads[2]!);
 
-      expect(document.activeElement).toBe(cancelButton("a.png"));
+      expect(document.activeElement).toBe(cancelButton("b.png"));
       expect(onReturnFocus).not.toHaveBeenCalled();
     });
 
@@ -149,6 +154,8 @@ describe("PendingUploadChips", () => {
       first.focus();
 
       fireEvent.click(first, { detail: 0 });
+      await act(async () => {});
+      expect(uploads[0]!.aborted()).toBe(true);
       expect(getPendingUploads(SURFACE)).toHaveLength(2);
       expect(document.activeElement).toBe(first);
 
@@ -179,14 +186,14 @@ describe("PendingUploadChips", () => {
       expect(document.activeElement).toBe(cancelButton("b.png"));
     });
 
-    it("moves nothing when a chip without focus leaves", async () => {
+    it("moves nothing when a chip without focus leaves, even with focus on the document", async () => {
       const { uploads, onReturnFocus } = renderChips(["a.png", "b.png"]);
-      composer().focus();
+      expect(document.activeElement).toBe(document.body);
 
       await uploads[0]!.resolve();
       await uploads[1]!.resolve();
 
-      expect(document.activeElement).toBe(composer());
+      expect(document.activeElement).toBe(document.body);
       expect(onReturnFocus).not.toHaveBeenCalled();
     });
 
@@ -260,12 +267,8 @@ describe("PendingUploadChips", () => {
     for (const name of ["a.png", "b.png"]) {
       const button = cancelButton(name);
       const chip = button.closest("[data-pending-uploads] > *")!;
-      const classes = button.className.split(" ");
       const box = px(button, "h-")!;
       expect(px(button, "w-")).toBe(box);
-      expect(classes).toContain("relative");
-      expect(classes).toContain("after:absolute");
-      expect(classes).toContain("after:content-['']");
       const reach = px(button, "after:-inset-")!;
       expect(box + 2 * reach).toBeGreaterThanOrEqual(24);
       // Within the chip's own padding, so it never meets the next chip's

@@ -1003,20 +1003,21 @@ export function FileBrowserPane({
   const treeColumnRef = useRef<HTMLDivElement>(null);
   const treeHeaderRef = useRef<HTMLDivElement>(null);
   const handleTreeHeaderKeyDown = useToolbarRoving(treeHeaderRef);
-  const focusTree = useCallback(() => {
-    requestAnimationFrame(() => {
-      const column = treeColumnRef.current;
-      if (!column) return;
-      // The tree when there are rows to land on, otherwise the first control the
-      // column still has: the loading, error and empty branches render no tree at
-      // all, and querying only for it would drop focus to the document in exactly
-      // the cases this exists to cover.
-      const target =
-        column.querySelector<HTMLElement>('[role="tree"]') ??
-        column.querySelector<HTMLElement>("button");
-      target?.focus();
-    });
+  const focusTreeNow = useCallback(() => {
+    const column = treeColumnRef.current;
+    if (!column) return;
+    // The tree when there are rows to land on, otherwise the first control the
+    // column still has: the loading, error and empty branches render no tree at
+    // all, and querying only for it would drop focus to the document in exactly
+    // the cases this exists to cover.
+    const target =
+      column.querySelector<HTMLElement>('[role="tree"]') ??
+      column.querySelector<HTMLElement>("button");
+    target?.focus();
   }, []);
+  const focusTree = useCallback(() => {
+    requestAnimationFrame(focusTreeNow);
+  }, [focusTreeNow]);
 
   // Collapsing the viewer unmounts everything in it, including its own controls.
   // The containment check is what keeps the common path intact: the toggle lives
@@ -1424,7 +1425,9 @@ export function FileBrowserPane({
             <PendingUploadChips
               surface={uploadSurface}
               className="shrink-0 border-t border-divider p-2"
-              onReturnFocus={focusTree}
+              // At once: the tree is already there, and a frame's wait could
+              // take focus back from whatever claimed it meanwhile.
+              onReturnFocus={focusTreeNow}
             />
             <LazyUploadConfirmHost />
           </>
