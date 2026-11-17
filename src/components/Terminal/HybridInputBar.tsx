@@ -477,8 +477,8 @@ const NO_TEMPLATE_ITEMS: AutocompleteItem[] = [];
 /** A file left out of the templates folder would otherwise just be absent from the menu. */
 const TEMPLATE_PROBLEMS_NOTE = {
   text: "Some prompt templates weren't loaded. See why in Settings > CLI agents",
-  // Bound in the composer's keymap (`Mod-Shift-,`): focus stays in the editor
-  // while the menu is open, so the note itself is never a tab stop.
+  // Bound in the composer's keymap by the physical comma key: focus stays in
+  // the editor while the menu is open, so the note itself is never a tab stop.
   shortcut: "Cmd+Shift+,",
   onClick: () => {
     void actionService.dispatch(

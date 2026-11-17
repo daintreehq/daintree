@@ -12,6 +12,7 @@ import {
   EASE_OUT_EXPO,
 } from "@/lib/animationUtils";
 import { createTrustedHTML, setTrustedInnerHTML } from "@/lib/trustedTypesPolicy";
+import { isMac } from "@/lib/platform";
 import { userEdit } from "./userEdit";
 
 const MAX_TEXTAREA_HEIGHT_PX = 160;
@@ -991,9 +992,13 @@ export function createCustomKeymap(config: CustomKeymapConfig): Extension {
         },
       },
       {
-        key: "Mod-Shift-,",
-        run() {
-          return config.onAutocompleteNote();
+        // Mod+Shift+Comma by the physical key, as app keybindings match
+        // punctuation and as the chip labels it for the user's layout: a
+        // character match misses where the layout puts the comma elsewhere.
+        any(_view, event) {
+          if (event.code !== "Comma" || !event.shiftKey || event.altKey) return false;
+          const mod = isMac() ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+          return mod && config.onAutocompleteNote();
         },
       },
     ])

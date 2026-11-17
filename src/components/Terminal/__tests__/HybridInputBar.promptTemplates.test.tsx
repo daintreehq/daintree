@@ -27,6 +27,7 @@ import {
 import { actionService } from "@/services/ActionService";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { toSlashAutocompleteItems } from "@/hooks/slashAutocompleteItems";
+import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import { HybridInputBar } from "../HybridInputBar";
 import { PROMPT_TEMPLATE_BAND } from "../promptTemplateCompletion";
 
@@ -767,36 +768,53 @@ describe("HybridInputBar's own prompt templates in the `/` menu", () => {
     );
   });
 
+  // Mod+Shift on the physical comma key, whatever character the layout puts there.
+  const NOTE_CHORD = "Cmd+Shift+,";
+  const mac = /Mac/.test(navigator.platform);
+  const pressCommaKey = async (view: EditorView, key: string, shiftKey = true) => {
+    let handled = false;
+    await act(async () => {
+      handled = runScopeHandlers(
+        view,
+        new KeyboardEvent("keydown", { key, code: "Comma", shiftKey, metaKey: mac, ctrlKey: !mac }),
+        "editor"
+      );
+    });
+    return handled;
+  };
+
   it("goes to the problem from the editor by the note's shortcut, leaving the draft alone", async () => {
     const dispatch = vi
       .spyOn(actionService, "dispatch")
       .mockResolvedValue({ ok: true } as Awaited<ReturnType<typeof actionService.dispatch>>);
     withFolder(() => folder([mine()], [{ fileName: "bad.md", reason: "title is missing" }]));
-    const { type, view } = await renderComposer("");
-    const mac = /Mac/.test(navigator.platform);
-    const chord = () =>
-      act(async () => {
-        runScopeHandlers(
-          view,
-          new KeyboardEvent("keydown", { key: ",", shiftKey: true, metaKey: mac, ctrlKey: !mac }),
-          "editor"
-        );
-      });
+    const { type, view, container } = await renderComposer("");
 
     // No menu, no note: the chord is nobody's.
-    await chord();
+    expect(await pressCommaKey(view, "<")).toBe(false);
     expect(dispatch).not.toHaveBeenCalled();
 
     // A `/` matching nothing still shows the note, and the chord still reaches it.
     await type("/zzz");
     expect(screen.queryAllByRole("option")).toHaveLength(0);
-    await chord();
-    expect(dispatch).toHaveBeenCalledTimes(1);
-    expect(dispatch).toHaveBeenCalledWith(
-      "app.settings.openTab",
-      expect.objectContaining({ tab: "agents", sectionId: "agents-prompt-templates" }),
-      { source: "user" }
-    );
+    const note = container.querySelector<HTMLElement>("[data-autocomplete-note]")!;
+    expect(note.getAttribute("aria-keyshortcuts")).toBe(comboToAriaKeyshortcuts(NOTE_CHORD, mac));
+
+    // Without Shift it's the Settings chord's key, not the note's.
+    expect(await pressCommaKey(view, ",", false)).toBe(false);
+    expect(dispatch).not.toHaveBeenCalled();
+
+    // US (`<`), then a layout that puts another character on the key (AZERTY's `.`).
+    for (const key of ["<", "."]) {
+      dispatch.mockClear();
+      expect(await pressCommaKey(view, key)).toBe(true);
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(dispatch).toHaveBeenCalledWith(
+        "app.settings.openTab",
+        expect.objectContaining({ tab: "agents", sectionId: "agents-prompt-templates" }),
+        { source: "user" }
+      );
+    }
     expect(view.state.doc.toString()).toBe("/zzz");
   });
 
@@ -815,14 +833,7 @@ describe("HybridInputBar's own prompt templates in the `/` menu", () => {
     await act(async () => {});
     expect(container.querySelector("[data-autocomplete-note]")).toBeNull();
 
-    const mac = /Mac/.test(navigator.platform);
-    await act(async () => {
-      runScopeHandlers(
-        view,
-        new KeyboardEvent("keydown", { key: ",", shiftKey: true, metaKey: mac, ctrlKey: !mac }),
-        "editor"
-      );
-    });
+    expect(await pressCommaKey(view, "<")).toBe(false);
     expect(dispatch).not.toHaveBeenCalled();
   });
 
