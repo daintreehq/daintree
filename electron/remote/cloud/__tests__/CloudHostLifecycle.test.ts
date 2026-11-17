@@ -4006,6 +4006,23 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
     next.lifecycle.dispose();
   });
 
+  it("never lets a replay of the same delete arm a machine the person chose to keep", async () => {
+    const { lifecycle, provider, store, gone } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"), "mutation-a");
+    gone.value = false;
+    await lifecycle.settleWorktreeCleanup(WORKTREE, null, "mutation-a");
+    lifecycle.dismissWorktreeCleanup("build");
+    // The reconnect replays the parked delete with the options it was confirmed with.
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"), "mutation-a");
+    expect(cleanupOf(store)).toBeNull();
+    gone.value = true;
+    expect(await lifecycle.settleWorktreeCleanup(WORKTREE, true, "mutation-a")).toEqual([]);
+    expect(provider.delete).not.toHaveBeenCalled();
+    // A later delete of the worktree asks afresh.
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"), "mutation-b");
+    expect(cleanupOf(store)).toMatchObject({ phase: "waiting", mutationId: "mutation-b" });
+  });
+
   it("lets the person keep a machine whose stop failed", async () => {
     const { lifecycle, provider, store } = await marked();
     lifecycle.prepareWorktreeCleanup(WORKTREE, choose("stop"));

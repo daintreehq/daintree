@@ -489,6 +489,8 @@ export class CloudHostLifecycle {
   private readonly reconcileOvertaken = new Set<string>();
   /** Worktree cleanups carrying out now, which every caller joins. */
   private readonly cleanupRuns = new Map<string, Promise<CloudWorktreeCleanupOutcome | null>>();
+  /** Keeps chosen in Settings, by binding and delete: that delete's replay never arms it again. */
+  private readonly keptForDelete = new Set<string>();
   private stopWatchingWorktrees: (() => void) | null = null;
   private renewingAll = false;
   /**
@@ -1400,6 +1402,7 @@ export class CloudHostLifecycle {
       this.deps.accounts.provider(binding.providerId);
       if (choice === "delete") this.requireDeletion(binding.providerId);
       if (planned.has(binding.id)) throw invalid("Choose once for each machine.");
+      if (mutation && this.keptForDelete.has(`${binding.id}\u0000${mutation}`)) continue;
       const current = binding.worktreeCleanup;
       if (
         this.cleanupRuns.has(binding.id) &&
@@ -1538,6 +1541,8 @@ export class CloudHostLifecycle {
     if (this.cleanupRuns.has(binding.id)) {
       throw invalid("The machine's stop or delete is under way. Wait for it to finish.");
     }
+    const mutation = binding.worktreeCleanup?.mutationId;
+    if (mutation) this.keptForDelete.add(`${binding.id}\u0000${mutation}`);
     this.deps.store.updateBinding(binding.id, (current) => ({ ...current, worktreeCleanup: null }));
   }
 

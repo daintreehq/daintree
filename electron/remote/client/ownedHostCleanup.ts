@@ -64,9 +64,16 @@ export async function worktreeRootGone(
   if (parent === worktreePath) return null;
   try {
     const found = await bounded((probes.parent ?? stat)(parent));
-    return found.isDirectory() ? true : null;
+    if (!found.isDirectory()) return null;
   } catch {
     return null;
+  }
+  // Read again: a volume that came back between the two reads brings the worktree with it.
+  try {
+    await bounded((probes.root ?? lstat)(worktreePath));
+    return false;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException)?.code === "ENOENT" ? true : null;
   }
 }
 

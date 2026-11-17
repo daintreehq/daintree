@@ -2682,6 +2682,48 @@ describe("WorktreeDeleteDialog — its cloud machine (#17360)", () => {
     expect(screen.getByText("What can be done with it changed. Choose again.")).toBeDefined();
   });
 
+  it("holds a force delete whose machine left the list during its check, and asks again if it returns", async () => {
+    const view = (hosts: ReturnType<typeof machine>[]) => {
+      cloudSnapshotMock.value = { providers: [BOAT], accounts: [], hosts };
+      return (
+        <WorktreeDeleteDialog
+          isOpen={true}
+          onClose={vi.fn()}
+          worktree={makeWorktree(makeChanges([]))}
+        />
+      );
+    };
+    buildPreviewMock.mockResolvedValueOnce(makePreview([]));
+    const { rerender } = render(view([machine()]));
+    await settlePreview();
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+    fireEvent.click(choice("stop"));
+    let finishCheck: (preview: unknown) => void = () => {};
+    buildPreviewMock.mockImplementationOnce(
+      () => new Promise((resolve) => (finishCheck = resolve))
+    );
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+    rerender(view([]));
+    await act(async () => finishCheck(makePreview([])));
+    // What was confirmed included a stop that is no longer on screen.
+    expect(startDeleteMock).not.toHaveBeenCalled();
+
+    // It comes back: the stop isn't revived, it's chosen again.
+    rerender(view([machine()]));
+    expect(screen.getByText("What can be done with it changed. Choose again.")).toBeDefined();
+    expect(choice("stop").checked).toBe(false);
+
+    // Gone again: nothing left to choose for, so the delete goes ahead without it.
+    rerender(view([]));
+    buildPreviewMock.mockResolvedValueOnce(makePreview([]));
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(startDeleteMock).toHaveBeenCalledWith("wt-1", { force: true, deleteBranch: false });
+  });
+
   it("names only the machine in a gate its delete alone raised", async () => {
     // The tree couldn't be checked, but without Force the worktree's own tier stays below D3.
     buildPreviewMock.mockRejectedValue(new Error("refresh timeout"));

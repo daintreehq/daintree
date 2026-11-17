@@ -280,6 +280,16 @@ describe("worktreeRootGone (#17360)", () => {
     ).toBeNull();
   });
 
+  it("isn't gone when the root comes back while its parent is read, as a volume remounting", async () => {
+    const rootProbe = vi
+      .fn(async (_target: string): Promise<unknown> => ({}))
+      .mockImplementationOnce(() => fail("ENOENT"));
+    expect(await worktreeRootGone(ROOT, { root: rootProbe, parent: parent("directory") })).toBe(
+      false
+    );
+    expect(rootProbe).toHaveBeenCalledTimes(2);
+  });
+
   it("proves nothing when the root can't be read", async () => {
     const parentProbe = parent("directory");
     expect(await worktreeRootGone(ROOT, { root: root("denied"), parent: parentProbe })).toBeNull();
