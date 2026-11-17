@@ -463,6 +463,21 @@ describe("PilotView", () => {
     });
   });
 
+  it("names the row's worktree when opening its run", () => {
+    // A run that exits while its project opens lands in this worktree instead of
+    // whichever one the project last showed.
+    seed([run({ runId: "t9", workspaceId: "p1", worktreeId: "/repo/wt/alpha" })]);
+    render(<PilotView />);
+
+    screen.getByTestId("pilot-row").click();
+
+    expect(dispatchMock).toHaveBeenCalledWith("pilot.openRun", {
+      runId: "t9",
+      workspaceId: "p1",
+      worktreeId: "/repo/wt/alpha",
+    });
+  });
+
   it("filters rows by title and drops projects left with nothing", () => {
     seed([
       run({ runId: "a", workspaceId: "p1", agentState: "working", title: "auth refactor" }),
@@ -2969,6 +2984,7 @@ describe("PilotView worktree scope", () => {
       expect(dispatchMock).toHaveBeenCalledWith("pilot.openRun", {
         runId: "alpha-1",
         workspaceId: "p1",
+        worktreeId: "/repo/wt/alpha",
       });
     });
 
