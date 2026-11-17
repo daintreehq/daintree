@@ -457,6 +457,8 @@ describe("DiffPane — pending notes with no diff table (#17198)", () => {
   });
 
   it("lists the file's notes when the since-review notice replaces the body", () => {
+    // The cache normally turns these outcomes into a sentinel patch; this pins the
+    // predicate itself so a replaced body never hides notes if a patch survives.
     addNote("a.ts");
     useDiffContentMock.mockReturnValue({
       content: "diff --git a/a.ts b/a.ts",
