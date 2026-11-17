@@ -185,6 +185,13 @@ function isCalendarKey(key: string): key is CalendarKey {
 
 type TipSource = "hover" | "focus" | "touch";
 
+// The card sits over the days above the one it names, which are the ones a
+// finger reaches for next: a tap that lands on the card would close the readout
+// instead of moving it. While a tap owns the readout the card lets touches
+// through. The hit is taken by Popper's wrapper, not the card, hence the
+// parent selector.
+const TOUCH_CARD_CLASS = "[[data-radix-popper-content-wrapper]:has(&)]:pointer-events-none";
+
 // A click is a PointerEvent in Chromium, and its pointerType names the input
 // that produced it: "touch" for a tap, "mouse" or "pen" for those, empty for
 // the click a keyboard activation synthesises.
@@ -463,7 +470,7 @@ export function PulseHeatmap({ cells, rangeDays, describedBy }: PulseHeatmapProp
           </TooltipTrigger>
           <TooltipContent
             side="top"
-            className="text-xs"
+            className={cn("text-xs", tip.source === "touch" && TOUCH_CARD_CLASS)}
             onPointerDownOutside={handleCardPointerDownOutside}
           >
             {tipCell && (

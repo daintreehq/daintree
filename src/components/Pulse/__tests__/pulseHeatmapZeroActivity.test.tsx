@@ -382,14 +382,21 @@ describe("PulseHeatmap — a tap is a request for a day's readout", () => {
   }
 
   // pointerdown, the focus the press causes, pointerup, then the click, in the
-  // order a touchscreen delivers them. The settle after lets Radix register its
-  // outside-press listeners, which it attaches on a timer.
+  // order a touchscreen delivers them: the focus lands after the press's own
+  // tick, so it is not the one a mouse press suppresses. The settle after lets
+  // Radix register its outside-press listeners, which it attaches on a timer.
   async function tap(el: HTMLElement) {
     fireEvent.pointerDown(el, { pointerType: "touch" });
-    act(() => {
-      el.focus();
-      fireEvent.focus(el);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
     });
+    // A button that already holds focus gets no focus event from a tap.
+    if (document.activeElement !== el) {
+      act(() => {
+        el.focus();
+        fireEvent.focus(el);
+      });
+    }
     fireEvent.pointerUp(el, { pointerType: "touch" });
     click(el, "touch");
     // Touch fires pointerleave once the finger lifts.
@@ -429,6 +436,38 @@ describe("PulseHeatmap — a tap is a request for a day's readout", () => {
     expect(shown()).toContain("5 commits");
     expect(shown()).not.toContain("2 commits");
     expect(anchor.style.top).not.toBe(before);
+  });
+
+  it("follows a run of taps: open, replace, replace, close", async () => {
+    renderHeatmap(cells);
+    await settle();
+    const first = cellByDate("2026-09-21");
+    const second = cellByDate("2026-09-22");
+
+    await tap(first);
+    expect(shown()).toContain("2 commits");
+    await tap(second);
+    expect(shown()).toContain("5 commits");
+    expect(shown()).not.toContain("2 commits");
+    await tap(first);
+    expect(shown()).toContain("2 commits");
+    expect(shown()).not.toContain("5 commits");
+    await tap(first);
+    expect(shown()).not.toContain("2 commits");
+  });
+
+  it("lets a tap through the card to a day it covers while a tap owns the readout", async () => {
+    renderHeatmap(cells);
+    await settle();
+    const cardOf = (text: string) =>
+      screen.getByText(text).closest<HTMLElement>("[data-side]")!.className;
+
+    await tap(cellByDate("2026-09-22"));
+    expect(cardOf("5 commits")).toContain("pointer-events-none");
+
+    // A readout the pointer owns is hover's, and keeps the card hoverable.
+    fireEvent.pointerOver(cellByDate("2026-09-21"), { pointerType: "mouse" });
+    expect(cardOf("2 commits")).not.toContain("pointer-events-none");
   });
 
   it("keeps the open day up while a finger presses another, until the click decides", async () => {
@@ -501,6 +540,47 @@ describe("PulseHeatmap — a tap is a request for a day's readout", () => {
       await vi.advanceTimersByTimeAsync(1000);
     });
     expect(shown()).toContain("5 commits");
+  });
+
+  it("closes on Escape", async () => {
+    renderHeatmap(cells);
+    await settle();
+    await tap(cellByDate("2026-09-22"));
+    expect(shown()).toContain("5 commits");
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(shown()).not.toContain("5 commits");
+  });
+
+  it("closes when the page scrolls under it", async () => {
+    renderHeatmap(cells);
+    await settle();
+    await tap(cellByDate("2026-09-22"));
+    expect(shown()).toContain("5 commits");
+
+    fireEvent.scroll(document);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(shown()).not.toContain("5 commits");
+  });
+
+  it("treats a pen as a pointer: it hovers a day open and a press closes it", async () => {
+    renderHeatmap(cells);
+    await settle();
+    const cell = cellByDate("2026-09-22");
+    fireEvent.pointerOver(cell, { pointerType: "pen" });
+    expect(shown()).toContain("5 commits");
+
+    fireEvent.pointerDown(cell, { pointerType: "pen" });
+    click(cell, "pen");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(shown()).not.toContain("5 commits");
   });
 
   it("leaves a mouse click closing the readout it opened", async () => {
