@@ -74,6 +74,14 @@ describe("buildSourcePrOptions", () => {
     });
   });
 
+  it.each([
+    ["open", "open"],
+    ["merged", "merged"],
+    ["closed", "closed"],
+  ] as const)("reports a %s PR as %s", (state, expected) => {
+    expect(buildSourcePrOptions({ ...pr, state }).sourcePrState).toBe(expected);
+  });
+
   it("leaves the linked issue unset when the body closes none", () => {
     expect(buildSourcePrOptions({ ...pr, body: "Just a refactor" }).sourcePrLinkedIssueNumber).toBe(
       undefined

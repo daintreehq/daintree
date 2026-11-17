@@ -616,11 +616,16 @@ describe("bulk create runner — PR mode", () => {
     await done;
 
     expect(mockFetchPRBranch).not.toHaveBeenCalled();
-    expect(created()[0]).toMatchObject({ baseBranch: "fix-1", useExistingBranch: true });
+    expect(created()[0]).toMatchObject({
+      baseBranch: "fix-1",
+      useExistingBranch: true,
+      sourcePrNumber: 1,
+      sourcePrState: "open",
+    });
   });
 
-  it("fails an item whose fetch leaves no local branch, and creates nothing for it", async () => {
-    mockListBranches.mockResolvedValue([]);
+  it("fails an item whose fetch leaves no local branch of the head's name, and creates nothing for it", async () => {
+    mockListBranches.mockResolvedValue([branch("main")]);
 
     const { runId, done } = startBulkCreateRun(prInput([pr(1)]));
     await done;
@@ -659,7 +664,9 @@ describe("bulk create runner — PR mode", () => {
       .mockResolvedValue([branch("fix-2")]);
     mockWorktreeCreate.mockResolvedValue({ worktreeId: "wt-2", branch: "fix-2-2" });
 
-    const { runId, done } = startBulkCreateRun(prInput([pr(2, { title: "Collides" })]));
+    const { runId, done } = startBulkCreateRun(
+      prInput([pr(2, { title: "Collides", body: "Closes #7" })])
+    );
     await done;
 
     expect(created()[0]).toMatchObject({
@@ -668,6 +675,7 @@ describe("bulk create runner — PR mode", () => {
       sourcePrTitle: "Collides",
       sourcePrUrl: "https://github.com/acme/app/pull/2",
       sourcePrState: "open",
+      sourcePrLinkedIssueNumber: 7,
     });
     expect(runOf(runId).progress.items.get(2)).toMatchObject({
       stage: "succeeded",
