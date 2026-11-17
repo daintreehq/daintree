@@ -6,8 +6,19 @@ import { LogsContent } from "../LogsContent";
 import { useLogsStore } from "@/store";
 
 vi.mock("../../Logs/LogFilters", () => ({
-  LogFilters: ({ searchInputRef }: { searchInputRef?: React.Ref<HTMLInputElement> }) => (
-    <input data-testid="log-filters" aria-label="Search logs" ref={searchInputRef} />
+  LogFilters: ({
+    searchInputRef,
+    availableSources,
+  }: {
+    searchInputRef?: React.Ref<HTMLInputElement>;
+    availableSources?: string[];
+  }) => (
+    <input
+      data-testid="log-filters"
+      data-sources={JSON.stringify(availableSources ?? [])}
+      aria-label="Search logs"
+      ref={searchInputRef}
+    />
   ),
 }));
 
@@ -203,7 +214,7 @@ describe("LogsContent — source list", () => {
   it("lists a source once when a live batch carries it several times", async () => {
     mockGetSources.mockResolvedValue(["main"]);
     const onSourcesChange = vi.fn();
-    render(<LogsContent onSourcesChange={onSourcesChange} />);
+    const { getByTestId } = render(<LogsContent onSourcesChange={onSourcesChange} />);
     await waitFor(() => expect(onSourcesChange).toHaveBeenCalledWith(["main"]));
 
     act(() => {
@@ -215,6 +226,7 @@ describe("LogsContent — source list", () => {
     });
 
     expect(onSourcesChange).toHaveBeenLastCalledWith(["git", "main"]);
+    expect(getByTestId("log-filters").dataset.sources).toBe('["git","main"]');
   });
 
   it("derives sources from the loaded entries when the sources read fails", async () => {
@@ -225,9 +237,10 @@ describe("LogsContent — source list", () => {
     ]);
     mockGetSources.mockRejectedValue(new Error("sources unavailable"));
     const onSourcesChange = vi.fn();
-    render(<LogsContent onSourcesChange={onSourcesChange} />);
+    const { getByTestId } = render(<LogsContent onSourcesChange={onSourcesChange} />);
 
     await waitFor(() => expect(onSourcesChange).toHaveBeenLastCalledWith(["git", "pty"]));
+    expect(getByTestId("log-filters").dataset.sources).toBe('["git","pty"]');
   });
 });
 
