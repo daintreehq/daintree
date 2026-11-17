@@ -71,6 +71,14 @@ describe("navigationActions adversarial", () => {
     expect(callbacks.onFocusRegionPrev).toHaveBeenCalledTimes(1);
   });
 
+  it("opens the quick switcher unscoped, and nav.quickOpenFile opens it on files", async () => {
+    const { actions, callbacks } = setupActions();
+
+    await call(actions, "nav.quickSwitcher");
+    await call(actions, "nav.quickOpenFile");
+    expect(callbacks.onOpenQuickSwitcher.mock.calls).toEqual([[], [{ kind: "files" }]]);
+  });
+
   it("find.inFocusedPanel dispatches a daintree:find-in-panel event", async () => {
     const { actions } = setupActions();
     await call(actions, "find.inFocusedPanel");
