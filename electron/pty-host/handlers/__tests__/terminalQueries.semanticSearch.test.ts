@@ -91,7 +91,8 @@ describe("search-semantic-buffers terminal scope (#17516)", () => {
       ...(terminalIds !== undefined ? { terminalIds } : {}),
     });
     const [[event]] = sendEvent.mock.calls;
-    return { matches: (event as { matches: SemanticSearchMatch[] }).matches, reads, getAll };
+    const matches = (event as { matches: SemanticSearchMatch[] }).matches;
+    return { matches, reads, getAll, getTerminal };
   }
 
   const buffers = {
@@ -121,11 +122,20 @@ describe("search-semantic-buffers terminal scope (#17516)", () => {
     expect(matches).toEqual([]);
   });
 
-  it("scans nothing for a malformed scope", () => {
-    const { matches, reads, getAll } = scopedSearch(buffers, "done", "a1");
+  it.each([
+    ["a string", "a1"],
+    ["null", null],
+  ])("scans nothing for %s scope", (_label, scope) => {
+    const { matches, reads, getAll } = scopedSearch(buffers, "done", scope);
     expect(getAll).not.toHaveBeenCalled();
     expect(reads).toEqual([]);
     expect(matches).toEqual([]);
+  });
+
+  it("skips non-string ids in a scope", () => {
+    const { reads, getTerminal } = scopedSearch(buffers, "done", ["a1", 7]);
+    expect(getTerminal.mock.calls).toEqual([["a1"]]);
+    expect(reads).toEqual(["a1"]);
   });
 
   it("scans every terminal when no scope is given", () => {

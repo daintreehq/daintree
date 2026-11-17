@@ -1631,11 +1631,11 @@ describe("PtyClient fabric", () => {
     it("splits a scope that spans projects into one request per owning shard", async () => {
       const { client, shardA, shardB } = twoProjects();
 
-      const promise = client.searchSemanticBuffersAsync("done", false, ["b1", "a3"]);
+      const promise = client.searchSemanticBuffersAsync("done", false, ["b1", "a1", "a3"]);
 
       const requestsA = messagesOfType(shardA.child, "search-semantic-buffers");
       const requestsB = messagesOfType(shardB.child, "search-semantic-buffers");
-      expect(requestsA).toEqual([expect.objectContaining({ terminalIds: ["a3"] })]);
+      expect(requestsA).toEqual([expect.objectContaining({ terminalIds: ["a1", "a3"] })]);
       expect(requestsB).toEqual([expect.objectContaining({ terminalIds: ["b1"] })]);
       const [requestA] = requestsA;
       const [requestB] = requestsB;
