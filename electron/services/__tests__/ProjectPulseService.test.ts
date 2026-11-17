@@ -1432,8 +1432,7 @@ describe("ProjectPulseService", () => {
         if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
         if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
         if (cmd === "rev-parse" && args.includes("--is-shallow-repository")) return "false\n";
-        if (cmd === "rev-list") return "rootsha\n";
-        if (cmd === "log" && args.includes("rootsha")) return `${firstTs}\n`;
+        if (cmd === "rev-list") return `${firstTs} rootsha\n`;
         if (cmd === "log") return commitOutput;
         return "";
       });
