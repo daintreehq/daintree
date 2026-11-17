@@ -236,6 +236,16 @@ describe("summarizeForgeArgs redaction", () => {
     ).toBe("{}");
   });
 
+  it("records a deployment read's target kind and PR number, never the branch name", () => {
+    expect(
+      summarizeForgeArgs("getDeployments", { kind: "branch", branch: "jane/fix-payroll-leak" })
+    ).toBe('{"target":"branch"}');
+    expect(summarizeForgeArgs("getDeployments", { kind: "pullRequest", prNumber: 12 })).toBe(
+      '{"target":"pullRequest","number":12}'
+    );
+    expect(summarizeForgeArgs("getDeployments", "feature/x")).toBe("{}");
+  });
+
   it("keeps only the PR number for review-write ops, omitting bodies/ids/reviewers", () => {
     // Each of these receives content (review body, dismissal message),
     // identifiers (review id), or PII (reviewer logins) beyond the PR number —

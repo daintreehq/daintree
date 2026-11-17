@@ -51,6 +51,7 @@ const fakeImpl = vi.hoisted(() => ({
   repoStats: { getRepoStats: vi.fn() },
   issueComments: { listIssueComments: vi.fn() },
   checks: { getChecks: vi.fn() },
+  deployments: { getDeployments: vi.fn() },
   autoMerge: { enable: vi.fn(), disable: vi.fn() },
   avatars: { resolveAuthorAvatar: vi.fn() },
   reviews: {
@@ -199,6 +200,7 @@ describe("forge handlers — rate limiting", () => {
     // explicit rather than relying on the bare mock's undefined.
     fakeImpl.getCIStatus.mockResolvedValue(null);
     fakeImpl.checks.getChecks.mockResolvedValue(null);
+    fakeImpl.deployments.getDeployments.mockResolvedValue(null);
     fakeImpl.assignIssue.mockResolvedValue(undefined);
     fakeImpl.unassignIssue.mockResolvedValue(undefined);
     const fakePR = {
@@ -984,6 +986,12 @@ describe("forge handlers — rate limiting", () => {
         maxCalls: 10,
         invoke: (h) => h({}, { cwd, prNumber: 1 }),
       },
+      // On-demand capability read, same tier as get-checks.
+      {
+        channel: CHANNELS.FORGE_GET_DEPLOYMENTS,
+        maxCalls: 10,
+        invoke: (h) => h({}, { cwd, target: { kind: "branch", branch: "main" } }),
+      },
       // tooltip + batch lookups: 20/10s (matches github:get-*-tooltip / by-numbers)
       {
         channel: CHANNELS.FORGE_GET_ISSUE_TOOLTIP,
@@ -1026,12 +1034,12 @@ describe("forge handlers — rate limiting", () => {
       },
     ];
 
-    it("registers all forge channels (55 rate-limited + 2 unrated probes)", () => {
-      expect(specs).toHaveLength(55);
+    it("registers all forge channels (56 rate-limited + 2 unrated probes)", () => {
+      expect(specs).toHaveLength(56);
       // FORGE_GET_CURRENT_USER and FORGE_GET_TOKEN_HEALTH are intentionally
       // unrated replay/identity probes with no checkRateLimit, so they register
       // handlers but stay out of `specs`.
-      expect(ipcMainMock.handle).toHaveBeenCalledTimes(57);
+      expect(ipcMainMock.handle).toHaveBeenCalledTimes(58);
     });
 
     it.each(specs)(

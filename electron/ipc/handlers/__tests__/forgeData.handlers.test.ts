@@ -449,6 +449,186 @@ describe("registerForgeDataHandlers", () => {
 
   // Distinct PR numbers per test for the same reason as getCIStatus above: the
   // checks single-flight is module-scoped and outlives an individual test.
+  describe("getDeployments", () => {
+    let appendSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      appendSpy = vi.spyOn(forgeAuditService, "appendRecord").mockImplementation(() => {});
+    });
+
+    const preview = {
+      id: "dep-1",
+      environment: "Preview – web",
+      state: "success" as const,
+      url: "https://web-abc123.vercel.app/",
+      createdAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_060_000,
+      commitSha: "7c374c599f4404adf5a65210ac99e99776194eb9",
+      rawData: { id: "DE_x", payload: { token: "provider-internal" } },
+    };
+    const branchTarget = { kind: "branch", branch: "feature/login" } as const;
+
+    function withDeployments(result: unknown) {
+      return {
+        ...fakeImpl,
+        deployments: { getDeployments: vi.fn().mockResolvedValue(result) },
+      };
+    }
+
+    function useImpl(impl: unknown) {
+      resolveForCwdMock.mockResolvedValue({
+        namespaceId: "fake.provider",
+        repoRef,
+        impl: impl as unknown as ForgeProviderImpl,
+      });
+    }
+
+    const read = (cwd: string, target: unknown) =>
+      findHandler("forge:get-deployments")(null, { cwd, target });
+
+    it("delegates to the capability and strips rawData on the way out", async () => {
+      const failed = { ...preview, id: "dep-0", state: "failure" as const, url: undefined };
+      const impl = withDeployments({ deployments: [preview, failed] });
+      useImpl(impl);
+      registerForgeDataHandlers();
+
+      const result = await read("/repo-deploy-strip", branchTarget);
+
+      expect(impl.deployments.getDeployments).toHaveBeenCalledWith(repoRef, branchTarget);
+      expect(result).toStrictEqual({
+        deployments: [
+          {
+            id: "dep-1",
+            environment: "Preview – web",
+            state: "success",
+            url: "https://web-abc123.vercel.app/",
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_060_000,
+            commitSha: "7c374c599f4404adf5a65210ac99e99776194eb9",
+          },
+          {
+            id: "dep-0",
+            environment: "Preview – web",
+            state: "failure",
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_060_000,
+            commitSha: "7c374c599f4404adf5a65210ac99e99776194eb9",
+          },
+        ],
+      });
+      expect(appendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          methodName: "getDeployments",
+          result: "success",
+          argsSummary: JSON.stringify({ target: "branch" }),
+        })
+      );
+    });
+
+    it("reports nothing, without asking anything, when the provider can't read deployments", async () => {
+      useImpl(fakeImpl);
+      registerForgeDataHandlers();
+
+      expect(await read("/repo-deploy-absent", branchTarget)).toEqual({ deployments: [] });
+      expect(appendSpy).not.toHaveBeenCalled();
+    });
+
+    it("passes a missing branch or PR through as null, apart from nothing deployed", async () => {
+      useImpl(withDeployments(null));
+      registerForgeDataHandlers();
+      expect(await read("/repo-deploy-missing", { kind: "pullRequest", prNumber: 42 })).toBeNull();
+      expect(appendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          methodName: "getDeployments",
+          result: "not-found",
+          argsSummary: JSON.stringify({ target: "pullRequest", number: 42 }),
+        })
+      );
+
+      useImpl(withDeployments({ deployments: [] }));
+      expect(await read("/repo-deploy-none", branchTarget)).toEqual({ deployments: [] });
+    });
+
+    it.each([
+      ["a javascript: URL", "javascript:alert(1)"],
+      ["a file: URL", "file:///etc/passwd"],
+      ["a URL with credentials", "https://user:secret@web.example.test/"],
+      ["an unparseable URL", "not a url"],
+    ])("drops %s but keeps the deployment", async (label, url) => {
+      useImpl(withDeployments({ deployments: [{ ...preview, url }] }));
+      registerForgeDataHandlers();
+
+      const result = (await read(`/repo-deploy-${label}`, branchTarget)) as {
+        deployments: Array<Record<string, unknown>>;
+      };
+
+      expect(result.deployments).toHaveLength(1);
+      expect(result.deployments[0]).not.toHaveProperty("url");
+      expect(result.deployments[0]).toMatchObject({ id: "dep-1", state: "success" });
+    });
+
+    it.each([
+      ["a non-array result", { deployments: "live" }],
+      ["a deployment without an id", { deployments: [{ ...preview, id: "" }] }],
+      ["a blank environment", { deployments: [{ ...preview, environment: "  " }] }],
+      ["an unknown state", { deployments: [{ ...preview, state: "deployed" }] }],
+      ["a non-numeric time", { deployments: [{ ...preview, createdAt: "2026-11-17" }] }],
+      ["a non-string ref", { deployments: [{ ...preview, ref: { name: "main" } }] }],
+    ])("rejects %s from the provider as an error", async (label, bad) => {
+      useImpl(withDeployments(bad));
+      registerForgeDataHandlers();
+
+      await expect(read(`/repo-deploy-${label}`, branchTarget)).rejects.toThrow(
+        /malformed deployment/
+      );
+      expect(appendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ methodName: "getDeployments", result: "error" })
+      );
+    });
+
+    it("rejects a provider failure rather than reporting nothing deployed", async () => {
+      useImpl({
+        ...fakeImpl,
+        deployments: { getDeployments: vi.fn().mockRejectedValue(new Error("Bad credentials")) },
+      });
+      registerForgeDataHandlers();
+
+      await expect(read("/repo-deploy-denied", branchTarget)).rejects.toThrow(/Bad credentials/);
+    });
+
+    it.each([
+      ["no target", undefined],
+      ["an unknown kind", { kind: "tag", branch: "v1" }],
+      ["a blank branch", { kind: "branch", branch: "  " }],
+      ["a zero PR number", { kind: "pullRequest", prNumber: 0 }],
+      ["a PR number past GraphQL's Int", { kind: "pullRequest", prNumber: 2_147_483_648 }],
+    ])("rejects %s before resolving a provider", async (_label, target) => {
+      registerForgeDataHandlers();
+
+      await expect(read("/repo-deploy-invalid", target)).rejects.toThrow(/Invalid/);
+      expect(resolveForCwdMock).not.toHaveBeenCalled();
+    });
+
+    it("coalesces concurrent identical reads but not other targets or worktrees", async () => {
+      const impl = withDeployments({ deployments: [preview] });
+      useImpl(impl);
+      registerForgeDataHandlers();
+
+      await Promise.all([
+        read("/repo-deploy-coalesce", branchTarget),
+        read("/repo-deploy-coalesce", branchTarget),
+      ]);
+      expect(impl.deployments.getDeployments).toHaveBeenCalledTimes(1);
+
+      await Promise.all([
+        read("/repo-deploy-coalesce", { kind: "branch", branch: "feature/other" }),
+        read("/repo-deploy-coalesce", { kind: "pullRequest", prNumber: 9 }),
+        read("/repo-deploy-coalesce-other", branchTarget),
+      ]);
+      expect(impl.deployments.getDeployments).toHaveBeenCalledTimes(4);
+    });
+  });
+
   describe("getChecks", () => {
     let appendSpy: ReturnType<typeof vi.spyOn>;
 

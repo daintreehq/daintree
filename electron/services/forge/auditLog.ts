@@ -71,6 +71,17 @@ export function summarizeForgeArgs(
       if (typeof opts.cursor === "string") summary.paged = true;
       return JSON.stringify(summary);
     }
+    case "getDeployments": {
+      // A branch name can carry a ticket title or a person's name, so only the
+      // target's kind and a PR's number are recorded.
+      const target = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;
+      const summary: Record<string, unknown> = {};
+      if (target.kind === "branch" || target.kind === "pullRequest") summary.target = target.kind;
+      if (target.kind === "pullRequest" && typeof target.prNumber === "number") {
+        summary.number = target.prNumber;
+      }
+      return JSON.stringify(summary);
+    }
     case "getIssue":
     case "getPR":
     case "getCIStatus":

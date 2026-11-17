@@ -18,6 +18,7 @@ import type { PanelTitleMode } from "../shared/types/panel.js";
 import type { HostMemoryPauseSnapshot } from "../shared/types/pty-host.js";
 import type { TerminalExitContext, TerminalKillOptions } from "../shared/types/terminal.js";
 import type { RendererInputBlockingSnapshot } from "../shared/types/ipc/system.js";
+import type { DeploymentTarget } from "../shared/types/forge.js";
 import type {
   McpRuntimeSnapshot,
   McpGrantLifecyclePayload,
@@ -3146,6 +3147,8 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.FORGE_LIST_ISSUE_COMMENTS, payload),
       getChecks: (payload: { cwd: string; prNumber: number }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_CHECKS, payload),
+      getDeployments: (payload: { cwd: string; target: DeploymentTarget }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_DEPLOYMENTS, payload),
       resolveAuthorAvatar: (payload: { cwd: string; email: string }) =>
         _unwrappingInvoke(CHANNELS.FORGE_RESOLVE_AUTHOR_AVATAR, payload),
       getTokenHealth: (payload: { providerId: string }) =>
