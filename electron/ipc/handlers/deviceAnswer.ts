@@ -487,10 +487,8 @@ export const decisionsNamespace = defineIpcNamespace({
     // shows. The list is the leaf Decisions installs into while it runs, so
     // reading it never loads Decisions; it is empty while Decisions is off.
     // Imported on demand, so Decisions adds no module to startup.
-    listQuestions: op(
-      CHANNELS.DECISIONS_LIST_QUESTIONS,
-      async (): Promise<DecisionQuestionList> =>
-        (await import("../../services/decisionsQuestionList.js")).getDecisionQuestionList()
+    listQuestions: op(CHANNELS.DECISIONS_LIST_QUESTIONS, async (): Promise<DecisionQuestionList> =>
+      (await import("../../services/decisionsQuestionList.js")).getDecisionQuestionList()
     ),
     getQuestionContentByReference: opValidated(
       CHANNELS.DECISIONS_GET_QUESTION_CONTENT_BY_REFERENCE,

@@ -111,11 +111,7 @@ export class QuestionImageLoader {
   ): Promise<void> {
     let load: QuestionImageLoad;
     try {
-      const read = await readTargetImage(
-        this.question,
-        attachment.attachmentId,
-        controller.signal
-      );
+      const read = await readTargetImage(this.question, attachment.attachmentId, controller.signal);
       if (controller !== this.controller) return;
       if (read.result !== "read") {
         load = {

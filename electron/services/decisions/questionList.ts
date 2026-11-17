@@ -135,7 +135,11 @@ function lastHumanActionSeq(row: QuestionRow): number | null {
   let latest: number | null = null;
   for (const entry of parseAnswers(row.answers_json)) {
     if (entry.source !== "human" || entry.event_seq === undefined) continue;
-    if (entry.action !== "answer" && entry.action !== "override" && entry.action !== "confirm-proxy") {
+    if (
+      entry.action !== "answer" &&
+      entry.action !== "override" &&
+      entry.action !== "confirm-proxy"
+    ) {
       continue;
     }
     latest = Math.max(latest ?? 0, entry.event_seq);

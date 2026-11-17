@@ -87,7 +87,9 @@ export async function readTargetLine(target: DecisionQuestionTarget): Promise<st
   return summary?.result === "read" ? summary.line : null;
 }
 
-export function cancelTarget(target: DecisionQuestionTarget): Promise<DecisionQuestionCancelResult> {
+export function cancelTarget(
+  target: DecisionQuestionTarget
+): Promise<DecisionQuestionCancelResult> {
   return target.scope === "pane"
     ? decisionsClient.cancelQuestion(target.terminalId, target.questionId)
     : decisionsClient.cancelQuestionByReference(target.reference);
