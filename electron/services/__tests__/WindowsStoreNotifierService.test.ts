@@ -899,50 +899,6 @@ describe("WindowsStoreNotifierService", () => {
       expect(storeMock.set).not.toHaveBeenCalledWith("storeNotifierEtag", expect.any(String));
     });
 
-    it("lets only the newest same-feed check publish when an older reply lands last", async () => {
-      channel = "nightly";
-      const older = deferredResponse();
-      const newer = deferredResponse();
-      netMock.fetch.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
-      windowsStoreNotifierService.initialize();
-      const olderCheck = windowsStoreNotifierService._checkNowForTest();
-      const newerCheck = windowsStoreNotifierService._checkNowForTest();
-
-      newer.resolve(makeResponse({ body: "version: 1.3.0\n", etag: '"newer"' }));
-      await newerCheck;
-      older.resolve(makeResponse({ body: "version: 1.2.0\n", etag: '"older"' }));
-      await olderCheck;
-
-      expect(broadcastMock).toHaveBeenCalledTimes(1);
-      expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.STORE_UPDATE_AVAILABLE, {
-        version: "1.3.0",
-        storeUrl: MS_STORE_FALLBACK_URL,
-      });
-      expect(getLatest()).toEqual({ version: "1.3.0", storeUrl: MS_STORE_FALLBACK_URL });
-
-      dismiss("1.3.0");
-      expect(storeMock.set).toHaveBeenCalledWith("storeNotifierEtag", '"newer"');
-    });
-
-    it("ignores an older same-feed reply that lands while a newer check is pending", async () => {
-      const older = deferredResponse();
-      const newer = deferredResponse();
-      netMock.fetch.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
-      windowsStoreNotifierService.initialize();
-      const olderCheck = windowsStoreNotifierService._checkNowForTest();
-      const newerCheck = windowsStoreNotifierService._checkNowForTest();
-
-      older.resolve(makeResponse({ body: "version: 1.2.0\n", etag: '"older"' }));
-      await olderCheck;
-      expect(broadcastMock).not.toHaveBeenCalled();
-      expect(getLatest()).toBeNull();
-
-      newer.resolve(makeResponse({ body: "version: 1.3.0\n", etag: null }));
-      await newerCheck;
-      expect(broadcastMock).toHaveBeenCalledTimes(1);
-      expect(getLatest()).toEqual({ version: "1.3.0", storeUrl: MS_STORE_FALLBACK_URL });
-    });
-
     it("discards a check that was in flight when notifications were turned off and on", async () => {
       const pending = deferredResponse();
       netMock.fetch.mockReturnValueOnce(pending.promise);
@@ -982,6 +938,8 @@ describe("WindowsStoreNotifierService", () => {
       expect(netMock.fetch).toHaveBeenCalledTimes(2);
     });
 
+    // Same-feed triggers share one request, so only a channel switch leaves an
+    // older check behind for a newer one.
     it("schedules no retry for a transient failure from a superseded check", async () => {
       let rejectOlder!: (err: unknown) => void;
       netMock.fetch
@@ -992,6 +950,7 @@ describe("WindowsStoreNotifierService", () => {
         )
         .mockResolvedValueOnce(makeResponse({ body: "version: 1.0.0\n", etag: null }));
       const olderCheck = windowsStoreNotifierService._checkNowForTest();
+      channel = "nightly";
       await windowsStoreNotifierService._checkNowForTest();
 
       rejectOlder(transientError());
@@ -1008,6 +967,7 @@ describe("WindowsStoreNotifierService", () => {
       const older = deferredResponse();
       netMock.fetch.mockReturnValueOnce(older.promise).mockRejectedValueOnce(transientError());
       const olderCheck = windowsStoreNotifierService._checkNowForTest();
+      channel = "nightly";
       await windowsStoreNotifierService._checkNowForTest();
 
       older.resolve(res);
@@ -1040,7 +1000,9 @@ describe("WindowsStoreNotifierService", () => {
       expect(netMock.fetch).toHaveBeenCalledTimes(5);
     });
 
-    it("cancels a waiting retry when a scheduled check starts, so it can't supersede it", async () => {
+    it("a waiting retry that fires during a scheduled check joins it instead of superseding it", async () => {
+      // Jitter factor 1.0: the retry waits exactly 30s.
+      vi.spyOn(Math, "random").mockReturnValue(0.5);
       const scheduled = deferredResponse();
       netMock.fetch
         .mockRejectedValueOnce(transientError())
@@ -1048,8 +1010,11 @@ describe("WindowsStoreNotifierService", () => {
         .mockResolvedValueOnce(makeResponse({ status: 404 }));
       await windowsStoreNotifierService._checkNowForTest();
 
+      // Started at 20s, the scheduled request's deadline (50s) outlasts the
+      // retry firing at 30s.
+      await vi.advanceTimersByTimeAsync(20_000);
       const scheduledCheck = windowsStoreNotifierService._checkNowForTest();
-      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      await vi.advanceTimersByTimeAsync(20_000);
       expect(netMock.fetch).toHaveBeenCalledTimes(2);
 
       scheduled.resolve(makeResponse({ body: "version: 1.2.0\n", etag: null }));
@@ -1060,7 +1025,7 @@ describe("WindowsStoreNotifierService", () => {
       });
     });
 
-    it("cancels a waiting retry when the resume check starts after wake", async () => {
+    it("queues no retry beside the resume check for a request that outlived the suspend", async () => {
       vi.spyOn(Math, "random").mockReturnValue(0.5);
       let rejectStartup!: (err: unknown) => void;
       const resumed = deferredResponse();
@@ -1079,14 +1044,15 @@ describe("WindowsStoreNotifierService", () => {
       const startupCheck = windowsStoreNotifierService._checkNowForTest();
       onSuspend();
       onWake();
-      // The request that outlived the suspend fails just after wake and
-      // queues a retry for 30s; the resume check starts at 7s.
+      // The request that outlived the suspend fails just after wake; a retry
+      // it queued would fire at 30s, and the resume check starts at 7s.
       rejectStartup(transientError());
       await startupCheck;
       await vi.advanceTimersByTimeAsync(7_000);
       expect(netMock.fetch).toHaveBeenCalledTimes(2);
 
-      await vi.advanceTimersByTimeAsync(60_000);
+      // Past the retry's 30s, short of the resume request's 37s deadline.
+      await vi.advanceTimersByTimeAsync(29_000);
       expect(netMock.fetch).toHaveBeenCalledTimes(2);
 
       resumed.resolve(makeResponse({ body: "version: 1.2.0\n", etag: null }));
