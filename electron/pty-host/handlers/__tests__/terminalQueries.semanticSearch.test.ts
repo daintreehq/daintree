@@ -8,8 +8,7 @@ function search(buffers: Record<string, string[]>, query: string, isRegex = fals
   const ctx = {
     sendEvent,
     ptyManager: {
-      getAll: () =>
-        Object.entries(buffers).map(([id, semanticBuffer]) => ({ id, semanticBuffer })),
+      getAll: () => Object.entries(buffers).map(([id, semanticBuffer]) => ({ id, semanticBuffer })),
     },
   } as unknown as HostContext;
   const handler = createTerminalQueryHandlers(ctx)["search-semantic-buffers"];

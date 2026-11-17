@@ -56,6 +56,11 @@ describe("findCaseInsensitiveLiteral", () => {
     expect(slice("İ ΟΔΟΣ", "οδος")).toBe("ΟΔΟΣ");
   });
 
+  it("reports the first occurrence", () => {
+    expect(findCaseInsensitiveLiteral("İ ok ok", "OK")).toEqual({ start: 2, end: 4 });
+    expect(findCaseInsensitiveLiteral("ok ok", "OK")).toEqual({ start: 0, end: 2 });
+  });
+
   it("returns null when nothing matches or the query is empty", () => {
     expect(findCaseInsensitiveLiteral("İSTANBUL: done", "missing")).toBeNull();
     expect(findCaseInsensitiveLiteral("plain", "missing")).toBeNull();
