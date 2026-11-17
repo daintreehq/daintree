@@ -8,6 +8,7 @@ import {
   buildMarkdownEditorExtensions,
   docUtf8Bytes,
   externalChange,
+  followHeadingLink,
   linkTargetAt,
 } from "../markdownEditorExtensions";
 
@@ -140,6 +141,46 @@ describe("markdownEditorExtensions (#12323)", () => {
       })
     );
     expect(callbacks.onFollowLink).toHaveBeenCalledWith("./docs/spec.md");
+  });
+
+  it("Mod+click on a same-document link takes the caret to the heading it names (#17335)", async () => {
+    mounted = mount("- [Risks](#risks-1)\n\n## Risks\n\nFirst.\n\n## Risks\n\nSecond.\n");
+    const { view, callbacks } = mounted;
+    ensureSyntaxTree(view.state, view.state.doc.length, 5000);
+    vi.spyOn(view, "posAtCoords").mockReturnValue(4);
+    const dispatch = vi.spyOn(view, "dispatch");
+
+    const click = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      metaKey: true,
+      clientX: 5,
+      clientY: 5,
+    });
+    view.contentDOM.dispatchEvent(click);
+
+    expect(click.defaultPrevented).toBe(true);
+    const target = view.state.doc.line(7).from;
+    await vi.waitFor(() => expect(view.state.selection.main.head).toBe(target));
+    // One select transaction, carrying the scroll that brings the heading up.
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ effects: expect.anything(), userEvent: "select" })
+    );
+    expect(view.state.doc.toString()).toContain("- [Risks](#risks-1)");
+    expect(callbacks.onFollowLink).not.toHaveBeenCalled();
+  });
+
+  it("Mod+click on a same-document link with no heading leaves the caret alone", async () => {
+    mounted = mount("- [Gone](#nowhere)\n\n## Risks\n");
+    const { view, callbacks } = mounted;
+    view.dispatch({ selection: { anchor: 3 } });
+
+    await followHeadingLink(view, "#nowhere");
+
+    expect(view.state.selection.main.head).toBe(3);
+    expect(callbacks.onFollowLink).not.toHaveBeenCalled();
   });
 
   it("does not report a buffer change while an IME composition is open", () => {

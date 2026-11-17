@@ -24,8 +24,8 @@ export function activateMarkdownLink(
   href: string | undefined,
   { filePath, rootPath }: { filePath: string; rootPath: string }
 ): void {
-  // Same-document anchors: headings carry no ids (no rehype-slug), so
-  // there is nothing to scroll to — swallow instead of navigating.
+  // Same-document anchors need the document they point into, which only the
+  // rendered document's own handler has (`onFragmentLink`) — never navigate.
   if (!href || href.startsWith("#")) return;
   if (HTTPish.test(href)) {
     getPluginKitHost()

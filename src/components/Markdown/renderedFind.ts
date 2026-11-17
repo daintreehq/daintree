@@ -241,7 +241,7 @@ export function scrollRangeIntoView(range: Range, root: Element, topInset = 0): 
 }
 
 /** The scroller the document scrolls in: its nearest vertically scrolling ancestor. */
-function paneScroller(root: Element): Element | null {
+export function paneScroller(root: Element): Element | null {
   let element: Element | null = root;
   while (element && !isScrollable(element, "y")) element = element.parentElement;
   return element;

@@ -59,7 +59,10 @@ export interface MarkdownEditorCallbacks {
    */
   onChange: (doc: Text) => void;
   onSave: () => void;
-  /** Mod+click on a link's destination text. */
+  /**
+   * Mod+click on a link's destination text. A same-document link (`#risks`)
+   * never comes here: the editor follows it to the heading itself.
+   */
   onFollowLink: (href: string) => void;
 }
 
@@ -100,6 +103,26 @@ export const docUtf8Bytes = StateField.define<number>({
     return next;
   },
 });
+
+/**
+ * Mod+click on `[Risks](#risks)`: the caret goes to the line the rendered
+ * document would scroll to. The parser that resolves it loads on the first
+ * such link, not with the editor, and reads the buffer as it stands then.
+ */
+export async function followHeadingLink(view: EditorView, href: string): Promise<void> {
+  const { markdownTargetLine } = await import("@/components/Markdown/markdownHeadingTargets");
+  // Closed, or replaced by a reload, while the parser loaded.
+  if (!view.dom.isConnected) return;
+  const line = markdownTargetLine(view.state.doc.toString(), href);
+  if (line === null || line > view.state.doc.lines) return;
+  const position = view.state.doc.line(line).from;
+  view.dispatch({
+    selection: { anchor: position },
+    effects: EditorView.scrollIntoView(position, { y: "start" }),
+    userEvent: "select",
+  });
+  view.focus();
+}
 
 /** Walk up from the click position to the nearest link node and read its target. */
 export function linkTargetAt(view: EditorView, pos: number): string | null {
@@ -226,7 +249,8 @@ export function buildMarkdownEditorExtensions(options: {
         const href = linkTargetAt(view, pos);
         if (!href) return false;
         event.preventDefault();
-        callbacks.onFollowLink(href);
+        if (href.startsWith("#")) void followHeadingLink(view, href);
+        else callbacks.onFollowLink(href);
         return true;
       },
     }),

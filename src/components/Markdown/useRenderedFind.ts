@@ -14,7 +14,7 @@ import {
 const NO_MATCHES: FindResult = { ranges: [], capped: false };
 
 /** How far a scrolled-to match stays below the top of the pane: the bar's depth plus its inset. */
-const FIND_BAR_CLEARANCE = 56;
+export const FIND_BAR_CLEARANCE = 56;
 
 /** Where focus goes on close when the element it came from is gone. */
 const FOCUS_FALLBACK = "[data-panel-id],[role='dialog']";

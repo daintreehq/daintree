@@ -434,6 +434,33 @@ describe("RenderedMarkdownDiff", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
+  // Each block renders through its own pipeline, so a slugger would restart
+  // at every block and repeated headings would collide: no anchors here.
+  it("gives headings no ids and leaves same-document links inert (#17335)", () => {
+    const source = "- [Risks](#risks)\n\n## Risks\n\nText[^1].\n\n[^1]: Note.\n";
+    const diff = patch([
+      "@@ -0,0 +1,7 @@",
+      ...source
+        .trimEnd()
+        .split("\n")
+        .map((line) => `+${line}`),
+    ]);
+
+    const { container } = renderDiff(diff, source, { status: "added" });
+    const before = document.activeElement;
+    const links = [...container.querySelectorAll("a")];
+    for (const link of links) {
+      const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+      link.dispatchEvent(click);
+      expect(click.defaultPrevented).toBe(true);
+    }
+
+    expect(container.querySelector("h2")?.id).toBe("");
+    expect(links.map((link) => link.getAttribute("href"))).toContain("#risks");
+    expect(document.activeElement).toBe(before);
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
   it("resolves a local image through the contained protocol URL", () => {
     const source = "![shot](./img/a.png)\n";
     const diff = patch(["@@ -0,0 +1,1 @@", "+![shot](./img/a.png)"]);
