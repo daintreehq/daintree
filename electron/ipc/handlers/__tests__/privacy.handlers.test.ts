@@ -14,12 +14,16 @@ const ipcMainMock = vi.hoisted(() => {
 });
 
 const appMock = vi.hoisted(() => ({
-  getPath: vi.fn(() => "/tmp/user-data"),
+  getPath: vi.fn((name: string) => (name === "userData" ? "/tmp/user-data" : `/tmp/other-${name}`)),
   relaunch: vi.fn(),
   exit: vi.fn(),
 }));
 
 const shellMock = vi.hoisted(() => ({ showItemInFolder: vi.fn() }));
+
+const openPathMock = vi.hoisted(() => ({ openWithDefaultApp: vi.fn() }));
+
+vi.mock("../../../utils/openPath.js", () => openPathMock);
 
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
@@ -199,5 +203,33 @@ describe("registerPrivacyHandlers", () => {
 
     expect(telemetryServiceMock.setTelemetryLevel).not.toHaveBeenCalled();
     expect(utilsMock.typedBroadcast).not.toHaveBeenCalled();
+  });
+
+  it("PRIVACY_OPEN_DATA_FOLDER opens the data folder itself rather than revealing it in its parent", async () => {
+    openPathMock.openWithDefaultApp.mockResolvedValue("");
+    registerPrivacyHandlers();
+
+    const handler = ipcMainMock._handlers.get("privacy:open-data-folder");
+    expect(handler).toBeDefined();
+
+    const settings = (await ipcMainMock._handlers.get("privacy:get-settings")!(null)) as {
+      dataFolderPath: string;
+    };
+
+    await expect(handler!(null)).resolves.toEqual({ opened: true });
+    expect(openPathMock.openWithDefaultApp).toHaveBeenCalledTimes(1);
+    expect(openPathMock.openWithDefaultApp).toHaveBeenCalledWith(settings.dataFolderPath);
+    expect(openPathMock.openWithDefaultApp).toHaveBeenCalledWith("/tmp/user-data");
+    expect(shellMock.showItemInFolder).not.toHaveBeenCalled();
+  });
+
+  it("PRIVACY_OPEN_DATA_FOLDER reports an OS refusal instead of resolving as opened", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    openPathMock.openWithDefaultApp.mockResolvedValue("No application could open this file");
+    registerPrivacyHandlers();
+
+    const handler = ipcMainMock._handlers.get("privacy:open-data-folder");
+    await expect(handler!(null)).resolves.toEqual({ opened: false });
+    warn.mockRestore();
   });
 });

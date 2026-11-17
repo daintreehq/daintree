@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { notify } from "@/lib/notify";
@@ -139,6 +139,8 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange, onClose }: Privac
   const [logRetentionFailure, setLogRetentionFailure] = useState<FailedWrite>(null);
   const [sessionRetentionFailure, setSessionRetentionFailure] = useState<FailedWrite>(null);
   const [cacheFailure, setCacheFailure] = useState<FailedWrite>(null);
+  const [openFolderFailed, setOpenFolderFailed] = useState(false);
+  const openFolderInFlight = useRef(false);
   const [shortenPending, setShortenPending] = useState(false);
   const [shortenError, setShortenError] = useState<string | null>(null);
   const [clearHistoryPending, setClearHistoryPending] = useState(false);
@@ -301,7 +303,19 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange, onClose }: Privac
   };
 
   const handleOpenDataFolder = () => {
-    window.electron.privacy.openDataFolder();
+    // One request at a time, so a slow earlier refusal can't overwrite a later success.
+    if (openFolderInFlight.current) return;
+    openFolderInFlight.current = true;
+    window.electron.privacy
+      .openDataFolder()
+      .then(({ opened }) => setOpenFolderFailed(!opened))
+      .catch((err: unknown) => {
+        logError("Failed to open the data folder", err);
+        setOpenFolderFailed(true);
+      })
+      .finally(() => {
+        openFolderInFlight.current = false;
+      });
   };
 
   const handleClearCache = async () => {
@@ -533,6 +547,11 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange, onClose }: Privac
                     <Button variant="outline" size="sm" onClick={handleOpenDataFolder}>
                       Open folder
                     </Button>
+                  }
+                  error={
+                    openFolderFailed
+                      ? "Couldn't open the folder. It's at the path above"
+                      : undefined
                   }
                 />
                 <SettingsPresetGroup

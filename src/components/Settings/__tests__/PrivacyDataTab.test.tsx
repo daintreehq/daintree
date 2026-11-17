@@ -51,7 +51,7 @@ function createPrivacyApi(overrides: Partial<typeof window.electron.privacy> = {
     }),
     setTelemetryLevel: vi.fn().mockResolvedValue(undefined),
     setLogRetention: vi.fn().mockResolvedValue(undefined),
-    openDataFolder: vi.fn(),
+    openDataFolder: vi.fn().mockResolvedValue({ opened: true }),
     clearCache: vi.fn().mockResolvedValue({ cleared: 5, failed: 0 }),
     resetAllData: vi.fn(),
     ...overrides,
@@ -280,6 +280,106 @@ describe("PrivacyDataTab", () => {
     });
 
     expect(screen.queryByText(/What's collected at each level/i)).toBeNull();
+  });
+
+  it("opens the data folder and stays quiet when the OS accepts it", async () => {
+    render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open folder" }));
+
+    await waitFor(() => expect(window.electron.privacy.openDataFolder).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/Couldn't open the folder/)).toBeNull();
+  });
+
+  it("says beside the control when the OS refuses to open the data folder", async () => {
+    window.electron = {
+      privacy: createPrivacyApi({
+        openDataFolder: vi.fn().mockResolvedValue({ opened: false }),
+      }),
+      agentSessionHistory: createAgentSessionHistoryApi(),
+    } as unknown as typeof window.electron;
+
+    render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open folder" }));
+
+    expect(await screen.findByText(/Couldn't open the folder/)).toBeTruthy();
+  });
+
+  it("ignores a second click while the first open is pending, so an old refusal can't outlive a success", async () => {
+    let resolveOpen!: (r: { opened: boolean }) => void;
+    const openDataFolder = vi.fn(
+      () => new Promise<{ opened: boolean }>((resolve) => (resolveOpen = resolve))
+    );
+    window.electron = {
+      privacy: createPrivacyApi({ openDataFolder }),
+      agentSessionHistory: createAgentSessionHistoryApi(),
+    } as unknown as typeof window.electron;
+
+    render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
+
+    const button = await screen.findByRole("button", { name: "Open folder" });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(openDataFolder).toHaveBeenCalledTimes(1);
+
+    resolveOpen({ opened: false });
+    expect(await screen.findByText(/Couldn't open the folder/)).toBeTruthy();
+
+    openDataFolder.mockResolvedValueOnce({ opened: true });
+    fireEvent.click(button);
+    await waitFor(() => expect(screen.queryByText(/Couldn't open the folder/)).toBeNull());
+    expect(openDataFolder).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets the data folder open again after a rejected request and after a success", async () => {
+    const openDataFolder = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("IPC fail"))
+      .mockResolvedValueOnce({ opened: true })
+      .mockResolvedValueOnce({ opened: true });
+    window.electron = {
+      privacy: createPrivacyApi({ openDataFolder }),
+      agentSessionHistory: createAgentSessionHistoryApi(),
+    } as unknown as typeof window.electron;
+
+    render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
+
+    const button = await screen.findByRole("button", { name: "Open folder" });
+    fireEvent.click(button);
+    expect(await screen.findByText(/Couldn't open the folder/)).toBeTruthy();
+
+    fireEvent.click(button);
+    await waitFor(() => expect(screen.queryByText(/Couldn't open the folder/)).toBeNull());
+    expect(openDataFolder).toHaveBeenCalledTimes(2);
+
+    fireEvent.click(button);
+    await waitFor(() => expect(openDataFolder).toHaveBeenCalledTimes(3));
+  });
+
+  it("says beside the control when the open request itself fails", async () => {
+    window.electron = {
+      privacy: createPrivacyApi({
+        openDataFolder: vi.fn().mockRejectedValue(new Error("IPC fail")),
+      }),
+      agentSessionHistory: createAgentSessionHistoryApi(),
+    } as unknown as typeof window.electron;
+
+    render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open folder" }));
+
+    expect(await screen.findByText(/Couldn't open the folder/)).toBeTruthy();
   });
 
   it("reverts log retention and says so beside it on IPC failure", async () => {
