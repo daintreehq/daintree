@@ -165,7 +165,7 @@ import { setCurrentProjectIdAccessor } from "../storeAccessors";
 import { usePanelLimitStore } from "../panelLimitStore";
 import { getPanelSlotReservations } from "../slices/panelRegistry/panelSlotReservations";
 import type { RecipeTerminal, TerminalRecipe } from "@shared/types/project";
-import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
+import { RecipeChangedSinceShownError, recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { RecipeImportDropsTerminalsError, RecipeImportInvalidError } from "@/utils/recipeImport";
 import {
   buildLaunchCommandFromFlags,
@@ -5519,9 +5519,74 @@ describe("plugin recipe panels, variables and agent tools (#13797)", () => {
           expectedRecipe: { id: "acme.tools.review", terminalsDigest: "0000000000000000" },
         }
       )
-    ).rejects.toThrow("Recipe changed since it was shown");
+    ).rejects.toThrow(RecipeChangedSinceShownError);
     expect(dispatchMock).not.toHaveBeenCalled();
     expect(addTerminalMock).not.toHaveBeenCalled();
+  });
+
+  it("runs the recipe a dialog showed while it still matches", async () => {
+    useRecipeStore.getState().setPluginRecipes([pluginRecipe()]);
+    const results = await useRecipeStore.getState().runRecipeWithResults(
+      "acme.tools.review",
+      "/repo/wt",
+      "wt-1",
+      { branchName: "feature/x" },
+      {
+        expectedRecipe: {
+          id: "acme.tools.review",
+          terminalsDigest: recipeApprovalDigest(pluginRecipe().terminals),
+        },
+      }
+    );
+    expect(results.spawned.map((s) => s.index)).toEqual([0, 1]);
+    expect(addTerminalMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses as a change when the recipe a dialog showed is gone (#17447)", async () => {
+    await expect(
+      useRecipeStore.getState().runRecipeWithResults(
+        "acme.tools.review",
+        "/repo/wt",
+        "wt-1",
+        {},
+        {
+          expectedRecipe: {
+            id: "acme.tools.review",
+            terminalsDigest: recipeApprovalDigest(pluginRecipe().terminals),
+          },
+        }
+      )
+    ).rejects.toThrow(RecipeChangedSinceShownError);
+    // Without an approval to honour, a missing recipe is still just missing.
+    await expect(
+      useRecipeStore.getState().runRecipeWithResults("acme.tools.review", "/repo/wt", "wt-1", {})
+    ).rejects.toThrow("Recipe acme.tools.review not found");
+    expect(addTerminalMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the row the dialog showed now resolves to another recipe (#17447)", async () => {
+    const terminals = [{ type: "terminal" as const, command: "npm run dev", env: {} }];
+    const local = { id: "local-dev", name: "Dev", projectId: "p", terminals, createdAt: 0 };
+    const team = { id: "team-dev", name: "Dev", scope: "inrepo" as const, terminals, createdAt: 0 };
+    // Same terminals, so only the id says a team recipe took the row over.
+    useRecipeStore.setState({
+      recipes: [{ ...local, shadowedBy: "Dev" }, team],
+      inRepoRecipes: [team],
+    });
+
+    await expect(
+      useRecipeStore.getState().runRecipeWithResults(
+        "local-dev",
+        "/repo/wt",
+        "wt-1",
+        {},
+        {
+          expectedRecipe: { id: "local-dev", terminalsDigest: recipeApprovalDigest(terminals) },
+        }
+      )
+    ).rejects.toThrow(RecipeChangedSinceShownError);
+    expect(addTerminalMock).not.toHaveBeenCalled();
+    expect(useRecipeStore.getState().recipes.every((r) => r.lastUsedAt === undefined)).toBe(true);
   });
 
   it("won't save a recipe that uses plugin-only features as a team recipe", async () => {
