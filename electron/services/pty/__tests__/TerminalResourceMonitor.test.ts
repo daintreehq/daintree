@@ -57,23 +57,25 @@ describe("TerminalResourceMonitor", () => {
   let monitor: TerminalResourceMonitor;
   const disposers: Array<() => void> = [];
 
-  async function enableAfterFirstCensus(): Promise<void> {
-    let resolveFirst!: () => void;
-    const first = new Promise<void>((resolve) => (resolveFirst = resolve));
+  /** `subscribeAhead` registers refresh listeners that run before the monitor's. */
+  async function enableAfterFirstCensus(subscribeAhead?: () => void): Promise<void> {
+    const refresh = vi.spyOn(cache, "refresh");
+    subscribeAhead?.();
     monitor = new TerminalResourceMonitor(
       cache,
       {
         getAll: () => [{ id: "t1", ptyProcess: { pid: SHELL_PID } }],
       } as unknown as PtyManager,
       (event) => {
-        if (event.type !== "resource-metrics") return;
-        events.push(event);
-        resolveFirst();
+        if (event.type === "resource-metrics") events.push(event);
       }
     );
-    // The first subscriber kicks off a census of its own.
     monitor.setEnabled(true);
-    await first;
+    // The first subscriber kicks off a census of its own.
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await refresh.mock.results[0]!.value;
+    refresh.mockRestore();
+    expect(events).toHaveLength(1);
   }
 
   beforeEach(() => {
@@ -99,13 +101,17 @@ describe("TerminalResourceMonitor", () => {
   it("publishes nothing for a census that failed after a successful one", async () => {
     psSucceeds(4096);
     await enableAfterFirstCensus();
-    expect(events).toHaveLength(1);
+    // Other subscribers still hear a failed census: process detection holds
+    // its state on the cache's error rather than reading an empty tree.
+    const notified = vi.fn();
+    cache.onRefresh(notified);
 
     psFails();
     await cache.refresh();
     await cache.refresh();
 
     expect(cache.getLastError()).not.toBeNull();
+    expect(notified).toHaveBeenCalledTimes(2);
     expect(events).toHaveLength(1);
   });
 
@@ -114,8 +120,7 @@ describe("TerminalResourceMonitor", () => {
     psSucceeds(4096);
     // Runs ahead of the monitor on every census, so the time a batch is sent
     // is never the time its census finished.
-    cache.onRefresh(() => vi.setSystemTime(Date.now() + 500));
-    await enableAfterFirstCensus();
+    await enableAfterFirstCensus(() => cache.onRefresh(() => vi.setSystemTime(Date.now() + 500)));
     expect(events[0]!.timestamp).toBe(1_000);
 
     vi.setSystemTime(5_000);
@@ -185,11 +190,12 @@ describe("TerminalResourceMonitor", () => {
     psSucceeds(4096);
     await enableAfterFirstCensus();
 
+    psSucceeds(8192);
     const pending = cache.refresh();
     monitor.dispose();
     await pending;
 
-    expect(cache.getLastError()).toBeNull();
+    expect(cache.getTreeResourceSummary(SHELL_PID)!.memoryKb).toBe(2048 + 8192);
     expect(events).toHaveLength(1);
   });
 });
