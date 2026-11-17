@@ -4711,6 +4711,10 @@ export interface GeneratedIpcInvokeMap {
     args: [enabled: boolean];
     result: void;
   };
+  "terminal-config:set-osc52-clipboard-enabled": {
+    args: [enabled: boolean];
+    result: void;
+  };
   "terminal-config:set-performance-mode": {
     args: [performanceMode: boolean];
     result: void;

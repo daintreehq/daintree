@@ -146,6 +146,12 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   createTerminalPaintPlane: () => mocks.createTerminalPaintPlane(),
 }));
 
+const { noteOsc52Gesture } = vi.hoisted(() => ({ noteOsc52Gesture: vi.fn() }));
+vi.mock("@/services/terminal/osc52", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/services/terminal/osc52")>()),
+  noteOsc52Gesture,
+}));
+
 vi.mock("@/services/terminal/fleetInputRouter", () => ({
   writeTerminalInputOrFleet: mocks.writeTerminalInputOrFleet,
 }));
@@ -436,6 +442,31 @@ describe("XtermAdapter lifecycle", () => {
     expect(firstOnExit).not.toHaveBeenCalled();
     expect(secondOnExit).toHaveBeenCalledWith(7);
     expect(mocks.terminalInstanceService.detach).not.toHaveBeenCalled();
+  });
+
+  it("opens the OSC 52 window on a key the handler consumes and on a pointer press", async () => {
+    const view = renderAdapter();
+    await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1));
+
+    // Plain Enter returns false before xterm's onData, so the stamp can't live there.
+    const enter = new KeyboardEvent("keydown", { key: "Enter", code: "Enter", cancelable: true });
+    expect(mocks.getKeyHandler()?.(enter)).toBe(false);
+    expect(noteOsc52Gesture).toHaveBeenCalledWith(mocks.managed, enter);
+
+    mocks.getKeyHandler()?.(new KeyboardEvent("keyup", { key: "Enter" }));
+    expect(noteOsc52Gesture).toHaveBeenCalledTimes(1);
+
+    const output = view.container.querySelector<HTMLElement>('[aria-label="Terminal output"]');
+    for (const type of ["pointerdown", "pointerup"]) {
+      const event = new MouseEvent(type, { bubbles: true });
+      output?.dispatchEvent(event);
+      expect(noteOsc52Gesture).toHaveBeenLastCalledWith(mocks.managed, event);
+    }
+
+    view.unmount();
+    noteOsc52Gesture.mockClear();
+    output?.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    expect(noteOsc52Gesture).not.toHaveBeenCalled();
   });
 
   it("keeps Tab and Shift+Tab as xterm-owned input without dispatching focus-region actions (#9082)", async () => {

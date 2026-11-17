@@ -1,4 +1,4 @@
-import { Fragment, useState, useMemo, useEffect } from "react";
+import { Fragment, useState, useMemo, useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { notify } from "@/lib/notify";
@@ -46,6 +46,8 @@ import { formatBytes } from "@/lib/formatBytes";
 import { actionService } from "@/services/ActionService";
 import { useCachedProjectViewsStore } from "@/store/cachedProjectViewsStore";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
+import { useOsc52ClipboardStore } from "@/store/osc52ClipboardStore";
+import { OSC52_GESTURE_WINDOW_MS } from "@/services/terminal/osc52";
 import { computeHardwareDefaults, usePanelLimitStore } from "@/store/panelLimitStore";
 import { getPanelLimitOrderingIssues } from "@shared/utils/panelLimit";
 import {
@@ -117,11 +119,16 @@ const TERMINAL_SUBTABS: SettingsSubtabItem[] = [
   { id: "layout", label: "Layout" },
   { id: "scrollback", label: "Scrollback" },
   { id: "accessibility", label: "Accessibility" },
+  { id: "clipboard", label: "Clipboard" },
 ];
 
 const TERMINAL_SUBTAB_IDS = TERMINAL_SUBTABS.map((s) => s.id);
 
-type SaveGroup = "resources" | "project-views" | "grid-layout" | "scrollback" | "accessibility";
+type SaveGroup =
+  "resources" | "project-views" | "grid-layout" | "scrollback" | "accessibility" | "clipboard";
+
+/** What an `apply` returns when it declined to run, so nothing settles. */
+const SAVE_SKIPPED = Symbol("save-skipped");
 
 interface SaveFailure {
   group: SaveGroup;
@@ -154,6 +161,10 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
   const screenReaderMode = useScreenReaderStore((state) => state.screenReaderMode);
   const resourceMonitoringEnabled = useResourceMonitoringStore((state) => state.enabled);
   const setResourceMonitoringEnabled = useResourceMonitoringStore((state) => state.setEnabled);
+  const osc52ClipboardEnabled = useOsc52ClipboardStore((state) => state.enabled);
+  const setOsc52ClipboardEnabled = useOsc52ClipboardStore((state) => state.setEnabled);
+  const [osc52Saving, setOsc52Saving] = useState(false);
+  const osc52InFlight = useRef(false);
 
   const twoPaneSplitConfig = useTwoPaneSplitStore((state) => state.config);
   const setTwoPaneSplitEnabled = useTwoPaneSplitStore((state) => state.setEnabled);
@@ -291,7 +302,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
     rollback?: () => void
   ): Promise<void> => {
     try {
-      await apply();
+      if ((await apply()) === SAVE_SKIPPED) return;
       setSaveFailure((current) => (current?.group === group ? null : current));
     } catch (error) {
       rollback?.();
@@ -393,6 +404,36 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
     } else {
       setThresholdRejected(true);
     }
+  };
+
+  // Turning it off takes effect at once; turning it on waits for the save, so
+  // a refused save never leaves programs writing the clipboard here. One save
+  // at a time, Retry included, so a late failure can't roll back over a newer
+  // success.
+  const setOsc52Clipboard = (value: boolean) => {
+    const previous = osc52ClipboardEnabled;
+    void persist(
+      "clipboard",
+      async () => {
+        // The save already running settles the banner, Retry included.
+        if (osc52InFlight.current) return SAVE_SKIPPED;
+        osc52InFlight.current = true;
+        setOsc52Saving(true);
+        if (!value) setOsc52ClipboardEnabled(false);
+        // A promise chain, not try/finally, which React Compiler can't lower;
+        // a synchronous throw from the bridge still settles it.
+        await Promise.resolve()
+          .then(() => window.electron.terminalConfig.setOsc52ClipboardEnabled(value))
+          .finally(() => {
+            osc52InFlight.current = false;
+            setOsc52Saving(false);
+          });
+        setOsc52ClipboardEnabled(value);
+        return undefined;
+      },
+      "Failed to persist OSC 52 clipboard setting",
+      () => setOsc52ClipboardEnabled(previous)
+    );
   };
 
   const handleScreenReaderModeChange = (mode: ScreenReaderMode) =>
@@ -887,6 +928,24 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 onChange={(mode) => void handleScreenReaderModeChange(mode)}
                 isModified={screenReaderMode !== "auto"}
                 onReset={() => void handleScreenReaderModeChange("auto")}
+              />
+            </SettingsGroup>
+          </SettingsSection>
+        )}
+
+        {effectiveSubtab === "clipboard" && (
+          <SettingsSection title="Copying from programs" settings={SECTION_SETTINGS.osc52Clipboard}>
+            {saveError("clipboard")}
+            <SettingsGroup>
+              <SettingsSwitchCard
+                id="terminal-osc52-clipboard"
+                title="Let programs copy to the clipboard (OSC 52)"
+                subtitle={`Lets tmux, Neovim, Zellij and fzf copy text from a shell, including over SSH and on a remote host. A copy lands only in the focused panel within ${OSC52_GESTURE_WINDOW_MS / 1000} seconds of a key press or click in it, never from an agent panel, and every copy shows a notice with its start and length. Default: Off.`}
+                isEnabled={osc52ClipboardEnabled}
+                disabled={osc52Saving}
+                onChange={() => setOsc52Clipboard(!osc52ClipboardEnabled)}
+                isModified={osc52ClipboardEnabled}
+                onReset={() => setOsc52Clipboard(false)}
               />
             </SettingsGroup>
           </SettingsSection>

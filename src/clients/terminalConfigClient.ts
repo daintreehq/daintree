@@ -54,6 +54,10 @@ export const terminalConfigClient = {
     return window.electron.terminalConfig.setCachedProjectViews(cachedProjectViews);
   },
 
+  setOsc52ClipboardEnabled: (enabled: boolean): Promise<void> => {
+    return window.electron.terminalConfig.setOsc52ClipboardEnabled(enabled);
+  },
+
   onChanged: (callback: (change: TerminalConfigChange) => void): (() => void) => {
     return window.electron.terminalConfig.onChanged(callback);
   },

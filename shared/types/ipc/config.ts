@@ -39,6 +39,8 @@ export interface TerminalConfig {
   memoryLeakAutoRestartThresholdMb?: number;
   /** Number of project views to keep cached in memory (1–5, default: 1) */
   cachedProjectViews?: number;
+  /** Let programs in a plain shell write the clipboard through OSC 52 (default: false) */
+  osc52ClipboardEnabled?: boolean;
 }
 
 /**

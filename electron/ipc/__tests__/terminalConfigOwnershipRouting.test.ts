@@ -129,6 +129,11 @@ const WRITES: ReadonlyArray<{ channel: string; field: TerminalConfigField; value
     field: "cachedProjectViews",
     value: 3,
   },
+  {
+    channel: CHANNELS.TERMINAL_CONFIG_SET_OSC52_CLIPBOARD_ENABLED,
+    field: "osc52ClipboardEnabled",
+    value: true,
+  },
 ];
 
 let forwarded: string[];

@@ -34,6 +34,7 @@ export const SECTION_SETTINGS = {
   gridLayout: ["appState.panelGridConfig"],
   scrollback: ["terminalConfig.scrollbackLines"],
   assistiveTechnology: ["terminalConfig.screenReaderMode"],
+  osc52Clipboard: ["terminalConfig.osc52ClipboardEnabled"],
   worktreePathPattern: ["worktreeConfig"],
   clientPreferences: ["storage:daintree-preferences"],
   worktreeSidebar: ["storage:daintree-worktree-filters*"],
