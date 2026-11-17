@@ -446,6 +446,28 @@ describe("dev preview through a forward", () => {
     expect(m.hasForwardsFor(HOST)).toBe(false);
   });
 
+  it("lets a forgotten host's lookup land nowhere when the forget comes as its forward opens (#17207)", async () => {
+    const upstream = http.createServer((_req, res) => res.end("ok"));
+    previewResolution = { kind: "ok", port: await listen(upstream), isHttps: false };
+    cleanups.push(() => upstream.close());
+    const forgot: { done: Promise<void> | null; port: number } = { done: null, port: 0 };
+    const m: PortForwardManager = manager({
+      now: () => 1_000,
+      onChange: ([opened]) => {
+        if (!opened || forgot.done) return;
+        forgot.port = opened.localPort;
+        forgot.done = m.forgetHost(HOST);
+      },
+    });
+
+    await expect(m.resolvePreview("dp-proj-panel")).resolves.toBeNull();
+    await forgot.done;
+    expect(m.list()).toEqual([]);
+    const free = net.createServer();
+    await new Promise<void>((resolve) => free.listen(forgot.port, "127.0.0.1", resolve));
+    await new Promise((resolve) => free.close(resolve));
+  });
+
   it("keeps another host's lookup of a forgotten host's preview origin (#17207)", async () => {
     const OTHER = "studio-02";
     const upstream = http.createServer((_req, res) => res.end("ok"));
