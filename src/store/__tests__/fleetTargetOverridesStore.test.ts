@@ -172,10 +172,15 @@ describe("fleetTargetOverridesStore", () => {
       const snapshot = store().snapshot();
       store().setPayloadOverride("t-1", "edited");
       const editedOverrides = store().payloadOverrides;
+      const skipRevisionsBefore = store().skipRevisions;
 
       store().consumeSnapshot(snapshot);
       expect(store().payloadOverrides).toBe(editedOverrides);
       expect(store().skippedIds.size).toBe(0);
+      expect(Object.keys(store().payloadRevisions)).toEqual(["t-1"]);
+      expect(store().skipRevisions).toEqual({});
+      // The earlier state's revisions are copied, never edited in place.
+      expect(Object.keys(skipRevisionsBefore)).toEqual(["t-2"]);
 
       const settled = useFleetTargetOverridesStore.getState();
       store().consumeSnapshot(snapshot);

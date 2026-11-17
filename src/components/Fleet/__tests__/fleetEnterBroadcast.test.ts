@@ -783,7 +783,10 @@ describe("tryFleetBroadcastFromEditor — per-target overrides and skips (#8691)
 
       useFleetTargetOverridesStore.getState().setPayloadOverride("b", "shared");
       submits.release(2);
-      await settle();
+      // The pre-empted send reports itself cancelled just before it consumes.
+      await vi.waitFor(() =>
+        expect(useAnnouncerStore.getState().polite?.msg).toMatch(/^Broadcast cancelled/)
+      );
 
       expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({ b: "shared" });
     });
@@ -794,8 +797,10 @@ describe("tryFleetBroadcastFromEditor — per-target overrides and skips (#8691)
       useFleetTargetOverridesStore.getState().setPayloadOverride("b", "shared");
       tryFleetBroadcastFromEditor("a", "first", vi.fn());
       await vi.waitFor(() => expect(submits.held()).toBe(2));
-      tryFleetBroadcastFromEditor("a", "second", vi.fn());
+      const newerDelivered = vi.fn();
+      tryFleetBroadcastFromEditor("a", "second", newerDelivered);
       await vi.waitFor(() => expect(submits.held()).toBe(4));
+      expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({ b: "shared" });
 
       submits.release(2);
       await vi.waitFor(() =>
@@ -807,7 +812,7 @@ describe("tryFleetBroadcastFromEditor — per-target overrides and skips (#8691)
         ["b", "shared"],
       ]);
       submits.release(2);
-      await settle();
+      await vi.waitFor(() => expect(newerDelivered).toHaveBeenCalledTimes(1));
     });
   });
 
@@ -822,6 +827,12 @@ describe("tryFleetBroadcastFromEditor — per-target overrides and skips (#8691)
     await vi.waitFor(() => expect(pending).toHaveLength(2));
 
     expect(submitMock).toHaveBeenCalledWith("b", "x");
+    expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({ b: "x" });
+    expect([...useFleetTargetOverridesStore.getState().skippedIds]).toEqual(["c"]);
+
+    // One write landing doesn't settle the send.
+    pending.shift()!();
+    for (let i = 0; i < 10; i += 1) await flush();
     expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({ b: "x" });
     expect([...useFleetTargetOverridesStore.getState().skippedIds]).toEqual(["c"]);
 
