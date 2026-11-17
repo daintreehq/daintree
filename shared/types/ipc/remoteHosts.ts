@@ -12,6 +12,7 @@ import type {
   OperationId,
   OperationOutcome,
   OperationProgress,
+  PendingHostPlacement,
 } from "../remoteHosts.js";
 import type { ProjectFocusOnActivateIntent } from "./project.js";
 import type { HostWakeSetup } from "../hostWake.js";
@@ -32,6 +33,12 @@ export interface UpdateHostPayload {
   assistantControlEnabled?: boolean;
   /** The host's wake setup (#16170); null removes it. */
   wake?: HostWakeSetup | null;
+  /**
+   * A worktree to open here once setup finishes; null removes it. One that
+   * carries a failure is recorded only on the placement it names (the same
+   * `requestedAt`): a cancelled or replaced one is left as it is.
+   */
+  pendingPlacement?: PendingHostPlacement | null;
 }
 
 export interface WindowHostInfo {

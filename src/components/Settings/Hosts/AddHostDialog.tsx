@@ -25,6 +25,8 @@ import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { remoteConnectionKind } from "@/lib/remoteHosts";
 import { mintOperationId } from "@/clients/operationsClient";
 import { useRemoteHostsStore } from "@/store/remoteHostsStore";
+import { holdHostSetup, notePlacementFailure } from "@/components/Hosts/pendingPlacement";
+import { logWarn } from "@/utils/logger";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import {
@@ -400,6 +402,31 @@ function isUsable(state: HostConnectionState): boolean {
   return state.status === "connected" || state.status === "driven-elsewhere";
 }
 
+/** Why setup stopped, in the words the dialog shows; null while nothing has. */
+function setupFailureText({
+  error,
+  installError,
+  outcome,
+  probe,
+  hostLabel,
+}: {
+  error: string | null;
+  installError: string | null;
+  outcome: Outcome | null;
+  probe: HostProbeResult | null;
+  hostLabel: string;
+}): string | null {
+  if (installError) return installError;
+  if (error) return error;
+  if (outcome && outcome !== "skipped" && !isUsable(outcome)) {
+    return outcome.status === "unreachable" && outcome.detail
+      ? `Couldn't connect: ${outcome.detail}`
+      : `Couldn't connect to ${hostLabel}`;
+  }
+  if (probe && !probe.reachable) return probe.sshError ?? `Couldn't reach ${hostLabel}`;
+  return null;
+}
+
 function ErrorLine({ message }: { message: string }) {
   return (
     <Callout severity="error" role="alert" className="mt-4 select-text">
@@ -550,6 +577,12 @@ export function AddHostDialog({
   const [refocusPackage, setRefocusPackage] = useState(false);
 
   const knownHosts = useRemoteHostsStore((s) => s.hosts);
+  // A worktree waiting for this setup: finishing connects, and the placement carries on from there.
+  const placement = existing
+    ? (knownHosts.find((entry) => entry.descriptor.id === existing.hostId)?.descriptor
+        .pendingPlacement ?? null)
+    : null;
+  const connectAtEnd = connectWhenDone || placement !== null;
   const discovering = !existing && discovered === null && discoverError === null;
   const showDiscovering = useDeferredLoading(discovering, UI_DOHERTY_THRESHOLD);
   const showConnecting = useDeferredLoading(connecting, UI_DOHERTY_THRESHOLD);
@@ -803,6 +836,31 @@ export function AddHostDialog({
     checkOnOpen();
   }, [isOpen, existingId]);
 
+  // While it's open, a link that comes up (an update reconnects it) isn't the end of setup.
+  useEffect(() => {
+    if (!isOpen || existingId === null) return undefined;
+    return holdHostSetup(existingId);
+  }, [isOpen, existingId]);
+
+  // A step that stopped is recorded on the worktree waiting for this setup, so
+  // it still says why once the dialog has closed. Each stop is recorded once.
+  const failure = setupFailureText({
+    error,
+    installError: installStopped ? null : installError,
+    outcome,
+    probe,
+    hostLabel,
+  });
+  const notedFailure = useRef<string | null>(null);
+  useEffect(() => {
+    if (existingId === null || placement === null || failure === null) return;
+    if (notedFailure.current === failure) return;
+    notedFailure.current = failure;
+    notePlacementFailure(existingId, placement, failure).catch((err: unknown) => {
+      logWarn("[Hosts] Couldn't record a setup failure on its pending placement", { err });
+    });
+  }, [existingId, placement, failure]);
+
   const loadPlan = (
     pkg: LinuxPackagePreference,
     downgrade = downgrading,
@@ -961,7 +1019,7 @@ export function AddHostDialog({
   };
 
   const finish = () => {
-    if (existing && connectWhenDone && !skipped && probe?.hostModeListening) {
+    if (existing && connectAtEnd && !skipped && probe?.hostModeListening) {
       connectSaved({ hostId: existing.hostId, name: existing.name });
       return;
     }
@@ -1617,7 +1675,7 @@ export function AddHostDialog({
       };
       // A different build still connects, best effort, with a warning.
       leading = continueAnyway;
-    } else if (verdict === "up-to-date" && existing && connectWhenDone) {
+    } else if (verdict === "up-to-date" && existing && connectAtEnd) {
       primary = {
         label: "Connect",
         onClick: () => connectSaved({ hostId: existing.hostId, name: existing.name }),
@@ -1989,7 +2047,9 @@ export function AddHostDialog({
         )}
       </div>
     );
-    primary = { label: "Done", onClick: onClose };
+    primary = connectAtEnd
+      ? { label: "Done", onClick: finish, disabled: busy, loading: busy }
+      : { label: "Done", onClick: onClose };
     secondary = undefined;
     announce = title;
   } else if (step === "enable") {
@@ -2113,6 +2173,11 @@ export function AddHostDialog({
       <AppDialog.Body>
         {/* An existing host's flow branches on what the check finds: no fixed steps to show. */}
         {!existing && step !== "done" && !finished && <WizardStepBar steps={steps} />}
+        {placement && existing && (
+          <Callout severity="info" className="mb-4">
+            When setup finishes, {placement.label} opens on {existing.name}.
+          </Callout>
+        )}
         {body}
         {error && <ErrorLine message={error} />}
         {/* No role: the discovery list's own status line stays the dialog's one status. */}

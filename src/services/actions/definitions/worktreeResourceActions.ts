@@ -479,6 +479,7 @@ export function registerWorktreeResourceActions(
             worktreePath: worktree.path,
             projectId: ctx.projectId,
             sshTarget,
+            label: worktree.branch ?? worktree.name,
             askFirst: ctx.dispatchSource === "agent" || ctx.dispatchSource === "plugin",
             isCurrent: () =>
               getCurrentViewStore().getState().worktrees.get(worktree.id)?.resourceStatus?.ssh ===

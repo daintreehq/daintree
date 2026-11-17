@@ -23,6 +23,7 @@ import { HostPluginsSection } from "./HostPluginsSection";
 import { HostSessionsSection } from "./HostSessionsSection";
 import { HostCopySettingsSection } from "./HostCopySettingsSection";
 import { takeFirstConnect } from "./hostCopySettingsRequests";
+import type { HostUpdateIntent } from "./hostUpdateRequests";
 import type { HostPluginsSectionId } from "./hostPluginRequests";
 import { HostClipboardGrants } from "./HostClipboardGrants";
 import { HostPluginViewConsents } from "./HostPluginViewConsents";
@@ -39,6 +40,7 @@ import {
   removeHostOutcome,
 } from "./hostLabels";
 import { describeHostForge } from "@/components/Hosts/hostForges";
+import { cancelPlacement } from "@/components/Hosts/pendingPlacement";
 import { clientErrorText } from "@/utils/clientAppError";
 import { isWindows } from "@/lib/platform";
 import { currentHostId } from "@/hooks/useHostPlatform";
@@ -48,8 +50,11 @@ interface HostDetailProps {
   entry: HostListEntry;
   /** Back to the list; `viaKeyboard` decides whether focus lands visibly there. */
   onBack: (viaKeyboard?: boolean) => void;
-  /** Open straight into this host's update flow (the host chip's "Update …"). */
-  openUpdate?: boolean;
+  /**
+   * Open straight into this host's update flow (the host chip's "Update …"),
+   * or its setup (a worktree to open there once Daintree runs on it).
+   */
+  openUpdate?: boolean | HostUpdateIntent;
   /** Scroll to this section: its plugins (the switch notice's "Review") or their views (a blocked view's way here). */
   focusSection?: HostPluginsSectionId;
   /** Just added and connected: scroll to Copy settings and offer it. */
@@ -134,11 +139,20 @@ export function HostDetail({
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
   // Why the update dialog is open, which names it: "Set up…" or "Check for update".
-  const [updateOpen, setUpdateOpen] = useState<"update" | "setup" | null>(
-    openUpdate ? "update" : null
+  const [updateOpen, setUpdateOpen] = useState<HostUpdateIntent | null>(
+    openUpdate === "setup" ? "setup" : openUpdate ? "update" : null
   );
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
+  // A worktree waiting for this host's setup to finish before it opens here.
+  const placement = descriptor.pendingPlacement ?? null;
+  const [placementError, setPlacementError] = useState<string | null>(null);
+  const cancelWaiting = () => {
+    setPlacementError(null);
+    cancelPlacement(descriptor.id).catch((err: unknown) =>
+      setPlacementError(clientErrorText(err, "Couldn't cancel"))
+    );
+  };
   const bringBacks = useHostBringBacks();
   const bringing = bringBacks.isPending(descriptor.id);
   const bringBackSaid = bringing
@@ -359,7 +373,7 @@ export function HostDetail({
                     Bring back
                   </Button>
                 )}
-                {hostModeOff && (
+                {hostModeOff && !placement && (
                   // Setting up turns Host mode on there; Retry checks again as it is.
                   <Button variant="outline" size="sm" onClick={() => setUpdateOpen("setup")}>
                     Set up…
@@ -389,6 +403,26 @@ export function HostDetail({
               </div>
             }
           />
+          {placement && (
+            <SettingsRow
+              label="Waiting to open"
+              description={`${placement.label} opens here once setup finishes`}
+              error={
+                placementError ??
+                (placement.failure ? `Setup failed: ${placement.failure.message}` : undefined)
+              }
+              control={
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" onClick={() => setUpdateOpen("setup")}>
+                    {placement.failure ? "Retry" : "Set up…"}
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={cancelWaiting}>
+                    Cancel
+                  </Button>
+                </div>
+              }
+            />
+          )}
           <SettingsRow
             label="Daintree build"
             description={

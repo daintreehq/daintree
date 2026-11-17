@@ -13,6 +13,7 @@ import {
 } from "./hostProjectPickerRequests";
 import { HostSetupRecipeConfirm } from "./HostSetupRecipeConfirm";
 import { runPendingHostSetup } from "./pendingHostSetup";
+import { usePendingPlacementResume } from "@/components/Hosts/usePendingPlacementResume";
 import {
   completeHostSwitchRequest,
   currentHostSwitchRequest,
@@ -46,6 +47,8 @@ export function HostSwitchDialogHost() {
 
   useEffect(() => registerHostSwitchDialogHost(), []);
   useEffect(() => registerHostProjectPickerHost(), []);
+  // After the registration above: a placement ready on mount finds a dialog host.
+  usePendingPlacementResume();
 
   // A new window opened onto a host with nothing to show there offers that
   // host's project list. Asked on mount, since a send before this view

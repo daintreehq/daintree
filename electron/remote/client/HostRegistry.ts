@@ -3,6 +3,7 @@ import {
   formatHostConnection,
   isReservedHostName,
   isValidRemoteHostId,
+  readPendingPlacement,
   readStoredHostConnection,
   sameHostAccount,
   sameHostConnection,
@@ -174,15 +175,38 @@ function sanitize(raw: unknown): HostDescriptor[] {
         ? { ownerWorktreeId: host.ownerWorktreeId }
         : {}),
       ...(connection.kind === "ssh" ? wakeOf(host.wake) : {}),
+      ...placementOf(host.pendingPlacement),
     });
   }
   return out;
+}
+
+/** A stored pending placement that still reads as one; anything else is as if none was asked for. */
+function placementOf(value: unknown): { pendingPlacement?: HostDescriptor["pendingPlacement"] } {
+  const pendingPlacement = readPendingPlacement(value);
+  return pendingPlacement ? { pendingPlacement } : {};
 }
 
 /** A stored wake setup that still reads as one; anything else is as if none was set up. */
 function wakeOf(value: unknown): { wake?: HostWakeSetup } {
   const wake = normalizeHostWake(value);
   return wake ? { wake } : {};
+}
+
+/**
+ * Set, replace or remove the worktree waiting on this host's setup. A failure
+ * is news about one placement only: written after that placement was
+ * cancelled or replaced, it would bring back what the person let go.
+ */
+function applyPendingPlacement(next: HostDescriptor, value: unknown): void {
+  if (value === null) {
+    delete next.pendingPlacement;
+    return;
+  }
+  const placement = readPendingPlacement(value);
+  if (!placement) throw invalid("A pending placement needs its project, worktree and label.");
+  if (placement.failure && next.pendingPlacement?.requestedAt !== placement.requestedAt) return;
+  next.pendingPlacement = placement;
 }
 
 export class HostRegistry {
@@ -285,6 +309,8 @@ export class HostRegistry {
         delete next.ownerWorktreeId;
         // Nor is the adapter and LAN recorded for the old one its own.
         delete next.wake;
+        // Nor was the worktree waiting on its setup meant for this machine.
+        delete next.pendingPlacement;
       }
     }
     if (payload.wake !== undefined) {
@@ -304,6 +330,7 @@ export class HostRegistry {
         next.wake = wake;
       }
     }
+    if (payload.pendingPlacement !== undefined) applyPendingPlacement(next, payload.pendingPlacement);
     if (payload.notificationsEnabled !== undefined) {
       if (typeof payload.notificationsEnabled !== "boolean") {
         throw invalid("notificationsEnabled must be true or false.");

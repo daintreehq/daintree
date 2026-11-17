@@ -70,6 +70,7 @@ import { LiveWorktreeTerminalSection } from "./WorktreeCard/WorktreeTerminalSect
 import { deriveSetupAlarm } from "./WorktreeCard/setupAlarm";
 import { syncLineHasNews } from "./WorktreeCard/syncLineNews";
 import { WslGitBanner } from "./WorktreeCard/WslGitBanner";
+import { PendingPlacementNotice } from "./WorktreeCard/PendingPlacementNotice";
 import { useInputReceiptKey } from "./WorktreeCard/hooks/useInputReceiptKey";
 import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
@@ -1768,6 +1769,8 @@ export function WorktreeCard({
               )}
             </div>
           )}
+
+          <PendingPlacementNotice worktreeId={worktree.id} inGutter={variant === "sidebar"} />
 
           <WorktreeDialogs
             worktree={worktree}
