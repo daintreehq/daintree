@@ -1886,6 +1886,98 @@ describe("McpServerService", () => {
       expect(service.listActiveClients()).toHaveLength(0);
     });
 
+    it("closes every stream the rotated key opened and releases its binding (#17213)", async () => {
+      const winA = boundWindow(REF_A, "from-window-A");
+      await service.start(winA.window);
+      paneTokenTiers.set("pane-token", "full");
+      const port = service.currentPort!;
+      const oldKey = service.getStatus().apiKey;
+
+      // A raw `/sse` stream under the key: it only ends when the server closes it.
+      const sseEnded = new Promise<void>((resolve, reject) => {
+        const req = http.request(
+          {
+            host: "127.0.0.1",
+            port,
+            path: "/sse",
+            method: "GET",
+            headers: { Authorization: `Bearer ${oldKey}` },
+          },
+          (res) => {
+            res.resume();
+            res.on("end", () => resolve());
+          }
+        );
+        req.on("error", reject);
+        req.end();
+      });
+
+      // A bound `/mcp` session with its standalone GET stream open, the one
+      // server-pushed notifications travel on.
+      let standaloneEnded: Promise<void> | null = null;
+      const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
+        requestInit: {
+          headers: {
+            Authorization: `Bearer ${oldKey}`,
+            "Daintree-Workspace-Id": REF_A.workspaceId,
+          },
+        },
+        reconnectionOptions: {
+          initialReconnectionDelay: 60_000,
+          maxReconnectionDelay: 60_000,
+          reconnectionDelayGrowFactor: 1,
+          maxRetries: 0,
+        },
+        fetch: async (input: string | URL | Request, init?: RequestInit) => {
+          const response = await fetch(input, init);
+          if (init?.method === "GET" && response.ok && response.body) {
+            const reader = response.clone().body!.getReader();
+            standaloneEnded = (async () => {
+              while (!(await reader.read().catch(() => ({ done: true }))).done);
+            })();
+          }
+          return response;
+        },
+      });
+      const client = new Client({ name: "bound-test-client", version: "1.0.0" });
+      client.onerror = () => {};
+      await client.connect(transport);
+      httpTransports.push(transport);
+
+      // A pane's own session authenticates with its pane token, not the key.
+      const pane = await connectClient(port, { Authorization: "Bearer pane-token" });
+      transports.push(pane.transport);
+
+      const liveBinding = () =>
+        service.getWorkspaceViewActivity(REF_A.workspaceId, winA.webContents.id).liveBinding;
+      await vi.waitFor(() => {
+        expect(service.listActiveClients()).toHaveLength(2);
+        expect(standaloneEnded).not.toBeNull();
+      });
+      expect(liveBinding()).toBe(true);
+      expect(service.listActiveBearers()).toHaveLength(1);
+      const sessionCountBefore = service._sessions.size + service._httpSessions.size;
+      expect(sessionCountBefore).toBe(3);
+
+      const snapshots: unknown[] = [];
+      const unsubscribe = service.onRuntimeStateChange((snapshot) => snapshots.push(snapshot));
+      try {
+        await service.rotateApiKey();
+      } finally {
+        unsubscribe();
+      }
+
+      expect(liveBinding()).toBe(false);
+      expect(service.listActiveClients()).toHaveLength(0);
+      expect(service.listActiveBearers()).toHaveLength(0);
+      expect(snapshots.length).toBeGreaterThan(0);
+      await sseEnded;
+      await standaloneEnded;
+      // Only the pane's session is left, and it still answers.
+      expect(service._sessions.size + service._httpSessions.size).toBe(1);
+      await expect(pane.client.listTools()).resolves.toBeDefined();
+    });
+
     it("still follows focus when the server was enabled at runtime, not at boot", async () => {
       // Enabling mid-session used to hand the registry straight to
       // `httpLifecycle.start()`, so `this._registry` stayed null for the rest

@@ -488,6 +488,54 @@ describe("SessionStore.revokeSession", () => {
   });
 });
 
+describe("SessionStore.revokeSessionsByCredential (#17213)", () => {
+  let store: SessionStore;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    store = new SessionStore(() => {});
+  });
+
+  afterEach(() => {
+    store.grantCache.dispose();
+    vi.useRealTimers();
+  });
+
+  it("ends every live session the credential opened, on both transports, and nothing else", () => {
+    const sse = fakeSseSession();
+    const http = fakeHttpSession();
+    const other = fakeHttpSession();
+    store.sessions.set("sse", sse);
+    store.httpSessions.set("http", http);
+    store.httpSessions.set("other", other);
+    store.bindSessionCredential("sse", "old-key");
+    store.bindSessionCredential("http", "old-key");
+    store.bindSessionCredential("other", "pane-token");
+    store.sessionOriginMap.set("http", "external");
+    store.sessionWorkspaceMap.set("http", "ws-1");
+
+    expect(store.revokeSessionsByCredential("old-key")).toBe(2);
+
+    expect(sse.transport.close).toHaveBeenCalled();
+    expect(http.transport.close).toHaveBeenCalled();
+    expect(other.transport.close).not.toHaveBeenCalled();
+    expect([...store.sessions.keys(), ...store.httpSessions.keys()]).toEqual(["other"]);
+    expect([...store.sessionCredentialMap.keys()]).toEqual(["other"]);
+    expect(store.hasLiveWorkspaceBinding("ws-1")).toBe(false);
+  });
+
+  it("revokes nothing for a credential no session holds, and is safe to repeat", () => {
+    const session = fakeSseSession();
+    store.sessions.set("s", session);
+    store.bindSessionCredential("s", "current-key");
+
+    expect(store.revokeSessionsByCredential("old-key")).toBe(0);
+    expect(store.revokeSessionsByCredential("current-key")).toBe(1);
+    expect(store.revokeSessionsByCredential("current-key")).toBe(0);
+    expect(session.transport.close).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("SessionStore dropAbuseState wiring (#8467)", () => {
   let dropAbuseSpy: ReturnType<typeof vi.fn<(sessionId: string) => void>>;
   let store: SessionStore;

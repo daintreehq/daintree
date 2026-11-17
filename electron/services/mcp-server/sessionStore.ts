@@ -967,6 +967,23 @@ export class SessionStore {
     return true;
   }
 
+  /**
+   * End every live session `credentialDigest` opened: what a rotated API key
+   * leaves behind (#17213). The ids are collected first because each revoke
+   * deletes its own credential row.
+   */
+  revokeSessionsByCredential(credentialDigest: string): number {
+    const sessionIds: string[] = [];
+    for (const [sessionId, digest] of this.sessionCredentialMap) {
+      if (digest === credentialDigest) sessionIds.push(sessionId);
+    }
+    let revoked = 0;
+    for (const sessionId of sessionIds) {
+      if (this.revokeSession(sessionId)) revoked += 1;
+    }
+    return revoked;
+  }
+
   drain(): void {
     // Clear dedup state up-front so an in-flight `.finally()` resolving
     // after drain finds no session to write back into and does not

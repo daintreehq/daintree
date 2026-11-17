@@ -939,6 +939,20 @@ export class HttpLifecycle {
     this.bearerRegister.delete(tokenHash);
   }
 
+  /**
+   * End every session `apiKey` opened and drop its bearer-register row, once a
+   * rotation has replaced it (#17213). The key's next request is refused
+   * anyway; what this closes is the streams it already holds open, an `/sse`
+   * stream or a `/mcp` GET, which would otherwise keep receiving pushes and
+   * keep a bound workspace protected until the idle reaper. A null key is the
+   * empty header a server without one admits.
+   */
+  revokeApiKeySessions(apiKey: string | null): void {
+    const authHeader = apiKey ? `Bearer ${apiKey}` : "";
+    this.deps.sessionStore.revokeSessionsByCredential(sessionCredentialDigest(authHeader));
+    this.clearBearer(createHash("sha256").update(authHeader).digest("hex"));
+  }
+
   private clearAllBearers(): void {
     this.bearerRegister.clear();
     this.sessionToTokenHash.clear();
@@ -1907,6 +1921,16 @@ export class HttpLifecycle {
         // the assistant over (#13360), which retires the bearer's transports —
         // but this one only registered afterwards, still holding the pin it
         // resolved first. Retire it as well; the client reconnects onto the new pin.
+        this.deps.sessionStore.revokeSession(transport.sessionId);
+      } else if (
+        tier === "external" &&
+        transport.sessionId !== undefined &&
+        resolveCredentialKind(authHeader, this.apiKeyBearerHash, this.helpTokenValidator) !==
+          "external-client"
+      ) {
+        // The API key rotated while this handshake was out (#17213). The
+        // rotation closed the sessions the old key had filed; this one only
+        // registered afterwards, under a key nothing accepts any more.
         this.deps.sessionStore.revokeSession(transport.sessionId);
       }
     } catch (err) {
