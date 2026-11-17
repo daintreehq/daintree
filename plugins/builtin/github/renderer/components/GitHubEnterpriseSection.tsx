@@ -64,7 +64,10 @@ export function GitHubEnterpriseSection({
   const [hostDraft, setHostDraft] = useState("");
   const [hostError, setHostError] = useState<string | null>(null);
   const [isSavingHost, setIsSavingHost] = useState(false);
-  const [token, setToken] = useState("");
+  const [draft, setDraft] = useState<{ host: string | null; token: string }>({
+    host: null,
+    token: "",
+  });
   const [tokenFeedback, setTokenFeedback] = useState<TokenFeedback>(null);
   const [busy, setBusy] = useState<"test" | "save" | "clear" | "preview" | "commit" | null>(null);
   const [confirmingClear, setConfirmingClear] = useState(false);
@@ -108,6 +111,10 @@ export function GitHubEnterpriseSection({
 
   const host = status?.host ?? null;
   const hostChanged = hostDraft.trim().toLowerCase() !== (host ?? "");
+  // A token draft belongs to the server it was typed for: once the account
+  // points somewhere else (here or in another window), the field reads empty.
+  const token = draft.host === host ? draft.token : "";
+  const setToken = (next: string) => setDraft({ host, token: next });
   const working = busy !== null || isSavingHost;
 
   const afterTokenChange = () => {

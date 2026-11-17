@@ -209,8 +209,10 @@ export class GitHubRateLimitServiceImpl {
     const resetSeconds = parseIntOrNull(resetRaw);
     const resource = headers.get("x-ratelimit-resource") ?? GLOBAL_RESOURCE_KEY;
 
-    // `x-ratelimit-limit: 0` is a server with rate limiting turned off.
+    // `x-ratelimit-limit: 0` is a server with rate limiting turned off: a
+    // primary block recorded before that no longer holds either.
     const limitless = parseIntOrNull(headers.get("x-ratelimit-limit")) === 0;
+    if (limitless) this.clearPrimaryBlock(resource);
     if (remaining === 0 && resetSeconds !== null && !limitless) {
       this.markBlocked(
         "primary",
@@ -338,6 +340,7 @@ export class GitHubRateLimitServiceImpl {
     // and a budget read before the server turned limits off no longer holds.
     if (limit !== null && limit <= 0) {
       this.dropBudget();
+      this.clearPrimaryBlock("graphql");
       return;
     }
 
@@ -594,6 +597,11 @@ export class GitHubRateLimitServiceImpl {
   /** Test-only inspector for the observed GraphQL budget state. */
   _getBudgetStateForTests(): Readonly<BudgetState> | null {
     return this._budgetState;
+  }
+
+  /** Lift a primary (quota) block on `resource`; a secondary throttle stays. */
+  private clearPrimaryBlock(resource: string): void {
+    if (this.states.get(resource)?.kind === "primary") this.clearResource(resource);
   }
 
   private clearResource(resource: string): void {

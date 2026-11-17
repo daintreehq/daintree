@@ -668,7 +668,7 @@ export async function listPullRequests(
 
       return result;
     } catch (error) {
-      throw new Error(parseGitHubError(error));
+      throw new Error(parseGitHubError(error, context.host));
     }
   });
 }

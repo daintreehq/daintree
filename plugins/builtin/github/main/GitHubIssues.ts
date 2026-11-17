@@ -166,7 +166,7 @@ export async function assignIssue(
 
       return { username: assigneeData.login, avatarUrl: assigneeData.avatarUrl };
     } catch (error) {
-      throw new Error(parseGitHubError(error));
+      throw new Error(parseGitHubError(error, context.host));
     }
   });
 }
@@ -213,7 +213,7 @@ export async function unassignIssue(
 
       removeIssueAssigneeFromCache(cacheOwner(context), context.repo, issueNumber, username);
     } catch (error) {
-      throw new Error(parseGitHubError(error), { cause: error });
+      throw new Error(parseGitHubError(error, context.host), { cause: error });
     }
   });
 }
@@ -591,7 +591,7 @@ export async function listIssues(
 
       return result;
     } catch (error) {
-      throw new Error(parseGitHubError(error));
+      throw new Error(parseGitHubError(error, context.host));
     }
   });
 }

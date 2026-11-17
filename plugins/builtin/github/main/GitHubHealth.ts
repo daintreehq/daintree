@@ -307,7 +307,7 @@ export async function getProjectHealthForContext(
       }
     }
 
-    return { health: null, error: parseGitHubError(error) };
+    return { health: null, error: parseGitHubError(error, context.host) };
   }
 }
 

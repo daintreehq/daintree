@@ -52,8 +52,8 @@ const HOSTNAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-
  * bare hostname can't carry — a scheme other than https, credentials, a port
  * other than 443, a path, query or fragment — because the host builds its own
  * endpoints from the name and a dropped part would point them somewhere else.
- * Unlike {@link normalizeHostname} it keeps a leading `www.`: the result also
- * names the origin a credential is bound to.
+ * The result also names the origin a credential is bound to, so a leading
+ * `www.` (which {@link normalizeHostname} strips for matching) is refused.
  */
 export function normalizeConfiguredForgeHost(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
@@ -77,6 +77,9 @@ export function normalizeConfiguredForgeHost(raw: unknown): string | null {
     return null;
   }
   const hostname = parsed.hostname.toLowerCase();
+  // Matching ignores a leading `www.`, so `www.x` would route remotes on `x`
+  // while naming a different origin: refuse it rather than mean either.
+  if (hostname.startsWith("www.")) return null;
   return HOSTNAME_PATTERN.test(hostname) ? hostname : null;
 }
 

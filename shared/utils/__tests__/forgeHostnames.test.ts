@@ -102,7 +102,6 @@ describe("normalizeConfiguredForgeHost", () => {
     ["https://github.example.com", "github.example.com"],
     ["https://github.example.com/", "github.example.com"],
     ["https://github.example.com:443", "github.example.com"],
-    ["www.ghe.example.com", "www.ghe.example.com"],
     ["ghe", "ghe"],
   ])("reads %j as %j", (input, expected) => {
     expect(normalizeConfiguredForgeHost(input)).toBe(expected);
@@ -120,6 +119,7 @@ describe("normalizeConfiguredForgeHost", () => {
     ["git@github.example.com:team/app.git", "a remote URL"],
     ["*.example.com", "a wildcard"],
     ["github example.com", "whitespace inside"],
+    ["www.ghe.example.com", "a www. host, which matching would read as ghe.example.com"],
   ])("refuses %j (%s)", (input) => {
     expect(normalizeConfiguredForgeHost(input)).toBeNull();
   });

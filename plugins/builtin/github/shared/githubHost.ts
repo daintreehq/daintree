@@ -15,9 +15,6 @@ export function normalizeEnterpriseHost(raw: unknown): string | null {
   const host = normalizeConfiguredForgeHost(raw);
   if (host === null) return null;
   if (host === GITHUB_COM_HOST || host.endsWith(`.${GITHUB_COM_HOST}`)) return null;
-  // Hostname routing ignores a leading `www.`, so `www.x` would route remotes
-  // on `x` that this provider then refuses as another host.
-  if (host.startsWith("www.")) return null;
   return host;
 }
 

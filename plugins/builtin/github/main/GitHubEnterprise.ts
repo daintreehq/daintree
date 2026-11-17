@@ -66,9 +66,6 @@ function isUnavailable(value: object): value is CredentialImportUnavailable {
   return (value as Partial<CredentialImportUnavailable>).unavailable === true;
 }
 
-// The shapes gh and GitHub hand out; anything else typed as a bare token is ignored.
-const TOKEN_SHAPE = /^[A-Za-z0-9_]{20,255}$/;
-
 const HOST_CHANGED_MESSAGE =
   "The Enterprise Server host changed in another window. Check the host, then try again.";
 const CREDENTIAL_CHANGED_MESSAGE =
@@ -139,18 +136,31 @@ export class GitHubEnterpriseAccount {
     setEnterpriseHost(raw);
   }
 
+  /**
+   * A real change to the saved host or token: it ends the startup restore
+   * (so its apply invalidates caches) and outdates any save still validating.
+   */
+  private markChanged(): void {
+    this.restoring = false;
+    this.credentialRevision++;
+  }
+
+  /** The token setting changed, from this account or the generated settings form. */
+  onTokenSetting(): void {
+    if (this.disposed) return;
+    this.markChanged();
+  }
+
   /** Mirror a new `enterpriseHost` value, retiring what belonged to the old host. */
   onHostSetting(raw: unknown): void {
     if (this.disposed) return;
     const previous = getEnterpriseHost();
     setEnterpriseHost(raw);
     if (getEnterpriseHost() === previous) return;
-    this.credentialRevision++;
-    if (!this.restoring) {
-      // Repo contexts, pages and counts were parsed and fetched against the
-      // old routing; a remote that was unserved may now be served.
-      clearGitHubCaches();
-    }
+    this.markChanged();
+    // Repo contexts, pages and counts were parsed and fetched against the old
+    // routing; a remote that was unserved may now be served.
+    clearGitHubCaches();
     this.retireSession();
     // A host checked with Test but never given a token still has a breaker.
     if (previous !== null) releaseRateLimitServiceForHost(previous);
@@ -170,21 +180,16 @@ export class GitHubEnterpriseAccount {
     const generation = ++this.applyGeneration;
     const raw = await this.readRawRecord();
     if (this.disposed || generation !== this.applyGeneration) return;
+    // Only the startup apply restores; it is the first to complete only when
+    // nothing changed while it read.
     const restoring = this.restoring;
     this.restoring = false;
     this.retireSession();
     const host = getEnterpriseHost();
     if (host === null) return;
-    let record = parseEnterpriseTokenRecord(raw);
-    if (!record && typeof raw === "string" && TOKEN_SHAPE.test(raw.trim())) {
-      // A bare token typed into the generated settings form: it was entered
-      // for the host configured now, so bind it to that host before using it.
-      record = { version: 1, host, token: raw.trim() };
-      this.credentialRevision++;
-      void this.deps.settings
-        .set(ENTERPRISE_TOKEN_SETTING, JSON.stringify(record))
-        .catch(() => undefined);
-    }
+    // Only a record bound to this host counts. A bare token (typed into the
+    // generated settings form) names no host, so it is never sent anywhere.
+    const record = parseEnterpriseTokenRecord(raw);
     const token = record && record.host === host ? record.token : null;
     if ((GitHubAuth.getToken(host) ?? null) !== token) {
       GitHubAuth.setMemoryToken(token, host);
@@ -251,7 +256,7 @@ export class GitHubEnterpriseAccount {
     validation: GitHubTokenValidation
   ): Promise<void> {
     const record: EnterpriseTokenRecord = { version: 1, host, token };
-    this.credentialRevision++;
+    this.markChanged();
     await this.deps.settings.set(ENTERPRISE_TOKEN_SETTING, JSON.stringify(record));
     await this.applySession();
     // Only the token this validation describes gets its identity; a later
@@ -285,7 +290,7 @@ export class GitHubEnterpriseAccount {
 
   async clearToken(expectedHost: string | null): Promise<{ cleared: boolean }> {
     if (getEnterpriseHost() !== expectedHost) return { cleared: false };
-    this.credentialRevision++;
+    this.markChanged();
     await this.deps.settings.unset(ENTERPRISE_TOKEN_SETTING);
     await this.applySession();
     return { cleared: true };
@@ -395,6 +400,7 @@ export async function registerGitHubEnterprise(
     void account.applySession().catch(() => undefined);
   });
   await subscribe(ENTERPRISE_TOKEN_SETTING, () => {
+    account.onTokenSetting();
     void account.applySession().catch(() => undefined);
   });
   // Only the hostname gates registration: remote parsing reads it

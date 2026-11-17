@@ -23,7 +23,7 @@
         "id": "enterpriseToken",
         "type": "secret",
         "label": "GitHub Enterprise Server token",
-        "description": "Personal access token for the GitHub Enterprise Server host, stored with the host it was saved for."
+        "description": "Set it in Settings → Code forge → GitHub, which checks it against the server first and stores it with the host it was saved for. A token entered here is ignored."
       }
     ],
     "forgeProviders": [

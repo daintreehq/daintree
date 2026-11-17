@@ -248,19 +248,71 @@ describe("GitHubEnterpriseAccount", () => {
     expect(GitHubAuth.getToken(GHES)).toBeUndefined();
   });
 
-  it("binds a bare token typed into the generated settings form to the configured host", async () => {
+  it("never uses a bare token typed into the generated settings form, which names no host", async () => {
     const { account, values } = makeAccount({ enterpriseHost: GHES, enterpriseToken: CANDIDATE });
 
     await load(account);
 
-    expect(GitHubAuth.getToken(GHES)).toBe(CANDIDATE);
-    await vi.waitFor(() =>
-      expect(parseEnterpriseTokenRecord(values.get("enterpriseToken"))).toEqual({
-        version: 1,
-        host: GHES,
-        token: CANDIDATE,
-      })
-    );
+    expect(GitHubAuth.hostHoldingToken(CANDIDATE)).toBeNull();
+    expect(values.get("enterpriseToken")).toBe(CANDIDATE);
+  });
+
+  it("lets a clear from the generated settings form win over a save still validating", async () => {
+    const { account, values } = makeAccount({ enterpriseHost: GHES });
+    await load(account);
+    vi.spyOn(GitHubAuth, "validate").mockImplementation(async () => {
+      // The token setting changed outside this account while the save checked.
+      values.delete("enterpriseToken");
+      account.onTokenSetting();
+      return { valid: true, scopes: [], username: "mona" };
+    });
+
+    await expect(account.saveToken(CANDIDATE, GHES)).resolves.toMatchObject({ valid: false });
+    expect(values.has("enterpriseToken")).toBe(false);
+  });
+
+  it("treats a host change during the startup token read as a change, not a restore", async () => {
+    repoStatsCache.set("team/app", { issueCount: 3, prCount: 1 });
+    let releaseRead: (value: unknown) => void = () => {};
+    const { settings, values } = makeSettings({ enterpriseHost: GHES });
+    const get = settings.get;
+    settings.get = async (key) =>
+      key === "enterpriseToken"
+        ? new Promise((resolve) => {
+            releaseRead = resolve;
+          })
+        : get(key);
+    const account = new GitHubEnterpriseAccount({ settings, onCredentialsChanged: vi.fn() });
+    await account.loadHost();
+    const restore = account.applySession();
+
+    values.set("enterpriseHost", "ghe.other.example");
+    account.onHostSetting("ghe.other.example");
+    releaseRead(undefined);
+    await restore;
+
+    expect(repoStatsCache.get("team/app")).toBeUndefined();
+  });
+
+  it("installs nothing when disposed while the startup token read is still pending", async () => {
+    let releaseRead: (value: unknown) => void = () => {};
+    const { settings } = makeSettings({ enterpriseHost: GHES });
+    const get = settings.get;
+    settings.get = async (key) =>
+      key === "enterpriseToken"
+        ? new Promise((resolve) => {
+            releaseRead = resolve;
+          })
+        : get(key);
+    const account = new GitHubEnterpriseAccount({ settings, onCredentialsChanged: vi.fn() });
+    await account.loadHost();
+    const restore = account.applySession();
+
+    account.dispose();
+    releaseRead(record(GHES, "enterprise-token"));
+    await restore;
+
+    expect(GitHubAuth.hostHoldingToken("enterprise-token")).toBeNull();
   });
 
   it("refuses token work until a host is set", async () => {

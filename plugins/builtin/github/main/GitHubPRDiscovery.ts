@@ -754,10 +754,14 @@ export async function batchCheckLinkedPRs(
           prewarmPRTooltipCache(freshContext, retryResults, retryRequestedAt);
           return { results: retryResults };
         } catch (retryError) {
-          return { results: new Map(), error: parseGitHubError(retryError), ...rateLimitMeta() };
+          return {
+            results: new Map(),
+            error: parseGitHubError(retryError, freshContext.host),
+            ...rateLimitMeta(),
+          };
         }
       }
     }
-    return { results: new Map(), error: parseGitHubError(error), ...rateLimitMeta() };
+    return { results: new Map(), error: parseGitHubError(error, context.host), ...rateLimitMeta() };
   }
 }

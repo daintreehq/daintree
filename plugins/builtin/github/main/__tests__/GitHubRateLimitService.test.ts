@@ -488,6 +488,18 @@ describe("GitHubRateLimitService", () => {
       expect(gitHubRateLimitService._getBudgetStateForTests()).toBeNull();
     });
 
+    it("lifts a quota block once the server reports a zero-sized window", () => {
+      const resetAt = new Date(Date.now() + ONE_HOUR_MS).toISOString();
+      gitHubRateLimitService.updateFromGraphQL({
+        rateLimit: { cost: 1, remaining: 0, resetAt, limit: 5000 },
+      });
+      expect(gitHubRateLimitService.shouldBlockRequest("graphql").blocked).toBe(true);
+
+      gitHubRateLimitService.updateFromGraphQL(graphQLData(0, 0));
+
+      expect(gitHubRateLimitService.shouldBlockRequest("graphql").blocked).toBe(false);
+    });
+
     it("doesn't block on REST headers that report a zero-sized window", () => {
       gitHubRateLimitService.update(
         new Headers({

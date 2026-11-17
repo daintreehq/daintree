@@ -963,10 +963,10 @@ export async function getRepoStatsAndPageForContext(
         },
         issues: null,
         prs: null,
-        error: parseGitHubError(error),
+        error: parseGitHubError(error, context.host),
       };
     }
-    return { stats: null, issues: null, prs: null, error: parseGitHubError(error) };
+    return { stats: null, issues: null, prs: null, error: parseGitHubError(error, context.host) };
   }
 }
 

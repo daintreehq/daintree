@@ -80,6 +80,15 @@ describe("github plugin activate", () => {
     expect(order).toEqual(["storage", "enterprise", "provider"]);
   });
 
+  it("empties the Enterprise Server session when the provider can't register", async () => {
+    const host = makeHost();
+    vi.mocked(host.registerForgeProvider).mockRejectedValue(new Error("registry refused"));
+
+    await expect(activate(host)).rejects.toThrow("registry refused");
+
+    expect(disposeEnterpriseMock).toHaveBeenCalledTimes(1);
+  });
+
   it("empties the Enterprise Server session on deactivation", async () => {
     const dispose = await activate(makeHost());
     expect(disposeEnterpriseMock).not.toHaveBeenCalled();
