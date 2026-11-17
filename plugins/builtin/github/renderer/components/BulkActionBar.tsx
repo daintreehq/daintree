@@ -58,7 +58,7 @@ export function BulkActionBar({
   if (count <= 0) return null;
 
   const noun = mode === "pr" ? "pull request" : "issue";
-  const hiddenNote = hiddenCount > 0 ? ` · ${hiddenCount} not shown` : "";
+  const hiddenNote = hiddenCount > 0 ? ` · ${hiddenCount.toLocaleString()} not shown` : "";
 
   return (
     /* This REPLACES the standard footer rather than stacking under it. The bar

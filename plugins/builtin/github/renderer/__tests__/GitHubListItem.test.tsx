@@ -141,6 +141,27 @@ describe("GitHubListItem", () => {
     expect(title.getAttribute("tabindex")).toBe("-1");
   });
 
+  it("reveals the title in a tooltip only while it is clipped", () => {
+    const widths = vi.spyOn(HTMLElement.prototype, "scrollWidth", "get");
+    const client = vi.spyOn(HTMLElement.prototype, "clientWidth", "get");
+    try {
+      widths.mockReturnValue(400);
+      client.mockReturnValue(200);
+      const { unmount } = render(
+        <GitHubListItem item={baseIssue} type="issue" onCreateWorktree={vi.fn()} />
+      );
+      expect(screen.getAllByText("Fix the thing").length).toBeGreaterThan(1);
+      unmount();
+
+      widths.mockReturnValue(200);
+      render(<GitHubListItem item={baseIssue} type="issue" onCreateWorktree={vi.fn()} />);
+      expect(screen.getAllByText("Fix the thing")).toHaveLength(1);
+    } finally {
+      widths.mockRestore();
+      client.mockRestore();
+    }
+  });
+
   it("opens the forge from the title, leaving the row to the worktree", () => {
     // The title is the resource's name, so it goes to where the resource
     // lives. Creating a worktree off a click on the text was the complaint.

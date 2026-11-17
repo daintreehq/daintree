@@ -265,7 +265,7 @@ export function BulkCreateWorktreeDialog({
         // "selected" gives way to it: the title and the button already count.
         pluralize(selectedCount, itemNoun) +
         (creatableCount > 0 ? "" : " selected") +
-        (skippedCount > 0 ? ` \u00b7 ${skippedCount} skipped` : "") +
+        (skippedCount > 0 ? ` \u00b7 ${skippedCount.toLocaleString()} skipped` : "") +
         (creatableCount > 0 ? " \u00b7 runs in the background" : "");
 
   // Nothing to cut issue branches from yet (detached main worktree, list still

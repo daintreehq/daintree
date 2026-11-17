@@ -503,6 +503,14 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.getByTestId("bulk-create-confirm-button").textContent).not.toContain("worktrees");
   });
 
+  it("groups digits in a large batch's confirm button", () => {
+    const many = Array.from({ length: 1204 }, (_, i) => makeIssue(i + 1));
+    render(<BulkCreateWorktreeDialog {...defaultProps} selectedIssues={many} />);
+    expect(screen.getByTestId("bulk-create-confirm-button").textContent).toContain(
+      "Create 1,204 worktrees"
+    );
+  });
+
   it("creates worktrees using direct client calls", async () => {
     const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(

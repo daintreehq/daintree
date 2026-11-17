@@ -135,6 +135,20 @@ describe("BulkActionBar", () => {
     );
     expect(screen.getByText(/issues selected/).textContent).toBe("1,204 issues selected");
     expect(screen.getByRole("button", { name: "Create worktrees" })).toBeTruthy();
+
+    rerender(
+      <BulkActionBar
+        mode="issue"
+        selectedIssues={[makeIssue(1)]}
+        selectedPRs={[]}
+        selectedCount={1204}
+        hiddenCount={1200}
+        onClear={vi.fn()}
+      />
+    );
+    expect(screen.getByText(/issues selected/).textContent).toBe(
+      "1,204 issues selected · 1,200 not shown"
+    );
   });
 
   it("opens bulk-create dialog with issues in issue mode", () => {
@@ -169,6 +183,7 @@ describe("BulkActionBar", () => {
     );
 
     expect(screen.getByText("3")).toBeTruthy();
+    expect(screen.getByText(/pull requests selected/).textContent).toBe("3 pull requests selected");
 
     fireEvent.click(screen.getByRole("button", { name: /create worktree/i }));
     expect(openBulkCreateDialogForPRs).toHaveBeenCalledWith(prs, onClear);

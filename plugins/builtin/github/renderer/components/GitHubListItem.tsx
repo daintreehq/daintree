@@ -465,6 +465,10 @@ export function GitHubListItem({
               <button
                 type="button"
                 tabIndex={-1}
+                // A refresh can swap in a longer title without resizing the
+                // button, so the resize observer never re-reads it; remounting
+                // re-measures. The button never holds focus (below).
+                key={item.title}
                 // Chromium focuses a native button on pointer press even at
                 // tabIndex -1. This grid keeps DOM focus in the search input
                 // and points `aria-activedescendant` at the row, so letting
