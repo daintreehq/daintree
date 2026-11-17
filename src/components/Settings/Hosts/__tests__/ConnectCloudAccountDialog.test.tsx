@@ -258,10 +258,16 @@ describe("ConnectCloudAccountDialog", () => {
     ]);
     render(<ConnectCloudAccountDialog isOpen onClose={() => {}} provider={optionalFile} />);
     type("cloud-account-credential-project", "acme-build");
-    const unreadable = new File(["{}"], "locked.json");
-    Object.defineProperty(unreadable, "text", { value: () => Promise.reject(new Error("")) });
-    chooseFile("cloud-account-credential-keyFile", unreadable);
-    expect((await screen.findByRole("alert")).textContent).toContain("That file couldn't be read");
+    const unreadable = (said: string) => {
+      const file = new File(["{}"], "locked.json");
+      Object.defineProperty(file, "text", { value: () => Promise.reject(new Error(said)) });
+      return file;
+    };
+    chooseFile("cloud-account-credential-keyFile", unreadable(" \t "));
+    expect((await screen.findByRole("alert")).textContent).toBe("That file couldn't be read");
+    expect(isDisabled(button("Check credentials"))).toBe(true);
+    chooseFile("cloud-account-credential-keyFile", unreadable("Permission denied"));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("Permission denied"));
     expect(isDisabled(button("Check credentials"))).toBe(true);
   });
 

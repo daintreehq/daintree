@@ -391,11 +391,14 @@ export class CloudAccountService {
     this.requireVault();
     this.requireCurrentOrigin(account);
     const checked = await this.check(provider, credentials, account.apiUrl);
-    if (account.identity && checked.identity && checked.identity !== account.identity) {
-      throw invalid(
-        `Those credentials sign in as ${checked.identity}, not ${account.identity}. Connect them as another account instead.`
-      );
-    }
+    const refuseOtherIdentity = (current: StoredCloudAccount) => {
+      if (current.identity && checked.identity && checked.identity !== current.identity) {
+        throw invalid(
+          `Those credentials sign in as ${checked.identity}, not ${current.identity}. Connect them as another account instead.`
+        );
+      }
+    };
+    refuseOtherIdentity(account);
     if (!checked.scopes.some((choice) => choice.scope.id === account.scope.id)) {
       throw invalid(`Those credentials can't bill ${account.scope.name}.`);
     }
@@ -403,13 +406,17 @@ export class CloudAccountService {
       // Removed while the check was out: nothing is sealed for an account that's gone.
       const before = this.requireAccount(account.id);
       this.requireCurrentOrigin(before);
+      // A check of the old set may have learned who it signs in as meanwhile.
+      refuseOtherIdentity(before);
       // Read before anything is overwritten: a set that can't be read now couldn't be put back.
       const previous = await this.deps.vault.get(account.id);
       await this.deps.vault.put(account.id, credentials);
       try {
+        const latest = this.deps.store.account(account.id) ?? before;
         this.deps.store.putAccount({
-          // A check of the old set may have written its identity while this one was sealed.
-          ...(this.deps.store.account(account.id) ?? before),
+          ...latest,
+          // Who the new set signs in as, never what a check of the old one wrote while it was sealed.
+          identity: checked.identity ?? before.identity,
           keyHint: this.hint(provider, credentials),
           credentialRevision: newCredentialRevision(),
           validation: { status: "valid", checkedAt: this.now() },

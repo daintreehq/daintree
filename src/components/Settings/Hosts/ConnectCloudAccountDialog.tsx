@@ -248,10 +248,8 @@ export function ConnectCloudAccountDialog({
         if (fileReads.current.get(field.id) !== read) return;
         setReadingField(field.id, false);
         // Never blank: an empty error would read as no error and let the form go on without it.
-        setFieldError(
-          field.id,
-          errorText(failure, "That file couldn't be read") || "That file couldn't be read"
-        );
+        const said = errorText(failure, "").trim();
+        setFieldError(field.id, said || "That file couldn't be read");
       }
     );
   };
