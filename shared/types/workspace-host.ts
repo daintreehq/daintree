@@ -620,6 +620,17 @@ export type WorkspaceHostRequest =
       deleteBranch?: boolean;
     }
   /**
+   * Main's merged-worktree rule (#17321) removing a worktree no one is there
+   * to confirm. Answered with `delete-worktree-result`. Never forces or
+   * deletes the branch; the host re-checks the guard right before git runs.
+   */
+  | {
+      type: "remove-merged-worktree";
+      requestId: string;
+      worktreeId: string;
+      guard: UnattendedRemovalGuard;
+    }
+  /**
    * What deleting the worktree would discard and run, read fresh, for a
    * delete main puts to the person itself with no view open (#13501): the
    * same three reads a view's dialog makes over its worktree port.
@@ -1344,4 +1355,14 @@ export interface WorkspaceClientConfig {
    * it (e.g. in tests) keeps eviction deterministic.
    */
   maxWarmEntries?: number;
+}
+
+/**
+ * What an unattended removal (#17321) was judged against: the branch the
+ * merged PR came from and the commit it merged. The host refuses unless the
+ * checkout still matches both and holds nothing uncommitted.
+ */
+export interface UnattendedRemovalGuard {
+  expectedBranch: string;
+  expectedHead: string;
 }

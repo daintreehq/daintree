@@ -159,6 +159,8 @@ export const SETTING_CATALOG = {
       mcpServer: host,
       helpAssistant: host,
       pendingErrors: device,
+      // The removals happened on the machine whose worktrees they were.
+      mergedWorktreeRemovalReceipts: host,
       errorFingerprints: device,
       gpu: device,
       crashRecovery: device,

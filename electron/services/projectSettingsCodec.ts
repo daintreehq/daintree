@@ -475,6 +475,7 @@ export function decode(raw: unknown): ProjectSettingsDecodeResult {
       typeof migrated.defaultWorktreeMode === "string" ? migrated.defaultWorktreeMode : undefined,
     daintreeMcpTier: decodeMcpTier(migrated.daintreeMcpTier),
     daintreeMcpSkipConfirmations: decodeMcpSkipConfirmations(migrated),
+    removeMergedWorktrees: migrated.removeMergedWorktrees === true ? true : undefined,
     exposeDaintreeMcpToAgents:
       typeof migrated.exposeDaintreeMcpToAgents === "boolean"
         ? migrated.exposeDaintreeMcpToAgents
@@ -586,6 +587,7 @@ export const ProjectSettingsSaveSchema = z
     defaultWorktreeMode: z.string().optional(),
     daintreeMcpTier: z.enum(["off", "core", "full"]).optional(),
     daintreeMcpSkipConfirmations: z.boolean().optional(),
+    removeMergedWorktrees: z.boolean().optional(),
     exposeDaintreeMcpToAgents: z.boolean().optional(),
     browserAllowedHosts: z.array(z.string()).optional(),
     voiceDictionary: z.array(z.unknown()).optional(),

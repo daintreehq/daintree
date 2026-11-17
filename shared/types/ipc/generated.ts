@@ -2832,6 +2832,22 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../menu.js").ShowContextMenuPayload];
     result: string | null;
   };
+  "merged-worktree-cleanup:ack-receipts": {
+    args: [payload: import("../mergedWorktreeCleanup.js").MergedWorktreeCleanupAckReceiptsPayload];
+    result: void;
+  };
+  "merged-worktree-cleanup:preview": {
+    args: [payload: import("../mergedWorktreeCleanup.js").MergedWorktreeCleanupPreviewPayload];
+    result: import("../mergedWorktreeCleanup.js").MergedWorktreeCleanupPreview;
+  };
+  "merged-worktree-cleanup:set-enabled": {
+    args: [payload: import("../mergedWorktreeCleanup.js").MergedWorktreeCleanupSetEnabledPayload];
+    result: void;
+  };
+  "merged-worktree-cleanup:take-receipts": {
+    args: [];
+    result: import("../mergedWorktreeCleanup.js").MergedWorktreeRemovalReceipt[];
+  };
   "onboarding:checklist-dismiss": {
     args: [];
     result: void;

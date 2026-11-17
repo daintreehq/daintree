@@ -97,6 +97,11 @@ import { WorktreeEmitGate } from "./WorktreeEmitGate.js";
 import { branchRefName, readBranchCommitterDates } from "../utils/branchCommitterDates.js";
 import { withTimeout } from "../utils/withTimeout.js";
 import { sweepWorktreeAdminEntries } from "./worktreeAdminSweep.js";
+import { writeWorktreeCreationStamp } from "../utils/worktreeCreationStamp.js";
+import {
+  verifyUnattendedCheckout,
+  type UnattendedRemovalGuard,
+} from "./unattendedWorktreeRemoval.js";
 import {
   getGitDir,
   getGitCommonDir,
@@ -3592,6 +3597,20 @@ export class WorkspaceService {
       };
       const canonicalWorktreeId = createdWorktree.id;
       const isActive = canonicalWorktreeId === this.activeWorktreeId;
+      // Only what is stamped here may ever be removed by the merged-worktree
+      // rule (#17321); a stamp that fails to land leaves the worktree to the
+      // person, which is the safe direction.
+      if (createdWorktree.gitDir) {
+        await writeWorktreeCreationStamp(createdWorktree.gitDir, {
+          createdAt: Date.now(),
+          branch: newBranch,
+        }).catch((error: unknown) => {
+          logWarn("[WorkspaceHost] could not stamp the new worktree as Daintree's", {
+            worktreePath: canonicalPath,
+            error: formatErrorMessage(error, "stamp write failed"),
+          });
+        });
+      }
 
       // Register the monitor SYNCHRONOUSLY before emitting the success event.
       // Two invariants depend on this ordering:
@@ -4056,6 +4075,34 @@ export class WorkspaceService {
     });
   }
 
+  /**
+   * The refusals an unattended removal (#17321) adds before anything stops or
+   * runs. Teardown is refused rather than run: the person consented to losing
+   * a checkout that holds nothing, not to a project script or resource
+   * teardown running with no one watching. The active worktree is refused
+   * because removing it switches a view the person may be looking at.
+   */
+  private async refuseUnattendedRemoval(
+    worktreeId: string,
+    monitor: WorktreeMonitor,
+    guard: UnattendedRemovalGuard
+  ): Promise<void> {
+    if (await pathIsMissing(monitor.path)) {
+      throw new Error("The worktree's folder is already gone");
+    }
+    if (monitor.isCurrent) {
+      throw new Error("The worktree is the active one");
+    }
+    if (monitor.branch !== guard.expectedBranch) {
+      throw new Error("The worktree is no longer on the branch its PR merged");
+    }
+    const teardown = await this.getDeleteTeardownPreview(worktreeId);
+    if (teardown === null || teardown.phases.length > 0) {
+      throw new Error("Deleting the worktree would run teardown steps");
+    }
+    await verifyUnattendedCheckout(monitor.path, guard);
+  }
+
   private async runLifecycleTeardown(worktreeId: string, monitor: WorktreeMonitor): Promise<void> {
     // A plugin step still setting the worktree up is setting up one that is
     // about to be gone. A clone would still be writing into it, so its child
@@ -4105,7 +4152,17 @@ export class WorkspaceService {
      * payload already carries the field; `handleWorktreePortRequest` in
      * `electron/workspace-host.ts` is the one hop that still has to forward it.
      */
-    branchOptions: { forceDeleteBranch?: boolean } = {}
+    branchOptions: {
+      forceDeleteBranch?: boolean;
+      /**
+       * Set only by main's merged-worktree rule (#17321): no one is there to
+       * consent, so the removal must lose nothing. Never forces, never deletes
+       * the branch, never runs teardown or prunes, and refuses unless the
+       * checkout is on `expectedBranch` at `expectedHead` with nothing
+       * uncommitted, read again right before git runs.
+       */
+      unattended?: UnattendedRemovalGuard;
+    } = {}
   ): Promise<void> {
     // Mutation-outbox replay short-circuit (#8405): a replay of an already
     // acknowledged delete must not re-run `git worktree remove` (which would
@@ -4144,6 +4201,14 @@ export class WorkspaceService {
 
       if (monitor.isMainWorktree) {
         throw new Error("Cannot delete the main worktree");
+      }
+
+      const unattended = branchOptions.unattended;
+      if (unattended) {
+        if (force || deleteBranch || branchOptions.forceDeleteBranch) {
+          throw new Error("An unattended removal never forces or deletes the branch");
+        }
+        await this.refuseUnattendedRemoval(worktreeId, monitor, unattended);
       }
 
       // Before every other guard and before teardown: no consent covers this,
@@ -4190,7 +4255,10 @@ export class WorkspaceService {
       if (await pathIsMissing(monitor.path)) {
         await this.guardPrunableSubmoduleStores(monitor.path);
       } else {
-        await this.guardSubmoduleDelete(monitor, worktreeId, force);
+        const needsForce = await this.guardSubmoduleDelete(monitor, worktreeId, force);
+        if (unattended && needsForce) {
+          throw new Error("Git would need --force to remove the worktree's submodules");
+        }
       }
 
       const branchToDelete = deleteBranch ? monitor.branch : undefined;
@@ -4267,6 +4335,12 @@ export class WorkspaceService {
           // narrows the window rather than closing it; closing it needs a
           // prepare/commit host API, which is a separate change.
           const needsMechanicalForce = await this.guardSubmoduleDelete(monitor, worktreeId, force);
+          if (unattended) {
+            if (needsMechanicalForce) {
+              throw new Error("Git would need --force to remove the worktree's submodules");
+            }
+            await verifyUnattendedCheckout(monitor.path, unattended);
+          }
           // Last, so no other await sits between it and the removal.
           await this.guardNestedWorktreeDelete(monitor);
 
@@ -4287,6 +4361,9 @@ export class WorkspaceService {
             () => this.guardNestedWorktreeDelete(monitor)
           );
           markHostPerformance("wtdelete.git-remove:end", { worktreeId });
+          if (removeResult === "stale" && unattended) {
+            throw new Error("Git no longer sees a checkout at the worktree's path");
+          }
           if (removeResult === "stale") {
             // Git no longer sees a checkout here, so this is the missing-path
             // branch reached late — and it needs that branch's guard.

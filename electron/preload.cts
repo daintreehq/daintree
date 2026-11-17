@@ -85,6 +85,7 @@ import { buildClaudePreloadBindings } from "./ipc/handlers/claude.preload.js";
 import { buildTerminalSessionFilePreloadBindings } from "./ipc/handlers/terminalSessionFile.preload.js";
 import { buildVoiceDictionaryPreloadBindings } from "./ipc/handlers/voiceDictionary.preload.js";
 import { buildProjectLinksPreloadBindings } from "./ipc/handlers/projectLinks.preload.js";
+import { buildMergedWorktreeCleanupPreloadBindings } from "./ipc/handlers/mergedWorktreeCleanup.preload.js";
 import { buildRecentDictationsPreloadBindings } from "./ipc/handlers/recentDictations.preload.js";
 import { buildOnboardingPreloadBindings } from "./ipc/handlers/onboarding.preload.js";
 import { buildShortcutHintsPreloadBindings } from "./ipc/handlers/shortcutHints.preload.js";
@@ -3340,6 +3341,14 @@ function buildElectronApi(): ElectronAPI {
     voiceDictionary: buildVoiceDictionaryPreloadBindings(_unwrappingInvoke),
 
     projectLinks: buildProjectLinksPreloadBindings(_unwrappingInvoke),
+
+    // The merged-worktree rule (#17321)
+    mergedWorktreeCleanup: {
+      ...buildMergedWorktreeCleanupPreloadBindings(_unwrappingInvoke),
+
+      onReceiptsReady: (callback: () => void) =>
+        _typedOn(CHANNELS.MERGED_WORKTREE_CLEANUP_RECEIPTS_READY, callback),
+    },
 
     recentDictations: {
       ...buildRecentDictationsPreloadBindings(_unwrappingInvoke),

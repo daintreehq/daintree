@@ -23,6 +23,10 @@ import {
 import type { WorkspaceHostProcess } from "./WorkspaceHostProcess.js";
 import { getWebContentsForProject } from "../window/webContentsRegistry.js";
 import { hasPendingScheduledLaunch } from "./scheduledRuns/scheduledRunAdmission.js";
+import {
+  holdHostForMergedWorktreeRemoval,
+  isHostHeldForMergedWorktreeRemoval,
+} from "./mergedWorktreeCleanup/removalHolds.js";
 import { isCheckoutPendingPath } from "./projectClone/checkoutGate.js";
 import { AppError } from "../utils/errorTypes.js";
 import type { ForgeProviderMatcher } from "../../shared/utils/forgeHostnames.js";
@@ -35,6 +39,7 @@ import type {
   WorkspaceHostGovernanceSnapshot,
   WorkspaceFetchResult,
   WorkspaceHostEvent,
+  UnattendedRemovalGuard,
 } from "../../shared/types/workspace-host.js";
 import type { WorktreeCreateResult, WorktreeSetupState } from "../../shared/types/worktree.js";
 import type {
@@ -113,6 +118,12 @@ function dedupeSnapshotsById(states: WorktreeSnapshot[]): WorktreeSnapshot[] {
 const FETCH_WORKTREE_TIMEOUT_MS = 5 * 60_000;
 
 /**
+ * `git worktree remove` deletes the whole checkout, `node_modules` and all,
+ * so it gets the same ceiling a view's delete over its port has.
+ */
+const MERGED_WORKTREE_REMOVAL_TIMEOUT_MS = 20 * 60_000;
+
+/**
  * A host's worktree snapshot read plus its own "is there a repository here"
  * verdict. `gitBacked: null` is "not classified" — never read it as `false`
  * (#11650). Main-process shape; the renderer sees `WorktreeListResult`.
@@ -163,7 +174,8 @@ export class WorkspaceClient extends EventEmitter {
       // A run's new worktree sets up in the host while its launch waits to spawn
       // (#16369), with no window at all when an OS job started Daintree, and
       // setup status goes with the host.
-      isHostBusy: hasPendingScheduledLaunch,
+      isHostBusy: (projectId) =>
+        hasPendingScheduledLaunch(projectId) || isHostHeldForMergedWorktreeRemoval(projectId),
     });
 
     this.copyTree = new WorkspaceCopyTreeClient({
@@ -1170,6 +1182,43 @@ export class WorkspaceClient extends EventEmitter {
       Extract<WorkspaceHostEvent, { type: "delete-preview-result" }>
     >({ type: "get-delete-preview", requestId, worktreeId });
     return { changes, risk, teardown };
+  }
+
+  /**
+   * Main's merged-worktree rule (#17321) removing one of a project's worktrees
+   * under the unattended guard, through that project's own host, started here
+   * when no window has started it. Project-scoped like {@link getDeletePreview}
+   * so a refusal never falls through to another project's host, and rejects
+   * with the host's reason.
+   */
+  async removeMergedWorktree(
+    projectPath: string,
+    expectedProjectId: string,
+    worktreeId: string,
+    guard: UnattendedRemovalGuard
+  ): Promise<void> {
+    // Held before the prewarm: a host started for this has no window holding
+    // it, and the pool would otherwise reclaim it mid-removal.
+    const release = holdHostForMergedWorktreeRemoval(expectedProjectId);
+    try {
+      const normalized = this.pool.normalizeProjectPath(projectPath);
+      if (!this.pool.entries.has(normalized)) this.pool.prewarmProject(projectPath);
+      const entry = this.pool.entries.get(normalized);
+      if (entry === undefined || entry.projectId !== expectedProjectId) {
+        throw new Error("The project's workspace host isn't running");
+      }
+      await entry.currentReadyPromise;
+      if (this.pool.entries.get(normalized) !== entry) {
+        throw new Error("The project's workspace host restarted");
+      }
+      const requestId = entry.host.generateRequestId();
+      await entry.host.sendWithResponse(
+        { type: "remove-merged-worktree", requestId, worktreeId, guard },
+        MERGED_WORKTREE_REMOVAL_TIMEOUT_MS
+      );
+    } finally {
+      release();
+    }
   }
 
   async getMonitorAsync(worktreeId: string): Promise<WorktreeSnapshot | null> {

@@ -1,0 +1,250 @@
+import path from "node:path";
+import type { PR } from "../../../shared/types/forge.js";
+import {
+  MERGED_WORKTREE_GRACE_MS,
+  type MergedWorktreeCandidate,
+  type MergedWorktreePR,
+  type MergedWorktreeSkipReason,
+} from "../../../shared/types/mergedWorktreeCleanup.js";
+import { pathComparisonKey } from "../../../shared/utils/path.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import type { WorktreeStatusObservation } from "../git/worktreeStatusObservation.js";
+import type { WorktreeCreationStamp } from "../../utils/worktreeCreationStamp.js";
+
+export interface ListedWorktree {
+  path: string;
+  branch: string;
+  bare: boolean;
+  isMainWorktree: boolean;
+}
+
+/** The panels a project's saved layout holds, by the worktree and folder each was opened in. */
+export interface SavedLayout {
+  panels: ReadonlyArray<{ worktreeId?: string; cwd?: string }>;
+  activeWorktreeId?: string;
+}
+
+/** The two PR reads the rule needs from the project's code forge. */
+export interface MergedWorktreeForge {
+  findPRByBranch(branch: string): Promise<PR | null>;
+  /** Read past every cache: the rule is about to act on the answer. */
+  getFreshPR(prNumber: number): Promise<PR | null>;
+}
+
+/** Every read the evaluation makes, so each can fail closed on its own. */
+export interface MergedWorktreeReads {
+  pathExists(worktreePath: string): Promise<boolean>;
+  readGitDir(worktreePath: string): Promise<string>;
+  readStamp(gitDir: string): Promise<WorktreeCreationStamp | null>;
+  readStatus(worktreePath: string): Promise<WorktreeStatusObservation>;
+  /**
+   * How many terminal records, exited and trashed ones included, sit in the
+   * worktree, and whether every record could be placed. Rejects when the
+   * census itself is partial.
+   */
+  countTerminals(worktreePath: string): Promise<{ count: number; complete: boolean }>;
+  /** Rejects when the saved layout couldn't be read in full. */
+  readSavedLayout(): Promise<SavedLayout | null>;
+  /** Rejects when the project's forge can't be reached or resolved. */
+  resolveForge(): Promise<MergedWorktreeForge>;
+  now(): number;
+}
+
+const FULL_OID = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+
+function skipped(
+  worktree: ListedWorktree,
+  reason: MergedWorktreeSkipReason,
+  extra: { pr?: MergedWorktreePR; detail?: string } = {}
+): MergedWorktreeCandidate {
+  return {
+    worktreePath: path.resolve(worktree.path),
+    branch: worktree.branch || null,
+    status: "skipped",
+    reason,
+    ...extra,
+  };
+}
+
+function unverified(worktree: ListedWorktree, error: unknown, pr?: MergedWorktreePR) {
+  return skipped(worktree, "unverified", {
+    ...(pr ? { pr } : {}),
+    detail: formatErrorMessage(error, "read failed"),
+  });
+}
+
+function isInside(child: string, root: string): boolean {
+  const relative = path.relative(root, child);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+/**
+ * The local half: everything that needs no network. Returns the observed HEAD
+ * for a worktree that passes, or the verdict for one that doesn't.
+ */
+async function checkLocal(
+  worktree: ListedWorktree,
+  reads: MergedWorktreeReads,
+  layout: () => Promise<SavedLayout | null>
+): Promise<{ headOid: string } | MergedWorktreeCandidate> {
+  if (!worktree.branch) return skipped(worktree, "detached");
+  const worktreePath = path.resolve(worktree.path);
+  try {
+    if (!(await reads.pathExists(worktreePath))) return skipped(worktree, "missing");
+    const stamp = await reads.readStamp(await reads.readGitDir(worktreePath));
+    if (stamp === null) return skipped(worktree, "not-created-by-daintree");
+
+    const status = await reads.readStatus(worktreePath);
+    if (status.branch !== worktree.branch || status.headOid === null) {
+      return skipped(worktree, "unverified", {
+        detail: "git reported a different branch than the worktree list",
+      });
+    }
+    const outstanding =
+      status.staged + status.unstaged + status.untracked + status.conflicted + status.hiddenFromStatus;
+    if (outstanding > 0) return skipped(worktree, "has-changes");
+
+    const terminals = await reads.countTerminals(worktreePath);
+    if (terminals.count > 0) return skipped(worktree, "has-terminals");
+    if (!terminals.complete) {
+      return skipped(worktree, "unverified", {
+        detail: "some terminals couldn't be placed in a worktree",
+      });
+    }
+
+    const saved = await layout();
+    const compare = { caseInsensitive: process.platform === "win32" };
+    const key = pathComparisonKey(worktreePath, compare);
+    if (saved?.activeWorktreeId && pathComparisonKey(saved.activeWorktreeId, compare) === key) {
+      return skipped(worktree, "active");
+    }
+    const hasPanel = (saved?.panels ?? []).some(
+      (panel) =>
+        (panel.worktreeId !== undefined && pathComparisonKey(panel.worktreeId, compare) === key) ||
+        (panel.cwd !== undefined &&
+          isInside(pathComparisonKey(panel.cwd, compare), pathComparisonKey(worktreePath, compare)))
+    );
+    if (hasPanel) return skipped(worktree, "has-panels");
+
+    return { headOid: status.headOid };
+  } catch (error) {
+    return unverified(worktree, error);
+  }
+}
+
+function toCandidatePR(pr: PR): MergedWorktreePR {
+  return {
+    number: pr.number,
+    title: pr.title,
+    url: pr.url,
+    ...(typeof pr.mergedAt === "number" && Number.isFinite(pr.mergedAt)
+      ? { mergedAt: pr.mergedAt }
+      : {}),
+  };
+}
+
+/**
+ * The forge half, read fresh: the PR the branch opened must have merged, from
+ * exactly the commit the worktree is on, more than the grace period ago by the
+ * forge's own clock. A squash-merged PR whose head branch was deleted still
+ * reports its head commit, so this holds where "on some remote ref" can't.
+ */
+async function checkForge(
+  worktree: ListedWorktree,
+  headOid: string,
+  forge: MergedWorktreeForge,
+  now: number
+): Promise<MergedWorktreeCandidate> {
+  let candidatePR: MergedWorktreePR | undefined;
+  try {
+    const found = await forge.findPRByBranch(worktree.branch);
+    if (found === null) return skipped(worktree, "no-pr");
+    const pr = await forge.getFreshPR(found.number);
+    if (pr === null) {
+      return skipped(worktree, "unverified", { detail: "the forge didn't return the PR" });
+    }
+    candidatePR = toCandidatePR(pr);
+    if (pr.headRef !== worktree.branch) {
+      return skipped(worktree, "unverified", {
+        pr: candidatePR,
+        detail: "the PR's head branch isn't the worktree's",
+      });
+    }
+    if (pr.state !== "merged" || pr.merged !== true) {
+      return skipped(worktree, "pr-not-merged", { pr: candidatePR });
+    }
+    const headSha = pr.headSha?.toLowerCase();
+    if (!headSha || !FULL_OID.test(headSha)) {
+      return skipped(worktree, "unverified", {
+        pr: candidatePR,
+        detail: "the forge didn't report the commit the PR merged",
+      });
+    }
+    if (headSha !== headOid.toLowerCase()) {
+      return skipped(worktree, "head-moved", { pr: candidatePR });
+    }
+    const mergedAt = candidatePR.mergedAt;
+    if (mergedAt === undefined) {
+      return skipped(worktree, "unverified", {
+        pr: candidatePR,
+        detail: "the forge didn't report when the PR merged",
+      });
+    }
+    const merged = { ...candidatePR, mergedAt };
+    const removableAt = mergedAt + MERGED_WORKTREE_GRACE_MS;
+    if (now < removableAt) {
+      return {
+        worktreePath: path.resolve(worktree.path),
+        branch: worktree.branch,
+        status: "waiting",
+        pr: merged,
+        head: headSha,
+        removableAt,
+      };
+    }
+    return {
+      worktreePath: path.resolve(worktree.path),
+      branch: worktree.branch,
+      status: "removable",
+      pr: merged,
+      head: headSha,
+    };
+  } catch (error) {
+    return unverified(worktree, error, candidatePR);
+  }
+}
+
+/**
+ * Judge each of a project's linked worktrees against the rule. Every read
+ * that can't answer leaves its worktree `unverified`, never removable. The
+ * forge is resolved once, and only when some worktree passes the local
+ * checks; a forge that can't be resolved leaves those worktrees unverified.
+ */
+export async function evaluateMergedWorktrees(
+  worktrees: readonly ListedWorktree[],
+  reads: MergedWorktreeReads
+): Promise<MergedWorktreeCandidate[]> {
+  let layoutRead: Promise<SavedLayout | null> | null = null;
+  const layout = () => (layoutRead ??= reads.readSavedLayout());
+  let forgeRead: Promise<MergedWorktreeForge> | null = null;
+  const forge = () => (forgeRead ??= reads.resolveForge());
+
+  const results: MergedWorktreeCandidate[] = [];
+  for (const worktree of worktrees) {
+    if (worktree.isMainWorktree || worktree.bare) continue;
+    const local = await checkLocal(worktree, reads, layout);
+    if (!("headOid" in local)) {
+      results.push(local);
+      continue;
+    }
+    let resolved: MergedWorktreeForge;
+    try {
+      resolved = await forge();
+    } catch (error) {
+      results.push(unverified(worktree, error));
+      continue;
+    }
+    results.push(await checkForge(worktree, local.headOid, resolved, reads.now()));
+  }
+  return results;
+}
