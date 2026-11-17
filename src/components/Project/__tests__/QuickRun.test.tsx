@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from "vitest";
 import { Component, StrictMode, type ReactNode } from "react";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 
@@ -1059,6 +1059,20 @@ describe("QuickRun", () => {
 
   describe("when the panel registry refuses the launch", () => {
     const historyKey = "daintree_cmd_history_test-project";
+    let setItem: MockInstance<Storage["setItem"]>;
+
+    beforeEach(() => {
+      setItem = vi.spyOn(localStorage, "setItem");
+    });
+
+    afterEach(() => {
+      setItem.mockRestore();
+      settingsMock.runCommands = [];
+    });
+
+    // Recent folds repeats into one row, so a second write of the same command
+    // would not show there.
+    const historyWrites = () => setItem.mock.calls.filter(([key]) => key === historyKey);
 
     function recentCommands(input: HTMLElement) {
       fireEvent.change(input, { target: { value: "" } });
@@ -1066,74 +1080,95 @@ describe("QuickRun", () => {
       return commandOptions().map((o) => o.getAttribute("data-command"));
     }
 
-    it("gives the draft back and leaves Recent as it was", async () => {
-      seedHistory("ls -la");
-      const stored = localStorage.getItem(historyKey);
-      mockAddTerminal.mockResolvedValue(null);
-      render(<Footer projectId="test-project" />);
-      const input = openPanel() as HTMLInputElement;
-      fireEvent.change(input, { target: { value: "cargo run" } });
+    async function enter(input: HTMLElement) {
       await act(async () => {
         fireEvent.keyDown(input, { key: "Enter" });
       });
+    }
+
+    it("gives the draft back and leaves Recent as it was", async () => {
+      seedHistory("ls -la");
+      setItem.mockClear();
+      mockAddTerminal.mockResolvedValueOnce(null);
+      render(<Footer projectId="test-project" />);
+      const input = openPanel() as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "cargo run" } });
+      await enter(input);
 
       expect(mockAddTerminal).toHaveBeenCalledTimes(1);
       expect(input.value).toBe("cargo run");
       // The registry has already said why, and a Retry would meet the same limit.
       expect(screen.queryByRole("alert")).toBeNull();
-      expect(localStorage.getItem(historyKey)).toBe(stored);
+      expect(historyWrites()).toEqual([]);
       expect(recentCommands(input)).toEqual(["ls -la"]);
     });
 
     it("records the command once when the next try starts", async () => {
       seedHistory("ls -la");
+      setItem.mockClear();
       mockAddTerminal.mockResolvedValueOnce(null).mockResolvedValueOnce("terminal-1");
       render(<Footer projectId="test-project" />);
       const input = openPanel() as HTMLInputElement;
       fireEvent.change(input, { target: { value: "cargo run" } });
-      await act(async () => {
-        fireEvent.keyDown(input, { key: "Enter" });
-      });
-      await act(async () => {
-        fireEvent.keyDown(input, { key: "Enter" });
-      });
+      await enter(input);
+      await enter(input);
 
       expect(mockAddTerminal).toHaveBeenCalledTimes(2);
       expect(input.value).toBe("");
+      expect(historyWrites()).toHaveLength(1);
       expect(recentCommands(input)).toEqual(["cargo run", "ls -la"]);
     });
 
-    it("keeps a one-off override on a pinned command for the next try", async () => {
+    it("keeps a pinned command's one-off override and the toggles for the next try", async () => {
       settingsMock.runCommands = [
         { id: "s", name: "Docs", command: "npx serve docs", preferredLocation: "dock" },
       ];
       mockAddTerminal.mockResolvedValueOnce(null).mockResolvedValueOnce("terminal-1");
-      try {
-        render(<Footer projectId="test-project" />);
-        const input = openPanel() as HTMLInputElement;
-        const dockToggle = screen.getByRole("button", { name: /run in the dock/i });
-        fireEvent.keyDown(input, { key: "ArrowDown" });
-        fireEvent.click(dockToggle);
-        expect(dockToggle.getAttribute("aria-pressed")).toBe("false");
+      render(<Footer projectId="test-project" />);
+      const input = openPanel() as HTMLInputElement;
+      const dockToggle = screen.getByRole("button", { name: /run in the dock/i });
+      const restartToggle = screen.getByRole("button", { name: "Auto-restart" });
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      fireEvent.click(dockToggle);
+      fireEvent.click(restartToggle);
+      expect(dockToggle.getAttribute("aria-pressed")).toBe("false");
+      expect(restartToggle.getAttribute("aria-pressed")).toBe("true");
 
-        await act(async () => {
-          fireEvent.keyDown(input, { key: "Enter" });
-        });
-        expect(input.value).toBe("npx serve docs");
-        expect(dockToggle.getAttribute("aria-pressed")).toBe("false");
+      await enter(input);
+      expect(input.value).toBe("npx serve docs");
+      expect(dockToggle.getAttribute("aria-pressed")).toBe("false");
+      expect(restartToggle.getAttribute("aria-pressed")).toBe("true");
 
-        await act(async () => {
-          fireEvent.keyDown(input, { key: "Enter" });
-        });
-        expect(mockAddTerminal).toHaveBeenCalledTimes(2);
-        for (const [options] of mockAddTerminal.mock.calls) {
-          expect(options).toEqual(
-            expect.objectContaining({ command: "npx serve docs", location: "grid" })
-          );
-        }
-      } finally {
-        settingsMock.runCommands = [];
-      }
+      await enter(input);
+      expect(mockAddTerminal).toHaveBeenCalledTimes(2);
+      const [[refused], [started]] = mockAddTerminal.mock.calls;
+      expect(refused).toEqual(
+        expect.objectContaining({
+          command: "npx serve docs",
+          location: "grid",
+          exitBehavior: "restart",
+        })
+      );
+      expect(started).toEqual(refused);
+    });
+
+    it("gives back a clicked row's whole command, not the filter that found it", async () => {
+      seedHistory("npm test", "npm run lint");
+      mockAddTerminal.mockResolvedValueOnce(null).mockResolvedValueOnce("terminal-1");
+      render(<Footer projectId="test-project" />);
+      const input = openPanel() as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "lint" } });
+      const row = commandOptions().find((o) => o.getAttribute("data-command") === "npm run lint");
+      await act(async () => {
+        fireEvent.click(row!);
+      });
+      expect(input.value).toBe("npm run lint");
+
+      await enter(input);
+      expect(mockAddTerminal).toHaveBeenCalledTimes(2);
+      expect(mockAddTerminal).toHaveBeenLastCalledWith(
+        expect.objectContaining({ command: "npm run lint" })
+      );
     });
   });
 
