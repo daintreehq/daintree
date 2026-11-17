@@ -360,6 +360,112 @@ describe("PluginUpdateCheckService", () => {
     });
   });
 
+  describe("a fresh update from another plugin (#17444)", () => {
+    const unreachable: Record<string, (id: string) => Promise<unknown>> = {
+      "fetch-failed": async () => ({ status: "fetch-failed", message: "net" }),
+      "catalog-unavailable": async () => ({
+        status: "catalog-unavailable",
+        catalog: "unavailable",
+        failure: "unreachable",
+      }),
+      "a thrown check": async () => {
+        throw new Error("boom");
+      },
+    };
+
+    async function cacheOfferForA() {
+      storeState.value = { enabled: true, lastCheckedAt: null };
+      pluginServiceMock.listPlugins.mockReturnValue([urlPlugin("pub.a"), urlPlugin("pub.b")]);
+      pluginServiceMock.checkForUpdate.mockImplementation(async (id: string) =>
+        id === "pub.a" ? available("pub.a", "2.0.0") : { status: "up-to-date" }
+      );
+      const svc = new PluginUpdateCheckService();
+      await svc._checkNowForTest();
+      expect(svc.getLatest()?.signature).toBe("pub.a@2.0.0");
+      return svc;
+    }
+
+    it.each(Object.keys(unreachable))(
+      "keeps the offer for a plugin whose check failed (%s) beside the new one",
+      async (kind) => {
+        const svc = await cacheOfferForA();
+
+        pluginServiceMock.checkForUpdate.mockImplementation(async (id: string) =>
+          id === "pub.a" ? unreachable[kind](id) : available("pub.b", "3.0.0")
+        );
+        await svc._checkNowForTest();
+
+        const latest = svc.getLatest();
+        expect(latest?.updates.map((u) => u.pluginId).sort()).toEqual(["pub.a", "pub.b"]);
+        expect(latest?.updates.find((u) => u.pluginId === "pub.a")?.version).toBe("2.0.0");
+        expect(latest?.signature).toBe("pub.a@2.0.0,pub.b@3.0.0");
+        // A renderer already open gets the same set a newly mounted one hydrates.
+        expect(broadcastMock).toHaveBeenCalledTimes(2);
+        expect(broadcastMock.mock.calls[1][1].payload).toEqual(latest);
+      }
+    );
+
+    it.each([
+      ["current", { status: "up-to-date" }],
+      ["delisted", { status: "delisted", scope: "plugin", version: "1.0.0" }],
+    ])("drops the old offer once the plugin is checked and is %s", async (_label, answer) => {
+      const svc = await cacheOfferForA();
+      pluginServiceMock.checkForUpdate.mockImplementation(async (id: string) =>
+        id === "pub.a" ? { status: "fetch-failed", message: "net" } : available("pub.b", "3.0.0")
+      );
+      await svc._checkNowForTest();
+      expect(svc.getLatest()?.updates).toHaveLength(2);
+
+      // pub.c keeps the pass inconclusive, so the cache is merged, not replaced.
+      pluginServiceMock.listPlugins.mockReturnValue([
+        urlPlugin("pub.a"),
+        urlPlugin("pub.b"),
+        urlPlugin("pub.c"),
+      ]);
+      pluginServiceMock.checkForUpdate.mockImplementation(async (id: string) =>
+        id === "pub.a"
+          ? answer
+          : id === "pub.b"
+            ? available("pub.b", "3.0.0")
+            : { status: "fetch-failed", message: "net" }
+      );
+      await svc._checkNowForTest();
+
+      const latest = svc.getLatest();
+      expect(latest).toMatchObject({
+        updates: [{ pluginId: "pub.b" }],
+        signature: "pub.b@3.0.0",
+      });
+      expect(broadcastMock.mock.calls[2][1].payload).toEqual(latest);
+    });
+
+    it("lists a plugin once when its fresh offer replaces the cached version", async () => {
+      const svc = await cacheOfferForA();
+      pluginServiceMock.checkForUpdate.mockImplementation(async (id: string) =>
+        id === "pub.a" ? available("pub.a", "2.1.0") : { status: "fetch-failed", message: "net" }
+      );
+      await svc._checkNowForTest();
+
+      expect(svc.getLatest()).toMatchObject({
+        updates: [{ pluginId: "pub.a", version: "2.1.0" }],
+        signature: "pub.a@2.1.0",
+      });
+    });
+
+    it("does not resurrect an offer for a plugin that is no longer installed", async () => {
+      const svc = await cacheOfferForA();
+      // pub.c fails its check, so the merge runs; pub.a is no longer a target and
+      // so is never reported as unchecked.
+      pluginServiceMock.listPlugins.mockReturnValue([urlPlugin("pub.b"), urlPlugin("pub.c")]);
+      pluginServiceMock.checkForUpdate.mockImplementation(async (id: string) =>
+        id === "pub.b" ? available("pub.b", "3.0.0") : { status: "fetch-failed", message: "net" }
+      );
+      await svc._checkNowForTest();
+
+      expect(svc.getLatest()?.signature).toBe("pub.b@3.0.0");
+    });
+  });
+
   it("does not broadcast or cache when disabled mid-pass", async () => {
     storeState.value = { enabled: true, lastCheckedAt: null };
     pluginServiceMock.listPlugins.mockReturnValue([urlPlugin("pub.a")]);

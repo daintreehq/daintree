@@ -254,8 +254,8 @@ export class PluginUpdateCheckService {
     // entry it already cleared.
     if (this.disposed || !this.getSettings().enabled) return;
 
-    const { updates, inconclusive, unchecked } = outcome;
-    if (updates.length === 0) {
+    const { updates: fresh, inconclusive, unchecked } = outcome;
+    if (fresh.length === 0) {
       // A conclusive empty pass supersedes any cached detection so a
       // late-mounting renderer doesn't hydrate an already-resolved update. Keep
       // the cache when the pass was inconclusive — we genuinely don't know.
@@ -266,6 +266,14 @@ export class PluginUpdateCheckService {
         this.lastDetected = keepUnchecked(this.lastDetected, unchecked);
       }
       return;
+    }
+
+    // A plugin this pass couldn't check keeps its last known offer beside the
+    // fresh ones, the same rule as the empty branch above (#17444).
+    let updates = fresh;
+    if (inconclusive && this.lastDetected && unchecked) {
+      const freshIds = new Set(fresh.map((u) => u.pluginId));
+      updates = [...fresh, ...uncheckedOffers(this.lastDetected.updates, unchecked, freshIds)];
     }
 
     const result: PluginBackgroundUpdateCheckResult = {
@@ -380,9 +388,18 @@ function keepUnchecked(
   cached: PluginBackgroundUpdateCheckResult,
   unchecked: ReadonlySet<string>
 ): PluginBackgroundUpdateCheckResult | null {
-  const updates = cached.updates.filter((u) => unchecked.has(u.pluginId));
+  const updates = uncheckedOffers(cached.updates, unchecked);
   if (updates.length === cached.updates.length) return cached;
   return updates.length === 0 ? null : { ...cached, updates, signature: computeSignature(updates) };
+}
+
+/** The cached offers for plugins a pass couldn't check, minus any it found a fresh offer for. */
+function uncheckedOffers(
+  cached: PluginBackgroundUpdateEntry[],
+  unchecked: ReadonlySet<string>,
+  freshIds?: ReadonlySet<string>
+): PluginBackgroundUpdateEntry[] {
+  return cached.filter((u) => unchecked.has(u.pluginId) && !freshIds?.has(u.pluginId));
 }
 
 /** Deterministic digest of the update set so repeated passes dedupe to one row. */
