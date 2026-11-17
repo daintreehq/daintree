@@ -228,14 +228,25 @@ function CrossWorktreeFileRow({
  *
  * Whether the band is clipped is measured here but read by every row under it,
  * and on the windowed path the band and its rows are separate items, so the
- * measurement goes up to the shelf through `onClipped`.
+ * measurement goes up to the shelf through `onClipChange`. A band reports
+ * clipped once it measures so, and withdraws only a clip it reported itself:
+ * a freshly mounted band reads unclipped before it has measured anything.
  */
-function FileGroupHeader({ dir, onClipped }: { dir: string; onClipped: (dir: string) => void }) {
+function FileGroupHeader({
+  dir,
+  onClipChange,
+}: {
+  dir: string;
+  onClipChange: (dir: string, clipped: boolean) => void;
+}) {
   const { ref, isTruncated } = useTruncationDetection();
   const label = formatDiffDir(dir);
+  const reportedRef = useRef(false);
   useEffect(() => {
-    if (isTruncated) onClipped(dir);
-  }, [isTruncated, dir, onClipped]);
+    if (isTruncated === reportedRef.current) return;
+    reportedRef.current = isTruncated;
+    onClipChange(dir, isTruncated);
+  }, [isTruncated, dir, onClipChange]);
   return (
     <div
       data-shelf-band=""
@@ -279,7 +290,7 @@ function layoutShelf(groups: FileGroup[]): ShelfLayout {
   let position = 0;
   for (const group of groups) {
     counts.push(group.files.length);
-    keysBySlot.push(`group:${group.dir || "(root)"}`);
+    keysBySlot.push(`group:${group.dir}`);
     for (const file of group.files) keysBySlot.push(`file:${fileKey(file)}`);
     position += group.files.length;
     lastPositions.push(position - 1);
@@ -288,15 +299,15 @@ function layoutShelf(groups: FileGroup[]): ShelfLayout {
 }
 
 /**
- * Scrolls a row the virtualizer reveals upward to just below the sticky
- * directory band rather than under it, where the default view location puts
- * it. `bandHeight` is read at reveal time; rows going down are left to the
- * default, and a row already clear of both edges is left where it is.
+ * Treats a row under the sticky directory band as out of view. The default
+ * counts only the scroller's edges, so a row the band covers reads as visible
+ * and stays hidden. Start alignment already lands below the band (the
+ * virtualizer subtracts its sticky header), so only the test changes.
+ * `bandHeight` is read at reveal time.
  */
 function viewLocationBelowBand(bandHeight: () => number): CalculateViewLocation {
   return ({ itemTop, itemBottom, viewportTop, viewportBottom, locationParams }) => {
-    const band = bandHeight();
-    if (itemTop < viewportTop + band) return { ...locationParams, align: "start", offset: -band };
+    if (itemTop < viewportTop + bandHeight()) return { ...locationParams, align: "start" };
     if (itemBottom > viewportBottom) return { ...locationParams, align: "end" };
     return null;
   };
@@ -728,11 +739,17 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
     containerRef: listRef,
   });
 
-  // Measured once per band and kept: the shelf's width is fixed, so a band
-  // that was clipped stays clipped when it scrolls out of the window and back.
+  // Kept when a band scrolls out of the window, so its rows still disclose
+  // their paths; changed only by a band that measured again.
   const [clippedDirs, setClippedDirs] = useState<ReadonlySet<string>>(() => new Set());
-  const markDirClipped = useCallback((dir: string) => {
-    setClippedDirs((current) => (current.has(dir) ? current : new Set(current).add(dir)));
+  const setDirClipped = useCallback((dir: string, clipped: boolean) => {
+    setClippedDirs((current) => {
+      if (current.has(dir) === clipped) return current;
+      const next = new Set(current);
+      if (clipped) next.add(dir);
+      else next.delete(dir);
+      return next;
+    });
   }, []);
   const directoryHidden = (dir: string) => isDirectoryShortened(dir) || clippedDirs.has(dir);
   // `null` means auto — prose wraps, code doesn't. Derived from the file on
@@ -804,24 +821,6 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
     setMeasuredGeneration((current) => current + 1);
   }, []);
 
-  // Keep the open file's row in view while stepping with the keyboard.
-  // Windowed, the row may not exist to be queried, so the virtualizer is asked
-  // for it by position instead; either way a row already in view is left alone.
-  useEffect(() => {
-    if (!selectedFile) return;
-    if (windowed) {
-      if (selectedFileIndex >= 0) revealPosition(selectedFileIndex);
-      return;
-    }
-    if (!listRef.current) return;
-    const row = Array.from(listRef.current.querySelectorAll<HTMLElement>("[data-file-path]")).find(
-      (el) => el.dataset.filePath === selectedFile.path
-    );
-    if (typeof row?.scrollIntoView === "function") {
-      row.scrollIntoView({ behavior: "instant", block: "nearest" });
-    }
-  }, [selectedFile, windowed, selectedFileIndex, revealPosition, measuredGeneration]);
-
   // Gated and floored: a fast comparison shows nothing, a slow one shows a
   // skeleton that stays long enough to read as one.
   const showListSkeleton = useSkeletonFloor(useSkeletonGate(loading));
@@ -850,6 +849,29 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
   useEffect(() => {
     if (!windowedListShown) awaitingMeasureRef.current = true;
   }, [windowedListShown]);
+
+  // Keep the open file's row in view while stepping, and bring it back when
+  // the list does. Keyed on the file's path and place, not its object: a
+  // refresh hands back fresh objects for an unchanged list, and must not pull
+  // the list away from a row the arrow keys moved to. Windowed, the row may not
+  // exist to be queried, so the virtualizer is asked for it by position;
+  // either way a row already in view is left alone.
+  const selectedPath = selectedFile?.path;
+  const listShown = showShelf && listReady;
+  useEffect(() => {
+    if (!listShown || selectedPath === undefined) return;
+    if (windowed) {
+      if (selectedFileIndex >= 0) revealPosition(selectedFileIndex);
+      return;
+    }
+    if (!listRef.current) return;
+    const row = Array.from(listRef.current.querySelectorAll<HTMLElement>("[data-file-path]")).find(
+      (el) => el.dataset.filePath === selectedPath
+    );
+    if (typeof row?.scrollIntoView === "function") {
+      row.scrollIntoView({ behavior: "instant", block: "nearest" });
+    }
+  }, [listShown, selectedPath, windowed, selectedFileIndex, revealPosition, measuredGeneration]);
 
   const rightPath = rightWorktree?.path;
 
@@ -1170,8 +1192,11 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                     itemsRendered={handleItemsRendered}
                     groupContent={(groupIndex) => (
                       <FileGroupHeader
+                        // One instance per directory: a sticky band reused for
+                        // the next directory would carry the last one's measure.
+                        key={groups[groupIndex]?.dir ?? ""}
                         dir={groups[groupIndex]?.dir ?? ""}
-                        onClipped={markDirClipped}
+                        onClipChange={setDirClipped}
                       />
                     )}
                     itemContent={(position, groupIndex) => {
@@ -1194,8 +1219,8 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                   />
                 ) : (
                   groups.map((group) => (
-                    <div key={group.dir || "(root)"} className="mb-1.5">
-                      <FileGroupHeader dir={group.dir} onClipped={markDirClipped} />
+                    <div key={`dir:${group.dir}`} className="mb-1.5">
+                      <FileGroupHeader dir={group.dir} onClipChange={setDirClipped} />
                       <div className="flex flex-col gap-px">
                         {group.files.map((file) => renderFileRow(file, group.dir))}
                       </div>

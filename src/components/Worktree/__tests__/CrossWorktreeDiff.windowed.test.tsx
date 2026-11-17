@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { ReactNode } from "react";
+import { Profiler, type ReactNode } from "react";
 import { VirtuosoMockContext, type GroupedVirtuosoHandle } from "react-virtuoso";
 import { CrossWorktreeDiff, groupComparisonFiles } from "../CrossWorktreeDiff";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -61,8 +61,18 @@ vi.mock("@/components/ui/AppDialog", () => {
 
 vi.mock("../DiffViewer", () => ({
   DiffFilePath: ({ path }: { path: string }) => <span>{path}</span>,
-  DiffViewer: ({ diff, headerActions }: { diff: string; headerActions?: ReactNode }) => (
+  // The file-list toggle and the comparison controls ride in the viewer's header.
+  DiffViewer: ({
+    diff,
+    headerLeading,
+    headerActions,
+  }: {
+    diff: string;
+    headerLeading?: ReactNode;
+    headerActions?: ReactNode;
+  }) => (
     <div>
+      {headerLeading}
       {headerActions}
       <div data-testid="diff-viewer">{diff}</div>
     </div>
@@ -70,13 +80,14 @@ vi.mock("../DiffViewer", () => ({
 }));
 
 /**
- * jsdom measures nothing, so no scroll the shelf asks of the virtualizer is
- * observable. This wraps the REAL `GroupedVirtuoso` and only taps its handle on
- * the way past, so the slot the shelf reveals can be asserted while the
- * windowing itself stays the library's own.
+ * jsdom measures nothing, so the scrolls the shelf asks of the virtualizer are
+ * only observable through `VirtuosoMockContext`'s synthetic sizes. This wraps
+ * the REAL `GroupedVirtuoso`, records the index each reveal asks for, and keeps
+ * the real handle so a test can scroll the window the way a user would.
  */
-const { scrollIntoViewMock } = vi.hoisted(() => ({
+const { scrollIntoViewMock, virtuoso } = vi.hoisted(() => ({
   scrollIntoViewMock: vi.fn<(location: { index: number; behavior?: string }) => void>(),
+  virtuoso: { handle: null as GroupedVirtuosoHandle | null },
 }));
 
 vi.mock("react-virtuoso", async (importOriginal) => {
@@ -100,7 +111,13 @@ vi.mock("react-virtuoso", async (importOriginal) => {
         scrollToIndex: (location: Parameters<GroupedVirtuosoHandle["scrollToIndex"]>[0]) =>
           inner.current?.scrollToIndex(location),
       }));
-      return createElement(Actual, { ...props, ref: inner });
+      return createElement(Actual, {
+        ...props,
+        ref: (handle: GroupedVirtuosoHandle | null) => {
+          inner.current = handle;
+          virtuoso.handle = handle;
+        },
+      });
     }),
   };
 });
@@ -111,6 +128,7 @@ beforeEach(() => {
   setCompareHead("one");
   mockCompareWorktrees.mockReset();
   scrollIntoViewMock.mockClear();
+  virtuoso.handle = null;
   Object.defineProperty(window, "electron", {
     value: { git: { compareWorktrees: mockCompareWorktrees } },
     configurable: true,
@@ -119,9 +137,7 @@ beforeEach(() => {
 
 /**
  * `groupCount` directories of `perGroup` files, handed over in REVERSE so the
- * shelf's own sort is what puts them in order. The directories sort in the
- * order they are numbered, so the nth drawn file sits behind n / perGroup
- * group headers plus its own: slot = n + floor(n / perGroup) + 1.
+ * shelf's own sort is what puts them in order.
  */
 function comparison(groupCount: number, perGroup: number, root = "src/mod"): CrossWorktreeFile[] {
   const files: CrossWorktreeFile[] = [];
@@ -148,108 +164,186 @@ function respondWith(files: CrossWorktreeFile[]) {
   );
 }
 
-function tree() {
+function tree(onRender?: () => void) {
+  const dialog = <CrossWorktreeDiff isOpen onClose={vi.fn()} initialWorktreeId="wt-left" />;
   return (
     <TooltipProvider>
       <VirtuosoMockContext.Provider value={{ itemHeight: 24, viewportHeight: 480 }}>
-        <CrossWorktreeDiff isOpen onClose={vi.fn()} initialWorktreeId="wt-left" />
+        {onRender ? (
+          <Profiler id="compare" onRender={onRender}>
+            {dialog}
+          </Profiler>
+        ) : (
+          dialog
+        )}
       </VirtuosoMockContext.Provider>
     </TooltipProvider>
   );
 }
 
-function renderComparison(files: CrossWorktreeFile[]) {
+function renderComparison(files: CrossWorktreeFile[], onRender?: () => void) {
   respondWith(files);
-  const view = render(tree());
+  const view = render(tree(onRender));
   fireEvent.change(screen.getByLabelText("Compare"), { target: { value: "wt-right" } });
-  return view;
+  // A new compare head reruns the comparison in place, keeping the open file.
+  const refresh = (next: CrossWorktreeFile[], head: string) => {
+    respondWith(next);
+    setCompareHead(head);
+    view.rerender(tree(onRender));
+  };
+  return { refresh };
 }
 
 function drawnOrder(files: CrossWorktreeFile[]): string[] {
   return groupComparisonFiles(files).flatMap((group) => group.files.map((f) => f.path));
 }
 
+function fileRows(): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>("[data-file-path]"));
+}
+
+function rowFor(path: string | undefined): HTMLElement | undefined {
+  return fileRows().find((row) => row.dataset.filePath === path);
+}
+
 function currentRow(): HTMLElement | undefined {
   return fileRows().find((row) => row.getAttribute("aria-current") === "true");
 }
 
-function fileRows(): HTMLElement[] {
-  return Array.from(document.querySelectorAll<HTMLElement>("[data-file-path]"));
+function focusedPath(): string | undefined {
+  const active = document.activeElement;
+  return active instanceof HTMLElement ? active.dataset.filePath : undefined;
 }
 
 function position(): string | null {
   return screen.queryByTestId("cross-worktree-file-position")?.textContent ?? null;
 }
 
+/** The per-file diffs asked for, in order (not the whole-file source reads). */
+function requestedDiffs(): string[] {
+  return mockCompareWorktrees.mock.calls
+    .filter((call) => call[3] !== undefined && call[6] === undefined)
+    .map((call) => String(call[3]));
+}
+
+/** Everything in the shelf that Tab can land on. */
+function tabStops(): HTMLElement[] {
+  const shelf = screen.getByTestId("cross-worktree-file-shelf");
+  return Array.from(shelf.querySelectorAll<HTMLElement>("button, [tabindex]")).filter(
+    (el) => el.tabIndex >= 0
+  );
+}
+
 describe("CrossWorktreeDiff shelf with a large comparison (#17461)", () => {
-  it("mounts a bounded window of rows while the totals still count every file", async () => {
+  it("never mounts more than a window of rows, while the totals count every file", async () => {
+    // Counted in every commit from the pick on, so a list that mounted every
+    // row once and windowed afterwards would still be caught.
+    let mostRows = 0;
     const files = comparison(30, 100);
-    renderComparison(files);
-    await waitFor(() => expect(fileRows().length).toBeGreaterThan(0));
+    renderComparison(files, () => {
+      mostRows = Math.max(mostRows, fileRows().length);
+    });
     await waitFor(() => expect(position()).toBe(`1 of ${files.length}`));
 
-    expect(fileRows().length).toBeLessThan(FILE_LIST_VIRTUALIZATION_THRESHOLD);
+    expect(fileRows().length).toBeGreaterThan(0);
+    expect(mostRows).toBeLessThan(FILE_LIST_VIRTUALIZATION_THRESHOLD);
     const shelf = screen.getByTestId("cross-worktree-file-shelf");
     expect(shelf.textContent).toContain(pluralize(files.length, "file"));
     expect(shelf.textContent).toContain(`+${(files.length * 2).toLocaleString()}`);
     expect(shelf.textContent).toContain(`-${files.length.toLocaleString()}`);
   });
 
-  it("draws the window in the shelf's order, directory bands included", async () => {
-    const files = comparison(30, 100);
+  it("draws the window root first, then by directory and file name", async () => {
+    const files: CrossWorktreeFile[] = [
+      ...comparison(30, 100),
+      { path: "docs/z.md", status: "M", insertions: 1, deletions: 0 },
+      { path: "b.ts", status: "M", insertions: 1, deletions: 0 },
+      { path: "docs/a.md", status: "A", insertions: 1, deletions: 0 },
+      { path: "a.ts", status: "D", insertions: 0, deletions: 1 },
+      { path: "docs/c.md", status: "M", insertions: 1, deletions: 0 },
+    ];
     renderComparison(files);
     await waitFor(() => expect(fileRows().length).toBeGreaterThan(0));
 
-    const drawn = drawnOrder(files);
-    const mounted = fileRows().map((row) => row.dataset.filePath);
-    expect(mounted).toEqual(drawn.slice(0, mounted.length));
-    expect(screen.getAllByText("src/mod-000").length).toBeGreaterThan(0);
+    expect(
+      fileRows()
+        .slice(0, 6)
+        .map((row) => row.dataset.filePath)
+    ).toEqual(["a.ts", "b.ts", "docs/a.md", "docs/c.md", "docs/z.md", "src/mod-000/file-0000.ts"]);
+    const shelf = screen.getByTestId("cross-worktree-file-shelf");
+    const bands = Array.from(shelf.querySelectorAll("[data-shelf-band]")).map(
+      (band) => band.textContent
+    );
+    expect(bands.slice(0, 3)).toEqual(["(root)", "docs", "src/mod-000"]);
   });
 
-  it("steps with ] and [ through every file, past the mounted window", async () => {
-    const perGroup = 50;
-    const files = comparison(4, perGroup);
+  it("steps with ] past the initially mounted rows, one file at a time, and back with [", async () => {
+    const files = comparison(4, 50);
+    const drawn = drawnOrder(files);
     renderComparison(files);
     await waitFor(() => expect(position()).toBe(`1 of ${files.length}`));
+    const steps = fileRows().length + 5;
+    expect(rowFor(drawn[steps])).toBeUndefined();
 
-    const drawn = drawnOrder(files);
-    for (let i = 1; i < files.length; i++) fireEvent.keyDown(window, { key: "]" });
-    await waitFor(() => expect(position()).toBe(`${files.length} of ${files.length}`));
-    // The virtualizer is asked for the open file by its place in the drawn
-    // order, and the row it brings in is that file's.
-    expect(scrollIntoViewMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ index: files.length - 1 })
-    );
-    await waitFor(() => expect(currentRow()?.dataset.filePath).toBe(drawn[files.length - 1]));
+    for (let i = 0; i < steps; i++) fireEvent.keyDown(window, { key: "]" });
+    await waitFor(() => expect(position()).toBe(`${steps + 1} of ${files.length}`));
+    // Each press opened the next file in the drawn order, none skipped.
+    expect(requestedDiffs()).toEqual(drawn.slice(0, steps + 1));
+    // The open file is asked for by its place in the drawn order, and the row
+    // the virtualizer brings in is that file's.
+    expect(scrollIntoViewMock).toHaveBeenLastCalledWith(expect.objectContaining({ index: steps }));
+    await waitFor(() => expect(currentRow()?.dataset.filePath).toBe(drawn[steps]));
 
     fireEvent.keyDown(window, { key: "[" });
-    await waitFor(() => expect(position()).toBe(`${files.length - 1} of ${files.length}`));
-    expect(currentRow()?.dataset.filePath).toBe(drawn[files.length - 2]);
+    await waitFor(() => expect(position()).toBe(`${steps} of ${files.length}`));
+    expect(currentRow()?.dataset.filePath).toBe(drawn[steps - 1]);
   });
 
-  it("brings in and focuses the final file when End lands on a row that is not mounted", async () => {
+  it("brings in, focuses and opens the final file with End, and returns with Home", async () => {
     const files = comparison(30, 100);
+    const drawn = drawnOrder(files);
     renderComparison(files);
     await waitFor(() => expect(fileRows().length).toBeGreaterThan(0));
-    const drawn = drawnOrder(files);
-    expect(fileRows().some((row) => row.dataset.filePath === drawn.at(-1))).toBe(false);
+    expect(rowFor(drawn.at(-1))).toBeUndefined();
 
     const stop = fileRows().find((row) => row.tabIndex === 0)!;
-    stop.focus();
+    act(() => stop.focus());
     fireEvent.keyDown(stop, { key: "End" });
 
-    await waitFor(() =>
-      expect((document.activeElement as HTMLElement | null)?.dataset.filePath).toBe(drawn.at(-1))
+    expect(scrollIntoViewMock).toHaveBeenCalledWith(
+      expect.objectContaining({ index: files.length - 1 })
     );
+    await waitFor(() => expect(focusedPath()).toBe(drawn.at(-1)));
     fireEvent.click(document.activeElement!);
     await waitFor(() => expect(position()).toBe(`${files.length} of ${files.length}`));
+
+    fireEvent.keyDown(document.activeElement!, { key: "Home" });
+    await waitFor(() => expect(focusedPath()).toBe(drawn[0]));
+    // Home moves focus, not the open file.
+    expect(position()).toBe(`${files.length} of ${files.length}`);
   });
 
-  it("keeps the shelf a single tab stop once it windows", async () => {
-    renderComparison(comparison(30, 100));
+  it("keeps the shelf one tab stop, parked on the list while the focused row is scrolled out", async () => {
+    const files = comparison(30, 100);
+    const drawn = drawnOrder(files);
+    renderComparison(files);
     await waitFor(() => expect(fileRows().length).toBeGreaterThan(0));
-    const shelf = screen.getByTestId("cross-worktree-file-shelf");
-    expect(shelf.querySelectorAll('[tabindex="0"]')).toHaveLength(1);
+    await waitFor(() => expect(virtuoso.handle).not.toBeNull());
+    expect(tabStops().map((el) => el.dataset.filePath)).toEqual([drawn[0]]);
+
+    act(() => rowFor(drawn[0])!.focus());
+    act(() => virtuoso.handle!.scrollToIndex({ index: 2000 }));
+    await waitFor(() => expect(rowFor(drawn[0])).toBeUndefined());
+    await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+
+    const parked = document.activeElement as HTMLElement;
+    expect(parked.dataset.filePath).toBeUndefined();
+    expect(screen.getByTestId("cross-worktree-file-shelf").contains(parked)).toBe(true);
+    expect(tabStops()).toEqual([parked]);
+
+    act(() => virtuoso.handle!.scrollToIndex({ index: 0 }));
+    await waitFor(() => expect(focusedPath()).toBe(drawn[0]));
+    expect(tabStops().map((el) => el.dataset.filePath)).toEqual([drawn[0]]);
   });
 
   it("reveals the open file where a refresh moved it, headers ahead of it included", async () => {
@@ -258,19 +352,80 @@ describe("CrossWorktreeDiff shelf with a large comparison (#17461)", () => {
     // with 290 more bands above it: a reveal that counted those bands as rows
     // would land 290 rows past it, well outside the mounted window.
     const original = comparison(4, 50);
-    const view = renderComparison(original);
     const open = drawnOrder(original)[0]!;
+    const { refresh } = renderComparison(original);
     await waitFor(() => expect(currentRow()?.dataset.filePath).toBe(open));
 
     const refreshed = [...comparison(290, 10, "lib/pkg"), ...original];
-    respondWith(refreshed);
-    setCompareHead("two");
-    view.rerender(tree());
+    refresh(refreshed, "two");
 
     await waitFor(() => expect(position()).toBe(`2901 of ${refreshed.length}`));
     expect(drawnOrder(refreshed)[2900]).toBe(open);
     expect(scrollIntoViewMock).toHaveBeenLastCalledWith(expect.objectContaining({ index: 2900 }));
     await waitFor(() => expect(currentRow()?.dataset.filePath).toBe(open));
+  });
+
+  it("brings the open file back into view when the shelf is put away and reopened", async () => {
+    const original = comparison(4, 50);
+    const open = drawnOrder(original)[0]!;
+    const { refresh } = renderComparison(original);
+    await waitFor(() => expect(currentRow()?.dataset.filePath).toBe(open));
+    refresh([...comparison(290, 10, "lib/pkg"), ...original], "two");
+    await waitFor(() => expect(currentRow()?.dataset.filePath).toBe(open));
+
+    fireEvent.click(screen.getByRole("button", { name: "Toggle file list" }));
+    await waitFor(() => expect(screen.queryByTestId("cross-worktree-file-shelf")).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Toggle file list" }));
+
+    // A new virtualizer opens at the top; the open file's row only comes back
+    // once it has measured and been asked for again.
+    await waitFor(() => expect(currentRow()?.dataset.filePath).toBe(open));
+  });
+
+  it("leaves the list where the keyboard took it when a refresh changes nothing", async () => {
+    const files = comparison(30, 100);
+    const drawn = drawnOrder(files);
+    const { refresh } = renderComparison(files);
+    await waitFor(() => expect(fileRows().length).toBeGreaterThan(0));
+    await waitFor(() => expect(requestedDiffs()).toEqual([drawn[0]]));
+    const stop = fileRows().find((row) => row.tabIndex === 0)!;
+    act(() => stop.focus());
+    fireEvent.keyDown(stop, { key: "End" });
+    await waitFor(() => expect(focusedPath()).toBe(drawn.at(-1)));
+
+    // The same list again, as fresh objects; the open file reloads in place.
+    scrollIntoViewMock.mockClear();
+    refresh(
+      files.map((file) => ({ ...file })),
+      "two"
+    );
+    await waitFor(() => expect(requestedDiffs()).toEqual([drawn[0], drawn[0]]));
+    await act(async () => {});
+
+    expect(scrollIntoViewMock).not.toHaveBeenCalled();
+    expect(focusedPath()).toBe(drawn.at(-1));
+  });
+
+  it("keeps focus on its row when a refresh moves the shelf across the windowing threshold", async () => {
+    const below = comparison(1, FILE_LIST_VIRTUALIZATION_THRESHOLD - 1);
+    const drawn = drawnOrder(below);
+    const { refresh } = renderComparison(below);
+    await waitFor(() => expect(fileRows()).toHaveLength(below.length));
+    act(() => rowFor(drawn[1])!.focus());
+
+    const added: CrossWorktreeFile = {
+      path: "src/mod-000/file-9999.ts",
+      status: "A",
+      insertions: 1,
+      deletions: 0,
+    };
+    refresh([...below, added], "two");
+    await waitFor(() => expect(fileRows().length).toBeLessThan(below.length));
+    await waitFor(() => expect(focusedPath()).toBe(drawn[1]));
+
+    refresh(below, "three");
+    await waitFor(() => expect(fileRows()).toHaveLength(below.length));
+    await waitFor(() => expect(focusedPath()).toBe(drawn[1]));
   });
 
   it("still discloses the full path when a windowed row's directory band is shortened", async () => {
@@ -284,14 +439,53 @@ describe("CrossWorktreeDiff shelf with a large comparison (#17461)", () => {
     await waitFor(() => expect(fileRows().length).toBeGreaterThan(0));
     expect(fileRows().length).toBeLessThan(files.length);
 
-    const row = fileRows()[0]!;
+    const row = fileRows()[1]!;
     fireEvent.focus(row);
     await waitFor(() =>
       expect(
-        screen
-          .getAllByRole("tooltip")
-          .some((t) => t.textContent?.includes(row.dataset.filePath ?? "\0"))
+        screen.getAllByRole("tooltip").some((tip) => tip.textContent === row.dataset.filePath)
       ).toBe(true)
     );
+  });
+
+  it("still discloses the full path when a windowed row's directory band is clipped", async () => {
+    // Two segments, so the band is never shortened; only its measured width
+    // can hide the directory. jsdom lays nothing out, so the band reports an
+    // overflow here and every other element reports none.
+    const dir = "src/clipped";
+    const isBand = (el: Element) =>
+      el.textContent === dir && el.closest("[data-shelf-band]") !== null;
+    const scrollWidth = vi
+      .spyOn(Element.prototype, "scrollWidth", "get")
+      .mockImplementation(function (this: Element) {
+        return isBand(this) ? 400 : 0;
+      });
+    const clientWidth = vi
+      .spyOn(Element.prototype, "clientWidth", "get")
+      .mockImplementation(function (this: Element) {
+        return isBand(this) ? 100 : 0;
+      });
+    try {
+      const files: CrossWorktreeFile[] = Array.from({ length: 120 }, (_, i) => ({
+        path: `${dir}/file-${String(i).padStart(3, "0")}.ts`,
+        status: "M",
+        insertions: 1,
+        deletions: 0,
+      }));
+      renderComparison(files);
+      await waitFor(() => expect(fileRows().length).toBeGreaterThan(0));
+      expect(fileRows().length).toBeLessThan(files.length);
+
+      const row = fileRows()[1]!;
+      fireEvent.focus(row);
+      await waitFor(() =>
+        expect(
+          screen.getAllByRole("tooltip").some((tip) => tip.textContent === row.dataset.filePath)
+        ).toBe(true)
+      );
+    } finally {
+      scrollWidth.mockRestore();
+      clientWidth.mockRestore();
+    }
   });
 });
