@@ -113,7 +113,7 @@ esac
 
 # --- Resolve target directory ---
 TARGET="${1:-.}"
-ABSOLUTE_PATH="$(cd -- "$TARGET" 2>/dev/null && pwd -P)" || ABSOLUTE_PATH=""
+ABSOLUTE_PATH="$(CDPATH= cd -- "$TARGET" 2>/dev/null && pwd -P)" || ABSOLUTE_PATH=""
 
 if [[ -z "$ABSOLUTE_PATH" || ! -d "$ABSOLUTE_PATH" ]]; then
   echo "daintree: '$TARGET' is not a directory" >&2

@@ -176,6 +176,39 @@ describe("CliInstallService — following a moved AppImage", () => {
     }
   );
 
+  it.skipIf(process.platform === "win32")(
+    "sends one absolute folder when CDPATH is exported",
+    async () => {
+      const service = await load();
+      const argvFile = path.join(root, "argv");
+      const image = path.join(root, "Daintree.AppImage");
+      fs.writeFileSync(
+        image,
+        `#!/usr/bin/env bash\nprintf '%s\\0' "$@" > ${JSON.stringify(argvFile)}\n`,
+        { mode: 0o755 }
+      );
+      const wrapper = path.join(root, "daintree-cli.sh");
+      fs.writeFileSync(wrapper, service.generateAppImageWrapper(image, "1.2.3"), { mode: 0o755 });
+      const project = path.join(root, "proj");
+      fs.mkdirSync(project);
+      for (const cdpath of [undefined, root]) {
+        fs.rmSync(argvFile, { force: true });
+        const env = { ...process.env };
+        if (cdpath === undefined) delete env.CDPATH;
+        else env.CDPATH = cdpath;
+        const res = spawnSync("bash", [wrapper, "proj"], { encoding: "utf8", cwd: root, env });
+        expect(res.status).toBe(0);
+        const deadline = Date.now() + 5000;
+        let raw = "";
+        while (Date.now() < deadline && !raw.endsWith("\0")) {
+          raw = fs.existsSync(argvFile) ? fs.readFileSync(argvFile, "utf8") : "";
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        expect(raw.split("\0").filter(Boolean)).toEqual([`--cli-path=${fs.realpathSync(project)}`]);
+      }
+    }
+  );
+
   it.runIf(process.platform === "linux")(
     "answers --status from the app's own binary, not a shell naming the wrapper",
     async () => {
