@@ -66,6 +66,13 @@ type AddEntryInput = Omit<
   NotificationHistoryEntry,
   "id" | "timestamp" | "seenAsToast" | "summarized" | "countable" | "archivedAt"
 > & {
+  /**
+   * The entry's id, for an event every project view hears at once (a host
+   * broadcast): each view files it under the same id, so their writes merge
+   * into one row. An id this view already holds changes nothing. Defaults to a
+   * fresh UUID.
+   */
+  id?: string;
   seenAsToast?: boolean;
   countable?: boolean;
   /**
@@ -563,7 +570,10 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
       evictedToInboxCount: 0,
       snoozedThreads: {},
       addEntry: (entry) => {
-        const { supersedes, ...rest } = entry;
+        const { supersedes, id: requestedId, ...rest } = entry;
+        if (requestedId !== undefined && get().entries.some((e) => e.id === requestedId)) {
+          return requestedId;
+        }
         const seenAsToast = rest.seenAsToast ?? false;
         const countable = rest.countable ?? true;
         const newEntry: NotificationHistoryEntry = {
@@ -572,7 +582,7 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
           summarized: false,
           countable,
           archivedAt: null,
-          id: crypto.randomUUID(),
+          id: requestedId ?? crypto.randomUUID(),
           timestamp: Date.now(),
         };
         set((state) => {
