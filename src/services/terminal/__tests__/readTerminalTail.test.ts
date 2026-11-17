@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Terminal as HeadlessTerminal } from "@xterm/headless";
+import type { IBuffer, IBufferLine } from "@xterm/xterm";
 import { CLIPPED_LINE_MARKER, readTerminalTail } from "../readTerminalTail";
 
 async function render(
@@ -59,31 +60,59 @@ describe("readTerminalTail", () => {
     // Ends on a fresh row: xterm doesn't reflow the cursor's own line.
     const terminal = await render(10, `$ ls\r\n${url}\r\n`);
     const before = tail(terminal);
+    expect(terminal.buffer.active.getLine(3)?.isWrapped).toBe(true);
     terminal.resize(60, 10);
+    expect(terminal.buffer.active.getLine(3)?.isWrapped).toBe(false);
     expect(tail(terminal)).toBe(before);
     terminal.resize(6, 10);
+    expect(terminal.buffer.active.getLine(3)?.isWrapped).toBe(true);
     expect(tail(terminal)).toBe(before);
     expect(before).toBe(`$ ls\n${url}`);
   });
 
   it("doesn't spend the line budget on blank rows below the output", async () => {
-    const terminal = await render(20, "a\r\nb\r\nc", { rows: 30 });
+    const terminal = await render(20, "a\r\nb\r\nc\r\n ", { rows: 30 });
     expect(terminal.buffer.active.length).toBe(30);
     expect(tail(terminal, 2)).toBe("b\nc");
   });
 
+  // Ten columns of a different letter per row, so the rows a read takes show.
+  const rowsOf = (count: number) =>
+    Array.from({ length: count }, (_, i) => String.fromCharCode(97 + i).repeat(10)).join("");
+
   it("keeps the tail of a line longer than the row cap, under the marker", async () => {
-    const long = "0123456789".repeat(5);
-    const terminal = await render(10, `before\r\n${long}`);
+    const long = rowsOf(5);
+    // Six rows tall, so no blank row sits below the output.
+    const terminal = await render(10, `before\r\n${long}`, { rows: 6 });
     expect(tail(terminal, 100, 3)).toBe(`${CLIPPED_LINE_MARKER}\n${long.slice(20)}`);
     expect(tail(terminal, 100, 6)).toBe(`before\n${long}`);
   });
 
   it("marks a line whose start the scrollback already dropped", async () => {
-    const long = "abcdefghij".repeat(10);
+    const long = rowsOf(10);
     const terminal = await render(10, long, { rows: 5, scrollback: 2 });
     expect(terminal.buffer.active.getLine(0)?.isWrapped).toBe(true);
     expect(tail(terminal)).toBe(`${CLIPPED_LINE_MARKER}\n${long.slice(30)}`);
+  });
+
+  it("reads no row outside the last maxRows, however many blank ones there are", () => {
+    const read = new Set<number>();
+    const blank: IBufferLine = {
+      isWrapped: false,
+      length: 80,
+      getCell: () => undefined,
+      translateToString: () => "",
+    };
+    const buffer: Pick<IBuffer, "length" | "getLine"> = {
+      length: 5000,
+      getLine: (y) => {
+        read.add(y);
+        return blank;
+      },
+    };
+    expect(readTerminalTail(buffer, 100, 400)).toBe("");
+    expect(read.size).toBe(400);
+    expect(Math.min(...read)).toBe(4600);
   });
 
   it("reads nothing from a blank screen", async () => {

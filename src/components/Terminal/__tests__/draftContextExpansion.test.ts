@@ -7,7 +7,7 @@ import type {
   ContextReferenceResolution,
 } from "@shared/types/pluginContextProvider";
 
-const screen = vi.hoisted(() => ({ terminal: null as unknown }));
+const screen = vi.hoisted(() => ({ terminal: null as null | { dispose(): void } }));
 vi.mock("@/services/terminal/terminalInstanceServiceAccessor", () => ({
   peek: () => ({
     get: () => (screen.terminal ? { terminal: screen.terminal } : undefined),
@@ -186,12 +186,14 @@ describe("shareWorkingDiffReads (#17480)", () => {
 
 describe("expandDraftContext @terminal", () => {
   afterEach(() => {
+    screen.terminal?.dispose();
     screen.terminal = null;
   });
 
   async function showing(cols: number, output: string, rows = 10): Promise<void> {
     const terminal = new HeadlessTerminal({ cols, rows, scrollback: 1000, allowProposedApi: true });
     await new Promise<void>((resolve) => terminal.write(output, resolve));
+    screen.terminal?.dispose();
     screen.terminal = terminal;
   }
 
@@ -223,6 +225,19 @@ describe("expandDraftContext @terminal", () => {
     expect(await injected()).toBe(command);
     await showing(120, command);
     expect(await injected()).toBe(command);
+  });
+
+  it("attaches the same lines at any width, even past a hundred wrapped rows", async () => {
+    const lines = Array.from(
+      { length: 60 },
+      (_, i) => `${String(i).padStart(2, "0")} ${"x".repeat(27)}`
+    );
+    // Three rows a line at ten columns: 180 rows in all.
+    await showing(10, lines.join("\r\n"));
+    const narrow = await injected();
+    await showing(120, lines.join("\r\n"));
+    expect(narrow).toBe(lines.join("\n"));
+    expect(await injected()).toBe(narrow);
   });
 
   it("keeps the line breaks the program wrote", async () => {

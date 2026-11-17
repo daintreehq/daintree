@@ -7,10 +7,11 @@ export const CLIPPED_LINE_MARKER = "[Earlier terminal output truncated]";
  * The last `maxLines` lines a terminal printed, with xterm's own wraps joined
  * the way its selection joins them, so a path, URL or command reads as one
  * line whatever the pane's width. Line breaks the program wrote stay; blank
- * rows below the output don't count toward `maxLines`. At most `maxRows`
- * rows are read, so one enormous line can't pull in the whole scrollback;
- * a line whose start lies past that, or was trimmed off the scrollback, keeps
- * its tail under `CLIPPED_LINE_MARKER`.
+ * rows below the output don't count toward `maxLines`. Only the last
+ * `maxRows` rows are read, those blank rows included, so neither one enormous
+ * line nor a run of empty ones walks the whole scrollback; a line whose start
+ * lies past that, or was trimmed off the scrollback, keeps its tail under
+ * `CLIPPED_LINE_MARKER`.
  */
 export function readTerminalTail(
   buffer: Pick<IBuffer, "length" | "getLine">,
@@ -20,9 +21,9 @@ export function readTerminalTail(
   const rowText = (y: number) => buffer.getLine(y)?.translateToString(true) ?? "";
   const isContinuation = (y: number) => buffer.getLine(y)?.isWrapped === true;
 
+  const floor = Math.max(0, buffer.length - maxRows);
   let end = buffer.length;
-  while (end > 0 && rowText(end - 1).trim() === "") end--;
-  const floor = Math.max(0, end - maxRows);
+  while (end > floor && rowText(end - 1).trim() === "") end--;
 
   const lines: string[] = [];
   let clipped = false;
