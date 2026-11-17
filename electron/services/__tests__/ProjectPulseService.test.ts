@@ -186,20 +186,28 @@ describe("ProjectPulseService", () => {
     expect(pulse.heatmap).toHaveLength(60);
   });
 
-  it.each([0, 8, 15, 23])(
-    "counts a morning commit on the oldest day when refreshed at %i:30 local time",
-    async (refreshHour) => {
-      vi.setSystemTime(new Date(2025, 0, 15, refreshHour, 30, 0));
+  it.each([
+    new Date(2025, 0, 15, 0, 30),
+    new Date(2025, 0, 15, 8, 30),
+    new Date(2025, 0, 15, 15, 30),
+    new Date(2025, 0, 15, 23, 30),
+    new Date(2025, 2, 1, 15, 30),
+  ])(
+    "cuts the heatmap off at local midnight of the oldest day when refreshed at %s",
+    async (now) => {
+      vi.setSystemTime(now);
 
-      const oldestDayOffset = 15 - 59;
-      const morningOfOldestDay = new Date(2025, 0, oldestDayOffset, 8, 0, 0);
-      const lastSecondBeforeOldestDay = new Date(2025, 0, oldestDayOffset, 0, 0, -1);
-      const oldestDayCell = new Date(2025, 0, oldestDayOffset);
-      const oldestDayKey = `${oldestDayCell.getFullYear()}-${String(oldestDayCell.getMonth() + 1).padStart(2, "0")}-${String(oldestDayCell.getDate()).padStart(2, "0")}`;
-      const commitTimestamps = [lastSecondBeforeOldestDay, morningOfOldestDay].map((date) =>
-        Math.floor(date.getTime() / 1000)
+      const oldestDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 59);
+      const oldestDayKey = `${oldestDay.getFullYear()}-${String(oldestDay.getMonth() + 1).padStart(2, "0")}-${String(oldestDay.getDate()).padStart(2, "0")}`;
+      const oldestMidnight = Math.floor(oldestDay.getTime() / 1000);
+      const lastSecondBeforeOldestDay = oldestMidnight - 1;
+      const morningOfOldestDay = Math.floor(
+        new Date(oldestDay.getFullYear(), oldestDay.getMonth(), oldestDay.getDate(), 8).getTime() /
+          1000
       );
+      const commitTimestamps = [lastSecondBeforeOldestDay, oldestMidnight, morningOfOldestDay];
 
+      const cutoffs: number[] = [];
       const raw = vi.fn(async (args: string[]) => {
         const cmd = args[0];
         if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
@@ -228,6 +236,7 @@ describe("ProjectPulseService", () => {
             ).getTime() / 1000
           );
         }
+        cutoffs.push(cutoff);
         return commitTimestamps.filter((timestamp) => timestamp >= cutoff).join("\n");
       });
 
@@ -247,9 +256,12 @@ describe("ProjectPulseService", () => {
         includeRecentCommits: false,
       });
 
+      // The commit before midnight lands in a day with no cell, so only the cutoff itself shows it
+      // was excluded.
+      expect(cutoffs).toEqual([oldestMidnight]);
       expect(pulse.heatmap[0].date).toBe(oldestDayKey);
-      expect(pulse.heatmap[0].count).toBe(1);
-      expect(pulse.commitsInRange).toBe(1);
+      expect(pulse.heatmap[0].count).toBe(2);
+      expect(pulse.commitsInRange).toBe(2);
       expect(pulse.activeDays).toBe(1);
     }
   );
