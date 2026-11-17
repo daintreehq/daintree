@@ -820,7 +820,7 @@ export function ConflictPanel({
 
         {/* Resolved disclosure — recedes when conflicts remain, collapsed by default. */}
         {!isWorklist && hasStagedResolutions && (
-          <div className="border-t border-divider/50">
+          <div className="border-t border-divider">
             <button
               type="button"
               onClick={() => setShowResolved((v) => !v)}

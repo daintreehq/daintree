@@ -670,6 +670,10 @@ describe("ReviewHub", () => {
       expect(list.hidden).toBe(true);
       // The disclosure always names a real element, collapsed or not.
       expect(toggle.getAttribute("aria-controls")).toBe(list.id);
+      // `border-divider/50` generates no CSS, which left a full-strength border.
+      const separator = toggle.parentElement!;
+      expect(separator.classList.contains("border-t")).toBe(true);
+      expect(separator.classList.contains("border-divider")).toBe(true);
 
       fireEvent.click(toggle);
       await waitFor(() => expect(list.hidden).toBe(false));

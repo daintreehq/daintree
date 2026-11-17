@@ -123,6 +123,17 @@ describe("review hub inset", () => {
     expect(handSpelled).toEqual([]);
   });
 
+  it("no source spells a divider with an opacity suffix, which generates no CSS", () => {
+    const files = [
+      ...sourceFiles(path.join(ROOT, "src/components/Worktree/ReviewHub")),
+      path.join(ROOT, "src/panels/diff/DiffPane.tsx"),
+    ];
+    const offenders = files
+      .filter((file) => /\bborder-divider\/\d+/.test(readFileSync(file, "utf8")))
+      .map(relative);
+    expect(offenders).toEqual([]);
+  });
+
   it("nothing in the hub sits on the old 16px inset", () => {
     const files = [
       ...sourceFiles(path.join(ROOT, "src/components/Worktree/ReviewHub")),

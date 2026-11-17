@@ -1687,7 +1687,7 @@ export function DiffPane({
           role="toolbar"
           aria-label="File review controls"
           onKeyDown={onFooterKeyDown}
-          className="flex items-center justify-between gap-3 px-4 py-1.5 border-t border-border-strong bg-surface-panel shrink-0"
+          className="flex items-center justify-between gap-3 px-2 py-1.5 border-t border-divider bg-surface-panel shrink-0"
         >
           <div className="flex items-center gap-1 min-w-0">
             {isWorkspace && (

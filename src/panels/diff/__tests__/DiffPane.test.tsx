@@ -1138,6 +1138,17 @@ describe("DiffPane — file keys across the whole pane (#16643)", () => {
     expectStepTo(0);
   });
 
+  it("keeps the footer on the toolbar's 8px inset and divider", () => {
+    seedAt(0);
+    renderPane();
+
+    const footer = screen.getByTestId("diff-pane-footer");
+    expect(footer.classList.contains("px-2")).toBe(true);
+    expect(footer.classList.contains("border-t")).toBe(true);
+    expect(footer.classList.contains("border-divider")).toBe(true);
+    expect(footer.classList.contains("border-border-strong")).toBe(false);
+  });
+
   it("leaves a key the focused control already claimed to that control", () => {
     seedAt(0);
     renderPane();
