@@ -1,4 +1,6 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { renderHook } from "@testing-library/react";
 import type { SpawnError, SpawnResult } from "@shared/types/pty-host";
 
 const panelsById: Record<string, Record<string, unknown>> = {};
@@ -20,11 +22,16 @@ vi.mock("@/lib/watchNotification", () => ({
 
 type SpawnListener = (id: string, result: SpawnResult) => void;
 const spawnListeners = new Set<SpawnListener>();
+const backendReadyListeners = new Set<() => void>();
 vi.mock("@/clients/terminalClient", () => ({
   terminalClient: {
     onSpawnResult: (listener: SpawnListener) => {
       spawnListeners.add(listener);
       return () => spawnListeners.delete(listener);
+    },
+    onBackendReady: (listener: () => void) => {
+      backendReadyListeners.add(listener);
+      return () => backendReadyListeners.delete(listener);
     },
   },
 }));
@@ -51,8 +58,12 @@ interface Notice {
 const notify = vi.fn((_notice: Notice) => {});
 vi.mock("@/lib/notify", () => ({ notify: (notice: Notice) => notify(notice) }));
 
-const { handleMemoryLeakRestartRequest, resetMemoryRestartReportsForTests, SPAWN_ANSWER_WAIT_MS } =
-  await import("../useMemoryLeakDetection");
+const {
+  handleMemoryLeakRestartRequest,
+  resetMemoryRestartReportsForTests,
+  SPAWN_ANSWER_WAIT_MS,
+  useMemoryLeakDetection,
+} = await import("../useMemoryLeakDetection");
 
 function pane(overrides: Record<string, unknown> = {}) {
   return { id: "t1", kind: "terminal", title: "Claude", worktreeId: "wt-1", ...overrides };
@@ -100,6 +111,7 @@ describe("handleMemoryLeakRestartRequest", () => {
     notify.mockReset();
     goToPanel.mockClear();
     spawnListeners.clear();
+    backendReadyListeners.clear();
     restarting.clear();
     resetMemoryRestartReportsForTests();
     for (const key of Object.keys(panelsById)) delete panelsById[key];
@@ -412,11 +424,18 @@ describe("handleMemoryLeakRestartRequest", () => {
     const handled = handleMemoryLeakRestartRequest(requestFor());
     await vi.advanceTimersByTimeAsync(0);
     delete panelsById.t1;
-    await vi.advanceTimersByTimeAsync(SPAWN_ANSWER_WAIT_MS);
-    await handled;
+    answerSpawn("t1", { success: true });
+    await vi.advanceTimersByTimeAsync(0);
 
+    let settled = false;
+    void handled.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(true);
     expect(notify).not.toHaveBeenCalled();
     expect(spawnListeners.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("says nothing about a pane trashed while the host answered", async () => {
@@ -442,6 +461,43 @@ describe("handleMemoryLeakRestartRequest", () => {
 
     expect(notify).not.toHaveBeenCalled();
     expect(spawnListeners.size).toBe(0);
+  });
+
+  it("says nothing when a restart took over and the host never answered either", async () => {
+    vi.useFakeTimers();
+    panelsById.t1 = pane({ restartKey: 0 });
+
+    const handled = handleMemoryLeakRestartRequest(requestFor());
+    await vi.advanceTimersByTimeAsync(0);
+    panelsById.t1 = { ...panelsById.t1, restartKey: 2 };
+    await vi.advanceTimersByTimeAsync(SPAWN_ANSWER_WAIT_MS);
+    await handled;
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("reports a failure again once the host recovered and replayed its processes", async () => {
+    (window as unknown as { electron: unknown }).electron = {
+      events: { on: () => () => {} },
+    };
+    const { unmount } = renderHook(() => useMemoryLeakDetection(false));
+    try {
+      const message = "Working directory does not exist: /gone";
+      panelsById.t1 = pane({ restartKey: 4 });
+      restartTerminal.mockImplementation(failsValidation(message));
+
+      await handleMemoryLeakRestartRequest(requestFor());
+      await handleMemoryLeakRestartRequest(requestFor());
+      expect(notify).toHaveBeenCalledTimes(1);
+
+      for (const listener of [...backendReadyListeners]) listener();
+      await handleMemoryLeakRestartRequest(requestFor());
+      expect(notify).toHaveBeenCalledTimes(2);
+    } finally {
+      unmount();
+      delete (window as unknown as { electron?: unknown }).electron;
+    }
+    expect(backendReadyListeners.size).toBe(0);
   });
 
   it("releases its listener when reporting throws", async () => {

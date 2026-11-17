@@ -37,6 +37,7 @@ describe("useMemoryLeakDetection across PTY shards (#17194)", () => {
     notify.mockClear();
     (window as unknown as { electron: unknown }).electron = {
       events: { on: () => () => {} },
+      terminal: { onBackendReady: () => () => {} },
     };
     useResourceMonitoringStore.setState({ enabled: true, metrics: new Map(), lastBatch: null });
     unmount = renderHook(() => useMemoryLeakDetection(true)).unmount;

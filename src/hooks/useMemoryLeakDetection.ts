@@ -224,8 +224,12 @@ export function useMemoryLeakDetection(enabled: boolean): void {
         });
       }
     );
+    // A recovered host replays its terminals as new processes, which the
+    // failures reported against the old ones no longer describe.
+    const unsubscribeRecovery = terminalClient.onBackendReady(() => reportedFailures.clear());
     return () => {
       unsubscribe();
+      unsubscribeRecovery();
       reportedFailures.clear();
     };
   }, []);
@@ -330,7 +334,8 @@ async function restartForMemory(
     }),
   ]);
   clearTimeout(timer);
-  if (result === SUPERSEDED) return { kind: "gone" };
+  // A restart after this one, or a close, owns the pane now.
+  if (result === SUPERSEDED || restartKeyOf(before.id) !== restartKey + 1) return { kind: "gone" };
   // Main's own report of a host that hasn't answered yet: the spawn may still land.
   if (result === null || (!result.success && result.error?.code === "SPAWN_TIMEOUT")) {
     return { kind: "unconfirmed" };
@@ -376,6 +381,9 @@ function reportRestart(before: PtyPanelData, thresholdMb: number, outcome: Resta
   if (outcome.kind === "gone" || !panel || !isPtyPanel(panel) || panel.location === "trash") {
     reportedFailures.delete(terminalId);
     return;
+  }
+  for (const id of reportedFailures.keys()) {
+    if (!usePanelStore.getState().panelsById[id]) reportedFailures.delete(id);
   }
 
   if (outcome.kind === "failed") {
