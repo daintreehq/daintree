@@ -125,6 +125,7 @@ function mixedHosts(): HostListEntry[] {
       lastSeenAt: Date.now() - 5 * MIN,
       detail: "Permission denied (publickey)",
       stoppedRetrying: true,
+      blocker: { kind: "ssh-access" },
     }),
     host(
       "gpu-box",

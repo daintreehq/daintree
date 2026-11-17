@@ -9,6 +9,7 @@ import {
   SshAccessError,
   UnusableConnectionError,
   TransportError,
+  WslDistroMissingError,
   createDirectTransport,
   type LinkOpenOptions,
   type LinkTransport,
@@ -606,7 +607,7 @@ describe("LinkClient backoff", () => {
     });
     client.start();
     await waitFor(() => client!.getState().status === "unreachable");
-    expect(client.getState()).toMatchObject({ retryAt: null });
+    expect(client.getState()).toMatchObject({ retryAt: null, blocker: { kind: "ssh-access" } });
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(transport.opens).toBe(1);
 
@@ -616,13 +617,13 @@ describe("LinkClient backoff", () => {
     expect(transport.opens).toBe(2);
   });
 
-  it("stops retrying a host this machine can't reach as set up (WSL missing, no such distro)", async () => {
+  it("stops retrying a WSL distribution that isn't there, and says which one", async () => {
     const transport = {
       opens: 0,
       async open(): Promise<never> {
         transport.opens++;
-        throw new UnusableConnectionError(
-          "Ubuntu isn't installed in WSL",
+        throw new WslDistroMissingError(
+          "Ubuntu-24.04",
           "There is no distribution with the supplied name."
         );
       },
@@ -639,9 +640,46 @@ describe("LinkClient backoff", () => {
     expect(client.getState()).toMatchObject({
       retryAt: null,
       detail: "There is no distribution with the supplied name.",
+      blocker: { kind: "wsl-distro-missing", distro: "Ubuntu-24.04" },
     });
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(transport.opens).toBe(1);
+  });
+
+  it("stops retrying a connection this machine can't use, in the transport's words", async () => {
+    const transport = {
+      async open(): Promise<never> {
+        throw new UnusableConnectionError("WSL isn't available on this PC", "spawn ENOENT");
+      },
+    };
+    client = new LinkClient({
+      transport,
+      handshake: TEST_HANDSHAKE,
+      client: { clientId: "c", clientName: "n", platform: "win32" },
+      backoff: { initialMs: 1, maxMs: 1, jitter: 0 },
+      random: () => 0,
+    });
+    client.start();
+    await waitFor(() => client!.getState().status === "unreachable");
+    expect(client.getState()).toMatchObject({
+      retryAt: null,
+      blocker: { kind: "unusable", message: "WSL isn't available on this PC" },
+    });
+  });
+
+  it("names no blocker for a failure it keeps retrying", async () => {
+    client = new LinkClient({
+      transport: failingTransport("x"),
+      handshake: TEST_HANDSHAKE,
+      client: { clientId: "c", clientName: "n", platform: "linux" },
+      backoff: { initialMs: 1_000, jitter: 0 },
+      random: () => 0,
+    });
+    client.start();
+    await waitFor(() => client!.getState().status === "unreachable");
+    const state = client.getState();
+    expect(state.status === "unreachable" && state.retryAt).not.toBeNull();
+    expect(state).not.toHaveProperty("blocker");
   });
 
   it("applies jitter below the base delay", async () => {

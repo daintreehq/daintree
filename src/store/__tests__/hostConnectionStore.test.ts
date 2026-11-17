@@ -57,10 +57,36 @@ describe("hostConnectionStore", () => {
       lastSeenAt: null,
       detail: "Permission denied (publickey).",
       stoppedRetrying: true,
+      blocker: { kind: "ssh-access" },
     });
     expect(variant()).toBe("access-denied");
     store.applyConnection({ status: "unreachable", lastSeenAt: null, detail: "timed out" });
     expect(variant()).toBe("unreachable");
+  });
+
+  it("never calls a link that stopped for something other than ssh a login failure", () => {
+    const store = useHostConnectionStore.getState();
+    store.bindHost("wsl-ubuntu", "Ubuntu");
+    const variant = () => selectHostBannerVariant(useHostConnectionStore.getState());
+    const parked = {
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: "There is no distribution with the supplied name.",
+      stoppedRetrying: true,
+    } as const;
+    store.applyConnection({
+      ...parked,
+      blocker: { kind: "wsl-distro-missing", distro: "Ubuntu-24.04" },
+    });
+    expect(variant()).toBe("wsl-distro-missing");
+    store.applyConnection({
+      ...parked,
+      blocker: { kind: "unusable", message: "WSL isn't available on this PC" },
+    });
+    expect(variant()).toBe("connection-unavailable");
+    // Nothing said why: that it stopped is all there is to say.
+    store.applyConnection(parked);
+    expect(variant()).toBe("connection-unavailable");
   });
 
   it("holds a host that said it was shutting down as restarting, through every dial", () => {

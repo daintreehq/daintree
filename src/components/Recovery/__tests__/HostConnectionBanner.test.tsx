@@ -325,6 +325,7 @@ describe("HostConnectionBanner", () => {
       lastSeenAt: null,
       detail: "Warning: something\ngreg@studio-01: Permission denied (publickey).",
       stoppedRetrying: true,
+      blocker: { kind: "ssh-access" },
     });
     render(<HostConnectionBanner />);
     expect(screen.getByText("Couldn't log in to studio-01 over ssh")).toBeTruthy();
@@ -333,6 +334,40 @@ describe("HostConnectionBanner", () => {
     );
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Host details…" })).toBeTruthy();
+  });
+
+  it("names a WSL distribution that's gone, without a word about ssh, and offers Retry", () => {
+    seed({
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: "There is no distribution with the supplied name.\nWsl/Service/WSL_E_DISTRO_NOT_FOUND",
+      stoppedRetrying: true,
+      blocker: { kind: "wsl-distro-missing", distro: "Ubuntu-24.04" },
+    });
+    render(<HostConnectionBanner />);
+    const banner = screen.getByRole("status");
+    expect(screen.getByText("WSL couldn't find Ubuntu-24.04")).toBeTruthy();
+    expect(banner.textContent).toContain("Restore it under that name in WSL, then retry.");
+    expect(banner.textContent?.toLowerCase()).not.toMatch(/ssh|log ?in/);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(connect).toHaveBeenCalledWith({ hostId: "studio-01", restart: true });
+    expect(screen.getByRole("button", { name: "Host details…" })).toBeTruthy();
+  });
+
+  it("says a connection that can't be used in the transport's words", () => {
+    seed({
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: "spawn wsl.exe ENOENT",
+      stoppedRetrying: true,
+      blocker: { kind: "unusable", message: "WSL isn't available on this PC" },
+    });
+    render(<HostConnectionBanner />);
+    expect(screen.getByText("Couldn't connect to studio-01")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain(
+      "WSL isn't available on this PC. Automatic retries have stopped."
+    );
+    expect(screen.getByRole("status").textContent).not.toContain("ssh");
   });
 
   it("says which build is behind and offers updating that side", () => {
@@ -585,6 +620,8 @@ describe("getHostConnectionBannerCopy", () => {
     "unreachable",
     "host-mode-off",
     "access-denied",
+    "wsl-distro-missing",
+    "connection-unavailable",
     "version-mismatch",
     "disconnected",
     "checking",

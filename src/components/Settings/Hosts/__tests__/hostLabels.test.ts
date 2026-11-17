@@ -111,6 +111,20 @@ describe("connectionLabel", () => {
       "Unreachable · never seen · not retrying until you connect · greg@studio: Permission denied (publickey)."
     );
   });
+
+  it("names the WSL distribution it couldn't find", () => {
+    expect(
+      connectionLabel({
+        status: "unreachable",
+        lastSeenAt: null,
+        detail: "There is no distribution with the supplied name.",
+        stoppedRetrying: true,
+        blocker: { kind: "wsl-distro-missing", distro: "Ubuntu-24.04" },
+      })
+    ).toBe(
+      "WSL couldn't find Ubuntu-24.04 · never seen · not retrying until you connect · There is no distribution with the supplied name."
+    );
+  });
 });
 
 describe("restart impact", () => {
