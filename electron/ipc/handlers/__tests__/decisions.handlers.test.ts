@@ -663,6 +663,75 @@ describe("decisions IPC", () => {
     }
   );
 
+  describe("this computer's questions while off (#17229)", () => {
+    const REFERENCE: DecisionQuestionReference = {
+      hostId: "host_1",
+      projectId: "project-b",
+      terminalId: "pane-closed",
+      questionId: QUESTION_ID,
+    };
+
+    it("lists what Decisions last installed, loading none of it, whatever the switch says", async () => {
+      const { setDecisionQuestions } = await import("../../../services/decisionsQuestionList.js");
+      saved.value = { enabled: false };
+      expect(listQuestions().questions).toEqual([]);
+
+      const changed = setDecisionQuestions([
+        {
+          reference: REFERENCE,
+          alias: 3,
+          agentKind: "claude",
+          projectLabel: null,
+          worktreeId: "w1",
+          worktreeRoot: "/repo",
+          requirement: "human-required",
+          askedAt: "2026-11-02T10:00:00.000Z",
+          expiresAt: null,
+          settledAt: null,
+          standing: { kind: "waiting", reason: "open" },
+        },
+      ]);
+      saved.value = { enabled: true };
+      expect(listQuestions()).toBe(changed);
+      setDecisionQuestions([]);
+
+      expect(decisionsEntry.evaluated).toBe(0);
+      expect(decisionsEntry.libraries).toBe(0);
+    });
+
+    it.each([
+      ["absent", undefined],
+      ["off", { enabled: false }],
+    ])(
+      "reads and cancels nothing by reference with the setting %s, saying it's off, loading none of Decisions",
+      async (_label, value) => {
+        saved.value = value;
+        // An enrolled Host's own lifetime never opens this computer's list.
+        saved.host = { deviceId: "dev_host_1", ownerOffAt: null, revokedAt: null };
+
+        await expect(getQuestionContentByReference({ reference: REFERENCE })).resolves.toEqual({
+          result: "off",
+        });
+        await expect(
+          getQuestionImageByReference({
+            reference: REFERENCE,
+            attachmentId: ATTACHMENT_ID,
+            offset: 0,
+          })
+        ).resolves.toEqual({ result: "off" });
+        await expect(getQuestionSummariesByReference({ references: [REFERENCE] })).resolves.toEqual(
+          { result: "off" }
+        );
+        await expect(cancelQuestionByReference({ reference: REFERENCE })).resolves.toEqual({
+          result: "off",
+        });
+
+        expect(decisionsEntry.evaluated).toBe(0);
+        expect(decisionsEntry.libraries).toBe(0);
+      }
+    );
+  });
+
   it("cancels no question once quit has sealed the loader, without loading it", async () => {
     saved.value = { enabled: true };
     sealDecisionsModule();
@@ -1173,66 +1242,6 @@ describe("decisions IPC", () => {
       terminalId: "pane-closed",
       questionId: QUESTION_ID,
     };
-
-    it("lists what Decisions last installed, loading none of it, whatever the switch says", async () => {
-      const { setDecisionQuestions } = await import("../../../services/decisionsQuestionList.js");
-      saved.value = { enabled: false };
-      expect(listQuestions().questions).toEqual([]);
-
-      const changed = setDecisionQuestions([
-        {
-          reference: REFERENCE,
-          alias: 3,
-          agentKind: "claude",
-          projectLabel: null,
-          worktreeId: "w1",
-          worktreeRoot: "/repo",
-          requirement: "human-required",
-          askedAt: "2026-11-02T10:00:00.000Z",
-          expiresAt: null,
-          settledAt: null,
-          standing: { kind: "waiting", reason: "open" },
-        },
-      ]);
-      saved.value = { enabled: true };
-      expect(listQuestions()).toBe(changed);
-      setDecisionQuestions([]);
-
-      expect(decisionsEntry.evaluated).toBe(0);
-      expect(decisionsEntry.libraries).toBe(0);
-    });
-
-    it.each([
-      ["absent", undefined],
-      ["off", { enabled: false }],
-    ])(
-      "reads and cancels nothing with the setting %s, saying it's off, loading none of Decisions",
-      async (_label, value) => {
-        saved.value = value;
-        // An enrolled Host's own switch never opens this computer's list.
-        saved.host = { deviceId: "dev_host_1", ownerOffAt: null, revokedAt: null };
-
-        await expect(getQuestionContentByReference({ reference: REFERENCE })).resolves.toEqual({
-          result: "off",
-        });
-        await expect(
-          getQuestionImageByReference({
-            reference: REFERENCE,
-            attachmentId: ATTACHMENT_ID,
-            offset: 0,
-          })
-        ).resolves.toEqual({ result: "off" });
-        await expect(getQuestionSummariesByReference({ references: [REFERENCE] })).resolves.toEqual(
-          { result: "off" }
-        );
-        await expect(cancelQuestionByReference({ reference: REFERENCE })).resolves.toEqual({
-          result: "off",
-        });
-
-        expect(decisionsEntry.evaluated).toBe(0);
-        expect(decisionsEntry.libraries).toBe(0);
-      }
-    );
 
     it("passes the reference to Decisions once on, with no view's project in it", async () => {
       saved.value = { enabled: true };

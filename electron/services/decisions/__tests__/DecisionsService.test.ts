@@ -636,12 +636,14 @@ describe("DecisionsService question list (#17229)", () => {
   });
 
   it("keeps an answer marked handled, settled, though no pane or attention list shows it", async () => {
+    // The handled record keeps only ids shaped as the library mints them.
     const handledRow = row(1, {
+      question_id: "q_handled_0001",
       local_status: "human-answered",
       delivery_status: "needs-attention",
       answers_json: answers({ revision: 1 }),
     });
-    const { service, lists, panes, setRows } = listed({ handled: { [qid(1)]: 1 } });
+    const { service, lists, panes, setRows } = listed({ handled: { q_handled_0001: 1 } });
     setRows([handledRow]);
     await service.start(on(HOST));
 
