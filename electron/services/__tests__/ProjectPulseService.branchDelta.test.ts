@@ -6,7 +6,7 @@ import path from "node:path";
 import { ProjectPulseService } from "../ProjectPulseService.js";
 
 function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", args, {
+  return execFileSync("git", ["-c", "commit.gpgsign=false", ...args], {
     cwd,
     encoding: "utf8",
     env: {
