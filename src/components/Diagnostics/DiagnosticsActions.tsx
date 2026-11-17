@@ -6,7 +6,7 @@ import { useTelemetryPreviewStore } from "@/store/telemetryPreviewStore";
 import { actionService } from "@/services/ActionService";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { notify } from "@/lib/notify";
+import { Callout } from "@/components/ui/Callout";
 import { logError } from "@/utils/logger";
 import { ClearLogsConfirmDialog } from "./ClearLogsConfirmDialog";
 
@@ -158,38 +158,35 @@ export function TelemetryActions() {
 export function EventsActions() {
   const [showClearDialog, setShowClearDialog] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
+  const [clearFailed, setClearFailed] = useState(false);
 
+  // A failure keeps the confirmation open, its button ready to retry. A toast
+  // retry would close over this component, which unmounts with any tab switch.
+  // No `finally`: React Compiler bails out on a try with a finalizer.
   const handleConfirmClear = useCallback(async () => {
     setIsClearing(true);
+    setClearFailed(false);
+    let failure: unknown = null;
     try {
       const result = await actionService.dispatch("eventInspector.clear", undefined, {
         source: "user",
       });
-      if (!result.ok) {
-        throw new Error(result.error.message);
-      }
+      if (!result.ok) failure = new Error(result.error.message);
     } catch (error) {
-      logError("Failed to clear events", error);
-      notify({
-        type: "error",
-        title: "Couldn't clear events",
-        // Only the view is known to be intact: a reply lost on the way back can
-        // follow a clear that did happen in main.
-        message: "The captured events are still shown here. Try again in a moment.",
-        // An unset priority resolves "low" under uiFeedback, which is inbox-only
-        // and strips the onClick recovery below.
-        priority: "high",
-        // Reopens the confirmation rather than re-dispatching, so the retry
-        // still passes through this gate.
-        actions: [
-          { label: "Try again", variant: "primary", onClick: () => setShowClearDialog(true) },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
-    } finally {
-      setIsClearing(false);
-      setShowClearDialog(false);
+      failure = error;
     }
+    setIsClearing(false);
+    if (failure === null) {
+      setShowClearDialog(false);
+      return;
+    }
+    logError("Failed to clear events", failure);
+    setClearFailed(true);
+  }, []);
+
+  const closeClearDialog = useCallback(() => {
+    setShowClearDialog(false);
+    setClearFailed(false);
   }, []);
 
   return (
@@ -206,14 +203,22 @@ export function EventsActions() {
       </div>
       <ConfirmDialog
         isOpen={showClearDialog}
-        onClose={() => setShowClearDialog(false)}
+        onClose={closeClearDialog}
         title="Clear events?"
         description="All captured event records will be permanently deleted."
         confirmLabel="Clear events"
         variant="destructive"
         isConfirmLoading={isClearing}
         onConfirm={handleConfirmClear}
-      />
+      >
+        {clearFailed && (
+          // Claims only the failed attempt: a reply lost on the way back can
+          // follow a clear that did happen in main.
+          <Callout severity="error" role="alert" title="Couldn't clear events">
+            The app didn't confirm the clear. Try again in a moment.
+          </Callout>
+        )}
+      </ConfirmDialog>
     </>
   );
 }

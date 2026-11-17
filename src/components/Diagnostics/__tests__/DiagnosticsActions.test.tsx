@@ -29,6 +29,11 @@ vi.mock("@/lib/notify", () => ({
   notify: (payload: NotifyPayload) => mockNotify(payload),
 }));
 
+const mockLogError = vi.fn();
+vi.mock("@/utils/logger", () => ({
+  logError: (...args: unknown[]) => mockLogError(...args),
+}));
+
 vi.mock("zustand/react/shallow", () => ({
   useShallow: (fn: unknown) => fn,
 }));
@@ -257,7 +262,7 @@ describe("EventsActions — ConfirmDialog", () => {
     expect(mockNotify).not.toHaveBeenCalled();
   });
 
-  it("surfaces a failed clear with a recovery action that re-confirms", async () => {
+  it("keeps the confirmation open on a failed clear and retries from it", async () => {
     mockDispatch.mockResolvedValue({ ok: false, error: { message: "bridge closed" } });
     const clearDispatches = () =>
       mockDispatch.mock.calls.filter((call) => call[0] === "eventInspector.clear");
@@ -266,28 +271,37 @@ describe("EventsActions — ConfirmDialog", () => {
     fireEvent.click(screen.getByText("Clear events"));
     fireEvent.click(within(screen.getByRole("alertdialog")).getByText("Clear events"));
 
-    await waitFor(() => expect(mockNotify).toHaveBeenCalledTimes(1));
-    const payload = mockNotify.mock.calls[0]?.[0];
-    expect(payload?.type).toBe("error");
-    expect(payload?.title).toBe("Couldn't clear events");
-    // uiFeedback is passive: an unset priority would land inbox-only and drop
-    // the onClick recovery.
-    expect(payload?.priority).toBeDefined();
-    expect(payload?.priority).not.toBe("low");
-    await waitFor(() => expect(screen.queryByText("Clear events?")).toBeNull());
-
-    const retry = payload?.actions?.[0];
-    expect(payload?.actions).toHaveLength(1);
-    expect(retry?.label).toBe("Try again");
-    act(() => retry?.onClick());
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Couldn't clear events");
+    expect(screen.getByText("Clear events?")).toBeTruthy();
+    expect(mockLogError).toHaveBeenCalledWith(
+      "Failed to clear events",
+      expect.objectContaining({ message: "bridge closed" })
+    );
+    // The failure lives in the dialog, so nothing outside it can strand a retry.
+    expect(mockNotify).not.toHaveBeenCalled();
     expect(clearDispatches()).toHaveLength(1);
-    expect(await screen.findByText("Clear events?")).toBeTruthy();
 
     mockDispatch.mockResolvedValue({ ok: true, result: undefined });
     fireEvent.click(within(screen.getByRole("alertdialog")).getByText("Clear events"));
     await waitFor(() => expect(screen.queryByText("Clear events?")).toBeNull());
     expect(clearDispatches()).toHaveLength(2);
-    expect(mockNotify).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops the failure once the confirmation is cancelled", async () => {
+    mockDispatch.mockResolvedValue({ ok: false, error: { message: "bridge closed" } });
+    render(<EventsActions />);
+
+    fireEvent.click(screen.getByText("Clear events"));
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByText("Clear events"));
+    await screen.findByRole("alert");
+
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByText("Cancel"));
+    await waitFor(() => expect(screen.queryByText("Clear events?")).toBeNull());
+
+    fireEvent.click(screen.getByText("Clear events"));
+    expect(await screen.findByText("Clear events?")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("locks the confirmation while the clear is in flight", async () => {
@@ -300,14 +314,16 @@ describe("EventsActions — ConfirmDialog", () => {
     render(<EventsActions />);
 
     fireEvent.click(screen.getByText("Clear events"));
-    const confirm = within(screen.getByRole("alertdialog"))
-      .getByText("Clear events")
-      .closest("button")!;
+    const dialog = screen.getByRole("alertdialog");
+    const confirm = within(dialog).getByText("Clear events").closest("button")!;
     fireEvent.click(confirm);
 
     await waitFor(() => expect(confirm.getAttribute("aria-disabled")).toBe("true"));
     fireEvent.click(confirm);
+    fireEvent.click(within(dialog).getByText("Cancel"));
+    fireEvent.keyDown(dialog, { key: "Escape" });
     expect(mockDispatch).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Clear events?")).toBeTruthy();
 
     await act(async () => settle({ ok: true, result: undefined }));
     await waitFor(() => expect(screen.queryByText("Clear events?")).toBeNull());

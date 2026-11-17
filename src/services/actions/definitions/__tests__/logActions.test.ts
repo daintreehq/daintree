@@ -380,6 +380,26 @@ describe("eventInspector.clear", () => {
     expect(useEventStore.getState().selectedEventId).toBe("e2");
   });
 
+  it("keeps what arrived and what was selected while a failing clear was pending", async () => {
+    useEventStore.getState().setEvents([makeEvent("e1"), makeEvent("e2")]);
+    useEventStore.getState().setSelectedEvent("e1");
+    let rejectClear!: (error: Error) => void;
+    eventInspectorClientMock.clear.mockReturnValue(
+      new Promise<void>((_, reject) => {
+        rejectClear = reject;
+      })
+    );
+
+    const pending = run(setupActions(), "eventInspector.clear");
+    useEventStore.getState().addEvents([makeEvent("e3")]);
+    useEventStore.getState().setSelectedEvent("e3");
+    rejectClear(new Error("bridge closed"));
+
+    await expect(pending).rejects.toThrow("bridge closed");
+    expect(useEventStore.getState().events.map((e) => e.id)).toEqual(["e1", "e2", "e3"]);
+    expect(useEventStore.getState().selectedEventId).toBe("e3");
+  });
+
   it("drops what was captured before the clear but keeps events that arrived during it", async () => {
     useEventStore.getState().setEvents([makeEvent("e1"), makeEvent("e2")]);
     useEventStore.getState().setSelectedEvent("e1");

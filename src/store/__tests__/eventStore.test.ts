@@ -76,14 +76,24 @@ describe("eventStore", () => {
     expect(useEventStore.getState().selectedEventId).toBeNull();
   });
 
-  it("removeEvents clears a named selection whose row already rolled out of the buffer", () => {
+  it("removeEvents drops a selection whose row already rolled out of the buffer", () => {
+    // The selected row was evicted by the cap before the clear snapshotted ids.
     useEventStore.getState().setEvents([makeEvent("2")]);
     useEventStore.getState().setSelectedEvent("1");
-    const before = useEventStore.getState().events;
 
-    useEventStore.getState().removeEvents(new Set(["1"]));
+    useEventStore.getState().removeEvents(new Set(["2"]));
 
-    expect(useEventStore.getState().events).toBe(before);
+    expect(useEventStore.getState().events).toEqual([]);
     expect(useEventStore.getState().selectedEventId).toBeNull();
+  });
+
+  it("removeEvents leaves the state untouched when nothing it names is present", () => {
+    useEventStore.getState().setEvents([makeEvent("1")]);
+    useEventStore.getState().setSelectedEvent("1");
+    const before = useEventStore.getState();
+
+    useEventStore.getState().removeEvents(new Set(["absent"]));
+
+    expect(useEventStore.getState()).toBe(before);
   });
 });
