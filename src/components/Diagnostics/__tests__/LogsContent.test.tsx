@@ -520,7 +520,8 @@ describe("LogsContent — collapsed groups", () => {
     });
     expect(queryByRole("button", { expanded: true })).toBe(disclosure);
     expect(disclosure.getAttribute("aria-label")).toContain("repeated 3 times");
-    expect(document.getElementById(panelId)?.textContent).toContain('"requestId": "c"');
-    expect(await copyPayload()).toContain('"requestId": "c"');
+    const allThree = /"requestId": "a".*"requestId": "b".*"requestId": "c"/s;
+    expect(document.getElementById(panelId)?.textContent).toMatch(allThree);
+    expect(await copyPayload()).toMatch(allThree);
   });
 });

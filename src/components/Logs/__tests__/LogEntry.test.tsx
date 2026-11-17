@@ -116,6 +116,8 @@ describe("LogEntry", () => {
       expect(a).toBeGreaterThan(aHeading);
       expect(none).toBeGreaterThan(a);
       expect(payload.split('"requestId": "a"')).toHaveLength(2);
+      expect(payload.split('"requestId": "b"')).toHaveLength(2);
+      expect(payload.split("(no context)")).toHaveLength(2);
       expect(payload).not.toContain(iso(burst[2]!.timestamp));
     });
 
@@ -155,9 +157,9 @@ describe("LogEntry", () => {
       expect(items[1]?.textContent).toContain('"requestId": "a"');
       expect(items[1]?.textContent).toContain("×2");
       expect(items[1]?.textContent).toContain("repeated 2 times");
-      expect(items[1]?.querySelector("time")?.getAttribute("datetime")).toBe(
-        iso(burst[1]!.timestamp)
-      );
+      const time = items[1]?.querySelector("time");
+      expect(time?.getAttribute("datetime")).toBe(iso(burst[1]!.timestamp));
+      expect(time?.textContent).toMatch(/^\d{2}:\d{2}:\d{2}$/);
       expect(items[2]?.textContent).toContain("No context");
     });
 
@@ -183,6 +185,7 @@ describe("LogEntry", () => {
       const payload = String(writeText.mock.calls[0]?.[0]);
       expect(payload.split('"requestId": "a"')).toHaveLength(2);
       expect(payload).not.toContain(iso(twin.timestamp));
+      expect(payload).not.toContain(`[${iso(first.timestamp)}]\n`);
     });
   });
 
