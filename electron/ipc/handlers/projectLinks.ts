@@ -1,11 +1,11 @@
 import { z } from "zod";
 import { defineIpcNamespace, opValidated } from "../define.js";
 import { projectStore } from "../../services/ProjectStore.js";
-import { PROJECT_PORTAL_LINKS_METHOD_CHANNELS } from "./projectPortalLinks.preload.js";
+import { PROJECT_LINKS_METHOD_CHANNELS } from "./projectLinks.preload.js";
 import type {
-  ProjectPortalLinksChangePayload,
-  ProjectPortalLinksChangeResult,
-} from "../../../shared/types/portal.js";
+  ProjectLinksChangePayload,
+  ProjectLinksChangeResult,
+} from "../../../shared/types/projectLinks.js";
 
 // Bounds on the raw payload only; the link model trims and applies the real
 // limits, so a value over them is refused with a reason rather than a throw.
@@ -30,22 +30,22 @@ const PayloadSchema = z
   .strict();
 
 /**
- * The project's Portal links have this one write, so a change lands on the
+ * The project's links have this one write, so a change lands on the
  * list as it is on disk and the Assistant's ownership is checked there, where
  * a whole-settings save would replace the list from whatever copy it held.
  */
-export const projectPortalLinksNamespace = defineIpcNamespace({
-  name: "projectPortalLinks",
+export const projectLinksNamespace = defineIpcNamespace({
+  name: "projectLinks",
   ops: {
     change: opValidated(
-      PROJECT_PORTAL_LINKS_METHOD_CHANNELS.change,
+      PROJECT_LINKS_METHOD_CHANNELS.change,
       PayloadSchema,
-      async (payload: ProjectPortalLinksChangePayload): Promise<ProjectPortalLinksChangeResult> =>
-        projectStore.changePortalLinks(payload.projectId, payload.actor, payload.change)
+      async (payload: ProjectLinksChangePayload): Promise<ProjectLinksChangeResult> =>
+        projectStore.changeLinks(payload.projectId, payload.actor, payload.change)
     ),
   },
 });
 
-export function registerProjectPortalLinksHandlers(): () => void {
-  return projectPortalLinksNamespace.register();
+export function registerProjectLinksHandlers(): () => void {
+  return projectLinksNamespace.register();
 }

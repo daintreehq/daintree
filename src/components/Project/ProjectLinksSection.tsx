@@ -7,21 +7,17 @@ import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { projectClient } from "@/clients";
-import { changeProjectPortalLinks, useProjectSettingsStore } from "@/store/projectSettingsStore";
-import type {
-  ProjectPortalLink,
-  ProjectPortalLinkChange,
-  ProjectPortalLinkRefusal,
-} from "@shared/types";
+import { changeProjectLinks, useProjectSettingsStore } from "@/store/projectSettingsStore";
+import type { ProjectLink, ProjectLinkChange, ProjectLinkRefusal } from "@shared/types";
 import {
-  MAX_PROJECT_PORTAL_LINK_TITLE_LENGTH,
-  MAX_PROJECT_PORTAL_LINK_URL_LENGTH,
-  portalLinkHost,
-} from "@shared/utils/projectPortalLinks";
+  MAX_PROJECT_LINK_TITLE_LENGTH,
+  MAX_PROJECT_LINK_URL_LENGTH,
+  linkHost,
+} from "@shared/utils/projectLinks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
 
-const NO_LINKS: ProjectPortalLink[] = [];
+const NO_LINKS: ProjectLink[] = [];
 
 interface Draft {
   title: string;
@@ -30,23 +26,21 @@ interface Draft {
 
 const EMPTY_DRAFT: Draft = { title: "", url: "" };
 
-type ChangeOutcome = "saved" | "dropped" | "failed" | ProjectPortalLinkRefusal;
+type ChangeOutcome = "saved" | "dropped" | "failed" | ProjectLinkRefusal;
 
 /**
- * The project's own Portal launchpad links, added here by hand or by the
- * Assistant (#17091). Main owns the list, so every change is one operation
- * and the page shows the list main returns. A change made here takes an
- * Assistant-added link over: from then on only the user can change it.
+ * The project's own links, added here by hand or by the Assistant (#17091).
+ * Main owns the list, so every change is one operation and the page shows the
+ * list main returns. A change made here takes an Assistant-added link over:
+ * from then on only the user can change it.
  */
-export function ProjectPortalLinksSection({ projectId }: { projectId: string }) {
+export function ProjectLinksSection({ projectId }: { projectId: string }) {
   // The project on screen keeps its links in the settings store, where an
   // Assistant change also lands; another project's are read for this page.
   const storeLinks = useProjectSettingsStore((s) =>
-    s.projectId === projectId && s.settings ? (s.settings.portalLinks ?? NO_LINKS) : null
+    s.projectId === projectId && s.settings ? (s.settings.links ?? NO_LINKS) : null
   );
-  const [loaded, setLoaded] = useState<{ projectId: string; links: ProjectPortalLink[] } | null>(
-    null
-  );
+  const [loaded, setLoaded] = useState<{ projectId: string; links: ProjectLink[] } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadCount, setReloadCount] = useState(0);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
@@ -88,11 +82,11 @@ export function ProjectPortalLinksSection({ projectId }: { projectId: string }) 
       .then(
         (settings) => {
           if (visitRef.current !== visit) return;
-          setLoaded({ projectId, links: settings.portalLinks ?? [] });
+          setLoaded({ projectId, links: settings.links ?? [] });
         },
         (error: unknown) => {
           if (visitRef.current !== visit) return;
-          logError("Failed to read the project's Portal links", error);
+          logError("Failed to read the project's links", error);
           setLoadError(formatErrorMessage(error, "The project's links couldn't be read."));
         }
       );
@@ -106,7 +100,7 @@ export function ProjectPortalLinksSection({ projectId }: { projectId: string }) 
    * to another project while it was out.
    */
   const change = async (
-    next: ProjectPortalLinkChange,
+    next: ProjectLinkChange,
     onRefused: (message: string) => void
   ): Promise<ChangeOutcome> => {
     if (pendingRef.current) return "dropped";
@@ -114,7 +108,7 @@ export function ProjectPortalLinksSection({ projectId }: { projectId: string }) 
     setPending(true);
     const visit = visitRef.current;
     try {
-      const result = await changeProjectPortalLinks({ projectId, actor: "user", change: next });
+      const result = await changeProjectLinks({ projectId, actor: "user", change: next });
       if (visitRef.current !== visit) return "dropped";
       if (!result.saved) {
         onRefused(result.message);
@@ -124,7 +118,7 @@ export function ProjectPortalLinksSection({ projectId }: { projectId: string }) 
       return "saved";
     } catch (error) {
       if (visitRef.current !== visit) return "dropped";
-      logError("Failed to change the project's Portal links", error);
+      logError("Failed to change the project's links", error);
       onRefused(formatErrorMessage(error, "The links are as they were."));
       return "failed";
     } finally {
@@ -146,7 +140,7 @@ export function ProjectPortalLinksSection({ projectId }: { projectId: string }) 
     (outcome === "invalid-title" ? titleInputRef : urlInputRef).current?.focus();
   };
 
-  const startEdit = (link: ProjectPortalLink) => {
+  const startEdit = (link: ProjectLink) => {
     setEditing({ id: link.id, draft: { title: link.title, url: link.url } });
     setEditError(null);
     setRowError(null);
@@ -165,7 +159,7 @@ export function ProjectPortalLinksSection({ projectId }: { projectId: string }) 
     }
   };
 
-  const remove = async (link: ProjectPortalLink) => {
+  const remove = async (link: ProjectLink) => {
     setRowError(null);
     await change({ op: "remove", id: link.id }, (message) => setRowError({ id: link.id, message }));
   };
@@ -178,8 +172,8 @@ export function ProjectPortalLinksSection({ projectId }: { projectId: string }) 
 
   return (
     <SettingsSection
-      id="project-portal-links"
-      title="Portal links"
+      id="project-links"
+      title="Project links"
       description="Addresses offered in this project's Portal launchpad, above the chat services, such as its staging site or CI dashboard. Kept in your local project settings, never in the repo."
     >
       {loadError && (
@@ -201,7 +195,7 @@ export function ProjectPortalLinksSection({ projectId }: { projectId: string }) 
                 ref={titleInputRef}
                 type="text"
                 value={draft.title}
-                maxLength={MAX_PROJECT_PORTAL_LINK_TITLE_LENGTH}
+                maxLength={MAX_PROJECT_LINK_TITLE_LENGTH}
                 aria-labelledby={labelId}
                 aria-describedby={descriptionId}
                 aria-invalid={addError ? true : undefined}
@@ -215,7 +209,7 @@ export function ProjectPortalLinksSection({ projectId }: { projectId: string }) 
                 ref={urlInputRef}
                 type="url"
                 value={draft.url}
-                maxLength={MAX_PROJECT_PORTAL_LINK_URL_LENGTH}
+                maxLength={MAX_PROJECT_LINK_URL_LENGTH}
                 aria-label="Link URL"
                 aria-describedby={descriptionId}
                 aria-invalid={addError ? true : undefined}
@@ -250,7 +244,7 @@ export function ProjectPortalLinksSection({ projectId }: { projectId: string }) 
                     ref={editTitleRef}
                     type="text"
                     value={editing.draft.title}
-                    maxLength={MAX_PROJECT_PORTAL_LINK_TITLE_LENGTH}
+                    maxLength={MAX_PROJECT_LINK_TITLE_LENGTH}
                     aria-labelledby={labelId}
                     aria-describedby={descriptionId}
                     aria-invalid={editError ? true : undefined}
@@ -265,7 +259,7 @@ export function ProjectPortalLinksSection({ projectId }: { projectId: string }) 
                     ref={editUrlRef}
                     type="url"
                     value={editing.draft.url}
-                    maxLength={MAX_PROJECT_PORTAL_LINK_URL_LENGTH}
+                    maxLength={MAX_PROJECT_LINK_URL_LENGTH}
                     aria-label="Link URL"
                     aria-describedby={descriptionId}
                     aria-invalid={editError ? true : undefined}
@@ -299,7 +293,7 @@ export function ProjectPortalLinksSection({ projectId }: { projectId: string }) 
             <SettingsRow
               key={link.id}
               label={link.title}
-              description={portalLinkHost(link.url)}
+              description={linkHost(link.url)}
               accessory={
                 link.addedByAssistant ? (
                   <Badge size="xs" tone="neutral">

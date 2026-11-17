@@ -1056,7 +1056,7 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 192_923): the same `role` the external half above pays for, on a tool both
   // surfaces list, so both totals moved by the identical amount.
   // 193_200 → 195_000 for #17091, measured at 194_985 B (+1_869 over develop's
-  // 193_116): the four `portal.projectLinks.*` tools, so the Assistant can keep a
+  // 193_116): the four `project.links.*` tools, so the Assistant can keep a
   // project's launchpad links. Only the listing advertises an output schema;
   // the writes answer with the same link without advertising it, and their
   // argument descriptions were trimmed first. Assistant-only, so the external

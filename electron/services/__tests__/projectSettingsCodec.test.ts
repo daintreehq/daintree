@@ -40,10 +40,10 @@ describe("decode", () => {
     });
   });
 
-  it("keeps only Portal links a change could have written (#17091)", () => {
+  it("keeps only project links a change could have written (#17091)", () => {
     const result = decode({
       runCommands: [],
-      portalLinks: [
+      links: [
         { id: "a", title: "Staging", url: "https://staging.example.com", addedByAssistant: true },
         { id: "b", title: "LAN", url: "http://10.0.0.5:8080", addedByAssistant: true },
         { id: "a", title: "Repeat", url: "https://repeat.example.com" },
@@ -52,7 +52,7 @@ describe("decode", () => {
         "https://bare.example.com",
       ],
     });
-    expect(result.ok && result.settings.portalLinks).toEqual([
+    expect(result.ok && result.settings.links).toEqual([
       {
         id: "a",
         title: "Staging",
@@ -62,6 +62,32 @@ describe("decode", () => {
       // The Assistant can't add a LAN address over http, so the link is the user's.
       { id: "b", title: "LAN", url: "http://10.0.0.5:8080/" },
     ]);
+  });
+
+  it("reads links stored as portalLinks, ids and the Assistant's marker kept (#17243)", () => {
+    const legacy = [
+      { id: "a", title: "Staging", url: "https://staging.example.com/", addedByAssistant: true },
+      { id: "b", title: "Prod", url: "https://prod.example.com/" },
+    ];
+    for (const envelope of [
+      { runCommands: [], portalLinks: legacy },
+      { _schemaVersion: PROJECT_SETTINGS_SCHEMA_VERSION, runCommands: [], portalLinks: legacy },
+    ]) {
+      const result = decode(envelope);
+      expect(result.ok && result.settings.links).toEqual(legacy);
+      expect(result.ok && "portalLinks" in result.settings).toBe(false);
+    }
+  });
+
+  it("prefers a links list, even an empty one, over a stale portalLinks (#17243)", () => {
+    const portalLinks = [{ id: "old", title: "Old", url: "https://old.example.com/" }];
+    expect(decode({ runCommands: [], links: [], portalLinks })).toEqual({
+      ok: true,
+      settings: expect.objectContaining({ links: [] }),
+    });
+    const kept = [{ id: "new", title: "New", url: "https://new.example.com/" }];
+    const result = decode({ runCommands: [], links: kept, portalLinks });
+    expect(result.ok && result.settings.links).toEqual(kept);
   });
 
   it("returns empty defaults for non-object input", () => {
@@ -406,6 +432,20 @@ describe("encodeEnvelope", () => {
     expect(enc.exposeDaintreeMcpToAgents).toBeUndefined();
     expect(enc.githubRemote).toBeUndefined();
     expect(enc.forgeRemote).toBe("upstream");
+  });
+
+  it("never writes a portalLinks key a passthrough save payload carries (#17243)", () => {
+    const links = [{ id: "a", title: "Staging", url: "https://staging.example.com/" }];
+    const parsed = ProjectSettingsSaveSchema.safeParse({
+      runCommands: [],
+      links,
+      portalLinks: [{ id: "x", title: "Evil", url: "https://evil.example.com/" }],
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    const enc = encodeEnvelope(parsed.data as unknown as Parameters<typeof encodeEnvelope>[0]);
+    expect("portalLinks" in enc).toBe(false);
+    expect(enc.links).toEqual(links);
   });
 
   it("strips a retired commandOverrides key a passthrough save payload still carries (#15759)", () => {

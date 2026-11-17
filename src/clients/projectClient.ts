@@ -11,8 +11,8 @@ import type {
   RecipeNameCollision,
   TerminalSnapshot,
   TabGroup,
-  ProjectPortalLinksChangePayload,
-  ProjectPortalLinksChangeResult,
+  ProjectLinksChangePayload,
+  ProjectLinksChangeResult,
 } from "@shared/types";
 import type { NotificationSettings } from "@shared/types/ipc/api";
 import type {
@@ -290,12 +290,10 @@ export const projectClient = {
     return window.electron.project.saveSettings(projectId, settings);
   },
 
-  changePortalLinks: async (
-    payload: ProjectPortalLinksChangePayload
-  ): Promise<ProjectPortalLinksChangeResult> => {
+  changeLinks: async (payload: ProjectLinksChangePayload): Promise<ProjectLinksChangeResult> => {
     invalidateProjectSettingsCache(payload.projectId);
     try {
-      return await window.electron.projectPortalLinks.change(payload);
+      return await window.electron.projectLinks.change(payload);
     } finally {
       // A read that landed while Main was writing may hold the file from before.
       invalidateProjectSettingsCache(payload.projectId);

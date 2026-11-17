@@ -1,13 +1,13 @@
 import type {
-  ProjectPortalLink,
-  ProjectPortalLinkActor,
-  ProjectPortalLinkChange,
-  ProjectPortalLinksChangeResult,
-} from "../types/portal.js";
+  ProjectLink,
+  ProjectLinkActor,
+  ProjectLinkChange,
+  ProjectLinksChangeResult,
+} from "../types/projectLinks.js";
 
-export const MAX_PROJECT_PORTAL_LINKS = 50;
-export const MAX_PROJECT_PORTAL_LINK_TITLE_LENGTH = 80;
-export const MAX_PROJECT_PORTAL_LINK_URL_LENGTH = 2048;
+export const MAX_PROJECT_LINKS = 50;
+export const MAX_PROJECT_LINK_TITLE_LENGTH = 80;
+export const MAX_PROJECT_LINK_URL_LENGTH = 2048;
 
 // Literal names only: anything else on plain http, a LAN address included,
 // is a page the Assistant could be steered to that nobody can vouch for.
@@ -17,11 +17,11 @@ const ASSISTANT_HTTP_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
 
 /** Why `title` can't name a project link, or null when it can. */
-export function projectPortalLinkTitleProblem(title: string): string | null {
+export function projectLinkTitleProblem(title: string): string | null {
   const trimmed = title.trim();
   if (!trimmed) return "Enter a name for the link";
-  if (trimmed.length > MAX_PROJECT_PORTAL_LINK_TITLE_LENGTH) {
-    return `A link's name can be at most ${MAX_PROJECT_PORTAL_LINK_TITLE_LENGTH} characters`;
+  if (trimmed.length > MAX_PROJECT_LINK_TITLE_LENGTH) {
+    return `A link's name can be at most ${MAX_PROJECT_LINK_TITLE_LENGTH} characters`;
   }
   if (CONTROL_CHARACTERS.test(trimmed)) return "A link's name can't hold a line break";
   return null;
@@ -34,16 +34,16 @@ export function projectPortalLinkTitleProblem(title: string): string | null {
  * own custom links may. Neither may carry a username or password, which would
  * be stored in plain settings.
  */
-export function parseProjectPortalLinkUrl(
+export function parseProjectLinkUrl(
   url: string,
-  actor: ProjectPortalLinkActor
+  actor: ProjectLinkActor
 ): { ok: true; href: string } | { ok: false; message: string } {
   const trimmed = url.trim();
   if (!trimmed) return { ok: false, message: "Enter the link's URL" };
-  if (trimmed.length > MAX_PROJECT_PORTAL_LINK_URL_LENGTH) {
+  if (trimmed.length > MAX_PROJECT_LINK_URL_LENGTH) {
     return {
       ok: false,
-      message: `A link's URL can be at most ${MAX_PROJECT_PORTAL_LINK_URL_LENGTH} characters`,
+      message: `A link's URL can be at most ${MAX_PROJECT_LINK_URL_LENGTH} characters`,
     };
   }
   let parsed: URL;
@@ -75,10 +75,10 @@ export function parseProjectPortalLinkUrl(
       message: "An http:// link can only point at localhost or 127.0.0.1; use https://",
     };
   }
-  if (parsed.href.length > MAX_PROJECT_PORTAL_LINK_URL_LENGTH) {
+  if (parsed.href.length > MAX_PROJECT_LINK_URL_LENGTH) {
     return {
       ok: false,
-      message: `A link's URL can be at most ${MAX_PROJECT_PORTAL_LINK_URL_LENGTH} characters`,
+      message: `A link's URL can be at most ${MAX_PROJECT_LINK_URL_LENGTH} characters`,
     };
   }
   return { ok: true, href: parsed.href };
@@ -89,21 +89,21 @@ export function parseProjectPortalLinkUrl(
  * of the wrong shape, repeated ids, and addresses no writer accepts are
  * dropped, as is a marker on a link the Assistant could not have added.
  */
-export function sanitizeProjectPortalLinks(raw: unknown): ProjectPortalLink[] | undefined {
+export function sanitizeProjectLinks(raw: unknown): ProjectLink[] | undefined {
   if (!Array.isArray(raw)) return undefined;
-  const links: ProjectPortalLink[] = [];
+  const links: ProjectLink[] = [];
   const ids = new Set<string>();
   for (const entry of raw) {
-    if (links.length >= MAX_PROJECT_PORTAL_LINKS) break;
+    if (links.length >= MAX_PROJECT_LINKS) break;
     if (!entry || typeof entry !== "object") continue;
     const { id, title, url, addedByAssistant } = entry as Record<string, unknown>;
     if (typeof id !== "string" || !id || ids.has(id)) continue;
-    if (typeof title !== "string" || projectPortalLinkTitleProblem(title)) continue;
+    if (typeof title !== "string" || projectLinkTitleProblem(title)) continue;
     if (typeof url !== "string") continue;
-    const parsed = parseProjectPortalLinkUrl(url, "user");
+    const parsed = parseProjectLinkUrl(url, "user");
     if (!parsed.ok) continue;
     const byAssistant =
-      addedByAssistant === true && parseProjectPortalLinkUrl(url, "assistant").ok === true;
+      addedByAssistant === true && parseProjectLinkUrl(url, "assistant").ok === true;
     ids.add(id);
     links.push({
       id,
@@ -120,25 +120,25 @@ export function sanitizeProjectPortalLinks(raw: unknown): ProjectPortalLink[] | 
  * disk. The Assistant may only change or remove a link it added and nobody
  * has edited since; a change made by hand takes the link over.
  */
-export function applyProjectPortalLinkChange(
-  links: readonly ProjectPortalLink[],
-  change: ProjectPortalLinkChange,
-  actor: ProjectPortalLinkActor,
+export function applyProjectLinkChange(
+  links: readonly ProjectLink[],
+  change: ProjectLinkChange,
+  actor: ProjectLinkActor,
   createId: () => string
-): ProjectPortalLinksChangeResult {
+): ProjectLinksChangeResult {
   if (change.op === "add") {
-    const titleProblem = projectPortalLinkTitleProblem(change.title);
+    const titleProblem = projectLinkTitleProblem(change.title);
     if (titleProblem) return { saved: false, code: "invalid-title", message: titleProblem };
-    const url = parseProjectPortalLinkUrl(change.url, actor);
+    const url = parseProjectLinkUrl(change.url, actor);
     if (!url.ok) return { saved: false, code: "invalid-url", message: url.message };
-    if (links.length >= MAX_PROJECT_PORTAL_LINKS) {
+    if (links.length >= MAX_PROJECT_LINKS) {
       return {
         saved: false,
         code: "limit",
-        message: `This project already has ${MAX_PROJECT_PORTAL_LINKS} links`,
+        message: `This project already has ${MAX_PROJECT_LINKS} links`,
       };
     }
-    const link: ProjectPortalLink = {
+    const link: ProjectLink = {
       id: createId(),
       title: change.title.trim(),
       url: url.href,
@@ -168,17 +168,17 @@ export function applyProjectPortalLinkChange(
 
   let title = current.title;
   if (change.title !== undefined) {
-    const titleProblem = projectPortalLinkTitleProblem(change.title);
+    const titleProblem = projectLinkTitleProblem(change.title);
     if (titleProblem) return { saved: false, code: "invalid-title", message: titleProblem };
     title = change.title.trim();
   }
   let url = current.url;
   if (change.url !== undefined) {
-    const parsed = parseProjectPortalLinkUrl(change.url, actor);
+    const parsed = parseProjectLinkUrl(change.url, actor);
     if (!parsed.ok) return { saved: false, code: "invalid-url", message: parsed.message };
     url = parsed.href;
   }
-  const link: ProjectPortalLink = {
+  const link: ProjectLink = {
     id: current.id,
     title,
     url,
@@ -190,7 +190,7 @@ export function applyProjectPortalLinkChange(
 }
 
 /** A link's host as the launchpad prints it beside the name, so an odd address shows before a click. */
-export function portalLinkHost(url: string): string {
+export function linkHost(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, "") || url;
   } catch {

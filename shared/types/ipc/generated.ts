@@ -3720,6 +3720,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./project.js").ProjectHistoryTarget | null;
   };
+  "project-links:change": {
+    args: [payload: import("../projectLinks.js").ProjectLinksChangePayload];
+    result: import("../projectLinks.js").ProjectLinksChangeResult;
+  };
   "project-match:find": {
     args: [payload: import("./projectMatch.js").FindProjectMatchPayload];
     result: import("./projectMatch.js").ProjectMatchCandidate[];
@@ -3735,10 +3739,6 @@ export interface GeneratedIpcInvokeMap {
   "project-match:take-pending-setup": {
     args: [payload: import("./projectMatch.js").TakePendingHostSetupPayload];
     result: import("./projectMatch.js").PendingHostSetup | null;
-  };
-  "project-portal-links:change": {
-    args: [payload: import("../portal.js").ProjectPortalLinksChangePayload];
-    result: import("../portal.js").ProjectPortalLinksChangeResult;
   };
   "project-presence:get-snapshot": {
     args: [];

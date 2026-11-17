@@ -80,7 +80,7 @@ import { registerCanopyHandlers } from "./handlers/canopy.js";
 import { registerCanopyWindowHandlers } from "./handlers/canopyWindow.js";
 import { registerVoiceInputHandlers } from "./handlers/voiceInput.js";
 import { registerVoiceDictionaryHandlers } from "./handlers/voiceDictionary.js";
-import { registerProjectPortalLinksHandlers } from "./handlers/projectPortalLinks.js";
+import { registerProjectLinksHandlers } from "./handlers/projectLinks.js";
 import { registerRecentDictationsHandlers } from "./handlers/recentDictations.js";
 import { registerMcpServerHandlers } from "./handlers/mcpServer.js";
 import { registerHelpAssistantHandlers } from "./handlers/helpAssistant.js";
@@ -276,7 +276,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerCanopyWindowHandlers());
     register(() => registerVoiceInputHandlers(deps));
     register(() => registerVoiceDictionaryHandlers());
-    register(() => registerProjectPortalLinksHandlers());
+    register(() => registerProjectLinksHandlers());
     register(() => registerRecentDictationsHandlers());
     register(() => registerMcpServerHandlers());
     register(() => registerHelpAssistantHandlers());

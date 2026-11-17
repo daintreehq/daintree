@@ -1,18 +1,18 @@
 import { describe, expect, it } from "vitest";
-import type { ProjectPortalLink } from "../../types/portal.js";
+import type { ProjectLink } from "../../types/projectLinks.js";
 import {
-  MAX_PROJECT_PORTAL_LINKS,
-  applyProjectPortalLinkChange,
-  parseProjectPortalLinkUrl,
-  portalLinkHost,
-} from "../projectPortalLinks.js";
+  MAX_PROJECT_LINKS,
+  applyProjectLinkChange,
+  parseProjectLinkUrl,
+  linkHost,
+} from "../projectLinks.js";
 
 const ids = () => {
   let next = 0;
   return () => `id-${++next}`;
 };
 
-describe("parseProjectPortalLinkUrl (#17091)", () => {
+describe("parseProjectLinkUrl (#17091)", () => {
   it.each([
     ["https://staging.example.com", "https://staging.example.com/"],
     ["https://example.com:8443/ci?x=1", "https://example.com:8443/ci?x=1"],
@@ -22,7 +22,7 @@ describe("parseProjectPortalLinkUrl (#17091)", () => {
     // WHATWG normalizes these spellings to the loopback address itself.
     ["http://127.1/", "http://127.0.0.1/"],
   ])("lets the Assistant add %s", (url, href) => {
-    expect(parseProjectPortalLinkUrl(url, "assistant")).toEqual({ ok: true, href });
+    expect(parseProjectLinkUrl(url, "assistant")).toEqual({ ok: true, href });
   });
 
   it.each([
@@ -39,27 +39,27 @@ describe("parseProjectPortalLinkUrl (#17091)", () => {
     "staging.example.com",
     "",
   ])("refuses the Assistant %s", (url) => {
-    expect(parseProjectPortalLinkUrl(url, "assistant").ok).toBe(false);
+    expect(parseProjectLinkUrl(url, "assistant").ok).toBe(false);
   });
 
   it("lets the user add any http or https address, but no other scheme or credentials", () => {
-    expect(parseProjectPortalLinkUrl("http://10.0.0.5:8080", "user")).toEqual({
+    expect(parseProjectLinkUrl("http://10.0.0.5:8080", "user")).toEqual({
       ok: true,
       href: "http://10.0.0.5:8080/",
     });
-    expect(parseProjectPortalLinkUrl("javascript:alert(1)", "user").ok).toBe(false);
-    expect(parseProjectPortalLinkUrl("https://a:b@example.com", "user").ok).toBe(false);
+    expect(parseProjectLinkUrl("javascript:alert(1)", "user").ok).toBe(false);
+    expect(parseProjectLinkUrl("https://a:b@example.com", "user").ok).toBe(false);
   });
 });
 
-describe("applyProjectPortalLinkChange (#17091)", () => {
-  const assistantLink: ProjectPortalLink = {
+describe("applyProjectLinkChange (#17091)", () => {
+  const assistantLink: ProjectLink = {
     id: "mine",
     title: "Staging",
     url: "https://staging.example.com/",
     addedByAssistant: true,
   };
-  const userLink: ProjectPortalLink = {
+  const userLink: ProjectLink = {
     id: "theirs",
     title: "Prod",
     url: "https://prod.example.com/",
@@ -67,13 +67,13 @@ describe("applyProjectPortalLinkChange (#17091)", () => {
 
   it("marks a link the Assistant adds, and not one the user adds", () => {
     const createId = ids();
-    const byAssistant = applyProjectPortalLinkChange(
+    const byAssistant = applyProjectLinkChange(
       [],
       { op: "add", title: "CI", url: "https://ci.example.com" },
       "assistant",
       createId
     );
-    const byUser = applyProjectPortalLinkChange(
+    const byUser = applyProjectLinkChange(
       [],
       { op: "add", title: "CI", url: "https://ci.example.com" },
       "user",
@@ -89,19 +89,19 @@ describe("applyProjectPortalLinkChange (#17091)", () => {
 
   it("refuses a title it can't show and a list at its limit", () => {
     expect(
-      applyProjectPortalLinkChange(
+      applyProjectLinkChange(
         [],
         { op: "add", title: "a\nb", url: "https://x.example.com" },
         "assistant",
         ids()
       )
     ).toMatchObject({ saved: false, code: "invalid-title" });
-    const full = Array.from({ length: MAX_PROJECT_PORTAL_LINKS }, (_, i) => ({
+    const full = Array.from({ length: MAX_PROJECT_LINKS }, (_, i) => ({
       ...userLink,
       id: `l${i}`,
     }));
     expect(
-      applyProjectPortalLinkChange(
+      applyProjectLinkChange(
         full,
         { op: "add", title: "One more", url: "https://x.example.com" },
         "user",
@@ -113,7 +113,7 @@ describe("applyProjectPortalLinkChange (#17091)", () => {
   it("holds the Assistant to its own links for updates and removals", () => {
     const links = [assistantLink, userLink];
     expect(
-      applyProjectPortalLinkChange(
+      applyProjectLinkChange(
         links,
         { op: "update", id: "theirs", title: "Renamed" },
         "assistant",
@@ -121,10 +121,10 @@ describe("applyProjectPortalLinkChange (#17091)", () => {
       )
     ).toMatchObject({ saved: false, code: "not-added-by-assistant" });
     expect(
-      applyProjectPortalLinkChange(links, { op: "remove", id: "theirs" }, "assistant", ids())
+      applyProjectLinkChange(links, { op: "remove", id: "theirs" }, "assistant", ids())
     ).toMatchObject({ saved: false, code: "not-added-by-assistant" });
 
-    const updated = applyProjectPortalLinkChange(
+    const updated = applyProjectLinkChange(
       links,
       { op: "update", id: "mine", url: "https://staging2.example.com" },
       "assistant",
@@ -138,7 +138,7 @@ describe("applyProjectPortalLinkChange (#17091)", () => {
 
   it("holds an Assistant update to the Assistant's address rule", () => {
     expect(
-      applyProjectPortalLinkChange(
+      applyProjectLinkChange(
         [assistantLink],
         { op: "update", id: "mine", url: "http://staging.example.com" },
         "assistant",
@@ -148,7 +148,7 @@ describe("applyProjectPortalLinkChange (#17091)", () => {
   });
 
   it("hands a link the user edits over to the user, out of the Assistant's reach", () => {
-    const edited = applyProjectPortalLinkChange(
+    const edited = applyProjectLinkChange(
       [assistantLink, userLink],
       { op: "update", id: "mine", title: "Staging EU" },
       "user",
@@ -164,7 +164,7 @@ describe("applyProjectPortalLinkChange (#17091)", () => {
       { op: "update", id: "mine", title: "Back" } as const,
       { op: "remove", id: "mine" } as const,
     ]) {
-      expect(applyProjectPortalLinkChange(edited.links, change, "assistant", ids())).toMatchObject({
+      expect(applyProjectLinkChange(edited.links, change, "assistant", ids())).toMatchObject({
         saved: false,
         code: "not-added-by-assistant",
       });
@@ -173,26 +173,28 @@ describe("applyProjectPortalLinkChange (#17091)", () => {
 
   it("undoes the Assistant's add only while the link is still the Assistant's", () => {
     const undo = { op: "remove", id: "mine", onlyIfAddedByAssistant: true } as const;
-    expect(
-      applyProjectPortalLinkChange([userLink, assistantLink], undo, "user", ids())
-    ).toMatchObject({ saved: true, links: [userLink] });
+    expect(applyProjectLinkChange([userLink, assistantLink], undo, "user", ids())).toMatchObject({
+      saved: true,
+      links: [userLink],
+    });
     const takenOver = { ...assistantLink, addedByAssistant: undefined };
-    expect(applyProjectPortalLinkChange([takenOver], undo, "user", ids())).toMatchObject({
+    expect(applyProjectLinkChange([takenOver], undo, "user", ids())).toMatchObject({
       saved: false,
       code: "not-added-by-assistant",
     });
   });
 
   it("says when a link is gone", () => {
-    expect(
-      applyProjectPortalLinkChange([], { op: "remove", id: "gone" }, "user", ids())
-    ).toMatchObject({ saved: false, code: "not-found" });
+    expect(applyProjectLinkChange([], { op: "remove", id: "gone" }, "user", ids())).toMatchObject({
+      saved: false,
+      code: "not-found",
+    });
   });
 });
 
-describe("portalLinkHost", () => {
+describe("linkHost", () => {
   it("prints the host without www, and the text itself when it isn't a URL", () => {
-    expect(portalLinkHost("https://www.example.com/path")).toBe("example.com");
-    expect(portalLinkHost("not a url")).toBe("not a url");
+    expect(linkHost("https://www.example.com/path")).toBe("example.com");
+    expect(linkHost("not a url")).toBe("not a url");
   });
 });

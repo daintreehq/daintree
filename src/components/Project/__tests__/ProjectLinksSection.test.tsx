@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
-import type { ProjectPortalLink, ProjectPortalLinksChangePayload } from "@shared/types";
+import type { ProjectLink, ProjectLinksChangePayload } from "@shared/types";
 
 const { changeMock, getSettingsMock } = vi.hoisted(() => ({
   changeMock: vi.fn(),
@@ -10,7 +10,7 @@ const { changeMock, getSettingsMock } = vi.hoisted(() => ({
 
 vi.mock("@/store/projectSettingsStore", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/store/projectSettingsStore")>()),
-  changeProjectPortalLinks: changeMock,
+  changeProjectLinks: changeMock,
 }));
 vi.mock("@/clients", () => ({
   projectClient: { getSettings: getSettingsMock, detectRunners: vi.fn() },
@@ -18,14 +18,15 @@ vi.mock("@/clients", () => ({
 }));
 vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 
-import { ProjectPortalLinksSection } from "../ProjectPortalLinksSection";
+import { ProjectLinksSection } from "../ProjectLinksSection";
+import { PROJECT_SETTINGS_SECTIONS } from "@/components/Settings/settingsTabRegistry";
 import {
   cleanupProjectSettingsStore,
-  patchCachedProjectPortalLinks,
+  patchCachedProjectLinks,
   useProjectSettingsStore,
 } from "@/store/projectSettingsStore";
 
-const staging: ProjectPortalLink = {
+const staging: ProjectLink = {
   id: "a",
   title: "Staging",
   url: "https://staging.example.com/",
@@ -39,9 +40,9 @@ function input(container: HTMLElement, index: number): HTMLInputElement {
 }
 
 /** Main's answer to a change, landing in the store as the real change does. */
-function mainAnswers(links: ProjectPortalLink[], link: ProjectPortalLink) {
-  changeMock.mockImplementationOnce(async (payload: ProjectPortalLinksChangePayload) => {
-    patchCachedProjectPortalLinks(payload.projectId, links);
+function mainAnswers(links: ProjectLink[], link: ProjectLink) {
+  changeMock.mockImplementationOnce(async (payload: ProjectLinksChangePayload) => {
+    patchCachedProjectLinks(payload.projectId, links);
     return { saved: true, links, link };
   });
 }
@@ -49,7 +50,7 @@ function mainAnswers(links: ProjectPortalLink[], link: ProjectPortalLink) {
 beforeEach(() => {
   useProjectSettingsStore.setState({
     projectId: "proj-1",
-    settings: { runCommands: [], portalLinks: [staging] },
+    settings: { runCommands: [], links: [staging] },
   });
 });
 
@@ -59,10 +60,16 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("ProjectPortalLinksSection (#17091)", () => {
+describe("ProjectLinksSection (#17091)", () => {
   it("shows the project's links with the Assistant's marked", () => {
-    const { getByText } = render(<ProjectPortalLinksSection projectId="proj-1" />);
+    const { container, getByText } = render(<ProjectLinksSection projectId="proj-1" />);
 
+    // The launchpad's settings link and a search hit both scroll to this anchor.
+    const anchor = container.querySelector(".settings-section")?.id;
+    expect(anchor).toBe("project-links");
+    expect(
+      (PROJECT_SETTINGS_SECTIONS["project:general"].sections ?? []).map((s) => s.id)
+    ).toContain(anchor);
     expect(getByText("Staging")).toBeTruthy();
     expect(getByText("staging.example.com")).toBeTruthy();
     expect(getByText("Added by Assistant")).toBeTruthy();
@@ -70,11 +77,9 @@ describe("ProjectPortalLinksSection (#17091)", () => {
   });
 
   it("adds a link by hand, as the user, and lists it", async () => {
-    const ci: ProjectPortalLink = { id: "b", title: "CI", url: "http://10.0.0.5:8080/" };
+    const ci: ProjectLink = { id: "b", title: "CI", url: "http://10.0.0.5:8080/" };
     mainAnswers([staging, ci], ci);
-    const { container, getByRole, getByText } = render(
-      <ProjectPortalLinksSection projectId="proj-1" />
-    );
+    const { container, getByRole, getByText } = render(<ProjectLinksSection projectId="proj-1" />);
 
     fireEvent.change(input(container, 0), { target: { value: "CI" } });
     fireEvent.change(input(container, 1), { target: { value: "http://10.0.0.5:8080" } });
@@ -97,9 +102,7 @@ describe("ProjectPortalLinksSection (#17091)", () => {
       code: "invalid-url",
       message: "The URL must use http:// or https://",
     });
-    const { container, getByRole, getByText } = render(
-      <ProjectPortalLinksSection projectId="proj-1" />
-    );
+    const { container, getByRole, getByText } = render(<ProjectLinksSection projectId="proj-1" />);
 
     fireEvent.change(input(container, 0), { target: { value: "Files" } });
     fireEvent.change(input(container, 1), { target: { value: "ftp://files.example.com" } });
@@ -119,10 +122,10 @@ describe("ProjectPortalLinksSection (#17091)", () => {
   });
 
   it("edits a link as the user, taking it over from the Assistant", async () => {
-    const renamed: ProjectPortalLink = { id: "a", title: "Staging EU", url: staging.url };
+    const renamed: ProjectLink = { id: "a", title: "Staging EU", url: staging.url };
     mainAnswers([renamed], renamed);
     const { container, getByRole, getByText, queryByText } = render(
-      <ProjectPortalLinksSection projectId="proj-1" />
+      <ProjectLinksSection projectId="proj-1" />
     );
 
     fireEvent.click(getByRole("button", { name: "Edit Staging" }));
@@ -141,9 +144,9 @@ describe("ProjectPortalLinksSection (#17091)", () => {
   });
 
   it("reads another project's links for the page, since the store holds only this view's", async () => {
-    getSettingsMock.mockResolvedValueOnce({ runCommands: [], portalLinks: [staging] });
+    getSettingsMock.mockResolvedValueOnce({ runCommands: [], links: [staging] });
 
-    const { findByText } = render(<ProjectPortalLinksSection projectId="proj-2" />);
+    const { findByText } = render(<ProjectLinksSection projectId="proj-2" />);
 
     expect(await findByText("Staging")).toBeTruthy();
     expect(getSettingsMock).toHaveBeenCalledWith("proj-2");
@@ -152,11 +155,11 @@ describe("ProjectPortalLinksSection (#17091)", () => {
   it("drops a failed read's error once the page shows a project it can read", async () => {
     getSettingsMock.mockRejectedValueOnce(new Error("disk unreadable"));
     const { findByText, queryByText, rerender } = render(
-      <ProjectPortalLinksSection projectId="proj-2" />
+      <ProjectLinksSection projectId="proj-2" />
     );
     expect(await findByText("Couldn't load the links")).toBeTruthy();
 
-    rerender(<ProjectPortalLinksSection projectId="proj-1" />);
+    rerender(<ProjectLinksSection projectId="proj-1" />);
 
     expect(queryByText("Couldn't load the links")).toBeNull();
   });

@@ -13,10 +13,10 @@ import type {
 } from "../types/index.js";
 import type { NotificationSettings, VoiceDictionaryEntry } from "../../shared/types/ipc/api.js";
 import type {
-  ProjectPortalLinkActor,
-  ProjectPortalLinkChange,
-  ProjectPortalLinksChangeResult,
-} from "../../shared/types/portal.js";
+  ProjectLinkActor,
+  ProjectLinkChange,
+  ProjectLinksChangeResult,
+} from "../../shared/types/projectLinks.js";
 import type { AgentPreset } from "../../shared/config/agentRegistry.js";
 import path from "path";
 import fs from "fs/promises";
@@ -2072,12 +2072,12 @@ export class ProjectStore {
     return this.settingsManager.addBrowserAllowedHost(projectId, hostname);
   }
 
-  async changePortalLinks(
+  async changeLinks(
     projectId: string,
-    actor: ProjectPortalLinkActor,
-    change: ProjectPortalLinkChange
-  ): Promise<ProjectPortalLinksChangeResult> {
-    return this.settingsManager.changePortalLinks(projectId, actor, change);
+    actor: ProjectLinkActor,
+    change: ProjectLinkChange
+  ): Promise<ProjectLinksChangeResult> {
+    return this.settingsManager.changeLinks(projectId, actor, change);
   }
 
   /**
