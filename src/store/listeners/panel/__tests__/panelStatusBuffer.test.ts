@@ -327,3 +327,56 @@ describe("panelStatusBuffer — held-duration batching", () => {
     expect(t?.heldDurationMs).toBe(6000);
   });
 });
+
+describe("panelStatusBuffer — no-op frames", () => {
+  it("does not copy the panel map when every patch is redundant", () => {
+    for (let i = 0; i < 100; i++) seedPanel(`t${i}`);
+    seedPanel("t0", {
+      activityHeadline: "h",
+      activityStatus: "working",
+      activityType: "interactive",
+      lastCommand: "ls",
+      runtimeStatus: "exited",
+    });
+
+    let copies = 0;
+    const raw = usePanelStore.getState().panelsById;
+    const proxied = new Proxy(raw, {
+      ownKeys(target) {
+        copies++;
+        return Reflect.ownKeys(target);
+      },
+    });
+    usePanelStore.setState({ panelsById: proxied });
+
+    enqueueActivityUpdate("t0", "h", "working", "interactive", "ls");
+    enqueueFlowStatusUpdate("t0", "paused", 5);
+    enqueueActivityUpdate("missing", "h", "working", "interactive", "ls");
+    raf.flushAll();
+
+    expect(copies).toBe(0);
+    expect(usePanelStore.getState().panelsById).toBe(proxied);
+  });
+
+  it("copies once for several real changes in one frame", () => {
+    for (let i = 0; i < 3; i++) seedPanel(`t${i}`);
+    let copies = 0;
+    const proxied = new Proxy(usePanelStore.getState().panelsById, {
+      ownKeys(target) {
+        copies++;
+        return Reflect.ownKeys(target);
+      },
+    });
+    usePanelStore.setState({ panelsById: proxied });
+
+    enqueueActivityUpdate("t0", "a", "working", "interactive", undefined);
+    enqueueActivityUpdate("t1", "b", "working", "interactive", undefined);
+    enqueueFlowStatusUpdate("t0", "paused", 5);
+    raf.flushAll();
+
+    expect(copies).toBe(1);
+    expect(getPtyPanel("t0")?.activityHeadline).toBe("a");
+    expect(getPtyPanel("t0")?.flowStatus).toBe("paused");
+    expect(getPtyPanel("t1")?.activityHeadline).toBe("b");
+  });
+});
