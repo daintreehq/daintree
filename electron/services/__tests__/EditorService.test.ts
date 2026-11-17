@@ -133,11 +133,12 @@ describe("EditorService.discover", () => {
     );
   });
 
-  it("takes the first PATH directory holding a launcher, then the next once it is gone", async () => {
+  it("takes the first PATH directory holding a launcher even when a later one answers sooner", async () => {
     Object.defineProperty(process, "platform", { value: "linux" });
     process.env.PATH = "/slow/bin:/fast/bin";
     const present = new Set(["/slow/bin/idea", "/fast/bin/idea"]);
     fsMock.promises.stat.mockImplementation(async (filePath: string) => {
+      if (filePath.startsWith("/slow/")) await new Promise((r) => setTimeout(r, 20));
       if (present.has(filePath)) return { isFile: () => true };
       throw new Error("ENOENT");
     });

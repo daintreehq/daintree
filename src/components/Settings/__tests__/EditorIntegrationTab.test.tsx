@@ -319,6 +319,18 @@ describe("EditorIntegrationTab", () => {
       expect((screen.getByLabelText("Editor") as HTMLSelectElement).value).toBe("webstorm");
     });
 
+    it("lists a pre-split machine default beside a project's own choice", async () => {
+      getConfigMock.mockResolvedValue({
+        preferredEditor: { id: "vscode" },
+        defaultEditor: { id: "webstorm" },
+        discoveredEditors: [{ id: "vscode", available: true, executablePath: "/usr/bin/code" }],
+      });
+      await renderLoadedTab();
+
+      expect((screen.getByLabelText("Editor") as HTMLSelectElement).value).toBe("vscode");
+      expect(optionText("webstorm")).toBe("Any JetBrains IDE (not found)");
+    });
+
     it("lists a pre-split machine default the project inherits", async () => {
       getConfigMock.mockResolvedValue({
         preferredEditor: null,
