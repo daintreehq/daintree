@@ -100,13 +100,17 @@ export function CloudMachineSection({
       ? stoppedBillingSentence(provider)
       : null;
   const actionError = machines.errorFor(hostId) ?? error;
+  // While its provider is missing nothing here can reach the machine, so why comes first.
   const shownError =
-    actionError ?? (status.operation === null ? (status.lastError?.message ?? null) : null);
+    actionError ??
+    status.providerUnavailable ??
+    (status.operation === null ? (status.lastError?.message ?? null) : null);
   const tunnel = provider?.capabilities.tunnel ?? null;
   // Offered only beside the error that names the command, never beside another one.
   const tunnelMissing =
     tunnel !== null &&
     actionError === null &&
+    status.providerUnavailable === null &&
     status.operation === null &&
     status.lastError?.code === "ssh-tunnel-command-missing";
   const presetValue =

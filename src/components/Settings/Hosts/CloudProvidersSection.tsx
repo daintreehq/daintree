@@ -17,7 +17,11 @@ import { credentialsNoun, sentenceCase } from "@/components/Hosts/cloud/cloudHos
 import { useCloudHosts } from "@/components/Hosts/cloud/cloudHostsState";
 import { pluralize } from "@/lib/pluralize";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
-import type { CloudAccountSummary, CloudProviderInfo } from "@shared/types/cloudHosts";
+import {
+  canConnectCloudAccount,
+  type CloudAccountSummary,
+  type CloudProviderInfo,
+} from "@shared/types/cloudHosts";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
 import { ConnectCloudAccountDialog } from "./ConnectCloudAccountDialog";
@@ -58,7 +62,9 @@ export function CloudProvidersSection() {
   const [removeError, setRemoveError] = useState<string | null>(null);
 
   const providers = snapshot.providers;
-  const usable = providers.filter((provider) => provider.unsupportedReason === null);
+  // A plugin's provider isn't offered for a new account until it can ask consent (#17352).
+  const connectable = providers.filter((provider) => canConnectCloudAccount(provider.id));
+  const usable = connectable.filter((provider) => provider.unsupportedReason === null);
   const accounts = snapshot.accounts;
   const providerFor = (account: CloudAccountSummary) =>
     providers.find((provider) => provider.id === account.providerId) ?? null;
@@ -141,7 +147,7 @@ export function CloudProvidersSection() {
       </DropdownMenu>
     );
 
-  const unsupported = providers.length > 0 && usable.length === 0;
+  const unsupported = connectable.length > 0 && usable.length === 0;
 
   return (
     <SettingsSection
@@ -166,7 +172,7 @@ export function CloudProvidersSection() {
             {!loaded
               ? "Loading cloud accounts"
               : unsupported
-                ? providers[0]!.unsupportedReason
+                ? connectable[0]!.unsupportedReason
                 : "Connect a cloud provider account to create machines that run projects and agents, then stop or delete them when you're done"}
           </SettingsEmptyRow>
         ) : (
@@ -177,6 +183,7 @@ export function CloudProvidersSection() {
             const validation = account.validation;
             const rowError =
               rowErrors[account.id] ??
+              account.providerUnavailable ??
               (validation.status === "invalid" ? validation.detail : undefined);
             return (
               <SettingsRow

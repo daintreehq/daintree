@@ -31,6 +31,7 @@ import {
   unregisterWorktreeSetupStepHandler,
 } from "../worktreeSetupStepRegistry.js";
 import { bindSearchProviderImpl } from "./pluginSearchProviderRegistry.js";
+import { bindPluginCloudProvider } from "./pluginCloudProviders.js";
 import {
   registerContextProviderImpl,
   unregisterContextProviderImpl,
@@ -163,6 +164,7 @@ export function buildContributionsHostApi(
   | "registerForgeProvider"
   | "registerFileDecorationProvider"
   | "registerWorktreeDeleteNotesProvider"
+  | "registerCloudProvider"
   | "registerWorktreeSetupStep"
   | "registerSearchProvider"
   | "registerContextProvider"
@@ -477,6 +479,38 @@ export function buildContributionsHostApi(
       // against idle disposal, and the check exists so the plugin need not stay
       // loaded. Unload and worker teardown clear the binding instead.
       return Promise.resolve(() => unregisterWorktreeDeleteNotesBinding(pluginId, binding));
+    },
+    registerCloudProvider: (descriptor, impl) => {
+      if (isRevoked()) {
+        throw new Error(
+          `Plugin "${pluginId}" host revoked: registerCloudProvider called after activate() returned or timed out`
+        );
+      }
+      if (!descriptor || typeof descriptor !== "object" || typeof descriptor.id !== "string") {
+        throw new Error(
+          `Plugin "${pluginId}" registerCloudProvider: descriptor.id must be a non-empty string`
+        );
+      }
+      if (!impl || typeof impl !== "object") {
+        throw new Error(`Plugin "${pluginId}" registerCloudProvider: impl must be an object`);
+      }
+      // A project's plugin never owns a provider: it would let a repository create machines.
+      if (boundProjectId !== null) {
+        throw new Error(
+          `Plugin "${pluginId}" registerCloudProvider: a project plugin can't contribute cloud providers`
+        );
+      }
+      let dispose: () => void;
+      try {
+        dispose = bindPluginCloudProvider(pluginId, descriptor.id, impl);
+      } catch (err) {
+        throw new Error(
+          `Plugin "${pluginId}" registerCloudProvider: ${formatErrorMessage(err, "refused")}`
+        );
+      }
+      // Like the delete notes check, not tracked with event subscriptions: those
+      // hold a worker against idle disposal, and the next call activates it again.
+      return Promise.resolve(dispose);
     },
     registerWorktreeSetupStep: (stepId, handler) => {
       if (isRevoked()) {

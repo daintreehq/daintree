@@ -12,6 +12,11 @@ import type {
   ResourceRef,
 } from "./forge.js";
 import type { PluginArtifactApi } from "./pluginArtifacts.js";
+import type {
+  CloudProviderContribution,
+  CloudProviderDescriptor,
+  CloudProviderImpl,
+} from "./pluginCloudProvider.js";
 export type {
   PluginArtifact,
   PluginArtifactApi,
@@ -3122,6 +3127,14 @@ export interface PluginManifest {
      * schema's `.default([])`, like `launchEntries`.
      */
     worktreeDeleteNotes?: WorktreeDeleteNotesContribution[];
+    /**
+     * Cloud providers an installed plugin runs in its worker (#17351), each
+     * registered as `{pluginId}.{id}`. Optional in the type but always
+     * materialized by the manifest schema's `.default([])`. Refused for a
+     * project plugin: a repository must never add a provider that creates
+     * machines.
+     */
+    cloudProviders?: CloudProviderContribution[];
     /**
      * Plugin-contributed file editors (#12323): an extra, writable mode on the
      * host's file panel for the declared extensions. Built-in plugins only in
@@ -7412,6 +7425,33 @@ export interface PluginActivationApi {
   registerWorktreeDeleteNotesProvider(
     descriptor: WorktreeDeleteNotesProviderDescriptor,
     impl: WorktreeDeleteNotesProviderImpl
+  ): Promise<() => void>;
+  /**
+   * Bind the implementation of a cloud provider the manifest declares in
+   * `contributes.cloudProviders` (#17351). Daintree lists the provider, and
+   * names its accounts and machines, from the manifest; every call it makes
+   * of the provider (checking credentials, the catalog, creating, starting,
+   * stopping and deleting machines, SSH access) comes to `impl` here. A
+   * plugin that isn't running is activated for the call.
+   *
+   * Each call has 30 seconds, activation included. A late answer, a crash or
+   * a throw is a provider error on that account; a throw whose `code` is a
+   * `CloudHostErrorCode` keeps that code. The impl must have every method the
+   * declared capabilities need: `renewLifetime` for a renewable lifetime,
+   * `authorizeSsh` or `sshAccess` for the declared SSH key timing.
+   *
+   * Returns a disposer that unbinds the impl; the binding also goes when the
+   * plugin's worker stops or the plugin unloads. Must be called during
+   * `activate()`. Calling it again with the same id replaces the binding, and
+   * the older disposer becomes inert.
+   *
+   * @throws {Error} If called after activation resolves or times out, with an
+   *   id `contributes.cloudProviders` does not declare, or with an impl
+   *   missing a method the declaration needs.
+   */
+  registerCloudProvider(
+    descriptor: CloudProviderDescriptor,
+    impl: CloudProviderImpl
   ): Promise<() => void>;
   /**
    * Subscribe to active-worktree changes. The callback fires with the new

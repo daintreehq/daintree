@@ -60,4 +60,5 @@ export function validateUniqueIdsAfterContextProviders(
   reportDuplicateIds(ctx, "databases", manifest.contributes.databases);
   reportDuplicateIds(ctx, "worktreeSetupSteps", manifest.contributes.worktreeSetupSteps);
   reportDuplicateIds(ctx, "setup", manifest.contributes.setup);
+  reportDuplicateIds(ctx, "cloudProviders", manifest.contributes.cloudProviders);
 }

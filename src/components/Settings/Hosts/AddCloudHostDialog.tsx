@@ -19,6 +19,7 @@ import { cloudHostsClient } from "@/clients/cloudHostsClient";
 import { cloudStatusFor, useCloudHosts } from "@/components/Hosts/cloud/cloudHostsState";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import {
+  canConnectCloudAccount,
   cloudMachineLabel,
   type CloudProviderInfo,
   type CloudResourceSummary,
@@ -89,9 +90,11 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
   );
   const [accountId, setAccountId] = useState<string | null>(accounts[0]?.id ?? null);
   const account = accounts.find((entry) => entry.id === accountId) ?? accounts[0] ?? null;
+  // A plugin's provider isn't offered for a new account until it can ask consent (#17352).
+  const connectable = usable.filter((entry) => canConnectCloudAccount(entry.id));
   const provider = account
     ? (usable.find((entry) => entry.id === account.providerId) ?? null)
-    : (usable[0] ?? null);
+    : (connectable[0] ?? null);
   const [mode, setMode] = useState<Mode>("create");
   const [name, setName] = useState("");
   const [resources, setResources] = useState<CloudResourceSummary[] | null>(null);
@@ -230,10 +233,10 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     body = (
       <div className="space-y-3">
         <p className="text-sm text-text-secondary">
-          {`Connect a cloud provider account first. Daintree uses its ${usable.length > 0 && usable.every((entry) => credentialsNoun(entry) === "key") ? "API key" : "credentials"} to create, start${usable.every((entry) => entry.capabilities.deletion) ? ", stop and delete" : " and stop"} machines; the account pays for them.`}
+          {`Connect a cloud provider account first. Daintree uses its ${connectable.length > 0 && connectable.every((entry) => credentialsNoun(entry) === "key") ? "API key" : "credentials"} to create, start${connectable.every((entry) => entry.capabilities.deletion) ? ", stop and delete" : " and stop"} machines; the account pays for them.`}
         </p>
         <div className="flex flex-wrap gap-2">
-          {usable.map((entry) => (
+          {connectable.map((entry) => (
             <Button key={entry.id} variant="outline" size="sm" onClick={() => setConnecting(entry)}>
               Connect {entry.name} account
             </Button>
