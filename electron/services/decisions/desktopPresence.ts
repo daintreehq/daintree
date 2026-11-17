@@ -1,6 +1,7 @@
 import { powerMonitor } from "electron";
 import { subscribePowerPolicy } from "../../window/powerPolicy.js";
 import { readUserPresence, type UserPresence } from "../userPresence.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 
 /**
  * How often presence is read and reported while it may be: the client library
@@ -133,7 +134,7 @@ export class DesktopPresence {
     } catch (error) {
       console.warn(
         "[Decisions] Presence couldn't be reported:",
-        error instanceof Error ? error.message : "error"
+        formatErrorMessage(error, "error")
       );
     }
   }

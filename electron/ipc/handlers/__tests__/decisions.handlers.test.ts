@@ -226,11 +226,10 @@ const decisionsEntry = vi.hoisted(() => ({
         ? { state: "connected", terminalSnapshots: true, revision: 1 }
         : { state: "connected", revision: 1 }
   ),
-  setDecisionsHoldPhonePushes: vi.fn(
-    async (enabled: boolean): Promise<DecisionsStatus> =>
-      enabled
-        ? { state: "connected", revision: 1 }
-        : { state: "connected", holdPhonePushes: false, revision: 1 }
+  setDecisionsHoldPhonePushes: vi.fn(async (enabled: boolean): Promise<DecisionsStatus> =>
+    enabled
+      ? { state: "connected", revision: 1 }
+      : { state: "connected", holdPhonePushes: false, revision: 1 }
   ),
   // Asks for a path as the real entry does, and answers with what it was given.
   exportRecoveryKit: vi.fn(
