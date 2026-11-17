@@ -1,6 +1,6 @@
 import type React from "react";
-import { useCallback, useEffect, useMemo } from "react";
-import type { Dispatch, Ref, RefObject, SetStateAction } from "react";
+import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef } from "react";
+import type { ComponentPropsWithoutRef, Dispatch, Ref, RefObject, SetStateAction } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { GitStatus, StagingFileEntry } from "@shared/types";
 import { ChevronDown, ChevronUp, Minus, Plus, SlidersHorizontal } from "lucide-react";
@@ -69,6 +69,12 @@ interface FileSectionProps {
     e: React.MouseEvent
   ) => void;
   onBulkAction: () => void;
+  /**
+   * The bulk button unmounted while it held focus: its section has no rows left
+   * for it to act on. Called from a layout effect, once the commit that removed
+   * it is in the DOM, so the hub can hand focus to what that commit left.
+   */
+  onBulkActionFocusLost?: (section: FileStageRowSection) => void;
   viewedFiles: ReadonlySet<string>;
   onViewedChange: (viewedKey: string, viewed: boolean) => void;
   sectionRef?: Ref<HTMLDivElement>;
@@ -207,6 +213,29 @@ function renderVirtualizedRow(index: number, file: StagingFileEntry, ctx: Sectio
   );
 }
 
+interface BulkActionButtonProps extends ComponentPropsWithoutRef<typeof Button> {
+  onFocusOrphaned: (button: HTMLButtonElement) => void;
+}
+
+/**
+ * The bulk button, as its own component so its unmount is observable: React
+ * runs a deleted component's layout cleanup before it removes the host node, so
+ * a button that held focus is still `activeElement` here. Afterwards there is
+ * only `<body>`, which says nothing about where focus was.
+ */
+function BulkActionButton({ onFocusOrphaned, ...buttonProps }: BulkActionButtonProps) {
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const reportFocusOrphaned = useEffectEvent(onFocusOrphaned);
+  useLayoutEffect(() => {
+    const node = buttonRef.current;
+    if (!node) return;
+    return () => {
+      if (node.ownerDocument.activeElement === node) reportFocusOrphaned(node);
+    };
+  }, []);
+  return <Button {...buttonProps} ref={buttonRef} />;
+}
+
 export function FileSection({
   isStaged,
   files,
@@ -224,6 +253,7 @@ export function FileSection({
   onToggle,
   onRowClick,
   onBulkAction,
+  onBulkActionFocusLost,
   viewedFiles,
   onViewedChange,
   sectionRef,
@@ -368,6 +398,26 @@ export function FileSection({
   // rows for one frame, to unmount them on the next, is exactly the cost this
   // change exists to remove.
   const awaitingScrollParent = virtualized && scrollParent === null;
+
+  // The cleanup only records; focus moves in the layout phase, after every
+  // mutation in the commit, so the hub's target (the composer, enabled by the
+  // same status) is already in its new state. A cleanup whose node is still
+  // connected was a StrictMode replay or an Activity hide, not a removal.
+  const showBulkAction = shownCount > 0;
+  const orphanedBulkButtonRef = useRef<HTMLButtonElement | null>(null);
+  const handleBulkFocusOrphaned = useCallback((button: HTMLButtonElement) => {
+    orphanedBulkButtonRef.current = button;
+  }, []);
+  const reportBulkFocusLost = useEffectEvent(() => onBulkActionFocusLost?.(section));
+  useLayoutEffect(() => {
+    const button = orphanedBulkButtonRef.current;
+    if (!button) return;
+    orphanedBulkButtonRef.current = null;
+    if (button.isConnected) return;
+    const doc = button.ownerDocument;
+    if (doc.activeElement !== null && doc.activeElement !== doc.body) return;
+    reportBulkFocusLost();
+  }, [showBulkAction]);
 
   return (
     <div
@@ -522,8 +572,9 @@ export function FileSection({
                 </DropdownMenuCheckboxItem>
               </DropdownMenuContent>
             </DropdownMenu>
-            {shownCount > 0 && (
-              <Button
+            {showBulkAction && (
+              <BulkActionButton
+                onFocusOrphaned={handleBulkFocusOrphaned}
                 variant="ghost"
                 size="xs"
                 onClick={onBulkAction}
@@ -541,7 +592,7 @@ export function FileSection({
               >
                 <BulkActionIcon aria-hidden="true" />
                 {bulkLabel}
-              </Button>
+              </BulkActionButton>
             )}
           </div>
         </div>

@@ -1431,6 +1431,22 @@ export function ReviewHubContent({
     [fileListExpanded, setFileListExpanded, worktreePath, fileListRef]
   );
 
+  // Where focus goes when a section's bulk button empties its own section.
+  // Staging leaves something to commit, so the message is next; unstaging
+  // leaves the files to pick through, and the list is where that happens.
+  const handleBulkActionFocusLost = useCallback(
+    (section: FileStageRowSection) => {
+      const message =
+        section === "unstaged"
+          ? rootRef.current?.querySelector<HTMLTextAreaElement>(
+              '[data-testid="review-hub-commit-message"]:not(:disabled)'
+            )
+          : null;
+      (message ?? fileListRef.current)?.focus({ preventScroll: true });
+    },
+    [fileListRef]
+  );
+
   const handleReadinessCta = useCallback(
     (cta: ReviewReadinessCta) => {
       switch (cta.kind) {
@@ -2391,6 +2407,7 @@ export function ReviewHubContent({
                                   ? handleUnstageFiltered()
                                   : handleUnstageAll());
                             }}
+                            onBulkActionFocusLost={handleBulkActionFocusLost}
                             viewedFiles={viewedFiles}
                             onViewedChange={handleViewedChange}
                             renderRowMenu={renderRowMenu}
@@ -2428,6 +2445,7 @@ export function ReviewHubContent({
                                   ? handleStageFiltered()
                                   : handleStageAll());
                             }}
+                            onBulkActionFocusLost={handleBulkActionFocusLost}
                             viewedFiles={viewedFiles}
                             onViewedChange={handleViewedChange}
                             renderRowMenu={renderRowMenu}
