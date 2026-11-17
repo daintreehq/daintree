@@ -184,6 +184,10 @@ export function HostIdleTimeRow({
           if (result.outcome === "unconfirmed" || result.instanceId !== instanceId) {
             setFresh(false);
             return load().then((verified) => {
+              if (linkEpoch.current !== epoch) {
+                setSaving(false);
+                return;
+              }
               if (result.outcome === "unconfirmed") {
                 setError(
                   verified
@@ -208,7 +212,9 @@ export function HostIdleTimeRow({
           return undefined;
         },
         (err: unknown) => {
-          setError(clientErrorText(err, "Couldn't change the idle time"));
+          if (linkEpoch.current === epoch) {
+            setError(clientErrorText(err, "Couldn't change the idle time"));
+          }
           setSaving(false);
         }
       );

@@ -205,6 +205,62 @@ describe("HostIdleTimeRow (#17357)", () => {
     expect(document.body.textContent).toContain("This changed on Boat since it was read");
   });
 
+  it("drops a change's answer that comes after a link drop, keeping the reading taken since", async () => {
+    const late = deferred<HostSettingsUpdateResult>();
+    api.read.mockResolvedValueOnce(snapshot(30));
+    api.read.mockResolvedValueOnce(snapshot(60));
+    api.update.mockReturnValueOnce(late.promise);
+    const row = await renderRow();
+    await pick("4 hours");
+
+    await row.setConnected(false);
+    await row.setConnected(true);
+    expect(select().textContent).toBe("1 hour");
+    await act(async () => {
+      late.resolve(result("applied", 240));
+    });
+    expect(select().textContent).toBe("1 hour");
+    expect(isDisabled(select())).toBe(false);
+    expect(screen.queryByText(/didn't/)).toBeNull();
+  });
+
+  it("says nothing stale when an unconfirmed change's read-back fails after the link came back", async () => {
+    const readback = deferred<HostSettingsSnapshot>();
+    api.read.mockResolvedValueOnce(snapshot(30));
+    api.read.mockReturnValueOnce(readback.promise);
+    api.read.mockResolvedValueOnce(snapshot(240));
+    api.update.mockResolvedValueOnce({ ...result("unconfirmed", 30), confirmedBy: null });
+    const row = await renderRow();
+    await pick("4 hours");
+
+    await row.setConnected(false);
+    await row.setConnected(true);
+    expect(select().textContent).toBe("4 hours");
+    await act(async () => {
+      readback.resolve(snapshot(30));
+    });
+    expect(select().textContent).toBe("4 hours");
+    expect(isDisabled(select())).toBe(false);
+    expect(screen.queryByText(/didn't confirm/)).toBeNull();
+  });
+
+  it("says an unconfirmed change couldn't be checked, with Retry to read the host again", async () => {
+    api.read.mockResolvedValueOnce(snapshot(30));
+    api.read.mockRejectedValueOnce(new Error("link dropped"));
+    api.read.mockResolvedValueOnce(snapshot(240));
+    api.update.mockResolvedValueOnce({ ...result("unconfirmed", 30), confirmedBy: null });
+    await renderRow();
+    await pick("4 hours");
+
+    // Nothing to edit against until the host is read again.
+    expect(screen.queryByRole("combobox")).toBeNull();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+    expect(select().textContent).toBe("4 hours");
+    expect(isDisabled(select())).toBe(false);
+  });
+
   it("offers Retry when a read after a reconnect fails, with nothing editable meanwhile", async () => {
     api.read.mockResolvedValueOnce(snapshot(30));
     api.read.mockRejectedValueOnce(new Error("link dropped"));
