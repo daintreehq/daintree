@@ -5,7 +5,7 @@
  * shared policy's fallback brings it back to the `…` button, and the menu's
  * own close hook used to cancel that by claiming every pointer dismissal.
  */
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { _resetTooltipFocusSuppressionForTests } from "@/lib/tooltipFocusSuppression";
 
@@ -15,12 +15,28 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipContent: () => null,
 }));
 
-const { OverflowMenu } = await import("../ToolbarOverflowMenu");
+// The launcher's own rows need its stores; the menu's handoff is what is under
+// test here, so one row stands in that asks for the launcher the way the dev
+// servers row does.
+vi.mock("../LinksLauncher", async () => {
+  const { DropdownMenuItem } = await import("@/components/ui/dropdown-menu");
+  const { useLinksLauncherStore } = await import("@/store/linksLauncherStore");
+  return {
+    LinksLauncherOverflowItems: ({ side }: { side: "left" | "right" }) => (
+      <DropdownMenuItem onSelect={() => useLinksLauncherStore.getState().deferFromOverflow(side)}>
+        Dev servers…
+      </DropdownMenuItem>
+    ),
+  };
+});
 
-async function openOverflow() {
+const { OverflowMenu } = await import("../ToolbarOverflowMenu");
+const { useLinksLauncherStore } = await import("@/store/linksLauncherStore");
+
+async function openOverflow(overflowIds: string[] = []) {
   const utils = render(
     <OverflowMenu
-      overflowIds={[]}
+      overflowIds={overflowIds as Parameters<typeof OverflowMenu>[0]["overflowIds"]}
       side="right"
       severity={null}
       errorCount={0}
@@ -54,6 +70,12 @@ async function openOverflow() {
 
 beforeEach(() => {
   _resetTooltipFocusSuppressionForTests();
+  useLinksLauncherStore.setState({
+    opening: null,
+    closeFocus: null,
+    detachedRestore: null,
+    deferredFromOverflow: null,
+  });
 });
 
 afterEach(cleanup);
@@ -85,5 +107,32 @@ describe("toolbar overflow menu close focus", () => {
     expect(focusTrigger).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(outside);
     outside.remove();
+  });
+
+  it("opens the links launcher once the menu has closed, keeping focus off the … button until it closes", async () => {
+    const { trigger, menu } = await openOverflow(["links-launcher"]);
+    const focusTrigger = vi.spyOn(trigger, "focus");
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Dev servers…" }));
+    await waitFor(() => expect(menu.isConnected).toBe(false));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(useLinksLauncherStore.getState().opening?.origin).toBe("detached");
+    expect(useLinksLauncherStore.getState().deferredFromOverflow).toBeNull();
+    expect(focusTrigger).not.toHaveBeenCalled();
+
+    // The launcher's close gives focus back to the … button it came from.
+    useLinksLauncherStore.getState().takeDetachedRestore()?.();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("drops a request a closed menu never spent when it opens again", async () => {
+    useLinksLauncherStore.getState().deferFromOverflow("right");
+    const { menu } = await openOverflow(["links-launcher"]);
+
+    fireEvent.pointerDown(document.body, { pointerType: "mouse" });
+    await waitFor(() => expect(menu.isConnected).toBe(false));
+
+    expect(useLinksLauncherStore.getState().opening).toBeNull();
   });
 });

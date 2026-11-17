@@ -174,8 +174,15 @@ describe("useHasLiveDevServer", () => {
     ["stopped", false],
   ] as const)("counts a %s server as live: %s", (status, live) => {
     const { result } = renderHook(() => useHasLiveDevServer());
+    // Wherever it sits among servers that aren't live, in any project.
     act(() => push!({ sessions: [server("stopped", "other"), server(status)] }));
     expect(result.current).toBe(live);
+    act(() =>
+      push!({ sessions: [{ ...server(status), projectId: "p2" }, server("stopped", "other")] })
+    );
+    expect(result.current).toBe(live);
+    act(() => push!({ sessions: [] }));
+    expect(result.current).toBe(false);
   });
 
   it("keeps the list when the launcher's own read of it comes and goes", () => {

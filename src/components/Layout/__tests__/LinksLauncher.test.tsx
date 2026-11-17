@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useSyncExternalStore } from "react";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ProjectLink } from "@shared/types";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
@@ -424,6 +425,43 @@ describe("dev servers in the launcher", () => {
 
     expect(headings()).toEqual(["Your links"]);
     expect(document.activeElement).toBe(rows()[0]);
+  });
+
+  it("hands focus to the focused panel when stopping the last server takes the button away", async () => {
+    h.links = { projectLinks: [], globalLinks: [] };
+    h.devSessions.sessions = [devSession()];
+    // The toolbar's own rule: shown only with a link or a live server.
+    function Toolbar() {
+      const { sessions } = useSyncExternalStore(subscribe, () => h.devSessions);
+      const live = sessions.some((s) => s.status !== "stopped" && s.status !== "restored-stopped");
+      return live ? <LinksLauncherToolbarButton /> : null;
+    }
+    render(<Toolbar />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Links" }));
+    });
+    await flush();
+    const stop = within(launcher()!).getByRole("button", {
+      name: "Stop dev server for feature-foo",
+    });
+    act(() => stop.focus());
+
+    await act(async () => {
+      setDevSessions([devSession({ status: "stopping" })]);
+    });
+    // Going down keeps the keyboard where it was.
+    expect(document.activeElement).toBe(stop);
+    expect(stop.getAttribute("aria-disabled")).toBe("true");
+
+    await act(async () => {
+      setDevSessions([devSession({ status: "stopped", terminalId: null })]);
+    });
+    await flush();
+
+    expect(screen.queryByRole("button", { name: "Links" })).toBeNull();
+    expect(launcher()).toBeNull();
+    expect(useLinksLauncherStore.getState().opening).toBeNull();
+    expect(h.enterFocusedPanel).toHaveBeenCalledWith("t1");
   });
 });
 

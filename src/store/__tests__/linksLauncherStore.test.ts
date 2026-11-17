@@ -154,23 +154,29 @@ describe("opening from a `…` menu row", () => {
     return trigger;
   }
 
-  it("is spent only by the menu on the side that asked for it", () => {
+  it.each([
+    ["left", "right"],
+    ["right", "left"],
+  ] as const)("is spent only by the %s menu that asked for it", (side, other) => {
     const store = useLinksLauncherStore.getState();
-    store.deferFromOverflow("right");
-    expect(store.takeDeferredFromOverflow("left")).toBe(false);
-    expect(store.takeDeferredFromOverflow("right")).toBe(true);
-    expect(store.takeDeferredFromOverflow("right")).toBe(false);
+    store.deferFromOverflow(side);
+    expect(store.takeDeferredFromOverflow(other)).toBe(false);
+    expect(store.takeDeferredFromOverflow(side)).toBe(true);
+    expect(store.takeDeferredFromOverflow(side)).toBe(false);
   });
 
-  it("opens detached and gives focus back to that side's `…` button", () => {
-    overflowTrigger("left", true);
-    const right = overflowTrigger("right", true);
-    openLinksLauncherFromOverflow("right");
+  it.each(["left", "right"] as const)(
+    "opens detached and gives focus back to the %s `…` button",
+    (side) => {
+      const left = overflowTrigger("left", true);
+      const right = overflowTrigger("right", true);
+      openLinksLauncherFromOverflow(side);
 
-    expect(useLinksLauncherStore.getState().opening?.origin).toBe("detached");
-    useLinksLauncherStore.getState().takeDetachedRestore()?.();
-    expect(document.activeElement).toBe(right);
-  });
+      expect(useLinksLauncherStore.getState().opening?.origin).toBe("detached");
+      useLinksLauncherStore.getState().takeDetachedRestore()?.();
+      expect(document.activeElement).toBe(side === "left" ? left : right);
+    }
+  );
 
   it("gives focus to nothing when that `…` button has gone", () => {
     overflowTrigger("right", false);

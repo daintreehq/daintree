@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import {
+  act,
   cleanup,
   render as rtlRender,
   screen,
@@ -95,13 +96,23 @@ describe("LinksLauncherDevServers", () => {
   it("leaves itself out when the load succeeded and no server is listed", () => {
     mockSessions([session({ status: "stopped" })]);
     const { container } = render(<DevServers />);
-    expect(container.textContent).toBe("");
+    expect(container.querySelector("section")).toBeNull();
   });
 
-  it("shows nothing before the first load lands and its skeleton is due", () => {
-    mockSessions([session()], { hydrated: false });
-    const { container } = render(<DevServers />);
-    expect(container.textContent).toBe("");
+  it("shows its skeleton once a first load outlasts the onset gate, and nothing before", () => {
+    vi.useFakeTimers();
+    try {
+      mockSessions([], { hydrated: false });
+      const { container } = render(<DevServers />);
+      expect(container.querySelector("section")).toBeNull();
+
+      act(() => vi.advanceTimersByTime(250));
+
+      expect(screen.getByRole("region", { name: "Dev servers" })).toBeTruthy();
+      expect(screen.getByRole("status", { name: "Loading dev servers" })).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("says so under its heading when the session fetch fails", () => {
@@ -199,11 +210,23 @@ describe("LinksLauncherDevServers", () => {
     expect(stopDevServerByWorktree).not.toHaveBeenCalled();
   });
 
+  it("keeps a stopping server's Stop focusable but inert", () => {
+    mockSessions([session({ status: "stopping" })]);
+    render(<DevServers />);
+    const stopButton = screen.getByLabelText(
+      "Stop dev server for feature-foo"
+    ) as HTMLButtonElement;
+    expect(stopButton.disabled).toBe(false);
+    expect(stopButton.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(stopButton);
+    expect(stop).not.toHaveBeenCalled();
+  });
+
   it("offers to dismiss an errored session's error, which fires the stop call", () => {
     mockSessions([session({ status: "error", terminalId: null, url: null })]);
     render(<DevServers />);
-    const stopButton = screen.getByLabelText("Dismiss error for feature-foo") as HTMLButtonElement;
-    expect(stopButton.disabled).toBe(false);
+    const stopButton = screen.getByLabelText("Dismiss error for feature-foo");
+    expect(stopButton.getAttribute("aria-disabled")).toBeNull();
     fireEvent.click(stopButton);
     expect(stop).toHaveBeenCalledWith({ panelId: "panel-1", projectId: "project-1" });
   });
@@ -346,12 +369,9 @@ describe("LinksLauncherDevServers", () => {
       render(<DevServers />);
       expect(screen.getByText("Atlas")).toBeTruthy();
       expect(screen.queryByText("panel-1")).toBeNull();
-      const stopButton = screen.getByLabelText("Stop dev server for Atlas") as HTMLButtonElement;
-      const restartButton = screen.getByLabelText(
-        "Restart dev server for Atlas"
-      ) as HTMLButtonElement;
-      expect(stopButton.disabled).toBe(false);
-      expect(restartButton.disabled).toBe(false);
+      const stopButton = screen.getByLabelText("Stop dev server for Atlas");
+      const restartButton = screen.getByLabelText("Restart dev server for Atlas");
+      expect(stopButton.getAttribute("aria-disabled")).toBeNull();
       fireEvent.click(stopButton);
       fireEvent.click(restartButton);
       expect(stop).toHaveBeenCalledWith({ panelId: "panel-1", projectId: "project-1" });

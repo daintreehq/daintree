@@ -134,6 +134,7 @@ function DevServerRow({
   };
 
   const handleStop = () => {
+    if (!canStop) return;
     safeFireAndForget(window.electron.devPreview.stop(target), {
       context: "Stopping dev server from the links launcher",
     });
@@ -196,7 +197,9 @@ function DevServerRow({
               <button
                 type="button"
                 onClick={handleStop}
-                disabled={!canStop}
+                // Not `disabled`: a server going down disables its Stop, and a
+                // disabled control drops the keyboard focus that was on it.
+                aria-disabled={!canStop || undefined}
                 aria-label={
                   isDismissableError
                     ? `Dismiss error for ${displayName}`
@@ -241,7 +244,7 @@ export function LinksLauncherDevServers({
   snapshot: DevSessionsSnapshot;
   sectionId: string;
 }) {
-  const { sessions: allSessions, hydrated, fetchError } = snapshot;
+  const { sessions: allSessions, hydrated } = snapshot;
   // Select only the names this list renders: the worktrees Map identity
   // changes on every polled git-status delta, but a flat Record of primitives
   // lets useShallow skip the re-render unless a relevant name changes.
