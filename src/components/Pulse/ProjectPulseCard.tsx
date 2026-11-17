@@ -414,9 +414,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
             }
             data-testid="pulse-last-updated"
           >
-            {refreshFailed && (
-              <AlertTriangle className="text-status-warning" aria-hidden="true" />
-            )}
+            {refreshFailed && <AlertTriangle className="text-status-warning" aria-hidden="true" />}
             <span>
               {refreshFailed
                 ? `Couldn't refresh · updated ${updatedLabel}`
