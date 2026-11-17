@@ -474,6 +474,33 @@ describe("BrowserPane webview lifecycle regression", () => {
       expect(getWebviewElement(container).getAttribute("src")).toBe("http://localhost:5173/");
     });
 
+    it("attaches at the page asked for since, when Retry forwards it after both forwards failed", async () => {
+      window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+      const forward = vi.fn().mockRejectedValue(new Error("host gone"));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).electron.portForwards = { forward };
+      const { container, getByRole } = render(<BrowserPane {...baseProps} />);
+      await act(async () => {});
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:browser-navigate", {
+            detail: { id: "browser-panel-1", url: "http://localhost:4000/" },
+          })
+        );
+      });
+      expect(container.querySelector("webview")).toBeNull();
+      expect(container.textContent).toContain("Port 4000 on the host couldn't be forwarded");
+
+      forward.mockImplementation(forwardTo(4000));
+      await act(async () => {
+        getByRole("button", { name: /retry/i }).click();
+      });
+      await act(async () => {});
+      expect(getWebviewElement(container).getAttribute("src")).toBe("http://localhost:4000/");
+      const toolbarProps = browserToolbarPropsSpy.mock.calls.at(-1)![0] as Record<string, unknown>;
+      expect(toolbarProps.url).toBe("http://localhost:4000/");
+    });
+
     it("says the port is taken here instead of showing the page at another address", async () => {
       window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

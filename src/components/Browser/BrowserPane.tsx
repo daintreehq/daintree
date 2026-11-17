@@ -236,21 +236,29 @@ export function BrowserPane({
   // Track the last URL we set on the webview to detect in-webview navigation
   const lastSetUrlRef = useRef<string>(history.present);
   const pendingNavigationRef = useRef<string | null>(null);
-  // Seed value for the webview `src` attribute, captured once at mount. We never
-  // re-bind `src` to navigation-driven state: Electron's SrcAttribute observer
-  // treats any same-or-different value write as a fresh loadURL, turning guest
-  // navigations into redundant full reloads (#9940). All post-mount navigation
-  // goes through imperative loadURL calls instead.
-  const initialUrlRef = useRef<string>(history.present);
-  // When `webviewPartition` changes the `key` remounts the <webview> as a fresh
-  // element, so its seed `src` must be the URL the user is currently on — not the
-  // URL captured at first component mount (#9940). Re-seed during render, before
-  // the JSX `src={initialUrlRef.current}` is read for the remounting element.
-  const lastPartitionRef = useRef<string>(webviewPartition);
-  if (lastPartitionRef.current !== webviewPartition) {
-    lastPartitionRef.current = webviewPartition;
-    initialUrlRef.current = history.present;
+  // The webview `src`, fixed for the life of each guest. It is never re-bound to
+  // navigation state while a guest is mounted: Electron's SrcAttribute observer
+  // treats any write as a fresh loadURL, turning guest navigations into
+  // redundant full reloads (#9940). All navigation within a guest goes through
+  // imperative loadURL calls instead.
+  //
+  // A guest that attaches fresh (first view, reopening after memory-pressure
+  // eviction, a forward that came through, a partition change remounting it)
+  // starts at the page the panel is on now, not the one it first opened at:
+  // its first load would otherwise be pushed over the current page, dropping
+  // every entry ahead of it (#17220). Adjusted during render, as DevPreviewPane's
+  // seed is (#12297), so the guest mounting in this pass reads it.
+  const [webviewSeed, setWebviewSeed] = useState(() => ({
+    partition: webviewPartition,
+    url: history.present,
+  }));
+  if (
+    webviewSeed.partition !== webviewPartition ||
+    (!webviewElement && webviewSeed.url !== history.present)
+  ) {
+    setWebviewSeed({ partition: webviewPartition, url: history.present });
   }
+  const webviewSeedUrl = webviewSeed.url;
   // In a view on a host, a localhost page is the host's, so its port is
   // forwarded to this machine before the <webview> attaches: main refuses to
   // attach a loopback src no forward holds, and a refused attach never loads
@@ -278,8 +286,9 @@ export function BrowserPane({
   // Every navigation takes a number; a forward that settles after a newer
   // navigation began decides nothing.
   const navigationGenRef = useRef(0);
-  // A host page whose forward failed, for Retry and Reload to try again.
-  const failedHostUrlRef = useRef<string | null>(null);
+  // A host page whose forward failed, for Retry and Reload to try again: as
+  // the same step through the history when it was Back or Forward.
+  const failedNavigationRef = useRef<{ url: string; step?: BrowserHistory } | null>(null);
   // Track if webview has been mounted and is ready
   const [isWebviewReady, setIsWebviewReady] = useState(false);
 
@@ -480,16 +489,17 @@ export function BrowserPane({
     if (hostForward !== "forwarding") return;
     let cancelled = false;
     const generation = navigationGenRef.current;
-    const url = initialUrlRef.current;
+    // No guest is mounted while this forwards, so the seed is the current page.
+    const url = webviewSeedUrl;
     holdHostPage(url).then(
       () => {
         if (cancelled || generation !== navigationGenRef.current) return;
-        failedHostUrlRef.current = null;
+        failedNavigationRef.current = null;
         setHostForward("ready");
       },
       (error: unknown) => {
         if (cancelled || generation !== navigationGenRef.current) return;
-        failedHostUrlRef.current = url;
+        failedNavigationRef.current = { url };
         setIsLoading(false);
         setLoadError({ kind: "network", message: hostForwardFailure(url, error) });
         setHostForward("failed");
@@ -498,7 +508,7 @@ export function BrowserPane({
     return () => {
       cancelled = true;
     };
-  }, [hostForward, setHostForward, holdHostPage]);
+  }, [hostForward, webviewSeedUrl, setHostForward, holdHostPage]);
 
   // Every host port this panel forwarded stays held while it is open (its
   // back and forward can return to any of them), and goes when it closes.
@@ -523,12 +533,17 @@ export function BrowserPane({
     loadWebviewUrl(webviewElement, url);
   }, [isWebviewReady, webviewElement]);
 
+  /**
+   * Loads `url` and records it: pushed as a new page, or, for a `step` through
+   * the history (Back or Forward without the guest's own history), as the
+   * entry that step lands on.
+   */
   const commitResolvedNavigation = useCallback(
-    (url: string) => {
+    (url: string, step?: BrowserHistory) => {
       isInitialRestoredLoadRef.current = false;
       setBlockedNav(null);
       setPendingApproval(null);
-      setHistory((prev) => pushBrowserHistory(prev, url));
+      setHistory((prev) => (step ? { ...step, present: url } : pushBrowserHistory(prev, url)));
       setIsLoading(true);
       setLoadError(null);
       lastSetUrlRef.current = url;
@@ -536,7 +551,6 @@ export function BrowserPane({
       // No <webview> yet (its first page couldn't be forwarded): this URL
       // needs no forward or has one now, so it attaches with it.
       if (hostForwardRef.current !== "ready") {
-        initialUrlRef.current = url;
         pendingNavigationRef.current = null;
         setHostForward("ready");
         return;
@@ -546,19 +560,23 @@ export function BrowserPane({
       if (webview && isWebviewReady) {
         pendingNavigationRef.current = null;
         loadWebviewUrl(webview, url);
-      } else {
+      } else if (webview) {
         pendingNavigationRef.current = url;
+      } else {
+        // The next guest attaches at the page the history now holds; loading
+        // it again once ready would be a second full load.
+        pendingNavigationRef.current = null;
       }
     },
     [isWebviewReady, setHostForward]
   );
 
   const commitNavigation = useCallback(
-    (url: string) => {
+    (url: string, step?: BrowserHistory) => {
       const generation = ++navigationGenRef.current;
-      failedHostUrlRef.current = null;
+      failedNavigationRef.current = null;
       if (!needsHostForward(url)) {
-        commitResolvedNavigation(url);
+        commitResolvedNavigation(url, step);
         return;
       }
       setBlockedNav(null);
@@ -567,11 +585,11 @@ export function BrowserPane({
       setLoadError(null);
       holdHostPage(url).then(
         (resolved) => {
-          if (generation === navigationGenRef.current) commitResolvedNavigation(resolved);
+          if (generation === navigationGenRef.current) commitResolvedNavigation(resolved, step);
         },
         (error: unknown) => {
           if (generation !== navigationGenRef.current) return;
-          failedHostUrlRef.current = url;
+          failedNavigationRef.current = { url, step };
           setIsLoading(false);
           setLoadError({ kind: "network", message: hostForwardFailure(url, error) });
         }
@@ -585,18 +603,20 @@ export function BrowserPane({
    * one, so Retry and Reload don't reload a <webview> that never attached.
    */
   const retryHostForward = useCallback((): boolean => {
-    const failedHostUrl = failedHostUrlRef.current;
-    if (failedHostUrl === null) return false;
+    const failed = failedNavigationRef.current;
+    if (failed === null) return false;
     setLoadError(null);
     setIsLoading(true);
-    if (hostForwardRef.current === "failed") {
-      initialUrlRef.current = failedHostUrl;
+    if (hostForwardRef.current === "failed" && !failed.step && failed.url === history.present) {
+      // The page the panel opened at: the <webview> attaches once it's forwarded.
       setHostForward("forwarding");
     } else {
-      commitNavigation(failedHostUrl);
+      // Any other page goes into the history when its forward comes through,
+      // which is where a <webview> attaching afterwards starts.
+      commitNavigation(failed.url, failed.step);
     }
     return true;
-  }, [commitNavigation, setHostForward]);
+  }, [commitNavigation, history.present, setHostForward]);
 
   const handleNavigate = useCallback(
     (url: string) => {
@@ -664,6 +684,9 @@ export function BrowserPane({
     if (!webview || !isWebviewReady) return;
 
     if (webview.canGoBack()) {
+      // Supersedes a host page still being forwarded.
+      ++navigationGenRef.current;
+      failedNavigationRef.current = null;
       isInitialRestoredLoadRef.current = false;
       setBlockedNav(null);
       setIsLoading(true);
@@ -672,17 +695,13 @@ export function BrowserPane({
       return;
     }
 
+    // The guest has no history of its own after a restore or an eviction, so
+    // the step goes through the saved history, forwarding a host page first.
     if (history.past.length > 0) {
       const nextHistory = goBackBrowserHistory(history);
-      isInitialRestoredLoadRef.current = false;
-      setBlockedNav(null);
-      setIsLoading(true);
-      setLoadError(null);
-      setHistory(nextHistory);
-      lastSetUrlRef.current = nextHistory.present;
-      loadWebviewUrl(webview, nextHistory.present);
+      commitNavigation(nextHistory.present, nextHistory);
     }
-  }, [history, isWebviewReady]);
+  }, [history, isWebviewReady, commitNavigation]);
 
   const handleForward = useCallback(() => {
     const webview = webviewRef.current;
@@ -692,6 +711,8 @@ export function BrowserPane({
     if (!webview || !isWebviewReady) return;
 
     if (webview.canGoForward()) {
+      ++navigationGenRef.current;
+      failedNavigationRef.current = null;
       isInitialRestoredLoadRef.current = false;
       setBlockedNav(null);
       setIsLoading(true);
@@ -702,15 +723,9 @@ export function BrowserPane({
 
     if (history.future.length > 0) {
       const nextHistory = goForwardBrowserHistory(history);
-      isInitialRestoredLoadRef.current = false;
-      setBlockedNav(null);
-      setIsLoading(true);
-      setLoadError(null);
-      setHistory(nextHistory);
-      lastSetUrlRef.current = nextHistory.present;
-      loadWebviewUrl(webview, nextHistory.present);
+      commitNavigation(nextHistory.present, nextHistory);
     }
-  }, [history, isWebviewReady]);
+  }, [history, isWebviewReady, commitNavigation]);
 
   const handleReload = useCallback(() => {
     if (retryHostForward()) return;
@@ -1222,9 +1237,9 @@ export function BrowserPane({
                   // seeded only via ?projectId= where the store resolves later) so the
                   // webview never keeps a stale cross-project session (#9965).
                   key={webviewPartition}
-                  // Seed-only: never re-bind to navigation state (#9940). On a
-                  // key-driven remount the ref re-initializes to the current URL.
-                  src={initialUrlRef.current}
+                  // Seed-only: never re-bind to navigation state (#9940). A fresh
+                  // guest is seeded with the current page (#17220).
+                  src={webviewSeedUrl}
                   partition={webviewPartition}
                   // @ts-expect-error React 19 requires "" to emit the attribute; boolean true is silently dropped
                   allowpopups=""
