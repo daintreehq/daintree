@@ -61,7 +61,9 @@ function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
 
 function show(current: CloudHostStatus) {
   cloud.snapshot = { providers: [], accounts: [], hosts: [current] };
-  return render(<CloudMachineSection hostId="build" hostName="build" />);
+  return render(
+    <CloudMachineSection hostId="build" hostName="build" connected={false} liveSummary={null} />
+  );
 }
 
 const createdFor = () => screen.queryByTestId("cloud-machine-created-for")?.textContent ?? null;
