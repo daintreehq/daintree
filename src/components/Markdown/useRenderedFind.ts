@@ -182,13 +182,11 @@ export function useRenderedFind(root: HTMLElement | null): RenderedFindState {
 
   useEffect(() => {
     if (!isOpen) return;
-    painterOf(painterRef).paint(result.ranges, result.ranges[activeIndex] ?? null);
+    painterOf(painterRef).paint(result.ranges, activeIndex);
   }, [isOpen, result, activeIndex]);
 
   // Forced colours decide whether the other matches are painted at all.
-  const repaint = useEffectEvent(() =>
-    painterOf(painterRef).paint(result.ranges, result.ranges[activeIndex] ?? null)
-  );
+  const repaint = useEffectEvent(() => painterOf(painterRef).paint(result.ranges, activeIndex));
   useEffect(() => {
     if (!isOpen || typeof matchMedia !== "function") return;
     const forced = matchMedia(FORCED_COLORS_QUERY);

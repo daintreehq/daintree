@@ -18,6 +18,7 @@ vi.mock("@/components/FileViewer/CodeViewer", () => ({
 }));
 
 import { MarkdownViewer, type MarkdownViewerHandle } from "../MarkdownViewer";
+import { FIND_CURRENT_HIGHLIGHT, FIND_MATCH_HIGHLIGHT } from "../renderedFind";
 
 const CONTENT = `# State management
 
@@ -61,9 +62,22 @@ async function openFind(ref: RefObject<MarkdownViewerHandle | null>) {
 
 const count = () => screen.getByRole("status").textContent;
 
+// Scoped stubs: `vi.unstubAllGlobals()` would also undo the setup file's
+// ResizeObserver and rAF stubs for the rest of the file.
+const restoreGlobals: Array<() => void> = [];
+function stubGlobal(name: string, value: unknown) {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, name);
+  Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
+  restoreGlobals.push(() => {
+    if (previous) Object.defineProperty(globalThis, name, previous);
+    else delete (globalThis as Record<string, unknown>)[name];
+  });
+}
+
 afterEach(() => {
   cleanup();
   document.body.innerHTML = "";
+  while (restoreGlobals.length > 0) restoreGlobals.pop()!();
 });
 
 describe("MarkdownViewer find in rendered mode (#16642)", () => {
@@ -90,6 +104,43 @@ describe("MarkdownViewer find in rendered mode (#16642)", () => {
     expect(count()).toBe("3 of 3");
     // Focus stays in the field while stepping.
     expect(document.activeElement).toBe(input);
+  });
+
+  // Stepping keeps the same matches, so only the two that change places are
+  // restyled; rewriting every highlight is a restyle per match per step (#17522).
+  it("moves only the current highlight when stepping", async () => {
+    class CountingHighlight extends Set<Range> {
+      priority = 0;
+      writes = 0;
+      override add(range: Range) {
+        this.writes++;
+        return super.add(range);
+      }
+      override delete(range: Range) {
+        this.writes++;
+        return super.delete(range);
+      }
+    }
+    const registry = new Map<string, CountingHighlight>();
+    stubGlobal("CSS", { highlights: registry });
+    stubGlobal("Highlight", CountingHighlight);
+    const { ref } = await renderRendered();
+    const input = await openFind(ref);
+    fireEvent.change(input, { target: { value: "store" } });
+    const matches = registry.get(FIND_MATCH_HIGHLIGHT)!;
+    const current = registry.get(FIND_CURRENT_HIGHLIGHT)!;
+    expect(matches.size).toBe(2);
+    const first = [...current][0];
+    matches.writes = current.writes = 0;
+
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(count()).toBe("2 of 3");
+    expect(matches.writes).toBe(2);
+    expect(current.writes).toBe(2);
+    expect(matches.has(first!)).toBe(true);
+    expect(matches.size).toBe(2);
+    expect(current.size).toBe(1);
   });
 
   it("says when nothing matches, and leaves nothing to step through", async () => {
