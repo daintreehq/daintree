@@ -781,6 +781,30 @@ describe("routeHostEvent", () => {
     ]);
   });
 
+  it("drops pause-duration entries for terminals its shard no longer owns (#17575)", () => {
+    const { deps } = makeDeps({ isForeignTerminal: (id) => id === "moved" });
+    const seen: unknown[] = [];
+    events.on("terminal:reliability-metric", (payload) => seen.push(payload.perTerminalHeld));
+
+    routeHostEvent(
+      {
+        type: "terminal-reliability-metric",
+        payload: {
+          terminalId: "resource-governor",
+          metricType: "pause-duration-gauge",
+          timestamp: 1,
+          perTerminalHeld: [
+            { terminalId: "own", heldDurationMs: 2000 },
+            { terminalId: "moved", heldDurationMs: 3000 },
+          ],
+        },
+      },
+      deps
+    );
+
+    expect(seen).toEqual([[{ terminalId: "own", heldDurationMs: 2000 }]]);
+  });
+
   it("logs and returns false for unknown event types", () => {
     const logWarn = vi.fn();
     const { deps } = makeDeps({ logWarn });

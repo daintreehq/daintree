@@ -873,6 +873,10 @@ export class PtyClient extends EventEmitter {
   private buildRouterDeps(shard: PtyShard): PtyEventRouterDeps {
     return {
       isDisposed: () => this.isDisposed || shard.retired,
+      isForeignTerminal: (id) => {
+        const owner = this.terminalOwners.get(id);
+        return owner !== undefined && owner !== shard.key;
+      },
       broker: shard.broker,
       emitter: new ShardEventEmitter((event, args) => this.emitFromShard(shard, event, args)),
       state: {

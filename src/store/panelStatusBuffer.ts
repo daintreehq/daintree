@@ -89,7 +89,7 @@ export function enqueueFlowStatusUpdate(
  */
 export function enqueueHeldDurationUpdate(terminalId: string, heldDurationMs: number): void {
   // Non-null patches do not clobber a pending null for the same terminal —
-  // a `null` from a fresh tick (terminal no longer in the gauge) wins
+  // a `null` from a fresh tick (terminal cleared from the gauge) wins
   // because the host has already stopped emitting it. Without this guard
   // a stale non-null entry from a previous tick could resurrect a value
   // for a terminal that's already resumed.

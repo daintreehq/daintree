@@ -41,6 +41,43 @@ import {
 } from "./spawnConfirmation.js";
 import type { HandlerDependencies } from "../../types.js";
 
+/**
+ * Hands each project view the pause-duration entries for its own terminals.
+ * Held samples repeat every tick, so a frozen view may skip them; a clear is
+ * said once, so it reaches frozen views too.
+ */
+function relayPauseDurationGauge(
+  payload: TerminalReliabilityMetricPayload,
+  projectOf: (terminalId: string) => string | null
+): void {
+  const { perTerminalHeld, clearedTerminalIds, ...envelope } = payload;
+  const held: Record<string, number> = {};
+  for (const entry of perTerminalHeld ?? []) held[entry.terminalId] = entry.heldDurationMs;
+  broadcastSlicedToProjectRenderers(CHANNELS.EVENTS_PUSH, held, projectOf, (slice) => ({
+    name: "terminal:reliability-metric",
+    payload: {
+      ...envelope,
+      perTerminalHeld: Object.entries(slice).map(([terminalId, heldDurationMs]) => ({
+        terminalId,
+        heldDurationMs,
+      })),
+    },
+  }));
+
+  const cleared: Record<string, true> = {};
+  for (const terminalId of clearedTerminalIds ?? []) cleared[terminalId] = true;
+  broadcastSlicedToProjectRenderers(
+    CHANNELS.EVENTS_PUSH,
+    cleared,
+    projectOf,
+    (slice) => ({
+      name: "terminal:reliability-metric",
+      payload: { ...envelope, perTerminalHeld: [], clearedTerminalIds: Object.keys(slice) },
+    }),
+    { includeFrozenViews: true }
+  );
+}
+
 export function registerTerminalEventHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
   if (!ptyClient) {
@@ -309,9 +346,16 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
 
   // Backpressure/suspend transitions. The only consumer is the owning pane's
   // stall watchdog, so it goes to that project's views like terminal:status.
+  // A pause-duration gauge is one shard's batch under the synthetic
+  // "resource-governor" id, so each of its entries goes to its own terminal's
+  // project instead (#17575).
   const unsubReliabilityMetric = events.on(
     "terminal:reliability-metric",
     (payload: TerminalReliabilityMetricPayload) => {
+      if (payload.metricType === "pause-duration-gauge") {
+        relayPauseDurationGauge(payload, (id) => ptyClient.getTerminalProjectId(id));
+        return;
+      }
       broadcastToProjectRenderers(
         ptyClient.getTerminalProjectId(payload.terminalId),
         CHANNELS.EVENTS_PUSH,

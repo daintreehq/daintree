@@ -541,3 +541,73 @@ describe("bridgePtyEvent", () => {
     expect(handled).toBe(false);
   });
 });
+
+describe("bridgePtyEvent — pause-duration gauge ownership (#17575)", () => {
+  afterEach(() => events.removeAllListeners());
+
+  function collect() {
+    const seen: unknown[] = [];
+    events.on("terminal:reliability-metric", (payload) => seen.push(payload));
+    return seen;
+  }
+
+  const gauge = {
+    type: "terminal-reliability-metric",
+    payload: {
+      terminalId: "resource-governor",
+      metricType: "pause-duration-gauge",
+      timestamp: 1,
+      perTerminalHeld: [
+        { terminalId: "own-1", heldDurationMs: 2000 },
+        { terminalId: "moved-1", heldDurationMs: 3000 },
+      ],
+      clearedTerminalIds: ["own-2", "moved-2"],
+    },
+  } as const;
+  const isForeignTerminal = (id: string) => id.startsWith("moved-");
+
+  it("drops entries and clears for terminals another shard owns", () => {
+    const seen = collect();
+
+    bridgePtyEvent(structuredClone(gauge), { isForeignTerminal });
+
+    expect(seen).toEqual([
+      {
+        terminalId: "resource-governor",
+        metricType: "pause-duration-gauge",
+        timestamp: 1,
+        perTerminalHeld: [{ terminalId: "own-1", heldDurationMs: 2000 }],
+        clearedTerminalIds: ["own-2"],
+      },
+    ]);
+  });
+
+  it("emits nothing when every entry belongs to another shard", () => {
+    const seen = collect();
+
+    const handled = bridgePtyEvent(structuredClone(gauge), { isForeignTerminal: () => true });
+
+    expect(handled).toBe(true);
+    expect(seen).toEqual([]);
+  });
+
+  it("passes the gauge through untouched without an ownership check", () => {
+    const seen = collect();
+
+    bridgePtyEvent(structuredClone(gauge));
+
+    expect(seen).toEqual([gauge.payload]);
+  });
+
+  it("leaves other metrics alone even when they name a foreign terminal", () => {
+    const seen = collect();
+    const pauseEnd = {
+      type: "terminal-reliability-metric",
+      payload: { terminalId: "moved-1", metricType: "pause-end", timestamp: 1, durationMs: 5 },
+    } as const;
+
+    bridgePtyEvent(structuredClone(pauseEnd), { isForeignTerminal });
+
+    expect(seen).toEqual([pauseEnd.payload]);
+  });
+});

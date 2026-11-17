@@ -875,6 +875,46 @@ describe("ResourceGovernor", () => {
 
       governor.dispose();
     });
+
+    it("names each terminal that left the gauge once, then goes quiet (#17575)", () => {
+      const snapshots = [
+        [
+          { terminalId: "t1", heldDurationMs: 2000 },
+          { terminalId: "t2", heldDurationMs: 1000 },
+        ],
+        [{ terminalId: "t2", heldDurationMs: 3000 }],
+        [],
+        [],
+        [{ terminalId: "t1", heldDurationMs: 500 }],
+      ];
+      let tick = 0;
+      const deps = createMockDeps({
+        getPausedDurationsSnapshot: vi.fn(() => snapshots[Math.min(tick++, snapshots.length - 1)]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000 * snapshots.length);
+
+      const gauges = (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls
+        .map((c: unknown[]) => (c[0] as { payload?: Record<string, unknown> }).payload)
+        .filter((p) => p?.metricType === "pause-duration-gauge")
+        .map((p) => ({ held: p!.perTerminalHeld, cleared: p!.clearedTerminalIds }));
+      expect(gauges).toEqual([
+        {
+          held: [
+            { terminalId: "t1", heldDurationMs: 2000 },
+            { terminalId: "t2", heldDurationMs: 1000 },
+          ],
+          cleared: undefined,
+        },
+        { held: [{ terminalId: "t2", heldDurationMs: 3000 }], cleared: ["t1"] },
+        { held: [], cleared: ["t2"] },
+        { held: [{ terminalId: "t1", heldDurationMs: 500 }], cleared: undefined },
+      ]);
+
+      governor.dispose();
+    });
   });
 
   describe("queue-depth-gauge", () => {

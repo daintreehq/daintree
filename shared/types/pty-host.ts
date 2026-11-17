@@ -1765,6 +1765,13 @@ export interface TerminalReliabilityMetricPayload {
    */
   perTerminalHeld?: Array<{ terminalId: string; heldDurationMs: number }>;
   /**
+   * Used by `pause-duration-gauge`: terminals the host's previous gauge
+   * reported held that are no longer paused, named once. Absence from
+   * `perTerminalHeld` means nothing on its own: each PTY shard reports only
+   * its own terminals, and Main hands each project view only its own entries.
+   */
+  clearedTerminalIds?: string[];
+  /**
    * Used by `queue-depth-gauge`: per-terminal queue depth for the live IPC
    * and per-window MessagePort paths. Excludes the FUTURE_SAB path
    * (dead in production) so the dead-code and live paths stay independently

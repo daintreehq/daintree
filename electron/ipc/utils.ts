@@ -698,14 +698,17 @@ function deliverToLocalProjectViews(
  *
  * A frozen cached view gets nothing: it can't run a per-batch consumer, and
  * every sample queued for it would run at once on thaw, inside the warm paint
- * gate, only for the next batch to supersede them (#17038).
+ * gate, only for the next batch to supersede them (#17038). A batch no later
+ * one supersedes (a one-shot clear) passes `includeFrozenViews` instead.
  */
 export function broadcastSlicedToProjectRenderers<T>(
   channel: string,
   entries: Record<string, T>,
   ownerOf: (key: string) => string | null,
-  wrap: (slice: Record<string, T>) => unknown
+  wrap: (slice: Record<string, T>) => unknown,
+  options?: { includeFrozenViews?: boolean }
 ): void {
+  const skipFrozen = options?.includeFrozenViews !== true;
   if (Object.keys(entries).length === 0) return;
   const views = hasRegisteredProjectViews() ? getRegisteredProjectViews() : [];
   const registry = getEndpointRegistry();
@@ -743,7 +746,7 @@ export function broadcastSlicedToProjectRenderers<T>(
     const whole = [wrap(entries)];
     for (const wc of getAllAppWebContents()) {
       if (wc.isDestroyed() || isWithheldFromView(wc.id, channel, whole)) continue;
-      if (isFrozenCachedView(wc)) continue;
+      if (skipFrozen && isFrozenCachedView(wc)) continue;
       try {
         wc.send(channel, ...whole);
       } catch {
@@ -752,7 +755,7 @@ export function broadcastSlicedToProjectRenderers<T>(
     }
   } else {
     for (const { webContents, projectId } of views) {
-      if (isFrozenCachedView(webContents)) continue;
+      if (skipFrozen && isFrozenCachedView(webContents)) continue;
       const payload = payloadFor(projectId);
       if (payload === null) continue;
       if (isWithheldFromView(webContents.id, channel, [payload.value])) continue;

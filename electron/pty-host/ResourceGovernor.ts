@@ -201,6 +201,8 @@ export class ResourceGovernor {
   private hasThroughputBaseline = false;
   private prevPauseCount = 0;
   private readonly pausedTerminalIds = new Set<string>();
+  /** Terminals the last pause-duration gauge reported held. */
+  private lastGaugeTerminalIds = new Set<string>();
   private isWarning = false;
   private profileOverride: ResourceProfile | null = null;
   private smoothedUtilizationPercent: number | undefined = undefined;
@@ -770,10 +772,22 @@ export class ResourceGovernor {
     // already aggregated by `getPausedDurationsSnapshot` from the closure
     // `pausedTerminals` map. Routing through the funnel would re-do the
     // same aggregation the snapshot already performed.
+    //
+    // A terminal that leaves the snapshot is named in `clearedTerminalIds`
+    // once: only this host knows what it reported last tick, and a pause can
+    // end without a `pause-end` (window disconnect, queue teardown). Main
+    // routes every entry to its terminal's own project, so no receiver has to
+    // read another shard's batch for absence (#17575).
     if (!this.deps.getPausedDurationsSnapshot) return;
 
     const snapshot = this.deps.getPausedDurationsSnapshot();
-    if (snapshot.length === 0) return;
+    const held = new Set(snapshot.map((entry) => entry.terminalId));
+    const cleared: string[] = [];
+    for (const terminalId of this.lastGaugeTerminalIds) {
+      if (!held.has(terminalId)) cleared.push(terminalId);
+    }
+    this.lastGaugeTerminalIds = held;
+    if (snapshot.length === 0 && cleared.length === 0) return;
 
     this.deps.sendEvent({
       type: "terminal-reliability-metric",
@@ -782,6 +796,7 @@ export class ResourceGovernor {
         metricType: "pause-duration-gauge",
         timestamp: Date.now(),
         perTerminalHeld: snapshot,
+        ...(cleared.length > 0 ? { clearedTerminalIds: cleared } : {}),
       },
     });
   }

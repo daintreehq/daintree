@@ -175,6 +175,88 @@ describe("terminal resource-metrics fan-out", () => {
     }
   });
 
+  describe("pause-duration gauge (#17575)", () => {
+    function gauge(held: Record<string, number>, clearedTerminalIds?: string[]) {
+      return {
+        terminalId: "resource-governor",
+        metricType: "pause-duration-gauge",
+        timestamp: 5,
+        perTerminalHeld: Object.entries(held).map(([terminalId, heldDurationMs]) => ({
+          terminalId,
+          heldDurationMs,
+        })),
+        ...(clearedTerminalIds ? { clearedTerminalIds } : {}),
+      };
+    }
+
+    function gaugesFor(view: FakeWc) {
+      return view.sends
+        .filter((s) => s.channel === CHANNELS.EVENTS_PUSH)
+        .map((s) => s.args[0] as { name: string; payload: Record<string, unknown> })
+        .filter((e) => e.name === "terminal:reliability-metric")
+        .map((e) => ({
+          held: e.payload.perTerminalHeld,
+          cleared: e.payload.clearedTerminalIds,
+        }));
+    }
+
+    it("hands each project view only its own terminals' durations", () => {
+      // Two shards' batches interleaved: neither may reach the other's view.
+      bus.emit("terminal:reliability-metric", gauge({ "p0-t0": 2000 }));
+      bus.emit("terminal:reliability-metric", gauge({ "p1-t0": 1000, "p1-t1": 800 }));
+      bus.emit("terminal:reliability-metric", gauge({ "p0-t0": 4000 }));
+
+      expect(gaugesFor(registry.views[0]!)).toEqual([
+        { held: [{ terminalId: "p0-t0", heldDurationMs: 2000 }], cleared: undefined },
+        { held: [{ terminalId: "p0-t0", heldDurationMs: 4000 }], cleared: undefined },
+      ]);
+      expect(gaugesFor(registry.views[1]!)).toEqual([
+        {
+          held: [
+            { terminalId: "p1-t0", heldDurationMs: 1000 },
+            { terminalId: "p1-t1", heldDurationMs: 800 },
+          ],
+          cleared: undefined,
+        },
+      ]);
+      for (const view of registry.views.slice(2)) expect(gaugesFor(view)).toEqual([]);
+    });
+
+    it("splits one shard's batch across the projects it hosts, clears included", () => {
+      bus.emit(
+        "terminal:reliability-metric",
+        gauge({ "p0-t0": 2000, "p2-t0": 1500 }, ["p2-t1", "p3-t0"])
+      );
+
+      expect(gaugesFor(registry.views[0]!)).toEqual([
+        { held: [{ terminalId: "p0-t0", heldDurationMs: 2000 }], cleared: undefined },
+      ]);
+      expect(gaugesFor(registry.views[2]!)).toEqual([
+        { held: [{ terminalId: "p2-t0", heldDurationMs: 1500 }], cleared: undefined },
+        { held: [], cleared: ["p2-t1"] },
+      ]);
+      expect(gaugesFor(registry.views[3]!)).toEqual([{ held: [], cleared: ["p3-t0"] }]);
+      for (const view of [1, 4, 5]) expect(gaugesFor(registry.views[view]!)).toEqual([]);
+    });
+
+    it("still reaches a frozen view with a clear, though not with samples", () => {
+      frozenIds.add(registry.views[1]!.id);
+
+      bus.emit("terminal:reliability-metric", gauge({ "p1-t0": 3000 }));
+      bus.emit("terminal:reliability-metric", gauge({}, ["p1-t0"]));
+
+      expect(gaugesFor(registry.views[1]!)).toEqual([{ held: [], cleared: ["p1-t0"] }]);
+    });
+
+    it("sends a clear whose terminal has no known project to every view", () => {
+      bus.emit("terminal:reliability-metric", gauge({}, ["orphan"]));
+
+      for (const view of registry.views) {
+        expect(gaugesFor(view)).toEqual([{ held: [], cleared: ["orphan"] }]);
+      }
+    });
+  });
+
   it("gives each view, cached or not, only its own project's terminals", () => {
     ptyClient.emit("resource-metrics", makeBatch(), 42);
 
