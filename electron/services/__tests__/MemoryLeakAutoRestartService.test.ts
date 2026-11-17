@@ -192,6 +192,98 @@ describe("MemoryLeakAutoRestartService", () => {
     expect(h.deliver).not.toHaveBeenCalled();
   });
 
+  describe("a decision still pending", () => {
+    async function pendingDecision() {
+      const h = harness();
+      let answer: (read: MemoryLeakTerminalRead) => void = () => {};
+      h.readTerminal.mockImplementationOnce(
+        () => new Promise<MemoryLeakTerminalRead>((resolve) => (answer = resolve))
+      );
+      await h.sample(OVER_KB, "t1", AUTO_RESTART_STARTUP_SAMPLES);
+      expect(h.readTerminal).toHaveBeenCalledTimes(1);
+      return { h, settle: () => answer({ projectId: "p1" }) };
+    }
+
+    it("is dropped when the policy is turned off before the lookup settles", async () => {
+      const { h, settle } = await pendingDecision();
+      h.policy.enabled = false;
+      settle();
+      await flush();
+      expect(h.deliver).not.toHaveBeenCalled();
+    });
+
+    it("is dropped when the policy is turned off and a later batch arrives", async () => {
+      const { h, settle } = await pendingDecision();
+      h.policy.enabled = false;
+      await h.sample(UNDER_KB);
+      settle();
+      await flush();
+      expect(h.deliver).not.toHaveBeenCalled();
+    });
+
+    it("is dropped when the threshold rises above the latest sample", async () => {
+      const { h, settle } = await pendingDecision();
+      h.policy.thresholdMb = THRESHOLD_MB * 2;
+      settle();
+      await flush();
+      expect(h.deliver).not.toHaveBeenCalled();
+    });
+
+    it("is dropped when a newer sample comes back under the threshold", async () => {
+      const { h, settle } = await pendingDecision();
+      await h.sample(UNDER_KB);
+      settle();
+      await flush();
+      expect(h.deliver).not.toHaveBeenCalled();
+    });
+
+    it("still goes ahead when the threshold drops but the latest sample stays over it", async () => {
+      const { h, settle } = await pendingDecision();
+      h.policy.thresholdMb = THRESHOLD_MB / 2;
+      settle();
+      await flush();
+      expect(h.deliver).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("a view delivery that runs later", () => {
+    async function delivered() {
+      const h = harness();
+      await h.sample(OVER_KB, "t1", AUTO_RESTART_STARTUP_SAMPLES);
+      await flush();
+      expect(h.deliver).toHaveBeenCalledTimes(1);
+      const isCurrent = h.deliver.mock.calls[0]![1] as () => boolean;
+      expect(isCurrent()).toBe(true);
+      return { h, isCurrent };
+    }
+
+    it("no longer holds once the policy is turned off", async () => {
+      const { h, isCurrent } = await delivered();
+      h.policy.enabled = false;
+      expect(isCurrent()).toBe(false);
+    });
+
+    it("no longer holds once the threshold rises above the latest sample", async () => {
+      const { h, isCurrent } = await delivered();
+      h.policy.thresholdMb = THRESHOLD_MB * 2;
+      expect(isCurrent()).toBe(false);
+    });
+
+    it("no longer holds once a newer sample recovers", async () => {
+      const { h, isCurrent } = await delivered();
+      await h.sample(UNDER_KB);
+      expect(isCurrent()).toBe(false);
+    });
+
+    it("no longer holds once the policy was turned off and on again", async () => {
+      const { h, isCurrent } = await delivered();
+      h.policy.enabled = false;
+      await h.sample(OVER_KB);
+      h.policy.enabled = true;
+      expect(isCurrent()).toBe(false);
+    });
+  });
+
   it("forgets a terminal that exits", async () => {
     const h = harness();
     await h.sample(OVER_KB, "t1", AUTO_RESTART_STARTUP_SAMPLES - 1);
