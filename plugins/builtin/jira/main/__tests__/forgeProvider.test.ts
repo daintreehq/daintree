@@ -7,6 +7,7 @@ import {
 import type { RepoRef } from "../../../../../shared/types/forge.js";
 import { issueBranchName } from "../../../../../shared/utils/issueBranchName.js";
 import { classifyTokenError } from "../../../../../src/lib/forgeErrors.js";
+import { ISSUE_FIELDS } from "../mappers.js";
 import {
   clearJiraCaches,
   jiraForgeProvider,
@@ -1240,24 +1241,27 @@ describe("Server and Data Center", () => {
     rawData: { siteUrl: BASE },
   };
   const ADA_DC = { name: "ada", key: "JIRAUSER1", displayName: "Ada Lovelace" };
-  const BOB_DC = { name: "bob", key: "JIRAUSER2", displayName: "Bob" };
+  const BOB_DC = { name: "bob", key: "JIRAUSER2", displayName: "Ada Lovelace" };
   const SERVER_INFO = {
     deploymentType: "DataCenter",
     version: "9.12.2",
     versionNumbers: [9, 12, 2],
   };
 
-  /** Answers by `"METHOD /path"` under the v2 API; anything else fails the test. */
+  /** A DC issue: numeric ids, as Jira hands them out. */
+  function dcNode(key: string, id: string, overrides: Record<string, unknown> = {}) {
+    return { ...node(key, overrides), id };
+  }
+
+  /** Answers by `"METHOD /path"`, the path matched exactly under the v2 API. */
   function routeDc(answers: Record<string, (body: Record<string, unknown>) => Response>) {
     fetchMock.mockImplementation(async (url: string, init: RequestInit) => {
       const method = init?.method ?? "GET";
-      const path = String(url).startsWith(API) ? String(url).slice(API.length) : String(url);
-      const key = Object.keys(answers).find((pattern) => {
-        const [wanted, prefix] = pattern.split(" ");
-        return wanted === method && path.startsWith(prefix);
-      });
-      if (!key) throw new Error(`Unexpected request: ${method} ${url}`);
-      return answers[key](init?.body ? JSON.parse(String(init.body)) : {});
+      const full = String(url);
+      const path = full.startsWith(API) ? full.slice(API.length).split("?")[0] : full;
+      const answer = answers[`${method} ${path}`];
+      if (!answer) throw new Error(`Unexpected request: ${method} ${full}`);
+      return answer(init?.body ? JSON.parse(String(init.body)) : {});
     });
   }
 
@@ -1270,11 +1274,13 @@ describe("Server and Data Center", () => {
     }));
   }
 
+  const VALIDATION = {
+    "GET /serverInfo": () => json(SERVER_INFO),
+    "GET /myself": () => json(ADA_DC),
+  };
+
   async function connect(token = "pat-1") {
-    routeDc({
-      "GET /serverInfo": () => json(SERVER_INFO),
-      "GET /myself": () => json(ADA_DC),
-    });
+    routeDc(VALIDATION);
     await expect(jiraForgeProvider.validateToken(token)).resolves.toEqual({
       valid: true,
       account: "Ada Lovelace",
@@ -1288,46 +1294,63 @@ describe("Server and Data Center", () => {
   });
 
   describe("connecting", () => {
-    it("checks the instance, then the token as a Bearer, under the context path", async () => {
-      await connect();
-      setMemoryToken(null);
-      routeDc({
-        "GET /serverInfo": () => json(SERVER_INFO),
-        "GET /myself": () => json(ADA_DC),
-      });
+    it("asks what the site is without the token, then checks the token as a Bearer", async () => {
+      routeDc(VALIDATION);
       await jiraForgeProvider.validateToken("pat-2");
       expect(dcRequests()).toEqual([
-        { url: `${API}/serverInfo`, method: "GET", authorization: "Bearer pat-2", body: undefined },
+        { url: `${API}/serverInfo`, method: "GET", authorization: undefined, body: undefined },
         { url: `${API}/myself`, method: "GET", authorization: "Bearer pat-2", body: undefined },
       ]);
     });
 
-    it("refuses a custom domain in front of Jira Cloud", async () => {
+    it("refuses a custom domain in front of Jira Cloud before the token reaches it", async () => {
       routeDc({ "GET /serverInfo": () => json({ deploymentType: "Cloud" }) });
       await expect(jiraForgeProvider.validateToken("token")).resolves.toEqual({
         valid: false,
         error: expect.stringContaining("Jira Cloud site"),
       });
+      expect(dcRequests()).toEqual([expect.objectContaining({ authorization: undefined })]);
+    });
+
+    it.each([
+      ["8.13 by its numbers", { deploymentType: "Server", versionNumbers: [8, 13, 9] }, /8\.14/],
+      ["8.13 by its string", { deploymentType: "Server", version: "8.13.9" }, /8\.14/],
+      ["7.20", { deploymentType: "Server", versionNumbers: [7, 20, 0] }, /8\.14/],
+      ["no version", { deploymentType: "DataCenter" }, /which version/],
+      ["a malformed version", { deploymentType: "Server", version: "eight" }, /which version/],
+      ["no deployment", { versionNumbers: [9, 0, 0] }, /didn't answer as Jira Server/],
+    ])("refuses %s without sending the token", async (_name, info, message) => {
+      routeDc({ "GET /serverInfo": () => json(info), "GET /myself": () => json(ADA_DC) });
+      const result = await jiraForgeProvider.validateToken("pat");
+      expect(result).toMatchObject({ valid: false, error: expect.stringMatching(message) });
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
     it.each([
-      [{ versionNumbers: [8, 13, 9] }, false],
-      [{ versionNumbers: [7, 20, 0] }, false],
-      [{ versionNumbers: [8, 14, 0] }, true],
-      [{ version: "10.3.1" }, true],
-      [{}, true],
-    ])("holds %j to the 8.14 floor (accepted: %s)", async (info, accepted) => {
-      routeDc({
-        "GET /serverInfo": () => json({ deploymentType: "Server", ...info }),
-        "GET /myself": () => json(ADA_DC),
-      });
-      const result = await jiraForgeProvider.validateToken("pat");
-      expect(result.valid).toBe(accepted);
-      if (!accepted) expect(result.error).toMatch(/8\.14 or later/);
+      ["8.14 by its numbers", { deploymentType: "Server", versionNumbers: [8, 14, 0] }],
+      ["10.3 by its string", { deploymentType: "DataCenter", version: "10.3.1" }],
+      [
+        "a malformed array with a usable string",
+        { deploymentType: "Server", versionNumbers: "x", version: "9.4.0" },
+      ],
+    ])("accepts %s", async (_name, info) => {
+      routeDc({ "GET /serverInfo": () => json(info), "GET /myself": () => json(ADA_DC) });
+      await expect(jiraForgeProvider.validateToken("pat")).resolves.toMatchObject({ valid: true });
     });
 
-    it("needs no email, and no accountId, but does need a username", async () => {
+    it("lets /myself decide when serverInfo is closed to anonymous callers", async () => {
+      routeDc({
+        "GET /serverInfo": () => json({}, 401),
+        "GET /myself": () => json(ADA_DC),
+      });
+      await expect(jiraForgeProvider.validateToken("pat")).resolves.toMatchObject({ valid: true });
+      expect(dcRequests().map((request) => request.authorization)).toEqual([
+        undefined,
+        "Bearer pat",
+      ]);
+    });
+
+    it("needs no email and no accountId, but does need a username", async () => {
       settings = { siteUrl: BASE };
       routeDc({
         "GET /serverInfo": () => json(SERVER_INFO),
@@ -1337,6 +1360,8 @@ describe("Server and Data Center", () => {
         valid: false,
         error: "Jira didn't recognize this account",
       });
+      routeDc(VALIDATION);
+      await expect(jiraForgeProvider.validateToken("pat")).resolves.toMatchObject({ valid: true });
     });
 
     it("keeps the previous token off a newly typed site until its own token is saved", async () => {
@@ -1367,15 +1392,21 @@ describe("Server and Data Center", () => {
     });
 
     it("checks the stored token without proving it anywhere new", async () => {
-      await connect();
-      routeDc({
-        "GET /serverInfo": () => json(SERVER_INFO),
-        "GET /myself": () => json(ADA_DC),
-      });
+      // Bound outright, as a replay is: no proof for this token exists.
+      setMemoryToken("pat", BASE);
+      routeDc(VALIDATION);
       await expect(jiraForgeProvider.validateCredentials()).resolves.toEqual({
         valid: true,
         account: "Ada Lovelace",
       });
+
+      // A replay against a record for another token: a proof from that check
+      // would bind it here anyway.
+      setProvenanceAccessors(() => ({ binding: "cloud", tokenDigest: "other" }), null);
+      jiraForgeProvider.setCredentials!({ kind: "bearer", value: "pat" });
+      fetchMock.mockReset();
+      await expect(jiraForgeProvider.listIssues(DC_REPO, {})).rejects.toThrow("another site");
+      expect(fetchMock).not.toHaveBeenCalled();
     });
   });
 
@@ -1384,36 +1415,43 @@ describe("Server and Data Center", () => {
       await connect();
     });
 
-    it("pages the offset search, with its total", async () => {
+    it("pages the offset search", async () => {
       routeDc({
         "POST /search": (body) =>
           json({
             startAt: body.startAt,
             maxResults: 2,
             total: 3,
-            issues: body.startAt === 0 ? [node("ENG-1"), node("ENG-2")] : [node("ENG-3")],
+            issues:
+              body.startAt === 0
+                ? [dcNode("ENG-1", "10001"), dcNode("ENG-2", "10002")]
+                : [dcNode("ENG-3", "10003")],
           }),
       });
       const first = await jiraForgeProvider.listIssues(DC_REPO, { perPage: 2 });
-      expect(first).toMatchObject({ nextCursor: "2", hasMore: true, totalCount: 3 });
+      expect(first).toMatchObject({ nextCursor: "2", hasMore: true });
       expect(first.items.map((issue) => issue.key)).toEqual(["ENG-1", "ENG-2"]);
       const second = await jiraForgeProvider.listIssues(DC_REPO, { perPage: 2, cursor: "2" });
       expect(second).toMatchObject({ nextCursor: null, hasMore: false });
       expect(second.items.map((issue) => issue.key)).toEqual(["ENG-3"]);
-      expect(dcRequests().map((request) => request.body)).toEqual([
-        {
-          jql: 'project = "ENG" AND statusCategory != "Done" ORDER BY created DESC',
-          startAt: 0,
-          maxResults: 2,
-          fields: expect.arrayContaining(["summary", "assignee"]),
-        },
-        expect.objectContaining({ startAt: 2 }),
+      expect(dcRequests().map((request) => [request.url, request.body])).toEqual([
+        [
+          `${API}/search`,
+          {
+            jql: 'project = "ENG" AND statusCategory != "Done" ORDER BY created DESC',
+            startAt: 0,
+            maxResults: 2,
+            fields: expect.arrayContaining(["summary", "assignee"]),
+          },
+        ],
+        [`${API}/search`, expect.objectContaining({ startAt: 2 })],
       ]);
     });
 
     it("ends a page that doesn't move forward, whatever the total says", async () => {
       routeDc({
-        "POST /search": () => json({ startAt: 0, maxResults: 50, total: 99, issues: [node()] }),
+        "POST /search": () =>
+          json({ startAt: 0, maxResults: 50, total: 99, issues: [dcNode("ENG-1", "10001")] }),
       });
       await expect(jiraForgeProvider.listIssues(DC_REPO, { cursor: "50" })).resolves.toMatchObject({
         nextCursor: null,
@@ -1428,30 +1466,63 @@ describe("Server and Data Center", () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it("keeps the context path in links and ids, and a wiki-markup description as it is", async () => {
+    it("hands out an id that opens the same issue, and only on its own instance", async () => {
       routeDc({
-        "GET /issue/ENG-12": () => json(node("ENG-12", { description: "h1. Steps\n*bold*" })),
+        "GET /issue/ENG-12": () =>
+          json(dcNode("ENG-12", "10042", { description: "h1. Steps\n*bold*" })),
+        "GET /issue/10042": () => json(dcNode("ENG-12", "10042")),
       });
       const issue = await jiraForgeProvider.getIssue(DC_REPO, 12);
       expect(issue).toMatchObject({
         url: `${BASE}/browse/ENG-12`,
-        id: "example.com:8443/jira/id-ENG-12",
+        id: "example.com:8443/jira/10042",
         body: "h1. Steps\n*bold*",
       });
+      await expect(jiraForgeProvider.getIssueById(DC_REPO, issue!.id)).resolves.toMatchObject({
+        key: "ENG-12",
+      });
+      for (const elsewhere of [
+        "example.com:8443/other/10042",
+        "example.com/jira/10042",
+        "acme.atlassian.net/10042",
+      ]) {
+        await expect(jiraForgeProvider.getIssueById(DC_REPO, elsewhere)).resolves.toBeNull();
+      }
+      expect(dcRequests().map((request) => request.url)).toEqual([
+        `${API}/issue/ENG-12?fields=${ISSUE_FIELDS.join(",")}`,
+        `${API}/issue/10042?fields=${ISSUE_FIELDS.join(",")}`,
+      ]);
     });
 
-    it("opens a stored id only on the instance that handed it out", async () => {
-      routeDc({ "GET /issue/10042": () => json(node("ENG-12")) });
-      await expect(
-        jiraForgeProvider.getIssueById(DC_REPO, "example.com:8443/jira/10042")
-      ).resolves.toMatchObject({ key: "ENG-12" });
-      await expect(
-        jiraForgeProvider.getIssueById(DC_REPO, "example.com:8443/other/10042")
-      ).resolves.toBeNull();
-      await expect(
-        jiraForgeProvider.getIssueById(DC_REPO, "acme.atlassian.net/10042")
-      ).resolves.toBeNull();
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+    it("reads comments under the context path, by username", async () => {
+      routeDc({
+        "GET /issue/ENG-12": () => json(dcNode("ENG-12", "10042")),
+        "GET /issue/10042/comment": () =>
+          json({
+            startAt: 0,
+            maxResults: 20,
+            total: 1,
+            comments: [
+              {
+                id: "20001",
+                author: ADA_DC,
+                body: "{code}x{code}",
+                created: "2026-10-03T10:00:00.000+0000",
+              },
+            ],
+          }),
+      });
+      const page = await jiraForgeProvider.issueComments!.listIssueComments(DC_REPO, 12, {});
+      expect(page.items).toEqual([
+        expect.objectContaining({
+          body: "{code}x{code}",
+          url: `${BASE}/browse/ENG-12?focusedCommentId=20001`,
+          author: expect.objectContaining({ login: "ada" }),
+        }),
+      ]);
+      expect(dcRequests()[1].url).toBe(
+        `${API}/issue/10042/comment?startAt=0&maxResults=20&orderBy=created`
+      );
     });
 
     it("resolves the project with the instance's base, for links that keep its path", async () => {
@@ -1472,10 +1543,9 @@ describe("Server and Data Center", () => {
       routeDc({ "POST /search": () => json({ startAt: 0, maxResults: 0, total: 41, issues: [] }) });
       const snapshot = await jiraForgeProvider.repoStats!.getRepoStats(DC_REPO);
       expect(snapshot.counts.issueCount).toBe(41);
-      expect(dcRequests()[0].body).toEqual({
-        jql: 'project = "ENG" AND statusCategory != "Done"',
-        maxResults: 0,
-      });
+      expect(dcRequests().map((request) => [request.url, request.body])).toEqual([
+        [`${API}/search`, { jql: 'project = "ENG" AND statusCategory != "Done"', maxResults: 0 }],
+      ]);
     });
   });
 
@@ -1487,28 +1557,33 @@ describe("Server and Data Center", () => {
       assignee = BOB_DC;
       routeDc({
         "GET /myself": () => json(ADA_DC),
-        "GET /issue/ENG-12": () => json(node("ENG-12", { assignee })),
-        "PUT /issue/id-ENG-12/assignee": (body) => {
+        "GET /issue/ENG-12": () => json(dcNode("ENG-12", "10042", { assignee })),
+        "PUT /issue/10042/assignee": (body) => {
           assignee = [ADA_DC, BOB_DC].find((person) => person.name === body.name) ?? null;
           return new Response(null, { status: 204 });
         },
       });
     });
 
-    it("assigns by username, and Undo hands the issue back to who had it", async () => {
-      await expect(jiraForgeProvider.assignIssue(DC_REPO, 12, "Ada Lovelace")).resolves.toEqual([
-        expect.objectContaining({ login: "Ada Lovelace" }),
+    const puts = () =>
+      dcRequests()
+        .filter((request) => request.method === "PUT")
+        .map((request) => request.body);
+
+    it("knows the viewer by username, so a namesake isn't taken for them", async () => {
+      await expect(jiraForgeProvider.identity!.getCurrentUser()).resolves.toMatchObject({
+        login: "ada",
+      });
+      // Bob shares Ada's display name; the issue is still his until assigned.
+      await expect(jiraForgeProvider.assignIssue(DC_REPO, 12, "ada")).resolves.toEqual([
+        expect.objectContaining({ login: "ada" }),
       ]);
       expect(assignee).toBe(ADA_DC);
-      await expect(jiraForgeProvider.unassignIssue(DC_REPO, 12, "Ada Lovelace")).resolves.toEqual([
-        expect.objectContaining({ login: "Bob" }),
+      await expect(jiraForgeProvider.unassignIssue(DC_REPO, 12, "ada")).resolves.toEqual([
+        expect.objectContaining({ login: "bob" }),
       ]);
       expect(assignee).toBe(BOB_DC);
-      expect(
-        dcRequests()
-          .filter((request) => request.method === "PUT")
-          .map((request) => request.body)
-      ).toEqual([{ name: "ada" }, { name: "bob" }]);
+      expect(puts()).toEqual([{ name: "ada" }, { name: "bob" }]);
     });
 
     it("leaves an issue that was already the viewer's alone", async () => {
@@ -1516,25 +1591,25 @@ describe("Server and Data Center", () => {
       await jiraForgeProvider.assignIssue(DC_REPO, 12, "ada");
       await jiraForgeProvider.unassignIssue(DC_REPO, 12, "ada");
       expect(assignee).toBe(ADA_DC);
-      expect(dcRequests().some((request) => request.method === "PUT")).toBe(false);
+      expect(puts()).toEqual([]);
     });
 
     it("unassigns with a null username when nobody had the issue", async () => {
       assignee = null;
-      await jiraForgeProvider.assignIssue(DC_REPO, 12, "Ada Lovelace");
-      await jiraForgeProvider.unassignIssue(DC_REPO, 12, "Ada Lovelace");
+      await jiraForgeProvider.assignIssue(DC_REPO, 12, "ada");
+      await jiraForgeProvider.unassignIssue(DC_REPO, 12, "ada");
       expect(assignee).toBeNull();
-      expect(
-        dcRequests()
-          .filter((request) => request.method === "PUT")
-          .map((request) => request.body)
-      ).toEqual([{ name: "ada" }, { name: null }]);
+      expect(puts()).toEqual([{ name: "ada" }, { name: null }]);
     });
 
     it("refuses to assign anyone but the viewer", async () => {
       await expect(jiraForgeProvider.assignIssue(DC_REPO, 12, "bob")).rejects.toThrow(
         "only be assigned to you"
       );
+      await expect(jiraForgeProvider.assignIssue(DC_REPO, 12, "Ada Lovelace")).rejects.toThrow(
+        "only be assigned to you"
+      );
+      expect(puts()).toEqual([]);
     });
   });
 });

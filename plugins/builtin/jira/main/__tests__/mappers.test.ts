@@ -172,12 +172,12 @@ describe("Server and Data Center users and ids", () => {
     expect(userIdOf(null)).toBeNull();
   });
 
-  it("maps a user with no account id, keeping the username", () => {
+  it("logs a Data Center user in by their unique username, and a Cloud one by name", () => {
     expect(mapUser(DC_USER)).toEqual({
-      login: "Ada Lovelace",
+      login: "ada",
       rawData: { accountId: null, name: "ada" },
     });
-    expect(mapUser({ name: "ada" }).login).toBe("ada");
+    expect(mapUser({ accountId: "abc", displayName: "Ada Lovelace" }).login).toBe("Ada Lovelace");
   });
 
   it("keeps a Cloud id as it was, and an instance's port and path in its own", () => {

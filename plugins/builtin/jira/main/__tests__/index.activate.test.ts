@@ -225,6 +225,7 @@ describe("where the stored token may go", () => {
   it.each([
     ["unreadable", () => Promise.reject(new Error("EACCES"))],
     ["malformed", async () => ({ binding: 42 })],
+    ["a stored null", async () => null],
   ])("sends a token whose record is %s nowhere", async (_name, read) => {
     const { host, storageApi } = makeHost({ siteUrl: BASE });
     storageApi.get.mockImplementation(read);
@@ -234,6 +235,53 @@ describe("where the stored token may go", () => {
     expect(tokenMayGoTo(BASE)).toBe(false);
     expect(tokenMayGoTo("https://acme.atlassian.net")).toBe(false);
     dispose();
+  });
+
+  it("takes a token from before records were kept as Cloud, once, and marks records as kept", async () => {
+    const { host, storage } = makeHost({ siteUrl: BASE });
+    replaying(host, "legacy");
+    const dispose = await activate(host);
+    expect(tokenMayGoTo("https://acme.atlassian.net")).toBe(true);
+    expect(tokenMayGoTo(BASE)).toBe(false);
+    expect(storage).toEqual({
+      credentialProvenanceTracked: true,
+      credentialProvenance: { binding: "cloud", tokenDigest: digestToken("legacy") },
+    });
+    dispose();
+  });
+
+  it("sends a token nowhere once its record is missing where records are kept", async () => {
+    // A save whose record never landed: the marker from an earlier activation is there.
+    const { host } = makeHost(
+      { siteUrl: "https://acme.atlassian.net", email: "ada@example.com" },
+      { credentialProvenanceTracked: true }
+    );
+    replaying(host, "pat");
+    const dispose = await activate(host);
+    expect(getToken()).toBe("pat");
+    expect(tokenMayGoTo("https://acme.atlassian.net")).toBe(false);
+    expect(tokenMayGoTo(BASE)).toBe(false);
+    dispose();
+  });
+
+  it("starts each activation with no token but the one the host replays", async () => {
+    const { host, storage } = makeHost(
+      { siteUrl: BASE },
+      { credentialProvenance: { binding: BASE, tokenDigest: digestToken("pat") } }
+    );
+    const first = await activate(host);
+    first();
+    // A save that finished after disposal, on the retired provider.
+    jiraForgeProvider.setCredentials?.({ kind: "bearer", value: "stray" });
+    expect(getToken()).toBe("stray");
+
+    const second = await activate(host);
+    expect(getToken()).toBeNull();
+    expect(storage.credentialProvenance).toEqual({
+      binding: BASE,
+      tokenDigest: digestToken("pat"),
+    });
+    second();
   });
 
   it("records a saved token where it was proven, and forgets it on a clear", async () => {

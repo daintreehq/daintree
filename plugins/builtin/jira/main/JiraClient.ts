@@ -107,11 +107,13 @@ function authorizationOf(connection: JiraConnection): { header: string; secrets:
   return { header: `Basic ${basic}`, secrets: [basic, connection.token, connection.email] };
 }
 
+const TIMED_OUT_MESSAGE = "Jira didn't respond in time";
+
 function unreachableMessage(err: unknown): string {
   if (!(err instanceof Error)) return "Couldn't reach Jira";
-  if (err.name === "TimeoutError") return "Jira didn't respond in time";
-  // Chromium names a certificate failure in the error's message.
-  if (/ERR_CERT_|ERR_SSL_/.test(err.message)) {
+  if (err.name === "TimeoutError") return TIMED_OUT_MESSAGE;
+  // Chromium names a certificate it couldn't verify in the error's message.
+  if (/\bERR_CERT_/.test(err.message)) {
     return "Couldn't reach Jira: this computer doesn't trust its certificate";
   }
   return "Couldn't reach Jira";
@@ -156,6 +158,11 @@ export async function jiraRequest<T>(
     ignoreCooldown?: boolean;
     /** A write Jira answers with 204 and nothing to read, like setting the assignee. */
     noContent?: boolean;
+    /**
+     * Sent with no credential, to learn what a site is before trusting it with
+     * one. A refusal is then the site's rule, not a verdict on the token.
+     */
+    anonymous?: boolean;
   } = {}
 ): Promise<T> {
   const connectionKey = connectionKeyOf(connection);
@@ -172,6 +179,8 @@ export async function jiraRequest<T>(
   const authorization = authorizationOf(connection);
   const apiVersion = connection.deployment === "cloud" ? 3 : 2;
   const rejectedMessage = REJECTED_MESSAGES[connection.deployment];
+  // Covers reading the body too: headers can arrive on time and the body stall.
+  const signal = AbortSignal.timeout(options.timeoutMs ?? JIRA_API_TIMEOUT_MS);
   let response: Response;
   try {
     const transport = await jiraFetch();
@@ -179,12 +188,12 @@ export async function jiraRequest<T>(
       method: options.method ?? "GET",
       headers: {
         Accept: "application/json",
-        Authorization: authorization.header,
+        ...(options.anonymous ? {} : { Authorization: authorization.header }),
         ...(options.body !== undefined ? { "Content-Type": "application/json" } : {}),
       },
       ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
       redirect: "manual",
-      signal: AbortSignal.timeout(options.timeoutMs ?? JIRA_API_TIMEOUT_MS),
+      signal,
     });
   } catch (err) {
     throw new JiraApiError(unreachableMessage(err));
@@ -195,8 +204,8 @@ export async function jiraRequest<T>(
   // project, so the login verdict it reports is checked before the status.
   const loginReason = response.headers.get("x-seraph-loginreason") ?? "";
   if (
-    response.status === 401 ||
-    FAILED_LOGIN_REASONS.some((reason) => loginReason.includes(reason))
+    !options.anonymous &&
+    (response.status === 401 || FAILED_LOGIN_REASONS.some((reason) => loginReason.includes(reason)))
   ) {
     if (canStartCooldown()) {
       cooldown = {
@@ -245,6 +254,8 @@ export async function jiraRequest<T>(
     options.noContent && response.status === 204
       ? undefined
       : ((await response.json().catch(() => null)) as unknown);
+  if (payload === null && signal.aborted)
+    throw new JiraApiError(TIMED_OUT_MESSAGE, response.status);
   if (!response.ok) {
     throw new JiraApiError(
       errorFromBody(payload, authorization.secrets) ??

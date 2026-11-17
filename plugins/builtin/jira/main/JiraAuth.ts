@@ -23,8 +23,12 @@ export interface CredentialProvenance {
   tokenDigest: string;
 }
 
-/** `null` when nothing was ever recorded, `"unreadable"` when storage couldn't say. */
-type ProvenanceReader = () => CredentialProvenance | null | "unreadable";
+/**
+ * `null` when no record has ever been kept, which only an install from before
+ * Data Center support can be. `"unknown"` when there should be a record and it
+ * can't be read, is malformed, or went missing.
+ */
+type ProvenanceReader = () => CredentialProvenance | null | "unknown";
 type ProvenanceWriter = (record: CredentialProvenance | null) => void;
 
 let provenanceReader: ProvenanceReader | null = null;
@@ -86,8 +90,8 @@ function provenBindingFor(digest: string): TokenBinding | undefined {
  * Where a token arriving from the host belongs: the site a validation of it just
  * proved, else the durable record of an earlier save. Before Data Center was
  * supported nothing was recorded and every saved token was a Cloud one, so a
- * token with no record at all is taken as Cloud, once, and recorded that way.
- * A record for some other token, or one that couldn't be read, binds nothing.
+ * token from such an install is taken as Cloud, once, and recorded that way.
+ * A record for some other token, or one that can't be known, binds nothing.
  */
 function resolveBinding(token: string): TokenBinding | null {
   const digest = digestToken(token);
@@ -97,7 +101,7 @@ function resolveBinding(token: string): TokenBinding | null {
     return proven;
   }
   const recorded = provenanceReader ? provenanceReader() : null;
-  if (recorded === "unreadable") return null;
+  if (recorded === "unknown") return null;
   if (recorded === null) {
     provenanceWriter?.({ binding: CLOUD_BINDING, tokenDigest: digest });
     return CLOUD_BINDING;

@@ -408,7 +408,18 @@ describe("JiraSettingsTab", () => {
       fireEvent.click(screen.getByRole("radio", { name: "Server or Data Center" }));
     }
 
-    it("connects with a base URL and a personal access token, with no email", async () => {
+    it("connects a fresh install with a base URL and a personal access token alone", async () => {
+      await renderLoaded("No credentials saved");
+      chooseDataCenter();
+      fill({ site: "jira.example.com/jira", token: "pat" });
+      fireEvent.click(saveButton());
+
+      await screen.findByText(/Signed in as Ada Lovelace/);
+      expect(stored).toEqual({ siteUrl: "https://jira.example.com/jira" });
+      expect(order).toEqual(["setting:siteUrl", "credential"]);
+    });
+
+    it("keeps a saved Cloud email, and cuts a pasted page URL back to the base", async () => {
       stored.email = "ada@example.com";
       await renderLoaded("No credentials saved");
       chooseDataCenter();
@@ -437,6 +448,29 @@ describe("JiraSettingsTab", () => {
       const radio = screen.getByRole("radio", { name: "Server or Data Center" });
       expect(radio.getAttribute("aria-checked")).toBe("true");
       expect(screen.queryByLabelText("Jira account email")).toBeNull();
+    });
+
+    it("keeps the form typed into during a slow load on its own deployment", async () => {
+      stored.siteUrl = "https://example.com/jira";
+      let finish!: () => void;
+      getSettingValues.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = () => resolve({ values: { ...stored } });
+          })
+      );
+      render(<JiraSettingsTab />);
+      // A Cloud token, typed into the Cloud form before the saved site arrived.
+      fill({ token: "ATATT3x", email: "ada@example.com" });
+      await act(async () => finish());
+      await screen.findByText("No credentials saved");
+      expect(screen.getByRole("radio", { name: "Jira Cloud" }).getAttribute("aria-checked")).toBe(
+        "true"
+      );
+
+      fireEvent.click(saveButton());
+      await screen.findByText(/choose Server or Data Center/);
+      expect(setCredential).not.toHaveBeenCalled();
     });
 
     it("keeps a deployment chosen during a slow load", async () => {
@@ -490,6 +524,11 @@ describe("JiraSettingsTab", () => {
 
       expect((await screen.findAllByText("Jira rejected the API token")).length).toBeGreaterThan(0);
       expect(stored).toEqual({ siteUrl: "https://acme.atlassian.net", email: "ada@example.com" });
+      // Only the site was written, and only the site put back.
+      expect(setSettingValue.mock.calls.map((call) => [call[1], call[2]])).toEqual([
+        ["siteUrl", "https://jira.example.com"],
+        ["siteUrl", "https://acme.atlassian.net"],
+      ]);
     });
   });
 });

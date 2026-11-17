@@ -15,7 +15,7 @@ const CLOUD = "https://acme.atlassian.net";
 const OTHER_CLOUD = "https://beta.atlassian.net";
 const DATA_CENTER = "https://example.com/jira";
 
-let stored: CredentialProvenance | null | "unreadable";
+let stored: CredentialProvenance | null | "unknown";
 let writes: Array<CredentialProvenance | null>;
 
 function wire() {
@@ -96,8 +96,8 @@ describe("where a token may go", () => {
     expect(tokenMayGoTo(DATA_CENTER)).toBe(false);
   });
 
-  it("sends a token nowhere when its record couldn't be read", () => {
-    stored = "unreadable";
+  it("sends a token nowhere when its record can't be known", () => {
+    stored = "unknown";
     setMemoryToken("pat");
 
     expect(tokenMayGoTo(CLOUD)).toBe(false);
@@ -114,6 +114,15 @@ describe("where a token may go", () => {
 
     expect(tokenMayGoTo(DATA_CENTER)).toBe(false);
     expect(tokenMayGoTo(CLOUD)).toBe(true);
+  });
+
+  it("keeps each candidate's proof, so saving the first after checking the second binds it to its own site", () => {
+    recordProvenValidation("pat-a", "https://example.com/jira-a");
+    recordProvenValidation("pat-b", "https://example.com/jira-b");
+    setMemoryToken("pat-a");
+
+    expect(tokenMayGoTo("https://example.com/jira-a")).toBe(true);
+    expect(tokenMayGoTo("https://example.com/jira-b")).toBe(false);
   });
 
   it("takes the latest proof for the same token", () => {

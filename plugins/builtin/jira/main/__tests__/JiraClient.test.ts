@@ -194,11 +194,28 @@ describe("jiraRequest", () => {
     expect((await failure()).message).toBe("Couldn't reach Jira");
   });
 
-  it("names a certificate this computer doesn't trust", async () => {
+  it("names a certificate this computer doesn't trust, and only that", async () => {
     fetchMock.mockRejectedValueOnce(new Error("net::ERR_CERT_AUTHORITY_INVALID"));
     expect((await failure()).message).toBe(
       "Couldn't reach Jira: this computer doesn't trust its certificate"
     );
+    fetchMock.mockRejectedValueOnce(new Error("net::ERR_SSL_VERSION_OR_CIPHER_MISMATCH"));
+    expect((await failure()).message).toBe("Couldn't reach Jira");
+  });
+
+  it("says a body that stalls past the timeout timed out, not that it was unreadable", async () => {
+    fetchMock.mockImplementationOnce(async (_url: string, init: RequestInit) => {
+      const body = new ReadableStream({
+        start(controller) {
+          init.signal!.addEventListener("abort", () => controller.error(init.signal!.reason));
+        },
+      });
+      return new Response(body, { status: 200 });
+    });
+    const error = await jiraRequest(CONNECTION, "/myself", { timeoutMs: 20 }).catch(
+      (err: unknown) => err
+    );
+    expect((error as Error).message).toBe("Jira didn't respond in time");
   });
 
   it("takes the credential back out of an explanation that echoes it", async () => {
@@ -279,9 +296,26 @@ describe("jiraRequest", () => {
       expect((error as Error).message).toBe("Bad header: Bearer [redacted]");
     });
 
+    it("asks anonymously without the token, and reads a refusal as the site's rule", async () => {
+      fetchMock.mockResolvedValue(json({}, { status: 401 }));
+      const error = await jiraRequest(DATA_CENTER, "/serverInfo", { anonymous: true }).catch(
+        (err: unknown) => err
+      );
+      expect(fetchMock.mock.calls[0][1].headers.Authorization).toBeUndefined();
+      expect(error).toMatchObject({ status: 401, credentialRejected: false });
+      // Nothing held against the token either.
+      fetchMock.mockResolvedValueOnce(json({ name: "ada" }));
+      await expect(jiraRequest(DATA_CENTER, "/myself")).resolves.toEqual({ name: "ada" });
+    });
+
     it("doesn't share a cooldown with a Cloud connection using the same token", async () => {
       fetchMock.mockResolvedValueOnce(json({}, { status: 401 }));
       await jiraRequest(DATA_CENTER, "/myself").catch(() => undefined);
+      // The Data Center connection is cooling down: this one never goes out.
+      await expect(jiraRequest(DATA_CENTER, "/myself")).rejects.toMatchObject({
+        credentialRejected: true,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
       fetchMock.mockResolvedValueOnce(json({ accountId: "abc" }));
       await expect(jiraRequest({ ...CONNECTION, token: "PATSECRET" }, "/myself")).resolves.toEqual({
         accountId: "abc",

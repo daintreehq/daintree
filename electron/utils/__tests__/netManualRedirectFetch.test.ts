@@ -212,14 +212,30 @@ describe("createManualRedirectFetch", () => {
     }
   );
 
-  it("refuses a body that isn't a string, whatever the redirect mode", async () => {
+  it.each(["manual", "error", "follow"] as const)(
+    "refuses a body that isn't a string when redirects are %s",
+    async (redirect) => {
+      const net = new FakeElectronNet({ [START]: { status: 200 } });
+
+      await expect(
+        createManualRedirectFetch(net.request)(START, {
+          method: "POST",
+          body: new Uint8Array([1]),
+          redirect,
+        })
+      ).rejects.toThrow(TypeError);
+      expect(net.requests).toHaveLength(0);
+    }
+  );
+
+  it("refuses even a string body when Electron may follow a redirect with it", async () => {
     const net = new FakeElectronNet({ [START]: { status: 200 } });
 
     await expect(
       createManualRedirectFetch(net.request)(START, {
         method: "POST",
-        body: new Uint8Array([1]),
-        redirect: "manual",
+        body: "x",
+        redirect: "follow",
       })
     ).rejects.toThrow(TypeError);
     expect(net.requests).toHaveLength(0);

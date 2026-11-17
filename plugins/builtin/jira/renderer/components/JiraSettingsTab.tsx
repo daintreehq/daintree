@@ -176,6 +176,7 @@ export function JiraSettingsTab() {
   const deploymentChosenRef = useRef(false);
   const siteEditedRef = useRef(false);
   const emailEditedRef = useRef(false);
+  const tokenEditedRef = useRef(false);
   // Save and Clear share one synchronous guard: state updates are deferred, so
   // two quick activations could both pass a check on `isSaving`.
   const busyRef = useRef(false);
@@ -190,7 +191,15 @@ export function JiraSettingsTab() {
       .then(([snapshot, status]) => {
         if (cancelled) return;
         const savedSite = stringSetting(snapshot.values, SITE_URL_SETTING);
-        if (!deploymentChosenRef.current) setDeployment(savedDeployment(savedSite));
+        // Once anything has been typed, the form stays the deployment it was
+        // typed into: a token entered for one kind of Jira mustn't be offered
+        // up for the other.
+        const touched =
+          deploymentChosenRef.current ||
+          siteEditedRef.current ||
+          emailEditedRef.current ||
+          tokenEditedRef.current;
+        if (!touched) setDeployment(savedDeployment(savedSite));
         if (!siteEditedRef.current) setSiteUrl(savedSite);
         if (!emailEditedRef.current) setEmail(stringSetting(snapshot.values, EMAIL_SETTING));
         setHasCredential(status.hasCredential);
@@ -411,7 +420,9 @@ export function JiraSettingsTab() {
             description={
               hasCredential
                 ? "Enter the token again to change any of these"
-                : "Stored by Daintree, and only ever sent to the Jira site it was saved for"
+                : isCloud
+                  ? "Stored by Daintree, and only ever sent to Atlassian"
+                  : "Stored by Daintree, and only ever sent to the Jira it was saved for"
             }
             layout="stacked"
             error={saveError ?? undefined}
@@ -421,6 +432,7 @@ export function JiraSettingsTab() {
                 type="password"
                 value={token}
                 onValueChange={(value) => {
+                  tokenEditedRef.current = true;
                   setToken(value);
                   clearResult();
                 }}

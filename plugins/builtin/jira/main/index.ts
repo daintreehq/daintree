@@ -19,6 +19,14 @@ import { setMemoryToken, setProvenanceAccessors, type CredentialProvenance } fro
  */
 const CREDENTIAL_PROVENANCE_KEY = "credentialProvenance";
 
+/**
+ * Set at the first activation that keeps records, before any token can be
+ * saved under them. Without it, a record lost to a failed write would look like
+ * an install from before records were kept, and a Data Center token would be
+ * taken for a Cloud one.
+ */
+const PROVENANCE_TRACKED_KEY = "credentialProvenanceTracked";
+
 function isProvenance(value: unknown): value is CredentialProvenance {
   if (!value || typeof value !== "object") return false;
   const { binding, tokenDigest } = value as Record<string, unknown>;
@@ -31,14 +39,20 @@ function isProvenance(value: unknown): value is CredentialProvenance {
  * read before its record would have nowhere it may go.
  */
 async function wireProvenance(host: PluginHostApi): Promise<void> {
-  let provenance: CredentialProvenance | null | "unreadable";
+  let provenance: CredentialProvenance | null | "unknown";
   try {
-    const stored = await host.storage.get<unknown>(CREDENTIAL_PROVENANCE_KEY);
-    provenance =
-      stored === undefined || stored === null ? null : isProvenance(stored) ? stored : "unreadable";
+    const [stored, tracked] = await Promise.all([
+      host.storage.get<unknown>(CREDENTIAL_PROVENANCE_KEY),
+      host.storage.get<unknown>(PROVENANCE_TRACKED_KEY),
+    ]);
+    if (stored !== undefined) provenance = isProvenance(stored) ? stored : "unknown";
+    else provenance = tracked === true ? "unknown" : null;
+    if (tracked !== true) {
+      await host.storage.set(PROVENANCE_TRACKED_KEY, true).catch(() => undefined);
+    }
   } catch {
     // Withholds the token rather than guessing where it belongs.
-    provenance = "unreadable";
+    provenance = "unknown";
   }
   setProvenanceAccessors(
     () => provenance,
@@ -109,6 +123,11 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
     return { siteUrl, email };
   });
   setProjectKeyReader(readProjectKey);
+  // A save that finished after the last disposal can have left a token in
+  // memory; only the host's replay may put one there. Cleared before the
+  // accessors are wired, so the durable record stays.
+  setProvenanceAccessors(null, null);
+  setMemoryToken(null);
   await wireProvenance(host);
   const disposeSettings = await Promise.all(
     [PROJECT_KEY_SETTING, SITE_URL_SETTING].map((key) =>

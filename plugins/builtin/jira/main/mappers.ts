@@ -104,10 +104,15 @@ export function userIdOf(node: JiraUserNode | null | undefined): string | null {
   return node?.accountId || node?.name || null;
 }
 
+/**
+ * `login` is what the host compares to tell the viewer from another assignee.
+ * A Server or Data Center username is unique and readable, so it's the login
+ * there; a Cloud account id is neither, so Cloud keeps the display name.
+ */
 export function mapUser(node: JiraUserNode): ForgeUser {
   const avatarUrl = node.avatarUrls?.["48x48"];
   return {
-    login: node.displayName || userIdOf(node) || "Unknown",
+    login: node.name || node.displayName || node.accountId || "Unknown",
     ...(avatarUrl ? { avatarUrl } : {}),
     rawData: { accountId: node.accountId ?? null, ...(node.name ? { name: node.name } : {}) },
   };

@@ -412,12 +412,13 @@ async function searchIssuesByOffset(jql: string, opts: ListOptions, op: Op): Pro
     { method: "POST", body: { jql, startAt, maxResults, fields: ISSUE_FIELDS } }
   );
   const issues = data.issues ?? [];
-  const { nextCursor, total } = nextOffset(startAt, issues.length, data, maxResults);
+  // No total for the host: a search naming a key adds that issue to the page,
+  // and Cloud's search has none either.
+  const { nextCursor } = nextOffset(startAt, issues.length, data, maxResults);
   return {
     items: issues.map((node) => mapIssue(node, op.connection.siteUrl)),
     nextCursor,
     hasMore: nextCursor !== null,
-    ...(total === null ? {} : { totalCount: total }),
   };
 }
 
@@ -467,17 +468,21 @@ interface JiraServerInfo {
   deploymentType?: unknown;
 }
 
+function versionParts(parts: unknown): number[] | null {
+  if (!Array.isArray(parts) || parts.length < 2) return null;
+  return parts.every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0)
+    ? (parts as number[])
+    : null;
+}
+
 /** `[8, 14, 0]` from `serverInfo`, or `null` when it doesn't say. */
 function serverVersionOf(info: JiraServerInfo): number[] | null {
-  const numbers = Array.isArray(info.versionNumbers)
-    ? info.versionNumbers
-    : typeof info.version === "string"
-      ? info.version.split(".").map(Number)
-      : [];
-  if (numbers.length < 2) return null;
-  return numbers.every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0)
-    ? (numbers as number[])
-    : null;
+  return (
+    versionParts(info.versionNumbers) ??
+    (typeof info.version === "string" && /^\d+(?:\.\d+)+$/.test(info.version)
+      ? versionParts(info.version.split(".").map(Number))
+      : null)
+  );
 }
 
 function isOlderThan(version: number[], floor: readonly number[]): boolean {
@@ -488,21 +493,39 @@ function isOlderThan(version: number[], floor: readonly number[]): boolean {
   return false;
 }
 
+const SERVER_DEPLOYMENTS: readonly unknown[] = ["Server", "DataCenter"];
+
 /**
- * A Server or Data Center instance answers `serverInfo` with what it is. A
- * custom domain in front of Cloud says `Cloud`, and that site wants an API token
- * as Basic auth at its atlassian.net address. A version too old for personal
- * access tokens is named rather than left to read as a rejected token.
+ * What the site is, asked before it's trusted with the token. `serverInfo` is
+ * open to anyone, and Jira Cloud always answers it, so a custom domain in front
+ * of Cloud says `Cloud` here without the token ever reaching it. A Server or
+ * Data Center instance says which and what version; one too old for personal
+ * access tokens is named rather than left to read as a rejected token. An
+ * instance that keeps even `serverInfo` from anonymous callers isn't Cloud, and
+ * `/myself` decides for it.
  */
 async function checkDataCenter(connection: JiraConnection): Promise<string | null> {
-  const info = await jiraRequest<JiraServerInfo>(connection, "/serverInfo", {
-    ignoreCooldown: true,
-  });
+  let info: JiraServerInfo;
+  try {
+    info = await jiraRequest<JiraServerInfo>(connection, "/serverInfo", {
+      ignoreCooldown: true,
+      anonymous: true,
+    });
+  } catch (err) {
+    if (err instanceof JiraApiError && (err.status === 401 || err.status === 403)) return null;
+    throw err;
+  }
   if (info.deploymentType === "Cloud") {
     return "That address is a Jira Cloud site. Choose Jira Cloud and use its atlassian.net address.";
   }
+  if (!SERVER_DEPLOYMENTS.includes(info.deploymentType)) {
+    return "That address didn't answer as Jira Server or Data Center. Check the site URL.";
+  }
   const version = serverVersionOf(info);
-  if (version && isOlderThan(version, MIN_DATA_CENTER_VERSION)) {
+  if (!version) {
+    return "Jira didn't say which version it is. Daintree needs Jira 8.14 or later.";
+  }
+  if (isOlderThan(version, MIN_DATA_CENTER_VERSION)) {
     return `Jira ${version.join(".")} doesn't have personal access tokens. Daintree needs Jira 8.14 or later.`;
   }
   return null;
