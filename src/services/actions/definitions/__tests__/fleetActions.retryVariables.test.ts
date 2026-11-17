@@ -7,7 +7,7 @@ import type { WorktreeSnapshot } from "@shared/types";
 
 // The real fleet pipeline runs here, from the first send to the retry; only
 // the write to a terminal is stood in for.
-const submitMock = vi.fn<(id: string, text: string) => Promise<void>>();
+const submitMock = vi.fn<(id: string, text: string, images: string[]) => Promise<void>>();
 
 vi.mock("@/clients", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/clients")>();
@@ -15,8 +15,8 @@ vi.mock("@/clients", async (importOriginal) => {
     ...actual,
     terminalClient: {
       ...actual.terminalClient,
-      submit: (id: string, text: string) => submitMock(id, text),
-      submitWithImages: (id: string, text: string) => submitMock(id, text),
+      submit: (id: string, text: string) => submitMock(id, text, []),
+      submitWithImages: (id: string, text: string, paths: string[]) => submitMock(id, text, paths),
     },
   };
 });
@@ -26,6 +26,8 @@ const { useFleetFailureStore } = await import("@/store/fleetFailureStore");
 const { useFleetTargetOverridesStore, __resetFleetTargetOverridesStoreForTesting } =
   await import("@/store/fleetTargetOverridesStore");
 const { useFleetRunStore } = await import("@/store/fleetRunStore");
+const { useTerminalInputStore } = await import("@/store/terminalInputStore");
+const { useLastComposerSendStore } = await import("@/store/lastComposerSendStore");
 const { usePanelStore } = await import("@/store/panelStore");
 const { setCurrentViewStore } = await import("@/store/createWorktreeStore");
 const { tryFleetBroadcastFromEditor } = await import("@/components/Fleet/fleetEnterBroadcast");
@@ -75,9 +77,23 @@ async function retryFailures(): Promise<void> {
   await registry.get("fleet.retryFailures" as ActionId)!().run(undefined as never, {} as never);
 }
 
-/** What each terminal was last handed, in the order the writes were made. */
-function sentTo(id: string): string[] {
-  return submitMock.mock.calls.filter(([target]) => target === id).map(([, text]) => text);
+/** Every write made, whoever it went to, so a stray one can't hide. */
+function writes(): Array<{ id: string; text: string; images: string[] }> {
+  return submitMock.mock.calls
+    .map(([id, text, images]) => ({ id, text, images }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function failWritesTo(...ids: string[]): void {
+  // Out of disk, a failure worth retrying.
+  submitMock.mockImplementation(async (id) => {
+    if (ids.includes(id)) throw new Error("ENOSPC: disk full");
+  });
+}
+
+function writesNowSucceed(): void {
+  submitMock.mockReset();
+  submitMock.mockResolvedValue(undefined);
 }
 
 describe("fleet.retryFailures — recipe variables after a failed write (#17513)", () => {
@@ -94,6 +110,8 @@ describe("fleet.retryFailures — recipe variables after a failed write (#17513)
     useFleetFailureStore.getState().clear();
     __resetFleetTargetOverridesStoreForTesting();
     useFleetRunStore.getState()._reset();
+    useTerminalInputStore.setState({ sentPrompts: new Map() });
+    useLastComposerSendStore.setState({ sends: {} });
     installWorktrees({ "wt-alpha": "feature/alpha", "wt-beta": "feature/beta" });
     const agents = [
       makeAgent("origin", "wt-alpha"),
@@ -122,25 +140,25 @@ describe("fleet.retryFailures — recipe variables after a failed write (#17513)
     useFleetTargetOverridesStore
       .getState()
       .setPayloadOverride("literal", "Review {{branch_name}} (literally)");
-    // Two writes fail for want of disk, a failure worth retrying.
-    submitMock.mockImplementation(async (id) => {
-      if (id === "beta" || id === "literal") throw new Error("ENOSPC: disk full");
-    });
+    failWritesTo("beta", "literal");
     tryFleetBroadcastFromEditor("origin", "Review {{branch_name}}", vi.fn());
     await flush();
 
-    expect(sentTo("origin")).toEqual(["Review feature/alpha"]);
-    expect(sentTo("beta")).toEqual(["Review feature/beta"]);
-    expect(sentTo("literal")).toEqual(["Review {{branch_name}} (literally)"]);
+    expect(writes()).toEqual([
+      { id: "beta", text: "Review feature/beta", images: [] },
+      { id: "literal", text: "Review {{branch_name}} (literally)", images: [] },
+      { id: "origin", text: "Review feature/alpha", images: [] },
+    ]);
     expect([...useFleetFailureStore.getState().failedIds].sort()).toEqual(["beta", "literal"]);
+    expect(useFleetRunStore.getState().run?.isRetry).toBe(false);
 
-    submitMock.mockReset();
-    submitMock.mockResolvedValue(undefined);
+    writesNowSucceed();
     await retryFailures();
 
-    expect(sentTo("origin")).toEqual([]);
-    expect(sentTo("beta")).toEqual(["Review feature/beta"]);
-    expect(sentTo("literal")).toEqual(["Review {{branch_name}} (literally)"]);
+    expect(writes()).toEqual([
+      { id: "beta", text: "Review feature/beta", images: [] },
+      { id: "literal", text: "Review {{branch_name}} (literally)", images: [] },
+    ]);
     expect(useFleetFailureStore.getState().failedIds.size).toBe(0);
     // The retry's run is labelled with the draft the person wrote.
     expect(useFleetRunStore.getState().run).toMatchObject({
@@ -150,19 +168,39 @@ describe("fleet.retryFailures — recipe variables after a failed write (#17513)
   });
 
   it("fills in each failed target's own branch when two on different ones fail", async () => {
-    submitMock.mockImplementation(async (id) => {
-      if (id === "origin" || id === "beta") throw new Error("ENOSPC: disk full");
-    });
+    failWritesTo("origin", "beta");
     tryFleetBroadcastFromEditor("literal", "Review {{branch_name}}", vi.fn());
     await flush();
     expect([...useFleetFailureStore.getState().failedIds].sort()).toEqual(["beta", "origin"]);
 
-    submitMock.mockReset();
-    submitMock.mockResolvedValue(undefined);
+    writesNowSucceed();
     await retryFailures();
 
-    expect(sentTo("origin")).toEqual(["Review feature/alpha"]);
-    expect(sentTo("beta")).toEqual(["Review feature/beta"]);
-    expect(sentTo("literal")).toEqual([]);
+    expect(writes()).toEqual([
+      { id: "beta", text: "Review feature/beta", images: [] },
+      { id: "origin", text: "Review feature/alpha", images: [] },
+    ]);
+  });
+
+  it("attaches the draft's image again to an unedited target, and sends an emptied edit as empty", async () => {
+    useFleetTargetOverridesStore.getState().setPayloadOverride("literal", "");
+    failWritesTo("beta", "literal");
+    tryFleetBroadcastFromEditor(
+      "origin",
+      "Review {{branch_name}} /tmp/shot.png",
+      vi.fn(),
+      undefined,
+      ["/tmp/shot.png"]
+    );
+    await flush();
+    expect([...useFleetFailureStore.getState().failedIds].sort()).toEqual(["beta", "literal"]);
+
+    writesNowSucceed();
+    await retryFailures();
+
+    expect(writes()).toEqual([
+      { id: "beta", text: "Review feature/beta /tmp/shot.png", images: ["/tmp/shot.png"] },
+      { id: "literal", text: "", images: [] },
+    ]);
   });
 });
