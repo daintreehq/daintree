@@ -566,7 +566,12 @@ describe("ReEntrySummary", () => {
       expect(dismissToast).toHaveBeenCalledOnce();
     });
 
-    it("hands focus back without a ring when the dismiss button is clicked", () => {
+    // A pointer press carries a click count; Enter or Space on the button does
+    // not, and keeps the ring the keyboard user is following.
+    it.each([
+      ["clicked", 1, true],
+      ["pressed from the keyboard", 0, false],
+    ])("hands focus back when the dismiss button is %s", (_how, detail, ringless) => {
       const dismiss = vi.fn();
       render(<ReEntrySummary state={makeState({ dismiss, rows: [makeRow()] })} />);
       flushEntry();
@@ -577,11 +582,11 @@ describe("ReEntrySummary", () => {
       const dismissButton = screen.getByLabelText("Dismiss summary");
       focus(dismissButton);
       const restore = vi.spyOn(outside, "focus");
-      fireEvent.click(dismissButton, { detail: 1 });
+      fireEvent.click(dismissButton, { detail });
 
       expect(dismiss).toHaveBeenCalledOnce();
       expect(document.activeElement).toBe(outside);
-      expect(restore.mock.calls[0]?.[0]?.focusVisible).toBe(false);
+      expect(restore.mock.calls[0]?.[0]?.focusVisible === false).toBe(ringless);
     });
 
     it("hands focus back to the most recent origin", () => {
