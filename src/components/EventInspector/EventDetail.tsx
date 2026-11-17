@@ -1,9 +1,10 @@
 import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { useEventStore, type EventRecord, type EventFilterOptions } from "@/store/eventStore";
-import { ChevronDown, ChevronRight, ListFilter } from "lucide-react";
+import { ChevronRight, ListFilter } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CopyButton } from "@/components/ui/CopyButton";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { FilterChip } from "@/components/ui/FilterChip";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
@@ -99,19 +100,18 @@ export function EventDetail({
 
   if (!event) {
     return (
-      <div
-        className={cn(
-          "flex items-center justify-center text-xs text-text-secondary h-full",
-          className
-        )}
-      >
-        <p>
-          {!hasEvents
-            ? "Nothing to inspect yet"
-            : hasMatches
-              ? "Select an event to see its payload"
-              : "No matching event to inspect"}
-        </p>
+      <div className={cn("flex h-full items-center justify-center", className)}>
+        <EmptyState
+          variant={!hasEvents || hasMatches ? "zero-data" : "filtered-empty"}
+          scale="sidebar"
+          title={
+            !hasEvents
+              ? "Nothing to inspect yet"
+              : hasMatches
+                ? "Select an event to see its payload"
+                : "No matching event to inspect"
+          }
+        />
       </div>
     );
   }
@@ -212,13 +212,16 @@ export function EventDetail({
           <button
             onClick={() => toggleSection("payload")}
             aria-expanded={expandedSections.has("payload")}
-            className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-overlay-subtle transition-colors text-text-primary"
+            className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-overlay-subtle transition-colors text-text-primary outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           >
-            {expandedSections.has("payload") ? (
-              <ChevronDown className="w-3.5 h-3.5" />
-            ) : (
-              <ChevronRight className="w-3.5 h-3.5" />
-            )}
+            <ChevronRight
+              data-animated-chevron
+              className={cn(
+                "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
+                expandedSections.has("payload") && "rotate-90"
+              )}
+              aria-hidden="true"
+            />
             <span className="text-xs font-medium">Payload</span>
           </button>
           {expandedSections.has("payload") && (
@@ -235,13 +238,16 @@ export function EventDetail({
             <button
               onClick={() => toggleSection("context")}
               aria-expanded={expandedSections.has("context")}
-              className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-overlay-subtle transition-colors text-text-primary"
+              className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-overlay-subtle transition-colors text-text-primary outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
             >
-              {expandedSections.has("context") ? (
-                <ChevronDown className="w-3.5 h-3.5" />
-              ) : (
-                <ChevronRight className="w-3.5 h-3.5" />
-              )}
+              <ChevronRight
+                data-animated-chevron
+                className={cn(
+                  "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
+                  expandedSections.has("context") && "rotate-90"
+                )}
+                aria-hidden="true"
+              />
               <span className="text-xs font-medium">Context</span>
             </button>
             {expandedSections.has("context") && (
@@ -265,13 +271,16 @@ export function EventDetail({
           <button
             onClick={() => toggleSection("metadata")}
             aria-expanded={expandedSections.has("metadata")}
-            className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-overlay-subtle transition-colors text-text-primary"
+            className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-overlay-subtle transition-colors text-text-primary outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           >
-            {expandedSections.has("metadata") ? (
-              <ChevronDown className="w-3.5 h-3.5" />
-            ) : (
-              <ChevronRight className="w-3.5 h-3.5" />
-            )}
+            <ChevronRight
+              data-animated-chevron
+              className={cn(
+                "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
+                expandedSections.has("metadata") && "rotate-90"
+              )}
+              aria-hidden="true"
+            />
             <span className="text-xs font-medium">Metadata</span>
           </button>
           {expandedSections.has("metadata") && (
