@@ -424,6 +424,13 @@ describe("VoiceDictionaryPage", () => {
       fireEvent.click(screen.getByRole("button", { name: "Add" }));
       const retryButton = await screen.findByRole("button", { name: "Retry" });
       expect(addField().value).toBe("zoo stand -> Zoostand\nzoo stand -> Zoo\nVite");
+      const landed = await main.importTerms({ entries: [] });
+      expect(landed.dictionary.map((entry) => entry.term)).toEqual([
+        "Zustand",
+        "Zoostand",
+        "Zoo",
+        "Vite",
+      ]);
       fireEvent.click(retryButton);
 
       await waitFor(() => expect(container.textContent).toContain("Left out"));

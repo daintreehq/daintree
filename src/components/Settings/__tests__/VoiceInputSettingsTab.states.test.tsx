@@ -1049,6 +1049,7 @@ describe("VoiceInputSettingsTab dictionary", () => {
       dictionary: [
         { ...term("Vite"), source: "imported" },
         { ...term("Daintree"), source: "imported" },
+        { ...term("Tailwind"), source: "imported" },
         { ...term("Zustand"), heardAs: ["zoo stand", "zu stand"], source: "imported" },
       ],
       suggestedDictionary: [],
@@ -1061,7 +1062,7 @@ describe("VoiceInputSettingsTab dictionary", () => {
 
     const input = await termField();
     fireEvent.change(input, {
-      target: { value: "Vite, Daintree\nzoo stand -> Zustand\nzu stand -> zustand" },
+      target: { value: "Vite, Daintree\nTailwind\nzoo stand -> Zustand\nzu stand -> zustand" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
@@ -1069,12 +1070,14 @@ describe("VoiceInputSettingsTab dictionary", () => {
       expect(screen.getByRole("button", { name: "Remove Zustand" })).toBeTruthy()
     );
     expect(screen.getByRole("button", { name: "Remove Vite" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Remove Tailwind" })).toBeTruthy();
     expect(input.value).toBe("");
     expect(importTerms).toHaveBeenCalledTimes(1);
     expect(importTerms).toHaveBeenCalledWith({
       entries: [
         { term: "Vite", heardAs: [] },
         { term: "Daintree", heardAs: [] },
+        { term: "Tailwind", heardAs: [] },
         { term: "Zustand", heardAs: ["zoo stand", "zu stand"] },
       ],
     });

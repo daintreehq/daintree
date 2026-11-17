@@ -200,7 +200,7 @@ describe("voiceDictionary operations", () => {
       ]);
       expect(added.conflicts).toEqual([]);
       expect(store.set).toHaveBeenCalledTimes(1);
-      expect(storedTerms()).toEqual(["Zustand", "Daintree", "Vite"]);
+      expect(stored().dictionary).toEqual(added.dictionary);
     });
 
     it("leaves out a phrase a stored or earlier pasted term has, and reports each", async () => {

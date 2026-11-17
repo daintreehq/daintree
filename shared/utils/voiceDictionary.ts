@@ -347,13 +347,16 @@ export function importDictionaryEntries(
     if (next === current) continue;
     current = next;
     // Skip never stores a phrase another entry fires for, so whatever this
-    // entry gained was unowned, and it is now the first entry firing for it.
+    // entry gained was unowned or owned by a later copy of its own term, and
+    // it is now the first entry firing for it.
     const key = fold(term.trim());
     const entry = current.find((candidate) => fold(candidate.term) === key);
     if (!entry) continue;
     for (const phrase of entry.heardAs) {
       const rule = heardAsRule(entry.term, phrase)?.key;
-      if (rule !== undefined && !owners.has(rule)) owners.set(rule, entry.term);
+      if (rule === undefined) continue;
+      const owner = owners.get(rule);
+      if (owner === undefined || fold(owner) === key) owners.set(rule, entry.term);
     }
   }
   return current;

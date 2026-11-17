@@ -296,6 +296,30 @@ describe("importDictionaryEntries", () => {
     ]);
   });
 
+  it("names the owner sequential adds would, past a stored copy of a term in another case", () => {
+    const stored = [entry("Zustand"), entry("zustand", { heardAs: ["zoo stand"] })];
+    const inputs = [
+      { term: "zustand", heardAs: ["Zoo  Stand"] },
+      { term: "Other", heardAs: ["zoo stand"] },
+    ];
+    const one: HeardAsConflict[] = [];
+    const sequential = inputs.reduce(
+      (current, input) =>
+        addDictionaryEntry(
+          current,
+          { ...input, source: "imported", heardAsConflict: "skip" },
+          T1,
+          one
+        ),
+      stored
+    );
+    const batch: HeardAsConflict[] = [];
+
+    expect(importDictionaryEntries(stored, inputs, T1, batch)).toEqual(sequential);
+    expect(batch).toEqual([{ phrase: "zoo stand", owner: "Zustand" }]);
+    expect(batch).toEqual(one);
+  });
+
   it("returns the same array when every term is already there", () => {
     const stored = [entry("Daintree", { heardAs: ["dane tree"] })];
     expect(
