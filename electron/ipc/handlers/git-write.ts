@@ -362,6 +362,33 @@ function pullRebaseReviewStaleError(
 }
 
 /**
+ * The branch HEAD names, or `null` on a detached HEAD.
+ *
+ * Read through `symbolic-ref` rather than `rev-parse --abbrev-ref`, which
+ * answers `heads/topic` when a tag is also called `topic`. The preview names
+ * the branch `topic`, so comparing against the abbreviated spelling would
+ * refuse an unchanged worktree, and no fresh preview could ever repair it.
+ */
+async function readHeadBranch(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">
+): Promise<string | null> {
+  try {
+    const ref = (await git.raw(["symbolic-ref", "--quiet", "HEAD"])).trim();
+    return ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** How the worktree's branch differs from the one previewed, or `null` when it doesn't. */
+function describeBranchSwitch(current: string | null, review: GitPullRebaseReview): string | null {
+  if (current === review.branch) return null;
+  return current === null
+    ? `this worktree is on a detached HEAD, not '${review.branch}'`
+    : `this worktree switched from '${review.branch}' to '${current}'`;
+}
+
+/**
  * Refuse the pull if the worktree is on another branch than its confirm showed
  * (#17188).
  *
@@ -373,39 +400,40 @@ function pullRebaseReviewStaleError(
  * as the switch it is rather than as a missing upstream.
  */
 function requirePreviewedBranch(
-  branchName: string,
+  current: string | null,
   review: GitPullRebaseReview,
   cwd: string
 ): void {
-  if (branchName === review.branch) return;
-  throw pullRebaseReviewStaleError(
-    cwd,
-    branchName,
-    branchName === "HEAD"
-      ? `this worktree is on a detached HEAD, not '${review.branch}'`
-      : `this worktree switched from '${review.branch}' to '${branchName}'`
-  );
+  const detail = describeBranchSwitch(current, review);
+  if (detail) throw pullRebaseReviewStaleError(cwd, current ?? "HEAD", detail);
 }
 
 /**
- * Refuse the pull if the branch gained, lost or rewrote commits since its
- * confirm was shown (#17188). Read last before the pull, so the comparison is
- * against the freshest state this handler can see.
+ * Refuse the pull if the worktree moved since its confirm was shown (#17188).
+ * Read last before the pull, so the comparison is against the freshest state
+ * this handler can see.
+ *
+ * The branch is read again alongside the commit, not trusted from the check
+ * at the start: a checkout of another branch on the SAME commit during the
+ * reads in between passes every commit comparison, and would pull this
+ * branch's upstream into a branch nobody previewed. Nothing here locks the
+ * worktree, so a process acting after this read can still move it.
  */
 async function requirePreviewedHead(
   git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">,
-  branchName: string,
   review: GitPullRebaseReview,
   cwd: string
 ): Promise<void> {
+  const current = await readHeadBranch(git);
+  requirePreviewedBranch(current, review, cwd);
   const tip = await readOid(git, "HEAD");
   if (tip?.toLowerCase() === review.headOid) return;
   throw pullRebaseReviewStaleError(
     cwd,
-    branchName,
+    review.branch,
     tip
-      ? `'${branchName}' moved to a different commit`
-      : `'${branchName}' no longer resolves to a commit`
+      ? `'${review.branch}' moved to a different commit`
+      : `'${review.branch}' no longer resolves to a commit`
   );
 }
 
@@ -654,6 +682,13 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
           );
 
           const localRef = `refs/heads/${branchName}`;
+          // Read FIRST and measured from, as the push preview does (#17188).
+          // This is the commit the pull is held to, so every row below has to
+          // describe it: read last, a commit landing mid-measurement would be
+          // pinned without ever having been shown. Unreadable, the rows still
+          // describe the branch, but there is nothing to approve them under.
+          const headOid = await readOid(git, localRef);
+          const tip = headOid ?? localRef;
 
           // Deliberately no `ls-remote` fallback, unlike the push preview.
           // `git pull --rebase` fetches before it replays, and a rebase onto a
@@ -674,7 +709,7 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
               total: 0,
               behind: 0,
               incoming: [],
-              headOid: await readOid(git, localRef),
+              headOid,
             };
           }
 
@@ -695,21 +730,17 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
             "--no-merges",
             "--cherry-pick",
             "--right-only",
-            `${upstream.remoteTrackingRef}...${localRef}`,
+            `${upstream.remoteTrackingRef}...${tip}`,
           ];
           const log = await git.log([`--max-count=${limit}`, ...revArgs]);
           const total = await countCommitsInRange(git, revArgs);
           // Measured separately and in the other direction: an empty replay set
           // is produced both by a branch level with its upstream and by one
           // purely behind it, and only the second is moved by the rebase.
-          const incomingRange = `${localRef}..${upstream.remoteTrackingRef}`;
+          const incomingRange = `${tip}..${upstream.remoteTrackingRef}`;
           const behind = await countCommitsInRange(git, [incomingRange]);
           const incomingLog =
             behind > 0 ? await git.log([`--max-count=${limit}`, incomingRange]) : null;
-          // Read LAST, as the base-integration preview does: this is what the
-          // pull is held to, so a commit landing mid-read surfaces as a
-          // refusal on submit instead of an unnoticed substitution (#17188).
-          const headOid = await readOid(git, localRef);
 
           return {
             upstream: { remote: upstream.remote, branch: upstream.branch },
@@ -1638,9 +1669,11 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     const git = await createAuthenticatedGit(payload.cwd);
 
     try {
-      const branch = await git.revparse(["--abbrev-ref", "HEAD"]);
-      const branchName = branch.trim();
-      if (review) requirePreviewedBranch(branchName, review, payload.cwd);
+      // `HEAD` on a detached HEAD, as `rev-parse --abbrev-ref` spelled it, so
+      // the upstream lookup below fails closed in the same terms it always has.
+      const headBranch = await readHeadBranch(git);
+      const branchName = headBranch ?? "HEAD";
+      if (review) requirePreviewedBranch(headBranch, review, payload.cwd);
       // Pull from the branch's UPSTREAM, not a hardcoded origin (#11746) and not
       // its push target: in a triangular workflow a branch tracks
       // `origin/release/topic` while pushing to `fork/topic`, and `git pull`
@@ -1657,7 +1690,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       await requireNoTrackedChanges(git, payload.cwd, "pull-rebase");
       // Absent for a caller no confirm previewed (an agent dispatch), which
       // keeps today's unpinned behaviour.
-      if (review) await requirePreviewedHead(git, branchName, review, payload.cwd);
+      if (review) await requirePreviewedHead(git, review, payload.cwd);
       // The same pins the base rebase carries, for the same reason: each closes
       // a gap between what the confirm previewed and what git would do under a
       // user's config. `rebase.updateRefs` moves OTHER local branches pointing

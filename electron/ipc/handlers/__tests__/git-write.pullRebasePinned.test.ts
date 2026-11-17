@@ -10,6 +10,17 @@ const ipcMainMock = vi.hoisted(() => ({
   removeHandler: vi.fn(),
 }));
 
+/**
+ * One-shot interleavings, each run synchronously inside a real git call: the
+ * preview's first `log` returning, and the pull's upstream lookup. They stand
+ * in for an agent acting in the worktree mid-read, which is the race the pins
+ * exist for.
+ */
+const hooks = vi.hoisted(() => ({
+  afterPreviewLog: null as (() => void) | null,
+  duringPullUpstreamLookup: null as (() => void) | null,
+}));
+
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
   BrowserWindow: {
@@ -39,13 +50,42 @@ vi.mock("../../../services/getSoundService.js", () => ({
 vi.mock("../../../utils/hardenedGit.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../utils/hardenedGit.js")>()),
   validateCwd: vi.fn(),
-  createHardenedGit: vi.fn(async (cwd: string) => hermeticSimpleGit(cwd)),
-  createAuthenticatedGit: vi.fn(async (cwd: string) => hermeticSimpleGit(cwd)),
+  createHardenedGit: vi.fn(async (cwd: string) => withPreviewLogHook(hermeticSimpleGit(cwd))),
+  createAuthenticatedGit: vi.fn(async (cwd: string) =>
+    withUpstreamLookupHook(hermeticSimpleGit(cwd))
+  ),
   createContinueGit: vi.fn(),
 }));
 
+function withPreviewLogHook<T extends { log: (...args: never[]) => unknown }>(client: T): T {
+  const log = client.log.bind(client) as (...args: never[]) => Promise<unknown>;
+  client.log = (async (...args: never[]) => {
+    const result = await log(...args);
+    const hook = hooks.afterPreviewLog;
+    hooks.afterPreviewLog = null;
+    hook?.();
+    return result;
+  }) as T["log"];
+  return client;
+}
+
+function withUpstreamLookupHook<T extends { raw: (...args: never[]) => unknown }>(client: T): T {
+  const raw = client.raw.bind(client) as (...args: never[]) => Promise<unknown>;
+  client.raw = (async (...args: never[]) => {
+    const argv = args[0] as unknown;
+    if (Array.isArray(argv) && argv[0] === "for-each-ref" && hooks.duringPullUpstreamLookup) {
+      const hook = hooks.duringPullUpstreamLookup;
+      hooks.duringPullUpstreamLookup = null;
+      hook();
+    }
+    return raw(...args);
+  }) as T["raw"];
+  return client;
+}
+
 import { registerGitWriteHandlers } from "../git-write.js";
 import { _resetRateLimitQueuesForTest } from "../../utils.js";
+import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 
 function hermeticEnv(): Record<string, string> {
   return {
@@ -152,7 +192,7 @@ async function rejection(promise: Promise<unknown>): Promise<string | null> {
     await promise;
     return null;
   } catch (error) {
-    return String(error instanceof Error ? error.message : error);
+    return formatErrorMessage(error, "rejected without a message");
   }
 }
 
@@ -179,6 +219,8 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  hooks.afterPreviewLog = null;
+  hooks.duringPullUpstreamLookup = null;
   ipcMainMock.handle.mockClear();
   _resetRateLimitQueuesForTest();
   registerGitWriteHandlers({} as never);
@@ -244,6 +286,58 @@ describe("git pull --rebase pinned to its preview (#17188)", () => {
 
     expectStale(error);
     expect(error).toMatch(/detached HEAD, not 'topic'/);
+  });
+
+  it("pins the commit its rows were measured from when the branch moves mid-preview", async () => {
+    // Read last, the pin would be the commit that landed mid-read: rows of one
+    // commit approved under the name of another, and a pull that passes.
+    const { repo, local } = makeFixture();
+    let landed = "";
+    hooks.afterPreviewLog = () => {
+      landed = commit(repo, "agent.txt");
+    };
+
+    const shown = await preview(repo, "topic");
+
+    expect(landed).not.toBe("");
+    expect(shown.headOid).toBe(local);
+    expect(shown.commits.map((c) => c.hash)).not.toContain(landed);
+    const error = await rejection(
+      pull(repo, { expectedBranch: "topic", expectedHeadOid: shown.headOid })
+    );
+    expectStale(error);
+    expect(git(repo, ["rev-parse", "HEAD"])).toBe(landed);
+  });
+
+  it("refuses a switch to another branch on the same commit during the pull's own checks", async () => {
+    // Passes the branch check at the start and every commit comparison at the
+    // end, so only re-reading the branch beside the commit catches it.
+    const { repo, local, incoming } = makeFixture();
+    const shown = await preview(repo, "topic");
+    hooks.duringPullUpstreamLookup = () => {
+      git(repo, ["checkout", "-q", "-b", "elsewhere"]);
+    };
+
+    const error = await rejection(
+      pull(repo, { expectedBranch: "topic", expectedHeadOid: shown.headOid })
+    );
+
+    expectStale(error);
+    expect(error).toMatch(/switched from 'topic' to 'elsewhere'/);
+    expect(git(repo, ["rev-parse", "elsewhere"])).toBe(local);
+    expect(contains(repo, incoming)).toBe(false);
+  });
+
+  it("knows the branch when a tag shares its name", async () => {
+    // `rev-parse --abbrev-ref HEAD` answers `heads/topic` here, which no
+    // preview spells that way: compared as-is it would refuse every time.
+    const { repo, incoming } = makeFixture();
+    git(repo, ["tag", "topic"]);
+    const shown = await preview(repo, "topic");
+
+    await pull(repo, { expectedBranch: "topic", expectedHeadOid: shown.headOid });
+
+    expect(contains(repo, incoming)).toBe(true);
   });
 
   it("accepts the commit in any case, as it compares the commit rather than the spelling", async () => {

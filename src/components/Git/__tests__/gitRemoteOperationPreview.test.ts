@@ -238,10 +238,14 @@ describe("buildGitRemoteOperationPreview", () => {
   // range read and the commit main measured it from, so the pull can refuse
   // when the worktree moved while the confirm was open.
   it("carries the branch and commit the replay set was measured against", async () => {
-    const { listRebaseCommits } = stubGit({ currentBranch: "topic" });
-    const preview = await buildGitRemoteOperationPreview("/repo", "pull-rebase");
-    const measured = (await listRebaseCommits.mock.results[0]!.value) as { headOid: string };
-    expect(preview.pullRebaseReview).toEqual({ branch: "topic", headOid: measured.headOid });
+    for (const [branch, headOid] of [
+      ["topic", "1".repeat(40)],
+      ["release/2.0", "2".repeat(40)],
+    ] as const) {
+      stubGit({ currentBranch: branch, rebaseHeadOid: headOid });
+      const preview = await buildGitRemoteOperationPreview("/repo", "pull-rebase");
+      expect(preview.pullRebaseReview).toEqual({ branch, headOid });
+    }
   });
 
   it("carries no pull-rebase review when main could not read the branch's commit", async () => {
@@ -335,6 +339,7 @@ describe("buildGitRemoteOperationPreview", () => {
       commits: [],
       total: 0,
       behind: 0,
+      headOid: REBASE_HEAD_OID,
     });
     await expect(buildGitRemoteOperationPreview("/repo", "pull-rebase")).resolves.toMatchObject({
       pullSource: { remote: "origin", branch: "renamed-topic" },

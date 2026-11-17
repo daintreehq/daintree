@@ -129,6 +129,9 @@ function rawResponder(forEachRef: string, forEachRefUpstream: string) {
       return `${format.includes("push:remotename") ? forEachRef : forEachRefUpstream}\n`;
     }
     if (args[0] === "rev-list") return "7\n";
+    // The pull reads its branch through `symbolic-ref` (#17188); the push
+    // still reads it through `rev-parse --abbrev-ref` on `revparse` below.
+    if (args[0] === "symbolic-ref") return `refs/heads/${LOCAL_BRANCH}\n`;
     return "";
   };
 }
@@ -774,32 +777,44 @@ describe("list-rebase-commits — replay range", () => {
     expect(result.incoming).toHaveLength(1);
   });
 
-  // The commit the pull is held to (#17188). Read after every range read, so a
-  // commit landing mid-measurement surfaces as a refusal on submit rather than
-  // rows describing one commit approved under the name of another.
-  it("reports the branch's commit, read after the ranges it pins", async () => {
+  // The commit the pull is held to (#17188). Read before anything is measured,
+  // and every range is measured from it rather than from the branch ref: read
+  // last, a commit landing mid-measurement would be pinned without ever having
+  // been on screen, and the pull would rebase it on an approval of other rows.
+  it("measures every range from the commit it reports, read before any of them", async () => {
+    const OID = "0123456789abcdef0123456789abcdef01234567";
     const git = makeRebaseGit([UPSTREAM_REF, LOCAL_REF]);
 
     const result = (await listRebaseCommits(git)) as unknown as { headOid: string | null };
 
-    expect(result.headOid).toBe("0123456789abcdef0123456789abcdef01234567");
-    const order = (mock: ReturnType<typeof vi.fn>, pick: (argv: string[]) => boolean) =>
-      mock.mock.calls
-        .map((call: unknown[], i: number) => ({
-          argv: (call[0] ?? []) as string[],
-          at: mock.mock.invocationCallOrder[i]!,
-        }))
-        .filter(({ argv }) => pick(argv))
-        .map(({ at }) => at);
-    const headRead = Math.max(
-      ...order(git.raw, (argv) => argv[0] === "rev-parse" && argv[3] === `${LOCAL_REF}^{commit}`)
+    expect(result.headOid).toBe(OID);
+    const logArgs = git.log.mock.calls.map((call: unknown[]) => (call[0] ?? []) as string[]);
+    const countArgs = git.raw.mock.calls
+      .map((call: unknown[]) => (call[0] ?? []) as string[])
+      .filter((argv: string[]) => argv[0] === "rev-list");
+    const measured = [...logArgs, ...countArgs];
+    expect(measured.flat()).toContain(`${UPSTREAM_REF}...${OID}`);
+    expect(measured.flat()).toContain(`${OID}..${UPSTREAM_REF}`);
+    expect(measured.flat().some((arg) => arg.includes(LOCAL_REF))).toBe(false);
+
+    const tipRead = git.raw.mock.calls.findIndex(
+      (call: unknown[]) => ((call[0] ?? []) as string[])[3] === `${LOCAL_REF}^{commit}`
     );
-    const measured = [
-      ...order(git.log, () => true),
-      ...order(git.raw, (argv) => argv[0] === "rev-list"),
-    ];
-    expect(measured.length).toBeGreaterThan(0);
-    expect(headRead).toBeGreaterThan(Math.max(...measured));
+    expect(git.raw.mock.invocationCallOrder[tipRead]!).toBeLessThan(
+      Math.min(...git.log.mock.invocationCallOrder)
+    );
+  });
+
+  it("reports the commit on an unfetched upstream too", async () => {
+    const git = makeRebaseGit([LOCAL_REF]);
+
+    const result = (await listRebaseCommits(git)) as unknown as {
+      rangeBasis: string;
+      headOid: string | null;
+    };
+
+    expect(result.rangeBasis).toBe("unfetched");
+    expect(result.headOid).toBe("0123456789abcdef0123456789abcdef01234567");
   });
 
   it("reports no commit when the branch can't be read, leaving nothing to approve", async () => {

@@ -360,6 +360,59 @@ describe("GitPullRebaseConfirmDialog", () => {
     expect(rebaseButton().hasAttribute("aria-disabled")).toBe(false);
   });
 
+  // The harmful order: the superseded read lands AFTER the current one. Without
+  // the per-read identity guard it would overwrite the current request's state
+  // and leave the dialog on the wrong rows or stuck unsettled.
+  it("keeps the current request's preview when the superseded read lands after it", async () => {
+    const stale = deferred<ReturnType<typeof loaded>>();
+    mocks.buildPreview.mockReturnValueOnce(stale.promise);
+    render(<GitPullRebaseConfirmDialog />);
+
+    await act(async () => {
+      void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
+    });
+
+    const current = deferred<ReturnType<typeof loaded>>();
+    mocks.buildPreview.mockReturnValueOnce(current.promise);
+    let decision: unknown;
+    await act(async () => {
+      void useGitPullRebaseConfirmStore
+        .getState()
+        .requestConfirmation("/repo")
+        .then((result) => {
+          decision = result;
+        });
+    });
+
+    const fresh = { branch: "main", headOid: oid("b") };
+    await act(async () => {
+      current.resolve(
+        loaded({
+          commits: [{ hash: "bbbbbbb2222", message: "Current read", author: "Ada" }],
+          pullRebaseReview: fresh,
+        })
+      );
+      await current.promise;
+    });
+    await act(async () => {
+      stale.resolve(
+        loaded({
+          commits: [{ hash: "aaaaaaa1111", message: "Stale read", author: "Ada" }],
+          pullRebaseReview: { branch: "main", headOid: oid("a") },
+        })
+      );
+      await stale.promise;
+    });
+
+    expect(screen.getByText("Current read")).toBeTruthy();
+    expect(screen.queryByText("Stale read")).toBeNull();
+    expect(rebaseButton().hasAttribute("aria-disabled")).toBe(false);
+    await act(async () => {
+      rebaseButton().click();
+    });
+    expect(decision).toEqual({ confirmed: true, review: fresh });
+  });
+
   // No review, no approval: a pull has to be held to what was shown, and a
   // preview main could not pin to a commit has nothing to hold it to.
   it("blocks approval and offers a retry when the branch's commit couldn't be read", async () => {

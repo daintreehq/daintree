@@ -13,7 +13,7 @@ vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 const refresh = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock("@/clients", () => ({ worktreeClient: { refresh } }));
 
-const notify = vi.hoisted(() => vi.fn().mockReturnValue("toast-1"));
+const notify = vi.hoisted(() => vi.fn<(toast: Toast) => string>().mockReturnValue("toast-1"));
 vi.mock("@/lib/notify", () => ({ notify }));
 
 const WT_ID = "wt-1";
@@ -218,7 +218,7 @@ describe("git.pullRebase refreshes and routes like a base integration (#17188)",
       expect.anything(),
       expect.anything()
     );
-    const toast = notify.mock.calls[0]![0] as Toast;
+    const toast = notify.mock.calls[0]![0];
     expect(toast.context.worktreeId).toBe(WT_ID);
     expect(toast.action?.label).toBe("Pull and rebase");
     // The recovery asks again, through a fresh confirm, for the same worktree.

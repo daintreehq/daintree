@@ -1089,7 +1089,16 @@ describe("ReviewHub", () => {
         expect(useGitPullRebaseConfirmStore.getState().pendingConfirm?.cwd).toBe(WORKTREE_PATH)
       );
       expect(pullRebaseMock).toHaveBeenCalledTimes(1);
-      useGitPullRebaseConfirmStore.getState().resolveConfirmation(null);
+
+      // The second pull carries the second approval, never the stale one.
+      const fresh = { branch: "feature/x", headOid: "a".repeat(40) };
+      pullRebaseMock.mockResolvedValueOnce(undefined);
+      await act(async () => {
+        useGitPullRebaseConfirmStore.getState().resolveConfirmation(fresh);
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(pullRebaseMock).toHaveBeenCalledTimes(2));
+      expect(pullRebaseMock).toHaveBeenLastCalledWith(WORKTREE_PATH, fresh);
     });
 
     it("Force-push CTA dispatches the action rather than pushing from this pane", async () => {
