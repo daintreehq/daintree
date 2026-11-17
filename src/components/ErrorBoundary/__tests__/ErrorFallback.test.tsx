@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { ErrorFallback } from "../ErrorFallback";
 import { logsClient } from "@/clients/logsClient";
@@ -183,6 +183,62 @@ describe("ErrorFallback", () => {
       render(<ErrorFallback {...baseProps} variant="section" />);
       fireEvent.click(screen.getByText("View logs"));
       expect(logsClient.openFile).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows a local alert when the log open call rejects, and keeps the other actions", async () => {
+      vi.stubEnv("DEV", false);
+      vi.mocked(logsClient.openFile).mockRejectedValueOnce(new Error("no logs"));
+      render(<ErrorFallback {...baseProps} variant="section" onReport={vi.fn()} />);
+      fireEvent.click(screen.getByText("View logs"));
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toContain("Couldn't open the log file");
+      expect(screen.getByTestId("error-fallback-restart")).toBeTruthy();
+      expect(screen.getByTestId("error-fallback-report")).toBeTruthy();
+      expect(screen.getByTestId("error-fallback-logs")).toBeTruthy();
+    });
+
+    it("shows the alert when the log opener throws synchronously", async () => {
+      vi.stubEnv("DEV", false);
+      vi.mocked(logsClient.openFile).mockImplementationOnce(() => {
+        throw new Error("bridge unavailable");
+      });
+      render(<ErrorFallback {...baseProps} variant="fullscreen" />);
+      fireEvent.click(screen.getByText("View logs"));
+      expect(await screen.findByRole("alert")).toBeTruthy();
+    });
+
+    it("clears the alert when View logs is retried and succeeds", async () => {
+      vi.stubEnv("DEV", false);
+      vi.mocked(logsClient.openFile).mockRejectedValueOnce(new Error("no logs"));
+      render(<ErrorFallback {...baseProps} variant="section" />);
+      fireEvent.click(screen.getByText("View logs"));
+      await screen.findByRole("alert");
+      fireEvent.click(screen.getByText("View logs"));
+      await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    });
+
+    it("ignores a stale failure that settles after a later successful retry", async () => {
+      vi.stubEnv("DEV", false);
+      let rejectFirst!: (e: Error) => void;
+      vi.mocked(logsClient.openFile)
+        .mockImplementationOnce(() => new Promise<void>((_, reject) => (rejectFirst = reject)))
+        .mockResolvedValueOnce(undefined);
+      render(<ErrorFallback {...baseProps} variant="section" />);
+      fireEvent.click(screen.getByText("View logs"));
+      fireEvent.click(screen.getByText("View logs"));
+      await waitFor(() => expect(logsClient.openFile).toHaveBeenCalledTimes(2));
+      await act(async () => {
+        rejectFirst(new Error("late"));
+      });
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("shows no alert when the log opens", async () => {
+      vi.stubEnv("DEV", false);
+      render(<ErrorFallback {...baseProps} variant="section" />);
+      fireEvent.click(screen.getByText("View logs"));
+      await waitFor(() => expect(logsClient.openFile).toHaveBeenCalled());
+      expect(screen.queryByRole("alert")).toBeNull();
     });
 
     it("keeps Report issue focused but inert while a report is in flight", () => {
