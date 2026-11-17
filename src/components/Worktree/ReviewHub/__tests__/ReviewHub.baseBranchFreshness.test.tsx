@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import type { ReactNode } from "react";
-import type { StagingStatus, WorktreeState } from "@shared/types";
+import type { GitStatus, StagingStatus, WorktreeState } from "@shared/types";
 import type { CrossWorktreeDiffResult, CrossWorktreeFile } from "@shared/types/ipc/git";
 
 const { getStagingStatusMock, onUpdateMock, compareWorktreesMock, commitMock, worktreeStoreData } =
@@ -73,6 +73,8 @@ import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 import { useReviewCommitDraftStore } from "@/store/reviewCommitDraftStore";
 import { resetStagingStatusCacheForTests } from "../stagingStatusCache";
+import { usePanelDialogStore } from "@/store/panelDialogStore";
+import { usePanelStore } from "@/store/panelStore";
 
 const MAIN_PATH = "/home/user/project";
 const WORKTREE_PATH = "/home/user/project-feature";
@@ -375,5 +377,84 @@ describe("ReviewHub base-branch freshness (#17196)", () => {
     await openVsMain();
     expect(baseRows()).toEqual(["delta.ts"]);
     expect(compareWorktreesMock).toHaveBeenCalledTimes(2);
+  });
+  describe("opening a base-branch file carries its change type (#17582)", () => {
+    const PANEL_ID = "base-diff-panel";
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      usePanelDialogStore.setState({ dialogStack: [] });
+      usePanelStore.setState((state) => {
+        const { [PANEL_ID]: _removed, ...rest } = state.panelsById;
+        return { panelsById: rest };
+      });
+    });
+
+    it("opens a deleted file as deleted and steps to an added one as added", async () => {
+      compareWorktreesMock.mockResolvedValue({
+        branch1: "main",
+        branch2: "feature/test",
+        files: [
+          { path: "gone.ts", status: "D", insertions: 0, deletions: 3 },
+          { path: "fresh.ts", status: "A", insertions: 4, deletions: 0 },
+        ],
+      } satisfies CrossWorktreeDiffResult);
+      const open = vi
+        .spyOn(usePanelDialogStore.getState(), "openPanelDialog")
+        .mockImplementation(async (rawOptions) => {
+          // AddPanelOptions is a union that doesn't name the diff fields.
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- the hub's diff request
+          const options = rawOptions as unknown as {
+            title: string;
+            filePath: string;
+            fileStatus: GitStatus;
+          };
+          usePanelStore.setState((state) => ({
+            panelsById: {
+              ...state.panelsById,
+              [PANEL_ID]: {
+                id: PANEL_ID,
+                kind: "diff",
+                title: options.title,
+                location: "dialog",
+                filePath: options.filePath,
+                fileStatus: options.fileStatus,
+                diffSource: "base-branch",
+              },
+            },
+          }));
+          usePanelDialogStore.setState({ dialogStack: [PANEL_ID] });
+          return PANEL_ID;
+        });
+      render(hub());
+      await waitFor(() => screen.getByText("index.ts"));
+      act(() => fireEvent.click(screen.getByRole("radio", { name: /vs main/i })));
+      await waitFor(() => expect(baseRows().length).toBe(2));
+
+      const rows = screen.getAllByTestId("base-branch-file-row-base");
+      fireEvent.click(rows.find((row) => row.textContent === "gone.ts")!);
+      await waitFor(() => expect(open).toHaveBeenCalledTimes(1));
+      const options = open.mock.calls[0]![0] as {
+        fileStatus: string;
+        changeSet: Array<{ path: string; status: string }>;
+      };
+      expect(options.fileStatus).toBe("deleted");
+      expect(options.changeSet.map((entry) => [entry.path, entry.status])).toEqual([
+        ["fresh.ts", "added"],
+        ["gone.ts", "deleted"],
+      ]);
+
+      await act(async () => {});
+      fireEvent.click(
+        screen
+          .getAllByTestId("base-branch-file-row-base")
+          .find((r) => r.textContent === "fresh.ts")!
+      );
+      await waitFor(() => {
+        const panel = usePanelStore.getState().panelsById[PANEL_ID];
+        expect(panel?.kind === "diff" && panel.fileStatus).toBe("added");
+      });
+      expect(open).toHaveBeenCalledTimes(1);
+    });
   });
 });
