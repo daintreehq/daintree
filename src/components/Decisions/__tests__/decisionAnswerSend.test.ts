@@ -4,7 +4,9 @@ import type {
   AnswerDecisionQuestionPayload,
   DecisionAnswerResultRead,
   DecisionQuestionAnswerResult,
+  DecisionQuestionContent,
   DecisionQuestionContentResult,
+  DecisionThreadAnswer,
 } from "@shared/types/decisionsQuestion";
 import {
   answerKey,
@@ -50,6 +52,42 @@ function place(answerId: string, phase: AnswerPhase) {
     },
   }));
 }
+
+const OPEN: DecisionQuestionContent = {
+  questionId: "q1",
+  alias: 1,
+  terminalId: "t1",
+  reference: REFERENCE,
+  revision: 1,
+  question: "Ship it?",
+  context: null,
+  kind: "choice",
+  options: [{ id: "yes", label: "Yes", description: null }],
+  allowText: false,
+  requirement: "human-required",
+  askedAt: "2026-11-02T10:00:00.000Z",
+  expiresAt: null,
+  status: "open",
+  deliveryStatus: "relay-queued",
+  attachments: [],
+  thread: [],
+};
+
+const ANSWER: DecisionThreadAnswer = {
+  type: "answer",
+  entryId: "",
+  revision: 2,
+  from: "person",
+  onComputer: true,
+  correction: false,
+  confirmsModel: false,
+  choices: [{ id: "yes", label: "Yes" }],
+  text: null,
+  reason: null,
+  images: [],
+  sentAt: "2026-11-02T10:05:00.000Z",
+  unreadable: false,
+};
 
 function deferred<T>() {
   let resolve: (value: T) => void = () => {};
@@ -170,28 +208,7 @@ describe("following an answer by its id (#17102)", () => {
       submission: record.submission && { ...record.submission, resubmitted: true },
     }));
     getAnswerResult.mockResolvedValue({ result: "not-found" });
-    getQuestionContent.mockResolvedValue({
-      result: "read",
-      question: {
-        questionId: "q1",
-        alias: 1,
-        terminalId: "t1",
-        reference: REFERENCE,
-        revision: 1,
-        question: "Ship it?",
-        context: null,
-        kind: "choice",
-        options: [{ id: "yes", label: "Yes", description: null }],
-        allowText: false,
-        requirement: "human-required",
-        askedAt: "2026-11-02T10:00:00.000Z",
-        expiresAt: null,
-        status: "open",
-        deliveryStatus: "relay-queued",
-        attachments: [],
-        thread: [],
-      },
-    });
+    getQuestionContent.mockResolvedValue({ result: "read", question: OPEN });
     answerQuestion.mockRejectedValue(new Error("lost"));
 
     // On its own, a second time: never; it waits for the person.
@@ -199,8 +216,11 @@ describe("following an answer by its id (#17102)", () => {
     expect(answerQuestion).not.toHaveBeenCalled();
     expect(readAnswerRecord(KEY).submission?.phase.kind).toBe("lost");
 
+    // Each Retry gives Retry back when its send is lost again.
     await followAnswer(KEY, true);
+    expect(readAnswerRecord(KEY).submission?.phase.kind).toBe("lost");
     await followAnswer(KEY, true);
+    expect(readAnswerRecord(KEY).submission?.phase.kind).toBe("lost");
     expect(answerQuestion).toHaveBeenCalledTimes(2);
     for (const [sent] of answerQuestion.mock.calls) expect(sent).toEqual(payload("answer-a"));
     expect(readAnswerRecord(KEY).submission?.answerId).toBe("answer-a");
@@ -219,13 +239,35 @@ describe("following an answer by its id (#17102)", () => {
     expect(answerQuestion).not.toHaveBeenCalled();
   });
 
-  it("keeps Retry for an answer never committed while its question can't be read just now", async () => {
+  it.each(["not-running", "off", "unreadable"] as const)(
+    "keeps Retry, and the id, while the question reads %s",
+    async (result) => {
+      place("answer-a", { kind: "lost" });
+      getAnswerResult.mockResolvedValue({ result: "not-found" });
+      getQuestionContent.mockResolvedValue({ result });
+      await followAnswer(KEY);
+
+      expect(readAnswerRecord(KEY).submission).toMatchObject({
+        answerId: "answer-a",
+        phase: { kind: "lost" },
+      });
+      expect(answerQuestion).not.toHaveBeenCalled();
+    }
+  );
+
+  it("counts the answer sent once the question's thread holds it, though its standing read missed it", async () => {
     place("answer-a", { kind: "lost" });
     getAnswerResult.mockResolvedValue({ result: "not-found" });
-    getQuestionContent.mockResolvedValue({ result: "not-running" });
-    await followAnswer(KEY);
+    getQuestionContent.mockResolvedValue({
+      result: "read",
+      question: { ...OPEN, status: "human-answered", thread: [{ ...ANSWER, entryId: "answer-a" }] },
+    });
+    await followAnswer(KEY, true);
 
-    expect(readAnswerRecord(KEY).submission?.phase.kind).toBe("lost");
+    expect(readAnswerRecord(KEY).submission?.phase).toEqual({
+      kind: "settled",
+      outcome: { status: "sent" },
+    });
     expect(answerQuestion).not.toHaveBeenCalled();
   });
 });

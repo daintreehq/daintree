@@ -199,14 +199,23 @@ async function follow(key: string, claim: Claim, retry: boolean): Promise<void> 
       fresh = null;
     }
     if (claimed(key, claim) === null) return;
-    // Nothing was committed under its id, so a question that is gone or can't
-    // be opened lets it go; one that couldn't be read just now leaves Retry.
-    if (fresh === null || fresh.result === "not-running" || fresh.result === "off") {
+    // A question that is gone lets it go, since nothing can answer it now; one
+    // that can't be read just now leaves Retry, as a send of it may be under way.
+    if (fresh?.result === "not-found") {
+      drop(key, claim, "closed");
+      return;
+    }
+    if (fresh === null || fresh.result !== "read") {
       setPhase(key, claim, { kind: "lost" });
       return;
     }
-    if (fresh.result !== "read") {
-      drop(key, claim, fresh.result === "unreadable" ? "unreadable" : "closed");
+    // A send of it got there after all: the relay took it.
+    if (
+      fresh.question.thread.some(
+        (entry) => entry.type === "answer" && entry.entryId === claim.answerId
+      )
+    ) {
+      setPhase(key, claim, { kind: "settled", outcome: { status: "sent" } });
       return;
     }
     if (!isAnswerable(fresh.question, Date.now())) {
