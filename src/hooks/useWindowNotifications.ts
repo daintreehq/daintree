@@ -16,13 +16,17 @@ export function useWindowNotifications(): void {
   // as another starts) still reaches main, which counts each pane once with
   // any Decisions question waiting in it (#17233). The pending send reads it.
   const prevWaitingRef = useRef<readonly string[]>(NO_PANES);
+  // Whether the count moved while the pending send waited. A send whose count
+  // didn't is marked membership-only, so main runs every pass it ran when only
+  // counts were sent, and the swap's own only while a question waits.
+  const countMovedRef = useRef(false);
   const windowFocusedRef = useRef(true);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const blurDimTimerRef = useRef<NodeJS.Timeout | null>(null);
-  // Last panes handed to Main and counted in the favicon. Focus used to
+  // Last badge state handed to Main and drawn in the favicon. Focus used to
   // re-send both unconditionally; with no waiting agents that is an IPC and a
   // favicon href rewrite per focus for no change.
-  const sentPanesRef = useRef<readonly string[] | null>(null);
+  const sentBadgeCountRef = useRef<number | null>(null);
   const faviconBadgedRef = useRef(false);
   const [blurTime, setBlurTime] = useState<number | null>(null);
 
@@ -45,14 +49,15 @@ export function useWindowNotifications(): void {
       }
 
       prevWaitingRef.current = NO_PANES;
+      countMovedRef.current = false;
 
       if (faviconBadgedRef.current) {
         faviconBadgedRef.current = false;
         clearFaviconBadge();
       }
 
-      if (sentPanesRef.current?.length !== 0 && window.electron?.notification?.updateBadge) {
-        sentPanesRef.current = NO_PANES;
+      if (sentBadgeCountRef.current !== 0 && window.electron?.notification?.updateBadge) {
+        sentBadgeCountRef.current = 0;
         window.electron.notification.updateBadge({ waitingPanelIds: [] });
       }
     };
@@ -88,10 +93,12 @@ export function useWindowNotifications(): void {
     const previous = prevWaitingRef.current;
     if (!samePanes(previous, waitingPanelIds)) {
       prevWaitingRef.current = waitingPanelIds;
+      const countMoved = previous.length !== waitingPanelIds.length;
 
       // A swap at the same count rides on a send already pending rather than
       // postponing it, so panes trading places can't hold a steady count back.
-      if (debounceTimerRef.current && previous.length === waitingPanelIds.length) return;
+      if (!countMoved && debounceTimerRef.current) return;
+      if (countMoved) countMovedRef.current = true;
 
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
@@ -101,15 +108,23 @@ export function useWindowNotifications(): void {
       debounceTimerRef.current = setTimeout(() => {
         debounceTimerRef.current = null;
         const panes = prevWaitingRef.current;
-        // Panes that came back to what Main last heard are no news to it, as a
-        // count that settled where it started never was.
-        if (sentPanesRef.current !== null && samePanes(sentPanesRef.current, panes)) return;
+        const membershipOnly = !countMovedRef.current;
+        countMovedRef.current = false;
         const waitingCount = panes.length;
 
         if (window.electron?.notification?.updateBadge) {
-          sentPanesRef.current = panes;
-          window.electron.notification.updateBadge({ waitingPanelIds: [...panes] });
+          if (membershipOnly) {
+            window.electron.notification.updateBadge({
+              waitingPanelIds: [...panes],
+              membershipOnly,
+            });
+          } else {
+            sentBadgeCountRef.current = waitingCount;
+            window.electron.notification.updateBadge({ waitingPanelIds: [...panes] });
+          }
         }
+        // The count, and so the favicon, stayed where it was.
+        if (membershipOnly) return;
 
         if (!windowFocusedRef.current) {
           if (waitingCount > 0) {

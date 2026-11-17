@@ -272,6 +272,11 @@ function waitingIn(...panelIds: string[]): NotificationState {
   return { waitingPanelIds: panelIds };
 }
 
+/** A view's report where only which panes wait moved, not how many. */
+function swappedTo(...panelIds: string[]): NotificationState {
+  return { waitingPanelIds: panelIds, membershipOnly: true };
+}
+
 describe("NotificationService", () => {
   const originalPlatform = process.platform;
 
@@ -1476,7 +1481,7 @@ describe("NotificationService", () => {
         vi.advanceTimersByTime(301);
         const writes = titleCount(win);
 
-        notificationService.updateNotifications(11, waitingIn("terminal-b"));
+        notificationService.updateNotifications(11, swappedTo("terminal-b"));
         vi.advanceTimersByTime(301);
 
         expect(titleCount(win)).toBe(writes);
@@ -1493,7 +1498,7 @@ describe("NotificationService", () => {
 
         notificationService.updateNotifications(21, waitingIn("terminal-x", "terminal-y"));
         vi.advanceTimersByTime(200);
-        notificationService.updateNotifications(11, waitingIn("terminal-b"));
+        notificationService.updateNotifications(11, swappedTo("terminal-b"));
         vi.advanceTimersByTime(101);
 
         expect(win2.setTitle).toHaveBeenLastCalledWith("(2) Daintree");
@@ -1509,7 +1514,7 @@ describe("NotificationService", () => {
         vi.advanceTimersByTime(301);
 
         notificationService.updateNotifications(21, waitingIn("terminal-x"));
-        notificationService.updateNotifications(11, waitingIn("terminal-b"));
+        notificationService.updateNotifications(11, swappedTo("terminal-b"));
         setDecisionQuestions([question("project-11", "terminal-b")]);
         expect(win1.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
         vi.advanceTimersByTime(301);
@@ -1523,7 +1528,7 @@ describe("NotificationService", () => {
         expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(2);
       });
 
-      it("still drops a view gone without its teardown reported when a swap arrives", async () => {
+      it("runs the pass of a report whose count moved and came back, as it always did", async () => {
         const win = windowWithViews(11, 12);
         notificationService.initialize(createRegistryMock([win]) as never);
         await questionsLoaded();
@@ -1532,7 +1537,8 @@ describe("NotificationService", () => {
         vi.advanceTimersByTime(301);
         expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(2);
 
-        // View 12 was evicted and its "destroyed" never arrived.
+        // View 12 was evicted and its "destroyed" never arrived. View 11's count
+        // went to two and back to one within its renderer's wait: not marked.
         win.ownerIds = [11];
         notificationService.updateNotifications(11, waitingIn("terminal-b"));
         vi.advanceTimersByTime(301);
@@ -1550,7 +1556,7 @@ describe("NotificationService", () => {
         vi.advanceTimersByTime(301);
         expect(win.setTitle).toHaveBeenLastCalledWith("(2) Daintree");
 
-        notificationService.updateNotifications(11, waitingIn("terminal-b"));
+        notificationService.updateNotifications(11, swappedTo("terminal-b"));
         vi.advanceTimersByTime(301);
 
         expect(win.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
@@ -1573,7 +1579,7 @@ describe("NotificationService", () => {
         notificationService.updateNotifications(21, waitingIn("terminal-x", "terminal-y"));
         vi.advanceTimersByTime(200);
         // The agent moves into the pane whose question already counts.
-        notificationService.updateNotifications(11, waitingIn("terminal-b"));
+        notificationService.updateNotifications(11, swappedTo("terminal-b"));
         return { win1, win2, win3 };
       }
 
@@ -1588,11 +1594,16 @@ describe("NotificationService", () => {
 
       it("lands at once when a window's focus runs the pass early", async () => {
         const { win1, win2, win3 } = await setup();
+        expect(win1.setTitle).toHaveBeenLastCalledWith("(2) Daintree");
+
         win3.trigger("focus");
 
         expect(win1.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
         expect(win2.setTitle).toHaveBeenLastCalledWith("(2) Daintree");
         expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(3);
+        const writes = titleCount(win1);
+        vi.advanceTimersByTime(400);
+        expect(titleCount(win1)).toBe(writes);
       });
     });
 

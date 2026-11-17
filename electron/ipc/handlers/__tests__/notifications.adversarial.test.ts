@@ -394,6 +394,23 @@ describe("notifications IPC adversarial", () => {
       });
     });
 
+    it("carries a report marked membership-only, and nothing else that claims it", () => {
+      const event = fakeEvent(createSender(42)) as Electron.IpcMainEvent;
+      getListener(CHANNELS.NOTIFICATION_UPDATE)(event, {
+        waitingPanelIds: ["t-2"],
+        membershipOnly: true,
+      });
+      getListener(CHANNELS.NOTIFICATION_UPDATE)(event, {
+        waitingPanelIds: ["t-3"],
+        membershipOnly: "yes",
+      });
+
+      expect(notificationServiceMock.updateNotifications.mock.calls).toEqual([
+        [42, { waitingPanelIds: ["t-2"], membershipOnly: true }],
+        [42, { waitingPanelIds: ["t-3"] }],
+      ]);
+    });
+
     it("keeps a view's last report through a malformed one, and clears it on an empty one", () => {
       const event = fakeEvent(createSender(42)) as Electron.IpcMainEvent;
       getListener(CHANNELS.NOTIFICATION_UPDATE)(event, { waitingPanelIds: ["t-1"] });

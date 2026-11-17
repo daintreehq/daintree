@@ -56,7 +56,10 @@ function readNotificationState(raw: unknown): NotificationState | null {
       waitingPanelIds.add(id);
     }
   }
-  return { waitingPanelIds: [...waitingPanelIds] };
+  const membershipOnly = (raw as { membershipOnly?: unknown }).membershipOnly === true;
+  return membershipOnly
+    ? { waitingPanelIds: [...waitingPanelIds], membershipOnly }
+    : { waitingPanelIds: [...waitingPanelIds] };
 }
 
 let cachedAllowedSoundFiles: AllowedSoundFilesSet | null = null;

@@ -227,8 +227,13 @@ describe("focus-driven work benchmark", () => {
       act(() => {
         vi.advanceTimersByTime(400);
       });
-      expect(updateBadgeMock).toHaveBeenLastCalledWith({ waitingPanelIds: ["t-2"] });
+      expect(updateBadgeMock).toHaveBeenLastCalledWith({
+        waitingPanelIds: ["t-2"],
+        membershipOnly: true,
+      });
       expect(updateBadgeMock).toHaveBeenCalledTimes(2);
+      // The count, and so the favicon, stayed where it was.
+      expect(updateFaviconMock).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
@@ -293,37 +298,50 @@ describe("focus-driven work benchmark", () => {
     }
   });
 
-  it("sends nothing when the panes come back to what main last heard", async () => {
-    vi.useFakeTimers();
-    try {
-      const { rerender } = renderHook(() => useWindowNotifications());
-      act(() => {
-        window.dispatchEvent(new Event("blur"));
-      });
-      counts.waitingPanelIds = ["t-a"];
-      rerender();
-      act(() => {
-        vi.advanceTimersByTime(400);
-      });
-      expect(updateBadgeMock).toHaveBeenCalledTimes(1);
+  it.each([
+    { through: ["t-b"], membershipOnly: true },
+    { through: ["t-a", "t-b"], membershipOnly: false },
+  ])(
+    "marks panes back where they were by way of $through as membership-only: $membershipOnly",
+    async ({ through, membershipOnly }) => {
+      vi.useFakeTimers();
+      try {
+        const { rerender } = renderHook(() => useWindowNotifications());
+        act(() => {
+          window.dispatchEvent(new Event("blur"));
+        });
+        counts.waitingPanelIds = ["t-a"];
+        rerender();
+        act(() => {
+          vi.advanceTimersByTime(400);
+        });
+        expect(updateBadgeMock).toHaveBeenCalledTimes(1);
 
-      counts.waitingPanelIds = ["t-b"];
-      rerender();
-      act(() => {
-        vi.advanceTimersByTime(100);
-      });
-      counts.waitingPanelIds = ["t-a"];
-      rerender();
-      act(() => {
-        vi.advanceTimersByTime(400);
-      });
+        counts.waitingPanelIds = through;
+        rerender();
+        act(() => {
+          vi.advanceTimersByTime(100);
+        });
+        counts.waitingPanelIds = ["t-a"];
+        rerender();
+        act(() => {
+          vi.advanceTimersByTime(400);
+        });
 
-      expect(updateBadgeMock).toHaveBeenCalledTimes(1);
-      expect(updateFaviconMock).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
+        // A count that moved and came back is sent as it always was; panes that
+        // only traded places are marked, so main runs no pass for them alone.
+        expect(updateBadgeMock).toHaveBeenCalledTimes(2);
+        expect(updateBadgeMock).toHaveBeenLastCalledWith(
+          membershipOnly
+            ? { waitingPanelIds: ["t-a"], membershipOnly }
+            : { waitingPanelIds: ["t-a"] }
+        );
+        expect(updateFaviconMock).toHaveBeenCalledTimes(membershipOnly ? 1 : 2);
+      } finally {
+        vi.useRealTimers();
+      }
     }
-  });
+  );
 
   it("tells two panes from one whose id joins theirs", async () => {
     vi.useFakeTimers();

@@ -27,20 +27,17 @@ import type {
 export interface NotificationState {
   /** The panes this view counts as agents waiting on the person, by panel id. */
   waitingPanelIds: readonly string[];
+  /**
+   * Only which panes wait moved since the view's last report, not how many: a
+   * report no view sent before panes were reported (#17233), which matters only
+   * against a waiting question.
+   */
+  membershipOnly?: boolean;
 }
 
 /** A pane named by the workspace its view holds it under and its panel (terminal) id. */
 function paneKey(workspaceKey: string, panelId: string): string {
   return `${workspaceKey}\0${panelId}`;
-}
-
-/** The same number of waiting panes as before, but not the same panes. */
-function isSwap(previous: NotificationState, next: NotificationState): boolean {
-  const before = previous.waitingPanelIds;
-  const after = next.waitingPanelIds;
-  return (
-    before.length === after.length && before.some((panelId, index) => panelId !== after[index])
-  );
 }
 
 /** What each window's title and the Dock badge count. */
@@ -376,18 +373,14 @@ class NotificationService {
   }
 
   updateNotifications(ownerWebContentsId: NotificationOwnerId, state: NotificationState): void {
-    const previous = this.statesByOwner.get(ownerWebContentsId);
     this.statesByOwner.set(ownerWebContentsId, state);
-    // A swap at the same count (before panes were reported, one never reached
-    // main) never postpones a pass already armed, which tallies the latest
-    // state when it runs. With no question waiting it moves no number at all,
-    // so it schedules nothing, unless a view gone without its teardown being
-    // reported is still counted: any report used to bring the pass that drops it.
+    // Panes trading places are kept for the next pass but bring none of their
+    // own with no question waiting, so with Decisions off every pass runs when
+    // it always did. Nor do they postpone a pass already armed, which tallies
+    // the latest state when it runs.
     if (
-      previous !== undefined &&
-      isSwap(previous, state) &&
-      (this.questionPanes.size === 0 || this.debounceTimer !== null) &&
-      ![...this.statesByOwner.keys()].some((ownerId) => this.isDeadOwner(ownerId))
+      state.membershipOnly === true &&
+      (this.questionPanes.size === 0 || this.debounceTimer !== null)
     ) {
       return;
     }
@@ -464,13 +457,11 @@ class NotificationService {
     if (!this.registry) return;
 
     for (const ownerId of [...this.statesByOwner.keys()]) {
-      if (this.isDeadOwner(ownerId)) this.statesByOwner.delete(ownerId);
+      const ctx = this.registry.getByWebContentsId(ownerId);
+      if (!ctx || ctx.browserWindow.isDestroyed()) {
+        this.statesByOwner.delete(ownerId);
+      }
     }
-  }
-
-  private isDeadOwner(ownerId: NotificationOwnerId): boolean {
-    const ctx = this.registry?.getByWebContentsId(ownerId);
-    return !ctx || ctx.browserWindow.isDestroyed();
   }
 
   /**

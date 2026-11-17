@@ -1716,9 +1716,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /**
      * Update window title and dock badge from the panes this view counts as
      * agents waiting on the person, by panel id; main counts each once with
-     * any Decisions question waiting in the same pane.
+     * any Decisions question waiting in the same pane. `membershipOnly` marks
+     * a report where only which panes wait moved, not how many.
      */
-    updateBadge(state: { waitingPanelIds: string[] }): void;
+    updateBadge(state: { waitingPanelIds: string[]; membershipOnly?: boolean }): void;
     /** Get notification settings */
     getSettings(): Promise<NotificationSettings>;
     /** Update notification settings (partial update) */
