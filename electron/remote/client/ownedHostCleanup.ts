@@ -100,14 +100,17 @@ export function watchOwnedHostCleanup(options: OwnedHostCleanupOptions): () => v
   const ownedBy = (worktreeId: string) =>
     options.list().filter((host) => host.ownerWorktreeId === worktreeId);
   // An owned host goes whole; only another host's record needs its placement dropped.
-  const waitingFor = (worktreeId: string) =>
+  // A worktree waiting on a machine made for it waits on that machine, not on its
+  // resource environment: only the worktree's own removal ends that wait.
+  const waitingFor = (worktreeId: string, worktreeGone: boolean) =>
     options.clearPlacement
       ? options
           .list()
           .filter(
             (host) =>
               host.pendingPlacement?.worktreeId === worktreeId &&
-              host.ownerWorktreeId !== worktreeId
+              host.ownerWorktreeId !== worktreeId &&
+              (worktreeGone || host.pendingPlacement.createdMachine !== true)
           )
       : [];
 
@@ -123,16 +126,23 @@ export function watchOwnedHostCleanup(options: OwnedHostCleanupOptions): () => v
   ): void => {
     const targets = () =>
       ownedBy(worktreeId).filter((host) => only === undefined || only.has(host.id));
+    // Confirmed gone only when the folder check ran: a resource teardown leaves the worktree.
+    const worktreeGone = confirm !== undefined;
     if (disposed || pending.has(worktreeId)) return;
     const placements = only === undefined;
-    if (targets().length === 0 && (!placements || waitingFor(worktreeId).length === 0)) return;
+    if (
+      targets().length === 0 &&
+      (!placements || waitingFor(worktreeId, worktreeGone).length === 0)
+    ) {
+      return;
+    }
     pending.add(worktreeId);
     void (async () => {
       const refused = new Set<HostId>();
       try {
         if (confirm && !(await confirm())) return;
         if (placements) {
-          for (const host of waitingFor(worktreeId)) {
+          for (const host of waitingFor(worktreeId, worktreeGone)) {
             await options.clearPlacement?.(host.id).catch((error: unknown) => {
               logger.warn("Dropping a removed worktree's pending placement failed", { error });
             });

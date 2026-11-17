@@ -1,4 +1,4 @@
-import type { ComponentProps } from "react";
+import type { ComponentProps, KeyboardEvent } from "react";
 import { useFieldControl } from "@/components/ui/field";
 import {
   Select,
@@ -48,6 +48,7 @@ interface CloudProvisioningSelectProps {
   id?: string;
   className?: string;
   "data-testid"?: string;
+  onTriggerKeyDown?: (event: KeyboardEvent<HTMLButtonElement>) => void;
 }
 
 /**
@@ -64,6 +65,7 @@ export function CloudProvisioningSelect({
   id,
   className,
   "data-testid": testId,
+  onTriggerKeyDown,
 }: CloudProvisioningSelectProps) {
   if (!form.currentCatalog) return null;
   const choices = choicesFor(form.currentCatalog, dimension, form.provisioning.location);
@@ -78,7 +80,7 @@ export function CloudProvisioningSelect({
       }
       disabled={disabled}
     >
-      <Trigger id={id} className={className} data-testid={testId}>
+      <Trigger id={id} className={className} data-testid={testId} onKeyDown={onTriggerKeyDown}>
         <SelectValue placeholder="Nothing to choose" />
       </Trigger>
       <SelectContent>

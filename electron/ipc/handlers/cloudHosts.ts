@@ -33,9 +33,13 @@ function field(payload: unknown, name: string): unknown {
 /**
  * The local project a machine is being made for, as main knows it. Only a
  * window on this machine, asking for its own project, can mark a machine for
- * one of its worktrees: a window bound to another host has none here.
+ * one of its worktrees, and only for a working tree git lists for that
+ * project: a window bound to another host has none here.
  */
-function requireOwnWorktree(ctx: IpcContext, worktree: unknown): { projectName: string } {
+async function requireOwnWorktree(
+  ctx: IpcContext,
+  worktree: unknown
+): Promise<{ projectName: string }> {
   const refuse = (message: string) =>
     new AppError({ code: "VALIDATION", message, userMessage: message });
   if (
@@ -56,6 +60,13 @@ function requireOwnWorktree(ctx: IpcContext, worktree: unknown): { projectName: 
   }
   const project = projectStore.getProjectById(projectId);
   if (!project) throw refuse("The worktree's project isn't open on this machine.");
+  const { getProjectAcrossHostsService } =
+    await import("../../services/projectAcrossHosts/defaults.js");
+  try {
+    await getProjectAcrossHostsService().requireProjectWorktree(projectId, worktreeId);
+  } catch {
+    throw refuse("The worktree isn't one of this project's working trees.");
+  }
   return { projectName: project.name };
 }
 
@@ -142,7 +153,7 @@ export const cloudHostsNamespace = defineIpcNamespace({
         payload: CloudHostCreateForWorktreeRequest
       ): Promise<{ hostId: string; requestedAt: number }> => {
         const worktree = field(payload, "worktree");
-        const { projectName } = requireOwnWorktree(ctx, worktree);
+        const { projectName } = await requireOwnWorktree(ctx, worktree);
         return requireRemoteService("cloudHosts").createHostForWorktree(
           field(payload, "machine"),
           worktree,

@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   createHost: vi.fn(async () => ({ hostId: "build" })),
   getProjectById: vi.fn((id: string) => (id === "proj-1" ? { id, name: "app" } : null)),
   hostForSender: vi.fn((_id: number): string | null => null),
+  requireProjectWorktree: vi.fn(async (_projectId: unknown, _path: unknown) => {}),
 }));
 
 vi.mock("../../../remote/runtime.js", () => ({
@@ -20,6 +21,9 @@ vi.mock("../../../services/ProjectStore.js", () => ({
 }));
 vi.mock("../../dispatcher.js", () => ({
   getIpcDispatcher: () => ({ hostForSender: mocks.hostForSender }),
+}));
+vi.mock("../../../services/projectAcrossHosts/defaults.js", () => ({
+  getProjectAcrossHostsService: () => ({ requireProjectWorktree: mocks.requireProjectWorktree }),
 }));
 
 import { cloudHostsNamespace } from "../cloudHosts.js";
@@ -49,6 +53,7 @@ describe("cloudHosts createHostForWorktree", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.hostForSender.mockReturnValue(null);
+    mocks.requireProjectWorktree.mockResolvedValue(undefined);
   });
 
   it("marks the machine with main's own project name, never the asker's", async () => {
@@ -64,18 +69,16 @@ describe("cloudHosts createHostForWorktree", () => {
     );
   });
 
-  it.each([
-    ["a window bound to another host", () => mocks.hostForSender.mockReturnValue("studio")],
+  const refusals: [string, () => void, Partial<Record<keyof IpcContext, unknown>>][] = [
+    ["a window bound to another host", () => mocks.hostForSender.mockReturnValue("studio"), {}],
     ["a remote client", () => {}, { client: { kind: "remote" } }],
     ["a remote view", () => {}, { endpoint: { kind: "remote-view" } }],
     ["no sender at all", () => {}, { event: null }],
-  ] as const)("refuses %s", async (_label, arrange, overrides = {}) => {
+  ];
+  it.each(refusals)("refuses %s", async (_label, arrange, overrides) => {
     arrange();
     await expect(
-      forWorktree(ctx(overrides as Partial<Record<keyof IpcContext, unknown>>), {
-        machine: MACHINE,
-        worktree: WORKTREE,
-      })
+      forWorktree(ctx(overrides), { machine: MACHINE, worktree: WORKTREE })
     ).rejects.toThrow(/window on this machine/);
     expect(mocks.createHostForWorktree).not.toHaveBeenCalled();
   });
@@ -104,6 +107,18 @@ describe("cloudHosts createHostForWorktree", () => {
         worktree: { ...WORKTREE, worktreeId: "app-worktrees/feature-login" },
       })
     ).rejects.toThrow(/missing its path/);
+    expect(mocks.createHostForWorktree).not.toHaveBeenCalled();
+  });
+
+  it("refuses a path git doesn't list as one of the project's working trees", async () => {
+    mocks.requireProjectWorktree.mockRejectedValueOnce(new Error("not a working tree"));
+    await expect(
+      forWorktree(ctx(), {
+        machine: MACHINE,
+        worktree: { ...WORKTREE, worktreeId: "/Users/me/other-repo" },
+      })
+    ).rejects.toThrow(/one of this project's working trees/);
+    expect(mocks.requireProjectWorktree).toHaveBeenCalledWith("proj-1", "/Users/me/other-repo");
     expect(mocks.createHostForWorktree).not.toHaveBeenCalled();
   });
 

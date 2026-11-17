@@ -1,3 +1,4 @@
+import type { KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import {
@@ -25,6 +26,7 @@ import {
   machineSpecLabel,
   providerStopSentence,
   sentenceCase,
+  stoppedBillingSentence,
 } from "../cloud/cloudHostLabels";
 import type { CloudMachineAccount } from "../cloudWorktreePlacement";
 
@@ -87,7 +89,21 @@ function reviewLine(choice: CloudMachineAccount, form: CloudMachineForm): string
           form.lifetimeHours === null ? null : form.lifetimeHours * 3600
         )
     : providerStopSentence(lifetimeModel, provider.name);
-  return `Billed to ${payer} on ${provider.name}${price}. ${lifetime ?? ""}`.trim();
+  return [
+    `Billed to ${payer} on ${provider.name}${price}.`,
+    lifetime,
+    stoppedBillingSentence(provider),
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/**
+ * The dialog's create shortcut, not a way to open a list: Radix opens on any
+ * Enter unless the event is already handled, as the Host select does.
+ */
+function keepCreateShortcut(event: KeyboardEvent<HTMLButtonElement>): void {
+  if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) event.preventDefault();
 }
 
 const hintClass = "text-xs leading-4 text-text-secondary";
@@ -129,6 +145,7 @@ export function NewMachineRows({
                 id={`worktree-machine-${dimension}`}
                 className="h-8 min-w-0"
                 data-testid={`worktree-machine-${dimension}`}
+                onTriggerKeyDown={keepCreateShortcut}
               />
             </FormRow>
           );
@@ -167,13 +184,19 @@ export function NewMachineRows({
         ) : (
           <Select
             value={form.machineType ?? ""}
-            onValueChange={form.setMachineType}
+            // Typeahead on the closed trigger can land on an unavailable size; it isn't taken.
+            onValueChange={(id) => {
+              if (catalog.machineTypes.some((type) => type.id === id && type.available)) {
+                form.setMachineType(id);
+              }
+            }}
             disabled={disabled}
           >
             <SelectTrigger
               id="worktree-machine-size"
               className="h-8 min-w-0"
               data-testid="worktree-machine-size"
+              onKeyDown={keepCreateShortcut}
             >
               <SelectValue placeholder="Choose a size" />
             </SelectTrigger>
@@ -203,6 +226,7 @@ export function NewMachineRows({
               id="worktree-machine-lifetime"
               className="h-8 min-w-0"
               data-testid="worktree-machine-lifetime"
+              onKeyDown={keepCreateShortcut}
             >
               <SelectValue />
             </SelectTrigger>

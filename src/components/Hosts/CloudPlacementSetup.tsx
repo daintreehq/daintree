@@ -16,6 +16,7 @@ import {
 import { useHostList } from "./hostList";
 import {
   hostSetupVersion,
+  isAnyHostSetupOpen,
   isHostSetupOpen,
   retryPlacementSetup,
   subscribeHostSetup,
@@ -50,7 +51,13 @@ export function CloudPlacementSetup() {
 
   useEffect(() => {
     if (projectId === null || getViewHostId() !== null) return;
-    const { ready, stale } = cloudSetupReady(hosts, snapshot, projectId, isHostSetupOpen);
+    const { ready, stale } = cloudSetupReady(
+      hosts,
+      snapshot,
+      projectId,
+      isHostSetupOpen,
+      isAnyHostSetupOpen()
+    );
     for (const hostId of stale) disarmCloudSetup(hostId);
     if (!ready || !observable || switching) return;
     // Opened after the commit, as the switch resume is: a StrictMode replay

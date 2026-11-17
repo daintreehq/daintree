@@ -287,6 +287,15 @@ export class ProjectAcrossHostsService {
     throw invalid("worktreePath is not a working tree of this project");
   }
 
+  /**
+   * Refuses unless `worktreePath` is one of this project's working trees, as
+   * git lists them: what a machine made for a worktree is marked with.
+   */
+  async requireProjectWorktree(projectId: unknown, worktreePath: unknown): Promise<void> {
+    const project = this.requireProject(projectId);
+    await this.resolveWorktree(project, worktreePath);
+  }
+
   // Source side
 
   async describeSource(payload: DescribeSourcePayload): Promise<SourceProjectDescription> {

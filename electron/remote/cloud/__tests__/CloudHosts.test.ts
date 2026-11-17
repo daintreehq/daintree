@@ -32,6 +32,7 @@ describe("CloudHosts.createHostForWorktree", () => {
         projectId: "proj-1",
         worktreeId: "/Users/me/app-worktrees/feature-login",
         worktreeName: " feature/login ",
+        projectName: "forged",
         hostId: "studio",
         hostName: "Studio",
       },

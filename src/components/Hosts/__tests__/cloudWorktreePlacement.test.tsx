@@ -25,6 +25,7 @@ const env = vi.hoisted(() => ({
 const cloud = vi.hoisted(() => ({
   createHostForWorktree: vi.fn(),
   retryCreate: vi.fn(),
+  refreshHost: vi.fn(),
   deleteMachine: vi.fn(),
 }));
 const update = vi.hoisted(() => vi.fn());
@@ -79,7 +80,12 @@ import {
   hasArmedCloudSetup,
   startCloudWorktreePlacement,
 } from "../cloudWorktreePlacement";
-import { _resetPendingPlacementsForTesting, holdHostSetup, NOT_OPENED } from "../pendingPlacement";
+import {
+  _resetPendingPlacementsForTesting,
+  holdHostSetup,
+  isHostSetupOpen,
+  NOT_OPENED,
+} from "../pendingPlacement";
 import { usePendingPlacementResume } from "../usePendingPlacementResume";
 import { CloudPlacementNotice } from "@/components/Worktree/WorktreeCard/CloudPlacementNotice";
 
@@ -312,7 +318,74 @@ describe("a new worktree on a new machine", () => {
     });
     expect(update).not.toHaveBeenCalled();
     await act(async () => completeHostSwitchRequest(switchRequest!.id));
+    // Held until the window has landed there with the worktree open.
+    expect(update).not.toHaveBeenCalled();
+    await act(async () => switchRequest!.onLanding!({ landed: true, worktreeOpened: true }));
     expect(update).toHaveBeenCalledWith({ hostId: "feature-login", pendingPlacement: null });
+  });
+
+  it("asks for no second machine for a worktree already waiting on one", async () => {
+    env.hosts = [hostEntry("feature-login", disconnected, PLACEMENT)];
+    const hostId = await startCloudWorktreePlacement({
+      projectId: "proj-1",
+      worktreeId: WORKTREE,
+      branch: "feature/login",
+      machine: MACHINE,
+    });
+    expect(hostId).toBe("feature-login");
+    expect(cloud.createHostForWorktree).not.toHaveBeenCalled();
+  });
+
+  it("asks once while a request for the same worktree is still out", async () => {
+    let answer!: (value: { hostId: string; requestedAt: number }) => void;
+    cloud.createHostForWorktree.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    const input = {
+      projectId: "proj-1",
+      worktreeId: WORKTREE,
+      branch: "feature/login",
+      machine: MACHINE,
+    };
+    const first = startCloudWorktreePlacement(input);
+    expect(await startCloudWorktreePlacement(input)).toBeNull();
+    answer({ hostId: "feature-login", requestedAt: 1_000 });
+    expect(await first).toBe("feature-login");
+    expect(cloud.createHostForWorktree).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps waiting to open setup until the host list has caught up with the new host", async () => {
+    cloud.createHostForWorktree.mockResolvedValue({ hostId: "feature-login", requestedAt: 1_000 });
+    await startCloudWorktreePlacement({
+      projectId: "proj-1",
+      worktreeId: WORKTREE,
+      branch: "feature/login",
+      machine: MACHINE,
+    });
+    // The answer came back before the list did.
+    env.hosts = [];
+    env.snapshot = snapshotWith(running());
+    const view = await showView();
+    expect(hasArmedCloudSetup()).toBe(true);
+    env.hosts = [hostEntry("feature-login", disconnected, PLACEMENT)];
+    await showView(view);
+    expect(requestHostUpdate).toHaveBeenCalledWith("feature-login", "setup");
+  });
+
+  it("waits while another host's setup is open rather than replacing it", async () => {
+    cloud.createHostForWorktree.mockResolvedValue({ hostId: "feature-login", requestedAt: 1_000 });
+    await startCloudWorktreePlacement({
+      projectId: "proj-1",
+      worktreeId: WORKTREE,
+      branch: "feature/login",
+      machine: MACHINE,
+    });
+    const otherSetup = holdHostSetup("studio");
+    env.hosts = [hostEntry("feature-login", disconnected, PLACEMENT)];
+    env.snapshot = snapshotWith(running());
+    const view = await showView();
+    expect(requestHostUpdate).not.toHaveBeenCalled();
+    await act(async () => otherSetup());
+    await showView(view);
+    expect(requestHostUpdate).toHaveBeenCalledWith("feature-login", "setup");
   });
 
   it("waits to open setup until the worktree's view can be seen", async () => {
@@ -404,7 +477,9 @@ describe("the worktree card while it waits on its machine", () => {
 
     fireEvent.click(button("Cancel"));
     expect(screen.getByText("Stop opening 'feature/login' on feature-login?")).toBeTruthy();
-    fireEvent.click(button("Stop opening"));
+    // Nothing carries on underneath while the choice is open.
+    expect(isHostSetupOpen("feature-login")).toBe(true);
+    fireEvent.click(button("Keep machine"));
     await waitFor(() =>
       expect(update).toHaveBeenCalledWith({ hostId: "feature-login", pendingPlacement: null })
     );
@@ -464,16 +539,20 @@ describe("the worktree card while it waits on its machine", () => {
     );
   });
 
-  it("after a failed setup, Retry opens setup again and Delete stays offered", async () => {
+  it("after a failed setup, Retry asks again and opens setup, and Delete stays offered", async () => {
     env.snapshot = snapshotWith(running());
     showNotice(hostEntry("feature-login", disconnected), {
       ...PLACEMENT,
       failure: { message: "Installing Daintree failed: disk full", at: 2 },
     });
     expect(notice().textContent).toContain("Couldn't set up feature-login");
+    expect(notice().textContent).toContain("Installing Daintree failed: disk full");
     expect(button("Delete machine…")).toBeTruthy();
     fireEvent.click(button("Retry"));
     await waitFor(() => expect(requestHostUpdate).toHaveBeenCalledWith("feature-login", "setup"));
+    const held = update.mock.calls[0]![0] as { pendingPlacement: PendingHostPlacement };
+    expect(held.pendingPlacement.requestedAt).not.toBe(PLACEMENT.requestedAt);
+    expect(held.pendingPlacement).not.toHaveProperty("failure");
   });
 
   it("after the switch dialog closed, Retry asks again and Cancel keeps the machine", async () => {
@@ -486,16 +565,64 @@ describe("the worktree card while it waits on its machine", () => {
     fireEvent.click(button("Retry"));
     await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
     const held = update.mock.calls[0]![0] as { pendingPlacement: PendingHostPlacement };
-    expect(held.pendingPlacement).toMatchObject({ ...PLACEMENT, requestedAt: expect.any(Number) });
-    expect(held.pendingPlacement).not.toHaveProperty("failure");
+    const { requestedAt, ...rest } = held.pendingPlacement;
+    expect(rest).toEqual({
+      projectId: PLACEMENT.projectId,
+      worktreeId: PLACEMENT.worktreeId,
+      worktreePath: PLACEMENT.worktreePath,
+      label: PLACEMENT.label,
+      createdMachine: true,
+    });
+    expect(requestedAt).not.toBe(PLACEMENT.requestedAt);
     expect(requestHostUpdate).not.toHaveBeenCalled();
 
     update.mockClear();
     fireEvent.click(button("Cancel"));
-    fireEvent.click(button("Stop opening"));
+    fireEvent.click(button("Keep machine"));
     await waitFor(() =>
       expect(update).toHaveBeenCalledWith({ hostId: "feature-login", pendingPlacement: null })
     );
+  });
+
+  it("deletes nothing until the host's name is typed exactly", async () => {
+    env.snapshot = snapshotWith(running());
+    showNotice(hostEntry("feature-login", disconnected));
+    fireEvent.click(button("Cancel"));
+    fireEvent.click(screen.getByRole("radio", { name: /Delete the machine/ }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "feature-log" } });
+    fireEvent.click(button("Delete machine"));
+    await act(async () => {});
+    expect(cloud.deleteMachine).not.toHaveBeenCalled();
+  });
+
+  it("offers no Delete for a machine whose own record says it wasn't made for this worktree", () => {
+    env.snapshot = snapshotWith(
+      status({
+        resourceId: "bx_1",
+        machine: "running",
+        createdFor: null,
+        ownership: "imported",
+      })
+    );
+    showNotice(hostEntry("feature-login", disconnected), {
+      ...PLACEMENT,
+      failure: { message: "Installing Daintree failed", at: 2 },
+    });
+    expect(screen.queryByRole("button", { name: "Delete machine…" })).toBeNull();
+    fireEvent.click(button("Cancel"));
+    expect(screen.queryByRole("radio")).toBeNull();
+    expect(screen.getByTestId("cancel-cloud-placement-console").textContent).not.toContain(
+      "marked as made for"
+    );
+  });
+
+  it("asks about a machine in an unknown state again on Retry", async () => {
+    cloud.refreshHost.mockResolvedValue(undefined);
+    env.snapshot = snapshotWith(status({ resourceId: "bx_1", machine: "unknown" }));
+    showNotice(hostEntry("feature-login", disconnected));
+    expect(notice().getAttribute("data-stage")).toBe("machine");
+    fireEvent.click(button("Retry"));
+    await waitFor(() => expect(cloud.refreshHost).toHaveBeenCalledWith("feature-login"));
   });
 
   it("offers no Delete on a provider that can't delete, pointing to its console instead", () => {

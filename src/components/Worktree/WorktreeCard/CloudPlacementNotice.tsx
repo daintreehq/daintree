@@ -1,4 +1,4 @@
-import { useState, type MouseEvent } from "react";
+import { useRef, useState, type MouseEvent } from "react";
 import { Server } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
@@ -6,10 +6,14 @@ import { cloudHostsClient } from "@/clients/cloudHostsClient";
 import { CancelCloudPlacementDialog } from "@/components/Hosts/CancelCloudPlacementDialog";
 import { canDeleteMachines, cloudProviderFor } from "@/components/Hosts/cloud/cloudHostLabels";
 import { cloudStatusFor, useCloudHosts } from "@/components/Hosts/cloud/cloudHostsState";
-import { armCloudSetup, cloudPlacementStage } from "@/components/Hosts/cloudWorktreePlacement";
 import {
-  holdPlacement,
+  armCloudSetup,
+  cloudPlacementStage,
+  isMadeForPlacement,
+} from "@/components/Hosts/cloudWorktreePlacement";
+import {
   isUsableConnection,
+  placeAgain,
   retryPlacementSetup,
 } from "@/components/Hosts/pendingPlacement";
 import {
@@ -65,7 +69,11 @@ export function CloudPlacementNotice({
   // Cancel removes this notice from under the button that was pressed.
   const focusHandoffRef = useCardFocusHandoff<HTMLDivElement>();
   const usable = isUsableConnection(connection);
-  const deletable = status !== null && canDeleteMachines(provider);
+  // Only the machine's own record says what it was made for; the placement's flag alone doesn't.
+  const madeForIt = isMadeForPlacement(status, placement);
+  const deletable = madeForIt && canDeleteMachines(provider);
+  // The card's own focus target, for when this notice is gone by the time a dialog closes.
+  const cardTarget = useRef<HTMLElement | null>(null);
 
   const run = (event: MouseEvent, work: () => Promise<unknown> | void, fallback: string) => {
     event.stopPropagation();
@@ -88,16 +96,17 @@ export function CloudPlacementNotice({
       );
       return;
     }
-    // A host already usable needs no setup: the placement asked again carries on at once.
+    if (stage.kind === "machine") {
+      run(event, () => cloudHostsClient.refreshHost(hostId), "Couldn't check the machine");
+      return;
+    }
+    // A fresh attempt, so neither an earlier handoff nor its failure holds it back. A host
+    // already usable needs no setup: the placement asked again carries on at once.
     run(
       event,
-      () => {
-        if (!usable) {
-          retryPlacementSetup(hostId);
-          return;
-        }
-        const { requestedAt: _at, failure: _failure, ...request } = placement;
-        return holdPlacement(hostId, request);
+      async () => {
+        await placeAgain(hostId, placement);
+        if (!usable) retryPlacementSetup(hostId);
       },
       "Couldn't retry"
     );
@@ -113,19 +122,32 @@ export function CloudPlacementNotice({
       },
       "Couldn't open the host"
     );
-  const openCancel = (event: MouseEvent, choice: "keep" | "delete") => {
+  const openCancel = (event: MouseEvent<HTMLElement>, choice: "keep" | "delete") => {
     event.stopPropagation();
+    const trigger = event.currentTarget;
+    cardTarget.current =
+      trigger
+        .closest("[data-worktree-row]")
+        ?.querySelector<HTMLElement>("[data-card-select-overlay]") ??
+      trigger.closest<HTMLElement>('[role="gridcell"]') ??
+      trigger.closest<HTMLElement>('[role="grid"]');
     setCancelling(choice);
   };
 
   const failedKind =
     stage.kind === "create-failed" || stage.kind === "machine" || stage.kind === "failed";
+  // A machine in an error or unknown state is asked about again; a stopped one is started from its details.
+  const retryChecks =
+    stage.kind === "machine" && (status?.machine === "error" || status?.machine === "unknown");
   let title: string;
   let body: string;
   switch (stage.kind) {
     case "busy":
       title = `${BUSY_TITLE[stage.operation]} ${hostName}`;
-      body = `${stage.step}. ${placement.label} opens there once Daintree is set up on it.`;
+      body =
+        stage.operation === "deleting"
+          ? `${stage.step}. ${placement.label} stays on this machine.`
+          : `${stage.step}. ${placement.label} opens there once Daintree is set up on it.`;
       break;
     case "create-failed":
       title = `Couldn't create ${hostName}`;
@@ -166,7 +188,9 @@ export function CloudPlacementNotice({
           <span className="break-words text-text-secondary select-text">{body}</span>
           {actionError && <span className="text-text-primary">{actionError}</span>}
           <div className="flex flex-wrap items-center gap-2">
-            {(stage.kind === "create-failed" || stage.kind === "failed") && (
+            {(stage.kind === "create-failed" ||
+              stage.kind === "failed" ||
+              (stage.kind === "machine" && retryChecks)) && (
               <Button
                 variant="outline"
                 size="xs"
@@ -186,7 +210,7 @@ export function CloudPlacementNotice({
                 Set up…
               </Button>
             )}
-            {stage.kind === "machine" && (
+            {stage.kind === "machine" && !retryChecks && (
               <Button
                 variant="outline"
                 size="xs"
@@ -215,6 +239,8 @@ export function CloudPlacementNotice({
           status={status}
           provider={provider}
           initialChoice={cancelling}
+          madeForIt={madeForIt}
+          restoreFocusTo={() => cardTarget.current}
           onClose={() => setCancelling(null)}
         />
       )}

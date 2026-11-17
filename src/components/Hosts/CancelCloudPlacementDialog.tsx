@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -11,7 +11,7 @@ import type { CloudHostStatus, CloudProviderInfo } from "@shared/types/cloudHost
 import type { HostId } from "@shared/types/remoteHosts";
 import { billsWhileStopped, canDeleteMachines } from "./cloud/cloudHostLabels";
 import { disarmCloudSetup } from "./cloudWorktreePlacement";
-import { cancelPlacement } from "./pendingPlacement";
+import { cancelPlacement, holdHostSetup } from "./pendingPlacement";
 
 interface CancelCloudPlacementDialogProps {
   hostId: HostId;
@@ -23,7 +23,16 @@ interface CancelCloudPlacementDialogProps {
   provider: Pick<CloudProviderInfo, "name" | "capabilities" | "dashboardUrl"> | null;
   /** Which way the dialog opens: from Cancel, keeping the machine; from Delete, deleting it. */
   initialChoice: "keep" | "delete";
+  /**
+   * The machine's own record says it was made for this worktree: only then is
+   * deleting it offered here. Keeping is always offered.
+   */
+  madeForIt: boolean;
+  /** Where focus goes when the worktree's notice is gone by the time this closes. */
+  restoreFocusTo?: () => HTMLElement | null;
   onClose: () => void;
+  /** The machine was deleted and its host is gone from this device. */
+  onDeleted?: () => void;
 }
 
 function errorText(err: unknown, fallback: string): string {
@@ -47,41 +56,51 @@ export function CancelCloudPlacementDialog({
   status,
   provider,
   initialChoice,
+  madeForIt,
+  restoreFocusTo,
   onClose,
+  onDeleted,
 }: CancelCloudPlacementDialogProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const deletable = canDeleteMachines(provider);
-  const [choice, setChoice] = useState<"keep" | "delete">(deletable ? initialChoice : "keep");
+  const deletable = madeForIt && status !== null && canDeleteMachines(provider);
+  const [choice, setChoice] = useState<"keep" | "delete">(initialChoice);
   const [openedFor, setOpenedFor] = useState(() =>
     status ? { resourceId: status.resourceId } : null
   );
   if (openedFor === null && status !== null) setOpenedFor({ resourceId: status.resourceId });
-  const ready = status !== null && openedFor !== null;
   const deleting = deletable && choice === "delete";
+  // Keeping needs only the placement; deleting needs the machine as it was when this opened.
+  const ready = !deleting || openedFor !== null;
   const providerName = provider?.name ?? "its provider";
   const accountName = status?.accountName ?? "its account";
   const created = openedFor?.resourceId != null;
+  const billedStopped = billsWhileStopped(provider);
 
+  // While this is open, neither its setup nor its switch carries on underneath.
+  useEffect(() => holdHostSetup(hostId), [hostId]);
+
+  const marked = madeForIt ? `, marked as made for ${label}` : "";
   const keepSentence = !created
-    ? `It stays in your host list, marked as made for ${label}. A machine its create makes bills ${accountName} while it runs.`
-    : billsWhileStopped(provider)
-      ? `It stays in your host list, marked as made for ${label}, and bills ${accountName} until it's deleted, even once it stops.`
-      : `It stays in your host list, marked as made for ${label}, and bills ${accountName} while it runs.`;
+    ? `It stays in your host list${marked}. A machine its create makes bills ${accountName} ${billedStopped ? "until it's deleted, even once it stops" : "while it runs"}.`
+    : billedStopped
+      ? `It stays in your host list${marked}, and bills ${accountName} until it's deleted, even once it stops.`
+      : `It stays in your host list${marked}, and bills ${accountName} while it runs.`;
 
   const confirm = () => {
-    if (!ready || openedFor === null) return;
+    if (!ready) return;
     setBusy(true);
     setError(null);
-    // Nothing here opens its setup any more, whichever way this goes.
-    disarmCloudSetup(hostId);
     const work = deleting
-      ? cloudHostsClient.deleteMachine(hostId, openedFor.resourceId)
+      ? cloudHostsClient.deleteMachine(hostId, openedFor?.resourceId ?? null)
       : cancelPlacement(hostId);
     work.then(
       () => {
+        // Nothing here opens its setup any more.
+        disarmCloudSetup(hostId);
         setBusy(false);
         onClose();
+        if (deleting) onDeleted?.();
       },
       (err: unknown) => {
         setBusy(false);
@@ -101,8 +120,9 @@ export function CancelCloudPlacementDialog({
           ? `Its machine and everything on its disk are deleted from ${providerName}, and the host leaves your list. ${label} stays on this machine.`
           : `${label} stays on this machine.`
       }
-      confirmLabel={deleting ? "Delete machine" : "Stop opening"}
+      confirmLabel={deleting ? "Delete machine" : "Keep machine"}
       cancelLabel="Back"
+      restoreFocusTo={restoreFocusTo}
       onConfirm={confirm}
       confirmDisabled={!ready}
       isConfirmLoading={busy}
@@ -116,8 +136,7 @@ export function CancelCloudPlacementDialog({
       }
     >
       <div className="space-y-3" data-testid="cancel-cloud-placement-choice">
-        {!ready && <p className="text-sm text-text-secondary">Reading the machine&apos;s state…</p>}
-        {ready && deletable && (
+        {deletable && (
           <RadioChoiceGroup legend="Its machine">
             <RadioChoiceRow
               name="cancel-cloud-placement"
@@ -139,10 +158,10 @@ export function CancelCloudPlacementDialog({
             />
           </RadioChoiceGroup>
         )}
-        {ready && !deletable && (
+        {!deletable && (
           <div className="space-y-2" data-testid="cancel-cloud-placement-console">
             <p className="text-sm text-text-secondary">{keepSentence}</p>
-            {provider?.dashboardUrl && (
+            {madeForIt && provider && !canDeleteMachines(provider) && (
               <>
                 <p className="text-sm text-text-secondary">
                   {`Daintree can't delete machines on ${providerName}. To delete it and stop paying for it, use ${providerName}'s console.`}

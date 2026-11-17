@@ -20,7 +20,7 @@ import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { notify } from "@/lib/notify";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import { getHostListSnapshot } from "./hostList";
-import { isUsableConnection, noteAskedHere } from "./pendingPlacement";
+import { isUsableConnection, noteAskedHere, placementForWorktree } from "./pendingPlacement";
 
 /** The host list's own limit on a name (`HostRegistry`), and the machine's with it. */
 const MAX_MACHINE_NAME_LENGTH = 64;
@@ -97,7 +97,14 @@ function errorText(err: unknown, fallback: string): string {
 export async function startCloudWorktreePlacement(
   input: CloudWorktreePlacementInput
 ): Promise<HostId | null> {
-  const name = cloudMachineName(input.branch, getHostListSnapshot().hosts);
+  const hosts = getHostListSnapshot().hosts;
+  // One machine per worktree: a Retry after an answer that never came back
+  // finds the machine that was made, rather than asking for a second.
+  const waiting = placementForWorktree(hosts, input.projectId, input.worktreeId);
+  if (waiting?.placement.createdMachine) return waiting.host.descriptor.id;
+  if (asking.has(input.worktreeId)) return null;
+  asking.add(input.worktreeId);
+  const name = cloudMachineName(input.branch, hosts);
   try {
     const { hostId, requestedAt } = await cloudHostsClient.createHostForWorktree({
       machine: { ...input.machine, name },
@@ -122,11 +129,20 @@ export async function startCloudWorktreePlacement(
       },
     });
     return null;
+  } finally {
+    asking.delete(input.worktreeId);
   }
 }
 
-/** Placements whose host this view opens setup for, once its machine runs. */
-const armed = new Map<HostId, number>();
+/** Worktrees a machine is being asked for right now, so a second press doesn't ask twice. */
+const asking = new Set<string>();
+
+/**
+ * Placements whose host this view opens setup for, once its machine runs.
+ * `seen` once the host list has shown the host: only then does its absence
+ * mean it went away, rather than that the list hasn't caught up yet.
+ */
+const armed = new Map<HostId, { requestedAt: number; seen: boolean }>();
 const armedListeners = new Set<() => void>();
 let armedVersion = 0;
 
@@ -141,14 +157,16 @@ function publishArmed(): void {
  * Set up… instead of a dialog appearing by itself.
  */
 export function armCloudSetup(hostId: HostId, requestedAt: number): void {
-  armed.set(hostId, requestedAt);
+  armed.set(hostId, { requestedAt, seen: false });
   publishArmed();
 }
 
 /** Stop waiting to open setup for a host; true when it was waiting for this placement. */
 export function disarmCloudSetup(hostId: HostId, requestedAt?: number): boolean {
   const held = armed.get(hostId);
-  if (held === undefined || (requestedAt !== undefined && held !== requestedAt)) return false;
+  if (held === undefined || (requestedAt !== undefined && held.requestedAt !== requestedAt)) {
+    return false;
+  }
   armed.delete(hostId);
   publishArmed();
   return true;
@@ -169,6 +187,24 @@ export function subscribeCloudSetup(listener: () => void): () => void {
   };
 }
 
+/**
+ * The machine's own record says it was made for the worktree this placement
+ * waits with: what deleting it from the placement rests on, rather than the
+ * placement's own flag.
+ */
+export function isMadeForPlacement(
+  status: CloudHostStatus | null,
+  placement: Pick<PendingHostPlacement, "projectId" | "worktreeId">
+): boolean {
+  const mark = status?.createdFor;
+  return (
+    mark != null &&
+    mark.hostId === null &&
+    mark.projectId === placement.projectId &&
+    mark.worktreeId === placement.worktreeId
+  );
+}
+
 /** The machine is up with nothing running on it: setup can begin. */
 export function isMachineReady(status: CloudHostStatus | null): boolean {
   return status !== null && status.machine === "running" && status.operation === null;
@@ -177,20 +213,28 @@ export function isMachineReady(status: CloudHostStatus | null): boolean {
 /**
  * The first armed placement of this project whose machine now runs and whose
  * host isn't usable yet, or null. `stale` collects armed hosts whose
- * placement is gone or replaced, for the caller to let go of.
+ * placement is gone or replaced, for the caller to let go of. Nothing is
+ * ready while any host's setup is open: opening another would replace it.
  */
 export function cloudSetupReady(
   hosts: readonly HostListEntry[],
   snapshot: CloudHostsSnapshot,
   projectId: string,
-  isSetupOpen: (hostId: HostId) => boolean
+  isSetupOpen: (hostId: HostId) => boolean,
+  anySetupOpen = false
 ): { ready: { hostId: HostId; requestedAt: number } | null; stale: HostId[] } {
   const stale: HostId[] = [];
   let ready: { hostId: HostId; requestedAt: number } | null = null;
-  for (const [hostId, requestedAt] of armed) {
+  for (const [hostId, arm] of armed) {
+    const { requestedAt } = arm;
     const host = hosts.find((entry) => entry.descriptor.id === hostId);
-    const placement: PendingHostPlacement | undefined = host?.descriptor.pendingPlacement;
-    if (!host || placement?.requestedAt !== requestedAt) {
+    if (!host) {
+      if (arm.seen) stale.push(hostId);
+      continue;
+    }
+    arm.seen = true;
+    const placement: PendingHostPlacement | undefined = host.descriptor.pendingPlacement;
+    if (placement?.requestedAt !== requestedAt) {
       stale.push(hostId);
       continue;
     }
@@ -199,7 +243,7 @@ export function cloudSetupReady(
       stale.push(hostId);
       continue;
     }
-    if (ready || placement.projectId !== projectId || isSetupOpen(hostId)) continue;
+    if (ready || anySetupOpen || placement.projectId !== projectId || isSetupOpen(hostId)) continue;
     const status = snapshot.hosts.find((entry) => entry.hostId === hostId) ?? null;
     if (isMachineReady(status)) ready = { hostId, requestedAt };
   }
@@ -257,6 +301,7 @@ export function cloudPlacementStage(
 
 export function _resetCloudWorktreePlacementForTesting(): void {
   armed.clear();
+  asking.clear();
   armedListeners.clear();
   armedVersion = 0;
 }
