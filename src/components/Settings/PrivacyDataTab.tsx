@@ -302,19 +302,20 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange, onClose }: Privac
     }
   };
 
-  const handleOpenDataFolder = async () => {
+  const handleOpenDataFolder = () => {
     // One request at a time, so a slow earlier refusal can't overwrite a later success.
     if (openFolderInFlight.current) return;
     openFolderInFlight.current = true;
-    try {
-      const { opened } = await window.electron.privacy.openDataFolder();
-      setOpenFolderFailed(!opened);
-    } catch (err) {
-      logError("Failed to open the data folder", err);
-      setOpenFolderFailed(true);
-    } finally {
-      openFolderInFlight.current = false;
-    }
+    window.electron.privacy
+      .openDataFolder()
+      .then(({ opened }) => setOpenFolderFailed(!opened))
+      .catch((err: unknown) => {
+        logError("Failed to open the data folder", err);
+        setOpenFolderFailed(true);
+      })
+      .finally(() => {
+        openFolderInFlight.current = false;
+      });
   };
 
   const handleClearCache = async () => {
@@ -543,7 +544,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange, onClose }: Privac
                     </TruncatedTooltip>
                   }
                   control={
-                    <Button variant="outline" size="sm" onClick={() => void handleOpenDataFolder()}>
+                    <Button variant="outline" size="sm" onClick={handleOpenDataFolder}>
                       Open folder
                     </Button>
                   }

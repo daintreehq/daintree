@@ -217,6 +217,7 @@ describe("registerPrivacyHandlers", () => {
     };
 
     await expect(handler!(null)).resolves.toEqual({ opened: true });
+    expect(openPathMock.openWithDefaultApp).toHaveBeenCalledTimes(1);
     expect(openPathMock.openWithDefaultApp).toHaveBeenCalledWith(settings.dataFolderPath);
     expect(openPathMock.openWithDefaultApp).toHaveBeenCalledWith("/tmp/user-data");
     expect(shellMock.showItemInFolder).not.toHaveBeenCalled();

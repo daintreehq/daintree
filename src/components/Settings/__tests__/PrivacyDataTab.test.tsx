@@ -338,6 +338,33 @@ describe("PrivacyDataTab", () => {
     expect(openDataFolder).toHaveBeenCalledTimes(2);
   });
 
+  it("lets the data folder open again after a rejected request and after a success", async () => {
+    const openDataFolder = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("IPC fail"))
+      .mockResolvedValueOnce({ opened: true })
+      .mockResolvedValueOnce({ opened: true });
+    window.electron = {
+      privacy: createPrivacyApi({ openDataFolder }),
+      agentSessionHistory: createAgentSessionHistoryApi(),
+    } as unknown as typeof window.electron;
+
+    render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
+
+    const button = await screen.findByRole("button", { name: "Open folder" });
+    fireEvent.click(button);
+    expect(await screen.findByText(/Couldn't open the folder/)).toBeTruthy();
+
+    fireEvent.click(button);
+    await waitFor(() => expect(screen.queryByText(/Couldn't open the folder/)).toBeNull());
+    expect(openDataFolder).toHaveBeenCalledTimes(2);
+
+    fireEvent.click(button);
+    await waitFor(() => expect(openDataFolder).toHaveBeenCalledTimes(3));
+  });
+
   it("says beside the control when the open request itself fails", async () => {
     window.electron = {
       privacy: createPrivacyApi({
