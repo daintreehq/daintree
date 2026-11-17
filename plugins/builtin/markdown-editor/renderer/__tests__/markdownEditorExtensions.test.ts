@@ -8,6 +8,7 @@ import {
   buildMarkdownEditorExtensions,
   docUtf8Bytes,
   externalChange,
+  followHeadingLink,
   linkTargetAt,
 } from "../markdownEditorExtensions";
 
@@ -38,6 +39,21 @@ function keydown(view: EditorView, init: KeyboardEventInit): KeyboardEvent {
   view.contentDOM.dispatchEvent(event);
   return event;
 }
+
+function modClick(view: EditorView): MouseEvent {
+  const click = new MouseEvent("click", {
+    bubbles: true,
+    cancelable: true,
+    button: 0,
+    metaKey: true,
+    clientX: 5,
+    clientY: 5,
+  });
+  view.contentDOM.dispatchEvent(click);
+  return click;
+}
+
+const TWO_RISKS = "- [Risks](#risks-1)\n\n## Risks\n\nFirst.\n\n## Risks\n\nSecond.\n";
 
 let mounted: ReturnType<typeof mount> | null = null;
 
@@ -140,6 +156,87 @@ describe("markdownEditorExtensions (#12323)", () => {
       })
     );
     expect(callbacks.onFollowLink).toHaveBeenCalledWith("./docs/spec.md");
+  });
+
+  it("Mod+click on a same-document link takes the caret to the heading it names (#17335)", async () => {
+    mounted = mount(TWO_RISKS);
+    const { view, callbacks } = mounted;
+    ensureSyntaxTree(view.state, view.state.doc.length, 5000);
+    view.focus();
+    vi.spyOn(view, "posAtCoords").mockReturnValue(4);
+    const dispatch = vi.spyOn(view, "dispatch");
+
+    const click = modClick(view);
+
+    expect(click.defaultPrevented).toBe(true);
+    const target = view.state.doc.line(7).from;
+    await vi.waitFor(() => expect(view.state.selection.main.head).toBe(target));
+    // One select transaction, carrying the scroll that brings the heading up.
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch.mock.calls[0]![0]).toEqual({
+      selection: { anchor: target },
+      effects: EditorView.scrollIntoView(target, { y: "start" }),
+      userEvent: "select",
+    });
+    expect(view.hasFocus).toBe(true);
+    expect(view.state.doc.toString()).toBe(TWO_RISKS);
+    expect(callbacks.onFollowLink).not.toHaveBeenCalled();
+  });
+
+  it("Mod+click on a same-document link with no heading leaves the caret alone", async () => {
+    mounted = mount("- [Gone](#nowhere)\n\n## Risks\n");
+    const { view, callbacks } = mounted;
+    ensureSyntaxTree(view.state, view.state.doc.length, 5000);
+    view.focus();
+    view.dispatch({ selection: { anchor: 3 } });
+    vi.spyOn(view, "posAtCoords").mockReturnValue(4);
+    const dispatch = vi.spyOn(view, "dispatch");
+
+    const click = modClick(view);
+    await vi.dynamicImportSettled();
+
+    expect(click.defaultPrevented).toBe(true);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(view.state.selection.main.head).toBe(3);
+    expect(callbacks.onFollowLink).not.toHaveBeenCalled();
+  });
+
+  it("a jump that resolves late yields to a closed editor or a reader who moved on", async () => {
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    try {
+      for (const moveOn of [
+        (m: ReturnType<typeof mount>) => m.host.remove(),
+        () => outside.focus(),
+        (m: ReturnType<typeof mount>) => m.view.dispatch({ selection: { anchor: 2 } }),
+      ]) {
+        const m = mount(TWO_RISKS);
+        try {
+          m.view.focus();
+          const dispatch = vi.spyOn(m.view, "dispatch");
+
+          const pending = followHeadingLink(m.view, "#risks");
+          moveOn(m);
+          dispatch.mockClear();
+          await pending;
+
+          expect(dispatch).not.toHaveBeenCalled();
+        } finally {
+          m.view.destroy();
+          m.host.remove();
+        }
+      }
+    } finally {
+      outside.remove();
+    }
+  });
+
+  it("reads a destination written in angle brackets without them", () => {
+    mounted = mount("[Setup](<#setup>) [doc](<./my doc.md>)\n");
+    const { view } = mounted;
+    ensureSyntaxTree(view.state, view.state.doc.length, 5000);
+    expect(linkTargetAt(view, 2)).toBe("#setup");
+    expect(linkTargetAt(view, 20)).toBe("./my doc.md");
   });
 
   it("does not report a buffer change while an IME composition is open", () => {

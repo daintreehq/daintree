@@ -434,6 +434,47 @@ describe("RenderedMarkdownDiff", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
+  // Each block renders through its own pipeline, so a slugger would restart
+  // at every block and repeated headings would collide: no anchors here.
+  it("gives headings no ids and leaves same-document links inert (#17335)", () => {
+    const source = "- [Risks](#risks)\n\n## Risks\n\nText[^1].\n\n[^1]: Note.\n";
+    const diff = patch([
+      "@@ -0,0 +1,7 @@",
+      ...source
+        .trimEnd()
+        .split("\n")
+        .map((line) => `+${line}`),
+    ]);
+
+    const { container } = renderDiff(diff, source, { status: "added" });
+    // The view's own scroller, as a pane would be: jsdom has no layout, so it
+    // is a box that scrolls with every target well below its top.
+    container.style.overflowY = "auto";
+    Object.defineProperty(container, "clientHeight", { configurable: true, value: 400 });
+    Object.defineProperty(container, "scrollHeight", { configurable: true, value: 4000 });
+    container.getBoundingClientRect = () => ({ top: 0 }) as DOMRect;
+    for (const target of container.querySelectorAll("h2, [id]")) {
+      target.getBoundingClientRect = () => ({ top: 900 }) as DOMRect;
+    }
+    const before = document.activeElement;
+    const links = [
+      container.querySelector('a[href="#risks"]'),
+      container.querySelector("a[data-footnote-ref]"),
+      container.querySelector("a[data-footnote-backref]"),
+    ];
+    for (const link of links) {
+      if (!link) throw new Error("a same-document link the fixture promises is missing");
+      const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+      link.dispatchEvent(click);
+      expect(click.defaultPrevented).toBe(true);
+      expect(container.scrollTop).toBe(0);
+      expect(document.activeElement).toBe(before);
+    }
+
+    expect(container.querySelector("h2")?.id).toBe("");
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
   it("resolves a local image through the contained protocol URL", () => {
     const source = "![shot](./img/a.png)\n";
     const diff = patch(["@@ -0,0 +1,1 @@", "+![shot](./img/a.png)"]);

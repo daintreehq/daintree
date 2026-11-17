@@ -148,4 +148,36 @@ describe("MarkdownViewer find in rendered mode (#16642)", () => {
     expect(codeOpenSearchMock).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("textbox", { name: "Find in document" })).toBeNull();
   });
+
+  // The bar's row is sticky over the pane's top, so a heading scrolled flush
+  // to the top would sit under it (#17335).
+  it("lands a followed heading below the find bar while the bar is open", async () => {
+    const ref = createRef<MarkdownViewerHandle>();
+    const { getByTestId } = render(
+      <div data-testid="pane" style={{ overflowY: "auto" }}>
+        <MarkdownViewer
+          ref={ref}
+          content={"- [Risks](#risks)\n\n## Risks\n"}
+          filePath="/repo/docs/plan.md"
+          rootPath="/repo"
+          viewMode="rendered"
+        />
+      </div>
+    );
+    const heading = await screen.findByRole("heading", { name: "Risks" });
+    const pane = getByTestId("pane");
+    Object.defineProperty(pane, "clientHeight", { configurable: true, value: 400 });
+    Object.defineProperty(pane, "scrollHeight", { configurable: true, value: 4000 });
+    pane.getBoundingClientRect = () => ({ top: 0 }) as DOMRect;
+    heading.getBoundingClientRect = () => ({ top: 700 }) as DOMRect;
+
+    screen.getByRole("link", { name: "Risks" }).click();
+    const closed = pane.scrollTop;
+    pane.scrollTop = 0;
+    await openFind(ref);
+    screen.getByRole("link", { name: "Risks" }).click();
+
+    expect(closed).toBe(692);
+    expect(pane.scrollTop).toBe(644);
+  });
 });

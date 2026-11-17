@@ -22,7 +22,7 @@ import {
   type FileLineEnding,
 } from "@/components/FileViewer/FileMetadataFacts";
 import { utf8ByteLength } from "@shared/utils/folderUpload";
-import { activateMarkdownLink } from "@/components/Markdown/markdownRenderPolicy";
+import { activateMarkdownLink } from "@/components/Markdown/markdownLinkPolicy";
 // The host banner for the conflict strip only: its Compare action has to stay
 // focusable while unavailable, and a kit Button can only be natively disabled.
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";

@@ -59,7 +59,10 @@ export interface MarkdownEditorCallbacks {
    */
   onChange: (doc: Text) => void;
   onSave: () => void;
-  /** Mod+click on a link's destination text. */
+  /**
+   * Mod+click on a link's destination text. A same-document link (`#risks`)
+   * never comes here: the editor follows it to the heading itself.
+   */
   onFollowLink: (href: string) => void;
 }
 
@@ -101,17 +104,43 @@ export const docUtf8Bytes = StateField.define<number>({
   },
 });
 
+/**
+ * Mod+click on `[Risks](#risks)`: the caret goes to the line the rendered
+ * document would scroll to. The parser that resolves it loads on the first
+ * such link, not with the editor, and reads the buffer as it stands then.
+ */
+export async function followHeadingLink(view: EditorView, href: string): Promise<void> {
+  const selection = view.state.selection;
+  const { markdownTargetLine } = await import("@/components/Markdown/markdownHeadingTargets");
+  // Closed or replaced by a reload while the parser loaded, or the reader has
+  // moved on: a late jump must not take the caret, or focus, back from them.
+  if (!view.dom.isConnected || !view.hasFocus || !view.state.selection.eq(selection)) return;
+  const line = markdownTargetLine(view.state.doc.toString(), href);
+  if (line === null || line > view.state.doc.lines) return;
+  const position = view.state.doc.line(line).from;
+  view.dispatch({
+    selection: { anchor: position },
+    effects: EditorView.scrollIntoView(position, { y: "start" }),
+    userEvent: "select",
+  });
+}
+
+/** A link destination without the `<…>` CommonMark allows around it, which the URL node keeps. */
+function destination(view: EditorView, url: SyntaxNode): string {
+  return view.state.sliceDoc(url.from, url.to).replace(/^<([\s\S]*)>$/, "$1");
+}
+
 /** Walk up from the click position to the nearest link node and read its target. */
 export function linkTargetAt(view: EditorView, pos: number): string | null {
   const tree = syntaxTree(view.state);
   let node: SyntaxNode | null = tree.resolveInner(pos, 1);
   while (node) {
     if (node.name === "URL") {
-      return view.state.sliceDoc(node.from, node.to);
+      return destination(view, node);
     }
     if (node.name === "Link" || node.name === "Image") {
       const url = node.getChild("URL");
-      return url ? view.state.sliceDoc(url.from, url.to) : null;
+      return url ? destination(view, url) : null;
     }
     if (node.name === "Autolink") {
       // `<https://example.com>` — the angle brackets are marks, the text between is the URL.
@@ -226,7 +255,8 @@ export function buildMarkdownEditorExtensions(options: {
         const href = linkTargetAt(view, pos);
         if (!href) return false;
         event.preventDefault();
-        callbacks.onFollowLink(href);
+        if (href.startsWith("#")) void followHeadingLink(view, href);
+        else callbacks.onFollowLink(href);
         return true;
       },
     }),

@@ -168,6 +168,13 @@ export interface MarkdownRenderPolicyOptions {
   filePath: string;
   /** Containment root for daintree-file:// image loads. */
   rootPath: string;
+  /**
+   * Follows a same-document link (`#risks`). Only a host that renders a whole
+   * document in one pass, so that its headings carry ids, passes one; without
+   * it such a link does nothing. Kept stable: a new function re-parses the
+   * document.
+   */
+  onFragmentLink?: (href: string) => void;
 }
 
 /**
@@ -225,6 +232,7 @@ export interface MarkdownRenderPolicy {
 export function useMarkdownRenderPolicy({
   filePath,
   rootPath,
+  onFragmentLink,
 }: MarkdownRenderPolicyOptions): MarkdownRenderPolicy {
   const urlTransform = useMemo<MarkdownRenderPolicy["urlTransform"]>(() => {
     return (url: string, key: string): string | null | undefined => {
@@ -249,8 +257,11 @@ export function useMarkdownRenderPolicy({
   }, [filePath, rootPath]);
 
   const handleLinkActivate = useMemo(() => {
-    return (href: string | undefined) => activateMarkdownLink(href, { filePath, rootPath });
-  }, [filePath, rootPath]);
+    return (href: string | undefined) => {
+      if (onFragmentLink && href?.startsWith("#")) onFragmentLink(href);
+      else activateMarkdownLink(href, { filePath, rootPath });
+    };
+  }, [filePath, rootPath, onFragmentLink]);
 
   const components = useMemo<Components>(
     () => ({

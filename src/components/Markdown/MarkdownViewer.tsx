@@ -5,7 +5,7 @@ import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
 import type { MarkdownFontSize } from "@/store/preferencesStore";
 import { MarkdownFindBar } from "./MarkdownFindBar";
-import { useRenderedFind } from "./useRenderedFind";
+import { FIND_BAR_CLEARANCE, useRenderedFind } from "./useRenderedFind";
 
 // The rendered document pulls react-markdown + remark-gfm; keep that weight
 // out of the first-paint chunk (FilePane is a firstRenderRestore seed).
@@ -166,6 +166,8 @@ export const MarkdownViewer = forwardRef<MarkdownViewerHandle, MarkdownViewerPro
             className={cn(DOCUMENT_INSET, className)}
             onRendered={onRendered}
             documentRef={setDocumentElement}
+            // A followed link's heading lands below the find bar, not under it.
+            anchorTopGap={find.isOpen ? FIND_BAR_CLEARANCE : undefined}
           />
         </Suspense>
       </>
