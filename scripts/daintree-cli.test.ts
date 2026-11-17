@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -144,6 +144,138 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh", () => {
     fs.symlinkSync(script, link);
     return { resources, link, argvFile };
   }
+
+  // A tarball install: no binary beside the script, so launching falls through
+  // to PATH, where the installed name is the wrapper itself (#17474).
+  function pathFallbackLayout() {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-cli-path-"));
+    roots.push(root);
+    const script = path.join(root, "res", "daintree-cli.sh");
+    fs.mkdirSync(path.dirname(script));
+    fs.copyFileSync(SCRIPT_SOURCE, script);
+    fs.chmodSync(script, 0o755);
+    const launches = path.join(root, "launches");
+    const argvFile = path.join(root, "argv");
+    const binDir = (name: string) => {
+      const dir = path.join(root, name);
+      fs.mkdirSync(dir);
+      return dir;
+    };
+    const app = (dir: string, name: string) => {
+      const binary = path.join(dir, name);
+      fs.writeFileSync(
+        binary,
+        `#!/usr/bin/env bash\necho "$0" >> ${JSON.stringify(launches)}\nprintf '%s\\0' "$@" > ${JSON.stringify(argvFile)}\n`,
+        { mode: 0o755 }
+      );
+      return binary;
+    };
+    const wrapperDir = binDir("wrapper-bin");
+    const link = path.join(wrapperDir, "daintree");
+    fs.symlinkSync(script, link);
+
+    const run = (pathDirs: string[], invoke = link) => {
+      // An empty APPDIR still makes the script try /daintree; BASH_ENV can seed
+      // bash's command hash and change what the lookup returns.
+      const env: NodeJS.ProcessEnv = { ...process.env, APPDIR: path.join(root, "no-appdir") };
+      delete env.BASH_ENV;
+      env.PATH = [...pathDirs, process.env.PATH ?? ""].join(path.delimiter);
+      const { status, stderr, error } = spawnSync("bash", [invoke, projectDir], {
+        encoding: "utf-8",
+        env,
+        timeout: 10_000,
+      });
+      if (error) throw error;
+      return { code: status, stderr };
+    };
+    // The recorder appends its own path, so a second launch would show as a second line.
+    const read = () => ({
+      binaries: fs.existsSync(launches)
+        ? fs.readFileSync(launches, "utf-8").split("\n").filter(Boolean)
+        : [],
+      argv: fs.existsSync(argvFile)
+        ? fs.readFileSync(argvFile, "utf-8").slice(0, -1).split("\0")
+        : [],
+    });
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 150));
+    // The launch is backgrounded, so wait for the recorder to finish writing.
+    const launched = async () => {
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline && !fs.existsSync(argvFile)) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      await settle();
+      return read();
+    };
+    const idle = async () => {
+      await settle();
+      return read();
+    };
+    return { script, link, wrapperDir, binDir, app, run, launched, idle };
+  }
+
+  // The fallback would reach a real install through the fixed package paths or
+  // PATH and launch it, so these only run where none exists (CI).
+  const executable = (candidate: string, mustBeFile: boolean) => {
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      // A directory on PATH is not a match, but the script takes a fixed path
+      // on -x alone.
+      return !mustBeFile || fs.statSync(candidate).isFile();
+    } catch {
+      return false;
+    }
+  };
+  const appInstalled =
+    ["/opt/Daintree/daintree", "/opt/Daintree/daintree-app"].some((c) => executable(c, false)) ||
+    (process.env.PATH ?? "")
+      .split(path.delimiter)
+      .flatMap((dir) => ["daintree", "daintree-app"].map((name) => path.join(dir, name)))
+      .some((c) => executable(c, true));
+
+  describe.skipIf(process.platform !== "linux" || appInstalled)(
+    "PATH fallback with the wrapper installed on PATH",
+    () => {
+      it("skips the wrapper and launches the daintree-app after it exactly once", async () => {
+        const layout = pathFallbackLayout();
+        const binary = layout.app(layout.binDir("app-bin"), "daintree-app");
+        const result = layout.run([layout.wrapperDir, path.dirname(binary)]);
+        expect(result.code).toBe(0);
+        expect(await layout.launched()).toEqual({
+          binaries: [binary],
+          argv: [`--cli-path=${fs.realpathSync(projectDir)}`],
+        });
+      });
+
+      it("keeps looking past the wrapper for another match of the same name", async () => {
+        const layout = pathFallbackLayout();
+        const early = layout.app(layout.binDir("early-bin"), "daintree-app");
+        const later = layout.app(layout.binDir("later-bin"), "daintree");
+        const result = layout.run([layout.wrapperDir, path.dirname(early), path.dirname(later)]);
+        expect(result.code).toBe(0);
+        // daintree is tried before daintree-app, wherever each sits on PATH.
+        expect((await layout.launched()).binaries).toEqual([later]);
+      });
+
+      it("fails with an actionable message when the wrapper is the only match", async () => {
+        const layout = pathFallbackLayout();
+        const result = layout.run([layout.wrapperDir]);
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain(`CLI wrapper (${layout.link})`);
+        expect(result.stderr).toContain("put its daintree or daintree-app executable on PATH");
+        // A relaunched wrapper would complain about its --cli-path= argument.
+        expect(result.stderr).not.toContain("not a directory");
+        expect((await layout.idle()).binaries).toEqual([]);
+      });
+
+      it("reports a plain miss when the wrapper is not on PATH", () => {
+        const layout = pathFallbackLayout();
+        const result = layout.run([], layout.script);
+        expect(result.code).toBe(1);
+        expect(result.stderr).toBe("daintree: Daintree executable not found.\n");
+      });
+    }
+  );
 
   it("reads the version from a packaged app.asar's build stamp", () => {
     const { resources, link } = packagedLinuxLayout();
