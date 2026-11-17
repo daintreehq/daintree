@@ -458,11 +458,7 @@ export function GitHubListItem({
             {/* At 450px most titles truncate. The elaborate tooltips used to
                 be on the trivia while the one line you actually need to read
                 had none. */}
-            {/* Keyed on the title: a refresh can swap in a longer one without resizing
-                the button, so the resize observer never re-reads it, and the
-                tooltip would keep a hover from before the clip. A remount does
-                both. The button never holds focus (see below). */}
-            <TruncatedTooltip key={item.title} content={item.title} side="bottom" focusable={false}>
+            <TruncatedTooltip content={item.title} side="bottom" focusable={false}>
               {/* The title is the resource's own name, so it goes where the
                   resource lives. The row around it is about running the work
                   locally; the text itself is the link out to the forge. */}

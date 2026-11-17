@@ -141,9 +141,9 @@ describe("GitHubListItem", () => {
     expect(title.getAttribute("tabindex")).toBe("-1");
   });
 
-  it("reveals the title in a tooltip only while it is clipped, re-reading it on a rename", () => {
-    // Width follows the text, against a fixed box: a refresh that swaps in a
-    // longer title clips it without any resize for an observer to report.
+  it("reveals the title in a tooltip only while it is clipped, including after a rename", () => {
+    // Width follows the text, against a fixed box: a refresh can swap in a
+    // longer title that clips.
     const scroll = vi
       .spyOn(HTMLElement.prototype, "scrollWidth", "get")
       .mockImplementation(function (this: HTMLElement) {
