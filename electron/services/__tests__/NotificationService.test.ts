@@ -1091,15 +1091,28 @@ describe("NotificationService", () => {
       questionId: "q-1",
     });
 
-    /** Windows most recently focused first, each showing its first view, as the registry ranks them. */
-    function windowsInFocusOrder(windows: WindowMock[]) {
+    /** Each window's app view, with the focus spy the click should hit. */
+    const viewFocus = new Map<number, ReturnType<typeof vi.fn>>();
+
+    /**
+     * `windows` registered in order, each showing its first view, and ranked by
+     * focus as `focusOrder` lists them, most recent first.
+     */
+    function windowsWith(windows: WindowMock[], focusOrder: WindowMock[] = windows) {
       for (const w of windows) w.activeProjectId = `project-${w.ownerIds[0]}`;
       const registry = createRegistryMock(windows);
-      registryMock.getAppWebContents.mockImplementation((win: WindowMock) => ({
-        ...electronMock.webContentsById.get(win.ownerIds[0]!)!,
-        focus: vi.fn(),
-      }));
-      notificationService.initialize({ ...registry, focusOrder: () => registry.all() } as never);
+      viewFocus.clear();
+      registryMock.getAppWebContents.mockImplementation((win: WindowMock) => {
+        const id = win.ownerIds[0]!;
+        if (!viewFocus.has(id)) viewFocus.set(id, vi.fn());
+        return { ...electronMock.webContentsById.get(id)!, focus: viewFocus.get(id) };
+      });
+      notificationService.initialize({
+        ...registry,
+        focusOrder: () =>
+          focusOrder.map((w) => registry.all().find((ctx) => ctx.windowId === w.id)!),
+      } as never);
+      return registry;
     }
 
     const opened = (ownerId: number) =>
@@ -1107,52 +1120,80 @@ describe("NotificationService", () => {
         ([, event]) => (event as { name: string }).name === "decisions:open-question"
       );
 
-    it("opens it in the window showing the question's project, brought forward", () => {
-      const recent = createWindowMock(true, [11]);
-      const showing = createWindowMock(false, [21]);
-      showing.isMinimized.mockReturnValue(true);
-      windowsInFocusOrder([recent, showing]);
+    const envelope = (reference: ReturnType<typeof referenceIn>) => [
+      "events:push",
+      { name: "decisions:open-question", payload: { reference } },
+    ];
 
-      expect(notificationService.openDecisionQuestion(referenceIn(21))).toBe(true);
-
-      expect(opened(21)).toEqual([
-        [
-          "events:push",
-          { name: "decisions:open-question", payload: { reference: referenceIn(21) } },
+    it("opens it in the most recently focused window showing the question's project, brought forward", () => {
+      const other = createWindowMock(false, [11]);
+      const olderShowing = createWindowMock(false, [21]);
+      const recentShowing = createWindowMock(false, [31]);
+      recentShowing.isMinimized.mockReturnValue(true);
+      // Registration order puts the older of the two first.
+      const registry = windowsWith(
+        [other, olderShowing, recentShowing],
+        [other, recentShowing, olderShowing]
+      );
+      // Both show the project the question was asked in.
+      const reference = referenceIn(31);
+      const older = registry.all().find((ctx) => ctx.windowId === olderShowing.id)!;
+      Object.assign((older.services as { projectViewManager: object }).projectViewManager, {
+        getAllViews: () => [
+          {
+            projectId: reference.projectId,
+            view: { webContents: electronMock.webContentsById.get(21) },
+          },
         ],
-      ]);
+      });
+
+      expect(notificationService.openDecisionQuestion(reference)).toBe(true);
+
+      expect(opened(31)).toEqual([envelope(reference)]);
+      expect(opened(21)).toHaveLength(0);
       expect(opened(11)).toHaveLength(0);
-      expect(showing.restore).toHaveBeenCalled();
-      expect(showing.focus).toHaveBeenCalled();
+      expect(recentShowing.restore).toHaveBeenCalled();
+      expect(recentShowing.focus).toHaveBeenCalled();
+      expect(viewFocus.get(31)).toHaveBeenCalled();
     });
 
     it("opens it in the most recently focused window when none shows its project", () => {
-      const recent = createWindowMock(false, [11]);
-      const older = createWindowMock(false, [21]);
-      windowsInFocusOrder([recent, older]);
-
+      const older = createWindowMock(false, [11]);
+      const recent = createWindowMock(false, [21]);
+      windowsWith([older, recent], [recent, older]);
       const reference = { ...referenceIn(11), projectId: "project-closed" };
-      notificationService.openDecisionQuestion(reference);
 
-      expect(opened(11)).toHaveLength(1);
-      expect(opened(21)).toHaveLength(0);
+      expect(notificationService.openDecisionQuestion(reference)).toBe(true);
+
+      expect(opened(21)).toEqual([envelope(reference)]);
+      expect(opened(11)).toHaveLength(0);
       expect(recent.focus).toHaveBeenCalled();
+      expect(viewFocus.get(21)).toHaveBeenCalled();
     });
 
-    it("passes over a window that has gone", () => {
+    it("passes over a window that has gone, and one with no app view to show it", () => {
       const gone = createWindowMock(false, [11]);
       gone.isDestroyed.mockReturnValue(true);
-      const live = createWindowMock(false, [21]);
-      windowsInFocusOrder([gone, live]);
+      const blank = createWindowMock(false, [21]);
+      const live = createWindowMock(false, [31]);
+      windowsWith([gone, blank, live]);
+      // With its view gone, a window answers with its own blank contents.
+      const blankContents = electronMock.webContentsById.get(21)!;
+      Object.assign(blank, { webContents: blankContents });
+      const appContents = registryMock.getAppWebContents.getMockImplementation()!;
+      registryMock.getAppWebContents.mockImplementation((win: WindowMock) =>
+        win === blank ? blankContents : appContents(win)
+      );
 
       notificationService.openDecisionQuestion(referenceIn(11));
 
       expect(opened(11)).toHaveLength(0);
-      expect(opened(21)).toHaveLength(1);
+      expect(opened(21)).toHaveLength(0);
+      expect(opened(31)).toHaveLength(1);
     });
 
     it("reports that nothing could take it with no window open", () => {
-      windowsInFocusOrder([]);
+      windowsWith([]);
 
       expect(notificationService.openDecisionQuestion(referenceIn(11))).toBe(false);
     });

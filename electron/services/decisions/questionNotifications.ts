@@ -14,6 +14,13 @@ export const NOTIFIED_QUESTIONS_META_KEY = "daintree:notified-questions";
 
 const MAX_KEY_LENGTH = 1024;
 
+/**
+ * Most claims kept for settled questions. A settled question can be reopened,
+ * so its claim outlives settling; past this the oldest settled ones go, and
+ * only a question reopened that long after would show again.
+ */
+export const MAX_SETTLED_CLAIMS = 500;
+
 /** A lifetime's desktop question notifications, as the service holds them. */
 export interface QuestionNotifications {
   stop(): void;
@@ -30,6 +37,11 @@ export interface QuestionNotifierOptions {
   questions: QuestionListSource;
   /** The question's opening line; null when it can't be read. */
   readOpeningLine: (reference: DecisionQuestionReference) => Promise<string | null>;
+  /**
+   * Readies what showing the question takes (whatever presents it, and its
+   * project's alert settings). One that fails shows nothing.
+   */
+  prepare?: (reference: DecisionQuestionReference) => Promise<void>;
   /** Whether this computer's notifications are on for the question's project. */
   notificationsOn: (projectId: string) => boolean;
   show: (question: DecisionQuestionListItem, openingLine: string | null, key: string) => void;
@@ -75,27 +87,27 @@ function parseRecord(text: string | null): Set<string> | null {
 /**
  * Raises one desktop notification for each question an agent asks (#17232),
  * whatever terminal asked it and whether anyone watches it, for one owner
- * store's lifetime. Each question is claimed in the store before it shows, so
- * it shows at most once across restarts; one that stopped waiting before it
- * would show, or asked while notifications are off, is claimed and never
- * shown. With no record yet (the first run, or one damaged), the questions
- * asked before this lifetime began are taken as already seen.
+ * store's lifetime. A question shows only once its claim is saved in the
+ * store, so it shows at most once across restarts; one that stopped waiting
+ * before it would show, or asked while notifications are off, stays claimed
+ * and never shows. With no record yet (the first run, or one damaged), the
+ * questions already waiting when this lifetime began are taken as seen.
  */
 export class QuestionNotifier implements QuestionNotifications {
   private claimed: Set<string> | null = null;
+  /** The claims as last saved in the store. */
+  private saved = new Set<string>();
   private written = "";
   private writing: Promise<void> = Promise.resolve();
   private shown = new Set<string>();
   private stopped = false;
   private off: (() => void) | null = null;
   private readonly startedAt: number;
-  /** Questions asked before this time are taken as seen; null once the record held. */
+  /** Only for the first list, with no record: questions asked before this time are taken as seen. */
   private seenBefore: number | null = null;
-  private readonly now: () => number;
 
   constructor(private readonly o: QuestionNotifierOptions) {
-    this.now = o.now ?? Date.now;
-    this.startedAt = this.now();
+    this.startedAt = (o.now ?? Date.now)();
   }
 
   /** Reads the record, then follows the list. A record that can't be read leaves it silent. */
@@ -113,7 +125,8 @@ export class QuestionNotifier implements QuestionNotifications {
     }
     if (this.stopped) return;
     const record = parseRecord(text);
-    this.claimed = record ?? new Set();
+    this.claimed = new Set(record ?? []);
+    this.saved = new Set(record ?? []);
     this.written = record === null ? "" : JSON.stringify([...record]);
     this.seenBefore = record === null ? this.startedAt : null;
     this.off = this.o.questions.onChange((list) => this.follow(list));
@@ -134,25 +147,28 @@ export class QuestionNotifier implements QuestionNotifications {
   private follow(list: DecisionQuestionList): void {
     const claimed = this.claimed;
     if (this.stopped || claimed === null) return;
+    const seenBefore = this.seenBefore;
+    this.seenBefore = null;
     const fresh: DecisionQuestionListItem[] = [];
     const listed = new Set<string>();
+    const settled: string[] = [];
     for (const question of list.questions) {
       const key = questionKey(question.reference);
       listed.add(key);
-      const asked = isNewlyAsked(question);
-      if (!asked) {
-        // A settled question never waits again: its claim has done its job.
-        if (question.standing.kind === "settled") claimed.delete(key);
+      if (!isNewlyAsked(question)) {
+        if (question.standing.kind === "settled" && claimed.has(key)) settled.push(key);
         if (this.shown.delete(key)) this.o.close(key);
         continue;
       }
       if (claimed.has(key)) continue;
       claimed.add(key);
       const askedAt = Date.parse(question.askedAt);
-      if (this.seenBefore !== null && Number.isFinite(askedAt) && askedAt < this.seenBefore) {
-        continue;
-      }
+      if (seenBefore !== null && Number.isFinite(askedAt) && askedAt < seenBefore) continue;
       fresh.push(question);
+    }
+    // The list is oldest first, so the oldest settled claims go first.
+    for (const key of settled.slice(0, Math.max(0, settled.length - MAX_SETTLED_CLAIMS))) {
+      claimed.delete(key);
     }
     // An emptied list is Decisions stopping, not its questions going.
     for (const key of this.shown) {
@@ -161,34 +177,49 @@ export class QuestionNotifier implements QuestionNotifications {
         this.o.close(key);
       }
     }
-    const written = this.persist(claimed);
-    for (const question of fresh) void this.deliver(question, written);
+    this.persist(claimed);
+    for (const question of fresh) void this.deliver(question);
   }
 
   /** Writes the record when it changed, one write at a time. */
-  private persist(claimed: ReadonlySet<string>): Promise<void> {
-    const text = JSON.stringify([...claimed]);
-    if (text === this.written) return this.writing;
+  private persist(claimed: ReadonlySet<string>): void {
+    const snapshot = new Set(claimed);
+    const text = JSON.stringify([...snapshot]);
+    if (text === this.written) return;
     this.written = text;
-    this.writing = this.writing.then(() =>
-      this.o.store.setMeta(NOTIFIED_QUESTIONS_META_KEY, text).catch((error: unknown) => {
+    this.writing = this.writing.then(async () => {
+      try {
+        await this.o.store.setMeta(NOTIFIED_QUESTIONS_META_KEY, text);
+        this.saved = snapshot;
+      } catch (error) {
+        // The next change writes it again.
+        if (this.written === text) this.written = "";
         console.warn(
           "[Decisions] The question notification record couldn't be saved:",
           error instanceof Error ? error.name : "error"
         );
-      })
-    );
-    return this.writing;
+      }
+    });
   }
 
-  private async deliver(asked: DecisionQuestionListItem, written: Promise<void>): Promise<void> {
+  private async deliver(asked: DecisionQuestionListItem): Promise<void> {
     const key = questionKey(asked.reference);
-    await written;
+    await this.writing;
+    if (this.stopped) return;
+    if (!this.saved.has(key)) {
+      // Shown unsaved, a restart would show it again; the list's next change claims it afresh.
+      if (this.claimed?.delete(key)) this.persist(this.claimed);
+      return;
+    }
     let line: string | null = null;
     try {
-      line = await this.o.readOpeningLine(asked.reference);
+      [line] = await Promise.all([
+        this.o.readOpeningLine(asked.reference).catch(() => null),
+        this.o.prepare?.(asked.reference),
+      ]);
     } catch {
-      // Shown without its opening line: the question itself still waits for the person.
+      // Nothing can present it.
+      return;
     }
     if (this.stopped) return;
     // Answered, withdrawn or answered by the model while it was being read: nothing to ask.

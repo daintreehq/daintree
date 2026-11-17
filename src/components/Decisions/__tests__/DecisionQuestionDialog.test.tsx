@@ -14,18 +14,19 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
 
 let decisionsOn = true;
+/** False until main has answered whether Decisions is on. */
+let decisionsKnown = true;
 const onListeners = new Set<() => void>();
 vi.mock("@/hooks/useDecisionsOn", async () => {
   const { useSyncExternalStore } = await import("react");
+  const subscribe = (listener: () => void) => {
+    onListeners.add(listener);
+    return () => onListeners.delete(listener);
+  };
+  const snapshot = () => (!decisionsKnown ? "unknown" : decisionsOn ? "on" : "off");
   return {
-    useDecisionsOn: () =>
-      useSyncExternalStore(
-        (listener) => {
-          onListeners.add(listener);
-          return () => onListeners.delete(listener);
-        },
-        () => decisionsOn
-      ),
+    useDecisionsSwitch: () => useSyncExternalStore(subscribe, snapshot),
+    useDecisionsOn: () => useSyncExternalStore(subscribe, () => snapshot() === "on"),
   };
 });
 
@@ -169,6 +170,7 @@ function pushList(revision: number, kinds: { qa: Kind; qz: Kind }) {
 
 beforeEach(() => {
   decisionsOn = true;
+  decisionsKnown = true;
   paneListeners = [];
   listListeners = [];
   useDecisionsQuestionViewStore.setState({ isOpen: false, request: null });
@@ -625,6 +627,25 @@ describe("DecisionQuestionDialog", () => {
     await screen.findByTestId("decision-question-content");
     fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
     await waitFor(() => expect(useDecisionsQuestionViewStore.getState().isOpen).toBe(false));
+  });
+
+  it("waits for main to say whether Decisions is on before reading, rather than closing (#17232)", async () => {
+    act(() => {
+      decisionsKnown = false;
+      for (const listener of onListeners) listener();
+    });
+    openReference([OTHER_PROJECT]);
+    await act(async () => {});
+    expect(useDecisionsQuestionViewStore.getState().isOpen).toBe(true);
+    expect(getQuestionContentByReference).not.toHaveBeenCalled();
+
+    act(() => {
+      decisionsKnown = true;
+      for (const listener of onListeners) listener();
+    });
+
+    await screen.findByTestId("decision-question-content");
+    expect(getQuestionContentByReference).toHaveBeenCalledWith({ reference: OTHER_PROJECT });
   });
 
   it("closes as soon as Decisions turns off", async () => {

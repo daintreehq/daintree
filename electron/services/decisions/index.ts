@@ -13,7 +13,6 @@ import type { MainProcessToastPayload } from "../../../shared/types/ipc/maps.js"
 import { isDiskSpaceFault } from "./storageRecovery.js";
 import { getAllAppWebContents } from "../../window/webContentsRegistry.js";
 import {
-  getAgentNotificationServiceRef,
   getDecisionsHostsPort,
   getMcpServerServiceRef,
   getPtyClient,
@@ -29,6 +28,7 @@ import {
 } from "../decisionsQuestionList.js";
 import { QuestionNotifier, type QuestionNotifications } from "./questionNotifications.js";
 import type { MetaStore } from "./attentionList.js";
+import type { agentNotificationService } from "../AgentNotificationService.js";
 import {
   BridgeError,
   enrollHost,
@@ -373,9 +373,11 @@ function publishQuestions(questions: readonly DecisionQuestionListItem[]): void 
  * Desktop notifications for the questions agents ask (#17232), from the list
  * every window here reads, so a Remote Host's questions notify once they are
  * listed too. Raised by the agent notification service, which owns this
- * computer's notification settings and sounds; until it has loaded, nothing shows.
+ * computer's notification settings and sounds: loaded on demand, since
+ * Decisions can start before the startup task that loads it has run.
  */
 function notifyQuestions(store: MetaStore): QuestionNotifications {
+  let presenter: typeof agentNotificationService | null = null;
   const notifier = new QuestionNotifier({
     store,
     questions: { get: getDecisionQuestionList, onChange: onDecisionQuestionsChanged },
@@ -384,11 +386,14 @@ function notifyQuestions(store: MetaStore): QuestionNotifications {
       const summary = read.result === "read" ? read.summaries[0] : undefined;
       return summary?.result === "read" ? summary.line : null;
     },
-    notificationsOn: (projectId) =>
-      getAgentNotificationServiceRef()?.decisionQuestionNotificationsOn(projectId) ?? false,
+    prepare: async (reference) => {
+      presenter ??= (await import("../AgentNotificationService.js")).agentNotificationService;
+      await presenter.prepareDecisionQuestion(reference.projectId);
+    },
+    notificationsOn: (projectId) => presenter?.decisionQuestionNotificationsOn(projectId) ?? false,
     show: (question, openingLine, key) =>
-      getAgentNotificationServiceRef()?.notifyDecisionQuestion(question, openingLine, key),
-    close: (key) => getAgentNotificationServiceRef()?.closeDecisionQuestion(key),
+      presenter?.notifyDecisionQuestion(question, openingLine, key),
+    close: (key) => presenter?.closeDecisionQuestion(key),
   });
   void notifier.start();
   return notifier;

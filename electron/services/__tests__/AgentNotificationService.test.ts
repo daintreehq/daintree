@@ -4323,7 +4323,7 @@ describe("Decisions questions (#17232)", () => {
       projectLabel: "Daintree",
       worktreeId: "wt-1",
       worktreeRoot: "/repo",
-      requirement: "human-preferred",
+      requirement: "proxy-ok",
       askedAt: new Date(askedAt).toISOString(),
       expiresAt: null,
       settledAt: null,
@@ -4382,10 +4382,35 @@ describe("Decisions questions (#17232)", () => {
   });
 
   it("shows the banner for a turn after the one that asked", () => {
-    setDecisionQuestions([question("term-1", Date.now())]);
-    vi.advanceTimersByTime(1_000);
+    turn(() => setDecisionQuestions([question("term-1", Date.now())]));
+    expect(finished()).toHaveLength(0);
 
     turn();
+
+    expect(finished()).toHaveLength(1);
+  });
+
+  it("keeps the banner replaced when Decisions turns off before it would show", () => {
+    events.emit("agent:state-changed", makePayload("working", "idle"));
+    vi.advanceTimersByTime(1_000);
+    setDecisionQuestions([question("term-1", Date.now())]);
+    events.emit("agent:state-changed", makePayload("completed", "working"));
+    // Turning Decisions off empties the list inside the banner's two-second wait.
+    setDecisionQuestions([]);
+    vi.advanceTimersByTime(5_000);
+
+    expect(finished()).toHaveLength(0);
+  });
+
+  it("shows a later turn's banner when the agent exits naturally after it", () => {
+    turn(() => setDecisionQuestions([question("term-1", Date.now())]));
+    events.emit("agent:state-changed", makePayload("working", "idle"));
+    vi.advanceTimersByTime(1_000);
+
+    // A natural exit tells `agent:exited` before the agent's last transition.
+    events.emit("agent:exited", { terminalId: "term-1", agentId: "agent-1" } as never);
+    events.emit("agent:state-changed", makePayload("exited", "working"));
+    vi.advanceTimersByTime(5_000);
 
     expect(finished()).toHaveLength(1);
   });
@@ -4427,23 +4452,49 @@ describe("Decisions questions (#17232)", () => {
     expect(body).toBe("Open it to read what was asked.");
   });
 
-  it("replaces a re-sent question's banner and takes it down by the same key", () => {
-    agentNotificationService.notifyDecisionQuestion(question("term-1", Date.now()), "Hi?", "k");
-    const options = notificationServiceMock.showNativeNotification.mock.calls[0]![2];
+  it("gives each question its own banner, replaced by a re-send and taken down by the same key", () => {
+    const asked = question("term-1", Date.now());
+    agentNotificationService.notifyDecisionQuestion(asked, "Hi?", "k-1");
+    agentNotificationService.notifyDecisionQuestion(asked, "Hi?", "k-1");
+    agentNotificationService.notifyDecisionQuestion(asked, "Other?", "k-2");
+    const keys = notificationServiceMock.showNativeNotification.mock.calls.map(
+      (call) => call[2].replaceKey as string
+    );
 
-    agentNotificationService.closeDecisionQuestion("k");
+    agentNotificationService.closeDecisionQuestion("k-1");
 
-    expect(notificationServiceMock.closeNotificationByKey).toHaveBeenCalledWith(options.replaceKey);
+    expect(keys[0]).toBeTruthy();
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
+    expect(notificationServiceMock.closeNotificationByKey).toHaveBeenCalledWith(keys[0]);
   });
 
   it("is silenced by turning notifications off, and only by that", () => {
-    mockStore({ completedEnabled: false, waitingEnabled: false, quietHoursEnabled: true });
+    // Monday 23:00, inside 22:00 to 06:00 quiet hours, with the session muted and both alert switches off.
+    vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
+    mockStore({
+      completedEnabled: false,
+      waitingEnabled: false,
+      quietHoursEnabled: true,
+      quietHoursStartMin: 22 * 60,
+      quietHoursEndMin: 6 * 60,
+    });
+    agentNotificationService.setSessionMuteUntil(Date.now() + 60 * 60 * 1000);
     expect(agentNotificationService.decisionQuestionNotificationsOn(PROJECT_ID)).toBe(true);
+    agentNotificationService.notifyDecisionQuestion(question("term-1", Date.now()), "Hi?", "k");
+    expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
 
+    notificationServiceMock.showNativeNotification.mockClear();
     mockStore({ enabled: false } as never);
     expect(agentNotificationService.decisionQuestionNotificationsOn(PROJECT_ID)).toBe(false);
     agentNotificationService.notifyDecisionQuestion(question("term-1", Date.now()), "Hi?", "k");
     expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+  });
+
+  it("reads the question's project's alert overrides before it shows", async () => {
+    await agentNotificationService.prepareDecisionQuestion("project-cold");
+
+    expect(projectStoreMock.loadNotificationOverrides).toHaveBeenCalledWith("project-cold");
   });
 
   it("plays this computer's waiting sound with sound on", () => {

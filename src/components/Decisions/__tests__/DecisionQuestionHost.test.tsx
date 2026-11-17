@@ -14,19 +14,23 @@ const reference = {
   questionId: "q-1",
 };
 
-let handlers: Map<string, (payload: DecisionsOpenQuestionRequest) => void>;
-let off: ReturnType<typeof vi.fn>;
+const handlers = new Map<string, Set<(payload: DecisionsOpenQuestionRequest) => void>>();
+
+/** Main sending this view an open request, as the preload delivers it. */
+function send(name: string, payload: DecisionsOpenQuestionRequest): void {
+  for (const handler of [...(handlers.get(name) ?? [])]) handler(payload);
+}
 
 beforeEach(() => {
-  handlers = new Map();
-  off = vi.fn();
+  handlers.clear();
   Object.defineProperty(window, "electron", {
     configurable: true,
     value: {
       events: {
         on: vi.fn((name: string, handler: (payload: DecisionsOpenQuestionRequest) => void) => {
-          handlers.set(name, handler);
-          return off;
+          if (!handlers.has(name)) handlers.set(name, new Set());
+          handlers.get(name)!.add(handler);
+          return () => handlers.get(name)?.delete(handler);
         }),
       },
     },
@@ -43,20 +47,29 @@ describe("DecisionQuestionHost", () => {
   it("opens the question a notification's click sends this view, by its reference", () => {
     render(<DecisionQuestionHost followsOpenRequests />);
 
-    act(() => handlers.get("decisions:open-question")!({ reference }));
+    act(() => send("decisions:open-question", { reference }));
+    expect(useDecisionsQuestionViewStore.getState()).toMatchObject({
+      isOpen: true,
+      request: { questions: [{ scope: "reference", reference }], index: 0 },
+    });
 
-    const state = useDecisionsQuestionViewStore.getState();
-    expect(state.isOpen).toBe(true);
-    expect(state.request?.questions).toHaveLength(1);
-    expect(state.request?.index).toBe(0);
+    const next = { ...reference, hostId: "host-2", questionId: "q-2" };
+    act(() => send("decisions:open-question", { reference: next }));
+    expect(useDecisionsQuestionViewStore.getState().request).toEqual({
+      questions: [{ scope: "reference", reference: next }],
+      index: 0,
+    });
   });
 
   it("stops following them once it unmounts", () => {
     const { unmount } = render(<DecisionQuestionHost followsOpenRequests />);
+    expect(handlers.get("decisions:open-question")?.size).toBe(1);
 
     unmount();
+    act(() => send("decisions:open-question", { reference }));
 
-    expect(off).toHaveBeenCalledTimes(1);
+    expect(handlers.get("decisions:open-question")?.size).toBe(0);
+    expect(useDecisionsQuestionViewStore.getState().isOpen).toBe(false);
   });
 
   it("follows none where it isn't asked to", () => {

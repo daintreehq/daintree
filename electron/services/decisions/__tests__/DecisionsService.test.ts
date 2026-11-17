@@ -629,6 +629,7 @@ describe("DecisionsService question list (#17229)", () => {
     };
     return {
       service,
+      store,
       lists,
       panes,
       commit,
@@ -669,10 +670,12 @@ describe("DecisionsService question list (#17229)", () => {
 
   it("raises desktop notifications from an owner's store once its first list is out, and stops them with it (#17232)", async () => {
     const seen: string[] = [];
-    const { service, lists, setRows } = listed({
-      notifyQuestions: () => {
+    const given: unknown[] = [];
+    const { service, store, lists, setRows } = listed({
+      notifyQuestions: (from) => {
+        given.push(from);
         seen.push(`started after ${lists.length} list(s)`);
-        return { stop: () => seen.push("stopped") };
+        return { stop: () => seen.push(`stopped with ${lists.length} list(s) out`) };
       },
     });
     setRows([row(1)]);
@@ -681,7 +684,10 @@ describe("DecisionsService question list (#17229)", () => {
 
     await service.stop();
 
-    expect(seen).toEqual(["started after 1 list(s)", "stopped"]);
+    expect(given).toEqual([store]);
+    // Stopped as its store is let go of, before the lifetime's empty list goes out.
+    expect(seen).toEqual(["started after 1 list(s)", "stopped with 1 list(s) out"]);
+    expect(lists.at(-1)).toEqual([]);
   });
 
   it("raises none for a Remote Host's lifetime, whose questions are its owner's to show", async () => {

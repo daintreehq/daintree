@@ -16,15 +16,13 @@ let decisionsOn = true;
 const onListeners = new Set<() => void>();
 vi.mock("@/hooks/useDecisionsOn", async () => {
   const { useSyncExternalStore } = await import("react");
+  const subscribe = (listener: () => void) => {
+    onListeners.add(listener);
+    return () => onListeners.delete(listener);
+  };
   return {
-    useDecisionsOn: () =>
-      useSyncExternalStore(
-        (listener) => {
-          onListeners.add(listener);
-          return () => onListeners.delete(listener);
-        },
-        () => decisionsOn
-      ),
+    useDecisionsSwitch: () => useSyncExternalStore(subscribe, () => (decisionsOn ? "on" : "off")),
+    useDecisionsOn: () => useSyncExternalStore(subscribe, () => decisionsOn),
   };
 });
 

@@ -711,7 +711,8 @@ class NotificationService {
    * Opens a Decisions question (#17232) in the question view of a window on
    * this computer: the most recently focused one showing the question's
    * project, else the most recently focused one. No project is switched to:
-   * every window reads a question by its reference, whatever it shows. False
+   * every window reads a question by its reference, whatever it shows. A view
+   * still loading gets it once it subscribes (the preload replays it). False
    * when no window could take it.
    */
   openDecisionQuestion(reference: DecisionQuestionReference): boolean {
@@ -719,7 +720,9 @@ class NotificationService {
       const window = ctx.browserWindow;
       if (window.isDestroyed()) return [];
       const contents = getAppWebContents(window);
-      return contents.isDestroyed() ? [] : [{ window, contents }];
+      // With its app view gone the window answers with its own blank contents, which show nothing.
+      if (contents.isDestroyed() || contents === window.webContents) return [];
+      return [{ window, contents }];
     });
     const target =
       targets.find(

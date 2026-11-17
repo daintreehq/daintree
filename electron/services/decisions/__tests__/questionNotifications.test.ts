@@ -5,6 +5,7 @@ import type {
   DecisionQuestionStanding,
 } from "../../../../shared/types/decisionsQuestion.js";
 import {
+  MAX_SETTLED_CLAIMS,
   NOTIFIED_QUESTIONS_META_KEY,
   QuestionNotifier,
   questionKey,
@@ -20,12 +21,12 @@ const OPEN: DecisionQuestionStanding = { kind: "waiting", reason: "open" };
 function question(
   questionId: string,
   standing: DecisionQuestionStanding = OPEN,
-  overrides: { askedAt?: string; hostId?: string; terminalId?: string } = {}
+  overrides: { askedAt?: string; hostId?: string; projectId?: string; terminalId?: string } = {}
 ): DecisionQuestionListItem {
   return {
     reference: {
       hostId: overrides.hostId ?? "host-1",
-      projectId: "project-1",
+      projectId: overrides.projectId ?? "project-1",
       terminalId: overrides.terminalId ?? "term-1",
       questionId,
     },
@@ -34,7 +35,7 @@ function question(
     projectLabel: "Daintree",
     worktreeId: "wt-1",
     worktreeRoot: "/repo",
-    requirement: "human-preferred",
+    requirement: "proxy-ok",
     askedAt: overrides.askedAt ?? AFTER,
     expiresAt: null,
     settledAt: null,
@@ -100,8 +101,12 @@ function notifier(
 /** Lets claims write and opening lines be read. */
 async function settle(made: QuestionNotifier): Promise<void> {
   await made.settled();
-  for (let i = 0; i < 5; i++) await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
+
+/** The keys the store's record holds now. */
+const recordOf = (store: ReturnType<typeof metaStore>): string[] =>
+  JSON.parse(store.meta.get(NOTIFIED_QUESTIONS_META_KEY) ?? "[]");
 
 function shownIds(show: ReturnType<typeof notifier>["show"]): string[] {
   return show.mock.calls.map(([asked]) => asked.reference.questionId);
@@ -124,6 +129,7 @@ describe("QuestionNotifier", () => {
 
     list.publish([question("q-1", { kind: "queued" })]);
     await settle(made);
+    expect(show).toHaveBeenCalledTimes(1);
     list.publish([question("q-1", OPEN)]);
     await settle(made);
 
@@ -134,22 +140,85 @@ describe("QuestionNotifier", () => {
     expect(key).toBe(questionKey(asked.reference));
   });
 
-  it("claims a question in the store before it shows", async () => {
+  it("shows a question only once its claim is saved in the store", async () => {
     const store = recorded();
-    const list = questionList();
-    const claimedWhenShown: boolean[] = [];
-    const { notifier: made } = notifier(store, list, {
-      show: (_asked, _line, key) => {
-        const record: string[] = JSON.parse(store.meta.get(NOTIFIED_QUESTIONS_META_KEY)!);
-        claimedWhenShown.push(record.includes(key));
-      },
+    let saved!: () => void;
+    store.setMeta.mockImplementationOnce(async (key: string, value: string) => {
+      await new Promise<void>((resolve) => (saved = resolve));
+      store.meta.set(key, value);
     });
+    const list = questionList();
+    const { notifier: made, show } = notifier(store, list);
     await made.start();
 
     list.publish([question("q-1")]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(show).not.toHaveBeenCalled();
+
+    saved();
+    await settle(made);
+    expect(shownIds(show)).toEqual(["q-1"]);
+  });
+
+  it("shows nothing for a claim the store didn't save, so a restart shows it then", async () => {
+    const store = recorded();
+    store.setMeta.mockRejectedValueOnce(new Error("SQLITE_FULL"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const list = questionList();
+    const first = notifier(store, list);
+    await first.notifier.start();
+    list.publish([question("q-1")]);
+    await settle(first.notifier);
+    first.notifier.stop();
+    expect(first.show).not.toHaveBeenCalled();
+
+    const second = notifier(store, list);
+    await second.notifier.start();
+    await settle(second.notifier);
+
+    expect(shownIds(second.show)).toEqual(["q-1"]);
+    warn.mockRestore();
+  });
+
+  it("tries a claim the store didn't save again on the list's next change", async () => {
+    const store = recorded();
+    store.setMeta.mockRejectedValueOnce(new Error("SQLITE_BUSY"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const list = questionList();
+    const { notifier: made, show } = notifier(store, list);
+    await made.start();
+    list.publish([question("q-1")]);
     await settle(made);
 
-    expect(claimedWhenShown).toEqual([true]);
+    list.publish([question("q-1"), question("q-2")]);
+    await settle(made);
+
+    expect(shownIds(show)).toEqual(["q-1", "q-2"]);
+    warn.mockRestore();
+  });
+
+  it("shows nothing when what presents it can't be readied, and waits for it otherwise", async () => {
+    const list = questionList();
+    const failed = notifier(recorded(), list, {
+      prepare: async () => {
+        throw new Error("no presenter");
+      },
+    });
+    await failed.notifier.start();
+    let ready!: () => void;
+    const waiting = notifier(recorded(), list, {
+      prepare: () => new Promise<void>((resolve) => (ready = resolve)),
+    });
+    await waiting.notifier.start();
+
+    list.publish([question("q-1")]);
+    await settle(waiting.notifier);
+    expect(waiting.show).not.toHaveBeenCalled();
+    ready();
+    await settle(waiting.notifier);
+
+    expect(failed.show).not.toHaveBeenCalled();
+    expect(shownIds(waiting.show)).toEqual(["q-1"]);
   });
 
   it.each<[string, DecisionQuestionStanding]>([
@@ -207,15 +276,28 @@ describe("QuestionNotifier", () => {
     expect(shownIds(second.show)).toEqual(["q-2"]);
   });
 
-  it("keeps a Remote Host's question with the same ids apart from this computer's", async () => {
+  it("keeps questions apart by every part of their reference, a Remote Host's included", async () => {
+    const store = recorded();
     const list = questionList();
-    const { notifier: made, show } = notifier(recorded(), list);
+    const { notifier: made, show, close } = notifier(store, list);
     await made.start();
+    const asked = [
+      question("q-1"),
+      question("q-1", OPEN, { hostId: "host-2" }),
+      question("q-1", OPEN, { projectId: "project-2" }),
+      question("q-1", OPEN, { terminalId: "term-2" }),
+    ];
 
-    list.publish([question("q-1"), question("q-1", OPEN, { hostId: "host-2" })]);
+    list.publish(asked);
+    await settle(made);
+    list.publish(asked.map((item) => ({ ...item, standing: { kind: "to-type" } })));
     await settle(made);
 
-    expect(show.mock.calls.map(([asked]) => asked.reference.hostId)).toEqual(["host-1", "host-2"]);
+    const keys = asked.map((item) => questionKey(item.reference));
+    expect(new Set(keys).size).toBe(4);
+    expect(show.mock.calls.map(([, , key]) => key)).toEqual(keys);
+    expect(recordOf(store)).toEqual(keys);
+    expect(close.mock.calls.map(([key]) => key)).toEqual(keys);
   });
 
   it.each([
@@ -239,6 +321,18 @@ describe("QuestionNotifier", () => {
     await next.notifier.start();
     await settle(next.notifier);
     expect(next.show).not.toHaveBeenCalled();
+  });
+
+  it("takes only the first list as seen: a question first listed later shows, whenever it was asked", async () => {
+    const list = questionList();
+    const { notifier: made, show } = notifier(metaStore(), list);
+    await made.start();
+
+    // A Remote Host's question asked while it was away, listed once it is back.
+    list.publish([question("q-host", OPEN, { askedAt: BEFORE, hostId: "host-2" })]);
+    await settle(made);
+
+    expect(shownIds(show)).toEqual(["q-host"]);
   });
 
   it("shows nothing while notifications are off, and nothing later for what was asked then", async () => {
@@ -272,7 +366,7 @@ describe("QuestionNotifier", () => {
     expect(show).toHaveBeenCalledWith(expect.anything(), null, expect.any(String));
   });
 
-  it("takes a shown notification down once its question stops waiting, and lets go of a settled one's claim", async () => {
+  it("takes a shown notification down once its question stops waiting, keeping its claim", async () => {
     const store = recorded();
     const list = questionList();
     const { notifier: made, close } = notifier(store, list);
@@ -288,8 +382,39 @@ describe("QuestionNotifier", () => {
 
     const keys = [question("q-1"), question("q-2")].map((asked) => questionKey(asked.reference));
     expect(close.mock.calls.map(([key]) => key)).toEqual(keys);
-    // One that failed to send can be sent again, and stays claimed; an expired one never waits again.
-    expect(JSON.parse(store.meta.get(NOTIFIED_QUESTIONS_META_KEY)!)).toEqual([keys[0]]);
+    expect(recordOf(store)).toEqual(keys);
+  });
+
+  it("never shows a withdrawn question again once it is reopened", async () => {
+    const list = questionList();
+    const { notifier: made, show } = notifier(recorded(), list);
+    await made.start();
+    list.publish([question("q-1")]);
+    await settle(made);
+
+    list.publish([question("q-1", { kind: "settled", outcome: "withdrawn" })]);
+    await settle(made);
+    list.publish([question("q-1", OPEN)]);
+    await settle(made);
+
+    expect(shownIds(show)).toEqual(["q-1"]);
+  });
+
+  it("keeps claims for the newest settled questions only, past its cap", async () => {
+    const settled = Array.from({ length: MAX_SETTLED_CLAIMS + 2 }, (_, index) =>
+      question(`q-${index}`, { kind: "settled", outcome: "answered", handled: false })
+    );
+    const keys = settled.map((item) => questionKey(item.reference));
+    const waiting = question("q-waiting", { kind: "to-type" });
+    const store = recorded([questionKey(waiting.reference), ...keys]);
+    const list = questionList();
+    const { notifier: made } = notifier(store, list);
+    await made.start();
+
+    list.publish([...settled, waiting]);
+    await settle(made);
+
+    expect(recordOf(store)).toEqual([questionKey(waiting.reference), ...keys.slice(2)]);
   });
 
   it("keeps its notifications and claims when the list empties as Decisions stops", async () => {
