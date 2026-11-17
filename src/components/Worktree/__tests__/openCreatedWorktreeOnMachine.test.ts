@@ -150,8 +150,9 @@ describe("openCreatedWorktreeOnMachine", () => {
       hostModeListening: true,
     });
     hostsClient.list.mockResolvedValue([]);
-    hostsClient.add.mockImplementation(async (payload: { name: string; ownerWorktreeId?: string }) =>
-      descriptor(payload.name, "dt-feature-x", payload.ownerWorktreeId)
+    hostsClient.add.mockImplementation(
+      async (payload: { name: string; ownerWorktreeId?: string }) =>
+        descriptor(payload.name, "dt-feature-x", payload.ownerWorktreeId)
     );
     hostsClient.connectAndSettle.mockResolvedValue({ status: "connected" });
     hostsClient.update.mockResolvedValue({});
