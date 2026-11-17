@@ -2004,6 +2004,21 @@ describe("ReviewHub", () => {
       ).toBeNull();
     });
 
+    // The status read that shows the staged resolution lands after the row
+    // leaves the list; until then the row's own staging is what counts.
+    it("does not call a just-resolved git am conflict empty before the status catches up", async () => {
+      getStagingStatusMock.mockResolvedValue(makeMergingStatus({ repoState: "APPLYING_MAILBOX" }));
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      fireEvent.click(await screen.findByLabelText("Mark src/app.ts as resolved"));
+      await waitFor(() =>
+        expect(screen.queryByLabelText("Mark src/app.ts as resolved")).toBeNull()
+      );
+
+      screen.getByText(/Ready to continue patch apply/i);
+      expect(screen.queryByText("Nothing staged for this patch")).toBeNull();
+    });
+
     // A patch that wouldn't apply at all stops with no conflicts and nothing
     // staged, and `git am --continue` refuses that index.
     it("holds Continue on a git am stop with nothing staged and names the terminal way out", async () => {

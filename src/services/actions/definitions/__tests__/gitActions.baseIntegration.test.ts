@@ -467,9 +467,16 @@ describe("git.abortRepositoryOperation schema", () => {
   it("accepts a halted git am as the operation hint", () => {
     const { schemaOf } = setupActions();
     const schema = schemaOf("git.abortRepositoryOperation")!;
-    expect(schema.safeParse({ worktreeId: WT_ID, operation: "APPLYING_MAILBOX" }).success).toBe(
-      true
-    );
+    for (const operation of [
+      "MERGING",
+      "REBASING",
+      "CHERRY_PICKING",
+      "REVERTING",
+      "APPLYING_MAILBOX",
+      undefined,
+    ]) {
+      expect(schema.safeParse({ worktreeId: WT_ID, operation }).success).toBe(true);
+    }
     expect(schema.safeParse({ worktreeId: WT_ID, operation: "AM" }).success).toBe(false);
   });
 });
