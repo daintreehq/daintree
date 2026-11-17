@@ -189,11 +189,34 @@ describe("QuestionNotifier", () => {
     await made.start();
     list.publish([question("q-1")]);
     await settle(made);
+    expect(show).not.toHaveBeenCalled();
 
     list.publish([question("q-1"), question("q-2")]);
     await settle(made);
 
     expect(shownIds(show)).toEqual(["q-1", "q-2"]);
+    warn.mockRestore();
+  });
+
+  it("shows a claim a later write saved after an earlier one failed", async () => {
+    const store = recorded();
+    let fail!: () => void;
+    store.setMeta.mockImplementationOnce(
+      () => new Promise<void>((_resolve, reject) => (fail = () => reject(new Error("SQLITE_BUSY"))))
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const list = questionList();
+    const { notifier: made, show } = notifier(store, list);
+    await made.start();
+
+    list.publish([question("q-1")]);
+    list.publish([question("q-1"), question("q-2")]);
+    await vi.waitFor(() => expect(store.setMeta).toHaveBeenCalledTimes(1));
+    fail();
+    await settle(made);
+
+    expect(shownIds(show).sort()).toEqual(["q-1", "q-2"]);
+    expect(recordOf(store)).toContain(questionKey(question("q-1").reference));
     warn.mockRestore();
   });
 

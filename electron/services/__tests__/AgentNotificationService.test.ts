@@ -4402,6 +4402,17 @@ describe("Decisions questions (#17232)", () => {
     expect(finished()).toHaveLength(0);
   });
 
+  it("keeps the banner replaced when the terminal is closed before it would show", () => {
+    events.emit("agent:state-changed", makePayload("working", "idle"));
+    vi.advanceTimersByTime(1_000);
+    setDecisionQuestions([question("term-1", Date.now())]);
+    events.emit("agent:state-changed", makePayload("completed", "working"));
+    events.emit("agent:killed", { terminalId: "term-1", agentId: "agent-1" } as never);
+    vi.advanceTimersByTime(5_000);
+
+    expect(finished()).toHaveLength(0);
+  });
+
   it("shows a later turn's banner when the agent exits naturally after it", () => {
     turn(() => setDecisionQuestions([question("term-1", Date.now())]));
     events.emit("agent:state-changed", makePayload("working", "idle"));

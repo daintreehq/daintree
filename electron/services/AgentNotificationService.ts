@@ -534,7 +534,6 @@ class AgentNotificationService {
         this.agentSpawnTimestamps.delete(payload.terminalId);
         this.activeTerminalIds.delete(payload.terminalId);
         this.turnStartedAt.delete(payload.terminalId);
-        this.decisionQuestionAskedAt.delete(payload.terminalId);
         this.activeSeedTouched?.add(payload.terminalId);
         this.forgetPanelOwnership(payload.terminalId);
         this.projectByTerminal.delete(payload.terminalId);
