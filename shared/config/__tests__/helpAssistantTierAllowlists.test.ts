@@ -125,7 +125,13 @@ describe("toNonRendererOwnedTools", () => {
   it("offers the project link tools to the Assistant at core, and to no worker pane (#17091)", () => {
     const isLinkTool = (id: string) => id.startsWith("project.links.");
     const linkTools = BUILT_IN_ACTION_IDS.filter(isLinkTool);
-    expect(linkTools.length).toBeGreaterThan(0);
+    // The Assistant keeps the whole list: dropping one verb strands the links it added.
+    expect([...linkTools].sort()).toEqual([
+      "project.links.add",
+      "project.links.list",
+      "project.links.remove",
+      "project.links.update",
+    ]);
     expect(linkTools.filter((id) => !CORE_TIER_TOOLS.includes(id as never))).toEqual([]);
     for (const tier of HELP_ASSISTANT_TIERS) {
       const projected = toNonRendererOwnedTools(HELP_TIER_CUMULATIVE[tier]);

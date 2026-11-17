@@ -19,6 +19,7 @@ vi.mock("@/clients", () => ({
 vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 
 import { ProjectLinksSection } from "../ProjectLinksSection";
+import { PROJECT_SETTINGS_SECTIONS } from "@/components/Settings/settingsTabRegistry";
 import {
   cleanupProjectSettingsStore,
   patchCachedProjectLinks,
@@ -61,8 +62,14 @@ afterEach(() => {
 
 describe("ProjectLinksSection (#17091)", () => {
   it("shows the project's links with the Assistant's marked", () => {
-    const { getByText } = render(<ProjectLinksSection projectId="proj-1" />);
+    const { container, getByText } = render(<ProjectLinksSection projectId="proj-1" />);
 
+    // The launchpad's settings link and a search hit both scroll to this anchor.
+    const anchor = container.querySelector(".settings-section")?.id;
+    expect(anchor).toBe("project-links");
+    expect(
+      (PROJECT_SETTINGS_SECTIONS["project:general"].sections ?? []).map((s) => s.id)
+    ).toContain(anchor);
     expect(getByText("Staging")).toBeTruthy();
     expect(getByText("staging.example.com")).toBeTruthy();
     expect(getByText("Added by Assistant")).toBeTruthy();

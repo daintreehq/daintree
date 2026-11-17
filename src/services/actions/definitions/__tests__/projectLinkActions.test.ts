@@ -55,10 +55,18 @@ const assistant: Partial<ActionContext> = {
   hostCallerOrigin: "assistant",
 };
 
-const writes: Array<[string, unknown]> = [
-  ["project.links.add", { title: "X", url: "https://x.example.com" }],
-  ["project.links.update", { id: "link-1", title: "X" }],
-  ["project.links.remove", { id: "link-1" }],
+const writes: Array<[string, unknown, unknown]> = [
+  [
+    "project.links.add",
+    { title: "X", url: "https://x.example.com" },
+    { op: "add", title: "X", url: "https://x.example.com" },
+  ],
+  [
+    "project.links.update",
+    { id: "link-1", title: "X" },
+    { op: "update", id: "link-1", title: "X" },
+  ],
+  ["project.links.remove", { id: "link-1" }, { op: "remove", id: "link-1" }],
 ];
 
 beforeEach(() => {
@@ -125,13 +133,14 @@ describe("project.links (#17091)", () => {
     }
   );
 
-  it.each(writes)("writes %s as the Assistant for the Assistant", async (id, args) => {
+  it.each(writes)("writes %s as the Assistant for the Assistant", async (id, args, change) => {
     await run(id, args, assistant);
 
     expect(changeMock).toHaveBeenCalledTimes(1);
-    expect(changeMock.mock.calls[0]?.[0]).toMatchObject({
+    expect(changeMock.mock.calls[0]?.[0]).toEqual({
       projectId: "proj-1",
       actor: "assistant",
+      change,
     });
   });
 

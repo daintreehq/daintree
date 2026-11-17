@@ -1,20 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectSettings, RunCommand } from "@shared/types";
 
-const { getSettingsMock, detectRunnersMock } = vi.hoisted(() => ({
+const { getSettingsMock, detectRunnersMock, changeLinksMock } = vi.hoisted(() => ({
   getSettingsMock: vi.fn(),
   detectRunnersMock: vi.fn(),
+  changeLinksMock: vi.fn(),
 }));
 
 vi.mock("@/clients", () => ({
   projectClient: {
     getSettings: getSettingsMock,
     detectRunners: detectRunnersMock,
+    changeLinks: changeLinksMock,
   },
   invalidateProjectSettingsCache: vi.fn(),
 }));
 
 import {
+  changeProjectLinks,
   cleanupProjectSettingsStore,
   patchCachedProjectLinks,
   patchCachedProjectSettings,
@@ -339,8 +342,35 @@ describe("projectSettingsStore", () => {
     });
   });
 
-  describe("Portal links (#17091)", () => {
+  describe("Project links (#17091)", () => {
     const staging = { id: "a", title: "Staging", url: "https://staging.example.com/" };
+
+    it("puts the list main saved into the cache, and leaves it on a refusal", async () => {
+      const prod = { id: "b", title: "Prod", url: "https://prod.example.com/" };
+      useProjectSettingsStore.setState({
+        projectId: "project-a",
+        settings: { runCommands: [], links: [staging] },
+      });
+      const change = { op: "add" as const, title: "Prod", url: "https://prod.example.com" };
+
+      changeLinksMock.mockResolvedValueOnce({ saved: true, links: [staging, prod], link: prod });
+      await changeProjectLinks({ projectId: "project-a", actor: "user", change });
+      expect(changeLinksMock).toHaveBeenLastCalledWith({
+        projectId: "project-a",
+        actor: "user",
+        change,
+      });
+      expect(useProjectSettingsStore.getState().settings?.links).toEqual([staging, prod]);
+
+      changeLinksMock.mockResolvedValueOnce({
+        saved: false,
+        code: "limit",
+        message: "This project already has 50 links",
+      });
+      const refused = await changeProjectLinks({ projectId: "project-a", actor: "user", change });
+      expect(refused.saved).toBe(false);
+      expect(useProjectSettingsStore.getState().settings?.links).toEqual([staging, prod]);
+    });
 
     it("keeps the cached links through settings saved from a copy without them", () => {
       useProjectSettingsStore.setState({

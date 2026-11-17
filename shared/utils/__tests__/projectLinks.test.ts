@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ProjectLink } from "../../types/portal.js";
+import type { ProjectLink } from "../../types/projectLinks.js";
 import {
   MAX_PROJECT_LINKS,
   applyProjectLinkChange,
