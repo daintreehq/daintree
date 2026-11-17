@@ -827,6 +827,17 @@ describe("fleet.retryFailures", () => {
     expect(overrides).toEqual({ t2: "Review {{branch_name}} as written" });
   });
 
+  it("keeps an edit that matches the draft word for word as the target's own text (#17513)", async () => {
+    useFleetFailureStore.getState().recordFailure("Review {{branch_name}}", ["t1", "t2"], 0, {
+      perTargetOverrides: { t2: "Review {{branch_name}}" },
+    });
+    const registry = await buildRegistry();
+    await run(registry, "fleet.retryFailures");
+    const [draft, , overrides] = vi.mocked(runManagedFleetBroadcast).mock.calls[0]!;
+    expect(draft).toBe("Review {{branch_name}}");
+    expect(overrides).toEqual({ t2: "Review {{branch_name}}" });
+  });
+
   it("sends each target its own text again, with the broadcast's images (#15600)", async () => {
     useFleetFailureStore.getState().recordFailure("look at /tmp/shot.png", ["t1", "t2", "t3"], 0, {
       imagePaths: ["/tmp/shot.png"],
@@ -875,6 +886,7 @@ describe("fleet.retryFailures", () => {
     useFleetFailureStore.setState({
       failedIds: new Set(["t1", "t2"]),
       payload: "ls\r",
+      perTargetOverrides: { t2: "ls -la\r" },
     });
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");

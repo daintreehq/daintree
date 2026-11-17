@@ -142,6 +142,11 @@ describe("fleet.retryFailures — recipe variables after a failed write (#17513)
     expect(sentTo("beta")).toEqual(["Review feature/beta"]);
     expect(sentTo("literal")).toEqual(["Review {{branch_name}} (literally)"]);
     expect(useFleetFailureStore.getState().failedIds.size).toBe(0);
+    // The retry's run is labelled with the draft the person wrote.
+    expect(useFleetRunStore.getState().run).toMatchObject({
+      isRetry: true,
+      draftPreview: "Review {{branch_name}}",
+    });
   });
 
   it("fills in each failed target's own branch when two on different ones fail", async () => {
