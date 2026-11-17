@@ -927,4 +927,86 @@ describe("PrChecksPopover", () => {
       });
     });
   });
+
+  describe("named the way GitLab names a merge request (#17216)", () => {
+    const MR_URL = "https://gitlab.com/group/project/-/merge_requests/42";
+    const renderMR = () => renderPopover({ prUrl: MR_URL, prTerm: "merge-request" });
+    // The popover's one polite region; a banner inside it is a status too.
+    const statusRegion = () =>
+      document.querySelector('[role="status"][aria-live="polite"]')?.textContent ?? "";
+
+    it("lists the jobs and hands the failing ones off as the merge request's", async () => {
+      getChecksMock.mockResolvedValue({
+        checks: [
+          check({ name: "rspec", conclusion: "failure", workflow: "test" }),
+          check({ name: "lint", conclusion: "success", workflow: "test" }),
+        ],
+      });
+      renderMR();
+
+      await openAndSettle();
+      expect(screen.getByTestId("pr-checks-popover").getAttribute("aria-label")).toBe(
+        "CI checks for merge request !42"
+      );
+      fireEvent.click(await screen.findByTestId("pr-checks-send"));
+
+      const [{ text, sourceLabel }] = openSendToAgentMock.mock.calls[0]!;
+      expect(sourceLabel).toBe("MR !42");
+      expect(text).toContain("merge request 42");
+      expect(text).not.toMatch(/pull request/i);
+    });
+
+    it("says the checks couldn't be read and links out to the merge request", async () => {
+      getChecksMock.mockRejectedValue(new Error("offline"));
+      renderMR();
+
+      await openAndSettle();
+      const banner = await screen.findByTestId("pr-checks-error");
+      expect(banner.textContent).toMatch(/open the merge request to see them there/);
+      const open = screen.getByTestId("pr-checks-open-pr");
+      expect(open.textContent).toBe("Open merge request");
+      fireEvent.click(open);
+      expect(onOpenExternal).toHaveBeenCalledWith(MR_URL);
+    });
+
+    it("says which merge request wasn't found", async () => {
+      getChecksMock.mockResolvedValue(null);
+      renderMR();
+
+      await openAndSettle();
+      const banner = await screen.findByTestId("pr-checks-missing");
+      expect(banner.textContent).toMatch(/^Merge request !42 wasn't found/);
+      await waitFor(() => expect(statusRegion()).toMatch(/^Merge request !42 wasn't found\./));
+    });
+
+    it("says no CI has reported on the merge request yet", async () => {
+      getChecksMock.mockResolvedValue({ checks: [] });
+      renderMR();
+
+      await openAndSettle();
+      await screen.findByTestId("pr-checks-empty");
+      await waitFor(() =>
+        expect(statusRegion()).toMatch(/No CI checks have reported on merge request !42 yet/)
+      );
+    });
+
+    it("calls a draft a draft merge request", async () => {
+      getChecksMock.mockResolvedValue({ checks: [check()] });
+      getPRMock.mockResolvedValue({
+        number: 42,
+        title: "Add feature",
+        url: MR_URL,
+        state: "open",
+        isDraft: true,
+        baseRef: "main",
+        rawData: {},
+      });
+      renderMR();
+
+      await openAndSettle();
+      const row = await screen.findByTestId("pr-merge-control");
+      expect(row.textContent).toMatch(/Draft merge request/);
+      expect(screen.getByTestId("pr-merge-open-pr").textContent).toBe("Open merge request");
+    });
+  });
 });

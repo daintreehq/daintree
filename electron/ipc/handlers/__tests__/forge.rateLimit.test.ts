@@ -63,6 +63,9 @@ const fakeImpl = vi.hoisted(() => ({
 }));
 
 const resolveForCwdMock = vi.hoisted(() => vi.fn());
+const activateImplMock = vi.hoisted(() =>
+  vi.fn(async (_namespaceId: string): Promise<unknown> => fakeImpl)
+);
 const resolveForgeRemoteNameMock = vi.hoisted(() => vi.fn());
 const deriveNewPRLinkMock = vi.hoisted(() => vi.fn());
 const createBackgroundFetchGitMock = vi.hoisted(() => vi.fn(async () => ({})));
@@ -123,7 +126,7 @@ vi.mock("../forgeResolution.js", () => ({
   resolveForgeRemoteNameForCwd: resolveForgeRemoteNameMock,
   getImplForNamespace: () => fakeImpl,
   getIssueImplForNamespace: () => fakeImpl,
-  getImplForNamespaceActivating: () => Promise.resolve(fakeImpl),
+  getImplForNamespaceActivating: (namespaceId: string) => activateImplMock(namespaceId),
   stampIssueProvider: (_context: unknown, issue: unknown) => issue,
   stampIssuePageProvider: (_context: unknown, page: unknown) => page,
   resolveIssueOverrideForCwd: async () => null,
@@ -331,6 +334,54 @@ describe("forge handlers — rate limiting", () => {
         await expect(getInvokeHandler(channel)({}, payload)).rejects.toThrow(error);
         expect(resolveForCwdMock).not.toHaveBeenCalled();
         expect(openExternalUrlMock).not.toHaveBeenCalled();
+      }
+    );
+  });
+
+  describe("pull request term (forge:get-pull-request-term)", () => {
+    const ask = (payload: unknown) =>
+      getInvokeHandler(CHANNELS.FORGE_GET_PULL_REQUEST_TERM)({}, payload);
+    const withTerm = (term: unknown) => Object.assign(fakeImpl, { pullRequestTerm: term });
+
+    it("answers a registered provider's own word, activating it first", async () => {
+      withTerm("merge-request");
+      try {
+        await expect(ask({ providerId: "fake-plugin.fake" })).resolves.toBe("merge-request");
+        expect(activateImplMock).toHaveBeenCalledWith("fake-plugin.fake");
+        expect(resolveForCwdMock).not.toHaveBeenCalled();
+      } finally {
+        withTerm(undefined);
+      }
+    });
+
+    it.each([undefined, "change-request", 7])(
+      "answers the default for a provider whose word is %s",
+      async (term) => {
+        withTerm(term);
+        try {
+          await expect(ask({ providerId: "fake-plugin.fake" })).resolves.toBe("pull-request");
+        } finally {
+          withTerm(undefined);
+        }
+      }
+    );
+
+    it("answers null for a provider that isn't registered, without activating anything", async () => {
+      await expect(ask({ providerId: "someone-else.forge" })).resolves.toBeNull();
+      expect(activateImplMock).not.toHaveBeenCalled();
+    });
+
+    it("answers null for a provider that can't be activated", async () => {
+      activateImplMock.mockResolvedValueOnce(undefined);
+
+      await expect(ask({ providerId: "fake-plugin.fake" })).resolves.toBeNull();
+    });
+
+    it.each([null, {}, { providerId: "" }, { providerId: 3 }])(
+      "refuses %j before any provider work",
+      async (payload) => {
+        await expect(ask(payload)).rejects.toThrow(/Invalid/);
+        expect(activateImplMock).not.toHaveBeenCalled();
       }
     );
   });
@@ -741,6 +792,11 @@ describe("forge handlers — rate limiting", () => {
         invoke: (h) => h({}, { cwd, head: "topic", baseRef: null, isMainWorktree: false }),
       },
       {
+        channel: CHANNELS.FORGE_GET_PULL_REQUEST_TERM,
+        maxCalls: 20,
+        invoke: (h) => h({}, { providerId: "fake-plugin.fake" }),
+      },
+      {
         channel: CHANNELS.FORGE_OPEN_ISSUE,
         maxCalls: 20,
         invoke: (h) => h({}, { cwd, issueNumber: 1 }),
@@ -961,12 +1017,12 @@ describe("forge handlers — rate limiting", () => {
       },
     ];
 
-    it("registers all forge channels (54 rate-limited + 2 unrated probes)", () => {
-      expect(specs).toHaveLength(54);
+    it("registers all forge channels (55 rate-limited + 2 unrated probes)", () => {
+      expect(specs).toHaveLength(55);
       // FORGE_GET_CURRENT_USER and FORGE_GET_TOKEN_HEALTH are intentionally
       // unrated replay/identity probes with no checkRateLimit, so they register
       // handlers but stay out of `specs`.
-      expect(ipcMainMock.handle).toHaveBeenCalledTimes(56);
+      expect(ipcMainMock.handle).toHaveBeenCalledTimes(57);
     });
 
     it.each(specs)(

@@ -395,6 +395,23 @@ describe("composePrChecksAgentText", () => {
     expect(text).toContain("/tmp/wt");
   });
 
+  it("names a GitLab merge request as one, and leaves out GitHub's log command", () => {
+    const text = composePrChecksAgentText({
+      prNumber: 42,
+      prUrl: "https://gitlab.com/o/r/-/merge_requests/42",
+      prTerm: "merge-request",
+      worktreePath: "/tmp/wt",
+      rows: preparePrChecks([check({ name: "rspec", conclusion: "failure" })]),
+    })!;
+
+    // GitLab writes it `!42`, but `!` is a shell history introducer and the
+    // hand-off strips it; the number still names the merge request.
+    expect(text).toContain("on merge request 42.");
+    expect(text).toContain('Merge request: "https://gitlab.com/o/r/-/merge_requests/42"');
+    expect(text).not.toMatch(/pull request|\bPR\b|gh run view|!/);
+    expect(parsePayload(text).checks.map((entry) => entry.name)).toEqual(["rspec"]);
+  });
+
   it("carries each failing check's workflow and app, whether or not the row shows them", () => {
     const text = compose([
       check({ name: "build", conclusion: "failure", workflow: "CI", app: "GitHub Actions" }),

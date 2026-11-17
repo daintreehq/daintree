@@ -97,6 +97,40 @@ describe("PrStatusChip", () => {
     expect(triggerDescription(trigger)).toMatch(/^Pull request #42 open — CI passing — /);
   });
 
+  it.each<NormalizedPRState>(["open", "merged", "closed"])(
+    "names a GitLab merge request the way GitLab does when it is %s",
+    (prState) => {
+      const { getByRole, getByTestId } = render(
+        <PrStatusChip
+          hasRemote
+          worktreePath="/tmp/wt"
+          newPRLink={null}
+          prTerm="merge-request"
+          onOpenExternal={() => undefined}
+          worktreePR={{
+            prNumber: 42,
+            prUrl: "https://gitlab.com/o/r/-/merge_requests/42",
+            prState,
+            prCiStatus: {
+              state: "failure",
+              total: 1,
+              passed: 0,
+              failed: 1,
+              pending: 0,
+              rawData: {},
+            },
+          }}
+        />
+      );
+      const trigger = getByTestId("pr-checks-trigger");
+
+      expect(trigger.textContent).toMatch(/^Merge request!42/);
+      expect(trigger.textContent).not.toMatch(/#42|Pull request/);
+      expect(triggerDescription(trigger)).toMatch(new RegExp(`^Merge request !42 ${prState} — CI`));
+      getByRole("button", { name: "View merge request !42" });
+    }
+  );
+
   it("shows a pending merge GitHub reports, whoever armed it (#13747)", () => {
     const { getByTestId } = render(
       <PrStatusChip
