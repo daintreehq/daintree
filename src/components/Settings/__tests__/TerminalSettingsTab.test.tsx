@@ -295,6 +295,8 @@ describe("TerminalSettingsTab OSC 52 clipboard switch", () => {
       fireEvent.click(retry);
     });
     expect(setOsc52ClipboardEnabled).toHaveBeenCalledTimes(2);
+    // The pending save, not the ignored press, decides what the banner says.
+    expect(screen.getByText("Couldn't save that change")).toBeTruthy();
   });
 
   it("stays off when the save is refused", async () => {

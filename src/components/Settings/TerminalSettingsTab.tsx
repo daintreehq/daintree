@@ -127,6 +127,9 @@ const TERMINAL_SUBTAB_IDS = TERMINAL_SUBTABS.map((s) => s.id);
 type SaveGroup =
   "resources" | "project-views" | "grid-layout" | "scrollback" | "accessibility" | "clipboard";
 
+/** What an `apply` returns when it declined to run, so nothing settles. */
+const SAVE_SKIPPED = Symbol("save-skipped");
+
 interface SaveFailure {
   group: SaveGroup;
   retry: () => void;
@@ -299,7 +302,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
     rollback?: () => void
   ): Promise<void> => {
     try {
-      await apply();
+      if ((await apply()) === SAVE_SKIPPED) return;
       setSaveFailure((current) => (current?.group === group ? null : current));
     } catch (error) {
       rollback?.();
@@ -412,7 +415,8 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
     void persist(
       "clipboard",
       async () => {
-        if (osc52InFlight.current) return;
+        // The save already running settles the banner, Retry included.
+        if (osc52InFlight.current) return SAVE_SKIPPED;
         osc52InFlight.current = true;
         setOsc52Saving(true);
         try {
