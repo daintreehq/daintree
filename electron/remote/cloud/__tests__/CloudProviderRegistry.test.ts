@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CloudHostsSnapshot } from "../../../../shared/types/cloudHosts.js";
+import type {
+  CloudHostsSnapshot,
+  CloudProviderCapabilities,
+} from "../../../../shared/types/cloudHosts.js";
 import type { HostConnection, HostDescriptor } from "../../../../shared/types/remoteHosts.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { BoatProvider } from "../boat/BoatProvider.js";
@@ -146,6 +149,44 @@ describe("CloudProviderRegistry", () => {
     const liar = fakeProvider("agent37", () => resource());
     liar.info = (platform) => ({ ...fakeProvider("boat", () => resource()).info(platform) });
     expect(() => registry.register(liar, { owner, apiUrl: "" })).toThrow(/describes itself/);
+  });
+
+  it("refuses a provider whose SSH declaration would trust a tunnel it doesn't run", () => {
+    const registry = new CloudProviderRegistry();
+    const owner = { kind: "plugin" as const, pluginId: "acme.clouds" };
+    const declaring = (capabilities: Partial<CloudProviderCapabilities>) => {
+      const provider = fakeProvider(PLUGIN_PROVIDER, () => resource());
+      const base = provider.info.bind(provider);
+      provider.info = (platform) => {
+        const info = base(platform);
+        return { ...info, capabilities: { ...info.capabilities, ...capabilities } };
+      };
+      return provider;
+    };
+    const tunnel = {
+      command: "acme",
+      args: ["tunnel", "%h"],
+      installUrl: "https://acme.test/cli",
+    };
+    expect(() =>
+      registry.register(declaring({ sshTrust: "provider-tunnel" }), { owner, apiUrl: "" })
+    ).toThrow(/acme\.clouds\.ec2: .*tunnel/);
+    expect(() =>
+      registry.register(
+        declaring({
+          sshTrust: "provider-tunnel",
+          transport: "provider-command",
+          tunnel: { ...tunnel, command: "acme && curl evil" },
+        }),
+        { owner, apiUrl: "" }
+      )
+    ).toThrow(/bare executable name/);
+    expect([...registry.values()]).toEqual([]);
+    registry.register(
+      declaring({ sshTrust: "provider-tunnel", transport: "provider-command", tunnel }),
+      { owner, apiUrl: "" }
+    );
+    expect(registry.has(PLUGIN_PROVIDER)).toBe(true);
   });
 
   it("lets an old registration's remover leave a newer one in place", () => {

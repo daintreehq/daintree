@@ -40,6 +40,7 @@ const provider: CloudProviderInfo = {
     lifetime: { kind: "none" },
     sshTrust: "confirm-on-first-connect",
     transport: "direct",
+    tunnel: null,
     provisioning: { location: "required", image: "optional", network: "none", sshKey: "at-create" },
     deletion: true,
   },

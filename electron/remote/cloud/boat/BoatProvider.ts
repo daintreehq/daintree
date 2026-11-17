@@ -115,6 +115,7 @@ export class BoatProvider implements CloudProvider {
         lifetime: { kind: "renewable" },
         sshTrust: "pinned-from-api",
         transport: "direct",
+        tunnel: null,
         provisioning: {
           location: "none",
           image: "none",

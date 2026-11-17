@@ -54,7 +54,8 @@ export interface StoredSshAccess {
   user: string;
   host: string;
   port: number;
-  hostKey: string;
+  /** Null when the provider's tunnel vouched for the machine and nothing was pinned. */
+  hostKey: string | null;
   obtainedAt: number;
 }
 
@@ -233,8 +234,9 @@ function readAccess(raw: unknown): StoredSshAccess | null {
   const user = str(value.user);
   const host = str(value.host);
   const port = num(value.port);
-  const hostKey = str(value.hostKey);
-  if (!user || !host || port === null || !hostKey) return null;
+  // Only an explicit null is a tunnel's access; a missing or empty key is a broken record.
+  const hostKey = value.hostKey === null ? null : str(value.hostKey);
+  if (!user || !host || port === null || (value.hostKey !== null && !hostKey)) return null;
   return { user, host, port, hostKey, obtainedAt: num(value.obtainedAt) ?? 0 };
 }
 

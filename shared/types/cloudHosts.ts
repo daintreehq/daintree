@@ -109,6 +109,19 @@ export type CloudSshTrust = "pinned-from-api" | "confirm-on-first-connect" | "pr
  */
 export type CloudSshTransport = "direct" | "provider-command";
 
+/**
+ * The command a `provider-command` transport runs as ssh's `ProxyCommand`:
+ * the provider's own CLI, which the person installs and signs in to.
+ */
+export interface CloudSshTunnelCommand {
+  /** The executable's bare name, looked up on this device's PATH: "agent37". */
+  command: string;
+  /** Its arguments: plain words, or exactly one of ssh's tokens %h, %p, %r or %n. */
+  args: string[];
+  /** Where the person gets the command; https only. */
+  installUrl: string;
+}
+
 /** Whether a create takes a value: never, when the person chooses to, or always. */
 export type CloudProvisioningInput = "none" | "optional" | "required";
 
@@ -135,6 +148,8 @@ export interface CloudProviderCapabilities {
   lifetime: CloudLifetimeModel;
   sshTrust: CloudSshTrust;
   transport: CloudSshTransport;
+  /** The tunnel a `provider-command` transport runs; null for a direct one. */
+  tunnel: CloudSshTunnelCommand | null;
   provisioning: CloudProvisioning;
   /** Machines can be deleted from Daintree. */
   deletion: boolean;
@@ -387,6 +402,7 @@ export type CloudHostErrorCode =
   | "data-expired"
   | "stop-failing"
   | "ssh-authorization"
+  | "ssh-tunnel-command-missing"
   | "provider-unreachable"
   | "outcome-unknown"
   | "unsupported"

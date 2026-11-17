@@ -56,6 +56,11 @@ export interface FindOnPathOptions {
    * still queued are dropped rather than run late.
    */
   timeoutMs?: number;
+  /**
+   * Called when the timeout cut the lookup short, so a caller can tell "not
+   * found" from "didn't finish looking"; both return what was confirmed.
+   */
+  onTimeout?: () => void;
 }
 
 async function isExecutableFile(candidate: string, signal: AbortSignal): Promise<boolean> {
@@ -143,6 +148,7 @@ async function bounded(
   const timeout = new Promise<string[]>((resolve) => {
     timer = setTimeout(() => {
       controller.abort();
+      options?.onTimeout?.();
       resolve([...matches]);
     }, timeoutMs);
   });
