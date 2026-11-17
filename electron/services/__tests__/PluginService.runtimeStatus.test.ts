@@ -146,7 +146,11 @@ interface RuntimeInternals {
     detail: string | null,
     opts?: { newGeneration?: boolean }
   ): void;
-  watchWorkerHealth(pluginId: string, entry: { workerHost: EventEmitter }): () => void;
+  watchWorkerHealth(
+    pluginId: string,
+    entry: { workerHost: EventEmitter },
+    mode: "dev" | "prod"
+  ): () => void;
   pluginWorkers: Map<string, unknown>;
   workerStatuses: Map<string, unknown>;
   plugins: Map<string, unknown>;
@@ -308,7 +312,7 @@ describe("worker health subscription — identity guards (#12278)", () => {
     const workerHost = new EventEmitter();
     const entry = { workerHost };
     internals(service).pluginWorkers.set(pluginId, entry);
-    const detach = internals(service).watchWorkerHealth(pluginId, entry);
+    const detach = internals(service).watchWorkerHealth(pluginId, entry, "prod");
     return { workerHost, entry, detach };
   }
 

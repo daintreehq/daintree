@@ -3139,6 +3139,7 @@ export class PluginService {
     }
 
     const { host, revoke } = this.createHost(pluginId);
+    const workerMode = plugin.devMode ? "dev" : "prod";
     const workerHost = new PluginDevWorkerHost({
       pluginId,
       // The host's own identity, so the worker-side proxy reports the real
@@ -3149,7 +3150,7 @@ export class PluginService {
       // reports activated without importing anything, then imports each command
       // handler on its first dispatch (#12274).
       bundlePath: plugin.resolvedMain ?? undefined,
-      mode: plugin.devMode ? "dev" : "prod",
+      mode: workerMode,
       permissionExecArgv,
     });
     const bridge = new PluginDevWorkerMainBridge({
@@ -3252,7 +3253,7 @@ export class PluginService {
     // Subscribed to the host's own lifecycle events rather than threaded through
     // the bridge: the supervisor respawns a crashed worker without telling this
     // service, so the process edges are only observable here (#12278).
-    const detachHealth = this.watchWorkerHealth(pluginId, entry);
+    const detachHealth = this.watchWorkerHealth(pluginId, entry, workerMode);
     this.setWorkerStatus(pluginId, "starting", null, null, { newGeneration: true });
 
     // Register the teardown disposer up front so a concurrent unloadPlugin()
@@ -5811,7 +5812,8 @@ export class PluginService {
    */
   private watchWorkerHealth(
     pluginId: string,
-    entry: { workerHost: PluginDevWorkerHost }
+    entry: { workerHost: PluginDevWorkerHost },
+    mode: "dev" | "prod"
   ): () => void {
     const isCurrent = (): boolean => this.pluginWorkers.get(pluginId) === entry;
     const onReady = (): void => {
@@ -5836,6 +5838,14 @@ export class PluginService {
         "crash-loop",
         `Worker crashed repeatedly (code ${code}) and will not be restarted automatically`
       );
+      // The supervisor has stopped respawning, so a prod worker is as dead as a
+      // protocol violation leaves it: left in place, the activation latch would
+      // short-circuit every lazy trigger and its registrations would pin it
+      // against idle disposal forever (#17211). The failure published above
+      // survives the teardown, so open panels keep their recovery banner. A dev
+      // worker stays: its recovery is the artifact watcher reloading the whole
+      // plugin on the next save (#12277).
+      if (mode === "prod") this.deactivateWorker(pluginId);
     };
     const onProtocolViolation = (reason: string): void => {
       if (!isCurrent()) return;
@@ -8234,10 +8244,11 @@ export class PluginService {
    * proof this teardown is re-entrant. Contrast `unloadPlugin`, which removes
    * the plugin entirely.
    *
-   * Two callers: the idle-dispose sweep, and a terminal protocol violation
-   * (#12276), which needs exactly this shape — the worker is unrecoverable, but
-   * the plugin itself did nothing to lose its contributions, and clearing the
-   * activation cache is what lets a re-open fork a fresh one.
+   * Callers: the idle-dispose sweep, a restart, and the two terminal worker
+   * failures — a protocol violation (#12276) and a prod crash loop (#17211) —
+   * which need exactly this shape: the worker is unrecoverable, but the plugin
+   * itself did nothing to lose its contributions, and clearing the activation
+   * cache is what lets a re-open fork a fresh one.
    */
   private deactivateWorker(pluginId: string): boolean {
     const entry = this.pluginWorkers.get(pluginId);
