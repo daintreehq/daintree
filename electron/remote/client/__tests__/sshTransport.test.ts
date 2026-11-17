@@ -27,6 +27,7 @@ import {
   buildProbeArgs,
   buildSignInArgs,
   buildStreamLocalCheckArgs,
+  defaultSshSpawner,
   controlPathFor,
   controlPathOption,
   exitStaleSshMasters,
@@ -92,8 +93,18 @@ describe("ssh argument construction", () => {
     }
     const signIn = buildSignInArgs("studio", "/cp/cm-%C");
     expect(signIn.filter((arg) => arg.startsWith("BatchMode="))).toEqual(["BatchMode=no"]);
+    // No banner deadline: behind a jump host it waits on the person's answer there.
+    expect(signIn.filter((arg) => arg.startsWith("ConnectTimeout="))).toEqual(["ConnectTimeout=0"]);
     const probe = buildProbeArgs("studio", "/cp/cm-%C");
-    expect(signIn.map((arg) => (arg === "BatchMode=no" ? "BatchMode=yes" : arg))).toEqual(probe);
+    expect(
+      signIn.map((arg) =>
+        arg === "BatchMode=no"
+          ? "BatchMode=yes"
+          : arg === "ConnectTimeout=0"
+            ? "ConnectTimeout=10"
+            : arg
+      )
+    ).toEqual(probe);
   });
 
   it("quotes the control path so ssh keeps a path with spaces as one value", () => {
@@ -409,6 +420,65 @@ describe("SshTransport with an injected ssh", () => {
     expect(ensureRunning).not.toHaveBeenCalled();
     expect(calls).toHaveLength(1);
   });
+
+  it("hears a jump host's refusal that ssh hid, and parks on it like any refused login", async () => {
+    const calls: string[][] = [];
+    const proxyClosed =
+      "kex_exchange_identification: Connection closed by remote host\nConnection closed by UNKNOWN port 65535\n";
+    const spawner: SshSpawner = (args) => {
+      calls.push(args);
+      const child = new FakeChild();
+      // Without a master the jump host's own stderr reaches this side.
+      if (args.includes("ControlPath=none")) {
+        child.finish(
+          255,
+          "",
+          `greg@bastion: Permission denied (publickey,keyboard-interactive).\n${proxyClosed}`
+        );
+      } else {
+        child.finish(255, "", proxyClosed);
+      }
+      return child;
+    };
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: spawner,
+    });
+    const error = await transport.open(new AbortController().signal).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(SshAccessError);
+    expect((error as SshAccessError).detail).toContain("greg@bastion: Permission denied");
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toContain("BatchMode=yes");
+    expect(calls[1]).not.toContain("ControlMaster=auto");
+  });
+
+  it("keeps retrying a host behind a jump host that didn't refuse the login", async () => {
+    const spawner: SshSpawner = () => {
+      const child = new FakeChild();
+      child.finish(255, "", "Connection closed by UNKNOWN port 65535\n");
+      return child;
+    };
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: spawner,
+    });
+    const error = await transport.open(new AbortController().signal).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(TransportError);
+    expect(error).not.toBeInstanceOf(SshAccessError);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "runs every batch ssh with askpass forbidden, so a jump host can't ask either",
+    async () => {
+      const child = defaultSshSpawner("/usr/bin/env")([]);
+      let out = "";
+      child.stdout?.on("data", (chunk: Buffer) => (out += chunk.toString()));
+      await new Promise((resolve) => child.on("exit", resolve));
+      expect(out.split("\n")).toContain("SSH_ASKPASS_REQUIRE=never");
+    }
+  );
 
   it("leaves an ordinary unreachable host to the usual retries", async () => {
     const spawner: SshSpawner = () => {

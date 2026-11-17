@@ -842,9 +842,11 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   const stopTitleRefresh = registry.onChange(refreshWindowTitles);
   const clientDir = path.join(app.getPath("userData"), "rh");
   const cloudFiles = new CloudSshFiles(path.join(clientDir, "cloud"), defaultCommandRunner);
-  const signIn = new SshSignInService({
+  // `client` is made below; a sign-in only starts once the app is up.
+  const signIn: SshSignInService = new SshSignInService({
     clientDir,
     run: defaultCommandRunner,
+    isRetiring: (connection) => client.isRetiring(connection),
     // The askpass helper is this build run again: an unpackaged one needs its app folder.
     helperCommand: () =>
       app.isPackaged ? [process.execPath] : [process.execPath, app.getAppPath()],

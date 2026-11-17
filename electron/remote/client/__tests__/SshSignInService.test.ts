@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SshSignInEvent } from "../../../../shared/types/ipc/remoteHosts.js";
 import type { CommandOptions, CommandResult, CommandRunner } from "../commandRunner.js";
 import { runAskpassClient } from "../sshAskpass.js";
@@ -60,11 +60,15 @@ class FakeChild extends EventEmitter implements SignInChild {
   }
 }
 
-function setup(batch: CommandResult) {
+function setup(
+  batch: CommandResult | ((args: readonly string[]) => CommandResult),
+  extra: Partial<ConstructorParameters<typeof SshSignInService>[0]> = {}
+) {
   const calls: Array<{ args: readonly string[]; options?: CommandOptions }> = [];
   const run: CommandRunner = async (_command, args, options) => {
     calls.push({ args, options });
-    return args.includes("-O") ? result({}) : batch;
+    if (args.includes("-O")) return result({});
+    return typeof batch === "function" ? batch(args) : batch;
   };
   const spawned: FakeChild[] = [];
   const service = new SshSignInService({
@@ -78,6 +82,7 @@ function setup(batch: CommandResult) {
       spawned.push(child);
       return child;
     },
+    ...extra,
   });
   services.push(service);
   return { service, calls, spawned };
@@ -128,6 +133,13 @@ describe("classifyAskpassPrompt", () => {
     expect(classifyAskpassPrompt(prompt, "")).toBe("refuse");
   });
 
+  it.each([
+    "Enter passphrase for key '/Users/g/.ssh/work host key': ",
+    "Enter the verification code to continue connecting: ",
+  ])("never mistakes a secret that mentions the words for a host-key question: %j", (prompt) => {
+    expect(classifyAskpassPrompt(prompt, "")).toBe("secret");
+  });
+
   it("refuses a permission question, and shows a presence notice without a field", () => {
     expect(classifyAskpassPrompt("Allow shared connection to studio? ", "confirm")).toBe("refuse");
     expect(classifyAskpassPrompt("Confirm user presence for key ECDSA-SK SHA256:abc", "none")).toBe(
@@ -146,6 +158,13 @@ describe("classifyAskpassPrompt", () => {
 });
 
 describe("displayPrompt", () => {
+  it("keeps the question when a long preamble has to give way", () => {
+    const shown = displayPrompt(`${"Enrolled device\n".repeat(400)}Passcode or option (1-3):`);
+    expect(shown.length).toBeLessThanOrEqual(4_000);
+    expect(shown.startsWith("…")).toBe(true);
+    expect(shown.endsWith("Passcode or option (1-3):")).toBe(true);
+  });
+
   it("keeps ssh's line breaks and drops what could disguise the text", () => {
     expect(displayPrompt("Duo two-factor login\r\n\r\n 1. Duo Push‮\nPasscode:\u001b[2J ")).toBe(
       "Duo two-factor login\n\n 1. Duo Push\nPasscode: [2J"
@@ -153,7 +172,7 @@ describe("displayPrompt", () => {
   });
 });
 
-describe("askpassLauncherScript", () => {
+describe.skipIf(process.platform === "win32")("askpassLauncherScript", () => {
   it("hands the prompt on in the environment, never as an argument to this build", () => {
     const bin = path.join(clientDir, "Dain tree's bin");
     fs.mkdirSync(bin);
@@ -186,7 +205,7 @@ describe("askpassLauncherScript", () => {
   });
 });
 
-describe("SshSignInService", () => {
+describe.skipIf(process.platform === "win32")("SshSignInService", () => {
   it("never starts a prompting ssh when the batch login gets in", async () => {
     const { service, calls, spawned } = setup(result({ code: 0 }));
     const { owner, events } = fakeOwner();
@@ -197,6 +216,50 @@ describe("SshSignInService", () => {
     expect(events).toHaveLength(0);
     expect(calls[0]!.args).toContain("BatchMode=yes");
     expect(calls[0]!.args).not.toContain("BatchMode=no");
+    expect(calls[0]!.options?.env).toEqual({ SSH_ASKPASS_REQUIRE: "never" });
+  });
+
+  it("takes a refusal only from ssh itself: a command there printing the words doesn't count", async () => {
+    const { service, spawned } = setup(
+      result({ code: 1, stderr: "Permission denied (restricted command)\n" })
+    );
+    await expect(
+      service.start(fakeOwner().owner, { attemptId: "attempt-0001", connection: SSH })
+    ).resolves.toMatchObject({ status: "failed" });
+    expect(spawned).toHaveLength(0);
+  });
+
+  it("signs in past a jump host whose refusal ssh hid, once it is heard without a master", async () => {
+    const closed = "Connection closed by UNKNOWN port 65535\n";
+    const { service, spawned, calls } = setup((args) =>
+      args.includes("ControlPath=none")
+        ? result({
+            code: 255,
+            stderr: `greg@bastion: Permission denied (publickey,keyboard-interactive).\n${closed}`,
+          })
+        : result({ code: 255, stderr: closed })
+    );
+    const { owner } = fakeOwner();
+    const done = service.start(owner, { attemptId: "attempt-0001", connection: SSH });
+    await vi.waitFor(() => expect(spawned).toHaveLength(1));
+    expect(calls[1]!.options?.env).toEqual({ SSH_ASKPASS_REQUIRE: "never" });
+    spawned[0]!.exit(0);
+    await expect(done).resolves.toEqual({ status: "signed-in" });
+  });
+
+  it("stops at a jump host that closed without refusing the login, in its own words", async () => {
+    const { service, spawned } = setup((args) =>
+      args.includes("ControlPath=none")
+        ? result({
+            code: 255,
+            stderr: "channel 0: open failed: connect failed: No route to host\n",
+          })
+        : result({ code: 255, stderr: "Connection closed by UNKNOWN port 65535\n" })
+    );
+    await expect(
+      service.start(fakeOwner().owner, { attemptId: "attempt-0001", connection: SSH })
+    ).resolves.toEqual({ status: "failed", detail: "Connection closed by UNKNOWN port 65535" });
+    expect(spawned).toHaveLength(0);
   });
 
   it("never prompts past a refusal that isn't a login: a host key stays ssh's to refuse", async () => {
@@ -211,14 +274,24 @@ describe("SshSignInService", () => {
   });
 
   it("relays each prompt to the view that asked and hands its answer to ssh once", async () => {
-    const { service, spawned } = setup(result({ code: 255, stderr: REFUSED }));
+    process.env.SSH_ASKPASS_PROMPT = "none";
+    onTestFinished(() => {
+      delete process.env.SSH_ASKPASS_PROMPT;
+    });
+    const { service, spawned, calls } = setup(result({ code: 255, stderr: REFUSED }));
     const { owner, events } = fakeOwner();
     const done = service.start(owner, { attemptId: "attempt-0001", connection: SSH });
     await vi.waitFor(() => expect(spawned).toHaveLength(1));
     const child = spawned[0]!;
     expect(child.args.filter((arg) => arg.startsWith("BatchMode="))).toEqual(["BatchMode=no"]);
     expect(child.env.SSH_ASKPASS_REQUIRE).toBe("force");
+    expect(child.env.SSH_ASKPASS_PROMPT).toBeUndefined();
     expect(fs.readFileSync(child.env.SSH_ASKPASS!, "utf8")).toContain("'--ssh-askpass'");
+    expect(fs.statSync(child.env.SSH_ASKPASS!).mode & 0o777).toBe(0o700);
+    // The master it starts is the one the batch call looked for, so later calls ride it.
+    const controlPathOf = (args: readonly string[]) =>
+      args.find((a) => a.startsWith("ControlPath="));
+    expect(controlPathOf(child.args)).toBe(controlPathOf(calls[0]!.args));
 
     const passphrase = askAs(child, "Enter passphrase for key '/Users/g/.ssh/id_ed25519': ");
     await vi.waitFor(() => expect(events).toHaveLength(1));
@@ -333,6 +406,30 @@ describe("SshSignInService", () => {
     expect(calls.some(({ args }) => args.includes("-O") && args.includes("exit"))).toBe(true);
   });
 
+  it("takes down what ssh started too, even what outlives ssh's own SIGTERM", async () => {
+    const pidFile = path.join(clientDir, "proxy.pid");
+    const fakeSsh = path.join(clientDir, "ssh");
+    // A ProxyJump's ssh stands in: it ignores SIGTERM and would outlive the ssh that started it.
+    fs.writeFileSync(
+      fakeSsh,
+      `#!/bin/sh\n( trap '' TERM; exec sleep 30 ) &\necho $! > '${pidFile}'\nwait\n`,
+      { mode: 0o700 }
+    );
+    const { service } = setup(result({ code: 255, stderr: REFUSED }), {
+      spawn: undefined,
+      sshPath: () => fakeSsh,
+    });
+    const { owner } = fakeOwner();
+    const done = service.start(owner, { attemptId: "attempt-0001", connection: SSH });
+    await vi.waitFor(() =>
+      expect(fs.existsSync(pidFile) && fs.readFileSync(pidFile, "utf8")).toBeTruthy()
+    );
+    const proxyPid = Number(fs.readFileSync(pidFile, "utf8").trim());
+    service.cancel(owner.id, { attemptId: "attempt-0001" });
+    await expect(done).resolves.toEqual({ status: "cancelled" });
+    await vi.waitFor(() => expect(() => process.kill(proxyPid, 0)).toThrow(), { timeout: 5_000 });
+  });
+
   it("stops when the view that asked goes away", async () => {
     const { service, spawned } = setup(result({ code: 255, stderr: REFUSED }));
     const { owner, goAway } = fakeOwner();
@@ -340,6 +437,36 @@ describe("SshSignInService", () => {
     await vi.waitFor(() => expect(spawned).toHaveLength(1));
     goAway();
     await expect(done).resolves.toEqual({ status: "cancelled" });
+  });
+
+  it("takes no more than ssh reads of an answer", async () => {
+    const { service, spawned } = setup(result({ code: 255, stderr: REFUSED }));
+    const { owner, events } = fakeOwner();
+    const done = service.start(owner, { attemptId: "attempt-0001", connection: SSH });
+    await vi.waitFor(() => expect(spawned).toHaveLength(1));
+    const asked = askAs(spawned[0]!, "Password: ");
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    const { promptId } = promptEvent(events);
+    // 512 two-byte characters: 1,024 bytes, past the 1,022 ssh keeps.
+    expect(() =>
+      service.answer(owner.id, { attemptId: "attempt-0001", promptId, answer: "é".repeat(512) })
+    ).toThrow(expect.objectContaining({ code: "VALIDATION" }));
+    expect(
+      service.answer(owner.id, { attemptId: "attempt-0001", promptId, answer: "é".repeat(511) })
+    ).toBe(true);
+    expect(await asked.done).toBe(0);
+    service.cancel(owner.id, { attemptId: "attempt-0001" });
+    await done;
+  });
+
+  it("starts no sign-in to a host that is being removed or re-pointed", async () => {
+    const { service, spawned } = setup(result({ code: 255, stderr: REFUSED }), {
+      isRetiring: (connection) => connection.kind === "ssh" && connection.target === "greg@studio",
+    });
+    await expect(
+      service.start(fakeOwner().owner, { attemptId: "attempt-0001", connection: SSH })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(spawned).toHaveLength(0);
   });
 
   it("takes one line of text as an answer, without echoing what was typed", async () => {
@@ -372,6 +499,12 @@ describe("SshSignInService", () => {
       })
     ).rejects.toMatchObject({ code: "UNSUPPORTED" });
     await expect(
+      service.start(owner, {
+        attemptId: "attempt-0001",
+        connection: { kind: "cloud", bindingId: "cb_0123456789ab" },
+      })
+    ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    await expect(
       service.start(owner, { attemptId: "../../etc", connection: SSH })
     ).rejects.toMatchObject({ code: "VALIDATION" });
     const first = service.start(owner, { attemptId: "attempt-0001", connection: SSH });
@@ -379,7 +512,15 @@ describe("SshSignInService", () => {
     await expect(
       service.start(fakeOwner(9).owner, { attemptId: "attempt-0002", connection: SSH })
     ).rejects.toMatchObject({ code: "VALIDATION" });
+    // Another host signs in alongside.
+    const other = service.start(fakeOwner(9).owner, {
+      attemptId: "attempt-0003",
+      connection: { kind: "ssh", target: "greg@lab" },
+    });
+    await vi.waitFor(() => expect(spawned).toHaveLength(2));
     service.cancelTarget("greg@studio");
     await expect(first).resolves.toEqual({ status: "cancelled" });
+    spawned[1]!.exit(0);
+    await expect(other).resolves.toEqual({ status: "signed-in" });
   });
 });

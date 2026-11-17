@@ -1,18 +1,19 @@
-import { useState } from "react";
+import { useId, useRef } from "react";
 import { AppDialog, type DialogAction } from "@/components/ui/AppDialog";
 import { Callout } from "@/components/ui/Callout";
-import { Field, FieldLabel } from "@/components/ui/field";
+import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/Spinner";
-import type { SshSignInState } from "./useSshSignIn";
+import type { SshSignInPrompt, SshSignInState } from "./useSshSignIn";
 
 const PROMPT_TEXT_CLASS =
-  "whitespace-pre-wrap rounded-[var(--radius-md)] bg-surface-input p-2 text-xs text-text-primary select-text";
+  "max-h-48 overflow-y-auto whitespace-pre-wrap rounded-[var(--radius-md)] bg-surface-input p-2 text-xs text-text-primary select-text";
 
 /**
  * ssh's own questions while it signs in to a host: a passphrase, a password,
  * a code, or a security key to touch. Each is shown as ssh wrote it; what is
- * typed goes to ssh and nowhere else.
+ * typed goes to ssh and nowhere else. The field is uncontrolled and keyed by
+ * its question, so nothing typed outlives the question it was typed for.
  */
 export function SshSignInDialog({
   hostLabel,
@@ -23,19 +24,21 @@ export function SshSignInDialog({
 }: {
   hostLabel: string;
   state: SshSignInState;
-  onAnswer: (promptId: string, text: string) => void;
+  onAnswer: (prompt: SshSignInPrompt, text: string) => void;
   onRetry: () => void;
   /** Cancel a running sign-in, or put a failed one away. */
   onClose: () => void;
 }) {
-  // Keyed by the prompt it was typed for, so it never carries over to the next question.
-  const [typed, setTyped] = useState<{ promptId: string; text: string } | null>(null);
+  const fieldRef = useRef<HTMLInputElement | null>(null);
+  const promptTextId = useId();
   const prompt = state.phase === "signing-in" ? state.prompt : null;
-  const text = prompt && typed?.promptId === prompt.id ? typed.text : "";
+  const error = state.phase === "signing-in" ? state.error : undefined;
   const submit = () => {
-    if (!prompt || prompt.kind !== "secret") return;
-    setTyped(null);
-    onAnswer(prompt.id, text);
+    const field = fieldRef.current;
+    if (!prompt || prompt.kind !== "secret" || !field) return;
+    const text = field.value;
+    field.value = "";
+    onAnswer(prompt, text);
   };
 
   let body: React.ReactNode = null;
@@ -47,42 +50,56 @@ export function SshSignInDialog({
       </Callout>
     );
     primary = { label: "Try again", onClick: onRetry };
-  } else if (prompt) {
+  } else if (prompt?.kind === "secret") {
     body = (
       <div className="space-y-3">
+        <pre id={promptTextId} className={PROMPT_TEXT_CLASS} data-testid="ssh-sign-in-prompt">
+          {prompt.text}
+        </pre>
+        <Field>
+          <FieldLabel className="sr-only">Answer for ssh</FieldLabel>
+          <Input
+            key={prompt.id}
+            ref={fieldRef}
+            type="password"
+            defaultValue=""
+            autoFocus
+            autoComplete="off"
+            spellCheck={false}
+            autoCapitalize="off"
+            aria-describedby={promptTextId}
+            data-testid="ssh-sign-in-answer"
+            onKeyDown={(event) => {
+              // Enter that commits an IME candidate, or one held down from the last question, isn't an answer.
+              if (
+                event.key !== "Enter" ||
+                event.nativeEvent.isComposing ||
+                event.nativeEvent.keyCode === 229 ||
+                event.repeat
+              ) {
+                return;
+              }
+              event.preventDefault();
+              submit();
+            }}
+          />
+          {error && <FieldError role="alert">{error}</FieldError>}
+        </Field>
+      </div>
+    );
+    primary = { label: "Continue", onClick: submit };
+  } else if (prompt) {
+    body = (
+      <div className="space-y-3" role="status">
         <pre className={PROMPT_TEXT_CLASS} data-testid="ssh-sign-in-prompt">
           {prompt.text}
         </pre>
-        {prompt.kind === "secret" ? (
-          <Field>
-            <FieldLabel className="sr-only">Answer for ssh</FieldLabel>
-            <Input
-              key={prompt.id}
-              type="password"
-              value={text}
-              autoFocus
-              autoComplete="off"
-              spellCheck={false}
-              autoCapitalize="off"
-              data-testid="ssh-sign-in-answer"
-              onChange={(event) => setTyped({ promptId: prompt.id, text: event.target.value })}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  submit();
-                }
-              }}
-            />
-          </Field>
-        ) : (
-          <p className="flex items-center gap-2 text-sm text-text-secondary" role="status">
-            <Spinner size="sm" />
-            Waiting for ssh…
-          </p>
-        )}
+        <p className="flex items-center gap-2 text-sm text-text-secondary">
+          <Spinner size="sm" />
+          Waiting for ssh…
+        </p>
       </div>
     );
-    if (prompt.kind === "secret") primary = { label: "Continue", onClick: submit };
   } else if (state.phase === "signing-in") {
     body = (
       <p className="flex items-center gap-2 text-sm text-text-secondary" role="status">

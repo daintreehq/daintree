@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HostRestartImpact } from "@shared/types/ipc/remoteHosts";
+import type { HostConnectionState } from "@shared/types/remoteHosts";
 import {
   canWaitForIdle,
   connectionLabel,
@@ -239,13 +240,10 @@ describe("sshRefusalAdvice", () => {
 });
 
 describe("isLoginRefused", () => {
-  const parked = (detail: string | null, stoppedRetrying = true) =>
-    ({
-      status: "unreachable",
-      lastSeenAt: null,
-      detail,
-      ...(stoppedRetrying ? { stoppedRetrying: true } : {}),
-    }) as const;
+  const parked = (detail: string | null, stoppedRetrying = true): HostConnectionState =>
+    stoppedRetrying
+      ? { status: "unreachable", lastSeenAt: null, detail, stoppedRetrying: true }
+      : { status: "unreachable", lastSeenAt: null, detail };
 
   it("is a link parked on a refused login", () => {
     expect(isLoginRefused(parked("greg@studio: Permission denied (publickey)."))).toBe(true);

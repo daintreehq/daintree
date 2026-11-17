@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostConnectionState, HostListEntry } from "@shared/types/remoteHosts";
 import type { SshSignInEvent, SshSignInResult } from "@shared/types/ipc/remoteHosts";
@@ -133,22 +133,33 @@ describe("HostDetail connection controls", () => {
       />
     );
     fireEvent.click(screen.getByRole("button", { name: "Sign in…" }));
+    await waitFor(() => expect(client.startSshSignIn).toHaveBeenCalledTimes(1));
     const { attemptId } = client.startSshSignIn.mock.calls[0]![0] as { attemptId: string };
     expect(client.startSshSignIn).toHaveBeenCalledWith({
       attemptId,
       connection: { kind: "ssh", target: "greg@studio" },
     });
-    act(() => {
-      for (const listener of signInListeners) {
-        listener({
-          type: "prompt",
-          attemptId,
-          promptId: "p1",
-          kind: "secret",
-          text: "(greg@studio) Verification code:",
-        });
-      }
+    const send = (event: SshSignInEvent) =>
+      act(() => {
+        for (const listener of signInListeners) listener(event);
+      });
+    // Another sign-in's prompt is none of this one's business.
+    send({
+      type: "prompt",
+      attemptId: "someone-else",
+      promptId: "x1",
+      kind: "secret",
+      text: "Password:",
     });
+    expect(screen.queryByTestId("ssh-sign-in-prompt")).toBeNull();
+    send({
+      type: "prompt",
+      attemptId,
+      promptId: "p1",
+      kind: "secret",
+      text: "(greg@studio) Verification code:",
+    });
+    send({ type: "prompt-closed", attemptId, promptId: "x1" });
     expect(screen.getByTestId("ssh-sign-in-prompt").textContent).toBe(
       "(greg@studio) Verification code:"
     );
@@ -161,6 +172,8 @@ describe("HostDetail connection controls", () => {
     });
     // Answered, the field goes: nothing typed stays on screen.
     expect(screen.queryByTestId("ssh-sign-in-answer")).toBeNull();
+    // Nothing dials until ssh is in.
+    expect(client.connectAndSettle).not.toHaveBeenCalled();
     await act(async () => finish({ status: "signed-in" }));
     expect(client.connectAndSettle).toHaveBeenCalledWith("studio-01", { restart: true });
     expect(signInListeners.size).toBe(0);
@@ -182,7 +195,7 @@ describe("HostDetail connection controls", () => {
     expect(screen.queryByRole("button", { name: "Sign in…" })).toBeNull();
   });
 
-  it("cancels a sign-in still running when the host's page goes", () => {
+  it("cancels a sign-in still running when the host's page goes", async () => {
     const view = render(
       <HostDetail
         entry={entry({
@@ -195,9 +208,12 @@ describe("HostDetail connection controls", () => {
       />
     );
     fireEvent.click(screen.getByRole("button", { name: "Sign in…" }));
+    await waitFor(() => expect(client.startSshSignIn).toHaveBeenCalledTimes(1));
     const { attemptId } = client.startSshSignIn.mock.calls.at(-1)![0] as { attemptId: string };
+    expect(signInListeners.size).toBe(1);
     view.unmount();
     expect(client.cancelSshSignIn).toHaveBeenCalledWith(attemptId);
+    expect(signInListeners.size).toBe(0);
   });
 
   it("says a Connect failed when the link reports it unreachable, in ssh's words", async () => {

@@ -660,7 +660,8 @@ export function HostDetail({
         hostLabel={hostName}
         state={signIn.state}
         onAnswer={signIn.answer}
-        onRetry={signIn.retry}
+        // The host's address now: it may have been changed since the last try.
+        onRetry={() => signIn.start(descriptor.connection)}
         onClose={signIn.close}
       />
       {changeTargetOpen && sshTarget !== null && (

@@ -42,7 +42,13 @@ import { bootstrapHostMode, LINUX_START_SCRIPT, macStartScript } from "./hostMod
 import { probeHost, type ProbeOutcome } from "./hostProbe.js";
 import { NIGHTLY_FEED_URL, STABLE_FEED_URL, type ClientBuild, planInstall } from "./installPlan.js";
 import { createSshCommandChannel, failureDetail, type HostCommandChannel } from "./remoteShell.js";
-import { closeSshMaster, controlPathFor } from "./sshTransport.js";
+import { sshExecutable } from "./sshExecutable.js";
+import {
+  closeSshMaster,
+  controlPathFor,
+  hiddenHopRefusal,
+  isProxyClosedEarly,
+} from "./sshTransport.js";
 import type { WslKeepalive } from "./wslKeepalive.js";
 import { createWslCommandChannel } from "./wslShell.js";
 
@@ -180,7 +186,25 @@ export class HostSetupService {
   }
 
   async probe(payload: HostSetupTarget): Promise<HostProbeResult> {
-    return (await this.probeOutcome(this.requireTarget(payload))).result;
+    const connection = this.requireTarget(payload);
+    const result = (await this.probeOutcome(connection)).result;
+    // The probe may start a master, so ssh hid a jump host's own words: heard
+    // once more without one, a refused login is named and can be signed in to.
+    if (
+      !result.reachable &&
+      connection.kind === "ssh" &&
+      !this.deps.channelFor &&
+      isProxyClosedEarly(result.sshError)
+    ) {
+      const refusal = await hiddenHopRefusal(
+        this.deps.run,
+        sshExecutable(),
+        connection.target
+      ).catch(() => null);
+      if (refusal !== null)
+        return { ...result, sshError: refusal.split("\n").slice(-3).join("\n") };
+    }
+    return result;
   }
 
   async planInstall(payload: PlanInstallPayload): Promise<HostInstallPlan> {

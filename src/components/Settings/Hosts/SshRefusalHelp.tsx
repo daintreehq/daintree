@@ -50,9 +50,10 @@ export function SshRefusalHelp({
           {onSignIn ? (
             <>
               <p className="text-xs text-text-secondary">
-                This machine refused the login. If ssh asks you for a key passphrase, a password or
-                a code there, sign in and Daintree passes its questions to you. Otherwise set up key
-                login so your own ssh gets in, then check again.
+                The login was refused (ssh names the machine above, which may be a jump host). If
+                ssh asks you for a key passphrase, a password or a code there, sign in and Daintree
+                passes its questions to you. Otherwise set up key login so your own ssh gets in,
+                then check again.
               </p>
               <Button variant="outline" size="sm" onClick={onSignIn}>
                 Sign in…
@@ -60,8 +61,8 @@ export function SshRefusalHelp({
             </>
           ) : (
             <p className="text-xs text-text-secondary">
-              This machine refused the login. Set up key login so your own ssh gets in, then check
-              again.
+              The login was refused (ssh names the machine above). Set up key login so your own ssh
+              gets in, then check again.
             </p>
           )}
           <HostCommand

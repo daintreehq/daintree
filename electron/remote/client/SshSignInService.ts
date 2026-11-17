@@ -5,6 +5,7 @@ import net from "node:net";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import type { WebContents } from "electron";
+import type { HostConnection } from "../../../shared/types/remoteHosts.js";
 import type {
   AnswerSshSignInPayload,
   CancelSshSignInPayload,
@@ -38,10 +39,13 @@ import {
 } from "./sshAskpass.js";
 import { sshExecutable } from "./sshExecutable.js";
 import {
+  BATCH_SSH_ENV,
   buildExitArgs,
   buildProbeArgs,
   buildSignInArgs,
   controlPathFor,
+  hiddenHopRefusal,
+  isProxyClosedEarly,
   noteSshMaster,
   shellQuote,
   SSH_COMMAND_TIMEOUT_MS,
@@ -71,19 +75,24 @@ import {
 const REQUEST_DEADLINE_MS = 10_000;
 /** How long ssh gets after SIGTERM before it, and whatever it started, is killed. */
 const KILL_GRACE_MS = 2_000;
-const MAX_PROMPT_CHARS = 2_000;
-const MAX_ANSWER_CHARS = 4_096;
+const MAX_PROMPT_CHARS = 4_000;
+/** ssh reads at most 1,023 bytes of askpass output, the newline included, and drops the rest. */
+const MAX_ANSWER_BYTES = 1_022;
 const MAX_STDERR_BYTES = 8 * 1024;
 const ATTEMPT_ID = /^[A-Za-z0-9-]{8,64}$/;
 const RELAY_DIR_PREFIX = "ap-";
+/** ssh's own exit status when it fails, rather than the remote command's. */
+const SSH_FAILED = 255;
 
 /**
- * OpenSSH's host-key questions (`The authenticity of host … can't be
- * established`, `Are you sure you want to continue connecting`, `Please type
- * 'yes'…`, `Accept updated hostkeys?`) and any other yes/no question.
+ * OpenSSH's host-key questions as it words them (sshconnect.c's confirm() and
+ * clientloop.c's UpdateHostKeys): `The authenticity of host '…' can't be
+ * established`, `Are you sure you want to continue connecting (yes/no…)?`,
+ * `Please type 'yes'…`, `Accept updated hostkeys? (yes/no)`, and any other
+ * question that ends asking yes or no.
  */
 const HOST_KEY_QUESTION =
-  /authenticity of host|continue connecting|please type 'yes'|accept updated hostkeys|identification has changed|\bhost key\b|\(yes\/no/i;
+  /^The authenticity of host '|Are you sure you want to continue connecting \(yes\/no|^Please type 'yes'|^Accept updated hostkeys\?|\(yes\/no[^)]*\)\s*[?:]?\s*$/im;
 
 /**
  * What to do with one askpass request. `SSH_ASKPASS_PROMPT=none` is a notice
@@ -108,7 +117,8 @@ export function displayPrompt(prompt: string): string {
     .map((line) => displaySafeText(line).trimEnd())
     .join("\n")
     .trim();
-  return text.length > MAX_PROMPT_CHARS ? `${text.slice(0, MAX_PROMPT_CHARS - 1)}…` : text;
+  // The question comes last: a long preamble (a PAM banner, a device list) gives way first.
+  return text.length > MAX_PROMPT_CHARS ? `…${text.slice(-(MAX_PROMPT_CHARS - 1))}` : text;
 }
 
 /**
@@ -205,6 +215,8 @@ export interface SshSignInDeps {
   spawn?: SignInSpawner;
   sshPath?: () => string;
   platform?: NodeJS.Platform;
+  /** The host is being removed or re-pointed: no sign-in to its old address starts. */
+  isRetiring?: (connection: HostConnection) => boolean;
 }
 
 interface PendingPrompt {
@@ -312,11 +324,16 @@ export class SshSignInService {
   async start(owner: SignInOwner, payload: unknown): Promise<SshSignInResult> {
     const raw = payload as Partial<StartSshSignInPayload> | null;
     const attemptId = requireAttemptId(raw?.attemptId);
-    const target = requireSshTarget(
-      requireSupportedConnection(requireHostConnection(raw?.connection), this.platform()),
-      "Signing in"
+    const connection = requireSupportedConnection(
+      requireHostConnection(raw?.connection),
+      this.platform()
     );
+    const target = requireSshTarget(connection, "Signing in");
     if (this.disposed) return { status: "cancelled" };
+    if (this.deps.isRetiring?.(connection)) {
+      const message = `${target} is being removed or changed on this device. Try again once that finishes.`;
+      throw new AppError({ code: "VALIDATION", message, userMessage: message });
+    }
     if (this.attempts.has(attemptId)) {
       throw new AppError({ code: "VALIDATION", message: "That sign-in is already running" });
     }
@@ -358,11 +375,15 @@ export class SshSignInService {
     if (!attempt || !prompt || prompt.kind !== "secret") return false;
     const answer = raw?.answer;
     // Never echoed: the value is someone's passphrase.
-    if (typeof answer !== "string" || answer.length > MAX_ANSWER_CHARS || /[\r\n\0]/.test(answer)) {
+    if (
+      typeof answer !== "string" ||
+      Buffer.byteLength(answer) > MAX_ANSWER_BYTES ||
+      /[\r\n\0]/.test(answer)
+    ) {
       throw new AppError({
         code: "VALIDATION",
         message: "Not an answer ssh can take",
-        userMessage: "ssh takes one line of text here.",
+        userMessage: `ssh takes one line here, up to ${MAX_ANSWER_BYTES} bytes.`,
       });
     }
     attempt.prompts.delete(promptId as string);
@@ -420,22 +441,38 @@ export class SshSignInService {
     const batch = await this.deps.run(sshPath, buildProbeArgs(attempt.target, controlPath), {
       timeoutMs: SSH_COMMAND_TIMEOUT_MS,
       signal,
+      env: BATCH_SSH_ENV,
     });
     if (signal.aborted) return { status: "cancelled" };
     if (batch.code === 0) return { status: "signed-in" };
-    if (sshRefusalAdvice(batch.stderr) !== "login-refused") {
-      return { status: "failed", detail: batchFailure(batch) };
+    // ssh itself failing (255) with its authentication refusal: a command
+    // there that prints "Permission denied" after a login doesn't count.
+    let refused = batch.code === SSH_FAILED && sshRefusalAdvice(batch.stderr) === "login-refused";
+    let detail = batchFailure(batch);
+    if (!refused && batch.code === SSH_FAILED && isProxyClosedEarly(batch.stderr)) {
+      const hop = await hiddenHopRefusal(this.deps.run, sshPath, attempt.target, signal);
+      if (signal.aborted) return { status: "cancelled" };
+      if (hop !== null) {
+        refused = sshRefusalAdvice(hop) === "login-refused";
+        detail = sshRefusalLine(hop);
+      }
     }
+    if (!refused) return { status: "failed", detail };
 
     const relay = await this.openRelay(attempt, owner);
+    let result: SshSignInResult;
     try {
-      const result = await this.runInteractive(attempt, relay, sshPath, controlPath);
-      // Stopped after ssh got in, its master may already be up: Cancel leaves no login behind.
-      if (result.status === "cancelled") await exitMaster(1_500);
-      return result;
+      result = await this.runInteractive(attempt, relay, sshPath, controlPath);
     } finally {
       await relay.close();
     }
+    // A Cancel that arrived before the end wins, even one after ssh got in:
+    // its master may already be up, and a cancelled sign-in leaves no login behind.
+    if (signal.aborted) {
+      await exitMaster(1_500);
+      return { status: "cancelled" };
+    }
+    return result;
   }
 
   /** Relay folders a launch that crashed mid sign-in left behind: none is in use before this one. */
@@ -555,7 +592,9 @@ export class SshSignInService {
       [ASKPASS_SOCKET_ENV]: relay.socketPath,
       [ASKPASS_TOKEN_ENV]: relay.token,
     };
+    // ssh sets the hint itself for each prompt that has one; an inherited one would mislabel the rest.
     delete env[ASKPASS_PROMPT_ENV];
+    delete env.SSH_ASKPASS_PROMPT;
     return new Promise((resolve) => {
       let child: SignInChild;
       try {
@@ -592,6 +631,8 @@ export class SshSignInService {
         )
       );
       child.on("exit", (code) => {
+        // ssh went on SIGTERM; anything it started that didn't (a ProxyJump's ssh) goes now.
+        if (signal.aborted) killGroup(child, "SIGKILL");
         // Let the last of stderr land before reading it.
         setImmediate(() => {
           if (signal.aborted) finish({ status: "cancelled" });

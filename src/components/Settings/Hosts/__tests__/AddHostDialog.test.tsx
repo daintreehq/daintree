@@ -255,11 +255,15 @@ describe("AddHostDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Check host" }));
     const guidance = await screen.findByTestId("add-host-ssh-refusal");
     fireEvent.click(within(guidance).getByRole("button", { name: "Sign in…" }));
-    expect(remoteHosts.startSshSignIn).toHaveBeenCalledWith({
-      attemptId: expect.any(String),
-      connection: { kind: "ssh", target: "greg@studio" },
-    });
+    await waitFor(() =>
+      expect(remoteHosts.startSshSignIn).toHaveBeenCalledWith({
+        attemptId: expect.any(String),
+        connection: { kind: "ssh", target: "greg@studio" },
+      })
+    );
     expect(await screen.findByTestId("ssh-sign-in-dialog")).toBeTruthy();
+    // The check runs again only once ssh is in.
+    expect(remoteHosts.probe).toHaveBeenCalledTimes(1);
     await act(async () => finish({ status: "signed-in" }));
     await waitFor(() => expect(remoteHosts.probe).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByTestId("ssh-sign-in-dialog")).toBeNull());

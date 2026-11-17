@@ -1555,8 +1555,11 @@ export function AddHostDialog({
                 refusal={refusal}
                 target={target}
                 testId="add-host-ssh-refusal"
+                // Not while a check runs: its answer, not this one's, is the refusal to sign in past.
                 onSignIn={
-                  refusal === "login-refused" ? () => signIn.start(connectionFor()) : undefined
+                  refusal === "login-refused" && !busy
+                    ? () => signIn.start(connectionFor())
+                    : undefined
                 }
               />
             )}
@@ -2188,7 +2191,7 @@ export function AddHostDialog({
           hostLabel={hostLabel}
           state={signIn.state}
           onAnswer={signIn.answer}
-          onRetry={signIn.retry}
+          onRetry={() => signIn.start(connectionFor())}
           onClose={signIn.close}
         />
       )}

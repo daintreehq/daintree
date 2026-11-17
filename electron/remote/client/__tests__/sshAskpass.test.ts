@@ -5,6 +5,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readOneLine, runAskpassClient, type AskpassRequest } from "../sshAskpass.js";
 
+vi.mock("electron", () => ({ app: { dock: { hide: vi.fn() } } }));
+
 let dir: string;
 let server: net.Server | null = null;
 
@@ -39,7 +41,7 @@ async function relay(
   return { socketPath, requests };
 }
 
-describe("runAskpassClient", () => {
+describe.skipIf(process.platform === "win32")("runAskpassClient", () => {
   it("sends the prompt with the sign-in's token and prints the answer it gets back", async () => {
     const { socketPath, requests } = await relay((_request, socket) =>
       socket.end(`${JSON.stringify({ answer: "correct horse" })}\n`)
@@ -121,5 +123,77 @@ describe("runAskpassClient", () => {
     client.stop();
     expect(await client.done).toBe(1);
     await closed;
+  });
+});
+
+describe.skipIf(process.platform === "win32")("--ssh-askpass", () => {
+  const saved = { ...process.env };
+  const consoleMethods = { ...console };
+  afterEach(() => {
+    // The helper sends console output to stderr for good; the worker gets its own back.
+    Object.assign(console, consoleMethods);
+    for (const key of [
+      "DAINTREE_ASKPASS_SOCKET",
+      "DAINTREE_ASKPASS_TOKEN",
+      "DAINTREE_ASKPASS_PROMPT",
+    ]) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+    if (saved.SSH_ASKPASS_PROMPT === undefined) delete process.env.SSH_ASKPASS_PROMPT;
+    else process.env.SSH_ASKPASS_PROMPT = saved.SSH_ASKPASS_PROMPT;
+  });
+
+  it("lets go of a notice when ssh sends SIGTERM, printing nothing", async () => {
+    const { socketPath, requests } = await relay(() => {});
+    process.env.DAINTREE_ASKPASS_SOCKET = socketPath;
+    process.env.DAINTREE_ASKPASS_TOKEN = "t0ken";
+    process.env.DAINTREE_ASKPASS_PROMPT = "Confirm user presence for key ED25519-SK SHA256:abc";
+    process.env.SSH_ASKPASS_PROMPT = "none";
+    const write = vi.spyOn(process.stdout, "write");
+    const closed = new Promise<void>((resolve) =>
+      server!.once("connection", (socket) => socket.once("close", () => resolve()))
+    );
+    const before = new Set(process.listeners("SIGTERM"));
+    const { runSshAskpassCli } = await import("../sshAskpassCli.js");
+    const exited = runSshAskpassCli();
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    expect(requests[0]).toEqual({
+      token: "t0ken",
+      prompt: "Confirm user presence for key ED25519-SK SHA256:abc",
+      hint: "none",
+    });
+    // What ssh's SIGTERM reaches: the helper's own handler, not the test worker's.
+    const added = process.listeners("SIGTERM").filter((listener) => !before.has(listener));
+    expect(added).toHaveLength(1);
+    added[0]!("SIGTERM");
+    expect(await exited).toBe(1);
+    await closed;
+    expect(write).not.toHaveBeenCalled();
+    write.mockRestore();
+    expect(process.listeners("SIGTERM")).not.toContain(added[0]);
+  });
+
+  it("prints the answer for ssh and nothing else", async () => {
+    const { socketPath } = await relay((_request, socket) =>
+      socket.end(`${JSON.stringify({ answer: "hunter2" })}\n`)
+    );
+    process.env.DAINTREE_ASKPASS_SOCKET = socketPath;
+    process.env.DAINTREE_ASKPASS_TOKEN = "t0ken";
+    process.env.DAINTREE_ASKPASS_PROMPT = "Password:";
+    delete process.env.SSH_ASKPASS_PROMPT;
+    const written: string[] = [];
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(((
+      chunk: string,
+      callback?: (error?: Error | null) => void
+    ) => {
+      written.push(String(chunk));
+      callback?.();
+      return true;
+    }) as typeof process.stdout.write);
+    const { runSshAskpassCli } = await import("../sshAskpassCli.js");
+    expect(await runSshAskpassCli()).toBe(0);
+    write.mockRestore();
+    expect(written).toEqual(["hunter2\n"]);
   });
 });
