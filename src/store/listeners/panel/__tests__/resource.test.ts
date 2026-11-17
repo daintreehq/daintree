@@ -130,23 +130,20 @@ describe("setupResourceListeners — resource metrics", () => {
     monitoring.enabled = false;
   });
 
-  it("hands the host's sampling time to the store with the batch", () => {
+  it("hands each batch's host sampling time to the store, and only while monitoring is on", () => {
     const d = setupResourceListeners();
-    const metrics = { t1: { cpuPercent: 1, memoryKb: 2, breakdown: [], processCount: 1 } };
+    const first = { t1: { cpuPercent: 1, memoryKb: 2, breakdown: [], processCount: 1 } };
+    const second = { t1: { cpuPercent: 3, memoryKb: 4, breakdown: [], processCount: 1 } };
 
-    deliver({ metrics, timestamp: 1_700_000_015_000 });
-
-    expect(updateMetricsMock).toHaveBeenCalledWith(metrics, 1_700_000_015_000);
-    d.dispose();
-  });
-
-  it("drops a batch while monitoring is off", () => {
+    deliver({ metrics: first, timestamp: 1_700_000_002_500 });
+    deliver({ metrics: second, timestamp: 1_700_000_017_500 });
     monitoring.enabled = false;
-    const d = setupResourceListeners();
+    deliver({ metrics: second, timestamp: 1_700_000_032_500 });
 
-    deliver({ metrics: {}, timestamp: 1 });
-
-    expect(updateMetricsMock).not.toHaveBeenCalled();
+    expect(updateMetricsMock.mock.calls).toEqual([
+      [first, 1_700_000_002_500],
+      [second, 1_700_000_017_500],
+    ]);
     d.dispose();
   });
 });

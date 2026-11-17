@@ -79,10 +79,14 @@ describe("resourceMonitoringStore.updateMetrics", () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(9_876);
     try {
       useResourceMonitoringStore.getState().updateMetrics({ t1: sample() });
+      expect(useResourceMonitoringStore.getState().lastBatch?.sampledAt).toBe(9_876);
+
+      now.mockReturnValue(24_876);
+      useResourceMonitoringStore.getState().updateMetrics({ t1: sample() });
+      expect(useResourceMonitoringStore.getState().lastBatch?.sampledAt).toBe(24_876);
     } finally {
       now.mockRestore();
     }
-    expect(useResourceMonitoringStore.getState().lastBatch?.sampledAt).toBe(9_876);
   });
 
   it("leaves the store untouched for an empty batch (#17194)", () => {

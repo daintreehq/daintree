@@ -12,6 +12,7 @@ vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: vi.fn() 
 
 import { CPU_HISTORY_SIZE, useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import {
+  ALERT_COOLDOWN_MS,
   CONSECUTIVE_REQUIRED,
   MIN_MEMORY_KB,
   STARTUP_SKIP_SAMPLES,
@@ -26,6 +27,8 @@ const ALERT_SAMPLE = STARTUP_SKIP_SAMPLES + CONSECUTIVE_REQUIRED - 1;
 
 // The host's sampling time for the nth poll at the nominal cadence.
 const at = (n: number) => T0 + n * NOMINAL_MS;
+// Another shard polls on its own clock, not at the same instant.
+const OTHER_SHARD_OFFSET_MS = 1_000;
 
 function sample(memoryKb: number): TerminalResourceSample {
   return { cpuPercent: 1, memoryKb, breakdown: [], processCount: 1 };
@@ -58,8 +61,8 @@ describe("useMemoryLeakDetection across PTY shards (#17194)", () => {
     for (let i = 0; i < ALERT_SAMPLE; i++) {
       // Shard A carries the leaking terminal; shard B a flat one, each tick.
       update({ leaky: sample(MIN_MEMORY_KB + i * GROWTH_KB) }, at(i));
-      update({ steady: sample(MIN_MEMORY_KB * 2) }, at(i));
-      update({}, at(i));
+      update({ steady: sample(MIN_MEMORY_KB * 2) }, at(i) + OTHER_SHARD_OFFSET_MS);
+      update({}, at(i) + OTHER_SHARD_OFFSET_MS);
       if (i < ALERT_SAMPLE - 1) expect(leakAlertsFor("leaky")).toBe(0);
     }
 
@@ -75,7 +78,7 @@ describe("useMemoryLeakDetection across PTY shards (#17194)", () => {
       const memoryKb = MIN_MEMORY_KB + i * GROWTH_KB;
       update({ alone: sample(memoryKb) }, at(i));
       update({ beside: sample(memoryKb), flat: sample(MIN_MEMORY_KB) }, at(i));
-      update({ elsewhere: sample(MIN_MEMORY_KB) }, at(i));
+      update({ elsewhere: sample(MIN_MEMORY_KB) }, at(i) + OTHER_SHARD_OFFSET_MS);
       if (aloneAt < 0 && leakAlertsFor("alone") > 0) aloneAt = i;
       if (besideAt < 0 && leakAlertsFor("beside") > 0) besideAt = i;
     }
@@ -136,32 +139,33 @@ describe("useMemoryLeakDetection across PTY shards (#17194)", () => {
   });
 
   describe("growth rate from sampling time", () => {
-    // 128 KB every second: 450 MB/hour, however often the census polled.
-    const KB_PER_SECOND = 128;
-    const schedules = {
-      "2.5s polling": [2_500],
-      "15s polling": [15_000],
-      "irregular polling": [2_500, 15_000, 4_000, 9_000],
-    };
+    // 128 KB/s is 450 MB/hour and 80 KB/s is 281 MB/hour, however often the
+    // census polled.
+    const cases = [
+      ["2.5s polling", [2_500], 128, "450 MB/hr"],
+      ["15s polling", [15_000], 128, "450 MB/hr"],
+      ["irregular polling", [2_500, 15_000, 4_000, 9_000], 128, "450 MB/hr"],
+      ["15s polling, slower growth", [15_000], 80, "281 MB/hr"],
+    ] as const;
 
-    it.each(Object.entries(schedules))(
-      "reports the same MB/hr for identical growth per minute at %s",
-      (_name, intervals) => {
+    it.each(cases)(
+      "reports the rate for identical growth per minute at %s",
+      (_name, intervals, kbPerSecond, expected) => {
         const update = useResourceMonitoringStore.getState().updateMetrics;
         let elapsedMs = 0;
         for (let i = 0; i < ALERT_SAMPLE; i++) {
           if (i > 0) elapsedMs += intervals[(i - 1) % intervals.length]!;
           expect(leakAlertsFor("leaky")).toBe(0);
           update(
-            { leaky: sample(MIN_MEMORY_KB + (KB_PER_SECOND * elapsedMs) / 1000) },
+            { leaky: sample(MIN_MEMORY_KB + (kbPerSecond * elapsedMs) / 1000) },
             T0 + elapsedMs
           );
         }
 
         const alerts = notify.mock.calls.filter(([n]) => n.correlationId === "memory-leak-leaky");
         expect(alerts).toHaveLength(1);
-        expect(alerts[0]![0].message).toContain("growing 450 MB/hr");
-        expect(alerts[0]![0].inboxMessage).toContain("growing 450 MB/hr");
+        expect(alerts[0]![0].message).toContain(`growing ${expected}`);
+        expect(alerts[0]![0].inboxMessage).toContain(`growing ${expected}`);
       }
     );
 
@@ -170,12 +174,43 @@ describe("useMemoryLeakDetection across PTY shards (#17194)", () => {
       // Every batch arrives within one tick, as when a thawed view drains its
       // queue; the host sampled them 15 seconds apart.
       for (let i = 0; i < ALERT_SAMPLE; i++) {
-        update({ leaky: sample(MIN_MEMORY_KB + i * 1920) }, T0 + i * 15_000);
+        update({ leaky: sample(MIN_MEMORY_KB + i * 1_200) }, T0 + i * 15_000);
       }
 
       const alerts = notify.mock.calls.filter(([n]) => n.correlationId === "memory-leak-leaky");
       expect(alerts).toHaveLength(1);
-      expect(alerts[0]![0].message).toContain("growing 450 MB/hr");
+      expect(alerts[0]![0].message).toContain("growing 281 MB/hr");
+      expect(alerts[0]![0].inboxMessage).toContain("growing 281 MB/hr");
+    });
+
+    it("holds the cooldown on this view's clock while the host's sampling time runs on", () => {
+      const update = useResourceMonitoringStore.getState().updateMetrics;
+      const RENDERER_T0 = 1_800_000_000_000;
+      const now = vi.spyOn(Date, "now").mockReturnValue(RENDERER_T0);
+      let poll = 0;
+      const growFor = (count: number) => {
+        for (const end = poll + count; poll < end; poll++) {
+          update({ leaky: sample(MIN_MEMORY_KB + poll * 320) }, at(poll));
+        }
+      };
+      try {
+        growFor(ALERT_SAMPLE);
+        expect(leakAlertsFor("leaky")).toBe(1);
+
+        // More than a cooldown's worth of host time passes, still growing.
+        growFor(Math.ceil(ALERT_COOLDOWN_MS / NOMINAL_MS) + 10);
+        expect(leakAlertsFor("leaky")).toBe(1);
+
+        now.mockReturnValue(RENDERER_T0 + ALERT_COOLDOWN_MS - 1);
+        growFor(1);
+        expect(leakAlertsFor("leaky")).toBe(1);
+
+        now.mockReturnValue(RENDERER_T0 + ALERT_COOLDOWN_MS);
+        growFor(1);
+        expect(leakAlertsFor("leaky")).toBe(2);
+      } finally {
+        now.mockRestore();
+      }
     });
   });
 });
