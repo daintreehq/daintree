@@ -56,9 +56,10 @@ const DIALOG = '[data-testid="decision-question-dialog"]';
 const REREAD_MS = 15_000;
 
 /**
- * How long a read may stay out before another starts beside it. No deadline
+ * How long a read may stay out before one more starts beside it. No deadline
  * on the way to main or a Remote Host guarantees a read settles, and one that
- * never did would otherwise hold every later read back.
+ * never did would otherwise hold every later read back. Never more than one
+ * beside it, so reads that never settle can't pile up.
  */
 const STALL_MS = 60_000;
 
@@ -349,33 +350,45 @@ export function DecisionQuestionDialog() {
     // What moves while it's out is read once after it lands.
     let started = 0;
     let shown = 0;
+    let out = 0;
     let reading = false;
     let again = false;
+    // The newest read is past its stall deadline, but one given up on is still out.
+    let overdue = false;
     let poll: ReturnType<typeof setTimeout> | undefined;
     let stall: ReturnType<typeof setTimeout> | undefined;
     const read = () => {
+      // A listener the event bus had already snapshotted can still call in after cleanup.
+      if (!live) return;
       if (reading) {
         again = true;
         return;
       }
       reading = true;
       again = false;
+      overdue = false;
       clearTimeout(poll);
       started += 1;
+      out += 1;
       const seq = started;
       stall = setTimeout(() => {
-        reading = false;
-        read();
+        if (out > 1) overdue = true;
+        else giveUp();
       }, STALL_MS);
       const settle = (result: Read) => {
         if (!live) return;
+        out -= 1;
         // A read given up on still paints if nothing newer has.
         if (seq > shown) {
           shown = seq;
           setTagged({ key: thisKey, read: result });
         }
-        if (seq !== started) return;
+        if (seq !== started) {
+          if (overdue) giveUp();
+          return;
+        }
         clearTimeout(stall);
+        overdue = false;
         reading = false;
         if (again) read();
         // A follow-up can change the thread without moving the pane's state.
@@ -385,6 +398,11 @@ export function DecisionQuestionDialog() {
         // Never the error itself: it could carry what the question says.
         settle({ result: "failed" })
       );
+    };
+    // Stop waiting on the newest read and start one more beside it.
+    const giveUp = () => {
+      reading = false;
+      read();
     };
     read();
     // An answer or its delivery moves the question; read again so the thread keeps up.

@@ -367,107 +367,162 @@ describe("DecisionQuestionDialog", () => {
     }
   });
 
-  it("shows a read slower than one poll, rather than starting another over it (#17564)", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      const pending: Array<(result: DecisionQuestionContentResult) => void> = [];
+  describe("one read at a time (#17564)", () => {
+    let pending: Array<(result: DecisionQuestionContentResult) => void>;
+
+    function holdReads() {
+      pending = [];
       getQuestionContent.mockImplementation(
         () => new Promise<DecisionQuestionContentResult>((resolve) => pending.push(resolve))
       );
-      openView(["qa"], "qa");
-      expect(pending).toHaveLength(1);
-      await act(async () => {
-        vi.advanceTimersByTime(40_000);
-      });
-      expect(pending).toHaveLength(1);
+    }
 
+    async function advance(ms: number) {
+      await act(async () => {
+        vi.advanceTimersByTime(ms);
+      });
+    }
+
+    async function land(which: number, notes: string) {
       await act(async () =>
-        pending[0]!({ result: "read", question: content("qa", 7, { context: "Slow read" }) })
+        pending[which]!({ result: "read", question: content("qa", 7, { context: notes }) })
       );
-      expect(screen.getByTestId("decision-question-content").textContent).toContain("Slow read");
-      // Nothing moved while it was out, so the next read waits a whole poll from its landing.
-      await act(async () => {
-        vi.advanceTimersByTime(14_000);
-      });
-      expect(pending).toHaveLength(1);
-      await act(async () => {
-        vi.advanceTimersByTime(2_000);
-      });
-      expect(pending).toHaveLength(2);
-    } finally {
-      vi.useRealTimers();
     }
-  });
 
-  it("folds moves while a read is out into one read after it, and paints both", async () => {
-    openView(["qa"], "qa");
-    await screen.findByTestId("decision-question-content");
-    const pending: Array<(result: DecisionQuestionContentResult) => void> = [];
-    getQuestionContent.mockImplementation(
-      () => new Promise<DecisionQuestionContentResult>((resolve) => pending.push(resolve))
-    );
-    act(() => pushPane("t1"));
-    act(() => pushPane("t1"));
-    act(() => pushPane("t1"));
-    expect(pending).toHaveLength(1);
+    function shownNotes(): string | undefined {
+      return screen.queryByTestId("decision-question-content")?.textContent ?? undefined;
+    }
 
-    await act(async () =>
-      pending[0]!({ result: "read", question: content("qa", 7, { context: "First notes" }) })
-    );
-    const body = screen.getByTestId("decision-question-content");
-    expect(body.textContent).toContain("First notes");
-    expect(pending).toHaveLength(2);
-
-    await act(async () =>
-      pending[1]!({ result: "read", question: content("qa", 7, { context: "Follow-up notes" }) })
-    );
-    expect(body.textContent).toContain("Follow-up notes");
-    await act(async () => {});
-    expect(pending).toHaveLength(2);
-  });
-
-  it.each([
-    // A read given up on paints only while nothing newer has.
-    ["the one after it lands first", [1, 0], ["Fresh notes", "Fresh notes"]],
-    ["it lands before the one after it", [0, 1], ["Stalled notes", "Fresh notes"]],
-  ] as const)(
-    "starts one read beside a read that never settles, and paints the newest when %s",
-    async (_case, order, expected) => {
-      vi.useFakeTimers({ shouldAdvanceTime: true });
-      try {
-        const pending: Array<(result: DecisionQuestionContentResult) => void> = [];
-        getQuestionContent.mockImplementation(
-          () => new Promise<DecisionQuestionContentResult>((resolve) => pending.push(resolve))
-        );
-        openView(["qa"], "qa");
-        await act(async () => {
-          vi.advanceTimersByTime(59_000);
-        });
-        expect(pending).toHaveLength(1);
-        await act(async () => {
-          vi.advanceTimersByTime(2_000);
-        });
-        expect(pending).toHaveLength(2);
-
-        const notes = ["Stalled notes", "Fresh notes"];
-        const painted: string[] = [];
-        for (const which of order) {
-          await act(async () =>
-            pending[which]!({
-              result: "read",
-              question: content("qa", 7, { context: notes[which] }),
-            })
-          );
-          const body = screen.queryByTestId("decision-question-content");
-          painted.push(notes.find((note) => body?.textContent?.includes(note)) ?? "nothing");
-        }
-        expect(painted).toEqual(expected);
-        expect(pending).toHaveLength(2);
-      } finally {
+    describe("on a clock", () => {
+      beforeEach(() => {
+        vi.useFakeTimers();
+      });
+      afterEach(() => {
         vi.useRealTimers();
-      }
-    }
-  );
+      });
+
+      it("shows a read slower than one poll, rather than starting another over it", async () => {
+        holdReads();
+        openView(["qa"], "qa");
+        expect(pending).toHaveLength(1);
+        await advance(40_000);
+        expect(pending).toHaveLength(1);
+
+        await land(0, "Slow read");
+        expect(shownNotes()).toContain("Slow read");
+        // Nothing moved while it was out, so the next read waits a whole poll from its landing.
+        await advance(14_000);
+        expect(pending).toHaveLength(1);
+        await advance(2_000);
+        expect(pending).toHaveLength(2);
+      });
+
+      it("never lets a poll due before a move fire under the read the move queued", async () => {
+        openView(["qa"], "qa");
+        await act(async () => {});
+        expect(getQuestionContent).toHaveBeenCalledTimes(1);
+        await advance(14_000);
+        holdReads();
+        act(() => pushPane("t1"));
+        act(() => pushPane("t1"));
+        expect(pending).toHaveLength(1);
+        await land(0, "First notes");
+        expect(pending).toHaveLength(2);
+        // Past the first read's poll, while the follow-up is out.
+        await advance(2_000);
+        await land(1, "Follow-up notes");
+        expect(pending).toHaveLength(2);
+        await advance(15_000);
+        expect(pending).toHaveLength(3);
+      });
+
+      it("keeps the newest when the read started beside a stalled one lands first", async () => {
+        holdReads();
+        openView(["qa"], "qa");
+        await advance(59_000);
+        expect(pending).toHaveLength(1);
+        await advance(2_000);
+        expect(pending).toHaveLength(2);
+
+        await land(1, "Fresh notes");
+        expect(shownNotes()).toContain("Fresh notes");
+        await land(0, "Stalled notes");
+        expect(shownNotes()).toContain("Fresh notes");
+        expect(pending).toHaveLength(2);
+      });
+
+      it("paints a stalled read that lands first, and leaves what follows to the newer read", async () => {
+        holdReads();
+        openView(["qa"], "qa");
+        await advance(61_000);
+        expect(pending).toHaveLength(2);
+
+        await land(0, "Stalled notes");
+        expect(shownNotes()).toContain("Stalled notes");
+        // The newer read is still out, so a move waits for it.
+        act(() => pushPane("t1"));
+        expect(pending).toHaveLength(2);
+        await land(1, "Fresh notes");
+        expect(shownNotes()).toContain("Fresh notes");
+        expect(pending).toHaveLength(3);
+      });
+
+      it("never starts a third read beside two stalled ones until one lands", async () => {
+        holdReads();
+        openView(["qa"], "qa");
+        await advance(61_000);
+        await advance(120_000);
+        expect(pending).toHaveLength(2);
+
+        await land(0, "Stalled notes");
+        expect(pending).toHaveLength(3);
+        await land(2, "Fresh notes");
+        await land(1, "Second stalled notes");
+        expect(shownNotes()).toContain("Fresh notes");
+        expect(pending).toHaveLength(3);
+      });
+
+      it("starts nothing more for a read still out when it closed", async () => {
+        holdReads();
+        openView(["qa"], "qa");
+        act(() => useDecisionsQuestionViewStore.getState().close());
+        await advance(180_000);
+        expect(getQuestionContent).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it("folds moves while a read is out into one read after it, and paints both", async () => {
+      openView(["qa"], "qa");
+      await screen.findByTestId("decision-question-content");
+      holdReads();
+      act(() => pushPane("t1"));
+      act(() => pushPane("t1"));
+      act(() => pushPane("t1"));
+      expect(pending).toHaveLength(1);
+
+      await land(0, "First notes");
+      expect(shownNotes()).toContain("First notes");
+      expect(pending).toHaveLength(2);
+      await land(1, "Follow-up notes");
+      expect(shownNotes()).toContain("Follow-up notes");
+      expect(pending).toHaveLength(2);
+    });
+
+    it("folds a Retry into the read still out", async () => {
+      getQuestionContent.mockRejectedValueOnce(new Error("unreachable"));
+      openView(["qa"], "qa");
+      await screen.findByTestId("decision-question-unavailable");
+      holdReads();
+      act(() => pushPane("t1"));
+      expect(pending).toHaveLength(1);
+
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      expect(pending).toHaveLength(1);
+      await land(0, "First notes");
+      expect(shownNotes()).toContain("First notes");
+      expect(pending).toHaveLength(2);
+    });
+  });
 
   it("says why a question can't be read, and offers a retry when it may come back", async () => {
     getQuestionContent.mockRejectedValueOnce(new Error("secret question text"));
