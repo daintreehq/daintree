@@ -427,6 +427,24 @@ describe("VoiceFileLinkResolver", () => {
       ).resolves.toBeNull();
     });
 
+    it("declines a rerank pick that the description fits worse than its same-named twin", async () => {
+      vi.stubGlobal("fetch", rerankReply("app/Profile.tsx"));
+
+      await expect(
+        pick("profile page lib", ["app/Profile.tsx", "lib/Profile.tsx"])
+      ).resolves.toBeNull();
+    });
+
+    it("sees same-named files that differ only by case", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        pick("user profile", ["app/UserProfile.tsx", "lib/features/userProfile.tsx"])
+      ).resolves.toBeNull();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
     it("takes a rerank pick whose same-named twin fits the description worse", async () => {
       vi.stubGlobal("fetch", rerankReply("lib/Profile.tsx"));
 
@@ -435,8 +453,8 @@ describe("VoiceFileLinkResolver", () => {
       );
     });
 
-    it("gives a spoken extension no directory credit, so a folder called the same can't win", async () => {
-      const fetchMock = rerankReply("src/UserProfileSettings.tsx");
+    it("takes a spoken extension as the file type, not a folder called the same", async () => {
+      const fetchMock = vi.fn();
       vi.stubGlobal("fetch", fetchMock);
 
       await expect(
@@ -445,7 +463,13 @@ describe("VoiceFileLinkResolver", () => {
           "src/UserProfileSettings.tsx",
         ])
       ).resolves.toBe("src/UserProfileSettings.tsx");
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await expect(
+        pick("user profile settings tsx", [
+          "server/features/UserProfileSettings.ts",
+          "ui/UserProfileSettingsPage.tsx",
+        ])
+      ).resolves.toBe("ui/UserProfileSettingsPage.tsx");
+      expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it("still reads a directory name that no candidate has as an extension", async () => {

@@ -23,10 +23,18 @@ interface PickRequest {
 }
 
 const baseNameOf = (file: string): string => file.slice(file.lastIndexOf("/") + 1);
+/** What makes two paths "the same file name" in different directories, however it is cased. */
+const nameKeyOf = (file: string): string => baseNameOf(file).toLowerCase();
+const extensionOf = (file: string): string | null => {
+  const match = /\.([^.]+)$/.exec(baseNameOf(file));
+  return match ? match[1].toLowerCase() : null;
+};
 
 interface PathFit {
   score: number;
   nameMatched: number;
+  /** 1 when the description named the file's own extension. */
+  extensionMatched: number;
   extraWords: number;
 }
 
@@ -98,8 +106,8 @@ export class VoiceFileLinkResolver {
         // nothing in it tells them apart: any one of them is a guess. A miss is
         // reported and the spoken words stay. Differently named files that merely
         // score alike are for the reranker.
-        const name = baseNameOf(best.paths[0]);
-        if (best.paths.every((file) => baseNameOf(file) === name)) {
+        const name = nameKeyOf(best.paths[0]);
+        if (best.paths.every((file) => nameKeyOf(file) === name)) {
           logDebug(`${P} Equally strong matches`, {
             score: Number(best.score.toFixed(2)),
             tied: best.paths.length,
@@ -118,7 +126,7 @@ export class VoiceFileLinkResolver {
       payload.signal
     );
     // The reranker sees no more of the project than the scorer does, so a pick
-    // with a same-named twin the description fits just as well is a guess too.
+    // with a same-named twin the description fits at least as well is a guess too.
     if (matched && this.hasEquallyFittingTwin(tokens, extensions, matched, candidates)) {
       logDebug(`${P} Rerank chose among same-named matches`);
       return null;
@@ -180,9 +188,9 @@ export class VoiceFileLinkResolver {
    * profile" names `app/UserProfile.tsx` over `lib/UserProfile.tsx`), unless it
    * is an extension some candidate has: "tsx" names a file type before it names
    * a `tsx/` folder. Past the score, more name matches outweigh directory ones,
-   * and `extraWords` is how much of the name the description never said
-   * outright, which separates `UserProfile.tsx` from its `UserProfile.test.tsx`
-   * and `UserProfiler.tsx` neighbours.
+   * then a named extension decides, and `extraWords` is how much of the name the
+   * description never said outright, which separates `UserProfile.tsx` from its
+   * `UserProfile.test.tsx` and `UserProfiler.tsx` neighbours.
    */
   private scorePath(
     tokens: readonly string[],
@@ -202,9 +210,11 @@ export class VoiceFileLinkResolver {
     }
     if (nameMatched === 0) return null;
 
+    const extension = extensionOf(file);
     return {
       score: (nameMatched + dirMatched) / tokens.length,
       nameMatched,
+      extensionMatched: extension !== null && tokens.includes(extension) ? 1 : 0,
       extraWords: nameWords.filter((w) => !tokens.includes(w)).length,
     };
   }
@@ -212,14 +222,19 @@ export class VoiceFileLinkResolver {
   private extensionsOf(candidates: readonly string[]): Set<string> {
     const extensions = new Set<string>();
     for (const file of candidates) {
-      const extension = /\.([^.]+)$/.exec(baseNameOf(file));
-      if (extension) extensions.add(extension[1].toLowerCase());
+      const extension = extensionOf(file);
+      if (extension) extensions.add(extension);
     }
     return extensions;
   }
 
   private fitsBetter(a: PathFit, b: PathFit): number {
-    return a.score - b.score || a.nameMatched - b.nameMatched || b.extraWords - a.extraWords;
+    return (
+      a.score - b.score ||
+      a.nameMatched - b.nameMatched ||
+      a.extensionMatched - b.extensionMatched ||
+      b.extraWords - a.extraWords
+    );
   }
 
   /** Every candidate that fits the tokens best, so a tie is seen rather than broken by list order. */
@@ -239,7 +254,7 @@ export class VoiceFileLinkResolver {
     return best && { score: best.score, paths: [...best.paths] };
   }
 
-  /** Another candidate with the picked file's name, in another directory, that the description fits no worse. */
+  /** Another candidate with the picked file's name, in another directory, that the description fits at least as well. */
   private hasEquallyFittingTwin(
     tokens: readonly string[],
     extensions: ReadonlySet<string>,
@@ -248,11 +263,11 @@ export class VoiceFileLinkResolver {
   ): boolean {
     const fit = this.scorePath(tokens, extensions, picked);
     if (!fit) return false;
-    const name = baseNameOf(picked);
+    const name = nameKeyOf(picked);
     return candidates.some((file) => {
-      if (file === picked || baseNameOf(file) !== name) return false;
+      if (file === picked || nameKeyOf(file) !== name) return false;
       const twin = this.scorePath(tokens, extensions, file);
-      return twin !== null && this.fitsBetter(fit, twin) === 0;
+      return twin !== null && this.fitsBetter(twin, fit) >= 0;
     });
   }
 
