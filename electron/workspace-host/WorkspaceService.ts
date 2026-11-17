@@ -599,7 +599,11 @@ export class WorkspaceService {
   // path would mint a stale id for any relocated project.
   private projectId: string | null = null;
   private projectEnvVars: Record<string, string> = {};
-  private lifecycleService = new WorktreeLifecycleService();
+  private lifecycleService = new WorktreeLifecycleService(undefined, undefined, (rootPath) =>
+    rootPath === this.projectRootPath && this.projectId
+      ? this.projectSettingsFilePath(this.projectId)
+      : null
+  );
   private readonly setupCoordinator: WorktreeSetupCoordinator;
   private listService = new WorktreeListService();
   private readonly fileDiffCache = new FileDiffCache();
@@ -5838,15 +5842,20 @@ export class WorkspaceService {
     return envs !== null && Object.keys(envs).length > 0;
   }
 
+  /** The settings file Project settings writes for `projectId`, or null without a userData root. */
+  private projectSettingsFilePath(projectId: string): string | null {
+    const userDataDir = process.env.DAINTREE_USER_DATA ?? "";
+    if (!userDataDir) return null;
+    // Settings live under `<userData>/projects/<id>/settings.json` (see
+    // ProjectStore's `projectsConfigDir`). DAINTREE_USER_DATA is the bare
+    // userData root, so the `projects` segment must be added here — without it
+    // the read silently missed and env vars never reached the host (#11282).
+    return settingsFilePath(pathResolve(userDataDir, "projects"), projectId);
+  }
+
   private async loadProjectEnvVars(projectId: string): Promise<Record<string, string>> {
     try {
-      const userDataDir = process.env.DAINTREE_USER_DATA ?? "";
-      if (!userDataDir) return {};
-      // Settings live under `<userData>/projects/<id>/settings.json` (see
-      // ProjectStore's `projectsConfigDir`). DAINTREE_USER_DATA is the bare
-      // userData root, so the `projects` segment must be added here — without it
-      // the read silently missed and env vars never reached the host (#11282).
-      const filePath = settingsFilePath(pathResolve(userDataDir, "projects"), projectId);
+      const filePath = this.projectSettingsFilePath(projectId);
       if (!filePath) return {};
       const raw = await readFile(filePath, "utf8");
       const parsed: unknown = JSON.parse(raw);

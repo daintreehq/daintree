@@ -2390,6 +2390,96 @@ describe("WorktreeLifecycleService", () => {
       expect(monitor.setResourceConnectCommand).toHaveBeenLastCalledWith(undefined);
     });
 
+    describe("environments saved in Project settings (#17354)", () => {
+      const SAVED = `/userData/projects/${"a".repeat(64)}/settings.json`;
+
+      beforeEach(async () => {
+        const { WorktreeLifecycleService } = await import("../WorktreeLifecycleService.js");
+        service = new WorktreeLifecycleService(
+          "/home/testuser",
+          {
+            isApproved: async (_root, fingerprint) => approved.has(fingerprint),
+            approve: async () => {},
+          },
+          (root) => (root === ROOT ? SAVED : null)
+        );
+      });
+
+      it("provisions a saved environment without asking", async () => {
+        serveFiles({
+          [SAVED]: {
+            _schemaVersion: 1,
+            runCommands: [],
+            resourceEnvironments: { cloud: { provision: ["terraform apply"], status: "check" } },
+          },
+        });
+        const monitor = makeMonitor({ worktreeMode: "cloud" });
+
+        const result = await service.runLifecycleSetup("wt-1", WT, makeCtx(monitor), true);
+
+        expect(result).toEqual({ shouldProvision: true, needsApproval: false });
+        expect(monitor.hasResourceConfig).toBe(true);
+        expect(await service.getCommandReview(WT, ROOT)).toBeNull();
+      });
+
+      it("shadows the home and repository settings files", async () => {
+        serveFiles({
+          [SAVED]: { resourceEnvironments: { cloud: { provision: ["saved"] } } },
+          "/home/testuser/.daintree/projects/_root/settings.json": {
+            resourceEnvironments: { home: { provision: ["home"] } },
+          },
+          "/root/.daintree/settings.json": {
+            resourceEnvironments: { repo: { provision: ["repo"] } },
+          },
+        });
+
+        const resolved = await service.resolveProjectResourceEnvironments(ROOT);
+
+        expect(resolved?.origin).toBe("user");
+        expect(n(resolved!.path)).toBe(SAVED);
+        expect(Object.keys(resolved!.environments)).toEqual(["cloud"]);
+      });
+
+      it.each([
+        ["no saved settings file", {}],
+        [
+          "saved settings without environments",
+          { [SAVED]: { _schemaVersion: 1, runCommands: [] } },
+        ],
+      ])("falls through to the home settings file with %s", async (_case, saved) => {
+        serveFiles({
+          ...saved,
+          "/home/testuser/.daintree/projects/_root/settings.json": {
+            resourceEnvironments: { home: { provision: ["home"] } },
+          },
+        });
+
+        const resolved = await service.resolveProjectResourceEnvironments(ROOT);
+
+        expect(n(resolved!.path)).toBe("/home/testuser/.daintree/projects/_root/settings.json");
+        expect(Object.keys(resolved!.environments)).toEqual(["home"]);
+      });
+
+      it("still asks about repository environments when nothing was saved", async () => {
+        serveFiles({
+          "/root/.daintree/settings.json": {
+            resourceEnvironments: { cloud: { provision: ["terraform apply"] } },
+          },
+        });
+        const monitor = makeMonitor({ worktreeMode: "cloud" });
+
+        const result = await service.runLifecycleSetup("wt-1", WT, makeCtx(monitor), true);
+
+        expect(result).toEqual({ shouldProvision: false, needsApproval: true });
+      });
+
+      it("never reads another project's saved settings", async () => {
+        serveFiles({ [SAVED]: { resourceEnvironments: { cloud: { provision: ["saved"] } } } });
+
+        expect(await service.resolveProjectResourceEnvironments("/other")).toBeNull();
+      });
+    });
+
     describe("plugin setup steps (#13807)", () => {
       const DB = {
         pluginId: "acme",
