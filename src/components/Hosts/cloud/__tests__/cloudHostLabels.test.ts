@@ -14,6 +14,7 @@ import {
   isObservationStale,
   formatHourly,
   lifetimeSentence,
+  providerStopSentence,
   stopKeepsSentence,
   stoppedBillingSentence,
   machineSpecLabel,
@@ -38,6 +39,7 @@ function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
     vcpu: 4,
     memoryGB: 8,
     hourlyDollars: 0.036,
+    lifetime: { kind: "renewable" },
     autoStopAt: null,
     lifetimeSeconds: 7200,
     stoppedAt: null,
@@ -132,10 +134,56 @@ describe("cloud host labels", () => {
   });
 
   it("says an imported lifetime exactly, never rounded to the hour", () => {
-    expect(lifetimeSentence(1800)).toContain("30 minutes after starting");
-    expect(lifetimeSentence(5400)).toContain("90 minutes after starting");
-    expect(lifetimeSentence(7200)).toContain("2 hours after starting");
-    expect(lifetimeSentence(null)).toBe("It runs until you stop it.");
+    const renewable = { kind: "renewable" } as const;
+    expect(lifetimeSentence(renewable, 1800)).toContain("30 minutes after starting");
+    expect(lifetimeSentence(renewable, 5400)).toContain("90 minutes after starting");
+    expect(lifetimeSentence(renewable, 7200)).toContain("2 hours after starting");
+    expect(lifetimeSentence(renewable, null)).toBe("It runs until you stop it.");
+  });
+
+  it("words when a machine stops by itself in its provider's terms", () => {
+    // Only a renewable lifetime is pushed back; a fixed one holds even while it's in use.
+    expect(lifetimeSentence({ kind: "renewable" }, 7200)).toContain("pushed back");
+    const fixed = lifetimeSentence({ kind: "fixed-at-create", canChangeWhileStopped: true }, 7200);
+    expect(fixed).toContain("2 hours after starting");
+    expect(fixed).toContain("can't be extended");
+    expect(fixed).not.toContain("pushed back");
+    // A stored lifetime means nothing to a provider that doesn't take one.
+    expect(lifetimeSentence({ kind: "none" }, 7200)).toBe("It runs until you stop it.");
+    expect(lifetimeSentence({ kind: "idle-sleep", idleSeconds: 1800 }, 7200)).toBe(
+      "It sleeps by itself after 30 minutes without activity."
+    );
+    expect(lifetimeSentence({ kind: "idle-sleep", idleSeconds: 45 }, null)).toContain("45 seconds");
+    expect(lifetimeSentence({ kind: "idle-sleep", idleSeconds: null }, null)).toContain(
+      "once it's been idle"
+    );
+    // An unregistered provider's model isn't known, so nothing is promised.
+    expect(lifetimeSentence(null, 7200)).toBe("");
+  });
+
+  it("names the provider that stops a machine when a create doesn't choose when", () => {
+    expect(providerStopSentence({ kind: "none" }, "Acme")).toContain("Acme has no lifetime");
+    expect(providerStopSentence({ kind: "idle-sleep", idleSeconds: 600 }, "Acme")).toContain(
+      "Acme puts it to sleep by itself after 10 minutes"
+    );
+    expect(providerStopSentence({ kind: "renewable" }, "Acme")).toBeNull();
+    expect(
+      providerStopSentence({ kind: "fixed-at-create", canChangeWhileStopped: false }, "Acme")
+    ).toBeNull();
+  });
+
+  it("says no auto-stop only where the provider's model has none", () => {
+    expect(cloudCostFacts(status({ lifetime: { kind: "none" } }))).toContain("no auto-stop");
+    const idle = cloudCostFacts(status({ lifetime: { kind: "idle-sleep", idleSeconds: 1800 } }));
+    expect(idle).toContain("sleeps when idle");
+    expect(idle).not.toContain("no auto-stop");
+    expect(cloudCostFacts(status({ lifetime: null }))).toEqual(["$0.036/h"]);
+    const deadline = new Date(Date.UTC(2026, 10, 14, 12)).toISOString();
+    expect(
+      cloudCostFacts(
+        status({ lifetime: { kind: "idle-sleep", idleSeconds: 60 }, autoStopAt: deadline })
+      ).some((fact) => fact.startsWith("stops by itself"))
+    ).toBe(true);
   });
 
   it("never reads an unknown state as stopped", () => {

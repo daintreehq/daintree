@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import type {
   CloudHostStatus,
   CloudHostsSnapshot,
+  CloudLifetimeModel,
   CloudProviderInfo,
   CloudSshTrust,
 } from "@shared/types/cloudHosts";
@@ -57,6 +58,7 @@ function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
     vcpu: null,
     memoryGB: null,
     hourlyDollars: null,
+    lifetime: { kind: "renewable" },
     autoStopAt: null,
     lifetimeSeconds: 7200,
     stoppedAt: null,
@@ -438,5 +440,74 @@ describe("CloudMachineSection SSH identity", () => {
     );
     expect(screen.getByRole("alert").textContent).toBe("SSH access failed");
     expect(screen.queryByRole("button", { name: "Get acme" })).toBeNull();
+  });
+});
+
+describe("CloudMachineSection lifetime row", () => {
+  const DEADLINE = new Date(Date.now() + 90 * 60_000).toISOString();
+  const lifetimeText = () => screen.getByTestId("cloud-machine-lifetime").textContent ?? "";
+  const lifetimeChoice = () => screen.queryByRole("combobox", { name: "Stops by itself after" });
+
+  function machine(lifetime: CloudLifetimeModel | null, overrides: Partial<CloudHostStatus> = {}) {
+    return status({
+      lifetime,
+      resourceId: "bx_23456789",
+      machine: "running",
+      operation: null,
+      observedAt: Date.now(),
+      autoStopAt: DEADLINE,
+      ...overrides,
+    });
+  }
+
+  it("says a machine with no provider lifetime runs until it's stopped, with nothing to choose", () => {
+    show(machine({ kind: "none" }, { autoStopAt: null }));
+    expect(lifetimeText()).toContain("it runs until you stop it");
+    expect(lifetimeChoice()).toBeNull();
+  });
+
+  it("says the provider sleeps it when idle, with its idle time", () => {
+    show(machine({ kind: "idle-sleep", idleSeconds: 1800 }, { autoStopAt: null }));
+    expect(screen.getByText("Sleeps when idle")).toBeTruthy();
+    expect(lifetimeText()).toContain("to sleep by itself after 30 minutes without activity");
+    expect(lifetimeChoice()).toBeNull();
+  });
+
+  it("shows a fixed limit's deadline, and that it can't be extended while it runs", () => {
+    show(machine({ kind: "fixed-at-create", canChangeWhileStopped: false }));
+    const text = lifetimeText();
+    expect(text).toMatch(/^2 hours\. This run stops by itself /);
+    expect(text).toContain("can't extend or change it");
+    expect(text).not.toContain("pushed back");
+    expect(lifetimeChoice()).toBeNull();
+  });
+
+  it("lets a fixed limit change only while the machine is stopped, where the provider allows", () => {
+    show(machine({ kind: "fixed-at-create", canChangeWhileStopped: true }));
+    expect(lifetimeText()).toContain("This run stops by itself");
+    expect(lifetimeText()).toContain("can't extend it while the machine runs");
+    expect(lifetimeChoice()?.hasAttribute("disabled")).toBe(true);
+    cleanup();
+    show(
+      machine(
+        { kind: "fixed-at-create", canChangeWhileStopped: true },
+        { machine: "stopped", autoStopAt: null }
+      )
+    );
+    expect(lifetimeText()).toContain("applies from its next start");
+    expect(lifetimeChoice()?.hasAttribute("disabled")).toBe(false);
+  });
+
+  it("keeps a renewable lifetime's choice and the keeper's promise", () => {
+    show(machine({ kind: "renewable" }));
+    expect(lifetimeChoice()?.hasAttribute("disabled")).toBe(false);
+    expect(screen.getByText(/Daintree pushes it back while a window here shows it/)).toBeTruthy();
+  });
+
+  it("promises nothing while the provider isn't available", () => {
+    show(machine(null, { providerUnavailable: "Its plugin isn't installed." }));
+    expect(lifetimeText()).toContain("as last reported");
+    expect(lifetimeText()).toContain("Unknown while boat isn't available");
+    expect(lifetimeChoice()).toBeNull();
   });
 });
