@@ -315,6 +315,28 @@ describe("ImageLinksAddon", () => {
       for (const y of [1, 2]) expect(await provide(addon, y)).toBeUndefined();
     });
 
+    it("doesn't join a wrap a widening cut back to the pane's width", async () => {
+      // The wrap was made at 9 columns; widening from 7 to 8 trims the row to
+      // 8, dropping the `X`, so nothing in the row's length shows the old width.
+      const terminal = await render(9, "\x1b[?1049himage #1X2");
+      terminal.resize(7, 10);
+      terminal.resize(8, 10);
+      const first = terminal.buffer.active.getLine(0)!;
+      expect(first.length).toBe(terminal.cols);
+      expect(first.translateToString(true)).toBe("image #1");
+      expect(terminal.buffer.active.getLine(1)!.isWrapped).toBe(true);
+      const addon = new ImageLinksAddon(terminal, () => [1, 12], vi.fn());
+      for (const y of [1, 2]) expect(await provide(addon, y)).toBeUndefined();
+    });
+
+    it("reads an alternate-buffer wrap as an edge, since its width can't be known", async () => {
+      const terminal = await render(10, "\x1b[?1049hsee [image #1]\r\n[image #2]");
+      expect(terminal.buffer.active.getLine(1)!.isWrapped).toBe(true);
+      const addon = new ImageLinksAddon(terminal, () => [1, 2], vi.fn());
+      for (const y of [1, 2]) expect(await provide(addon, y)).toBeUndefined();
+      expect((await provide(addon, 3))?.map((link) => link.text)).toEqual(["[image #2]"]);
+    });
+
     it("links a reference ending a narrowed row when nothing is hidden or wrapped", async () => {
       const terminal = await render(9, "\x1b[?1049himage #1\r\nok");
       terminal.resize(8, 10);

@@ -51,7 +51,10 @@ function lineAt(buffer: IBuffer, y: number): IBufferLine | undefined {
   return y >= 0 && y < buffer.length ? buffer.getLine(y) : undefined;
 }
 
-/** Whether a row longer than the pane holds text past its edge. */
+/**
+ * Whether a row holds text past the pane's edge, as an alternate-buffer row
+ * kept through a narrowing can. Cells never written are spare capacity.
+ */
 function hidesText(line: IBufferLine, cols: number): boolean {
   let scratch: IBufferCell | undefined;
   for (let x = cols; x < line.length; x++) {
@@ -71,14 +74,15 @@ function hidesText(line: IBufferLine, cols: number): boolean {
  * character moves down reads as a space; only that wide character follows it,
  * and it can't be part of a reference or a word boundary.
  *
- * A row longer than the pane is one an alternate buffer kept through a
- * narrowing without reflow. It never joins the row below it: xterm doesn't
- * record whether that wrap was made at the old width, past cells now hidden,
- * or at the new one, and an erased cell reads the same as one never written.
+ * Wraps join rows only in the normal buffer, which reflows on every resize so
+ * its wraps sit at the pane's width. The alternate buffer keeps rows as drawn:
+ * a wrap there may date from an earlier width, its cells since hidden by a
+ * narrowing or cut by a widening, so it is an edge the line is clipped at.
  */
 function readWrappedText(terminal: ImageLinkTerminal, row: number): WrappedText | null {
   const buffer = terminal.buffer.active;
   const cols = terminal.cols;
+  const joinsWraps = buffer.type === "normal";
   const hovered = lineAt(buffer, row);
   if (!hovered) return null;
 
@@ -86,9 +90,9 @@ function readWrappedText(terminal: ImageLinkTerminal, row: number): WrappedText 
   let topLine = hovered;
   let clippedStart = false;
   for (let reach = 0; topLine.isWrapped; reach += cols) {
-    const above = lineAt(buffer, top - 1);
     // No row above means scrollback dropped the start of the line.
-    if (!above || reach >= CONTEXT_CELLS || above.length > cols) {
+    const above = joinsWraps ? lineAt(buffer, top - 1) : undefined;
+    if (!above || reach >= CONTEXT_CELLS) {
       clippedStart = true;
       break;
     }
@@ -100,18 +104,17 @@ function readWrappedText(terminal: ImageLinkTerminal, row: number): WrappedText 
   let bottomLine = hovered;
   let clippedEnd = false;
   for (let reach = 0; ; reach += cols) {
-    const below = lineAt(buffer, bottom + 1);
-    if (bottomLine.length > cols && (below?.isWrapped || hidesText(bottomLine, cols))) {
+    if (hidesText(bottomLine, cols)) {
       clippedEnd = true;
       break;
     }
-    if (!below?.isWrapped) break;
-    if (reach >= CONTEXT_CELLS) {
+    if (!lineAt(buffer, bottom + 1)?.isWrapped) break;
+    if (!joinsWraps || reach >= CONTEXT_CELLS) {
       clippedEnd = true;
       break;
     }
     bottom++;
-    bottomLine = below;
+    bottomLine = buffer.getLine(bottom)!;
   }
 
   let text = "";
