@@ -33,7 +33,7 @@ import { validateGitHubToken } from "./GitHubToken.js";
 import { parseGitHubRepoUrl } from "./GitHubRepoContext.js";
 import { gitHubRateLimitService, rateLimitServiceForHost } from "./GitHubRateLimitService.js";
 import { cacheOwner, clearPRCaches, repoEventsETagCache } from "./GitHubCaches.js";
-import { githubWebBase } from "./GitHubHost.js";
+import { getEnterpriseHost, githubWebBase } from "./GitHubHost.js";
 import { missingTokenMessage } from "./queryInfra.js";
 import type { RepoContext } from "./types.js";
 import {
@@ -318,8 +318,13 @@ function toAuthValidation(result: GitHubTokenValidation): AuthValidation {
 }
 
 export const githubForgeProvider: ForgeProviderImpl = {
+  // github.com's token, else the Enterprise Server one. Its callers ask
+  // whether the provider can authenticate at all; every request picks the
+  // token for its own repository's host instead.
   async getCredentials(): Promise<Credentials | null> {
-    const token = GitHubAuth.getToken();
+    const enterpriseHost = getEnterpriseHost();
+    const token =
+      GitHubAuth.getToken() ?? (enterpriseHost ? GitHubAuth.getToken(enterpriseHost) : undefined);
     if (!token) return null;
     return { kind: "bearer", value: token };
   },

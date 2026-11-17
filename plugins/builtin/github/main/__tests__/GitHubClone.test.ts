@@ -16,8 +16,8 @@ vi.mock("../../../../../electron/utils/windowsTreeKill.js", async (importOrigina
 
 vi.mock("../GitHubRepoContext.js", () => ({
   parseGitHubRepoUrl: (url: string) => {
-    const m = /^https?:\/\/github\.com\/([^/]+)\/([^/.]+)/i.exec(url);
-    return m ? { owner: m[1], repo: m[2] } : null;
+    const m = /^https?:\/\/(github\.com|github\.example\.com)\/([^/]+)\/([^/.]+)/i.exec(url);
+    return m ? { host: m[1]!.toLowerCase(), owner: m[2], repo: m[3] } : null;
   },
 }));
 
@@ -108,6 +108,17 @@ describe("GitHubClone — probeAuth", () => {
     );
   });
 
+  it("asks gh about the Enterprise Server host a clone targets", async () => {
+    setAuthResult(null);
+    await cloneCapability.probeAuth(undefined, "https://github.example.com/team/app.git");
+    expect(childProcessMock.execFile).toHaveBeenCalledWith(
+      GH,
+      ["auth", "status", "--hostname", "github.example.com"],
+      expect.objectContaining({ windowsHide: true }),
+      expect.any(Function)
+    );
+  });
+
   it("reports unauthenticated when `gh auth status` fails", async () => {
     setAuthResult(new Error("not authed"));
     const probe = await cloneCapability.probeAuth();
@@ -139,6 +150,18 @@ describe("GitHubClone — cloneRepository", () => {
       expect.objectContaining({ cwd: path.dirname(TARGET_DIR), windowsHide: true })
     );
     expect(spawnedArgs).toEqual(["repo", "clone", "owner/repo", TARGET_DIR]);
+  });
+
+  it("names an Enterprise Server host so gh can't clone a same-named github.com repository", async () => {
+    let spawnedArgs: string[] | undefined;
+    childProcessMock.spawn.mockImplementation((_cmd: string, args: string[]) => {
+      spawnedArgs = args;
+      return makeChild();
+    });
+
+    await cloneCapability.cloneRepository!("https://github.example.com/team/app", TARGET_DIR, {});
+
+    expect(spawnedArgs).toEqual(["repo", "clone", "github.example.com/team/app", TARGET_DIR]);
   });
 
   it("appends -- --depth 1 when shallow is true", async () => {

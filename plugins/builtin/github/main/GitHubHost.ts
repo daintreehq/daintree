@@ -9,31 +9,13 @@ export { GITHUB_COM_HOST } from "../shared/githubHost.js";
  */
 let enterpriseHost: string | null = null;
 
-const listeners = new Set<(host: string | null) => void>();
-
 export function getEnterpriseHost(): string | null {
   return enterpriseHost;
 }
 
-/** Mirror a new setting value. Listeners hear only an actual change. */
+/** Mirror a new `enterpriseHost` setting value; anything that isn't a valid host clears it. */
 export function setEnterpriseHost(raw: unknown): void {
-  const next = normalizeEnterpriseHost(raw);
-  if (next === enterpriseHost) return;
-  enterpriseHost = next;
-  for (const listener of [...listeners]) {
-    try {
-      listener(next);
-    } catch {
-      // One listener's failure must not keep the others stale.
-    }
-  }
-}
-
-export function onEnterpriseHostChanged(listener: (host: string | null) => void): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
+  enterpriseHost = normalizeEnterpriseHost(raw);
 }
 
 /** Whether this provider serves `host` right now: github.com, or the configured enterprise host. */
@@ -89,8 +71,7 @@ export function apiHostOf(url: string): string | null {
   return null;
 }
 
-/** Test-only reset of the mirrored host and its listeners. */
+/** Test-only reset of the mirrored host. */
 export function _resetEnterpriseHostForTests(): void {
   enterpriseHost = null;
-  listeners.clear();
 }

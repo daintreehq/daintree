@@ -1762,6 +1762,14 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [{ file: FORGE_REGISTRY, symbol: "hostnameMatchesAny" }],
       note: "Matched against a repo host to route to the provider.",
     },
+    matchesSettingRef: {
+      mode: "cross-reference",
+      consumers: [
+        { file: "electron/schemas/plugin/validation/providers.ts", symbol: "validateForgeProviderRefs" },
+        { file: FORGE_REGISTRY, symbol: "setForgeProviderSettingMatch" },
+      ],
+      note: "Validated against a declared user-scoped string setting; its value joins the provider's hostname matches.",
+    },
     roles: {
       mode: "verbatim",
       consumers: [
