@@ -340,7 +340,8 @@ describe("HostConnectionBanner", () => {
     seed({
       status: "unreachable",
       lastSeenAt: null,
-      detail: "There is no distribution with the supplied name.\nWsl/Service/WSL_E_DISTRO_NOT_FOUND",
+      detail:
+        "There is no distribution with the supplied name.\nWsl/Service/WSL_E_DISTRO_NOT_FOUND",
       stoppedRetrying: true,
       blocker: { kind: "wsl-distro-missing", distro: "Ubuntu-24.04" },
     });

@@ -168,7 +168,8 @@ export function getHostConnectionBannerCopy(
       const distro = blocker?.kind === "wsl-distro-missing" ? blocker.distro : hostName;
       return {
         title: `WSL couldn't find ${distro}`,
-        description: "Automatic retries have stopped. Restore it under that name in WSL, then retry.",
+        description:
+          "Automatic retries have stopped. Restore it under that name in WSL, then retry.",
       };
     }
     case "connection-unavailable": {

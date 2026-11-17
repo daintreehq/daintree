@@ -1,9 +1,5 @@
 import { create } from "zustand";
-import type {
-  HostConnectionBlocker,
-  HostConnectionState,
-  HostId,
-} from "@shared/types/remoteHosts";
+import type { HostConnectionBlocker, HostConnectionState, HostId } from "@shared/types/remoteHosts";
 
 /**
  * The link between this view and the host it runs on, as last observed. Only

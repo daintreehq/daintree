@@ -167,7 +167,8 @@ function clipDetail(detail: string | null): string | null {
 /** A dial failure trying again can't change, as the transport named it; null for any other. */
 function blockerOf(err: unknown): HostConnectionBlocker | null {
   if (err instanceof SshAccessError) return { kind: "ssh-access" };
-  if (err instanceof WslDistroMissingError) return { kind: "wsl-distro-missing", distro: err.distro };
+  if (err instanceof WslDistroMissingError)
+    return { kind: "wsl-distro-missing", distro: err.distro };
   if (err instanceof UnusableConnectionError) return { kind: "unusable", message: err.message };
   return null;
 }
