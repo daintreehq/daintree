@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostDescriptor } from "../../../../shared/types/remoteHosts.js";
 import { events } from "../../../services/events.js";
@@ -281,5 +284,31 @@ describe("worktreeRootGone (#17360)", () => {
     const parentProbe = parent("directory");
     expect(await worktreeRootGone(ROOT, { root: root("denied"), parent: parentProbe })).toBeNull();
     expect(parentProbe).not.toHaveBeenCalled();
+  });
+});
+
+describe("worktreeRootGone on a real filesystem (#17360)", () => {
+  let base = "";
+  afterEach(async () => {
+    if (base) await fs.rm(base, { recursive: true, force: true });
+    base = "";
+  });
+
+  it("follows a parent link: gone only when its target is a folder that reads", async () => {
+    base = await fs.mkdtemp(path.join(os.tmpdir(), "worktree-gone-"));
+    const real = path.join(base, "app-worktrees");
+    await fs.mkdir(real);
+    expect(await worktreeRootGone(path.join(real, "feature-login"))).toBe(true);
+    await fs.mkdir(path.join(real, "feature-login"));
+    expect(await worktreeRootGone(path.join(real, "feature-login"))).toBe(false);
+
+    // A link into a drive that isn't mounted: nothing proven.
+    const dangling = path.join(base, "on-drive");
+    await fs.symlink(path.join(base, "unmounted", "app-worktrees"), dangling);
+    expect(await worktreeRootGone(path.join(dangling, "feature-login"))).toBeNull();
+
+    const linked = path.join(base, "linked");
+    await fs.symlink(real, linked);
+    expect(await worktreeRootGone(path.join(linked, "other"))).toBe(true);
   });
 });

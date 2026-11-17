@@ -174,6 +174,12 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     machineSelections[hostId] = choice;
     if (choice !== "keep") chosenCleanups.push({ machine, choice });
   }
+  // A stop or delete chosen for a machine that has since gone from the list
+  // never comes back with it.
+  for (const [hostId, recorded] of Object.entries(machineChoices)) {
+    if (recorded.choice !== "stop" && recorded.choice !== "delete") continue;
+    if (!cloudMachines.some((machine) => machine.status.hostId === hostId)) newlyStale.push(hostId);
+  }
   const machineChoiceStale = Object.values(machineSelections).some((choice) => choice === null);
   const newlyStaleKey = newlyStale.join("\n");
   useEffect(() => {
@@ -618,6 +624,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // the immediate dismiss #8417 asks for on all of them.
   const revalidateThenDelete = async () => {
     const session = sessionRef.current;
+    const confirmedMachines = cleanupKey(chosenCleanups);
     pendingCheckRef.current = "submit";
     setIsDeleting(true);
     const outcome = await settleWorktreeDeleteOutcome(buildWorktreeDeletePreview(worktree.id));
@@ -666,7 +673,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     }
     // A machine's offer that changed during the check is chosen again first.
     const machinesNow = machineStateRef.current;
-    if (machinesNow.stale) {
+    if (machinesNow.stale || cleanupKey(machinesNow.cleanups) !== confirmedMachines) {
       setIsDeleting(false);
       return;
     }
@@ -1568,6 +1575,19 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
 }
 
 const SUBMIT_CHECK_LABEL = "Checking current work before deleting";
+
+/** The machines' stops and deletes as confirmed, to tell whether they changed under a check. */
+function cleanupKey(
+  cleanups: ReadonlyArray<{
+    machine: { status: { hostId: string; resourceId: string | null } };
+    choice: string;
+  }>
+): string {
+  return cleanups
+    .map(({ machine, choice }) => `${machine.status.hostId}:${machine.status.resourceId}:${choice}`)
+    .sort()
+    .join("\n");
+}
 
 const TEARDOWN_COMMAND_LIMIT = 4;
 

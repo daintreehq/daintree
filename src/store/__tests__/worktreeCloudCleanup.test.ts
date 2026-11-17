@@ -14,7 +14,7 @@ const {
   const calls: string[] = [];
   return {
     calls,
-    worktreeClientDeleteMock: vi.fn(async () => {
+    worktreeClientDeleteMock: vi.fn(async (..._args: unknown[]) => {
       calls.push("delete");
     }),
     closeTerminalsForWorktreeMock: vi.fn(async () => {
@@ -116,13 +116,12 @@ describe("a worktree delete with its cloud machines (#17360)", () => {
     store.getState().startDelete("wt-1", { closeTerminals: true, cloudCleanup: CLEANUP });
     await flush();
     expect(calls).toEqual(["prepare", "close-terminals", "delete", "settle"]);
-    expect(prepareMock).toHaveBeenCalledWith(
-      CLEANUP.worktree,
-      CLEANUP.machines,
-      expect.any(String)
-    );
+    // One id names the delete throughout: written with it, sent with it, settled with it.
+    const sent = worktreeClientDeleteMock.mock.calls[0]![1] as { mutationId: string };
+    expect(sent.mutationId).toEqual(expect.any(String));
+    expect(prepareMock).toHaveBeenCalledWith(CLEANUP.worktree, CLEANUP.machines, sent.mutationId);
     expect(settleMock).toHaveBeenCalledTimes(1);
-    expect(settleMock).toHaveBeenCalledWith(CLEANUP.worktree, true, expect.any(String));
+    expect(settleMock).toHaveBeenCalledWith(CLEANUP.worktree, true, sent.mutationId);
   });
 
   it("stops the delete when the choice can't be written down, and asks for review on Retry", async () => {

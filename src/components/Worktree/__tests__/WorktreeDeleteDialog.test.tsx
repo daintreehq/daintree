@@ -2654,6 +2654,34 @@ describe("WorktreeDeleteDialog — its cloud machine (#17360)", () => {
     });
   });
 
+  it("holds a force delete whose machine's offer changed during its check", async () => {
+    const view = (hosts: ReturnType<typeof machine>[], providers = [BOAT]) => {
+      cloudSnapshotMock.value = { providers, accounts: [], hosts };
+      return (
+        <WorktreeDeleteDialog
+          isOpen={true}
+          onClose={vi.fn()}
+          worktree={makeWorktree(makeChanges([]))}
+        />
+      );
+    };
+    buildPreviewMock.mockResolvedValueOnce(makePreview([]));
+    const { rerender } = render(view([machine()]));
+    await settlePreview();
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+    fireEvent.click(choice("stop"));
+    let finishCheck: (preview: unknown) => void = () => {};
+    buildPreviewMock.mockImplementationOnce(
+      () => new Promise((resolve) => (finishCheck = resolve))
+    );
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+    // The provider goes while the tree is re-read.
+    rerender(view([machine({ providerUnavailable: "Its plugin is disabled" })], []));
+    await act(async () => finishCheck(makePreview([])));
+    expect(startDeleteMock).not.toHaveBeenCalled();
+    expect(screen.getByText("What can be done with it changed. Choose again.")).toBeDefined();
+  });
+
   it("names only the machine in a gate its delete alone raised", async () => {
     // The tree couldn't be checked, but without Force the worktree's own tier stays below D3.
     buildPreviewMock.mockRejectedValue(new Error("refresh timeout"));

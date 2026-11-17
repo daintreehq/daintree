@@ -1338,7 +1338,11 @@ export class CloudHostLifecycle {
         throw invalid("The machine to delete changed since you confirmed. Check it and try again.");
       }
       const { provider, credentials } = await this.context(current, signal);
-      // The provider may have been replaced while the operation waited.
+      // The provider may have left or been replaced while its credentials were read.
+      if (!this.stillRegistered(current.providerId, provider)) {
+        const message = `${nameOf(provider)} changed while the machine was being deleted. Try again.`;
+        throw new AppError({ code: "UNSUPPORTED", message, userMessage: message });
+      }
       this.requireDeletion(current.providerId);
       this.stage(binding.id, "Deleting the machine");
       try {
@@ -1443,8 +1447,9 @@ export class CloudHostLifecycle {
    * refused, null when the answer was lost. The machines' stops and deletes
    * run once the worktree is known to be gone, and this resolves when they're
    * done, with how each ended. A worktree on this device is looked at, never
-   * taken on report. One still there leaves its machines as they are, and a
-   * later delete asks again; an unknown answer leaves the choice waiting.
+   * taken on report. One still there after a refusal leaves its machines as
+   * they are, and a later delete asks again; anything short of a refusal
+   * leaves the choice waiting for the worktree to go.
    */
   async settleWorktreeCleanup(
     worktree: unknown,
@@ -1456,9 +1461,7 @@ export class CloudHostLifecycle {
     const reported = deleted === true ? true : deleted === false ? false : null;
     // Only the choices that delete came with: a late answer never settles a later delete's.
     const targets = new Map(
-      [...this.cleanupsFor(ref)].filter(
-        ([, cleanup]) => mutation === null || cleanup.mutationId === mutation
-      )
+      [...this.cleanupsFor(ref)].filter(([, cleanup]) => cleanup.mutationId === mutation)
     );
     if (targets.size === 0) return [];
     const waiting = new Map([...targets].filter(([, cleanup]) => cleanup.phase === "waiting"));
@@ -1468,9 +1471,11 @@ export class CloudHostLifecycle {
         for (const [bindingId, cleanup] of waiting) {
           void this.carryOutCleanup(bindingId, ["waiting"], cleanup.attemptId);
         }
-      } else if (gone === false) {
-        for (const [bindingId, cleanup] of waiting)
+      } else if (gone === false && reported === false) {
+        // Only a refusal drops it: a delete whose answer was lost may still be removing it.
+        for (const [bindingId, cleanup] of waiting) {
           this.disarmCleanup(bindingId, cleanup.attemptId);
+        }
       }
     }
     const outcomes = await Promise.all(

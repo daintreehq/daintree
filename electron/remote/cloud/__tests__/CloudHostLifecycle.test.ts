@@ -3680,12 +3680,17 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
     expect(cleanupOf(store)).toBeNull();
   });
 
-  it("leaves the machine and drops the choice when the worktree is still there", async () => {
+  it("leaves the machine while the worktree is still there, dropping the choice only on a refusal", async () => {
     const { lifecycle, provider, store, gone } = await marked();
     lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
     gone.value = false;
     // Even a delete reported as done: only the missing root counts on this device.
     expect(await lifecycle.settleWorktreeCleanup(WORKTREE, true)).toEqual([]);
+    expect(cleanupOf(store)).toMatchObject({ phase: "waiting" });
+    // A lost answer: the delete may still be removing it, so the choice waits on.
+    expect(await lifecycle.settleWorktreeCleanup(WORKTREE, null)).toEqual([]);
+    expect(cleanupOf(store)).toMatchObject({ phase: "waiting" });
+    expect(await lifecycle.settleWorktreeCleanup(WORKTREE, false)).toEqual([]);
     expect(cleanupOf(store)).toBeNull();
     expect(provider.delete).not.toHaveBeenCalled();
   });
@@ -3754,12 +3759,57 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
   it("settles only the delete an answer belongs to", async () => {
     const { lifecycle, provider, store } = await marked();
     lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"), "mutation-b");
-    // A late answer from an earlier delete of a worktree at the same path.
+    // A late answer from an earlier delete of a worktree at the same path, or one naming none.
     expect(await lifecycle.settleWorktreeCleanup(WORKTREE, true, "mutation-a")).toEqual([]);
+    expect(await lifecycle.settleWorktreeCleanup(WORKTREE, true)).toEqual([]);
     expect(cleanupOf(store)).toMatchObject({ phase: "waiting", mutationId: "mutation-b" });
     expect(provider.delete).not.toHaveBeenCalled();
     const [outcome] = await lifecycle.settleWorktreeCleanup(WORKTREE, true, "mutation-b");
     expect(outcome).toMatchObject({ choice: "delete", error: null });
+  });
+
+  it("sends no delete through a provider replaced while its credentials were read", async () => {
+    const { lifecycle, provider, store, accounts } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    const read = accounts.credentials.bind(accounts);
+    const registered = vi.spyOn(accounts, "provider");
+    vi.spyOn(accounts, "credentials").mockImplementation(async (...args) => {
+      const credentials = await read(...args);
+      registered.mockReturnValue({ ...provider } as CloudProvider);
+      return credentials;
+    });
+    const [outcome] = await lifecycle.settleWorktreeCleanup(WORKTREE, true);
+    expect(outcome?.error).toMatch(/changed while the machine was being deleted/);
+    expect(provider.delete).not.toHaveBeenCalled();
+    expect(cleanupOf(store)).toMatchObject({ phase: "failed" });
+  });
+
+  it("says a Check again that lost the race to a failed delete failed, without sending it again", async () => {
+    let heard: (worktreeId: string) => void = () => {};
+    const { lifecycle, provider, store, worktreeGone, gone } = await marked(MARK, {
+      onWorktreeRemoved: (listener) => {
+        heard = listener;
+        return () => {};
+      },
+    });
+    lifecycle.start();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    gone.value = null;
+    await lifecycle.settleWorktreeCleanup(WORKTREE, null);
+    const look = deferred<boolean | null>();
+    worktreeGone.mockImplementationOnce(() => look.promise);
+    const checking = lifecycle.retryWorktreeCleanup("build");
+    await vi.waitFor(() => expect(worktreeGone).toHaveBeenCalledTimes(2));
+    vi.mocked(provider.delete).mockRejectedValueOnce(
+      new BoatApiError("server", "Upstream exploded", 500, null, null)
+    );
+    gone.value = true;
+    heard(ROOT);
+    await vi.waitFor(() => expect(cleanupOf(store)).toMatchObject({ phase: "failed" }));
+    look.resolve(true);
+    await expect(checking).rejects.toThrow(/Upstream exploded/);
+    expect(provider.delete).toHaveBeenCalledTimes(1);
+    lifecycle.dispose();
   });
 
   it("waits for a provider that leaves partway, rather than failing", async () => {
