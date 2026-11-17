@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const getSettingsMock = vi.hoisted(() => vi.fn());
 
@@ -282,5 +282,40 @@ describe("useProjectBranding", () => {
     });
 
     expect(result.current.projectIconSvg).toBe("<svg>fresh</svg>");
+  });
+
+  describe("transient read failures", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      invalidateBrandingCache();
+      vi.useRealTimers();
+    });
+
+    const flush = () =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+    it("retries a failed read and shows the saved icon without a settings edit", async () => {
+      getSettingsMock
+        .mockRejectedValueOnce(new Error("transient"))
+        .mockResolvedValueOnce({ projectIconSvg: "<svg>saved</svg>" });
+
+      const { result } = renderHook(() => useProjectBranding("project-1"));
+      await flush();
+
+      expect(getSettingsMock).toHaveBeenCalledTimes(1);
+      expect(result.current.projectIconSvg).toBeUndefined();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+
+      expect(getSettingsMock).toHaveBeenCalledTimes(2);
+      expect(result.current.projectIconSvg).toBe("<svg>saved</svg>");
+    });
   });
 });
