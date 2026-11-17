@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SettingsTabClose } from "../settingsTabClose";
 
 vi.mock("@/hooks/useProjectSettingsForm", () => ({
@@ -263,6 +263,24 @@ describe("close requests that overlap", () => {
     expect(next).not.toHaveBeenCalled();
 
     view.unmount();
+    expect(next).toHaveBeenCalledExactlyOnceWith(true);
+  });
+});
+
+describe("close requests in performance mode", () => {
+  afterEach(() => {
+    delete document.body.dataset.performanceMode;
+  });
+
+  it("carries on at once after a close that had no exit to wait for", async () => {
+    document.body.dataset.performanceMode = "true";
+    const onClose = vi.fn();
+    const { rerender } = await openEnvironment(onClose);
+    rerender(dialog(false, onClose));
+    await act(async () => {});
+
+    const next = vi.fn();
+    closeSettingsThen(next);
     expect(next).toHaveBeenCalledExactlyOnceWith(true);
   });
 });

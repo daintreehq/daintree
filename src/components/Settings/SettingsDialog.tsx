@@ -298,11 +298,16 @@ function SettingsDialogInner({
   // timer callback to skip the speculative mount when the dialog is closing.
   const isOpenRef = useRef(isOpen);
   // Closed but still animating out, until onCloseComplete has handed focus back.
+  // Set in a layout effect: a zero-length exit (performance mode) completes in
+  // the dialog's own passive effect, which runs before this component's.
   const exitingRef = useRef(false);
+  const wasOpenRef = useRef(isOpen);
+  useLayoutEffect(() => {
+    exitingRef.current = !isOpen && (wasOpenRef.current || exitingRef.current);
+    wasOpenRef.current = isOpen;
+  }, [isOpen]);
   useEffect(() => {
-    const wasOpen = isOpenRef.current;
     isOpenRef.current = isOpen;
-    exitingRef.current = !isOpen && (wasOpen || exitingRef.current);
     // Reopened before the exit finished: that close's follow-up hears it didn't close.
     if (isOpen) {
       const cancelled = afterCloseRef.current;
@@ -744,11 +749,11 @@ function SettingsDialogInner({
   // One that asks while Settings is already animating out waits for that exit.
   const closeWaitersRef = useRef(new Set<(closed: boolean) => void>());
   const answerCloseRequest = useEffectEvent((request: SettingsCloseRequest) => {
-    if (!isOpenRef.current && !exitingRef.current) return;
+    if (!isOpen && !exitingRef.current) return;
     request.claim();
     closeWaitersRef.current.add(request.settle);
     // Not handleClose: its follow-up slot belongs to the tab that closed with one.
-    if (isOpenRef.current) {
+    if (isOpen) {
       void flushBeforeClose().then((closing) => {
         if (closing) onClose();
       });
