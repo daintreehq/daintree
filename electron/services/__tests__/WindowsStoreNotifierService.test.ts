@@ -837,6 +837,8 @@ describe("WindowsStoreNotifierService", () => {
       await windowsStoreNotifierService._checkNowForTest();
       await windowsStoreNotifierService._checkNowForTest();
 
+      expect(netMock.fetch).toHaveBeenCalledTimes(2);
+      expect(console.error).not.toHaveBeenCalled();
       expect(getLatest()).toEqual({ version: "1.2.0", storeUrl: MS_STORE_FALLBACK_URL });
       dismiss("1.2.0");
       expect(storeMock.set).toHaveBeenCalledWith("storeNotifierEtag", '"stable-etag"');
@@ -1030,6 +1032,12 @@ describe("WindowsStoreNotifierService", () => {
 
       await vi.advanceTimersByTimeAsync(30_000);
       expect(netMock.fetch).toHaveBeenCalledTimes(3);
+
+      // The fresh budget is still a budget: two more backoffs, then it stops.
+      await vi.advanceTimersByTimeAsync(120_000 + 480_000);
+      expect(netMock.fetch).toHaveBeenCalledTimes(5);
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(netMock.fetch).toHaveBeenCalledTimes(5);
     });
 
     it("cancels a waiting retry when a scheduled check starts, so it can't supersede it", async () => {
@@ -1046,6 +1054,43 @@ describe("WindowsStoreNotifierService", () => {
 
       scheduled.resolve(makeResponse({ body: "version: 1.2.0\n", etag: null }));
       await scheduledCheck;
+      expect(windowsStoreNotifierService.getLastDetectedUpdate()).toEqual({
+        version: "1.2.0",
+        storeUrl: MS_STORE_FALLBACK_URL,
+      });
+    });
+
+    it("cancels a waiting retry when the resume check starts after wake", async () => {
+      vi.spyOn(Math, "random").mockReturnValue(0.5);
+      let rejectStartup!: (err: unknown) => void;
+      const resumed = deferredResponse();
+      netMock.fetch
+        .mockReturnValueOnce(
+          new Promise((_resolve, reject) => {
+            rejectStartup = reject;
+          })
+        )
+        .mockReturnValueOnce(resumed.promise)
+        .mockResolvedValueOnce(makeResponse({ status: 404 }));
+      windowsStoreNotifierService.initialize();
+      const onSuspend = (systemSleepMock.onSuspend.mock.calls[0] as unknown[])[0] as () => void;
+      const onWake = (systemSleepMock.onWake.mock.calls[0] as unknown[])[0] as () => void;
+
+      const startupCheck = windowsStoreNotifierService._checkNowForTest();
+      onSuspend();
+      onWake();
+      // The request that outlived the suspend fails just after wake and
+      // queues a retry for 30s; the resume check starts at 7s.
+      rejectStartup(transientError());
+      await startupCheck;
+      await vi.advanceTimersByTimeAsync(7_000);
+      expect(netMock.fetch).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(netMock.fetch).toHaveBeenCalledTimes(2);
+
+      resumed.resolve(makeResponse({ body: "version: 1.2.0\n", etag: null }));
+      await vi.advanceTimersByTimeAsync(0);
       expect(windowsStoreNotifierService.getLastDetectedUpdate()).toEqual({
         version: "1.2.0",
         storeUrl: MS_STORE_FALLBACK_URL,
