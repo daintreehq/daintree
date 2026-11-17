@@ -77,13 +77,13 @@ export function useReviewHubStagingActions({
     return ++writeIdRef.current;
   }, [setActionError, debouncedBgRefreshRef]);
 
-  /**
-   * Whether a failure of write `id` may still be reported: no newer write has
-   * cleared the banner, and the hub still shows `cwd`.
-   */
+  /** Whether the hub still shows `cwd`; reads and failures there are no longer this view's. */
+  const isShowing = useCallback((cwd: string) => getView().worktreePath === cwd, [getView]);
+
+  /** Whether write `id`'s failure may still be reported: no newer write has started since. */
   const mayReport = useCallback(
-    (id: number, cwd: string) => writeIdRef.current === id && getView().worktreePath === cwd,
-    [getView]
+    (id: number, cwd: string) => writeIdRef.current === id && isShowing(cwd),
+    [isShowing]
   );
 
   // A large stage runs in batches, so one that failed partway has already
@@ -128,7 +128,7 @@ export function useReviewHubStagingActions({
         } catch (err) {
           error = { cause: err };
         }
-        if (!mayReport(id, cwd)) return;
+        if (!isShowing(cwd)) return;
         await refresh();
         if (!error || !mayReport(id, cwd)) return;
         setActionError({
@@ -139,17 +139,18 @@ export function useReviewHubStagingActions({
       };
       await attempt(scope);
     },
-    [worktreePath, refresh, setActionError, beginWrite, mayReport, stillUnstaged]
+    [worktreePath, refresh, setActionError, beginWrite, isShowing, mayReport, stillUnstaged]
   );
 
   const handleStageFile = useCallback(
     async (filePath: string) => {
       const attempt = async (): Promise<void> => {
-        beginWrite();
+        const id = beginWrite();
         try {
           await window.electron.git.stageFile(worktreePath, filePath);
           await refresh();
         } catch (err) {
+          if (!mayReport(id, worktreePath)) return;
           setActionError({
             title: "Couldn't stage file",
             detail: formatErrorMessage(err, "Failed to stage file"),
@@ -159,17 +160,18 @@ export function useReviewHubStagingActions({
       };
       await attempt();
     },
-    [worktreePath, refresh, setActionError, beginWrite]
+    [worktreePath, refresh, setActionError, beginWrite, mayReport]
   );
 
   const handleUnstageFile = useCallback(
     async (filePath: string) => {
       const attempt = async (): Promise<void> => {
-        beginWrite();
+        const id = beginWrite();
         try {
           await window.electron.git.unstageFile(worktreePath, filePath);
           await refresh();
         } catch (err) {
+          if (!mayReport(id, worktreePath)) return;
           setActionError({
             title: "Couldn't unstage file",
             detail: formatErrorMessage(err, "Failed to unstage file"),
@@ -179,16 +181,17 @@ export function useReviewHubStagingActions({
       };
       await attempt();
     },
-    [worktreePath, refresh, setActionError, beginWrite]
+    [worktreePath, refresh, setActionError, beginWrite, mayReport]
   );
 
   const handleStageAll = useCallback(async () => {
     const attempt = async (): Promise<void> => {
-      beginWrite();
+      const id = beginWrite();
       try {
         await window.electron.git.stageAll(worktreePath);
         await refresh();
       } catch (err) {
+        if (!mayReport(id, worktreePath)) return;
         setActionError({
           title: "Couldn't stage all files",
           detail: formatErrorMessage(err, "Failed to stage all files"),
@@ -197,15 +200,16 @@ export function useReviewHubStagingActions({
       }
     };
     await attempt();
-  }, [worktreePath, refresh, setActionError, beginWrite]);
+  }, [worktreePath, refresh, setActionError, beginWrite, mayReport]);
 
   const handleUnstageAll = useCallback(async () => {
     const attempt = async (): Promise<void> => {
-      beginWrite();
+      const id = beginWrite();
       try {
         await window.electron.git.unstageAll(worktreePath);
         await refresh();
       } catch (err) {
+        if (!mayReport(id, worktreePath)) return;
         setActionError({
           title: "Couldn't unstage all files",
           detail: formatErrorMessage(err, "Failed to unstage all files"),
@@ -214,7 +218,7 @@ export function useReviewHubStagingActions({
       }
     };
     await attempt();
-  }, [worktreePath, refresh, setActionError, beginWrite]);
+  }, [worktreePath, refresh, setActionError, beginWrite, mayReport]);
 
   const handleStageFiltered = useCallback(async () => {
     const paths = derivedUnstaged.map((f) => f.path);
@@ -248,7 +252,7 @@ export function useReviewHubStagingActions({
       selectionAnchorRef.current = null;
       await refresh();
     } catch (err) {
-      if (!mayReport(id, cwd)) return;
+      if (!isShowing(cwd)) return;
       // Part of a large selection may have landed before the failure.
       await refresh();
       if (!mayReport(id, cwd)) return;
@@ -276,6 +280,7 @@ export function useReviewHubStagingActions({
     setSelectionSection,
     selectionAnchorRef,
     beginWrite,
+    isShowing,
     mayReport,
     stillUnstaged,
     writePaths,
@@ -295,7 +300,7 @@ export function useReviewHubStagingActions({
       selectionAnchorRef.current = null;
       await refresh();
     } catch (err) {
-      if (!mayReport(id, cwd)) return;
+      if (!isShowing(cwd)) return;
       // Part of a large selection may have landed before the failure.
       await refresh();
       if (!mayReport(id, cwd)) return;
@@ -323,6 +328,7 @@ export function useReviewHubStagingActions({
     setSelectionSection,
     selectionAnchorRef,
     beginWrite,
+    isShowing,
     mayReport,
     writePaths,
   ]);

@@ -1523,6 +1523,14 @@ describe("ReviewHub", () => {
       it("drops an older failure once a newer write has started", async () => {
         const releaseRead = await failUnstageShown();
 
+        // The newer write is still in flight when the older read lands.
+        let finishStage!: () => void;
+        stageFileMock.mockImplementationOnce(
+          () =>
+            new Promise<void>((resolve) => {
+              finishStage = resolve;
+            })
+        );
         const toggle = within(screen.getByTestId("file-stage-row-src/x.ts")).getByRole("button", {
           name: /Stage src\/x\.ts/i,
         });
@@ -1535,6 +1543,10 @@ describe("ReviewHub", () => {
         await waitFor(() => expect(inSection(unstagedSection, "src/a.ts")).toBe(true));
         expect(screen.queryByText("Couldn't unstage files")).toBeNull();
         expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+
+        await act(async () => {
+          finishStage();
+        });
       });
 
       it("shows what landed when an unstage selection fails partway", async () => {
