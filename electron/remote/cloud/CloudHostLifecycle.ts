@@ -1056,16 +1056,18 @@ export class CloudHostLifecycle {
       this.recordError(bindingId, error);
       throw new AppError({ code: "NOT_FOUND", message: error.message, userMessage: error.message });
     }
+    let startable = resource.machine === "stopped" || resource.machine === "error";
     if (resource.machine === "stopping") {
-      resource = await this.waitFor(
+      await this.waitFor(
         bindingId,
         "stopped",
         STOP_DEADLINE_MS,
         signal,
         "Waiting for the last stop to finish"
       );
+      startable = true;
     }
-    if (resource.machine === "stopped" || resource.machine === "error") {
+    if (startable) {
       this.stage(bindingId, "Starting the machine");
       try {
         const ticket = this.ticket();
@@ -1424,7 +1426,10 @@ export class CloudHostLifecycle {
         }
         throw new UnusableConnectionError(described.message, described.message);
       }
-      binding = this.deps.store.binding(bindingId)!;
+      binding = this.deps.store.binding(bindingId);
+      if (!binding) {
+        throw new UnusableConnectionError("This cloud host isn't set up on this device", null);
+      }
     }
     const machine = machineOf(binding);
     if (machine === "starting") {
@@ -1822,8 +1827,7 @@ export class CloudHostLifecycle {
     extra?: (binding: StoredCloudBinding) => StoredCloudBinding
   ): boolean {
     if (this.overtaken(bindingId, ticket)) return false;
-    this.observedTicket.set(bindingId, ticket);
-    this.deps.store.updateBinding(bindingId, (current) => {
+    const written = this.deps.store.updateBinding(bindingId, (current) => {
       const before = current.observation;
       // Any stop, or a start seen from outside, may bring a new address or
       // host key: access is resolved again for the next dial.
@@ -1839,7 +1843,24 @@ export class CloudHostLifecycle {
       };
       return extra ? extra(next) : next;
     });
+    // A binding forgotten while the request was out keeps no mark behind.
+    if (!written) return false;
+    this.observedTicket.set(bindingId, ticket);
     return true;
+  }
+
+  /** Writes a not-found answer to the request sent with this ticket, unless a newer one was written. */
+  private observeMissing(bindingId: string, described: CloudHostError, ticket: number): void {
+    if (this.overtaken(bindingId, ticket)) return;
+    // Not proof of deletion (a scope or key change looks the same): say what was seen.
+    const written = this.deps.store.updateBinding(bindingId, (current) => ({
+      ...current,
+      observation: current.observation
+        ? { ...current.observation, machine: "unknown", observedAt: this.now() }
+        : null,
+      lastError: described,
+    }));
+    if (written) this.observedTicket.set(bindingId, ticket);
   }
 
   /**
@@ -1861,17 +1882,7 @@ export class CloudHostLifecycle {
     } catch (error) {
       if (this.overtaken(bindingId, ticket)) return null;
       const described = provider.describeError(error);
-      if (described.code === "not-found") {
-        this.observedTicket.set(bindingId, ticket);
-        // Not proof of deletion (a scope or key change looks the same): say what was seen.
-        this.deps.store.updateBinding(bindingId, (current) => ({
-          ...current,
-          observation: current.observation
-            ? { ...current.observation, machine: "unknown", observedAt: this.now() }
-            : null,
-          lastError: described,
-        }));
-      }
+      if (described.code === "not-found") this.observeMissing(bindingId, described, ticket);
       throw error;
     }
     // An answer supersedes an earlier failure to get one; a refused start or stop stays.
@@ -1889,7 +1900,7 @@ export class CloudHostLifecycle {
     deadlineMs: number,
     signal: AbortSignal,
     stage: string
-  ): Promise<ProviderResource> {
+  ): Promise<void> {
     const binding = this.deps.store.binding(bindingId);
     if (!binding?.resourceId) throw new Error("No machine");
     const { provider, credentials } = await this.context(binding, signal);
@@ -1901,18 +1912,23 @@ export class CloudHostLifecycle {
       const ticket = this.ticket();
       try {
         const answer = await provider.inspect({ ...credentials, signal }, binding.resourceId);
-        // Overtaken by a newer read: this round saw nothing, and the next one asks again.
         if (this.observe(bindingId, answer, ticket)) resource = answer;
       } catch (error) {
         if (signal.aborted) throw error;
         const described = provider.describeError(error);
         if (described.code !== "provider-unreachable" && !this.overtaken(bindingId, ticket)) {
-          this.recordError(bindingId, described);
+          if (described.code === "not-found") this.observeMissing(bindingId, described, ticket);
+          else this.recordError(bindingId, described);
           throw this.deps.accounts.asAppError(provider, error);
         }
       }
+      // Overtaken by a newer read: its word stands for this round.
+      if (!resource && this.overtaken(bindingId, ticket)) {
+        const current = this.deps.store.binding(bindingId);
+        if (current && machineOf(current) === target) return;
+      }
       if (resource) {
-        if (resource.machine === target) return resource;
+        if (resource.machine === target) return;
         if (resource.machine === "error" || resource.machine === "deleted") {
           const message =
             resource.error ??
