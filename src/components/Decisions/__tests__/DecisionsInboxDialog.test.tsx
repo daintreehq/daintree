@@ -301,6 +301,12 @@ describe("DecisionsInboxDialog", () => {
     expect(own.textContent).not.toContain("Alpha (as asked)");
     expect(own.textContent).toContain("feature-x");
     expect(own.textContent).toContain("Waiting for an answer");
+    // The dots between agent, project and worktree are hidden from assistive technology.
+    const dots = Array.from(own.querySelectorAll("span")).filter(
+      (span) => span.textContent?.trim() === "·"
+    );
+    expect(dots).toHaveLength(2);
+    for (const dot of dots) expect(dot.getAttribute("aria-hidden")).toBe("true");
     // Another project's question keeps the name it was asked under, and its own agent.
     const other = rowNamed("q-3");
     expect(other.textContent).toContain("Beta");
@@ -324,6 +330,20 @@ describe("DecisionsInboxDialog", () => {
     });
     expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true");
     expect(screen.getByTestId("decisions-inbox-detail-title").textContent).toContain("q-2");
+  });
+
+  it("waits on the dialog while the list loads, then puts the keyboard on the question shown", async () => {
+    let resolveList!: (list: DecisionQuestionList) => void;
+    listQuestions.mockImplementationOnce(
+      () => new Promise<DecisionQuestionList>((resolve) => (resolveList = resolve))
+    );
+    open();
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+    // Not Close: Enter there would dismiss the inbox before anything shows.
+    expect(document.activeElement?.tagName).not.toBe("BUTTON");
+    await act(async () => resolveList(LIST));
+    await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
   });
 
   it("starts at the question of the pane that opened it", async () => {
@@ -573,6 +593,26 @@ describe("DecisionsInboxDialog", () => {
       });
       await waitFor(() =>
         expect(screen.queryByTestId("decisions-inbox-go-to-terminal")).toBeNull()
+      );
+      expect(useDecisionsInboxStore.getState().isOpen).toBe(true);
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it("drops a look that lands after another question was chosen", async () => {
+      getAllTerminals.mockResolvedValue([
+        terminal({ id: "t9", projectId: "project-b", hasPty: true }),
+      ]);
+      open({ terminalId: "t9" });
+      const go = await screen.findByTestId("decisions-inbox-go-to-terminal");
+      let resolveLook!: (terminals: BackendTerminalInfo[]) => void;
+      getAllTerminals.mockImplementationOnce(
+        () => new Promise<BackendTerminalInfo[]>((resolve) => (resolveLook = resolve))
+      );
+      fireEvent.click(go);
+      fireEvent.click(rowNamed("q-2"));
+      await waitFor(() => expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true"));
+      await act(async () =>
+        resolveLook([terminal({ id: "t9", projectId: "project-b", hasPty: true })])
       );
       expect(useDecisionsInboxStore.getState().isOpen).toBe(true);
       expect(dispatch).not.toHaveBeenCalled();

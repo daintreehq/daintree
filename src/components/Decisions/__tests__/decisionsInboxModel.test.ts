@@ -256,15 +256,24 @@ describe("decisionsInboxModel", () => {
       problem: "storage",
     });
     const keys = connectionNotice({ state: "not-connected", relayOrigin: origin, problem: "keys" });
+    const otherRelay = connectionNotice({
+      state: "not-connected",
+      relayOrigin: origin,
+      problem: "other-relay",
+    });
+    // Each problem says its own cause.
+    expect(storage!.text).toMatch(/database/);
+    expect(keys!.text).toMatch(/keys/);
+    expect(otherRelay!.text).toMatch(/another relay/);
     const revoked = connectionNotice({ state: "revoked", relayOrigin: origin });
     const dropped = connectionNotice({ state: "reconnecting", relayOrigin: origin });
     const connecting = connectionNotice({ state: "connecting", relayOrigin: origin });
-    const notices = [none, storage, keys, revoked, dropped];
+    const notices = [none, storage, keys, otherRelay, revoked, dropped];
     for (const notice of notices) expect(notice).not.toBeNull();
     expect(new Set(notices.map((notice) => notice!.text)).size).toBe(notices.length);
     expect(connecting).toEqual(dropped);
     // A problem or a revocation isn't something that waits for a reconnect.
-    for (const stopped of [storage, keys, revoked]) {
+    for (const stopped of [storage, keys, otherRelay, revoked]) {
       expect(stopped!.severity).toBe("warning");
       expect(stopped!.text).not.toMatch(/reconnect/);
     }

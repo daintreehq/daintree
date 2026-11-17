@@ -406,7 +406,12 @@ describe("Questions → Inbox (#17231)", () => {
   it("opens the inbox, from Settings shown outside its dialog", async () => {
     render(<Sections />);
     await act(async () => {});
-    fireEvent.click(screen.getByTestId("decisions-inbox-open"));
+    const button = screen.getByRole("button", { name: "Open inbox" });
+    // The row's description reaches the button, so it isn't read out alone.
+    const described = document.getElementById(button.getAttribute("aria-describedby") ?? "");
+    expect(described?.closest("#decisions-questions-inbox")).not.toBeNull();
+    expect(described?.textContent?.length).toBeGreaterThan(0);
+    fireEvent.click(button);
     expect(useDecisionsInboxStore.getState().isOpen).toBe(true);
     expect(useDecisionsInboxStore.getState().request.terminalId).toBeNull();
   });
