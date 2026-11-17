@@ -148,11 +148,16 @@ async function renderOpenBadge(): Promise<HTMLElement> {
 // Drives the real `viewCacheState` singleton through its preload boundary, the
 // same way ProjectResourceBadge.test.tsx does.
 let cachedHandlers: Set<() => void>;
+let revealedHandlers: Set<() => void>;
 let documentHidden = false;
 let originalHidden: boolean;
 
 function emitCached(): void {
   Array.from(cachedHandlers).forEach((h) => h());
+}
+
+function emitRevealed(): void {
+  Array.from(revealedHandlers).forEach((h) => h());
 }
 
 /** Opens a trigger's tooltip by focusing it and returns what it says. */
@@ -218,6 +223,7 @@ function findMemoryRow(container: HTMLElement, value: string): HTMLElement | und
 function setupDefaultMocks(): void {
   vi.useFakeTimers();
   cachedHandlers = new Set();
+  revealedHandlers = new Set();
   documentHidden = false;
   originalHidden = document.hidden;
   Object.defineProperty(document, "hidden", {
@@ -231,7 +237,10 @@ function setupDefaultMocks(): void {
         return () => cachedHandlers.delete(cb);
       },
       onViewWarmActivated: () => () => {},
-      onViewRevealed: () => () => {},
+      onViewRevealed: (cb: () => void) => {
+        revealedHandlers.add(cb);
+        return () => revealedHandlers.delete(cb);
+      },
       isViewCached: () => false,
     },
   });
@@ -723,7 +732,9 @@ describe("ProjectResourceBadge — popover poll ordering (#17574)", () => {
 
   /** The freshness line beside the Memory heading, or null while it's silent. */
   function ageLabelOf(container: HTMLElement): string | null {
-    return container.querySelector("#resource-usage-title")?.nextElementSibling?.textContent ?? null;
+    const row = container.querySelector("#resource-usage-title")?.closest("div")?.parentElement;
+    const text = row?.textContent ?? "";
+    return /Updated \d+s ago/.exec(text)?.[0] ?? null;
   }
 
   function terminalProgramsValue(container: HTMLElement): string | undefined {
@@ -740,7 +751,8 @@ describe("ProjectResourceBadge — popover poll ordering (#17574)", () => {
       .mockResolvedValue(makeMemorySnapshot({ totalMemoryMb: 1_500 }));
     mockGetDiagnosticsInfo
       .mockResolvedValueOnce({ uptimeSeconds: 60, eventLoopP99Ms: 10, systemAvailableMB: 4096 })
-      .mockResolvedValue({ uptimeSeconds: 64, eventLoopP99Ms: 10, systemAvailableMB: 2048 });
+      .mockResolvedValueOnce({ uptimeSeconds: 64, eventLoopP99Ms: 10, systemAvailableMB: 3072 })
+      .mockResolvedValue({ uptimeSeconds: 68, eventLoopP99Ms: 10, systemAvailableMB: 2048 });
 
     const container = await renderOpenBadge();
     expect(terminalProgramsValue(container)).toBe("900 MB");
@@ -749,19 +761,25 @@ describe("ProjectResourceBadge — popover poll ordering (#17574)", () => {
     // The snapshot read started on the second tick never answers; the
     // diagnostics read beside it does, and must not wait on it.
     await advance(4_000);
-    expect(findMemoryRow(container, "2.0 GB")).toBeDefined();
+    expect(findMemoryRow(container, "3.0 GB")).toBeDefined();
 
     // Two more ticks: no second snapshot read stacks behind the stalled one,
     // while the healthy collector keeps its cadence.
     await advance(8_000);
     expect(mockGetMemorySnapshot).toHaveBeenCalledTimes(2);
     expect(mockGetDiagnosticsInfo).toHaveBeenCalledTimes(4);
+    expect(findMemoryRow(container, "2.0 GB")).toBeDefined();
 
-    // Once the stalled read answers, the next tick reads again.
+    // Once the stalled read answers it lands alone: the machine figure read
+    // beside it on that tick is long superseded and must not come back.
     await act(async () => {
       stalled.resolve(makeMemorySnapshot({ totalMemoryMb: 1_200 }));
     });
     expect(terminalProgramsValue(container)).toBe("1.2 GB");
+    expect(findMemoryRow(container, "2.0 GB")).toBeDefined();
+    expect(findMemoryRow(container, "3.0 GB")).toBeUndefined();
+
+    // And the next tick reads it again.
     await advance(4_000);
     expect(mockGetMemorySnapshot).toHaveBeenCalledTimes(3);
     expect(terminalProgramsValue(container)).toBe("1.5 GB");
@@ -832,6 +850,74 @@ describe("ProjectResourceBadge — popover poll ordering (#17574)", () => {
     await advance(12_000);
     expect(container.textContent).toContain("showing last reading");
     expect(ageLabelOf(container)).toBe("Updated 12s ago");
+  });
+
+  it("ages the Memory reading by the machine figure while that read stalls, until it fails", async () => {
+    let rejectStalled!: (reason: unknown) => void;
+    const stalledInfo = new Promise<never>((_, reject) => {
+      rejectStalled = reject;
+    });
+    mockGetDiagnosticsInfo
+      .mockResolvedValueOnce({ uptimeSeconds: 60, eventLoopP99Ms: 10, systemAvailableMB: 4096 })
+      .mockReturnValueOnce(stalledInfo)
+      .mockResolvedValue({ uptimeSeconds: 70, eventLoopP99Ms: 10, systemAvailableMB: 2048 });
+
+    const container = await renderOpenBadge();
+
+    // The snapshot keeps answering; the machine-available row beside it is
+    // still the first tick's, and the heading dates the oldest figure shown.
+    await advance(12_000);
+    expect(findMemoryRow(container, "4.0 GB")).toBeDefined();
+    expect(ageLabelOf(container)).toBe("Updated 12s ago");
+
+    // It fails: the row goes, and with it the only old figure under the heading.
+    await act(async () => {
+      rejectStalled(new Error("diagnostics ipc down"));
+    });
+    expect(findMemoryRow(container, "4.0 GB")).toBeUndefined();
+    expect(ageLabelOf(container)).toBeNull();
+
+    // The next tick asks again, and the row comes back.
+    await advance(4_000);
+    expect(findMemoryRow(container, "2.0 GB")).toBeDefined();
+  });
+
+  it("keeps a read still out across a close and reopen to its one call, and lands it", async () => {
+    const stalled = deferred<CompositeMemorySnapshot>();
+    mockGetMemorySnapshot
+      .mockResolvedValueOnce(makeMemorySnapshot())
+      .mockReturnValueOnce(stalled.promise)
+      .mockResolvedValue(makeMemorySnapshot({ totalMemoryMb: 1_500 }));
+
+    const container = await renderOpenBadge();
+    await advance(4_000);
+    expect(mockGetMemorySnapshot).toHaveBeenCalledTimes(2);
+
+    // Caching the view closes the popover; revealing it and clicking the
+    // readout opens it again with the snapshot read still out.
+    await act(async () => {
+      emitCached();
+    });
+    await act(async () => {
+      emitRevealed();
+    });
+    const infoCallsBeforeReopen = mockGetDiagnosticsInfo.mock.calls.length;
+    await act(async () => {
+      fireEvent.click(container.querySelector("button")!);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // The free collectors read straight away; the stalled one is not asked twice.
+    expect(mockGetDiagnosticsInfo.mock.calls.length).toBe(infoCallsBeforeReopen + 1);
+    expect(mockGetMemorySnapshot).toHaveBeenCalledTimes(2);
+
+    // Its answer is still the newest of its kind, so it shows.
+    await act(async () => {
+      stalled.resolve(makeMemorySnapshot({ totalMemoryMb: 1_200 }));
+    });
+    expect(terminalProgramsValue(container)).toBe("1.2 GB");
   });
 });
 
