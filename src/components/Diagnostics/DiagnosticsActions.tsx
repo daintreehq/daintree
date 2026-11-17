@@ -173,7 +173,9 @@ export function EventsActions() {
       notify({
         type: "error",
         title: "Couldn't clear events",
-        message: "Your captured events are unchanged. Try again in a moment.",
+        // Only the view is known to be intact: a reply lost on the way back can
+        // follow a clear that did happen in main.
+        message: "The captured events are still shown here. Try again in a moment.",
         // An unset priority resolves "low" under uiFeedback, which is inbox-only
         // and strips the onClick recovery below.
         priority: "high",

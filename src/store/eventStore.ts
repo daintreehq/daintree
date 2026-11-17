@@ -19,7 +19,6 @@ interface EventsState {
   addEvent: (event: EventRecord) => void;
   addEvents: (events: EventRecord[]) => void;
   setEvents: (events: EventRecord[]) => void;
-  clearEvents: () => void;
   /** Drops the given events, and the selection only when it was one of them. */
   removeEvents: (ids: ReadonlySet<string>) => void;
   togglePanel: () => void;
@@ -104,18 +103,17 @@ const createEventsStore: StateCreator<EventsState> = (set, get) => ({
     set({ events: clamped });
   },
 
-  clearEvents: () => set({ events: [], selectedEventId: null }),
-
   removeEvents: (ids) =>
     set((state) => {
-      if (ids.size === 0) return state;
       const events = state.events.filter((e) => !ids.has(e.id));
-      if (events.length === state.events.length) return state;
-      const selectedEventId =
-        state.selectedEventId !== null && ids.has(state.selectedEventId)
-          ? null
-          : state.selectedEventId;
-      return { events, selectedEventId };
+      // Checked apart from the rows: a selected event can already have rolled
+      // out of the capped buffer, leaving no row to remove but its id dangling.
+      const dropSelection = state.selectedEventId !== null && ids.has(state.selectedEventId);
+      if (events.length === state.events.length && !dropSelection) return state;
+      return {
+        events: events.length === state.events.length ? state.events : events,
+        selectedEventId: dropSelection ? null : state.selectedEventId,
+      };
     }),
 
   togglePanel: () => set((state) => ({ isOpen: !state.isOpen })),

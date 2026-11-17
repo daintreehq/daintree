@@ -391,6 +391,9 @@ describe("eventInspector.clear", () => {
     );
 
     const pending = run(setupActions(), "eventInspector.clear");
+    // Nothing goes until main acknowledges the clear.
+    expect(useEventStore.getState().events.map((e) => e.id)).toEqual(["e1", "e2"]);
+    expect(useEventStore.getState().selectedEventId).toBe("e1");
     useEventStore.getState().addEvents([makeEvent("e3")]);
     resolveClear();
     await pending;

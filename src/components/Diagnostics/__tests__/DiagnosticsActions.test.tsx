@@ -277,11 +277,40 @@ describe("EventsActions — ConfirmDialog", () => {
     await waitFor(() => expect(screen.queryByText("Clear events?")).toBeNull());
 
     const retry = payload?.actions?.[0];
+    expect(payload?.actions).toHaveLength(1);
     expect(retry?.label).toBe("Try again");
-    const dispatchesBefore = clearDispatches().length;
     act(() => retry?.onClick());
-    expect(clearDispatches()).toHaveLength(dispatchesBefore);
+    expect(clearDispatches()).toHaveLength(1);
     expect(await screen.findByText("Clear events?")).toBeTruthy();
+
+    mockDispatch.mockResolvedValue({ ok: true, result: undefined });
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByText("Clear events"));
+    await waitFor(() => expect(screen.queryByText("Clear events?")).toBeNull());
+    expect(clearDispatches()).toHaveLength(2);
+    expect(mockNotify).toHaveBeenCalledTimes(1);
+  });
+
+  it("locks the confirmation while the clear is in flight", async () => {
+    let settle!: (value: unknown) => void;
+    mockDispatch.mockReturnValue(
+      new Promise((resolve) => {
+        settle = resolve;
+      })
+    );
+    render(<EventsActions />);
+
+    fireEvent.click(screen.getByText("Clear events"));
+    const confirm = within(screen.getByRole("alertdialog"))
+      .getByText("Clear events")
+      .closest("button")!;
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(confirm.getAttribute("aria-disabled")).toBe("true"));
+    fireEvent.click(confirm);
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
+
+    await act(async () => settle({ ok: true, result: undefined }));
+    await waitFor(() => expect(screen.queryByText("Clear events?")).toBeNull());
   });
 });
 

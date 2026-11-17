@@ -46,11 +46,11 @@ describe("eventStore", () => {
     expect(useEventStore.getState().filtersResetCount).toBe(before + 1);
   });
 
-  it("clearEvents keeps the filters, so the bar still has them to show", () => {
+  it("removeEvents keeps the filters, so the bar still has them to show", () => {
     useEventStore.getState().setEvents([makeEvent("1", { payload: { agentId: "claude-1" } })]);
     useEventStore.getState().setFilters({ agentId: "claude-1" });
 
-    useEventStore.getState().clearEvents();
+    useEventStore.getState().removeEvents(new Set(["1"]));
 
     expect(useEventStore.getState().events).toEqual([]);
     expect(useEventStore.getState().filters).toEqual({ agentId: "claude-1" });
@@ -73,6 +73,17 @@ describe("eventStore", () => {
     useEventStore.getState().removeEvents(new Set(["1"]));
 
     expect(useEventStore.getState().events.map((e) => e.id)).toEqual(["2"]);
+    expect(useEventStore.getState().selectedEventId).toBeNull();
+  });
+
+  it("removeEvents clears a named selection whose row already rolled out of the buffer", () => {
+    useEventStore.getState().setEvents([makeEvent("2")]);
+    useEventStore.getState().setSelectedEvent("1");
+    const before = useEventStore.getState().events;
+
+    useEventStore.getState().removeEvents(new Set(["1"]));
+
+    expect(useEventStore.getState().events).toBe(before);
     expect(useEventStore.getState().selectedEventId).toBeNull();
   });
 });
