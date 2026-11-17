@@ -385,10 +385,13 @@ describe("DecisionQuestionDialog", () => {
         pending[0]!({ result: "read", question: content("qa", 7, { context: "Slow read" }) })
       );
       expect(screen.getByTestId("decision-question-content").textContent).toContain("Slow read");
-      // Nothing moved while it was out, so the next read waits for the next poll.
+      // Nothing moved while it was out, so the next read waits a whole poll from its landing.
+      await act(async () => {
+        vi.advanceTimersByTime(14_000);
+      });
       expect(pending).toHaveLength(1);
       await act(async () => {
-        vi.advanceTimersByTime(16_000);
+        vi.advanceTimersByTime(2_000);
       });
       expect(pending).toHaveLength(2);
     } finally {
@@ -422,6 +425,49 @@ describe("DecisionQuestionDialog", () => {
     await act(async () => {});
     expect(pending).toHaveLength(2);
   });
+
+  it.each([
+    // A read given up on paints only while nothing newer has.
+    ["the one after it lands first", [1, 0], ["Fresh notes", "Fresh notes"]],
+    ["it lands before the one after it", [0, 1], ["Stalled notes", "Fresh notes"]],
+  ] as const)(
+    "starts one read beside a read that never settles, and paints the newest when %s",
+    async (_case, order, expected) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const pending: Array<(result: DecisionQuestionContentResult) => void> = [];
+        getQuestionContent.mockImplementation(
+          () => new Promise<DecisionQuestionContentResult>((resolve) => pending.push(resolve))
+        );
+        openView(["qa"], "qa");
+        await act(async () => {
+          vi.advanceTimersByTime(59_000);
+        });
+        expect(pending).toHaveLength(1);
+        await act(async () => {
+          vi.advanceTimersByTime(2_000);
+        });
+        expect(pending).toHaveLength(2);
+
+        const notes = ["Stalled notes", "Fresh notes"];
+        const painted: string[] = [];
+        for (const which of order) {
+          await act(async () =>
+            pending[which]!({
+              result: "read",
+              question: content("qa", 7, { context: notes[which] }),
+            })
+          );
+          const body = screen.queryByTestId("decision-question-content");
+          painted.push(notes.find((note) => body?.textContent?.includes(note)) ?? "nothing");
+        }
+        expect(painted).toEqual(expected);
+        expect(pending).toHaveLength(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
 
   it("says why a question can't be read, and offers a retry when it may come back", async () => {
     getQuestionContent.mockRejectedValueOnce(new Error("secret question text"));
@@ -596,6 +642,56 @@ describe("DecisionQuestionDialog", () => {
         fireEvent.click(send);
       });
       expect(cancelQuestion).not.toHaveBeenCalled();
+    } finally {
+      delete QUESTIONS.qw;
+    }
+  });
+
+  it("reads once more after a withdrawal, never over a read still out", async () => {
+    QUESTIONS.qw = content("qw", 11, { status: "open", thread: [] });
+    try {
+      openView(["qw"], "qw");
+      fireEvent.click(await screen.findByTestId("decision-question-cancel"));
+      const confirm = await screen.findByRole("alertdialog");
+      const pending: Array<(result: DecisionQuestionContentResult) => void> = [];
+      getQuestionContent.mockImplementation(
+        () => new Promise<DecisionQuestionContentResult>((resolve) => pending.push(resolve))
+      );
+      act(() => pushPane("t1"));
+      expect(pending).toHaveLength(1);
+
+      await act(async () => {
+        fireEvent.click(within(confirm).getByRole("button", { name: "Cancel question" }));
+      });
+      expect(cancelQuestion).toHaveBeenCalledOnce();
+      expect(pending).toHaveLength(1);
+      await act(async () => pending[0]!({ result: "read", question: QUESTIONS.qw! }));
+      expect(pending).toHaveLength(2);
+    } finally {
+      delete QUESTIONS.qw;
+    }
+  });
+
+  it("never reads another question again for a withdrawal that lands after stepping away", async () => {
+    QUESTIONS.qw = content("qw", 11, { status: "open", thread: [] });
+    let finish: (result: DecisionQuestionCancelResult) => void = () => {};
+    cancelQuestion.mockImplementation(
+      () => new Promise<DecisionQuestionCancelResult>((resolve) => (finish = resolve))
+    );
+    try {
+      openView(["qw", "qa"], "qw");
+      fireEvent.click(await screen.findByTestId("decision-question-cancel"));
+      const confirm = await screen.findByRole("alertdialog");
+      await act(async () => {
+        fireEvent.click(within(confirm).getByRole("button", { name: "Cancel question" }));
+      });
+      expect(cancelQuestion).toHaveBeenCalledOnce();
+
+      act(() => useDecisionsQuestionViewStore.getState().step(1));
+      await waitFor(() => expect(screen.getByRole("dialog").textContent).toContain("q-7"));
+      const calls = getQuestionContent.mock.calls.length;
+      await act(async () => finish({ result: "cancelling" }));
+      expect(getQuestionContent.mock.calls.length).toBe(calls);
     } finally {
       delete QUESTIONS.qw;
     }
