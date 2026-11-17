@@ -2148,6 +2148,8 @@ describe("AnswerDelivery question reads (#17097)", () => {
       { ...OWN, terminalId: "pane-2" },
       { ...OWN, projectId: "project-2" },
       { ...OWN, projectId: null },
+      // A reference naming another machine (#17229), whatever else it gets right.
+      { ...OWN, hostId: "host_elsewhere" },
     ]) {
       await expect(h.delivery.questionImage(scope, Q1, attachmentId, 0)).resolves.toEqual({
         result: "not-found",
@@ -2157,6 +2159,10 @@ describe("AnswerDelivery question reads (#17097)", () => {
     expect(h.reports.filter((r) => r.path.includes("/attachments/"))).toEqual([]);
 
     const read = await h.delivery.questionImage(OWN, Q1, attachmentId, 0);
+    // A reference naming this machine reads the same image.
+    await expect(
+      h.delivery.questionImage({ ...OWN, hostId: HOST }, Q1, attachmentId, 0)
+    ).resolves.toEqual(read);
 
     expect(read).toEqual({
       result: "read",
@@ -2196,9 +2202,6 @@ describe("AnswerDelivery question reads (#17097)", () => {
         { questionId: Q1, result: "not-found" },
       ]);
     }
-    await expect(
-      h.delivery.questionImage({ ...reference, hostId: "host_elsewhere" }, Q1, "attach_00000001", 0)
-    ).resolves.toEqual({ result: "not-found" });
   });
 
   it("names each question asked for once, in order, and only the pane's own", async () => {

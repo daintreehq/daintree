@@ -148,8 +148,9 @@ function lastHumanActionSeq(row: QuestionRow): number | null {
 }
 
 /**
- * When a settled question settled: its newest answer, or its expiry notice,
- * else the time it was set to expire. A withdrawal records no time.
+ * When a settled question settled: its newest answer, or the person's reply
+ * to the agent's latest request for one when that came later; its expiry
+ * notice, else the time it was set to expire. A withdrawal records no time.
  */
 function settledAt(
   row: QuestionRow,
@@ -164,6 +165,28 @@ function settledAt(
       newest = { revision: entry.revision, at: entry.created_at };
     }
   }
-  if (newest !== null) return newest.at;
-  return outcome === "expired" ? (row.expires_at ?? null) : null;
+  if (outcome === "expired") return newest?.at ?? row.expires_at ?? null;
+  const reply = replyAt(row);
+  if (newest === null) return reply;
+  return reply !== null && Date.parse(reply) > Date.parse(newest.at) ? reply : newest.at;
+}
+
+/** When the person first followed up after the agent's latest request for a reply; null without one. */
+function replyAt(row: QuestionRow): string | null {
+  const messages = parseMessages(row.messages_json);
+  let asked: number | null = null;
+  for (const message of messages) {
+    if (message.side === "agent" && message.expects_reply) {
+      asked = Math.max(asked ?? 0, message.event_seq);
+    }
+  }
+  if (asked === null) return null;
+  let reply: { seq: number; at: string } | null = null;
+  for (const message of messages) {
+    if (message.side !== "human" || message.event_seq <= asked) continue;
+    if (reply === null || message.event_seq < reply.seq) {
+      reply = { seq: message.event_seq, at: message.created_at };
+    }
+  }
+  return reply?.at ?? null;
 }

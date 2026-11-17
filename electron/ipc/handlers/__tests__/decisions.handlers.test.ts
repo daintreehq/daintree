@@ -529,6 +529,10 @@ describe("decisions IPC", () => {
     decisionsEntry.getDecisionQuestionSummaries.mockClear();
     decisionsEntry.cancelDecisionQuestion.mockClear();
     decisionsEntry.getDecisionQuestionImage.mockClear();
+    decisionsEntry.getDecisionQuestionContentByReference.mockClear();
+    decisionsEntry.getDecisionQuestionImageByReference.mockClear();
+    decisionsEntry.getDecisionQuestionSummariesByReference.mockClear();
+    decisionsEntry.cancelDecisionQuestionByReference.mockClear();
     decisionsEntry.setDecisionsEnabled.mockClear();
     decisionsEntry.checkRelay.mockClear();
     decisionsEntry.claimRelay.mockClear();
@@ -691,6 +695,8 @@ describe("decisions IPC", () => {
           standing: { kind: "waiting", reason: "open" },
         },
       ]);
+      // Whatever the switch reads now: the list is what Decisions last installed.
+      await expect(listQuestions()).resolves.toBe(changed);
       saved.value = { enabled: true };
       await expect(listQuestions()).resolves.toBe(changed);
       setDecisionQuestions([]);
@@ -1246,13 +1252,27 @@ describe("decisions IPC", () => {
     it("passes the reference to Decisions once on, with no view's project in it", async () => {
       saved.value = { enabled: true };
       const image = { reference: REFERENCE, attachmentId: ATTACHMENT_ID, offset: 0 };
+      const content: DecisionQuestionContentResult = { result: "unreadable" };
+      const part: DecisionQuestionImagePartResult = {
+        result: "unavailable",
+        reason: "fetch-failed",
+      };
+      const summaries: DecisionQuestionSummariesResult = {
+        result: "read",
+        summaries: [{ questionId: QUESTION_ID, result: "read", line: "Ship it?" }],
+      };
+      const cancel: DecisionQuestionCancelResult = { result: "refused", reason: "answered" };
+      decisionsEntry.getDecisionQuestionContentByReference.mockResolvedValueOnce(content);
+      decisionsEntry.getDecisionQuestionImageByReference.mockResolvedValueOnce(part);
+      decisionsEntry.getDecisionQuestionSummariesByReference.mockResolvedValueOnce(summaries);
+      decisionsEntry.cancelDecisionQuestionByReference.mockResolvedValueOnce(cancel);
 
-      await getQuestionContentByReference({ reference: REFERENCE });
-      await getQuestionImageByReference(image);
-      await getQuestionSummariesByReference({ references: [REFERENCE] });
-      await expect(cancelQuestionByReference({ reference: REFERENCE })).resolves.toEqual({
-        result: "cancelling",
-      });
+      await expect(getQuestionContentByReference({ reference: REFERENCE })).resolves.toBe(content);
+      await expect(getQuestionImageByReference(image)).resolves.toBe(part);
+      await expect(getQuestionSummariesByReference({ references: [REFERENCE] })).resolves.toBe(
+        summaries
+      );
+      await expect(cancelQuestionByReference({ reference: REFERENCE })).resolves.toBe(cancel);
 
       expect(decisionsEntry.getDecisionQuestionContentByReference).toHaveBeenCalledExactlyOnceWith({
         reference: REFERENCE,

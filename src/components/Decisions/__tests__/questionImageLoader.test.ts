@@ -239,9 +239,16 @@ describe("imagesKey", () => {
   });
 
   it("changes with the way the question is read, so a pane's images never stand in for a reference's", () => {
-    expect(imagesKey({ scope: "reference", reference: REFERENCE }, IMAGES)).not.toBe(
-      imagesKey(PANE, IMAGES)
-    );
+    const byReference = imagesKey({ scope: "reference", reference: REFERENCE }, IMAGES);
+    expect(byReference).not.toBe(imagesKey(PANE, IMAGES));
+    for (const reference of [
+      { ...REFERENCE, hostId: "host_2" },
+      { ...REFERENCE, projectId: "project-c" },
+      { ...REFERENCE, terminalId: "t2" },
+      { ...REFERENCE, questionId: "qb" },
+    ]) {
+      expect(imagesKey({ scope: "reference", reference }, IMAGES)).not.toBe(byReference);
+    }
   });
 });
 

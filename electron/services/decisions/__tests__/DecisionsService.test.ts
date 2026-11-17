@@ -587,6 +587,9 @@ describe("DecisionsService pane state", () => {
 describe("DecisionsService question list (#17229)", () => {
   function listed(options: { handled?: Record<string, number> } = {}) {
     let rows: QuestionRow[] = [];
+    let handled = options.handled ?? null;
+    // Set to hold the next read until the test lets it land.
+    let gate: Promise<void> | null = null;
     const listeners = new Set<() => void>();
     const store = {
       ...fakeStore(),
@@ -594,11 +597,13 @@ describe("DecisionsService question list (#17229)", () => {
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
-      listQuestions: async () => rows,
+      listQuestions: async () => {
+        const read = rows;
+        if (gate !== null) await gate;
+        return read;
+      },
       getMeta: async (key: string) =>
-        key === HANDLED_ANSWERS_META_KEY && options.handled
-          ? JSON.stringify(options.handled)
-          : null,
+        key === HANDLED_ANSWERS_META_KEY && handled !== null ? JSON.stringify(handled) : null,
     } as unknown as DaintreeLocalStore;
     const lists: DecisionQuestionListItem[][] = [];
     const panes: PaneDecisionState[] = [];
@@ -614,7 +619,25 @@ describe("DecisionsService question list (#17229)", () => {
       for (const listener of listeners) listener();
       await vi.waitFor(() => expect(lists.length).toBeGreaterThan(before));
     };
-    return { service, lists, panes, commit, setRows: (next: QuestionRow[]) => (rows = next) };
+    return {
+      service,
+      lists,
+      panes,
+      commit,
+      setRows: (next: QuestionRow[]) => (rows = next),
+      setHandled: (next: Record<string, number>) => (handled = next),
+      fireCommit: () => {
+        for (const listener of listeners) listener();
+      },
+      hold: () => {
+        let release!: () => void;
+        gate = new Promise<void>((resolve) => (release = resolve));
+        return () => {
+          gate = null;
+          release();
+        };
+      },
+    };
   }
 
   const HOST = { hostId: "host_1" };
@@ -659,17 +682,59 @@ describe("DecisionsService question list (#17229)", () => {
     await service.stop();
   });
 
-  it("empties the list when it stops, and lists nothing while off", async () => {
+  it("settles an answer once a person marks it handled, on the commit that follows", async () => {
+    const attention = row(1, {
+      question_id: "q_handled_0001",
+      local_status: "human-answered",
+      delivery_status: "needs-attention",
+      answers_json: answers({ revision: 1 }),
+    });
+    const { service, lists, commit, setRows, setHandled } = listed();
+    setRows([attention]);
+    await service.start(on(HOST));
+    expect(lists.at(-1)?.[0]?.standing).toMatchObject({ kind: "needs-attention" });
+
+    setHandled({ q_handled_0001: 1 });
+    await commit([attention]);
+
+    expect(lists.at(-1)?.[0]?.standing).toEqual({
+      kind: "settled",
+      outcome: "answered",
+      handled: true,
+    });
+    await service.stop();
+  });
+
+  it("empties the list when it stops, and a read that lands after lists nothing", async () => {
+    const { service, lists, setRows, fireCommit, hold } = listed();
+    setRows([row(1)]);
+    await service.start(on(HOST));
+    expect(lists.at(-1)).toHaveLength(1);
+
+    const release = hold();
+    setRows([row(1), row(2)]);
+    fireCommit();
+    await service.stop();
+    expect(lists.at(-1)).toEqual([]);
+    const after = lists.length;
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(lists).toHaveLength(after);
+  });
+
+  it("lists again when this machine's host id is forgotten or set, with no write to the store", async () => {
     const { service, lists, setRows } = listed();
     setRows([row(1)]);
     await service.start(on(HOST));
     expect(lists.at(-1)).toHaveLength(1);
 
+    service.updateSettings(on({ hostId: null }));
+    await vi.waitFor(() => expect(lists.at(-1)).toEqual([]));
+
+    service.updateSettings(on(HOST));
+    await vi.waitFor(() => expect(lists.at(-1)).toHaveLength(1));
     await service.stop();
-    expect(lists.at(-1)).toEqual([]);
-    const after = lists.length;
-    service.observeQuestions([row(2)]);
-    expect(lists).toHaveLength(after);
   });
 
   it("lists nothing for a Remote Host's own lifetime: its questions are its owner's to show", async () => {
@@ -2483,6 +2548,31 @@ describe("DecisionsService disk-space recovery (#16605)", () => {
     expect(service.getStatus()).toEqual({ state: "not-connected", problem: "storage" });
     made[1]!.options.onStatus({ state: "connected" });
     expect(service.getStatus()).toEqual({ state: "connected" });
+  });
+
+  it("lists nothing once a replacement store doesn't open (#17229)", async () => {
+    const lists: DecisionQuestionListItem[][] = [];
+    const first = faultableStore([row(1)]);
+    let opens = 0;
+    const service = new DecisionsService({
+      openStore: async () => {
+        opens += 1;
+        if (opens === 1) return first.store;
+        throw new Error("still no room");
+      },
+      keyFilePath: () => "/nonexistent/keys.bin",
+      publishQuestions: (questions) => lists.push([...questions]),
+      connect: () => ({ start: () => {}, stop: () => {} }),
+    });
+    await service.start(on({ ...RELAY, hostId: "host_1" }));
+    expect(lists.at(-1)).toHaveLength(1);
+    first.fault("disk-pressure");
+
+    expect(await service.diskSpaceRecovered()).toBe(false);
+
+    expect(opens).toBe(2);
+    expect(lists.at(-1)).toEqual([]);
+    await service.stop();
   });
 
   it("restarts a Host's lifetime as a Host", async () => {

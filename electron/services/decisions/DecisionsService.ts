@@ -448,11 +448,14 @@ export class DecisionsService {
    */
   updateSettings(settings: DecisionsSettings): void {
     if (this.disposed || this.settings === null || !settings.enabled) return;
+    const hostChanged = this.settings.hostId !== settings.hostId;
     this.settings = settings;
     this.applyPolicy(settings);
     this.paused = false;
     this.applyModel();
     this.reconcileConnection();
+    // The list names questions by this machine's host id: a forgotten or new one lists again now.
+    if (hostChanged) void this.feed?.refresh();
   }
 
   /**
@@ -704,6 +707,8 @@ export class DecisionsService {
         opened = await this.openStore(() => this.disposed);
       } catch (error) {
         this.storeFailed = true;
+        // With no store there is nothing to list until the next start opens one.
+        this.sendQuestions([]);
         logWarn("[Decisions] The local store didn't reopen after it stopped writing", {
           reason,
           error: error instanceof Error ? error.name : "error",
@@ -734,8 +739,10 @@ export class DecisionsService {
       if (this.disposed || !settings.enabled) return;
       if (this.settings !== null && this.role !== role) await this.release(true);
       if (this.disposed) return;
+      const hostChanged = this.settings?.hostId !== settings.hostId;
       this.role = role;
       this.settings = settings;
+      if (hostChanged) void this.feed?.refresh();
       this.applyPolicy(settings);
       this.paused = false;
       // There is no relay identity until a relay is claimed or restored, and no

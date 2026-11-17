@@ -355,6 +355,8 @@ function publishPaneState(projectId: string, state: PaneDecisionState): void {
  * never get it. Ids, labels, times and statuses only; never any content.
  */
 function publishQuestions(questions: readonly DecisionQuestionListItem[]): void {
+  // Once quit begins the list only empties, for main's consumers; the windows are going.
+  if (shutDown && questions.length > 0) return;
   const changed = setDecisionQuestions(questions);
   if (changed === null || shutDown) return;
   sendToLocalViews("decisions:questions-changed", changed);

@@ -45,6 +45,48 @@ describe("projectDecisionQuestions", () => {
     });
   });
 
+  it("carries each question's own agent, requirement and worktree", () => {
+    const list = projectDecisionQuestions(
+      [
+        row(1, {
+          requirement: "proxy-ok",
+          origin: { agent_kind: "codex", worktree_id: "w-1", worktree_root: "/repos/one" },
+        }),
+        row(2, {
+          requirement: "proxy-first",
+          expires_at: "2026-12-01T00:00:00.000Z",
+          origin: { agent_kind: "gemini", worktree_id: "w-2", worktree_root: "/repos/two" },
+        }),
+      ],
+      new Map(),
+      HOST
+    );
+    expect(
+      list.map(({ agentKind, requirement, worktreeId, worktreeRoot, expiresAt }) => ({
+        agentKind,
+        requirement,
+        worktreeId,
+        worktreeRoot,
+        expiresAt,
+      }))
+    ).toEqual([
+      {
+        agentKind: "codex",
+        requirement: "proxy-ok",
+        worktreeId: "w-1",
+        worktreeRoot: "/repos/one",
+        expiresAt: null,
+      },
+      {
+        agentKind: "gemini",
+        requirement: "proxy-first",
+        worktreeId: "w-2",
+        worktreeRoot: "/repos/two",
+        expiresAt: "2026-12-01T00:00:00.000Z",
+      },
+    ]);
+  });
+
   it("keeps a closed terminal's questions, settled or not: nothing checks a terminal still runs", () => {
     // Nothing here knows which terminals run; a question outlives its terminal in the store.
     const list = projectDecisionQuestions(
@@ -344,6 +386,54 @@ describe("standingOf", () => {
       [{ kind: "settled", outcome: "expired" }, "2026-11-01T11:00:02.000Z"],
       [{ kind: "settled", outcome: "expired" }, "2026-11-01T12:00:00.000Z"],
     ]);
+  });
+
+  it("settles a thread when the person replies to the agent's request, at the reply", () => {
+    const [item] = projectDecisionQuestions(
+      [
+        row(1, {
+          ...delivered,
+          answers_json: answers({
+            delivered: true,
+            event_seq: 5,
+            created_at: "2026-11-01T10:05:00.000Z",
+          }),
+          messages_json: messages(
+            // A follow-up of the person's before the request settles nothing.
+            {
+              message_id: "message-0",
+              event_seq: 6,
+              created_at: "2026-11-01T10:06:00.000Z",
+              delivery: { status: "terminal-delivered" },
+            },
+            {
+              message_id: "message-1",
+              side: "agent",
+              expects_reply: true,
+              event_seq: 7,
+              created_at: "2026-11-01T10:07:00.000Z",
+              delivery: null,
+            },
+            {
+              message_id: "message-2",
+              event_seq: 8,
+              created_at: "2026-11-01T10:08:00.000Z",
+              delivery: { status: "terminal-delivered" },
+            },
+            {
+              message_id: "message-3",
+              event_seq: 9,
+              created_at: "2026-11-01T10:09:00.000Z",
+              delivery: { status: "terminal-delivered" },
+            }
+          ),
+        }),
+      ],
+      new Map(),
+      HOST
+    );
+    expect(item?.standing).toMatchObject({ kind: "settled", outcome: "answered" });
+    expect(item?.settledAt).toBe("2026-11-01T10:08:00.000Z");
   });
 
   it("settles a closed question even when its delivery status is left from before", () => {

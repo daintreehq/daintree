@@ -137,9 +137,11 @@ function openReference(references: DecisionQuestionReference[], reference = refe
   act(() => useDecisionsQuestionViewStore.getState().openReference(references, reference));
 }
 
-/** This computer's list, with `qa` standing as `kind` (and one other question). */
-function pushList(revision: number, kind: "waiting" | "to-type") {
-  const item = (reference: DecisionQuestionReference, alias: number) => ({
+type Kind = "waiting" | "to-type";
+
+/** This computer's list: `qa` (the question opened) and one other question, `qz`, each standing as given. */
+function pushList(revision: number, kinds: { qa: Kind; qz: Kind }) {
+  const item = (reference: DecisionQuestionReference, alias: number, kind: Kind) => ({
     reference,
     alias,
     agentKind: "claude",
@@ -155,7 +157,10 @@ function pushList(revision: number, kind: "waiting" | "to-type") {
   for (const listener of [...listListeners]) {
     listener({
       revision,
-      questions: [item(OTHER_PROJECT, 7), item({ ...OTHER_PROJECT, questionId: "qz" }, 9)],
+      questions: [
+        item(OTHER_PROJECT, 7, kinds.qa),
+        item({ ...OTHER_PROJECT, questionId: "qz" }, 9, kinds.qz),
+      ],
     });
   }
 }
@@ -451,11 +456,13 @@ describe("DecisionQuestionDialog", () => {
     it("reads again when its place in the list moves, and not for another question's", async () => {
       openReference([OTHER_PROJECT]);
       await screen.findByTestId("decision-question-content");
-      act(() => pushList(1, "waiting"));
+      act(() => pushList(1, { qa: "waiting", qz: "waiting" }));
       await waitFor(() => expect(getQuestionContentByReference).toHaveBeenCalledTimes(2));
-      // The same standing again, for another question's move: nothing new to read.
-      act(() => pushList(2, "waiting"));
-      act(() => pushList(3, "to-type"));
+      // Only the other question moves: nothing new to read for this one.
+      act(() => pushList(2, { qa: "waiting", qz: "to-type" }));
+      await act(async () => {});
+      expect(getQuestionContentByReference).toHaveBeenCalledTimes(2);
+      act(() => pushList(3, { qa: "to-type", qz: "to-type" }));
       await waitFor(() => expect(getQuestionContentByReference).toHaveBeenCalledTimes(3));
       expect(paneListeners).toHaveLength(0);
     });
@@ -508,6 +515,84 @@ describe("DecisionQuestionDialog", () => {
         questionId: "qw",
       });
       expect(cancelQuestionByReference).not.toHaveBeenCalled();
+    } finally {
+      delete QUESTIONS.qw;
+    }
+  });
+
+  it.each([
+    ["queued", true],
+    ["open", true],
+    ["human-answered", false],
+    ["proxy-answered", false],
+    ["cancelled", false],
+    ["expired", false],
+    ["publish-failed", false],
+  ] as const)("offers a withdrawal for a %s question: %s", async (status, offered) => {
+    QUESTIONS.qw = content("qw", 11, { status, thread: [] });
+    try {
+      openView(["qw"], "qw");
+      await screen.findByTestId("decision-question-content");
+      expect(screen.queryByTestId("decision-question-cancel") !== null).toBe(offered);
+    } finally {
+      delete QUESTIONS.qw;
+    }
+  });
+
+  it("sends nothing once the question stops waiting under the confirmation", async () => {
+    QUESTIONS.qw = content("qw", 11, { status: "open", thread: [] });
+    try {
+      openView(["qw"], "qw");
+      fireEvent.click(await screen.findByTestId("decision-question-cancel"));
+      const confirm = await screen.findByRole("alertdialog");
+
+      QUESTIONS.qw = content("qw", 11, { status: "human-answered" });
+      act(() => pushPane("t1"));
+      await waitFor(() => expect(confirm.textContent).toMatch(/isn't waiting for an answer/));
+      const send = within(confirm).getByRole("button", { name: "Cancel question" });
+      expect(send.getAttribute("aria-disabled")).toBe("true");
+      await act(async () => {
+        fireEvent.click(send);
+      });
+      expect(cancelQuestion).not.toHaveBeenCalled();
+    } finally {
+      delete QUESTIONS.qw;
+    }
+  });
+
+  it("keeps focus in the view when stepping away from the withdrawal button by arrow key", async () => {
+    QUESTIONS.qw = content("qw", 11, { status: "open", thread: [] });
+    try {
+      openView(["qw", "qa"], "qw");
+      const cancel = await screen.findByTestId("decision-question-cancel");
+      act(() => cancel.focus());
+      fireEvent.keyDown(cancel, { key: "ArrowRight" });
+      await waitFor(() => expect(screen.getByRole("dialog").textContent).toContain("q-7"));
+      expect(document.activeElement).toBe(screen.getByTestId("decision-question-next"));
+      expect(screen.queryByTestId("decision-question-cancel")).toBeNull();
+
+      fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
+      expect(useDecisionsQuestionViewStore.getState().request?.index).toBe(0);
+    } finally {
+      delete QUESTIONS.qw;
+    }
+  });
+
+  it("never brings a confirmation back after the view closed under it", async () => {
+    QUESTIONS.qw = content("qw", 11, { status: "open", thread: [] });
+    try {
+      openView(["qw"], "qw");
+      fireEvent.click(await screen.findByTestId("decision-question-cancel"));
+      await screen.findByRole("alertdialog");
+
+      act(() => useDecisionsQuestionViewStore.getState().close());
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      openView(["qw"], "qw");
+      await screen.findByTestId("decision-question-cancel");
+      await act(async () => {});
+
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(cancelQuestion).not.toHaveBeenCalled();
     } finally {
       delete QUESTIONS.qw;
     }

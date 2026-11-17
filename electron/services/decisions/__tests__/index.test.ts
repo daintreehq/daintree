@@ -1155,6 +1155,38 @@ describe("Decisions entry", () => {
         await expect(
           getDecisionQuestionSummariesByReference({ references: [REFERENCE] })
         ).resolves.toEqual({ result: "not-running" });
+
+        // A read that returns normally as its delivery ends answers not running too.
+        const ending = {
+          questionContent: async () => {
+            current.delivery = null;
+            return { result: "not-found" as const };
+          },
+          questionImage: async () => {
+            current.delivery = null;
+            return { result: "not-found" as const };
+          },
+          questionSummaries: async () => {
+            current.delivery = null;
+            return [];
+          },
+        } as Partial<AnswerDelivery> as AnswerDelivery;
+        current.delivery = ending;
+        await expect(
+          getDecisionQuestionContentByReference({ reference: REFERENCE })
+        ).resolves.toEqual({ result: "not-running" });
+        current.delivery = ending;
+        await expect(
+          getDecisionQuestionImageByReference({
+            reference: REFERENCE,
+            attachmentId: "attach_0001",
+            offset: 0,
+          })
+        ).resolves.toEqual({ result: "not-running" });
+        current.delivery = ending;
+        await expect(
+          getDecisionQuestionSummariesByReference({ references: [REFERENCE] })
+        ).resolves.toEqual({ result: "not-running" });
       });
     });
 

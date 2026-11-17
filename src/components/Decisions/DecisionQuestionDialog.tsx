@@ -66,10 +66,12 @@ function onQuestionMoved(target: DecisionQuestionTarget, moved: () => void): () 
       if (state.terminalId === target.terminalId) moved();
     });
   }
-  const { questionId } = target.reference;
+  const key = targetKey(target);
   let last: string | undefined;
   return decisionsClient.onQuestionsChanged((list) => {
-    const item = list.questions.find((question) => question.reference.questionId === questionId);
+    const item = list.questions.find(
+      (question) => targetKey({ scope: "reference", reference: question.reference }) === key
+    );
     const now = JSON.stringify(item ?? null);
     if (now === last) return;
     last = now;
@@ -349,11 +351,13 @@ export function DecisionQuestionDialog() {
       // A Retry or a link in the content goes with the step; keep focus in the dialog.
       const active = document.activeElement;
       const stepper = delta < 0 ? previousRef.current : nextRef.current;
+      // The cancel footer goes with the question it was for, so focus leaves it the same way.
       if (
         active instanceof HTMLElement &&
         active !== previousRef.current &&
         active !== nextRef.current &&
-        active.closest('[data-testid="decision-question-body"]') !== null
+        (active === cancelRef.current ||
+          active.closest('[data-testid="decision-question-body"]') !== null)
       ) {
         stepper?.focus({ preventScroll: true });
       }
@@ -400,6 +404,10 @@ export function DecisionQuestionDialog() {
   // The withdrawal asked about, while this view still shows that question.
   const cancelShown = cancel !== null && key === targetKey(cancel.target.question);
   const cancelStatus = cancelShown && current?.result === "read" ? current.question.status : null;
+  // A confirmation ends with the view, or once it moves to another question: neither brings it back.
+  if (cancel !== null && cancel.open && (!isOpen || !cancelShown)) {
+    setCancel({ ...cancel, open: false });
+  }
 
   return (
     <>

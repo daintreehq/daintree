@@ -73,8 +73,30 @@ describe("decisionsQuestionViewStore", () => {
 
   it("matches a reference by everything it names, not its question id alone", () => {
     const store = useDecisionsQuestionViewStore;
-    store.getState().openReference([ref("a", "project-a")], ref("a", "project-b"));
+    const listed = ref("a");
+    for (const chosen of [
+      { ...listed, hostId: "host_2" },
+      { ...listed, projectId: "project-b" },
+      { ...listed, terminalId: "t2" },
+      { ...listed, questionId: "b" },
+    ]) {
+      store.getState().openReference([listed], chosen);
+      expect(store.getState().request, JSON.stringify(chosen)).toBeNull();
+    }
     expect(store.getState().isOpen).toBe(false);
-    expect(store.getState().request).toBeNull();
+  });
+
+  it("keeps two references that share a question id but differ elsewhere", () => {
+    const store = useDecisionsQuestionViewStore;
+    const here = ref("a");
+    const elsewhere = { ...here, hostId: "host_2" };
+    store.getState().openReference([here, elsewhere, here], elsewhere);
+    expect(store.getState().request).toEqual({
+      questions: [
+        { scope: "reference", reference: here },
+        { scope: "reference", reference: elsewhere },
+      ],
+      index: 1,
+    });
   });
 });
