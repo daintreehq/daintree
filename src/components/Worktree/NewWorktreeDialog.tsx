@@ -17,7 +17,12 @@ import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
-import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import {
+  useDohertyGate,
+  useSkeletonDisplayFloor,
+  useSkeletonGate,
+} from "@/hooks/useDeferredLoading";
+import { UI_SKELETON_FLOOR_MS } from "@/lib/animationUtils";
 import { FolderGit2, GitBranch } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
@@ -169,6 +174,9 @@ export function NewWorktreeDialog({
 }: NewWorktreeDialogProps) {
   const [branches, setBranches] = useState<BranchInfo[]>([]);
   const [loading, setLoading] = useState(false);
+  // Whether this opening's bootstrap has run. It sets `loading` a commit after
+  // the dialog opens, so until then a cold open can't read it.
+  const [bootstrapRan, setBootstrapRan] = useState(false);
   // A failed branch list is a load state, not a field the user got wrong: it
   // holds until the list loads, whatever else is edited.
   const [branchLoadError, setBranchLoadError] = useState<string | null>(null);
@@ -516,6 +524,7 @@ export function NewWorktreeDialog({
   useEffect(() => {
     if (!isOpen) {
       bootstrappedRef.current = false;
+      setBootstrapRan(false);
       return;
     }
     const isRefetch = bootstrappedRef.current;
@@ -526,6 +535,7 @@ export function NewWorktreeDialog({
     const cached = initialPR ? undefined : branchListCache.get(rootPath);
 
     setLoading(!cached);
+    setBootstrapRan(true);
     setBranchLoadError(null);
     setPrBranchResolved(null);
     setBranches(cached ?? []);
@@ -673,12 +683,28 @@ export function NewWorktreeDialog({
     }
   }, [isOpen, restoreDraft, settingsDefaultMode, settingsResourceEnvs]);
 
-  // Focus new branch input after loading
+  // A cold open (no cached list, or a PR) is pending from its first commit,
+  // before the bootstrap has set `loading`; a stale `loading` left by a close
+  // mid-load doesn't count for the next opening.
+  const branchesPending =
+    isOpen && !bootstrapRan ? !!initialPR || !branchListCache.has(rootPath) : loading;
+  // A load inside the onset gate shows no skeleton at all, and one that shows
+  // stays up for the floor rather than tearing down in the frame it appeared.
+  // The floor drops while closed, so a reopen starts from a fresh gate instead
+  // of inheriting the last opening's dwell.
+  const showSkeleton = useSkeletonDisplayFloor(
+    useSkeletonGate(isOpen && branchesPending),
+    isOpen ? UI_SKELETON_FLOOR_MS : 0
+  );
+  const formNotReady = branchesPending || showSkeleton;
+
+  // Focus the new branch input once the form itself is mounted, not when the
+  // load settles under a skeleton the floor is still holding.
   useEffect(() => {
-    if (isOpen && !loading) {
-      setTimeout(() => newBranchInputRef.current?.focus(), 0);
-    }
-  }, [isOpen, loading, newBranchInputRef]);
+    if (!isOpen || formNotReady) return;
+    const timer = setTimeout(() => newBranchInputRef.current?.focus(), 0);
+    return () => clearTimeout(timer);
+  }, [isOpen, formNotReady, newBranchInputRef]);
 
   // --- Form dirty check and dismiss guard ---
   const formDirty = useMemo(() => {
@@ -1334,6 +1360,7 @@ export function NewWorktreeDialog({
     // Nothing another host can create yet that this one couldn't: the same
     // gates as local Create (a PR branch that didn't resolve, checks in flight).
     if (
+      formNotReady ||
       isCheckingBranch ||
       isGeneratingPath ||
       (initialPR !== null && initialPR !== undefined && prBranchResolved === false)
@@ -1371,7 +1398,7 @@ export function NewWorktreeDialog({
   const submitDisabled =
     placementPending ||
     (placement?.unavailable ?? null) !== null ||
-    loading ||
+    formNotReady ||
     isCheckingBranch ||
     isGeneratingPath ||
     (initialPR !== null && initialPR !== undefined && prBranchResolved === false);
@@ -1415,8 +1442,11 @@ export function NewWorktreeDialog({
   // line that used to sit under the branch input restating its own value.
   const prBranchUnavailable =
     initialPR !== null && initialPR !== undefined && prBranchResolved === false;
-  const outcomeSummary = loading ? (
-    <span className="truncate">Loading branches…</span>
+  const outcomeSummary = formNotReady ? (
+    // Said with the skeleton, not before it: a load inside the gate says nothing.
+    showSkeleton ? (
+      <span className="truncate">Loading branches…</span>
+    ) : null
   ) : prBranchUnavailable ? (
     // The base below is a fallback, not the PR's branch — echoing it as the
     // outcome would promise a checkout this dialog can't make.
@@ -1598,6 +1628,45 @@ export function NewWorktreeDialog({
     },
   ];
 
+  // Built from the same flags as the resolved form and rendered in the same
+  // FormGrid, so the branch list resolving swaps content in without moving
+  // anything. A fixed-shape skeleton would guess the section list wrong
+  // whenever Setup is empty or carries extra rows. Bones pulse at once: they
+  // only mount as a skeleton once the onset gate has already been waited out.
+  const branchPlaceholder = (
+    <FormGrid>
+      {skeletonSections.map((section) => (
+        <FormSection
+          key={section.title}
+          title={section.title}
+          note={section.title === "Setup" ? "Optional" : undefined}
+          // The real switch, inert: the header row keeps its height and
+          // the rule its length, so the Branch heading doesn't move.
+          action={
+            section.title === "Branch" &&
+            !initialPR && <BranchModeControl branchMode={branchMode} onChange={() => {}} disabled />
+          }
+        >
+          {section.rows.map((row, index) =>
+            row === null ? (
+              // h-4, not h-3: the resolved hint row is as tall as its 16px
+              // checkbox, and 12px here grew the row by 4px on resolve.
+              <SkeletonBone key={index} immediate className={cn(HINT_CELL, "h-4 w-44")} />
+            ) : (
+              <Fragment key={index}>
+                <span className="text-xs text-text-secondary">{row}</span>
+                <SkeletonBone
+                  immediate
+                  className={row === "Prompt" ? "h-[76px] w-full" : "h-8 w-full"}
+                />
+              </Fragment>
+            )
+          )}
+        </FormSection>
+      ))}
+    </FormGrid>
+  );
+
   return (
     <>
       <AppDialog
@@ -1605,6 +1674,9 @@ export function NewWorktreeDialog({
         onClose={onClose}
         onBeforeClose={handleBeforeClose}
         size="lg"
+        // The surface holds focus until the form is in, rather than a footer
+        // button taking it for the frames before the branch field mounts.
+        initialFocus={formNotReady ? "surface" : undefined}
         data-testid="new-worktree-dialog"
       >
         <AppDialog.Header>
@@ -1618,45 +1690,17 @@ export function NewWorktreeDialog({
 
         <AppDialog.Body className="space-y-5">
           {initialPR && <PrHeader pr={initialPR} />}
-          {loading ? (
-            <Skeleton label="Loading branches">
-              {/* Built from the same flags as the resolved form and rendered in
-                the same FormGrid, so the branch list resolving swaps content in
-                without moving anything. A fixed-shape skeleton would guess the
-                section list wrong whenever Setup is empty or carries extra rows. */}
-              <FormGrid>
-                {skeletonSections.map((section) => (
-                  <FormSection
-                    key={section.title}
-                    title={section.title}
-                    note={section.title === "Setup" ? "Optional" : undefined}
-                    // The real switch, inert: the header row keeps its height and
-                    // the rule its length, so the Branch heading doesn't move.
-                    action={
-                      section.title === "Branch" &&
-                      !initialPR && (
-                        <BranchModeControl branchMode={branchMode} onChange={() => {}} disabled />
-                      )
-                    }
-                  >
-                    {section.rows.map((row, index) =>
-                      row === null ? (
-                        // h-4, not h-3: the resolved hint row is as tall as its 16px
-                        // checkbox, and 12px here grew the row by 4px on resolve.
-                        <SkeletonBone key={index} className={cn(HINT_CELL, "h-4 w-44")} />
-                      ) : (
-                        <Fragment key={index}>
-                          <span className="text-xs text-text-secondary">{row}</span>
-                          <SkeletonBone
-                            className={row === "Prompt" ? "h-[76px] w-full" : "h-8 w-full"}
-                          />
-                        </Fragment>
-                      )
-                    )}
-                  </FormSection>
-                ))}
-              </FormGrid>
-            </Skeleton>
+          {formNotReady ? (
+            showSkeleton ? (
+              <Skeleton label="Loading branches">{branchPlaceholder}</Skeleton>
+            ) : (
+              // Inside the onset gate nothing is drawn, but the form's footprint
+              // is held: the dialog has no fixed height, and opening short to
+              // grow when the branches land would move everything in it.
+              <div aria-hidden="true" inert className="invisible">
+                {branchPlaceholder}
+              </div>
+            )
           ) : (
             <>
               <FormGrid>

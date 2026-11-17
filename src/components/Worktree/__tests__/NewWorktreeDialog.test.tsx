@@ -307,6 +307,7 @@ vi.mock("@/components/ui/AppDialog", () => {
   const Dialog = ({
     children,
     isOpen,
+    initialFocus,
   }: {
     children: React.ReactNode;
     isOpen: boolean;
@@ -314,8 +315,14 @@ vi.mock("@/components/ui/AppDialog", () => {
     onBeforeClose?: () => boolean;
     size?: string;
     dismissible?: boolean;
+    initialFocus?: string;
     "data-testid"?: string;
-  }) => (isOpen ? <div data-testid="new-worktree-dialog">{children}</div> : null);
+  }) =>
+    isOpen ? (
+      <div data-testid="new-worktree-dialog" data-initial-focus={initialFocus}>
+        {children}
+      </div>
+    ) : null;
   Dialog.Header = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
   Dialog.Title = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
   Dialog.CloseButton = () => <button aria-label="Close" />;
@@ -1572,6 +1579,31 @@ describe("NewWorktreeDialog — branch loading skeleton timing", () => {
 
   const skeleton = () => screen.queryByRole("status", { name: "Loading branches" });
   const branchInput = () => screen.queryByTestId("branch-name-input");
+  const SKELETON_SELECTOR = '[role="status"][aria-label="Loading branches"]';
+  const FORM_SELECTOR = '[data-testid="branch-name-input"]';
+
+  /**
+   * Whether `selector` was ever mounted, including in a commit that a later one
+   * in the same act() replaced: a removed subtree keeps its descendants, so the
+   * removal record still shows what was there.
+   */
+  function watchMounts(selector: string) {
+    const observer = new MutationObserver(() => {});
+    observer.observe(document.body, { childList: true, subtree: true });
+    let seen = false;
+    return {
+      seen() {
+        for (const record of observer.takeRecords()) {
+          for (const node of [...record.addedNodes, ...record.removedNodes]) {
+            if (node instanceof Element && (node.matches(selector) || node.querySelector(selector)))
+              seen = true;
+          }
+        }
+        return seen;
+      },
+      stop: () => observer.disconnect(),
+    };
+  }
 
   /** Steps the clock, recording each step whether the skeleton and the form were mounted. */
   async function sample(totalMs: number) {
@@ -1586,24 +1618,40 @@ describe("NewWorktreeDialog — branch loading skeleton timing", () => {
   }
 
   it("never mounts the skeleton when branches resolve inside the onset gate", async () => {
+    const mounts = watchMounts(SKELETON_SELECTOR);
     resolveBranchesAfter(UI_SKELETON_GATE_MS / 4);
     renderDialog();
 
     expect(skeleton()).toBeNull();
+    expect(branchInput()).toBeNull();
+    // The surface holds focus while there is no field to put it in.
+    const dialog = screen.getByTestId("new-worktree-dialog");
+    expect(dialog.getAttribute("data-initial-focus")).toBe("surface");
     const frames = await sample(UI_SKELETON_GATE_MS + UI_SKELETON_FLOOR_MS);
 
+    expect(mounts.seen()).toBe(false);
+    mounts.stop();
     expect(frames.filter((f) => f.skeleton)).toEqual([]);
     expect(frames.find((f) => f.form)?.at).toBeLessThanOrEqual(UI_SKELETON_GATE_MS);
+    expect(dialog.getAttribute("data-initial-focus")).toBeNull();
     expect(document.activeElement).toBe(branchInput());
   });
 
   it("holds a skeleton that crossed the gate for the display floor, then focuses the form", async () => {
     // Resolves just after the skeleton appears: without the floor it would
     // mount and tear down within a frame or two.
+    const formMounts = watchMounts(FORM_SELECTOR);
     resolveBranchesAfter(UI_SKELETON_GATE_MS + 2 * STEP_MS);
     renderDialog();
 
-    const frames = await sample(UI_SKELETON_GATE_MS + UI_SKELETON_FLOOR_MS + 10 * STEP_MS);
+    const beforeGate = await sample(UI_SKELETON_GATE_MS - STEP_MS);
+    expect(beforeGate.some((f) => f.skeleton || f.form)).toBe(false);
+    // Nothing went form-then-skeleton, not even the first commit of a cold open.
+    expect(formMounts.seen()).toBe(false);
+    formMounts.stop();
+
+    const frames = await sample(UI_SKELETON_FLOOR_MS + 12 * STEP_MS);
+    for (const f of frames) f.at += UI_SKELETON_GATE_MS - STEP_MS;
 
     const shown = frames.filter((f) => f.skeleton);
     expect(shown.length).toBeGreaterThan(0);
@@ -1614,6 +1662,49 @@ describe("NewWorktreeDialog — branch loading skeleton timing", () => {
     // Never both, never neither once shown: the skeleton hands straight to the form.
     expect(frames.some((f) => f.skeleton && f.form)).toBe(false);
     expect(frames.filter((f) => f.at > firstShown && !f.skeleton && !f.form)).toEqual([]);
+    expect(document.activeElement).toBe(branchInput());
+  });
+
+  it("measures the floor from the skeleton's appearance, not from the load settling", async () => {
+    resolveBranchesAfter(UI_SKELETON_GATE_MS + UI_SKELETON_FLOOR_MS - 4 * STEP_MS);
+    renderDialog();
+
+    const frames = await sample(UI_SKELETON_GATE_MS + 2 * UI_SKELETON_FLOOR_MS);
+
+    const firstForm = frames.find((f) => f.form)!.at;
+    expect(firstForm).toBeGreaterThanOrEqual(UI_SKELETON_GATE_MS + UI_SKELETON_FLOOR_MS);
+    expect(firstForm).toBeLessThanOrEqual(UI_SKELETON_GATE_MS + UI_SKELETON_FLOOR_MS + STEP_MS);
+    expect(document.activeElement).toBe(branchInput());
+  });
+
+  it("swaps a load that outlasts the floor out as soon as it resolves", async () => {
+    const loadMs = UI_SKELETON_GATE_MS + UI_SKELETON_FLOOR_MS + 15 * STEP_MS;
+    resolveBranchesAfter(loadMs);
+    renderDialog();
+
+    const frames = await sample(loadMs + 5 * STEP_MS);
+
+    expect(frames.find((f) => f.form)!.at).toBeLessThanOrEqual(loadMs + STEP_MS);
+    expect(frames.find((f) => f.at >= loadMs + STEP_MS)?.skeleton).toBe(false);
+  });
+
+  it("starts a fresh gate when reopened after a close mid-load", async () => {
+    mockListBranches.mockReturnValue(new Promise(() => {}));
+    const props = { onClose: vi.fn(), rootPath: "/test/root" };
+    const { rerender } = render(<NewWorktreeDialog isOpen={true} {...props} />);
+    await sample(UI_SKELETON_GATE_MS + 5 * STEP_MS);
+    expect(skeleton()).not.toBeNull();
+
+    rerender(<NewWorktreeDialog isOpen={false} {...props} />);
+    await sample(STEP_MS);
+    resolveBranchesAfter(UI_SKELETON_GATE_MS / 4);
+    const mounts = watchMounts(SKELETON_SELECTOR);
+    rerender(<NewWorktreeDialog isOpen={true} {...props} />);
+
+    expect(skeleton()).toBeNull();
+    await sample(UI_SKELETON_GATE_MS + UI_SKELETON_FLOOR_MS);
+    expect(mounts.seen()).toBe(false);
+    mounts.stop();
     expect(document.activeElement).toBe(branchInput());
   });
 
