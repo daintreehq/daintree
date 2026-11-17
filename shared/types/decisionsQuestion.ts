@@ -241,3 +241,94 @@ export type DecisionQuestionImageResult = DecisionQuestionImageRead<{
   result: "read";
   image: DecisionQuestionImage;
 }>;
+
+/**
+ * One question this computer's Decisions holds, named wherever it is read
+ * from (#17229): the machine that asked it, and the project, terminal and
+ * question there. Any Daintree window on this computer may read it by this
+ * reference, whatever project it shows and whether the terminal is still open.
+ */
+export interface DecisionQuestionReference {
+  hostId: string;
+  projectId: string;
+  terminalId: string;
+  questionId: string;
+}
+
+/**
+ * Where a question stands, in exactly one place:
+ * - `waiting`: for the person, because it is `open`, or because it was
+ *   answered and the agent's latest follow-up expects a `reply`;
+ * - `queued`: not yet sent to the relay; `send-failed`: it never could be;
+ * - `to-type`: answered, or followed up by the person, and waiting to be typed in;
+ * - `needs-attention`: an answer or a person's follow-up that delivery stopped
+ *   on, as the list of answers needing attention shows it;
+ * - `settled`: answered and typed in or marked handled, withdrawn, expired,
+ *   or declined (reserved: nothing records a decline yet).
+ */
+export type DecisionQuestionStanding =
+  | { kind: "waiting"; reason: "open" | "reply" }
+  | { kind: "queued" }
+  | { kind: "send-failed" }
+  | { kind: "to-type" }
+  | { kind: "needs-attention"; deliveryStatus: "needs-attention" | "delivery-uncertain" }
+  | { kind: "settled"; outcome: "answered"; handled: boolean }
+  | { kind: "settled"; outcome: "withdrawn" | "expired" | "declined" };
+
+/**
+ * A question as the list names it: who asked, where, when, and where it
+ * stands. Never its words: they are read on demand by reference.
+ */
+export interface DecisionQuestionListItem {
+  reference: DecisionQuestionReference;
+  alias: number;
+  /** The agent that asked (`claude`, `codex`, …). */
+  agentKind: string;
+  /** The project's name as it was when asked; null when the question carries none. */
+  projectLabel: string | null;
+  worktreeId: string;
+  /** Where the worktree was on this computer when asked. */
+  worktreeRoot: string;
+  requirement: DecisionsRequirement;
+  askedAt: string;
+  /** ISO 8601 as recorded; null when the question never expires. */
+  expiresAt: string | null;
+  /**
+   * When it was settled: the answer that settled it, or its expiry. Null
+   * while it isn't settled, and for a withdrawal, which records no time.
+   */
+  settledAt: string | null;
+  standing: DecisionQuestionStanding;
+}
+
+/**
+ * Every question this computer's Decisions holds, oldest first. Empty while
+ * Decisions is off or its store is closed. `revision` only rises, so a read
+ * and a push can be ordered.
+ */
+export interface DecisionQuestionList {
+  revision: number;
+  questions: DecisionQuestionListItem[];
+}
+
+/** One question read by its reference, from any window (#17229). */
+export interface GetDecisionQuestionByReferencePayload {
+  reference: DecisionQuestionReference;
+}
+
+/** Part of one image of a question, read by its reference. */
+export interface GetDecisionQuestionImageByReferencePayload {
+  reference: DecisionQuestionReference;
+  attachmentId: string;
+  offset: number;
+}
+
+/** The questions whose opening lines a list needs, by reference. */
+export interface GetDecisionQuestionSummariesByReferencePayload {
+  references: DecisionQuestionReference[];
+}
+
+/** A person withdrawing a question by its reference, from any window. */
+export interface CancelDecisionQuestionByReferencePayload {
+  reference: DecisionQuestionReference;
+}

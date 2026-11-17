@@ -25,15 +25,22 @@ import { questionLine } from "./attentionList.js";
 import { RetiredAttemptError } from "./relayTransport.js";
 
 /**
- * Where a read comes from: the pane and the project of the view asking, and
- * this machine's host id. A question is read only by a view of the pane that
- * asked it, on the machine it was asked on.
+ * Where a read comes from: the pane and the project of the view asking, or
+ * those a reference names, and this machine's host id. A question is read
+ * only for the pane that asked it, on the machine it was asked on.
  */
 export interface QuestionReadScope {
   hostId: string | null;
   projectId: string | null;
   terminalId: string;
 }
+
+/**
+ * What a read names: the pane and project of the view asking, or, for a read
+ * by reference from any window (#17229), the reference's machine too, which
+ * must be this one.
+ */
+export type QuestionReadRequest = Omit<QuestionReadScope, "hostId"> & { hostId?: string };
 
 export function inScope(row: QuestionRow, scope: QuestionReadScope): boolean {
   const { origin } = row;

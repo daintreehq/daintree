@@ -78,15 +78,21 @@ import type {
   SetDecisionsModelThresholdPayload,
 } from "../../../shared/types/decisionsModel.js";
 import type {
+  CancelDecisionQuestionByReferencePayload,
   CancelDecisionQuestionPayload,
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
   DecisionQuestionImagePartResult,
+  DecisionQuestionList,
   DecisionQuestionSummariesResult,
+  GetDecisionQuestionByReferencePayload,
+  GetDecisionQuestionImageByReferencePayload,
   GetDecisionQuestionImagePayload,
   GetDecisionQuestionPayload,
+  GetDecisionQuestionSummariesByReferencePayload,
   GetDecisionQuestionSummariesPayload,
 } from "../../../shared/types/decisionsQuestion.js";
+import { getDecisionQuestionList } from "../../services/decisionsQuestionList.js";
 import { AppError } from "../../utils/errorTypes.js";
 
 /**
@@ -289,18 +295,46 @@ const cancelQuestionSchema = z
   .object({ terminalId: questionTerminalIdSchema, questionId: questionIdSchema })
   .strict();
 
-// An attachment id as the protocol shapes it, and where in the image (at most 20 MiB) a part starts.
+const attachmentIdSchema = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/);
+
+// Where in an image (at most 20 MiB) a part starts.
+const imageOffsetSchema = z
+  .number()
+  .int()
+  .min(0)
+  .max(20 * 1024 * 1024);
+
 const getQuestionImageSchema = z
   .object({
     terminalId: questionTerminalIdSchema,
     questionId: questionIdSchema,
-    attachmentId: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/),
-    offset: z
-      .number()
-      .int()
-      .min(0)
-      .max(20 * 1024 * 1024),
+    attachmentId: attachmentIdSchema,
+    offset: imageOffsetSchema,
   })
+  .strict();
+
+// A question by the machine, project, terminal and id it names (#17229); main checks the machine is this one.
+const questionReferenceSchema = z
+  .object({
+    hostId: z.string().min(1).max(256),
+    projectId: z.string().min(1).max(256),
+    terminalId: questionTerminalIdSchema,
+    questionId: questionIdSchema,
+  })
+  .strict();
+
+const questionByReferenceSchema = z.object({ reference: questionReferenceSchema }).strict();
+
+const getQuestionImageByReferenceSchema = z
+  .object({
+    reference: questionReferenceSchema,
+    attachmentId: attachmentIdSchema,
+    offset: imageOffsetSchema,
+  })
+  .strict();
+
+const getQuestionSummariesByReferenceSchema = z
+  .object({ references: z.array(questionReferenceSchema).max(64) })
   .strict();
 
 // A pane holds at most ten open questions; the cap leaves room for the settled ones a list names.
@@ -447,6 +481,63 @@ export const decisionsNamespace = defineIpcNamespace({
         return decisions.cancelDecisionQuestion(ctx.projectId, payload);
       },
       { withContext: true }
+    ),
+    // Every question this computer's Decisions holds (#17229), ids, labels,
+    // times and statuses only, and each read or withdrawn by its reference.
+    // `shell`: this computer's own, for any of its windows whatever project it
+    // shows. The list is the leaf Decisions installs into while it runs, so
+    // reading it never loads Decisions; it is empty while Decisions is off.
+    listQuestions: op(
+      CHANNELS.DECISIONS_LIST_QUESTIONS,
+      (): DecisionQuestionList => getDecisionQuestionList()
+    ),
+    getQuestionContentByReference: opValidated(
+      CHANNELS.DECISIONS_GET_QUESTION_CONTENT_BY_REFERENCE,
+      questionByReferenceSchema,
+      async (
+        payload: GetDecisionQuestionByReferencePayload
+      ): Promise<DecisionQuestionContentResult> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.getDecisionQuestionContentByReference(payload);
+      }
+    ),
+    getQuestionImageByReference: opValidated(
+      CHANNELS.DECISIONS_GET_QUESTION_IMAGE_BY_REFERENCE,
+      getQuestionImageByReferenceSchema,
+      async (
+        payload: GetDecisionQuestionImageByReferencePayload
+      ): Promise<DecisionQuestionImagePartResult> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.getDecisionQuestionImageByReference(payload);
+      }
+    ),
+    getQuestionSummariesByReference: opValidated(
+      CHANNELS.DECISIONS_GET_QUESTION_SUMMARIES_BY_REFERENCE,
+      getQuestionSummariesByReferenceSchema,
+      async (
+        payload: GetDecisionQuestionSummariesByReferencePayload
+      ): Promise<DecisionQuestionSummariesResult> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.getDecisionQuestionSummariesByReference(payload);
+      }
+    ),
+    cancelQuestionByReference: opValidated(
+      CHANNELS.DECISIONS_CANCEL_QUESTION_BY_REFERENCE,
+      questionByReferenceSchema,
+      async (
+        payload: CancelDecisionQuestionByReferencePayload
+      ): Promise<DecisionQuestionCancelResult> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.cancelDecisionQuestionByReference(payload);
+      }
     ),
     // Which terminals this view's hybrid input holds a draft for (#16282): an
     // answer waits behind one. Kept whatever the switch says, so turning

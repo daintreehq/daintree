@@ -1,0 +1,165 @@
+import {
+  isPendingMessage,
+  parseAnswers,
+  parseMessages,
+  type QuestionRow,
+} from "@daintreehq/decisions-client";
+import { threadAwaitsHuman } from "@daintreehq/decisions-protocol";
+import type {
+  DecisionQuestionListItem,
+  DecisionQuestionStanding,
+} from "../../../shared/types/decisionsQuestion.js";
+import {
+  answerNeedsAttention,
+  heldFollowUps,
+  isHandled,
+  pendingEntries,
+  type HandledAnswers,
+} from "./attentionList.js";
+
+type AnsweredStatus = Extract<QuestionRow["local_status"], "human-answered" | "proxy-answered">;
+
+function byAlias(a: QuestionRow, b: QuestionRow): number {
+  return a.alias - b.alias || (a.question_id < b.question_id ? -1 : 1);
+}
+
+function attentionStatus(status: QuestionRow["delivery_status"]): boolean {
+  return status === "needs-attention" || status === "delivery-uncertain";
+}
+
+/**
+ * Every question this computer asked, from the store's rows (#17229), oldest
+ * first, `handled` the answers a person marked handled. Imported history and
+ * questions another machine asked aren't this computer's, and show nowhere.
+ * Only ids, labels, times and statuses are copied, field by field: a row's
+ * content and its answers' and follow-ups' sealed text are never read.
+ */
+export function projectDecisionQuestions(
+  rows: readonly QuestionRow[],
+  handled: HandledAnswers,
+  hostId: string | null
+): DecisionQuestionListItem[] {
+  if (hostId === null) return [];
+  return rows
+    .filter(
+      (row) =>
+        !row.history_only &&
+        row.origin.host_id === hostId &&
+        row.origin.project_id !== "" &&
+        row.origin.pane_id !== ""
+    )
+    .sort(byAlias)
+    .map((row) => {
+      const { origin } = row;
+      const standing = standingOf(row, handled);
+      return {
+        reference: {
+          hostId,
+          projectId: origin.project_id,
+          terminalId: origin.pane_id,
+          questionId: row.question_id,
+        },
+        alias: row.alias,
+        agentKind: origin.agent_kind,
+        projectLabel: origin.project_label?.trim() || null,
+        worktreeId: origin.worktree_id,
+        worktreeRoot: origin.worktree_root,
+        requirement: row.requirement,
+        askedAt: row.origin_created_at,
+        expiresAt: row.expires_at ?? null,
+        settledAt: standing.kind === "settled" ? settledAt(row, standing.outcome) : null,
+        standing,
+      };
+    });
+}
+
+/**
+ * Where the question stands. One that needs a person's decision about its
+ * answer or a follow-up does first, whatever else holds, so this list and the
+ * list of answers needing attention never disagree; then a closed question is
+ * settled, a waiting one waits, and an answered one waits for a reply its
+ * agent asked for, for its answer or follow-up to be typed in, or is settled.
+ * A received answer or follow-up waits to be typed by the delivery engine's
+ * own test, as the pane's chip shows it.
+ */
+export function standingOf(row: QuestionRow, handled: HandledAnswers): DecisionQuestionStanding {
+  const answerHeld = answerNeedsAttention(row, handled);
+  const held = heldFollowUps(row);
+  if (answerHeld || held.length > 0) {
+    const uncertain =
+      (answerHeld && row.delivery_status === "delivery-uncertain") ||
+      held.some((message) => message.delivery?.status === "delivery-uncertain");
+    return {
+      kind: "needs-attention",
+      deliveryStatus: uncertain ? "delivery-uncertain" : "needs-attention",
+    };
+  }
+  switch (row.local_status) {
+    case "cancelled":
+      return { kind: "settled", outcome: "withdrawn" };
+    case "expired":
+      return { kind: "settled", outcome: "expired" };
+    case "queued":
+      return { kind: "queued" };
+    case "publish-failed":
+      return { kind: "send-failed" };
+    case "open":
+      return { kind: "waiting", reason: "open" };
+    case "human-answered":
+    case "proxy-answered":
+      return answeredStanding(row, row.local_status, handled);
+  }
+}
+
+function answeredStanding(
+  row: QuestionRow,
+  status: AnsweredStatus,
+  handled: HandledAnswers
+): DecisionQuestionStanding {
+  const messages = parseMessages(row.messages_json);
+  if (threadAwaitsHuman({ status, messages, lastHumanActionSeq: lastHumanActionSeq(row) })) {
+    return { kind: "waiting", reason: "reply" };
+  }
+  // An answer delivery stopped on and a person handled is never typed in.
+  const answerPending = !attentionStatus(row.delivery_status) && pendingEntries(row).length > 0;
+  if (answerPending || messages.some(isPendingMessage)) return { kind: "to-type" };
+  return { kind: "settled", outcome: "answered", handled: isHandled(row, handled) };
+}
+
+/**
+ * The ledger seq of the person's latest answer, correction or confirmation of
+ * the model's: what an agent's request for a reply is compared against. An
+ * answer stored before threads carries none, and comes before every message.
+ */
+function lastHumanActionSeq(row: QuestionRow): number | null {
+  let latest: number | null = null;
+  for (const entry of parseAnswers(row.answers_json)) {
+    if (entry.source !== "human" || entry.event_seq === undefined) continue;
+    if (entry.action !== "answer" && entry.action !== "override" && entry.action !== "confirm-proxy") {
+      continue;
+    }
+    latest = Math.max(latest ?? 0, entry.event_seq);
+  }
+  return latest;
+}
+
+/**
+ * When a settled question settled: its newest answer, or its expiry notice,
+ * else the time it was set to expire. A withdrawal records no time.
+ */
+function settledAt(
+  row: QuestionRow,
+  outcome: "answered" | "withdrawn" | "expired" | "declined"
+): string | null {
+  if (outcome === "withdrawn" || outcome === "declined") return null;
+  const kind = outcome === "answered" ? "answer" : "expired";
+  let newest: { revision: number; at: string } | null = null;
+  for (const entry of parseAnswers(row.answers_json)) {
+    if (entry.kind !== kind) continue;
+    if (newest === null || entry.revision >= newest.revision) {
+      newest = { revision: entry.revision, at: entry.created_at };
+    }
+  }
+  if (newest !== null) return newest.at;
+  return outcome === "expired" ? (row.expires_at ?? null) : null;
+}

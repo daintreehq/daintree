@@ -1623,6 +1623,8 @@ export interface IpcEventMap {
   "terminal:decision-state": import("../decisions.js").PaneDecisionState;
   // This machine's Decisions status changed, relay connection included; sent to its own windows only.
   "decisions:status-changed": import("../decisions.js").DecisionsStatus;
+  // Every question this computer's Decisions holds changed (#17229); never any content. Its own windows only.
+  "decisions:questions-changed": import("../decisionsQuestion.js").DecisionQuestionList;
   // The relay's paired devices or its key changed; Settings reads the list again. Its own windows only.
   "decisions:devices-changed": null;
   // The setup check's progress (#16024). Its own windows only.
@@ -2814,6 +2816,7 @@ export type IpcEventBusMap = Pick<
   | "terminal:decision-state"
   // This machine's Decisions status (local windows only)
   | "decisions:status-changed"
+  | "decisions:questions-changed"
   | "decisions:devices-changed"
   | "decisions:setup-check-changed"
   // Agent session journaled — resume surfaces refetch (global broadcast)

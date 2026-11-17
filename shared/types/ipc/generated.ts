@@ -810,6 +810,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisionsQuestion.js").CancelDecisionQuestionPayload];
     result: import("../decisionsQuestion.js").DecisionQuestionCancelResult;
   };
+  "decisions:cancel-question-by-reference": {
+    args: [payload: import("../decisionsQuestion.js").CancelDecisionQuestionByReferencePayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionCancelResult;
+  };
   "decisions:cancel-relay-deploy": {
     args: [deployId: string];
     result: void;
@@ -886,12 +890,26 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisionsQuestion.js").GetDecisionQuestionPayload];
     result: import("../decisionsQuestion.js").DecisionQuestionContentResult;
   };
+  "decisions:get-question-content-by-reference": {
+    args: [payload: import("../decisionsQuestion.js").GetDecisionQuestionByReferencePayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionContentResult;
+  };
   "decisions:get-question-image": {
     args: [payload: import("../decisionsQuestion.js").GetDecisionQuestionImagePayload];
     result: import("../decisionsQuestion.js").DecisionQuestionImagePartResult;
   };
+  "decisions:get-question-image-by-reference": {
+    args: [payload: import("../decisionsQuestion.js").GetDecisionQuestionImageByReferencePayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionImagePartResult;
+  };
   "decisions:get-question-summaries": {
     args: [payload: import("../decisionsQuestion.js").GetDecisionQuestionSummariesPayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionSummariesResult;
+  };
+  "decisions:get-question-summaries-by-reference": {
+    args: [
+      payload: import("../decisionsQuestion.js").GetDecisionQuestionSummariesByReferencePayload,
+    ];
     result: import("../decisionsQuestion.js").DecisionQuestionSummariesResult;
   };
   "decisions:get-setup-check": {
@@ -917,6 +935,10 @@ export interface GeneratedIpcInvokeMap {
   "decisions:list-hosts": {
     args: [];
     result: import("../decisionsHosts.js").DecisionsHostsResult;
+  };
+  "decisions:list-questions": {
+    args: [];
+    result: import("../decisionsQuestion.js").DecisionQuestionList;
   };
   "decisions:mark-answer-handled": {
     args: [payload: import("../decisionsAttention.js").MarkDecisionsAnswerHandledPayload];
