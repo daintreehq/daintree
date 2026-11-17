@@ -45,7 +45,7 @@ afterEach(() => {
 
 describe("useWorktreeChoices — when the worktrees are known (#17467)", () => {
   it("has no ids before the host has reported, so a target can't be called missing", () => {
-    setStore({ isInitialized: false });
+    setStore({ worktrees: [MAIN], isInitialized: false });
     expect(renderHook(() => useWorktreeChoices()).result.current.ids).toBeNull();
   });
 
@@ -87,5 +87,17 @@ describe("useWorktreeChoices — when the worktrees are known (#17467)", () => {
     view.rerender();
 
     expect(view.result.current.ids).toEqual(new Set([MAIN.id, FEATURE.id]));
+  });
+
+  it("drops an id when the worktree is removed while the read stays ready", () => {
+    setStore({ worktrees: [MAIN, FEATURE] });
+    const view = renderHook(() => useWorktreeChoices());
+    expect(view.result.current.ids).toEqual(new Set([MAIN.id, FEATURE.id]));
+
+    setStore({ worktrees: [MAIN] });
+    view.rerender();
+
+    expect(view.result.current.ids).toEqual(new Set([MAIN.id]));
+    expect(view.result.current.labels.has(FEATURE.id)).toBe(false);
   });
 });

@@ -465,8 +465,19 @@ describe("ProjectSchedulesTab — a schedule in another worktree (#17467)", () =
     worktreeList.error = null;
   });
 
-  const openHistory = async () =>
-    fireEvent.click(await screen.findByRole("button", { name: "Run history of Nightly audit" }));
+  const openHistory = async () => {
+    const open = await screen.findByRole("button", { name: "Run history of Nightly audit" });
+    await act(async () => {
+      fireEvent.click(open);
+    });
+  };
+  const editSchedule = async () => {
+    const edit = await screen.findByRole("button", { name: "Edit schedule" });
+    await act(async () => {
+      fireEvent.click(edit);
+    });
+    return screen.findByRole("combobox", { name: "Worktree" });
+  };
 
   it("keeps the target unconfirmed in the list and the history while the host hasn't reported", async () => {
     worktreeList.initialized = false;
@@ -496,7 +507,7 @@ describe("ProjectSchedulesTab — a schedule in another worktree (#17467)", () =
     expect(screen.queryByText("Missing worktree")).toBeNull();
   });
 
-  it("names the worktree once it arrives", async () => {
+  it("names the worktree in the list once it arrives", async () => {
     worktreeList.current = [MAIN];
     worktreeList.reconnecting = true;
     client.list.mockResolvedValue(snapshot([inFeature]));
@@ -512,6 +523,23 @@ describe("ProjectSchedulesTab — a schedule in another worktree (#17467)", () =
     expect(screen.queryByText("Missing worktree")).toBeNull();
   });
 
+  it("names the worktree in the history once it arrives", async () => {
+    worktreeList.current = [MAIN];
+    worktreeList.reconnecting = true;
+    client.list.mockResolvedValue(snapshot([inFeature]));
+    const view = renderTab();
+    await openHistory();
+    expect(await screen.findByText(/Worktree unconfirmed/)).toBeTruthy();
+
+    worktreeList.current = [MAIN, FEATURE];
+    worktreeList.reconnecting = false;
+    view.update({ onClose: vi.fn() });
+
+    expect(await screen.findByText(/feature/)).toBeTruthy();
+    expect(screen.queryByText(/Worktree unconfirmed/)).toBeNull();
+    expect(screen.queryByText(/Missing worktree/)).toBeNull();
+  });
+
   it("calls the target missing only once the worktrees are known without it", async () => {
     worktreeList.current = [MAIN];
     client.list.mockResolvedValue(snapshot([inFeature]));
@@ -523,6 +551,27 @@ describe("ProjectSchedulesTab — a schedule in another worktree (#17467)", () =
     await openHistory();
     expect(await screen.findByText(/Missing worktree/)).toBeTruthy();
     expect(screen.queryByText(/Worktree unconfirmed/)).toBeNull();
+
+    expect((await editSchedule()).textContent).toContain("Missing worktree");
+  });
+
+  it("reads the main checkout's own id as the main checkout, never missing", async () => {
+    client.list.mockResolvedValue(
+      snapshot([{ ...NIGHTLY, launch: { ...NIGHTLY.launch, worktreeId: MAIN.id } }])
+    );
+    worktreeList.current = [MAIN, FEATURE];
+    renderTab();
+
+    expect(await screen.findByText("Main checkout")).toBeTruthy();
+    expect(screen.queryByText("Missing worktree")).toBeNull();
+
+    await openHistory();
+    expect(await screen.findByText(/Main checkout/)).toBeTruthy();
+    expect(screen.queryByText(/Missing worktree/)).toBeNull();
+
+    const trigger = await editSchedule();
+    expect(trigger.textContent).toContain("Main checkout");
+    expect(trigger.textContent).not.toContain("Missing worktree");
   });
 
   it("opens the editor on an unconfirmed target while the worktrees are unknown", async () => {
@@ -530,9 +579,8 @@ describe("ProjectSchedulesTab — a schedule in another worktree (#17467)", () =
     client.list.mockResolvedValue(snapshot([inFeature]));
     renderTab();
     await openHistory();
-    fireEvent.click(await screen.findByRole("button", { name: "Edit schedule" }));
 
-    const trigger = await screen.findByRole("combobox", { name: "Worktree" });
+    const trigger = await editSchedule();
     expect(trigger.textContent).toContain("Worktree unconfirmed");
     expect(trigger.textContent).not.toContain("Missing worktree");
   });

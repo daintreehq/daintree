@@ -358,11 +358,17 @@ describe("ScheduleEditor: a fixed worktree the choices don't list (#17467)", () 
     const schedule = existing({ worktreeId: "/wt" });
     const view = renderEditor(schedule, MAIN_ONLY, null);
     expect(worktreeTrigger().textContent).toContain("Worktree unconfirmed");
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+      target: { value: "Renamed" },
+    });
 
     view.rerender(editorElement(schedule, WITH_FEATURE, new Set(["/repo", "/wt"])));
 
     expect(worktreeTrigger().textContent).toContain("feature");
     expect(screen.queryByText("Worktree unconfirmed")).toBeNull();
+    expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe(
+      "Renamed"
+    );
   });
 });
 
