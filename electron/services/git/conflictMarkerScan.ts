@@ -6,7 +6,23 @@ export const STAGED_FILE_SIZE_CAP = 1_000_000;
 // Bounds what one `cat-file --batch` holds in memory at once.
 const BATCH_READ_BYTES = 16 * STAGED_FILE_SIZE_CAP;
 
-const CONFLICT_MARKER_RE = /^(?:<{7}|\|{7}|={7}|>{7})[ \t\r]?/m;
+const LF = 0x0a;
+const CR = 0x0d;
+const TAB = 0x09;
+const SPACE = 0x20;
+const MIN_MARKER_LENGTH = 7;
+
+// Only the markers git writes at a region's edges: the opener, the diff3 base,
+// and the closer. The `=======` divider is left out on purpose: alone it is a
+// Setext heading underline or a text separator in ordinary Markdown and plain
+// text, and a real region always carries an opener the scan reports first.
+const MARKER_BYTES = new Set([
+  0x3c, // <
+  0x7c, // |
+  0x3e, // >
+]);
+
+const UTF8_BOM = [0xef, 0xbb, 0xbf];
 
 // Gitlinks (160000) name a submodule commit rather than a blob, so `cat-file`
 // can't read them as one; deletions and unmerged entries (000000) have no stage-0
@@ -54,19 +70,47 @@ function parseBinaryPathsFromNumstat(raw: string): Set<string> {
   return binary;
 }
 
+// A run of at least seven marker characters at the start of a line, then
+// whitespace or the end of the line. Git writes seven, but widens them for some
+// merges (eight for a rename/rename content conflict) and to any width a
+// `conflict-marker-size` attribute names, so the width is a floor. Text glued to
+// the run (`<<<<<<<HEAD`) is not one: git always separates its label.
+function isMarkerLineAt(blob: Buffer, start: number): boolean {
+  const first = blob[start];
+  if (!MARKER_BYTES.has(first)) return false;
+  let end = start + 1;
+  while (blob[end] === first) end++;
+  if (end - start < MIN_MARKER_LENGTH) return false;
+  const after = blob[end];
+  return after === undefined || after === SPACE || after === TAB || after === CR || after === LF;
+}
+
+// Walks the raw bytes, so a megabyte blob is never decoded or split into lines.
+function findFirstConflictMarkerLine(blob: Buffer): number | null {
+  let start = UTF8_BOM.every((byte, i) => blob[i] === byte) ? UTF8_BOM.length : 0;
+  let line = 1;
+  while (start < blob.length) {
+    if (isMarkerLineAt(blob, start)) return line;
+    const lineEnd = blob.indexOf(LF, start);
+    if (lineEnd === -1) return null;
+    start = lineEnd + 1;
+    line++;
+  }
+  return null;
+}
+
 function assertNoConflictMarkers(filePath: string, blob: Buffer): void {
-  const content = blob.toString("utf8");
-  const probe = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
-  if (CONFLICT_MARKER_RE.test(probe)) {
+  const line = findFirstConflictMarkerLine(blob);
+  if (line !== null) {
     throw new Error(
-      `Unresolved conflict markers found in ${filePath}. Resolve all conflicts before committing.`
+      `Unresolved conflict markers found in ${filePath} (line ${line}). Resolve all conflicts before committing.`
     );
   }
 }
 
 /**
  * Rejects when a staged text blob of at most `STAGED_FILE_SIZE_CAP` bytes
- * carries a conflict marker line. Blobs are sized first, so one past the cap is
+ * carries a conflict opener, base, or closer marker line. Blobs are sized first, so one past the cap is
  * never read, and the rest are read in a few `cat-file --batch` runs bounded by
  * total bytes rather than one process per file. `cwd` is where `git` runs.
  */
