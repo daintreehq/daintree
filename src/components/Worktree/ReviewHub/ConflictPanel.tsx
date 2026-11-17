@@ -251,6 +251,7 @@ function ConflictedFileLabel({
       content={`${path} (${kind})`}
       isTruncated={dirTruncated || baseTruncated}
       focusable={false}
+      contentClassName="font-mono [overflow-wrap:anywhere]"
     >
       <div className="flex-1 min-w-0 flex items-baseline gap-2">
         {/* The directory gives way first; the basename is the file's identity
@@ -287,7 +288,12 @@ function ResolvedFileLabel({ path }: { path: string }) {
   const { ref: baseRef, isTruncated: baseTruncated } = useTruncationDetection();
   const { dir, base } = splitPath(path);
   return (
-    <TruncatedTooltip content={path} isTruncated={dirTruncated || baseTruncated} focusable={false}>
+    <TruncatedTooltip
+      content={path}
+      isTruncated={dirTruncated || baseTruncated}
+      focusable={false}
+      contentClassName="font-mono [overflow-wrap:anywhere]"
+    >
       <div className="flex-1 min-w-0 flex items-baseline font-mono text-2xs">
         {dir && (
           <PathTail ref={dirRef} className="min-w-0 text-text-secondary">{`${dir}/`}</PathTail>

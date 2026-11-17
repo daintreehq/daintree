@@ -117,6 +117,13 @@ describe("DiffNotesSendMenu worktree name", () => {
     expect(item.querySelector('[tabindex="0"]')).toBeNull();
   });
 
+  it("discloses the fallback for an agent with no worktree when it is cut", () => {
+    targetsMock.current = [{ ...targetsMock.current[0]!, worktreeName: null }];
+    cutText = "No worktree";
+    openMenu();
+    expect(tooltips()).toEqual(["No worktree"]);
+  });
+
   it("shows no tooltip while the name fits", () => {
     openMenu();
     expect(tooltips()).toEqual([]);

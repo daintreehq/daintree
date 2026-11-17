@@ -92,10 +92,10 @@ describe("TruncatedTooltip", () => {
       expect(reads).toBeGreaterThan(0);
     });
 
-    it("leaves the child unmeasured when the caller says it is not truncated", () => {
+    it.each([false, true])("leaves the child unmeasured when the caller says %s", (isTruncated) => {
       countReads();
       render(
-        <TruncatedTooltip content="Full label" isTruncated={false}>
+        <TruncatedTooltip content="Full label" isTruncated={isTruncated}>
           <span data-label="">Label</span>
         </TruncatedTooltip>
       );

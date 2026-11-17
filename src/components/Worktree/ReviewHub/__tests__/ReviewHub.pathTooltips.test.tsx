@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, within } from "@testing-library/react";
 import type { ComponentProps, ReactNode } from "react";
 import type { StagingFileEntry, StagingStatus } from "@shared/types";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
@@ -28,12 +28,13 @@ import { BaseBranchFileRow } from "../BaseBranchFileRow";
 import { ConflictPanel } from "../ConflictPanel";
 import { CommitPanel } from "../CommitPanel";
 
-// jsdom lays nothing out. In a browser only the box that clips its own text
-// (`truncate`, which PathTail and the name spans carry) reports more scroll
-// width than client width; the flex wrappers around them shrink their children
-// instead and never overflow. `cut` decides which of those clipping boxes
-// overflow in a test.
+// jsdom lays nothing out, so `cut` decides which boxes overflow in a test. In a
+// browser only a box that clips its own text (`truncate`, which PathTail and the
+// name spans carry) reports more scroll width than client width; the flex
+// wrappers around them shrink their children instead and never overflow.
 let cut: (el: HTMLElement) => boolean = () => false;
+const clips = (el: HTMLElement) => el.classList.contains("truncate");
+const originalElectron = Object.getOwnPropertyDescriptor(window, "electron");
 const originalScrollWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollWidth");
 const originalClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
 
@@ -46,7 +47,7 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
     configurable: true,
     get(this: HTMLElement) {
-      return this.classList.contains("truncate") && cut(this) ? 240 : 120;
+      return cut(this) ? 240 : 120;
     },
   });
   Object.defineProperty(HTMLElement.prototype, "clientWidth", {
@@ -63,11 +64,12 @@ afterAll(() => {
 afterEach(() => {
   cleanup();
   cut = () => false;
-  vi.unstubAllGlobals();
+  if (originalElectron) Object.defineProperty(window, "electron", originalElectron);
+  else delete (window as unknown as Record<string, unknown>).electron;
 });
 
-function cutText(text: string) {
-  cut = (el) => el.textContent === text;
+function cutText(...texts: string[]) {
+  cut = (el) => clips(el) && texts.includes(el.textContent ?? "");
 }
 
 function tooltips(): string[] {
@@ -117,9 +119,13 @@ describe("FileStageRow path tooltip", () => {
     expect(tooltips()).toContain("a-file-name-long-enough-to-be-cut.config.ts");
   });
 
-  it("adds no tab stop inside the row, which the listbox owns", () => {
+  it("keeps a cut row's name button out of the tab order, which the listbox owns", () => {
     cutText(`${DIR}/`);
     const { container } = renderRow();
+    const name = container.querySelector<HTMLButtonElement>(
+      `button[aria-label="View diff: ${PATH}"]`
+    );
+    expect(name?.tabIndex).toBe(-1);
     expect(container.querySelector('[tabindex="0"]')).toBeNull();
   });
 });
@@ -160,8 +166,10 @@ describe("ConflictPanel path tooltips", () => {
   const RESOLVED = `${DIR}/CommitPanel.tsx`;
 
   function renderPanel() {
-    vi.stubGlobal("electron", {
-      git: { scanConflictMarkers: vi.fn().mockResolvedValue([]) },
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: { git: { scanConflictMarkers: vi.fn().mockResolvedValue([]) } },
     });
     const status: StagingStatus = {
       staged: [{ path: RESOLVED, status: "modified", insertions: 1, deletions: 0 }],
@@ -201,7 +209,7 @@ describe("ConflictPanel path tooltips", () => {
   });
 
   it("names the file when only its name is cut", () => {
-    cut = (el) => el.textContent === "ConflictPanel.tsx" || el.textContent === "CommitPanel.tsx";
+    cutText("ConflictPanel.tsx", "CommitPanel.tsx");
     renderPanel();
     expect(tooltips()).toContain(`${CONFLICTED} (both modified)`);
     expect(tooltips()).toContain(RESOLVED);
@@ -249,7 +257,13 @@ describe("CommitPanel", () => {
   }
 
   function statusLineCut(el: HTMLElement) {
-    return el.textContent?.includes("pushes to") === true;
+    return clips(el) && el.textContent?.includes("pushes to") === true;
+  }
+
+  function statusTooltips(): string[] {
+    return within(screen.getByTestId("review-hub-commit-status"))
+      .queryAllByTestId("tooltip-content")
+      .map((el) => el.textContent ?? "");
   }
 
   it("draws no native title on the status line", () => {
@@ -261,19 +275,20 @@ describe("CommitPanel", () => {
   it("discloses a cut push destination in a tooltip", () => {
     cut = statusLineCut;
     renderPanel();
-    const [tip] = tooltips().filter((text) => text.includes("pushes to"));
-    expect(tip).toMatch(/^2 files staged · pushes to .*feature\/a-very-long-branch-name$/);
+    expect(statusTooltips()).toEqual([
+      "2 files staged · pushes to origin/feature/a-very-long-branch-name",
+    ]);
   });
 
-  it("shows no destination tooltip while the status line fits", () => {
+  it("shows no tooltip while the status line fits", () => {
     renderPanel();
-    expect(tooltips().filter((text) => text.includes("pushes to"))).toEqual([]);
+    expect(statusTooltips()).toEqual([]);
   });
 
   it("discloses a cut destination while pushing", () => {
-    cut = (el) => el.textContent?.startsWith("Pushing to") === true;
+    cut = (el) => clips(el) && el.textContent?.startsWith("Pushing to") === true;
     renderPanel({ isPushing: true, pushTargetBranch: "origin/feature/a-very-long-branch-name" });
-    expect(tooltips()).toContain("Pushing to origin/feature/a-very-long-branch-name");
+    expect(statusTooltips()).toEqual(["Pushing to origin/feature/a-very-long-branch-name"]);
   });
 
   it("adds no tab stop for a cut destination", () => {
@@ -282,11 +297,23 @@ describe("CommitPanel", () => {
     expect(screen.getByTestId("review-hub-commit-status").querySelector("[tabindex]")).toBeNull();
   });
 
-  it("offers no tooltip for a blocker, which wraps instead of cutting", () => {
-    cut = (el) => (el.textContent ?? "").length > 0;
+  // Every box overflows here, so only the missing tooltip text keeps these shut.
+  it("offers no tooltip for a blocker", () => {
+    cut = () => true;
     renderPanel({ commitMessage: "" });
-    const status = screen.getByTestId("review-hub-commit-status").textContent ?? "";
-    expect(tooltips().filter((text) => status.includes(text))).toEqual([]);
+    expect(screen.getByTestId("review-hub-commit-status").textContent).toContain(
+      "Write a commit message"
+    );
+    expect(statusTooltips()).toEqual([]);
+  });
+
+  it("offers no tooltip for a line with no destination to name", () => {
+    cut = () => true;
+    renderPanel({ pushDestination: null });
+    expect(screen.getByTestId("review-hub-commit-status").textContent).toContain(
+      "no push destination"
+    );
+    expect(statusTooltips()).toEqual([]);
   });
 
   describe("push confirm file list", () => {
@@ -306,6 +333,16 @@ describe("CommitPanel", () => {
       renderPanel();
       openConfirm();
       expect(tooltips()).toContain(PATH);
+      expect(tooltips()).not.toContain("README.md");
+    });
+
+    it("discloses a path whose file name alone is cut, at the root too", () => {
+      const root = "a-root-file-name-long-enough-to-be-cut.config.ts";
+      cutText("FileStageRow.tsx", root);
+      renderPanel({ stagedPaths: [PATH, "README.md", root] });
+      openConfirm();
+      expect(tooltips()).toContain(PATH);
+      expect(tooltips()).toContain(root);
       expect(tooltips()).not.toContain("README.md");
     });
 

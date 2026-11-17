@@ -243,6 +243,7 @@ function FileStageRowComponent({
         content={file.path}
         isTruncated={dirTruncated || baseTruncated}
         focusable={false}
+        contentClassName="font-mono [overflow-wrap:anywhere]"
       >
         <button
           type="button"

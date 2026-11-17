@@ -174,7 +174,11 @@ function DiffNoteTargetItems({
           ) : (
             // The item is the focus target and already names the worktree in
             // full, so the cut name is a pointer disclosure only.
-            <TruncatedTooltip content={target.worktreeName ?? "No worktree"} focusable={false}>
+            <TruncatedTooltip
+              content={target.worktreeName ?? "No worktree"}
+              focusable={false}
+              contentClassName="[overflow-wrap:anywhere]"
+            >
               <DropdownMenuMeta className="max-w-[140px] truncate">
                 {target.worktreeName ?? "No worktree"}
               </DropdownMenuMeta>

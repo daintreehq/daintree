@@ -109,7 +109,12 @@ function PushConfirmPath({ path }: { path: string }) {
   const dir = slash === -1 ? "" : path.slice(0, slash + 1);
   const base = slash === -1 ? path : path.slice(slash + 1);
   return (
-    <TruncatedTooltip content={path} isTruncated={dirTruncated || baseTruncated} focusable={false}>
+    <TruncatedTooltip
+      content={path}
+      isTruncated={dirTruncated || baseTruncated}
+      focusable={false}
+      contentClassName="font-mono [overflow-wrap:anywhere]"
+    >
       <li className="flex min-w-0">
         {dir && (
           <PathTail ref={dirRef} className="min-w-0 text-text-secondary">
@@ -891,6 +896,7 @@ export function CommitPanel({
           content={statusTooltip}
           disabled={statusTooltip === undefined}
           focusable={false}
+          contentClassName="[overflow-wrap:anywhere]"
         >
           <span className={cn("min-w-0", isBlocked && !isBusy ? "break-words" : "truncate")}>
             {statusContent}

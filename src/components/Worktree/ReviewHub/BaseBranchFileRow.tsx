@@ -55,6 +55,7 @@ export function BaseBranchFileRow({
       content={file.path}
       isTruncated={dirTruncated || baseTruncated}
       focusable={false}
+      contentClassName="font-mono [overflow-wrap:anywhere]"
     >
       <div
         className={cn(
