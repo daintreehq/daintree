@@ -9,11 +9,15 @@ import type {
   CloudSshTrust,
 } from "@shared/types/cloudHosts";
 
-const { cloud, trustHostKey, connect } = vi.hoisted(() => ({
-  cloud: { snapshot: { providers: [], accounts: [], hosts: [] } as CloudHostsSnapshot },
-  trustHostKey: vi.fn(),
-  connect: vi.fn(),
-}));
+const { cloud, trustHostKey, connect, retryWorktreeCleanup, dismissWorktreeCleanup } = vi.hoisted(
+  () => ({
+    cloud: { snapshot: { providers: [], accounts: [], hosts: [] } as CloudHostsSnapshot },
+    trustHostKey: vi.fn(),
+    connect: vi.fn(),
+    retryWorktreeCleanup: vi.fn(async () => {}),
+    dismissWorktreeCleanup: vi.fn(async () => {}),
+  })
+);
 vi.mock("@/components/Hosts/cloud/cloudHostsState", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/components/Hosts/cloud/cloudHostsState")>()),
   useCloudHosts: () => ({ snapshot: cloud.snapshot, loaded: true, loadError: null }),
@@ -29,7 +33,13 @@ vi.mock("@/components/Hosts/cloud/useCloudMachineActions", () => ({
   }),
 }));
 vi.mock("@/clients/cloudHostsClient", () => ({
-  cloudHostsClient: { retryCreate: vi.fn(), setLifetime: vi.fn(), trustHostKey },
+  cloudHostsClient: {
+    retryCreate: vi.fn(),
+    setLifetime: vi.fn(),
+    trustHostKey,
+    retryWorktreeCleanup,
+    dismissWorktreeCleanup,
+  },
 }));
 vi.mock("@/clients/remoteHostsClient", () => ({
   remoteHostsClient: { connect },
@@ -525,5 +535,94 @@ describe("CloudMachineSection lifetime row", () => {
     expect(lifetimeText()).toContain("as last reported");
     expect(lifetimeText()).toContain("Unknown while boat isn't available");
     expect(lifetimeChoice()).toBeNull();
+  });
+});
+
+describe("CloudMachineSection with its worktree's delete (#17360)", () => {
+  const MARK = {
+    hostId: null,
+    projectId: "0f1e2d3c",
+    worktreeId: "/Users/me/code/app-worktrees/feature-login",
+    projectName: "app",
+    worktreeName: "feature/login",
+    hostName: null,
+  };
+  const notice = () => screen.queryByTestId("cloud-machine-cleanup");
+
+  it("shows a failed delete with Retry, the provider's console and Keep", async () => {
+    show(
+      status({
+        resourceId: "bx_23456789",
+        machine: "running",
+        operation: null,
+        createdFor: MARK,
+        worktreeCleanup: {
+          choice: "delete",
+          phase: "failed",
+          error: { code: "failed", message: "Boat didn't answer.", at: 1 },
+        },
+      }),
+      [BOAT_PROVIDER]
+    );
+    expect(notice()?.textContent).toContain("Couldn't delete it with 'feature/login'");
+    expect(notice()?.textContent).toContain("Boat didn't answer.");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(retryWorktreeCleanup).toHaveBeenCalledWith("build");
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: /Open Boat console/ }));
+    expect(openExternal).toHaveBeenCalledWith(BOAT_PROVIDER.dashboardUrl);
+    fireEvent.click(screen.getByRole("button", { name: "Keep machine" }));
+    expect(dismissWorktreeCleanup).toHaveBeenCalledWith("build");
+  });
+
+  it("says a failed Retry in place", async () => {
+    retryWorktreeCleanup.mockRejectedValueOnce(
+      Object.assign(new Error("x"), { userMessage: "Boat refused it." })
+    );
+    show(
+      status({
+        resourceId: "bx_23456789",
+        machine: "running",
+        operation: null,
+        createdFor: MARK,
+        worktreeCleanup: {
+          choice: "stop",
+          phase: "failed",
+          error: { code: "failed", message: "Boat didn't answer.", at: 1 },
+        },
+      }),
+      [BOAT_PROVIDER]
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await act(async () => {});
+    expect(notice()?.textContent).toMatch(/Couldn't stop/);
+    expect(notice()?.textContent).not.toContain("Boat didn't answer.");
+  });
+
+  it("says what's still to come while it waits or runs, and nothing for a machine with none", () => {
+    const base = { resourceId: "bx_23456789", machine: "running" as const, operation: null };
+    show(
+      status({
+        ...base,
+        createdFor: MARK,
+        worktreeCleanup: { choice: "stop", phase: "waiting", error: null },
+      }),
+      [BOAT_PROVIDER]
+    );
+    expect(notice()?.textContent).toBe("It will be stopped once 'feature/login' is deleted.");
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    cleanup();
+    show(
+      status({
+        ...base,
+        createdFor: MARK,
+        worktreeCleanup: { choice: "delete", phase: "running", error: null },
+      }),
+      [BOAT_PROVIDER]
+    );
+    expect(notice()?.textContent).toBe("It's being deleted with 'feature/login'.");
+    cleanup();
+    show(status({ ...base, createdFor: MARK }), [BOAT_PROVIDER]);
+    expect(notice()).toBeNull();
   });
 });
