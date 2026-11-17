@@ -96,9 +96,7 @@ describe("GitService.compareWorktrees renames (real git)", () => {
       "src/old.ts"
     );
     expect(typeof diff).toBe("string");
-    const changed = (diff as string)
-      .split("\n")
-      .filter((line) => /^[+-](?![+-]{2} )/.test(line));
+    const changed = (diff as string).split("\n").filter((line) => /^[+-](?![+-]{2} )/.test(line));
     expect(changed).toEqual(["+line 101"]);
     expect(diff).toContain("rename from src/old.ts");
   });
