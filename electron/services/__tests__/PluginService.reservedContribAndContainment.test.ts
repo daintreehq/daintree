@@ -761,6 +761,9 @@ describe("reserved contribution point warnings", () => {
       expect(service.listPlugins().map((p) => p.manifest.name)).toContain("portal.links");
       const own = getPluginKeybindings().filter((entry) => entry.pluginId === "portal.links");
       expect(own.map((entry) => entry.item.actionId)).toEqual(["portal.links.add"]);
+      expect(service.listPluginActions()).toContainEqual(
+        expect.objectContaining({ pluginId: "portal.links", id: "portal.links.add" })
+      );
       const lines =
         service.getDiagnosticsSnapshot().plugins.find((p) => p.pluginId === "portal.links")
           ?.logLines ?? [];
