@@ -44,6 +44,7 @@ import {
   itemSentence,
   needsAttention,
   paneWaitOf,
+  readsPaneWait,
   type DecisionItem,
 } from "./decisionsChipModel";
 
@@ -231,7 +232,11 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
   const headingId = useId();
   const [open, setOpen] = useState(false);
   const openAttention = useDecisionsAttentionStore((s) => s.open);
-  const hasDraft = useTerminalInputStore((s) => hasDraftText(s.draftInputs, terminalId));
+  // Every pane header mounts this chip, so only one with something to say reads the drafts.
+  const watchDrafts = readsPaneWait(state);
+  const hasDraft = useTerminalInputStore(
+    (s) => watchDrafts && hasDraftText(s.draftInputs, terminalId)
+  );
   const queuesInput = usePanelStore((s) => {
     const panel = s.panelsById[terminalId];
     const agentId = panel && isPtyPanel(panel) ? getRuntimeOrBootAgentId(panel) : undefined;

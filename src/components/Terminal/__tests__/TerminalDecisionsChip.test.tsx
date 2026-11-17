@@ -45,6 +45,7 @@ vi.mock("@/components/ui/popover", async () => {
 
 import { TerminalDecisionsChip } from "../TerminalDecisionsChip";
 import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 import type {
   DecisionQuestionCancelResult,
   DecisionQuestionSummariesResult,
@@ -95,6 +96,47 @@ function paneState(overrides: Partial<PaneDecisionState> = {}): PaneDecisionStat
   };
 }
 
+/** Drafts that count every read of them, as the selector of a pane header would make one. */
+class CountingDrafts extends Map<string, string> {
+  reads = 0;
+  override get(key: string) {
+    this.reads++;
+    return super.get(key);
+  }
+  override has(key: string) {
+    this.reads++;
+    return super.has(key);
+  }
+  override forEach(...args: Parameters<Map<string, string>["forEach"]>) {
+    this.reads++;
+    super.forEach(...args);
+  }
+  override entries() {
+    this.reads++;
+    return super.entries();
+  }
+  override keys() {
+    this.reads++;
+    return super.keys();
+  }
+  override values() {
+    this.reads++;
+    return super.values();
+  }
+  override [Symbol.iterator]() {
+    this.reads++;
+    return super[Symbol.iterator]();
+  }
+}
+
+/** A keystroke in some composer: the store swaps in a fresh drafts map. */
+function typeInAComposer(entries: Array<[string, string]>): CountingDrafts {
+  const drafts = new CountingDrafts(entries);
+  drafts.reads = 0;
+  act(() => useTerminalInputStore.setState({ draftInputs: drafts }));
+  return drafts;
+}
+
 beforeEach(() => {
   statusListeners = [];
   paneListeners = [];
@@ -110,6 +152,7 @@ beforeEach(() => {
   }));
   cancelQuestion.mockReset().mockResolvedValue({ result: "cancelling" });
   useDecisionsQuestionViewStore.setState({ isOpen: false, request: null });
+  useTerminalInputStore.setState({ draftInputs: new Map() });
   onDecisionState.mockClear();
   Reflect.set(window, "electron", {
     events: {
@@ -140,6 +183,58 @@ describe("TerminalDecisionsChip", () => {
     expect(getPaneState).not.toHaveBeenCalled();
     expect(onDecisionState).not.toHaveBeenCalled();
     expect(screen.queryByTestId("terminal-decisions-chip")).toBeNull();
+  });
+
+  it("with Decisions off, reads no drafts when someone types in a composer", async () => {
+    render(<TerminalDecisionsChip terminalId="t1" />);
+    await waitFor(() => expect(getStatus).toHaveBeenCalled());
+    await act(async () => {});
+
+    const drafts = typeInAComposer([
+      ["project-a:t1", "a draft here"],
+      ["project-a:t2", "typing elsewhere"],
+    ]);
+    expect(drafts.reads).toBe(0);
+  });
+
+  it("with nothing outstanding for the pane, reads no drafts when someone types", async () => {
+    getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+    getPaneState.mockResolvedValue(null);
+    render(<TerminalDecisionsChip terminalId="t1" />);
+    await waitFor(() => expect(paneListeners).toHaveLength(1));
+    await act(async () => {});
+
+    const drafts = typeInAComposer([["project-a:t1", "a draft here"]]);
+    expect(drafts.reads).toBe(0);
+    expect(screen.queryByTestId("terminal-decisions-chip")).toBeNull();
+  });
+
+  it("holds an answer for the pane's own draft, never another host's for the same id", async () => {
+    getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+    getPaneState.mockResolvedValue(
+      paneState({
+        openQuestions: [],
+        waitingAnswers: [
+          { questionId: "q42", alias: 42, kind: "answer", deliveryStatus: "desktop-received" },
+        ],
+      })
+    );
+    render(<TerminalDecisionsChip terminalId="t1" />);
+    const chip = await screen.findByTestId("terminal-decisions-chip");
+    const heldForDraft = "once the draft here is sent or cleared";
+    expect(chip.getAttribute("aria-label")).not.toContain(heldForDraft);
+
+    const remoteReply: [string, string] = ["isolated-composer:host-b:t1", "a reply over there"];
+    typeInAComposer([remoteReply]);
+    expect(chip.getAttribute("aria-label")).not.toContain(heldForDraft);
+
+    typeInAComposer([remoteReply, ["project-a:t1", "a draft here"]]);
+    expect(chip.getAttribute("aria-label")).toContain(heldForDraft);
+
+    // Once the answer is typed in, nothing the pane shows waits on a draft.
+    act(() => paneListeners[0]!(paneState({ openQuestions: [], revision: 2 })));
+    expect(screen.queryByTestId("terminal-decisions-chip")).toBeNull();
+    expect(typeInAComposer([["project-a:t1", "a longer draft"]]).reads).toBe(0);
   });
 
   it("shares one status watch between every pane in the view", async () => {

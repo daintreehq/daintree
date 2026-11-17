@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { useTerminalInputStore } from "../terminalInputStore";
+import { isolatedComposerScope } from "@/lib/draftKey";
 import {
   _resetComposerSnapshotsForTesting,
   keepComposerSnapshot,
@@ -731,6 +732,40 @@ describe("terminalInputStore", () => {
       expect(after.commandHistory.size).toBe(0);
       expect(after.historyIndex.size).toBe(0);
       expect(after.tempDraft.size).toBe(0);
+    });
+
+    it("keeps another host's isolated draft for a terminal of the same id", () => {
+      const store = useTerminalInputStore.getState();
+      const otherHost = isolatedComposerScope("host-b");
+
+      store.setDraftInput("term-1", "local", "project-a");
+      store.setDraftInput("term-1", "local isolated", isolatedComposerScope());
+      store.setDraftInput("term-1", "reply to host-b", otherHost);
+      store.setPendingDraft("term-1", "pending for host-b", otherHost);
+      store.stashEditorState("term-1", makeState("stashed for host-b"), otherHost);
+      store.addToHistory("term-1", "sent to host-b", otherHost);
+      store.addToHistory("term-1", "sent here", "project-a");
+
+      useTerminalInputStore.getState().clearTerminalState("term-1");
+
+      const after = useTerminalInputStore.getState();
+      const remoteKey = `${otherHost}:term-1`;
+      expect([...after.draftInputs.keys()]).toEqual([remoteKey]);
+      expect(after.getDraftInput("term-1", otherHost)).toBe("reply to host-b");
+      expect([...after.pendingDrafts.keys()]).toEqual([remoteKey]);
+      expect(after.hasStashedEditorState("term-1", otherHost)).toBe(true);
+      expect([...after.commandHistory.keys()]).toEqual([remoteKey]);
+    });
+
+    it("leaves the store alone when only another host holds the id", () => {
+      useTerminalInputStore
+        .getState()
+        .setDraftInput("term-1", "reply to host-b", isolatedComposerScope("host-b"));
+
+      const before = useTerminalInputStore.getState();
+      useTerminalInputStore.getState().clearTerminalState("term-1");
+
+      expect(useTerminalInputStore.getState()).toBe(before);
     });
   });
 

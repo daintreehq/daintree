@@ -15,6 +15,7 @@ import {
   itemSentence,
   paneWaitOf,
   needsAttention,
+  readsPaneWait,
 } from "../decisionsChipModel";
 
 function pane(
@@ -118,6 +119,45 @@ describe("paneWaitOf", () => {
     expect(paneWaitOf({ hasDraft: true, queuesInput: false })).toBe("draft");
     expect(paneWaitOf({ hasDraft: false, queuesInput: true })).toBe("composer");
     expect(paneWaitOf({ hasDraft: false, queuesInput: false })).toBe("prompt");
+  });
+});
+
+describe("readsPaneWait", () => {
+  /** Whether anything the chip says comes out differently for another wait. */
+  function wordingTurnsOnWait(state: PaneDecisionState): boolean {
+    const said = (["draft", "composer", "prompt"] as const).map((wait) => {
+      const items = decisionItems(state, wait);
+      return JSON.stringify([
+        items.map((item) => [item.status, item.waitsFor]),
+        chipSummary(items),
+        deliveryNotes(items, wait),
+      ]);
+    });
+    return new Set(said).size > 1;
+  }
+
+  it("is set wherever the chip's wording turns on the pane's wait", () => {
+    for (const state of [
+      pane({ open: [open(42)] }),
+      pane({ open: [open(42, "queued")] }),
+      pane({ waiting: [waiting(41)] }),
+      pane({ waiting: [waiting(40, "expired")] }),
+      pane({ attention: [stopped(39)], waiting: [waiting(41)] }),
+    ]) {
+      expect(wordingTurnsOnWait(state)).toBe(true);
+      expect(readsPaneWait(state)).toBe(true);
+    }
+  });
+
+  it("is clear when nothing is out or waiting, so the drafts go unread", () => {
+    for (const state of [
+      pane(),
+      pane({ attention: [stopped(39), stopped(38, "delivery-uncertain")] }),
+    ]) {
+      expect(wordingTurnsOnWait(state)).toBe(false);
+      expect(readsPaneWait(state)).toBe(false);
+    }
+    expect(readsPaneWait(null)).toBe(false);
   });
 });
 
