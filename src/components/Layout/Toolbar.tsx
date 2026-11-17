@@ -157,6 +157,7 @@ import {
   hasLauncherLinks,
   useHasLiveDevServer,
   useLinksLauncherLinks,
+  useLinksLauncherPullRequest,
   useLinksLauncherRefresh,
 } from "@/hooks/useLinksLauncher";
 
@@ -852,6 +853,7 @@ export function Toolbar({
   useLinksLauncherRefresh();
   const hasLinks = hasLauncherLinks(useLinksLauncherLinks());
   const hasLiveDevServer = useHasLiveDevServer();
+  const hasPullRequest = useLinksLauncherPullRequest() !== null;
 
   const buttonRegistry = useMemo<
     Record<string, { render: () => React.ReactNode; isAvailable: boolean }>
@@ -1229,12 +1231,12 @@ export function Toolbar({
         // haven't enabled developer tools (the default).
         isAvailable: showDeveloperTools || watcherDegraded || topologyWatcherDark,
       },
-      // Shown only with a link to open or a dev server live somewhere; the
-      // palette's `links.open` still opens the launcher without either
-      // (`LinksLauncherDetachedHost`).
+      // Shown only with a link to open, the active worktree's pull request,
+      // or a dev server live somewhere; the palette's `links.open` still opens
+      // the launcher without any (`LinksLauncherDetachedHost`).
       "links-launcher": {
         render: () => <LinksLauncherToolbarButton key="links-launcher" data-toolbar-item="" />,
-        isAvailable: hasLinks || hasLiveDevServer,
+        isAvailable: hasLinks || hasPullRequest || hasLiveDevServer,
       },
       "assistant-toggle": {
         render: () => <ToolbarAssistantButton key="assistant-toggle" data-toolbar-item="" />,
@@ -1351,6 +1353,7 @@ export function Toolbar({
       fileBrowserAriaShortcut,
       fileBrowserHintHover,
       hasLinks,
+      hasPullRequest,
       hasLiveDevServer,
     ]
   );

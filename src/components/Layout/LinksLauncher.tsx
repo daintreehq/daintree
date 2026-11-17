@@ -7,11 +7,10 @@ import {
   type ReactNode,
 } from "react";
 import { Globe, ServerCog } from "lucide-react";
-import { Link } from "@/components/icons";
+import { GitPullRequest, Link, ListChecks } from "@/components/icons";
 import { linkHost } from "@shared/utils/projectLinks";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ChoiceCard } from "@/components/ui/card";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import {
   DropdownMenuGroup,
@@ -28,6 +27,8 @@ import { useAriaKeyshortcuts, useEffectiveCombo } from "@/hooks";
 import {
   hasLauncherLinks,
   useLinksLauncherLinks,
+  useLinksLauncherPullRequest,
+  type LauncherPullRequest,
   type LinksLauncherLinks,
 } from "@/hooks/useLinksLauncher";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
@@ -38,6 +39,8 @@ import { useAllDevSessions } from "@/store/allDevSessionsStore";
 import { useLinksLauncherStore } from "@/store/linksLauncherStore";
 import { usePanelStore } from "@/store/panelStore";
 import { logError } from "@/utils/logger";
+import { pullRequestWords } from "@/components/Worktree/ReviewHub/prWords";
+import { usePullRequestTerm } from "@/components/Worktree/ReviewHub/usePullRequestTerm";
 import {
   DEV_SERVERS_HEADING,
   LinksLauncherDevServers,
@@ -46,6 +49,13 @@ import {
   summarizeDevServers,
   type DevSessionsSnapshot,
 } from "./LinksLauncherDevServers";
+import {
+  LinksLauncherPullRequest,
+  pullRequestMenuWords,
+  useLauncherPullRequestChecks,
+  type LauncherChecks,
+} from "./LinksLauncherPullRequest";
+import { LinksLauncherRow } from "./LinksLauncherRow";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { focusToolbarControl } from "./PluginToolbarPopover";
 import { toolbarIconButtonClass } from "./toolbarItemClasses";
@@ -94,46 +104,27 @@ interface LinkRowProps {
 }
 
 function LinkRow({ rowId, title, url, addedByAssistant, onOpen }: LinkRowProps) {
-  const focusRestore = useOverlayFocusRestore();
-  const titleId = `${rowId}-title`;
-  const hostId = `${rowId}-host`;
   return (
-    <li>
-      <ChoiceCard
-        tone="row"
-        padding="sm"
-        aria-labelledby={titleId}
-        aria-describedby={hostId}
-        onClick={() => {
-          // A panel takes focus as it comes forward; the close mustn't pull it back.
-          if (opensInPanel(url)) focusRestore?.expectHandoff();
-          onOpen(url);
-        }}
-        className="group flex w-full items-center gap-2.5 text-left"
-      >
-        <Globe className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden="true" />
-        <span className="flex min-w-0 flex-1 items-baseline gap-2">
-          <span
-            id={titleId}
-            className="min-w-0 shrink-0 max-w-[60%] truncate text-sm text-text-primary"
-          >
-            {title}
-          </span>
-          <span
-            id={hostId}
-            className="min-w-0 truncate text-xs text-text-secondary group-hover:text-text-primary transition-colors duration-150"
-          >
-            {linkHost(url)}
-            {addedByAssistant && <span className="sr-only">, added by the Assistant</span>}
-          </span>
-        </span>
-        {addedByAssistant && (
+    <LinksLauncherRow
+      rowId={rowId}
+      icon={<Globe className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden="true" />}
+      title={title}
+      detail={
+        <>
+          {linkHost(url)}
+          {addedByAssistant && <span className="sr-only">, added by the Assistant</span>}
+        </>
+      }
+      trailing={
+        addedByAssistant && (
           <Badge size="xs" tone="neutral" aria-hidden="true" className="shrink-0">
             Assistant
           </Badge>
-        )}
-      </ChoiceCard>
-    </li>
+        )
+      }
+      url={url}
+      onOpen={onOpen}
+    />
   );
 }
 
@@ -167,27 +158,31 @@ function openProjectLinkSettings(): void {
 
 /**
  * The launcher's list: this project's links, then the person's own, then the
- * dev servers across every worktree.
+ * active worktree's pull request, then the dev servers across every worktree.
  */
 export function LinksLauncherList({
   links,
+  pullRequest,
+  checks,
   devSessions,
   onOpen,
   onManage,
 }: {
   links: LinksLauncherLinks;
+  pullRequest: LauncherPullRequest | null;
+  checks: LauncherChecks;
   devSessions: DevSessionsSnapshot;
   onOpen: (url: string) => void;
   onManage: () => void;
 }) {
   const baseId = useId();
   const { projectLinks, globalLinks } = links;
-  if (!hasLauncherLinks(links) && !hasDevServersSection(devSessions)) {
+  if (!hasLauncherLinks(links) && pullRequest === null && !hasDevServersSection(devSessions)) {
     return (
       <div className="flex flex-col items-start gap-2 p-3">
         <p className="text-xs text-text-secondary">
-          Links you or the Assistant save for this project, and dev servers running in any worktree,
-          show here.
+          Links you or the Assistant save for this project, the active worktree's pull request, and
+          dev servers running in any worktree show here.
         </p>
         <Button type="button" variant="outline" size="sm" onClick={onManage}>
           Add a project link
@@ -225,6 +220,16 @@ export function LinksLauncherList({
           ))}
         </LinkSection>
       )}
+      {pullRequest !== null && (
+        <LinksLauncherPullRequest
+          // A section per pull request: nothing one painted carries over to another.
+          key={`${pullRequest.worktreeId}:${pullRequest.number}`}
+          pullRequest={pullRequest}
+          checks={checks}
+          sectionId={`${baseId}-pull-request`}
+          onOpen={onOpen}
+        />
+      )}
       <LinksLauncherDevServers snapshot={devSessions} sectionId={`${baseId}-dev-servers`} />
     </div>
   );
@@ -246,9 +251,11 @@ function LinksLauncherPopoverContent({
   onCloseAutoFocus: NonNullable<ComponentProps<typeof PopoverContent>["onCloseAutoFocus"]>;
 }) {
   const links = useLinksLauncherLinks();
-  // Read here rather than in the section, so a server leaving the list
-  // re-runs the focus repair below like a link leaving it does.
+  // Read here rather than in their sections, so a server or a check leaving
+  // the list re-runs the focus repair below like a link leaving it does.
   const devSessions = useAllDevSessions();
+  const pullRequest = useLinksLauncherPullRequest();
+  const checks = useLauncherPullRequestChecks(pullRequest, seq);
   const close = useLinksLauncherStore((s) => s.close);
   const contentRef = useRef<HTMLDivElement>(null);
   // The control inside that last held focus. Kept through its removal, which
@@ -287,6 +294,8 @@ function LinksLauncherPopoverContent({
     >
       <LinksLauncherList
         links={links}
+        pullRequest={pullRequest}
+        checks={checks}
         devSessions={devSessions}
         onOpen={(url) => {
           close(seq ?? undefined);
@@ -430,12 +439,16 @@ export function LinksLauncherDetachedHost() {
 /**
  * The launcher's links inlined into a `…` menu its button went into, as menu
  * rows. Mounted with the menu's content, so each opening of the menu re-reads
- * this project's list the way an opening of the popover does. Dev servers
- * have controls of their own a menu row can't hold, so one row opens the
- * launcher for them once the menu has closed.
+ * this project's list the way an opening of the popover does. A pull
+ * request's checks are read when the launcher opens, and dev servers have
+ * controls of their own a menu row can't hold, so each gets one row that
+ * opens the launcher once the menu has closed.
  */
 export function LinksLauncherOverflowItems({ side }: { side: "left" | "right" }) {
   const links = useLinksLauncherLinks();
+  const pullRequest = useLinksLauncherPullRequest();
+  const prWords = pullRequestWords(usePullRequestTerm(pullRequest?.providerId ?? null));
+  const prMenu = pullRequest !== null ? pullRequestMenuWords(pullRequest, prWords) : null;
   const { sessions } = useAllDevSessions();
   const listedServers = listedDevSessions(sessions);
   const focusRestore = useOverlayFocusRestore();
@@ -481,6 +494,22 @@ export function LinksLauncherOverflowItems({ side }: { side: "left" | "right" })
               <DropdownMenuMeta aria-hidden={false}>{linkHost(link.url)}</DropdownMenuMeta>
             </DropdownMenuItem>
           ))}
+        </DropdownMenuGroup>
+      )}
+      {pullRequest !== null && prMenu !== null && (
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>{prWords.title}</DropdownMenuLabel>
+          <DropdownMenuItem onClick={() => select(pullRequest.url)}>
+            <GitPullRequest className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate">{prMenu.title}</span>
+            <DropdownMenuMeta aria-hidden={false}>{prMenu.detail}</DropdownMenuMeta>
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() => useLinksLauncherStore.getState().deferFromOverflow(side)}
+          >
+            <ListChecks className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate">Checks…</span>
+          </DropdownMenuItem>
         </DropdownMenuGroup>
       )}
       {listedServers.length > 0 && (
