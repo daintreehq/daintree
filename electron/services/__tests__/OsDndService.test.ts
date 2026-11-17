@@ -188,7 +188,7 @@ describe("OsDndService — macOS", () => {
     setPlatform("darwin");
   });
 
-  it("starts the plutil probe asynchronously and never blocks on execFileSync", () => {
+  it("starts the plutil probe asynchronously, bounded in time and output, never via execFileSync", () => {
     const svc = getOsDndService();
     svc.initialize();
 
@@ -236,8 +236,14 @@ describe("OsDndService — macOS", () => {
     ["a store whose records are not an array", { storeAssertionRecords: {} }],
   ])("an active assertion after %s still reports Focus on", async (_case, sibling) => {
     const active = JSON.parse(ACTIVE) as { data: unknown[] };
+    const svc = await initializeWithProbe(JSON.stringify({ data: [sibling, ...active.data] }));
+    expect(svc.getState()).toBe(true);
+  });
+
+  it("an active assertion before a store without assertions still reports Focus on", async () => {
+    const active = JSON.parse(ACTIVE) as { data: unknown[] };
     const svc = await initializeWithProbe(
-      JSON.stringify({ data: [sibling, ...active.data, { storeAssertionRecords: [] }] })
+      JSON.stringify({ data: [...active.data, {}, { storeAssertionRecords: [] }] })
     );
     expect(svc.getState()).toBe(true);
   });
