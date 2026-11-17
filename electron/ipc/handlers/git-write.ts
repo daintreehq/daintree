@@ -1506,14 +1506,15 @@ async function withStagedRenamePartners(cwd: string, paths: string[]): Promise<s
 type DiffGit = Pick<Awaited<ReturnType<typeof createHardenedGit>>, "diff" | "raw">;
 
 /**
- * Whether HEAD is a branch with no commit yet, read the way `git status` reads
- * "No commits yet". Strict where {@link hasHeadCommit} is lenient: a detached
- * HEAD, a branch that names any object however unreadable, or a probe that
- * fails is not unborn.
+ * Whether HEAD is a branch with no commit yet. Strict where
+ * {@link hasHeadCommit} is lenient: a detached HEAD, a branch that names any
+ * object however unreadable, or a probe that fails is not unborn. `git` must
+ * reject every non-zero exit, or a listing from a git that died silently would
+ * read as "no such branch".
  */
 async function isUnbornBranch(git: DiffGit): Promise<boolean> {
   const ref = (await git.raw(["symbolic-ref", "--quiet", "HEAD"]).catch(() => "")).trim();
-  if (!ref) return false;
+  if (!ref.startsWith("refs/heads/")) return false;
   // A pattern also matches refs under it (`main` matches `main/x`), so only an
   // exact name counts. `for-each-ref` answers a missing ref with exit 0.
   const listed = await git.raw(["for-each-ref", "--format=%(refname)", ref]).catch(() => null);
@@ -1527,15 +1528,16 @@ const WORKING_DIFF_ARGS = ["--no-ext-diff", "--no-textconv"];
  * name, so it diffs against the empty tree instead: every tracked path shows as
  * a new file holding what is on disk now. Any other failure is HEAD's to report.
  */
-async function diffWorkingTreeAgainstHead(git: DiffGit): Promise<string> {
+async function diffWorkingTreeAgainstHead(git: DiffGit, cwd: string): Promise<string> {
   try {
     // `--` keeps a tracked file named HEAD from being read as the revision.
     return await git.diff([...WORKING_DIFF_ARGS, "HEAD", "--"]);
   } catch (error) {
-    if (!(await isUnbornBranch(git))) throw error;
-    const format = (await git.raw(["rev-parse", "--show-object-format"]).catch(() => "")).trim();
+    const strict = await createStrictExitGit(cwd).catch(() => null);
+    if (!strict || !(await isUnbornBranch(strict))) throw error;
+    const format = (await strict.raw(["rev-parse", "--show-object-format"]).catch(() => "")).trim();
     if (format !== "sha1" && format !== "sha256") throw error;
-    return git.diff([...WORKING_DIFF_ARGS, EMPTY_TREE[format], "--"]);
+    return strict.diff([...WORKING_DIFF_ARGS, EMPTY_TREE[format], "--"]);
   }
 }
 
@@ -2371,7 +2373,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
         raw = await git.diff([...WORKING_DIFF_ARGS, "--cached"]);
         break;
       case "head":
-        raw = await diffWorkingTreeAgainstHead(git);
+        raw = await diffWorkingTreeAgainstHead(git, payload.cwd);
         break;
     }
 

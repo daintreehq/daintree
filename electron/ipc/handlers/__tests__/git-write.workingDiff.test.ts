@@ -43,8 +43,10 @@ function subcommand(args: readonly string[]): string | undefined {
   return args[i];
 }
 
-const GIT_ENV = {
-  ...process.env,
+// The fixture's own git: nothing inherited from the runner (a hook's
+// GIT_INDEX_FILE, a default hash or ref format) may reach the repositories.
+const GIT_ENV: NodeJS.ProcessEnv = {
+  ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
   GIT_AUTHOR_NAME: "Test",
   GIT_AUTHOR_EMAIL: "test@example.test",
   GIT_COMMITTER_NAME: "Test",
@@ -55,6 +57,17 @@ const GIT_ENV = {
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, env: GIT_ENV, encoding: "utf8" });
+}
+
+/** What git itself says when `git diff HEAD --` fails here, first line. */
+function headDiffFailure(cwd: string): string {
+  try {
+    git(cwd, "diff", "--no-ext-diff", "--no-textconv", "HEAD", "--");
+  } catch (error) {
+    const stderr = String((error as { stderr?: unknown }).stderr ?? "").trim();
+    if (stderr) return stderr.split("\n")[0];
+  }
+  throw new Error("expected git diff HEAD to fail with an error");
 }
 
 let tmp: string;
@@ -80,6 +93,15 @@ function write(name: string, content: string, cwd = repo): void {
 
 function initRepo(...extra: string[]): void {
   git(tmp, "init", "-q", "-b", "main", ...extra, repo);
+}
+
+/** Leaves HEAD's ref in place and takes away the commit it names. */
+function deleteHeadCommitObject(): void {
+  const oid = git(repo, "rev-parse", "HEAD").trim();
+  const object = path.join(repo, ".git", "objects", oid.slice(0, 2), oid.slice(2));
+  // Loose objects are read-only, which Windows won't unlink.
+  fs.chmodSync(object, 0o644);
+  fs.rmSync(object);
 }
 
 beforeAll(async () => {
@@ -133,7 +155,6 @@ describe("@diff:head working diff (real git)", () => {
     expect(diff).toContain("diff --git a/a.txt b/a.txt\nnew file mode 100644\n");
     expect(diff).toContain("--- /dev/null\n+++ b/a.txt\n@@ -0,0 +1,2 @@\n+one\n+two\n");
     expect(diff).not.toContain("untracked.txt");
-    expect(diff).not.toMatch(/fatal|bad revision/);
   });
 
   it("answers no changes when an unborn branch tracks nothing", async () => {
@@ -159,7 +180,8 @@ describe("@diff:head working diff (real git)", () => {
     git(repo, "add", "base.txt");
     git(repo, "commit", "-q", "-m", "base");
     const linked = path.join(tmp, "linked");
-    git(repo, "worktree", "add", "-q", "--orphan", "-b", "fresh", linked);
+    git(repo, "worktree", "add", "-q", "--detach", linked);
+    git(linked, "switch", "-q", "--orphan", "fresh");
     write("c.txt", "orphan\n", linked);
     git(linked, "add", "c.txt");
 
@@ -167,6 +189,17 @@ describe("@diff:head working diff (real git)", () => {
 
     expect(diff).toContain("--- /dev/null\n+++ b/c.txt\n");
     expect(diff).not.toContain("base.txt");
+  });
+
+  it("caps a first commit's diff like any other", async () => {
+    initRepo();
+    write("big.txt", Array.from({ length: 600 }, (_, i) => `line ${i}\n`).join(""));
+    git(repo, "add", "big.txt");
+
+    const diff = await headDiff();
+
+    expect(diff).toContain("--- /dev/null\n+++ b/big.txt\n@@ -0,0 +1,600 @@\n+line 0\n");
+    expect(diff).toMatch(/\n\[Diff truncated — showing first 500 of \d+ lines\]$/);
   });
 
   it("reads a tracked file named HEAD as a path, never as the revision", async () => {
@@ -183,18 +216,20 @@ describe("@diff:head working diff (real git)", () => {
     expect(diff).toContain("+edited\n");
   });
 
-  it("diffs against HEAD in one git process once there is a commit", async () => {
+  it("diffs staged and unstaged edits against HEAD in one git process once there is a commit", async () => {
     initRepo();
     write("a.txt", "one\n");
     git(repo, "add", "a.txt");
     git(repo, "commit", "-q", "-m", "base");
-    write("a.txt", "one\ntwo\n");
+    write("a.txt", "one\nstaged\n");
+    git(repo, "add", "a.txt");
+    write("a.txt", "one\nstaged\nunstaged\n");
 
     const mark = spawned.length;
     const diff = await headDiff();
 
     expect(diff).toContain("--- a/a.txt\n+++ b/a.txt\n");
-    expect(diff).toContain(" one\n+two\n");
+    expect(diff).toContain(" one\n+staged\n+unstaged\n");
     expect(spawned.slice(mark).map(subcommand)).toEqual(["diff"]);
   });
 
@@ -216,27 +251,32 @@ describe("@diff:head working diff (real git)", () => {
     write("a.txt", "one\n");
     git(repo, "add", "a.txt");
     git(repo, "commit", "-q", "-m", "base");
-    fs.writeFileSync(path.join(repo, ".git", "refs", "heads", "main"), "garbage\n");
+    const loose = path.join(repo, ".git", "refs", "heads", "main");
+    // Only the files ref backend can hold a malformed ref.
+    expect(fs.existsSync(loose)).toBe(true);
+    fs.writeFileSync(loose, "garbage\n");
 
-    await expect(headDiff()).rejects.toThrow(/bad revision 'HEAD'/);
+    await expect(headDiff()).rejects.toThrow(headDiffFailure(repo));
   });
 
-  it("reports git's own error when HEAD names a commit git can't read", async () => {
+  it("reports git's own error when HEAD's branch names a missing commit", async () => {
     initRepo();
     write("a.txt", "one\n");
     git(repo, "add", "a.txt");
     git(repo, "commit", "-q", "-m", "base");
-    fs.writeFileSync(path.join(repo, ".git", "refs", "heads", "main"), `${"d".repeat(40)}\n`);
+    deleteHeadCommitObject();
 
-    await expect(headDiff()).rejects.toThrow(/bad object HEAD/);
+    await expect(headDiff()).rejects.toThrow(headDiffFailure(repo));
   });
 
   it("reports git's own error when a detached HEAD names a missing commit", async () => {
     initRepo();
     write("a.txt", "one\n");
     git(repo, "add", "a.txt");
-    fs.writeFileSync(path.join(repo, ".git", "HEAD"), `${"d".repeat(40)}\n`);
+    git(repo, "commit", "-q", "-m", "base");
+    git(repo, "checkout", "-q", "--detach");
+    deleteHeadCommitObject();
 
-    await expect(headDiff()).rejects.toThrow(/bad object HEAD/);
+    await expect(headDiff()).rejects.toThrow(headDiffFailure(repo));
   });
 });

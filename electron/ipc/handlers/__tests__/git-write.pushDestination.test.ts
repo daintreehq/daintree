@@ -31,12 +31,14 @@ vi.mock("../../../services/getSoundService.js", () => ({
 
 const createHardenedGitMock = vi.hoisted(() => vi.fn());
 const createAuthenticatedGitMock = vi.hoisted(() => vi.fn());
+const createStrictExitGitMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../../utils/hardenedGit.js", () => ({
   validateCwd: vi.fn(),
   createHardenedGit: createHardenedGitMock,
   createAuthenticatedGit: createAuthenticatedGitMock,
   createContinueGit: vi.fn(),
+  createStrictExitGit: createStrictExitGitMock,
 }));
 
 // Staged blob content by object id, as `cat-file` would answer for it.
@@ -1606,6 +1608,81 @@ describe("git-write commit and working diff", () => {
       await handler(null, { cwd: "/tmp/repo", type: "head" });
 
       expect(git.diff).toHaveBeenCalledWith(["--no-ext-diff", "--no-textconv", "HEAD", "--"]);
+      expect(createStrictExitGitMock).not.toHaveBeenCalled();
+    });
+
+    describe("when the HEAD diff fails", () => {
+      const headFailure = new Error("fatal: bad revision 'HEAD'");
+
+      /** A strict git answering each probe by subcommand; anything unlisted fails. */
+      function strictGit(answers: Record<string, string | Error>) {
+        const strict = makeFakeGit({
+          raw: vi.fn(async (args: string[]) => {
+            const answer = answers[args[0]];
+            if (answer === undefined || answer instanceof Error) {
+              throw answer ?? new Error(`unexpected git ${args[0]}`);
+            }
+            return answer;
+          }),
+          diff: vi.fn().mockResolvedValue("diff --git a/a.txt b/a.txt\nnew file mode 100644\n"),
+        });
+        createStrictExitGitMock.mockResolvedValue(strict);
+        return strict;
+      }
+
+      async function headDiff() {
+        const git = makeFakeGit({ diff: vi.fn().mockRejectedValue(headFailure) });
+        createHardenedGitMock.mockReturnValue(git);
+        registerGitWriteHandlers({} as Parameters<typeof registerGitWriteHandlers>[0]);
+        return getHandler("git:get-working-diff")(null, { cwd: "/tmp/repo", type: "head" });
+      }
+
+      beforeEach(() => {
+        createStrictExitGitMock.mockReset();
+      });
+
+      it("diffs an unborn branch against its object format's empty tree", async () => {
+        const strict = strictGit({
+          "symbolic-ref": "refs/heads/main\n",
+          "for-each-ref": "refs/heads/main/old\n",
+          "rev-parse": "sha256\n",
+        });
+
+        await expect(headDiff()).resolves.toContain("new file mode");
+        expect(strict.diff).toHaveBeenCalledWith([
+          "--no-ext-diff",
+          "--no-textconv",
+          "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321",
+          "--",
+        ]);
+      });
+
+      // Every probe but the one under test answers as an unborn branch would, so
+      // a guard that let the case through would reach the empty-tree diff.
+      const unborn = {
+        "symbolic-ref": "refs/heads/main\n",
+        "for-each-ref": "",
+        "rev-parse": "sha1\n",
+      };
+      it.each([
+        ["HEAD is detached", { ...unborn, "symbolic-ref": new Error("exited with 1") }],
+        ["HEAD's branch has a commit", { ...unborn, "for-each-ref": "refs/heads/main\n" }],
+        ["HEAD names a ref outside the branches", { ...unborn, "symbolic-ref": "refs/tags/v1\n" }],
+        ["the ref listing fails", { ...unborn, "for-each-ref": new Error("probe failed") }],
+        ["the object format can't be read", { ...unborn, "rev-parse": new Error("probe failed") }],
+        ["the object format is unknown", { ...unborn, "rev-parse": "sha512\n" }],
+      ] as const)("rethrows git's own error when %s", async (_case, answers) => {
+        const strict = strictGit(answers);
+
+        await expect(headDiff()).rejects.toThrow("fatal: bad revision 'HEAD'");
+        expect(strict.diff).not.toHaveBeenCalled();
+      });
+
+      it("rethrows git's own error when no strict git can be made", async () => {
+        createStrictExitGitMock.mockRejectedValue(new Error("no git"));
+
+        await expect(headDiff()).rejects.toThrow("fatal: bad revision 'HEAD'");
+      });
     });
 
     it("rejects an invalid diff type without invoking git", async () => {
