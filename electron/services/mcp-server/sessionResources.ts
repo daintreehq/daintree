@@ -15,7 +15,6 @@ import type { McpTier, ParsedResourceUri } from "./shared.js";
 import {
   RESOURCE_SCROLLBACK_TAIL_LINES,
   parseResourceUri,
-  serializeResourcePayload,
   unwrapDispatchResult,
   truncateText,
   truncateTextTail,
@@ -27,6 +26,7 @@ import {
 } from "./shared.js";
 import { WorkspaceBindingError } from "./rendererBridge.js";
 import { isTierPermitted } from "./tierAuth.js";
+import { fitJsonResource, type JsonArrayTrim } from "./resourceJsonBudget.js";
 import { safeSerializeToolResultCompact } from "../../utils/safeSerializeToolResult.js";
 import type { SessionStore } from "./sessionStore.js";
 import type { SessionContext } from "./sessionContext.js";
@@ -254,6 +254,21 @@ function listResourceTemplates(
   return templates;
 }
 
+// The heatmap is chronological, so it keeps its newest days, and it gives way
+// before the newest-first recent commits. Issue rows keep the page's own order,
+// and the cursor still points past the whole page, rows dropped here included.
+const PULSE_RESOURCE_TRIMS: readonly JsonArrayTrim[] = [
+  { key: "heatmap", keep: "tail" },
+  { key: "recentCommits", keep: "head" },
+];
+const ISSUES_RESOURCE_TRIMS: readonly JsonArrayTrim[] = [
+  {
+    key: "items",
+    keep: "head",
+    note: "Rows were dropped from the end of this page; nextCursor and hasMore describe the whole page.",
+  },
+];
+
 async function readResourceContents(
   uri: string,
   parsed: ParsedResourceUri,
@@ -273,8 +288,8 @@ async function readResourceContents(
       worktreeId: parsed.id,
       rangeDays: 60,
     });
-    const text = serializeResourcePayload(unwrapDispatchResult(envelope));
-    return { uri, mimeType: "application/json", text: truncateText(text) };
+    const text = fitJsonResource(unwrapDispatchResult(envelope), PULSE_RESOURCE_TRIMS);
+    return { uri, mimeType: "application/json", text };
   }
   if (parsed.kind === "scrollback") {
     const envelope = await dispatchAction("terminal.getOutput", {
@@ -325,8 +340,8 @@ async function readResourceContents(
     // Explicit rather than riding the action's default: this resource is read
     // whole and then truncated, so the compact projection is the point.
     const envelope = await dispatchAction("forge.listIssues", { view: "summary" });
-    const text = serializeResourcePayload(unwrapDispatchResult(envelope));
-    return { uri, mimeType: "application/json", text: truncateText(text) };
+    const text = fitJsonResource(unwrapDispatchResult(envelope), ISSUES_RESOURCE_TRIMS);
+    return { uri, mimeType: "application/json", text };
   }
   throw new McpError(ErrorCode.InvalidRequest, `Unknown resource URI: ${uri}`);
 }

@@ -11,6 +11,7 @@ import { createSessionServer } from "../sessionServer.js";
 import { getAgentAvailabilityStore } from "../../AgentAvailabilityStore.js";
 import { events } from "../../events.js";
 import { fakeSessionStore, fakeDeps, makeMockTransport } from "./helpers/sessionServerFixture.js";
+import { RESOURCE_TEXT_MAX_BYTES } from "../shared.js";
 
 describe("Resource error envelope (integration through sessionServer)", () => {
   async function readResource(server: ReturnType<typeof createSessionServer>, uri: string) {
@@ -199,5 +200,164 @@ describe("Resource error envelope (integration through sessionServer)", () => {
     expect(parsed.state).toBe("working");
     expect(parsed).not.toHaveProperty("exitCode");
     store.clear();
+  });
+
+  describe("oversized JSON resources (#17490)", () => {
+    async function readText(uri: string, result: unknown): Promise<string> {
+      const deps = fakeDeps({
+        sessionStore: fakeSessionStore("full"),
+        dispatchAction: vi.fn().mockResolvedValue({ result: { ok: true, result } }),
+      });
+      const server = createSessionServer(`s-res-oversized-${uri}`, deps);
+      await server.connect(makeMockTransport());
+      const read = (await readResource(server, uri)) as {
+        contents: { uri: string; mimeType: string; text: string }[];
+      };
+      expect(read.contents[0].mimeType).toBe("application/json");
+      return read.contents[0].text;
+    }
+
+    function issueRow(n: number) {
+      return {
+        number: n,
+        title: `Issue ${n} ${"é".repeat(120)}`,
+        state: "OPEN",
+        url: `https://github.com/acme/repo/issues/${n}`,
+        author: "octocat",
+        assignees: ["octocat"],
+        labels: ["bug", "needs-triage"],
+        createdAt: 1_700_000_000_000 + n,
+        updatedAt: 1_700_000_100_000 + n,
+      };
+    }
+
+    it("keeps an over-budget issue page parseable, in budget, and marked partial", async () => {
+      const items = Array.from({ length: 400 }, (_, i) => issueRow(i + 1));
+      const page = { items, nextCursor: "cursor-2", hasMore: true, totalCount: 900 };
+      expect(Buffer.byteLength(JSON.stringify(page), "utf8")).toBeGreaterThan(
+        RESOURCE_TEXT_MAX_BYTES
+      );
+
+      const text = await readText("daintree://project/current/issues", page);
+
+      expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(RESOURCE_TEXT_MAX_BYTES);
+      const parsed = JSON.parse(text);
+      expect(parsed.items.length).toBeGreaterThan(0);
+      expect(parsed.items.length).toBeLessThan(items.length);
+      expect(parsed.items).toEqual(items.slice(0, parsed.items.length));
+      expect(parsed.nextCursor).toBe("cursor-2");
+      expect(parsed.hasMore).toBe(true);
+      expect(parsed.totalCount).toBe(900);
+      expect(parsed.truncated).toEqual({
+        maxBytes: RESOURCE_TEXT_MAX_BYTES,
+        originalBytes: Buffer.byteLength(JSON.stringify(page), "utf8"),
+        omitted: { items: items.length - parsed.items.length },
+        note: expect.stringContaining("nextCursor"),
+      });
+    });
+
+    it("keeps an over-budget pulse parseable, in budget, and marked partial", async () => {
+      const heatmap = Array.from({ length: 1_500 }, (_, i) => ({
+        date: `day-${String(i).padStart(4, "0")}`,
+        count: i % 7,
+        level: i % 5,
+      }));
+      const recentCommits = Array.from({ length: 10 }, (_, i) => ({
+        sha: `${i}`.padStart(40, "a"),
+        subject: `Commit ${i} ${"ü".repeat(200)}`,
+        authorName: "Dev",
+        timestamp: 1_700_000_000_000 - i,
+      }));
+      const pulse = {
+        worktreeId: "wt-1",
+        worktreePath: "/repo",
+        branch: "feature/x",
+        mainBranch: "main",
+        rangeDays: 60,
+        generatedAt: 1_700_000_000_000,
+        heatmap,
+        commitsInRange: 321,
+        activeDays: 40,
+        projectAgeDays: 900,
+        currentStreakDays: 3,
+        recentCommits,
+      };
+      expect(Buffer.byteLength(JSON.stringify(pulse), "utf8")).toBeGreaterThan(
+        RESOURCE_TEXT_MAX_BYTES
+      );
+
+      const text = await readText("daintree://worktree/wt-1/pulse", pulse);
+
+      expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(RESOURCE_TEXT_MAX_BYTES);
+      const parsed = JSON.parse(text);
+      expect(parsed.worktreeId).toBe("wt-1");
+      expect(parsed.commitsInRange).toBe(321);
+      expect(parsed.currentStreakDays).toBe(3);
+      expect(parsed.heatmap.length).toBeGreaterThan(0);
+      expect(parsed.heatmap.length).toBeLessThan(heatmap.length);
+      // The newest days are the ones kept.
+      expect(parsed.heatmap).toEqual(heatmap.slice(-parsed.heatmap.length));
+      expect(parsed.recentCommits).toEqual(recentCommits);
+      expect(parsed.truncated).toEqual({
+        maxBytes: RESOURCE_TEXT_MAX_BYTES,
+        originalBytes: Buffer.byteLength(JSON.stringify(pulse), "utf8"),
+        omitted: { heatmap: heatmap.length - parsed.heatmap.length },
+      });
+    });
+
+    it("drops a pulse's oldest days before its newest commits, then its oldest commits", async () => {
+      const heatmap = Array.from({ length: 60 }, (_, i) => ({
+        date: `2026-09-${String(i).padStart(2, "0")}`,
+        count: i % 3,
+        level: i % 5,
+      }));
+      // Newest first, as `git log` lists them; together far past the cap.
+      const recentCommits = Array.from({ length: 10 }, (_, i) => ({
+        sha: `${i}`.padStart(40, "c"),
+        subject: `Commit ${i} ${"ß".repeat(3_000)}`,
+        timestamp: 1_700_000_000_000 - i,
+      }));
+      const pulse = {
+        worktreeId: "wt-1",
+        worktreePath: "/repo",
+        mainBranch: "main",
+        rangeDays: 60,
+        generatedAt: 1_700_000_000_000,
+        heatmap,
+        commitsInRange: 10,
+        activeDays: 10,
+        projectAgeDays: 90,
+        recentCommits,
+      };
+
+      const text = await readText("daintree://worktree/wt-1/pulse", pulse);
+
+      expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(RESOURCE_TEXT_MAX_BYTES);
+      const parsed = JSON.parse(text);
+      const keptCommits = parsed.recentCommits.length;
+      const keptDays = parsed.heatmap.length;
+      expect(keptCommits).toBeGreaterThan(0);
+      expect(keptCommits).toBeLessThan(recentCommits.length);
+      expect(parsed.recentCommits).toEqual(recentCommits.slice(0, keptCommits));
+      expect(parsed.heatmap).toEqual(heatmap.slice(heatmap.length - keptDays));
+      expect(parsed.truncated.omitted).toEqual({
+        recentCommits: recentCommits.length - keptCommits,
+        ...(keptDays < heatmap.length ? { heatmap: heatmap.length - keptDays } : {}),
+      });
+      // Commits were placed against an empty heatmap, and no further one fits there.
+      const oneMoreCommit = JSON.stringify({
+        ...parsed,
+        truncated: {
+          ...parsed.truncated,
+          omitted: {
+            recentCommits: recentCommits.length - keptCommits - 1,
+            heatmap: heatmap.length,
+          },
+        },
+        heatmap: [],
+        recentCommits: recentCommits.slice(0, keptCommits + 1),
+      });
+      expect(Buffer.byteLength(oneMoreCommit, "utf8")).toBeGreaterThan(RESOURCE_TEXT_MAX_BYTES);
+    });
   });
 });

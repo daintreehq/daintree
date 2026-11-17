@@ -1371,12 +1371,6 @@ export function unwrapDispatchResult(envelope: DispatchEnvelope): unknown {
   );
 }
 
-export function serializeResourcePayload(value: unknown): string {
-  if (value === undefined || value === null) return "null";
-  if (typeof value === "string") return value;
-  return safeSerializeToolResult(value);
-}
-
 export function truncateText(text: string, maxBytes: number = RESOURCE_TEXT_MAX_BYTES): string {
   if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
   const sliced = Buffer.from(text, "utf8").subarray(0, maxBytes).toString("utf8");
