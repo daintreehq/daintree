@@ -287,6 +287,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `find.inFocusedPanel` | Find in focused panel | safe | — |
 | `nav.focusRegion.next` | Focus next region | safe | — |
 | `nav.focusRegion.prev` | Focus previous region | safe | — |
+| `nav.quickOpenFile` | Open file by name | safe | — |
 | `nav.quickSwitcher` | Quick switcher | safe | — |
 | `nav.showGrid` | Show grid | safe | — |
 | `nav.showProjectHome` | Show project home | safe | — |
