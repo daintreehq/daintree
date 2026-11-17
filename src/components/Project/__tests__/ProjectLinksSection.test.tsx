@@ -96,6 +96,26 @@ describe("ProjectLinksSection (#17091)", () => {
     expect(input(container, 0).value).toBe("");
   });
 
+  it("does not add while Enter commits an IME composition, then adds on a plain Enter", async () => {
+    const ci: ProjectLink = { id: "b", title: "CI", url: "http://10.0.0.5:8080/" };
+    mainAnswers([staging, ci], ci);
+    const { container } = render(<ProjectLinksSection projectId="proj-1" />);
+
+    fireEvent.change(input(container, 0), { target: { value: "CI" } });
+    fireEvent.change(input(container, 1), { target: { value: "http://10.0.0.5:8080" } });
+
+    await act(async () => {
+      fireEvent.keyDown(input(container, 0), { key: "Enter", isComposing: true });
+      fireEvent.keyDown(input(container, 0), { key: "Enter", keyCode: 229 });
+    });
+    expect(changeMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.keyDown(input(container, 0), { key: "Enter" });
+    });
+    expect(changeMock).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the draft, ties the refusal to the field and moves there", async () => {
     changeMock.mockResolvedValueOnce({
       saved: false,
