@@ -111,6 +111,15 @@ interface PopoverData {
 
 type PopoverCollector = "processMetrics" | "heapStats" | "diagnosticsInfo" | "memorySnapshot";
 
+/** The earliest of the given times, or null when none is known. */
+function earliest(...times: Array<number | null>): number | null {
+  let result: number | null = null;
+  for (const time of times) {
+    if (time !== null && (result === null || time < result)) result = time;
+  }
+  return result;
+}
+
 function settled<T>(result: PromiseSettledResult<T>, what: string): T | null {
   if (result.status === "fulfilled") return result.value;
   logError(`[ProjectResourceBadge] Failed to fetch ${what}`, result.reason);
@@ -580,8 +589,10 @@ export function ProjectResourceBadge({
   // reads so the popover degrades to "showing last reading" instead of
   // dropping to a fake 0 or hiding a previously-shown row.
   const [lastGoodWorkloads, setLastGoodWorkloads] = useState<TerminalWorkloadSlice | null>(null);
-  // When the last snapshot that succeeded was asked for.
+  // When the popover asked for the readings above: the snapshot on show (set
+  // only by a read that succeeded) and the last good workload slice.
   const [popoverSampledAt, setPopoverSampledAt] = useState<number | null>(null);
+  const [lastGoodWorkloadsAt, setLastGoodWorkloadsAt] = useState<number | null>(null);
   const [nowTs, setNowTs] = useState(() => Date.now());
   const [thresholds, setThresholds] = useState<MemoryThresholds>(FALLBACK_THRESHOLDS);
   const samplesRef = useRef<number[]>([]);
@@ -652,22 +663,6 @@ export function ProjectResourceBadge({
   );
 
   const systemAvailableMB = popoverData.diagnosticsInfo?.systemAvailableMB ?? null;
-  // The Memory heading dates the oldest read behind its figures: the snapshot,
-  // and the machine-available figure while that row shows. Each is dated to
-  // when it was asked for, so a read that stalls ages instead of arriving
-  // looking fresh, and a failed read freshens nothing. The workload sweep's own
-  // age stays with its note: the pty-host backs off when idle, so dating the
-  // heading by it would call a healthy reading old.
-  const infoSampledAt = systemAvailableMB !== null ? (popoverData.diagnosticsInfoAt ?? null) : null;
-  const memoryReadAt =
-    popoverSampledAt !== null && infoSampledAt !== null
-      ? Math.min(popoverSampledAt, infoSampledAt)
-      : (popoverSampledAt ?? infoSampledAt);
-  const ageSec =
-    memoryReadAt !== null ? Math.max(0, Math.round((nowTs - memoryReadAt) / 1000)) : null;
-  // Silent while fresh. The popover polls every 4s, so "Updated just now" on
-  // every open said nothing; an age only earns its line once the reads stall.
-  const ageLabel = ageSec !== null && ageSec >= STALE_AFTER_SEC ? `Updated ${ageSec}s ago` : null;
 
   const fetchStats = useCallback(async () => {
     try {
@@ -868,7 +863,8 @@ export function ProjectResourceBadge({
   useEffect(() => {
     if (!open) return;
 
-    const inFlight = (popoverReadsInFlightRef.current ??= new Set());
+    if (popoverReadsInFlightRef.current === null) popoverReadsInFlightRef.current = new Set();
+    const inFlight = popoverReadsInFlightRef.current;
 
     // A read still out when the popover closes lands anyway: it is still the
     // newest of its kind, and its slot is what kept a reopen from asking again.
@@ -886,9 +882,8 @@ export function ProjectResourceBadge({
         value = await request();
       } catch (error) {
         if (what) logError(`[ProjectResourceBadge] Failed to fetch ${what}`, error);
-      } finally {
-        inFlight.delete(collector);
       }
+      inFlight.delete(collector);
       land(value, requestedAt);
     };
 
@@ -928,6 +923,7 @@ export function ProjectResourceBadge({
           if (snapshot === null) return;
           if (snapshot.terminalWorkloads.available) {
             setLastGoodWorkloads(snapshot.terminalWorkloads);
+            setLastGoodWorkloadsAt(requestedAt);
           }
           setPopoverSampledAt(requestedAt);
         }
@@ -1040,6 +1036,30 @@ export function ProjectResourceBadge({
     memorySnapshot?.terminalWorkloads ?? null,
     lastGoodWorkloads
   );
+
+  // The Memory heading dates the oldest figure shown under it, each by when the
+  // popover asked for it: a read that stalls ages instead of arriving looking
+  // fresh, a failed read freshens nothing, and a retained figure keeps its own
+  // date. The workload sweep's age stays with its note, since the pty-host
+  // backs off when idle and dating the heading by it would call a healthy
+  // reading old; the badge's fallback app figure has its own freshness gate.
+  const memoryReadAt =
+    memorySnapshot === undefined
+      ? null
+      : earliest(
+          memorySnapshot?.electron.available ? popoverSampledAt : null,
+          shownWorkloads === null
+            ? null
+            : shownWorkloads === memorySnapshot?.terminalWorkloads
+              ? popoverSampledAt
+              : lastGoodWorkloadsAt,
+          systemAvailableMB !== null ? (popoverData.diagnosticsInfoAt ?? null) : null
+        );
+  const ageSec =
+    memoryReadAt !== null ? Math.max(0, Math.round((nowTs - memoryReadAt) / 1000)) : null;
+  // Silent while fresh. The popover polls every 4s, so "Updated just now" on
+  // every open said nothing; an age only earns its line once the reads stall.
+  const ageLabel = ageSec !== null && ageSec >= STALE_AFTER_SEC ? `Updated ${ageSec}s ago` : null;
 
   return (
     <>
