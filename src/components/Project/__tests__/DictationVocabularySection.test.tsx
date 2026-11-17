@@ -117,6 +117,31 @@ describe("DictationVocabularySection", () => {
       expect(document.activeElement).toBe(termInput());
     });
 
+    it("falls back to a surviving row when the captured neighbour went first", async () => {
+      let resolveGamma!: (entries: VoiceDictionaryEntry[]) => void;
+      api.removeFromProject.mockReturnValueOnce(new Promise((resolve) => (resolveGamma = resolve)));
+      api.removeFromProject.mockResolvedValueOnce([entry("Alpha")]);
+      render(<DictationVocabularySection projectId="p1" />);
+      fireEvent.click(await screen.findByRole("button", { name: "Remove Gamma" }));
+      fireEvent.click(screen.getByRole("button", { name: "Remove Beta" }));
+      await act(async () => resolveGamma([entry("Alpha"), entry("Beta")]));
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Remove Beta" })).toBeNull());
+      expect(document.activeElement).toBe(removeButton("Alpha"));
+    });
+
+    it("leaves focus where the user moved it while the removal was saving", async () => {
+      let resolveRemove!: (entries: VoiceDictionaryEntry[]) => void;
+      api.removeFromProject.mockReturnValueOnce(
+        new Promise((resolve) => (resolveRemove = resolve))
+      );
+      render(<DictationVocabularySection projectId="p1" />);
+      fireEvent.click(await screen.findByRole("button", { name: "Remove Beta" }));
+      heardAsInput().focus();
+      await act(async () => resolveRemove([entry("Alpha"), entry("Gamma")]));
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Remove Beta" })).toBeNull());
+      expect(document.activeElement).toBe(heardAsInput());
+    });
+
     it("leaves focus alone when the removal fails", async () => {
       api.removeFromProject.mockRejectedValueOnce(new Error("disk full"));
       render(<DictationVocabularySection projectId="p1" />);
