@@ -21,6 +21,7 @@ const {
   abortRepositoryOperationMock,
   continueRepositoryOperationMock,
   scanConflictMarkersMock,
+  openSendToAgentPaletteWithTextMock,
   checkoutOursTheirsMock,
   openInEditorMock,
   stageFileMock,
@@ -58,6 +59,7 @@ const {
   abortRepositoryOperationMock: vi.fn().mockResolvedValue(undefined),
   continueRepositoryOperationMock: vi.fn().mockResolvedValue(undefined),
   scanConflictMarkersMock: vi.fn().mockResolvedValue([]),
+  openSendToAgentPaletteWithTextMock: vi.fn<(content: { text: string }) => boolean>(),
   checkoutOursTheirsMock: vi.fn().mockResolvedValue(undefined),
   openInEditorMock: vi.fn().mockResolvedValue(undefined),
   stageFileMock: vi.fn().mockResolvedValue(undefined),
@@ -93,6 +95,10 @@ const {
       ],
     ]),
   },
+}));
+
+vi.mock("@/hooks/useSendToAgentPalette", () => ({
+  openSendToAgentPaletteWithText: openSendToAgentPaletteWithTextMock,
 }));
 
 vi.mock("@/utils/debounce", () => ({
@@ -785,6 +791,100 @@ describe("ReviewHub", () => {
       await waitFor(() => screen.getByTestId("conflict-panel"));
       const badge = await screen.findByTestId("conflict-hunk-count-src/app.ts");
       expect(badge.textContent).toBe("3 regions");
+    });
+
+    describe("send conflicts to agent", () => {
+      const sentText = (): string => openSendToAgentPaletteWithTextMock.mock.calls[0]![0].text;
+
+      beforeEach(() => {
+        openSendToAgentPaletteWithTextMock.mockReset().mockReturnValue(true);
+      });
+
+      it("hands the palette the live conflicts with the scan's counts, in the rebase's own wording", async () => {
+        getStagingStatusMock.mockResolvedValue(
+          makeMergingStatus({
+            repoState: "REBASING",
+            rebaseStep: 2,
+            rebaseTotalSteps: 4,
+            conflictedFiles: [
+              { path: "src/app.ts", xy: "UU", label: "both modified" },
+              { path: "src/gone.ts", xy: "DU", label: "deleted by us" },
+            ],
+            rebaseSequence: {
+              backend: "merge",
+              entries: [
+                { action: "pick", sha: "aaa1111", subject: "first", state: "done" },
+                { action: "pick", sha: "bbb2222", subject: "second", state: "current" },
+              ],
+            },
+          })
+        );
+        scanConflictMarkersMock.mockResolvedValue([
+          { path: "src/app.ts", hunkCount: 3, firstMarkerLine: 12 },
+          { path: "src/gone.ts", hunkCount: null, firstMarkerLine: null },
+        ]);
+
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        await screen.findByTestId("conflict-hunk-count-src/app.ts");
+        fireEvent.click(screen.getByTestId("conflict-send-to-agent"));
+
+        expect(openSendToAgentPaletteWithTextMock).toHaveBeenCalledTimes(1);
+        const text = sentText();
+        expect(text).toContain('"conflictRegions": 3');
+        expect(text).toContain('"firstMarkerLine": 12');
+        expect(text).toContain('"kind": "deleted by destination"');
+        expect(text).toContain('"subject": "second"');
+        expect(text).toContain("ours is the destination branch");
+      });
+
+      it("leaves a file out once it is marked resolved", async () => {
+        getStagingStatusMock.mockResolvedValue(
+          makeMergingStatus({
+            conflictedFiles: [
+              { path: "src/app.ts", xy: "UU", label: "both modified" },
+              { path: "src/other.ts", xy: "UU", label: "both modified" },
+            ],
+          })
+        );
+        scanConflictMarkersMock.mockResolvedValue([
+          { path: "src/app.ts", hunkCount: 0, firstMarkerLine: null },
+          { path: "src/other.ts", hunkCount: 1, firstMarkerLine: 4 },
+        ]);
+
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        fireEvent.click(await screen.findByLabelText("Mark src/app.ts as resolved"));
+        await waitFor(() =>
+          expect(screen.queryByLabelText("Mark src/app.ts as resolved")).toBeNull()
+        );
+        fireEvent.click(screen.getByTestId("conflict-send-to-agent"));
+
+        const text = sentText();
+        expect(text).toContain("src/other.ts");
+        expect(text).not.toContain("src/app.ts");
+      });
+
+      it("shows a hint and keeps the button when no agent is open", async () => {
+        openSendToAgentPaletteWithTextMock.mockReturnValue(false);
+        getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        fireEvent.click(await screen.findByTestId("conflict-send-to-agent"));
+
+        expect(screen.getByTestId("conflict-send-to-agent-hint").textContent).toContain(
+          "Open an agent terminal"
+        );
+      });
+
+      it("is absent once every conflict is resolved", async () => {
+        getStagingStatusMock.mockResolvedValue(
+          makeMergingStatus({ conflicted: [], conflictedFiles: [] })
+        );
+
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        await screen.findByTestId("conflict-panel");
+
+        expect(screen.queryByTestId("conflict-send-to-agent")).toBeNull();
+      });
     });
 
     it("rescans a conflicted file rewritten inside Daintree, with no focus change", async () => {
