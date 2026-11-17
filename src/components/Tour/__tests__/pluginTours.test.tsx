@@ -111,6 +111,7 @@ describe("plugin tours", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       }
     );

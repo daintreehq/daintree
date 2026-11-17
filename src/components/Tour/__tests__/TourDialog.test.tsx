@@ -38,7 +38,9 @@ vi.mock("@/components/ui/AppDialog", () => {
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
   TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
-  TooltipContent: () => null,
+  TooltipContent: ({ children }: { children: ReactNode }) => (
+    <span data-testid="tooltip-content">{children}</span>
+  ),
 }));
 
 // The scene boundary reports what it catches; keep that local to the test.
@@ -117,6 +119,7 @@ describe("TourDialog", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       }
     );
@@ -173,6 +176,29 @@ describe("TourDialog", () => {
     fireEvent.keyDown(screen.getByRole("heading", { level: 3 }), { key: "m" });
     expect(mute.getAttribute("aria-pressed")).toBe("false");
     expect(props.onMutedChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("words the transport and mute tooltips for what a click does now", () => {
+    renderDialog();
+    const tips = () => screen.getAllByTestId("tooltip-content").map((n) => n.textContent);
+    const mute = screen.getByRole("button", { name: "Mute narration" });
+    expect(tips()).toContain("Mute narration");
+    fireEvent.click(mute);
+    expect(mute.getAttribute("aria-label")).toBe("Mute narration");
+    expect(tips()).toContain("Unmute narration");
+    expect(tips()).not.toContain("Mute narration");
+
+    const transport = screen
+      .getAllByRole("button", { name: "Play" })
+      .find((b) => b.hasAttribute("aria-pressed"))!;
+    expect(transport.getAttribute("aria-pressed")).toBe("true");
+    expect(tips()).toContain("Pause");
+    expect(tips()).not.toContain("Play");
+    fireEvent.click(transport);
+    expect(transport.getAttribute("aria-pressed")).toBe("false");
+    expect(transport.getAttribute("aria-label")).toBe("Play");
+    expect(tips()).toContain("Play");
+    expect(tips()).not.toContain("Pause");
   });
 
   it("stops the narration when closed", () => {
