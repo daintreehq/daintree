@@ -46,13 +46,55 @@ describe("eventStore", () => {
     expect(useEventStore.getState().filtersResetCount).toBe(before + 1);
   });
 
-  it("clearEvents keeps the filters, so the bar still has them to show", () => {
+  it("removeEvents keeps the filters, so the bar still has them to show", () => {
     useEventStore.getState().setEvents([makeEvent("1", { payload: { agentId: "claude-1" } })]);
     useEventStore.getState().setFilters({ agentId: "claude-1" });
 
-    useEventStore.getState().clearEvents();
+    useEventStore.getState().removeEvents(new Set(["1"]));
 
     expect(useEventStore.getState().events).toEqual([]);
     expect(useEventStore.getState().filters).toEqual({ agentId: "claude-1" });
+  });
+
+  it("removeEvents drops only the named events and keeps a selection outside them", () => {
+    useEventStore.getState().setEvents([makeEvent("1"), makeEvent("2"), makeEvent("3")]);
+    useEventStore.getState().setSelectedEvent("3");
+
+    useEventStore.getState().removeEvents(new Set(["1", "2"]));
+
+    expect(useEventStore.getState().events.map((e) => e.id)).toEqual(["3"]);
+    expect(useEventStore.getState().selectedEventId).toBe("3");
+  });
+
+  it("removeEvents clears the selection when the selected event goes", () => {
+    useEventStore.getState().setEvents([makeEvent("1"), makeEvent("2")]);
+    useEventStore.getState().setSelectedEvent("1");
+
+    useEventStore.getState().removeEvents(new Set(["1"]));
+
+    expect(useEventStore.getState().events.map((e) => e.id)).toEqual(["2"]);
+    expect(useEventStore.getState().selectedEventId).toBeNull();
+  });
+
+  it("removeEvents drops a selection whose row already rolled out of the buffer", () => {
+    // The selected row was evicted by the cap before the clear snapshotted ids,
+    // and "3" arrived while it ran.
+    useEventStore.getState().setEvents([makeEvent("2"), makeEvent("3")]);
+    useEventStore.getState().setSelectedEvent("1");
+
+    useEventStore.getState().removeEvents(new Set(["2"]));
+
+    expect(useEventStore.getState().events.map((e) => e.id)).toEqual(["3"]);
+    expect(useEventStore.getState().selectedEventId).toBeNull();
+  });
+
+  it("removeEvents leaves the state untouched when nothing it names is present", () => {
+    useEventStore.getState().setEvents([makeEvent("1")]);
+    useEventStore.getState().setSelectedEvent("1");
+    const before = useEventStore.getState();
+
+    useEventStore.getState().removeEvents(new Set(["absent"]));
+
+    expect(useEventStore.getState()).toBe(before);
   });
 });
