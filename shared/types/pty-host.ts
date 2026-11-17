@@ -31,6 +31,7 @@ import type { TerminalHandback } from "./handback.js";
 import type {
   ClosedProcessKillResult,
   ClosedProcessKillTarget,
+  HostPidOwner,
   HostProcessInventory,
 } from "./processes.js";
 
@@ -464,6 +465,7 @@ export type PtyHostRequest =
   | { type: "get-all-terminals"; requestId: string }
   | { type: "get-memory-rollup"; requestId: string }
   | { type: "get-process-inventory"; requestId: string; pids: number[] }
+  | { type: "find-pid-owners"; requestId: string; pids: number[] }
   | {
       type: "kill-closed-terminal-processes";
       requestId: string;
@@ -1016,6 +1018,7 @@ export type PtyHostEvent =
   | { type: "all-terminals"; requestId: string; terminals: PtyHostTerminalInfo[] }
   | { type: "memory-rollup"; requestId: string; rollup: MemoryRollup }
   | { type: "process-inventory"; requestId: string; inventory: HostProcessInventory }
+  | { type: "pid-owners"; requestId: string; owners: HostPidOwner[] }
   | {
       type: "closed-terminal-processes-killed";
       requestId: string;

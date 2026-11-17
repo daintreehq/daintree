@@ -128,6 +128,7 @@ import type {
 import type {
   ClosedProcessKillResult,
   ClosedProcessKillTarget,
+  HostPidOwner,
   HostProcessInventory,
 } from "../../shared/types/processes.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
@@ -2620,6 +2621,26 @@ export class PtyClient extends EventEmitter {
       shardsTotal: shards.length + unreachable,
       shardsFailed: shards.length - inventories.length + unreachable,
     };
+  }
+
+  /**
+   * Which live terminal's process tree each of `pids` sits in, from every
+   * shard's warm census. A pid sits in at most one terminal's tree, so a shard
+   * that fails or is mid-restart only leaves its own terminals' pids unowned,
+   * which a caller reads as "can't say", never as "nobody's".
+   */
+  async findPidOwners(pids: readonly number[]): Promise<HostPidOwner[]> {
+    const list = [...pids];
+    const results = await Promise.all(
+      this.fanOutShards().map((shard) =>
+        sendPtyHostRpc<HostPidOwner[]>(shard, "pid-owners", (requestId) => ({
+          type: "find-pid-owners",
+          requestId,
+          pids: list,
+        })).catch(() => [])
+      )
+    );
+    return results.flat();
   }
 
   /**

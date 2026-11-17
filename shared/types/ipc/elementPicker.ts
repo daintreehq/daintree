@@ -127,7 +127,7 @@ export type ElementPickerPushPayload =
  * that project; nothing here names a path main has not already authorised.
  */
 export interface ElementPickerWorkspaceOpenRequest {
-  /** The dev preview the workspace serves; source changes are pushed about it. */
+  /** The dev preview or browser panel the workspace serves; source changes are pushed about it. */
   panelId: string;
   worktreeId: string;
   /**
@@ -142,6 +142,13 @@ export interface ElementPickerWorkspaceOpenRequest {
    * loopback HTTP(S) origin; anything else opens a workspace that fetches none.
    */
   previewOrigin?: string;
+  /**
+   * The port a browser panel's page is served from on this machine. Main looks
+   * up which terminal's process tree listens on it, and refuses the workspace
+   * when that terminal belongs to another worktree: the panel records where it
+   * was opened, not where the page's server runs. It authorises nothing.
+   */
+  listenerPort?: number;
 }
 
 export type ElementPickerWorkspaceOpenResult =
@@ -158,7 +165,13 @@ export type ElementPickerWorkspaceOpenResult =
   /** More than one app, and nothing says which one the preview serves: the user chooses. */
   | { status: "ambiguous"; appPaths: string[]; scanComplete: boolean }
   /** The worktree is not one of the sender's project's, or the chosen app is not inside it. */
-  | { status: "unavailable"; reason: "unknown-worktree" | "invalid-app" };
+  | { status: "unavailable"; reason: "unknown-worktree" | "invalid-app" }
+  /**
+   * The page's server runs in a terminal of another worktree. `serverWorktreeId`
+   * names it when it is one of the sender's project's own, and is left out
+   * when the terminal belongs to another project.
+   */
+  | { status: "unavailable"; reason: "other-worktree"; serverWorktreeId?: string };
 
 export interface ElementPickerWorkspaceRequest {
   workspaceId: string;

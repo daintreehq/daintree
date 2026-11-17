@@ -17,6 +17,7 @@ import { AppError } from "../../utils/errorTypes.js";
 import { logWarn } from "../../utils/logger.js";
 import { AdmissionGate } from "./admissionGate.js";
 import { hasControlCharacter, isStrictlyInside } from "./containment.js";
+import { findListenerOwner, type ListenerOwnerDeps } from "./listenerOwner.js";
 import type { ElementPickerHost } from "./ElementPickerHost.js";
 import { ElementPickerHostError } from "./errors.js";
 import { getElementPickerHost } from "./index.js";
@@ -83,6 +84,9 @@ export interface ElementPickerWorkspaceServiceDeps {
   ): Promise<ReadonlyArray<{ id: string; path: string }> | null>;
   getHost?: () => Promise<WorkspaceHost>;
   discoverApps?: (worktreeRoot: string, signal: AbortSignal) => Promise<AppDiscovery>;
+  /** Who listens on a browser page's port; absent, a `listenerPort` is not checked. */
+  findListenerPids?: ListenerOwnerDeps["findListenerPids"];
+  findPidOwners?: ListenerOwnerDeps["findPidOwners"];
 }
 
 interface LeaseRecord extends ElementPickerLease {
@@ -253,6 +257,9 @@ export class ElementPickerWorkspaceService {
     const worktreeRoot = worktreePath === null ? null : await canonicalDirectory(worktreePath);
     if (worktreeRoot === null) return { status: "unavailable", reason: "unknown-worktree" };
 
+    const server = await this.serverOutsideWorktree(owner, request);
+    if (server !== null) return server;
+
     let explicitApp: string | null = null;
     if (request.appPath !== undefined) {
       const target = appPathTarget(worktreeRoot, request.appPath);
@@ -290,6 +297,34 @@ export class ElementPickerWorkspaceService {
       appPath: toRelative(worktreeRoot, lease.appRoot),
       appPaths,
       scanComplete,
+    };
+  }
+
+  /**
+   * A browser page whose server a terminal of another worktree is running:
+   * resolving it against this worktree would trace the page to a checkout that
+   * isn't the one serving it, and hand the agent the wrong files. Only a
+   * positive sighting refuses; a listener nobody can place opens as asked.
+   */
+  private async serverOutsideWorktree(
+    owner: ElementPickerWorkspaceOwner,
+    request: ElementPickerWorkspaceOpenRequest
+  ): Promise<ElementPickerWorkspaceOpenResult | null> {
+    const { findListenerPids, findPidOwners } = this.deps;
+    if (request.listenerPort === undefined || !findListenerPids || !findPidOwners) return null;
+    const verdict = await findListenerOwner(request.listenerPort, {
+      findListenerPids,
+      findPidOwners,
+    });
+    this.assertLive(owner);
+    if (verdict.status !== "terminal") return null;
+    if (verdict.projectId === owner.projectId && verdict.worktreeId === request.worktreeId) {
+      return null;
+    }
+    return {
+      status: "unavailable",
+      reason: "other-worktree",
+      ...(verdict.projectId === owner.projectId ? { serverWorktreeId: verdict.worktreeId } : {}),
     };
   }
 

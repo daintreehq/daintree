@@ -249,3 +249,65 @@ export async function scanHostListeners(
   }
   return [];
 }
+
+export type PortLsofRunner = (port: number) => Promise<string>;
+
+const defaultPortLsof: PortLsofRunner = (port) =>
+  new Promise((resolve, reject) => {
+    execFile(
+      "/usr/sbin/lsof",
+      ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-F", "pcn"],
+      { timeout: LSOF_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
+      (error, stdout) => {
+        if (error && (error as { code?: unknown }).code !== 1) {
+          reject(error);
+          return;
+        }
+        resolve(String(stdout));
+      }
+    );
+  });
+
+export interface PortListenerOptions {
+  platform?: NodeJS.Platform;
+  uid?: number;
+  lsof?: PortLsofRunner;
+  procFs?: ProcFs;
+  excludePids?: ReadonlySet<number>;
+}
+
+/**
+ * The processes listening on `port` where a `localhost` connection reaches,
+ * every socket's owner rather than one per port: a server and something else
+ * can hold the IPv4 and IPv6 sides of the same port. Null when this machine
+ * can't say: an unsupported platform, a failed scan, or a listener whose owner
+ * isn't readable. An empty list means nothing of the user's is listening.
+ */
+export async function findPortListenerPids(
+  port: number,
+  options: PortListenerOptions = {}
+): Promise<number[] | null> {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+  const platform = options.platform ?? process.platform;
+  const exclude = options.excludePids ?? new Set([process.pid]);
+  let listeners: RawListener[];
+  try {
+    if (platform === "darwin") {
+      listeners = parseLsofListeners(await (options.lsof ?? defaultPortLsof)(port));
+    } else if (platform === "linux") {
+      const uid = options.uid ?? process.getuid?.() ?? -1;
+      listeners = await scanLinuxListeners(uid, options.procFs);
+    } else {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  const pids = new Set<number>();
+  for (const listener of listeners) {
+    if (listener.port !== port) continue;
+    if (listener.pid === null) return null;
+    if (!exclude.has(listener.pid)) pids.add(listener.pid);
+  }
+  return [...pids].sort((a, b) => a - b);
+}

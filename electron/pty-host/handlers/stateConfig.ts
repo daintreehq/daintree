@@ -1,7 +1,11 @@
 import { normalizeScrollbackLines } from "../../../shared/config/scrollback.js";
 import { setSessionPersistSuppressed } from "../../services/pty/terminalSessionPersistence.js";
 import type { MemoryRollupProject } from "../../../shared/types/pty-host.js";
-import { buildProcessInventory, killClosedTerminalProcesses } from "./processInventory.js";
+import {
+  buildProcessInventory,
+  findPidOwners,
+  killClosedTerminalProcesses,
+} from "./processInventory.js";
 import type { HandlerMap, HostContext } from "./types.js";
 
 export function createStateConfigHandlers(ctx: HostContext): HandlerMap {
@@ -118,6 +122,14 @@ export function createStateConfigHandlers(ctx: HostContext): HandlerMap {
         type: "process-inventory",
         requestId: msg.requestId,
         inventory: buildProcessInventory(ctx, Array.isArray(msg.pids) ? msg.pids : []),
+      });
+    },
+
+    "find-pid-owners": (msg) => {
+      sendEvent({
+        type: "pid-owners",
+        requestId: msg.requestId,
+        owners: findPidOwners(ctx, Array.isArray(msg.pids) ? msg.pids : []),
       });
     },
 

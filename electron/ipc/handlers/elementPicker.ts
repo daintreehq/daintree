@@ -21,7 +21,7 @@ import { z } from "zod";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, opValidated } from "../define.js";
 import { getWebContentsForProject } from "../../window/webContentsRegistry.js";
-import { getWorkspaceClientRef } from "../../window/serviceRefs.js";
+import { getPtyClient, getWorkspaceClientRef } from "../../window/serviceRefs.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { getSitePreviewBridge } from "../../services/SitePreviewBridge.js";
@@ -88,6 +88,7 @@ const workspaceOpenSchema = z
     serverCwd: z.string().min(1).max(4096).optional(),
     appPath: z.string().min(1).max(1024).optional(),
     previewOrigin: z.string().min(1).max(2048).optional(),
+    listenerPort: z.number().int().min(1).max(65535).optional(),
   })
   .strict();
 
@@ -176,6 +177,13 @@ function workspaceService(): Promise<ElementPickerWorkspaceService> {
           const result = await client.getAllStatesForProjectResultAsync(projectPath, projectId);
           return result.status === "ok" ? result.states : null;
         },
+        // Behind a dynamic import like the service itself: the scan runs only
+        // for a browser panel's page, and only once the picker opens its source.
+        findListenerPids: (port) =>
+          import("../../remote/ports/listenerScan.js").then(({ findPortListenerPids }) =>
+            findPortListenerPids(port)
+          ),
+        findPidOwners: async (pids) => (await getPtyClient()?.findPidOwners(pids)) ?? [],
       }),
     (error: unknown) => {
       // Not cached: a failed load must not disable the picker for the session.

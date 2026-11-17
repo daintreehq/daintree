@@ -40,6 +40,7 @@ import {
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { mismatchMessage, runtimeIssueMessage, wireFailureMessage } from "./copy.js";
 import { usePanelStore } from "@/store/panelStore";
+import { isBrowserPanel, type PanelInstance } from "@shared/types/panel";
 import { redactUrl } from "./pageText.js";
 import {
   isProjectViewObservable,
@@ -204,7 +205,13 @@ export type WorkspaceState =
  * error is retried, a remembered app that has gone is chosen again, and a
  * server running from another checkout can only be restarted from this one.
  */
-export type WorkspaceFailure = "read-error" | "invalid-app" | "unknown-worktree" | "other-worktree";
+export type WorkspaceFailure =
+  | "read-error"
+  | "invalid-app"
+  | "unknown-worktree"
+  | "other-worktree"
+  /** A browser panel's page whose server a terminal of another worktree runs. */
+  | "served-elsewhere";
 
 export interface PageState {
   epoch: number;
@@ -512,6 +519,36 @@ function isWithin(root: string, path: string): boolean {
 function panelCwd(panel: unknown): string | null {
   if (typeof panel !== "object" || panel === null || !("cwd" in panel)) return null;
   return typeof panel.cwd === "string" && panel.cwd.length > 0 ? panel.cwd : null;
+}
+
+/**
+ * The port a browser panel's page is served from on this machine, for main to
+ * find out which terminal is listening on it. Only a loopback name says the
+ * server is here; a `.local` or private address may be another machine, and a
+ * dev preview runs its own server, which its `cwd` already places.
+ */
+function browserListenerPort(panel: unknown, url: string): number | null {
+  if (typeof panel !== "object" || panel === null || !isBrowserPanel(panel as PanelInstance)) {
+    return null;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  const host = parsed.hostname.toLowerCase().replace(/\.$/, "");
+  const loopback =
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host === "[::1]" ||
+    host === "[::]" ||
+    host === "0.0.0.0" ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+  if (!loopback) return null;
+  if (parsed.port) return Number(parsed.port);
+  return parsed.protocol === "https:" ? 443 : 80;
 }
 
 /** The preview's origin, which source maps may be fetched from; null for anything but a plain HTTP(S) page. */
@@ -836,7 +873,13 @@ export class InspectorController implements DevPreviewToolSession {
     // A window attached to another machine shows the page at this machine's
     // address, which on the machine holding the source names something else:
     // that workspace fetches no maps rather than the wrong ones.
-    const origin = this.deps.remoteWindow?.() === true ? null : originOf(this.pageUrl);
+    const remote = this.deps.remoteWindow?.() === true;
+    const origin = remote ? null : originOf(this.pageUrl);
+    // Same reason: on the machine holding the source, this machine's port
+    // names a different listener, if any.
+    const listenerPort = remote
+      ? null
+      : browserListenerPort(usePanelStore.getState().panelsById[this.panelId], this.pageUrl);
     let result: ElementPickerWorkspaceOpenResult;
     try {
       result = await this.deps.picker.openWorkspace({
@@ -845,6 +888,7 @@ export class InspectorController implements DevPreviewToolSession {
         ...(cwd !== null ? { serverCwd: cwd } : {}),
         ...(appPath !== undefined ? { appPath } : {}),
         ...(origin !== null ? { previewOrigin: origin } : {}),
+        ...(listenerPort !== null ? { listenerPort } : {}),
       });
     } catch (error) {
       if (request !== this.workspaceRequest) return;
@@ -889,11 +933,14 @@ export class InspectorController implements DevPreviewToolSession {
         return;
       case "unavailable":
         this.patchState({
-          workspace: {
-            status: "failed",
-            reason: result.reason,
-            message: appPath ?? "",
-          },
+          workspace:
+            result.reason === "other-worktree"
+              ? {
+                  status: "failed",
+                  reason: "served-elsewhere",
+                  message: result.serverWorktreeId ?? "",
+                }
+              : { status: "failed", reason: result.reason, message: appPath ?? "" },
         });
         this.releaseHeld();
         return;
@@ -1046,7 +1093,7 @@ export class InspectorController implements DevPreviewToolSession {
       this.patchState({
         binding: {
           status: "failed",
-          message: clientErrorText(error, "Couldn't connect to the dev preview"),
+          message: clientErrorText(error, "Couldn't connect to the page"),
           retrying,
         },
       });

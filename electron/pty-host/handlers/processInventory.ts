@@ -3,6 +3,7 @@ import type {
   ClosedProcessKillResult,
   ClosedProcessKillTarget,
   HostClosedTerminalProcess,
+  HostPidOwner,
   HostProcessInventory,
   HostProcessInventoryTerminal,
   ProcessTreeSample,
@@ -14,6 +15,10 @@ import type { HostContext } from "./types.js";
 
 /** Bounds the extra-pid lookup so a malformed request cannot walk the census unbounded. */
 const MAX_EXTRA_PIDS = 64;
+/** A port has a socket or two per address family; anything past this is a malformed request. */
+const MAX_OWNER_PIDS = 16;
+/** How far up its ancestry one process is followed before it counts as no terminal's. */
+const MAX_OWNER_DEPTH = 64;
 
 function sampleTree(ctx: HostContext, pid: number): ProcessTreeSample | null {
   const summary = ctx.processTreeCache.getTreeResourceSummary(pid);
@@ -31,6 +36,44 @@ function sampleTree(ctx: HostContext, pid: number): ProcessTreeSample | null {
       memoryKb: member.memoryKb,
     })),
   };
+}
+
+/**
+ * Which live terminal's tree each of `pids` sits in, read from the warm census
+ * with no OS sweep: the nearest ancestor that is a terminal's root process. A
+ * process the census has not seen yet, or one that left every terminal's tree
+ * (a daemon re-parented to init), has no owner and is left out.
+ */
+export function findPidOwners(ctx: HostContext, pids: readonly unknown[]): HostPidOwner[] {
+  const roots = new Map<number, { id: string; projectId?: string; worktreeId?: string }>();
+  for (const info of ctx.ptyManager.getAll()) {
+    if (info.isExited || info.wasKilled) continue;
+    const pid = info.ptyProcess?.pid;
+    if (Number.isInteger(pid) && (pid as number) > 0) roots.set(pid as number, info);
+  }
+  const owners: HostPidOwner[] = [];
+  if (roots.size === 0) return owners;
+  for (const pid of pids.slice(0, MAX_OWNER_PIDS)) {
+    if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) continue;
+    const seen = new Set<number>();
+    let current: number | undefined = pid;
+    while (current !== undefined && current > 1 && seen.size < MAX_OWNER_DEPTH) {
+      if (seen.has(current)) break;
+      seen.add(current);
+      const root = roots.get(current);
+      if (root) {
+        owners.push({
+          pid,
+          terminalId: root.id,
+          projectId: root.projectId ?? null,
+          worktreeId: root.worktreeId ?? null,
+        });
+        break;
+      }
+      current = ctx.processTreeCache.getProcess(current)?.ppid;
+    }
+  }
+  return owners;
 }
 
 /**

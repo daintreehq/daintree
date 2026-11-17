@@ -1896,6 +1896,7 @@ export interface GeneratedIpcInvokeMap {
         serverCwd?: string | undefined;
         appPath?: string | undefined;
         previewOrigin?: string | undefined;
+        listenerPort?: number | undefined;
       },
     ];
     result: import("./elementPicker.js").ElementPickerWorkspaceOpenResult;

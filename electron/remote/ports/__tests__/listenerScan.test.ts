@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   finalizeListeners,
+  findPortListenerPids,
   parseLsofListeners,
   parseProcNetTcp,
   scanHostListeners,
@@ -154,5 +155,84 @@ describe("scanHostListeners", () => {
         new Set()
       )
     ).toEqual([{ port: 80, pid: 7, processName: "nginx" }]);
+  });
+});
+
+describe("findPortListenerPids", () => {
+  const LINUX_FS = () =>
+    fakeProc(
+      { "/proc/net/tcp": PROC_TCP, "/proc/net/tcp6": PROC_TCP6 },
+      { "/proc": ["300", "400"], "/proc/300/fd": ["19"], "/proc/400/fd": ["5"] },
+      { "/proc/300/fd/19": "socket:[666]", "/proc/400/fd/5": "socket:[111]" }
+    );
+
+  it("asks lsof about the one port and names every process holding it", async () => {
+    const asked: number[] = [];
+    const pids = await findPortListenerPids(5173, {
+      platform: "darwin",
+      lsof: async (port) => {
+        asked.push(port);
+        // Two processes holding the two address families of one port.
+        return ["p4242", "cnode", "n[::1]:5173", "p4300", "cnode", "n127.0.0.1:5173", ""].join(
+          "\n"
+        );
+      },
+      excludePids: new Set(),
+    });
+    expect(asked).toEqual([5173]);
+    expect(pids).toEqual([4242, 4300]);
+  });
+
+  it("leaves out this process and listeners on other ports or unreachable addresses", async () => {
+    expect(
+      await findPortListenerPids(5173, {
+        platform: "darwin",
+        lsof: async () => LSOF_SAMPLE,
+        excludePids: new Set([4242]),
+      })
+    ).toEqual([]);
+    expect(
+      await findPortListenerPids(5432, {
+        platform: "darwin",
+        lsof: async () => LSOF_SAMPLE,
+        excludePids: new Set(),
+      })
+    ).toEqual([]);
+  });
+
+  it("reads a Linux listener's owner from its socket", async () => {
+    expect(
+      await findPortListenerPids(5173, {
+        platform: "linux",
+        uid: 1000,
+        procFs: LINUX_FS(),
+        excludePids: new Set(),
+      })
+    ).toEqual([300]);
+  });
+
+  it("can't say when a listener's owner isn't readable", async () => {
+    expect(
+      await findPortListenerPids(8080, {
+        platform: "linux",
+        uid: 1000,
+        procFs: LINUX_FS(),
+        excludePids: new Set(),
+      })
+    ).toBeNull();
+  });
+
+  it("can't say on a platform it has no scan for, after a failed scan, or for a bad port", async () => {
+    expect(await findPortListenerPids(5173, { platform: "win32" })).toBeNull();
+    expect(
+      await findPortListenerPids(5173, {
+        platform: "darwin",
+        lsof: () => Promise.reject(new Error("lsof timed out")),
+      })
+    ).toBeNull();
+    expect(await findPortListenerPids(0, { platform: "darwin", lsof: async () => "" })).toBeNull();
+    expect(
+      await findPortListenerPids(70_000, { platform: "darwin", lsof: async () => "" })
+    ).toBeNull();
   });
 });
