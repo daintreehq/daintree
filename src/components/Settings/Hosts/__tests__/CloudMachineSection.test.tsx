@@ -37,6 +37,7 @@ function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
     machineName: "build",
     ownership: "created-by-daintree",
     createdFor: null,
+    provisioning: null,
     machine: "not-created",
     rawState: null,
     machineType: "default",
@@ -113,5 +114,52 @@ describe("CloudMachineSection created-for row", () => {
     show(status({ ownership: "imported", resourceId: "bx_23456789", operation: null }));
     expect(createdFor()).toBeNull();
     expect(screen.getByText(/Added from the account/)).toBeTruthy();
+  });
+});
+
+describe("CloudMachineSection provisioning rows", () => {
+  it("shows where the machine runs and what it boots, as named at create, with its provider gone", () => {
+    show(
+      status({
+        providerId: "acme.clouds.ec2",
+        provisioning: {
+          location: { label: "Region", id: "eu-west-1", value: "Europe (Ireland)" },
+          image: { label: "AMI", id: "ami-0abc", value: "Ubuntu 24.04" },
+          network: { label: "Subnet", id: null, value: "Chosen by Acme" },
+        },
+      })
+    );
+    expect(screen.getByTestId("cloud-machine-location").textContent).toBe(
+      "Europe (Ireland) · eu-west-1"
+    );
+    expect(screen.getByTestId("cloud-machine-image").textContent).toBe("Ubuntu 24.04 · ami-0abc");
+    expect(screen.getByTestId("cloud-machine-network").textContent).toBe("Chosen by Acme");
+    // The provider's own names for them, kept with the machine.
+    expect(screen.getByText("Region")).toBeTruthy();
+    expect(screen.getByText("AMI")).toBeTruthy();
+    expect(screen.getByText("Subnet")).toBeTruthy();
+  });
+
+  it("names a choice once when its id is its name, and only the dimensions it was given", () => {
+    show(
+      status({
+        provisioning: {
+          location: { label: "Zone", id: "us-central1-a", value: "us-central1-a" },
+          image: null,
+          network: null,
+        },
+      })
+    );
+    expect(screen.getByTestId("cloud-machine-location").textContent).toBe("us-central1-a");
+    expect(screen.getByText("Zone")).toBeTruthy();
+    expect(screen.queryByTestId("cloud-machine-image")).toBeNull();
+    expect(screen.queryByTestId("cloud-machine-network")).toBeNull();
+  });
+
+  it("has no rows for a machine that named none", () => {
+    show(status());
+    expect(screen.queryByTestId("cloud-machine-location")).toBeNull();
+    expect(screen.queryByTestId("cloud-machine-image")).toBeNull();
+    expect(screen.queryByTestId("cloud-machine-network")).toBeNull();
   });
 });

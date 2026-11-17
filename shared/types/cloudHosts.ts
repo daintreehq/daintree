@@ -235,9 +235,100 @@ export interface CloudMachineType {
   reason: string | null;
 }
 
+/** The three things a create may name beyond its size, in the order a person picks them. */
+export type CloudProvisioningDimension = "location" | "image" | "network";
+
+export const CLOUD_PROVISIONING_DIMENSIONS: readonly CloudProvisioningDimension[] = [
+  "location",
+  "image",
+  "network",
+];
+
+/** One region, image or network an account may create a machine with. */
+export interface CloudProvisioningChoice {
+  /** The provider's own id for it, opaque to Daintree. */
+  id: string;
+  label: string;
+  /** A short line about it ("Ubuntu 24.04 LTS, x86-64"); null for none. */
+  description: string | null;
+  available: boolean;
+  /** Why it isn't available, in the provider's words. */
+  reason: string | null;
+  /**
+   * The location ids an image or network is offered in: null for every
+   * location, [] for none. Always null on a location.
+   */
+  locations: string[] | null;
+}
+
+/** What a provider offers for one dimension of a create. */
+export interface CloudProvisioningOptions {
+  /** What the provider calls it: "Region", "Zone", "AMI", "Subnet". */
+  label: string;
+  choices: CloudProvisioningChoice[];
+  /**
+   * The provider's suggestion. For an optional dimension null means the
+   * provider decides; for a required one, that it suggests nothing.
+   */
+  defaultId: string | null;
+}
+
+/**
+ * The ids a create names. Null is "not named": the provider decides, which
+ * only an optional dimension (or one the provider doesn't take) allows.
+ */
+export interface CloudProvisioningSelection {
+  location: string | null;
+  image: string | null;
+  network: string | null;
+}
+
+/** One dimension as it was chosen at create, with the words to show it by afterwards. */
+export interface CloudProvisioningPick {
+  /** The provider's name for the dimension then: "Region". */
+  label: string;
+  /** Null when the provider was left to decide. */
+  id: string | null;
+  /** The choice's label then, or who decides when nobody chose. */
+  value: string;
+}
+
+/** What a machine was created with; a dimension the provider didn't take is null. */
+export type CloudHostProvisioning = Record<
+  CloudProvisioningDimension,
+  CloudProvisioningPick | null
+>;
+
+/** Whether an image or network can be used in a location; a location-bound one needs a location. */
+export function cloudChoiceFitsLocation(
+  choice: CloudProvisioningChoice,
+  location: string | null
+): boolean {
+  if (choice.locations === null) return true;
+  return location !== null && choice.locations.includes(location);
+}
+
+/** A dimension's name inside a sentence: "region", "AMI". */
+export function cloudProvisioningNoun(label: string): string {
+  return /^[A-Z][a-z]/.test(label) ? `${label[0]!.toLowerCase()}${label.slice(1)}` : label;
+}
+
+/** The same, with its article: "a region", "an AMI". */
+export function cloudProvisioningArticleNoun(label: string): string {
+  const noun = cloudProvisioningNoun(label);
+  return `${/^[aeiou]/i.test(noun) ? "an" : "a"} ${noun}`;
+}
+
 export interface CloudCatalog {
   accountId: string;
   machineTypes: CloudMachineType[];
+  /**
+   * What a create may name, per dimension the provider takes; null for a
+   * dimension it doesn't. Boat takes none.
+   */
+  provisioning: Record<CloudProvisioningDimension, CloudProvisioningOptions | null>;
+  /** What this account's last create named on this device; null before its first. */
+  lastChoice: CloudProvisioningSelection | null;
   /** The provider will accept a start now. */
   canStart: boolean;
   /** Included machine hours left this period, when the provider reports them. */
@@ -343,6 +434,8 @@ export interface CloudHostStatus {
   ownership: "created-by-daintree" | "imported";
   /** The worktree it was created for; null for every other machine. */
   createdFor: CloudHostCreatedFor | null;
+  /** The region, image and network it was created with; null when none was named (imported, or a provider that takes none). */
+  provisioning: CloudHostProvisioning | null;
   machine: CloudMachineState;
   rawState: string | null;
   machineType: string | null;
@@ -380,6 +473,11 @@ export interface CloudHostCreateRequest {
   machineType: string;
   /** Hours the machine may run before the provider stops it unless renewed; null for never. */
   lifetimeHours: number | null;
+  /**
+   * The region, image and network, for a provider that takes any. Checked
+   * against the account's catalog as sent, never filled in.
+   */
+  provisioning?: CloudProvisioningSelection;
 }
 
 export interface CloudHostImportRequest {

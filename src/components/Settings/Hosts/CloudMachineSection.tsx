@@ -20,7 +20,11 @@ import {
   machineSpecLabel,
 } from "@/components/Hosts/cloud/cloudHostLabels";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
-import { CLOUD_LIFETIME_CHOICES, type CloudHostCreatedFor } from "@shared/types/cloudHosts";
+import {
+  CLOUD_LIFETIME_CHOICES,
+  CLOUD_PROVISIONING_DIMENSIONS,
+  type CloudHostCreatedFor,
+} from "@shared/types/cloudHosts";
 import type { HostId, HostMetricsSummary } from "@shared/types/remoteHosts";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsGroup, SettingsRow } from "../SettingsGroup";
@@ -235,6 +239,24 @@ export function CloudMachineSection({
           label="Size"
           description={`${status.machineType ? `${status.machineType[0]!.toUpperCase()}${status.machineType.slice(1)} · ` : ""}${machineSpecLabel(status.vcpu, status.memoryGB)} · ${formatHourly(status.hourlyDollars)}`}
         />
+        {CLOUD_PROVISIONING_DIMENSIONS.map((dimension) => {
+          // As it was named at create, so it reads the same with the provider gone.
+          const pick = status.provisioning?.[dimension];
+          if (!pick) return null;
+          return (
+            <SettingsRow
+              key={dimension}
+              label={pick.label}
+              description={
+                <span data-testid={`cloud-machine-${dimension}`}>
+                  {pick.id !== null && pick.id !== pick.value
+                    ? `${pick.value} · ${pick.id}`
+                    : pick.value}
+                </span>
+              }
+            />
+          );
+        })}
         <SettingsSelect
           label="Stops by itself after"
           description={

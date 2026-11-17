@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import {
+  CLOUD_PROVISIONING_DIMENSIONS,
   cloudProviderNamespace,
   isCloudProviderId,
   type CloudAccountAddRequest,
@@ -8,12 +9,16 @@ import {
   type CloudCatalog,
   type CloudProviderId,
   type CloudProviderInfo,
+  type CloudProvisioningChoice,
+  type CloudProvisioningDimension,
+  type CloudProvisioningOptions,
+  type CloudProvisioningSelection,
   type CloudResourceSummary,
 } from "../../../shared/types/cloudHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
 import type { CloudCredentialVault } from "./CloudCredentialVault.js";
 import type { CloudHostStore, StoredCloudAccount } from "./CloudHostStore.js";
-import type { CloudProvider, ProviderCredentials } from "./provider.js";
+import type { CloudProvider, ProviderCatalog, ProviderCredentials } from "./provider.js";
 
 const MAX_ACCOUNTS = 16;
 const MAX_KEY_LENGTH = 4096;
@@ -22,6 +27,84 @@ const CATALOG_TTL_MS = 5 * 60_000;
 
 function invalid(message: string): AppError {
   return new AppError({ code: "VALIDATION", message, userMessage: message });
+}
+
+const DIMENSION_LABELS: Record<CloudProvisioningDimension, string> = {
+  location: "Location",
+  image: "Image",
+  network: "Network",
+};
+
+function text(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+/**
+ * One dimension's options as Daintree shows and checks them: choices with an
+ * id, each id once, and a default that names one of them. A provider from a
+ * plugin can hand over anything, so nothing here trusts the shape.
+ */
+function normalizeOptions(
+  raw: unknown,
+  dimension: CloudProvisioningDimension
+): CloudProvisioningOptions {
+  const value = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const seen = new Set<string>();
+  const choices: CloudProvisioningChoice[] = [];
+  for (const entry of Array.isArray(value.choices) ? value.choices : []) {
+    const choice = (entry && typeof entry === "object" ? entry : {}) as Record<string, unknown>;
+    const id = typeof choice.id === "string" && choice.id.length > 0 ? choice.id : null;
+    if (id === null || seen.has(id)) continue;
+    seen.add(id);
+    choices.push({
+      id,
+      label: text(choice.label) ?? id,
+      description: text(choice.description),
+      // A constraint that doesn't read narrows, never widens: only a plain true is available,
+      // and locations that aren't a list tie the choice to none.
+      available: choice.available === true,
+      reason: text(choice.reason),
+      locations:
+        dimension === "location" || choice.locations === null || choice.locations === undefined
+          ? null
+          : Array.isArray(choice.locations)
+            ? choice.locations.filter(
+                (location): location is string => typeof location === "string"
+              )
+            : [],
+    });
+  }
+  const defaultId =
+    typeof value.defaultId === "string" && seen.has(value.defaultId) ? value.defaultId : null;
+  return { label: text(value.label) ?? DIMENSION_LABELS[dimension], choices, defaultId };
+}
+
+/** The catalog's options for each dimension the provider says a create takes, and only those. */
+export function normalizeProvisioning(
+  info: CloudProviderInfo,
+  raw: ProviderCatalog["provisioning"]
+): CloudCatalog["provisioning"] {
+  const offered = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const result = {} as CloudCatalog["provisioning"];
+  for (const dimension of CLOUD_PROVISIONING_DIMENSIONS) {
+    result[dimension] =
+      info.capabilities.provisioning[dimension] === "none"
+        ? null
+        : normalizeOptions(offered[dimension], dimension);
+  }
+  // With no location to pick, nothing can be tied to one.
+  if (result.location === null) {
+    for (const dimension of ["image", "network"] as const) {
+      const options = result[dimension];
+      if (options) {
+        result[dimension] = {
+          ...options,
+          choices: options.choices.map((choice) => ({ ...choice, locations: null })),
+        };
+      }
+    }
+  }
+  return result;
 }
 
 /** A pasted key, trimmed: printable ASCII with no whitespace inside. */
@@ -246,6 +329,7 @@ export class CloudAccountService {
       keyHint: key.slice(-4),
       addedAt: this.now(),
       validation: { status: "valid", checkedAt: this.now() },
+      lastProvisioning: null,
     };
     await this.deps.vault.put(id, key);
     // Another connect may have finished while the key was being sealed.
@@ -358,23 +442,54 @@ export class CloudAccountService {
     return summary!;
   }
 
+  /**
+   * The account's catalog. What the provider offers is cached for a while;
+   * the account's last choice is read fresh on every call, so a create made
+   * a moment ago is what the next dialog starts from.
+   */
   async catalog(accountId: unknown, options: { refresh?: boolean } = {}): Promise<CloudCatalog> {
     const account = this.requireAccount(accountId);
     const provider = this.provider(account.providerId);
     const cached = this.catalogs.get(account.id);
-    if (cached && !options.refresh && this.now() - cached.fetchedAt < CATALOG_TTL_MS) return cached;
+    if (cached && !options.refresh && this.now() - cached.fetchedAt < CATALOG_TTL_MS) {
+      return this.withLastChoice(cached);
+    }
     try {
+      const offered = await provider.catalog(await this.credentials(account));
       const catalog: CloudCatalog = {
         accountId: account.id,
-        ...(await provider.catalog(await this.credentials(account))),
+        machineTypes: offered.machineTypes,
+        canStart: offered.canStart,
+        includedHoursRemaining: offered.includedHoursRemaining,
+        startsRemaining: offered.startsRemaining,
+        savedSnapshotDayDollars: offered.savedSnapshotDayDollars,
+        provisioning: normalizeProvisioning(
+          provider.info(this.deps.platform ?? process.platform),
+          offered.provisioning
+        ),
+        lastChoice: null,
         fetchedAt: this.now(),
       };
       this.catalogs.set(account.id, catalog);
-      return catalog;
+      return this.withLastChoice(catalog);
     } catch (error) {
       this.noteFailure(account, provider, error);
       throw this.asAppError(provider, error);
     }
+  }
+
+  private withLastChoice(catalog: CloudCatalog): CloudCatalog {
+    return {
+      ...catalog,
+      lastChoice: this.deps.store.account(catalog.accountId)?.lastProvisioning ?? null,
+    };
+  }
+
+  /** Keeps what a create named as the account's next starting point; an account since removed stays removed. */
+  rememberProvisioning(accountId: string, selection: CloudProvisioningSelection): void {
+    const current = this.deps.store.account(accountId);
+    if (!current) return;
+    this.deps.store.putAccount({ ...current, lastProvisioning: { ...selection } });
   }
 
   /** The cached catalog's hourly rate for a size, when one was read. */

@@ -8,6 +8,7 @@ import type {
   CloudHostCreateRequest,
   CloudHostImportRequest,
   CloudProviderId,
+  CloudProvisioning,
 } from "../../../../shared/types/cloudHosts.js";
 import { TransportError, UnusableConnectionError } from "../../client/transport.js";
 import { BoatApiError } from "../boat/BoatClient.js";
@@ -17,7 +18,7 @@ import { MemoryCloudCredentialVault } from "../CloudCredentialVault.js";
 import { CloudHostLifecycle } from "../CloudHostLifecycle.js";
 import { CloudHostStore, type CloudHostsValue } from "../CloudHostStore.js";
 import { CloudSshFiles } from "../CloudSshFiles.js";
-import type { CloudProvider, ProviderResource } from "../provider.js";
+import type { CloudProvider, ProviderCatalog, ProviderResource } from "../provider.js";
 import type { CommandRunner } from "../../client/commandRunner.js";
 
 const HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl";
@@ -126,10 +127,15 @@ type Activity = { connected: boolean; busy: boolean; shown: boolean } | null;
 
 async function setup(
   initial: Partial<ProviderResource> = {},
-  options: { activity?: () => Activity; now?: () => number } = {}
+  options: {
+    activity?: () => Activity;
+    now?: () => number;
+    adapt?: (provider: CloudProvider) => void;
+  } = {}
 ) {
   const state = { machine: resource(initial) };
   const provider = fakeProvider(state);
+  options.adapt?.(provider);
   let backendValue: unknown;
   const backend = {
     get: () => backendValue,
@@ -205,7 +211,19 @@ async function setup(
     next.lifecycle.start();
     return next;
   };
-  return { lifecycle, provider, store, state, account, hosts, disconnect, files, run, restart };
+  return {
+    lifecycle,
+    accounts,
+    provider,
+    store,
+    state,
+    account,
+    hosts,
+    disconnect,
+    files,
+    run,
+    restart,
+  };
 }
 
 describe("CloudHostLifecycle.create", () => {
@@ -947,5 +965,221 @@ describe("CloudHostLifecycle worktree marks", () => {
     expect(provider.stop).not.toHaveBeenCalled();
     expect(provider.delete).not.toHaveBeenCalled();
     lifecycle.dispose();
+  });
+});
+
+/** What an EC2-shaped provider takes: a region and an image always, a subnet when asked. */
+const TAKES: CloudProvisioning = {
+  location: "required",
+  image: "required",
+  network: "optional",
+  sshKey: "at-create",
+};
+
+function offered(): NonNullable<ProviderCatalog["provisioning"]> {
+  const choice = (id: string, label: string, locations: string[] | null = null) => ({
+    id,
+    label,
+    description: null,
+    available: true,
+    reason: null,
+    locations,
+  });
+  return {
+    location: {
+      label: "Region",
+      defaultId: "us-east-1",
+      choices: [
+        choice("us-east-1", "US East (N. Virginia)"),
+        choice("eu-west-1", "Europe (Ireland)"),
+        { ...choice("ap-south-2", "Asia Pacific (Hyderabad)"), available: false, reason: "opt-in" },
+      ],
+    },
+    image: {
+      label: "AMI",
+      defaultId: null,
+      choices: [
+        choice("ami-use1", "Ubuntu 24.04", ["us-east-1"]),
+        choice("ami-euw1", "Ubuntu 24.04", ["eu-west-1"]),
+        choice("ami-any", "Debian 12"),
+      ],
+    },
+    network: {
+      label: "Subnet",
+      defaultId: null,
+      choices: [choice("subnet-euw1a", "eu-west-1a", ["eu-west-1"])],
+    },
+  };
+}
+
+function offerRegions(provider: CloudProvider, takes: () => CloudProvisioning = () => TAKES): void {
+  const info = provider.info.bind(provider);
+  provider.info = (platform) => {
+    const base = info(platform);
+    return { ...base, capabilities: { ...base.capabilities, provisioning: takes() } };
+  };
+  const catalog = provider.catalog;
+  provider.catalog = vi.fn(async (credentials) => ({
+    ...(await catalog(credentials)),
+    provisioning: offered(),
+  }));
+}
+
+describe("CloudHostLifecycle provisioning", () => {
+  const IRELAND = { location: "eu-west-1", image: "ami-euw1", network: "subnet-euw1a" };
+
+  function request(accountId: string, name = "build"): CloudHostCreateRequest {
+    return { accountId, name, machineType: "default", lifetimeHours: 2, provisioning: IRELAND };
+  }
+
+  it("sends the region, image and subnet it checked, in the first write, and shows them on the host", async () => {
+    const { lifecycle, provider, account, store } = await setup({}, { adapt: offerRegions });
+    const put = vi.spyOn(store, "putBinding");
+    await lifecycle.create(request(account.id));
+    const picks = {
+      location: { label: "Region", id: "eu-west-1", value: "Europe (Ireland)" },
+      image: { label: "AMI", id: "ami-euw1", value: "Ubuntu 24.04" },
+      network: { label: "Subnet", id: "subnet-euw1a", value: "eu-west-1a" },
+    };
+    // Kept from the first write, so a restart before the host is added still knows them.
+    expect(put.mock.calls[0]?.[0]).toMatchObject({ hostId: null, provisioning: picks });
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.machine).toBe("running"));
+    expect(vi.mocked(provider.create).mock.calls[0]?.[1].provisioning).toEqual(IRELAND);
+    expect(lifecycle.statuses()[0]?.provisioning).toEqual(picks);
+    expect(store.account(account.id)?.lastProvisioning).toEqual(IRELAND);
+  });
+
+  it("offers the account's last choice with every catalog, cached or read again", async () => {
+    const { lifecycle, provider, account, accounts } = await setup({}, { adapt: offerRegions });
+    expect((await accounts.catalog(account.id)).lastChoice).toBeNull();
+    await lifecycle.create(request(account.id));
+    const reads = vi.mocked(provider.catalog).mock.calls.length;
+    const cached = await accounts.catalog(account.id);
+    expect(provider.catalog).toHaveBeenCalledTimes(reads);
+    expect(cached.lastChoice).toEqual(IRELAND);
+    expect(cached.provisioning.location?.defaultId).toBe("us-east-1");
+    expect((await accounts.catalog(account.id, { refresh: true })).lastChoice).toEqual(IRELAND);
+  });
+
+  it("refuses a missing region, an unavailable one, or an image from another region before anything is sent", async () => {
+    const { lifecycle, provider, account, store, hosts } = await setup({}, { adapt: offerRegions });
+    const attempts: CloudHostCreateRequest["provisioning"][] = [
+      undefined,
+      { location: null, image: "ami-use1", network: null },
+      { location: "ap-south-2", image: "ami-any", network: null },
+      { location: "us-east-1", image: "ami-euw1", network: null },
+      { location: "us-east-1", image: "ami-use1", network: "subnet-euw1a" },
+      { location: "us-east-1", image: "ami-gone", network: null },
+    ];
+    for (const provisioning of attempts) {
+      await expect(
+        lifecycle.create({ ...request(account.id), provisioning })
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+    }
+    expect(provider.create).not.toHaveBeenCalled();
+    expect(store.bindings()).toEqual([]);
+    expect(hosts).toEqual([]);
+    expect(store.account(account.id)?.lastProvisioning).toBeNull();
+  });
+
+  it("refuses a region for a provider that takes none, and leaves Boat's hosts without any", async () => {
+    const { lifecycle, provider, account, store } = await setup();
+    await expect(
+      lifecycle.create({ ...request(account.id), provisioning: IRELAND })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    await lifecycle.create({ ...request(account.id), provisioning: undefined });
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.machine).toBe("running"));
+    expect(vi.mocked(provider.create).mock.calls[0]?.[1].provisioning).toEqual({
+      location: null,
+      image: null,
+      network: null,
+    });
+    expect(lifecycle.statuses()[0]?.provisioning).toBeNull();
+    expect(store.account(account.id)?.lastProvisioning).toBeNull();
+  });
+
+  it("retries a create after a restart with the choice it was made with, not the account's latest", async () => {
+    const { lifecycle, provider, account, store, restart } = await setup(
+      {},
+      { adapt: offerRegions }
+    );
+    vi.mocked(provider.create).mockRejectedValueOnce(
+      new BoatApiError("network", "lost", null, null, null)
+    );
+    await lifecycle.create(request(account.id));
+    await vi.waitFor(() =>
+      expect(lifecycle.statuses()[0]?.lastError?.code).toBe("outcome-unknown")
+    );
+    // A later create in another region moves what the account remembers.
+    const VIRGINIA = { location: "us-east-1", image: "ami-use1", network: null };
+    await lifecycle.create({ ...request(account.id, "other"), provisioning: VIRGINIA });
+    await vi.waitFor(() =>
+      expect(lifecycle.statuses().find((s) => s.hostId === "other")?.machine).toBe("running")
+    );
+    expect(store.account(account.id)?.lastProvisioning).toEqual(VIRGINIA);
+    expect(lifecycle.statuses().find((s) => s.hostId === "other")?.provisioning?.network).toEqual({
+      label: "Subnet",
+      id: null,
+      value: "Chosen by Boat",
+    });
+
+    const next = restart(lifecycle);
+    await next.lifecycle.retryCreate("build");
+    const calls = vi.mocked(provider.create).mock.calls;
+    const first = calls[0]![1];
+    const retried = calls[calls.length - 1]![1];
+    expect(retried.provisioning).toEqual(IRELAND);
+    expect(retried.idempotencyKey).toBe(first.idempotencyKey);
+    expect(
+      next.lifecycle.statuses().find((s) => s.hostId === "build")?.provisioning?.location
+    ).toEqual({ label: "Region", id: "eu-west-1", value: "Europe (Ireland)" });
+    expect(next.store.account(account.id)?.lastProvisioning).toEqual(VIRGINIA);
+  });
+
+  it("won't send a retry whose saved choice can't be read back, even where nothing is required", async () => {
+    const optional: CloudProvisioning = {
+      location: "optional",
+      image: "optional",
+      network: "optional",
+      sshKey: "at-create",
+    };
+    const { lifecycle, provider, account, store } = await setup(
+      {},
+      { adapt: (p) => offerRegions(p, () => optional) }
+    );
+    vi.mocked(provider.create).mockRejectedValueOnce(
+      new BoatApiError("payment-required", "pay", 402, null, null)
+    );
+    await lifecycle.create(request(account.id));
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.lastError?.code).toBe("billing"));
+    const binding = store.bindings()[0]!;
+    store.putBinding({ ...binding, provisioning: { location: 5 } as never });
+    store.updateBinding(binding.id, (current) => ({ ...current, intent: "run" }));
+    expect(store.bindings()[0]?.provisioning).toBe("unreadable");
+    await expect(lifecycle.retryCreate("build")).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(provider.create).toHaveBeenCalledTimes(1);
+    expect(lifecycle.statuses()[0]?.lastError?.message).toMatch(/can't read back/);
+  });
+
+  it("won't send a retry the provider now needs a region for that its create never named", async () => {
+    let takes: CloudProvisioning = {
+      location: "none",
+      image: "none",
+      network: "none",
+      sshKey: "after-create",
+    };
+    const { lifecycle, provider, account } = await setup(
+      {},
+      { adapt: (p) => offerRegions(p, () => takes) }
+    );
+    vi.mocked(provider.create).mockRejectedValueOnce(
+      new BoatApiError("payment-required", "pay", 402, null, null)
+    );
+    await lifecycle.create({ ...request(account.id), provisioning: undefined });
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.lastError?.code).toBe("billing"));
+    takes = TAKES;
+    await expect(lifecycle.retryCreate("build")).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(provider.create).toHaveBeenCalledTimes(1);
+    expect(lifecycle.statuses()[0]?.lastError?.message).toMatch(/never named/);
   });
 });
