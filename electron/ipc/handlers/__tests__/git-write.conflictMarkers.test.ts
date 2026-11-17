@@ -33,7 +33,6 @@ vi.mock("../../../services/getSoundService.js", () => ({
 let CHANNELS: typeof import("../../channels.js").CHANNELS;
 let resetRateLimits: () => void;
 let resetProjectIo: () => void;
-let CONCURRENCY: number;
 let SIZE_CAP: number;
 let tmp: string;
 let cwd: string;
@@ -118,7 +117,7 @@ beforeAll(async () => {
   ({ _resetRateLimitQueuesForTest: resetRateLimits } = await import("../../utils.js"));
   ({ __resetProjectIoForTests: resetProjectIo } =
     await import("../../../services/projectIoGate.js"));
-  ({ CONFLICT_MARKER_SCAN_CONCURRENCY: CONCURRENCY, STAGED_FILE_SIZE_CAP: SIZE_CAP } =
+  ({ STAGED_FILE_SIZE_CAP: SIZE_CAP } =
     await import("../../../services/git/conflictMarkerScan.js"));
   const { registerGitWriteHandlers } = await import("../git-write.js");
   registerGitWriteHandlers({} as never);
@@ -139,20 +138,19 @@ afterEach(() => {
 });
 
 describe("git-write conflict marker scan", () => {
-  it("never has more than the bound of files open at once across a large conflict set", async () => {
-    const names = writeConflictSet("src", CONCURRENCY * 5 + 3);
+  it("reads one file at a time across a large conflict set", async () => {
+    const names = writeConflictSet("src", 40);
     const files = trackOpenFiles();
 
     const results = await scan(names);
 
-    expect(files.peak()).toBe(CONCURRENCY);
-    expect(files.peak()).toBeGreaterThan(1);
+    expect(files.peak()).toBe(1);
     expect(files.open()).toBe(0);
     expect(results).toEqual(names.map(expectedEntry));
   });
 
   it("starts a later single-file scan of the same worktree before most of a large one", async () => {
-    const large = writeConflictSet("large", CONCURRENCY * 4);
+    const large = writeConflictSet("large", 32);
     write("one.ts", conflicted(2, 1));
     const files = trackOpenFiles();
 
@@ -162,55 +160,58 @@ describe("git-write conflict marker scan", () => {
 
     expect(single).toEqual([{ path: "one.ts", hunkCount: 1, firstMarkerLine: 3 }]);
     expect(largeResults).toEqual(large.map(expectedEntry));
-    // It queued behind a few of the large scan's files, not its whole list.
-    expect(files.statted.indexOf("one.ts")).toBeLessThan(files.statted.indexOf(large.at(-1)!));
+    // It queued behind the large scan's current file, not its whole list.
+    expect(files.statted.indexOf("one.ts")).toBe(1);
   });
 
-  it("answers another worktree while one stalls, then degrades the stalled files instead of hanging", async () => {
-    const other = path.join(tmp, "other");
-    write("stuck.ts", conflicted(0, 1));
-    write("after.ts", conflicted(1, 1));
-    write("one.ts", conflicted(2, 1), other);
+  it.each(["stat", "readFile"] as const)(
+    "answers another worktree while a %s stalls, and fails the stalled worktree's scans instead of hanging",
+    async (call) => {
+      const other = path.join(tmp, "other");
+      write("stuck.ts", conflicted(0, 1));
+      write("after.ts", conflicted(1, 1));
+      write("one.ts", conflicted(2, 1), other);
 
-    // A stat that never returns until released, as on a dead network mount.
-    let releaseStuck: () => Promise<void> = async () => {};
-    const realStat = fs.promises.stat.bind(fs.promises);
-    vi.spyOn(fs.promises, "stat").mockImplementation(((...args: Parameters<typeof realStat>) => {
-      if (relative(args[0]) !== "stuck.ts") return realStat(...args);
-      return new Promise((resolve) => {
-        releaseStuck = async () => {
-          resolve(await realStat(...args));
-          await nextMacrotask();
-        };
-      });
-    }) as typeof fs.promises.stat);
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      // A call that never returns until released, as on a dead network mount.
+      let releaseStuck: () => Promise<void> = async () => {};
+      const real = fs.promises[call].bind(fs.promises) as (...args: unknown[]) => Promise<unknown>;
+      vi.spyOn(fs.promises, call).mockImplementation(((...args: unknown[]) => {
+        if (relative(args[0]) !== "stuck.ts") return real(...args);
+        return new Promise((resolve) => {
+          releaseStuck = async () => {
+            resolve(await real(...args));
+            await nextMacrotask();
+          };
+        });
+      }) as never);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 
-    let stalledSettled = false;
-    const stalled = scan(["stuck.ts", "after.ts"]).then((results) => {
-      stalledSettled = true;
-      return results;
-    });
+      let stalledSettled = false;
+      const stalled = scan(["stuck.ts", "after.ts"]);
+      stalled.then(
+        () => (stalledSettled = true),
+        () => (stalledSettled = true)
+      );
 
-    expect(await scanIn(other, ["one.ts"])).toEqual([
-      { path: "one.ts", hunkCount: 1, firstMarkerLine: 3 },
-    ]);
-    expect(stalledSettled).toBe(false);
+      expect(await scanIn(other, ["one.ts"])).toEqual([
+        { path: "one.ts", hunkCount: 1, firstMarkerLine: 3 },
+      ]);
+      expect(stalledSettled).toBe(false);
 
-    // The read deadline passes: the stuck file and the one queued behind it
-    // come back without counts rather than holding the scan open.
-    await vi.runOnlyPendingTimersAsync();
-    expect(await stalled).toEqual([
-      { path: "stuck.ts", hunkCount: null, firstMarkerLine: null },
-      { path: "after.ts", hunkCount: null, firstMarkerLine: null },
-    ]);
+      // Past the read deadline the scan fails rather than answering with
+      // skipped entries the renderer could take for a deletion's missing file.
+      await vi.runOnlyPendingTimersAsync();
+      await expect(stalled).rejects.toMatchObject({ code: "PROJECT_IO_STALLED" });
+      // A later scan of that worktree fails at once while the read is still out.
+      await expect(scan(["after.ts"])).rejects.toMatchObject({ code: "PROJECT_IO_STALLED" });
 
-    // Once the mount answers, the worktree's reads resume.
-    await releaseStuck();
-    expect(await scan(["after.ts"])).toEqual([
-      { path: "after.ts", hunkCount: 1, firstMarkerLine: 2 },
-    ]);
-  });
+      // Once the mount answers, the worktree's reads resume.
+      await releaseStuck();
+      expect(await scan(["after.ts"])).toEqual([
+        { path: "after.ts", hunkCount: 1, firstMarkerLine: 2 },
+      ]);
+    }
+  );
 
   it("answers in request order with each file's own counts and lines", async () => {
     write("a/early.ts", conflicted(4, 2));
@@ -235,7 +236,6 @@ describe("git-write conflict marker scan", () => {
       return realReadFile(...args);
     }) as typeof fs.promises.readFile);
 
-    // The traversal and missing paths settle before the files ahead of them.
     expect(
       await scan([
         "a/early.ts",

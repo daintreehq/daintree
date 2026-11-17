@@ -69,13 +69,12 @@ import {
   PORCELAIN_V2_CONFLICT_ARGS,
 } from "../../services/git/porcelainConflicts.js";
 import {
-  CONFLICT_MARKER_SCAN_CONCURRENCY,
   STAGED_FILE_SIZE_CAP,
   scanConflictMarkerText,
   scanStagedFilesForConflictMarkers,
 } from "../../services/git/conflictMarkerScan.js";
 import { EMPTY_TREE } from "../../services/git/reviewPoint/captureReviewPoint.js";
-import { projectIo } from "../../services/projectIoGate.js";
+import { isProjectIoError, projectIo } from "../../services/projectIoGate.js";
 import { shouldPlayUiFeedbackSound } from "../../utils/uiFeedbackSound.js";
 import { resolveExecutableForSpawn } from "../../utils/windowsExecutable.js";
 import { getSanitizedProcessEnv } from "../../utils/gitEnv.js";
@@ -2587,27 +2586,23 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
         if (!stat.isFile() || stat.size > STAGED_FILE_SIZE_CAP) return skipped(filePath);
         const content = await projectIo.run(payload.cwd, () => fs.promises.readFile(absolute));
         return { path: filePath, ...scanConflictMarkerText(content) };
-      } catch {
-        // Treat any per-file error as a degraded scan result — the UI hides
-        // the badge rather than blocking the worklist on a single bad path.
+      } catch (error) {
+        // The gate refused or gave up on the read, so nobody looked: a skipped
+        // entry would read as a deletion conflict's missing file and stage it
+        // unasked, where a failed scan makes the renderer ask first.
+        if (isProjectIoError(error)) throw error;
+        // Treat any other per-file error as a degraded scan result — the UI
+        // hides the badge rather than blocking the worklist on a single bad path.
         return skipped(filePath);
       }
     };
 
-    // A few files at a time rather than the whole list, so a later scan of the
-    // same worktree queues behind a handful of this one's files at the gate.
-    const filePaths = payload.filePaths;
-    const results = new Array<ConflictMarkerScanEntry>(filePaths.length);
-    let next = 0;
-    const worker = async (): Promise<void> => {
-      while (next < filePaths.length) {
-        const index = next++;
-        results[index] = await scanOne(filePaths[index]);
-      }
-    };
-    await Promise.all(
-      Array.from({ length: Math.min(CONFLICT_MARKER_SCAN_CONCURRENCY, filePaths.length) }, worker)
-    );
+    // One file at a time: the gate runs one read per worktree anyway, so more
+    // in flight would only queue there, ahead of a later scan's files.
+    const results: ConflictMarkerScanEntry[] = [];
+    for (const filePath of payload.filePaths) {
+      results.push(await scanOne(filePath));
+    }
     return results;
   };
   handlers.push(typedHandle(CHANNELS.GIT_SCAN_CONFLICT_MARKERS, handleScanConflictMarkers));
