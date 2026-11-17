@@ -189,6 +189,8 @@ describe("tryFleetBroadcastFromEditor — a11y announcements", () => {
       expect(useAnnouncerStore.getState().polite?.msg).toBe(
         "Broadcast cancelled — 5 sent, 7 terminals skipped"
       );
+      // The announcement is a cancelled run's feedback channel.
+      expect(window.electron.notification.playUiEvent).not.toHaveBeenCalled();
     } finally {
       useFleetBroadcastProgressStore.setState({ advance: origAdvance });
     }
@@ -277,7 +279,7 @@ describe("tryFleetBroadcastFromEditor — permanent failure auto-disarm (#8706)"
     tryFleetBroadcastFromEditor("perm", "hello", vi.fn());
     await flush();
     expect(useAnnouncerStore.getState().polite?.msg).toBe(
-      "Broadcast not delivered — 1 retryable, 1 unreachable"
+      "Broadcast not confirmed — 1 retryable, 1 unreachable"
     );
   });
 
@@ -359,7 +361,7 @@ describe("tryFleetBroadcastFromEditor — fires immediately without confirmation
     await flush();
     expect(window.electron.notification.playUiEvent).not.toHaveBeenCalled();
     expect(useFleetArmingStore.getState().broadcastSignal).toBe(before);
-    expect(useAnnouncerStore.getState().polite?.msg).toMatch(/^Broadcast not delivered/);
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Broadcast not confirmed — 2 failed");
   });
 
   it("returns false so the caller does its own submit when every armed pane is ineligible", async () => {

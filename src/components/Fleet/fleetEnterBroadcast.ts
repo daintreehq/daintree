@@ -189,7 +189,7 @@ function buildBroadcastAnnouncement(
   }
   if (result.successCount === 0) {
     if (result.failureCount > 0) {
-      return `Broadcast not delivered — ${describeFailureSplit(permanent, transient)}${failedHostsSuffix(failedHosts)}${skipped}`;
+      return `Broadcast not confirmed — ${describeFailureSplit(permanent, transient)}${failedHostsSuffix(failedHosts)}${skipped}`;
     }
     return result.skippedCount > 0
       ? `Broadcast not sent — ${pluralize(result.skippedCount, "terminal", "terminals")} skipped`
