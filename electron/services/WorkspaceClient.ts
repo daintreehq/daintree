@@ -14,6 +14,7 @@ import { EventEmitter } from "events";
 import { resolve as pathResolve } from "path";
 import { CHANNELS } from "../ipc/channels.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { BrokerError } from "./rpc/RequestResponseBroker.js";
 import { type ProcessEntry, sendToEntryWindows } from "./workspace-client/types.js";
 import {
   WorkspaceHostPool,
@@ -40,6 +41,7 @@ import type {
   WorkspaceFetchResult,
   WorkspaceHostEvent,
   UnattendedRemovalGuard,
+  UnattendedRemovalOutcome,
 } from "../../shared/types/workspace-host.js";
 import type { WorktreeCreateResult, WorktreeSetupState } from "../../shared/types/worktree.js";
 import type {
@@ -1190,8 +1192,8 @@ export class WorkspaceClient extends EventEmitter {
    * when no window has started it. Project-scoped like {@link getDeletePreview}
    * so a refusal never falls through to another project's host. `confirm` runs
    * once the host is ready, right before the request goes, so a start that
-   * took a while can't carry a stale decision; false sends nothing. Resolves
-   * whether the removal went through, and rejects with the host's reason.
+   * took a while can't carry a stale decision; false sends nothing. Never
+   * rejects: it says whether the request went, and what came back.
    */
   async removeMergedWorktree(
     projectPath: string,
@@ -1199,31 +1201,45 @@ export class WorkspaceClient extends EventEmitter {
     worktreeId: string,
     guard: UnattendedRemovalGuard,
     confirm: () => Promise<boolean>
-  ): Promise<boolean> {
+  ): Promise<UnattendedRemovalOutcome> {
     // Held before the prewarm: a host started for this has no window holding
     // it, and the pool would otherwise reclaim it mid-removal.
     const release = holdHostForMergedWorktreeRemoval(expectedProjectId);
     try {
-      const normalized = this.pool.normalizeProjectPath(projectPath);
-      if (!this.pool.entries.has(normalized)) this.pool.prewarmProject(projectPath);
-      const entry = this.pool.entries.get(normalized);
-      if (entry === undefined || entry.projectId !== expectedProjectId) {
-        throw new Error("The project's workspace host isn't running");
+      let entry;
+      try {
+        const normalized = this.pool.normalizeProjectPath(projectPath);
+        if (!this.pool.entries.has(normalized)) this.pool.prewarmProject(projectPath);
+        entry = this.pool.entries.get(normalized);
+        if (entry === undefined || entry.projectId !== expectedProjectId) {
+          throw new Error("The project's workspace host isn't running");
+        }
+        await entry.currentReadyPromise;
+        if (this.pool.entries.get(normalized) !== entry) {
+          throw new Error("The project's workspace host restarted");
+        }
+        if (!(await confirm())) return { outcome: "declined" };
+        if (this.pool.entries.get(normalized) !== entry) {
+          throw new Error("The project's workspace host restarted");
+        }
+      } catch (error) {
+        return { outcome: "not-sent", error: formatErrorMessage(error, "not sent") };
       }
-      await entry.currentReadyPromise;
-      if (this.pool.entries.get(normalized) !== entry) {
-        throw new Error("The project's workspace host restarted");
+      try {
+        const requestId = entry.host.generateRequestId();
+        await entry.host.sendWithResponse(
+          { type: "remove-merged-worktree", requestId, worktreeId, guard },
+          MERGED_WORKTREE_REMOVAL_TIMEOUT_MS
+        );
+        return { outcome: "removed" };
+      } catch (error) {
+        // The broker's own errors mean no answer came; anything else is the
+        // host's refusal, carried back in its result.
+        return {
+          outcome: error instanceof BrokerError ? "lost" : "refused",
+          error: formatErrorMessage(error, "removal failed"),
+        };
       }
-      if (!(await confirm())) return false;
-      if (this.pool.entries.get(normalized) !== entry) {
-        throw new Error("The project's workspace host restarted");
-      }
-      const requestId = entry.host.generateRequestId();
-      await entry.host.sendWithResponse(
-        { type: "remove-merged-worktree", requestId, worktreeId, guard },
-        MERGED_WORKTREE_REMOVAL_TIMEOUT_MS
-      );
-      return true;
     } finally {
       release();
     }

@@ -18,8 +18,9 @@
  * effect before the next removal, including one a running sweep was about to
  * make. Each removal is recorded as pending before git is asked and kept
  * until a window on screen puts it in the notification inbox; a removal whose
- * answer was lost is settled from the disk on the next start. Removals stop,
- * rather than drop a record, while the receipts nobody has taken are full.
+ * answer was lost stays pending and each later sweep settles it from the
+ * disk. Removals stop, rather than drop a record, while the receipts nobody
+ * has taken are full.
  */
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -29,7 +30,10 @@ import type {
   MergedWorktreeCleanupPreview,
   MergedWorktreeRemovalReceipt,
 } from "../../../shared/types/mergedWorktreeCleanup.js";
-import type { UnattendedRemovalGuard } from "../../../shared/types/workspace-host.js";
+import type {
+  UnattendedRemovalGuard,
+  UnattendedRemovalOutcome,
+} from "../../../shared/types/workspace-host.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   evaluateMergedWorktrees,
@@ -48,6 +52,12 @@ export const MERGED_WORKTREE_RECEIPT_CAP = 200;
  * them: a view files them and answers within moments.
  */
 export const MERGED_WORKTREE_RECEIPT_LEASE_MS = 60_000;
+/**
+ * A pending receipt whose checkout is still there this long after it was
+ * written didn't go through: past the host's own removal timeout, so git has
+ * finished or given up.
+ */
+export const MERGED_WORKTREE_PENDING_SETTLE_MS = 30 * 60 * 1000;
 const DISPOSE_WAIT_MS = 5_000;
 
 export interface MergedWorktreeProject {
@@ -75,15 +85,14 @@ export interface MergedWorktreeCleanupDeps {
   /**
    * Remove through the project's own workspace host, starting it if no window
    * has. `confirm` runs once the host is ready, right before the request goes:
-   * false sends nothing. Resolves whether the request went and succeeded;
-   * rejects with the host's refusal or a lost answer.
+   * false sends nothing.
    */
   removeWorktree(
     project: MergedWorktreeProject,
     worktreeId: string,
     guard: UnattendedRemovalGuard,
     confirm: () => Promise<boolean>
-  ): Promise<boolean>;
+  ): Promise<UnattendedRemovalOutcome>;
   pathExists(target: string): Promise<boolean>;
   loadReceipts(): MergedWorktreeRemovalReceipt[];
   saveReceipts(receipts: MergedWorktreeRemovalReceipt[]): void;
@@ -100,9 +109,9 @@ export class MergedWorktreeCleanupService {
   private startupTimer: ReturnType<typeof setTimeout> | null = null;
   private interval: ReturnType<typeof setInterval> | null = null;
   private soonTimer: ReturnType<typeof setTimeout> | null = null;
+  private leaseTimer: ReturnType<typeof setTimeout> | null = null;
   private sweeping: Promise<void> | null = null;
   private disposed = false;
-  private reconciled = false;
   private readonly abort = new AbortController();
   /** Bumped when a project's switch goes off, so a sweep under way stops for it. */
   private readonly generations = new Map<string, number>();
@@ -139,9 +148,11 @@ export class MergedWorktreeCleanupService {
     if (this.disposed) return;
     this.disposed = true;
     this.abort.abort();
-    for (const timer of [this.startupTimer, this.soonTimer]) if (timer) clearTimeout(timer);
+    for (const timer of [this.startupTimer, this.soonTimer, this.leaseTimer]) {
+      if (timer) clearTimeout(timer);
+    }
     if (this.interval) clearInterval(this.interval);
-    this.startupTimer = this.soonTimer = this.interval = null;
+    this.startupTimer = this.soonTimer = this.leaseTimer = this.interval = null;
     const sweeping = this.sweeping;
     if (!sweeping) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -189,23 +200,26 @@ export class MergedWorktreeCleanupService {
   /**
    * The settled receipts no other live view holds, oldest first, for a view
    * on screen. They are held for `holder` until it acks or the lease lapses,
-   * so two windows don't both file one the person has since cleared.
+   * so two windows don't both file one the person has since cleared. One held
+   * by a view that then never files it (parked, say) is announced again when
+   * its hold lapses, so the view on screen asks for it.
    */
   takeReceipts(holder: number): MergedWorktreeRemovalReceipt[] {
     const at = this.now();
     const settled = this.deps.loadReceipts().filter((receipt) => !receipt.pending);
     const ids = new Set(settled.map((receipt) => receipt.id));
     for (const id of this.leases.keys()) if (!ids.has(id)) this.leases.delete(id);
+    let heldElsewhereFor: number | null = null;
     const taken = settled.filter((receipt) => {
       const lease = this.leases.get(receipt.id);
-      return (
-        !lease ||
-        lease.holder === holder ||
-        !this.deps.isLiveView(lease.holder) ||
-        at - lease.at >= MERGED_WORKTREE_RECEIPT_LEASE_MS
-      );
+      if (!lease || lease.holder === holder || !this.deps.isLiveView(lease.holder)) return true;
+      const left = lease.at + MERGED_WORKTREE_RECEIPT_LEASE_MS - at;
+      if (left <= 0) return true;
+      heldElsewhereFor = heldElsewhereFor === null ? left : Math.min(heldElsewhereFor, left);
+      return false;
     });
     for (const receipt of taken) this.leases.set(receipt.id, { holder, at });
+    if (heldElsewhereFor !== null) this.announceAfter(heldElsewhereFor);
     return taken;
   }
 
@@ -236,6 +250,15 @@ export class MergedWorktreeCleanupService {
     this.soonTimer.unref?.();
   }
 
+  private announceAfter(delayMs: number): void {
+    if (this.disposed || this.leaseTimer) return;
+    this.leaseTimer = setTimeout(() => {
+      this.leaseTimer = null;
+      this.deps.announceReceipts();
+    }, delayMs);
+    this.leaseTimer.unref?.();
+  }
+
   private bumpGeneration(projectId: string): void {
     this.generations.set(projectId, (this.generations.get(projectId) ?? 0) + 1);
   }
@@ -251,10 +274,7 @@ export class MergedWorktreeCleanupService {
   }
 
   private async runSweep(): Promise<void> {
-    if (!this.reconciled) {
-      this.reconciled = true;
-      await this.reconcilePending();
-    }
+    await this.reconcilePending();
     for (const project of this.deps.listProjects()) {
       if (this.disposed) return;
       const generation = this.generations.get(project.id) ?? 0;
@@ -271,27 +291,35 @@ export class MergedWorktreeCleanupService {
   }
 
   /**
-   * Pending receipts left by a run that never heard back: the removal went
-   * through if the checkout is gone, and didn't if it is still there. One that
-   * can't be read stays pending for the next start.
+   * Pending receipts whose removal never answered (a lost reply, a quit, a
+   * settle that failed to save): the removal went through once the checkout
+   * is gone, and didn't if it is still there well past the host's removal
+   * timeout. One still in that window, or whose folder can't be read, waits
+   * for the next sweep.
    */
   private async reconcilePending(): Promise<void> {
     const pending = this.deps.loadReceipts().filter((receipt) => receipt.pending);
     if (pending.length === 0) return;
-    const outcome = new Map<string, boolean>();
+    const decided = new Map<string, "settle" | "drop">();
     for (const receipt of pending) {
+      let exists: boolean;
       try {
-        outcome.set(receipt.id, !(await this.deps.pathExists(receipt.worktreePath)));
+        exists = await this.deps.pathExists(receipt.worktreePath);
       } catch {
-        // Unknown: left pending.
+        continue;
+      }
+      if (!exists) decided.set(receipt.id, "settle");
+      else if (this.now() - receipt.removedAt >= MERGED_WORKTREE_PENDING_SETTLE_MS) {
+        decided.set(receipt.id, "drop");
       }
     }
+    if (decided.size === 0) return;
     let settled = 0;
     const next: MergedWorktreeRemovalReceipt[] = [];
     for (const receipt of this.deps.loadReceipts()) {
-      const removed = receipt.pending ? outcome.get(receipt.id) : undefined;
-      if (removed === undefined) next.push(receipt);
-      else if (removed) {
+      const decision = receipt.pending ? decided.get(receipt.id) : undefined;
+      if (decision === undefined) next.push(receipt);
+      else if (decision === "settle") {
         next.push(settle(receipt));
         settled++;
       }
@@ -364,25 +392,27 @@ export class MergedWorktreeCleanupService {
       );
     };
 
-    let removed: boolean;
-    try {
-      removed = await this.deps.removeWorktree(
+    const result = await this.deps
+      .removeWorktree(
         project,
         candidate.worktreePath,
         { expectedBranch: candidate.branch, expectedHead: candidate.head },
         confirm
-      );
-    } catch (error) {
-      // A refusal leaves the checkout; a lost answer (a timeout, a host that
-      // died) may not have. The disk says which.
-      removed = !(await this.deps.pathExists(candidate.worktreePath).catch(() => true));
-      if (!removed) {
-        this.logWarn("[MergedWorktreeCleanup] Worktree removal refused", {
-          projectId: project.id,
-          error: formatErrorMessage(error, "unknown"),
-        });
-      }
+      )
+      .catch((error: unknown): UnattendedRemovalOutcome => ({
+        outcome: "lost",
+        error: formatErrorMessage(error, "unknown"),
+      }));
+    if ("error" in result) {
+      this.logWarn(`[MergedWorktreeCleanup] Worktree removal ${result.outcome}`, {
+        projectId: project.id,
+        error: result.error,
+      });
     }
+    // A lost answer may still be a removal in progress: its receipt stays
+    // pending, and later sweeps settle it from the disk.
+    if (result.outcome === "lost") return;
+    const removed = result.outcome === "removed";
 
     try {
       const others = this.deps.loadReceipts().filter((entry) => entry.id !== receipt.id);

@@ -37,8 +37,10 @@ async function pathExists(target: string): Promise<boolean> {
 
 /**
  * The same refusals the host makes for an unattended removal, read from the
- * delete preview it already serves, for a host that is running. Teardown it
- * would refuse to run; submodules git won't remove without `--force`.
+ * delete preview it already serves, for a host that is running: teardown it
+ * would refuse to run, and submodules that need `--force` or hold work the
+ * removal would discard. A submodule inventory that couldn't finish is a read
+ * that failed, not a refusal.
  */
 async function readHostRefusal(
   project: MergedWorktreeProject,
@@ -55,7 +57,14 @@ async function readHostRefusal(
   }
   if (preview.teardown && preview.teardown.phases.length > 0) return "teardown";
   const risk = preview.risk;
-  if (risk && (risk.incomplete || risk.requiresMechanicalForce || risk.entries.length > 0)) {
+  if (risk?.incomplete) throw new Error("The submodule inventory couldn't finish");
+  if (
+    risk &&
+    (risk.requiresMechanicalForce ||
+      risk.dirtyFiles.length > 0 ||
+      risk.untrackedFiles.length > 0 ||
+      risk.atRiskCommits.length > 0)
+  ) {
     return "submodules";
   }
   return null;

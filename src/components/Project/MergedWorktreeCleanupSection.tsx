@@ -70,7 +70,7 @@ function CandidateRow({ candidate, now }: { candidate: MergedWorktreeCandidate; 
 export function MergedWorktreeCleanupSection({ projectId }: { projectId: string }) {
   const [loaded, setLoaded] = useState<Loaded>({ projectId, state: "loading" });
   const [reloadCount, setReloadCount] = useState(0);
-  const [confirmed, setConfirmed] = useState<{ projectId: string; enabled: boolean } | null>(null);
+  const [confirmed, setConfirmed] = useState<Readonly<Record<string, boolean>>>({});
   const [saving, setSaving] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<{
     projectId: string;
@@ -92,7 +92,7 @@ export function MergedWorktreeCleanupSection({ projectId }: { projectId: string 
       .then((preview) => {
         if (cancelled) return;
         setLoaded({ projectId, state: "loaded", preview });
-        setConfirmed({ projectId, enabled: preview.enabled });
+        setConfirmed((known) => ({ ...known, [projectId]: preview.enabled }));
       })
       .catch((error: unknown) => {
         if (!cancelled) {
@@ -110,7 +110,7 @@ export function MergedWorktreeCleanupSection({ projectId }: { projectId: string 
 
   const current = loaded.projectId === projectId ? loaded : null;
   const preview = current?.state === "loaded" ? current.preview : null;
-  const enabledHere = confirmed?.projectId === projectId ? confirmed.enabled : null;
+  const enabledHere: boolean | null = confirmed[projectId] ?? null;
   const enabled = enabledHere ?? false;
   const savingHere = saving === projectId;
   const saveErrorHere = saveError?.projectId === projectId ? saveError : null;
@@ -133,7 +133,7 @@ export function MergedWorktreeCleanupSection({ projectId }: { projectId: string 
     setSaveError(null);
     try {
       await api.setEnabled({ projectId: target, enabled: next });
-      setConfirmed({ projectId: target, enabled: next });
+      setConfirmed((known) => ({ ...known, [target]: next }));
       setReloadCount((count) => count + 1);
     } catch (error) {
       setSaveError({

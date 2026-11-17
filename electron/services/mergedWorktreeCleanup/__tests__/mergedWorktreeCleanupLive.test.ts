@@ -136,20 +136,26 @@ describe("createMergedWorktreeReads", () => {
           risk: { ...risk, entries: [{ path: "vendor/lib" }] },
           teardown: { phases: [] },
         })
-      ).toBe("submodules");
-      expect(
-        await refusal({
-          changes: {},
-          risk: { ...risk, incomplete: true },
-          teardown: { phases: [] },
-        })
-      ).toBe("submodules");
+      ).toBeNull();
+      for (const atRisk of [
+        { requiresMechanicalForce: true },
+        { dirtyFiles: [{ path: "vendor/lib/a" }] },
+        { untrackedFiles: [{ path: "vendor/lib/b" }] },
+        { atRiskCommits: [{ sha: "x" }] },
+      ]) {
+        expect(
+          await refusal({ changes: {}, risk: { ...risk, ...atRisk }, teardown: { phases: [] } })
+        ).toBe("submodules");
+      }
     });
 
     it("rejects when the host couldn't read what deleting it would do", async () => {
       await expect(
         refusal({ changes: {}, risk: "unreadable", teardown: { phases: [] } })
       ).rejects.toThrow("couldn't read");
+      await expect(
+        refusal({ changes: {}, risk: { ...risk, incomplete: true }, teardown: { phases: [] } })
+      ).rejects.toThrow("couldn't finish");
     });
   });
 });

@@ -150,7 +150,7 @@ describe("MergedWorktreeCleanupSection (#17321)", () => {
       () => new Promise<void>((resolve) => (finishSave = resolve))
     );
     previewMock.mockImplementation(async ({ projectId }) =>
-      projectId === "p2" ? { ...preview(false), worktrees: [] } : preview(false)
+      projectId === "p2" ? { ...preview(true), worktrees: [] } : preview(false)
     );
     const { findByText, getByRole, rerender } = render(
       <MergedWorktreeCleanupSection projectId="p1" />
@@ -166,7 +166,9 @@ describe("MergedWorktreeCleanupSection (#17321)", () => {
       finishSave();
     });
 
-    expect(getByRole("switch").getAttribute("aria-checked")).toBe("false");
+    const toggle = getByRole("switch");
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(toggle.hasAttribute("disabled")).toBe(false);
   });
 
   it("shows worktrees that couldn't be checked as a failure with Retry, not as nothing qualifying", async () => {

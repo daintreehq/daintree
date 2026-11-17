@@ -4092,6 +4092,15 @@ export class WorkspaceService {
     if (await pathIsMissing(monitor.path)) {
       throw new Error("The worktree's folder is already gone");
     }
+    const teardown = await this.getDeleteTeardownPreview(worktreeId);
+    if (teardown === null || teardown.phases.length > 0) {
+      throw new Error("Deleting the worktree would run teardown steps");
+    }
+    await verifyUnattendedCheckout(monitor.path, guard);
+    // After the reads, so a selection or a setup started while they ran counts.
+    if (this.monitors.get(worktreeId) !== monitor) {
+      throw new Error("The worktree was replaced while it was checked");
+    }
     if (monitor.isCurrent) {
       throw new Error("The worktree is the active one");
     }
@@ -4101,11 +4110,6 @@ export class WorkspaceService {
     if (monitor.lifecycleStatus?.state === "running" || monitor.setupStatus?.state === "running") {
       throw new Error("The worktree is still being set up");
     }
-    const teardown = await this.getDeleteTeardownPreview(worktreeId);
-    if (teardown === null || teardown.phases.length > 0) {
-      throw new Error("Deleting the worktree would run teardown steps");
-    }
-    await verifyUnattendedCheckout(monitor.path, guard);
   }
 
   private async runLifecycleTeardown(worktreeId: string, monitor: WorktreeMonitor): Promise<void> {
@@ -4350,12 +4354,14 @@ export class WorkspaceService {
           if (unattended && needsMechanicalForce) {
             throw new Error("Git would need --force to remove the worktree's submodules");
           }
-          // An unattended removal re-reads the checkout after the nested scan,
-          // so nothing that scan awaited can change it unseen.
+          // An unattended removal re-reads the checkout here too; the nested
+          // scan stays last, since a worktree nested in the checkout is the
+          // one thing a removal can take that isn't its own.
           const lastChecks = async () => {
-            await this.guardNestedWorktreeDelete(monitor);
-            if (unattended)
+            if (unattended) {
               await this.assertUnattendedRemovalHolds(worktreeId, monitor, unattended);
+            }
+            await this.guardNestedWorktreeDelete(monitor);
           };
           // Last, so no other await sits between them and the removal.
           await lastChecks();

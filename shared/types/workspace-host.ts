@@ -1366,3 +1366,15 @@ export interface UnattendedRemovalGuard {
   expectedBranch: string;
   expectedHead: string;
 }
+
+/**
+ * How an unattended removal (#17321) ended, as main can tell it: `declined`
+ * when the last check before the request said no, `not-sent` when it failed
+ * before the request went, `refused` when the host answered no, and `lost`
+ * when the request went and no answer came back (a timeout, a host that
+ * exited), so the removal may or may not have happened.
+ */
+export type UnattendedRemovalOutcome =
+  | { outcome: "removed" }
+  | { outcome: "declined" }
+  | { outcome: "not-sent" | "refused" | "lost"; error: string };
