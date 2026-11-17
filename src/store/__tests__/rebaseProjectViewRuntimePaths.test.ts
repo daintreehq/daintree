@@ -27,10 +27,9 @@ function makeFakeStore<T extends object>(initial: T): FakeStore<T> {
 
 // Mutable holder the mocks delegate to. The exported store objects are STABLE
 // (so `import { usePanelStore }` binds once); each call reads the current fake.
-const holders: { panels: any; selection: any; mruSuppressed: boolean } = vi.hoisted(() => ({
+const holders: { panels: any; selection: any } = vi.hoisted(() => ({
   panels: null,
   selection: null,
-  mruSuppressed: false,
 }));
 const persistMruListMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
@@ -46,7 +45,6 @@ vi.mock("../worktreeStore", () => ({
     setState: (p: any) => holders.selection.setState(p),
   },
   persistMruList: persistMruListMock,
-  isMruRecordingSuppressed: () => holders.mruSuppressed,
 }));
 
 import { rebaseProjectViewRuntimePaths } from "../rebaseProjectViewRuntimePaths";
@@ -91,7 +89,6 @@ beforeEach(() => {
   });
   holders.panels = panels;
   holders.selection = selection;
-  holders.mruSuppressed = false;
   persistMruListMock.mockClear();
 });
 
@@ -163,10 +160,14 @@ describe("rebaseProjectViewRuntimePaths", () => {
   });
 
   it("rebases the durable restore selection and the focused worktree (#17184)", () => {
+    selection._reset({
+      ...selection.getState(),
+      focusedWorktreeId: `${OLD}/.worktrees/focus`,
+    });
     rebaseProjectViewRuntimePaths(OLD, NEW);
     const state = selection.getState();
     expect(state.restoreWorktreeId).toBe(NEW);
-    expect(state.focusedWorktreeId).toBe(NEW);
+    expect(state.focusedWorktreeId).toBe(`${NEW}/.worktrees/focus`);
   });
 
   it("keeps an incidental active selection distinct from the durable restore one", () => {
@@ -185,24 +186,29 @@ describe("rebaseProjectViewRuntimePaths", () => {
   it("rebases pending, fleet-parked and cross-diff worktree ids (#17184)", () => {
     selection._reset({
       ...selection.getState(),
-      pendingWorktreeId: OLD,
-      _previousActiveWorktreeId: OLD,
+      activeWorktreeId: "/vol/wts/feature",
+      pendingWorktreeId: `${OLD}/.worktrees/pending`,
+      _previousActiveWorktreeId: `${OLD}/.worktrees/parked`,
       _previousRestoreWorktreeId: OLD,
-      crossDiffDialog: { isOpen: true, initialWorktreeId: OLD },
+      crossDiffDialog: { isOpen: true, initialWorktreeId: `${OLD}/.worktrees/diff` },
     });
     rebaseProjectViewRuntimePaths(OLD, NEW);
     const state = selection.getState();
-    expect(state.pendingWorktreeId).toBe(NEW);
-    expect(state._previousActiveWorktreeId).toBe(NEW);
+    expect(state.activeWorktreeId).toBe("/vol/wts/feature");
+    expect(state.pendingWorktreeId).toBe(`${NEW}/.worktrees/pending`);
+    expect(state._previousActiveWorktreeId).toBe(`${NEW}/.worktrees/parked`);
     expect(state._previousRestoreWorktreeId).toBe(NEW);
-    expect(state.crossDiffDialog).toEqual({ isOpen: true, initialWorktreeId: NEW });
+    expect(state.crossDiffDialog).toEqual({
+      isOpen: true,
+      initialWorktreeId: `${NEW}/.worktrees/diff`,
+    });
   });
 
   it("re-keys per-worktree selection state under the new root (#17184)", () => {
     const LINKED = "/vol/wts/feature";
-    const maximize = (worktreeId: string) => ({
-      maximizedId: "main1",
-      maximizeTarget: { type: "panel", id: "main1" },
+    const maximize = (panelId: string, worktreeId: string) => ({
+      maximizedId: panelId,
+      maximizeTarget: { type: "group", id: `group-${panelId}` },
       preMaximizeLayout: { gridCols: 3, gridItemCount: 4, worktreeId },
     });
     selection._reset({
@@ -214,8 +220,8 @@ describe("rebaseProjectViewRuntimePaths", () => {
         [LINKED, "linked1"],
       ]),
       maximizeByWorktree: new Map([
-        [OLD, maximize(OLD)],
-        [LINKED, maximize(LINKED)],
+        [OLD, maximize("main1", OLD)],
+        [LINKED, maximize("linked1", LINKED)],
       ]),
     });
 
@@ -228,9 +234,60 @@ describe("rebaseProjectViewRuntimePaths", () => {
       [NEW, "main1"],
       [LINKED, "linked1"],
     ]);
-    expect(state.maximizeByWorktree.has(OLD)).toBe(false);
-    expect(state.maximizeByWorktree.get(NEW).preMaximizeLayout.worktreeId).toBe(NEW);
-    expect(state.maximizeByWorktree.get(LINKED)).toEqual(maximize(LINKED));
+    expect([...state.maximizeByWorktree]).toEqual([
+      [NEW, maximize("main1", NEW)],
+      [LINKED, maximize("linked1", LINKED)],
+    ]);
+  });
+
+  it("lets a moved entry win over a leftover already keyed by the new root", () => {
+    selection._reset({
+      ...selection.getState(),
+      lastFocusedTerminalByWorktree: new Map([
+        [NEW, "stale"],
+        [OLD, "main1"],
+      ]),
+      maximizeByWorktree: new Map([
+        [
+          OLD,
+          {
+            maximizedId: "main1",
+            maximizeTarget: { type: "panel", id: "main1" },
+            preMaximizeLayout: null,
+          },
+        ],
+        [
+          NEW,
+          {
+            maximizedId: "stale",
+            maximizeTarget: { type: "panel", id: "stale" },
+            preMaximizeLayout: null,
+          },
+        ],
+      ]),
+    });
+    rebaseProjectViewRuntimePaths(OLD, NEW);
+    const state = selection.getState();
+    expect([...state.lastFocusedTerminalByWorktree]).toEqual([[NEW, "main1"]]);
+    expect([...state.maximizeByWorktree.keys()]).toEqual([NEW]);
+    expect(state.maximizeByWorktree.get(NEW).maximizedId).toBe("main1");
+  });
+
+  it("keeps unchanged selection collections by identity", () => {
+    const LINKED = "/vol/wts/feature";
+    selection._reset({
+      ...selection.getState(),
+      expandedWorktrees: new Set([LINKED]),
+      lastFocusedTerminalByWorktree: new Map([[LINKED, "linked1"]]),
+    });
+    const before = selection.getState();
+    rebaseProjectViewRuntimePaths(OLD, NEW);
+    const state = selection.getState();
+    expect(state.restoreWorktreeId).toBe(NEW);
+    expect(state.expandedWorktrees).toBe(before.expandedWorktrees);
+    expect(state.lastFocusedTerminalByWorktree).toBe(before.lastFocusedTerminalByWorktree);
+    expect(state.maximizeByWorktree).toBe(before.maximizeByWorktree);
+    expect(state.crossDiffDialog).toBe(before.crossDiffDialog);
   });
 
   it("rebases worktree MRU entries and leaves terminal entries alone (#17184)", () => {
@@ -248,14 +305,6 @@ describe("rebaseProjectViewRuntimePaths", () => {
     expect(persistMruListMock).toHaveBeenCalledWith(panels.getState().mruList);
   });
 
-  it("leaves the MRU write to hydration while recording is suppressed", () => {
-    holders.mruSuppressed = true;
-    panels._reset({ ...panels.getState(), mruList: [`worktree:${OLD}`] });
-    rebaseProjectViewRuntimePaths(OLD, NEW);
-    expect(panels.getState().mruList).toEqual([`worktree:${NEW}`]);
-    expect(persistMruListMock).not.toHaveBeenCalled();
-  });
-
   it("does not write the MRU when no entry moved", () => {
     panels._reset({ ...panels.getState(), mruList: ["terminal:main1", "worktree:/vol/wts/x"] });
     rebaseProjectViewRuntimePaths(OLD, NEW);
@@ -267,22 +316,30 @@ describe("rebaseProjectViewRuntimePaths", () => {
       ...panels.getState(),
       panelsById: {
         ...panels.getState().panelsById,
-        plugin1: { kind: "plugin-x", worktreeId: OLD, pendingDockWorktreeId: OLD },
+        plugin1: {
+          kind: "plugin-x",
+          worktreeId: "/vol/wts/feature",
+          pendingDockWorktreeId: `${OLD}/.worktrees/dock`,
+        },
         scoped: { kind: "plugin-x", pendingDockWorktreeId: null },
         main1: {
           kind: "terminal",
           cwd: `${OLD}/pkg`,
-          worktreeId: OLD,
-          worktreeMoveNotice: { destinationWorktreeId: OLD, deliveryFailed: true },
+          worktreeId: "/vol/wts/feature",
+          worktreeMoveNotice: {
+            destinationWorktreeId: `${OLD}/.worktrees/dest`,
+            deliveryFailed: true,
+          },
         },
       },
     });
     rebaseProjectViewRuntimePaths(OLD, NEW);
     const state = panels.getState();
-    expect(state.panelsById.plugin1.pendingDockWorktreeId).toBe(NEW);
+    expect(state.panelsById.plugin1.pendingDockWorktreeId).toBe(`${NEW}/.worktrees/dock`);
+    expect(state.panelsById.plugin1.worktreeId).toBe("/vol/wts/feature");
     expect(state.panelsById.scoped.pendingDockWorktreeId).toBeNull();
     expect(state.panelsById.main1.worktreeMoveNotice).toEqual({
-      destinationWorktreeId: NEW,
+      destinationWorktreeId: `${NEW}/.worktrees/dest`,
       deliveryFailed: true,
     });
   });
@@ -290,8 +347,8 @@ describe("rebaseProjectViewRuntimePaths", () => {
   it("rebases the group a trashed or backgrounded panel restores into, keeping panel-id keys", () => {
     const meta = (worktreeId: string | null) => ({
       panelIds: ["main1", "main2"],
-      activeTabId: "main1",
-      location: "grid",
+      activeTabId: "main2",
+      location: "dock",
       worktreeId,
     });
     panels._reset({
@@ -310,15 +367,14 @@ describe("rebaseProjectViewRuntimePaths", () => {
     });
     rebaseProjectViewRuntimePaths(OLD, NEW);
     const state = panels.getState();
-    expect([...state.trashedTerminals.keys()]).toEqual(["main1", "solo"]);
-    expect(state.trashedTerminals.get("main1").groupMetadata.worktreeId).toBe(NEW);
-    expect(state.trashedTerminals.get("solo")).toEqual({
-      id: "solo",
-      expiresAt: 1,
-      originalLocation: "dock",
-    });
-    expect(state.backgroundedTerminals.get("main2").groupMetadata.worktreeId).toBe(NEW);
-    expect(state.backgroundedTerminals.get("x").groupMetadata.worktreeId).toBeNull();
+    expect([...state.trashedTerminals]).toEqual([
+      ["main1", { id: "main1", expiresAt: 1, originalLocation: "grid", groupMetadata: meta(NEW) }],
+      ["solo", { id: "solo", expiresAt: 1, originalLocation: "dock" }],
+    ]);
+    expect([...state.backgroundedTerminals]).toEqual([
+      ["main2", { id: "main2", originalLocation: "grid", groupMetadata: meta(NEW) }],
+      ["x", { id: "x", originalLocation: "grid", groupMetadata: meta(null) }],
+    ]);
   });
 
   it("rebases the live maximize's layout binding (#17184)", () => {

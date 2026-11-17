@@ -9,7 +9,6 @@ import { rebaseAbsolutePath, rebaseMruEntry } from "@shared/utils/projectPathRel
 import { usePanelStore } from "./panelStore";
 import type { TrashedTerminalGroupMetadata } from "./slices/panelRegistry/types";
 import {
-  isMruRecordingSuppressed,
   persistMruList,
   useWorktreeSelectionStore,
   type WorktreeMaximizeSnapshot,
@@ -91,7 +90,9 @@ function rebaseIdSet(ids: Set<string>, oldRoot: string, newRoot: string): Set<st
 /**
  * A new Map with keys and values passed through the given rebases, or the same
  * Map when nothing moved. Insertion order is kept, so iteration-order readers see
- * the same sequence under the new keys.
+ * the same sequence under the new keys. When a moved key lands on one already
+ * there, the moved entry wins: the new root had no worktree before the move, so
+ * whatever sat under its id is a leftover.
  */
 function remapMap<V>(
   map: Map<string, V>,
@@ -99,11 +100,14 @@ function remapMap<V>(
   rebaseValue: (value: V) => V
 ): Map<string, V> {
   let changed = false;
+  const movedKeys = new Set<string>();
   const next = new Map<string, V>();
   for (const [key, value] of map) {
     const nextKey = rebaseKey(key);
     const nextValue = rebaseValue(value);
     if (nextKey !== key || nextValue !== value) changed = true;
+    if (nextKey === key && movedKeys.has(key)) continue;
+    if (nextKey !== key) movedKeys.add(nextKey);
     next.set(nextKey, nextValue);
   }
   return changed ? next : map;
@@ -260,7 +264,10 @@ export function rebaseProjectViewRuntimePaths(oldRoot: string, newRoot: string):
   });
 
   // Main already rewrote the saved list; sending the rebased one keeps this
-  // view's write bookkeeping on it and supersedes any held write of the old one.
+  // view's write bookkeeping on it and supersedes any held write of the old one,
+  // which would otherwise replay the old root once the host link is back. Not
+  // gated on hydration's MRU suppression: that stops recording selections, and
+  // this records none.
   const mruList = usePanelStore.getState().mruList;
-  if (mruList !== mruBefore && !isMruRecordingSuppressed()) void persistMruList(mruList);
+  if (mruList !== mruBefore) void persistMruList(mruList);
 }
