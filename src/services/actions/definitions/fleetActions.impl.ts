@@ -260,6 +260,10 @@ export const fleetActionRuns = {
     // What each target was sent: its own edit where it had one, so a retry
     // doesn't hand it an image or a token that edit took out.
     const textFor = (id: string) => perTargetOverrides[id] ?? payload;
+    // `payload` is the draft as typed, recipe variables unfilled. Only a real
+    // edit goes back as an override: handing the draft to a target as one
+    // would skip its variables, and it would get `{{branch_name}}` literally.
+    const hasOwnText = (id: string) => Object.hasOwn(perTargetOverrides, id);
     // Re-check eligibility at dispatch time: a pane that died or was trashed
     // since the failure was recorded must not receive bytes. The primary
     // broadcast gates this in its caller (tryFleetBroadcastFromEditor), not
@@ -276,17 +280,21 @@ export const fleetActionRuns = {
     if (eligibleTargets.length === 0) return;
     retryInFlight = true;
     try {
-      // Each target's text goes through perTargetOverrides, so the empty
-      // draft is never resolved. `runManagedFleetBroadcast` runs it through the
-      // shared single-flight controller so the retry gains batching, progress,
-      // and a working ribbon Cancel button just like the primary Enter path.
-      // The images go again too, attached wherever that text still names them.
-      const retryOverrides = Object.fromEntries(eligibleTargets.map((id) => [id, textFor(id)]));
-      const result = await runManagedFleetBroadcast("", eligibleTargets, retryOverrides, {
-        isRetry: true,
-        draftPreview: payload,
-        imagePaths,
-      });
+      // The draft is resolved per target again, against the worktree it is in
+      // now, as the first send did; only a target's own edit stands in for it.
+      // `runManagedFleetBroadcast` runs it through the shared single-flight
+      // controller so the retry gains batching, progress, and a working ribbon
+      // Cancel button just like the primary Enter path. The images go again
+      // too, attached wherever that text still names them.
+      const retryOverrides = Object.fromEntries(
+        eligibleTargets.filter(hasOwnText).map((id) => [id, perTargetOverrides[id]!])
+      );
+      const result = await runManagedFleetBroadcast(
+        payload,
+        eligibleTargets,
+        Object.keys(retryOverrides).length > 0 ? retryOverrides : undefined,
+        { isRetry: true, imagePaths }
+      );
       // Permanent failures (dead PTYs) auto-disarm so a future retry doesn't
       // keep firing into the same dead pipes. The retry chip clears for them
       // too — the user already saw them once; surfacing the same id again
