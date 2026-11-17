@@ -490,6 +490,35 @@ describe("BulkCreateWorktreeDialog", () => {
     onComplete: vi.fn(),
   };
 
+  it("names the worktree count on the confirm button with tabular figures", () => {
+    const { rerender } = render(<BulkCreateWorktreeDialog {...defaultProps} />);
+    const confirm = screen.getByTestId("bulk-create-confirm-button");
+    expect(confirm.textContent).toContain("Create 3 worktrees");
+    expect(confirm.className).toContain("tabular-nums");
+
+    rerender(<BulkCreateWorktreeDialog {...defaultProps} selectedIssues={[makeIssue(1)]} />);
+    expect(screen.getByTestId("bulk-create-confirm-button").textContent).toContain(
+      "Create 1 worktree"
+    );
+    expect(screen.getByTestId("bulk-create-confirm-button").textContent).not.toContain("worktrees");
+  });
+
+  it("groups digits in a large batch's summary and confirm button", () => {
+    const many = Array.from({ length: 1204 }, (_, i) =>
+      i < 1200 ? { ...makeIssue(i + 1), state: "closed" as const } : makeIssue(i + 1)
+    );
+    render(<BulkCreateWorktreeDialog {...defaultProps} selectedIssues={many} />);
+    expect(screen.getByTestId("bulk-create-footer-hint").textContent).toBe(
+      "1,204 issues \u00b7 1,200 skipped \u00b7 runs in the background"
+    );
+    const clearable = Array.from({ length: 1204 }, (_, i) => makeIssue(i + 1));
+    cleanup();
+    render(<BulkCreateWorktreeDialog {...defaultProps} selectedIssues={clearable} />);
+    expect(screen.getByTestId("bulk-create-confirm-button").textContent).toContain(
+      "Create 1,204 worktrees"
+    );
+  });
+
   it("creates worktrees using direct client calls", async () => {
     const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(

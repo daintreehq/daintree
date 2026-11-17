@@ -6,6 +6,7 @@ import {
   DropdownMenu,
   Icon,
   Tooltip,
+  TruncatedTooltip,
   type DropdownMenuEntry,
 } from "@daintreehq/plugin-ui";
 import { avatarUrlAtSize } from "@/components/ui/Avatar";
@@ -457,7 +458,7 @@ export function GitHubListItem({
             {/* At 450px most titles truncate. The elaborate tooltips used to
                 be on the trivia while the one line you actually need to read
                 had none. */}
-            <Tooltip content={item.title} side="bottom">
+            <TruncatedTooltip content={item.title} side="bottom" focusable={false}>
               {/* The title is the resource's own name, so it goes where the
                   resource lives. The row around it is about running the work
                   locally; the text itself is the link out to the forge. */}
@@ -481,14 +482,14 @@ export function GitHubListItem({
                   handleOpenExternal();
                 }}
                 className={cn(
-                  "flex-1 min-w-0 text-sm font-medium text-foreground truncate text-left",
-                  "cursor-pointer rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+                  "flex-1 min-w-0 text-sm font-medium text-text-primary truncate text-left",
+                  "cursor-pointer rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                   !isSelectionActive && "hover:underline"
                 )}
               >
                 {item.title}
               </button>
-            </Tooltip>
+            </TruncatedTooltip>
 
             {/* Trailing rail — every slot is persistent ink, no hover-only reveals.
                 Order matters: everything of variable width sits to the LEFT of the

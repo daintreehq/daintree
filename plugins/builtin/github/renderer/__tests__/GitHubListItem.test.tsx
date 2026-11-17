@@ -128,6 +128,49 @@ afterEach(() => {
 });
 
 describe("GitHubListItem", () => {
+  it("styles the title with current tokens and keeps its tooltip for truncation only", () => {
+    render(<GitHubListItem item={baseIssue} type="issue" onCreateWorktree={vi.fn()} />);
+    const title = screen.getByRole("button", { name: "Fix the thing" });
+    expect(title.className).toContain("text-text-primary");
+    expect(title.className).toContain("rounded-[var(--radius-sm)]");
+    expect(title.className).not.toContain("text-foreground");
+    expect(title.className).not.toMatch(/\brounded-sm\b/);
+    // A title that fits in full has nothing more to say: no duplicate tooltip
+    // copy beside it, and no extra tab stop on the button.
+    expect(screen.getAllByText("Fix the thing")).toHaveLength(1);
+    expect(title.getAttribute("tabindex")).toBe("-1");
+  });
+
+  it("reveals the title in a tooltip only while it is clipped, including after a rename", () => {
+    // Width follows the text, against a fixed box: a refresh can swap in a
+    // longer title that clips.
+    const scroll = vi
+      .spyOn(HTMLElement.prototype, "scrollWidth", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        return (this.textContent ?? "").length * 10;
+      });
+    const client = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(200);
+    try {
+      const { rerender } = render(
+        <GitHubListItem item={baseIssue} type="issue" onCreateWorktree={vi.fn()} />
+      );
+      expect(screen.getAllByText("Fix the thing")).toHaveLength(1);
+
+      const longTitle = "Fix the thing that clips once a refresh renames it";
+      rerender(
+        <GitHubListItem
+          item={{ ...baseIssue, title: longTitle }}
+          type="issue"
+          onCreateWorktree={vi.fn()}
+        />
+      );
+      expect(screen.getAllByText(longTitle).length).toBeGreaterThan(1);
+    } finally {
+      scroll.mockRestore();
+      client.mockRestore();
+    }
+  });
+
   it("opens the forge from the title, leaving the row to the worktree", () => {
     // The title is the resource's name, so it goes to where the resource
     // lives. Creating a worktree off a click on the text was the complaint.

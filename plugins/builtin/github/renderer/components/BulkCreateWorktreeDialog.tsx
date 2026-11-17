@@ -31,6 +31,7 @@ import { collectGitHubIssueNumbers, planIssueWorktrees, planPRWorktrees } from "
 import { startBulkCreateRun, useBulkCreateRunStore } from "./bulkCreateRunner";
 import type { ForgeBulkCreateWorktreeDialogProps } from "@/types/forgeSlotProps";
 import type { BranchInfo } from "@shared/types";
+import { pluralize } from "@/lib/pluralize";
 
 /** Conforms to the host's bulk-create slot contract (forge-normalized shapes). */
 export type BulkCreateWorktreeDialogProps = ForgeBulkCreateWorktreeDialogProps;
@@ -262,9 +263,9 @@ export function BulkCreateWorktreeDialog({
       : // Create closes this and the batch carries on in the toolbar; say so
         // before the click, so the dialog vanishing doesn't read as nothing.
         // "selected" gives way to it: the title and the button already count.
-        `${selectedCount} ${selectedCount === 1 ? itemNoun : `${itemNoun}s`}` +
+        pluralize(selectedCount, itemNoun) +
         (creatableCount > 0 ? "" : " selected") +
-        (skippedCount > 0 ? ` \u00b7 ${skippedCount} skipped` : "") +
+        (skippedCount > 0 ? ` \u00b7 ${skippedCount.toLocaleString()} skipped` : "") +
         (creatableCount > 0 ? " \u00b7 runs in the background" : "");
 
   // Nothing to cut issue branches from yet (detached main worktree, list still
@@ -368,8 +369,8 @@ export function BulkCreateWorktreeDialog({
       onClose={handleClose}
       size="md"
       data-testid="bulk-create-worktree-dialog"
-      icon={<Icon name="worktree" className="w-5 h-5 text-text-muted" />}
-      title={`Create ${creatableCount} worktree${creatableCount !== 1 ? "s" : ""}`}
+      icon={<Icon name="worktree" className="w-5 h-5 text-text-secondary" />}
+      title={<span className="tabular-nums">Create {pluralize(creatableCount, "worktree")}</span>}
       hint={batchSummary}
       footer={
         <>
@@ -380,11 +381,11 @@ export function BulkCreateWorktreeDialog({
             aria-disabled={createBlocked || undefined}
             variant="contrast"
             onClick={createBlocked ? undefined : handleCreate}
-            className={cn("min-w-[100px]", createBlocked && ARIA_DISABLED_CLASSES)}
+            className={cn("min-w-[100px] tabular-nums", createBlocked && ARIA_DISABLED_CLASSES)}
             data-testid="bulk-create-confirm-button"
             icon="check"
           >
-            Create {creatableCount} worktree{creatableCount !== 1 ? "s" : ""}
+            Create {pluralize(creatableCount, "worktree")}
           </Button>
         </>
       }
