@@ -1238,12 +1238,17 @@ describe("terminal:search-semantic-buffers", () => {
     );
     if (!envelope.ok) throw new Error(JSON.stringify(envelope.error));
     expect(envelope.data).toEqual({ matches: [matches[0]], complete: true });
+  });
+
+  it("answers a remote view with no project without searching any shard", async () => {
+    ptyClient.searchSemanticBuffersAsync.mockClear();
     const none = await getIpcDispatcher().invokeForEndpoint(
       { endpoint: remoteView(null), client },
       CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
       ["token", false]
     );
     expect(none.ok && none.data).toEqual({ matches: [], complete: true });
+    expect(ptyClient.searchSemanticBuffersAsync).not.toHaveBeenCalled();
   });
 
   it("keeps a partial answer's matches and passes on that it was incomplete", async () => {
