@@ -684,6 +684,98 @@ describe("tryFleetBroadcastFromEditor — per-target overrides and skips (#8691)
     expect(useFleetTargetOverridesStore.getState().skippedIds.size).toBe(0);
   });
 
+  describe("edits made for the next draft while a send is out (#17518)", () => {
+    /** Holds every submit until `release`, so the send is still out while the test edits. */
+    function holdSubmits(): { held: () => number; release: () => void } {
+      const pending: Array<() => void> = [];
+      submitMock.mockImplementation(() => new Promise<void>((resolve) => pending.push(resolve)));
+      return {
+        held: () => pending.length,
+        release: () => {
+          for (const resolve of pending.splice(0)) resolve();
+        },
+      };
+    }
+
+    async function settle(): Promise<void> {
+      for (let i = 0; i < 10; i += 1) await flush();
+    }
+
+    it("keeps a new edit to a recipient the send already rewrote", async () => {
+      arm(["a", "b"]);
+      const submits = holdSubmits();
+      useFleetTargetOverridesStore.getState().setPayloadOverride("b", "for this send");
+      tryFleetBroadcastFromEditor("a", "hello", vi.fn());
+      await vi.waitFor(() => expect(submits.held()).toBe(2));
+
+      useFleetTargetOverridesStore.getState().setPayloadOverride("b", "for the next send");
+      submits.release();
+      await settle();
+
+      expect(submitMock).toHaveBeenCalledWith("b", "for this send");
+      expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({
+        b: "for the next send",
+      });
+    });
+
+    it("keeps a recipient excluded while the send is out, and consumes the send's own edits", async () => {
+      arm(["a", "b", "c"]);
+      const submits = holdSubmits();
+      useFleetTargetOverridesStore.getState().setPayloadOverride("b", "for this send");
+      tryFleetBroadcastFromEditor("a", "hello", vi.fn());
+      await vi.waitFor(() => expect(submits.held()).toBe(3));
+
+      useFleetTargetOverridesStore.getState().setSkipped("c", true);
+      submits.release();
+      await settle();
+
+      const state = useFleetTargetOverridesStore.getState();
+      expect([...state.skippedIds]).toEqual(["c"]);
+      expect(state.payloadOverrides).toEqual({});
+    });
+
+    it("keeps a recipient excluded again after being let back in while the send is out", async () => {
+      arm(["a", "b", "c"]);
+      const submits = holdSubmits();
+      useFleetTargetOverridesStore.getState().setSkipped("c", true);
+      tryFleetBroadcastFromEditor("a", "hello", vi.fn());
+      await vi.waitFor(() => expect(submits.held()).toBe(2));
+
+      useFleetTargetOverridesStore.getState().setSkipped("c", false);
+      useFleetTargetOverridesStore.getState().setSkipped("c", true);
+      submits.release();
+      await settle();
+
+      expect(submitMock).not.toHaveBeenCalledWith("c", "hello");
+      expect(useFleetTargetOverridesStore.getState().skippedIds.has("c")).toBe(true);
+    });
+
+    it("keeps an edit made after a newer send settled when the older one settles last", async () => {
+      arm(["a", "b"]);
+      const pending: Array<{ text: string; resolve: () => void }> = [];
+      submitMock.mockImplementation(
+        (_id, text) => new Promise<void>((resolve) => pending.push({ text, resolve }))
+      );
+      const releaseSend = (text: string) => {
+        for (const entry of pending.filter((p) => p.text === text)) entry.resolve();
+      };
+      useFleetTargetOverridesStore.getState().setPayloadOverride("b", "shared");
+      tryFleetBroadcastFromEditor("a", "first", vi.fn());
+      await vi.waitFor(() => expect(pending).toHaveLength(2));
+      tryFleetBroadcastFromEditor("a", "second", vi.fn());
+      await vi.waitFor(() => expect(pending).toHaveLength(4));
+
+      releaseSend("second");
+      releaseSend("shared");
+      await settle();
+      useFleetTargetOverridesStore.getState().setPayloadOverride("b", "shared");
+      releaseSend("first");
+      await settle();
+
+      expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({ b: "shared" });
+    });
+  });
+
   it("clears overrides but keeps the draft when all initial targets are skipped", () => {
     arm(["a", "b"]);
     useFleetTargetOverridesStore.getState().setPayloadOverride("a", "x");
