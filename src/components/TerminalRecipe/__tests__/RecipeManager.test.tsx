@@ -685,7 +685,7 @@ describe("RecipeManager — copying and exporting team and overridden recipes (#
 
       await activate(item(rowById("recipe-local"), /Duplicate recipe/));
 
-      expect(updateInRepo.mock.calls[0]![1].terminals[0].command).toBe("local-only");
+      expect(updateInRepo.mock.calls[0]![1].terminals[0]?.command).toBe("local-only");
     });
 
     it("says why a copy failed and offers one Retry that tries again", async () => {
