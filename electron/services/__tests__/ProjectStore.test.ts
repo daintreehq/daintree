@@ -223,6 +223,7 @@ vi.mock("../GitService.js", () => ({
 
 vi.mock("../ProjectSettingsManager.js", () => ({
   ProjectSettingsManager: class {
+    constructor(readonly projectsConfigDir: string) {}
     deleteAllEnvForProject() {}
     migrateEnvForProject() {}
     getEffectiveNotificationSettings(...args: unknown[]) {
@@ -775,6 +776,31 @@ describe("ProjectStore.getEffectiveNotificationSettings (#15635)", () => {
     expect(store.getEffectiveNotificationSettings(null)).toEqual({
       forwarded: [null, undefined],
     });
+  });
+});
+
+describe("ProjectStore.projectSettingsFilePath (#17354)", () => {
+  beforeEach(() => {
+    sqlite = new Database(":memory:");
+    sqlite.exec(CREATE_TABLES_SQL);
+    db = drizzle(sqlite, { schema });
+  });
+
+  afterEach(() => {
+    sqlite.close();
+  });
+
+  it("names the settings file inside the folder the settings manager writes", () => {
+    const store = new ProjectStore();
+    const projectsDir = (store["settingsManager"] as unknown as { projectsConfigDir: string })
+      .projectsConfigDir;
+    const id = "b".repeat(64);
+
+    expect(store.projectSettingsFilePath(id)).toBe(path.join(projectsDir, id, "settings.json"));
+  });
+
+  it("is null for an id that isn't a project id", () => {
+    expect(new ProjectStore().projectSettingsFilePath("../escape")).toBeNull();
   });
 });
 

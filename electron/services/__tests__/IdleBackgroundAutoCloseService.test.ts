@@ -24,6 +24,9 @@ const projectStoreMock = vi.hoisted(() => ({
     lastOpened: Date.now() - 30 * 60 * 1000,
   })),
   updateProjectStatus: vi.fn(),
+  projectSettingsFilePath: vi.fn<(id: string) => string | null>(
+    (id) => `/userData/projects/${id}/settings.json`
+  ),
 }));
 
 const ptyClientMock = vi.hoisted(() => ({
@@ -70,9 +73,13 @@ const gitSafetyMock = vi.hoisted(() => ({
 vi.mock("../../utils/gitSleepSafety.js", () => gitSafetyMock);
 
 const resourceProbeMock = vi.hoisted(() => ({
-  probeResourceConfig: vi.fn<(root: string, paths: readonly string[]) => Promise<string>>(
-    async () => "none"
-  ),
+  probeResourceConfig: vi.fn<
+    (
+      root: string,
+      paths: readonly string[],
+      options?: { projectSettingsPath?: string | null }
+    ) => Promise<string>
+  >(async () => "none"),
 }));
 vi.mock("../../utils/resourceConfigProbe.js", () => resourceProbeMock);
 
@@ -1992,6 +1999,18 @@ describe("IdleBackgroundAutoCloseService", () => {
       expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
       expect(skipLog()).toEqual({ [reason]: ["proj-1"] });
+    });
+
+    it("probes the resource environments saved in Project settings", async () => {
+      enableShells();
+      const service = setUpIdleShellProject();
+      await runCheck(service);
+
+      expect(resourceProbeMock.probeResourceConfig).toHaveBeenCalledWith(
+        "/projects/proj-1",
+        expect.any(Array),
+        { projectSettingsPath: "/userData/projects/proj-1/settings.json" }
+      );
     });
 
     it("won't kill a terminal it never vetted", async () => {

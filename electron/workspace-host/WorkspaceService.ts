@@ -599,7 +599,11 @@ export class WorkspaceService {
   // path would mint a stale id for any relocated project.
   private projectId: string | null = null;
   private projectEnvVars: Record<string, string> = {};
-  private lifecycleService = new WorktreeLifecycleService();
+  private lifecycleService = new WorktreeLifecycleService(undefined, undefined, (rootPath) =>
+    rootPath === this.projectRootPath && this.projectId
+      ? this.projectSettingsFilePath(this.projectId)
+      : null
+  );
   private readonly setupCoordinator: WorktreeSetupCoordinator;
   private listService = new WorktreeListService();
   private readonly fileDiffCache = new FileDiffCache();
@@ -1940,11 +1944,19 @@ export class WorkspaceService {
           const named = envKey !== "local" ? ownResource(envs, envKey) : undefined;
           if (named) {
             resourceConfig = named;
-          } else {
-            const keys = Object.keys(envs);
-            if (keys.length > 0) resourceConfig = envs[keys[0]];
+            resourceEnvironments = resolvedEnvs;
+          } else if (Object.keys(envs).length > 0) {
+            // The worktree can switch into one of the project's environments,
+            // but none is its own. Setup, actions and teardown resolve the
+            // environment by its exact key, so another one's commands are not
+            // published here: its Connect would reach a box this worktree
+            // doesn't own. Applying an empty block also drops the commands a
+            // refresh finds left over from an environment since renamed away.
+            if (monitor.resourceEnvironmentEpoch !== environmentEpoch) return;
+            applyResourceConfigToMonitor(monitor, {}, (cmd) => cmd, false);
+            if (monitor.isRunning && monitor.hasInitialStatus) this.emitUpdate(monitor);
+            return;
           }
-          if (resourceConfig) resourceEnvironments = resolvedEnvs;
         }
       }
       if (!resourceConfig) return;
@@ -5834,15 +5846,20 @@ export class WorkspaceService {
     return envs !== null && Object.keys(envs).length > 0;
   }
 
+  /** The settings file Project settings writes for `projectId`, or null without a userData root. */
+  private projectSettingsFilePath(projectId: string): string | null {
+    const userDataDir = process.env.DAINTREE_USER_DATA ?? "";
+    if (!userDataDir) return null;
+    // Settings live under `<userData>/projects/<id>/settings.json` (see
+    // ProjectStore's `projectsConfigDir`). DAINTREE_USER_DATA is the bare
+    // userData root, so the `projects` segment must be added here — without it
+    // the read silently missed and env vars never reached the host (#11282).
+    return settingsFilePath(pathResolve(userDataDir, "projects"), projectId);
+  }
+
   private async loadProjectEnvVars(projectId: string): Promise<Record<string, string>> {
     try {
-      const userDataDir = process.env.DAINTREE_USER_DATA ?? "";
-      if (!userDataDir) return {};
-      // Settings live under `<userData>/projects/<id>/settings.json` (see
-      // ProjectStore's `projectsConfigDir`). DAINTREE_USER_DATA is the bare
-      // userData root, so the `projects` segment must be added here — without it
-      // the read silently missed and env vars never reached the host (#11282).
-      const filePath = settingsFilePath(pathResolve(userDataDir, "projects"), projectId);
+      const filePath = this.projectSettingsFilePath(projectId);
       if (!filePath) return {};
       const raw = await readFile(filePath, "utf8");
       const parsed: unknown = JSON.parse(raw);

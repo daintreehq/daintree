@@ -44,6 +44,7 @@ import {
   mintProjectId,
   isValidProjectId,
   getProjectStateDir,
+  settingsFilePath,
 } from "./projectStorePaths.js";
 import { ProjectSettingsManager } from "./ProjectSettingsManager.js";
 import { ProjectStateManager, type ProjectStateReadResult } from "./ProjectStateManager.js";
@@ -2061,6 +2062,11 @@ export class ProjectStore {
 
   async saveProjectSettings(projectId: string, settings: ProjectSettings): Promise<void> {
     return this.settingsManager.saveProjectSettings(projectId, settings);
+  }
+
+  /** The file {@link saveProjectSettings} writes, or null for an invalid id. */
+  projectSettingsFilePath(projectId: string): string | null {
+    return settingsFilePath(this.projectsConfigDir, projectId);
   }
 
   async changeLocalVoiceDictionary(

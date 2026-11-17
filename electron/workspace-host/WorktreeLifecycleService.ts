@@ -245,7 +245,13 @@ export class WorktreeLifecycleService {
     private readonly homeDir: string = os.homedir(),
     private readonly approvals: LifecycleCommandApprovalStore = new FileLifecycleCommandApprovalStore(
       resolveLifecycleCommandApprovalsDir(process.env.DAINTREE_USER_DATA)
-    )
+    ),
+    /**
+     * Where Project settings saved this project's settings, or null when the
+     * host has no loaded project for that root. The host resolves it because
+     * only main knows the project's immutable id.
+     */
+    private readonly projectSettingsPath: (projectRootPath: string) => string | null = () => null
   ) {}
 
   /**
@@ -950,7 +956,12 @@ export class WorktreeLifecycleService {
     projectRootPath: string
   ): Promise<ResolvedResourceEnvironments | null> {
     const sanitizedRoot = sanitizePathSegment(projectRootPath);
+    const appSettingsPath = this.projectSettingsPath(projectRootPath);
     const candidates: Array<{ origin: ResolvedResourceEnvironments["origin"]; path: string }> = [
+      // First, because Project settings writes here and the New Worktree
+      // dialog offers the keys it holds. Resource environments are never
+      // shared through the repository, so this file is the user's own.
+      ...(appSettingsPath ? [{ origin: "user" as const, path: appSettingsPath }] : []),
       {
         origin: "user",
         path: pathJoin(this.homeDir, ".daintree", "projects", sanitizedRoot, "settings.json"),
@@ -1186,10 +1197,13 @@ export class WorktreeLifecycleService {
       return { shouldProvision: false, needsApproval: false };
     }
 
-    if (!config || !resolvedConfig) return { shouldProvision: false, needsApproval: false };
-
+    // Without a config file there are no setup commands, but an environment
+    // from settings still provisions after the empty setup, as it does when a
+    // config file declares none.
+    const setupCommands = config?.setup ?? [];
     const setupApproved =
-      !config.setup?.length || (await this.isConfigApproved(resolvedConfig, projectRootPath));
+      setupCommands.length === 0 ||
+      (resolvedConfig !== null && (await this.isConfigApproved(resolvedConfig, projectRootPath)));
     const monitor = ctx.getMonitor(worktreeId);
     if (!monitor) {
       return { shouldProvision: false, needsApproval: false };
@@ -1211,7 +1225,7 @@ export class WorktreeLifecycleService {
       monitor.setLifecycleStatus({
         phase: "setup",
         state: "needs-approval",
-        totalCommands: config.setup?.length ?? 0,
+        totalCommands: setupCommands.length,
         error: LIFECYCLE_COMMANDS_NEED_APPROVAL_ERROR,
         startedAt: now,
         completedAt: now,
@@ -1224,7 +1238,7 @@ export class WorktreeLifecycleService {
       return { shouldProvision: false, needsApproval: true };
     }
 
-    const commands = (config.setup ?? []).map(sub);
+    const commands = setupCommands.map(sub);
     const env = this.buildEnv(
       worktreePath,
       projectRootPath,

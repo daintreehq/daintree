@@ -936,7 +936,9 @@ export class IdleBackgroundAutoCloseService {
     const workspace = evaluateWorkspace(read);
     if (!workspace.ok) return { status: "skipped", reason: workspace.reason };
     const worktreePaths = workspace.value;
-    const resources = await probeResourceConfig(project.path, worktreePaths);
+    const resources = await probeResourceConfig(project.path, worktreePaths, {
+      projectSettingsPath: projectStore.projectSettingsFilePath(projectId),
+    });
     if (resources === "configured") return { status: "skipped", reason: "resource-configured" };
     if (resources === "unknown") return { status: "skipped", reason: "resource-unknown" };
     const gitBlock = evaluateGit(
