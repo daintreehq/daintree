@@ -9,7 +9,9 @@ import {
   SettingsActions,
   SettingsGroup,
   SettingsRow,
+  settingsRowFrameClass,
 } from "@/components/Settings/SettingsGroup";
+import { Callout } from "@/components/ui/Callout";
 import {
   Select,
   SelectContent,
@@ -22,7 +24,7 @@ import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { editorClient } from "@/clients/editorClient";
 import type { EditorConfig, DiscoveredEditor, KnownEditorId } from "@shared/types/editor";
-import { KNOWN_EDITOR_IDS } from "@shared/types/editor";
+import { KNOWN_EDITOR_IDS, terminalOnlyEditorCommand } from "@shared/types/editor";
 import { useProjectStore, patchCachedProjectSettings } from "@/store";
 import { invalidateProjectSettingsCache, withProjectSettingsWrite } from "@/clients/projectClient";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -148,9 +150,12 @@ export function EditorIntegrationTab() {
         setDiscoveredEditors(discovered);
         setPreferredEditor(pref ?? null);
         setDefaultEditor(fallback ?? null);
-        // The draft starts at what a launch would try first, else the first editor found.
-        const start = pref ??
-          fallback ?? { id: discovered.find((d) => d.available)?.id ?? DEFAULT_EDITOR_ID };
+        // The draft starts at what a launch would try first, else the first editor found
+        // that automatic selection would also launch.
+        const firstLaunchable = discovered.find(
+          (d) => d.available && !terminalOnlyEditorCommand(d.id)
+        );
+        const start = pref ?? fallback ?? { id: firstLaunchable?.id ?? DEFAULT_EDITOR_ID };
         const draft = draftFieldsOf(start);
         setSelectedId(draft.id);
         setCustomCommand(draft.command);
@@ -348,6 +353,7 @@ export function EditorIntegrationTab() {
   };
 
   const availabilityMap = new Map(discoveredEditors.map((d) => [d.id, d]));
+  const selectedTerminalCommand = terminalOnlyEditorCommand(selectedId);
 
   // The inventory rule: the current choice and anything that needs attention stay in
   // view; the healthy remainder, with its paths, sits behind a disclosure.
@@ -489,6 +495,20 @@ export function EditorIntegrationTab() {
             </>
           )}
         />
+
+        {selectedTerminalCommand && (
+          <div className={settingsRowFrameClass(0)}>
+            <Callout
+              severity="warning"
+              title={`${EDITOR_LABELS[selectedId]} runs in a terminal`}
+              data-testid="editor-terminal-only-note"
+            >
+              Daintree can&apos;t open it directly. To use it, choose Custom… with your terminal app
+              as the command, like kitty, and &quot;{selectedTerminalCommand} {"{file}"}&quot; as
+              the arguments.
+            </Callout>
+          </div>
+        )}
 
         {selectedId !== "custom" && discoveredEditors.length > 0 && (
           <>

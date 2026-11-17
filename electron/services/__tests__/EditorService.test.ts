@@ -947,7 +947,6 @@ describe("EditorService directory targets", () => {
       ["zed", "zed"],
       ["sublime", "subl"],
       ["webstorm", "webstorm"],
-      ["neovim", "nvim"],
     ] as const) {
       vi.clearAllMocks();
       mockExecaChildren(execaMock.execa, ["spawned"]);
@@ -1184,25 +1183,71 @@ describe("EditorService terminal-only editors", () => {
     expect(execaMock.execa.mock.calls[0]![1]).toEqual(["-t", "/abs/file.ts"]);
   });
 
-  it("an explicit Neovim choice never spawns nvim detached and says how to set one up", async () => {
+  // Substituting another editor for an explicit choice would hide why the
+  // choice never opens; the result lets the window say how to set it up.
+  it("an explicit Neovim choice launches nothing and answers that it needs a terminal", async () => {
     mockExistingFiles(["/usr/local/bin/nvim", "/usr/local/bin/code"]);
+    process.env.EDITOR = "code";
     const { openFile } = await loadModule();
 
-    const result = openFile("/abs/file.ts", 12, 5, { id: "neovim" });
+    const result = await openFile("/abs/file.ts", 12, 5, { id: "neovim" });
 
-    await expect(result).rejects.toThrow(/terminal/i);
-    await expect(result).rejects.toThrow(/Custom/);
-    expect(launchedBinaries()).not.toContain("/usr/local/bin/nvim");
+    expect(result).toEqual({ outcome: "needs-terminal", editorName: "Neovim", command: "nvim" });
+    expect(execaMock.execa).not.toHaveBeenCalled();
     expect(shellMock.openPath).not.toHaveBeenCalled();
   });
 
-  it("an explicit Neovim choice explains for a folder target too", async () => {
+  it("an explicit Neovim choice answers the same for a folder target", async () => {
     mockExistingFiles(["/usr/local/bin/nvim"]);
     const { openFile } = await loadModule();
 
-    await expect(
-      openFile("/abs/worktrees/feature-x", undefined, undefined, { id: "neovim" }, true)
-    ).rejects.toThrow(/terminal/i);
+    const result = await openFile(
+      "/abs/worktrees/feature-x",
+      undefined,
+      undefined,
+      { id: "neovim" },
+      true
+    );
+
+    expect(result).toMatchObject({ outcome: "needs-terminal" });
     expect(execaMock.execa).not.toHaveBeenCalled();
+  });
+
+  it("an explicit Neovim choice answers the same when nvim isn't installed", async () => {
+    mockExistingFiles(["/usr/local/bin/code"]);
+    const { openFile } = await loadModule();
+
+    const result = await openFile("/abs/file.ts", 12, 5, { id: "neovim" });
+
+    expect(result).toMatchObject({ outcome: "needs-terminal" });
+    expect(execaMock.execa).not.toHaveBeenCalled();
+  });
+
+  // `nvim --server <addr> --remote {file}` hands the file to a running Neovim
+  // and needs no terminal of its own, so a custom command is never second-guessed.
+  it("a custom nvim command still launches as configured", async () => {
+    const { openFile } = await loadModule();
+
+    const result = await openFile("/abs/my file.ts", 12, 5, {
+      id: "custom",
+      customCommand: "nvim",
+      customTemplate: "--server /tmp/nvim.sock --remote {file}",
+    });
+
+    expect(result).toBeUndefined();
+    expect(execaMock.execa).toHaveBeenCalledTimes(1);
+    expect(execaMock.execa).toHaveBeenCalledWith(
+      "nvim",
+      ["--server", "/tmp/nvim.sock", "--remote", "/abs/my file.ts"],
+      expect.objectContaining({ detached: true })
+    );
+  });
+
+  it("a GUI editor's launch answers nothing", async () => {
+    mockExistingFiles(["/usr/local/bin/code"]);
+    const { openFile } = await loadModule();
+
+    await expect(openFile("/abs/file.ts", 12, 5, { id: "vscode" })).resolves.toBeUndefined();
+    expect(launchedBinaries()).toEqual(["/usr/local/bin/code"]);
   });
 });

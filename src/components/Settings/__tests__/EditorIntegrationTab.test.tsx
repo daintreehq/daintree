@@ -236,6 +236,42 @@ describe("EditorIntegrationTab", () => {
     expect(testButton.disabled).toBe(true);
   });
 
+  // Neovim needs a terminal, so a launch never starts it detached (#17441).
+  describe("terminal-only editors", () => {
+    it("starts an automatic draft at the first editor a launch would open, passing over Neovim", async () => {
+      getConfigMock.mockResolvedValue({
+        preferredEditor: null,
+        discoveredEditors: [
+          { id: "neovim", available: true, executablePath: "/usr/bin/nvim" },
+          { id: "sublime", available: true, executablePath: "/usr/bin/subl" },
+        ],
+      });
+      useProjectStore.setState({ currentProject: TEST_PROJECT });
+      render(
+        <TooltipProvider>
+          <EditorIntegrationTab />
+        </TooltipProvider>
+      );
+      await screen.findByText(/Not saved yet/i);
+
+      expect((screen.getByLabelText("Editor") as HTMLSelectElement).value).toBe("sublime");
+      expect(screen.queryByTestId("editor-terminal-only-note")).toBeNull();
+    });
+
+    it("explains how to run Neovim through a terminal app while it's selected", async () => {
+      await renderLoadedTab();
+      expect(screen.queryByTestId("editor-terminal-only-note")).toBeNull();
+
+      selectEditor("neovim");
+      const note = screen.getByTestId("editor-terminal-only-note");
+      expect(note.textContent).toContain("Neovim runs in a terminal");
+      expect(note.textContent).toContain('"nvim {file}"');
+
+      selectEditor("custom");
+      expect(screen.queryByTestId("editor-terminal-only-note")).toBeNull();
+    });
+  });
+
   // An inventory keeps the current choice and anything needing attention in view,
   // and discloses the healthy remainder with its paths.
   describe("detected editors inventory", () => {

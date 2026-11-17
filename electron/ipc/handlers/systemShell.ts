@@ -359,7 +359,7 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
     const editorConfig = resolveEffectiveEditor(projectEditor, readDefaultEditor());
 
     const { openFile } = await import("../../services/EditorService.js");
-    await openFile(realTarget, line, col, editorConfig, isDirectory);
+    return openFile(realTarget, line, col, editorConfig, isDirectory);
   };
   handlers.push(
     typedHandleValidated(
