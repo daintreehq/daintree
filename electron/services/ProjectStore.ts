@@ -1749,8 +1749,9 @@ export class ProjectStore {
     // after tearing down its runtimes), never this closed-project reattach path
     // — repointing a live view/host/PTY from here would strand them on the old
     // path (#11282). This single-window pointer only catches the last-focused
-    // window; the authoritative open-anywhere fork lives at the IPC boundary
-    // (`collectActiveProjectIds`), which routes open projects to the coordinator.
+    // window; the authoritative fork lives in the coordinator, which routes any
+    // project holding live runtimes (shown anywhere, or kept warm in the
+    // background) to its pipeline.
     if (projectId === this.getCurrentProjectId()) {
       throw new Error("Cannot relocate the currently active project");
     }
@@ -1772,9 +1773,10 @@ export class ProjectStore {
    * via {@link relocateProject} (folder moved externally), or the phase-3
    * relocation coordinator after its own same-volume `fs.rename`.
    *
-   * Split out from `relocateProject` so the coordinator can relocate an OPEN
-   * project while PRESERVING its `status` (forcing `"closed"` would make the
-   * visible project and the DB row disagree); `relocateProject` always closes.
+   * Split out from `relocateProject` so the coordinator can relocate a project
+   * holding live runtimes with the status it decided for it (forcing `"closed"`
+   * would make a visible or backgrounded project and the DB row disagree);
+   * `relocateProject` always closes.
    *
    * `expectedOldPath` guards a concurrent move: if the row no longer points where
    * the caller captured it, the state rebase would run against a stale old root,

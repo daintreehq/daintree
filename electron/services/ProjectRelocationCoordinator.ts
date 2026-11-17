@@ -94,6 +94,19 @@ interface TargetWindow {
   windowId: number;
 }
 
+/**
+ * What of a project is live at the moment a relocation starts. `open` is the
+ * foreground set (any window, the outgoing bridge, the DB pointer, a remote
+ * Shell); `held` adds a project kept warm behind another one — a cached view, a
+ * tracked PTY, or a workspace host still rooted at its path (#17185). Anything
+ * held has runtimes on the old path, so it needs the pipeline, not the
+ * closed-only shortcut.
+ */
+interface RuntimeOwnership {
+  open: boolean;
+  held: boolean;
+}
+
 export class ProjectRelocationCoordinator {
   private deps: ProjectRelocationDeps = {};
   private readonly relocating = new Set<string>();
@@ -108,10 +121,11 @@ export class ProjectRelocationCoordinator {
   }
 
   /**
-   * Relocate a project. Routes an OPEN project (visible in any window) through
-   * the quiesce/rebind pipeline; a closed reattach delegates to the existing
-   * phase-1/2 `ProjectStore.relocateProject` (already correct for a project with
-   * no live runtimes). Broadcasts the final `PROJECT_UPDATED` in both branches.
+   * Relocate a project. Routes a project holding live runtimes (visible in any
+   * window, or kept warm in the background) through the quiesce/rebind
+   * pipeline; a reattach of a project holding nothing delegates to the existing
+   * phase-1/2 `ProjectStore.relocateProject`. Broadcasts the final
+   * `PROJECT_UPDATED` in both branches.
    */
   async relocate(request: RelocateProjectRequest): Promise<Project> {
     const { projectId, mode } = request;
@@ -130,12 +144,10 @@ export class ProjectRelocationCoordinator {
         `A relocation is already running for "${project.name}".`
       );
     }
-    const openAtEntry = collectActiveProjectIds(
-      projectViewManagersFrom(this.deps.windowRegistry),
-      projectStore.getCurrentProjectId(),
-      "project-relocation"
-    ).has(projectId);
-    const targetWindows = openAtEntry ? this.snapshotWindowsShowingProject(projectId) : [];
+    const ownership = this.snapshotOwnership(project, "project-relocation");
+    // Only windows SHOWING it reopen; a background holder is reloaded at the new
+    // root by its next switch, which loads the row's (now relocated) path.
+    const targetWindows = ownership.open ? this.snapshotWindowsShowingProject(projectId) : [];
 
     // Reserve BEFORE any branch so a concurrent relocation of the same project —
     // closed-delegate or pipeline — is rejected, not interleaved.
@@ -143,12 +155,18 @@ export class ProjectRelocationCoordinator {
     try {
       // Closed reattach: the folder is already on disk and nothing is live, so
       // the phase-1/2 path is correct as-is — no quiesce machinery needed.
-      if (mode === "reattach" && !openAtEntry) {
+      if (mode === "reattach" && !ownership.held) {
         const relocated = await projectStore.relocateProject(projectId, request.newPath);
         broadcastToRenderer(CHANNELS.PROJECT_UPDATED, relocated);
         return relocated;
       }
-      return await this.runPipeline(project, request, disposition, targetWindows);
+      return await this.runPipeline(
+        project,
+        request,
+        disposition,
+        targetWindows,
+        relocatedStatus(project.status, ownership)
+      );
     } finally {
       this.relocating.delete(projectId);
       // Hold the state-write rewrite a beat past the operation: a renderer layout
@@ -180,17 +198,14 @@ export class ProjectRelocationCoordinator {
     const oldPath = project.path;
     // Resolve ownership SYNCHRONOUSLY before any await (#11131), mirroring
     // `relocate`. `apply` only quiesces (kills terminals, refuses on an active
-    // Assistant) when it runs `runPipeline` — every move, plus a reattach of an
-    // OPEN project. A reattach of a closed/missing project delegates straight to
+    // Assistant) when it runs `runPipeline` — every move, plus a reattach of a
+    // project holding live runtimes, foreground or background. A reattach of a
+    // project holding nothing delegates straight to
     // `ProjectStore.relocateProject`, which touches no runtimes, so the preview
     // must NOT claim terminals will stop or block on a (possibly stale) Assistant
     // record there.
-    const openAtEntry = collectActiveProjectIds(
-      projectViewManagersFrom(this.deps.windowRegistry),
-      projectStore.getCurrentProjectId(),
-      "project-relocation-preview"
-    ).has(projectId);
-    const usesPipeline = mode === "move" || openAtEntry;
+    const usesPipeline =
+      mode === "move" || this.snapshotOwnership(project, "project-relocation-preview").held;
 
     const blockers: RelocationBlocker[] = [];
     const pushBlocker = (error: unknown): void => {
@@ -343,6 +358,35 @@ export class ProjectRelocationCoordinator {
     }
   }
 
+  private snapshotOwnership(project: Project, source: string): RuntimeOwnership {
+    const open = collectActiveProjectIds(
+      projectViewManagersFrom(this.deps.windowRegistry),
+      projectStore.getCurrentProjectId(),
+      source
+    ).has(project.id);
+    return { open, held: open || this.holdsBackgroundRuntimes(project, source) };
+  }
+
+  /**
+   * Whether anything of the project survives off-screen. Synchronous, so it is
+   * read before the first await like the foreground check. A source that throws
+   * counts as held: the pipeline is safe for a project holding nothing, while
+   * the closed-only shortcut strands whatever it missed.
+   */
+  private holdsBackgroundRuntimes(project: Project, source: string): boolean {
+    const { windowRegistry, ptyClient, worktreeService } = this.deps;
+    try {
+      for (const ctx of windowRegistry?.all() ?? []) {
+        if (ctx.services.projectViewManager?.views.has(project.id)) return true;
+      }
+      if (ptyClient?.getLiveWorkspaceIds().has(project.id)) return true;
+      return worktreeService?.getHostForProject(project.path) !== undefined;
+    } catch (error) {
+      logError("relocate-runtime-ownership-failed", error, { projectId: project.id, source });
+      return true;
+    }
+  }
+
   private scheduleGuardRelease(projectId: string): void {
     // Cancel any pending release so only the LATEST relocation's timer survives —
     // otherwise an older timer could fire after a newer relocation re-armed the
@@ -361,7 +405,8 @@ export class ProjectRelocationCoordinator {
     project: Project,
     request: RelocateProjectRequest,
     disposition: AssistantDisposition,
-    targetWindows: TargetWindow[]
+    targetWindows: TargetWindow[],
+    status: Project["status"]
   ): Promise<Project> {
     const { projectId, mode } = request;
     const oldRoot = project.path;
@@ -444,14 +489,15 @@ export class ProjectRelocationCoordinator {
     }
 
     // Finalize durable state (DB path + phase-2 migration + git/submodule repair),
-    // PRESERVING the project's status so an open project stays open.
+    // with the status decided at entry so an open project stays open and a
+    // background one stays reopenable.
     let updated: Project;
     try {
       updated = await projectStore.finalizeRelocatedPath({
         projectId,
         expectedOldPath: oldRoot,
         newPath: requestedNewRoot,
-        status: project.status,
+        status,
       });
     } catch (error) {
       // Post-commit: the folder is at the new root but the DB update failed. Do
@@ -708,6 +754,24 @@ export class ProjectRelocationCoordinator {
     }
     return result;
   }
+}
+
+/**
+ * The status a pipeline relocation writes, decided from what the project held at
+ * entry (the quiesce destroys the PTYs and host it would otherwise read). A
+ * project that went missing while still live gets its live status back:
+ * `checkMissingProjects` marks any non-current project missing, and preserving
+ * that would leave the relocated row unopenable. A background holder lands as
+ * `"background"` so the next visit goes through reopen, which loads the host at
+ * the new root and reuses the cached view when one survived the relocation.
+ */
+function relocatedStatus(
+  status: Project["status"],
+  ownership: RuntimeOwnership
+): Project["status"] {
+  if (ownership.open) return status === "missing" ? "active" : status;
+  if (ownership.held) return "background";
+  return status === "missing" ? "closed" : status;
 }
 
 /**
