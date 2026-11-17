@@ -340,8 +340,8 @@ describe("HelpSessionTabs", () => {
     async (label) => {
       // A dialog that has claimed focus by the time the menu's close handler runs;
       // jsdom has no exit animation, so a microtask stands in for AppDialog's frame.
+      const field = document.createElement("input");
       const opensDialog = () => {
-        const field = document.createElement("input");
         document.body.appendChild(field);
         queueMicrotask(() => field.focus());
       };
@@ -353,14 +353,16 @@ describe("HelpSessionTabs", () => {
           onClose: opensDialog,
         })
       );
-      fireEvent.click(within(await openPicker()).getByRole("menuitem", { name: label }));
-      await act(async () => {
-        await new Promise<void>((resolve) => setTimeout(resolve, CLOSE_SETTLE_MS));
-      });
+      try {
+        fireEvent.click(within(await openPicker()).getByRole("menuitem", { name: label }));
+        await act(async () => {
+          await new Promise<void>((resolve) => setTimeout(resolve, CLOSE_SETTLE_MS));
+        });
 
-      const active = document.activeElement;
-      expect(active instanceof HTMLInputElement).toBe(true);
-      active?.remove();
+        expect(document.activeElement).toBe(field);
+      } finally {
+        field.remove();
+      }
     }
   );
 

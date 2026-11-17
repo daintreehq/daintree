@@ -226,7 +226,7 @@ describe("TerminalDecisionsChip", () => {
     const calls: string[] = [];
     const policy = makePolicy(() => calls.push("handoff"));
     const original = useDecisionsAttentionStore.getState().open;
-    useDecisionsAttentionStore.setState({ open: () => calls.push("open") });
+    useDecisionsAttentionStore.setState({ open: (terminalId) => calls.push(`open ${terminalId}`) });
     try {
       render(
         <OverlayFocusRestoreContext.Provider value={policy}>
@@ -237,7 +237,7 @@ describe("TerminalDecisionsChip", () => {
       expect(calls).toEqual([]);
       fireEvent.click(await screen.findByTestId("terminal-decisions-review"));
 
-      expect(calls).toEqual(["handoff", "open"]);
+      expect(calls).toEqual(["handoff", "open t1"]);
       expect(screen.queryByTestId("popover-content")).toBeNull();
     } finally {
       useDecisionsAttentionStore.setState({ open: original });

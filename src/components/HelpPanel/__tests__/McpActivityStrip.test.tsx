@@ -486,7 +486,7 @@ describe("McpActivityStrip", () => {
 
   it("hands focus to Settings before the audit log link closes the popover", async () => {
     const calls: string[] = [];
-    dispatch.mockImplementation(() => {
+    dispatch.mockImplementationOnce(() => {
       calls.push("dispatch");
       return Promise.resolve();
     });
