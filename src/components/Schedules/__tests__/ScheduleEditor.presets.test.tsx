@@ -67,6 +67,7 @@ function renderEditor(schedule: Schedule) {
       schedule={schedule}
       defaultAgentId="claude"
       worktrees={[{ id: null, label: "Main checkout" }]}
+      worktreeIds={new Set()}
       now={NOW}
       osJobContext={null}
       leaveStateRef={createRef<EditorLeaveState | null>()}
