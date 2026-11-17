@@ -75,10 +75,12 @@ async function renderRow(
 
 function deferred<T>() {
   let resolve: (value: T) => void = () => {};
-  const promise = new Promise<T>((settle) => {
+  let reject: (reason: unknown) => void = () => {};
+  const promise = new Promise<T>((settle, fail) => {
     resolve = settle;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 const isDisabled = (element: HTMLElement) =>
@@ -222,6 +224,20 @@ describe("HostIdleTimeRow (#17357)", () => {
     expect(select().textContent).toBe("1 hour");
     expect(isDisabled(select())).toBe(false);
     expect(screen.queryByText(/didn't/)).toBeNull();
+
+    // A refusal from before the drop says nothing about the reading taken since.
+    const refused = deferred<HostSettingsUpdateResult>();
+    api.update.mockReturnValueOnce(refused.promise);
+    api.read.mockResolvedValueOnce(snapshot(15));
+    await pick("8 hours");
+    await row.setConnected(false);
+    await row.setConnected(true);
+    await act(async () => {
+      refused.reject(new Error("link closed"));
+    });
+    expect(select().textContent).toBe("15 minutes");
+    expect(isDisabled(select())).toBe(false);
+    expect(screen.queryByText(/link closed/)).toBeNull();
   });
 
   it("says nothing stale when an unconfirmed change's read-back fails after the link came back", async () => {
@@ -252,8 +268,9 @@ describe("HostIdleTimeRow (#17357)", () => {
     await renderRow();
     await pick("4 hours");
 
-    // Nothing to edit against until the host is read again.
+    // Nothing to edit against until the host is read again, and why.
     expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain("link dropped");
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     });
