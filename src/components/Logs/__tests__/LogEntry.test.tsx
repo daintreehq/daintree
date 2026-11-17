@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -112,6 +112,29 @@ describe("LogEntry", () => {
       expect(screen.getByRole("region", { name: /context/i }).textContent).toContain(
         '"requestId": "b"'
       );
+    });
+
+    it("lists distinct contexts in first-seen order with their repeats", () => {
+      const repeatOfFirst = { ...first, id: "g3", timestamp: first.timestamp + 9000 };
+      const bare = { ...first, id: "g4", timestamp: first.timestamp + 12000, context: {} };
+      renderRow(
+        <LogEntry
+          entry={first}
+          members={[first, second, repeatOfFirst, bare]}
+          count={4}
+          isExpanded={true}
+          onToggle={vi.fn()}
+        />
+      );
+      const items = within(screen.getByRole("region", { name: /context/i })).getAllByRole(
+        "listitem"
+      );
+      expect(items.map((item) => item.textContent)).toEqual([
+        expect.stringMatching(/repeated 2 times.*"requestId": "a"/s),
+        expect.not.stringMatching(/repeated/),
+        expect.stringContaining("No context"),
+      ]);
+      expect(items[1]?.textContent).toContain('"requestId": "b"');
     });
 
     it("shows a shared context once", () => {
