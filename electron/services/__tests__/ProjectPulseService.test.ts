@@ -1401,4 +1401,134 @@ describe("ProjectPulseService", () => {
     const cache = (svc as any).cache as Map<string, unknown>;
     expect(cache.size).toBe(0);
   });
+
+  describe("project age across DST changes (#17454)", () => {
+    type LocalDay = [year: number, monthIndex: number, day: number];
+    const noon = ([y, m, d]: LocalDay) => new Date(y, m, d, 12, 0, 0, 0);
+
+    let machineZone: string | undefined;
+
+    beforeEach(() => {
+      machineZone = process.env.TZ;
+    });
+
+    afterEach(() => {
+      if (machineZone === undefined) delete process.env.TZ;
+      else process.env.TZ = machineZone;
+    });
+
+    async function pulseFor(first: LocalDay, commitDays: LocalDay[], today: LocalDay) {
+      vi.setSystemTime(noon(today));
+      const firstTs = Math.floor(noon(first).getTime() / 1000);
+      const commitOutput = commitDays.map((d) => Math.floor(noon(d).getTime() / 1000)).join("\n");
+
+      const raw = vi.fn(async (args: string[]) => {
+        const cmd = args[0];
+        if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
+        if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
+        if (cmd === "rev-parse" && args.includes("--is-shallow-repository")) return "false\n";
+        if (cmd === "rev-list") return "rootsha\n";
+        if (cmd === "log" && args.includes("rootsha")) return `${firstTs}\n`;
+        if (cmd === "log") return commitOutput;
+        return "";
+      });
+
+      vi.doMock("../../utils/hardenedGit.js", () => ({
+        createHardenedGit: () => createGitStub(raw),
+      }));
+
+      const { ProjectPulseService } = await import("../ProjectPulseService.js");
+      return new ProjectPulseService().getPulse({
+        worktreePath: "/repo",
+        worktreeId: "wt-dst",
+        mainBranch: "main",
+        rangeDays: 60 as const,
+        includeDelta: false,
+        includeRecentCommits: false,
+      });
+    }
+
+    const cases: Array<{
+      name: string;
+      zone: string;
+      first: LocalDay;
+      commits: LocalDay[];
+      today: LocalDay;
+      midnightGapHours: number;
+      ageDays: number;
+    }> = [
+      {
+        name: "spring forward in America/New_York, a commit on each of three dates",
+        zone: "America/New_York",
+        first: [2026, 2, 7],
+        commits: [
+          [2026, 2, 7],
+          [2026, 2, 8],
+          [2026, 2, 9],
+        ],
+        today: [2026, 2, 9],
+        midnightGapHours: 47,
+        ageDays: 3,
+      },
+      {
+        name: "fall back in America/New_York, a commit on each of three dates",
+        zone: "America/New_York",
+        first: [2026, 9, 31],
+        commits: [
+          [2026, 9, 31],
+          [2026, 10, 1],
+          [2026, 10, 2],
+        ],
+        today: [2026, 10, 2],
+        midnightGapHours: 49,
+        ageDays: 3,
+      },
+      {
+        name: "a span that crosses the spring change but starts days before it",
+        zone: "America/New_York",
+        first: [2026, 2, 1],
+        commits: [
+          [2026, 2, 1],
+          [2026, 2, 20],
+        ],
+        today: [2026, 2, 20],
+        midnightGapHours: 19 * 24 - 1,
+        ageDays: 20,
+      },
+      {
+        name: "spring forward in a southern-hemisphere zone (Australia/Sydney, October)",
+        zone: "Australia/Sydney",
+        first: [2026, 9, 3],
+        commits: [
+          [2026, 9, 3],
+          [2026, 9, 4],
+          [2026, 9, 5],
+        ],
+        today: [2026, 9, 5],
+        midnightGapHours: 47,
+        ageDays: 3,
+      },
+    ];
+
+    it.each(cases)(
+      "counts calendar dates, not elapsed hours: $name",
+      async ({ zone, first, commits, today, midnightGapHours, ageDays }) => {
+        process.env.TZ = zone;
+        // Guards the premise: the zone took effect and the midnights are not 24h multiples.
+        const gapMs = new Date(...today).getTime() - new Date(...first).getTime();
+        expect(gapMs / (60 * 60 * 1000)).toBe(midnightGapHours);
+
+        const pulse = await pulseFor(first, commits, today);
+
+        expect(pulse.projectAgeDays).toBe(ageDays);
+        expect(pulse.activeDays).toBe(commits.length);
+        // The strip and summary render activeDays/projectAgeDays, so the numerator can never exceed it.
+        expect(pulse.activeDays).toBeLessThanOrEqual(pulse.projectAgeDays);
+        // Cells the heatmap greys out agree with the age: exactly the last `ageDays` cells are live.
+        const live = pulse.heatmap.filter((cell) => !cell.isBeforeProject);
+        expect(live).toHaveLength(ageDays);
+        expect(live.every((cell) => pulse.heatmap.indexOf(cell) >= 60 - ageDays)).toBe(true);
+      }
+    );
+  });
 });

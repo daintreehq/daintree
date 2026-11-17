@@ -70,6 +70,15 @@ function getLocalMidnight(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
 }
 
+// Counts calendar dates, not elapsed time: local midnights are 23 or 25 hours
+// apart across a DST change, so dividing milliseconds by 24h undercounts after
+// the spring transition and disagrees with the heatmap's per-date cells.
+function countInclusiveLocalDays(first: Date, last: Date): number {
+  const firstUtc = Date.UTC(first.getFullYear(), first.getMonth(), first.getDate());
+  const lastUtc = Date.UTC(last.getFullYear(), last.getMonth(), last.getDate());
+  return Math.round((lastUtc - firstUtc) / (1000 * 60 * 60 * 24)) + 1;
+}
+
 function getDateCells(rangeDays: PulseRangeDays): Array<{ date: string; isToday: boolean }> {
   const todayMidnight = getLocalMidnight(new Date());
   const todayString = formatLocalDay(todayMidnight);
@@ -324,14 +333,9 @@ export class ProjectPulseService {
     let projectAgeDays: number = rangeDays;
     if (firstCommitDate) {
       const firstCommitDay = formatLocalDay(firstCommitDate);
-      const todayMidnight = getLocalMidnight(new Date());
 
-      // Calculate days since first commit (inclusive of first commit day)
-      const daysSinceFirst =
-        Math.floor(
-          (todayMidnight.getTime() - getLocalMidnight(firstCommitDate).getTime()) /
-            (1000 * 60 * 60 * 24)
-        ) + 1;
+      // Calendar days from the first commit's day through today, inclusive
+      const daysSinceFirst = countInclusiveLocalDays(firstCommitDate, new Date());
       projectAgeDays = Math.min(daysSinceFirst, rangeDays);
 
       // Mark cells before project started
