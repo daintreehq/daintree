@@ -447,7 +447,7 @@ describe("DaintreeAssistantSettingsTab", () => {
     });
   });
 
-  it("disables the runbooks row, flush rather than nested, while Daintree control is off", async () => {
+  it("disables the runbooks row under a Dependents reason while Daintree control is off, keeping its copy static", async () => {
     installApi({
       getSettings: vi.fn().mockResolvedValue({
         docSearch: true,
@@ -471,7 +471,49 @@ describe("DaintreeAssistantSettingsTab", () => {
 
     const toggle = screen.getByRole("switch", { name: "Follow runbooks" });
     expect(toggle.hasAttribute("disabled")).toBe(true);
-    expect(toggle.closest("[data-settings-dependents]")).toBeNull();
+    expect(toggle.closest("[data-settings-dependents]")).not.toBeNull();
+    const description =
+      "Before each task, the assistant loads Daintree's step-by-step procedure for it";
+    expect(container.textContent).toContain(description);
+    expect(container.textContent).not.toContain(
+      "Needs Daintree control. Runbooks are procedures for Daintree actions.Before"
+    );
+  });
+
+  it("keeps the Daintree control and runbook descriptions the same in both switch states", async () => {
+    const settings = {
+      docSearch: true,
+      daintreeControl: true,
+      runbookSearch: true,
+      tier: "core" as const,
+      bypassPermissions: false,
+      auditRetention: 7,
+    };
+    installApi({ getSettings: vi.fn().mockResolvedValue(settings) });
+    const { container, unmount } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Follow runbooks");
+    const copy = (c: HTMLElement) =>
+      ["Let the assistant call Daintree actions", "Before each task, the assistant loads"].map(
+        (needle) => c.textContent?.includes(needle)
+      );
+    expect(copy(container)).toEqual([true, true]);
+    expect(
+      container.querySelector("[data-settings-dependents] p")?.textContent ?? ""
+    ).not.toContain("Needs Daintree control");
+    unmount();
+
+    installApi({ getSettings: vi.fn().mockResolvedValue({ ...settings, daintreeControl: false }) });
+    const off = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(off.container, "Needs Daintree control");
+    expect(copy(off.container)).toEqual([true, true]);
   });
 
   it("marks the behavior switches modified only when they differ from their defaults, and resets them", async () => {
@@ -526,6 +568,9 @@ describe("DaintreeAssistantSettingsTab", () => {
     fireEvent.click(toggle);
 
     await waitForContent(container, "unless an automation grant covers them");
+    const warning = screen.getByTestId("assistant-bypass-warning");
+    expect(warning.getAttribute("data-callout")).toBe("warning");
+    expect(warning.closest("[data-settings-dependents]")).not.toBeNull();
     expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
       bypassPermissions: true,
     });
@@ -1972,7 +2017,7 @@ describe("DaintreeAssistantSettingsTab", () => {
     expect(screen.getByRole("button", { name: /open mcp server settings/i })).toBeTruthy();
   });
 
-  it("shows the local-server disclosure when Daintree control is on, and hides it when off", async () => {
+  it("always discloses the local server in the Daintree control description, whichever way the switch is set", async () => {
     const { container } = render(
       <SettingsValidationProvider>
         <DaintreeAssistantSettingsTab />
@@ -1981,13 +2026,16 @@ describe("DaintreeAssistantSettingsTab", () => {
     await waitForContent(container, "Daintree control");
 
     // daintreeControl defaults to true in the mocked settings.
-    expect(container.textContent).toContain("starts a local HTTP server on 127.0.0.1");
+    expect(container.textContent).toContain("which listens on 127.0.0.1");
 
     fireEvent.click(screen.getByLabelText("Allow the assistant to call Daintree control tools"));
 
     await waitFor(() => {
-      expect(container.textContent).not.toContain("starts a local HTTP server on 127.0.0.1");
+      expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+        daintreeControl: false,
+      });
     });
+    expect(container.textContent).toContain("which listens on 127.0.0.1");
   });
 
   it("surfaces the runtime error and a recovery link when the MCP server failed to start", async () => {
@@ -2448,7 +2496,8 @@ describe("DaintreeAssistantSettingsTab", () => {
     await waitForContent(container, "Agent");
 
     const banner = await screen.findByTestId("assistant-dropped-agent-banner");
-    fireEvent.click(within(banner).getByRole("button", { name: "Dismiss" }));
+    expect(within(banner).queryByRole("button", { name: "Dismiss" })).toBeNull();
+    fireEvent.click(within(banner).getByRole("button", { name: "Dismiss removed agent notice" }));
 
     expect(helpPanelState.clearDroppedPreferredAgent).toHaveBeenCalledTimes(1);
   });
@@ -2684,7 +2733,7 @@ describe("DaintreeAssistantSettingsTab", () => {
     await waitForContent(container, "Clear turn outcomes");
   });
 
-  it("toggling the recording switch off calls setAuditEnabled(false) and updates the subtitle", async () => {
+  it("toggling the recording switch off calls setAuditEnabled(false) and leaves the subtitle static", async () => {
     const { container } = render(
       <SettingsValidationProvider>
         <DaintreeAssistantSettingsTab />
@@ -2703,8 +2752,12 @@ describe("DaintreeAssistantSettingsTab", () => {
     await waitFor(() => {
       expect(window.electron.mcpServer.setAuditEnabled).toHaveBeenCalledWith(false);
     });
-    await waitForContent(container, "New dispatches will not be recorded");
-    expect(screen.getByLabelText("Capture audit log").getAttribute("aria-checked")).toBe("false");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Capture audit log").getAttribute("aria-checked")).toBe("false");
+    });
+    expect(container.textContent).toContain(
+      "Record every Daintree action the assistant dispatches"
+    );
   });
 
   it("surfaces an inline error when setAuditEnabled rejects, leaving recording on", async () => {
@@ -2773,8 +2826,12 @@ describe("DaintreeAssistantSettingsTab", () => {
     );
     await waitForContent(container, "Capture audit log");
 
-    await waitForContent(container, "New dispatches will not be recorded");
-    expect(screen.getByLabelText("Capture audit log").getAttribute("aria-checked")).toBe("false");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Capture audit log").getAttribute("aria-checked")).toBe("false");
+    });
+    expect(container.textContent).toContain(
+      "Record every Daintree action the assistant dispatches"
+    );
   });
 
   it("loads customArgs from the IPC settings into the input", async () => {
