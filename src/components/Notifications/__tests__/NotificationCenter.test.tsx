@@ -1383,6 +1383,9 @@ describe("NotificationCenter — Needs attention pinned section", () => {
     act(() => {
       fireEvent.click(screen.getByRole("radio", { name: "Snoozed" }));
     });
+    expect(screen.getByRole("radio", { name: "Snoozed" }).getAttribute("aria-checked")).toBe(
+      "true"
+    );
 
     act(() => {
       setEntries([makeEntry({ message: "Plain" })]);
