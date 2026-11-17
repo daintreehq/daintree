@@ -4,6 +4,8 @@ import { Radio } from "lucide-react";
 import { Workflow } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/CopyButton";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { useClampDetection } from "@/hooks/useClampDetection";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
@@ -48,6 +50,24 @@ function FailureList({ items }: { items: { key: string | number; text: string }[
         </li>
       ))}
     </ul>
+  );
+}
+
+export function DraftPreview({ text }: { text: string }) {
+  const [ref, clamped] = useClampDetection<HTMLParagraphElement>();
+  return (
+    <TruncatedTooltip
+      content={text}
+      isTruncated={clamped}
+      contentClassName="[overflow-wrap:anywhere]"
+    >
+      <p
+        ref={ref}
+        className="mt-0.5 line-clamp-2 text-xs [overflow-wrap:anywhere] text-text-secondary select-text"
+      >
+        {text}
+      </p>
+    </TruncatedTooltip>
   );
 }
 
@@ -116,14 +136,7 @@ function FleetRunRow({ record }: { record: Extract<RunHistoryRecord, { kind: "fl
               <CountPill failed={record.status === "failed"} label={statusLabel} />
             ) : null}
           </div>
-          {record.draftPreview ? (
-            <p
-              className="mt-0.5 line-clamp-2 text-xs text-text-secondary select-text"
-              title={record.draftPreview}
-            >
-              {record.draftPreview}
-            </p>
-          ) : null}
+          {record.draftPreview ? <DraftPreview text={record.draftPreview} /> : null}
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
             <CountPill label={`${record.successCount} sent`} />
             {record.failureCount > 0 ? (

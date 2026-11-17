@@ -2306,10 +2306,10 @@ export function ScopeChip({
   const isProject = scope === "project" && projectLabel !== null;
   const scopeWord = scope === "project" ? "Project" : "Global";
   const entity = isProject ? projectLabel : null;
-  const title = crossScope
+  const disclosure = crossScope
     ? `Switches to ${scopeWord.toLowerCase()} settings${entity ? ` for ${entity}` : ""}`
-    : undefined;
-  return (
+    : null;
+  const chip = (
     <span
       className={cn(
         "inline-flex items-center gap-1 max-w-[14rem] min-w-0 shrink-0",
@@ -2318,7 +2318,6 @@ export function ScopeChip({
         // one accent is already spent on the nav's active marker.
         crossScope ? "bg-tint/20 text-text-primary" : "bg-tint/10 text-text-secondary"
       )}
-      title={title}
     >
       {crossScope && (
         <>
@@ -2334,6 +2333,13 @@ export function ScopeChip({
         </>
       )}
     </span>
+  );
+  if (disclosure === null) return chip;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{chip}</TooltipTrigger>
+      <TooltipContent side="top">{disclosure}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -2612,7 +2618,7 @@ export function SearchResults({
                 // The app's one "Enter acts on this row" treatment, moved by the
                 // pointer as well as the arrow keys so only one row is ever lit.
                 PALETTE_ROW_CLASS,
-                "group w-full text-left p-3 rounded-[var(--radius-md)]",
+                "w-full text-left p-3 rounded-[var(--radius-md)]",
                 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
               )}
             >
@@ -2639,7 +2645,7 @@ export function SearchResults({
                         <span key={i} className="flex min-w-0 items-center gap-1">
                           {i > 0 && (
                             <ChevronRight
-                              className="h-2.5 w-2.5 shrink-0 text-text-muted"
+                              className="h-2.5 w-2.5 shrink-0 text-text-secondary"
                               aria-hidden="true"
                             />
                           )}
@@ -2674,7 +2680,7 @@ export function SearchResults({
                     "w-4 h-4 shrink-0 transition-[color,translate] duration-150",
                     index === activeIndex
                       ? "text-text-secondary translate-x-0.5"
-                      : "text-text-muted group-hover:text-text-secondary"
+                      : "text-text-secondary"
                   )}
                 />
               </div>

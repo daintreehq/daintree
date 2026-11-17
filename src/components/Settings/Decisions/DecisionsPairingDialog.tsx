@@ -5,6 +5,8 @@ import { CopyButton } from "@/components/ui/CopyButton";
 import { SkeletonBone } from "@/components/ui/Skeleton";
 import { Spinner } from "@/components/ui/Spinner";
 import { InlineError } from "@/components/ui/field";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { useClampDetection } from "@/hooks/useClampDetection";
 import { cn } from "@/lib/utils";
 import { PairingQrCode } from "./PairingQrCode";
 import { formatCountdown, groupPairingCode, spokenPairingCode } from "./devicesCopy";
@@ -59,6 +61,25 @@ function Countdown({ expiresAt, now }: { expiresAt: number; now: number }) {
     >
       Expires in {formatCountdown(left)}
     </p>
+  );
+}
+
+export function InvitationUrl({ url }: { url: string | undefined }) {
+  const [ref, clamped] = useClampDetection<HTMLSpanElement>();
+  const text = url ?? "…";
+  return (
+    <TruncatedTooltip
+      content={text}
+      isTruncated={clamped}
+      contentClassName="font-mono [overflow-wrap:anywhere]"
+    >
+      <span
+        ref={ref}
+        className="line-clamp-2 min-w-0 flex-1 font-mono text-xs break-all text-text-primary select-text"
+      >
+        {text}
+      </span>
+    </TruncatedTooltip>
   );
 }
 
@@ -161,12 +182,7 @@ export function DecisionsPairingDialog({
               <div className="flex items-center gap-2 rounded-[var(--radius-md)] border border-border-default bg-surface-input py-1.5 pr-1.5 pl-2.5">
                 {/* Two lines, broken anywhere, so the relay's whole address shows
                     before the payload is cut. */}
-                <span
-                  className="line-clamp-2 min-w-0 flex-1 font-mono text-xs break-all text-text-primary select-text"
-                  title={invitation?.url}
-                >
-                  {invitation?.url ?? "…"}
-                </span>
+                <InvitationUrl url={invitation?.url} />
                 <CopyButton
                   text={invitation?.url ?? ""}
                   label="Copy link"
