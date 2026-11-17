@@ -43,6 +43,7 @@ import {
   createHardenedGit,
   createAuthenticatedGit,
   createContinueGit,
+  createStrictExitGit,
 } from "../../utils/hardenedGit.js";
 import {
   getPerFileDiffStats,
@@ -50,6 +51,7 @@ import {
   resolveHeadOidFromGitDir,
 } from "../../utils/git.js";
 import { resolveGitDirFromFs } from "../../utils/gitUtils.js";
+import { parsePorcelainV1Z } from "../../services/git/fileMutation.js";
 import { withTimeout } from "../../utils/withTimeout.js";
 import {
   resolveExistingBaseCompareTarget,
@@ -1435,6 +1437,35 @@ async function hasHeadCommit(
   }
 }
 
+/**
+ * The paths a reset to HEAD has to name to unstage `paths`: each one, plus the
+ * other half of any staged rename it names. Git resets only the paths it is
+ * given, so resetting a rename's destination alone leaves its source staged for
+ * deletion, and the next commit still deletes it.
+ *
+ * Pairs come from an unscoped status read, the one Review Hub lists rows from
+ * (`status.renames` decides what is a pair): a pathspec would hide the half it
+ * doesn't name. A copy's source is a file of its own and is left alone. The
+ * read must answer before anything is reset; an empty answer from a git that
+ * died would quietly bring the half-unstage back.
+ */
+async function withStagedRenamePartners(cwd: string, paths: string[]): Promise<string[]> {
+  const git = await createStrictExitGit(cwd);
+  const entries = parsePorcelainV1Z(
+    await git.raw(["status", "--porcelain=v1", "-z", "--untracked-files=no"])
+  );
+  const requested = new Set(paths);
+  const expanded = new Set(paths);
+  for (const entry of entries) {
+    if (entry.x !== "R" || !entry.origPath) continue;
+    if (requested.has(entry.path) || requested.has(entry.origPath)) {
+      expanded.add(entry.origPath);
+      expanded.add(entry.path);
+    }
+  }
+  return [...expanded];
+}
+
 export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
@@ -1461,7 +1492,11 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     const git = await createHardenedGit(payload.cwd);
 
     if (await hasHeadCommit(git, payload.cwd)) {
-      await git.reset(["HEAD", "--", payload.filePath]);
+      await git.reset([
+        "HEAD",
+        "--",
+        ...(await withStagedRenamePartners(payload.cwd, [payload.filePath])),
+      ]);
     } else {
       await git.raw(["rm", "--cached", "--", payload.filePath]);
     }
@@ -1503,7 +1538,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     const git = await createHardenedGit(payload.cwd);
 
     if (await hasHeadCommit(git, payload.cwd)) {
-      await git.reset(["HEAD", "--", ...paths]);
+      await git.reset(["HEAD", "--", ...(await withStagedRenamePartners(payload.cwd, paths))]);
     } else {
       await git.raw(["rm", "--cached", "--", ...paths]);
     }

@@ -153,7 +153,8 @@ describe("git-write staging handlers (real git)", () => {
     const mark = spawned.length;
     await unstage("a.txt");
     expect(git(repo, "diff", "--cached", "--name-only")).toBe("");
-    expect(spawnedSince(mark).map(subcommand)).toEqual(["reset"]);
+    // The status read finds a staged rename's other half (below).
+    expect(spawnedSince(mark).map(subcommand)).toEqual(["status", "reset"]);
   });
 
   it("unstages from a packed HEAD and a linked worktree's HEAD the same way", async () => {
@@ -166,7 +167,7 @@ describe("git-write staging handlers (real git)", () => {
       const mark = spawned.length;
       await handler(CHANNELS.GIT_UNSTAGE_FILE)(null, { cwd, filePath: "a.txt" });
       expect(git(cwd, "diff", "--cached", "--name-only")).toBe("");
-      expect(spawnedSince(mark).map(subcommand)).toEqual(["reset"]);
+      expect(spawnedSince(mark).map(subcommand)).toEqual(["status", "reset"]);
     }
   });
 
@@ -178,7 +179,7 @@ describe("git-write staging handlers (real git)", () => {
     let mark = spawned.length;
     await handler(CHANNELS.GIT_UNSTAGE_FILES)(null, { cwd: repo, filePaths: ["a.txt", "b.txt"] });
     expect(git(repo, "diff", "--cached", "--name-only")).toBe("");
-    expect(spawnedSince(mark).map(subcommand)).toEqual(["reset"]);
+    expect(spawnedSince(mark).map(subcommand)).toEqual(["status", "reset"]);
 
     git(repo, "add", ".");
     mark = spawned.length;
@@ -201,7 +202,7 @@ describe("git-write staging handlers (real git)", () => {
       vi.useRealTimers();
       await run;
       expect(git(repo, "diff", "--cached", "--name-only")).toBe("");
-      expect(spawnedSince(mark).map(subcommand)).toEqual(["rev-parse", "reset"]);
+      expect(spawnedSince(mark).map(subcommand)).toEqual(["rev-parse", "status", "reset"]);
     } finally {
       vi.useRealTimers();
       stallGitDirRead.on = false;
@@ -232,6 +233,12 @@ describe("git-write staging handlers (real git)", () => {
   });
 
   describe("a staged rename", () => {
+    const unstageFiles = (filePaths: string[]) =>
+      handler(CHANNELS.GIT_UNSTAGE_FILES)(null, { cwd: repo, filePaths });
+
+    /** The index against HEAD with renames split, so each half shows on its own. */
+    const cached = () => git(repo, "diff", "--cached", "--name-status", "--no-renames");
+
     function stageRename(from: string, to: string): void {
       git(repo, "mv", from, to);
       expect(git(repo, "diff", "--cached", "--name-status", "-M").split("\n")).toContain(
@@ -240,7 +247,12 @@ describe("git-write staging handlers (real git)", () => {
     }
 
     function expectRenameUnstaged(from: string, to: string, content: string): void {
-      expect(git(repo, "diff", "--cached", "--name-only")).toBe("");
+      const stagedPaths = cached()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => line.split("\t")[1]);
+      expect(stagedPaths).not.toContain(from);
+      expect(stagedPaths).not.toContain(to);
       expect(fs.readFileSync(path.join(repo, to), "utf8")).toBe(content);
       expect(fs.existsSync(path.join(repo, from))).toBe(false);
     }
@@ -251,24 +263,100 @@ describe("git-write staging handlers (real git)", () => {
 
       await unstage("renamed.txt");
 
+      expect(cached()).toBe("");
       expectRenameUnstaged("original.txt", "renamed.txt", "keep\n");
     });
 
-    it("unstages both halves of each rename in a multi-file unstage", async () => {
-      commitFiles({ "one.txt": "1\n", "sub/two.txt": "2\n", "plain.txt": "a\n" });
+    it("unstages both halves when the single-file unstage names the source", async () => {
+      commitFiles({ "original.txt": "keep\n" });
+      stageRename("original.txt", "renamed.txt");
+
+      await unstage("original.txt");
+
+      expect(cached()).toBe("");
+      expectRenameUnstaged("original.txt", "renamed.txt", "keep\n");
+    });
+
+    it("unstages a rename with staged edits and keeps the edited bytes", async () => {
+      commitFiles({ "original.txt": "a\nb\nc\nd\n" });
+      git(repo, "mv", "original.txt", "renamed.txt");
+      fs.writeFileSync(path.join(repo, "renamed.txt"), "a\nb\nc\nd\ne\n");
+      git(repo, "add", "renamed.txt");
+      expect(git(repo, "diff", "--cached", "--name-status", "-M")).toMatch(
+        /^R\d+\toriginal\.txt\trenamed\.txt\n$/
+      );
+
+      await unstage("renamed.txt");
+
+      expect(cached()).toBe("");
+      expectRenameUnstaged("original.txt", "renamed.txt", "a\nb\nc\nd\ne\n");
+    });
+
+    it("unstages every rename a multi-file unstage names and nothing it doesn't", async () => {
+      commitFiles({ "one.txt": "1\n", "sub/two.txt": "2\n", "three.txt": "3\n", "p.txt": "a\n" });
       stageRename("one.txt", "uno.txt");
       stageRename("sub/two.txt", "dos.txt");
-      fs.writeFileSync(path.join(repo, "plain.txt"), "b\n");
-      git(repo, "add", "plain.txt");
+      stageRename("three.txt", "tres.txt");
+      fs.writeFileSync(path.join(repo, "p.txt"), "b\n");
+      git(repo, "add", "p.txt");
 
-      await handler(CHANNELS.GIT_UNSTAGE_FILES)(null, {
-        cwd: repo,
-        filePaths: ["uno.txt", "dos.txt", "plain.txt"],
-      });
+      await unstageFiles(["uno.txt", "dos.txt", "p.txt"]);
 
       expectRenameUnstaged("one.txt", "uno.txt", "1\n");
       expectRenameUnstaged("sub/two.txt", "dos.txt", "2\n");
-      expect(fs.readFileSync(path.join(repo, "plain.txt"), "utf8")).toBe("b\n");
+      expect(fs.readFileSync(path.join(repo, "p.txt"), "utf8")).toBe("b\n");
+      expect(cached()).toBe("D\tthree.txt\nA\ttres.txt\n");
+    });
+
+    it("leaves a copy's source staged", async () => {
+      commitFiles({ "a.txt": "1\n2\n3\n4\n" });
+      git(repo, "config", "status.renames", "copies");
+      fs.copyFileSync(path.join(repo, "a.txt"), path.join(repo, "b.txt"));
+      fs.writeFileSync(path.join(repo, "a.txt"), "1\n2\n3\n4\n5\n");
+      git(repo, "add", ".");
+      expect(git(repo, "status", "--porcelain=v1")).toBe("M  a.txt\nC  a.txt -> b.txt\n");
+
+      await unstage("b.txt");
+
+      expect(cached()).toBe("M\ta.txt\n");
+    });
+
+    it("unstages a source whose name is a glob without widening to the names it matches", async () => {
+      commitFiles({ "[draft].md": "x\n", "d.md": "d\n" });
+      stageRename("[draft].md", "final.md");
+      fs.writeFileSync(path.join(repo, "d.md"), "d2\n");
+      git(repo, "add", "d.md");
+
+      await unstageFiles(["final.md"]);
+
+      expectRenameUnstaged("[draft].md", "final.md", "x\n");
+      expect(cached()).toBe("M\td.md\n");
+    });
+
+    it("pairs the halves the way status does, not diff", async () => {
+      commitFiles({ "one.txt": "1\n", "two.txt": "2\n" });
+      stageRename("one.txt", "uno.txt");
+      git(repo, "config", "diff.renames", "false");
+      git(repo, "config", "status.renames", "true");
+
+      await unstage("uno.txt");
+      expectRenameUnstaged("one.txt", "uno.txt", "1\n");
+
+      // Shown as two rows, a deletion and an addition, each unstages alone.
+      git(repo, "config", "status.renames", "false");
+      stageRename("two.txt", "dos.txt");
+      await unstage("dos.txt");
+      expect(cached()).toBe("D\ttwo.txt\n");
+    });
+
+    it("refuses before resetting anything when the status read fails", async () => {
+      commitFiles({ "original.txt": "keep\n" });
+      stageRename("original.txt", "renamed.txt");
+      git(repo, "config", "status.renameLimit", "not-a-number");
+
+      await expect(unstage("renamed.txt")).rejects.toThrow(/renamelimit/i);
+
+      expect(cached()).toBe("D\toriginal.txt\nA\trenamed.txt\n");
     });
   });
 
