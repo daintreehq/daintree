@@ -185,7 +185,11 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
             // Never still cached: without `showInOtherWindow`, a cached owner
             // is released above or refuses the switch.
             if (owner.state !== "cached") {
-              focusWorkspaceOwner({ ...owner, state: owner.state }, scratchId, options?.focusIntent);
+              focusWorkspaceOwner(
+                { ...owner, state: owner.state },
+                scratchId,
+                options?.focusIntent
+              );
             }
             // The requesting view still shows what it showed.
             return null;

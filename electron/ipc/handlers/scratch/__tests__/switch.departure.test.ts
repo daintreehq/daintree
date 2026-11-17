@@ -13,7 +13,9 @@ vi.mock("electron", () => ({
   BrowserWindow: { getAllWindows: () => [] },
 }));
 
-const hosts = vi.hoisted(() => [] as Array<{ projectPath: string; send: ReturnType<typeof vi.fn> }>);
+const hosts = vi.hoisted(
+  () => [] as Array<{ projectPath: string; send: ReturnType<typeof vi.fn> }>
+);
 vi.mock("../../../../services/WorkspaceHostProcess.js", () => ({
   WorkspaceHostProcess: class {
     projectPath: string;
@@ -89,10 +91,7 @@ import { registerScratchHandlers } from "../index.js";
 import { WorkspaceHostPool } from "../../../../services/workspace-client/WorkspaceHostPool.js";
 import { resetProjectHistory } from "../../../../services/ProjectHistoryService.js";
 import { isAppError } from "../../../../utils/errorTypes.js";
-import {
-  beginWindowSwitch,
-  isCurrentWindowSwitch,
-} from "../../../../window/windowSwitchEpochs.js";
+import { beginWindowSwitch, isCurrentWindowSwitch } from "../../../../window/windowSwitchEpochs.js";
 import type { HandlerDependencies } from "../../../types.js";
 import type { WorkspaceClient } from "../../../../services/WorkspaceClient.js";
 
@@ -161,7 +160,11 @@ function setup(options: {
   const otherWindow = makeBrowserWindow(OTHER_ID);
   registryMock.senderWindow = senderWindow;
   const contexts = [
-    { windowId: SENDER_ID, browserWindow: senderWindow, services: { projectViewManager: senderPvm } },
+    {
+      windowId: SENDER_ID,
+      browserWindow: senderWindow,
+      services: { projectViewManager: senderPvm },
+    },
     ...(options.otherPvm
       ? [
           {
