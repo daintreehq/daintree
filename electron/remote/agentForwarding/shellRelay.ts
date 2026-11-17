@@ -45,7 +45,11 @@ const DEFAULT_REPLY_TIMEOUT_MS = 120_000;
 const DEFAULT_IDLE_TIMEOUT_MS = 11 * 60_000;
 const DEFAULT_MAX_CONNECTIONS = 64;
 const CONNECT_TIMEOUT_MS = 5_000;
-/** Retired ids the Host hasn't closed yet; it always does, so this only bounds a lost notice. */
+/**
+ * Retired ids the Host hasn't closed yet. It always does, so this fills only
+ * from lost close notices; when it does, new connections are refused rather
+ * than an old id forgotten and opened afresh.
+ */
 const MAX_RETIRED = 1024;
 
 const FAILURE: AgentReply = { message: AGENT_FAILURE_BODY };
@@ -168,11 +172,23 @@ export class ShellAgentRelay {
     try {
       let upstream = this.upstreams.get(connectionId) ?? null;
       if (!upstream) {
-        if (this.upstreams.size + this.opening.size >= this.maxConnections) return FAILURE;
+        if (
+          this.upstreams.size + this.opening.size >= this.maxConnections ||
+          this.retired.size >= MAX_RETIRED
+        ) {
+          return FAILURE;
+        }
         upstream = await this.open(connectionId);
         if (!upstream) return FAILURE;
       }
-      return { message: await this.exchange(connectionId, upstream, message) };
+      const reply = await this.exchange(connectionId, upstream, message);
+      // The last window on the host closed, or the switch went off, while the
+      // agent was answering (a key's touch, an approval): the answer stays here.
+      if (this.disposed || !this.options.isEnabled()) {
+        this.retire(connectionId);
+        throw refused("Agent forwarding stopped while the agent answered");
+      }
+      return { message: reply };
     } finally {
       this.busy.delete(connectionId);
     }
@@ -276,7 +292,10 @@ export class ShellAgentRelay {
   /** The Host is done with the connection: forget it entirely. */
   private release(connectionId: number): void {
     const open = this.opening.get(connectionId);
-    if (open) open.cancelled = true;
+    if (open) {
+      open.cancelled = true;
+      this.opening.delete(connectionId);
+    }
     this.destroyUpstream(connectionId);
     this.retired.delete(connectionId);
   }
@@ -289,10 +308,6 @@ export class ShellAgentRelay {
 
   private markRetired(connectionId: number): void {
     this.retired.add(connectionId);
-    if (this.retired.size > MAX_RETIRED) {
-      const oldest = this.retired.values().next().value;
-      if (oldest !== undefined) this.retired.delete(oldest);
-    }
   }
 
   private destroyUpstream(connectionId: number): void {

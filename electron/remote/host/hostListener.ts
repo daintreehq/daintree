@@ -9,6 +9,7 @@ import {
 import { createDriveLeaseGate, getDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { createLeaseTargetResolvers } from "../../services/driveLeaseTargetResolvers.js";
 import { getIpcDispatcher } from "../../ipc/dispatcher.js";
+import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import {
   notifyMcpDriveTargetChange,
   setMcpDriveTargetResolver,
@@ -272,6 +273,17 @@ async function buildHostListener(
     server,
     lease: getDriveLeaseService(),
     socketDir: path.join(location.dir, "agent"),
+    // A driver's view leaving, or its link dropping, makes its lease reserved
+    // with no holder change to say so.
+    onRouteMaybeChanged: (listener) => {
+      const offs = [
+        getEndpointRegistry().onChange(listener),
+        host.sessionHost.onTransportChange(() => listener()),
+      ];
+      return () => {
+        for (const off of offs) off();
+      };
+    },
   });
   teardowns.push(() => agentForwarding.dispose());
   teardowns.push(registerRemoteService("agentForwardingHost", agentForwarding));

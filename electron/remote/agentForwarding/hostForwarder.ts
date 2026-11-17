@@ -1,12 +1,13 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import type { DriveTarget } from "../../services/DriveLeaseService.js";
 import { createLogger } from "../../utils/logger.js";
 import { clearStaleSocket, prepareOwnerOnlyDir } from "../host/HostServer.js";
-import { assertSocketPathFits } from "../host/hostSocketPath.js";
+import { maxSocketPathBytes } from "../host/hostSocketPath.js";
 import type { LinkSession } from "../link/session.js";
 import { readSshConfig, readTerminalIdentityAgent, type SshConfigReader } from "./identityAgent.js";
 import {
@@ -56,6 +57,17 @@ export interface HostAgentForwardingDeps {
   };
   /** Created owner-only; the project sockets live here. */
   socketDir: string;
+  /**
+   * Where they go instead when a path there wouldn't fit `sun_path` (a long
+   * home folder on macOS): a short owner-only folder that stays the same.
+   */
+  fallbackSocketDir?: string;
+  /**
+   * Told when a driver may have come or gone without a holder change: an
+   * endpoint closed, or a link dropped or resumed. The lease's own change
+   * events cover a new holder.
+   */
+  onRouteMaybeChanged?: (listener: () => void) => () => void;
   readSshConfig?: SshConfigReader;
   /** How long a forwarded request may wait for the Shell's answer. */
   replyTimeoutMs?: number;
@@ -153,27 +165,38 @@ export function installHostAgentForwarding(deps: HostAgentForwardingDeps): HostA
     wired.add(session);
     // A new link starts with forwarding off, a resumed session included: the
     // Shell says again on every link whether its switch is on.
-    session.registerCallHandler(
-      AgentForwardMethod.CONFIGURE,
-      AgentConfigurePayloadSchema,
-      ({ enabled }) => {
-        consent.set(session, enabled);
-        if (!enabled) recheck((connection) => connection.route === session);
-        return null;
-      }
+    disposers.push(
+      session.registerCallHandler(
+        AgentForwardMethod.CONFIGURE,
+        AgentConfigurePayloadSchema,
+        ({ enabled }) => {
+          consent.set(session, enabled);
+          if (!enabled) recheck((connection) => connection.route === session);
+          return null;
+        }
+      ),
+      session.registerCallHandler(AgentForwardMethod.INSPECT, z.null(), () => inspect()),
+      session.onClose(() => recheck((connection) => connection.route === session))
     );
-    session.registerCallHandler(AgentForwardMethod.INSPECT, z.null(), () => inspect());
-    session.onClose(() => recheck((connection) => connection.route === session));
   };
 
+  const fallbackDir =
+    deps.fallbackSocketDir ??
+    path.join(os.tmpdir(), `daintree-agent-${process.getuid?.() ?? "user"}`);
+
   const listen = async (projectId: string): Promise<string> => {
-    await prepareOwnerOnlyDir(deps.socketDir);
-    const socketPath = path.join(deps.socketDir, agentSocketName(projectId));
+    const name = agentSocketName(projectId);
+    let dir = deps.socketDir;
+    if (Buffer.byteLength(path.join(dir, name)) > maxSocketPathBytes()) dir = fallbackDir;
+    const socketPath = path.join(dir, name);
+    if (Buffer.byteLength(socketPath) > maxSocketPathBytes()) {
+      throw new Error(`No agent socket path short enough for ${socketPath}`);
+    }
+    await prepareOwnerOnlyDir(dir);
     const owner = pathOwners.get(socketPath);
     if (owner !== undefined && owner !== projectId) {
       throw new Error("Two projects map to one agent socket");
     }
-    assertSocketPathFits(socketPath);
     await clearStaleSocket(socketPath);
     if (disposed) throw new Error("Agent forwarding stopped");
     const server = net.createServer((socket) => accept(projectId, socket));
@@ -244,6 +267,7 @@ export function installHostAgentForwarding(deps: HostAgentForwardingDeps): HostA
       recheck((connection) => connection.projectId === projectId)
     )
   );
+  if (deps.onRouteMaybeChanged) disposers.push(deps.onRouteMaybeChanged(() => recheck(() => true)));
   for (const projectId of issuedProjects) {
     ensureListener(projectId).catch((error: unknown) => {
       logger.warn("Couldn't listen for agent requests again", { error });

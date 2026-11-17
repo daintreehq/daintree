@@ -1397,16 +1397,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         ? getEffectiveAgentConfig(launchAgentId)?.capabilities?.inlineModeEnv
         : undefined;
     if (inlineModeEnv) spawnEnv = mergeLaunchEnv(spawnEnv ?? {}, inlineModeEnv);
-    // The person turned forwarding on for this host, so it outranks an
-    // SSH_AUTH_SOCK a preset or project env names. Checked again here: the
-    // driver may have turned it off, or moved on, while the launch was built.
-    if (
-      agentSocketPath &&
-      projectId &&
-      getRemoteService("agentForwardingHost")?.isForwarding(projectId)
-    ) {
-      spawnEnv = mergeLaunchEnv(spawnEnv ?? {}, { SSH_AUTH_SOCK: agentSocketPath });
-    }
 
     // Resolved again only if what it depends on moved since: a settings
     // template that named the executable itself, or a PATH adopted mid-spawn.
@@ -1551,6 +1541,17 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // can never be taken for the removal's, whichever spawn went first.
       if (removalArgv) noteRelayRemovalLaunch(id);
       else if (isDecisionsRemoveTerminalId(id)) spoilRelayRemovalLaunch(id);
+      // The person turned forwarding on for this host, so it outranks an
+      // SSH_AUTH_SOCK a preset or project env names. Checked again with nothing
+      // left to await: the driver may have turned it off, or moved on, while
+      // the launch was built.
+      if (
+        agentSocketPath &&
+        projectId &&
+        getRemoteService("agentForwardingHost")?.isForwarding(projectId)
+      ) {
+        spawnEnv = mergeLaunchEnv(spawnEnv ?? {}, { SSH_AUTH_SOCK: agentSocketPath });
+      }
       // Every terminal is an interactive shell. Agent launches inject their
       // command after the shell's first prompt renders — never `exec`'d over
       // the shell, so when the agent exits the shell reclaims the foreground.

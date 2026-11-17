@@ -259,6 +259,14 @@ export class HostConnection {
     return this.endpoints.size > 0;
   }
 
+  /** As {@link hasViews}, counting only views still bound to this host, not one moved on whose endpoint is closing. */
+  get hasBoundViews(): boolean {
+    for (const webContentsId of this.endpoints.keys()) {
+      if (this.isBoundHere(webContentsId)) return true;
+    }
+    return false;
+  }
+
   get linkState(): LinkClientState {
     return this.link.getState();
   }
@@ -1218,9 +1226,9 @@ export class RemoteHostManager {
     };
   }
 
-  /** A window on this machine has a view on the host now. */
+  /** A window on this machine has a view bound to the host now. */
   hasViews(hostId: HostId): boolean {
-    return this.connections.get(hostId)?.hasViews === true;
+    return this.connections.get(hostId)?.hasBoundViews === true;
   }
 
   /** Mark the host's connection used now, so the idle release starts counting again. */

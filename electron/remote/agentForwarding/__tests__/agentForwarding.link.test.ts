@@ -42,6 +42,8 @@ interface FakeAgent {
   /** Every request body it received, with the connection it came on. */
   saw: Array<{ connection: number; body: number[] }>;
   open: Set<net.Socket>;
+  /** Connections it ever accepted. */
+  accepted: () => number;
 }
 
 let dir: string;
@@ -58,6 +60,7 @@ let registryListeners: Array<() => void>;
 type HostSessionCtx = { sessionId: string; session: LinkSession };
 let hostSessions: HostSessionCtx[];
 let sessionListeners: Array<(ctx: HostSessionCtx) => void>;
+let routeListeners: Array<() => void>;
 let hostSide: HostAgentForwarding;
 let shellSide: AgentForwardingClient;
 const cleanups: Array<() => unknown> = [];
@@ -89,8 +92,14 @@ function setSwitch(on: boolean): void {
 }
 
 async function startFakeAgent(socketPath: string): Promise<FakeAgent> {
-  const fake: FakeAgent = { path: socketPath, server: null!, saw: [], open: new Set() };
   let nextConnection = 1;
+  const fake: FakeAgent = {
+    path: socketPath,
+    server: null!,
+    saw: [],
+    open: new Set(),
+    accepted: () => nextConnection - 1,
+  };
   fake.server = net.createServer((socket) => {
     const connection = nextConnection++;
     fake.open.add(socket);
@@ -112,7 +121,8 @@ async function startFakeAgent(socketPath: string): Promise<FakeAgent> {
 function installShell(
   session: LinkSession,
   agentPath: string,
-  readConfig: (target: string) => Promise<string> = async () => `identityagent ${agentPath}\n`
+  readConfig: (target: string) => Promise<string> = async () => `identityagent ${agentPath}\n`,
+  env: NodeJS.ProcessEnv = {}
 ): AgentForwardingClient {
   const installed = installAgentForwardingClient({
     manager: {
@@ -142,13 +152,13 @@ function installShell(
       return readConfig(configTarget);
     },
     platform: "darwin",
-    env: {},
+    env,
   });
   cleanups.push(() => installed.dispose());
   return installed;
 }
 
-function installHost(): HostAgentForwarding {
+function installHost(socketDir = path.join(dir, "agent")): HostAgentForwarding {
   const installed = installHostAgentForwarding({
     server: {
       sessions: hostSessions,
@@ -164,7 +174,12 @@ function installHost(): HostAgentForwarding {
         return () => {};
       },
     },
-    socketDir: path.join(dir, "agent"),
+    socketDir,
+    fallbackSocketDir: path.join(dir, "fb"),
+    onRouteMaybeChanged(listener) {
+      routeListeners.push(listener);
+      return () => {};
+    },
     readSshConfig: async (_destination, env) =>
       `user me\nidentityagent ${env?.SSH_AUTH_SOCK ?? "none"}\n`,
   });
@@ -219,6 +234,7 @@ beforeEach(async () => {
   registryListeners = [];
   hostSessions = [{ sessionId: SESSION_ID, session: host }];
   sessionListeners = [];
+  routeListeners = [];
   hostSide = installHost();
   shellSide = installShell(client, agent.path);
 });
@@ -397,14 +413,46 @@ describe("agent forwarding over a link", () => {
     const socketPath = await projectSocket();
     const open = await connectAgentClient(socketPath);
     expect(await open.ask([11])).toEqual(IDENTITIES_ANSWER);
-    expect(agent.open.size).toBe(1);
+    // One the host's forwarder knows nothing of, so only the Shell can close it.
+    expect(await relayDirect(42, [11])).toEqual({ message: Uint8Array.from(IDENTITIES_ANSWER) });
+    expect(agent.open.size).toBe(2);
 
     setSwitch(false);
 
     await waitFor(() => agent.open.size === 0);
+    await expect(relayDirect(42, [11])).rejects.toMatchObject({ code: "CANCELLED" });
     expect(await relayDirect(99, [11])).toEqual({ message: Uint8Array.of(5) });
     await waitFor(() => open.isClosed());
-    expect(agent.saw).toHaveLength(1);
+    expect(agent.saw).toHaveLength(2);
+  });
+
+  it("keeps an answer the agent gave after the last window on the host closed", async () => {
+    let releaseSign!: () => void;
+    signDelay = new Promise((resolve) => (releaseSign = resolve));
+    const pending = relayDirect(8, [13, 0, 0, 0, 0]).catch((error: unknown) => error);
+    await waitFor(() => agent.saw.length === 1);
+
+    views = false;
+    releaseSign();
+
+    expect(await pending).toMatchObject({ code: "CANCELLED" });
+    await waitFor(() => agent.open.size === 0);
+  });
+
+  it("drops the answer to a request the driver's takeover overtook, and the connection with it", async () => {
+    const ssh = await connectAgentClient(await projectSocket());
+    let releaseSign!: () => void;
+    signDelay = new Promise((resolve) => (releaseSign = resolve));
+    ssh.send([13, 0, 0, 0, 0]);
+    await waitFor(() => agent.saw.length === 1);
+
+    // The driver's view left: its lease is reserved, with no holder change to say so.
+    target = { kind: "reserved", holder: (liveTarget() as { holder: never }).holder };
+    for (const listener of routeListeners) listener();
+    releaseSign();
+
+    await waitFor(() => ssh.isClosed());
+    expect(ssh.replies).toEqual([]);
   });
 
   it("signs nothing for a host none of this Shell's windows is on", async () => {
@@ -421,9 +469,15 @@ describe("agent forwarding over a link", () => {
       pair.host.close("test over");
       pair.client.close("test over");
     });
-    installShell(pair.client, agent.path, async () => {
-      throw new Error("ssh -G timed out");
-    });
+    installShell(
+      pair.client,
+      agent.path,
+      async () => {
+        throw new Error("ssh -G timed out");
+      },
+      // The default agent is right there: it still isn't used in place of the configured one.
+      { SSH_AUTH_SOCK: agent.path }
+    );
 
     const reply = await pair.host.call(AgentForwardMethod.REQUEST, {
       connectionId: 1,
@@ -444,7 +498,7 @@ describe("agent forwarding over a link", () => {
     await pending;
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    expect(agent.open.size).toBe(0);
+    expect(agent.accepted()).toBe(0);
     expect(agent.saw).toEqual([]);
   });
 
@@ -502,6 +556,20 @@ describe("agent forwarding over a link", () => {
 
     const crashed = installShell(client, stale);
     expect((await crashed.check(HOST_ID)).localAgent).toBe(false);
+  });
+
+  it("puts the socket in a short folder when the usual path wouldn't fit", async () => {
+    await hostSide.dispose();
+    hostSide = installHost(path.join(dir, "x".repeat(110)));
+    // Said again to the new start, as a fresh link would.
+    setSwitch(false);
+    setSwitch(true);
+
+    const socketPath = await projectSocket();
+
+    expect(path.dirname(socketPath)).toBe(path.join(dir, "fb"));
+    const ssh = await connectAgentClient(socketPath);
+    expect(await ssh.ask([11])).toEqual(IDENTITIES_ANSWER);
   });
 
   it("refuses to check a host that isn't in the list", async () => {
