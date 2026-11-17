@@ -42,39 +42,41 @@ import {
 import type { HandlerDependencies } from "../../types.js";
 
 /**
- * Hands each project view the pause-duration entries for its own terminals.
- * Held samples repeat every tick, so a frozen view may skip them; a clear is
- * said once, so it reaches frozen views too.
+ * Hands each project view the pause-duration entries and clears for its own
+ * terminals, in one envelope: an older renderer reads each envelope as its
+ * project's whole snapshot. Held samples repeat every tick, so a frozen view
+ * may skip them; a tick that clears anything reaches frozen views too, since
+ * nothing says a clear twice.
  */
 function relayPauseDurationGauge(
   payload: TerminalReliabilityMetricPayload,
   projectOf: (terminalId: string) => string | null
 ): void {
   const { perTerminalHeld, clearedTerminalIds, ...envelope } = payload;
-  const held: Record<string, number> = {};
-  for (const entry of perTerminalHeld ?? []) held[entry.terminalId] = entry.heldDurationMs;
-  broadcastSlicedToProjectRenderers(CHANNELS.EVENTS_PUSH, held, projectOf, (slice) => ({
-    name: "terminal:reliability-metric",
-    payload: {
-      ...envelope,
-      perTerminalHeld: Object.entries(slice).map(([terminalId, heldDurationMs]) => ({
-        terminalId,
-        heldDurationMs,
-      })),
-    },
-  }));
-
-  const cleared: Record<string, true> = {};
-  for (const terminalId of clearedTerminalIds ?? []) cleared[terminalId] = true;
+  const entries: Record<string, number | null> = {};
+  for (const entry of perTerminalHeld ?? []) entries[entry.terminalId] = entry.heldDurationMs;
+  for (const terminalId of clearedTerminalIds ?? []) entries[terminalId] = null;
   broadcastSlicedToProjectRenderers(
     CHANNELS.EVENTS_PUSH,
-    cleared,
+    entries,
     projectOf,
-    (slice) => ({
-      name: "terminal:reliability-metric",
-      payload: { ...envelope, perTerminalHeld: [], clearedTerminalIds: Object.keys(slice) },
-    }),
-    { includeFrozenViews: true }
+    (slice) => {
+      const held: Array<{ terminalId: string; heldDurationMs: number }> = [];
+      const cleared: string[] = [];
+      for (const [terminalId, heldDurationMs] of Object.entries(slice)) {
+        if (heldDurationMs === null) cleared.push(terminalId);
+        else held.push({ terminalId, heldDurationMs });
+      }
+      return {
+        name: "terminal:reliability-metric",
+        payload: {
+          ...envelope,
+          perTerminalHeld: held,
+          ...(cleared.length > 0 ? { clearedTerminalIds: cleared } : {}),
+        },
+      };
+    },
+    { includeFrozenViews: (clearedTerminalIds?.length ?? 0) > 0, ownersOnly: true }
   );
 }
 

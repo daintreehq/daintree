@@ -195,7 +195,9 @@ export function flushPanelStatusBuffer(): void {
       for (const [id, patch] of held) {
         const terminal = nextById[id];
         if (!terminal || !isPtyPanel(terminal)) continue;
-        if (terminal.heldDurationMs === patch.heldDurationMs) continue;
+        // A clear for a panel that holds no duration (a gauge clear after
+        // `pause-end` already cleared it) changes nothing, so it writes nothing.
+        if (terminal.heldDurationMs === (patch.heldDurationMs ?? undefined)) continue;
         nextById[id] = {
           ...terminal,
           // `null` clears the field via destructuring-rest; a number sets it.

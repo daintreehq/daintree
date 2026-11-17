@@ -1361,7 +1361,7 @@ describe("onReliabilityMetric — pause-duration-gauge routing", () => {
   describe("snapshots from several PTY shards (#17575)", () => {
     function setupTwoPanels() {
       const base = {
-        kind: "terminal",
+        kind: "terminal" as const,
         cwd: "/tmp",
         cols: 80,
         rows: 24,
@@ -1409,6 +1409,8 @@ describe("onReliabilityMetric — pause-duration-gauge routing", () => {
       // term-a resumes: its own shard names it once, B's batch carries on.
       handler(gauge({}, ["term-a"]));
       flushPanelStatusBuffer();
+      expect(getPtyHeldDuration("term-a")).toBeUndefined();
+      expect(getPtyHeldDuration("term-b")).toBe(3000);
       handler(gauge({ "term-b": 5000 }));
       flushPanelStatusBuffer();
       expect(getPtyHeldDuration("term-a")).toBeUndefined();
@@ -1419,8 +1421,24 @@ describe("onReliabilityMetric — pause-duration-gauge routing", () => {
       expect(getPtyHeldDuration("term-b")).toBeUndefined();
     });
 
-    it("clears a terminal named in the same batch that still holds another", () => {
+    it("clears only the terminal a batch names, never one it leaves out", () => {
       setupTwoPanels();
+      usePanelStore.setState((s) => ({
+        panelsById: {
+          ...s.panelsById,
+          "term-c": {
+            id: "term-c",
+            kind: "terminal",
+            title: "C",
+            cwd: "/tmp",
+            cols: 80,
+            rows: 24,
+            location: "grid",
+            heldDurationMs: 7000,
+          },
+        },
+        panelIds: [...s.panelIds, "term-c"],
+      }));
       const handler = getReliabilityHandler();
 
       handler(gauge({ "term-a": 2000, "term-b": 1000 }));
@@ -1430,6 +1448,8 @@ describe("onReliabilityMetric — pause-duration-gauge routing", () => {
 
       expect(getPtyHeldDuration("term-a")).toBeUndefined();
       expect(getPtyHeldDuration("term-b")).toBe(3000);
+      // Another shard's terminal, absent from both batches.
+      expect(getPtyHeldDuration("term-c")).toBe(7000);
     });
 
     it("lets a clear win over a sample still waiting for the same flush", () => {

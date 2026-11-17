@@ -55,6 +55,7 @@ vi.mock("@/utils/stateHydration/statePatcher", () => ({
 }));
 
 import { resyncHostTerminals } from "../hostTerminalResync";
+import { flushPanelStatusBuffer } from "../panelStatusBuffer";
 import { markSpawnUnconfirmed } from "../slices/panelRegistry/unconfirmedSpawn";
 import {
   holdForDriveLease,
@@ -130,6 +131,29 @@ describe("resyncHostTerminals", () => {
       await loadTerminalService();
       expect(setAgentState).toHaveBeenCalledWith("t-1", "working");
     });
+  });
+
+  it("drops every held duration from before the gap (#17575)", async () => {
+    panel("t-held", { heldDurationMs: 8000 });
+    panel("t-idle");
+    panel("b-1", { kind: "browser" });
+    getForProject.mockResolvedValue([{ id: "t-held" }, { id: "t-idle" }]);
+
+    await resyncHostTerminals("proj-1", current);
+    flushPanelStatusBuffer();
+
+    expect(store.panelsById["t-held"]).not.toHaveProperty("heldDurationMs", 8000);
+    expect(store.panelsById["t-held"]?.heldDurationMs).toBeUndefined();
+  });
+
+  it("keeps held durations when a newer resync took over", async () => {
+    panel("t-held", { heldDurationMs: 8000 });
+    getForProject.mockResolvedValue([{ id: "t-held" }]);
+
+    await resyncHostTerminals("proj-1", { isCurrent: () => false });
+    flushPanelStatusBuffer();
+
+    expect(store.panelsById["t-held"]?.heldDurationMs).toBe(8000);
   });
 
   it("keeps a directing pane directing over a newer waiting report", async () => {

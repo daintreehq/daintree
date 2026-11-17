@@ -283,6 +283,16 @@ describe("panelStatusBuffer — held-duration batching", () => {
     expect(getPtyPanel("term-1")?.heldDurationMs).toBeUndefined();
   });
 
+  it("writes nothing for a clear on a panel that holds no duration", () => {
+    // `pause-end` clears the field first; the gauge's own clear follows a
+    // tick later and must not hand subscribers a new panel object.
+    seedPanel("term-1");
+    const before = usePanelStore.getState().panelsById["term-1"];
+    clearHeldDuration("term-1");
+    raf.flushAll();
+    expect(usePanelStore.getState().panelsById["term-1"]).toBe(before);
+  });
+
   it("combines with activity + flow-status in a single flush", () => {
     seedPanel("term-1", { isVisible: true });
     enqueueActivityUpdate("term-1", "Working", "working", "interactive", "cmd");

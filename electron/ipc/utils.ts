@@ -700,15 +700,19 @@ function deliverToLocalProjectViews(
  * every sample queued for it would run at once on thaw, inside the warm paint
  * gate, only for the next batch to supersede them (#17038). A batch no later
  * one supersedes (a one-shot clear) passes `includeFrozenViews` instead.
+ *
+ * `ownersOnly` keeps an entry whose project is known to that project: with no
+ * view or remote endpoint of its own it reaches nobody, rather than everyone.
  */
 export function broadcastSlicedToProjectRenderers<T>(
   channel: string,
   entries: Record<string, T>,
   ownerOf: (key: string) => string | null,
   wrap: (slice: Record<string, T>) => unknown,
-  options?: { includeFrozenViews?: boolean }
+  options?: { includeFrozenViews?: boolean; ownersOnly?: boolean }
 ): void {
   const skipFrozen = options?.includeFrozenViews !== true;
+  const ownersOnly = options?.ownersOnly === true;
   if (Object.keys(entries).length === 0) return;
   const views = hasRegisteredProjectViews() ? getRegisteredProjectViews() : [];
   const registry = getEndpointRegistry();
@@ -726,7 +730,8 @@ export function broadcastSlicedToProjectRenderers<T>(
   for (const [key, value] of Object.entries(entries)) {
     const owner = ownerOf(key);
     const slice = owner === null ? undefined : byProject.get(owner);
-    (slice ?? shared)[key] = value;
+    if (slice) slice[key] = value;
+    else if (owner === null || !ownersOnly) shared[key] = value;
   }
   // `null` marks a project whose slice is empty, so it is sent nothing.
   const payloads = new Map<string | null, { value: unknown } | null>();

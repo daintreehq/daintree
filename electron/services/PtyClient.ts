@@ -721,6 +721,7 @@ export class PtyClient extends EventEmitter {
         this.recovery.cleanupOrphanedPtysForShard(shard, fallbackCrashType);
         shard.broker.clear(new BrokerError("HOST_EXITED", "Pty host exited"));
         shard.shouldResyncProjectContext = true;
+        this.clearPauseDurationsOfShard(shard);
         // The crashed shard's throttle/memory-warning holds are gone with the
         // process; recompute the aggregate so a sibling-free release isn't
         // stuck behind a dead shard's stale hold. Only for the shard that
@@ -1061,6 +1062,30 @@ export class PtyClient extends EventEmitter {
    * the release edge if the aggregate flipped — a retired/crashed shard must
    * not pin "throttled"/"memory warning" on forever.
    */
+  /**
+   * A host's pause-duration gauge names a terminal as cleared only on the tick
+   * after its hold ends, and the host that exited can't say it any more: its
+   * replacement starts with nothing held. Clear every terminal it owned, on
+   * its own route, so no pane keeps a duration from the dead host (#17575).
+   */
+  private clearPauseDurationsOfShard(shard: PtyShard): void {
+    const owned: string[] = [];
+    for (const [id, owner] of this.terminalOwners) {
+      if (owner === shard.key) owned.push(id);
+    }
+    if (owned.length === 0) return;
+    this.handleShardEvent(shard, {
+      type: "terminal-reliability-metric",
+      payload: {
+        terminalId: "resource-governor",
+        metricType: "pause-duration-gauge",
+        timestamp: Date.now(),
+        perTerminalHeld: [],
+        clearedTerminalIds: owned,
+      },
+    });
+  }
+
   private dropShardSignals(shardKey: string): void {
     this.signalAggregator.dropShard(shardKey);
     this.memoryPauseTracker.dropShard(shardKey);
