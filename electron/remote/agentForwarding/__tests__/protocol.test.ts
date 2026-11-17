@@ -10,12 +10,13 @@ import {
 const sshString = (text: string) => [0, 0, 0, text.length, ...Buffer.from(text, "latin1")];
 
 describe("AgentMessageReader", () => {
+  it("frames a body behind its big-endian length", () => {
+    expect([...frameAgentMessage(Uint8Array.of(13, 1, 2))]).toEqual([0, 0, 0, 3, 13, 1, 2]);
+  });
+
   it("rebuilds messages split across reads and splits ones that share a read", () => {
     const reader = new AgentMessageReader();
-    const wire = Buffer.concat([
-      frameAgentMessage(Uint8Array.of(11)),
-      frameAgentMessage(Uint8Array.of(13, 1, 2, 3)),
-    ]);
+    const wire = Buffer.from([0, 0, 0, 1, 11, 0, 0, 0, 4, 13, 1, 2, 3]);
 
     const out: number[][] = [];
     for (const byte of wire) out.push(...reader.push(Uint8Array.of(byte)).map((m) => [...m]));
@@ -80,6 +81,11 @@ describe("isForwardableRequest", () => {
       isForwardableRequest(Uint8Array.from([27, ...sshString("session-bind@openssh.co")]))
     ).toBe(false);
     expect(isForwardableRequest(Uint8Array.from([27, 0, 0, 0, 40, 115, 101]))).toBe(false);
+    // The whole name is there, but its declared length runs one byte past the body.
+    const name = [...Buffer.from("session-bind@openssh.com")];
+    expect(isForwardableRequest(Uint8Array.from([27, 0, 0, 0, name.length + 1, ...name]))).toBe(
+      false
+    );
     expect(isForwardableRequest(Uint8Array.of(27, 0, 0))).toBe(false);
   });
 });

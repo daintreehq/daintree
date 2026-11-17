@@ -1,10 +1,10 @@
-import fs from "node:fs/promises";
 import type { HostAgentForwardingCheck } from "../../../shared/types/ipc/remoteHosts.js";
 import {
   sshTargetOf,
   type HostDescriptor,
   type HostId,
 } from "../../../shared/types/remoteHosts.js";
+import { AppError } from "../../utils/errorTypes.js";
 import { createLogger } from "../../utils/logger.js";
 import type { LinkSession } from "../link/session.js";
 import {
@@ -14,7 +14,7 @@ import {
   type SshConfigReader,
 } from "./identityAgent.js";
 import { AgentForwardMethod, AgentInspectResultSchema } from "./linkMethods.js";
-import { ShellAgentRelay } from "./shellRelay.js";
+import { connectAgentSocket, ShellAgentRelay } from "./shellRelay.js";
 
 const logger = createLogger("main:AgentForwardingClient");
 
@@ -29,10 +29,13 @@ export const CONFIGURE_RETRY_MS = 5_000;
 /** One `ssh -G` read serves the connections a burst of git commands opens. */
 const AGENT_SOCKET_CACHE_MS = 30_000;
 const INSPECT_TIMEOUT_MS = 15_000;
+const AGENT_PROBE_TIMEOUT_MS = 2_000;
 
 export interface AgentForwardingClientDeps {
   manager: {
     onSessionOpened(listener: (hostId: HostId, session: LinkSession) => void): () => void;
+    /** Whether a window here has a view on the host: a link with none signs nothing. */
+    hasViews(hostId: HostId): boolean;
   };
   registry: {
     get(hostId: HostId): HostDescriptor | null;
@@ -91,9 +94,11 @@ export function installAgentForwardingClient(
     const now = Date.now();
     const cached = sockets.get(target);
     if (cached && now - cached.at < AGENT_SOCKET_CACHE_MS) return cached.path;
+    // A config ssh couldn't read may name another agent for this host, or
+    // none: never fall back to the default one in its place.
     const resolved = readConfig(target).then(
       (dump) => agentSocketFor(parseIdentityAgent(dump), env),
-      () => agentSocketFor(null, env)
+      () => null
     );
     sockets.set(target, { at: now, path: resolved });
     return resolved;
@@ -130,7 +135,9 @@ export function installAgentForwardingClient(
   const offOpened = deps.manager.onSessionOpened((hostId, session) => {
     if (disposed || !session.isOpen || deliveries.has(session)) return;
     const relay = new ShellAgentRelay(session, {
-      isEnabled: () => enabledFor(hostId),
+      // The host's word that this Shell drives can't be checked from here,
+      // but a window of this Shell on it can.
+      isEnabled: () => enabledFor(hostId) && deps.manager.hasViews(hostId),
       agentSocket: () => agentSocket(hostId),
     });
     const delivery: Delivery = { hostId, relay, sent: null, retry: null };
@@ -145,10 +152,12 @@ export function installAgentForwardingClient(
     for (const [session, delivery] of deliveries) deliver(session, delivery);
   });
 
-  const isSocket = async (socketPath: string | null): Promise<boolean> => {
+  /** A socket file an agent left behind when it crashed answers nothing. */
+  const answers = async (socketPath: string | null): Promise<boolean> => {
     if (!socketPath) return false;
     try {
-      return (await fs.stat(socketPath)).isSocket();
+      (await connectAgentSocket(socketPath, AGENT_PROBE_TIMEOUT_MS)).destroy();
+      return true;
     } catch {
       return false;
     }
@@ -156,7 +165,10 @@ export function installAgentForwardingClient(
 
   return {
     async check(hostId) {
-      const localAgent = await isSocket(await agentSocket(hostId));
+      if (!deps.registry.get(hostId)) {
+        throw new AppError({ code: "NOT_FOUND", message: `No host with id ${hostId}` });
+      }
+      const localAgent = await answers(await agentSocket(hostId));
       const session = deps.sessionFor(hostId);
       if (!session?.isOpen) return { localAgent };
       try {

@@ -1218,6 +1218,11 @@ export class RemoteHostManager {
     };
   }
 
+  /** A window on this machine has a view on the host now. */
+  hasViews(hostId: HostId): boolean {
+    return this.connections.get(hostId)?.hasViews === true;
+  }
+
   /** Mark the host's connection used now, so the idle release starts counting again. */
   touch(hostId: HostId): void {
     if (this.connections.has(hostId)) this.lastUsed.set(hostId, this.now());

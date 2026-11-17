@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentSocketFor, parseIdentityAgent } from "../identityAgent.js";
+import { agentSocketFor, parseIdentityAgent, readTerminalIdentityAgent } from "../identityAgent.js";
 
 describe("parseIdentityAgent", () => {
   it("reads the identityagent line ssh -G prints, keeping spaces in a path", () => {
@@ -40,5 +40,25 @@ describe("agentSocketFor", () => {
     expect(agentSocketFor("agent.sock", env)).toBeNull();
     expect(agentSocketFor(null, {})).toBeNull();
     expect(agentSocketFor(null, { SSH_AUTH_SOCK: "relative.sock" })).toBeNull();
+  });
+});
+
+describe("readTerminalIdentityAgent", () => {
+  const echoing = async (_destination: string, env?: NodeJS.ProcessEnv) =>
+    `identityagent ${env?.SSH_AUTH_SOCK}\n`;
+
+  it("reads ${SSH_AUTH_SOCK} as the socket a terminal is handed, not this process's", async () => {
+    expect(await readTerminalIdentityAgent("github.com", echoing, { SSH_AUTH_SOCK: "/mine" })).toBe(
+      "SSH_AUTH_SOCK"
+    );
+  });
+
+  it("keeps a path or none the config names itself", async () => {
+    const fixed = (value: string) => async () => `identityagent ${value}\n`;
+    expect(await readTerminalIdentityAgent("github.com", fixed("/opt/agent.sock"))).toBe(
+      "/opt/agent.sock"
+    );
+    expect(await readTerminalIdentityAgent("github.com", fixed("none"))).toBe("none");
+    expect(await readTerminalIdentityAgent("github.com", async () => "user me\n")).toBeNull();
   });
 });

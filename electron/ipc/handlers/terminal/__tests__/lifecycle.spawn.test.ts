@@ -4507,6 +4507,7 @@ describe("terminal spawn handler - forwarded ssh-agent (#17432)", () => {
     );
     unregister = registerRemoteService("agentForwardingHost", {
       socketForSpawn,
+      isForwarding: () => true,
       dispose: async () => {},
     });
 
@@ -4522,14 +4523,34 @@ describe("terminal spawn handler - forwarded ssh-agent (#17432)", () => {
   it("leaves the environment alone when nobody forwards one", async () => {
     unregister = registerRemoteService("agentForwardingHost", {
       socketForSpawn: async () => null,
+      isForwarding: () => false,
       dispose: async () => {},
     });
 
-    expect((await spawnEnv({ env: { KEEP: "1" } }))?.SSH_AUTH_SOCK).toBeUndefined();
+    expect(await spawnEnv({ env: { SSH_AUTH_SOCK: "/own/agent", KEEP: "1" } })).toMatchObject({
+      SSH_AUTH_SOCK: "/own/agent",
+      KEEP: "1",
+    });
+  });
+
+  it("leaves it alone when forwarding stopped while the launch was built", async () => {
+    unregister = registerRemoteService("agentForwardingHost", {
+      socketForSpawn: async () => "/run/user/1000/daintree/agent/abc.sock",
+      isForwarding: () => false,
+      dispose: async () => {},
+    });
+
+    expect(await spawnEnv({ env: { SSH_AUTH_SOCK: "/own/agent", KEEP: "1" } })).toMatchObject({
+      SSH_AUTH_SOCK: "/own/agent",
+      KEEP: "1",
+    });
   });
 
   it("spawns as before on a machine not in Host mode", async () => {
-    expect((await spawnEnv())?.SSH_AUTH_SOCK).toBeUndefined();
+    expect(await spawnEnv({ env: { SSH_AUTH_SOCK: "/own/agent", KEEP: "1" } })).toMatchObject({
+      SSH_AUTH_SOCK: "/own/agent",
+      KEEP: "1",
+    });
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
   });
 });

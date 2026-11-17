@@ -51,6 +51,12 @@ function entry(
   };
 }
 
+const CONNECTED: HostConnectionState = {
+  status: "connected",
+  rttMs: null,
+  handshake: { version: "1", commit: "c", protocolVersion: 1, platform: "linux", arch: "x64" },
+};
+
 const forwardSwitch = () => screen.getByRole("switch", { name: LABEL });
 
 function description(): string {
@@ -83,16 +89,35 @@ describe("HostDetail agent forwarding (#17432)", () => {
     expect(client.checkAgentForwarding).toHaveBeenCalledWith("studio-01");
   });
 
-  it("warns when the host's ssh config names another IdentityAgent", async () => {
+  it("warns when the connected host's ssh config names another IdentityAgent, or none", async () => {
     client.checkAgentForwarding.mockResolvedValue({
       localAgent: true,
       hostIdentityAgent: "/home/greg/.1password/agent.sock",
     });
-    await act(async () => {
-      render(<HostDetail entry={entry(true)} onBack={() => {}} />);
-    });
-
+    const { rerender } = render(<HostDetail entry={entry(true, CONNECTED)} onBack={() => {}} />);
+    await act(async () => {});
     expect(description()).toMatch(/studio-01's ssh config sets IdentityAgent/);
+
+    // Disconnected, main reports only this computer's side, and the warning goes.
+    client.checkAgentForwarding.mockResolvedValue({ localAgent: true });
+    await act(async () => {
+      rerender(<HostDetail entry={entry(true)} onBack={() => {}} />);
+    });
+    expect(description()).not.toMatch(/IdentityAgent/);
+
+    client.checkAgentForwarding.mockResolvedValue({ localAgent: true, hostIdentityAgent: "none" });
+    await act(async () => {
+      rerender(<HostDetail entry={entry(true, CONNECTED)} onBack={() => {}} />);
+    });
+    expect(description()).toMatch(/studio-01's ssh config sets IdentityAgent/);
+  });
+
+  it("turns a saved switch off", async () => {
+    render(<HostDetail entry={entry(true)} onBack={() => {}} />);
+    await act(async () => {
+      fireEvent.click(forwardSwitch());
+    });
+    expect(client.update).toHaveBeenCalledWith({ hostId: "studio-01", forwardSshAgent: false });
   });
 
   it("says nothing of an IdentityAgent that still names SSH_AUTH_SOCK, or none", async () => {
@@ -106,22 +131,7 @@ describe("HostDetail agent forwarding (#17432)", () => {
 
     client.checkAgentForwarding.mockResolvedValue({ localAgent: true, hostIdentityAgent: null });
     await act(async () => {
-      rerender(
-        <HostDetail
-          entry={entry(true, {
-            status: "connected",
-            rttMs: null,
-            handshake: {
-              version: "1",
-              commit: "c",
-              protocolVersion: 1,
-              platform: "linux",
-              arch: "x64",
-            },
-          })}
-          onBack={() => {}}
-        />
-      );
+      rerender(<HostDetail entry={entry(true, CONNECTED)} onBack={() => {}} />);
     });
     expect(client.checkAgentForwarding).toHaveBeenCalledTimes(2);
     expect(description()).not.toMatch(/IdentityAgent/);

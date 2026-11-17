@@ -1398,8 +1398,13 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         : undefined;
     if (inlineModeEnv) spawnEnv = mergeLaunchEnv(spawnEnv ?? {}, inlineModeEnv);
     // The person turned forwarding on for this host, so it outranks an
-    // SSH_AUTH_SOCK a preset or project env names.
-    if (agentSocketPath) {
+    // SSH_AUTH_SOCK a preset or project env names. Checked again here: the
+    // driver may have turned it off, or moved on, while the launch was built.
+    if (
+      agentSocketPath &&
+      projectId &&
+      getRemoteService("agentForwardingHost")?.isForwarding(projectId)
+    ) {
       spawnEnv = mergeLaunchEnv(spawnEnv ?? {}, { SSH_AUTH_SOCK: agentSocketPath });
     }
 

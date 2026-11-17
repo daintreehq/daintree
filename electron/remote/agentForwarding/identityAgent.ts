@@ -42,15 +42,34 @@ export function agentSocketFor(
   return path.isAbsolute(identityAgent) ? identityAgent : null;
 }
 
-export type SshConfigReader = (destination: string) => Promise<string>;
+export type SshConfigReader = (destination: string, env?: NodeJS.ProcessEnv) => Promise<string>;
 
 /** `ssh -G <destination>`: reads the config only, never connects. */
-export const readSshConfig: SshConfigReader = (destination) =>
+export const readSshConfig: SshConfigReader = (destination, env = process.env) =>
   new Promise((resolve, reject) => {
     execFile(
-      sshExecutable(),
+      sshExecutable(env),
       ["-G", destination],
-      { timeout: SSH_CONFIG_TIMEOUT_MS, maxBuffer: SSH_CONFIG_MAX_BYTES, windowsHide: true },
+      { env, timeout: SSH_CONFIG_TIMEOUT_MS, maxBuffer: SSH_CONFIG_MAX_BYTES, windowsHide: true },
       (error, stdout) => (error ? reject(error) : resolve(String(stdout)))
     );
   });
+
+/**
+ * `ssh -G` expands `${SSH_AUTH_SOCK}` in an IdentityAgent from its own
+ * environment, so a Host reads its config with this in its place: a value
+ * that comes back as this one names whatever socket a terminal is handed.
+ */
+export const AUTH_SOCK_PLACEHOLDER = "/daintree-forwarded-agent-placeholder.sock";
+
+/** The Host's IdentityAgent for a destination as a terminal there would see it. */
+export async function readTerminalIdentityAgent(
+  destination: string,
+  read: SshConfigReader = readSshConfig,
+  env: NodeJS.ProcessEnv = process.env
+): Promise<string | null> {
+  const identityAgent = parseIdentityAgent(
+    await read(destination, { ...env, SSH_AUTH_SOCK: AUTH_SOCK_PLACEHOLDER })
+  );
+  return identityAgent === AUTH_SOCK_PLACEHOLDER ? "SSH_AUTH_SOCK" : identityAgent;
+}

@@ -18,25 +18,35 @@ import {
  * Shell side of agent forwarding: each Host connection gets its own
  * connection to this computer's agent, opened on its first request and kept
  * for its life, since ssh binds an agent connection to the session it signs
- * for. Requests the relay won't forward, and every request while the switch
- * is off or no agent is running here, are answered with a failure without
- * reaching the agent.
+ * for. Requests the relay won't forward, and every request while forwarding
+ * isn't allowed or no agent is running here, are answered with a failure
+ * without reaching the agent.
+ *
+ * A Host connection whose agent connection ended (the agent closed it, the
+ * switch went off, it sat idle) is retired rather than quietly given a fresh
+ * one, which would carry none of its session binding: its next request is
+ * refused, and the Host closes it.
  */
 
 export interface ShellAgentRelayOptions {
-  /** Read on every request: the switch can go off while a connection is open. */
+  /** Read on every request: the switch can go off, or the last window close, mid-connection. */
   isEnabled(): boolean;
   /** The agent socket this computer's ssh uses for the host; null when there is none. */
   agentSocket(): Promise<string | null>;
   connect?: (socketPath: string) => Promise<net.Socket>;
   /** Long enough for a hardware key's touch or a password manager's approval. */
   replyTimeoutMs?: number;
+  /** Past the Host's own idle limit, for a close notice that never arrived. */
+  idleTimeoutMs?: number;
   maxConnections?: number;
 }
 
 const DEFAULT_REPLY_TIMEOUT_MS = 120_000;
+const DEFAULT_IDLE_TIMEOUT_MS = 11 * 60_000;
 const DEFAULT_MAX_CONNECTIONS = 64;
 const CONNECT_TIMEOUT_MS = 5_000;
+/** Retired ids the Host hasn't closed yet; it always does, so this only bounds a lost notice. */
+const MAX_RETIRED = 1024;
 
 const FAILURE: AgentReply = { message: AGENT_FAILURE_BODY };
 
@@ -44,6 +54,7 @@ interface Upstream {
   socket: net.Socket;
   reader: AgentMessageReader;
   waiting: { resolve(body: Uint8Array): void; reject(error: Error): void } | null;
+  idle: ReturnType<typeof setTimeout> | null;
 }
 
 export function connectAgentSocket(
@@ -68,14 +79,21 @@ export function connectAgentSocket(
   });
 }
 
+function refused(message: string): AppError {
+  return new AppError({ code: "CANCELLED", message });
+}
+
 export class ShellAgentRelay {
   private readonly upstreams = new Map<number, Upstream>();
+  /** Opens still waiting on the agent's path or socket; `cancelled` once the Host let go. */
+  private readonly opening = new Map<number, { cancelled: boolean }>();
+  private readonly retired = new Set<number>();
   private readonly busy = new Set<number>();
-  private opening = 0;
   private disposed = false;
   private readonly disposers: Array<() => void> = [];
   private readonly connect: (socketPath: string) => Promise<net.Socket>;
   private readonly replyTimeoutMs: number;
+  private readonly idleTimeoutMs: number;
   private readonly maxConnections: number;
 
   constructor(
@@ -84,6 +102,7 @@ export class ShellAgentRelay {
   ) {
     this.connect = options.connect ?? ((socketPath) => connectAgentSocket(socketPath));
     this.replyTimeoutMs = options.replyTimeoutMs ?? DEFAULT_REPLY_TIMEOUT_MS;
+    this.idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
     this.maxConnections = options.maxConnections ?? DEFAULT_MAX_CONNECTIONS;
     if (session.isClosed) {
       this.disposed = true;
@@ -99,7 +118,7 @@ export class ShellAgentRelay {
         AgentForwardMethod.CLOSE,
         AgentClosePayloadSchema,
         ({ connectionId }) => {
-          this.closeConnection(connectionId);
+          this.release(connectionId);
           return null;
         }
       ),
@@ -111,9 +130,13 @@ export class ShellAgentRelay {
     return this.upstreams.size;
   }
 
-  /** The switch went off: nothing open keeps using the agent. */
+  /** Forwarding stopped here: nothing open keeps using the agent. */
   closeAll(): void {
-    for (const id of [...this.upstreams.keys()]) this.closeConnection(id);
+    for (const id of [...this.upstreams.keys()]) this.retire(id);
+    for (const [id, open] of this.opening) {
+      open.cancelled = true;
+      this.markRetired(id);
+    }
   }
 
   dispose(): void {
@@ -132,8 +155,12 @@ export class ShellAgentRelay {
         message: "An agent request is already waiting on this connection",
       });
     }
+    if (this.retired.has(connectionId)) throw refused("This agent connection has ended");
     if (this.disposed || !this.options.isEnabled()) {
-      this.closeConnection(connectionId);
+      if (this.upstreams.has(connectionId)) {
+        this.retire(connectionId);
+        throw refused("Agent forwarding is off");
+      }
       return FAILURE;
     }
     if (!isForwardableRequest(message)) return FAILURE;
@@ -141,13 +168,9 @@ export class ShellAgentRelay {
     try {
       let upstream = this.upstreams.get(connectionId) ?? null;
       if (!upstream) {
-        if (this.upstreams.size + this.opening >= this.maxConnections) return FAILURE;
+        if (this.upstreams.size + this.opening.size >= this.maxConnections) return FAILURE;
         upstream = await this.open(connectionId);
         if (!upstream) return FAILURE;
-      }
-      if (this.disposed || !this.options.isEnabled()) {
-        this.closeConnection(connectionId);
-        return FAILURE;
       }
       return { message: await this.exchange(connectionId, upstream, message) };
     } finally {
@@ -156,22 +179,29 @@ export class ShellAgentRelay {
   }
 
   private async open(connectionId: number): Promise<Upstream | null> {
-    this.opening++;
+    const open = { cancelled: false };
+    this.opening.set(connectionId, open);
     let socket: net.Socket;
     try {
       const socketPath = await this.options.agentSocket();
-      if (!socketPath) return null;
+      if (!socketPath || open.cancelled) return null;
       socket = await this.connect(socketPath);
     } catch {
       return null;
     } finally {
-      this.opening--;
+      if (this.opening.get(connectionId) === open) this.opening.delete(connectionId);
     }
-    if (this.disposed) {
+    // The Host let go, or forwarding stopped, while the agent was being reached.
+    if (open.cancelled || this.disposed || !this.options.isEnabled()) {
       socket.destroy();
-      return null;
+      throw refused("The agent connection was closed while it opened");
     }
-    const upstream: Upstream = { socket, reader: new AgentMessageReader(), waiting: null };
+    const upstream: Upstream = {
+      socket,
+      reader: new AgentMessageReader(),
+      waiting: null,
+      idle: null,
+    };
     this.upstreams.set(connectionId, upstream);
     const fail = (error: Error): void => {
       const waiting = upstream.waiting;
@@ -180,6 +210,11 @@ export class ShellAgentRelay {
       socket.destroy();
     };
     socket.on("data", (chunk: Buffer) => {
+      // An agent speaks only when asked, and answers each request once.
+      if (!upstream.waiting) {
+        fail(new Error("The ssh agent sent a reply nobody asked for"));
+        return;
+      }
       let replies: Uint8Array[];
       try {
         replies = upstream.reader.push(chunk);
@@ -187,21 +222,24 @@ export class ShellAgentRelay {
         fail(error as Error);
         return;
       }
-      for (const reply of replies) {
-        const waiting = upstream.waiting;
-        if (!waiting) {
-          fail(new Error("The ssh agent sent a reply nobody asked for"));
-          return;
-        }
-        upstream.waiting = null;
-        waiting.resolve(reply);
+      if (replies.length === 0) return;
+      if (replies.length > 1 || upstream.reader.pendingBytes > 0) {
+        fail(new Error("The ssh agent sent more than one reply"));
+        return;
       }
+      const waiting = upstream.waiting;
+      upstream.waiting = null;
+      waiting.resolve(replies[0]!);
     });
     socket.on("error", () => {
       // "close" follows and settles anything waiting.
     });
     socket.once("close", () => {
-      if (this.upstreams.get(connectionId) === upstream) this.upstreams.delete(connectionId);
+      if (upstream.idle) clearTimeout(upstream.idle);
+      if (this.upstreams.get(connectionId) === upstream) {
+        this.upstreams.delete(connectionId);
+        this.markRetired(connectionId);
+      }
       fail(new Error("The ssh agent closed the connection"));
     });
     return upstream;
@@ -212,15 +250,18 @@ export class ShellAgentRelay {
     upstream: Upstream,
     message: Uint8Array
   ): Promise<Uint8Array> {
+    if (upstream.idle) clearTimeout(upstream.idle);
+    upstream.idle = null;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         // A late reply can't be matched to anything once given up on, so the
         // connection goes with it.
-        this.closeConnection(connectionId);
+        this.retire(connectionId);
       }, this.replyTimeoutMs);
       upstream.waiting = {
         resolve: (body) => {
           clearTimeout(timer);
+          upstream.idle = setTimeout(() => this.retire(connectionId), this.idleTimeoutMs);
           resolve(body);
         },
         reject: (error) => {
@@ -232,10 +273,33 @@ export class ShellAgentRelay {
     });
   }
 
-  private closeConnection(connectionId: number): void {
+  /** The Host is done with the connection: forget it entirely. */
+  private release(connectionId: number): void {
+    const open = this.opening.get(connectionId);
+    if (open) open.cancelled = true;
+    this.destroyUpstream(connectionId);
+    this.retired.delete(connectionId);
+  }
+
+  /** End the agent connection while the Host still holds its side: its next request is refused. */
+  private retire(connectionId: number): void {
+    this.destroyUpstream(connectionId);
+    this.markRetired(connectionId);
+  }
+
+  private markRetired(connectionId: number): void {
+    this.retired.add(connectionId);
+    if (this.retired.size > MAX_RETIRED) {
+      const oldest = this.retired.values().next().value;
+      if (oldest !== undefined) this.retired.delete(oldest);
+    }
+  }
+
+  private destroyUpstream(connectionId: number): void {
     const upstream = this.upstreams.get(connectionId);
     if (!upstream) return;
     this.upstreams.delete(connectionId);
+    if (upstream.idle) clearTimeout(upstream.idle);
     upstream.socket.destroy();
   }
 }

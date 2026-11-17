@@ -35,7 +35,9 @@ export const AgentRequestPayloadSchema = z.object({ connectionId, message });
 export type AgentRequestPayload = z.infer<typeof AgentRequestPayloadSchema>;
 
 export const AgentReplySchema = z.object({ message });
-export type AgentReply = z.infer<typeof AgentReplySchema>;
+export interface AgentReply {
+  message: Uint8Array;
+}
 
 export const AgentClosePayloadSchema = z.object({ connectionId });
 

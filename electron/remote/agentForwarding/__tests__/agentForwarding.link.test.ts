@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
@@ -18,29 +19,48 @@ import {
   installHostAgentForwarding,
   type HostAgentForwarding,
 } from "../hostForwarder.js";
+import { AgentForwardMethod } from "../linkMethods.js";
 import { AgentMessageReader, frameAgentMessage } from "../protocol.js";
 
 const HOST_ID = "studio-01";
 const PROJECT = "project-a";
 const SESSION_ID = "session-1";
+const OTHER_SESSION_ID = "session-2";
 
-const IDENTITIES_ANSWER = Uint8Array.of(12, 0, 0, 0, 0);
-const SIGN_RESPONSE = Uint8Array.of(14, 0, 0, 0, 1, 7);
+const IDENTITIES_ANSWER = [12, 0, 0, 0, 0];
+const SIGN_RESPONSE = [14, 0, 0, 0, 1, 7];
+const SESSION_BIND = [
+  27,
+  ...[0, 0, 0, 24],
+  ...Buffer.from("session-bind@openssh.com"),
+  ...[0, 0, 0, 2, 9, 9],
+];
+
+interface FakeAgent {
+  path: string;
+  server: net.Server;
+  /** Every request body it received, with the connection it came on. */
+  saw: Array<{ connection: number; body: number[] }>;
+  open: Set<net.Socket>;
+}
 
 let dir: string;
 let host: LinkSession;
 let client: LinkSession;
-let agentPath: string;
-let agentServer: net.Server;
-/** Request types the fake agent on the Shell received, in order. */
-let agentSaw: number[];
+let agent: FakeAgent;
 let signDelay: Promise<void>;
+let sshConfigGate: Promise<void>;
 let target: DriveTarget;
 let leaseListeners: Array<(state: { projectId: string }) => void>;
 let switchOn: boolean;
+let views: boolean;
 let registryListeners: Array<() => void>;
+type HostSessionCtx = { sessionId: string; session: LinkSession };
+let hostSessions: HostSessionCtx[];
+let sessionListeners: Array<(ctx: HostSessionCtx) => void>;
 let hostSide: HostAgentForwarding;
 let shellSide: AgentForwardingClient;
+const cleanups: Array<() => unknown> = [];
 const sockets: net.Socket[] = [];
 
 function liveTarget(linkSessionId = SESSION_ID): DriveTarget {
@@ -68,18 +88,88 @@ function setSwitch(on: boolean): void {
   for (const listener of registryListeners) listener();
 }
 
-function startFakeAgent(socketPath: string): Promise<net.Server> {
-  const server = net.createServer((socket) => {
+async function startFakeAgent(socketPath: string): Promise<FakeAgent> {
+  const fake: FakeAgent = { path: socketPath, server: null!, saw: [], open: new Set() };
+  let nextConnection = 1;
+  fake.server = net.createServer((socket) => {
+    const connection = nextConnection++;
+    fake.open.add(socket);
+    socket.on("close", () => fake.open.delete(socket));
     const reader = new AgentMessageReader();
     socket.on("data", async (chunk) => {
       for (const body of reader.push(chunk)) {
-        agentSaw.push(body[0]!);
+        fake.saw.push({ connection, body: [...body] });
         if (body[0] === 13) await signDelay;
-        socket.write(frameAgentMessage(body[0] === 11 ? IDENTITIES_ANSWER : SIGN_RESPONSE));
+        const reply = body[0] === 11 ? IDENTITIES_ANSWER : SIGN_RESPONSE;
+        socket.write(frameAgentMessage(Uint8Array.from(reply)));
       }
     });
   });
-  return new Promise((resolve) => server.listen(socketPath, () => resolve(server)));
+  await new Promise<void>((resolve) => fake.server.listen(socketPath, () => resolve()));
+  return fake;
+}
+
+function installShell(
+  session: LinkSession,
+  agentPath: string,
+  readConfig: (target: string) => Promise<string> = async () => `identityagent ${agentPath}\n`
+): AgentForwardingClient {
+  const installed = installAgentForwardingClient({
+    manager: {
+      onSessionOpened(listener) {
+        listener(HOST_ID, session);
+        return () => {};
+      },
+      hasViews: () => views,
+    },
+    registry: {
+      get: (hostId) =>
+        hostId === HOST_ID
+          ? ({
+              id: HOST_ID,
+              connection: { kind: "ssh", target: "me@studio" },
+              forwardSshAgent: switchOn,
+            } as HostDescriptor)
+          : null,
+      onChange(listener) {
+        registryListeners.push(listener);
+        return () => {};
+      },
+    },
+    sessionFor: () => session,
+    readSshConfig: async (configTarget) => {
+      await sshConfigGate;
+      return readConfig(configTarget);
+    },
+    platform: "darwin",
+    env: {},
+  });
+  cleanups.push(() => installed.dispose());
+  return installed;
+}
+
+function installHost(): HostAgentForwarding {
+  const installed = installHostAgentForwarding({
+    server: {
+      sessions: hostSessions,
+      onSession(listener) {
+        sessionListeners.push(listener);
+        return () => {};
+      },
+    },
+    lease: {
+      getDriveTarget: () => target,
+      onChange(listener) {
+        leaseListeners.push(listener);
+        return () => {};
+      },
+    },
+    socketDir: path.join(dir, "agent"),
+    readSshConfig: async (_destination, env) =>
+      `user me\nidentityagent ${env?.SSH_AUTH_SOCK ?? "none"}\n`,
+  });
+  cleanups.push(() => installed.dispose());
+  return installed;
 }
 
 /** A client of the host's project socket, like ssh on the host. */
@@ -99,6 +189,7 @@ async function connectAgentClient(socketPath: string) {
   socket.on("close", () => (closed = true));
   socket.on("error", () => {});
   return {
+    socket,
     replies,
     isClosed: () => closed,
     send(...bodies: number[][]) {
@@ -118,141 +209,151 @@ beforeEach(async () => {
   _resetIssuedAgentSocketsForTest();
   dir = await makeTempDir();
   ({ host, client } = await openSessionPair(dir));
-  agentSaw = [];
   signDelay = Promise.resolve();
-  agentPath = path.join(dir, "fa.sock");
-  agentServer = await startFakeAgent(agentPath);
+  sshConfigGate = Promise.resolve();
+  agent = await startFakeAgent(path.join(dir, "fa.sock"));
   target = liveTarget();
   leaseListeners = [];
   switchOn = true;
+  views = true;
   registryListeners = [];
-
-  hostSide = installHostAgentForwarding({
-    server: {
-      sessions: [{ sessionId: SESSION_ID, session: host }],
-      onSession: () => () => {},
-    },
-    lease: {
-      getDriveTarget: () => target,
-      onChange(listener) {
-        leaseListeners.push(listener);
-        return () => {};
-      },
-    },
-    socketDir: path.join(dir, "agent"),
-    readSshConfig: async () => "user me\nidentityagent SSH_AUTH_SOCK\n",
-  });
-  shellSide = installAgentForwardingClient({
-    manager: {
-      onSessionOpened(listener) {
-        listener(HOST_ID, client);
-        return () => {};
-      },
-    },
-    registry: {
-      get: (hostId) =>
-        hostId === HOST_ID
-          ? ({
-              id: HOST_ID,
-              connection: { kind: "ssh", target: "me@studio" },
-              forwardSshAgent: switchOn,
-            } as HostDescriptor)
-          : null,
-      onChange(listener) {
-        registryListeners.push(listener);
-        return () => {};
-      },
-    },
-    sessionFor: () => client,
-    readSshConfig: async () => `identityagent ${agentPath}\n`,
-    platform: "darwin",
-    env: {},
-  });
+  hostSessions = [{ sessionId: SESSION_ID, session: host }];
+  sessionListeners = [];
+  hostSide = installHost();
+  shellSide = installShell(client, agent.path);
 });
 
 afterEach(async () => {
   for (const socket of sockets.splice(0)) socket.destroy();
-  shellSide.dispose();
-  await hostSide.dispose();
+  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
   host.close("test over");
   client.close("test over");
-  await new Promise<void>((resolve) => agentServer.close(() => resolve()));
+  await new Promise<void>((resolve) => agent.server.close(() => resolve()));
   await removeTempDir(dir);
 });
 
 /** What a spawn would be handed once the host has heard the Shell's latest switch. */
-async function spawnSocket(expectSocket: boolean): Promise<string | null> {
+async function spawnSocket(expectSocket: boolean, projectId = PROJECT): Promise<string | null> {
   for (let i = 0; i < 200; i++) {
-    const socketPath = await hostSide.socketForSpawn(PROJECT);
+    const socketPath = await hostSide.socketForSpawn(projectId);
     if ((socketPath !== null) === expectSocket) return socketPath;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(expectSocket ? "no socket for the project" : "still handed a socket");
 }
 
-async function projectSocket(): Promise<string> {
-  return (await spawnSocket(true))!;
+async function projectSocket(projectId = PROJECT): Promise<string> {
+  return (await spawnSocket(true, projectId))!;
+}
+
+/** A request straight over the link, as a host would send it. */
+function relayDirect(connectionId: number, body: number[]): Promise<unknown> {
+  return host.call(AgentForwardMethod.REQUEST, { connectionId, message: Uint8Array.from(body) });
 }
 
 describe("agent forwarding over a link", () => {
-  it("carries a request to the driving Shell's agent and returns its reply", async () => {
-    const agent = await connectAgentClient(await projectSocket());
+  it("carries requests to the driving Shell's agent, whole and on one agent connection", async () => {
+    const ssh = await connectAgentClient(await projectSocket());
 
-    expect(await agent.ask([11])).toEqual([...IDENTITIES_ANSWER]);
-    expect(agentSaw).toEqual([11]);
+    expect(await ssh.ask([11])).toEqual(IDENTITIES_ANSWER);
+    expect(await ssh.ask(SESSION_BIND)).toEqual(SIGN_RESPONSE);
+    expect(await ssh.ask([13, 0, 0, 0, 3, 1, 2, 3])).toEqual(SIGN_RESPONSE);
+
+    expect(agent.saw).toEqual([
+      { connection: 1, body: [11] },
+      { connection: 1, body: SESSION_BIND },
+      { connection: 1, body: [13, 0, 0, 0, 3, 1, 2, 3] },
+    ]);
   });
 
-  it("keeps the socket owner-only, at a path that stays the project's", async () => {
+  it("gives each project its own owner-only socket, at a path that stays the project's", async () => {
     const socketPath = await projectSocket();
+    const other = await projectSocket("project-b");
 
+    expect(other).not.toBe(socketPath);
     expect((await fs.stat(socketPath)).mode & 0o777).toBe(0o600);
     expect((await fs.stat(path.dirname(socketPath))).mode & 0o777).toBe(0o700);
     expect(await hostSide.socketForSpawn(PROJECT)).toBe(socketPath);
   });
 
+  it("listens again on a socket it handed out when Host mode starts again", async () => {
+    const socketPath = await projectSocket();
+    await hostSide.dispose();
+    await expect(fs.lstat(socketPath)).rejects.toThrow();
+
+    hostSide = installHost();
+
+    for (let i = 0; i < 200; i++) {
+      if (
+        await fs.lstat(socketPath).then(
+          () => true,
+          () => false
+        )
+      )
+        break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    // No link has said its switch is on to this new start yet: an answer, not a missing socket.
+    const ssh = await connectAgentClient(socketPath);
+    expect(await ssh.ask([11])).toEqual([5]);
+  });
+
   it("refuses requests to change keys on the Shell, in order with the ones it forwards", async () => {
-    const agent = await connectAgentClient(await projectSocket());
+    const ssh = await connectAgentClient(await projectSocket());
     let releaseSign!: () => void;
     signDelay = new Promise((resolve) => (releaseSign = resolve));
 
     // A slow signature, then an add, a remove-all and a lock queued behind it.
-    agent.send([13, 0, 0, 0, 0], [17, 1, 2], [19], [22, 0, 0, 0, 0]);
-    await waitFor(() => agentSaw.length === 1);
-    expect(agent.replies).toEqual([]);
+    ssh.send([13, 0, 0, 0, 0], [17, 1, 2], [19], [22, 0, 0, 0, 0]);
+    await waitFor(() => agent.saw.length === 1);
+    expect(ssh.replies).toEqual([]);
     releaseSign();
-    await waitFor(() => agent.replies.length === 4);
+    await waitFor(() => ssh.replies.length === 4);
 
-    expect(agent.replies).toEqual([[...SIGN_RESPONSE], [5], [5], [5]]);
-    expect(agentSaw).toEqual([13]);
+    expect(ssh.replies).toEqual([SIGN_RESPONSE, [5], [5], [5]]);
+    expect(agent.saw.map((request) => request.body[0])).toEqual([13]);
+  });
+
+  it("refuses a second request on a connection while one is still out", async () => {
+    let releaseSign!: () => void;
+    signDelay = new Promise((resolve) => (releaseSign = resolve));
+    const first = relayDirect(7, [13, 0, 0, 0, 0]);
+    await waitFor(() => agent.saw.length === 1);
+
+    await expect(relayDirect(7, [11])).rejects.toMatchObject({ code: "VALIDATION" });
+    releaseSign();
+    expect(await first).toEqual({ message: Uint8Array.from(SIGN_RESPONSE) });
   });
 
   it("refuses every extension but session-bind", async () => {
-    const agent = await connectAgentClient(await projectSocket());
+    const ssh = await connectAgentClient(await projectSocket());
     const extension = (name: string) => [27, 0, 0, 0, name.length, ...Buffer.from(name)];
 
-    expect(await agent.ask(extension("query"))).toEqual([5]);
-    expect(await agent.ask(extension("session-bind@openssh.comX"))).toEqual([5]);
-    expect(await agent.ask(extension("session-bind@openssh.com"))).toEqual([...SIGN_RESPONSE]);
-    expect(agentSaw).toEqual([27]);
+    expect(await ssh.ask(extension("query"))).toEqual([5]);
+    expect(await ssh.ask(extension("session-bind@openssh.comX"))).toEqual([5]);
+    expect(agent.saw).toEqual([]);
   });
 
-  it("hands no socket to a spawn until the Shell's switch is on", async () => {
+  it("hands a spawn the socket only while the Shell's switch is on", async () => {
+    const socketPath = await projectSocket();
+
     setSwitch(false);
     expect(await spawnSocket(false)).toBeNull();
+    expect(hostSide.isForwarding(PROJECT)).toBe(false);
 
     setSwitch(true);
-
-    expect(await projectSocket()).toContain(path.join(dir, "agent"));
+    expect(await spawnSocket(true)).toBe(socketPath);
+    expect(hostSide.isForwarding(PROJECT)).toBe(true);
   });
 
   it("answers an agent failure when nobody forwards an agent, instead of hanging", async () => {
     const socketPath = await projectSocket();
     setTarget({ kind: "vacant" });
-    const agent = await connectAgentClient(socketPath);
+    const ssh = await connectAgentClient(socketPath);
 
-    expect(await agent.ask([11])).toEqual([5]);
-    expect(await agent.ask([13, 0, 0, 0, 0])).toEqual([5]);
-    expect(agentSaw).toEqual([]);
+    expect(await ssh.ask([11])).toEqual([5]);
+    expect(await ssh.ask([13, 0, 0, 0, 0])).toEqual([5]);
+    expect(agent.saw).toEqual([]);
   });
 
   it("answers a failure when the driver is this machine's own window", async () => {
@@ -261,65 +362,149 @@ describe("agent forwarding over a link", () => {
       ...liveTarget(),
       endpoint: { kind: "local-view" } as ClientEndpoint,
     } as DriveTarget);
-    const agent = await connectAgentClient(socketPath);
+    const ssh = await connectAgentClient(socketPath);
 
-    expect(await agent.ask([11])).toEqual([5]);
+    expect(await ssh.ask([11])).toEqual([5]);
   });
 
-  it("closes a connection once its Shell stops driving the project", async () => {
-    const agent = await connectAgentClient(await projectSocket());
-    expect(await agent.ask([11])).toEqual([...IDENTITIES_ANSWER]);
+  it("closes a connection once its Shell stops driving, and sends new ones to the new driver", async () => {
+    const pair = await openSessionPair(dir);
+    cleanups.push(() => {
+      pair.host.close("test over");
+      pair.client.close("test over");
+    });
+    const otherAgent = await startFakeAgent(path.join(dir, "fb.sock"));
+    cleanups.push(() => new Promise<void>((resolve) => otherAgent.server.close(() => resolve())));
+    const other = { sessionId: OTHER_SESSION_ID, session: pair.host };
+    hostSessions.push(other);
+    for (const listener of sessionListeners) listener(other);
+    installShell(pair.client, otherAgent.path);
+    const socketPath = await projectSocket();
+    const ssh = await connectAgentClient(socketPath);
+    expect(await ssh.ask([11])).toEqual(IDENTITIES_ANSWER);
+    expect(agent.open.size).toBe(1);
 
-    setTarget(liveTarget("another-session"));
+    setTarget(liveTarget(OTHER_SESSION_ID));
 
-    await waitFor(() => agent.isClosed());
+    await waitFor(() => ssh.isClosed() && agent.open.size === 0);
+    const next = await connectAgentClient(socketPath);
+    expect(await next.ask([11])).toEqual(IDENTITIES_ANSWER);
+    expect(otherAgent.saw).toEqual([{ connection: 1, body: [11] }]);
+    expect(agent.saw).toHaveLength(1);
   });
 
-  it("closes connections and refuses at once when the Shell's switch goes off", async () => {
+  it("closes the Shell's agent connections and refuses at once when its switch goes off", async () => {
     const socketPath = await projectSocket();
     const open = await connectAgentClient(socketPath);
-    expect(await open.ask([11])).toEqual([...IDENTITIES_ANSWER]);
+    expect(await open.ask([11])).toEqual(IDENTITIES_ANSWER);
+    expect(agent.open.size).toBe(1);
 
     setSwitch(false);
 
+    await waitFor(() => agent.open.size === 0);
+    expect(await relayDirect(99, [11])).toEqual({ message: Uint8Array.of(5) });
     await waitFor(() => open.isClosed());
-    const fresh = await connectAgentClient(socketPath);
-    expect(await fresh.ask([11])).toEqual([5]);
-    expect(agentSaw).toEqual([11]);
+    expect(agent.saw).toHaveLength(1);
+  });
+
+  it("signs nothing for a host none of this Shell's windows is on", async () => {
+    views = false;
+
+    expect(await relayDirect(5, [11])).toEqual({ message: Uint8Array.of(5) });
+    expect(agent.saw).toEqual([]);
+  });
+
+  it("forwards nothing when this computer's ssh config can't be read", async () => {
+    shellSide.dispose();
+    const pair = await openSessionPair(dir);
+    cleanups.push(() => {
+      pair.host.close("test over");
+      pair.client.close("test over");
+    });
+    installShell(pair.client, agent.path, async () => {
+      throw new Error("ssh -G timed out");
+    });
+
+    const reply = await pair.host.call(AgentForwardMethod.REQUEST, {
+      connectionId: 1,
+      message: Uint8Array.of(11),
+    });
+
+    expect(reply).toEqual({ message: Uint8Array.of(5) });
+    expect(agent.saw).toEqual([]);
+  });
+
+  it("never opens an agent connection for a host connection closed while it was opening", async () => {
+    let releaseConfig!: () => void;
+    sshConfigGate = new Promise((resolve) => (releaseConfig = resolve));
+    const pending = relayDirect(3, [11]).catch((error: unknown) => error);
+
+    await host.call(AgentForwardMethod.CLOSE, { connectionId: 3 });
+    releaseConfig();
+    await pending;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(agent.open.size).toBe(0);
+    expect(agent.saw).toEqual([]);
+  });
+
+  it("closes a host connection whose agent connection ended, rather than opening a fresh one", async () => {
+    const ssh = await connectAgentClient(await projectSocket());
+    expect(await ssh.ask([11])).toEqual(IDENTITIES_ANSWER);
+
+    for (const socket of agent.open) socket.destroy();
+    await waitFor(() => agent.open.size === 0);
+    ssh.send([11]);
+
+    await waitFor(() => ssh.isClosed());
+    expect(agent.saw).toHaveLength(1);
   });
 
   it("closes a connection whose link goes down", async () => {
-    const agent = await connectAgentClient(await projectSocket());
-    expect(await agent.ask([11])).toEqual([...IDENTITIES_ANSWER]);
+    const ssh = await connectAgentClient(await projectSocket());
+    expect(await ssh.ask([11])).toEqual(IDENTITIES_ANSWER);
 
     client.close("gone");
 
-    await waitFor(() => agent.isClosed());
+    await waitFor(() => ssh.isClosed() && agent.open.size === 0);
   });
 
   it("closes a connection that sends a length over the agent's ceiling", async () => {
-    const socketPath = await projectSocket();
-    const agent = await connectAgentClient(socketPath);
+    const ssh = await connectAgentClient(await projectSocket());
     const header = Buffer.alloc(4);
     header.writeUInt32BE(256 * 1024 + 1, 0);
 
-    sockets.at(-1)!.write(header);
+    ssh.socket.write(header);
 
-    await waitFor(() => agent.isClosed());
+    await waitFor(() => ssh.isClosed());
   });
 
-  it("reports the host's IdentityAgent and whether this computer has an agent", async () => {
+  it("reports the host's IdentityAgent as a terminal there sees it, and whether this computer's agent answers", async () => {
     expect(await shellSide.check(HOST_ID)).toEqual({
       localAgent: true,
       hostIdentityAgent: "SSH_AUTH_SOCK",
     });
   });
 
-  it("removes the project's socket when it stops", async () => {
-    const socketPath = await projectSocket();
+  it("reports no local agent for a missing socket or one its agent left behind", async () => {
+    // An agent that exits without closing its listener leaves the file behind.
+    const stale = path.join(dir, "stale.sock");
+    execFileSync(process.execPath, [
+      "-e",
+      `require("net").createServer().listen(${JSON.stringify(stale)}, () => process.exit(0))`,
+    ]);
+    expect((await fs.lstat(stale)).isSocket()).toBe(true);
 
-    await hostSide.dispose();
+    shellSide.dispose();
+    const missing = installShell(client, path.join(dir, "nothing-here.sock"));
+    expect((await missing.check(HOST_ID)).localAgent).toBe(false);
+    missing.dispose();
 
-    await expect(fs.lstat(socketPath)).rejects.toThrow();
+    const crashed = installShell(client, stale);
+    expect((await crashed.check(HOST_ID)).localAgent).toBe(false);
+  });
+
+  it("refuses to check a host that isn't in the list", async () => {
+    await expect(shellSide.check("nobody")).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });

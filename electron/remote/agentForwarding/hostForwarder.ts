@@ -8,7 +8,7 @@ import { createLogger } from "../../utils/logger.js";
 import { clearStaleSocket, prepareOwnerOnlyDir } from "../host/HostServer.js";
 import { assertSocketPathFits } from "../host/hostSocketPath.js";
 import type { LinkSession } from "../link/session.js";
-import { parseIdentityAgent, readSshConfig, type SshConfigReader } from "./identityAgent.js";
+import { readSshConfig, readTerminalIdentityAgent, type SshConfigReader } from "./identityAgent.js";
 import {
   AgentConfigurePayloadSchema,
   AgentForwardMethod,
@@ -70,6 +70,8 @@ export interface HostAgentForwarding {
    * when its driver isn't a Shell with forwarding on.
    */
   socketForSpawn(projectId: string): Promise<string | null>;
+  /** Whether the project's driver still forwards an agent, checked again right before a spawn. */
+  isForwarding(projectId: string): boolean;
   dispose(): Promise<void>;
 }
 
@@ -93,8 +95,9 @@ export function _resetIssuedAgentSocketsForTest(): void {
   issuedProjects.clear();
 }
 
+/** Short, so a long home folder on macOS still fits `sun_path`. */
 export function agentSocketName(projectId: string): string {
-  return `${crypto.createHash("sha256").update(projectId).digest("hex").slice(0, 24)}.sock`;
+  return `${crypto.createHash("sha256").update(projectId).digest("hex").slice(0, 16)}.sock`;
 }
 
 const FAILURE_FRAME = frameAgentMessage(AGENT_FAILURE_BODY);
@@ -137,8 +140,8 @@ export function installHostAgentForwarding(deps: HostAgentForwardingDeps): HostA
   const inspect = (): Promise<AgentInspectResult> => {
     const now = Date.now();
     if (inspected && now - inspected.at < INSPECT_CACHE_MS) return inspected.result;
-    const result = readConfig(INSPECTED_SSH_DESTINATION).then(
-      (dump) => ({ identityAgent: parseIdentityAgent(dump) }),
+    const result = readTerminalIdentityAgent(INSPECTED_SSH_DESTINATION, readConfig).then(
+      (identityAgent) => ({ identityAgent }),
       () => ({ identityAgent: null })
     );
     inspected = { at: now, result };
@@ -257,11 +260,14 @@ export function installHostAgentForwarding(deps: HostAgentForwardingDeps): HostA
         return null;
       }
     },
+    isForwarding: (projectId) => !disposed && liveRoute(projectId) !== null,
     async dispose() {
       if (disposed) return;
       disposed = true;
       for (const dispose of disposers.splice(0)) dispose();
       for (const connection of [...connections]) connection.close();
+      // A listen still under way sees `disposed` and closes its own server.
+      await Promise.allSettled([...listeners.values()]);
       const closing = [...servers.values()].map(
         (server) => new Promise<void>((resolve) => server.close(() => resolve()))
       );
@@ -287,7 +293,11 @@ class AgentConnection {
   /** A request reached the Shell, which may hold an agent connection for it. */
   private relayed = false;
   private closed = false;
+  /** The client stopped reading: nothing more is answered until it drains. */
+  private draining = false;
   private idle: ReturnType<typeof setTimeout> | null = null;
+  /** Withdraws a request the link hasn't sent yet, so a former driver never sees it. */
+  private readonly abort = new AbortController();
 
   constructor(
     readonly id: number,
@@ -308,6 +318,7 @@ class AgentConnection {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.abort.abort();
     if (this.idle) clearTimeout(this.idle);
     this.idle = null;
     this.socket.destroy();
@@ -345,12 +356,21 @@ class AgentConnection {
     this.pump();
   }
 
+  private write(frame: Buffer): void {
+    if (this.socket.write(frame)) return;
+    this.draining = true;
+    this.socket.once("drain", () => {
+      this.draining = false;
+      this.pump();
+    });
+  }
+
   private pump(): void {
-    if (this.closed || this.inFlight) return;
+    if (this.closed || this.inFlight || this.draining) return;
     const message = this.queue.shift();
     if (!message) return;
     if (this.route === null) {
-      this.socket.write(FAILURE_FRAME);
+      this.write(FAILURE_FRAME);
       this.pump();
       return;
     }
@@ -367,18 +387,19 @@ class AgentConnection {
       .call(
         AgentForwardMethod.REQUEST,
         { connectionId: this.id, message },
-        { timeoutMs: this.hooks.replyTimeoutMs }
+        { timeoutMs: this.hooks.replyTimeoutMs, signal: this.abort.signal }
       )
       .then(
         (result) => {
           const reply = AgentReplySchema.safeParse(result);
           if (this.closed) return;
-          if (!reply.success) {
+          // A signature for a driver that has since gone is not handed over.
+          if (!reply.success || !this.hooks.stillRoutes(this)) {
             this.close();
             return;
           }
           this.inFlight = false;
-          this.socket.write(frameAgentMessage(reply.data.message));
+          this.write(frameAgentMessage(reply.data.message));
           this.armIdle();
           this.pump();
         },

@@ -376,7 +376,6 @@ describe("HostRegistry", () => {
       const same = registry.update({
         hostId: host.id,
         connection: { kind: "ssh", target: "me@studio" },
-        forwardSshAgent: true,
       });
       expect(same.forwardSshAgent).toBe(true);
     });
