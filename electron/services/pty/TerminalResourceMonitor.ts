@@ -23,6 +23,12 @@ export class TerminalResourceMonitor {
   }
 
   private collectAndEmit(): void {
+    // A failed census still fires refresh callbacks, over the tree the last
+    // successful one left behind. Republishing that would read downstream as
+    // a new poll (the auto-restart startup count, the leak detector), so the
+    // last reading stands until a census succeeds again.
+    if (this.processTreeCache.getLastError() !== null) return;
+
     const terminals = this.ptyManager.getAll();
     const metrics: TerminalResourceBatchPayload = {};
 
@@ -45,7 +51,7 @@ export class TerminalResourceMonitor {
       this.sendEvent({
         type: "resource-metrics",
         metrics,
-        timestamp: Date.now(),
+        timestamp: this.processTreeCache.getLastRefreshTime(),
       });
     }
   }
