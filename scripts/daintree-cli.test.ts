@@ -121,6 +121,128 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh", () => {
     return { resources, link, argvFile };
   }
 
+  // A tarball install: no binary beside the script, so launching falls through
+  // to PATH, where the installed name is the wrapper itself (#17474).
+  function pathFallbackLayout() {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-cli-path-"));
+    roots.push(root);
+    const script = path.join(root, "res", "daintree-cli.sh");
+    fs.mkdirSync(path.dirname(script));
+    fs.copyFileSync(SCRIPT_SOURCE, script);
+    fs.chmodSync(script, 0o755);
+    const launches = path.join(root, "launches");
+    const argvFile = path.join(root, "argv");
+    const binDir = (name: string) => {
+      const dir = path.join(root, name);
+      fs.mkdirSync(dir);
+      return dir;
+    };
+    const app = (dir: string, name: string) => {
+      const binary = path.join(dir, name);
+      fs.writeFileSync(
+        binary,
+        `#!/usr/bin/env bash\necho "$0" >> ${JSON.stringify(launches)}\nprintf '%s\\0' "$@" > ${JSON.stringify(argvFile)}\n`,
+        { mode: 0o755 }
+      );
+      return binary;
+    };
+    const wrapperDir = binDir("wrapper-bin");
+    const link = path.join(wrapperDir, "daintree");
+    fs.symlinkSync(script, link);
+
+    const run = (pathDirs: string[]) => {
+      try {
+        execFileSync("bash", [link, projectDir], {
+          encoding: "utf-8",
+          stdio: ["ignore", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            APPDIR: "",
+            PATH: [...pathDirs, process.env.PATH ?? ""].join(path.delimiter),
+          },
+        });
+        return { code: 0, stderr: "" };
+      } catch (error) {
+        const failed = error as { status: number; stderr: string };
+        return { code: failed.status, stderr: failed.stderr };
+      }
+    };
+    // The recorder appends its own path, so a second launch would show as a second line.
+    const read = () => ({
+      binaries: fs.existsSync(launches)
+        ? fs.readFileSync(launches, "utf-8").split("\n").filter(Boolean)
+        : [],
+      argv: fs.existsSync(argvFile)
+        ? fs.readFileSync(argvFile, "utf-8").split("\0").filter(Boolean)
+        : [],
+    });
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 150));
+    // The launch is backgrounded, so wait for the recorder to finish writing.
+    const launched = async () => {
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline && !fs.existsSync(argvFile)) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      await settle();
+      return read();
+    };
+    const idle = async () => {
+      await settle();
+      return read();
+    };
+    return { wrapperDir, binDir, app, run, launched, idle };
+  }
+
+  // The fallback would reach a real install through the fixed package paths or
+  // PATH and launch it, so these only run where none exists (CI).
+  const appInstalled = [
+    "/opt/Daintree/daintree",
+    "/opt/Daintree/daintree-app",
+    ...(process.env.PATH ?? "")
+      .split(path.delimiter)
+      .flatMap((dir) => ["daintree", "daintree-app"].map((name) => path.join(dir, name))),
+  ].some((candidate) => {
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
+  describe.skipIf(process.platform !== "linux" || appInstalled)(
+    "PATH fallback with the wrapper installed on PATH",
+    () => {
+      it("skips the wrapper and launches the daintree-app after it exactly once", async () => {
+        const layout = pathFallbackLayout();
+        const binary = layout.app(layout.binDir("app-bin"), "daintree-app");
+        const result = layout.run([layout.wrapperDir, path.dirname(binary)]);
+        expect(result.code).toBe(0);
+        expect(await layout.launched()).toEqual({
+          binaries: [binary],
+          argv: [`--cli-path=${fs.realpathSync(projectDir)}`],
+        });
+      });
+
+      it("keeps looking past the wrapper for another match of the same name", async () => {
+        const layout = pathFallbackLayout();
+        const binary = layout.app(layout.binDir("app-bin"), "daintree");
+        const result = layout.run([layout.wrapperDir, path.dirname(binary)]);
+        expect(result.code).toBe(0);
+        expect((await layout.launched()).binaries).toEqual([binary]);
+      });
+
+      it("fails with an actionable message when the wrapper is the only match", async () => {
+        const layout = pathFallbackLayout();
+        const result = layout.run([layout.wrapperDir]);
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain("only match on PATH is this CLI wrapper");
+        expect(result.stderr).toContain("daintree-app");
+        expect((await layout.idle()).binaries).toEqual([]);
+      });
+    }
+  );
+
   it("reads the version from a packaged app.asar's build stamp", () => {
     const { resources, link } = packagedLinuxLayout();
     fs.writeFileSync(

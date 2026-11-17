@@ -160,6 +160,14 @@ if [[ "$(uname)" == "Darwin" ]]; then
 fi
 
 # --- Linux: locate the Daintree binary ---
+# `-ef` follows symlinks and compares device and inode, so the installed name (a
+# symlink to this script, or a copy of it) is never taken for the app: launching
+# it would re-run this script with `--cli-path=…` as its directory argument,
+# fail there, and still leave this process exiting 0.
+is_app_binary() {
+  [[ -n "$1" && -x "$1" ]] && ! [[ "$1" -ef "$SCRIPT_PATH" ]]
+}
+
 DAINTREE_BIN=""
 
 for candidate in \
@@ -169,24 +177,36 @@ for candidate in \
   "${APPDIR:-}/daintree-app" \
   "/opt/Daintree/daintree" \
   "/opt/Daintree/daintree-app"; do
-  if [[ -n "$candidate" && -x "$candidate" ]]; then
+  if is_app_binary "$candidate"; then
     DAINTREE_BIN="$candidate"
     break
   fi
 done
 
-# PATH lookup (last resort)
+# PATH lookup (last resort). Every match is checked, not just the first one
+# `command -v` returns, so a wrapper earlier on PATH doesn't shadow the app.
+WRAPPER_ON_PATH=""
 if [[ -z "$DAINTREE_BIN" ]]; then
   for command_name in daintree daintree-app; do
-    if command -v "$command_name" &>/dev/null; then
-      DAINTREE_BIN="$(command -v "$command_name")"
-      break
-    fi
+    while IFS= read -r candidate; do
+      if is_app_binary "$candidate"; then
+        DAINTREE_BIN="$candidate"
+        break 2
+      fi
+      if [[ "$candidate" -ef "$SCRIPT_PATH" ]]; then
+        WRAPPER_ON_PATH="$candidate"
+      fi
+    done < <(type -aP "$command_name" 2>/dev/null || true)
   done
 fi
 
 if [[ -z "$DAINTREE_BIN" ]]; then
-  echo "daintree: Daintree executable not found." >&2
+  if [[ -n "$WRAPPER_ON_PATH" ]]; then
+    echo "daintree: the only match on PATH is this CLI wrapper ($WRAPPER_ON_PATH), not the Daintree app." >&2
+    echo "daintree: Install Daintree under /opt/Daintree, or put its daintree or daintree-app executable on PATH." >&2
+  else
+    echo "daintree: Daintree executable not found." >&2
+  fi
   exit 1
 fi
 
