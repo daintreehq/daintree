@@ -44,7 +44,6 @@ Meanwhile the agent CLIs themselves now ship worktrees, subagents, session resum
 - **Daintree Assistant** — The user's own Claude Code or Codex, running in a terminal in the help panel, wired to Daintree's MCP tools, docs and runbooks. Orchestration context without a bespoke chat UI.
 - **Canopy** — A reader that ranks every agent by what it needs from you, quoting each screen as its evidence. On by default, and turned off or hidden from Settings. Reads on the user's own machine with a small open model that ships inside the app (#14448, #16415).
 - **Voice Input** — Hands-free delegation while monitoring other agents.
-- **Portal** — A tabbed dock for web-based AI agent UIs alongside terminal agents.
 
 **Brand Voice:** "Calm partner" — helpful, not flashy. Reduces cognitive load. Opinionated defaults. Quiet when nothing needs you; it never praises the user for doing their work and never guilts them for not doing it (#11182, #12840).
 
@@ -217,7 +216,7 @@ Each row is a decision that was actually made, with the issue or PR behind it. W
 | --- | --- | --- |
 | Freeform panel layouts | **REJECT** | Automatic, size-driven layout with dock and maximize is the right shape for monitoring a fleet (#4768). |
 | Integrated Browser | **APPROVE** | Localhost preview, console capture, agent-app debugging. Hosts beyond localhost and private networks need the user's approval first. Not a general-purpose browser. |
-| Portal (Web Agent Dock) | **APPROVE** | Bridges CLI agents and web agent UIs. Not for viewing GitHub issues or PRs (#9103). |
+| Portal (Web Agent Dock) | **REMOVED** | The embedded web-chat dock is retired (#17241, recorded in #17247). Vendor desktop apps now do the web-chat job and handle sign-in, passkeys and uploads that an embedded Electron view handles badly, so embedded sign-in was brittle, and the native-view host (z-order against dialogs, offscreen parking, restore and eviction races, focus handoff) was costly to keep. Kept, in a toolbar launcher with no embedded browser: project and global links, and the cross-worktree dev servers. External addresses open in the system browser and local ones in Daintree's existing preview and browser panels. The launcher serves Worktree Orchestration (dev servers across worktrees) and Context In, Review Out (links, and the active worktree's pull request and checks), and opens local addresses in the Panel Grid's existing panels. General-purpose browsing stays out. Not for viewing GitHub issues or PRs (#9103). |
 | Notes Panel | **REJECT (core)** | Removed in #5629: it drifted into an app-within-an-app and the save bug was architectural. A notes plugin is fine (#5538); in core, Markdown files in the worktree cover it. |
 | Terminal Scratchpad | **APPROVE** | Not the Notes Panel. Scoped to one terminal and disposable by design: the notes ride that terminal's own record, move with it across worktrees, survive a restart, and are deleted when the terminal is permanently removed. No document list, no cross-terminal store, no agent-facing surface (#12835). |
 | Project onboarding wizard | **REMOVED** | Open the folder, show the code immediately, decorate later (#6750). |
