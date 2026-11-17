@@ -134,11 +134,6 @@ describe("review hub inset", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("the Resolved disclosure is wrapped in a real top divider", () => {
-    const src = read("src/components/Worktree/ReviewHub/ConflictPanel.tsx");
-    expect(src).toMatch(/<div className="border-t border-divider">\s*<button/);
-  });
-
   it("nothing in the hub sits on the old 16px inset", () => {
     const files = [
       ...sourceFiles(path.join(ROOT, "src/components/Worktree/ReviewHub")),

@@ -1144,6 +1144,7 @@ describe("DiffPane — file keys across the whole pane (#16643)", () => {
 
     const footer = screen.getByTestId("diff-pane-footer");
     expect(footer.classList.contains("px-2")).toBe(true);
+    expect(footer.classList.contains("border-t")).toBe(true);
     expect(footer.classList.contains("border-divider")).toBe(true);
     expect(footer.classList.contains("border-border-strong")).toBe(false);
   });

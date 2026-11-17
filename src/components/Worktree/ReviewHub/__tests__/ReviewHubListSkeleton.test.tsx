@@ -16,6 +16,8 @@ describe("ReviewHubListSkeleton", () => {
     expect(band.classList.contains("border-divider")).toBe(true);
     // The loaded label's line, not a free-floating 32px bone.
     expect(band.classList.contains("text-2xs")).toBe(true);
+    // Without the row the two bones stack and double the band's height.
+    expect(band.firstElementChild!.classList.contains("flex")).toBe(true);
     const bones = band.querySelectorAll(".h-\\[1lh\\]");
     expect(bones).toHaveLength(2);
   });
