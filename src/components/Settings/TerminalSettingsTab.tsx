@@ -1,4 +1,4 @@
-import { Fragment, useState, useMemo, useEffect } from "react";
+import { Fragment, useState, useMemo, useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { notify } from "@/lib/notify";
@@ -161,6 +161,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
   const osc52ClipboardEnabled = useOsc52ClipboardStore((state) => state.enabled);
   const setOsc52ClipboardEnabled = useOsc52ClipboardStore((state) => state.setEnabled);
   const [osc52Saving, setOsc52Saving] = useState(false);
+  const osc52InFlight = useRef(false);
 
   const twoPaneSplitConfig = useTwoPaneSplitStore((state) => state.config);
   const setTwoPaneSplitEnabled = useTwoPaneSplitStore((state) => state.setEnabled);
@@ -404,18 +405,22 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
   // Turning it off takes effect at once; turning it on waits for the save, so
   // a refused save never leaves programs writing the clipboard here. One save
-  // at a time, so a late failure can't roll back over a newer success.
+  // at a time, Retry included, so a late failure can't roll back over a newer
+  // success.
   const setOsc52Clipboard = (value: boolean) => {
     const previous = osc52ClipboardEnabled;
     void persist(
       "clipboard",
       async () => {
+        if (osc52InFlight.current) return;
+        osc52InFlight.current = true;
         setOsc52Saving(true);
         try {
           if (!value) setOsc52ClipboardEnabled(false);
           await window.electron.terminalConfig.setOsc52ClipboardEnabled(value);
           setOsc52ClipboardEnabled(value);
         } finally {
+          osc52InFlight.current = false;
           setOsc52Saving(false);
         }
       },

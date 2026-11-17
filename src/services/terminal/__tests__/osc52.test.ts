@@ -66,8 +66,11 @@ describe("parseOsc52", () => {
   });
 
   it("refuses a payload past the decode cap before decoding it", () => {
+    const decode = vi.spyOn(globalThis, "atob");
     const payload = "A".repeat(Math.ceil(((OSC52_MAX_TEXT_BYTES + 3) * 4) / 3) + 8);
     expect(parseOsc52(`c;${payload}`)).toEqual({ kind: "invalid", reason: "too-large" });
+    expect(decode).not.toHaveBeenCalled();
+    decode.mockRestore();
   });
 });
 

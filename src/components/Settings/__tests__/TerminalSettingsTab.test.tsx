@@ -280,6 +280,23 @@ describe("TerminalSettingsTab OSC 52 clipboard switch", () => {
     expect(setOsc52ClipboardEnabled).toHaveBeenLastCalledWith(false);
   });
 
+  it("ignores Retry while a retried save is still pending", async () => {
+    setOsc52ClipboardEnabled.mockRejectedValueOnce(new Error("IPC down"));
+    renderSubtab("clipboard");
+    await act(async () => {
+      fireEvent.click(osc52Switch());
+    });
+    const retry = screen.getByRole("button", { name: "Retry" });
+    setOsc52ClipboardEnabled.mockReturnValueOnce(new Promise<void>(() => {}));
+    await act(async () => {
+      fireEvent.click(retry);
+    });
+    await act(async () => {
+      fireEvent.click(retry);
+    });
+    expect(setOsc52ClipboardEnabled).toHaveBeenCalledTimes(2);
+  });
+
   it("stays off when the save is refused", async () => {
     setOsc52ClipboardEnabled.mockRejectedValueOnce(new Error("IPC down"));
     renderSubtab("clipboard");
