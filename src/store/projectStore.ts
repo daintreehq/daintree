@@ -1357,7 +1357,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
               ? rollbackOptimisticProjectUpdate(
                   state.currentProject,
                   write,
-                  state.projects.find((p) => p.id === id)
+                  projects.find((p) => p.id === id)
                 )
               : state.currentProject,
           error: "Failed to update project",

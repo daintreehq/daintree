@@ -50,10 +50,10 @@ export function applyOptimisticProjectUpdate(
  * takes the field back, a saved one leaves its value in place. Fields a newer
  * write owns stay, with `write` spliced out of their history so a later failure
  * of that newer write restores past it. With `row` given (for `currentProject`:
- * the list row before its own rollback), a field whose row no longer carries
- * this write's claim follows the row instead, since a reload replaced it with
- * Main's value while this copy kept its claims. Returns the same object when
- * nothing was restored.
+ * its list row, already rolled back), owned fields copy the row instead of this
+ * object's own history: reloads replace list rows but never `currentProject`,
+ * so that history can predate Main's current value. Returns the same object
+ * when nothing was restored.
  */
 export function rollbackOptimisticProjectUpdate(
   project: Project,
@@ -74,11 +74,10 @@ export function rollbackOptimisticProjectUpdate(
     let hasValue: boolean;
     let value: unknown;
     let owner: FieldClaim | undefined;
-    const rowClaim = rowClaims?.get(key);
-    if (row && rowClaim?.write !== write) {
+    if (row) {
       hasValue = Object.hasOwn(row, key);
       value = (row as unknown as Record<string, unknown>)[key];
-      owner = rowClaim;
+      owner = rowClaims?.get(key);
     } else {
       hasValue = claim.hadPrior;
       value = claim.prior;

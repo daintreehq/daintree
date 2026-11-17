@@ -378,7 +378,7 @@ describe("projectStore.updateProject rollback", () => {
     expect(useProjectStore.getState().currentProject).toBeNull();
   });
 
-  it("keeps an older pending edit on the current project when a reload preceded the failed write", async () => {
+  it("keeps the current project on the list row when an older edit is still pending past a reload", async () => {
     const calls = holdUpdates();
     // Hold the missing-folder check so its follow-up reload can't replace the
     // row again after the second write lands.
@@ -395,12 +395,36 @@ describe("projectStore.updateProject rollback", () => {
     calls[1]!.reject(new Error("nope"));
     await failed(second);
     expect(project("a")?.name).toBe("Alpha");
-    expect(useProjectStore.getState().currentProject?.name).toBe("Alpha 2");
-
-    calls[0]!.reject(new Error("nope"));
-    await failed(first);
     expect(useProjectStore.getState().currentProject?.name).toBe("Alpha");
+
+    calls[0]!.resolve();
+    await first;
+    expect(project("a")?.name).toBe("Alpha 2");
+    expect(useProjectStore.getState().currentProject?.name).toBe("Alpha 2");
   });
+
+  it.each([
+    ["older", [0, 1]],
+    ["newer", [1, 0]],
+  ] as const)(
+    "lands the current project on Main's value when both writes around a reload fail, %s first",
+    async (_order, rejectOrder) => {
+      const calls = holdUpdates();
+      projectClientMock.checkMissing.mockReturnValueOnce(deferred<void>().promise);
+      const writes = [useProjectStore.getState().updateProject("a", { name: "Alpha 2" })];
+
+      server.set("a", { ...server.get("a")!, name: "Alpha Saved" });
+      await useProjectStore.getState().loadProjects();
+      writes.push(useProjectStore.getState().updateProject("a", { name: "Alpha 3" }));
+
+      for (const index of rejectOrder) {
+        calls[index]!.reject(new Error("nope"));
+        await failed(writes[index]!);
+      }
+      expect(project("a")?.name).toBe("Alpha Saved");
+      expect(useProjectStore.getState().currentProject?.name).toBe("Alpha Saved");
+    }
+  );
 
   it("restores a value the write explicitly cleared", async () => {
     useProjectStore.setState((state) => ({
