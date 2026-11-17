@@ -469,7 +469,12 @@ describe("bookmark mutator handlers", () => {
     const list = handlerFor(CHANNELS.AGENT_SESSION_LIST);
 
     await list({}, { worktreeId: "wt-1", projectId: "proj-1" });
-    expect(m.listAgentSessionsOrThrow).toHaveBeenLastCalledWith("wt-1", expect.any(String), 30, "proj-1");
+    expect(m.listAgentSessionsOrThrow).toHaveBeenLastCalledWith(
+      "wt-1",
+      expect.any(String),
+      30,
+      "proj-1"
+    );
 
     // The ordinary worktree-scoped path: a handler that only forwarded
     // worktreeId when projectId was also present would break this.
