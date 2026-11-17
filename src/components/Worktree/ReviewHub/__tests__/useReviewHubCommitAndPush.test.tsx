@@ -246,6 +246,8 @@ describe("useReviewHubCommitAndPush — first commit (#17588)", () => {
 
   afterEach(() => {
     useGitPushConfirmStore.setState({ requestConfirmation: originalRequestConfirmation });
+    // A failed assertion must not leave a review pending for the next test.
+    useGitPushConfirmStore.getState().resolveConfirmation(null);
   });
 
   function deferred<T>() {
@@ -302,6 +304,12 @@ describe("useReviewHubCommitAndPush — first commit (#17588)", () => {
     expect(requestConfirmation).toHaveBeenCalledWith(PATH, { yieldToPending: true });
     expect(push).toHaveBeenCalledTimes(1);
     expect(push).toHaveBeenCalledWith(PATH, undefined, undefined, FIRST_PUSH);
+    expect(push).toHaveBeenCalledWith(
+      PATH,
+      undefined,
+      undefined,
+      expect.objectContaining({ headOid: "b".repeat(40) })
+    );
   });
 
   it("keeps the commit and pushes nothing when the review is declined", async () => {
