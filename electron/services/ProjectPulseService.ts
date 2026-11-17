@@ -17,6 +17,8 @@ interface ComputedPulse {
   pulse: ProjectPulse;
   headSha: string | null;
   headBranch: string | undefined;
+  day: string;
+  historyLoadedAt: number;
   // False when a supplementary read failed and the pulse carries a fallback
   // for it: caching would pin that fallback until HEAD moves or the TTL ends.
   cacheable: boolean;
@@ -27,6 +29,31 @@ interface CacheEntry {
   timestamp: number;
   headSha: string | null;
   headBranch: string | undefined;
+  day: string;
+}
+
+// Range-independent facts about the history reachable from one HEAD: the project's start
+// (earliest root) and every local day with a commit, which the streak is counted from at
+// compute time so day rollover needs no new walk.
+interface HistoryFacts {
+  firstCommitDate: Date | null;
+  // Null when the walk failed: the streak is then unknown, never zero.
+  commitDays: ReadonlySet<string> | null;
+}
+
+interface HistoryEntry {
+  headSha: string;
+  timeZone: string;
+  facts: HistoryFacts;
+  // When the walks started: the age a Pulse built on these facts inherits.
+  timestamp: number;
+}
+
+interface HistoryResult {
+  facts: HistoryFacts;
+  loadedAt: number;
+  // False when a walk failed and its fallback stands in.
+  complete: boolean;
 }
 
 interface HeadProbeResult {
@@ -45,6 +72,11 @@ const PROBE_ERROR_SENTINEL = "__probe-error__";
 
 const CACHE_TTL_MS = 60_000;
 const MAX_CACHE_SIZE = 100;
+const MAX_COMMITS_FOR_STREAK = 50_000;
+// The history walks depend only on HEAD, but fetch --deepen/--unshallow, replace refs and
+// grafts can change what HEAD reaches without moving it, so reuse keeps the Pulse's own
+// freshness window rather than living as long as the SHA.
+const HISTORY_TTL_MS = CACHE_TTL_MS;
 const VERBOSE_PROJECT_PULSE_LOGGING = process.env.DAINTREE_VERBOSE === "1";
 
 const NO_COMMITS_PATTERNS = [
@@ -114,8 +146,29 @@ function countInclusiveLocalDays(first: Date, last: Date): number {
   return Math.round((lastUtc - firstUtc) / (1000 * 60 * 60 * 24)) + 1;
 }
 
-function getDateCells(rangeDays: PulseRangeDays): Array<{ date: string; isToday: boolean }> {
-  const todayMidnight = getLocalMidnight(new Date());
+function getLocalTimeZone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
+function countStreakDays(commitDays: ReadonlySet<string>, todayMidnight: Date): number {
+  // Count back from today, or from yesterday when today has no commits yet.
+  const cursor = new Date(todayMidnight);
+  if (!commitDays.has(formatLocalDay(cursor))) {
+    cursor.setDate(cursor.getDate() - 1);
+  }
+
+  let streak = 0;
+  while (commitDays.has(formatLocalDay(cursor))) {
+    streak++;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return streak;
+}
+
+function getDateCells(
+  rangeDays: PulseRangeDays,
+  todayMidnight: Date = getLocalMidnight(new Date())
+): Array<{ date: string; isToday: boolean }> {
   const todayString = formatLocalDay(todayMidnight);
 
   const cells: Array<{ date: string; isToday: boolean }> = [];
@@ -133,6 +186,12 @@ export class ProjectPulseService {
   private cache = new Map<string, CacheEntry>();
   private inFlight = new Map<string, Promise<ProjectPulse>>();
   private abortControllers = new Map<string, AbortController>();
+  private historyCache = new Map<string, HistoryEntry>();
+  private historyInFlight = new Map<string, Promise<HistoryResult>>();
+
+  private getHistoryKey(worktreeId: string, worktreePath: string): string {
+    return `${worktreeId}:${worktreePath}`;
+  }
 
   private getCacheKey(options: GetProjectPulseOptions): string {
     const includeDelta = options.includeDelta ?? true;
@@ -166,6 +225,13 @@ export class ProjectPulseService {
     );
     inFlightToDelete.forEach((key) => this.inFlight.delete(key));
 
+    for (const key of Array.from(this.historyCache.keys())) {
+      if (key.startsWith(`${worktreeId}:`)) this.historyCache.delete(key);
+    }
+    for (const key of Array.from(this.historyInFlight.keys())) {
+      if (key.startsWith(`${worktreeId}:`)) this.historyInFlight.delete(key);
+    }
+
     logProjectPulseDebug("ProjectPulse cache invalidated", {
       worktreeId,
       keysDeleted: keysToDelete.length,
@@ -186,7 +252,12 @@ export class ProjectPulseService {
       // await above, deleting the entry. Use the freshly-fetched entry so
       // we don't serve data that was just invalidated.
       const fresh = this.cache.get(cacheKey);
-      if (fresh === cached && probe.sha === cached.headSha && probe.branch === cached.headBranch) {
+      if (
+        fresh === cached &&
+        probe.sha === cached.headSha &&
+        probe.branch === cached.headBranch &&
+        cached.day === formatLocalDay(new Date())
+      ) {
         logProjectPulseDebug("ProjectPulse cache hit", { cacheKey });
         return cached.pulse;
       }
@@ -214,16 +285,17 @@ export class ProjectPulseService {
 
     const promise = (async () => {
       try {
-        const { pulse, headSha, headBranch, cacheable } = await this.computePulse(
-          options,
-          controller!.signal
-        );
+        const { pulse, headSha, headBranch, day, historyLoadedAt, cacheable } =
+          await this.computePulse(options, controller!.signal);
         if (cacheable && !controller!.signal.aborted) {
           this.cache.set(cacheKey, {
             pulse,
-            timestamp: Date.now(),
+            // A Pulse built on reused history expires with that history, so switching ranges
+            // can't stretch how long a walk's result is served.
+            timestamp: Math.min(Date.now(), historyLoadedAt),
             headSha,
             headBranch,
+            day,
           });
           this.pruneCache();
         }
@@ -313,6 +385,9 @@ export class ProjectPulseService {
     // stderr, which the lenient profile resolves as an empty, zero-commit log.
     const git = await createStrictExitGit(worktreePath, signal);
     const startTime = Date.now();
+    // One calendar day for the whole compute, so the heatmap, streak and age agree across midnight.
+    const todayMidnight = getLocalMidnight(new Date(startTime));
+    const day = formatLocalDay(todayMidnight);
 
     const isRepo = await git.checkIsRepo();
     if (!isRepo) {
@@ -331,6 +406,8 @@ export class ProjectPulseService {
           pulse: this.createEmptyPulse(options),
           headSha: null,
           headBranch: undefined,
+          day,
+          historyLoadedAt: startTime,
           cacheable: true,
         };
       }
@@ -354,15 +431,14 @@ export class ProjectPulseService {
     }
 
     // Run operations in parallel for performance
-    const [heatmapResult, recentCommitsResult, deltaResult, firstCommitResult, fullStreakResult] =
+    const [heatmapResult, recentCommitsResult, deltaResult, historyResult] =
       await Promise.allSettled([
-        this.computeHeatmap(git, rangeDays),
+        this.computeHeatmap(git, rangeDays, todayMidnight),
         includeRecentCommits ? this.getRecentCommits(git, 8) : Promise.resolve([]),
         includeDelta && branch
           ? this.getBranchDelta(git, mainBranch, branch)
           : Promise.resolve(null),
-        this.getFirstCommitDate(git),
-        this.calculateFullStreak(git),
+        this.getHistoryFacts(git, options, headSha, signal),
       ]);
 
     // HEAD resolved, so this repository has history: a failed read of it is a
@@ -380,35 +456,21 @@ export class ProjectPulseService {
     const recentCommits = recentCommitsResult.value;
     const deltaToMain = deltaResult.status === "fulfilled" ? deltaResult.value : undefined;
 
-    let cacheable = true;
+    const history = historyResult.status === "fulfilled" ? historyResult.value : null;
+    const cacheable = history?.complete ?? false;
     // A failed root read keeps the full-window denominator and skips the
     // before-project marking, as a shallow clone does, but isn't cached.
-    let firstCommitDate: Date | null = null;
-    if (firstCommitResult.status === "fulfilled") {
-      firstCommitDate = firstCommitResult.value;
-    } else {
-      cacheable = false;
-      logReadFailure("Failed to get first commit date", firstCommitResult.reason, worktreeId);
-    }
+    const firstCommitDate = history?.facts.firstCommitDate ?? null;
     // Unknown, not zero: the streak is optional, so consumers leave it out.
-    let currentStreakDays: number | undefined;
-    if (fullStreakResult.status === "fulfilled") {
-      currentStreakDays = fullStreakResult.value;
-    } else {
-      cacheable = false;
-      logReadFailure(
-        "Failed to get commit timestamps for full streak",
-        fullStreakResult.reason,
-        worktreeId
-      );
-    }
+    const commitDays = history?.facts.commitDays;
+    const currentStreakDays = commitDays ? countStreakDays(commitDays, todayMidnight) : undefined;
 
     // Mark cells before project start and calculate project age
     let projectAgeDays: number = rangeDays;
     if (firstCommitDate) {
       const firstCommitDay = formatLocalDay(firstCommitDate);
 
-      const daysSinceFirst = countInclusiveLocalDays(firstCommitDate, new Date());
+      const daysSinceFirst = countInclusiveLocalDays(firstCommitDate, todayMidnight);
       projectAgeDays = Math.min(daysSinceFirst, rangeDays);
 
       // Mark cells before project started
@@ -446,11 +508,22 @@ export class ProjectPulseService {
       durationMs: Date.now() - startTime,
     });
 
-    return { pulse, headSha, headBranch: branch, cacheable };
+    return {
+      pulse,
+      headSha,
+      headBranch: branch,
+      day,
+      historyLoadedAt: history?.loadedAt ?? startTime,
+      cacheable,
+    };
   }
 
-  private async computeHeatmap(git: SimpleGit, rangeDays: PulseRangeDays): Promise<HeatCell[]> {
-    const dateCells = getDateCells(rangeDays);
+  private async computeHeatmap(
+    git: SimpleGit,
+    rangeDays: PulseRangeDays,
+    todayMidnight: Date
+  ): Promise<HeatCell[]> {
+    const dateCells = getDateCells(rangeDays, todayMidnight);
     const since = dateCells[0]?.date;
     if (!since) {
       return [];
@@ -523,8 +596,8 @@ export class ProjectPulseService {
     return cells;
   }
 
-  private createEmptyHeatmap(rangeDays: PulseRangeDays): HeatCell[] {
-    const dateCells = getDateCells(rangeDays);
+  private createEmptyHeatmap(rangeDays: PulseRangeDays, todayMidnight?: Date): HeatCell[] {
+    const dateCells = getDateCells(rangeDays, todayMidnight);
     const cells: HeatCell[] = [];
 
     for (const { date, isToday } of dateCells) {
@@ -684,26 +757,116 @@ export class ProjectPulseService {
     }
   }
 
-  private async calculateFullStreak(git: SimpleGit): Promise<number> {
-    const MAX_COMMITS_FOR_STREAK = 50_000;
+  // Shared by every range on the same HEAD: a range switch only re-reads the heatmap window.
+  private async getHistoryFacts(
+    git: SimpleGit,
+    options: GetProjectPulseOptions,
+    headSha: string | null,
+    signal?: AbortSignal
+  ): Promise<HistoryResult> {
+    if (!headSha) {
+      const loadedAt = Date.now();
+      return { ...(await this.loadHistoryFacts(git, "HEAD", options.worktreeId)), loadedAt };
+    }
 
+    const key = this.getHistoryKey(options.worktreeId, options.worktreePath);
+    const timeZone = getLocalTimeZone();
+    const cached = this.historyCache.get(key);
+    if (
+      !options.forceRefresh &&
+      cached &&
+      cached.headSha === headSha &&
+      cached.timeZone === timeZone &&
+      Date.now() - cached.timestamp < HISTORY_TTL_MS
+    ) {
+      return { facts: cached.facts, loadedAt: cached.timestamp, complete: true };
+    }
+
+    const inFlightKey = `${key}:${headSha}:${timeZone}`;
+    const existing = this.historyInFlight.get(inFlightKey);
+    if (existing) {
+      return existing;
+    }
+
+    const loadedAt = Date.now();
+    const promise = (async (): Promise<HistoryResult> => {
+      const { facts, complete } = await this.loadHistoryFacts(git, headSha, options.worktreeId);
+      // invalidate() aborts the signal and drops this flight, so an aborted or superseded load
+      // never lands in the cache; a partial load is served once and walked again next time.
+      if (complete && !signal?.aborted && this.historyInFlight.get(inFlightKey) === promise) {
+        this.historyCache.set(key, { headSha, timeZone, facts, timestamp: loadedAt });
+        this.pruneHistoryCache();
+      }
+      return { facts, loadedAt, complete };
+    })();
+
+    this.historyInFlight.set(inFlightKey, promise);
+    try {
+      return await promise;
+    } finally {
+      if (this.historyInFlight.get(inFlightKey) === promise) {
+        this.historyInFlight.delete(inFlightKey);
+      }
+    }
+  }
+
+  private pruneHistoryCache(): void {
+    const now = Date.now();
+    for (const [key, entry] of Array.from(this.historyCache.entries())) {
+      if (now - entry.timestamp >= HISTORY_TTL_MS) this.historyCache.delete(key);
+    }
+    if (this.historyCache.size <= MAX_CACHE_SIZE) return;
+    const entries = Array.from(this.historyCache.entries());
+    entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
+    for (const [key] of entries.slice(0, entries.length - MAX_CACHE_SIZE)) {
+      this.historyCache.delete(key);
+    }
+  }
+
+  // Both walks start from the SHA the compute resolved, so a checkout between commands can't
+  // file another commit's history under it.
+  private async loadHistoryFacts(
+    git: SimpleGit,
+    rev: string,
+    worktreeId: string
+  ): Promise<{ facts: HistoryFacts; complete: boolean }> {
+    const [firstCommitResult, commitDaysResult] = await Promise.allSettled([
+      this.loadFirstCommitDate(git, rev),
+      this.loadCommitDays(git, rev),
+    ]);
+
+    if (firstCommitResult.status === "rejected") {
+      logReadFailure("Failed to get first commit date", firstCommitResult.reason, worktreeId);
+    }
+    if (commitDaysResult.status === "rejected") {
+      logReadFailure(
+        "Failed to get commit timestamps for full streak",
+        commitDaysResult.reason,
+        worktreeId
+      );
+    }
+
+    return {
+      facts: {
+        firstCommitDate: firstCommitResult.status === "fulfilled" ? firstCommitResult.value : null,
+        commitDays: commitDaysResult.status === "fulfilled" ? commitDaysResult.value : null,
+      },
+      complete: firstCommitResult.status === "fulfilled" && commitDaysResult.status === "fulfilled",
+    };
+  }
+
+  private async loadCommitDays(git: SimpleGit, rev: string): Promise<Set<string>> {
     const output = await git.raw([
       "log",
       `--max-count=${MAX_COMMITS_FOR_STREAK}`,
       "--pretty=format:%ct",
+      rev,
     ]);
 
-    if (!output.trim()) {
-      return 0;
-    }
-
-    // Group commits by local calendar day
-    const commitsByDay = new Map<string, number>();
+    const commitDays = new Set<string>();
     const lines = output.split("\n").filter(Boolean);
 
-    // Detect if we hit the commit limit (may truncate streak for high-volume repos)
-    const hitCommitLimit = lines.length === MAX_COMMITS_FOR_STREAK;
-    if (hitCommitLimit) {
+    if (lines.length === MAX_COMMITS_FOR_STREAK) {
       logProjectPulseDebug("Full streak calculation hit commit limit", {
         commitCount: MAX_COMMITS_FOR_STREAK,
         note: "Streak may be undercounted for high-volume repositories",
@@ -713,38 +876,13 @@ export class ProjectPulseService {
     for (const line of lines) {
       const timestamp = parseInt(line, 10) * 1000;
       if (isNaN(timestamp)) continue;
-      const date = formatLocalDay(new Date(timestamp));
-      commitsByDay.set(date, (commitsByDay.get(date) || 0) + 1);
+      commitDays.add(formatLocalDay(new Date(timestamp)));
     }
 
-    // Count consecutive days backward from today (using local midnight for consistency)
-    let streak = 0;
-    const currentDate = getLocalMidnight(new Date());
-    const todayStr = formatLocalDay(currentDate);
-
-    // Check if today has commits - if not, start from yesterday
-    const todayCount = commitsByDay.get(todayStr) || 0;
-    if (todayCount === 0) {
-      currentDate.setDate(currentDate.getDate() - 1);
-    }
-
-    // Count the streak
-    while (true) {
-      const dateKey = formatLocalDay(currentDate);
-      const commitCount = commitsByDay.get(dateKey) || 0;
-
-      if (commitCount > 0) {
-        streak++;
-        currentDate.setDate(currentDate.getDate() - 1);
-      } else {
-        break;
-      }
-    }
-
-    return streak;
+    return commitDays;
   }
 
-  private async getFirstCommitDate(git: SimpleGit): Promise<Date | null> {
+  private async loadFirstCommitDate(git: SimpleGit, rev: string): Promise<Date | null> {
     // Shallow clones graft the boundary commit as a parent-less root, which would
     // make rev-list --max-parents=0 return the boundary SHA (often only days old)
     // instead of the historical root. Bail so the caller skips isBeforeProject culling.
@@ -756,7 +894,7 @@ export class ProjectPulseService {
     // Merging unrelated histories leaves several reachable roots, and rev-list prints
     // them newest first, so the project's start is the earliest root timestamp rather
     // than whichever line comes first. Each line is "<committer timestamp> <sha>".
-    const rootsOut = await git.raw(["rev-list", "--max-parents=0", "--timestamp", "HEAD"]);
+    const rootsOut = await git.raw(["rev-list", "--max-parents=0", "--timestamp", rev]);
 
     let earliest: number | null = null;
     for (const line of rootsOut.split("\n")) {
