@@ -52,10 +52,12 @@ function captured(captureId: string): ReviewMarkCaptureOutcome {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((r) => {
-    resolve = r;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 const getStagingStatus = vi.fn<(path: string) => Promise<StagingStatus>>();
@@ -236,6 +238,65 @@ describe("useReviewHubStatus opening read", () => {
     expect(marks.capture).toHaveBeenCalledTimes(3);
     expect(getStagingStatus).toHaveBeenCalledTimes(2);
     expect(result.current.statusCapture?.capture.captureId).toBe("c3");
+    expect(result.current.loading).toBe(false);
+  });
+});
+
+describe("useReviewHubStatus failed reads", () => {
+  const newer: StagingStatus = { ...status, currentBranch: "newer" };
+
+  it("keeps a newer background success over an older foreground read that rejects", async () => {
+    marks.available = false;
+    const foreground = deferred<StagingStatus>();
+    getStagingStatus.mockReturnValueOnce(foreground.promise);
+    const { result } = renderStatus();
+    expect(result.current.loading).toBe(true);
+
+    getStagingStatus.mockResolvedValueOnce(newer);
+    act(() => result.current.readWithCapture());
+    await advance(0);
+    expect(result.current.status?.currentBranch).toBe("newer");
+
+    await act(async () => foreground.reject(new Error("git status failed")));
+
+    expect(result.current.status?.currentBranch).toBe("newer");
+    expect(result.current.statusIsFresh).toBe(true);
+    expect(result.current.loadError).toBeNull();
+    expect(result.current.loading).toBe(false);
+  });
+
+  it("still shows a foreground failure that nothing newer answered", async () => {
+    marks.available = false;
+    const foreground = deferred<StagingStatus>();
+    getStagingStatus.mockReturnValueOnce(foreground.promise);
+    const { result } = renderStatus();
+
+    await act(async () => foreground.reject(new Error("git status failed")));
+
+    expect(result.current.loadError).toBe("git status failed");
+    expect(result.current.loading).toBe(false);
+  });
+
+  it("keeps a held Refresh's failure for another worktree out of the open one", async () => {
+    marks.available = false;
+    const { result, rerender } = renderHook(
+      ({ path }: { path: string }) =>
+        useReviewHubStatus({ isOpen: true, worktreePath: path, worktreeId: "wt-1" }),
+      { initialProps: { path: WT } }
+    );
+    await advance(0);
+    // A staging action awaiting its git call holds this worktree's `refresh`.
+    const heldRefresh = result.current.refresh;
+
+    rerender({ path: "/repo/other" });
+    await advance(0);
+    expect(result.current.loadError).toBeNull();
+
+    getStagingStatus.mockRejectedValueOnce(new Error("not a git repository"));
+    await act(async () => heldRefresh());
+
+    expect(getStagingStatus).toHaveBeenLastCalledWith(WT);
+    expect(result.current.loadError).toBeNull();
     expect(result.current.loading).toBe(false);
   });
 });
