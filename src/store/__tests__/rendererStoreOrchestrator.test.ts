@@ -632,7 +632,8 @@ describe("rendererStoreOrchestrator", () => {
         panelIds: [...state.panelIds, ...panels.map((added) => added.id)],
       });
     };
-    const detect = (id: string) => __test_simulateArtifactDetected(id, [lateArtifact]);
+    const detect = (id: string, artifactId = "late") =>
+      __test_simulateArtifactDetected(id, [{ ...lateArtifact, id: artifactId }]);
 
     beforeEach(() => {
       __test_resetArtifactStore();
@@ -646,22 +647,27 @@ describe("rendererStoreOrchestrator", () => {
       addPanels(panel("kept", "terminal"));
       expect(detect("kept")).toBe(true);
 
+      const retired: string[] = [];
       for (let i = 0; i < 40; i++) {
+        const ids = [`term-${i}`, `browser-${i}`, `preview-${i}`];
         addPanels(
-          panel(`term-${i}`, "terminal"),
-          panel(`browser-${i}`, "browser"),
-          panel(`preview-${i}`, "dev-preview")
+          panel(ids[0]!, "terminal"),
+          panel(ids[1]!, "browser"),
+          panel(ids[2]!, "dev-preview")
         );
-        expect(detect(`term-${i}`)).toBe(true);
-        usePanelStore.getState().removePanel(`term-${i}`);
-        usePanelStore.getState().removePanel(`browser-${i}`);
-        usePanelStore.getState().removePanel(`preview-${i}`);
+        for (const id of ids) {
+          expect(detect(id, "early")).toBe(true);
+          usePanelStore.getState().removePanel(id);
+          expect(__test_getArtifactsFor(id)).toBeUndefined();
+        }
+        retired.push(...ids);
       }
 
-      for (let i = 0; i < 40; i++) {
-        expect(detect(`term-${i}`)).toBe(false);
-        expect(detect(`browser-${i}`)).toBe(false);
-        expect(detect(`preview-${i}`)).toBe(false);
+      const { panelsById, panelIds } = usePanelStore.getState();
+      for (const id of retired) {
+        expect(panelsById[id]).toBeUndefined();
+        expect(panelIds).not.toContain(id);
+        expect(detect(id)).toBe(false);
       }
       expect(__test_getArtifactStoreSize()).toBe(1);
       expect(__test_getArtifactsFor("kept")).toHaveLength(1);
@@ -680,20 +686,29 @@ describe("rendererStoreOrchestrator", () => {
       expect(__test_getArtifactsFor("term-1")).toHaveLength(1);
 
       usePanelStore.getState().trashPanel("term-1");
+      expect(usePanelStore.getState().trashedTerminals.has("term-1")).toBe(true);
       usePanelStore.getState().removePanel("term-1");
+
+      const state = usePanelStore.getState();
+      expect(state.panelsById["term-1"]).toBeUndefined();
+      expect(state.panelIds).not.toContain("term-1");
+      expect(state.trashedTerminals.has("term-1")).toBe(false);
       expect(detect("term-1")).toBe(false);
       expect(__test_getArtifactStoreSize()).toBe(0);
     });
 
     it("takes packets for a reused id as soon as its panel is registered again", () => {
       addPanels(panel("term-1", "terminal"));
+      expect(detect("term-1", "old")).toBe(true);
       usePanelStore.getState().removePanel("term-1");
+      expect(__test_getArtifactsFor("term-1")).toBeUndefined();
       expect(detect("term-1")).toBe(false);
+      expect(__test_getArtifactsFor("term-1")).toBeUndefined();
 
       addPanels(panel("term-1", "terminal"));
 
-      expect(detect("term-1")).toBe(true);
-      expect(__test_getArtifactsFor("term-1")).toHaveLength(1);
+      expect(detect("term-1", "new")).toBe(true);
+      expect(__test_getArtifactsFor("term-1")!.map((artifact) => artifact.id)).toEqual(["new"]);
     });
   });
 

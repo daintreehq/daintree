@@ -13,7 +13,12 @@ import {
   __test_subscribeArtifactStore,
   __test_simulateArtifactDetected,
 } from "@/hooks/useArtifacts";
-import { setPanelStoreAccessor, type PanelStoreSnapshot } from "@/store/storeAccessors";
+import {
+  getPanelStoreSnapshot,
+  resetStoreAccessorsForTesting,
+  setPanelStoreAccessor,
+  type PanelStoreSnapshot,
+} from "@/store/storeAccessors";
 import type { Artifact } from "@shared/types";
 
 type RegisteredPanel = PanelStoreSnapshot["panelsById"][string];
@@ -112,28 +117,43 @@ describe("useArtifacts module-level store teardown", () => {
     expect(__test_getArtifactStoreSize()).toBe(0);
   });
 
-  it("remembers nothing about a retired id, so churn leaves only live terminals' entries", () => {
+  it("keeps only live terminals' entries through churn and still turns every retired id away", () => {
     for (let i = 0; i < 100; i++) {
       register(`churn-${i}`);
-      __test_simulateArtifactDetected(`churn-${i}`, [makeArtifact({ id: `c${i}` })]);
+      expect(__test_simulateArtifactDetected(`churn-${i}`, [makeArtifact({ id: `c${i}` })])).toBe(
+        true
+      );
       unregister(`churn-${i}`);
       removeArtifactsForTerminal(`churn-${i}`);
     }
     __test_simulateArtifactDetected("t1", [makeArtifact()]);
 
     expect(__test_getArtifactStoreSize()).toBe(1);
-    expect(__test_simulateArtifactDetected("churn-0", [makeArtifact()])).toBe(false);
-
-    register("churn-0");
-    expect(__test_simulateArtifactDetected("churn-0", [makeArtifact()])).toBe(true);
+    for (let i = 0; i < 100; i++) {
+      expect(__test_simulateArtifactDetected(`churn-${i}`, [makeArtifact()])).toBe(false);
+    }
+    expect(__test_getArtifactStoreSize()).toBe(1);
   });
 
-  it("keeps every packet in a renderer with no panel registry wired", async () => {
-    vi.resetModules();
-    const fresh = await import("@/hooks/useArtifacts");
+  it("takes a reused id's new packets, not its old ones, once its panel is registered again", () => {
+    __test_simulateArtifactDetected("t1", [makeArtifact({ id: "old" })]);
+    unregister("t1");
+    removeArtifactsForTerminal("t1");
+    expect(__test_simulateArtifactDetected("t1", [makeArtifact({ id: "late" })])).toBe(false);
+    expect(__test_getArtifactsFor("t1")).toBeUndefined();
 
-    expect(fresh.__test_simulateArtifactDetected("anywhere", [makeArtifact()])).toBe(true);
-    expect(fresh.__test_getArtifactsFor("anywhere")).toHaveLength(1);
+    register("t1");
+    expect(__test_simulateArtifactDetected("t1", [makeArtifact({ id: "new" })])).toBe(true);
+
+    expect(__test_getArtifactsFor("t1")!.map((artifact) => artifact.id)).toEqual(["new"]);
+  });
+
+  it("keeps every packet in a renderer with no panel registry wired", () => {
+    resetStoreAccessorsForTesting();
+    expect(getPanelStoreSnapshot()).toBeNull();
+
+    expect(__test_simulateArtifactDetected("anywhere", [makeArtifact()])).toBe(true);
+    expect(__test_getArtifactsFor("anywhere")).toHaveLength(1);
   });
 
   it("notifies subscribers with an empty array for the removed terminal", () => {
@@ -283,6 +303,7 @@ describe("useArtifacts module-level store teardown", () => {
     act(() => {
       result.current.clearArtifacts();
     });
+    expect(__test_getArtifactsFor("live-cap")).toBeUndefined();
 
     act(() => {
       __test_simulateArtifactDetected(
@@ -360,15 +381,16 @@ describe("useHasArtifacts", () => {
   });
 
   it("follows a change of terminal id", () => {
-    removeArtifactsForTerminal("t2");
     const { result, rerender } = renderHook(({ id }) => useHasArtifacts(id), {
       initialProps: { id: "t1" },
     });
 
     rerender({ id: "t2" });
     act(() => detected?.({ terminalId: "t2", artifacts: [makeArtifact()] }));
-
     expect(result.current).toBe(true);
+
+    act(() => removeArtifactsForTerminal("t2"));
+    expect(result.current).toBe(false);
   });
 
   it("answers from artifacts collected before it mounted, and only for its terminal", () => {
@@ -387,17 +409,22 @@ describe("useHasArtifacts", () => {
     expect(result.current).toBe(false);
   });
 
-  it("collects a reused id's first batch once its panel is registered again", () => {
-    unregister("t1");
-    removeArtifactsForTerminal("t1");
+  it("collects a reused id's first new batch once its panel is registered again", () => {
     const { result } = renderHook(() => useHasArtifacts("t1"));
-    act(() => detected?.({ terminalId: "t1", artifacts: [makeArtifact()] }));
+    act(() => detected?.({ terminalId: "t1", artifacts: [makeArtifact({ id: "old" })] }));
+    expect(result.current).toBe(true);
+
+    unregister("t1");
+    act(() => removeArtifactsForTerminal("t1"));
+    act(() => detected?.({ terminalId: "t1", artifacts: [makeArtifact({ id: "late" })] }));
     expect(result.current).toBe(false);
+    expect(__test_getArtifactsFor("t1")).toBeUndefined();
 
     register("t1");
-    act(() => detected?.({ terminalId: "t1", artifacts: [makeArtifact()] }));
+    act(() => detected?.({ terminalId: "t1", artifacts: [makeArtifact({ id: "new" })] }));
 
     expect(result.current).toBe(true);
+    expect(__test_getArtifactsFor("t1")!.map((artifact) => artifact.id)).toEqual(["new"]);
   });
 
   it("shares one detection subscription with the overlay and drops it with the last owner", () => {
