@@ -6,6 +6,9 @@ import { Agent37Client, resolveAgent37ApiUrl } from "./agent37/Agent37Client.js"
 import { Agent37Provider } from "./agent37/Agent37Provider.js";
 import { BoatClient, resolveBoatApiUrl } from "./boat/BoatClient.js";
 import { BoatProvider } from "./boat/BoatProvider.js";
+import { GceTokenSource, gceTokenUrlFor } from "./gce/gceAuth.js";
+import { GceClient, resolveGceApiUrl } from "./gce/GceClient.js";
+import { GceProvider, type GceEndpoints } from "./gce/GceProvider.js";
 import { CloudAccountService } from "./CloudAccountService.js";
 import {
   DigitalOceanClient,
@@ -64,6 +67,22 @@ export function initCloudHosts(params: {
     new DigitalOceanProvider(clientCache((baseUrl) => new DigitalOceanClient({ baseUrl }))),
     { owner: { kind: "built-in" }, apiUrl: resolveDigitalOceanApiUrl(app.isPackaged) }
   );
+  const gceEndpoints = new Map<string, GceEndpoints>();
+  const gce = new GceProvider((apiUrl) => {
+    let endpoints = gceEndpoints.get(apiUrl);
+    if (!endpoints) {
+      endpoints = {
+        client: new GceClient({ baseUrl: apiUrl }),
+        tokens: new GceTokenSource(gceTokenUrlFor(apiUrl)),
+      };
+      gceEndpoints.set(apiUrl, endpoints);
+    }
+    return endpoints;
+  });
+  providers.register(gce, {
+    owner: { kind: "built-in" },
+    apiUrl: resolveGceApiUrl(app.isPackaged),
+  });
   const accounts = new CloudAccountService({
     store,
     vault: new KeychainCloudCredentialVault(
@@ -92,6 +111,7 @@ export function initCloudHosts(params: {
       stopWatchingProviders();
       unregister();
       cloudHosts.dispose();
+      gce.dispose();
     },
   };
 }

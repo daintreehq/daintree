@@ -29,6 +29,7 @@ import { CloudProvisioningSelect, provisioningChoiceDescription } from "./CloudP
 import { LIFETIME_VALUES, useCloudMachineForm } from "./useCloudMachineForm";
 import {
   canStartMachine,
+  credentialsNoun,
   formatHourly,
   stopKeepsSentence,
   stoppedBillingFact,
@@ -91,7 +92,10 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
   const provider = account
     ? (usable.find((entry) => entry.id === account.providerId) ?? null)
     : (usable[0] ?? null);
-  const [mode, setMode] = useState<Mode>("create");
+  const [chosenMode, setMode] = useState<Mode>("create");
+  // A provider that takes Daintree's key only with its own create can't reach a machine made elsewhere.
+  const importable = provider?.capabilities.provisioning.sshKey !== "at-create";
+  const mode: Mode = importable ? chosenMode : "create";
   const [name, setName] = useState("");
   const [resources, setResources] = useState<CloudResourceSummary[] | null>(null);
   const [resourcesError, setResourcesError] = useState<string | null>(null);
@@ -229,7 +233,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     body = (
       <div className="space-y-3">
         <p className="text-sm text-text-secondary">
-          {`Connect a cloud provider account first. Daintree uses its API key to create, start${usable.every((entry) => entry.capabilities.deletion) ? ", stop and delete" : " and stop"} machines; the account pays for them.`}
+          {`Connect a cloud provider account first. Daintree uses its ${usable.length > 0 && usable.every((entry) => credentialsNoun(entry) === "key") ? "API key" : "credentials"} to create, start${usable.every((entry) => entry.capabilities.deletion) ? ", stop and delete" : " and stop"} machines; the account pays for them.`}
         </p>
         <div className="flex flex-wrap gap-2">
           {usable.map((entry) => (
@@ -347,17 +351,19 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
             </Select>
           </Field>
         )}
-        <SegmentedRadioGroup<Mode>
-          aria-label="New or existing machine"
-          value={mode}
-          onChange={setMode}
-          disabled={busy}
-          testId="add-cloud-host-mode"
-          options={[
-            { value: "create", label: "New machine" },
-            { value: "import", label: "Existing machine" },
-          ]}
-        />
+        {importable && (
+          <SegmentedRadioGroup<Mode>
+            aria-label="New or existing machine"
+            value={mode}
+            onChange={setMode}
+            disabled={busy}
+            testId="add-cloud-host-mode"
+            options={[
+              { value: "create", label: "New machine" },
+              { value: "import", label: "Existing machine" },
+            ]}
+          />
+        )}
         {mode === "create" ? (
           <>
             <Field>

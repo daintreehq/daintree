@@ -332,7 +332,7 @@ export class CloudAccountService {
     const provider = this.requireSupported(request.providerId);
     const credentials = this.normalize(provider, request.credentials);
     if (typeof request.scopeId !== "string" || request.scopeId.length === 0) {
-      throw invalid("Choose which account or organization pays for machines.");
+      throw invalid("Choose who pays for machines.");
     }
     this.requireVault();
     if (this.deps.store.accounts().length >= MAX_ACCOUNTS) {
@@ -341,7 +341,7 @@ export class CloudAccountService {
     const apiUrl = this.apiUrl(request.providerId);
     const checked = await this.check(provider, credentials, apiUrl);
     const choice = checked.scopes.find((entry) => entry.scope.id === request.scopeId);
-    if (!choice) throw invalid("These credentials can't bill that account or organization.");
+    if (!choice) throw invalid("These credentials can't create machines billed there.");
     const refuseDuplicate = () => {
       const duplicate = this.findDuplicate(
         request.providerId,

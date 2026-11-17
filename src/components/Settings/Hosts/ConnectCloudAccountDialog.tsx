@@ -456,7 +456,9 @@ export function ConnectCloudAccountDialog({
                           : "Your own account"
                         : choice.scope.kind === "workspace"
                           ? "The workspace this key belongs to"
-                          : "An organization you belong to"
+                          : choice.scope.kind === "project"
+                            ? `Project ${choice.scope.id}: machines are created and billed here`
+                            : "An organization you belong to"
                     }
                   />
                 ))}
