@@ -461,6 +461,12 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
     });
     const renewing = env.lifecycle.renewDue();
     await vi.waitFor(() => expect(env.provider.renewLifetime).toHaveBeenCalledTimes(1));
+    // Seen stopping meanwhile: the change is only kept here, so nothing after the settle checks again.
+    const id = env.store.bindings()[0]!.id;
+    env.store.updateBinding(id, (current) => ({
+      ...current,
+      observation: { ...current.observation!, machine: "stopped" },
+    }));
     const changing = env.lifecycle.setLifetime(env.hostId, 4);
     // A replacement that renews too would take the change; only the guard stops it.
     const replacement = fakeProvider(PLUGIN_PROVIDER, () => resource());
@@ -472,6 +478,23 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
     expect(env.store.bindings()[0]!.lifetimeSeconds).toBe(7200);
     expect(env.provider.renewLifetime).toHaveBeenCalledTimes(1);
     expect(replacement.renewLifetime).not.toHaveBeenCalled();
+  });
+
+  it("sends no lifetime change through a provider replaced while its key was read", async () => {
+    const env = await importedHost();
+    const replacement = fakeProvider(PLUGIN_PROVIDER, () => resource());
+    const read = env.vault.get.bind(env.vault);
+    vi.spyOn(env.vault, "get").mockImplementationOnce(async (accountId) => {
+      env.unregister();
+      env.registry.register(replacement, { owner: pluginOwner, apiUrl: "https://api.acme.test" });
+      return read(accountId);
+    });
+    await expect(env.lifecycle.setLifetime(env.hostId, 4)).rejects.toThrow(
+      /changed while this was being saved/
+    );
+    expect(env.provider.renewLifetime).not.toHaveBeenCalled();
+    expect(replacement.renewLifetime).not.toHaveBeenCalled();
+    expect(env.store.bindings()[0]!.lifetimeSeconds).toBe(7200);
   });
 
   it("keeps nothing of a lifetime change answered after its provider was replaced", async () => {
@@ -488,6 +511,25 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
     );
     expect(env.store.bindings()[0]!.lifetimeSeconds).toBe(7200);
     expect(env.lifecycle.statuses()[0]!.autoStopAt).toBe(before);
+  });
+
+  it("reports a replaced provider's late failure as the change it is, not the account's", async () => {
+    const env = await importedHost();
+    vi.mocked(env.provider.renewLifetime!).mockImplementationOnce(async () => {
+      env.unregister();
+      env.registry.register(
+        fakeProvider(PLUGIN_PROVIDER, () => resource()),
+        {
+          owner: pluginOwner,
+          apiUrl: "https://api.acme.test",
+        }
+      );
+      throw new Error("key revoked");
+    });
+    await expect(env.lifecycle.setLifetime(env.hostId, 4)).rejects.toThrow(
+      /changed while this was being saved/
+    );
+    expect(env.store.bindings()[0]!.lifetimeSeconds).toBe(7200);
   });
 
   it("polls again as soon as its provider is back, not after the time it was gone", async () => {

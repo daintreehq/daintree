@@ -377,7 +377,8 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     } else if (unknown) {
       primary = { label: "Check status", onClick: checkAdded };
       secondary = { label: "Close", onClick: onClose };
-    } else if (failed && status?.resourceId === null) {
+    } else if (failed && status?.resourceId === null && status.lastError?.code !== "unsupported") {
+      // An unsupported refusal answers the same on every retry: closing is the way on.
       primary = { label: "Retry", onClick: retry };
       secondary = { label: "Close", onClick: onClose };
     } else if (failed && startable) {

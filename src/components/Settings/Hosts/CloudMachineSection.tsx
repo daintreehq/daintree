@@ -367,22 +367,25 @@ export function CloudMachineSection({
           }
           control={
             <div className="flex items-center gap-1.5">
-              {status.resourceId === null && status.operation === null && status.lastError && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  loading={busy === "retry"}
-                  onClick={() =>
-                    act(
-                      "retry",
-                      () => cloudHostsClient.retryCreate(hostId),
-                      "Couldn't create the machine"
-                    )
-                  }
-                >
-                  Retry
-                </Button>
-              )}
+              {status.resourceId === null &&
+                status.operation === null &&
+                status.lastError &&
+                status.lastError.code !== "unsupported" && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    loading={busy === "retry"}
+                    onClick={() =>
+                      act(
+                        "retry",
+                        () => cloudHostsClient.retryCreate(hostId),
+                        "Couldn't create the machine"
+                      )
+                    }
+                  >
+                    Retry
+                  </Button>
+                )}
               {canStartMachine(status) && (
                 <Button
                   variant="outline"

@@ -585,6 +585,10 @@ export class CloudHostLifecycle {
     }
     // A size is checked against the account's current catalog, never assumed.
     const catalog = await this.deps.accounts.catalog(account.id, { refresh: true });
+    // The lifetime was checked against this provider; one registered in its place meanwhile wasn't asked.
+    if (!this.stillRegistered(account.providerId, provider)) {
+      throw invalid(`${nameOf(provider)} changed while the machine was being set up. Try again.`);
+    }
     const size = catalog.machineTypes.find((type) => type.id === request.machineType);
     if (!size) throw invalid("Choose a machine size.");
     if (!size.available) {
@@ -675,7 +679,7 @@ export class CloudHostLifecycle {
         ? `${nameOf(provider)} changed while the machine was being asked for.`
         : `${nameOf(provider)} no longer takes a lifetime for its machines, so Daintree won't ask for one with it.`;
       const next = sent
-        ? "An earlier request may still have made it; removing the host deletes it if it turns up."
+        ? "An earlier request may still have made it; removing the host checks once and deletes any machine it finds."
         : changed
           ? "Nothing was asked for; Retry asks again."
           : "Nothing was created; remove the host and add it again.";
@@ -1194,6 +1198,10 @@ export class CloudHostLifecycle {
     try {
       resource = await provider.renewLifetime(credentials, binding.resourceId, lifetimeSeconds);
     } catch (error) {
+      // A replaced provider's failure says nothing about the account as it is now.
+      if (!this.stillRegistered(binding.providerId, provider)) {
+        throw invalid(`${nameOf(owner)} changed while this was being saved. Try again.`);
+      }
       throw this.deps.accounts.asAppError(provider, error);
     }
     if (!this.stillRegistered(binding.providerId, provider)) {

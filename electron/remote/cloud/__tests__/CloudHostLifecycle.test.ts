@@ -1379,7 +1379,60 @@ describe("CloudHostLifecycle lifetime models", () => {
     await expect(lifecycle.retryCreate("build")).rejects.toThrow(/changed while the machine/);
     expect(provider.create).toHaveBeenCalledTimes(1);
     expect(replacement.create).not.toHaveBeenCalled();
-    expect(lifecycle.statuses()[0]!.lastError?.code).toBe("outcome-unknown");
+    expect(lifecycle.statuses()[0]!.lastError).toMatchObject({
+      code: "outcome-unknown",
+      message: expect.stringMatching(/changed while the machine.*checks once/),
+    });
+  });
+
+  it("asks nothing of a provider replaced while a first create read its key", async () => {
+    const { lifecycle, provider, store, accounts } = await setup();
+    const replacement = fakeProvider({ machine: resource() });
+    const read = accounts.credentials.bind(accounts);
+    // The first read is the catalog's; the second is the create's own.
+    vi.spyOn(accounts, "credentials")
+      .mockImplementationOnce(read)
+      .mockImplementationOnce(async (...args) => {
+        vi.spyOn(accounts, "provider").mockReturnValue(replacement);
+        return read(...args);
+      });
+    await lifecycle.create({
+      accountId: store.accounts()[0]!.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: 2,
+    });
+    await vi.waitFor(() =>
+      expect(lifecycle.statuses()[0]?.lastError).toMatchObject({
+        code: "failed",
+        message: expect.stringMatching(/Retry asks again/),
+      })
+    );
+    expect(provider.create).not.toHaveBeenCalled();
+    expect(replacement.create).not.toHaveBeenCalled();
+  });
+
+  it("writes nothing for a create whose provider was replaced while its sizes were read", async () => {
+    const { lifecycle, provider, store, accounts, hosts } = await setup();
+    const replacement = fakeProvider({ machine: resource() });
+    const sizes = provider.catalog;
+    vi.mocked(provider.catalog).mockImplementationOnce(async (credentials) => {
+      vi.spyOn(accounts, "provider").mockReturnValue(replacement);
+      return fakeProvider({ machine: resource() }).catalog(credentials);
+    });
+    await expect(
+      lifecycle.create({
+        accountId: store.accounts()[0]!.id,
+        name: "build",
+        machineType: "default",
+        lifetimeHours: 2,
+      })
+    ).rejects.toThrow(/changed while the machine was being set up/);
+    expect(sizes).toHaveBeenCalledTimes(1);
+    expect(store.bindings()).toEqual([]);
+    expect(hosts).toEqual([]);
+    expect(provider.create).not.toHaveBeenCalled();
+    expect(replacement.create).not.toHaveBeenCalled();
   });
 
   it("creates a machine with a fixed runtime limit from the same choices", async () => {
