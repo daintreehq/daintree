@@ -273,10 +273,11 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   });
   handlers.push(unsubArtifactDetected);
 
-  // Resource metrics (batched from pty-host). The batch covers every terminal
-  // in every project; each project view gets only its own terminals. Cached
-  // views still get their slice: their memory-leak detector watches their
-  // terminals in the background.
+  // Resource metrics (batched from pty-host). Each pty-host shard sends its own
+  // batch, covering only its terminals; each project view gets only its own
+  // terminals, and nothing when the batch has none. Cached views still get
+  // their slice: their memory-leak detector watches their terminals in the
+  // background.
   const handleResourceMetrics = (metrics: TerminalResourceBatchPayload, timestamp: number) => {
     broadcastSlicedToProjectRenderers(
       CHANNELS.TERMINAL_RESOURCE_METRICS,

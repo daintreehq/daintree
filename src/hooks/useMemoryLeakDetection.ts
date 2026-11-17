@@ -147,26 +147,30 @@ export function useMemoryLeakDetection(enabled: boolean): void {
     const localStateMap = stateMapRef.current;
 
     const unsubscribe = useResourceMonitoringStore.subscribe((curr, prev) => {
-      if (curr.metrics === prev.metrics) return;
-
-      const now = Date.now();
       const stateMap = localStateMap;
 
-      // Clean up states for removed terminals
-      for (const id of stateMap.keys()) {
-        if (!curr.metrics.has(id)) {
-          stateMap.delete(id);
+      if (curr.metrics !== prev.metrics) {
+        for (const id of stateMap.keys()) {
+          if (!curr.metrics.has(id)) {
+            stateMap.delete(id);
+          }
         }
       }
 
-      for (const [id, metric] of curr.metrics) {
+      if (curr.lastBatch === prev.lastBatch || curr.lastBatch === null) return;
+
+      const now = Date.now();
+      // Only the terminals this poll sampled: each PTY host shard polls on its
+      // own, and counting another shard's poll as a repeat of this terminal's
+      // last reading resets its growth streak (#17194).
+      for (const [id, sample] of Object.entries(curr.lastBatch.samples)) {
         let leakState = stateMap.get(id);
         if (!leakState) {
           leakState = createLeakState();
           stateMap.set(id, leakState);
         }
 
-        const shouldAlert = evaluateTerminal(metric.memoryKb, leakState, now);
+        const shouldAlert = evaluateTerminal(sample.memoryKb, leakState, now);
 
         if (shouldAlert) {
           leakState.lastAlertAt = now;
@@ -180,8 +184,8 @@ export function useMemoryLeakDetection(enabled: boolean): void {
             priority: "high",
             duration: 0,
             title: `Memory leak detected \u2014 ${terminalTitle}`,
-            message: `RSS: ${formatMb(metric.memoryKb)} (growing ${formatGrowthRate(slope)})`,
-            inboxMessage: `Memory leak: ${terminalTitle} at ${formatMb(metric.memoryKb)}, growing ${formatGrowthRate(slope)}`,
+            message: `RSS: ${formatMb(sample.memoryKb)} (growing ${formatGrowthRate(slope)})`,
+            inboxMessage: `Memory leak: ${terminalTitle} at ${formatMb(sample.memoryKb)}, growing ${formatGrowthRate(slope)}`,
             correlationId: `memory-leak-${id}`,
             context: {
               panelId: id,
