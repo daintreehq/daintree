@@ -36,7 +36,6 @@ const PROBE_ERROR_SENTINEL = "__probe-error__";
 
 const CACHE_TTL_MS = 60_000;
 const MAX_CACHE_SIZE = 100;
-const MAX_COMMITS_FOR_HEATMAP = 20_000;
 const VERBOSE_PROJECT_PULSE_LOGGING = process.env.DAINTREE_VERBOSE === "1";
 
 const NO_COMMITS_PATTERNS = [
@@ -390,25 +389,26 @@ export class ProjectPulseService {
       new Date(sinceYear, sinceMonth - 1, sinceDay).getTime() / 1000
     );
 
+    // No --max-count: the window already bounds this read, and any ceiling below
+    // the window's real volume cut the oldest days out of the grid and the totals
+    // while they still read as exact (#17455). One %ct line is 11 bytes, so a
+    // window of 100,000 commits prints about 1MB.
     let output: string;
     try {
-      output = await git.raw([
-        "log",
-        `--since=${sinceEpochSeconds}`,
-        `--max-count=${MAX_COMMITS_FOR_HEATMAP}`,
-        "--pretty=format:%ct",
-      ]);
+      output = await git.raw(["log", `--since=${sinceEpochSeconds}`, "--pretty=format:%ct"]);
     } catch (error) {
       logError("Failed to get commit timestamps for heatmap", { error: (error as Error).message });
       return this.createEmptyHeatmap(rangeDays);
     }
 
-    // Group commits by local day
+    // Walked in place rather than split, so a busy window doesn't also allocate
+    // one string per commit.
     const dailyCounts = new Map<string, number>();
-    const lines = output.split("\n").filter(Boolean);
-
-    for (const line of lines) {
-      const timestamp = parseInt(line, 10) * 1000;
+    for (let start = 0; start < output.length; ) {
+      const newline = output.indexOf("\n", start);
+      const end = newline === -1 ? output.length : newline;
+      const timestamp = parseInt(output.slice(start, end), 10) * 1000;
+      start = end + 1;
       if (isNaN(timestamp)) continue;
       const date = formatLocalDay(new Date(timestamp));
       dailyCounts.set(date, (dailyCounts.get(date) || 0) + 1);
