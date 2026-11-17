@@ -32,8 +32,12 @@ import { getElementPickerHost } from "./index.js";
  */
 
 const P = "[ElementPickerWorkspaces]";
-/** How long one scan of a port's listeners answers every check that asks. */
+/** How long a finished scan of a port's listeners answers the resolves that ask. */
 const LISTENER_REUSE_MS = 1_000;
+/** Scans of the machine's sockets running at once, across ports. */
+const MAX_LISTENER_SCANS = 2;
+/** Ports with a scan running or remembered at once. */
+const MAX_LISTENER_LOOKUPS = 16;
 
 /**
  * Workspaces one view may hold. A panel holds one; past this the oldest goes,
@@ -283,7 +287,12 @@ export class ElementPickerWorkspaceService {
     const worktreeRoot = worktreePath === null ? null : await canonicalDirectory(worktreePath);
     if (worktreeRoot === null) return { status: "unavailable", reason: "unknown-worktree" };
 
-    const server = await this.serverOutsideWorktree(owner, request.worktreeId, serving.pageUrl);
+    const server = await this.serverOutsideWorktree(
+      owner,
+      request.worktreeId,
+      serving.pageUrl,
+      false
+    );
     if (server !== null) return server;
 
     let explicitApp: string | null = null;
@@ -335,7 +344,8 @@ export class ElementPickerWorkspaceService {
   private async serverOutsideWorktree(
     owner: ElementPickerWorkspaceOwner,
     worktreeId: string,
-    pageUrl: string | null | undefined
+    pageUrl: string | null | undefined,
+    reuseSettled: boolean
   ): Promise<Extract<ElementPickerWorkspaceOpenResult, { reason: "other-worktree" }> | null> {
     const findListeners = this.deps.findListeners;
     const listenerPort = pageUrl ? localServerPort(pageUrl) : null;
@@ -352,7 +362,7 @@ export class ElementPickerWorkspaceService {
       (worktree): worktree is { id: string; root: string } => worktree.root !== null
     );
     const verdict = await findServerWorktree(listenerPort, worktrees, {
-      findListeners: (port) => this.listenersOn(port, findListeners),
+      findListeners: (port) => this.listenersOn(port, findListeners, reuseSettled),
       canonical: canonicalDirectory,
       isCheckoutRoot,
     });
@@ -366,23 +376,31 @@ export class ElementPickerWorkspaceService {
   }
 
   /**
-   * Who listens on a port, shared by every check that asks while one is out
-   * and for a moment after: a page can make selections far faster than a
-   * scan of the machine's sockets should run.
+   * Who listens on a port. A scan still running answers every check that asks
+   * meanwhile. A finished one answers a resolve for a moment after, since a
+   * page can make selections far faster than the machine's sockets should be
+   * scanned, but never an open: an open is a new document, or a retry after
+   * one, and a server that changed hands is exactly what it is there to see.
+   * Past a few scans at once a check can't say, which opens as asked.
    */
   private listenersOn(
     port: number,
-    find: NonNullable<ElementPickerWorkspaceServiceDeps["findListeners"]>
+    find: NonNullable<ElementPickerWorkspaceServiceDeps["findListeners"]>,
+    reuseSettled: boolean
   ): Promise<PortListener[] | null> {
     const now = Date.now();
-    const recent = this.listenerLookups.get(port);
-    if (recent && (recent.settledAt === null || now - recent.settledAt < LISTENER_REUSE_MS)) {
-      return recent.listeners;
-    }
     for (const [known, lookup] of this.listenerLookups) {
       if (lookup.settledAt !== null && now - lookup.settledAt >= LISTENER_REUSE_MS) {
         this.listenerLookups.delete(known);
       }
+    }
+    const recent = this.listenerLookups.get(port);
+    if (recent && (recent.settledAt === null || reuseSettled)) return recent.listeners;
+    let running = 0;
+    for (const lookup of this.listenerLookups.values()) if (lookup.settledAt === null) running++;
+    const others = this.listenerLookups.size - (recent ? 1 : 0);
+    if (running >= MAX_LISTENER_SCANS || others >= MAX_LISTENER_LOOKUPS) {
+      return Promise.resolve(null);
     }
     const lookup: { listeners: Promise<PortListener[] | null>; settledAt: number | null } = {
       listeners: find(port)
@@ -420,7 +438,7 @@ export class ElementPickerWorkspaceService {
     // re-proof keeps the workspace it was proven in. The view reopens a
     // closed workspace, and the open says where the page is served from.
     const pageUrl = serving.pageUrlOf?.(lease.panelId);
-    if ((await this.serverOutsideWorktree(owner, lease.worktreeId, pageUrl)) !== null) {
+    if ((await this.serverOutsideWorktree(owner, lease.worktreeId, pageUrl, true)) !== null) {
       this.release(lease);
       throw workspaceClosedError();
     }

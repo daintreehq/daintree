@@ -43,6 +43,11 @@ export interface PickedSelection {
   results: Readonly<Record<string, readonly ResolutionResult[]>>;
   scope: SelectionScope;
   capturedAt: string;
+  /**
+   * Another worktree main saw serving the page when this was picked, by the
+   * working directory of the process listening on its port; absent otherwise.
+   */
+  servedFrom?: string;
 }
 
 export interface Viewport {
@@ -564,8 +569,6 @@ export interface PromptRequest {
   selection: PickedSelection;
   scope: TaskScope | undefined;
   worktreePath: string | null;
-  /** The worktree the page's server runs from, when main saw it isn't this one. */
-  servedFrom?: string | null;
   project: ProjectContextOutcome | null;
   picture: PageScreenshot;
 }
@@ -576,7 +579,7 @@ export function promptInputFor(request: PromptRequest): AgentPromptInput {
   return {
     instruction: request.instruction,
     worktreePath: request.worktreePath,
-    servedFrom: request.servedFrom ?? null,
+    servedFrom: selection.servedFrom ?? null,
     page: {
       displayedUrl: selection.displayedUrl,
       reportedRouteId: null,

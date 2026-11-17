@@ -20,6 +20,7 @@ import type { RegisterWorkspaceOptions } from "../ElementPickerHost.js";
 import type { ClientEndpoint, Disposable, HostFrame } from "../../../ipc/endpoint.js";
 import { ELEMENT_PICKER_WORKSPACE_CLOSED } from "../../../../shared/types/ipc/elementPicker.js";
 import type { ElementPickerWorkspaceOpenRequest } from "../../../../shared/types/ipc/elementPicker.js";
+import type { PortListener } from "../../../remote/ports/listenerScan.js";
 
 const PROJECT = "project-1";
 const OTHER_PROJECT = "project-2";
@@ -445,7 +446,7 @@ describe("ElementPickerWorkspaceService.open for a browser page", () => {
     expect(host.releaseWorkspace).toHaveBeenCalledWith(opened.workspaceId);
   });
 
-  it("shares one scan of a port between the checks that ask at once, and for a moment after", async () => {
+  it("shares a running scan, reuses a finished one only for resolves, and only for a moment", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -461,15 +462,50 @@ describe("ElementPickerWorkspaceService.open for a browser page", () => {
       svc.open(owner, openRequest({ worktreeId: "wt-single" }), { pageUrl: PAGE })
     );
     await vi.waitFor(() => expect(findListeners).toHaveBeenCalledTimes(1));
+    // A slow scan: the moment it answers for starts when it finishes.
+    vi.setSystemTime(Date.now() + 3_000);
     release();
-    for (const opened of await Promise.all(opening)) expect(opened.status).toBe("ready");
+    const opened = await Promise.all(opening);
+    for (const result of opened) expect(result.status).toBe("ready");
     expect(findListeners).toHaveBeenCalledTimes(1);
 
-    await svc.open(owner, openRequest({ worktreeId: "wt-single" }), { pageUrl: PAGE });
+    const first = opened[0]!;
+    if (first.status !== "ready") throw new Error("expected a workspace");
+    const request = { workspaceId: first.workspaceId, requestId: "r1" } as never;
+    const serving = { pageUrlOf: () => PAGE };
+    vi.setSystemTime(Date.now() + 900);
+    await svc.resolve(owner, request, serving);
     expect(findListeners).toHaveBeenCalledTimes(1);
-    vi.setSystemTime(Date.now() + 5_000);
+    // An open is a new document: it never takes a finished scan's word.
     await svc.open(owner, openRequest({ worktreeId: "wt-single" }), { pageUrl: PAGE });
     expect(findListeners).toHaveBeenCalledTimes(2);
+    vi.setSystemTime(Date.now() + 1_100);
+    await svc.resolve(owner, request, serving);
+    expect(findListeners).toHaveBeenCalledTimes(3);
+  });
+
+  it("can't say past a few scans at once, and opens as asked", async () => {
+    const gates: Array<() => void> = [];
+    const findListeners = vi.fn(
+      (_port: number) =>
+        new Promise<PortListener[]>((resolve) =>
+          gates.push(() => resolve([{ pid: 1, cwd: path.join(root, "multi") }]))
+        )
+    );
+    const { svc } = service({ findListeners });
+    const owner = { projectId: PROJECT, endpoint: new FakeEndpoint(1) };
+    const at = (port: number) =>
+      svc.open(owner, openRequest({ worktreeId: "wt-single" }), {
+        pageUrl: `http://localhost:${port}/`,
+      });
+    const blocked = [at(5173), at(5174)];
+    await vi.waitFor(() => expect(findListeners).toHaveBeenCalledTimes(2));
+    await expect(at(5175)).resolves.toMatchObject({ status: "ready" });
+    expect(findListeners).toHaveBeenCalledTimes(2);
+    for (const open of gates) open();
+    for (const result of await Promise.all(blocked)) {
+      expect(result).toMatchObject({ status: "unavailable", reason: "other-worktree" });
+    }
   });
 
   it("checks nothing at resolve for a page main can't read", async () => {

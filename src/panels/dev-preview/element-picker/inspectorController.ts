@@ -580,7 +580,7 @@ export class InspectorController implements DevPreviewToolSession {
   private pageReady = false;
   private pageUrl = "";
   /** The document a served-elsewhere refusal was read for; the next one asks again. */
-  private servedElsewhereEpoch: number | null = null;
+  private servedElsewhereFor: string | null = null;
   private reattachTimer: ReturnType<typeof setTimeout> | null = null;
   private connectRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private connectAttempts = 0;
@@ -819,7 +819,7 @@ export class InspectorController implements DevPreviewToolSession {
     if (!projectId || !worktreeId || !worktreePath) return;
     const request = ++this.workspaceRequest;
     // Main reads who serves the page as of now: a refusal is about this document.
-    const openedFor = this.state.page?.epoch ?? null;
+    const openedFor = this.documentKey();
     // A preview moved between worktrees keeps running its server from the old
     // one: the page would show one checkout while the agent works in another.
     const cwd = panelCwd(usePanelStore.getState().panelsById[this.panelId]);
@@ -872,6 +872,17 @@ export class InspectorController implements DevPreviewToolSession {
       if (result.status === "ready") this.releaseWorkspace(result.workspaceId);
       return;
     }
+    // A refusal about a document the panel has since left says nothing about
+    // the one it shows, which arrived while main was looking and skipped its
+    // own check: ask again, keeping any click held for the source.
+    if (
+      result.status === "unavailable" &&
+      result.reason === "other-worktree" &&
+      this.documentKey() !== openedFor
+    ) {
+      void this.openWorkspace(appPath, candidates);
+      return;
+    }
     switch (result.status) {
       case "ready":
         this.patchState({
@@ -905,15 +916,6 @@ export class InspectorController implements DevPreviewToolSession {
               : { status: "failed", reason: result.reason, message: appPath ?? "" },
         });
         this.releaseHeld();
-        // A document that arrived while main was looking skipped its own check.
-        if (
-          result.reason === "other-worktree" &&
-          this.state.page !== null &&
-          this.state.page.epoch !== openedFor
-        ) {
-          this.servedElsewhereEpoch = this.state.page.epoch;
-          void this.openWorkspace();
-        }
         return;
     }
   }
@@ -976,9 +978,17 @@ export class InspectorController implements DevPreviewToolSession {
   }
 
   /** Refused because another worktree serves the page, as of the document the open was for. */
-  private servedElsewhere(serverWorktreeId: string, openedFor: number | null): WorkspaceState {
-    this.servedElsewhereEpoch = openedFor;
+  private servedElsewhere(serverWorktreeId: string, openedFor: string | null): WorkspaceState {
+    this.servedElsewhereFor = openedFor;
     return { status: "failed", reason: "served-elsewhere", message: serverWorktreeId };
+  }
+
+  /** The document showing now, across rebinds: a new binding counts its epochs from 0 again. */
+  private documentKey(): string | null {
+    const binding = this.state.binding;
+    const page = this.state.page;
+    if (page === null) return null;
+    return `${binding.status === "bound" ? binding.sessionId : ""}#${page.epoch}`;
   }
 
   private currentWorkspaceId(): string | null {
@@ -991,20 +1001,15 @@ export class InspectorController implements DevPreviewToolSession {
    * too. Reopen once per lost workspace; a second failure is reported, not
    * looped on.
    */
+  /**
+   * Reopen a workspace main closed, whichever call heard of it first. What
+   * belonged to it goes with it; a pick that never asked it for source stays.
+   */
   private recoverClosedWorkspace(workspaceId: string): void {
     if (this.disposed || this.currentWorkspaceId() !== workspaceId) return;
     if (this.recoveringWorkspace === workspaceId) return;
     this.recoveringWorkspace = workspaceId;
     this.selectionRequest++;
-    this.endReprove();
-    this.patchState({ workspace: { status: "idle" }, selection: { status: "none" } });
-    void this.openWorkspace();
-  }
-
-  private reopenClosedWorkspace(workspaceId: string): void {
-    if (this.disposed || this.currentWorkspaceId() !== workspaceId) return;
-    if (this.recoveringWorkspace === workspaceId) return;
-    this.recoveringWorkspace = workspaceId;
     this.closeWorkspace();
     void this.openWorkspace();
   }
@@ -1332,13 +1337,13 @@ export class InspectorController implements DevPreviewToolSession {
         if (
           workspace.status === "failed" &&
           workspace.reason === "served-elsewhere" &&
-          this.servedElsewhereEpoch !== epoch
+          this.servedElsewhereFor !== this.documentKey()
         ) {
           // A new document may come from a server this worktree now runs: main
           // reads who is listening again. A workspace that opened stays open
           // across documents, so a reload's re-proof keeps it; main checks the
           // server again on each resolve instead.
-          this.servedElsewhereEpoch = epoch;
+          this.servedElsewhereFor = this.documentKey();
           void this.openWorkspace();
           return;
         }
@@ -1428,7 +1433,15 @@ export class InspectorController implements DevPreviewToolSession {
   ): PickedSelection {
     const binding = this.state.binding;
     this.selectionCount += 1;
+    // The verdict belongs to the page this was picked on, not to whatever the
+    // panel shows by the time a request about it goes in.
+    const current = this.state.workspace;
+    const servedFrom =
+      workspace === null && current.status === "failed" && current.reason === "served-elsewhere"
+        ? current.message
+        : null;
     return {
+      ...(servedFrom !== null ? { servedFrom } : {}),
       selectionId: `${this.panelId}:${this.generation}:${epoch}:${this.selectionCount}`,
       previewPanelId: this.panelId,
       sessionId: binding.status === "bound" ? binding.sessionId : "",
@@ -1611,7 +1624,7 @@ export class InspectorController implements DevPreviewToolSession {
         // at any resolve (another worktree took the page's port), and a newer
         // pick that resolved nothing would never hear of it. Reopened without
         // touching what the newer pick holds.
-        if (isWorkspaceClosed(error)) this.reopenClosedWorkspace(workspace.workspaceId);
+        if (isWorkspaceClosed(error)) this.recoverClosedWorkspace(workspace.workspaceId);
         return;
       }
       if (isWorkspaceClosed(error)) {

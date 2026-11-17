@@ -41,14 +41,27 @@ describe("findServerWorktree", () => {
 
   it("can't say for a checkout of its own nested inside a worktree", async () => {
     // Another project, or a submodule, cloned under the main checkout.
-    const d = deps([{ pid: 1, cwd: "/repo/vendor/other/app" }], {}, ["/repo/vendor/other"]);
-    expect(await findServerWorktree(5173, WORKTREES, d)).toEqual({ status: "unknown" });
+    for (const cwd of [
+      "/repo/vendor/other",
+      "/repo/vendor/other/app",
+      "/repo/vendor/other/packages/web/src",
+    ]) {
+      const d = deps([{ pid: 1, cwd }], {}, ["/repo/vendor/other"]);
+      expect(await findServerWorktree(5173, WORKTREES, d), cwd).toEqual({ status: "unknown" });
+    }
     // The worktree's own root holding `.git` is no nesting.
-    const own = deps([{ pid: 1, cwd: "/repo/src" }], {}, ["/repo", "/repo/.worktrees/b"]);
-    expect(await findServerWorktree(5173, WORKTREES, own)).toEqual({
-      status: "worktree",
-      worktreeId: "main",
-    });
+    for (const [cwd, worktreeId] of [
+      ["/repo/src/deep/er", "main"],
+      ["/repo", "main"],
+      ["/repo/.worktrees/b", "wt-b"],
+      ["/repo/.worktrees/b/app", "wt-b"],
+    ] as const) {
+      const own = deps([{ pid: 1, cwd }], {}, ["/repo", "/repo/.worktrees/b"]);
+      expect(await findServerWorktree(5173, WORKTREES, own), cwd).toEqual({
+        status: "worktree",
+        worktreeId,
+      });
+    }
   });
 
   it("compares the directory with its links resolved", async () => {
