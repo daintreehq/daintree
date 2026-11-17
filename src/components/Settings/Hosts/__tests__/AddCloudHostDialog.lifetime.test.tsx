@@ -51,6 +51,7 @@ function provider(lifetime: CloudLifetimeModel): CloudProviderInfo {
       lifetime,
       sshTrust: "pinned-from-api",
       transport: "direct",
+      tunnel: null,
       provisioning: { location: "none", image: "none", network: "none", sshKey: "after-create" },
       deletion: true,
     },
