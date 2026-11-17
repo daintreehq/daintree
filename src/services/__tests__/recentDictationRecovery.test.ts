@@ -83,7 +83,7 @@ describe("recentDictationRecovery", () => {
     useTerminalInputStore.setState({ voiceSubmittingPanels: new Set() });
     useVoiceRecordingStore.setState({ status: "idle", activeTarget: null, pendingTarget: null });
     useTypingLocatorStore.getState().clearLocator();
-    useFleetArmingStore.setState({ armedIds: new Set() });
+    useFleetArmingStore.setState({ armedIds: new Set(), crossHostTargets: [] });
     inputBlock.current = null;
     requestPaneFocus.mockClear();
     focusPanelInput.mockClear();
@@ -144,6 +144,22 @@ describe("recentDictationRecovery", () => {
     [
       "it is one of an armed fleet, which mirrors its draft",
       () => useFleetArmingStore.setState({ armedIds: new Set(["panel-1", "panel-2"]) }),
+    ],
+    [
+      "it is armed beside another host's agent, whose broadcast takes its draft",
+      () =>
+        useFleetArmingStore.setState({
+          armedIds: new Set(["panel-1"]),
+          crossHostTargets: [
+            {
+              key: "host-fleet:studio:r-1",
+              hostId: "studio",
+              hostName: "Studio",
+              terminalId: "r-1",
+              title: "remote",
+            },
+          ],
+        }),
     ],
     [
       "another screen drives the project and replaces its draft",

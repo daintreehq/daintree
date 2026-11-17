@@ -132,6 +132,7 @@ const {
   },
   armed: {
     armedIds: new Set<string>(),
+    crossHostTargets: [] as unknown[],
     armId: vi.fn(),
     armIds: vi.fn(),
     toggleId: vi.fn(),
@@ -209,11 +210,14 @@ vi.mock("@/store/voiceRecordingStore", () => ({
 // Snooze need the run on the snapshot as well.
 vi.mock("@/store/fleetArmingStore", () => ({
   useFleetArmingStore: Object.assign(
-    (selector: (s: { armedIds: Set<string> }) => unknown) => selector(armed),
+    (selector: (s: { armedIds: Set<string>; crossHostTargets: unknown[] }) => unknown) =>
+      selector(armed),
     { getState: () => armed }
   ),
   isFleetArmEligible: () => fleetEligible.current,
   collectEligibleIds,
+  selectFleetMemberCount: (s: { armedIds: Set<string>; crossHostTargets: unknown[] }) =>
+    s.armedIds.size + s.crossHostTargets.length,
 }));
 
 vi.mock("@/store/fleetSnapshotStore", () => ({
@@ -1277,6 +1281,7 @@ describe("TerminalContextMenu — dictation lock and recent targets (#14955)", (
     voiceState.lockedTarget = null;
     voiceState.recentTargets = [];
     armed.armedIds = new Set();
+    armed.crossHostTargets = [];
     useTerminalInputStore.setState({ hybridInputEnabled: true });
   });
 
@@ -1362,6 +1367,17 @@ describe("TerminalContextMenu — dictation lock and recent targets (#14955)", (
     armed.armedIds = new Set(["agent-2", "agent-3"]);
     openOn(shell);
     expect(screen.queryByText("Lock dictation to this panel")).toBeNull();
+  });
+
+  it("offers the lock on a plain shell armed beside another host's agent (#17182)", () => {
+    armed.armedIds = new Set(["shell-1"]);
+    openOn(shell);
+    expect(screen.queryByText("Lock dictation to this panel")).toBeNull();
+    cleanup();
+
+    armed.crossHostTargets = [{ key: "host-fleet:studio:r-1" }];
+    openOn(shell);
+    expect(screen.queryByText("Lock dictation to this panel")).not.toBeNull();
   });
 
   it("lists a recent shell target only while it is armed in the fleet", () => {

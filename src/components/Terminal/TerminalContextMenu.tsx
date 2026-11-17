@@ -17,7 +17,11 @@ import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useSidebarWorktreeOrder } from "@/hooks/useSidebarWorktreeOrder";
-import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
+import {
+  useFleetArmingStore,
+  isFleetArmEligible,
+  selectFleetMemberCount,
+} from "@/store/fleetArmingStore";
 import { useTerminalWhenDoneStore } from "@/store/terminalWhenDoneStore";
 import { isEphemeralPanel } from "@/store/slices/panelRegistry/panelCount";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
@@ -399,7 +403,7 @@ function TerminalContextMenuBody({
   const whenDoneChoice = useTerminalWhenDoneStore((s) =>
     isMenuLive ? s.choices[terminalId] : undefined
   );
-  const fleetSize = useFleetArmingStore((s) => (isMenuLive ? s.armedIds.size : 0));
+  const fleetSize = useFleetArmingStore((s) => (isMenuLive ? selectFleetMemberCount(s) : 0));
   const isVoiceLockedHere = useVoiceRecordingStore((s) => s.lockedTarget?.panelId === terminalId);
   const hybridInputEnabled = useTerminalInputStore((s) => isMenuLive && s.hybridInputEnabled);
   // What Resend last message needs to know, read only while the menu is live.
@@ -478,10 +482,11 @@ function TerminalContextMenuBody({
     (e: React.MouseEvent<HTMLElement>) => {
       handleTriggerContextMenu(e);
       const { panelsById } = usePanelStore.getState();
-      const { armedIds } = useFleetArmingStore.getState();
+      const arming = useFleetArmingStore.getState();
+      const { armedIds } = arming;
       const composerOptions = {
         hybridInputEnabled: useTerminalInputStore.getState().hybridInputEnabled,
-        fleetSize: armedIds.size,
+        fleetSize: selectFleetMemberCount(arming),
       };
       // Only a pane whose composer can show the words is offered (#14955).
       const canDictate = (panel: (typeof panelsById)[string] | undefined) =>

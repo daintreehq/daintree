@@ -107,7 +107,12 @@ beforeEach(() => {
     panelIdsByWorktreeId: { [WT_ID]: panels.map((p) => p.id) },
     focusedId: "term-1",
   });
-  useTerminalInputStore.setState({ draftInputs: new Map(), hybridInputAutoFocus: false });
+  useTerminalInputStore.setState({
+    draftInputs: new Map(),
+    fleetDraftHolds: new Map(),
+    hybridInputAutoFocus: false,
+    lastTypedAgentTarget: null,
+  });
   useFleetArmingStore.setState({
     armedIds: new Set<string>(),
     armOrder: [],
@@ -216,6 +221,36 @@ describe("HybridInputBar's fleet send", () => {
 
     act(() => useFleetArmingStore.getState().disarmCrossHostTarget(remote));
     expect(fleetChrome()).toBeNull();
+  });
+
+  it("claims no single-agent routing while typing to another host's agent too", async () => {
+    Object.assign(window, { __DAINTREE_INITIAL_PROJECT__: { id: "proj-1" } });
+    try {
+      useFleetArmingStore.getState().armIds(["term-1"]);
+      const remote = "host-fleet:studio:r-1";
+      useFleetArmingStore.getState().armCrossHostTarget({
+        key: remote,
+        hostId: "studio",
+        hostName: "Studio",
+        terminalId: "r-1",
+        title: "remote",
+      });
+      const prior = { terminalId: "term-2", workspaceId: "proj-1" };
+      useTerminalInputStore.setState({ lastTypedAgentTarget: prior });
+      const { type } = await mount();
+
+      await type("to the fleet");
+      expect(useTerminalInputStore.getState().lastTypedAgentTarget).toEqual(prior);
+
+      act(() => useFleetArmingStore.getState().disarmCrossHostTarget(remote));
+      await type(" and now just here");
+      expect(useTerminalInputStore.getState().lastTypedAgentTarget).toMatchObject({
+        terminalId: "term-1",
+        workspaceId: "proj-1",
+      });
+    } finally {
+      Reflect.deleteProperty(window, "__DAINTREE_INITIAL_PROJECT__");
+    }
   });
 
   it("clears the draft once the broadcast has gone out", async () => {

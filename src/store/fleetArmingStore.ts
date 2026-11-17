@@ -93,6 +93,17 @@ export function selectFleetMemberCount(
   return s.armedIds.size + s.crossHostTargets.length;
 }
 
+/**
+ * Whether a composer in this view is broadcasting: one of this view's panes is
+ * armed into a fleet of two or more. A fleet of other hosts' agents alone is
+ * typed in the ribbon, so nothing typed into a pane here reaches it.
+ */
+export function selectIsLocalFleetComposing(
+  s: Pick<FleetArmingState, "armedIds" | "crossHostTargets">
+): boolean {
+  return s.armedIds.size > 0 && selectFleetMemberCount(s) >= 2;
+}
+
 function rebuildOrderById(order: string[]): Record<string, number> {
   const out: Record<string, number> = {};
   for (let i = 0; i < order.length; i++) {
