@@ -930,6 +930,7 @@ export class SshTransport implements LinkTransport {
     const { target, clientDir } = this.options;
     // Before anything is read: a change made during this dial shows on the next one.
     const configStamp = stampedAt ?? (await this.configStamp(signal));
+    if (signal.aborted) throw new TransportError("Connection cancelled", null);
     await fs.mkdir(clientDir, { recursive: true, mode: 0o700 });
     await fs.chmod(clientDir, 0o700);
     const controlPath = controlPathFor(clientDir, target);

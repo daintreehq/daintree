@@ -9,11 +9,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The developer's own ~/.ssh/config would decide whether a route is remembered;
 // tests that care about the config name their files.
-vi.mock("../sshConfig.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../sshConfig.js")>()),
-  defaultSshConfigRoots: () => [],
-}));
+vi.mock("../sshConfig.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../sshConfig.js")>();
+  return {
+    ...actual,
+    defaultSshConfigRoots: () => [],
+    sshConfigStamp: vi.fn(actual.sshConfigStamp),
+  };
+});
 import { HostServer } from "../../host/HostServer.js";
+import { sshConfigStamp } from "../sshConfig.js";
 import { hostSocketLocation, remoteHostSocketLocation } from "../../host/hostSocketPath.js";
 import { LinkClient, type LinkClientState } from "../LinkClient.js";
 import { bridgeChild, type BridgeChild } from "../../__tests__/harness/bridgeChild.js";
@@ -1560,10 +1565,35 @@ describe("reconnecting to a host the transport already knows", () => {
 
     writeFileSync(included, "HostName b.example.org\n");
     const before = host.calls.length;
+    const stampsBefore = vi.mocked(sshConfigStamp).mock.calls.length;
     const third = await transport.open(new AbortController().signal);
     expect(third.remembered).toBeUndefined();
     expect(host.calls.slice(before).filter(isProbe)).toHaveLength(1);
+    // The walk that showed the change is the one the dial goes on with.
+    expect(vi.mocked(sshConfigStamp).mock.calls.length - stampsBefore).toBe(1);
     await third.dispose();
+    host.closeProxies();
+  });
+
+  it("keeps a remembered route when the dial is cancelled while the config is read", async () => {
+    const host = await knownHost();
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: host.spawner,
+      sshConfigFiles: [],
+    });
+    const first = await transport.open(new AbortController().signal);
+    await first.dispose();
+    const abort = new AbortController();
+    vi.mocked(sshConfigStamp).mockImplementationOnce(async () => {
+      abort.abort();
+      return "incomplete:cancelled";
+    });
+    await expect(transport.open(abort.signal)).rejects.toThrow("Connection cancelled");
+    const again = await transport.open(new AbortController().signal);
+    expect(again.remembered).toBe(true);
+    await again.dispose();
     host.closeProxies();
   });
 

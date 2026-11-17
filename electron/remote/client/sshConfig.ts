@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { Stats } from "node:fs";
+import { constants as fsConstants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -18,8 +18,10 @@ const MAX_INCLUDE_DEPTH = 16;
 const MAX_FILES = 256;
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_DIR_ENTRIES = 4096;
-/** Pattern comparisons per walk: a pathological Host line stops here rather than holding the main thread. */
-const MAX_MATCH_WORK = 1_000_000;
+/** Character comparisons per walk: a pathological Host line stops here rather than holding the main thread. */
+const MAX_MATCH_WORK = 20_000_000;
+/** Longer than any file name, so a longer glob segment can't name one; reading it would only cost time. */
+const MAX_GLOB_SEGMENT = 1024;
 /** A config on a dead mount stops the walk here rather than holding up a dial or the dialog. */
 const WALK_DEADLINE_MS = 2_000;
 /** More than a list can usefully show; the rest can still be typed. */
@@ -247,26 +249,31 @@ function localToken(token: string, home: string): string | null {
   }
 }
 
-/** Include's environment variables and %-tokens (OpenSSH 9.9+); null when one can't be known here. */
+/**
+ * Include's environment variables and %-tokens (OpenSSH 9.9+), in one pass
+ * over the operand as ssh makes it, so a value is never read again as a token.
+ * Null when one can't be known here.
+ */
 function expandIncludeTokens(arg: string, home: string): string | null {
-  let unresolved = false;
-  const withEnv = arg.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name: string) => {
-    const value = process.env[name];
-    if (value === undefined) unresolved = true;
-    return value ?? "";
-  });
-  if (unresolved || withEnv.includes("${")) return null;
   let out = "";
-  for (let i = 0; i < withEnv.length; i++) {
-    const c = withEnv[i]!;
-    if (c !== "%") {
+  for (let i = 0; i < arg.length; i++) {
+    const c = arg[i]!;
+    if (c === "$" && arg[i + 1] === "{") {
+      const close = arg.indexOf("}", i + 2);
+      const name = close < 0 ? "" : arg.slice(i + 2, close);
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return null;
+      const value = process.env[name];
+      if (value === undefined) return null;
+      out += value;
+      i = close;
+    } else if (c === "%") {
+      const token = arg[++i];
+      const value = token === undefined ? null : localToken(token, home);
+      if (value === null) return null;
+      out += value;
+    } else {
       out += c;
-      continue;
     }
-    const token = withEnv[++i];
-    const value = token === undefined ? null : localToken(token, home);
-    if (value === null) return null;
-    out += value;
   }
   return out;
 }
@@ -289,11 +296,52 @@ function includePattern(arg: string, system: boolean, home: string): string | nu
 type GlobToken = { kind: "star" } | { kind: "one"; test: (c: string) => boolean; literal?: string };
 
 /**
+ * A bracket expression from `open` (the `[`): its test and where it closes,
+ * or null when nothing closes it and the `[` is literal. `undefined` for a
+ * POSIX character class, which isn't read here.
+ */
+function globClass(
+  segment: string,
+  open: number,
+  escapes: boolean
+): { test: (c: string) => boolean; close: number } | null | undefined {
+  let i = open + 1;
+  const negate = segment[i] === "!";
+  if (negate) i++;
+  const chars: string[] = [];
+  const ranges: Array<[string, string]> = [];
+  let first = true;
+  while (i < segment.length) {
+    let c = segment[i]!;
+    // A `]` first in the class is one of its characters.
+    if (c === "]" && !first) {
+      const set = ranges.concat(chars.map((ch): [string, string] => [ch, ch]));
+      return { test: (ch) => set.some(([lo, hi]) => ch >= lo && ch <= hi) !== negate, close: i };
+    }
+    if (c === "[" && segment[i + 1] === ":") return undefined;
+    if (escapes && c === "\\" && i + 1 < segment.length) c = segment[++i]!;
+    first = false;
+    const dash = segment[i + 1] === "-" && i + 2 < segment.length && segment[i + 2] !== "]";
+    if (dash) {
+      let hi = segment[i + 2]!;
+      i += 2;
+      if (escapes && hi === "\\" && i + 1 < segment.length) hi = segment[++i]!;
+      ranges.push([c, hi]);
+    } else {
+      chars.push(c);
+    }
+    i++;
+  }
+  return null;
+}
+
+/**
  * One path segment of a glob(3) pattern: `*`, `?`, `[...]` (with `!` and
- * ranges) and, on POSIX, `\` escapes. Null for a POSIX character class, which
- * isn't read here.
+ * ranges) and, on POSIX, `\` escapes. Null for what isn't read here: a POSIX
+ * character class, or a segment longer than any file name.
  */
 function globTokens(segment: string): GlobToken[] | null {
+  if (segment.length > MAX_GLOB_SEGMENT) return null;
   const escapes = path.sep === "/";
   const tokens: GlobToken[] = [];
   for (let i = 0; i < segment.length; i++) {
@@ -307,29 +355,11 @@ function globTokens(segment: string): GlobToken[] | null {
       continue;
     }
     if (c === "[") {
-      let j = i + 1;
-      const negate = segment[j] === "!";
-      if (negate) j++;
-      // A `]` first in the class is one of its characters.
-      const close = segment.indexOf("]", j + 1);
-      if (close > 0) {
-        const body = segment.slice(j, close);
-        if (body.includes("[:")) return null;
-        const ranges: Array<[string, string]> = [];
-        for (let k = 0; k < body.length; k++) {
-          const from = body[k]!;
-          if (body[k + 1] === "-" && k + 2 < body.length) {
-            ranges.push([from, body[k + 2]!]);
-            k += 2;
-          } else {
-            ranges.push([from, from]);
-          }
-        }
-        tokens.push({
-          kind: "one",
-          test: (ch) => ranges.some(([lo, hi]) => ch >= lo && ch <= hi) !== negate,
-        });
-        i = close;
+      const bracket = globClass(segment, i, escapes);
+      if (bracket === undefined) return null;
+      if (bracket) {
+        tokens.push({ kind: "one", test: bracket.test });
+        i = bracket.close;
         continue;
       }
     }
@@ -392,7 +422,10 @@ async function readDirBudgeted(dir: string, ctx: WalkContext): Promise<string[] 
 async function expandInclude(pattern: string, ctx: WalkContext): Promise<string[]> {
   const { root } = path.parse(pattern);
   const separators = path.sep === "/" ? /\/+/ : /[\\/]+/;
-  const trailingSlash = /[\\/]$/.test(pattern) && pattern.length > root.length;
+  // On POSIX a backslash escapes; only on Windows does it end a directory name.
+  const trailingSlash =
+    (path.sep === "/" ? pattern.endsWith("/") : /[\\/]$/.test(pattern)) &&
+    pattern.length > root.length;
   const segments = pattern.slice(root.length).split(separators).filter(Boolean);
   let paths = [root];
   let magic = false;
@@ -424,10 +457,18 @@ async function expandInclude(pattern: string, ctx: WalkContext): Promise<string[
   return paths.sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
 }
 
-/** A file's bytes, or null when it holds `limit` bytes or more (it grew since it was stat'ed). */
+/** Opening a pipe for reading waits for a writer; non-blocking, it can't hold a worker. */
+const READ_FLAGS =
+  process.platform === "win32" ? "r" : fsConstants.O_RDONLY | fsConstants.O_NONBLOCK;
+
+/**
+ * A regular file's bytes, or null when it holds `limit` bytes or more (it grew
+ * since it was stat'ed) or is no longer a regular file.
+ */
 async function readBelow(file: string, limit: number): Promise<Buffer | null> {
-  const handle = await fs.open(file, "r");
+  const handle = await fs.open(file, READ_FLAGS);
   try {
+    if (!(await handle.stat()).isFile()) return null;
     const buffer = Buffer.alloc(limit);
     let length = 0;
     while (length < limit) {
@@ -448,11 +489,13 @@ function collectAliases(
 ): void {
   // A literal on its own Host line matches it; only that line's negations can still rule it out.
   const negations = patterns.filter((p) => p.startsWith("!")).map((p) => p.slice(1));
-  const gateWork = gates.reduce((sum, gate) => sum + gate.length, 0);
+  const patternChars = (list: readonly string[]) => list.reduce((sum, p) => sum + p.length + 1, 0);
+  // Matching is at worst the name's length times the pattern's, so that's what each check costs.
+  const cost = patternChars(negations) + gates.reduce((sum, gate) => sum + patternChars(gate), 0);
   for (const alias of patterns) {
     if (ctx.aliases.length >= MAX_ALIASES) return;
     if (ctx.aliasSet.has(alias) || !isListableAlias(alias)) continue;
-    ctx.work += negations.length + gateWork;
+    ctx.work += (alias.length + 1) * cost;
     if (ctx.work > MAX_MATCH_WORK) return halt(ctx);
     if (negations.some((negation) => matchHostPattern(alias, negation))) continue;
     // An included host applies only to names its Includes' own Host lines match too.

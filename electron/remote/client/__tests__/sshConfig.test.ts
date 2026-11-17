@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, type PathLike } from "node:fs";
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -20,6 +21,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   rmSync(home, { recursive: true, force: true });
 });
@@ -132,17 +134,31 @@ describe("listSshConfigAliases", () => {
     expect(await aliases()).toEqual(["first", "second", "extra", "top"]);
   });
 
-  it("reads bracket classes, escapes and an explicit leading dot as glob(3) does", async () => {
-    write("config", "Include conf.d/[0-9]* conf.d/lit\\.conf conf.d/\\.private*\n");
+  it("reads bracket classes and ranges as glob(3) does", async () => {
+    write("config", "Include conf.d/[0-9]* conf.d/[!0-9x]-?\n");
     write("conf.d/1-a", "Host one\n");
-    write("conf.d/x-b", "Host letter\n");
-    write("conf.d/lit.conf", "Host literal\n");
-    write("conf.d/.private-a", "Host private\n");
-    expect(await aliases()).toEqual(["one", "literal", "private"]);
+    write("conf.d/x-b", "Host letter-x\n");
+    write("conf.d/y-c", "Host letter-y\n");
+    write("conf.d/.9-d", "Host hidden\n");
+    expect(await aliases()).toEqual(["one", "letter-y"]);
   });
 
+  it.skipIf(process.platform === "win32")(
+    "reads POSIX escapes and an explicit leading dot as glob(3) does",
+    async () => {
+      write("config", "Include conf.d/lit\\.conf conf.d/\\.private* conf.d/[a\\-c].conf\n");
+      write("conf.d/lit.conf", "Host literal\n");
+      write("conf.d/.private-a", "Host private\n");
+      write("conf.d/a.conf", "Host class-a\n");
+      write("conf.d/b.conf", "Host class-b\n");
+      write("conf.d/-.conf", "Host class-dash\n");
+      expect(await aliases()).toEqual(["literal", "private", "class-dash", "class-a"]);
+    }
+  );
+
   it("expands environment variables and this machine's %-tokens in an Include", async () => {
-    const elsewhere = mkdtempSync(path.join(os.tmpdir(), "ssh-config-env-"));
+    // A value is used as it stands, never read again for tokens.
+    const elsewhere = mkdtempSync(path.join(os.tmpdir(), "ssh-config-env-%h-"));
     try {
       writeFileSync(path.join(elsewhere, "env.conf"), "Host from-env\n");
       writeFileSync(path.join(home, "home.conf"), "Host from-home\n");
@@ -208,10 +224,12 @@ describe("listSshConfigAliases", () => {
     expect(await aliases()).toEqual(["fine"]);
   });
 
-  it("stops at a file that includes itself", async () => {
+  it("stops at a file that includes itself, reading it once", async () => {
     write("config", "Include loop.conf\n");
-    write("loop.conf", "Host looped\nInclude loop.conf\n");
+    const loop = write("loop.conf", "Host looped\nInclude loop.conf\n");
+    const open = vi.spyOn(fsp, "open");
     expect(await aliases()).toEqual(["looped"]);
+    expect(open.mock.calls.filter(([file]) => path.resolve(String(file)) === loop)).toHaveLength(1);
   });
 
   it("returns nothing once cancelled or past its deadline", async () => {
@@ -229,10 +247,19 @@ describe("sshConfigStamp", () => {
 
   it("stays put while nothing changes and moves when an included file's bytes do", async () => {
     write("config", "Host studio\n  Include studio.conf\n");
-    write("studio.conf", "HostName a.example\n");
+    const included = write("studio.conf", "HostName a.example\n");
+    // Times held still, as within one tick of a coarse clock: only the bytes tell the edit apart.
+    const realStat = fsp.stat.bind(fsp);
+    vi.spyOn(fsp, "stat").mockImplementation((async (target: PathLike) => {
+      const stat = await realStat(target);
+      if (String(target) === included) {
+        stat.mtimeMs = 1;
+        stat.ctimeMs = 1;
+      }
+      return stat;
+    }) as unknown as typeof fsp.stat);
     const first = await stamp();
     expect(await stamp()).toBe(first);
-    // Same size, so only the bytes tell it apart within one timestamp tick.
     write("studio.conf", "HostName b.example\n");
     expect(await stamp()).not.toBe(first);
   });
@@ -277,5 +304,29 @@ describe("sshConfigStamp", () => {
     b = await sshConfigStamp(roots(), { home, deadlineMs: -1 });
     expect(a).not.toBe(b);
     expect(a).not.toBe(await stamp());
+  });
+
+  it("settles as soon as it is cancelled or out of time, whatever read is pending", async () => {
+    write("config", "Host a\n");
+    let release: () => void = () => {};
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const realStat = fsp.stat.bind(fsp);
+    vi.spyOn(fsp, "stat").mockImplementation((async (target: PathLike) => {
+      await pending;
+      return realStat(target);
+    }) as unknown as typeof fsp.stat);
+    try {
+      // Deadlines far past the test's own timeout: only the abort or the short one can end these.
+      const abort = new AbortController();
+      const listed = listSshConfigAliases({ home, signal: abort.signal, deadlineMs: 60_000 });
+      setTimeout(() => abort.abort(), 10);
+      expect(await listed).toEqual([]);
+      const cut = await sshConfigStamp(roots(), { home, deadlineMs: 20 });
+      expect(cut).toMatch(/^incomplete:/);
+    } finally {
+      release();
+    }
   });
 });
