@@ -86,18 +86,35 @@ vi.mock("electron", () => ({
 
 /** Windows the registry lists beyond focus and primary, each showing its app view. */
 let registryWindows: Harness[] | null = null;
+/** A window still showing its outgoing project's view while it switches away. */
+let bridging: { windowId: number; projectId: string; webContentsId: number } | null = null;
 
 vi.mock("../../../window/windowRef.js", () => ({
   getMainWindow: () => harness?.win ?? null,
   getWindowRegistry: () =>
-    registryWindows && {
-      getPrimary: () => undefined,
-      all: () =>
-        registryWindows!.map((h) => ({
-          browserWindow: h.win,
-          services: { projectViewManager: { getActiveView: () => h.appView } },
-        })),
-    },
+    registryWindows || bridging
+      ? {
+          getPrimary: () => undefined,
+          all: () =>
+            (registryWindows ?? []).map((h) => ({
+              browserWindow: h.win,
+              services: { projectViewManager: { getActiveView: () => h.appView } },
+            })),
+          getByWindowId: (windowId: number) => {
+            const bridge = bridging;
+            if (bridge?.windowId !== windowId) return undefined;
+            return {
+              services: {
+                projectViewManager: {
+                  getOutgoingBridgeProjectId: () => bridge.projectId,
+                  getProjectIdForWebContents: (id: number) =>
+                    id === bridge.webContentsId ? bridge.projectId : null,
+                },
+              },
+            };
+          },
+        }
+      : null,
   getProjectViewManager: () => null,
 }));
 
@@ -701,6 +718,7 @@ describe("pluginCapability consent bridge — where a local plugin's prompt may 
   afterEach(() => {
     focusedInstead = null;
     registryWindows = null;
+    bridging = null;
     _resetPluginFrontendRoutingForTesting();
     for (const h of opened.splice(0)) {
       unregisterProjectView(h.appWebContents.id);
@@ -814,6 +832,7 @@ describe("pluginCapability consent bridge — where a local plugin's prompt may 
     looseViews.push(outgoing);
     registerWebContents(outgoing as never, switching.win as never);
     registerProjectView("proj-a", outgoing as never);
+    bridging = { windowId: switching.win.id, projectId: "proj-a", webContentsId: outgoing.id };
 
     const settled = startProjectGatedCall("proj-a");
 
@@ -830,6 +849,26 @@ describe("pluginCapability consent bridge — where a local plugin's prompt may 
 
     expectUndeliverable(await startProjectGatedCall("proj-a"));
     expect(harness!.appWebContents.send).not.toHaveBeenCalled();
+    dispose();
+  });
+
+  it("passes over a view still restoring out of sight for one a window shows", async () => {
+    const dispose = registerPluginCapabilityHandlers();
+    showInPrimary("proj-b");
+    // A background restore registers its view in the focused window, neither
+    // attached nor cached until it hydrates.
+    const restoring = makeWebContents();
+    looseViews.push(restoring);
+    registerWebContents(restoring as never, harness!.win as never);
+    registerProjectView("proj-a", restoring as never);
+    const shown = openWindow("proj-a");
+
+    const settled = startProjectGatedCall("proj-a");
+
+    expect(restoring.send).not.toHaveBeenCalled();
+    expect(shown.appWebContents.send).toHaveBeenCalledTimes(1);
+    await approveIn(shown.appWebContents);
+    await expect(settled).resolves.toEqual({ ok: true });
     dispose();
   });
 

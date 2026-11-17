@@ -15,8 +15,9 @@ import type {
   PluginCapabilityConsentRequest,
   PluginCapabilityFirstUseRequest,
 } from "../../services/plugin-capability/PluginCapabilityConsentService.js";
-import { getMainWindow } from "../../window/windowRef.js";
+import { getMainWindow, getWindowRegistry } from "../../window/windowRef.js";
 import {
+  getAppView,
   getAppWebContents,
   getWebContentsForProject,
   getWindowForWebContents,
@@ -139,11 +140,10 @@ function resolvePromptWebContents(projectId: string | null): Electron.WebContent
 
 /**
  * A view of `projectId` on this machine that a window has on screen, the
- * focused window's first, then the primary window's, then any other. A cached
- * view is out of sight and may be frozen, so it never counts: with no view on
- * screen the prompt is undeliverable rather than shown over another project.
- * A window switching away still shows its outgoing view until the incoming one
- * paints, and that view is not cached yet, so it still counts.
+ * focused window's first, then the primary window's, then any other. With no
+ * view on screen the prompt is undeliverable rather than shown over another
+ * project, or into a view nobody can see: a cached one, or one still restoring
+ * in the background, which is neither attached nor cached until it hydrates.
  */
 function resolveShownProjectView(projectId: string): Electron.WebContents | null {
   const focused = BrowserWindow.getFocusedWindow();
@@ -153,7 +153,7 @@ function resolveShownProjectView(projectId: string): Electron.WebContents | null
   for (const wc of getWebContentsForProject(projectId)) {
     if (isCachedViewWebContents(wc.id) || isRemoteHostView(wc.id)) continue;
     const win = getWindowForWebContents(wc);
-    if (!win || win.isDestroyed()) continue;
+    if (!win || win.isDestroyed() || !isShownInWindow(win, wc, projectId)) continue;
     const rank = win === focused ? 0 : win === primary ? 1 : 2;
     if (rank < bestRank) {
       best = wc;
@@ -161,6 +161,19 @@ function resolveShownProjectView(projectId: string): Electron.WebContents | null
     }
   }
   return best;
+}
+
+/**
+ * Whether `win` has `wc` on screen: its app view, or, while it switches away
+ * from `projectId`, the outgoing view it keeps up until the incoming one paints.
+ */
+function isShownInWindow(win: BrowserWindow, wc: Electron.WebContents, projectId: string): boolean {
+  if (getAppView(win)?.webContents === wc) return true;
+  const manager = getWindowRegistry()?.getByWindowId(win.id)?.services.projectViewManager;
+  return (
+    manager?.getOutgoingBridgeProjectId() === projectId &&
+    manager.getProjectIdForWebContents(wc.id) === projectId
+  );
 }
 
 /**
