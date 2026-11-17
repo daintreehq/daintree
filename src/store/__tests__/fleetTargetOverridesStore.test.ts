@@ -106,6 +106,119 @@ describe("fleetTargetOverridesStore", () => {
     });
   });
 
+  describe("snapshot consumption (#17518)", () => {
+    const store = () => useFleetTargetOverridesStore.getState();
+
+    it("drops what the snapshot took and keeps what changed or arrived since", () => {
+      store().setPayloadOverride("taken", "sent");
+      store().setPayloadOverride("edited", "sent");
+      store().setSkipped("skipped", true);
+      const snapshot = store().snapshot();
+
+      store().setPayloadOverride("edited", "for the next draft");
+      store().setPayloadOverride("added", "for the next draft");
+      store().setSkipped("newly-skipped", true);
+      store().consumeSnapshot(snapshot);
+
+      expect(store().payloadOverrides).toEqual({
+        edited: "for the next draft",
+        added: "for the next draft",
+      });
+      expect([...store().skippedIds]).toEqual(["newly-skipped"]);
+    });
+
+    it("keeps an entry removed and set again to the same value since", () => {
+      store().setPayloadOverride("t-1", "same");
+      store().setSkipped("t-2", true);
+      const snapshot = store().snapshot();
+
+      store().clearPayloadOverride("t-1");
+      store().setPayloadOverride("t-1", "same");
+      store().toggleSkipped("t-2");
+      store().toggleSkipped("t-2");
+      store().consumeSnapshot(snapshot);
+
+      expect(store().payloadOverrides).toEqual({ "t-1": "same" });
+      expect(store().skippedIds.has("t-2")).toBe(true);
+    });
+
+    it("keeps an entry set again after a clear", () => {
+      store().setSkipped("t-1", true);
+      const snapshot = store().snapshot();
+
+      store().clear();
+      store().setSkipped("t-1", true);
+      store().consumeSnapshot(snapshot);
+
+      expect(store().skippedIds.has("t-1")).toBe(true);
+    });
+
+    it("tells an override and a skip on the same target apart", () => {
+      store().setPayloadOverride("t-1", "sent");
+      store().setSkipped("t-1", true);
+      const snapshot = store().snapshot();
+
+      store().setSkipped("t-1", false);
+      store().setSkipped("t-1", true);
+      store().consumeSnapshot(snapshot);
+
+      expect(store().payloadOverrides).toEqual({});
+      expect(store().skippedIds.has("t-1")).toBe(true);
+    });
+
+    it("leaves an untouched field ref-identical, and the state when nothing is left to take", () => {
+      store().setPayloadOverride("t-1", "sent");
+      store().setSkipped("t-2", true);
+      const snapshot = store().snapshot();
+      store().setPayloadOverride("t-1", "edited");
+      const editedOverrides = store().payloadOverrides;
+      const skipRevisionsBefore = store().skipRevisions;
+
+      store().consumeSnapshot(snapshot);
+      expect(store().payloadOverrides).toBe(editedOverrides);
+      expect(store().skippedIds.size).toBe(0);
+      expect(Object.keys(store().payloadRevisions)).toEqual(["t-1"]);
+      expect(store().skipRevisions).toEqual({});
+      // The earlier state's revisions are copied, never edited in place.
+      expect(Object.keys(skipRevisionsBefore)).toEqual(["t-2"]);
+
+      const settled = useFleetTargetOverridesStore.getState();
+      store().consumeSnapshot(snapshot);
+      expect(useFleetTargetOverridesStore.getState()).toBe(settled);
+    });
+
+    it("keeps what a send took as it stood when taken", () => {
+      store().setPayloadOverride("t-1", "sent");
+      store().setSkipped("t-2", true);
+      const snapshot = store().snapshot();
+
+      store().setPayloadOverride("t-1", "edited");
+      store().setSkipped("t-2", false);
+
+      expect(snapshot.payloadOverrides).toEqual({ "t-1": "sent" });
+      expect([...snapshot.skippedIds]).toEqual(["t-2"]);
+    });
+
+    it("keeps an entry for a target pruned and set again since", () => {
+      useFleetArmingStore.getState().armIds(["t-1", "t-2"]);
+      const unsub = subscribeFleetTargetOverridesPruning();
+      try {
+        store().setSkipped("t-2", true);
+        const snapshot = store().snapshot();
+
+        useFleetArmingStore.getState().disarmId("t-2");
+        expect(store().skippedIds.has("t-2")).toBe(false);
+        useFleetArmingStore.getState().armId("t-2");
+        store().setSkipped("t-2", true);
+        store().consumeSnapshot(snapshot);
+
+        expect(store().skippedIds.has("t-2")).toBe(true);
+      } finally {
+        unsub();
+      }
+    });
+  });
+
   describe("arming-store pruning subscription", () => {
     it("drops a disarmed pane's override + skip while keeping still-armed panes", () => {
       const overrides = useFleetTargetOverridesStore.getState();
@@ -124,6 +237,9 @@ describe("fleetTargetOverridesStore", () => {
         // B is still armed — its entries must survive.
         expect(state.payloadOverrides["b"]).toBe("for b");
         expect(state.skippedIds.has("b")).toBe(true);
+        // A's revisions leave with its entries (#17518).
+        expect(Object.keys(state.payloadRevisions)).toEqual(["b"]);
+        expect(Object.keys(state.skipRevisions)).toEqual(["b"]);
       } finally {
         unsub();
       }

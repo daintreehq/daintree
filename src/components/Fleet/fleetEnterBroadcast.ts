@@ -385,16 +385,18 @@ export function tryFleetBroadcastFromEditor(
   // the broadcast submits the user's intent as it stood at press time —
   // a popover-close effect that clears the overrides store mid-send can't
   // mutate what we already captured here. We deliberately do NOT re-read
-  // the live store inside `doSend`.
-  const overridesState = useFleetTargetOverridesStore.getState();
-  const initialOverrides = { ...overridesState.payloadOverrides };
-  const initialSkipped = new Set(overridesState.skippedIds);
+  // the live store inside `doSend`. The send lets go of exactly these
+  // edits once it settles, and of nothing set after them (#17518).
+  const overrides = useFleetTargetOverridesStore.getState().snapshot();
+  const consumeOverrides = () => useFleetTargetOverridesStore.getState().consumeSnapshot(overrides);
+  const initialOverrides = overrides.payloadOverrides;
+  const initialSkipped = overrides.skippedIds;
 
   // All eligible targets skipped → consume the Enter (so the single-pane
   // send doesn't also fire) without dispatching anything. The draft stays.
   if (targets.every((id) => initialSkipped.has(id))) {
     useAnnouncerStore.getState().announce("Broadcast skipped — all targets excluded", "polite");
-    useFleetTargetOverridesStore.getState().clear();
+    consumeOverrides();
     return true;
   }
 
@@ -428,7 +430,7 @@ export function tryFleetBroadcastFromEditor(
           .getState()
           .announce("Broadcast skipped — no eligible targets remain", "polite");
       } finally {
-        useFleetTargetOverridesStore.getState().clear();
+        consumeOverrides();
       }
       return;
     }
@@ -468,10 +470,11 @@ export function tryFleetBroadcastFromEditor(
         perTargetOverrides: effectiveOverrides,
       });
     } finally {
-      // Per-target overrides are ephemeral per-broadcast (#8691 constraint).
-      // Clear them so the next broadcast starts from the resolved defaults.
-      // Controller teardown is owned by `runManagedFleetBroadcast`.
-      useFleetTargetOverridesStore.getState().clear();
+      // Per-target overrides are ephemeral per-broadcast (#8691 constraint),
+      // so the next broadcast starts from the resolved defaults. An edit or
+      // exclusion made while this one was out is the next draft's, and it
+      // stays. Controller teardown is owned by `runManagedFleetBroadcast`.
+      consumeOverrides();
       const owned = latestEditorSend === send;
       if (owned) latestEditorSend = null;
       if (delivered && owned) onDelivered();
