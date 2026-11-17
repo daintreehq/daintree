@@ -279,6 +279,32 @@ function acquireFigures(): () => void {
 }
 
 /**
+ * A read's answer, except that a host whose link was heard since it was asked
+ * for keeps the link it now has. Its summary is the held one unless the link
+ * stayed up throughout, when the answer's may be fresher; across a drop the
+ * answer's may be from before it.
+ */
+function keepLinksHeard(
+  hosts: HostListEntry[],
+  heard: ReadonlyMap<HostId, boolean>
+): HostListEntry[] {
+  if (heard.size === 0) return hosts;
+  return hosts.map((entry) => {
+    const dropped = heard.get(entry.descriptor.id);
+    if (dropped === undefined) return entry;
+    const held = snapshot.hosts.find((h) => h.descriptor.id === entry.descriptor.id);
+    if (!held) return entry;
+    if (held.connection.status !== "connected") {
+      return { ...entry, connection: held.connection, summary: null };
+    }
+    const upThroughout = !dropped && entry.connection.status === "connected";
+    const answered = entry.summary ?? undefined;
+    const summary = upThroughout && isFresher(held.summary, answered) ? answered : held.summary;
+    return { ...entry, connection: held.connection, summary };
+  });
+}
+
+/**
  * Follow the host list while anything shows it. Makes no calls at all where
  * Remote Hosts doesn't exist, so nothing changes for a Windows build.
  */
@@ -291,13 +317,18 @@ function start(): () => void {
   // Bumped by every full list, from either source. An answer to a request
   // made before the latest full list is older than it and is dropped.
   let listVersion = 0;
+  // Links heard since the latest read was asked for, and whether each went
+  // down meanwhile. Its answer may still carry what they were before, since a
+  // reply and a push share no order.
+  const linksHeard = new Map<HostId, boolean>();
   const refresh = () => {
     const requestedAt = ++listVersion;
+    linksHeard.clear();
     api
       .list()
       .then((hosts) => {
         if (current !== generation || requestedAt !== listVersion) return;
-        publish({ ...snapshot, hosts: remoteEntries(hosts) });
+        publish({ ...snapshot, hosts: keepLinksHeard(remoteEntries(hosts), linksHeard) });
       })
       .catch((error: unknown) => {
         logWarn("[Hosts] Couldn't read the host list", { error });
@@ -307,6 +338,10 @@ function start(): () => void {
     api.onEvent((event) => {
       if (event.type === "hosts-changed") listVersion += 1;
       if (!applyRemoteHostsEvent(event)) refresh();
+      else if (event.type === "connection-changed") {
+        const dropped = event.connection.status !== "connected";
+        linksHeard.set(event.hostId, dropped || linksHeard.get(event.hostId) === true);
+      }
     })
   );
   refresh();
