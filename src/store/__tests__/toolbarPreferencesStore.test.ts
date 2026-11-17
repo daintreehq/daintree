@@ -1625,6 +1625,63 @@ describe("toolbarPreferencesStore", () => {
       expect(store.getState().layout.pinnedButtons).toEqual({});
     });
 
+    it("drops the retired Portal toggle from both sides and the pin map, closing the gap (#17256)", async () => {
+      const blob = (withPortal: boolean) =>
+        JSON.stringify({
+          state: {
+            layout: {
+              leftButtons: ["terminal", ...(withPortal ? ["portal-toggle"] : []), "acme.thing"],
+              rightButtons: ["settings", ...(withPortal ? ["portal-toggle"] : []), "problems"],
+              pinnedButtons: {
+                ...(withPortal ? { "portal-toggle": true } : {}),
+                "copy-tree": false,
+                "acme.thing": true,
+              },
+            },
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 14,
+        });
+
+      storageMock.setItem(STORAGE_KEY, blob(false));
+      const without = (await loadStore()).getState().layout;
+
+      vi.resetModules();
+      storageMock.setItem(STORAGE_KEY, blob(true));
+      const store = await loadStore();
+      const { layout } = store.getState();
+
+      expect(store.persist.hasHydrated()).toBe(true);
+      expect(layout.leftButtons).toEqual(without.leftButtons);
+      expect(layout.rightButtons).toEqual(without.rightButtons);
+      expect(layout.pinnedButtons).toEqual({ "copy-tree": false, "acme.thing": true });
+
+      store.getState().toggleButtonVisibility("copy-tree", "right");
+      const written = JSON.parse(storageMock.getItem(STORAGE_KEY)!) as { state: { layout: object } };
+      expect(JSON.stringify(written.state.layout)).not.toContain("portal-toggle");
+    });
+
+    it("drops a hidden Portal toggle carried through the v7→v8 pin migration (#17256)", async () => {
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            layout: {
+              leftButtons: ["terminal"],
+              rightButtons: ["settings"],
+              hiddenButtons: ["portal-toggle", "copy-tree"],
+            },
+          },
+          version: 7,
+        })
+      );
+
+      const store = await loadStore();
+
+      expect(store.getState().layout.pinnedButtons).not.toHaveProperty("portal-toggle");
+      expect(store.getState().layout.pinnedButtons).toMatchObject({ "copy-tree": false });
+    });
+
     it("heals a browser duplicated across sides toward the moved copy after it left the defaults", async () => {
       // `browser` is no longer in `DEFAULT_LEFT_BUTTONS`, but a profile old
       // enough to have duplicated it had it as a left-side button at the time.

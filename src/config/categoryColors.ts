@@ -28,8 +28,6 @@ export const ACTION_CATEGORY_COLORS: Record<string, string> = {
   system: "bg-category-rose-subtle text-category-rose-text border border-category-rose-border",
   logs: "bg-category-amber-subtle text-category-amber-text border border-category-amber-border",
   recipes: "bg-category-pink-subtle text-category-pink-text border border-category-pink-border",
-  portal:
-    "bg-category-violet-subtle text-category-violet-text border border-category-violet-border",
   browser: "bg-category-cyan-subtle text-category-cyan-text border border-category-cyan-border",
 };
 

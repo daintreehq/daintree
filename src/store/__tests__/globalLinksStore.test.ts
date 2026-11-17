@@ -268,10 +268,57 @@ describe("globalLinksStore", () => {
       const first = await loadStore();
       expect(first.useGlobalLinksStore.getState().links).toEqual([]);
       expect(backing.has(KEY)).toBe(false);
+      expect(backing.has(PORTAL_KEY)).toBe(true);
 
       vi.restoreAllMocks();
       const nextLaunch = await loadStore();
       expect(nextLaunch.useGlobalLinksStore.getState().links.map((l) => l.id)).toEqual(["user-a"]);
+    });
+
+    it("keeps both copies when the Portal's backup can't be read, so a later launch still moves it", async () => {
+      const payload = portalPayload([portalLink("user-a", "user")]);
+      const backing = installLocalStorage({
+        [PORTAL_KEY]: "{not json",
+        [`${PORTAL_KEY}.__bak`]: payload,
+      });
+      const realGet = globalThis.localStorage.getItem.bind(globalThis.localStorage);
+      vi.spyOn(globalThis.localStorage, "getItem").mockImplementation((key) => {
+        if (key === `${PORTAL_KEY}.__bak`) throw new Error("storage unavailable");
+        return realGet(key);
+      });
+
+      const first = await loadStore();
+      expect(first.useGlobalLinksStore.getState().links).toEqual([]);
+      expect(backing.has(KEY)).toBe(false);
+      expect(backing.get(`${PORTAL_KEY}.__bak`)).toBe(payload);
+
+      vi.restoreAllMocks();
+      const nextLaunch = await loadStore();
+      expect(nextLaunch.useGlobalLinksStore.getState().links.map((l) => l.id)).toEqual(["user-a"]);
+      expect(backing.has(`${PORTAL_KEY}.__bak`)).toBe(false);
+    });
+
+    it("moves links from a backup whose live copy is already gone, then removes it", async () => {
+      const backing = installLocalStorage({
+        [`${PORTAL_KEY}.__bak`]: portalPayload([portalLink("user-a", "user")]),
+      });
+
+      const { useGlobalLinksStore } = await loadStore();
+
+      expect(useGlobalLinksStore.getState().links.map((l) => l.id)).toEqual(["user-a"]);
+      expect(backing.has(`${PORTAL_KEY}.__bak`)).toBe(false);
+    });
+
+    it("removes a backup left behind after an earlier launch already moved the links", async () => {
+      const backing = installLocalStorage({
+        [KEY]: JSON.stringify({ state: { links: [] }, version: 0 }),
+        [`${PORTAL_KEY}.__bak`]: portalPayload([portalLink("user-a", "user")]),
+      });
+
+      const { useGlobalLinksStore } = await loadStore();
+
+      expect(useGlobalLinksStore.getState().links).toEqual([]);
+      expect(backing.has(`${PORTAL_KEY}.__bak`)).toBe(false);
     });
 
     it("reads an unversioned payload from an older release and keeps an always-on link always on", async () => {
@@ -621,7 +668,6 @@ describe("globalLinksStore", () => {
       await Promise.resolve();
 
       expect(view.useGlobalLinksStore.getState().links.map((l) => l.id)).toEqual(["user-x"]);
-      expect(view.hasGlobalLink("user-x")).toBe(true);
     });
   });
 });

@@ -1107,8 +1107,9 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
             // blob's pins into a blob that has none. There is no default pin map
             // to fall back to any more (#11667) — a profile with no persisted
             // pins has expressed no overrides, and every built-in it positions
-            // is therefore visible.
-            pinnedButtons: persisted.layout?.pinnedButtons ?? {},
+            // is therefore visible. Normalized like a write, so a retired
+            // button's pin never comes back into memory.
+            pinnedButtons: normalizePinnedButtons(persisted.layout?.pinnedButtons),
           }),
         };
       },

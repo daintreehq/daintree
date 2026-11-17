@@ -9,8 +9,9 @@ import {
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import {
   GLOBAL_LINKS_STORAGE_KEY,
-  LEGACY_PORTAL_STORAGE_KEY,
+  readLegacyPortalPayload,
   readLegacyUserLinks,
+  removeLegacyPortalPayload,
   sanitizeGlobalLink,
 } from "./persistence/globalLinksMigration";
 
@@ -164,7 +165,7 @@ const storage = createSafeJSONStorage<GlobalLinksPersistedState>({ mergeOnWrite:
 /** Whether `key` holds a value; null when storage couldn't be read. */
 function isStored(key: string): boolean | null {
   try {
-    // storage-key: daintree-global-links portal-storage
+    // storage-key: daintree-global-links
     return globalThis.localStorage.getItem(key) !== null;
   } catch {
     return null;
@@ -172,39 +173,28 @@ function isStored(key: string): boolean | null {
 }
 
 /**
- * Drops the Portal's persisted state, and its backup, once this store's key is
- * on disk: the key's presence records that the links came over, and nothing
- * else reads the Portal's payload since the dock went (#17256).
- */
-function retireLegacyPortalStorage(): void {
-  if (isStored(GLOBAL_LINKS_STORAGE_KEY) !== true) return;
-  if (isStored(LEGACY_PORTAL_STORAGE_KEY) !== true) return;
-  createSafeJSONStorage<unknown>().removeItem(LEGACY_PORTAL_STORAGE_KEY);
-}
-
-/**
  * Carries the links a person added to the Portal into this store, once: only
  * while the key has never been written, and writing it even when nothing came
  * over, so its presence is the record that the move happened. The Portal's
- * payload is read with the same backup recovery its own hydration had, and is
- * removed only once the move is on disk, whichever launch made it. Returns
- * what it moved, or null when there was nothing to do or storage couldn't be
- * read, which leaves the move for a later launch.
+ * payload, which nothing else reads since the dock went (#17256), is removed
+ * with its backup once this store's key is on disk, on the launch that made
+ * the move or any later one. Returns what it moved, or null when there was
+ * nothing to do or storage couldn't be read, which leaves the move for later.
  */
 export function migrateLegacyGlobalLinks(): GlobalLink[] | null {
   const migrated = isStored(GLOBAL_LINKS_STORAGE_KEY);
   if (migrated !== false) {
-    if (migrated) retireLegacyPortalStorage();
+    if (migrated) removeLegacyPortalPayload();
     return null;
   }
+  const legacy = readLegacyPortalPayload();
   // A read that failed is not an empty Portal list: leave the move for later.
-  if (isStored(LEGACY_PORTAL_STORAGE_KEY) === null) return null;
-  const legacy = createSafeJSONStorage<unknown>().getItem(LEGACY_PORTAL_STORAGE_KEY);
-  const links = readLegacyUserLinks(legacy instanceof Promise ? null : legacy);
+  if (legacy.kind === "unreadable") return null;
+  const links = legacy.kind === "read" ? readLegacyUserLinks(legacy.envelope) : [];
   storage.setItem(GLOBAL_LINKS_STORAGE_KEY, { state: { links }, version: PERSIST_VERSION });
   // A write storage refused (quota, or the in-memory fallback) leaves the
   // Portal's copy for the launch that does get the move onto disk.
-  retireLegacyPortalStorage();
+  if (isStored(GLOBAL_LINKS_STORAGE_KEY) === true) removeLegacyPortalPayload();
   return links;
 }
 
@@ -305,11 +295,6 @@ export const useGlobalLinksStore = create<GlobalLinksState>()(
     }
   )
 );
-
-/** Whether `id` names one of the global links, rather than a link some other list keeps. */
-export function hasGlobalLink(id: string): boolean {
-  return useGlobalLinksStore.getState().links.some((l) => l.id === id);
-}
 
 // A persist store hydrates once per view, and a cached view would keep showing
 // a link another view removed. Views share the storage partition, so the

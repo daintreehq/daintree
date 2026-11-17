@@ -1,5 +1,5 @@
 import type { GlobalLink } from "../globalLinksStore";
-import { createSafeJSONStorage, readLocalStorageItemSafely } from "./safeStorage";
+import { backupKeyFor, safeJSONParse } from "./safeStorage";
 
 /**
  * Links a person added for every project on this machine (#17242), kept apart
@@ -10,8 +10,8 @@ export const GLOBAL_LINKS_STORAGE_KEY = "daintree-global-links";
 /**
  * Where global links lived before they had a store of their own (#17242): the
  * Portal dock's persisted state, beside its tabs, width and the built-in web
- * chats. Read raw, never through the Portal store, so a user who upgrades past
- * the dock's removal still gets their links.
+ * chats. Read raw, since the Portal store is gone (#17256), so a user who
+ * upgrades straight past both releases still gets their links.
  */
 export const LEGACY_PORTAL_STORAGE_KEY = "portal-storage";
 
@@ -71,24 +71,53 @@ export function readLegacyUserLinks(envelope: unknown): GlobalLink[] {
   return links;
 }
 
+/** What storage holds for the Portal's payload, read once so one answer decides the move. */
+export type LegacyPortalPayload =
+  | { readonly kind: "absent" }
+  | { readonly kind: "unreadable" }
+  | { readonly kind: "read"; readonly envelope: unknown };
+
 /**
- * The URLs of the person's own links as the global list last stored them, read
- * with the same backup recovery that list's hydration has, or null while it
- * has never been written (or can't be read), when the Portal's copy is still
- * the person's list. A stored list nothing can be recovered from holds none.
+ * The Portal's persisted envelope, or its last-good backup when the live copy
+ * is corrupt or already gone. A read that throws is `unreadable`, never an
+ * empty list: the move is then left for a later launch, with both copies kept.
  */
-export function readStoredGlobalLinkUrls(): string[] | null {
-  if (readLocalStorageItemSafely(GLOBAL_LINKS_STORAGE_KEY) === null) return null;
-  const envelope = createSafeJSONStorage<unknown>().getItem(GLOBAL_LINKS_STORAGE_KEY);
-  if (!envelope || envelope instanceof Promise) return [];
-  const { state } = envelope;
-  if (!state || typeof state !== "object") return [];
-  const stored = field(state, "links");
-  if (!Array.isArray(stored)) return [];
-  const urls: string[] = [];
-  for (const entry of stored) {
-    const link = sanitizeGlobalLink(entry, 0);
-    if (link) urls.push(link.url);
+export function readLegacyPortalPayload(): LegacyPortalPayload {
+  let live: string | null;
+  let backup: string | null;
+  try {
+    const ls = globalThis.localStorage;
+    // storage-key: portal-storage
+    live = ls.getItem(LEGACY_PORTAL_STORAGE_KEY);
+    // storage-key: portal-storage
+    backup = ls.getItem(backupKeyFor(LEGACY_PORTAL_STORAGE_KEY));
+  } catch {
+    return { kind: "unreadable" };
   }
-  return urls;
+  if (live === null && backup === null) return { kind: "absent" };
+  const context = { store: "globalLinksStore", key: LEGACY_PORTAL_STORAGE_KEY };
+  const parsed = safeJSONParse<unknown>(live, context, undefined);
+  if (parsed !== undefined) return { kind: "read", envelope: parsed };
+  return { kind: "read", envelope: safeJSONParse<unknown>(backup, context, null) };
+}
+
+/**
+ * Removes the Portal's payload and its backup. Called only once the global
+ * list is on disk; a removal that fails is retried on the next launch.
+ */
+export function removeLegacyPortalPayload(): void {
+  let ls: Storage;
+  try {
+    ls = globalThis.localStorage;
+  } catch {
+    return;
+  }
+  // storage-key: portal-storage
+  for (const key of [LEGACY_PORTAL_STORAGE_KEY, backupKeyFor(LEGACY_PORTAL_STORAGE_KEY)]) {
+    try {
+      ls.removeItem(key);
+    } catch {
+      // Retried on the next launch, which finds the global list on disk.
+    }
+  }
 }

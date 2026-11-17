@@ -103,7 +103,7 @@ const THREE_DOT_ALLOWED = new Set([
 
 // Any casing, and the link/page rows of a native page menu.
 const AMBIGUOUS_BROWSER = /\bopen (?:link |page )?in browser\b/i;
-const IN_APP_BROWSER_FILES = /^src\/components\/(Browser|Portal|DevPreview)\//;
+const IN_APP_BROWSER_FILES = /^src\/components\/(Browser|DevPreview)\//;
 const IN_APP_BROWSER_MENUS = new Set([
   "src/components/Terminal/TerminalContextMenu.tsx",
   // The portal page's native right-click menu.
