@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import type { TerminalRecipe } from "@/types";
 
 const {
@@ -213,5 +213,31 @@ describe("RecipesTab — default pin", () => {
     );
 
     expect(container.querySelector("#project-default-recipe")).not.toBeNull();
+  });
+});
+
+describe("RecipesTab — copying an overridden recipe (#17200)", () => {
+  it("copies the row that was clicked, not the team recipe that overrides it", async () => {
+    mockRecipes.value = [
+      makeRecipe({ id: "local-1", name: "Shared", projectId: "proj-1", shadowedBy: "Shared" }),
+      makeRecipe({ id: "inrepo-shared", name: "Shared", scope: "inrepo" }),
+    ];
+    mockExportRecipe.mockClear().mockReturnValue('{"id":"local-1"}');
+    render(
+      <RecipesTab
+        projectId="proj-1"
+        defaultWorktreeRecipeId={undefined}
+        onDefaultWorktreeRecipeIdChange={vi.fn()}
+        worktreeMap={new Map()}
+        isOpen={true}
+      />
+    );
+
+    const row = document.querySelector<HTMLElement>('[data-recipe-id="local-1"]')!;
+    expect(row.textContent).toContain("Overridden by team recipe");
+    fireEvent.click(within(row).getByRole("button", { name: "Copy recipe Shared as JSON" }));
+
+    await waitFor(() => expect(mockExportRecipe).toHaveBeenCalled());
+    expect(mockExportRecipe.mock.calls.map(([id]) => id)).toEqual(["local-1"]);
   });
 });
