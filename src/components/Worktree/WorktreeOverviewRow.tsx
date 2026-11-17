@@ -710,13 +710,18 @@ export function WorktreeOverviewRow({
                 // A session arriving or leaving swaps these lines for the strip
                 // (or back); the guard keeps a focused line's keyboard alive.
                 <FocusHandoffGuard key="inline" onFocusLeaving={onFocusLost}>
-                  {marks.map((mark) => (
-                    <SessionLine
-                      key={mark.terminal.id}
-                      mark={mark}
-                      onBeforeOpen={onBeforeMenuAction}
-                    />
-                  ))}
+                  {/* A 24px line against the 20px headline line beside it; lifting
+                      the list by half the difference keeps the first session's
+                      text on the title's centre line. */}
+                  <div className="-mt-0.5">
+                    {marks.map((mark) => (
+                      <SessionLine
+                        key={mark.terminal.id}
+                        mark={mark}
+                        onBeforeOpen={onBeforeMenuAction}
+                      />
+                    ))}
+                  </div>
                 </FocusHandoffGuard>
               ) : (
                 <FocusHandoffGuard key="strip" onFocusLeaving={onFocusLost}>
