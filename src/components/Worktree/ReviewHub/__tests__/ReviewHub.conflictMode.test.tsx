@@ -1775,11 +1775,14 @@ describe("ReviewHub", () => {
 
     it("asks before staging a file whose opener was deleted but whose closer remains", async () => {
       getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      // The background scan read the file clean; the edit since left a closer.
+      await waitFor(() => expect(scanConflictMarkersMock).toHaveBeenCalled());
       scanConflictMarkersMock.mockResolvedValue([
         { path: "src/app.ts", hunkCount: 0, hasMarkers: true, firstMarkerLine: 4 },
       ]);
-
-      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       const markButton = await screen.findByRole("button", {
         name: /Mark src\/app\.ts as resolved/i,
@@ -1876,11 +1879,13 @@ describe("ReviewHub", () => {
           conflictedFiles: [{ path: "src/app.ts", xy: "UD", label: "deleted by them" }],
         })
       );
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => expect(scanConflictMarkersMock).toHaveBeenCalled());
       scanConflictMarkersMock.mockResolvedValue([
         { path: "src/app.ts", hunkCount: 0, hasMarkers: true, firstMarkerLine: 3 },
       ]);
-
-      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       fireEvent.click(
         await screen.findByRole("button", { name: /Mark src\/app\.ts as resolved/i })

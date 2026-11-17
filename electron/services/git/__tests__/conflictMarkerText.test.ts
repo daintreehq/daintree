@@ -70,6 +70,20 @@ describe("scanConflictMarkerText", () => {
       hasMarkers: true,
       firstMarkerLine: 3,
     });
+    expect(scanConflictMarkerText("a\rb\n>>>>>>> theirs\r")).toMatchObject({
+      hasMarkers: true,
+      firstMarkerLine: 3,
+    });
+  });
+
+  // Git splits lines only at LF, so it never writes a marker straight after a
+  // bare CR, and the commit scan passes one there.
+  it("matches the commit scan in ignoring a run that follows only a bare CR", () => {
+    expect(scanConflictMarkerText("a\r>>>>>>> theirs\r")).toEqual({
+      hunkCount: 0,
+      hasMarkers: false,
+      firstMarkerLine: null,
+    });
   });
 
   // Review Hub asks about exactly what the commit scan would refuse: a run of
