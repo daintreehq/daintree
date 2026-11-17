@@ -68,33 +68,58 @@ describe("FindBar accessibility", () => {
 });
 
 describe("FindBar count", () => {
-  function counterText(container: HTMLElement): string {
-    const input = container.querySelector('input[aria-label="Find in page"]') as HTMLInputElement;
-    return container.querySelector(`[id="${input.getAttribute("aria-describedby")}"]`)!
-      .textContent!;
+  function counter(): HTMLElement {
+    const id = screen.getByLabelText("Find in page").getAttribute("aria-describedby");
+    const node = document.getElementById(id ?? "");
+    if (!node) throw new Error("no counter");
+    return node;
   }
 
   it("says nothing while the page hasn't answered the query", () => {
-    const { container } = render(
-      <FindBar find={makeFindState({ query: "foo", matchCount: 0, isPending: true })} />
-    );
-    expect(counterText(container)).toBe("");
+    render(<FindBar find={makeFindState({ query: "foo", matchCount: 0, isPending: true })} />);
+    expect(counter().textContent).toBe("");
   });
 
   it("reports no matches once the page has answered with none", () => {
-    const { container } = render(
-      <FindBar find={makeFindState({ query: "foo", matchCount: 0, isPending: false })} />
-    );
-    expect(counterText(container)).toBe("No matches");
+    render(<FindBar find={makeFindState({ query: "foo", matchCount: 0, isPending: false })} />);
+    expect(counter().textContent).toBe("No matches");
   });
 
   it("reports the count once the page has answered", () => {
-    const { container } = render(
+    render(
       <FindBar
         find={makeFindState({ query: "foo", activeMatch: 2, matchCount: 5, isPending: false })}
       />
     );
-    expect(counterText(container)).toBe("2 of 5");
+    expect(counter().textContent).toBe("2 of 5");
+  });
+
+  it("keeps one live region through a pending search, styled as no result only once settled", () => {
+    const { rerender } = render(
+      <FindBar find={makeFindState({ query: "", matchCount: 0, isPending: false })} />
+    );
+    const node = counter();
+    const idleClass = node.className;
+
+    rerender(<FindBar find={makeFindState({ query: "foo", matchCount: 0, isPending: true })} />);
+    expect(counter()).toBe(node);
+    expect(node.textContent).toBe("");
+    expect(node.className).toBe(idleClass);
+
+    rerender(<FindBar find={makeFindState({ query: "foo", matchCount: 0, isPending: false })} />);
+    expect(counter()).toBe(node);
+    expect(node.textContent).toBe("No matches");
+    expect(node.className).not.toBe(idleClass);
+  });
+
+  it("ends a composition its field can no longer finish when the bar unmounts", () => {
+    const isComposingRef = { current: false };
+    const { unmount } = render(<FindBar find={makeFindState({ isComposingRef })} />);
+    fireEvent.compositionStart(screen.getByLabelText("Find in page"));
+    expect(isComposingRef.current).toBe(true);
+
+    unmount();
+    expect(isComposingRef.current).toBe(false);
   });
 });
 

@@ -23,8 +23,15 @@ export interface FindInPageState {
   toggleMatchCase: () => void;
 }
 
-interface FindAnswer {
+interface FindRequest {
+  id: number;
   webview: Electron.WebviewTag;
+  query: string;
+  matchCase: boolean;
+}
+
+interface FindAnswer {
+  request: FindRequest;
   activeMatch: number;
   matchCount: number;
 }
@@ -51,7 +58,7 @@ export function useFindInPage(
   const [matchCase, setMatchCase] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const isComposingRef = useRef(false);
-  const latestRequestIdRef = useRef<number | null>(null);
+  const latestRequestRef = useRef<FindRequest | null>(null);
 
   // The kept query and matchCase belong to one pane. A tab switch reuses this
   // instance with another pane's id, which starts a fresh find session instead
@@ -65,7 +72,7 @@ export function useFindInPage(
     setMatchCase(false);
   }
   useEffect(() => {
-    latestRequestIdRef.current = null;
+    latestRequestRef.current = null;
     isComposingRef.current = false;
   }, [panelId]);
 
@@ -75,13 +82,16 @@ export function useFindInPage(
   const safeFind = useCallback(
     (text: string, opts: { forward?: boolean; findNext?: boolean; matchCase?: boolean }) => {
       if (!webviewElement || !isWebviewReady || !text) return;
+      const { matchCase: explicitMatchCase, ...restOpts } = opts;
+      const requestMatchCase = explicitMatchCase ?? matchCase;
       try {
-        const { matchCase: explicitMatchCase, ...restOpts } = opts;
-        const requestId = webviewElement.findInPage(text, {
-          ...restOpts,
-          matchCase: explicitMatchCase ?? matchCase,
-        });
-        latestRequestIdRef.current = requestId;
+        const id = webviewElement.findInPage(text, { ...restOpts, matchCase: requestMatchCase });
+        latestRequestRef.current = {
+          id,
+          webview: webviewElement,
+          query: text,
+          matchCase: requestMatchCase,
+        };
       } catch {
         // webview detached
       }
@@ -93,7 +103,7 @@ export function useFindInPage(
   // the counts on screen: they answered something else, and a late reply to
   // that request must not land on this one.
   const forgetAnswer = useCallback(() => {
-    latestRequestIdRef.current = null;
+    latestRequestRef.current = null;
     setAnswer(null);
   }, []);
 
@@ -177,10 +187,11 @@ export function useFindInPage(
 
     const handler = (event: Electron.FoundInPageEvent) => {
       const { result } = event;
-      if (result.requestId !== latestRequestIdRef.current) return;
+      const request = latestRequestRef.current;
+      if (!request || result.requestId !== request.id) return;
       if (!result.finalUpdate) return;
       setAnswer({
-        webview: webviewElement,
+        request,
         activeMatch: result.activeMatchOrdinal,
         matchCount: result.matches,
       });
@@ -192,22 +203,32 @@ export function useFindInPage(
     };
   }, [webviewElement, isOpen]);
 
-  // Restart find on SPA navigation
+  // Restart an open search when the page changes under it: an in-page (SPA)
+  // navigation, or a new document. A DOM move of the <webview> (dock, grid
+  // reorder) also swaps in a new guest under the same element while it stays
+  // ready, and only its `dom-ready` says so.
   useEffect(() => {
     if (!webviewElement || !isOpen || !query) return;
 
-    const handler = (event: Electron.DidNavigateInPageEvent) => {
-      if (!event.isMainFrame) return;
+    const restart = () => {
       forgetAnswer();
-      safeFind(query, { findNext: true });
+      if (!isComposingRef.current) safeFind(query, { findNext: true });
+    };
+    const handleInPage = (event: Electron.DidNavigateInPageEvent) => {
+      if (event.isMainFrame) restart();
     };
 
-    webviewElement.addEventListener("did-navigate-in-page", handler as unknown as EventListener);
+    webviewElement.addEventListener(
+      "did-navigate-in-page",
+      handleInPage as unknown as EventListener
+    );
+    webviewElement.addEventListener("dom-ready", restart);
     return () => {
       webviewElement.removeEventListener(
         "did-navigate-in-page",
-        handler as unknown as EventListener
+        handleInPage as unknown as EventListener
       );
+      webviewElement.removeEventListener("dom-ready", restart);
     };
   }, [webviewElement, isOpen, query, forgetAnswer, safeFind]);
 
@@ -289,9 +310,19 @@ export function useFindInPage(
     }
   }, [isOpen]);
 
-  // A replaced webview's answer described the old page. It's dropped from the
-  // first render on, not when the resume effect gets to it after the paint.
-  const currentAnswer = answer?.webview === webviewElement ? answer : null;
+  // An answer shows only while the bar still asks what it answered: the same
+  // text and case, of the same ready page. Checked here rather than left to the
+  // effects that forget it, which run a paint late (a replaced or unready
+  // webview) and can be overtaken (a keystroke between a commit and its resume).
+  const asked = answer?.request;
+  const currentAnswer =
+    answer &&
+    isWebviewReady &&
+    asked?.webview === webviewElement &&
+    asked.query === query &&
+    asked.matchCase === matchCase
+      ? answer
+      : null;
 
   return {
     isOpen,

@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useEffect, useId } from "react";
 import { ChevronUp, ChevronDown, X } from "lucide-react";
 import {
   FIND_BAR_CLASS,
@@ -32,6 +32,15 @@ export function FindBar({ find }: FindBarProps) {
     toggleMatchCase,
   } = find;
   const counterId = useId();
+
+  // A composition ends with its field. Unmounted mid-composition (a dev preview
+  // swapping in its empty state keeps Find open), the field never sees
+  // compositionend, and the flag would keep every later keystroke from searching.
+  useEffect(() => {
+    return () => {
+      isComposingRef.current = false;
+    };
+  }, [isComposingRef]);
 
   // Enter and Cmd/Ctrl+G belong to the field; Escape closes from anywhere in the
   // bar, as in the terminal's find bar.
