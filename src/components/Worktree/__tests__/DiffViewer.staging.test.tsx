@@ -432,7 +432,7 @@ describe("DiffViewer staged rows", () => {
   it("holds Show more back until every row is in, then stages the hunks it reveals", async () => {
     const { container } = renderViewer(<DiffViewer diff={largeManyHunks()} />);
     // Over the soft-collapse gate: opened by hand.
-    fireEvent.click(screen.getByText("Show diff"));
+    fireEvent.click(screen.getByRole("button", { name: /^Large diff/ }));
     const firstBatch = rowCount(container);
     expect(firstBatch).toBe(DIFF_ROW_BATCH);
     expect(screen.queryByText(/more hunks/)).toBeNull();
