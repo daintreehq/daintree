@@ -867,7 +867,7 @@ export function ConflictPanel({
     status.rebaseTotalSteps != null &&
     status.rebaseStep < status.rebaseTotalSteps;
   const summary = unidentified
-    ? "Abort and Continue wait until it can be read — Refresh to check again"
+    ? "Abort and Continue wait until it can be read — Refresh, or finish it from a terminal"
     : conflictCount > 0
       ? `${pluralize(conflictCount, "conflicted file")} — resolve each, then continue`
       : mailboxNeedsChanges

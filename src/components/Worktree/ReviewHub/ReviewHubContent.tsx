@@ -1260,9 +1260,14 @@ export function ReviewHubContent({
     // Never over a conflict or a halted operation: staging everything would
     // stage conflicted files markers and all, which marks them resolved, and
     // the conflict panel owns what gets staged there. Opening the hub to
-    // resolve or continue one is ordinary (#17559), not an edge case.
+    // resolve or continue one is ordinary (#17559), not an edge case. The
+    // one-shot is spent here too, as it is over staged files below: the
+    // tree the operation leaves when it finishes is not what was opened.
     const halted = status.repoState !== "CLEAN" && status.repoState !== "DIRTY";
-    if (status.conflicted.length > 0 || halted) return;
+    if (status.conflicted.length > 0 || halted) {
+      hasAutoStagedRef.current = true;
+      return;
+    }
     if (status.staged.length > 0) {
       // Already staged from a prior session — skip and mark as handled.
       hasAutoStagedRef.current = true;

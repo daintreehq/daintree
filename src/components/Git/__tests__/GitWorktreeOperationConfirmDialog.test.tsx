@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { GitWorktreeOperationConfirmDialog } from "../GitWorktreeOperationConfirmDialog";
@@ -451,7 +451,9 @@ describe("GitWorktreeOperationConfirmDialog — abort binds to the operation it 
     render(<GitWorktreeOperationConfirmDialog />);
     const outcome = await openAbort("MERGING");
 
-    const close = screen.getByRole("button", { name: "Close" });
+    // Nothing destructive left to confirm, so not an alert.
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    const close = within(screen.getByRole("dialog")).getByRole("button", { name: "Close" });
     expect(isDisabled(close)).toBe(false);
     await act(async () => {
       close.click();

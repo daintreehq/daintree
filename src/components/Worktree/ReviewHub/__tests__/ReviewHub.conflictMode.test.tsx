@@ -1828,7 +1828,11 @@ describe("ReviewHub", () => {
 
         await waitFor(() => expect(abortRepositoryOperationMock).toHaveBeenCalledTimes(1));
         await act(async () => {});
-        expect(screen.getByRole("alertdialog")).toBeTruthy();
+        // Still open and usable: a second try sends the same choice again.
+        const still = screen.getByRole("alertdialog");
+        fireEvent.click(within(still).getByRole("button", { name: /Abort merge/i }));
+        await waitFor(() => expect(abortRepositoryOperationMock).toHaveBeenCalledTimes(2));
+        expect(abortRepositoryOperationMock).toHaveBeenLastCalledWith(WORKTREE_PATH, MERGE_A);
       });
 
       it("treats a status with no identity field at all as unidentified", async () => {
@@ -1841,6 +1845,8 @@ describe("ReviewHub", () => {
         await screen.findByText(/Couldn't identify this merge/);
         const abort = screen.getByRole("button", { name: /^Abort /i }) as HTMLButtonElement;
         expect(abort.disabled).toBe(true);
+        const continueBtn = screen.getByRole("button", { name: /^Continue /i });
+        expect(continueBtn.getAttribute("aria-disabled")).toBe("true");
       });
 
       it("offers neither Abort nor Continue for a merge the read couldn't identify", async () => {

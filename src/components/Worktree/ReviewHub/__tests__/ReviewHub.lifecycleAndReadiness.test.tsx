@@ -506,6 +506,43 @@ describe("ReviewHub", () => {
       ],
       ["a halted rebase between conflicts", { repoState: "REBASING", repoOperationId: "rb-1" }],
     ];
+    it("stays spent once the operation it opened over finishes", async () => {
+      // Opened on a halted merge; Continue then commits it and leaves an
+      // unrelated edit behind. That edit is not what the hub was opened over.
+      const unrelated = {
+        path: "src/unrelated.ts",
+        status: "modified",
+        insertions: 1,
+        deletions: 0,
+      } as const;
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({
+          staged: [{ path: "src/conflict.ts", status: "modified", insertions: 1, deletions: 1 }],
+          unstaged: [unrelated],
+          repoState: "MERGING",
+          repoOperationId: "merge-a",
+        })
+      );
+      render(
+        <ReviewHubContent
+          isOpen={true}
+          worktreePath={WORKTREE_PATH}
+          onClose={vi.fn()}
+          autoStageOnOpen={true}
+        />
+      );
+      await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalled());
+      await act(async () => {});
+
+      getStagingStatusMock.mockResolvedValue(makeStatus({ staged: [], unstaged: [unrelated] }));
+      await act(async () => {
+        capturedUpdateCallback!(makeWorktreeState());
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(screen.getByText("unrelated.ts")).toBeTruthy());
+      expect(stageAllMock).not.toHaveBeenCalled();
+    });
+
     it.each(overConflicts)("never stages everything over %s", async (_case, overrides) => {
       // Staging everything would stage the conflicted file markers and all,
       // which marks it resolved; opening the hub to continue is ordinary (#17559).
