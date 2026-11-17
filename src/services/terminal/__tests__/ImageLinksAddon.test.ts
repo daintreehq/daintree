@@ -304,17 +304,25 @@ describe("ImageLinksAddon", () => {
       expect(links![0]!.range).toEqual(range(1, 3, 8, 3));
     });
 
-    it("follows a wrap written after a narrowing past the rows' spare cells", async () => {
-      const terminal = await render(9, "\x1b[?1049h");
+    it("doesn't join a narrowed row to a wrap that may have been made at the old width", async () => {
+      // `image #1`, an erased cell, then `2` on the wrapped row: once the pane
+      // narrows past the erased cell, the rows read like a wrapped `image #12`.
+      const terminal = await render(9, "\x1b[?1049himage #1X2\x1b[1;9H\x1b[X");
       terminal.resize(8, 10);
-      await write(terminal, "[image #1]");
+      expect(terminal.buffer.active.getLine(1)!.isWrapped).toBe(true);
+      expect(terminal.buffer.active.getLine(0)!.translateToString(true)).toBe("image #1");
+      const addon = new ImageLinksAddon(terminal, () => [1, 12], vi.fn());
+      for (const y of [1, 2]) expect(await provide(addon, y)).toBeUndefined();
+    });
+
+    it("links a reference ending a narrowed row when nothing is hidden or wrapped", async () => {
+      const terminal = await render(9, "\x1b[?1049himage #1\r\nok");
+      terminal.resize(8, 10);
       expect(terminal.buffer.active.getLine(0)!.length).toBeGreaterThan(terminal.cols);
       const addon = new ImageLinksAddon(terminal, () => [1], vi.fn());
-      for (const y of [1, 2]) {
-        const links = await provide(addon, y);
-        expect(links).toHaveLength(1);
-        expect(links![0]!.range).toEqual(range(1, 1, 2, 2));
-      }
+      const links = await provide(addon, 1);
+      expect(links).toHaveLength(1);
+      expect(links![0]!.range).toEqual(range(1, 1, 8, 1));
     });
 
     it("leaves a bracketed reference inert when a narrowed pane hides its end", async () => {

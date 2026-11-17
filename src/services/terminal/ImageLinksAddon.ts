@@ -51,11 +51,7 @@ function lineAt(buffer: IBuffer, y: number): IBufferLine | undefined {
   return y >= 0 && y < buffer.length ? buffer.getLine(y) : undefined;
 }
 
-/**
- * Whether a row holds text past the pane's edge. An alternate buffer narrowed
- * without reflow keeps each row's old cells, so the row below doesn't continue
- * what's on screen; cells that were never written are just spare capacity.
- */
+/** Whether a row longer than the pane holds text past its edge. */
 function hidesText(line: IBufferLine, cols: number): boolean {
   let scratch: IBufferCell | undefined;
   for (let x = cols; x < line.length; x++) {
@@ -74,6 +70,11 @@ function hidesText(line: IBufferLine, cols: number): boolean {
  * always ends the line. The blank cell xterm leaves at the edge when a wide
  * character moves down reads as a space; only that wide character follows it,
  * and it can't be part of a reference or a word boundary.
+ *
+ * A row longer than the pane is one an alternate buffer kept through a
+ * narrowing without reflow. It never joins the row below it: xterm doesn't
+ * record whether that wrap was made at the old width, past cells now hidden,
+ * or at the new one, and an erased cell reads the same as one never written.
  */
 function readWrappedText(terminal: ImageLinkTerminal, row: number): WrappedText | null {
   const buffer = terminal.buffer.active;
@@ -87,7 +88,7 @@ function readWrappedText(terminal: ImageLinkTerminal, row: number): WrappedText 
   for (let reach = 0; topLine.isWrapped; reach += cols) {
     const above = lineAt(buffer, top - 1);
     // No row above means scrollback dropped the start of the line.
-    if (!above || reach >= CONTEXT_CELLS || hidesText(above, cols)) {
+    if (!above || reach >= CONTEXT_CELLS || above.length > cols) {
       clippedStart = true;
       break;
     }
@@ -99,11 +100,11 @@ function readWrappedText(terminal: ImageLinkTerminal, row: number): WrappedText 
   let bottomLine = hovered;
   let clippedEnd = false;
   for (let reach = 0; ; reach += cols) {
-    if (hidesText(bottomLine, cols)) {
+    const below = lineAt(buffer, bottom + 1);
+    if (bottomLine.length > cols && (below?.isWrapped || hidesText(bottomLine, cols))) {
       clippedEnd = true;
       break;
     }
-    const below = lineAt(buffer, bottom + 1);
     if (!below?.isWrapped) break;
     if (reach >= CONTEXT_CELLS) {
       clippedEnd = true;
