@@ -308,13 +308,20 @@ export class PluginUpdateCheckService {
     // Re-check enabled after the async init — a toggle-off mid-wait aborts.
     if (this.disposed || !this.getSettings().enabled) return null;
 
-    const targets = pluginService
-      .listPlugins()
-      // A catalog install is checked against the catalog, not its URL (#16781).
-      .filter(
-        (p) => !p.isBuiltin && (p.source === "catalog" || (!!p.originalUrl && !!p.archiveHash))
-      )
-      .map((p) => p.manifest.name);
+    // The registry can list one plugin twice while a re-enable is in flight (running
+    // and disabled rows). One check per id keeps a plugin out of both `found` and
+    // `failedIds`, so a fresh offer never sits beside its own cached version.
+    const targets = [
+      ...new Set(
+        pluginService
+          .listPlugins()
+          // A catalog install is checked against the catalog, not its URL (#16781).
+          .filter(
+            (p) => !p.isBuiltin && (p.source === "catalog" || (!!p.originalUrl && !!p.archiveHash))
+          )
+          .map((p) => p.manifest.name)
+      ),
+    ];
 
     const { found, failedIds } = await this.checkAll(pluginService, targets);
     return {

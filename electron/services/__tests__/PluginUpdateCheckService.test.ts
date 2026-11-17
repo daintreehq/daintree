@@ -465,6 +465,19 @@ describe("PluginUpdateCheckService", () => {
       expect(svc.getLatest()?.updates).toHaveLength(2);
     });
 
+    it("checks a plugin once when the registry lists it twice", async () => {
+      const svc = await cacheOffers({ "pub.a": urlPlugin });
+      pluginServiceMock.checkForUpdate.mockClear();
+      // A re-enable in flight holds the plugin in both the running and disabled rows.
+      pluginServiceMock.listPlugins.mockReturnValue([urlPlugin("pub.a"), urlPlugin("pub.a")]);
+      const answers = [async () => available("pub.a", "3.0.0"), netFailed];
+      pluginServiceMock.checkForUpdate.mockImplementation(async () => answers.shift()!());
+      await svc._checkNowForTest();
+
+      expect(pluginServiceMock.checkForUpdate).toHaveBeenCalledTimes(1);
+      expect(svc.getLatest()?.signature).toBe("pub.a@3.0.0");
+    });
+
     it("does not resurrect an offer for a plugin that is no longer installed", async () => {
       const svc = await cacheOffers({ "pub.a": urlPlugin, "pub.c": urlPlugin });
       // pub.a is gone, so it is no longer a target and is never reported as
