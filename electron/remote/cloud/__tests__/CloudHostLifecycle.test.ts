@@ -1349,6 +1349,23 @@ describe("CloudHostLifecycle lifetime models", () => {
     });
     expect(provider.create).toHaveBeenCalledTimes(1);
     // The lost first request may still have made it: removal must still go the delete way.
+    expect(lifecycle.statuses()[0]!.lastError).toMatchObject({
+      code: "outcome-unknown",
+      message: expect.stringContaining("deletes any machine it finds"),
+    });
+  });
+
+  it("points to the account, not removal, when its provider can't delete machines", async () => {
+    const { lifecycle, provider } = await lostCreate();
+    const info = provider.info;
+    provider.info = (platform) => {
+      const described = info(platform);
+      return {
+        ...described,
+        capabilities: { ...described.capabilities, lifetime: NONE, deletion: false },
+      };
+    };
+    await expect(lifecycle.retryCreate("build")).rejects.toThrow(/check your Boat account/);
     expect(lifecycle.statuses()[0]!.lastError?.code).toBe("outcome-unknown");
   });
 

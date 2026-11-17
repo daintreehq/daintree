@@ -679,7 +679,9 @@ export class CloudHostLifecycle {
         ? `${nameOf(provider)} changed while the machine was being asked for.`
         : `${nameOf(provider)} no longer takes a lifetime for its machines, so Daintree won't ask for one with it.`;
       const next = sent
-        ? "An earlier request may still have made it; removing the host checks once and deletes any machine it finds."
+        ? provider.info(process.platform).capabilities.deletion
+          ? "An earlier request may still have made it; removing the host checks once and deletes any machine it finds."
+          : `An earlier request may still have made it; check your ${nameOf(provider)} account for it.`
         : changed
           ? "Nothing was asked for; Retry asks again."
           : "Nothing was created; remove the host and add it again.";
