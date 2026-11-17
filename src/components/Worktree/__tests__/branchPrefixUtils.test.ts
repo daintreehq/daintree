@@ -249,6 +249,24 @@ describe("detectPrefixFromIssue", () => {
     expect(detectPrefixFromIssue(issue)).toBe("feature");
   });
 
+  it.each([
+    "Updating dependencies",
+    "Improving keyboard navigation",
+    "Updated docs",
+    "Improved caching",
+    "Updates to the sidebar",
+    "Improves startup",
+  ])("detects feature from inflected title %j", (title) => {
+    expect(detectPrefixFromIssue(createTestIssue(title))).toBe("feature");
+  });
+
+  it.each(["Updater service rewrite", "Improvement ideas", "Upd dependencies"])(
+    "keeps word boundaries for unrelated title %j",
+    (title) => {
+      expect(detectPrefixFromIssue(createTestIssue(title))).toBeNull();
+    }
+  );
+
   it("does not falsely match keyword in middle of word", () => {
     const issue = createTestIssue("Debug prefix handler");
     expect(detectPrefixFromIssue(issue)).toBeNull();
