@@ -1712,7 +1712,7 @@ export function ReviewHubContent({
   const totalChanges = new Set([
     ...(status?.staged ?? []).map((f) => f.path),
     ...(status?.unstaged ?? []).map((f) => f.path),
-    ...(status?.conflicted ?? []).map((f) => f.path),
+    ...(status?.conflicted ?? []),
   ]).size;
   const hasConflicts = (status?.conflicted.length ?? 0) > 0;
   const hasStagedSelection = selectionSection === "staged" && selectedPaths.size > 0;
