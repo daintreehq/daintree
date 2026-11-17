@@ -771,12 +771,12 @@ describe("HybridInputBar's own prompt templates in the `/` menu", () => {
   // Mod+Shift on the physical comma key, whatever character the layout puts there.
   const NOTE_CHORD = "Cmd+Shift+,";
   const mac = /Mac/.test(navigator.platform);
-  const pressCommaKey = async (view: EditorView, key: string, shiftKey = true) => {
+  const pressCommaKey = async (view: EditorView, key: string, shiftKey = true, code = "Comma") => {
     let handled = false;
     await act(async () => {
       handled = runScopeHandlers(
         view,
-        new KeyboardEvent("keydown", { key, code: "Comma", shiftKey, metaKey: mac, ctrlKey: !mac }),
+        new KeyboardEvent("keydown", { key, code, shiftKey, metaKey: mac, ctrlKey: !mac }),
         "editor"
       );
     });
@@ -800,8 +800,9 @@ describe("HybridInputBar's own prompt templates in the `/` menu", () => {
     const note = container.querySelector<HTMLElement>("[data-autocomplete-note]")!;
     expect(note.getAttribute("aria-keyshortcuts")).toBe(comboToAriaKeyshortcuts(NOTE_CHORD, mac));
 
-    // Without Shift it's the Settings chord's key, not the note's.
+    // Without Shift it's the Settings chord's key, not the note's; the key beside it is nobody's.
     expect(await pressCommaKey(view, ",", false)).toBe(false);
+    expect(await pressCommaKey(view, ">", true, "Period")).toBe(false);
     expect(dispatch).not.toHaveBeenCalled();
 
     // US (`<`), then a layout that puts another character on the key (AZERTY's `.`).
