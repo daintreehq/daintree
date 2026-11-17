@@ -186,6 +186,86 @@ describe("ProjectPulseService", () => {
     expect(pulse.heatmap).toHaveLength(60);
   });
 
+  it.each([
+    new Date(2025, 0, 15, 0, 30),
+    new Date(2025, 0, 15, 8, 30),
+    new Date(2025, 0, 15, 15, 30),
+    new Date(2025, 0, 15, 23, 30),
+    new Date(2025, 2, 1, 15, 30),
+  ])(
+    "cuts the heatmap off at local midnight of the oldest day when refreshed at %s",
+    async (now) => {
+      vi.setSystemTime(now);
+
+      const oldestDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 59);
+      const oldestDayKey = `${oldestDay.getFullYear()}-${String(oldestDay.getMonth() + 1).padStart(2, "0")}-${String(oldestDay.getDate()).padStart(2, "0")}`;
+      const oldestMidnight = Math.floor(oldestDay.getTime() / 1000);
+      const lastSecondBeforeOldestDay = oldestMidnight - 1;
+      const morningOfOldestDay = Math.floor(
+        new Date(oldestDay.getFullYear(), oldestDay.getMonth(), oldestDay.getDate(), 8).getTime() /
+          1000
+      );
+      const commitTimestamps = [lastSecondBeforeOldestDay, oldestMidnight, morningOfOldestDay];
+
+      const cutoffs: number[] = [];
+      const raw = vi.fn(async (args: string[]) => {
+        const cmd = args[0];
+        if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
+        if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
+        if (cmd !== "log") return "";
+
+        const sinceArgs = args.filter((a) => a.startsWith("--since="));
+        if (sinceArgs.length === 0) return commitTimestamps.join("\n");
+
+        // Mirrors git: a bare calendar date borrows the current time of day, an epoch is exact.
+        const resolved = sinceArgs.map((arg) => {
+          const value = arg.slice("--since=".length);
+          if (/^\d+$/.test(value)) return Number(value);
+          const [year, month, day] = value.split("-").map(Number);
+          const clock = new Date();
+          return Math.floor(
+            new Date(
+              year,
+              month - 1,
+              day,
+              clock.getHours(),
+              clock.getMinutes(),
+              clock.getSeconds()
+            ).getTime() / 1000
+          );
+        });
+        cutoffs.push(...resolved);
+        // Git keeps the last --since it is given.
+        const cutoff = resolved[resolved.length - 1];
+        return commitTimestamps.filter((timestamp) => timestamp >= cutoff).join("\n");
+      });
+
+      vi.doMock("../../utils/hardenedGit.js", () => ({
+        createHardenedGit: () => createGitStub(raw),
+      }));
+
+      const { ProjectPulseService } = await import("../ProjectPulseService.js");
+      const svc = new ProjectPulseService();
+
+      const pulse = await svc.getPulse({
+        worktreePath: "/repo",
+        worktreeId: "wt-1",
+        mainBranch: "main",
+        rangeDays: 60 as const,
+        includeDelta: false,
+        includeRecentCommits: false,
+      });
+
+      // The commit before midnight lands in a day with no cell, so only the cutoff itself shows it
+      // was excluded.
+      expect(cutoffs).toEqual([oldestMidnight]);
+      expect(pulse.heatmap[0].date).toBe(oldestDayKey);
+      expect(pulse.heatmap[0].count).toBe(2);
+      expect(pulse.commitsInRange).toBe(2);
+      expect(pulse.activeDays).toBe(1);
+    }
+  );
+
   it("skips today when calculating streak if no commits today", async () => {
     const baseTime = new Date("2025-01-15T12:00:00.000Z");
     vi.setSystemTime(baseTime);
