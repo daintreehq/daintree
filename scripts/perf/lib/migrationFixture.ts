@@ -406,6 +406,7 @@ export function createHeavyMigrationFixture(): LegacyStoreV0 {
       auditRetention: 30,
     },
     pendingErrors,
+    mergedWorktreeRemovalReceipts: [],
     errorFingerprints: {},
     gpu: { hardwareAccelerationDisabled: false },
     crashRecovery: { autoRestoreOnCrash: false },

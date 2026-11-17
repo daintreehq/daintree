@@ -156,6 +156,11 @@ vi.mock("../../utils/logger.js", async (importOriginal) => ({
   logError: logErrorMock,
 }));
 
+const unattendedMocks = vi.hoisted(() => ({ verify: vi.fn() }));
+vi.mock("../unattendedWorktreeRemoval.js", () => ({
+  verifyUnattendedCheckout: unattendedMocks.verify,
+}));
+
 function createTestWorktree(overrides: Partial<Worktree> = {}): Worktree {
   return {
     id: "/test/worktree",
@@ -2066,6 +2071,135 @@ describe("WorkspaceService.deleteWorktree", () => {
       await service.deleteWorktree("req-late", "/test/worktree", true);
 
       expect(failureError()).toContain("/test/worktree/late");
+      expect(removeCalls()).toEqual([]);
+    });
+  });
+
+  describe("unattended removal (#17321)", () => {
+    const guard = { expectedBranch: "feature/test", expectedHead: "a".repeat(40) };
+
+    beforeEach(async () => {
+      unattendedMocks.verify.mockReset().mockResolvedValue(undefined);
+      const fsModule = await import("fs/promises");
+      vi.mocked(fsModule.access).mockImplementation(async (p: unknown) => {
+        if (n(p as string) === "/test/worktree") return undefined;
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      });
+      vi.spyOn(service, "getDeleteTeardownPreview").mockResolvedValue({ phases: [] });
+    });
+
+    function removeCalls(): string[][] {
+      return mockSimpleGit.raw.mock.calls
+        .map((c) => c[0])
+        .filter((args): args is string[] => Array.isArray(args) && args[1] === "remove");
+    }
+
+    function failure(): string | undefined {
+      return mockSendEvent.mock.calls
+        .map((c) => c[0])
+        .find((e) => e.type === "delete-worktree-result" && e.success === false)?.error;
+    }
+
+    function removeUnattended(requestId: string) {
+      return service.deleteWorktree(requestId, "/test/worktree", false, false, undefined, false, {
+        unattended: guard,
+      });
+    }
+
+    it("removes without --force, keeps the branch, and re-reads the checkout right before git", async () => {
+      createAndRegisterMonitor();
+
+      await removeUnattended("req-unattended");
+
+      expect(removeCalls()).toEqual([["worktree", "remove", "--end-of-options", "/test/worktree"]]);
+      expect(
+        mockSimpleGit.raw.mock.calls.some((c) => Array.isArray(c[0]) && c[0][0] === "branch")
+      ).toBe(false);
+      expect(unattendedMocks.verify).toHaveBeenCalledTimes(2);
+      expect(unattendedMocks.verify).toHaveBeenLastCalledWith("/test/worktree", guard);
+      expect(mockSendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "delete-worktree-result", success: true })
+      );
+    });
+
+    it("refuses a worktree whose delete would run teardown, before running any of it", async () => {
+      vi.mocked(service.getDeleteTeardownPreview).mockResolvedValue({
+        phases: [{ phase: "teardown", commands: ["docker compose down"], approved: true }],
+      });
+      const teardown = vi.spyOn(service as any, "runLifecycleTeardown");
+      createAndRegisterMonitor();
+
+      await removeUnattended("req-teardown");
+
+      expect(failure()).toMatch(/teardown/);
+      expect(teardown).not.toHaveBeenCalled();
+      expect(removeCalls()).toEqual([]);
+    });
+
+    it.each([
+      ["the active worktree", { isCurrent: true }, /active/],
+      ["another branch", { branch: "feature/other" }, /branch/],
+    ])("refuses %s", async (_label, overrides, message) => {
+      createAndRegisterMonitor(overrides);
+
+      await removeUnattended("req-refused");
+
+      expect(failure()).toMatch(message);
+      expect(removeCalls()).toEqual([]);
+    });
+
+    it("refuses when git would need --force for the worktree's submodules", async () => {
+      vi.spyOn(service as any, "inventorySubmoduleRisk").mockResolvedValue({
+        entries: [],
+        dirtyFiles: [],
+        untrackedFiles: [],
+        atRiskCommits: [],
+        requiresMechanicalForce: true,
+        incomplete: false,
+      } satisfies SubmoduleDeleteRisk);
+      createAndRegisterMonitor();
+
+      await removeUnattended("req-mechanical");
+
+      expect(failure()).toMatch(/--force/);
+      expect(removeCalls()).toEqual([]);
+    });
+
+    it("refuses when the checkout changed between the first read and git", async () => {
+      unattendedMocks.verify
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error("The worktree's HEAD is not the commit its PR merged"));
+      createAndRegisterMonitor();
+
+      await removeUnattended("req-moved");
+
+      expect(failure()).toMatch(/HEAD/);
+      expect(removeCalls()).toEqual([]);
+      expect(service["monitors"].has("/test/worktree")).toBe(true);
+    });
+
+    it("refuses a checkout that is already gone, without pruning", async () => {
+      const fsModule = await import("fs/promises");
+      vi.mocked(fsModule.access).mockRejectedValue(
+        Object.assign(new Error("ENOENT"), { code: "ENOENT" })
+      );
+      createAndRegisterMonitor();
+
+      await removeUnattended("req-gone");
+
+      expect(failure()).toMatch(/gone/);
+      expect(sweepSpy).not.toHaveBeenCalled();
+      expect(barePruneCalls()).toEqual([]);
+    });
+
+    it("refuses force or branch deletion alongside the guard", async () => {
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-forced", "/test/worktree", true, false, undefined, false, {
+        unattended: guard,
+      });
+
+      expect(failure()).toMatch(/never forces/);
       expect(removeCalls()).toEqual([]);
     });
   });

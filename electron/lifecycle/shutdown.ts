@@ -820,6 +820,15 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
   // into a half-disposed WorkspaceClient during the await. Both wrap their
   // own failures so a single throw can't strand the rest of shutdown.
   const preDisposePromise = capturePersistencePromise.then(async () => {
+    // Before the workspace hosts go (#17321): no removal starts from here on,
+    // and one git is already running gets a moment to finish and record.
+    try {
+      const { disposeMergedWorktreeCleanupService } =
+        await import("../services/mergedWorktreeCleanup/mergedWorktreeCleanupLive.js");
+      await disposeMergedWorktreeCleanupService();
+    } catch (err) {
+      console.warn("[MAIN] Merged-worktree cleanup dispose failed:", err);
+    }
     const ccr = getCcrConfigService();
     if (ccr) {
       try {

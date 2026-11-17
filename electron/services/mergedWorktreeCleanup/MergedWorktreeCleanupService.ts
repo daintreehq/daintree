@@ -38,6 +38,7 @@ export const MERGED_WORKTREE_SWEEP_STARTUP_DELAY_MS = 2 * 60 * 1000;
 export const MERGED_WORKTREE_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 /** After the switch goes on, so the first removals don't wait for the hourly tick. */
 export const MERGED_WORKTREE_SWEEP_AFTER_ENABLE_MS = 60 * 1000;
+const DISPOSE_WAIT_MS = 5_000;
 /** Receipts no window has taken are kept up to this many, oldest dropped first. */
 export const MERGED_WORKTREE_RECEIPT_CAP = 200;
 
@@ -100,8 +101,9 @@ export class MergedWorktreeCleanupService {
   }
 
   /**
-   * Stops every timer and the reads under way. A removal git has already been
-   * asked for is waited on, so its receipt is written.
+   * Stops every timer and the reads under way, and no removal starts after it.
+   * A removal git is already running gets up to {@link DISPOSE_WAIT_MS} to
+   * finish and record its receipt; quitting doesn't wait out a large checkout.
    */
   async dispose(): Promise<void> {
     if (this.disposed) return;
@@ -110,7 +112,16 @@ export class MergedWorktreeCleanupService {
     for (const timer of [this.startupTimer, this.soonTimer]) if (timer) clearTimeout(timer);
     if (this.interval) clearInterval(this.interval);
     this.startupTimer = this.soonTimer = this.interval = null;
-    await this.sweeping?.catch(() => undefined);
+    const sweeping = this.sweeping;
+    if (!sweeping) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      sweeping.catch(() => undefined),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, DISPOSE_WAIT_MS);
+      }),
+    ]);
+    clearTimeout(timer);
   }
 
   async setEnabled(projectId: string, enabled: boolean): Promise<void> {

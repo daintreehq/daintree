@@ -2821,6 +2821,13 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
         keywords: ["worktree", "path", "pattern", "location", "directory", "folder", "variables"],
       },
       {
+        id: "project-merged-worktrees",
+        section: "Merged worktrees",
+        title: "Remove worktrees once their PR has merged",
+        description: "Removes clean worktrees Daintree created a day after their PR merged",
+        keywords: ["merged", "cleanup", "remove", "delete", "prune", "worktree", "pr", "automatic"],
+      },
+      {
         // Id kept for deep links; the names follow the heading the page renders, which
         // is what a result with no DOM section lands by.
         id: "project-terminal-settings",
