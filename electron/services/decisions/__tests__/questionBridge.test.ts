@@ -84,20 +84,18 @@ function liveBridge() {
       expectsReply: true,
     })),
     listPending: vi.fn(async () => []),
-    getInvolvement: vi.fn(
-      async (): Promise<InvolvementView> => ({
-        status: "available",
-        mode: "recommend",
-        normalMode: "recommend",
-        consultCount: 2,
-        revision: 3,
-        overrideActive: false,
-        until: null,
-        setAt: "2026-11-17T09:00:00.000Z",
-        lastSyncedAt: "2026-11-17T09:00:05.000Z",
-        stale: false,
-      })
-    ),
+    getInvolvement: vi.fn(async (): Promise<InvolvementView> => ({
+      status: "available",
+      mode: "recommend",
+      normalMode: "recommend",
+      consultCount: 2,
+      revision: 3,
+      overrideActive: false,
+      until: null,
+      setAt: "2026-11-17T09:00:00.000Z",
+      lastSyncedAt: "2026-11-17T09:00:05.000Z",
+      stale: false,
+    })),
   };
 }
 
