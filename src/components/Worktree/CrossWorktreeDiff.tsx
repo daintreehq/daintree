@@ -52,7 +52,7 @@ import {
   type ComparisonBlocker,
 } from "./crossWorktreeDiffUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { useTruncationDetection } from "@/hooks/useTruncationDetection";
+import { isElementTruncated, useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { PathTail } from "@/components/ui/PathTail";
 import { usePreferencesStore, type DiffViewType } from "@/store/preferencesStore";
@@ -228,9 +228,9 @@ function CrossWorktreeFileRow({
  *
  * Whether the band is clipped is measured here but read by every row under it,
  * and on the windowed path the band and its rows are separate items, so the
- * measurement goes up to the shelf through `onClipChange`. A band reports
- * clipped once it measures so, and withdraws only a clip it reported itself:
- * a freshly mounted band reads unclipped before it has measured anything.
+ * measurement goes up to the shelf through `onClipChange`. The hook's first
+ * value is a placeholder until it has measured, so a mounting band reports a
+ * reading of its own, and after that only the changes the hook observes.
  */
 function FileGroupHeader({
   dir,
@@ -241,10 +241,21 @@ function FileGroupHeader({
 }) {
   const { ref, isTruncated } = useTruncationDetection();
   const label = formatDiffDir(dir);
-  const reportedRef = useRef(false);
+  const pathRef = useRef<HTMLElement | null>(null);
+  const setPath = useCallback(
+    (element: HTMLElement | null) => {
+      pathRef.current = element;
+      ref(element);
+    },
+    [ref]
+  );
+  useLayoutEffect(() => {
+    if (pathRef.current) onClipChange(dir, isElementTruncated(pathRef.current));
+  }, [dir, onClipChange]);
+  const observedRef = useRef(isTruncated);
   useEffect(() => {
-    if (isTruncated === reportedRef.current) return;
-    reportedRef.current = isTruncated;
+    if (isTruncated === observedRef.current) return;
+    observedRef.current = isTruncated;
     onClipChange(dir, isTruncated);
   }, [isTruncated, dir, onClipChange]);
   return (
@@ -261,7 +272,7 @@ function FileGroupHeader({
         isTruncated={isTruncated || isDirectoryShortened(dir)}
         focusable={false}
       >
-        <PathTail ref={ref} className="min-w-0 font-mono">
+        <PathTail ref={setPath} className="min-w-0 font-mono">
           {label}
         </PathTail>
       </TruncatedTooltip>
@@ -858,6 +869,14 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
   // either way a row already in view is left alone.
   const selectedPath = selectedFile?.path;
   const listShown = showShelf && listReady;
+  // The open row's place among rows AND bands: a refresh can add bands ahead
+  // of it without changing its place among the files, and still move it.
+  const selectedRow =
+    selectedFileIndex < 0 || !shelfLayout
+      ? -1
+      : selectedFileIndex +
+        shelfLayout.lastPositions.findIndex((last) => last >= selectedFileIndex) +
+        1;
   useEffect(() => {
     if (!listShown || selectedPath === undefined) return;
     if (windowed) {
@@ -871,7 +890,16 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
     if (typeof row?.scrollIntoView === "function") {
       row.scrollIntoView({ behavior: "instant", block: "nearest" });
     }
-  }, [listShown, selectedPath, windowed, selectedFileIndex, revealPosition, measuredGeneration]);
+    // `selectedRow` is a trigger: a refresh that moves the row asks again.
+  }, [
+    listShown,
+    selectedPath,
+    windowed,
+    selectedFileIndex,
+    selectedRow,
+    revealPosition,
+    measuredGeneration,
+  ]);
 
   const rightPath = rightWorktree?.path;
 

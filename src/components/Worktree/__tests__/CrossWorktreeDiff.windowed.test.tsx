@@ -379,6 +379,37 @@ describe("CrossWorktreeDiff shelf with a large comparison (#17461)", () => {
     await waitFor(() => expect(currentRow()?.dataset.filePath).toBe(open));
   });
 
+  it("asks again for the open file when a refresh adds bands ahead of it", async () => {
+    // Sixty files in one directory become sixty directories of one file. The
+    // open file keeps its place among the files, 60, but has 59 more bands
+    // above it, so its row moves down out of the window.
+    const tail = comparison(1, 30);
+    const together = Array.from({ length: 60 }, (_, i) => ({
+      path: `lib/a/file-${String(i).padStart(2, "0")}.ts`,
+      status: "M",
+      insertions: 1,
+      deletions: 0,
+    }));
+    const apart = together.map((file, i) => ({
+      ...file,
+      path: `lib/d-${String(i).padStart(2, "0")}/file.ts`,
+    }));
+    const files = [...together, ...tail];
+    const open = drawnOrder(files)[60]!;
+    const { refresh } = renderComparison(files);
+    await waitFor(() => expect(position()).toBe(`1 of ${files.length}`));
+    for (let i = 0; i < 60; i++) fireEvent.keyDown(window, { key: "]" });
+    await waitFor(() => expect(currentRow()?.dataset.filePath).toBe(open));
+
+    scrollIntoViewMock.mockClear();
+    const refreshed = [...apart, ...tail];
+    refresh(refreshed, "two");
+    await waitFor(() => expect(requestedDiffs().filter((path) => path === open)).toHaveLength(2));
+    expect(drawnOrder(refreshed)[60]).toBe(open);
+    expect(scrollIntoViewMock).toHaveBeenLastCalledWith(expect.objectContaining({ index: 60 }));
+    await waitFor(() => expect(currentRow()?.dataset.filePath).toBe(open));
+  });
+
   it("brings the open file back into view when the shelf is put away and reopened", async () => {
     const original = comparison(4, 50);
     const open = drawnOrder(original)[0]!;
@@ -489,17 +520,18 @@ describe("CrossWorktreeDiff shelf with a large comparison (#17461)", () => {
     );
   });
 
-  it("still discloses the full path when a windowed row's directory band is clipped", async () => {
+  it("discloses the full path while a windowed row's band is clipped, and stops once it fits", async () => {
     // Two segments, so the band is never shortened; only its measured width
     // can hide the directory. jsdom lays nothing out, so the band reports an
-    // overflow here and every other element reports none.
+    // overflow here (while `clipped` holds) and every other element none.
     const dir = "src/clipped";
+    let clipped = true;
     const isBand = (el: Element) =>
       el.textContent === dir && el.closest("[data-shelf-band]") !== null;
     const scrollWidth = vi
       .spyOn(Element.prototype, "scrollWidth", "get")
       .mockImplementation(function (this: Element) {
-        return isBand(this) ? 400 : 0;
+        return clipped && isBand(this) ? 400 : 0;
       });
     const clientWidth = vi
       .spyOn(Element.prototype, "clientWidth", "get")
@@ -524,6 +556,22 @@ describe("CrossWorktreeDiff shelf with a large comparison (#17461)", () => {
           screen.getAllByRole("tooltip").some((tip) => tip.textContent === row.dataset.filePath)
         ).toBe(true)
       );
+
+      // The shelf comes back with room for the directory (a scrollbar gone,
+      // say): the remounted band measures again and its rows stop disclosing.
+      clipped = false;
+      fireEvent.click(screen.getByRole("button", { name: "Toggle file list" }));
+      await waitFor(() => expect(screen.queryByTestId("cross-worktree-file-shelf")).toBeNull());
+      fireEvent.click(screen.getByRole("button", { name: "Toggle file list" }));
+      await waitFor(() => expect(fileRows().length).toBeGreaterThan(2));
+      const next = fileRows()[2]!;
+      fireEvent.focus(next);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(
+        screen.queryAllByRole("tooltip").some((tip) => tip.textContent === next.dataset.filePath)
+      ).toBe(false);
     } finally {
       scrollWidth.mockRestore();
       clientWidth.mockRestore();
