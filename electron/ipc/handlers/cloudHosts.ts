@@ -41,6 +41,7 @@ function requireOwnWorktree(ctx: IpcContext, worktree: unknown): { projectName: 
   if (
     !ctx.event ||
     ctx.client?.kind !== "local" ||
+    ctx.endpoint?.kind === "remote-view" ||
     getIpcDispatcher().hostForSender(ctx.webContentsId) !== null
   ) {
     throw refuse("A machine is made for a worktree only from a window on this machine.");

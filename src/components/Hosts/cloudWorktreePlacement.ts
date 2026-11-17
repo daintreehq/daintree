@@ -115,7 +115,7 @@ export async function startCloudWorktreePlacement(
       type: "error",
       title: "Couldn't create the machine",
       message: `${errorText(err, "The machine wasn't asked for.")} ${input.branch} was created on this machine.`,
-      context: { worktreeId: input.worktreeId },
+      context: { worktreeId: input.worktreeId, eventKind: "host" },
       action: {
         label: "Retry",
         onClick: () => void startCloudWorktreePlacement(input),

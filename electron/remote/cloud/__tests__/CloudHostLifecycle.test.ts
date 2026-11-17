@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HostConnection, HostDescriptor } from "../../../../shared/types/remoteHosts.js";
+import type {
+  HostConnection,
+  HostDescriptor,
+  PendingHostPlacement,
+} from "../../../../shared/types/remoteHosts.js";
 import type {
   CloudHostCreatedFor,
   CloudHostCreateRequest,
@@ -261,8 +265,13 @@ async function setup(
       files,
       clientDir: root,
       hosts: {
-        add: (name: string, connection: HostConnection) => {
-          const descriptor = { id: name, name, connection } as HostDescriptor;
+        add: (name: string, connection: HostConnection, pendingPlacement) => {
+          const descriptor = {
+            id: name,
+            name,
+            connection,
+            ...(pendingPlacement ? { pendingPlacement } : {}),
+          } as HostDescriptor;
           hosts.push(descriptor);
           for (const listener of listeners) listener();
           return descriptor;
@@ -2352,6 +2361,47 @@ describe("CloudHostLifecycle worktree marks", () => {
     await vi.waitFor(() => expect(lifecycle.statuses()[0]?.resourceId).toBe("bx_23456789"));
     expect(store.bindings()[0]?.creation).toBeNull();
     expect(lifecycle.statuses()[0]).toMatchObject({ createdFor: MARK, machineName: "build-box" });
+  });
+
+  it("adds the host with its worktree waiting, before the provider is asked", async () => {
+    const { lifecycle, provider, store, state, account, hosts } = await setup();
+    const placement: PendingHostPlacement = {
+      projectId: MARK.projectId,
+      worktreeId: MARK.worktreeId,
+      worktreePath: MARK.worktreeId,
+      label: MARK.worktreeName,
+      requestedAt: 1_000,
+      createdMachine: true,
+    };
+    let waitingWhenSent: unknown = null;
+    vi.mocked(provider.create).mockImplementationOnce(async (_c, sent) => {
+      waitingWhenSent = hosts[0]?.pendingPlacement;
+      state.machine = resource({ name: "build-box", labels: sent.labels });
+      return resource({ name: "build-box", machine: "starting", rawState: "provisioning" });
+    });
+    const { hostId } = await lifecycle.create(request(account.id), MARK, placement);
+    expect(hosts.find((host) => host.id === hostId)?.pendingPlacement).toEqual(placement);
+    expect(store.bindings()[0]).toMatchObject({ hostId, createdFor: MARK });
+    await vi.waitFor(() => expect(provider.create).toHaveBeenCalled());
+    expect(waitingWhenSent).toEqual(placement);
+  });
+
+  it("adds no host to wait on when the mark is refused", async () => {
+    const { lifecycle, provider, store, account, hosts } = await setup();
+    const placement: PendingHostPlacement = {
+      projectId: "0f1e2d3c",
+      worktreeId: "/w",
+      worktreePath: "/w",
+      label: "w",
+      requestedAt: 1,
+      createdMachine: true,
+    };
+    await expect(
+      lifecycle.create(request(account.id), { ...MARK, worktreeName: "" }, placement)
+    ).rejects.toThrow(/missing its project or path/);
+    expect(hosts).toHaveLength(0);
+    expect(store.bindings()).toHaveLength(0);
+    expect(provider.create).not.toHaveBeenCalled();
   });
 
   it("keeps the mark through a restart mid-create when the machine turns up", async () => {
