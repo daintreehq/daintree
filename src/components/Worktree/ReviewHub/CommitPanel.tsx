@@ -35,7 +35,7 @@ import { PathTail } from "@/components/ui/PathTail";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { isCommitShortcut, type CommitShortcutHandler } from "./commitShortcut";
-import type { CommitPushTarget } from "./reviewHubUtils";
+import { readGitErrorFields, type CommitPushTarget } from "./reviewHubUtils";
 
 const MAX_SUBJECT_LENGTH = 72;
 const HISTORY_FETCH_POLL_INTERVAL_MS = 10;
@@ -502,8 +502,10 @@ export function CommitPanel({
     }
   }, [canCommit, actionsBusy, stagedCount, commitMessage, onCommit]);
 
+  // Resolves to "review-stale" when main refused the reviewed commit because
+  // what the confirm showed moved under it, so the confirm's choices never ran.
   const handleCommitAndPush = useCallback(
-    async (message: string, target: CommitPushTarget) => {
+    async (message: string, target: CommitPushTarget): Promise<"review-stale" | undefined> => {
       if (!canCommit || actionsBusy) return;
       if (actionInFlightRef.current) return;
       actionInFlightRef.current = true;
@@ -511,8 +513,9 @@ export function CommitPanel({
       setPendingAction("commit-push");
       try {
         await onCommitAndPush(message, target);
-      } catch {
+      } catch (err) {
         // Error is handled by the parent via setActionError
+        if (readGitErrorFields(err).gitReason === "commit-review-stale") return "review-stale";
       } finally {
         setPendingAction(null);
         actionInFlightRef.current = false;
@@ -596,11 +599,8 @@ export function CommitPanel({
 
   const handleConfirmPush = useCallback(() => {
     if (outgoingRange === null || !currentBranch) return;
-    // The opt-out is persisted on confirm regardless of whether the
-    // subsequent push succeeds — the user expressed a preference about the
-    // confirm dialog, which is orthogonal to network/rejection failure.
     // A protected branch never records an opt-out: the box is not offered there.
-    onSetSkipPushConfirm(isProtected ? skipPushConfirm : dontAskChecked);
+    const skipNextConfirm = isProtected ? skipPushConfirm : dontAskChecked;
     setPushConfirmOpen(false);
     setDontAskChecked(false);
     // What the dialog previewed is what gets pushed, even if a history recall
@@ -611,6 +611,13 @@ export function CommitPanel({
       branch: currentBranch,
       destination: outgoingRange.destination,
       reviewed: { headOid: outgoingRange.headOid, stagedIdentity: outgoingRange.staged.identity },
+    }).then((outcome) => {
+      // The opt-out stands however the push goes — a preference about the
+      // confirm, orthogonal to network or rejection failures — except when the
+      // commit refused what was confirmed (#17563). The refusal asks for a
+      // fresh review, and an opt-out recorded here would answer that next
+      // click with a commit and push nobody reviewed.
+      if (outcome !== "review-stale") onSetSkipPushConfirm(skipNextConfirm);
     });
   }, [
     currentBranch,
@@ -852,7 +859,9 @@ export function CommitPanel({
     : pushDestination === null
       ? "Set a destination to continue"
       : outgoingResult?.status === "error"
-        ? "Retry the preview to continue"
+        ? outgoingResult.stagedUnread
+          ? "Update Daintree on the host to continue"
+          : "Retry the preview to continue"
         : null;
   const outgoingDescription = outgoingRange ? describeOutgoingRange(outgoingRange) : null;
   const retryOutgoingButton = (
@@ -1092,8 +1101,10 @@ export function CommitPanel({
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                 )}
               >
-                {confirmPaths.map((path) => (
-                  <PushConfirmPath key={path} path={path} />
+                {/* By position: two names git stores as different bytes can
+                    decode to the same text. */}
+                {confirmPaths.map((path, index) => (
+                  <PushConfirmPath key={`${index}:${path}`} path={path} />
                 ))}
               </ul>
             </div>
@@ -1158,7 +1169,13 @@ export function CommitPanel({
               data-testid="commit-panel-push-confirm-unpushed-error"
             >
               {outgoingResult.stagedUnread ? (
-                <p>Couldn&apos;t read the staged changes this commit would contain.</p>
+                // Main in this build always answers with the snapshot, so an
+                // answer without one comes from a host on an older build.
+                <p>
+                  The host running this worktree didn&apos;t report what&apos;s staged, so this
+                  commit can&apos;t be checked before it&apos;s pushed. Update Daintree there, then
+                  retry.
+                </p>
               ) : outgoingResult.changedTo ? (
                 <p>
                   Git now resolves this push to{" "}

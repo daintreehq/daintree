@@ -84,7 +84,20 @@ function withPushHook<T extends { push: (...args: never[]) => unknown }>(client:
   return client;
 }
 
+// Real reads, spied so a test can show which operations never take them.
+vi.mock("../../../services/git/stagedSnapshot.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../../services/git/stagedSnapshot.js")>();
+  return {
+    readStagedSnapshot: vi.fn(real.readStagedSnapshot),
+    readCommitStagedIdentity: vi.fn(real.readCommitStagedIdentity),
+  };
+});
+
 import { registerGitWriteHandlers } from "../git-write.js";
+import {
+  readCommitStagedIdentity,
+  readStagedSnapshot,
+} from "../../../services/git/stagedSnapshot.js";
 import { _resetRateLimitQueuesForTest } from "../../utils.js";
 
 function hermeticEnv(): Record<string, string> {
@@ -763,9 +776,21 @@ describe("commit & push — held to the staged changes its confirm listed (#1756
     }) as Promise<ReviewedCommit>;
   }
 
-  function expectCommitStale(error: string | null): void {
-    expect(error).toMatch(/\[GitError\|commit-review-stale\|/);
-    expect(error).toMatch(/Nothing was committed or pushed/);
+  /** The refusal as main throws it: its reason, and the sentence the composer shows. */
+  function refusal(
+    promise: Promise<unknown>
+  ): Promise<{ reason?: string; message: string } | null> {
+    return promise.then(
+      () => null,
+      (e: { reason?: string; message: string }) => ({ reason: e.reason, message: e.message })
+    );
+  }
+
+  function expectCommitStale(error: { reason?: string; message: string } | null): void {
+    expect(error?.reason).toBe("commit-review-stale");
+    // Plain prose: the preload adds the one wire prefix the renderer strips.
+    expect(error?.message).toMatch(/^This commit changed after it was reviewed: /);
+    expect(error?.message).toMatch(/Nothing was committed or pushed/);
   }
 
   it("refuses a content-only restage under the same branch, tip and file list, and commits nothing", async () => {
@@ -781,13 +806,12 @@ describe("commit & push — held to the staged changes its confirm listed (#1756
     expect(now.staged.paths).toEqual(staged.paths);
     expect(now.staged.identity).not.toBe(staged.identity);
 
-    const error = await rejection(commitAsReviewed(fixture.repo, "topic", shown));
+    const error = await refusal(commitAsReviewed(fixture.repo, "topic", shown));
 
     expectCommitStale(error);
-    expect(error).toMatch(/the staged changes are different/);
+    expect(error?.message).toMatch(/the staged changes are different/);
     expect(git(fixture.repo, ["rev-parse", "HEAD"])).toBe(fixture.reviewed);
     expect(git(fixture.repo, ["show", ":user.txt"])).toBe("different text");
-    expect(remoteTip(fixture.bare, "refs/heads/topic")).toBe(fixture.published);
   });
 
   it("commits what was listed and reports the same identity back", async () => {
@@ -813,6 +837,9 @@ describe("commit & push — held to the staged changes its confirm listed (#1756
     stageText(fixture.repo, "user.txt", "reviewed text\n");
     const { shown, staged } = await reviewCommit(fixture.repo, "topic");
     commitHook.before = () => stageText(fixture.repo, "user.txt", "different text\n");
+    // Put the reviewed contents back in the index once the commit is made, so
+    // only a read of the commit itself, never of the index, can tell them apart.
+    commitHook.after = () => stageText(fixture.repo, "user.txt", "reviewed text\n");
 
     const committed = await commitAsReviewed(fixture.repo, "topic", shown);
 
@@ -832,10 +859,10 @@ describe("commit & push — held to the staged changes its confirm listed (#1756
     git(fixture.repo, ["commit", "-q", "-m", "agent", "--", "agent.txt"]);
     const agentTip = git(fixture.repo, ["rev-parse", "HEAD"]);
 
-    const error = await rejection(commitAsReviewed(fixture.repo, "topic", shown));
+    const error = await refusal(commitAsReviewed(fixture.repo, "topic", shown));
 
     expectCommitStale(error);
-    expect(error).toMatch(/'topic' moved to a different commit/);
+    expect(error?.message).toMatch(/'topic' moved to a different commit/);
     expect(git(fixture.repo, ["rev-parse", "HEAD"])).toBe(agentTip);
   });
 
@@ -845,17 +872,19 @@ describe("commit & push — held to the staged changes its confirm listed (#1756
     const { shown } = await reviewCommit(fixture.repo, "topic");
     git(fixture.repo, ["checkout", "-q", "-b", "twin"]);
 
-    const error = await rejection(commitAsReviewed(fixture.repo, "topic", shown));
+    const error = await refusal(commitAsReviewed(fixture.repo, "topic", shown));
 
     expectCommitStale(error);
-    expect(error).toMatch(/switched from 'topic' to 'twin'/);
+    expect(error?.message).toMatch(/switched from 'topic' to 'twin'/);
     expect(git(fixture.repo, ["rev-parse", "twin"])).toBe(fixture.reviewed);
   });
 
   it.each([
     ["the staged identity", { expectedStagedIdentity: undefined }],
     ["the branch", { expectedBranch: undefined }],
+    ["the tip", { expectedHeadOid: undefined }],
     ["a well-formed staged identity", { expectedStagedIdentity: "not-an-identity" }],
+    ["a lowercase staged identity", { expectedStagedIdentity: "E".repeat(64) }],
   ])("refuses a review without %s, and commits nothing", async (_label, override) => {
     const fixture = makeFixture();
     stageText(fixture.repo, "user.txt", "reviewed text\n");
@@ -879,6 +908,8 @@ describe("commit & push — held to the staged changes its confirm listed (#1756
   it("reads nothing staged unless asked, and reports no identity for an unreviewed commit", async () => {
     const fixture = makeFixture();
     stageText(fixture.repo, "user.txt", "reviewed text\n");
+    vi.mocked(readStagedSnapshot).mockClear();
+    vi.mocked(readCommitStagedIdentity).mockClear();
 
     const shown = await preview(fixture.repo, "topic");
     const committed = (await getHandler("git:commit")(FAKE_EVENT, {
@@ -888,5 +919,43 @@ describe("commit & push — held to the staged changes its confirm listed (#1756
 
     expect(shown.staged).toBeUndefined();
     expect("stagedIdentity" in committed).toBe(false);
+    expect(readStagedSnapshot).not.toHaveBeenCalled();
+    expect(readCommitStagedIdentity).not.toHaveBeenCalled();
+  });
+
+  it("won't describe another branch's index as staged on the named one", async () => {
+    const fixture = makeFixture();
+    git(fixture.repo, ["checkout", "-q", "-b", "twin", fixture.published]);
+    vi.mocked(readStagedSnapshot).mockClear();
+
+    const error = await refusal(preview(fixture.repo, "topic", { includeStaged: true }));
+
+    expect(error?.reason).toBe("commit-review-stale");
+    expect(error?.message).toMatch(/switched from 'topic' to 'twin'/);
+    expect(readStagedSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("agrees with the commit about a change inside a collapsed sparse directory", async () => {
+    const fixture = makeFixture();
+    fs.mkdirSync(path.join(fixture.repo, "in"));
+    fs.mkdirSync(path.join(fixture.repo, "out", "deep"), { recursive: true });
+    fs.writeFileSync(path.join(fixture.repo, "in", "a.txt"), "a");
+    fs.writeFileSync(path.join(fixture.repo, "out", "deep", "b.txt"), "b");
+    git(fixture.repo, ["add", "."]);
+    git(fixture.repo, ["commit", "-q", "-m", "tree"]);
+    fs.writeFileSync(path.join(fixture.repo, "out", "deep", "b.txt"), "b2");
+    git(fixture.repo, ["commit", "-q", "-am", "deep change"]);
+    git(fixture.repo, ["sparse-checkout", "set", "--cone", "--sparse-index", "in"]);
+    // The out-of-cone change is now staged inside the index's one `out/` entry.
+    git(fixture.repo, ["reset", "-q", "--soft", "HEAD^"]);
+    const tip = git(fixture.repo, ["rev-parse", "HEAD"]);
+    expect(git(fixture.repo, ["ls-files", "--sparse"])).toMatch(/^out\/$/m);
+
+    const { shown, staged } = await reviewCommit(fixture.repo, "topic");
+    const committed = await commitAsReviewed(fixture.repo, "topic", shown);
+
+    expect(staged.paths).toEqual(["out/deep/b.txt"]);
+    expect(committed.parentOids).toEqual([tip]);
+    expect(committed.stagedIdentity).toBe(staged.identity);
   });
 });

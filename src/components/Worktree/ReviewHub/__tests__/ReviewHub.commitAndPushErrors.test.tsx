@@ -1407,8 +1407,13 @@ describe("ReviewHub", () => {
 
       it("keeps the commit but pushes nothing when it landed on a tip the confirm never showed", async () => {
         // An agent committed while the confirm was open, so the user's commit
-        // sits on top of history the preview never listed.
-        commitMock.mockResolvedValueOnce({ ...COMMITTED, parentOids: ["e".repeat(40)] });
+        // sits on top of history the preview never listed. Its contents match,
+        // so the parent is the only thing that differs.
+        commitMock.mockResolvedValueOnce({
+          ...COMMITTED,
+          parentOids: ["e".repeat(40)],
+          stagedIdentity: STAGED,
+        });
 
         await confirmCommitAndPush();
 
@@ -1470,6 +1475,9 @@ describe("ReviewHub", () => {
 
         const banner = await screen.findByTestId("review-hub-push-error");
         expect(banner.getAttribute("data-reason")).toBe("push-review-stale");
+        // Says what actually happened to the local commit, not that the branch moved.
+        expect(banner.textContent).toMatch(/commit holds changes the review didn't show/);
+        expect(banner.textContent).not.toMatch(/branch moved/);
         expect(pushMock).not.toHaveBeenCalled();
         expect(screen.getByTestId("review-hub-push-error-cta").textContent?.trim()).toBe(
           "Review push"

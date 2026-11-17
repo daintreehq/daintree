@@ -583,10 +583,20 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
           }
           // Against the same tip the rows are, and before any network read, so
           // the commit is held to the index as it stood when the confirm opened.
-          const staged =
-            payload.includeStaged === true
-              ? await readStagedSnapshot(payload.cwd, headOid)
-              : undefined;
+          // The index is the worktree's, so it only describes a commit on this
+          // branch while the worktree has it checked out: diffed against
+          // another branch's tip it would list that branch's differences as
+          // staged.
+          let staged: GitPushCommitPreview["staged"];
+          if (payload.includeStaged === true) {
+            const switched = describeBranchSwitch(await readHeadBranch(git), {
+              branch: branchName,
+            });
+            if (switched) {
+              throw commitReviewStaleError(payload.cwd, branchName, switched, "list-push-commits");
+            }
+            staged = await readStagedSnapshot(payload.cwd, headOid);
+          }
           const hasRemoteRef = await refExists(git, destination.remoteTrackingRef);
 
           // With no remote-tracking ref there is nothing to subtract locally, and
@@ -1152,17 +1162,28 @@ function readCommitReview(payload: {
   return { branch, headOid: headOid.toLowerCase(), stagedIdentity };
 }
 
+/**
+ * Plain prose, not pre-encoded like its siblings: the composer shows this
+ * sentence as is, and the reason and branch already cross to the renderer as
+ * fields the preload encodes once. Encoding here too left a second prefix in
+ * front of the sentence on screen.
+ */
 function commitReviewStaleError(
   cwd: string,
   branchName: string,
-  detail: string
+  detail: string,
+  op = "commit"
 ): GitOperationError {
-  const message = `This commit changed after it was reviewed: ${detail}. Nothing was committed or pushed. Commit and push again to review what is staged now.`;
-  return new GitOperationError(
-    "commit-review-stale",
-    encodeGitOperationErrorMessage("commit-review-stale", message, { branchName }),
-    { cwd, op: "commit", rawMessage: message, branchName }
-  );
+  const message =
+    op === "commit"
+      ? `This commit changed after it was reviewed: ${detail}. Nothing was committed or pushed. Commit and push again to review what is staged now.`
+      : `${detail}, so what is staged there can't be reviewed for '${branchName}'.`;
+  return new GitOperationError("commit-review-stale", message, {
+    cwd,
+    op,
+    rawMessage: message,
+    branchName,
+  });
 }
 
 /**

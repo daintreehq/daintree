@@ -20,9 +20,14 @@ import { runGitForBytes, type RunGitOptions } from "./reviewPoint/runGit.js";
  *
  * Bytes, not decoded text, go into the hash: two paths that differ only in
  * bytes that aren't valid UTF-8 must not share an identity.
+ *
+ * Both sides recurse (`-r`): a sparse index keeps an out-of-cone directory as
+ * one tree entry, and without it the index side would name that directory
+ * where the commit side names the files inside it.
  */
 
 const RAW_DIFF_ARGS = [
+  "-r",
   "--raw",
   "-z",
   "--no-abbrev",
@@ -69,9 +74,21 @@ export async function readStagedSnapshot(cwd: string, baseOid: string): Promise<
   return { identity: identityOf(base, stdout), paths: pathsOf(stdout) };
 }
 
+/** The parents written in the commit object itself, which no replace ref or graft can restate. */
+async function readLiteralParents(cwd: string, commit: string): Promise<string[]> {
+  const { stdout } = await runGitForBytes(cwd, ["cat-file", "commit", commit], READ_LIMITS);
+  const header = stdout.toString("utf8").split("\n\n", 1)[0] ?? "";
+  return header
+    .split("\n")
+    .filter((line) => line.startsWith("parent "))
+    .map((line) => line.slice("parent ".length).trim().toLowerCase());
+}
+
 /**
  * The identity of what `commitOid` contains over `parentOid`, in the form
- * {@link readStagedSnapshot} gives the index.
+ * {@link readStagedSnapshot} gives the index. Refuses unless `parentOid` is
+ * the commit's one real parent: a parent list read through a replace ref could
+ * otherwise vouch for history the commit doesn't have.
  */
 export async function readCommitStagedIdentity(
   cwd: string,
@@ -80,9 +97,13 @@ export async function readCommitStagedIdentity(
 ): Promise<string> {
   const parent = requireOid(parentOid);
   const commit = requireOid(commitOid);
+  const parents = await readLiteralParents(cwd, commit);
+  if (parents.length !== 1 || parents[0] !== parent) {
+    throw new Error("The commit's own parents differ from the ones read back");
+  }
   const { stdout } = await runGitForBytes(
     cwd,
-    ["diff-tree", "-r", ...RAW_DIFF_ARGS, parent, commit, "--"],
+    ["diff-tree", ...RAW_DIFF_ARGS, parent, commit, "--"],
     READ_LIMITS
   );
   return identityOf(parent, stdout);

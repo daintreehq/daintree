@@ -76,6 +76,13 @@ export function reviewForCommittedPush(
 export interface PushErrorState {
   reason: GitOperationReason;
   rawMessage: string;
+  /**
+   * The sentence the banner shows in place of the reason's stock copy. Set
+   * only where the renderer itself withheld the push and knows exactly why
+   * (#17563): "the branch changed" would misdescribe a commit that holds
+   * other changes than the ones reviewed.
+   */
+  summary?: string;
   /** Captured `refs/remotes/origin/<branch>` SHA at push-rejection time. */
   leaseSha?: string;
   /** Local branch name resolved at push-rejection time. */
@@ -305,7 +312,9 @@ export function getPushBannerConfig(
    */
   forgeProviderId?: string | null
 ): PushBannerConfig {
-  const base = PUSH_BANNER_CONFIGS[state.reason];
+  const base = state.summary
+    ? { ...PUSH_BANNER_CONFIGS[state.reason], message: state.summary }
+    : PUSH_BANNER_CONFIGS[state.reason];
   if (state.reason === "auth-failed") {
     return forgeProviderId
       ? {

@@ -165,13 +165,15 @@ export function useReviewHubCommitAndPush({
    */
   const lastPushReviewRef = useRef<GitPushReview | null>(null);
 
-  // Nothing reaches the network: the banner reads like main's own refusal of a
-  // reviewed push that moved, and offers no Retry, because there is no approval
-  // left to retry under. The next step is a fresh review of the push.
+  // Nothing reaches the network: the banner carries main's refusal reason for a
+  // reviewed push that moved, says in its own words why this one was held
+  // back, and offers no Retry, because there is no approval left to retry
+  // under. The next step is a fresh review of the push.
   const withholdPush = useCallback((detail: string, branchName?: string) => {
     lastPushReviewRef.current = null;
-    const rawMessage = `${detail} Nothing was pushed. Review the push again to see what it would publish now.`;
-    setPushError({ reason: "push-review-stale", rawMessage, branchName });
+    const summary = `${detail} Nothing was pushed.`;
+    const rawMessage = `${summary} Review the push again to see what it would publish now.`;
+    setPushError({ reason: "push-review-stale", rawMessage, summary, branchName });
   }, []);
 
   const runPush = useCallback(

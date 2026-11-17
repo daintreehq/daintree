@@ -429,7 +429,10 @@ describe("CommitPanel — push confirm", () => {
     fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
 
     const error = await screen.findByTestId("commit-panel-push-confirm-unpushed-error");
-    expect(error.textContent).toContain("Couldn't read the staged changes");
+    expect(error.textContent).toMatch(/didn't report what's staged.*Update Daintree there/);
+    expect(screen.getByTestId("confirm-hint").textContent).toBe(
+      "Update Daintree on the host to continue"
+    );
     const confirm = confirmButton(/Push to origin\/feature\/x/);
     expect(confirm.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(confirm);
@@ -549,6 +552,26 @@ describe("CommitPanel — push confirm", () => {
     fireEvent.click(confirm);
     expect(listPushCommits).not.toHaveBeenCalled();
     expect(onCommitAndPush).not.toHaveBeenCalled();
+  });
+
+  it("records no opt-out when the commit refuses what was confirmed, so the next push confirms again (#17563)", async () => {
+    // Main's refusal as the preload hands it over.
+    const refused = new Error(
+      "[GitError|commit-review-stale||feature%2Fx] This commit changed after it was reviewed: the staged changes are different. Nothing was committed or pushed. Commit and push again to review what is staged now."
+    );
+    const onCommitAndPush = vi.fn().mockRejectedValueOnce(refused);
+    const { onSetSkipPushConfirm } = renderPanel({ currentBranch: "feature/x", onCommitAndPush });
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
+    fireEvent.click(screen.getByTestId("commit-panel-push-confirm-dont-ask"));
+    await confirmWhenReady(/Push to origin\/feature\/x/);
+
+    expect(onCommitAndPush).toHaveBeenCalledTimes(1);
+    expect(onSetSkipPushConfirm).not.toHaveBeenCalled();
+    // The stored preference is unchanged, so following the refusal's advice
+    // opens a fresh confirm rather than committing straight away.
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
+    expect(screen.getByTestId("push-confirm-dialog")).toBeDefined();
+    expect(onCommitAndPush).toHaveBeenCalledTimes(1);
   });
 
   it("persists the opt-out even when the push call rejects", async () => {
@@ -894,6 +917,33 @@ describe("CommitPanel — earlier commits in the push (#15557)", () => {
       );
     }
   );
+
+  it("pins the current opening's staged changes when an earlier opening's read of the same tip lands late (#17563)", async () => {
+    const earlier = "a".repeat(64);
+    const current = "b".repeat(64);
+    const paths = ["src/same.ts"];
+    const first = deferred<GitPushCommitPreview>();
+    const second = deferred<GitPushCommitPreview>();
+    listPushCommits.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const { onCommitAndPush } = openConfirm();
+    await waitFor(() => expect(listPushCommits).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
+    await waitFor(() => expect(listPushCommits).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      second.resolve(pushPreview({ staged: { identity: current, paths } }));
+    });
+    await act(async () => {
+      first.resolve(pushPreview({ staged: { identity: earlier, paths } }));
+    });
+
+    await confirmWhenReady(CONFIRM);
+    expect(onCommitAndPush).toHaveBeenCalledWith(
+      "fix: bug",
+      previewed("feature/x", undefined, undefined, current)
+    );
+  });
 
   it.each<[string, Identity]>([
     ["destination remote", { ...IDENTITY_A, destination: { remote: "fork", branch: "feature/x" } }],

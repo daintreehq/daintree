@@ -15,6 +15,7 @@ vi.mock("@/hooks/useHostConnection", () => ({
 vi.mock("@/clients/operationsClient", () => ({ mintRemoteOperationId: () => undefined }));
 
 import { useReviewHubCommitAndPush } from "../useReviewHubCommitAndPush";
+import { useDiffViewedStore } from "@/store/diffViewedStore";
 import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
 import { useGitPushConfirmStore, type GitPushConfirmResult } from "@/store/gitPushConfirmStore";
 
@@ -501,6 +502,7 @@ describe("useReviewHubCommitAndPush — held to the staged changes the confirm l
 
   it("keeps the draft and says why when main refuses a restaged commit", async () => {
     commit.mockRejectedValueOnce(commitReviewStale());
+    const clearViewed = vi.spyOn(useDiffViewedStore.getState(), "clearWorktree");
     const setActionError = vi.fn();
     const onCommitted = vi.fn();
     const { result } = renderPushHook({ setActionError, onCommitted });
@@ -512,6 +514,7 @@ describe("useReviewHubCommitAndPush — held to the staged changes the confirm l
     expect(push).not.toHaveBeenCalled();
     expect(onCommitted).not.toHaveBeenCalled();
     expect(headMoved).not.toHaveBeenCalled();
+    expect(clearViewed).not.toHaveBeenCalled();
     expect(setActionError).toHaveBeenLastCalledWith({
       title: "Couldn't commit changes",
       detail: expect.stringMatching(
@@ -520,20 +523,27 @@ describe("useReviewHubCommitAndPush — held to the staged changes the confirm l
     });
   });
 
-  it("pushes nothing when the commit holds other staged changes than the confirm listed", async () => {
+  it("pushes nothing, then or on Retry, when the commit holds other staged changes than the confirm listed", async () => {
+    // An earlier Commit & push whose push failed leaves an approval Retry could use.
+    commit.mockResolvedValueOnce({ ...COMMITTED, stagedIdentity: REVIEWED_STAGED });
+    push.mockRejectedValueOnce(networkDown());
     commit.mockResolvedValueOnce({ ...COMMITTED, stagedIdentity: "d".repeat(64) });
     const onCommitted = vi.fn();
     const { result } = renderPushHook({ onCommitted });
+    await act(() => result.current.handleCommitAndPush("feat: first", CONFIRMED));
+    expect(push).toHaveBeenCalledTimes(1);
 
     await act(() => result.current.handleCommitAndPush("feat: x", CONFIRMED));
 
     // The commit landed, so the draft goes; only the push is withheld.
-    expect(onCommitted).toHaveBeenCalledWith(PATH, "feat: x");
-    expect(push).not.toHaveBeenCalled();
+    expect(onCommitted).toHaveBeenLastCalledWith(PATH, "feat: x");
+    expect(push).toHaveBeenCalledTimes(1);
     expect(result.current.pushError?.reason).toBe("push-review-stale");
-    expect(result.current.pushError?.rawMessage).toMatch(/staged changes changed/);
+    expect(result.current.pushError?.summary).toMatch(
+      /staged changes changed.*Nothing was pushed\.$/
+    );
     await act(() => result.current.handleRetryPush());
-    expect(push).not.toHaveBeenCalled();
+    expect(push).toHaveBeenCalledTimes(1);
   });
 
   it("pushes nothing when a host answers a reviewed commit without saying what it holds", async () => {
