@@ -912,6 +912,22 @@ describe("ReviewHub", () => {
       expect(openPanelDialogMock).not.toHaveBeenCalled();
     });
 
+    it("counts a partially staged path once in the Files header", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({
+          staged: [{ path: "src/dual.ts", status: "modified", insertions: 1, deletions: 0 }],
+          unstaged: [{ path: "src/dual.ts", status: "modified", insertions: 2, deletions: 0 }],
+        })
+      );
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => screen.getAllByText("dual.ts"));
+
+      expect(screen.getByText("Files (1)")).toBeTruthy();
+      expect(screen.getAllByText("dual.ts")).toHaveLength(2);
+    });
+
     it("shares one Viewed mark between the staged and unstaged copies of the same path", async () => {
       // Partial-staging scenario: the same file is both staged and unstaged
       // (e.g. user staged some hunks, left others unstaged).
