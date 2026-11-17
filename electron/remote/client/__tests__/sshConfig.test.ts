@@ -146,13 +146,18 @@ describe("listSshConfigAliases", () => {
   it.skipIf(process.platform === "win32")(
     "reads POSIX escapes and an explicit leading dot as glob(3) does",
     async () => {
-      write("config", "Include conf.d/lit\\.conf conf.d/\\.private* conf.d/[a\\-c].conf\n");
+      write(
+        "config",
+        "Include conf.d/lit\\.conf conf.d/\\.private* conf.d/[a\\-c].conf conf.d/[[:x.conf\n"
+      );
       write("conf.d/lit.conf", "Host literal\n");
       write("conf.d/.private-a", "Host private\n");
       write("conf.d/a.conf", "Host class-a\n");
       write("conf.d/b.conf", "Host class-b\n");
       write("conf.d/-.conf", "Host class-dash\n");
-      expect(await aliases()).toEqual(["literal", "private", "class-dash", "class-a"]);
+      // With no `]` to close it, `[[:` is just part of a name.
+      write("conf.d/[[:x.conf", "Host bracketed\n");
+      expect(await aliases()).toEqual(["literal", "private", "class-dash", "class-a", "bracketed"]);
     }
   );
 

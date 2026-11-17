@@ -262,8 +262,8 @@ function expandIncludeTokens(arg: string, home: string): string | null {
       const close = arg.indexOf("}", i + 2);
       const name = close < 0 ? "" : arg.slice(i + 2, close);
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return null;
-      const value = process.env[name];
-      if (value === undefined) return null;
+      const value: unknown = process.env[name];
+      if (typeof value !== "string") return null;
       out += value;
       i = close;
     } else if (c === "%") {
@@ -303,15 +303,18 @@ type GlobToken = { kind: "star" } | { kind: "one"; test: (c: string) => boolean;
 function globClass(
   segment: string,
   open: number,
-  escapes: boolean
+  escapes: boolean,
+  lastClose: number
 ): { test: (c: string) => boolean; close: number } | null | undefined {
+  // Nothing can close it: a member and then the segment's last `]` must both fit after it.
+  if (lastClose < open + 2) return null;
   let i = open + 1;
   const negate = segment[i] === "!";
   if (negate) i++;
   const chars: string[] = [];
   const ranges: Array<[string, string]> = [];
   let first = true;
-  while (i < segment.length) {
+  while (i <= lastClose) {
     let c = segment[i]!;
     // A `]` first in the class is one of its characters.
     if (c === "]" && !first) {
@@ -343,6 +346,11 @@ function globClass(
 function globTokens(segment: string): GlobToken[] | null {
   if (segment.length > MAX_GLOB_SEGMENT) return null;
   const escapes = path.sep === "/";
+  let lastClose = -1;
+  for (let i = 0; i < segment.length; i++) {
+    if (escapes && segment[i] === "\\") i++;
+    else if (segment[i] === "]") lastClose = i;
+  }
   const tokens: GlobToken[] = [];
   for (let i = 0; i < segment.length; i++) {
     const c = segment[i]!;
@@ -355,7 +363,7 @@ function globTokens(segment: string): GlobToken[] | null {
       continue;
     }
     if (c === "[") {
-      const bracket = globClass(segment, i, escapes);
+      const bracket = globClass(segment, i, escapes, lastClose);
       if (bracket === undefined) return null;
       if (bracket) {
         tokens.push({ kind: "one", test: bracket.test });
@@ -491,10 +499,11 @@ function collectAliases(
   const negations = patterns.filter((p) => p.startsWith("!")).map((p) => p.slice(1));
   const patternChars = (list: readonly string[]) => list.reduce((sum, p) => sum + p.length + 1, 0);
   // Matching is at worst the name's length times the pattern's, so that's what each check costs.
-  const cost = patternChars(negations) + gates.reduce((sum, gate) => sum + patternChars(gate), 0);
+  let cost: number | undefined;
   for (const alias of patterns) {
     if (ctx.aliases.length >= MAX_ALIASES) return;
     if (ctx.aliasSet.has(alias) || !isListableAlias(alias)) continue;
+    cost ??= patternChars(negations) + gates.reduce((sum, gate) => sum + patternChars(gate), 0);
     ctx.work += (alias.length + 1) * cost;
     if (ctx.work > MAX_MATCH_WORK) return halt(ctx);
     if (negations.some((negation) => matchHostPattern(alias, negation))) continue;

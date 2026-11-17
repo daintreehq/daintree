@@ -449,6 +449,8 @@ afterEach(async () => {
   await server?.close();
   client = null;
   server = null;
+  // Back to the real walk, so a fake one queued by a failed test can't reach the next.
+  vi.mocked(sshConfigStamp).mockReset();
   await removeTempDir(root);
 });
 
@@ -1595,6 +1597,20 @@ describe("reconnecting to a host the transport already knows", () => {
     expect(again.remembered).toBe(true);
     await again.dispose();
     host.closeProxies();
+  });
+
+  it("starts nothing for a first dial cancelled while the config is read", async () => {
+    const clientDir = path.join(root, "c");
+    const spawn = vi.fn(() => new FakeChild());
+    const transport = new SshTransport({ target: "studio", clientDir, spawn, sshConfigFiles: [] });
+    const abort = new AbortController();
+    vi.mocked(sshConfigStamp).mockImplementationOnce(async () => {
+      abort.abort();
+      return "incomplete:cancelled";
+    });
+    await expect(transport.open(abort.signal)).rejects.toThrow("Connection cancelled");
+    expect(existsSync(clientDir)).toBe(false);
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it("starts no fresh dial for a remembered one that was cancelled", async () => {
