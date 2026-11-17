@@ -588,7 +588,6 @@ export function ConflictPanel({
   );
 
   const conflictCount = liveConflicts.length;
-  const canContinue = conflictCount === 0;
   // Git stages what it merged cleanly beside what a person resolved, so only
   // the paths its index remembers resolving are resolutions. Without that
   // record every staged path is named for what it is, not for how it got there.
@@ -601,6 +600,14 @@ export function ConflictPanel({
     }
     return { resolvedStaged: resolved, otherStaged: other };
   }, [status.staged, status.resolveUndoPaths]);
+  const hasStagedChanges = status.staged.length > 0;
+  // `git am --continue` commits what is staged and refuses an index with no
+  // changes, which is where a patch that wouldn't apply at all leaves it. A row
+  // just marked resolved counts as staged until the status read catches up.
+  const mailboxNeedsChanges =
+    operationKey === "APPLYING_MAILBOX" && !hasStagedChanges && optimisticResolved.size === 0;
+  const canContinue = conflictCount === 0 && !mailboxNeedsChanges;
+  const needsUser = conflictCount > 0 || mailboxNeedsChanges;
   const continueBlocked = !canContinue || isAborting || isContinuing || busyFile !== null;
 
   // Scan for hunk counts + first-marker line on every status read that lands,
@@ -811,13 +818,15 @@ export function ConflictPanel({
   const summary =
     conflictCount > 0
       ? `${pluralize(conflictCount, "conflicted file")} — resolve each, then continue`
-      : isRebaseMidSequence
-        ? "Continue to replay the remaining commits"
-        : operationKey === "APPLYING_MAILBOX"
-          ? // `git am` keeps no progress Review Hub reads, and it applies the
-            // rest of the series on Continue, so "finish" could overpromise.
-            "Continue to commit this patch and apply any that remain"
-          : `Continue to finish the ${operationNoun}`;
+      : mailboxNeedsChanges
+        ? "Stage this patch's changes to continue, or run git am --skip in a terminal to drop it"
+        : isRebaseMidSequence
+          ? "Continue to replay the remaining commits"
+          : operationKey === "APPLYING_MAILBOX"
+            ? // `git am` keeps no progress Review Hub reads, and it applies the
+              // rest of the series on Continue, so "finish" could overpromise.
+              "Continue to commit this patch and apply any that remain"
+            : `Continue to finish the ${operationNoun}`;
 
   // What the hand-off sends is what the rows show: the same live list, kind
   // wording and scan answers.
@@ -852,14 +861,14 @@ export function ConflictPanel({
         <div
           className={cn(
             "px-3 py-3 border-b border-divider",
-            conflictCount > 0 ? "bg-status-warning/10" : "bg-overlay-subtle"
+            needsUser ? "bg-status-warning/10" : "bg-overlay-subtle"
           )}
         >
           <div className="flex items-start gap-2">
             <GitMerge
               className={cn(
                 "w-4 h-4 mt-0.5 shrink-0",
-                conflictCount > 0 ? "text-status-warning" : "text-text-secondary"
+                needsUser ? "text-status-warning" : "text-text-secondary"
               )}
               aria-hidden
             />
@@ -868,7 +877,9 @@ export function ConflictPanel({
                 <h3 className="text-sm font-semibold text-text-primary">
                   {conflictCount > 0
                     ? `Resolve ${operationNoun} conflicts`
-                    : `Ready to continue ${operationNoun}`}
+                    : mailboxNeedsChanges
+                      ? "Nothing staged for this patch"
+                      : `Ready to continue ${operationNoun}`}
                 </h3>
                 {operationState === "REBASING" &&
                   status.rebaseStep != null &&

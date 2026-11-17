@@ -103,6 +103,14 @@ describe("composeConflictAgentText", () => {
     expect(payload.replayingCommit).toBeUndefined();
   });
 
+  it("names a halted git am as one, never as a rebase", () => {
+    const text = composeConflictAgentText(base({ operation: "APPLYING_MAILBOX" }))!;
+
+    expect(parsePayload(text).operation).toBe("git am session");
+    expect(text).toContain("do not continue, skip or abort the git am session");
+    expect(text).not.toMatch(/rebase/i);
+  });
+
   it("names no operation, and no operation's commands, for conflicts with none behind them", () => {
     const text = composeConflictAgentText(base({ operation: null }))!;
 

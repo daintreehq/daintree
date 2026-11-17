@@ -424,6 +424,11 @@ describe("useWorktreeStatus — gitStateIndicator", () => {
       label: "applying patches",
       tone: "warning",
     });
+    expect(getIndicator({ repoState: "REBASING" })).toEqual({
+      kind: "rebasing",
+      label: "rebasing",
+      tone: "warning",
+    });
   });
 
   it("shows no operation for CLEAN or DIRTY repo states", () => {

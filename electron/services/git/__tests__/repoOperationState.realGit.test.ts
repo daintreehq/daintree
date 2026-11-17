@@ -16,12 +16,18 @@ import {
 let root: string;
 let home: string;
 
-function git(cwd: string, ...args: string[]): void {
-  execFileSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=T", ...args], {
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=T", ...args], {
     cwd,
     env: { PATH: process.env.PATH ?? "", HOME: home, GIT_CONFIG_NOSYSTEM: "1", LC_ALL: "C" },
-    stdio: "ignore",
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
   });
+}
+
+/** The stop is a real three-way conflict, not just a patch that failed to apply. */
+function hasUnmergedEntries(repo: string): boolean {
+  return git(repo, "ls-files", "--unmerged").trim() !== "";
 }
 
 function gitMayFail(cwd: string, ...args: string[]): void {
@@ -67,10 +73,16 @@ describe("in-progress operation detection against real git", () => {
     gitMayFail(repo, "am", "-3", path.join(patches, fs.readdirSync(patches)[0]!));
     const gitDir = path.join(repo, ".git");
     expect(fs.existsSync(path.join(gitDir, "rebase-apply", "applying"))).toBe(true);
+    const unmerged = hasUnmergedEntries(repo);
+    expect(unmerged).toBe(true);
 
-    const detected = await detectRepoOperationState(gitDir, true);
-    expect(detected.state).toBe("APPLYING_MAILBOX");
-    expect(detected.rebaseSequence).toBeNull();
+    const detected = await detectRepoOperationState(gitDir, unmerged);
+    expect(detected).toEqual({
+      state: "APPLYING_MAILBOX",
+      rebaseStep: null,
+      rebaseTotalSteps: null,
+      rebaseSequence: null,
+    });
     expect(getRepoOperationStateSync(gitDir)).toBe("APPLYING_MAILBOX");
     await expect(getRepoOperationState(gitDir)).resolves.toBe("APPLYING_MAILBOX");
   });
@@ -81,8 +93,10 @@ describe("in-progress operation detection against real git", () => {
     gitMayFail(repo, "rebase", "--apply", "main");
     const gitDir = path.join(repo, ".git");
     expect(fs.existsSync(path.join(gitDir, "rebase-apply", "rebasing"))).toBe(true);
+    const unmerged = hasUnmergedEntries(repo);
+    expect(unmerged).toBe(true);
 
-    const detected = await detectRepoOperationState(gitDir, true);
+    const detected = await detectRepoOperationState(gitDir, unmerged);
     expect(detected.state).toBe("REBASING");
     expect(detected.rebaseStep).toBe(1);
     expect(detected.rebaseTotalSteps).toBe(1);

@@ -461,6 +461,19 @@ describe("git.abortRepositoryOperation", () => {
   });
 });
 
+describe("git.abortRepositoryOperation schema", () => {
+  // The card passes the halted operation as the confirm's loading label, so a
+  // value the enum rejects would refuse the Abort row before it ran.
+  it("accepts a halted git am as the operation hint", () => {
+    const { schemaOf } = setupActions();
+    const schema = schemaOf("git.abortRepositoryOperation")!;
+    expect(schema.safeParse({ worktreeId: WT_ID, operation: "APPLYING_MAILBOX" }).success).toBe(
+      true
+    );
+    expect(schema.safeParse({ worktreeId: WT_ID, operation: "AM" }).success).toBe(false);
+  });
+});
+
 describe("git.continueRepositoryOperation", () => {
   it("continues without a confirm — the user already started this operation", async () => {
     const { run, git, defOf } = setupActions();

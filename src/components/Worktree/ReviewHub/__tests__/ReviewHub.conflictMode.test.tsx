@@ -1963,6 +1963,10 @@ describe("ReviewHub", () => {
         makeMergingStatus({
           repoState: "APPLYING_MAILBOX",
           staged: [{ path: "a.ts", status: "modified", insertions: 1, deletions: 0 }],
+          // Counters a rebase would render, so the panel's own rebase guard is
+          // what keeps them off a mailbox apply.
+          rebaseStep: 2,
+          rebaseTotalSteps: 3,
         })
       );
 
@@ -1980,9 +1984,14 @@ describe("ReviewHub", () => {
       expect(dialog.textContent).not.toMatch(/replayed commit/);
     });
 
-    it("tells a conflict-free git am that Continue applies the rest of the series", async () => {
+    it("tells a resolved git am that Continue applies the rest of the series", async () => {
       getStagingStatusMock.mockResolvedValue(
-        makeMergingStatus({ repoState: "APPLYING_MAILBOX", conflicted: [], conflictedFiles: [] })
+        makeMergingStatus({
+          repoState: "APPLYING_MAILBOX",
+          conflicted: [],
+          conflictedFiles: [],
+          staged: [{ path: "a.ts", status: "modified", insertions: 1, deletions: 0 }],
+        })
       );
 
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
@@ -1990,6 +1999,27 @@ describe("ReviewHub", () => {
       await waitFor(() => screen.getByTestId("conflict-panel"));
       screen.getByText(/Ready to continue patch apply/i);
       screen.getByText("Continue to commit this patch and apply any that remain");
+      expect(
+        screen.getByRole("button", { name: /^Continue patch apply/i }).getAttribute("aria-disabled")
+      ).toBeNull();
+    });
+
+    // A patch that wouldn't apply at all stops with no conflicts and nothing
+    // staged, and `git am --continue` refuses that index.
+    it("holds Continue on a git am stop with nothing staged and names the terminal way out", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeMergingStatus({ repoState: "APPLYING_MAILBOX", conflicted: [], conflictedFiles: [] })
+      );
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => screen.getByTestId("conflict-panel"));
+      screen.getByText("Nothing staged for this patch");
+      screen.getByText(/run git am --skip in a terminal/);
+      const continueButton = screen.getByRole("button", { name: /^Continue patch apply/i });
+      expect(continueButton.getAttribute("aria-disabled")).toBe("true");
+      fireEvent.click(continueButton);
+      expect(continueRepositoryOperationMock).not.toHaveBeenCalled();
     });
 
     it("renders normal staging UI when repoState is DIRTY with conflicts", async () => {

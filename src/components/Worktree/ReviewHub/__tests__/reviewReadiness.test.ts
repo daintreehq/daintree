@@ -150,10 +150,15 @@ describe("deriveReviewReadiness", () => {
         status: makeStatus({
           repoState: "APPLYING_MAILBOX",
           staged: [{ path: "a.ts", status: "modified", insertions: 1, deletions: 0 }],
+          rebaseStep: 2,
+          rebaseTotalSteps: 3,
         }),
+        aheadCount: 1,
+        behindCount: 0,
       });
       expect(summary.level).toBe("blocked");
       expect(summary.commitReady).toBe(false);
+      expect(summary.pushReady).toBe(false);
       expect(itemIds(summary.blockers)).toContain("operation-in-progress");
       expect(summary.blockers[0]!.detail).toBeUndefined();
     });

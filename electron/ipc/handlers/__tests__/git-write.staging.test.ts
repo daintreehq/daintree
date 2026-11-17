@@ -67,8 +67,10 @@ function subcommand(args: readonly string[]): string | undefined {
   return args[i];
 }
 
+// Inherited GIT_* (a hook's GIT_DIR or GIT_INDEX_FILE) would point fixture git
+// at another repository, while the hardened handlers strip them.
 const GIT_ENV = {
-  ...process.env,
+  ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
   GIT_AUTHOR_NAME: "Test",
   GIT_AUTHOR_EMAIL: "test@example.test",
   GIT_COMMITTER_NAME: "Test",
@@ -802,32 +804,40 @@ describe("git-write repository operation handlers on a halted git am (real git)"
     handler(CHANNELS.GIT_ABORT_REPOSITORY_OPERATION)(null, repo) as Promise<void>;
   const amMarker = () => path.join(repo, ".git", "rebase-apply", "applying");
 
-  /** A `git am -3` of `topic`'s commit onto a `main` that rewrote the same line. */
-  function haltGitAm(): string {
-    commitFiles({ "f.txt": "base\n" });
+  /**
+   * A `git am -3` of `topic`'s two commits onto a `main` that rewrote the line
+   * the second one touches: the first patch lands, the second stops.
+   */
+  function haltGitAm(): { tip: string; firstApplied: string } {
+    commitFiles({ "f.txt": "base\n", "g.txt": "base\n" });
     // The handlers' git commits under the test's empty home, so the identity
     // has to live in the repository itself.
     git(repo, "config", "user.name", "Repo Owner");
     git(repo, "config", "user.email", "repo@example.test");
     git(repo, "config", "commit.gpgsign", "false");
     git(repo, "checkout", "-q", "-b", "topic");
+    fs.writeFileSync(path.join(repo, "g.txt"), "topic\n");
+    git(repo, "commit", "-q", "-a", "-m", "clean change");
     fs.writeFileSync(path.join(repo, "f.txt"), "topic\n");
     git(repo, "commit", "-q", "-a", "-m", "topic change");
     const patches = path.join(tmp, "patches");
-    git(repo, "format-patch", "-q", "-1", "-o", patches);
+    git(repo, "format-patch", "-q", "-2", "-o", patches);
     git(repo, "checkout", "-q", "main");
     fs.writeFileSync(path.join(repo, "f.txt"), "main\n");
     git(repo, "commit", "-q", "-a", "-m", "main change");
     const tip = git(repo, "rev-parse", "HEAD").trim();
+    const series = fs
+      .readdirSync(patches)
+      .sort()
+      .map((name) => path.join(patches, name));
     expect(() =>
-      execFileSync("git", ["am", "-3", path.join(patches, fs.readdirSync(patches)[0]!)], {
-        cwd: repo,
-        env: GIT_ENV,
-        stdio: "ignore",
-      })
+      execFileSync("git", ["am", "-3", ...series], { cwd: repo, env: GIT_ENV, stdio: "ignore" })
     ).toThrow();
     expect(fs.existsSync(amMarker())).toBe(true);
-    return tip;
+    const firstApplied = git(repo, "rev-parse", "HEAD").trim();
+    expect(git(repo, "log", "-1", "--format=%s").trim()).toBe("clean change");
+    expect(firstApplied).not.toBe(tip);
+    return { tip, firstApplied };
   }
 
   it("reports the halted session as a mailbox apply in the staging status", async () => {
@@ -867,8 +877,9 @@ describe("git-write repository operation handlers on a halted git am (real git)"
     expect(fs.existsSync(amMarker())).toBe(true);
   });
 
+  // Two patches so a skip, which would keep the first, can't pass for an abort.
   it("aborts with git am, returning the branch to its tip from before the session", async () => {
-    const tip = haltGitAm();
+    const { tip } = haltGitAm();
 
     const mark = spawned.length;
     await abortOperation();
