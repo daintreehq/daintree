@@ -566,6 +566,15 @@ if (!gotTheLock) {
   // Bumped when Keep Agents Running closes every window, so a restore still
   // opening windows from before stops instead of bringing them back.
   let launchWindowsGeneration = 0;
+  // A launch whose manifest stays read-only until a clean fleet restore (a
+  // windowless launch, a crash recovery bringing its fleet back) owes that
+  // release. Keep Agents Running can abandon the restore; the reopen that
+  // replaces it pays it instead.
+  let owesSavesRelease = false;
+  function releaseLaunchSaves(): void {
+    owesSavesRelease = false;
+    enableOpenWindowsSaves();
+  }
   const listenForHandedOffHostMode = (): void => {
     // A handoff arriving mid-quit would start listening just before the stop.
     if (getActiveShutdown() !== null) return;
@@ -1282,8 +1291,9 @@ if (!gotTheLock) {
     // IPC decides whether this crash is a single one that earns the whole
     // window set back (#12801); safe mode and loops never trigger it.
     if (launchIntent === "recovery") {
-      setCrashFleetRestorer((requesterWebContentsId) =>
-        restoreFleetAfterCrash({
+      setCrashFleetRestorer((requesterWebContentsId) => {
+        owesSavesRelease = true;
+        return restoreFleetAfterCrash({
           startupRestore,
           waitForRequesterHydrated: async () => {
             const ctx = windowRegistry.getByWebContentsId(requesterWebContentsId);
@@ -1322,12 +1332,12 @@ if (!gotTheLock) {
           createWindow: createRestoredWindow,
           suppressSaves: suppressOpenWindowsSaves,
           resumeSaves: resumeOpenWindowsSaves,
-          enableSaves: enableOpenWindowsSaves,
+          enableSaves: releaseLaunchSaves,
           onBackgroundWindowFailed,
           isProjectOwned,
-          isShuttingDown,
-        })
-      );
+          isShuttingDown: isAbandoned,
+        });
+      });
     }
 
     await startupRestore;
@@ -1512,7 +1522,10 @@ if (!gotTheLock) {
         // brings back the windows just closed, not that folder.
         armReopen: () =>
           armLaunchWindowRequest(stripLaunchTargets(process.argv), {
-            releaseHeldSaves: releaseOpenWindowsHold,
+            releaseHeldSaves: () => {
+              if (owesSavesRelease) releaseLaunchSaves();
+              releaseOpenWindowsHold();
+            },
             afterKeepAgentsRunning: true,
             onOpen: () => {
               reopening = true;
@@ -1619,7 +1632,8 @@ if (!gotTheLock) {
             : "[MAIN] Due-schedule launch — starting without a window"
         );
         if (windowsDeferred) {
-          armLaunchWindowRequest(process.argv, { releaseHeldSaves: enableOpenWindowsSaves });
+          owesSavesRelease = true;
+          armLaunchWindowRequest(process.argv, { releaseHeldSaves: releaseLaunchSaves });
         }
         appLifecycle.onStartedWindowless();
         if ((await startHostRuntime({ windowRegistry })) === "exit-requested") return;
