@@ -129,7 +129,7 @@ describe("LinksSettingsTab adding a link", () => {
     fireEvent.keyDown(url, { key: "Enter", isComposing: true });
 
     expect(useGlobalLinksStore.getState().links).toHaveLength(3);
-    expect((url as HTMLInputElement).value).toBe("https://status.example.com");
+    expect(url).toHaveProperty("value", "https://status.example.com");
   });
 
   it("flags the name, not the URL, when only the name is missing", () => {
@@ -294,7 +294,9 @@ describe("LinksSettingsTab removing a link", () => {
     fireEvent.click(button("Move Team docs down"));
     fireEvent.click(button("Move CI down"));
     expect(titles()).toEqual(["Team docs", "CI"]);
-    act(() => useGlobalLinksStore.getState().addLink({ title: "New", url: "https://new.test" }));
+    act(() => {
+      useGlobalLinksStore.getState().addLink({ title: "New", url: "https://new.test" });
+    });
 
     lastUndo()();
     expect(titles()).toEqual(["Team docs", "Wiki", "CI", "New"]);
