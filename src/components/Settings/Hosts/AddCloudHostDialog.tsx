@@ -542,7 +542,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
                         providerStopSentence(lifetimeModel, provider.name),
                         // Nothing can hand this device's key to a machine that didn't take it when it was made.
                         provider.capabilities.provisioning.sshKey === "at-create"
-                          ? `${provider.name} takes an SSH key only when a machine is created, so Daintree can connect only to one it made with this account`
+                          ? `${provider.name} takes an SSH key only when a machine is created, so Daintree connects only to one that already accepts this account's key from this device`
                           : null
                       )}
                 </FieldDescription>

@@ -44,8 +44,12 @@ const TAG = /^[A-Za-z0-9_:-]{1,255}$/;
 const MIN_MEMORY_MIB = 2048;
 const PREFERRED_IMAGE = "ubuntu-24-04-x64";
 const PREFERRED_REGION = "nyc3";
-/** How long `stop()` follows the shutdown it asked for before leaving the rest to the state reads. */
-const SHUTDOWN_FOLLOW_MS = 90_000;
+/**
+ * How long `stop()` follows the shutdown it asked for: past DigitalOcean's own
+ * give-up, so an errored shutdown is reported rather than waited out, and
+ * inside the lifecycle's stop deadline.
+ */
+const SHUTDOWN_FOLLOW_MS = 10 * 60_000;
 const SHUTDOWN_POLL_MS = 3_000;
 
 /**
@@ -202,7 +206,8 @@ export class DigitalOceanProvider implements CloudProvider {
 
   constructor(
     private readonly clientFor: (apiUrl: string) => DigitalOceanClient,
-    private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void> = abortableSleep
+    private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void> = abortableSleep,
+    private readonly now: () => number = Date.now
   ) {}
 
   info(platform: NodeJS.Platform): CloudProviderInfo {
@@ -304,20 +309,14 @@ export class DigitalOceanProvider implements CloudProvider {
     ]);
     const offeredImages = images.filter(isSupportedDropletImage);
     const imageRegions = new Set(offeredImages.flatMap((image) => image.regions));
-    const offeredSizes = sizes
-      .filter(
-        (size) =>
-          size.available &&
-          size.memory >= MIN_MEMORY_MIB &&
-          !size.slug.startsWith("gpu-") &&
-          size.regions.length > 0
-      )
-      .sort(
-        (a, b) =>
-          (a.price_hourly ?? Number.POSITIVE_INFINITY) -
-            (b.price_hourly ?? Number.POSITIVE_INFINITY) || a.memory - b.memory
-      );
-    const sizeRegions = new Set(offeredSizes.flatMap((size) => size.regions));
+    const usableSizes = sizes.filter(
+      (size) =>
+        size.available &&
+        size.memory >= MIN_MEMORY_MIB &&
+        !size.slug.startsWith("gpu-") &&
+        size.regions.length > 0
+    );
+    const sizeRegions = new Set(usableSizes.flatMap((size) => size.regions));
     // A region is offered when it takes new Droplets and has a size and an image to make one with.
     const offeredRegions = regions
       .filter(
@@ -326,6 +325,15 @@ export class DigitalOceanProvider implements CloudProvider {
       )
       .sort((a, b) => a.name.localeCompare(b.name));
     const regionIds = new Set(offeredRegions.map((region) => region.slug));
+    // A size can't say which regions have it, so only one every offered region has is offered:
+    // any region and size the person picks together then make a Droplet.
+    const offeredSizes = usableSizes
+      .filter((size) => offeredRegions.every((region) => size.regions.includes(region.slug)))
+      .sort(
+        (a, b) =>
+          (a.price_hourly ?? Number.POSITIVE_INFINITY) -
+            (b.price_hourly ?? Number.POSITIVE_INFINITY) || a.memory - b.memory
+      );
     const imageChoices = offeredImages
       .map((image) => imageChoice(image, regionIds))
       .sort((a, b) => b.label.localeCompare(a.label, undefined, { numeric: true }));
@@ -383,6 +391,23 @@ export class DigitalOceanProvider implements CloudProvider {
       this.ctx(credentials),
       tag
     );
+    if (tag !== undefined) {
+      // How a lost create is found again: an answer that doesn't plainly hold the one tag asked
+      // for (a row without it, or carrying two values for its key) fails, rather than reading as none.
+      const key = tag.slice(0, tag.indexOf(":") + 1);
+      for (const droplet of droplets) {
+        const values = new Set(droplet.tags.filter((entry) => entry.startsWith(key)));
+        if (!values.has(tag) || values.size > 1) {
+          throw new DigitalOceanApiError(
+            "bad-response",
+            "DigitalOcean's tag lookup listed a Droplet that doesn't carry that tag alone",
+            null,
+            null,
+            null
+          );
+        }
+      }
+    }
     return droplets.map((droplet) => dropletResource(droplet));
   }
 
@@ -497,8 +522,8 @@ export class DigitalOceanProvider implements CloudProvider {
     const client = this.clientFor(credentials.apiUrl);
     const ctx = this.ctx(credentials);
     let action = await client.dropletAction(ctx, resourceId, { type: "shutdown" });
-    const deadline = Date.now() + SHUTDOWN_FOLLOW_MS;
-    while (action.status === "in-progress" && Date.now() < deadline) {
+    const deadline = this.now() + SHUTDOWN_FOLLOW_MS;
+    while (action.status === "in-progress" && this.now() < deadline) {
       await this.sleep(SHUTDOWN_POLL_MS, ctx.signal);
       action = await client.getAction(ctx, action.id);
     }

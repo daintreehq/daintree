@@ -57,6 +57,7 @@ import type {
 } from "@shared/types/ipc/remoteHosts";
 import { AddHostDiscovery } from "./AddHostDiscovery";
 import { AddHostNotes } from "./AddHostNotes";
+import { CloudSetupHostKey } from "./CloudHostKeyReview";
 import { WizardFooterActions, WizardStepBar, type WizardStepView } from "./AddHostWizardChrome";
 import { HostCommand } from "./HostCommand";
 import { SshRefusalHelp } from "./SshRefusalHelp";
@@ -429,6 +430,10 @@ type LocalUpdate =
 
 /** How long a check of this machine's updater spins before it is said to be quiet. */
 const LOCAL_UPDATE_QUIET_MS = 10_000;
+
+/** After a cloud host key is trusted, how often and how many times an unreachable machine is checked again: five minutes. */
+const LOGIN_RECHECK_MS = 10_000;
+const LOGIN_RECHECKS = 30;
 
 /** What "Update this machine" led to, under the verdict that offered it. */
 function LocalUpdateStatus({ update }: { update: LocalUpdate }) {
@@ -823,6 +828,24 @@ export function AddHostDialog({
         setStep("check");
       }
     );
+  };
+
+  // A new cloud machine can still be setting itself up when its key is trusted, and turn this
+  // device away until it's done: after a trust, an unreachable check is tried again for a while.
+  const [loginRechecks, setLoginRechecks] = useState(0);
+  const recheckForLogin = useEffectEvent(() => {
+    setLoginRechecks((left) => Math.max(0, left - 1));
+    check();
+  });
+  const awaitingLogin = loginRechecks > 0 && probe !== null && !probe.reachable;
+  useEffect(() => {
+    if (!isOpen || !awaitingLogin || busy) return undefined;
+    const timer = setTimeout(() => recheckForLogin(), LOGIN_RECHECK_MS);
+    return () => clearTimeout(timer);
+  }, [isOpen, awaitingLogin, busy, probe, loginRechecks]);
+  const trustedHostKey = () => {
+    setLoginRechecks(LOGIN_RECHECKS);
+    check();
   };
 
   // An existing host is checked as the dialog opens: its target is already known.
@@ -1550,7 +1573,22 @@ export function AddHostDialog({
                 Daintree runs programs in the distribution with <code>wsl.exe</code>. Check that{" "}
                 <code>wsl -d {wslCommandArg(target)}</code> opens a shell there.
               </p>
-            ) : cloudExisting ? null : (
+            ) : cloudExisting ? (
+              <>
+                {existingId !== null && (
+                  <CloudSetupHostKey hostId={existingId} onTrusted={trustedHostKey} />
+                )}
+                {awaitingLogin && (
+                  <p
+                    className="mt-3 text-xs text-text-secondary"
+                    data-testid="add-host-awaiting-login"
+                  >
+                    A new machine can take a few minutes to finish setting up before it lets this
+                    device sign in. Daintree checks again every 10 seconds.
+                  </p>
+                )}
+              </>
+            ) : (
               <SshRefusalHelp
                 refusal={refusal}
                 target={target}

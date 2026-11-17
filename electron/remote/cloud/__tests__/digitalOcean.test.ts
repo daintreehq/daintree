@@ -203,10 +203,11 @@ describe("DigitalOceanClient", () => {
     expect(error.message).not.toContain(TOKEN);
   });
 
-  it("waits out a rate limit as DigitalOcean asks, then answers", async () => {
+  it("waits out a rate limit as long as DigitalOcean asks, then answers", async () => {
     const sleeps: number[] = [];
     const responses: Responder[] = [
-      jsonResponse(429, { id: "too_many_requests", message: "slow down" }, { "retry-after": "2" }),
+      jsonResponse(429, { id: "too_many_requests", message: "slow" }, { "retry-after": "6" }),
+      jsonResponse(429, { id: "too_many_requests", message: "slow" }, { "retry-after": "8" }),
       jsonResponse(200, ACCOUNT),
     ];
     const fetch = vi.fn(async () => responses.shift() as Response);
@@ -218,7 +219,7 @@ describe("DigitalOceanClient", () => {
       },
     });
     expect((await client.account(ctx)).uuid).toBe("acct-uuid");
-    expect(sleeps[0]).toBeGreaterThanOrEqual(2000);
+    expect(sleeps).toEqual([6000, 8000]);
   });
 
   it("counts pages itself, keeps the tag filter, and stops when there's no next page", async () => {
@@ -248,14 +249,34 @@ describe("DigitalOceanClient", () => {
     expect(await all.client.listDroplets(ctx)).toHaveLength(1);
   });
 
-  it("stops reading an answer that runs past its size cap", async () => {
-    const huge = new ReadableStream<Uint8Array>({
+  it("stops reading an answer that runs past its size cap, and cancels the rest", async () => {
+    // A well-formed account, padded past 4 MiB: only the size can be why it's refused.
+    const head = new TextEncoder().encode('{"account":{"uuid":"acct-uuid","email":"');
+    const tail = new TextEncoder().encode('"}}');
+    const chunk = new TextEncoder().encode("a".repeat(512 * 1024));
+    let sent = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(head);
+      },
       pull(controller) {
-        controller.enqueue(new Uint8Array(1024 * 1024));
+        if (sent >= 12) {
+          controller.enqueue(tail);
+          controller.close();
+          return;
+        }
+        sent += 1;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        cancelled = true;
       },
     });
-    const { client } = clientWith([new Response(huge, { status: 200 })]);
+    const { client } = clientWith([new Response(body, { status: 200 })]);
     await expect(client.account(ctx)).rejects.toMatchObject({ kind: "bad-response" });
+    expect(cancelled).toBe(true);
+    expect(sent).toBeLessThan(12);
   });
 
   it("reads a missing account key as none, and refuses to send a private key", async () => {
@@ -266,16 +287,26 @@ describe("DigitalOceanClient", () => {
       client.createSshKey(ctx, { name: "x", public_key: "-----BEGIN OPENSSH PRIVATE KEY-----" })
     ).rejects.toMatchObject({ kind: "invalid-request" });
   });
+
+  it("lets any other failure to read an account key through", async () => {
+    const { client } = clientWith([jsonResponse(403, { id: "forbidden", message: "no" })]);
+    await expect(client.findSshKey(ctx, KEY_MD5)).rejects.toMatchObject({ kind: "forbidden" });
+  });
 });
 
 describe("redactDigitalOceanText", () => {
-  it("removes token-shaped runs and bearer values", () => {
+  it("removes token-shaped runs and bearer values, and keeps what's around them", () => {
     const text = redactDigitalOceanText(
-      `Authorization: Bearer abc.def and doo_v1_${"a".repeat(64)} and ?access_token=zzz`
+      `Size unavailable; Authorization: Bearer abc.def and doo_v1_${"a".repeat(64)} and ?access_token=zzz`
     );
+    expect(text).toContain("Size unavailable;");
     expect(text).not.toContain("abc.def");
     expect(text).not.toContain("doo_v1_");
     expect(text).not.toContain("zzz");
+    // The request's own token is removed whatever its shape.
+    expect(redactDigitalOceanText("said opaque-secret-value here", "opaque-secret-value")).toBe(
+      "said [redacted] here"
+    );
   });
 });
 
@@ -304,17 +335,18 @@ describe("tags, labels and hostnames", () => {
 
   it("refuses a label that can't be a tag rather than changing it", () => {
     expect(() => labelsToTags({ owner: "a b" })).toThrow(DigitalOceanApiError);
+    expect(() => labelsToTags({ "a:b": "c" })).toThrow(DigitalOceanApiError);
     expect(labelFilterToTag("no-equals")).toBeNull();
     expect(labelFilterToTag("k=v w")).toBeNull();
+    expect(labelFilterToTag("a:b=c")).toBeNull();
   });
 
   it("makes a single DNS label of any name, with a fallback when nothing survives", () => {
     expect(dropletHostname("Build host (main)", "x")).toBe("build-host-main");
     expect(dropletHostname("api.example.com", "x")).toBe("api-example-com");
     expect(dropletHostname("構築", "daintree-cb-abc")).toBe("daintree-cb-abc");
-    const long = dropletHostname(`${"a".repeat(62)}-b`, "x");
-    expect(long.length).toBeLessThanOrEqual(63);
-    expect(long.endsWith("-")).toBe(false);
+    // Cut to 63 at a hyphen, which is then dropped rather than left at the end.
+    expect(dropletHostname(`${"a".repeat(62)}-bcd`, "x")).toBe("a".repeat(62));
   });
 });
 
@@ -342,9 +374,9 @@ describe("dropletResource", () => {
   });
 
   it("reads a shutdown under way as stopping, and a power-on under way as starting", () => {
-    const action = (type: string) => ({
+    const action = (type: string, status = "in-progress") => ({
       id: 7,
-      status: "in-progress",
+      status,
       type,
       started_at: null,
       completed_at: null,
@@ -356,6 +388,14 @@ describe("dropletResource", () => {
     expect(
       dropletResource({ ...DROPLET, status: "off", locked: true }, action("power_on")).machine
     ).toBe("starting");
+    // A finished one changes nothing: the Droplet's own status says where it is.
+    expect(dropletResource(DROPLET, action("shutdown", "completed"))).toMatchObject({
+      machine: "running",
+      stop: null,
+    });
+    expect(
+      dropletResource({ ...DROPLET, status: "off" }, action("power_on", "completed")).machine
+    ).toBe("stopped");
   });
 });
 
@@ -432,15 +472,25 @@ describe("DigitalOceanProvider", () => {
     });
   });
 
+  it("accepts a token that still belongs to the account's team", async () => {
+    const { provider, credentials, calls } = providerWith([
+      jsonResponse(200, ACCOUNT),
+      jsonResponse(200, { droplets: [], links: {} }),
+    ]);
+    expect(await provider.validate(credentials)).toEqual({ identity: "person@example.com" });
+    expect(calls.map((c) => c.url.pathname)).toEqual(["/v2/account", "/v2/droplets"]);
+  });
+
   it("offers only regions, images and sizes a Host can be made with", async () => {
-    const image = (slug: string, distribution: string, regions = ["nyc3", "ams3"]) => ({
+    const image = (slug: string, distribution: string, extra: object = {}) => ({
       id: slug.length,
       name: slug,
       distribution,
       slug,
-      regions,
+      regions: ["nyc3", "ams3", "nyc2"],
       status: "available",
       public: true,
+      ...extra,
     });
     const size = (slug: string, memory: number, price: number, extra: object = {}) => ({
       slug,
@@ -448,47 +498,55 @@ describe("DigitalOceanProvider", () => {
       vcpus: 2,
       disk: 50,
       price_hourly: price,
-      regions: ["nyc3", "ams3"],
+      regions: ["nyc3", "ams3", "nyc2"],
       available: true,
       description: "Basic",
       ...extra,
     });
-    const { provider, credentials } = providerWith([
-      jsonResponse(200, { ...ACCOUNT, account: { ...ACCOUNT.account, status: "locked" } }),
+    const responses = (status: string) => [
+      jsonResponse(200, { account: { ...ACCOUNT.account, status } }),
       jsonResponse(200, {
         regions: [
           { slug: "nyc3", name: "New York 3", sizes: [], available: true },
           { slug: "ams3", name: "Amsterdam 3", sizes: [], available: true },
+          // Has sizes and images, but takes no new Droplets.
           { slug: "nyc2", name: "New York 2", sizes: [], available: false },
-          { slug: "syd1", name: "Sydney 1", sizes: [], available: true },
+          // Has a size but no image.
+          { slug: "sgp1", name: "Singapore 1", sizes: [], available: true },
         ],
         links: {},
       }),
       jsonResponse(200, {
         sizes: [
           size("s-2vcpu-4gb", 4096, 0.03571),
-          size("s-1vcpu-2gb", 2048, 0.01786),
+          size("s-1vcpu-2gb", 2048, 0.01786, { regions: ["nyc3", "ams3", "sgp1"] }),
           size("s-1vcpu-1gb", 1024, 0.00893),
           size("gpu-h100x1-80gb", 245760, 3.39),
           size("s-8vcpu-16gb", 16384, 0.14286, { available: false }),
+          // Only one of the offered regions has it: offered with the other, it couldn't be made.
+          size("c-4", 8192, 0.125, { regions: ["nyc3"] }),
         ],
         links: {},
       }),
       jsonResponse(200, {
         images: [
           image("ubuntu-22-04-x64", "Ubuntu"),
-          image("ubuntu-24-04-x64", "Ubuntu", ["nyc3", "syd1"]),
+          image("ubuntu-24-04-x64", "Ubuntu", { regions: ["nyc3"] }),
+          // Sorts ahead of 24.04, yet isn't the default.
+          image("ubuntu-26-04-x64", "Ubuntu"),
           image("ubuntu-25-04-x64", "Ubuntu"),
           image("debian-12-x64", "Debian"),
+          image("debian-13-x64", "Debian", { public: false }),
+          image("debian-14-x64", "Debian", { status: "retired" }),
           image("debian-11-x64", "Debian"),
           image("fedora-42-x64", "Fedora"),
-          { ...image("ubuntu-20-04-x64", "Ubuntu"), status: "retired" },
         ],
         links: {},
       }),
-    ]);
+    ];
+    const { provider, credentials } = providerWith(responses("active"));
     const catalog = await provider.catalog(credentials);
-    expect(catalog.canStart).toBe(false);
+    expect(catalog.canStart).toBe(true);
     expect(
       catalog.machineTypes.map((type) => [type.id, type.memoryGB, type.hourlyDollars])
     ).toEqual([
@@ -496,7 +554,6 @@ describe("DigitalOceanProvider", () => {
       ["s-2vcpu-4gb", 4, 0.03571],
     ]);
     const regions = catalog.provisioning!.location!;
-    // Sydney has an image but no offered size; New York 2 takes no new Droplets.
     expect(regions.choices.map((choice) => choice.id)).toEqual(["ams3", "nyc3"]);
     expect(regions.defaultId).toBe("nyc3");
     const images = catalog.provisioning!.image!;
@@ -504,11 +561,15 @@ describe("DigitalOceanProvider", () => {
       "debian-12-x64",
       "ubuntu-22-04-x64",
       "ubuntu-24-04-x64",
+      "ubuntu-26-04-x64",
     ]);
     expect(images.defaultId).toBe("ubuntu-24-04-x64");
     expect(images.choices.find((choice) => choice.id === "ubuntu-24-04-x64")!.locations).toEqual([
       "nyc3",
     ]);
+
+    const locked = providerWith(responses("locked"));
+    expect((await locked.provider.catalog(locked.credentials)).canStart).toBe(false);
   });
 
   it("creates a Droplet with the account key, the binding's tags and its first-boot script", async () => {
@@ -579,30 +640,47 @@ describe("DigitalOceanProvider", () => {
     expect((raced.calls[3]!.body as { ssh_keys: number[] }).ssh_keys).toEqual([10]);
   });
 
-  it("asks for nothing when a create is missing its region, image or key", async () => {
-    const { provider, credentials, fetch } = providerWith([]);
-    const base = {
-      name: "build",
-      machineType: "s-2vcpu-4gb",
-      lifetimeSeconds: null,
-      labels: {},
-      idempotencyKey: "k",
-    };
-    await expect(
-      provider.create(credentials, {
-        ...base,
-        provisioning: { location: null, image: "ubuntu-24-04-x64", network: null },
+  it.each([
+    ["region", { location: null, image: "ubuntu-24-04-x64", network: null }, PUBLIC_KEY],
+    ["image", { location: "nyc3", image: null, network: null }, PUBLIC_KEY],
+    ["key", { location: "nyc3", image: "ubuntu-24-04-x64", network: null }, null],
+  ] as const)(
+    "asks for nothing when a create is missing its %s",
+    async (_missing, provisioning, publicKey) => {
+      const { provider, credentials, fetch } = providerWith([]);
+      await expect(
+        provider.create(credentials, {
+          name: "build",
+          machineType: "s-2vcpu-4gb",
+          lifetimeSeconds: null,
+          labels: {},
+          idempotencyKey: "k",
+          provisioning,
+          publicKey,
+        })
+      ).rejects.toMatchObject({ kind: "invalid-request" });
+      expect(fetch).not.toHaveBeenCalled();
+    }
+  );
+
+  it("doesn't look the key up again for a registration that failed some other way", async () => {
+    const { provider, credentials, calls } = providerWith([
+      jsonResponse(404, { id: "not_found", message: "not found" }),
+      jsonResponse(403, { id: "forbidden", message: "ssh_key:create missing" }),
+    ]);
+    const error = await provider
+      .create(credentials, {
+        name: "build",
+        machineType: "s-2vcpu-4gb",
+        lifetimeSeconds: null,
+        provisioning: { location: "nyc3", image: "ubuntu-24-04-x64", network: null },
+        labels: {},
+        idempotencyKey: "k",
         publicKey: PUBLIC_KEY,
       })
-    ).rejects.toThrow(DigitalOceanApiError);
-    await expect(
-      provider.create(credentials, {
-        ...base,
-        provisioning: { location: "nyc3", image: "ubuntu-24-04-x64", network: null },
-        publicKey: null,
-      })
-    ).rejects.toThrow(DigitalOceanApiError);
-    expect(fetch).not.toHaveBeenCalled();
+      .catch((e: unknown) => e);
+    expect(provider.describeError(error).code).toBe("permission");
+    expect(calls).toHaveLength(2);
   });
 
   it("calls a create DigitalOcean turned down a refusal, which nothing was made by", async () => {
@@ -639,6 +717,24 @@ describe("DigitalOceanProvider", () => {
     expect(found[0]!.labels["daintree-binding"]).toBe("cb_abcdefgh");
   });
 
+  it.each([
+    ["without the tag", { ...DROPLET, tags: undefined }],
+    [
+      "with a second binding",
+      { ...DROPLET, tags: [...DROPLET.tags, "daintree-binding:cb_zzzzzzzz"] },
+    ],
+  ])(
+    "fails a tag lookup that lists a Droplet %s, rather than reading it as none",
+    async (_how, row) => {
+      const { provider, credentials } = providerWith([
+        jsonResponse(200, { droplets: [row], links: {} }),
+      ]);
+      await expect(
+        provider.list(credentials, { label: "daintree-binding=cb_abcdefgh" })
+      ).rejects.toMatchObject({ kind: "bad-response" });
+    }
+  );
+
   it("asks which action holds a locked Droplet, and only then", async () => {
     const free = providerWith([jsonResponse(200, { droplet: DROPLET })]);
     await free.provider.inspect(free.credentials, "3164444");
@@ -648,13 +744,17 @@ describe("DigitalOceanProvider", () => {
       jsonResponse(200, { droplet: { ...DROPLET, locked: true } }),
       jsonResponse(200, {
         actions: [
+          { id: 4, status: "in-progress", type: "rename" },
+          { id: 3, status: "completed", type: "power_on" },
           { id: 2, status: "in-progress", type: "shutdown" },
-          { id: 1, status: "completed", type: "power_on" },
         ],
         links: {},
       }),
     ]);
-    expect((await locked.provider.inspect(locked.credentials, "3164444")).machine).toBe("stopping");
+    expect(await locked.provider.inspect(locked.credentials, "3164444")).toMatchObject({
+      machine: "stopping",
+      stop: { id: "2" },
+    });
   });
 
   it("stops with a graceful shutdown, following it until DigitalOcean says it's done", async () => {
@@ -681,6 +781,38 @@ describe("DigitalOceanProvider", () => {
     expect(provider.describeError(error).message).toMatch(/didn't shut down/);
   });
 
+  it("follows a slow shutdown at a steady pace, and leaves one still going to the state reads", async () => {
+    let clock = 0;
+    const harness = clientWith([]);
+    const reads: number[] = [];
+    harness.fetch.mockImplementation(async (url: URL | string) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith("/actions")) {
+        return jsonResponse(201, { action: { id: 44, status: "in-progress", type: "shutdown" } });
+      }
+      if (path === "/v2/actions/44") {
+        reads.push(clock);
+        return jsonResponse(200, { action: { id: 44, status: "in-progress", type: "shutdown" } });
+      }
+      return jsonResponse(200, { droplet: { ...DROPLET, locked: true } });
+    });
+    const provider = new DigitalOceanProvider(
+      () => harness.client,
+      async (ms) => {
+        clock += ms;
+      },
+      () => clock
+    );
+    const resource = await provider.stop(
+      { apiKey: TOKEN, scopeId: "team-uuid", apiUrl: "https://do.test/v2" },
+      "3164444"
+    );
+    expect(new Set(reads.map((at, i) => at - (reads[i - 1] ?? 0)))).toEqual(new Set([3000]));
+    expect(clock).toBeLessThanOrEqual(10 * 60_000 + 3000);
+    expect(clock).toBeGreaterThanOrEqual(10 * 60_000);
+    expect(resource).toMatchObject({ machine: "stopping", stop: { id: "44", status: "pending" } });
+  });
+
   it("starts with power_on and renames with a hostname", async () => {
     const { provider, credentials, calls } = providerWith([
       jsonResponse(201, { action: { id: 1, status: "in-progress", type: "power_on" } }),
@@ -703,21 +835,28 @@ describe("DigitalOceanProvider", () => {
     });
   });
 
-  it("treats a Droplet with no address yet as one to try again shortly", async () => {
+  it("treats a Droplet with no public address yet as one to try again shortly", async () => {
     const { provider, credentials } = providerWith([
-      jsonResponse(200, { droplet: { ...DROPLET, networks: { v4: [], v6: [] } } }),
+      jsonResponse(200, {
+        droplet: {
+          ...DROPLET,
+          networks: { v4: [{ ip_address: "10.10.0.5", type: "private" }], v6: [] },
+        },
+      }),
     ]);
     const error = await provider.sshAccess(credentials, "3164444").catch((e: unknown) => e);
+    expect(error).toMatchObject({ kind: "not-ready" });
     expect(provider.describeError(error).code).toBe("provider-unreachable");
   });
 
-  it("describes errors in terms a person can act on", () => {
+  it("maps each kind of failure to the code the lifecycle acts on", () => {
     const { provider } = providerWith([]);
     const err = (kind: ConstructorParameters<typeof DigitalOceanApiError>[0]) =>
       provider.describeError(new DigitalOceanApiError(kind, "said", null, null, null)).code;
     expect(err("unauthorized")).toBe("credential-invalid");
     expect(err("forbidden")).toBe("permission");
     expect(err("rate-limited")).toBe("rate-limited");
+    expect(err("unprocessable")).toBe("refused");
     expect(err("not-found")).toBe("not-found");
     expect(err("network")).toBe("provider-unreachable");
     expect(err("server")).toBe("provider-unreachable");
@@ -732,35 +871,64 @@ describe("Droplet first-boot script", () => {
   it("reads a public key's type and blob, and rejects anything else", () => {
     expect(key).toEqual({ type: "ssh-ed25519", blob: KEY_BLOB });
     expect(md5Fingerprint(key)).toBe(KEY_MD5);
-    // A blob of another type than it claims, a private key, junk.
+    // A blob of another type than it claims, a private key, a blob with a stray character.
     expect(parsePublicKey(`ssh-rsa ${KEY_BLOB}`)).toBeNull();
     expect(parsePublicKey("-----BEGIN OPENSSH PRIVATE KEY-----")).toBeNull();
-    expect(parsePublicKey("ssh-ed25519 not'base64")).toBeNull();
+    expect(parsePublicKey(`ssh-ed25519 ${KEY_BLOB}'`)).toBeNull();
   });
 
-  it("is a script sh can parse, small enough for user data", () => {
-    const parsed = spawnSync("sh", ["-n"], { input: script, encoding: "utf8" });
-    expect(parsed.stderr).toBe("");
-    expect(parsed.status).toBe(0);
-    expect(Buffer.byteLength(script)).toBeLessThan(64 * 1024);
-    expect(script.startsWith("#!/bin/sh\n")).toBe(true);
-  });
+  it.skipIf(process.platform === "win32")(
+    "is a script sh can parse, small enough for user data",
+    () => {
+      const parsed = spawnSync("/bin/sh", ["-n"], { input: script, encoding: "utf8" });
+      expect(parsed.stderr).toBe("");
+      expect(parsed.status).toBe(0);
+      expect(Buffer.byteLength(script)).toBeLessThan(64 * 1024);
+      expect(script.startsWith("#!/bin/sh\n")).toBe(true);
+    }
+  );
 
-  it("lets the key log in only once everything the Host needs is in place", () => {
+  it("takes the key off root first, and lets it log in as daintree only as the very last step", () => {
     const at = (needle: string) => {
       const index = script.indexOf(needle);
       expect(index, needle).toBeGreaterThan(-1);
       return index;
     };
-    const login = at('mv -f "$T" "$H/.ssh/authorized_keys"');
-    expect(at("apt-get -o DPkg::Lock::Timeout=600 satisfy")).toBeLessThan(login);
-    expect(at('loginctl enable-linger "$U"')).toBeLessThan(login);
-    expect(at("useradd")).toBeLessThan(login);
-    // Root loses the key after the daintree user has it.
-    expect(at("/root/.ssh/authorized_keys")).toBeGreaterThan(login);
+    const rootRemoved = at('mv -f "$T" "$R"');
+    expect(rootRemoved).toBeLessThan(at("useradd"));
+    expect(at("useradd")).toBeLessThan(at("satisfy -y"));
+    expect(at("satisfy -y")).toBeLessThan(at('loginctl enable-linger "$U"'));
+    const commands = script.trim().split("\n");
+    expect(commands.at(-1)).toBe('mv -f "$K" "$H/.ssh/authorized_keys"');
+    expect(script).toContain(`'${DROPLET_HOST_PACKAGES.join(", ")}'`);
     expect(script).not.toContain("daintree-acct");
     expect(script).not.toMatch(/sudo/);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "drops only the line that authorizes this key from root's keys",
+    () => {
+      const program = /awk -v t="\$KEY_TYPE" -v b="\$BLOB" '([^']+)'/.exec(script)?.[1];
+      expect(program).toBeTruthy();
+      const other =
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOtherOtherOtherOtherOtherOtherOtherOther person@laptop";
+      const lines = [
+        other,
+        `ssh-ed25519 ${KEY_BLOB} daintree-acct`,
+        `no-pty ssh-ed25519 ${KEY_BLOB}`,
+        // The blob in a comment isn't this key.
+        `ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQC0 mentions ${KEY_BLOB}`,
+        // The same blob under another type isn't either.
+        `ssh-rsa ${KEY_BLOB}`,
+      ];
+      const ran = spawnSync("awk", ["-v", `t=${key.type}`, "-v", `b=${key.blob}`, program!], {
+        input: `${lines.join("\n")}\n`,
+        encoding: "utf8",
+      });
+      expect(ran.status).toBe(0);
+      expect(ran.stdout.trim().split("\n")).toEqual([lines[0], lines[3], lines[4]]);
+    }
+  );
 
   it("installs at least what the release's deb depends on", () => {
     const config = fs.readFileSync(

@@ -23,9 +23,13 @@ import {
  * whose one "Droplet" is a private sshd on this Mac in front of a real Host
  * app (App A, Host mode on). App B, the Shell, connects a team token, creates
  * a Droplet from a region, image and size with the account's key, confirms
- * the host key the Droplet presents (no API vouches for one), connects over
- * real ssh, stops it with the copy that says it still bills in full, starts
- * it, and deletes it.
+ * in setup the host key the Droplet presents (no API vouches for one), waits
+ * out a first boot that still turns the key away, connects over real ssh,
+ * stops it with the copy that says it still bills in full, starts it, and
+ * deletes it.
+ *
+ * The Host is already running, so this proves the provider, trust and SSH
+ * flow, not installing onto a fresh Linux image.
  *
  * DigitalOcean's sshd is port 22 as `daintree`; the Shell's ssh is a wrapper
  * that adds the private port and this Mac's user, leaving the route Daintree
@@ -209,6 +213,8 @@ test.describe.serial("Cloud hosts: a DigitalOcean Droplet as a Remote Host", () 
 
   test("1. connects a DigitalOcean team with a token that is checked before it's saved", async () => {
     const page = run.b.window;
+    const saved = async () =>
+      (await page.evaluate(() => window.electron.cloudHosts.getSnapshot())).accounts.length;
     await openSettings(page);
     await page.locator(SEL.remoteHosts.settingsTab).click();
     const section = page.locator('[id="hosts-cloud-providers"]');
@@ -220,27 +226,31 @@ test.describe.serial("Cloud hosts: a DigitalOcean Droplet as a Remote Host", () 
     await dialog.getByTestId("cloud-account-api-key").fill("dop_v1_wrong");
     await dialog.getByRole("button", { name: "Check key" }).click();
     await expect(dialog.getByRole("alert")).toContainText("didn't accept");
-    expect(calls("GET", "/droplets")).toHaveLength(0);
+    expect(await saved()).toBe(0);
 
     await dialog.getByTestId("cloud-account-api-key").fill(FAKE_DO_TOKEN);
     await dialog.getByRole("button", { name: "Check key" }).click();
     await expect(dialog.getByRole("radio", { name: FAKE_DO_TEAM.name })).toBeChecked();
+    // Checked, not saved: only Connect account keeps it.
+    expect(await saved()).toBe(0);
+    const probesBeforeSave = calls("GET", "/droplets?per_page=1").length;
     await dialog.getByRole("button", { name: "Connect account" }).click();
     await expect(dialog).toBeHidden();
     await expect(section).toContainText("DigitalOcean");
     await expect(section).toContainText(`Key ending ${FAKE_DO_TOKEN.slice(-4)}`);
+    expect(await saved()).toBe(1);
+    // Saving checked the token again, Droplet access included.
+    expect(calls("GET", "/droplets?per_page=1").length).toBeGreaterThan(probesBeforeSave);
 
-    // Checked twice (once in the dialog, once again on save), and able to read Droplets each time.
-    expect(calls("GET", "/droplets?per_page=1").length).toBeGreaterThanOrEqual(2);
     const snapshot = JSON.stringify(
       await page.evaluate(() => window.electron.cloudHosts.getSnapshot())
     );
     expect(snapshot).not.toContain(FAKE_DO_TOKEN);
-    await closeSettings(page);
   });
 
-  test("2. creates a Droplet from a region, image and size with the account's key", async () => {
+  test("2. creates a Droplet from a region, image and size, and confirms its host key in setup", async () => {
     const page = run.b.window;
+    run.api.holdFirstBoot = true;
     await page.getByRole("button", { name: "Add host", exact: true }).first().click();
     const addHost = page.locator(SEL.remoteHosts.addHostDialog);
     await addHost.getByRole("button", { name: "Create a cloud machine instead" }).click();
@@ -249,8 +259,14 @@ test.describe.serial("Cloud hosts: a DigitalOcean Droplet as a Remote Host", () 
     await dialog.getByTestId("add-cloud-host-name").fill(HOST_NAME);
     await expect(dialog.getByTestId("add-cloud-host-location")).toContainText("New York 3");
     await expect(dialog.getByTestId("add-cloud-host-image")).toContainText("Ubuntu 24.04");
-    // Too small for a Host, so not offered; the cheapest that fits comes first.
+    await dialog.getByTestId("add-cloud-host-location").click();
+    await page.getByRole("option", { name: "Amsterdam 3" }).click();
+    await dialog.getByTestId("add-cloud-host-image").click();
+    await page.getByRole("option", { name: "Debian 12 x64" }).click();
+    // Too small for a Host, or not in every region: not offered. The cheapest that fits comes first.
     await expect(dialog.getByRole("radio", { name: /s-1vcpu-1gb/ })).toHaveCount(0);
+    await expect(dialog.getByRole("radio", { name: /c-4/ })).toHaveCount(0);
+    await expect(dialog.getByRole("radio", { name: /s-1vcpu-2gb/ })).toBeChecked();
     await dialog.getByRole("radio", { name: /s-2vcpu-4gb/ }).check();
     await expect(dialog.getByTestId("add-cloud-host-review")).toContainText("$0.036 an hour");
     await expect(dialog.getByTestId("add-cloud-host-review")).toContainText(
@@ -258,21 +274,9 @@ test.describe.serial("Cloud hosts: a DigitalOcean Droplet as a Remote Host", () 
     );
     await dialog.getByRole("button", { name: "Create and connect" }).click();
 
-    await expect
-      .poll(
-        async () => {
-          const hosts = await page.evaluate(() => window.electron.remoteHosts.list());
-          return hosts.find((h) => h.descriptor.name === HOST_NAME)?.descriptor.id ?? "";
-        },
-        { timeout: 30_000 }
-      )
-      .not.toBe("");
-    const hosts = await page.evaluate(() => window.electron.remoteHosts.list());
-    run.hostId = hosts.find((h) => h.descriptor.name === HOST_NAME)!.descriptor.id;
-
-    const creates = calls("POST", "/droplets").filter((r) => r.path === "/droplets");
-    expect(creates).toHaveLength(1);
-    const body = creates[0]!.body as {
+    const creates = () => calls("POST", "/droplets").filter((r) => r.path === "/droplets");
+    await expect.poll(() => creates().length, { timeout: 60_000 }).toBe(1);
+    const body = creates()[0]!.body as {
       name: string;
       region: string;
       image: string;
@@ -283,8 +287,8 @@ test.describe.serial("Cloud hosts: a DigitalOcean Droplet as a Remote Host", () 
     };
     expect(body).toMatchObject({
       name: HOST_NAME,
-      region: "nyc3",
-      image: "ubuntu-24-04-x64",
+      region: "ams3",
+      image: "debian-12-x64",
       size: "s-2vcpu-4gb",
     });
     // The account's key, registered once and named by id; its blob also reaches the login user.
@@ -293,36 +297,32 @@ test.describe.serial("Cloud hosts: a DigitalOcean Droplet as a Remote Host", () 
     const publicKey = (registered[0]!.body as { public_key: string }).public_key;
     expect(publicKey).toMatch(/^ssh-ed25519 [A-Za-z0-9+/=]+$/);
     expect(body.ssh_keys).toEqual([...run.api.keys.keys()]);
-    expect(body.user_data).toContain(publicKey.split(" ")[1]);
+    expect(body.user_data).toContain(`BLOB='${publicKey.split(" ")[1]}'`);
     expect(body.tags).toContain("daintree:1");
     expect(body.tags.some((tag) => tag.startsWith("daintree-binding:cb_"))).toBe(true);
     expect(JSON.stringify(body)).not.toContain(FAKE_DO_TOKEN);
+    const hosts = await page.evaluate(() => window.electron.remoteHosts.list());
+    run.hostId = hosts.find((h) => h.descriptor.name === HOST_NAME)!.descriptor.id;
 
-    // No API vouches for the Droplet's host key: it waits for the person, and nothing connects.
-    await expect
-      .poll(async () => (await cloudHost(page))?.hostKeyReview?.reason ?? null, {
-        timeout: 90_000,
-      })
-      .toBe("first-connect");
-    expect((await cloudHost(page))?.hostKeyReview?.fingerprint).toBe(await sshdFingerprint());
-    expect(await linkStatus(page)).not.toBe("connected");
+    // No API vouches for the Droplet's host key: setup stops on it, showing the key it presents.
     const setup = page.locator(SEL.remoteHosts.addHostDialog);
+    const review = setup.getByTestId("cloud-host-key-review");
+    await expect(review).toContainText(await sshdFingerprint(), { timeout: 90_000 });
+    expect(await linkStatus(page)).not.toBe("connected");
+    await setup.getByRole("button", { name: "Trust this key" }).click();
+    // Trusted, but first boot isn't done: the Droplet turns the key away, and setup keeps looking.
+    await expect(setup.getByTestId("add-host-awaiting-login")).toBeVisible({ timeout: 30_000 });
+    expect(await linkStatus(page)).not.toBe("connected");
+    run.api.releaseFirstBoot();
+    await expect(setup).toContainText(/Host mode\s*Listening/, { timeout: 60_000 });
+    expect((await cloudHost(page))?.hostKeyReview).toBeNull();
+
     const close = setup.getByRole("button", { name: /^(Done|Close|Cancel)$/ }).first();
     if (await close.isVisible().catch(() => false)) await close.click();
-  });
-
-  test("3. the person confirms the host key, then it connects over real ssh with that key pinned", async () => {
-    const page = run.b.window;
-    const section = await openHostDetails(page);
-    await expect(section).toContainText("Confirm host key");
-    await expect(section).toContainText(await sshdFingerprint());
-    await section.getByRole("button", { name: "Trust this key" }).click();
-    await expect(section).not.toContainText("Confirm host key");
-
     await page.evaluate((id) => window.electron.remoteHosts.connect({ hostId: id }), run.hostId);
-    await expect.poll(() => linkStatus(page), { timeout: 90_000 }).toBe("connected");
+    await expect.poll(() => linkStatus(page), { timeout: 60_000 }).toBe("connected");
 
-    // The route is a Droplet's own: user daintree on port 22, its key pinned.
+    // The route is a Droplet's own: user daintree on port 22, the confirmed key pinned.
     const machines = path.join(run.shellUserData, "rh", "cloud", "machines");
     const [bindingDir] = await fs.readdir(machines);
     const sshConfig = await fs.readFile(path.join(machines, bindingDir!, "config"), "utf8");
@@ -335,6 +335,13 @@ test.describe.serial("Cloud hosts: a DigitalOcean Droplet as a Remote Host", () 
       .slice(0, 2)
       .join(" ");
     expect(knownHosts.trim()).toBe(`dtc-${bindingDir} ${hostKey}`);
+  });
+
+  test("3. the host's details show the machine with no key left to confirm", async () => {
+    const page = run.b.window;
+    const section = await openHostDetails(page);
+    await expect(section.getByTestId("cloud-machine-state")).toContainText("Running");
+    await expect(section).not.toContainText("Confirm host key");
     await closeSettings(page);
   });
 
@@ -374,7 +381,7 @@ test.describe.serial("Cloud hosts: a DigitalOcean Droplet as a Remote Host", () 
     expect((await cloudHost(page))?.hostKeyReview).toBeNull();
   });
 
-  test("6. removing the host can delete the Droplet, which ends its bill", async () => {
+  test("6. removing the host can delete the Droplet, after its name is typed", async () => {
     const page = run.b.window;
     await openSettings(page);
     await page.locator(SEL.remoteHosts.settingsTab).click();
@@ -386,10 +393,16 @@ test.describe.serial("Cloud hosts: a DigitalOcean Droplet as a Remote Host", () 
       .locator('[role="dialog"], [role="alertdialog"]')
       .filter({ has: page.getByTestId("remove-cloud-host-choice") });
     await dialog.getByRole("radio", { name: "Delete the machine too" }).check();
+    const deleteButton = dialog.getByRole("button", { name: "Delete machine" });
+    await expect(deleteButton).toHaveAttribute("aria-disabled", "true");
+    await dialog.getByLabel(`Type ${HOST_NAME} to confirm`).fill(`${HOST_NAME}-x`);
+    await expect(deleteButton).toHaveAttribute("aria-disabled", "true");
+    expect(run.api.requests.filter((r) => r.method === "DELETE")).toHaveLength(0);
     await dialog.getByLabel(`Type ${HOST_NAME} to confirm`).fill(HOST_NAME);
-    await dialog.getByRole("button", { name: "Delete machine" }).click();
+    await deleteButton.click();
     await expect(dialog).toBeHidden({ timeout: 30_000 });
-    expect(run.api.requests.filter((r) => r.method === "DELETE")).toHaveLength(1);
+    const deletes = run.api.requests.filter((r) => r.method === "DELETE");
+    expect(deletes).toHaveLength(1);
     expect(run.api.droplets.size).toBe(0);
     // The account key stays: other Droplets on the team may still use it.
     expect(run.api.keys.size).toBe(1);

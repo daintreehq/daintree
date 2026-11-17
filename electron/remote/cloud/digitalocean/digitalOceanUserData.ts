@@ -78,15 +78,15 @@ export function md5Fingerprint(key: ParsedPublicKey): string {
 
 /**
  * The first-boot script a Droplet runs as root (cloud-init runs user data
- * that starts with `#!` as a script once, after the image's own setup). It
- * makes the `daintree` user, installs what the Host needs, keeps that user's
- * services running without a login, and only then lets the account's key log
- * in as it. So the first successful login is also the sign the machine is
- * ready: before it, sshd answers but turns the key away.
+ * that starts with `#!` as a script once, after the image's own setup).
  *
- * DigitalOcean also puts the key on root, since that's how a create names
- * one; it's taken off root once setup is done, so the key Daintree holds
- * never keeps root access.
+ * DigitalOcean puts the key on root too, since a create can only name a key
+ * that way; that authorization is taken off first, so Daintree's key never
+ * keeps root access, whether or not the rest succeeds. Then the script makes
+ * the `daintree` user, installs what the Host needs, keeps that user's
+ * services running without a login, and as its very last step lets the key
+ * log in as it. So a successful login is also the sign the machine is ready:
+ * until then, sshd answers but turns the key away.
  */
 export function dropletUserData(key: ParsedPublicKey): string {
   const user = DROPLET_SSH_USER;
@@ -97,14 +97,24 @@ export function dropletUserData(key: ParsedPublicKey): string {
     "set -eu",
     "export DEBIAN_FRONTEND=noninteractive",
     `U=${user}`,
-    `KEY='${key.type} ${key.blob}'`,
+    `KEY_TYPE='${key.type}'`,
     `BLOB='${key.blob}'`,
+    // Replaced whole, keeping the file's owner and mode; only a line naming this key's type and blob goes.
+    "R=/root/.ssh/authorized_keys",
+    'if [ -f "$R" ]; then',
+    "  T=$(mktemp /root/.ssh/.authorized_keys.XXXXXX)",
+    '  awk -v t="$KEY_TYPE" -v b="$BLOB" \'{ for (i = 1; i < NF; i++) if ($i == t && $(i + 1) == b) next; print }\' "$R" > "$T"',
+    '  chown --reference="$R" "$T"',
+    '  chmod --reference="$R" "$T"',
+    '  mv -f "$T" "$R"',
+    "fi",
     // A password nobody can type rather than a locked account: sshd without PAM turns locked accounts away.
     `id "$U" >/dev/null 2>&1 || useradd --create-home --shell /bin/bash --password '*' "$U"`,
-    // First boot often runs unattended-upgrades alongside: wait on apt's lock, and try again a few times.
+    // First boot often runs unattended-upgrades alongside, holding apt's locks for minutes: keep trying
+    // for about ten, and count an index that failed to download as a failure, not a stale success.
     "n=0",
-    `until apt-get -o DPkg::Lock::Timeout=600 update && apt-get -o DPkg::Lock::Timeout=600 satisfy -y --no-install-recommends '${packages}'; do`,
-    '  n=$((n + 1)); [ "$n" -ge 5 ] && exit 1; sleep 20',
+    `until apt-get -o DPkg::Lock::Timeout=600 --error-on=any update && apt-get -o DPkg::Lock::Timeout=600 satisfy -y --no-install-recommends '${packages}'; do`,
+    '  n=$((n + 1)); [ "$n" -ge 30 ] && exit 1; sleep 20',
     "done",
     // Chromium's sandbox needs user namespaces, which Ubuntu 24.04's AppArmor only grants a profiled
     // /opt install; the Host runs from an AppImage in its home, on a machine that exists for it.
@@ -115,15 +125,12 @@ export function dropletUserData(key: ParsedPublicKey): string {
     'loginctl enable-linger "$U"',
     'H=$(getent passwd "$U" | cut -d: -f6)',
     'install -d -m 700 -o "$U" -g "$U" "$H/.ssh"',
-    'T=$(mktemp "$H/.ssh/.authorized_keys.XXXXXX")',
-    'printf \'%s\\n\' "$KEY" > "$T"',
-    'chown "$U:$U" "$T"',
-    'chmod 600 "$T"',
-    'mv -f "$T" "$H/.ssh/authorized_keys"',
-    "R=/root/.ssh/authorized_keys",
-    'if [ -f "$R" ]; then',
-    '  awk -v b="$BLOB" \'{ for (i = 1; i <= NF; i++) if ($i == b) next; print }\' "$R" > "$R.daintree" && cat "$R.daintree" > "$R" && rm -f "$R.daintree"',
-    "fi",
+    'K=$(mktemp "$H/.ssh/.authorized_keys.XXXXXX")',
+    'printf \'%s %s\\n\' "$KEY_TYPE" "$BLOB" > "$K"',
+    'chown "$U:$U" "$K"',
+    'chmod 600 "$K"',
+    // Last, and atomic: nothing can log in as the user until everything above is done.
+    'mv -f "$K" "$H/.ssh/authorized_keys"',
     "",
   ].join("\n");
 }

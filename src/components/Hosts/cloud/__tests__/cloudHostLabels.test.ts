@@ -331,18 +331,26 @@ describe("what stopping and deleting mean for each provider (#17346)", () => {
     expect(canDeleteMachines(BOAT_PROVIDER)).toBe(true);
   });
 
-  it("words a stopped machine's bill as its provider does, still pointing to Delete", () => {
-    const billed = provider({ stoppedComputeBilled: true, deletion: true });
-    billed.capabilities = {
-      ...billed.capabilities,
-      persistence: {
-        ...billed.capabilities.persistence,
-        stoppedBilling: "Acme bills a stopped box in full until it's deleted.",
-      },
+  it("words a stopped machine's bill as its provider does, still saying how to stop paying", () => {
+    const worded = (stoppedComputeBilled: boolean, deletion: boolean) => {
+      const declared = provider({ stoppedComputeBilled, deletion });
+      declared.capabilities = {
+        ...declared.capabilities,
+        persistence: {
+          ...declared.capabilities.persistence,
+          stoppedBilling: "Acme bills a stopped box in full until it's deleted.",
+        },
+      };
+      return stoppedBillingSentence(declared);
     };
-    expect(stoppedBillingSentence(billed)).toBe(
+    expect(worded(true, true)).toBe(
       "Acme bills a stopped box in full until it's deleted. To stop paying for it, remove the host and delete its machine."
     );
+    expect(worded(true, false)).toBe(
+      "Acme bills a stopped box in full until it's deleted. To stop paying for it, delete the machine in Acme's console."
+    );
+    // The wording only says how a billed stop bills: a stop that ends the bill needs no warning.
+    expect(worded(false, true)).toBeNull();
   });
 
   it("says a stopped machine still bills, and that deleting it is how to stop paying", () => {

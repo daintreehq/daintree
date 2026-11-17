@@ -20,6 +20,13 @@ vi.mock("@/lib/remoteHosts", async (importOriginal) => ({
   remoteConnectionKind: () => connectionKind.value,
 }));
 
+// The key review itself is CloudHostKeyReview's; here it only needs to say the key was trusted.
+vi.mock("../CloudHostKeyReview", () => ({
+  CloudSetupHostKey: ({ onTrusted }: { onTrusted: () => void }) => (
+    <button onClick={onTrusted}>Trust this key</button>
+  ),
+}));
+
 function probeResult(overrides: Partial<HostProbeResult> = {}): HostProbeResult {
   return {
     connection: { kind: "ssh", target: "greg@studio" },
@@ -1058,6 +1065,79 @@ describe("AddHostDialog", () => {
           }),
         })
       );
+    });
+  });
+
+  describe("a new cloud machine that turns this device away while it finishes setting up", () => {
+    const EXISTING = {
+      hostId: "droplet",
+      name: "droplet",
+      connection: { kind: "cloud" as const, bindingId: "cb_abcdefgh" },
+      intent: "setup" as const,
+    };
+    const turnedAway = probeResult({
+      connection: EXISTING.connection,
+      reachable: false,
+      sshError: "Permission denied (publickey).",
+    });
+    const advance = (ms: number) =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("checks again after its key is trusted, until it lets this device in", async () => {
+      remoteHosts
+        .probe!.mockResolvedValueOnce(turnedAway)
+        .mockResolvedValueOnce(turnedAway)
+        .mockResolvedValue(probeResult({ connection: EXISTING.connection }));
+      render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
+      await advance(0);
+      expect(remoteHosts.probe).toHaveBeenCalledTimes(1);
+      // Nothing was trusted yet: an unreachable machine isn't tried again by itself.
+      await advance(60_000);
+      expect(remoteHosts.probe).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByRole("button", { name: "Trust this key" }));
+      await advance(0);
+      expect(remoteHosts.probe).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId("add-host-awaiting-login")).toBeTruthy();
+      await advance(10_000);
+      expect(remoteHosts.probe).toHaveBeenCalledTimes(3);
+      // In: no more checks, and no more waiting said.
+      await advance(60_000);
+      expect(remoteHosts.probe).toHaveBeenCalledTimes(3);
+      expect(screen.queryByTestId("add-host-awaiting-login")).toBeNull();
+    });
+
+    it("stops checking after five minutes, leaving Check again to the person", async () => {
+      remoteHosts.probe!.mockResolvedValue(turnedAway);
+      render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
+      await advance(0);
+      fireEvent.click(screen.getByRole("button", { name: "Trust this key" }));
+      await advance(0);
+      for (let i = 0; i < 40; i++) await advance(10_000);
+      // The one on open, the one the trust asked for, and thirty more.
+      expect(remoteHosts.probe).toHaveBeenCalledTimes(32);
+      expect(screen.queryByTestId("add-host-awaiting-login")).toBeNull();
+    });
+
+    it("stops checking when the dialog closes", async () => {
+      remoteHosts.probe!.mockResolvedValue(turnedAway);
+      const view = render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
+      await advance(0);
+      fireEvent.click(screen.getByRole("button", { name: "Trust this key" }));
+      await advance(0);
+      view.rerender(<AddHostDialog isOpen={false} onClose={() => {}} existing={EXISTING} />);
+      await advance(60_000);
+      expect(remoteHosts.probe).toHaveBeenCalledTimes(2);
     });
   });
 

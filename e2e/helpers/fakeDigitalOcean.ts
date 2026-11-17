@@ -19,6 +19,10 @@ import { SYSTEM_SSH } from "./privateSshd";
  * every argument Daintree passes and add only the private port and this
  * Mac's user, so the route Daintree writes stays the one a real Droplet gets.
  *
+ * First boot can be held ({@link FakeDigitalOcean.holdFirstBoot}): the Droplet
+ * then reports `active` and presents its host key while still turning the
+ * account key away, as a real one does while its script runs.
+ *
  * Every request is recorded so a test can assert what Daintree asked for.
  */
 
@@ -69,6 +73,9 @@ export interface FakeDigitalOcean {
   keys: Map<number, SshKey>;
   /** How long a boot, shutdown or power-on takes. */
   transitionMs: number;
+  /** While true, an active Droplet's first boot waits for {@link releaseFirstBoot}. */
+  holdFirstBoot: boolean;
+  releaseFirstBoot(): void;
   stop(): Promise<void>;
 }
 
@@ -76,11 +83,13 @@ const SIZES = [
   { slug: "s-1vcpu-1gb", memory: 1024, vcpus: 1, disk: 25, price_hourly: 0.00893 },
   { slug: "s-1vcpu-2gb", memory: 2048, vcpus: 1, disk: 50, price_hourly: 0.01786 },
   { slug: "s-2vcpu-4gb", memory: 4096, vcpus: 2, disk: 80, price_hourly: 0.03571 },
+  // Only one region has it, so it can't be offered beside the other.
+  { slug: "c-4", memory: 8192, vcpus: 4, disk: 50, price_hourly: 0.125, regions: ["nyc3"] },
 ].map((size) => ({
+  regions: ["nyc3", "ams3"],
   ...size,
   transfer: 2,
   price_monthly: Math.round(size.price_hourly * 672),
-  regions: ["nyc3", "ams3"],
   available: true,
   description: "Basic",
 }));
@@ -113,6 +122,8 @@ export async function startFakeDigitalOcean(params: {
   const keys = new Map<number, SshKey>();
   const actions = new Map<number, Action>();
   const timers = new Set<NodeJS.Timeout>();
+  const inFlight = new Set<Promise<void>>();
+  const heldBoots: Array<() => void> = [];
   let nextId = 3_164_000;
 
   const fake: FakeDigitalOcean = {
@@ -121,16 +132,28 @@ export async function startFakeDigitalOcean(params: {
     droplets,
     keys,
     transitionMs: 1_500,
+    holdFirstBoot: false,
+    releaseFirstBoot() {
+      fake.holdFirstBoot = false;
+      for (const release of heldBoots.splice(0)) release();
+    },
     async stop() {
       for (const timer of timers) clearTimeout(timer);
+      fake.releaseFirstBoot();
+      await Promise.allSettled([...inFlight]);
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
+  };
+
+  const track = (work: Promise<void>) => {
+    inFlight.add(work);
+    void work.finally(() => inFlight.delete(work));
   };
 
   const later = (fn: () => void | Promise<void>) => {
     const timer = setTimeout(() => {
       timers.delete(timer);
-      void fn();
+      track(Promise.resolve().then(fn));
     }, fake.transitionMs);
     timers.add(timer);
   };
@@ -169,15 +192,22 @@ export async function startFakeDigitalOcean(params: {
     };
   };
 
-  /** What first boot does on a real Droplet: the key reaches the login user once setup is done. */
+  /**
+   * What first boot does on a real Droplet: the key reaches the login user once
+   * setup is done, all at once (sshd never reads a half-written file).
+   */
   const firstBoot = async (droplet: Droplet) => {
+    if (fake.holdFirstBoot) await new Promise<void>((resolve) => heldBoots.push(resolve));
     const current = await fs.readFile(authorizedKeys, "utf8").catch(() => "");
     let next = current;
     for (const id of droplet.ssh_keys) {
       const key = keys.get(id);
       if (key && !next.includes(key.public_key)) next += `${key.public_key}\n`;
     }
-    if (next !== current) await fs.writeFile(authorizedKeys, next);
+    if (next === current) return;
+    const staged = `${authorizedKeys}.${droplet.id}.tmp`;
+    await fs.writeFile(staged, next);
+    await fs.rename(staged, authorizedKeys);
   };
 
   const startAction = (droplet: Droplet, type: string, finish: () => void): Action => {
@@ -287,8 +317,15 @@ export async function startFakeDigitalOcean(params: {
           ssh_keys?: number[];
           user_data?: string;
         };
-        if (!SIZES.some((size) => size.slug === request.size)) {
+        const size = SIZES.find((entry) => entry.slug === request.size);
+        const image = IMAGES.find((entry) => entry.slug === request.image);
+        const region = REGIONS.find((entry) => entry.slug === request.region && entry.available);
+        if (!region || !size?.regions.includes(region.slug)) {
           fail(422, "unprocessable_entity", "Size is not available in this region.");
+          return;
+        }
+        if (!image?.regions.includes(region.slug)) {
+          fail(422, "unprocessable_entity", "Image is not available in this region.");
           return;
         }
         const created: Droplet = {
@@ -308,7 +345,7 @@ export async function startFakeDigitalOcean(params: {
         later(async () => {
           created.status = "active";
           created.locked = false;
-          await firstBoot(created);
+          track(firstBoot(created));
         });
         send(202, {
           droplet: view(created),

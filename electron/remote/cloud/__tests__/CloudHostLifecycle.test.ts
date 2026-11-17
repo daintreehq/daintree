@@ -409,9 +409,12 @@ describe("CloudHostLifecycle.create", () => {
     });
     await lifecycle.retryCreate("build");
     const keys = vi.mocked(provider.create).mock.calls.map(([, request]) => request.idempotencyKey);
+    expect(keys).toHaveLength(2);
+    expect(keys.every((key) => typeof key === "string" && key.length > 0)).toBe(true);
     expect(keys[1]).not.toBe(keys[0]);
     // Nothing was made by the refusal, so the retry doesn't go looking for it first.
     expect(provider.list).not.toHaveBeenCalled();
+    expect(lifecycle.statuses()[0]).toMatchObject({ resourceId: "bx_23456789", lastError: null });
   });
 
   it("refuses a size the account can't have before anything is sent", async () => {
