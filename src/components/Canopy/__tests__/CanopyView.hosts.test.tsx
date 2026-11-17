@@ -1004,8 +1004,11 @@ describe("All hosts", () => {
       expect(state.invoke).toHaveBeenCalledWith("studio", "canopy:untrash", 7);
       expect(own.untrash).not.toHaveBeenCalled();
     } finally {
-      cleanup();
-      vi.useRealTimers();
+      try {
+        cleanup();
+      } finally {
+        vi.useRealTimers();
+      }
     }
   });
 
