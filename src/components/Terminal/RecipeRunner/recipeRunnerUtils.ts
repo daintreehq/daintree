@@ -82,7 +82,9 @@ export function rankSearchResults(
   now: number
 ): RankedRecipe[] {
   const fuse = getRecipeFuse(recipes);
-  const results = fuse.search(query, { limit: 50 });
+  // Uncapped: a limit would hide matches behind a common prefix while the
+  // live region reported the capped length as the total.
+  const results = fuse.search(query);
 
   if (results.length === 0) return [];
 
