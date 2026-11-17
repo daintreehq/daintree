@@ -537,9 +537,13 @@ describe("installed package instance mode (#14103)", () => {
     vi.spyOn(store, "removePackage").mockImplementation(() => {
       throw new Error("disk full");
     });
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await service.uninstallPlugin(PKG);
+    try {
+      await service.uninstallPlugin(PKG);
+    } finally {
+      quiet.mockRestore();
+    }
 
     expect(mockPluginMcpSupervisor.removeStatesWhere).toHaveBeenCalledTimes(1);
     const [owns] = mockPluginMcpSupervisor.removeStatesWhere.mock.calls[0] as [
