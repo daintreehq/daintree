@@ -140,7 +140,7 @@ describe("PrivacyDataTab", () => {
     expect(mockNotify).not.toHaveBeenCalled();
   });
 
-  it("reverts to latest successful value (stale closure proof)", async () => {
+  it("reverts a failed second change to the first, which saved", async () => {
     const setTelemetry = vi
       .fn()
       .mockResolvedValueOnce(undefined) // first call succeeds
@@ -174,11 +174,11 @@ describe("PrivacyDataTab", () => {
 
     // Second change: errors → full (fails)
     fireEvent.click(radio("Full usage"));
-    await waitFor(() => {
-      // Should revert to "errors" (the last successful value), NOT "off"
-      expect(radio("Errors only").checked).toBe(true);
-      expect(radio("Full usage").checked).toBe(false);
-    });
+    await screen.findByText("Telemetry level couldn't be saved");
+    // Back to "errors", which saved, not "off" from before it.
+    expect(radio("Errors only").checked).toBe(true);
+    expect(radio("Full usage").checked).toBe(false);
+    expect(setTelemetry.mock.calls).toEqual([["errors"], ["full"]]);
   });
 
   it("renders telemetry disclosure listing all allowlisted analytics events", async () => {
@@ -679,7 +679,13 @@ describe("PrivacyDataTab", () => {
             pending.push({ resolve, reject });
           })
       );
-      return { send, pending };
+      /** Settles the nth write: resolved without an error, rejected with one. */
+      const settle = async (index: number, error?: unknown) => {
+        const write = pending[index];
+        if (!write) throw new Error(`write ${index} was never sent`);
+        await act(async () => (error === undefined ? write.resolve() : write.reject(error)));
+      };
+      return { send, settle };
     }
 
     const logRetentionOption = (label: string) =>
@@ -691,49 +697,58 @@ describe("PrivacyDataTab", () => {
         "radio",
         { name: label }
       );
+    const isChecked = (option: HTMLElement) => option.getAttribute("aria-checked") === "true";
+
+    async function renderTab(
+      subtab: "telemetry" | "storage",
+      apis: {
+        privacy?: Partial<typeof window.electron.privacy>;
+        sessions?: Partial<typeof window.electron.agentSessionHistory>;
+      }
+    ) {
+      Reflect.set(window, "electron", {
+        privacy: createPrivacyApi(apis.privacy),
+        agentSessionHistory: createAgentSessionHistoryApi(apis.sessions),
+      });
+      render(<PrivacyDataTab activeSubtab={subtab} onSubtabChange={vi.fn()} />, {
+        wrapper: TooltipProvider,
+      });
+      if (subtab === "telemetry") await waitFor(() => expect(radio("Off").checked).toBe(true));
+      else
+        await waitFor(() => {
+          expect(isChecked(logRetentionOption("30 days"))).toBe(true);
+          expect(isChecked(sessionOption("30 days"))).toBe(true);
+        });
+    }
 
     it("keeps the newer telemetry level when the older write fails after it saved", async () => {
       const writes = deferredWrites();
-      Reflect.set(window, "electron", {
-        privacy: createPrivacyApi({ setTelemetryLevel: writes.send }),
-        agentSessionHistory: createAgentSessionHistoryApi(),
-      });
-      render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />, {
-        wrapper: TooltipProvider,
-      });
-      await waitFor(() => expect(radio("Off").checked).toBe(true));
+      await renderTab("telemetry", { privacy: { setTelemetryLevel: writes.send } });
 
       fireEvent.click(radio("Errors only"));
       fireEvent.click(radio("Full usage"));
       expect(writes.send).toHaveBeenCalledTimes(2);
 
-      await act(async () => writes.pending[1].resolve());
-      await act(async () => writes.pending[0].reject(new Error("IPC fail")));
+      await writes.settle(1);
+      await writes.settle(0, new Error("IPC fail"));
 
       expect(radio("Full usage").checked).toBe(true);
       expect(screen.queryByText("Telemetry level couldn't be saved")).toBeNull();
       expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     });
 
-    it("shows the older level that landed after the newer write failed, and retries the newer one", async () => {
+    it("falls back to the older level still in flight when the newer write fails, and retries the newer one", async () => {
       const writes = deferredWrites();
-      Reflect.set(window, "electron", {
-        privacy: createPrivacyApi({ setTelemetryLevel: writes.send }),
-        agentSessionHistory: createAgentSessionHistoryApi(),
-      });
-      render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />, {
-        wrapper: TooltipProvider,
-      });
-      await waitFor(() => expect(radio("Off").checked).toBe(true));
+      await renderTab("telemetry", { privacy: { setTelemetryLevel: writes.send } });
 
       fireEvent.click(radio("Errors only"));
       fireEvent.click(radio("Full usage"));
 
-      await act(async () => writes.pending[1].reject(new Error("IPC fail")));
-      expect(radio("Off").checked).toBe(true);
+      await writes.settle(1, new Error("IPC fail"));
+      expect(radio("Errors only").checked).toBe(true);
       expect(screen.getByText("Telemetry level couldn't be saved")).toBeTruthy();
 
-      await act(async () => writes.pending[0].resolve());
+      await writes.settle(0);
       expect(radio("Errors only").checked).toBe(true);
       expect(screen.getByText("Telemetry level couldn't be saved")).toBeTruthy();
 
@@ -745,97 +760,84 @@ describe("PrivacyDataTab", () => {
 
     it("keeps the newer log retention when the older write fails after it saved", async () => {
       const writes = deferredWrites();
-      Reflect.set(window, "electron", {
-        privacy: createPrivacyApi({ setLogRetention: writes.send }),
-        agentSessionHistory: createAgentSessionHistoryApi(),
-      });
-      render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
-        wrapper: TooltipProvider,
-      });
-      await waitFor(() =>
-        expect(logRetentionOption("30 days").getAttribute("aria-checked")).toBe("true")
-      );
+      await renderTab("storage", { privacy: { setLogRetention: writes.send } });
 
       fireEvent.click(logRetentionOption("90 days"));
       fireEvent.click(logRetentionOption("7 days"));
 
-      await act(async () => writes.pending[1].resolve());
-      await act(async () => writes.pending[0].reject(new Error("IPC fail")));
+      await writes.settle(1);
+      await writes.settle(0, new Error("IPC fail"));
 
-      expect(logRetentionOption("7 days").getAttribute("aria-checked")).toBe("true");
+      expect(isChecked(logRetentionOption("7 days"))).toBe(true);
       expect(screen.queryByText("Log retention couldn't be saved")).toBeNull();
     });
 
-    it("retries the newest log retention, not an older one, after an out-of-order failure", async () => {
+    it("falls back past every failed log retention write, and retries only the newest", async () => {
       const writes = deferredWrites();
-      Reflect.set(window, "electron", {
-        privacy: createPrivacyApi({ setLogRetention: writes.send }),
-        agentSessionHistory: createAgentSessionHistoryApi(),
-      });
-      render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
-        wrapper: TooltipProvider,
-      });
-      await waitFor(() =>
-        expect(logRetentionOption("30 days").getAttribute("aria-checked")).toBe("true")
-      );
+      await renderTab("storage", { privacy: { setLogRetention: writes.send } });
 
       fireEvent.click(logRetentionOption("90 days"));
       fireEvent.click(logRetentionOption("7 days"));
 
-      await act(async () => writes.pending[1].reject(new Error("IPC fail")));
-      // Only 30 days is confirmed while 90 days is still on its way.
-      expect(logRetentionOption("30 days").getAttribute("aria-checked")).toBe("true");
-      await act(async () => writes.pending[0].resolve());
-      expect(logRetentionOption("90 days").getAttribute("aria-checked")).toBe("true");
+      await writes.settle(1, new Error("IPC fail"));
+      expect(isChecked(logRetentionOption("90 days"))).toBe(true);
+      await writes.settle(0, new Error("IPC fail"));
+      expect(isChecked(logRetentionOption("30 days"))).toBe(true);
 
       fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      expect(writes.send).toHaveBeenCalledTimes(3);
       expect(writes.send).toHaveBeenLastCalledWith(7);
+    });
+
+    it("drops the Retry once the value it would resend is in play again", async () => {
+      const writes = deferredWrites();
+      await renderTab("storage", { privacy: { setLogRetention: writes.send } });
+
+      fireEvent.click(logRetentionOption("90 days"));
+      fireEvent.click(logRetentionOption("7 days"));
+      fireEvent.click(logRetentionOption("90 days"));
+
+      await writes.settle(2, new Error("IPC fail"));
+      expect(isChecked(logRetentionOption("7 days"))).toBe(true);
+      expect(screen.getByText("Log retention couldn't be saved")).toBeTruthy();
+
+      // The first write asked for 90 days too, and it's still on its way.
+      await writes.settle(1, new Error("IPC fail"));
+      expect(isChecked(logRetentionOption("90 days"))).toBe(true);
+      expect(screen.queryByText("Log retention couldn't be saved")).toBeNull();
+
+      await writes.settle(0);
+      expect(isChecked(logRetentionOption("90 days"))).toBe(true);
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     });
 
     it("keeps the newer session retention when the older write fails after it saved", async () => {
       const writes = deferredWrites();
-      Reflect.set(window, "electron", {
-        privacy: createPrivacyApi(),
-        agentSessionHistory: createAgentSessionHistoryApi({ setRetentionDays: writes.send }),
-      });
-      render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
-        wrapper: TooltipProvider,
-      });
-      await waitFor(() =>
-        expect(sessionOption("30 days").getAttribute("aria-checked")).toBe("true")
-      );
+      await renderTab("storage", { sessions: { setRetentionDays: writes.send } });
 
       // Both are longer windows, so each applies straight away without a confirm.
       fireEvent.click(sessionOption("90 days"));
       fireEvent.click(sessionOption("Keep forever"));
 
-      await act(async () => writes.pending[1].resolve());
-      await act(async () => writes.pending[0].reject(new Error("IPC fail")));
+      await writes.settle(1);
+      await writes.settle(0, new Error("IPC fail"));
 
-      expect(sessionOption("Keep forever").getAttribute("aria-checked")).toBe("true");
+      expect(isChecked(sessionOption("Keep forever"))).toBe(true);
       expect(screen.queryByText("Session history retention couldn't be saved")).toBeNull();
     });
 
-    it("shows the older session retention that landed after the newer write failed, and retries the newer one", async () => {
+    it("shows the host's refusal for the newer session retention and retries it once the older one saved", async () => {
       const writes = deferredWrites();
-      Reflect.set(window, "electron", {
-        privacy: createPrivacyApi(),
-        agentSessionHistory: createAgentSessionHistoryApi({ setRetentionDays: writes.send }),
-      });
-      render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
-        wrapper: TooltipProvider,
-      });
-      await waitFor(() =>
-        expect(sessionOption("30 days").getAttribute("aria-checked")).toBe("true")
-      );
+      await renderTab("storage", { sessions: { setRetentionDays: writes.send } });
 
       fireEvent.click(sessionOption("90 days"));
       fireEvent.click(sessionOption("Keep forever"));
 
-      await act(async () => writes.pending[1].reject(new Error("IPC fail")));
-      expect(sessionOption("30 days").getAttribute("aria-checked")).toBe("true");
-      await act(async () => writes.pending[0].resolve());
-      expect(sessionOption("90 days").getAttribute("aria-checked")).toBe("true");
+      await writes.settle(1, new ClientAppError("DRIVEN_ELSEWHERE", "refused", TAKE_CONTROL));
+      expect(isChecked(sessionOption("90 days"))).toBe(true);
+      expect(screen.getByText(TAKE_CONTROL)).toBeTruthy();
+      await writes.settle(0);
+      expect(isChecked(sessionOption("90 days"))).toBe(true);
 
       // Keep forever is still longer than what's saved, so the retry needs no confirm.
       fireEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -844,26 +846,39 @@ describe("PrivacyDataTab", () => {
       expect(writes.send).toHaveBeenLastCalledWith(0);
     });
 
-    it("names the window being replaced while a confirmed shortening saves", async () => {
+    it("asks before shortening a longer window that is still being saved", async () => {
       const writes = deferredWrites();
-      Reflect.set(window, "electron", {
-        privacy: createPrivacyApi(),
-        agentSessionHistory: createAgentSessionHistoryApi({ setRetentionDays: writes.send }),
-      });
-      render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
-        wrapper: TooltipProvider,
-      });
-      await waitFor(() =>
-        expect(sessionOption("30 days").getAttribute("aria-checked")).toBe("true")
-      );
+      await renderTab("storage", { sessions: { setRetentionDays: writes.send } });
 
+      fireEvent.click(sessionOption("90 days"));
+      fireEvent.click(sessionOption("Keep forever"));
+      // Main may already hold 90 days, so 30 days would delete sessions it keeps.
+      await writes.settle(1, new Error("IPC fail"));
+      fireEvent.click(sessionOption("30 days"));
+
+      const dialog = await screen.findByRole("alertdialog");
+      expect(within(dialog).getByText(/30 days instead of 90 days/)).toBeTruthy();
+      expect(writes.send).toHaveBeenCalledTimes(2);
+    });
+
+    it("names the window being replaced as it changes, and holds it while the shortening saves", async () => {
+      const writes = deferredWrites();
+      await renderTab("storage", { sessions: { setRetentionDays: writes.send } });
+
+      fireEvent.click(sessionOption("90 days"));
       fireEvent.click(sessionOption("7 days"));
       const dialog = await screen.findByRole("alertdialog");
-      fireEvent.click(within(dialog).getByRole("button", { name: "Shorten and delete" }));
-      await waitFor(() => expect(writes.send).toHaveBeenCalledWith(7));
+      expect(within(dialog).getByText(/7 days instead of 90 days/)).toBeTruthy();
 
+      await writes.settle(0, new Error("IPC fail"));
       expect(within(dialog).getByText(/7 days instead of 30 days/)).toBeTruthy();
-      await act(async () => writes.pending[0].resolve());
+
+      fireEvent.click(within(dialog).getByRole("button", { name: "Shorten and delete" }));
+      await waitFor(() => expect(writes.send).toHaveBeenLastCalledWith(7));
+      expect(isChecked(sessionOption("7 days"))).toBe(true);
+      expect(within(dialog).getByText(/7 days instead of 30 days/)).toBeTruthy();
+
+      await writes.settle(1);
       await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     });
   });

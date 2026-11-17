@@ -34,6 +34,12 @@ type LoadState = "loading" | "ready" | "error";
 /** A write that failed, and the call that repeats it. */
 type FailedWrite = { message: string; retry: () => void } | null;
 
+/**
+ * A choice whose newest write failed. Its Retry is built at render time so it goes
+ * through the handlers of the render the user sees, never the one that failed.
+ */
+type FailedChoice<T> = { message: string; target: T } | null;
+
 /** The host's own words for a change it refused because another screen drives a project there. */
 function drivenElsewhereMessage(error: unknown): string | null {
   return isClientAppError(error) && error.code === "DRIVEN_ELSEWHERE" && error.userMessage
@@ -142,20 +148,18 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange, onClose }: Privac
   const [cacheClearing, setCacheClearing] = useState(false);
   const [cacheCleared, setCacheCleared] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
-  // The window it would replace is kept from when the confirm opened, since the
-  // picker behind it shows the shorter one while that is being saved.
-  const [pendingSessionRetention, setPendingSessionRetention] = useState<{
-    days: LogRetention;
-    replacing: LogRetention;
-  } | null>(null);
+  const [pendingSessionRetention, setPendingSessionRetention] = useState<LogRetention | null>(null);
   const [showAllEvents, setShowAllEvents] = useState(false);
-  const [telemetryFailure, setTelemetryFailure] = useState<FailedWrite>(null);
-  const [logRetentionFailure, setLogRetentionFailure] = useState<FailedWrite>(null);
-  const [sessionRetentionFailure, setSessionRetentionFailure] = useState<FailedWrite>(null);
+  const [telemetryFailure, setTelemetryFailure] = useState<FailedChoice<TelemetryLevel>>(null);
+  const [logRetentionFailure, setLogRetentionFailure] = useState<FailedChoice<LogRetention>>(null);
+  const [sessionRetentionFailure, setSessionRetentionFailure] =
+    useState<FailedChoice<LogRetention>>(null);
   const [cacheFailure, setCacheFailure] = useState<FailedWrite>(null);
   const [openFolderFailed, setOpenFolderFailed] = useState(false);
   const openFolderInFlight = useRef(false);
-  const [shortenPending, setShortenPending] = useState(false);
+  // The window a confirmed shortening replaces, held while it saves: the picker
+  // behind the confirm already shows the shorter one by then.
+  const [shorteningFrom, setShorteningFrom] = useState<LogRetention | null>(null);
   const [shortenError, setShortenError] = useState<string | null>(null);
   const [clearHistoryPending, setClearHistoryPending] = useState(false);
   const [clearHistoryError, setClearHistoryError] = useState<string | null>(null);
@@ -206,10 +210,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange, onClose }: Privac
     if (result.status === "saved") return;
     logError("Failed to set telemetry level", result.error);
     if (result.status === "failed") {
-      setTelemetryFailure({
-        message: "Telemetry level couldn't be saved",
-        retry: () => void handleTelemetryChange(level),
-      });
+      setTelemetryFailure({ message: "Telemetry level couldn't be saved", target: level });
     }
   };
 
@@ -221,10 +222,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange, onClose }: Privac
     if (result.status === "saved") return;
     logError("Failed to set log retention", result.error);
     if (result.status === "failed") {
-      setLogRetentionFailure({
-        message: "Log retention couldn't be saved",
-        retry: () => void handleRetentionChange(days),
-      });
+      setLogRetentionFailure({ message: "Log retention couldn't be saved", target: days });
     }
   };
 
@@ -264,8 +262,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange, onClose }: Privac
     if (reportInline) {
       setSessionRetentionFailure({
         message: refusal ?? "Session history retention couldn't be saved",
-        // Through the same gate as the picker, so a retry that now shortens asks first.
-        retry: () => requestSessionRetentionChange(days),
+        target: days,
       });
     }
     return { refusal };
@@ -274,13 +271,13 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange, onClose }: Privac
   // The confirm stays up, busy, until the shorter window has actually been
   // saved, and says so inside itself if it wasn't.
   const confirmShortenRetention = async () => {
-    if (pendingSessionRetention === null || shortenPending) return;
-    setShortenPending(true);
+    if (pendingSessionRetention === null || shorteningFrom !== null) return;
+    setShorteningFrom(sessionRetentionDays);
     setShortenError(null);
-    const failure = await handleSessionRetentionChange(pendingSessionRetention.days, {
+    const failure = await handleSessionRetentionChange(pendingSessionRetention, {
       reportInline: false,
     });
-    setShortenPending(false);
+    setShorteningFrom(null);
     if (failure === null) setPendingSessionRetention(null);
     else
       setShortenError(failure.refusal ?? "Session history retention couldn't be saved. Try again.");
@@ -290,7 +287,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange, onClose }: Privac
   // a longer one only keeps more and applies straight away.
   const requestSessionRetentionChange = (days: LogRetention) => {
     if (isShorterRetention(days, sessionRetentionDays)) {
-      setPendingSessionRetention({ days, replacing: sessionRetentionDays });
+      setPendingSessionRetention(days);
     } else {
       void handleSessionRetentionChange(days);
     }
@@ -465,10 +462,10 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange, onClose }: Privac
                     />
                   ))}
                 </RadioChoiceGroup>
-                {telemetryFailure && (
+                {telemetryFailure && telemetryFailure.target !== telemetryLevel && (
                   <ErrorRetryRow
                     message={telemetryFailure.message}
-                    onRetry={telemetryFailure.retry}
+                    onRetry={() => void handleTelemetryChange(telemetryFailure.target)}
                   />
                 )}
                 <SettingsRow
@@ -578,10 +575,10 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange, onClose }: Privac
                   onReset={() => void handleRetentionChange(DEFAULT_RETENTION_DAYS)}
                   disabled={privacyUnknown}
                 />
-                {logRetentionFailure && (
+                {logRetentionFailure && logRetentionFailure.target !== logRetentionDays && (
                   <ErrorRetryRow
                     message={logRetentionFailure.message}
-                    onRetry={logRetentionFailure.retry}
+                    onRetry={() => void handleRetentionChange(logRetentionFailure.target)}
                   />
                 )}
                 <SettingsRow
@@ -649,12 +646,14 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange, onClose }: Privac
                   onReset={() => requestSessionRetentionChange(DEFAULT_RETENTION_DAYS)}
                   disabled={sessionRetentionUnknown}
                 />
-                {sessionRetentionFailure && (
-                  <ErrorRetryRow
-                    message={sessionRetentionFailure.message}
-                    onRetry={sessionRetentionFailure.retry}
-                  />
-                )}
+                {sessionRetentionFailure &&
+                  sessionRetentionFailure.target !== sessionRetentionDays && (
+                    <ErrorRetryRow
+                      message={sessionRetentionFailure.message}
+                      // Through the picker's gate, so a retry that now shortens asks first.
+                      onRetry={() => requestSessionRetentionChange(sessionRetentionFailure.target)}
+                    />
+                  )}
               </SettingsGroup>
               <SettingsGroup>
                 <SettingsRow
@@ -727,13 +726,13 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange, onClose }: Privac
           setPendingSessionRetention(null);
           setShortenError(null);
         }}
-        isConfirmLoading={shortenPending}
+        isConfirmLoading={shorteningFrom !== null}
         hint={shortenError ?? undefined}
         title="Shorten session history?"
         description={
           pendingSessionRetention === null
             ? ""
-            : `Keeping session history for ${retentionLabel(pendingSessionRetention.days)} instead of ${retentionLabel(pendingSessionRetention.replacing)} deletes older recorded sessions across every project now. Bookmarked sessions are kept.`
+            : `Keeping session history for ${retentionLabel(pendingSessionRetention)} instead of ${retentionLabel(shorteningFrom ?? sessionRetentionDays)} deletes older recorded sessions across every project now. Bookmarked sessions are kept.`
         }
         confirmLabel="Shorten and delete"
       />
