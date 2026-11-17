@@ -67,8 +67,18 @@ beforeEach(() => {
       "/vol/wts/feature": ["linked1"],
     },
     tabGroups: new Map([["g1", { id: "g1", worktreeId: OLD }]]),
+    mruList: [],
+    preMaximizeLayout: null,
   });
-  selection = makeFakeStore<any>({ activeWorktreeId: OLD });
+  selection = makeFakeStore<any>({
+    activeWorktreeId: OLD,
+    restoreWorktreeId: OLD,
+    focusedWorktreeId: OLD,
+    expandedWorktrees: new Set<string>(),
+    expandedTerminals: new Set<string>(),
+    lastFocusedTerminalByWorktree: new Map<string, string>(),
+    maximizeByWorktree: new Map(),
+  });
   holders.panels = panels;
   holders.selection = selection;
 });
@@ -117,10 +127,100 @@ describe("rebaseProjectViewRuntimePaths", () => {
       panelIds: ["a"],
       panelIdsByWorktreeId: { "/somewhere/else": ["a"] },
       tabGroups: new Map(),
+      mruList: ["worktree:/somewhere/else", "terminal:a"],
+      preMaximizeLayout: { gridCols: 2, gridItemCount: 3, worktreeId: "/somewhere/else" },
     });
     const before = panels.getState();
     rebaseProjectViewRuntimePaths(OLD, NEW);
     expect(panels.getState()).toBe(before);
+  });
+
+  it("rebases the durable restore selection and the focused worktree (#17184)", () => {
+    rebaseProjectViewRuntimePaths(OLD, NEW);
+    const state = selection.getState();
+    expect(state.restoreWorktreeId).toBe(NEW);
+    expect(state.focusedWorktreeId).toBe(NEW);
+  });
+
+  it("re-keys per-worktree selection state under the new root (#17184)", () => {
+    const LINKED = "/vol/wts/feature";
+    const maximize = (worktreeId: string) => ({
+      maximizedId: "main1",
+      maximizeTarget: { type: "panel", id: "main1" },
+      preMaximizeLayout: { gridCols: 3, gridItemCount: 4, worktreeId },
+    });
+    selection._reset({
+      ...selection.getState(),
+      expandedWorktrees: new Set([OLD, LINKED]),
+      expandedTerminals: new Set([OLD]),
+      lastFocusedTerminalByWorktree: new Map([
+        [OLD, "main1"],
+        [LINKED, "linked1"],
+      ]),
+      maximizeByWorktree: new Map([
+        [OLD, maximize(OLD)],
+        [LINKED, maximize(LINKED)],
+      ]),
+    });
+
+    rebaseProjectViewRuntimePaths(OLD, NEW);
+    const state = selection.getState();
+
+    expect([...state.expandedWorktrees]).toEqual([NEW, LINKED]);
+    expect([...state.expandedTerminals]).toEqual([NEW]);
+    expect([...state.lastFocusedTerminalByWorktree]).toEqual([
+      [NEW, "main1"],
+      [LINKED, "linked1"],
+    ]);
+    expect(state.maximizeByWorktree.has(OLD)).toBe(false);
+    expect(state.maximizeByWorktree.get(NEW).preMaximizeLayout.worktreeId).toBe(NEW);
+    expect(state.maximizeByWorktree.get(LINKED)).toEqual(maximize(LINKED));
+  });
+
+  it("rebases worktree MRU entries and leaves terminal entries alone (#17184)", () => {
+    panels._reset({
+      ...panels.getState(),
+      mruList: [`worktree:${OLD}`, "terminal:main1", "worktree:/vol/wts/feature"],
+    });
+    rebaseProjectViewRuntimePaths(OLD, NEW);
+    expect(panels.getState().mruList).toEqual([
+      `worktree:${NEW}`,
+      "terminal:main1",
+      "worktree:/vol/wts/feature",
+    ]);
+  });
+
+  it("rebases the live maximize's layout binding (#17184)", () => {
+    panels._reset({
+      ...panels.getState(),
+      preMaximizeLayout: { gridCols: 2, gridItemCount: 5, worktreeId: OLD },
+    });
+    rebaseProjectViewRuntimePaths(OLD, NEW);
+    expect(panels.getState().preMaximizeLayout).toEqual({
+      gridCols: 2,
+      gridItemCount: 5,
+      worktreeId: NEW,
+    });
+  });
+
+  it("rebases a file panel's pinned containment root (#17184)", () => {
+    panels._reset({
+      ...panels.getState(),
+      panelsById: {
+        ...panels.getState().panelsById,
+        main2: {
+          kind: "file",
+          filePath: `${OLD}/docs/guide.md`,
+          worktreeId: OLD,
+          fileContainmentRoot: `${OLD}/docs`,
+        },
+      },
+    });
+    rebaseProjectViewRuntimePaths(OLD, NEW);
+    expect(panels.getState().panelsById.main2).toMatchObject({
+      filePath: `${NEW}/docs/guide.md`,
+      fileContainmentRoot: `${NEW}/docs`,
+    });
   });
 });
 /* eslint-enable @typescript-eslint/no-explicit-any */
