@@ -216,7 +216,7 @@ export class QuestionNotifier implements QuestionNotifications {
       if (this.claimed?.delete(key)) this.persist(this.claimed);
       return;
     }
-    let line: string | null = null;
+    let line: string | null;
     try {
       [line] = await Promise.all([
         this.o.readOpeningLine(asked.reference).catch(() => null),
