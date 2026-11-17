@@ -104,24 +104,86 @@ const STATS_CACHE_TTL_MS = 5 * 60_000;
 const statsCache = new Map<string, { version: number; at: number; issueCount: number | null }>();
 /** Team key → team, per key version: every issue call resolves the project's team first. */
 const teamCache = new Map<string, { id: string; key: string }>();
-/**
- * Who an issue was assigned to before "Assign to me", by issue id. Linear
- * issues take one assignee, so the Undo has to put that person back rather
- * than leave the issue unassigned — and leave it alone when it was already the
- * viewer's. Undo is offered for seconds, so only the latest few are kept.
- */
-const previousAssignees = new Map<string, string | null>();
-const PREVIOUS_ASSIGNEES_LIMIT = 50;
+/** What a run of assignments in a row found (a user id, `null` for nobody), and how many of their Undos are left. */
+interface PreviousAssigneeRun {
+  previous: string | null;
+  count: number;
+}
 
-function rememberPreviousAssignee(op: Op, issueId: string, assigneeId: string | null): void {
+/**
+ * By key and issue id, what each "Assign to me" still open to Undo found,
+ * latest last. Linear issues take one assignee, so the Undo has to put that
+ * person back rather than leave the issue unassigned, and leave it alone when
+ * it was already the viewer's. Two worktrees made from one issue each offer an
+ * Undo, so the second assignment, which finds the issue already the viewer's,
+ * must not take the first one's record. Assignments in a row that found the
+ * same assignee share one run, so only a change of hands adds one. Undo is
+ * offered for seconds, so only the latest few issues are kept.
+ */
+const previousAssignees = new Map<string, PreviousAssigneeRun[]>();
+const PREVIOUS_ASSIGNEES_LIMIT = 50;
+const PREVIOUS_ASSIGNEE_RUNS_PER_ISSUE = 10;
+
+function previousAssigneeKey(op: Op, issueId: string): string {
+  return `${op.version}\u0000${issueId}`;
+}
+
+function rememberPreviousAssignee(op: Op, key: string, previous: string | null): void {
   // A key change cleared this history; don't refill it from the old key's work.
   if (!isCurrent(op)) return;
-  previousAssignees.delete(issueId);
-  previousAssignees.set(issueId, assigneeId);
+  const runs = previousAssignees.get(key) ?? [];
+  const latest = runs.at(-1);
+  if (latest && latest.previous === previous) {
+    latest.count++;
+  } else {
+    runs.push({ previous, count: 1 });
+    // Past the cap, the oldest after the first go: the first is who the issue
+    // goes back to once every Undo has run.
+    if (runs.length > PREVIOUS_ASSIGNEE_RUNS_PER_ISSUE) runs.splice(1, 1);
+  }
+  previousAssignees.delete(key);
+  previousAssignees.set(key, runs);
   if (previousAssignees.size > PREVIOUS_ASSIGNEES_LIMIT) {
     const oldest = previousAssignees.keys().next().value;
     if (oldest !== undefined) previousAssignees.delete(oldest);
   }
+}
+
+/** What the latest assignment still open to Undo found; `undefined` when none is. */
+function latestPreviousAssignee(key: string): string | null | undefined {
+  return previousAssignees.get(key)?.at(-1)?.previous;
+}
+
+/** One Undo is used up. Assignments and Undos for an issue run in turn, so it's the latest. */
+function forgetLatestPreviousAssignee(key: string): void {
+  const runs = previousAssignees.get(key);
+  const latest = runs?.at(-1);
+  if (!runs || !latest) return;
+  if (--latest.count > 0) return;
+  runs.pop();
+  if (runs.length === 0) previousAssignees.delete(key);
+}
+
+const assignmentQueues = new Map<string, Promise<void>>();
+
+/**
+ * Runs an assign or Undo for one issue after any still under way for it, so
+ * each reads the assignee, writes and keeps its record without another landing
+ * in between and leaving the records out of order. Not split by key: an old
+ * key's write still lands on the same issue, after a new key's read.
+ */
+function queueAssignment<T>(repo: RepoRef, issueNumber: number, run: () => Promise<T>): Promise<T> {
+  const key = `${teamKeyOf(repo)}-${issueNumber}`;
+  const result = (assignmentQueues.get(key) ?? Promise.resolve()).then(run);
+  const settled = result.then(
+    () => undefined,
+    () => undefined
+  );
+  assignmentQueues.set(key, settled);
+  void settled.then(() => {
+    if (assignmentQueues.get(key) === settled) assignmentQueues.delete(key);
+  });
+  return result;
 }
 
 export function clearLinearCaches(): void {
@@ -459,29 +521,52 @@ export const linearForgeProvider: ForgeIssueProviderImpl = {
   async assignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]> {
     const op = beginOp();
     const viewer = await requireViewerFor(username, op);
-    const issue = await requireIssue(repo, issueNumber, op);
-    const before = assigneeIdOf(issue);
-    rememberPreviousAssignee(op, issue.id, before);
-    if (before === viewer.id) return issue.assignees;
-    return setAssignee(issue.id, viewer.id, op);
+    return queueAssignment(repo, issueNumber, async () => {
+      const issue = await requireIssue(repo, issueNumber, op);
+      const before = assigneeIdOf(issue);
+      const key = previousAssigneeKey(op, issue.id);
+      if (before === viewer.id) {
+        rememberPreviousAssignee(op, key, viewer.id);
+        return issue.assignees;
+      }
+      const assignees = await setAssignee(issue.id, viewer.id, op);
+      rememberPreviousAssignee(op, key, before);
+      return assignees;
+    });
   },
 
   async unassignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]> {
     const op = beginOp();
     const viewer = await requireViewerFor(username, op);
-    const current = await requireIssue(repo, issueNumber, op);
-    const previous = previousAssignees.has(current.id)
-      ? (previousAssignees.get(current.id) ?? null)
-      : null;
-    previousAssignees.delete(current.id);
-    // Only take the issue off the viewer, and only if "Assign to me" put it
-    // there: if someone else picked it up since, or it was already the
-    // viewer's, there is nothing of ours to undo.
-    if (assigneeIdOf(current) !== viewer.id || previous === viewer.id) {
-      return current.assignees;
-    }
-    // Hand it back to whoever "Assign to me" took it from.
-    return setAssignee(current.id, previous, op);
+    return queueAssignment(repo, issueNumber, async () => {
+      const current = await requireIssue(repo, issueNumber, op);
+      // A key change cleared this history meanwhile: going on would take the
+      // issue off the viewer rather than hand it back.
+      if (!isCurrent(op)) {
+        throw new Error("The Linear API key changed before the issue could be unassigned");
+      }
+      const key = previousAssigneeKey(op, current.id);
+      const previous = latestPreviousAssignee(key);
+      // Someone else has picked the issue up since: this Undo has nothing of
+      // ours left to undo, and its record goes with it.
+      if (assigneeIdOf(current) !== viewer.id) {
+        forgetLatestPreviousAssignee(key);
+        return current.assignees;
+      }
+      // With nothing remembered this only takes the issue off the viewer, which
+      // is what an agent's unassign asks for.
+      if (previous === undefined) return setAssignee(current.id, null, op);
+      // That assignment found the issue already the viewer's.
+      if (previous === viewer.id) {
+        forgetLatestPreviousAssignee(key);
+        return current.assignees;
+      }
+      // Hand it back to whoever "Assign to me" took it from. A failure keeps
+      // the record, so trying again still knows who that was.
+      const assignees = await setAssignee(current.id, previous, op);
+      forgetLatestPreviousAssignee(key);
+      return assignees;
+    });
   },
 
   createIssue: () => notSupported("Creating issues"),
