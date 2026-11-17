@@ -73,6 +73,9 @@ async function runCliWith(
       },
       encoding: "utf-8",
       cwd,
+      // The backgrounded Linux launch holds stderr open, so a stalled one would
+      // block here before the polling deadline below starts.
+      timeout: 10_000,
     });
     if (result.error) throw result.error;
 

@@ -230,7 +230,11 @@ describe("CliInstallService — following a moved AppImage", () => {
         encoding: "utf8",
         cwd,
         env: { ...process.env, DAINTREE_TEST_RECORD: record },
+        // The backgrounded stub holds stderr open, so a stalled one would block
+        // here before recordedArgv's own deadline starts.
+        timeout: 10_000,
       });
+      if (result.error) throw result.error;
       return { status: result.status, stderr: result.stderr, record };
     };
   }
