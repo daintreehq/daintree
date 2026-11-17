@@ -1778,16 +1778,17 @@ describe("ReviewHub", () => {
 
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
-      // The background scan read the file clean; the edit since left a closer.
-      await waitFor(() => expect(scanConflictMarkersMock).toHaveBeenCalled());
-      scanConflictMarkersMock.mockResolvedValue([
-        { path: "src/app.ts", hunkCount: 0, hasMarkers: true, firstMarkerLine: 4 },
-      ]);
-
+      // The background scan reads the file clean; only the click's own re-read
+      // sees the closer the edit since left behind.
+      const leftover = [{ path: "src/app.ts", hunkCount: 0, hasMarkers: true, firstMarkerLine: 4 }];
       const markButton = await screen.findByRole("button", {
         name: /Mark src\/app\.ts as resolved/i,
       });
+      await waitFor(() => expect(scanConflictMarkersMock).toHaveBeenCalled());
+      const scansBefore = scanConflictMarkersMock.mock.calls.length;
+      scanConflictMarkersMock.mockResolvedValueOnce(leftover);
       fireEvent.click(markButton);
+      expect(scanConflictMarkersMock).toHaveBeenCalledTimes(scansBefore + 1);
       const dialog = await screen.findByRole("alertdialog");
       expect(dialog.textContent).toContain("leftover conflict markers, starting on line 4");
       expect(dialog.textContent).not.toContain("without checking");
@@ -1797,9 +1798,11 @@ describe("ReviewHub", () => {
       await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
       expect(stageFileMock).not.toHaveBeenCalled();
 
-      fireEvent.click(
-        await screen.findByRole("button", { name: /Mark src\/app\.ts as resolved/i })
-      );
+      const markAgain = await screen.findByRole("button", {
+        name: /Mark src\/app\.ts as resolved/i,
+      });
+      scanConflictMarkersMock.mockResolvedValueOnce(leftover);
+      fireEvent.click(markAgain);
       fireEvent.click(
         within(await screen.findByRole("alertdialog")).getByRole("button", {
           name: "Mark resolved",
@@ -1882,14 +1885,14 @@ describe("ReviewHub", () => {
 
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
+      const markButton = await screen.findByRole("button", {
+        name: /Mark src\/app\.ts as resolved/i,
+      });
       await waitFor(() => expect(scanConflictMarkersMock).toHaveBeenCalled());
-      scanConflictMarkersMock.mockResolvedValue([
+      scanConflictMarkersMock.mockResolvedValueOnce([
         { path: "src/app.ts", hunkCount: 0, hasMarkers: true, firstMarkerLine: 3 },
       ]);
-
-      fireEvent.click(
-        await screen.findByRole("button", { name: /Mark src\/app\.ts as resolved/i })
-      );
+      fireEvent.click(markButton);
       const dialog = await screen.findByRole("alertdialog");
       expect(dialog.textContent).toContain("starting on line 3");
       expect(stageFileMock).not.toHaveBeenCalled();
