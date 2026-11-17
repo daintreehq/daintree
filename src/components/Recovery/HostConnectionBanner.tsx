@@ -283,10 +283,8 @@ export function HostConnectionBanner() {
 
   if (variant === "version-mismatch") {
     // The way out is the update the host chip and Settings → Hosts offer, of
-    // whichever side is behind. A host updated from elsewhere leaves this
-    // link parked on the old answer, so Retry asks it again. This machine's
-    // own build can't change while it runs, so a behind Shell gets no Retry.
-    const hostBehind = mismatch !== null && updateTargetFor(mismatch) === "host";
+    // whichever side is behind. A host updated (or rolled back) from elsewhere
+    // leaves this link parked on its old answer, so Retry asks it again.
     return (
       <InlineStatusBanner
         title={title}
@@ -305,17 +303,13 @@ export function HostConnectionBanner() {
                   variant: "primary",
                   onClick: () => runHostUpdate(updateTargetFor(mismatch), hostId),
                 },
-                ...(hostBehind
-                  ? [
-                      {
-                        id: "reconnect",
-                        label: "Retry",
-                        icon: RefreshCw,
-                        variant: "dismiss" as const,
-                        onClick: reconnectHost,
-                      },
-                    ]
-                  : []),
+                {
+                  id: "reconnect",
+                  label: "Retry",
+                  icon: RefreshCw,
+                  variant: "dismiss",
+                  onClick: reconnectHost,
+                },
               ]
         }
       />

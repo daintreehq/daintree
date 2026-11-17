@@ -332,10 +332,12 @@ describe("HostConnectionBanner", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(connect).toHaveBeenCalledWith({ hostId: "studio-01", restart: true });
 
-    // Still behind: the same answer comes back, and so does the way to recheck it.
+    // The dial leaves the mismatch; still behind, the same answer comes back,
+    // and so does the way to recheck it.
     act(() => {
       seed({ status: "connecting", attempt: 1 });
     });
+    expect(screen.queryByText("studio-01 runs an older version of Daintree")).toBeNull();
     act(() => {
       seed(behind);
     });
@@ -343,12 +345,12 @@ describe("HostConnectionBanner", () => {
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
 
     act(() => {
-      seed({ status: "connected", rttMs: 20, handshake: HANDSHAKE });
+      seed({ status: "connected", rttMs: 20, handshake: { ...HANDSHAKE, protocolVersion: 5 } });
     });
     expect(container.firstChild).toBeNull();
   });
 
-  it("offers no recheck when this machine is the one behind: its build can't change while it runs", () => {
+  it("rechecks when this machine is the one behind too: the host may have been rolled back", () => {
     seed({
       status: "version-mismatch",
       mismatch: { kind: "protocol", local: 4, remote: 5 },
@@ -356,14 +358,15 @@ describe("HostConnectionBanner", () => {
     });
     render(<HostConnectionBanner />);
     expect(screen.getByRole("button", { name: "Update this machine" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(connect).toHaveBeenCalledWith({ hostId: "studio-01", restart: true });
   });
 
   it("calls builds a commit apart different, not older, and still offers the update", () => {
     seed({
       status: "version-mismatch",
       mismatch: { kind: "commit", local: "a", remote: "b" },
-      remote: HANDSHAKE,
+      remote: { ...HANDSHAKE, commit: "b" },
     });
     render(<HostConnectionBanner />);
     expect(screen.getByText("studio-01 runs a different build of Daintree")).toBeTruthy();
