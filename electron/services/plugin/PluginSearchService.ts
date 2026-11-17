@@ -56,16 +56,17 @@ function visibleProviders(projectId: string | null): RegisteredSearchProvider[] 
 
 /**
  * The search providers a view of `projectId` can see (#13792), with the user's
- * "Show in quick switcher" choice and, for a provider whose keyword another
- * plugin registered first, which plugin took it. A refused provider is still
- * listed so Settings can say why it never appears.
+ * "Show in quick switcher" choice and, for a provider whose keyword a shown
+ * provider registered first holds, which plugin holds it. A refused or
+ * switched-off provider is still listed so Settings can say who answers its
+ * keyword.
  */
 export function listSearchProviders(
   projectId: string | null,
   hidden: ReadonlySet<string>
 ): PluginSearchProviderInfo[] {
   const visible = visibleProviders(projectId);
-  const refusals = searchKeywordRefusals(visible);
+  const refusals = searchKeywordRefusals(visible, hidden);
   return visible.map((provider) => {
     const takenBy = refusals.get(provider.key);
     return {
@@ -344,7 +345,8 @@ export class PluginSearchCoordinator {
       // a query nobody is waiting on.
       if (signal.aborted) return { status: "cancelled" };
       // The plugin may have unloaded, been switched off, been hidden in this
-      // project or lost its keyword while it answered.
+      // project or lost its keyword while it answered, which includes an
+      // earlier provider of that keyword being shown again.
       if (this.eligibleProvider(projectId, request) !== provider) {
         return { status: "unavailable" };
       }
@@ -397,10 +399,11 @@ export class PluginSearchCoordinator {
     const provider = getSearchProvider(request.providerKey);
     if (!provider) return null;
     if (request.mode === "blended" && !provider.blend) return null;
-    if (this.deps.hiddenProviderKeys().has(provider.key)) return null;
+    const hidden = this.deps.hiddenProviderKeys();
+    if (hidden.has(provider.key)) return null;
     const visible = visibleProviders(projectId);
     if (!visible.includes(provider)) return null;
-    if (searchKeywordRefusals(visible).has(provider.key)) return null;
+    if (searchKeywordRefusals(visible, hidden).has(provider.key)) return null;
     return provider;
   }
 

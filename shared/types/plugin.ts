@@ -632,7 +632,11 @@ export interface PluginSearchProviderInfo {
   kind: "declarative" | "runtime";
   /** The user's "Show in quick switcher" choice. */
   shown: boolean;
-  /** Another plugin's provider registered the same keyword first in this project; this one is refused. */
+  /**
+   * A shown provider of another plugin registered the same keyword first in
+   * this project, so this one is refused, and would still be if it were
+   * switched off and then on. A switched-off provider claims no keyword.
+   */
   keywordTakenBy?: string;
 }
 

@@ -148,6 +148,48 @@ describe("search provider registry", () => {
     expect(listed.find((p) => p.pluginId === "other.notes")?.keywordTakenBy).toBe("Acme Notes");
   });
 
+  it("gives a keyword to the earliest shown provider and names it to every later one", () => {
+    registerSearchProviders("acme.notes", [provider()]);
+    registerSearchProviders("other.notes", [
+      provider({ pluginId: "other.notes", pluginName: "Other Notes" }),
+    ]);
+    registerSearchProviders("third.notes", [
+      provider({ pluginId: "third.notes", pluginName: "Third Notes" }),
+    ]);
+    const takenBy = () =>
+      listSearchProviders("p1", hidden).map((p) => [p.pluginId, p.keywordTakenBy ?? null]);
+
+    hidden.add("acme.notes.notes");
+    expect(takenBy()).toEqual([
+      // Switched off and registered first: showing it takes the keyword back.
+      ["acme.notes", null],
+      ["other.notes", null],
+      ["third.notes", "Other Notes"],
+    ]);
+
+    // A switched-off later provider still names who would refuse it.
+    hidden.add("third.notes.notes");
+    expect(takenBy()).toEqual([
+      ["acme.notes", null],
+      ["other.notes", null],
+      ["third.notes", "Other Notes"],
+    ]);
+
+    hidden.add("other.notes.notes");
+    expect(takenBy()).toEqual([
+      ["acme.notes", null],
+      ["other.notes", null],
+      ["third.notes", null],
+    ]);
+
+    hidden.clear();
+    expect(takenBy()).toEqual([
+      ["acme.notes", null],
+      ["other.notes", "Acme Notes"],
+      ["third.notes", "Acme Notes"],
+    ]);
+  });
+
   it("lists only what the project can see, with the user's choice", () => {
     projectOf.set("project__p1__acme.wiki", "p1");
     registerSearchProviders("acme.notes", [provider()]);
@@ -270,6 +312,43 @@ describe("PluginSearchCoordinator", () => {
       });
       expect(result).toEqual({ status: "unavailable" });
     }
+  });
+
+  it("hands a switched-off owner's keyword to the next provider, and gives it back when shown", async () => {
+    registerSearchProviders("acme.notes", [provider()]);
+    registerSearchProviders("other.notes", [
+      provider({ pluginId: "other.notes", pluginName: "Other Notes" }),
+    ]);
+    for (const key of ["acme.notes.notes", "other.notes.notes"]) {
+      bindSearchProviderImpl(key, () => [{ id: "n1", label: key }]);
+    }
+    const search = coordinator();
+    const ask = (providerKey: string) =>
+      search.query(endpoint(), "p1", { providerKey, query: "x", mode: "scoped" });
+
+    hidden.add("acme.notes.notes");
+    expect((await ask("other.notes.notes")).status).toBe("ok");
+    expect(await ask("acme.notes.notes")).toEqual({ status: "unavailable" });
+
+    hidden.delete("acme.notes.notes");
+    expect((await ask("acme.notes.notes")).status).toBe("ok");
+    expect(await ask("other.notes.notes")).toEqual({ status: "unavailable" });
+  });
+
+  it("drops a stand-in's answer when the provider it stood in for is shown again", async () => {
+    registerSearchProviders("acme.notes", [provider()]);
+    registerSearchProviders("other.notes", [provider({ pluginId: "other.notes" })]);
+    hidden.add("acme.notes.notes");
+    const answer = deferred<{ id: string; label: string }[]>();
+    bindSearchProviderImpl("other.notes.notes", () => answer.promise);
+    const result = coordinator().query(endpoint(), "p1", {
+      providerKey: "other.notes.notes",
+      query: "x",
+      mode: "scoped",
+    });
+    hidden.delete("acme.notes.notes");
+    answer.resolve([{ id: "n1", label: "Groceries" }]);
+    expect(await result).toEqual({ status: "unavailable" });
   });
 
   it("drops a provider that misses its deadline and records it once per window", async () => {
