@@ -1827,8 +1827,10 @@ describe("ReviewHub", () => {
         fireEvent.click(within(dialog).getByRole("button", { name: /Abort merge/i }));
 
         await waitFor(() => expect(abortRepositoryOperationMock).toHaveBeenCalledTimes(1));
-        await act(async () => {});
-        // Still open and usable: a second try sends the same choice again.
+        // A read that can't identify the merge leaves the confirm open, and the
+        // second try still sends the choice it was opened for, not that read.
+        await statusChanged(makeMergingStatus({ repoOperationId: null }));
+        await screen.findByText(/Couldn't identify this merge/);
         const still = screen.getByRole("alertdialog");
         fireEvent.click(within(still).getByRole("button", { name: /Abort merge/i }));
         await waitFor(() => expect(abortRepositoryOperationMock).toHaveBeenCalledTimes(2));
@@ -1847,6 +1849,9 @@ describe("ReviewHub", () => {
         expect(abort.disabled).toBe(true);
         const continueBtn = screen.getByRole("button", { name: /^Continue /i });
         expect(continueBtn.getAttribute("aria-disabled")).toBe("true");
+        fireEvent.click(continueBtn);
+        await act(async () => {});
+        expect(continueRepositoryOperationMock).not.toHaveBeenCalled();
       });
 
       it("offers neither Abort nor Continue for a merge the read couldn't identify", async () => {

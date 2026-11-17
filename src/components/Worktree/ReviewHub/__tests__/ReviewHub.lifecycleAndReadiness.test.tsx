@@ -515,10 +515,13 @@ describe("ReviewHub", () => {
         insertions: 1,
         deletions: 0,
       } as const;
+      // Nothing staged, so only the halted-operation guard can spend the one-shot.
       getStagingStatusMock.mockResolvedValue(
         makeStatus({
-          staged: [{ path: "src/conflict.ts", status: "modified", insertions: 1, deletions: 1 }],
+          staged: [],
           unstaged: [unrelated],
+          conflicted: ["src/conflict.ts"],
+          conflictedFiles: [{ path: "src/conflict.ts", xy: "UU", label: "both modified" }],
           repoState: "MERGING",
           repoOperationId: "merge-a",
         })
@@ -531,8 +534,7 @@ describe("ReviewHub", () => {
           autoStageOnOpen={true}
         />
       );
-      await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalled());
-      await act(async () => {});
+      await screen.findByTestId("conflict-panel");
 
       getStagingStatusMock.mockResolvedValue(makeStatus({ staged: [], unstaged: [unrelated] }));
       await act(async () => {
