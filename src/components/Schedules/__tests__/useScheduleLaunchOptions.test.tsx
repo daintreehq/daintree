@@ -135,10 +135,12 @@ describe("useScheduleLaunchOptions", () => {
     expect(result.current.presetStatus).toBe("found");
   });
 
-  it("gives a scratch workspace no project presets, and settles absence there", () => {
-    useScratchStore.setState({ currentScratch: { id: "s" } } as never);
+  it("gives a scratch workspace no project presets, and settles absence once it resolves", () => {
     useProjectPresetsStore.getState().setPresetsByAgent("a", { claude: [TEAM] });
     const { result } = renderHook(() => useScheduleLaunchOptions("claude", "team"));
+    expect(result.current.presetStatus).toBe("loading");
+
+    act(() => useScratchStore.setState({ currentScratch: { id: "s" } } as never));
     expect(result.current.presets.map((p) => p.id)).not.toContain("team");
     expect(result.current.presetStatus).toBe("missing");
   });

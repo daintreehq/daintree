@@ -48,14 +48,22 @@ vi.mock("@/hooks/useResumeAgentSession", () => ({ useResumeAgentSession: () => r
 vi.mock("@/components/Worktree/hooks/useFirstAgentOptions", () => ({
   useFirstAgentOptions: () => [{ id: "claude", name: "Claude", iconId: "claude" }],
 }));
-const launchPresetStatus = vi.hoisted(() => ({ current: "missing" as "missing" | "loading" }));
+const launchPresetStatus = vi.hoisted(() => ({
+  current: "missing" as "missing" | "loading" | "found",
+}));
 vi.mock("@/components/Schedules/useScheduleLaunchOptions", () => ({
-  useScheduleLaunchOptions: (_agentId: string, presetId: string | null) => ({
-    presets: [],
-    preset: undefined,
-    presetStatus: presetId === null ? "none" : launchPresetStatus.current,
-    stopsAtPrompts: false,
-  }),
+  useScheduleLaunchOptions: (_agentId: string, presetId: string | null) => {
+    const found =
+      presetId !== null && launchPresetStatus.current === "found"
+        ? { id: presetId, name: `Preset ${presetId}` }
+        : undefined;
+    return {
+      presets: found ? [found] : [],
+      preset: found,
+      presetStatus: presetId === null ? "none" : launchPresetStatus.current,
+      stopsAtPrompts: false,
+    };
+  },
 }));
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -418,6 +426,16 @@ describe("ProjectSchedulesTab — a saved preset (#17210)", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Run history of Nightly audit" }));
 
     expect(await screen.findByRole("button", { name: "Edit schedule" })).toBeTruthy();
+    expect(screen.queryByText("Missing preset")).toBeNull();
+  });
+
+  it("names a preset it found, with no badge", async () => {
+    launchPresetStatus.current = "found";
+    client.list.mockResolvedValue(snapshot([withPreset]));
+    renderTab();
+    fireEvent.click(await screen.findByRole("button", { name: "Run history of Nightly audit" }));
+
+    expect(await screen.findByText(/Preset team/)).toBeTruthy();
     expect(screen.queryByText("Missing preset")).toBeNull();
   });
 
