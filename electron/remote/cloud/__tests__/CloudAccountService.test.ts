@@ -600,6 +600,67 @@ describe("CloudAccountService with declared credential sets", () => {
     expect(store.account(added.id)?.identity).toBe("bob@acme.iam");
   });
 
+  it("keeps the sign-in known at commit when the new set's check names none", async () => {
+    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE, {
+      validate: vi.fn(async () => ({ identity: "carol@acme.iam" })),
+    });
+    vi.mocked(provider.checkCredentials)
+      .mockResolvedValueOnce({ identity: "alice@acme.iam", scopes: [personalChoice()] })
+      // A blank sign-in is no sign-in.
+      .mockResolvedValueOnce({ identity: " ", scopes: [personalChoice()] });
+    const { accounts, vault, store } = service({ provider });
+    const added = await accounts.addAccount({
+      providerId: "acme.clouds.gce",
+      credentials: { keyFile: serviceAccountKey("key-one"), project: "acme-build" },
+      scopeId: "personal",
+    });
+    let release: () => void = () => {};
+    const sealing = new Promise<void>((resolve) => (release = resolve));
+    const put = vault.put.bind(vault);
+    vi.spyOn(vault, "put").mockImplementationOnce(async (id, values) => {
+      await sealing;
+      await put(id, values);
+    });
+    const replacing = accounts.replaceCredentials(added.id, {
+      keyFile: serviceAccountKey("key-two"),
+      project: "acme-build",
+    });
+    await vi.waitFor(() => expect(vault.put).toHaveBeenCalled());
+    await accounts.validate(added.id);
+    expect(store.account(added.id)?.identity).toBe("carol@acme.iam");
+    release();
+    await replacing;
+    expect(store.account(added.id)?.identity).toBe("alice@acme.iam");
+  });
+
+  it("won't make an account a second copy of one already connected for that sign-in and wallet", async () => {
+    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE);
+    vi.mocked(provider.checkCredentials)
+      .mockResolvedValueOnce({ identity: null, scopes: [personalChoice()] })
+      .mockResolvedValueOnce({ identity: "bob@acme.iam", scopes: [personalChoice()] })
+      .mockResolvedValueOnce({ identity: "bob@acme.iam", scopes: [personalChoice()] });
+    const { accounts, vault } = service({ provider });
+    const first = { keyFile: serviceAccountKey("key-one"), project: "acme-build" };
+    const unknown = await accounts.addAccount({
+      providerId: "acme.clouds.gce",
+      credentials: first,
+      scopeId: "personal",
+    });
+    await accounts.addAccount({
+      providerId: "acme.clouds.gce",
+      credentials: { keyFile: serviceAccountKey("key-bob"), project: "acme-build" },
+      scopeId: "personal",
+      displayName: "Bob's",
+    });
+    await expect(
+      accounts.replaceCredentials(unknown.id, {
+        keyFile: serviceAccountKey("key-two"),
+        project: "acme-build",
+      })
+    ).rejects.toThrow(/Bob's is already connected as bob@acme\.iam/);
+    expect(vault.sets.get(unknown.id)).toEqual(first);
+  });
+
   it("refuses a replacement that signs in as someone a check of the old set has since learned", async () => {
     let pass: () => void = () => {};
     const provider = fieldsProvider("acme.clouds.gce", KEY_FILE, {

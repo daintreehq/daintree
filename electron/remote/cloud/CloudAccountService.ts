@@ -148,7 +148,11 @@ export interface CloudAccountServiceDeps {
 /** The provider's check result, carried on as exactly the declared shape and nothing else. */
 function projectCheck(result: CloudAccountCheckResult): CloudAccountCheckResult {
   return {
-    identity: typeof result.identity === "string" ? result.identity : null,
+    // A blank sign-in is no sign-in: it must never stand in for a known one.
+    identity:
+      typeof result.identity === "string" && result.identity.trim().length > 0
+        ? result.identity
+        : null,
     scopes: result.scopes.map((choice) => ({
       scope: { kind: choice.scope.kind, id: choice.scope.id, name: choice.scope.name },
       active: choice.active === true,
@@ -294,12 +298,14 @@ export class CloudAccountService {
     providerId: CloudProviderId,
     identity: string | null,
     scopeId: string,
-    apiUrl: string
+    apiUrl: string,
+    exceptId: string | null = null
   ): StoredCloudAccount | undefined {
     return this.deps.store
       .accounts()
       .find(
         (account) =>
+          account.id !== exceptId &&
           account.providerId === providerId &&
           account.identity === identity &&
           account.scope.id === scopeId &&
@@ -408,6 +414,16 @@ export class CloudAccountService {
       this.requireCurrentOrigin(before);
       // A check of the old set may have learned who it signs in as meanwhile.
       refuseOtherIdentity(before);
+      // Two accounts for one sign-in and wallet are refused at connect, and so here.
+      const identity = checked.identity ?? before.identity;
+      const duplicate =
+        identity &&
+        this.findDuplicate(before.providerId, identity, before.scope.id, before.apiUrl, before.id);
+      if (duplicate) {
+        throw invalid(
+          `${duplicate.displayName} is already connected as ${identity} for ${before.scope.name}. Remove one of them instead.`
+        );
+      }
       // Read before anything is overwritten: a set that can't be read now couldn't be put back.
       const previous = await this.deps.vault.get(account.id);
       await this.deps.vault.put(account.id, credentials);
@@ -416,7 +432,7 @@ export class CloudAccountService {
         this.deps.store.putAccount({
           ...latest,
           // Who the new set signs in as, never what a check of the old one wrote while it was sealed.
-          identity: checked.identity ?? before.identity,
+          identity,
           keyHint: this.hint(provider, credentials),
           credentialRevision: newCredentialRevision(),
           validation: { status: "valid", checkedAt: this.now() },
