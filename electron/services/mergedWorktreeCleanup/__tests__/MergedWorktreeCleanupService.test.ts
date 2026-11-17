@@ -46,7 +46,7 @@ function mergedPR(overrides: Partial<PR> = {}): PR {
   } as PR;
 }
 
-function cleanReads(getFreshPR: () => Promise<PR | null> = async () => mergedPR()) {
+function cleanReads(getPR: () => Promise<PR | null> = async () => mergedPR()) {
   return (): MergedWorktreeReads => ({
     pathExists: async () => true,
     readGitDir: async () => "/repo/.git/worktrees/feature-x",
@@ -64,7 +64,7 @@ function cleanReads(getFreshPR: () => Promise<PR | null> = async () => mergedPR(
     readSavedLayout: async () => null,
     resolveForge: async () => ({
       findPRByBranch: async () => mergedPR(),
-      getFreshPR,
+      getPR,
     }),
     now: () => NOW,
   });
@@ -80,7 +80,7 @@ function setup(overrides: Partial<MergedWorktreeCleanupDeps> = {}) {
       settings = { ...settings, removeMergedWorktrees: enabled ? true : undefined };
     }),
     listWorktrees: vi.fn(async () => listed),
-    readsFor: cleanReads(),
+    readsFor: vi.fn(cleanReads()),
     removeWorktree: vi.fn(async () => undefined),
     loadReceipts: () => receipts,
     saveReceipts: vi.fn((next: MergedWorktreeRemovalReceipt[]) => {
@@ -127,6 +127,17 @@ describe("MergedWorktreeCleanupService", () => {
       }),
     ]);
     expect(deps.announceReceipts).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads past the forge's caches for a sweep, and lets a preview use them", async () => {
+    const { service, deps } = setup();
+    await service.preview("p1");
+    expect(vi.mocked(deps.readsFor).mock.calls.map((call) => call[2])).toEqual(["preview"]);
+    await service.sweep();
+    expect(vi.mocked(deps.readsFor).mock.calls.slice(1).map((call) => call[2])).toEqual([
+      "sweep",
+      "sweep",
+    ]);
   });
 
   it("reads nothing past the settings for a project that hasn't opted in", async () => {

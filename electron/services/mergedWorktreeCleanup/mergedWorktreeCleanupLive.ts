@@ -34,7 +34,13 @@ async function pathExists(target: string): Promise<boolean> {
   }
 }
 
-function readsFor(project: MergedWorktreeProject, signal: AbortSignal): MergedWorktreeReads {
+function readsFor(
+  project: MergedWorktreeProject,
+  signal: AbortSignal,
+  purpose: "sweep" | "preview"
+): MergedWorktreeReads {
+  // One census per pass, not one per worktree.
+  let census: ReturnType<typeof readPtyTerminalProcesses> | null = null;
   return {
     pathExists,
     readGitDir: async (worktreePath) => {
@@ -50,7 +56,8 @@ function readsFor(project: MergedWorktreeProject, signal: AbortSignal): MergedWo
     readStamp: readWorktreeCreationStamp,
     readStatus: (worktreePath) => readWorktreeStatusObservation(worktreePath, signal),
     countTerminals: async (worktreePath) => {
-      const records = await readPtyTerminalProcesses(getPtyClient());
+      census ??= readPtyTerminalProcesses(getPtyClient());
+      const records = await census;
       const census = await terminalsInWorktree(records, worktreePath, HOST_MATCH_OPTIONS);
       return { count: census.terminals.length, complete: census.complete };
     },
@@ -71,7 +78,7 @@ function readsFor(project: MergedWorktreeProject, signal: AbortSignal): MergedWo
       const { impl, repoRef } = await resolveForCwd(project.path);
       return {
         findPRByBranch: (branch) => impl.findPRByBranch(repoRef, branch),
-        getFreshPR: (prNumber) => impl.getPR(repoRef, prNumber, { fresh: true }),
+        getPR: (prNumber) => impl.getPR(repoRef, prNumber, { fresh: purpose === "sweep" }),
       };
     },
     now: Date.now,

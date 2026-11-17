@@ -53,8 +53,15 @@ export interface MergedWorktreeCleanupDeps {
   readSettings(projectId: string): Promise<ProjectSettings>;
   writeEnabled(projectId: string, enabled: boolean): Promise<void>;
   listWorktrees(projectPath: string): Promise<ListedWorktree[]>;
-  /** The fresh reads for one project, bound to it. */
-  readsFor(project: MergedWorktreeProject, signal: AbortSignal): MergedWorktreeReads;
+  /**
+   * The reads for one project, bound to it. A `sweep` read goes past the
+   * forge's caches; a `preview` may use them. Each call starts fresh.
+   */
+  readsFor(
+    project: MergedWorktreeProject,
+    signal: AbortSignal,
+    purpose: "sweep" | "preview"
+  ): MergedWorktreeReads;
   removeWorktree(
     project: MergedWorktreeProject,
     worktreeId: string,
@@ -151,7 +158,7 @@ export class MergedWorktreeCleanupService {
     }
     const worktrees = await evaluateMergedWorktrees(
       listed,
-      this.deps.readsFor(project, this.abort.signal)
+      this.deps.readsFor(project, this.abort.signal, "preview")
     );
     return { enabled, checkedAt, worktrees };
   }
@@ -221,7 +228,7 @@ export class MergedWorktreeCleanupService {
     const listed = await this.deps.listWorktrees(project.path);
     const found = await evaluateMergedWorktrees(
       listed,
-      this.deps.readsFor(project, this.abort.signal)
+      this.deps.readsFor(project, this.abort.signal, "sweep")
     );
     for (const candidate of found) {
       if (candidate.status !== "removable") continue;
@@ -233,7 +240,7 @@ export class MergedWorktreeCleanupService {
       if (!worktree) continue;
       const [current] = await evaluateMergedWorktrees(
         [worktree],
-        this.deps.readsFor(project, this.abort.signal)
+        this.deps.readsFor(project, this.abort.signal, "sweep")
       );
       if (current?.status !== "removable") continue;
       if (!(await this.isStillEnabled(project.id, generation))) return;

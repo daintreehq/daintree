@@ -24,11 +24,14 @@ export interface SavedLayout {
   activeWorktreeId?: string;
 }
 
-/** The two PR reads the rule needs from the project's code forge. */
+/**
+ * The two PR reads the rule needs from the project's code forge. A sweep's
+ * `getPR` reads past every cache, since it acts on the answer; a dry run's
+ * may take the provider's cached copy.
+ */
 export interface MergedWorktreeForge {
   findPRByBranch(branch: string): Promise<PR | null>;
-  /** Read past every cache: the rule is about to act on the answer. */
-  getFreshPR(prNumber: number): Promise<PR | null>;
+  getPR(prNumber: number): Promise<PR | null>;
 }
 
 /** Every read the evaluation makes, so each can fail closed on its own. */
@@ -144,7 +147,7 @@ function toCandidatePR(pr: PR): MergedWorktreePR {
 }
 
 /**
- * The forge half, read fresh: the PR the branch opened must have merged, from
+ * The forge half: the PR the branch opened must have merged, from
  * exactly the commit the worktree is on, more than the grace period ago by the
  * forge's own clock. A squash-merged PR whose head branch was deleted still
  * reports its head commit, so this holds where "on some remote ref" can't.
@@ -159,7 +162,7 @@ async function checkForge(
   try {
     const found = await forge.findPRByBranch(worktree.branch);
     if (found === null) return skipped(worktree, "no-pr");
-    const pr = await forge.getFreshPR(found.number);
+    const pr = await forge.getPR(found.number);
     if (pr === null) {
       return skipped(worktree, "unverified", { detail: "the forge didn't return the PR" });
     }

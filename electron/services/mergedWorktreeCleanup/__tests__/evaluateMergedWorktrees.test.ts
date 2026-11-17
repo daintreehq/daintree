@@ -61,7 +61,7 @@ function reads(overrides: Partial<MergedWorktreeReads> = {}): MergedWorktreeRead
     readSavedLayout: vi.fn(async () => ({ panels: [] })),
     resolveForge: vi.fn(async () => ({
       findPRByBranch: vi.fn(async () => pr()),
-      getFreshPR: vi.fn(async () => pr()),
+      getPR: vi.fn(async () => pr()),
     })),
     now: () => NOW,
     ...overrides,
@@ -163,7 +163,7 @@ describe("evaluateMergedWorktrees", () => {
     const forge = (found: PR | null, fresh: PR | null) =>
       vi.fn(async () => ({
         findPRByBranch: vi.fn(async () => found),
-        getFreshPR: vi.fn(async () => fresh),
+        getPR: vi.fn(async () => fresh),
       }));
     expect(await judge({ resolveForge: forge(null, null) })).toMatchObject({ reason: "no-pr" });
     expect(
@@ -177,12 +177,12 @@ describe("evaluateMergedWorktrees", () => {
     ).toMatchObject({ reason: "head-moved", pr: { number: 42 } });
   });
 
-  it("decides on the fresh read, not the branch search's copy", async () => {
-    const getFreshPR = vi.fn(async () => pr({ state: "open", merged: false }));
+  it("decides on the PR read by number, not the branch search's copy", async () => {
+    const getPR = vi.fn(async () => pr({ state: "open", merged: false }));
     const result = await judge({
-      resolveForge: vi.fn(async () => ({ findPRByBranch: vi.fn(async () => pr()), getFreshPR })),
+      resolveForge: vi.fn(async () => ({ findPRByBranch: vi.fn(async () => pr()), getPR })),
     });
-    expect(getFreshPR).toHaveBeenCalledWith(42);
+    expect(getPR).toHaveBeenCalledWith(42);
     expect(result).toMatchObject({ reason: "pr-not-merged" });
   });
 
@@ -190,7 +190,7 @@ describe("evaluateMergedWorktrees", () => {
     const result = await judge({
       resolveForge: vi.fn(async () => ({
         findPRByBranch: vi.fn(async () => pr()),
-        getFreshPR: vi.fn(async () => pr({ headSha: HEAD.toUpperCase() })),
+        getPR: vi.fn(async () => pr({ headSha: HEAD.toUpperCase() })),
       })),
     });
     expect(result.status).toBe("removable");
@@ -205,7 +205,7 @@ describe("evaluateMergedWorktrees", () => {
     const result = await judge({
       resolveForge: vi.fn(async () => ({
         findPRByBranch: vi.fn(async () => pr()),
-        getFreshPR: vi.fn(async () => pr(overrides as Partial<PR>)),
+        getPR: vi.fn(async () => pr(overrides as Partial<PR>)),
       })),
     });
     expect(result).toMatchObject({ status: "skipped", reason: "unverified" });
@@ -242,7 +242,7 @@ describe("evaluateMergedWorktrees", () => {
   it("reads the forge only for worktrees that pass the local checks, and resolves it once", async () => {
     const resolveForge = vi.fn(async () => ({
       findPRByBranch: vi.fn(async () => pr()),
-      getFreshPR: vi.fn(async () => pr()),
+      getPR: vi.fn(async () => pr()),
     }));
     const dirty = { ...feature, path: "/repo-worktrees/dirty", branch: "feature/dirty" };
     const results = await evaluateMergedWorktrees(
