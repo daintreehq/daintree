@@ -829,7 +829,15 @@ describe("Review Hub review marks (#14585)", () => {
       useReviewMarksStore.setState({ marks: { [WT]: summary(2) }, revision: 2, loaded: true });
       const result = comparable(["src/own.ts", "src/gone.ts"], 0);
       if (result.state !== "comparable") throw new Error("expected comparable");
-      result.files[1]!.status = "deleted";
+      // A committed deletion: the reviewed side had the file, the current side does not.
+      Object.assign(result.files[1]!, {
+        status: "deleted" as const,
+        index: "changed" as const,
+        reviewed: {
+          kind: "unlisted" as const,
+          entry: { mode: "100644" as const, oid: "a".repeat(40) },
+        },
+      });
       bridge.compare.mockResolvedValue({ status: "compared", markRevision: 2, result });
       const dialogs = usePanelDialogStore.getState();
       const open = vi.spyOn(dialogs, "openPanelDialog").mockResolvedValue("diff-panel");

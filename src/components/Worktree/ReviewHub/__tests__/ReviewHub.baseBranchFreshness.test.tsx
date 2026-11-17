@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import type { ReactNode } from "react";
-import type { StagingStatus, WorktreeState } from "@shared/types";
+import type { GitStatus, StagingStatus, WorktreeState } from "@shared/types";
 import type { CrossWorktreeDiffResult, CrossWorktreeFile } from "@shared/types/ipc/git";
 
 const { getStagingStatusMock, onUpdateMock, compareWorktreesMock, commitMock, worktreeStoreData } =
@@ -401,18 +401,24 @@ describe("ReviewHub base-branch freshness (#17196)", () => {
       } satisfies CrossWorktreeDiffResult);
       const open = vi
         .spyOn(usePanelDialogStore.getState(), "openPanelDialog")
-        .mockImplementation(async (options) => {
+        .mockImplementation(async (rawOptions) => {
+          // AddPanelOptions is a union that doesn't name the diff fields.
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- the hub's diff request
+          const options = rawOptions as unknown as {
+            title: string;
+            filePath: string;
+            fileStatus: GitStatus;
+          };
           usePanelStore.setState((state) => ({
             panelsById: {
               ...state.panelsById,
               [PANEL_ID]: {
                 id: PANEL_ID,
                 kind: "diff",
-                title: String(options.title),
+                title: options.title,
                 location: "dialog",
-                filePath: String(options.filePath),
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- the hub always passes a GitStatus
-                fileStatus: options.fileStatus as "modified",
+                filePath: options.filePath,
+                fileStatus: options.fileStatus,
                 diffSource: "base-branch",
               },
             },
