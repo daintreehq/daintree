@@ -282,10 +282,25 @@ describe("EventsActions — ConfirmDialog", () => {
     expect(mockNotify).not.toHaveBeenCalled();
     expect(clearDispatches()).toHaveLength(1);
 
-    mockDispatch.mockResolvedValue({ ok: true, result: undefined });
+    let settleRetry!: (value: unknown) => void;
+    mockDispatch.mockReturnValue(
+      new Promise((resolve) => {
+        settleRetry = resolve;
+      })
+    );
     fireEvent.click(within(screen.getByRole("alertdialog")).getByText("Clear events"));
+    // The old failure doesn't linger over the attempt that replaces it.
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    await act(async () => settleRetry({ ok: true, result: undefined }));
     await waitFor(() => expect(screen.queryByText("Clear events?")).toBeNull());
     expect(clearDispatches()).toHaveLength(2);
+
+    fireEvent.click(screen.getByText("Clear events"));
+    const reopened = await screen.findByRole("alertdialog");
+    expect(within(reopened).queryByRole("alert")).toBeNull();
+    expect(
+      within(reopened).getByText("Clear events").closest("button")?.getAttribute("aria-disabled")
+    ).not.toBe("true");
   });
 
   it("drops the failure once the confirmation is cancelled", async () => {

@@ -77,13 +77,14 @@ describe("eventStore", () => {
   });
 
   it("removeEvents drops a selection whose row already rolled out of the buffer", () => {
-    // The selected row was evicted by the cap before the clear snapshotted ids.
-    useEventStore.getState().setEvents([makeEvent("2")]);
+    // The selected row was evicted by the cap before the clear snapshotted ids,
+    // and "3" arrived while it ran.
+    useEventStore.getState().setEvents([makeEvent("2"), makeEvent("3")]);
     useEventStore.getState().setSelectedEvent("1");
 
     useEventStore.getState().removeEvents(new Set(["2"]));
 
-    expect(useEventStore.getState().events).toEqual([]);
+    expect(useEventStore.getState().events.map((e) => e.id)).toEqual(["3"]);
     expect(useEventStore.getState().selectedEventId).toBeNull();
   });
 
