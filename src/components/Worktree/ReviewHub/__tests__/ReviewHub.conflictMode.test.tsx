@@ -918,10 +918,136 @@ describe("ReviewHub", () => {
       });
     });
 
+    it("names a cleanly merged path as staged, then splits it from the resolution once the conflict is resolved", async () => {
+      const clean = {
+        path: "src/clean.ts",
+        status: "modified" as const,
+        insertions: 1,
+        deletions: 0,
+      };
+      const resolved = {
+        path: "src/app.ts",
+        status: "modified" as const,
+        insertions: 4,
+        deletions: 2,
+      };
+      getStagingStatusMock.mockResolvedValue(
+        makeMergingStatus({ staged: [clean], resolveUndoPaths: [] })
+      );
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => screen.getByTestId("conflict-panel"));
+      // Before: git staged the clean path itself, and nothing has been resolved.
+      expect(screen.queryByTestId("conflict-resolved-toggle")).toBeNull();
+      const before = screen.getByTestId("conflict-staged-toggle");
+      expect(before.textContent).toContain("Staged changes");
+      expect(before.textContent).not.toContain("Resolved");
+      expect(within(before).getByText("1")).toBeTruthy();
+      expect(screen.getByTestId("conflict-staged-list").querySelectorAll("li")).toHaveLength(1);
+
+      getStagingStatusMock.mockResolvedValue(
+        makeMergingStatus({
+          conflicted: [],
+          conflictedFiles: [],
+          staged: [clean, resolved],
+          resolveUndoPaths: ["src/app.ts"],
+        })
+      );
+      fireEvent.click(screen.getByRole("button", { name: /Mark src\/app\.ts as resolved/i }));
+
+      // After: the resolution counts alone, and the clean path keeps its own count.
+      await waitFor(() => screen.getByTestId("conflict-resolved-toggle"));
+      const resolvedToggle = screen.getByTestId("conflict-resolved-toggle");
+      const resolvedList = screen.getByTestId("conflict-resolved-list");
+      expect(resolvedToggle.textContent).toContain("Resolved");
+      expect(within(resolvedToggle).getByText("1")).toBeTruthy();
+      expect(resolvedList.textContent).toContain("app.ts");
+      expect(resolvedList.textContent).not.toContain("clean.ts");
+
+      const otherToggle = screen.getByTestId("conflict-staged-toggle");
+      const otherList = screen.getByTestId("conflict-staged-list");
+      expect(otherToggle.textContent).toContain("Other staged changes");
+      expect(within(otherToggle).getByText("1")).toBeTruthy();
+      expect(otherList.textContent).toContain("clean.ts");
+      expect(otherList.textContent).not.toContain("app.ts");
+    });
+
+    it("names every staged path as staged when the status carries no resolution record", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeMergingStatus({
+          conflicted: [],
+          conflictedFiles: [],
+          staged: [
+            { path: "src/a.ts", status: "modified", insertions: 1, deletions: 0 },
+            { path: "src/b.ts", status: "modified", insertions: 1, deletions: 0 },
+          ],
+        })
+      );
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => screen.getByTestId("conflict-panel"));
+      expect(screen.queryByTestId("conflict-resolved-toggle")).toBeNull();
+      const toggle = screen.getByTestId("conflict-staged-toggle");
+      expect(toggle.textContent).toContain("Staged changes");
+      expect(within(toggle).getByText("2")).toBeTruthy();
+    });
+
+    it("ignores a recorded resolution that is no longer staged", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeMergingStatus({
+          conflicted: [],
+          conflictedFiles: [],
+          staged: [{ path: "src/clean.ts", status: "modified", insertions: 1, deletions: 0 }],
+          resolveUndoPaths: ["src/reset.ts"],
+        })
+      );
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => screen.getByTestId("conflict-panel"));
+      expect(screen.queryByTestId("conflict-resolved-toggle")).toBeNull();
+      expect(screen.getByTestId("conflict-staged-list").textContent).not.toContain("reset.ts");
+      expect(screen.getByTestId("conflict-staged-toggle").textContent).toContain("Staged changes");
+    });
+
+    it("keeps each staged disclosure's open state separate", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeMergingStatus({
+          conflicted: [],
+          conflictedFiles: [],
+          staged: [
+            { path: "src/clean.ts", status: "modified", insertions: 1, deletions: 0 },
+            { path: "src/app.ts", status: "modified", insertions: 1, deletions: 0 },
+          ],
+          resolveUndoPaths: ["src/app.ts"],
+        })
+      );
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => screen.getByTestId("conflict-panel"));
+      const resolvedList = screen.getByTestId("conflict-resolved-list");
+      const stagedList = screen.getByTestId("conflict-staged-list");
+      expect(resolvedList.id).not.toBe(stagedList.id);
+      expect(screen.getByTestId("conflict-resolved-toggle").getAttribute("aria-controls")).toBe(
+        resolvedList.id
+      );
+      expect(screen.getByTestId("conflict-staged-toggle").getAttribute("aria-controls")).toBe(
+        stagedList.id
+      );
+
+      fireEvent.click(screen.getByTestId("conflict-staged-toggle"));
+      await waitFor(() => expect(stagedList.hidden).toBe(false));
+      expect(resolvedList.hidden).toBe(true);
+    });
+
     it("keeps the Resolved section collapsed by default and expands on click", async () => {
       getStagingStatusMock.mockResolvedValue(
         makeMergingStatus({
           staged: [{ path: "src/done.ts", status: "modified", insertions: 1, deletions: 0 }],
+          resolveUndoPaths: ["src/done.ts"],
         })
       );
 
@@ -963,7 +1089,7 @@ describe("ReviewHub", () => {
 
       const dialog = await screen.findByRole("alertdialog");
       // 2 staged + replayed = rebaseStep - 1 = 3 of 7
-      expect(dialog.textContent).toMatch(/Discards 2 staged resolutions/);
+      expect(dialog.textContent).toMatch(/Discards 2 staged changes/);
       expect(dialog.textContent).toMatch(/reverts 3 of 7 replayed commits/);
     });
 

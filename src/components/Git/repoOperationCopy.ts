@@ -6,7 +6,7 @@ import { pluralize } from "@/lib/pluralize";
  *
  * Lifted out of `ConflictPanel` when the worktree card's Git submenu gained its
  * own Abort row (#12092). Two surfaces confirming the same abort is fine; two
- * surfaces describing it differently is not — "Discards 3 staged resolutions
+ * surfaces describing it differently is not — "Discards 3 staged changes
  * and reverts 2 of 5 replayed commits" in Review Hub and a vaguer sentence on
  * the card would be the same operation wearing two consequences, and the reader
  * has no way to know which one is accurate.
@@ -74,7 +74,7 @@ export function buildAbortDescription(
   const parts: string[] = [];
 
   if (stagedCount > 0) {
-    parts.push(`Discards ${pluralize(stagedCount, "staged resolution")}`);
+    parts.push(`Discards ${pluralize(stagedCount, "staged change")}`);
   }
 
   if (

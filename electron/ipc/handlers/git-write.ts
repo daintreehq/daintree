@@ -63,6 +63,7 @@ import { store } from "../../store.js";
 import { getSoundService } from "../../services/getSoundService.js";
 import type * as SoundServiceModule from "../../services/SoundService.js";
 import { detectRepoOperationState, resolveGitDir } from "../../services/git/repoOperationState.js";
+import { RESOLVE_UNDO_ARGS, parseResolveUndoPaths } from "../../services/git/resolveUndo.js";
 import {
   parsePorcelainV2Conflicts,
   PORCELAIN_V2_CONFLICT_ARGS,
@@ -2335,11 +2336,28 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       }
     }
 
+    // Only a stopped operation puts cleanly merged paths in the index beside
+    // the resolved ones, so nothing else pays for the read. After the last
+    // conflict clears the sentinel still names the operation, so the read still
+    // runs then.
+    let resolveUndoPaths: string[] | undefined;
+    if (staged.length > 0 && repoState !== "CLEAN" && repoState !== "DIRTY") {
+      try {
+        // A git that died partway must not pass for a shorter list of resolutions.
+        const strictGit = await createStrictExitGit(cwd);
+        resolveUndoPaths =
+          parseResolveUndoPaths(await strictGit.raw(RESOLVE_UNDO_ARGS)) ?? undefined;
+      } catch {
+        // Left out, so the panel names the staged paths without claiming a split.
+      }
+    }
+
     return {
       staged,
       unstaged,
       conflicted,
       conflictedFiles,
+      ...(resolveUndoPaths ? { resolveUndoPaths } : {}),
       isDetachedHead,
       currentBranch,
       hasRemote,
