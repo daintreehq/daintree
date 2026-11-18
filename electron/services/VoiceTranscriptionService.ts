@@ -2,6 +2,7 @@ import type { VoiceInputSettings } from "../../shared/types/ipc/api.js";
 import { logInfo } from "../utils/logger.js";
 import { DeepgramTranscriptionProvider } from "./voice/DeepgramTranscriptionProvider.js";
 import { GrokTranscriptionProvider } from "./voice/GrokTranscriptionProvider.js";
+import { LocalTranscriptionProvider } from "./voice/LocalTranscriptionProvider.js";
 import { OpenAITranscriptionProvider } from "./voice/OpenAITranscriptionProvider.js";
 import type {
   ProviderSessionStats,
@@ -57,6 +58,8 @@ export class VoiceTranscriptionService {
         return new DeepgramTranscriptionProvider();
       case "grok":
         return new GrokTranscriptionProvider();
+      case "local":
+        return new LocalTranscriptionProvider();
       case "openai":
       default:
         return new OpenAITranscriptionProvider();

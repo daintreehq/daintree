@@ -8,7 +8,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type * as Ort from "onnxruntime-node";
-import { RnntGreedyDecoder, type RnntStepModel } from "./localSpeechDecoder.js";
+import { RnntGreedyDecoder, type DecodedToken, type RnntStepModel } from "./localSpeechDecoder.js";
 import { LocalSpeechMel } from "./localSpeechMel.js";
 import { LOCAL_SPEECH_GEOMETRY as G } from "./localSpeechModelSpec.js";
 import { LocalSpeechVocabulary } from "./localSpeechVocabulary.js";
@@ -16,6 +16,9 @@ import { LocalSpeechVocabulary } from "./localSpeechVocabulary.js";
 type OrtModule = typeof Ort;
 
 const ROWS = G.preEncodeCacheRows + G.chunkSamples / 160;
+
+/** Encoder frames a chunk yields: one per 80 ms. */
+export const FRAMES_PER_CHUNK = G.chunkSamples / 1280;
 
 class OrtStepModel implements RnntStepModel {
   private h: Ort.Tensor;
@@ -144,8 +147,11 @@ export class LocalSpeechEngine {
     this.decoder.reset();
   }
 
-  /** The tokens one chunk of `chunkSamples` 16 kHz samples emits. */
-  async decodeChunk(chunk: Float32Array): Promise<number[]> {
+  /**
+   * The tokens one chunk of `chunkSamples` 16 kHz samples emits, each with the
+   * encoder frame it came at (80 ms apiece, `FRAMES_PER_CHUNK` a chunk).
+   */
+  async decodeChunk(chunk: Float32Array): Promise<DecodedToken[]> {
     if (chunk.length !== G.chunkSamples) {
       throw new Error(`A chunk is ${G.chunkSamples} samples, got ${chunk.length}`);
     }

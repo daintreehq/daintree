@@ -20,6 +20,16 @@ export function normalizeVoiceLanguage(value: unknown): string {
   return trimmed || "en";
 }
 
+/**
+ * Spoken commands ("new line", "send it") are English phrases. They run with
+ * English selected, and on Auto-detect, where a passage in any language can
+ * end in one; a fixed other language leaves them as words.
+ */
+export function spokenCommandsAvailable(language: unknown): boolean {
+  const code = normalizeVoiceLanguage(language);
+  return code === "en" || code === VOICE_LANGUAGE_AUTO;
+}
+
 export function voiceLanguageName(code: string): string {
   return VOICE_LANGUAGES.find((l) => l.code === code)?.label ?? code;
 }

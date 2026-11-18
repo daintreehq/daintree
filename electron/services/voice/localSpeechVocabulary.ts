@@ -11,6 +11,7 @@ const LOCALE_TAG = /^<[a-z]{2,3}-[A-Z]{2,3}>$/;
 export class LocalSpeechVocabulary {
   private readonly text: string[];
   private readonly tag: boolean[];
+  private readonly wordStart: boolean[];
 
   private constructor(pieces: string[]) {
     this.text = pieces.map((piece) =>
@@ -19,6 +20,7 @@ export class LocalSpeechVocabulary {
         : piece.replaceAll(WORD_MARKER, " ")
     );
     this.tag = pieces.map((piece) => LOCALE_TAG.test(piece));
+    this.wordStart = this.text.map((text) => text.startsWith(" "));
   }
 
   static parse(contents: string, expectedSize?: number): LocalSpeechVocabulary {
@@ -37,6 +39,11 @@ export class LocalSpeechVocabulary {
   /** A locale tag: the model's mark that an utterance ended, on Auto-detect. */
   isTag(id: number): boolean {
     return this.tag[id] === true;
+  }
+
+  /** A piece that starts a new word: a word marker, alone or with the word's first letters. */
+  startsWord(id: number): boolean {
+    return this.wordStart[id] === true;
   }
 
   /** The text of `ids` joined, word markers as spaces, tags and specials dropped. */

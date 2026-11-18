@@ -3234,8 +3234,11 @@ export type VoiceTranscriptionModel = "gpt-live-transcribe";
  *   so no client commit timer is needed.
  * - "grok": xAI's `grok-voice-transcribe-2.0` streaming. Server-side endpointing
  *   like Deepgram's, with utterance finals that restate the whole utterance.
+ * - "local": NVIDIA's Nemotron 3.5 ASR Streaming on this device, from a model
+ *   downloaded on first use. Client-side VAD like OpenAI's; nothing leaves the
+ *   machine to transcribe.
  */
-export type VoiceTranscriptionProvider = "openai" | "deepgram" | "grok";
+export type VoiceTranscriptionProvider = "openai" | "deepgram" | "grok" | "local";
 
 /**
  * The model cleanup and spoken rewrite run on, the user's choice in settings.

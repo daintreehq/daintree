@@ -20,6 +20,12 @@ export interface RnntStepModel {
   reset(): void;
 }
 
+/** An emitted token and the encoder frame of its chunk it was emitted at. */
+export interface DecodedToken {
+  id: number;
+  frame: number;
+}
+
 export class RnntGreedyDecoder {
   private lastToken: number;
   private predictionValid = false;
@@ -40,8 +46,8 @@ export class RnntGreedyDecoder {
   }
 
   /** The tokens the chunk's first `frames` encoder frames emit, in order. */
-  async decodeChunk(frames: number): Promise<number[]> {
-    const tokens: number[] = [];
+  async decodeChunk(frames: number): Promise<DecodedToken[]> {
+    const tokens: DecodedToken[] = [];
     let frame = 0;
     let symbols = 0;
     // Joint rows of frames [rowsFirst, frames) for the current prediction.
@@ -63,7 +69,7 @@ export class RnntGreedyDecoder {
         symbols = 0;
         continue;
       }
-      tokens.push(best);
+      tokens.push({ id: best, frame });
       this.lastToken = best;
       this.model.commit();
       this.predictionValid = false;
