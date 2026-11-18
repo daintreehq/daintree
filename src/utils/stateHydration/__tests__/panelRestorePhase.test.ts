@@ -120,6 +120,7 @@ vi.mock("../statePatcher", async () => {
         allowResumeLatest?: boolean;
         allowSessionIdResume?: boolean;
         resolvedResumeLatestSessionId?: string;
+        restoredAt?: number;
         coldLaunch?: {
           cwd: string;
           conversationCwd?: string;
@@ -154,7 +155,12 @@ vi.mock("../statePatcher", async () => {
       ...(s.exitCode !== undefined && { restoredExitCode: s.exitCode }),
       // Stands in for the builder's own verdict on the launch; a fixture sets it
       // on the saved panel to say what the builder decided (#17883).
-      ...(s.restoreProvenance !== undefined && { restoreProvenance: s.restoreProvenance }),
+      ...(s.restoreProvenance !== undefined && {
+        restoreProvenance: {
+          at: options?.restoredAt ?? 0,
+          disposition: s.restoreProvenance.disposition,
+        },
+      }),
       ...(s.title !== undefined && { title: s.title }),
     }),
     // Mirrors the real resolver's title recovery (same agent order) so the
@@ -382,13 +388,19 @@ describe("restorePanelsPhase — saved panels", () => {
   it("reports each agent it relaunched, and what the launch did with its conversation", async () => {
     reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
     const ctx = makeContext();
+    // The pane comes back under an id the store chose, which is the one to name.
+    ctx.addPanel.mockImplementation(async (args: { requestedId?: string }) =>
+      args.requestedId === "fresh" ? "fresh-restored" : (args.requestedId ?? "x")
+    );
     ctx.backendTerminalMap.set("live", backend("live", { launchAgentId: "claude" }));
+    const before = Date.now();
     const { wakeCandidates } = await restorePanelsPhase(
       [
         panel("resumed", {
           kind: "agent",
           launchAgentId: "claude",
           worktreeId: "w1",
+          // What the previous wake recorded; this pass records its own.
           restoreProvenance: { at: 1, disposition: "resume" },
         }),
         panel("shell"),
@@ -402,6 +414,7 @@ describe("restorePanelsPhase — saved panels", () => {
       ],
       ctx
     );
+    const after = Date.now();
     expect(
       wakeCandidates.map(({ terminalId, title, agentId, worktreeId, outcome }) => ({
         terminalId,
@@ -418,9 +431,20 @@ describe("restorePanelsPhase — saved panels", () => {
         worktreeId: "w1",
         outcome: "resumed",
       },
-      { terminalId: "fresh", title: "fresh", agentId: "codex", worktreeId: null, outcome: "fresh" },
+      {
+        terminalId: "fresh-restored",
+        title: "fresh",
+        agentId: "codex",
+        worktreeId: null,
+        outcome: "fresh",
+      },
     ]);
-    // One restore pass, one time: what a pane typed afterwards is measured from it.
+    // One restore pass, one time, and it is this pass's: what the pane does
+    // afterwards is read against the provenance it records.
+    for (const { restoredAt } of wakeCandidates) {
+      expect(restoredAt).toBeGreaterThanOrEqual(before);
+      expect(restoredAt).toBeLessThanOrEqual(after);
+    }
     expect(new Set(wakeCandidates.map((c) => c.restoredAt)).size).toBe(1);
   });
 

@@ -3,6 +3,8 @@ import type { DeliveryState } from "@/services/agentRequests/deliveryState";
 import type { WakeCandidate } from "@/services/wakeContinue/wakeCandidate";
 
 export interface WakeContinueEntry extends WakeCandidate {
+  /** The pane's last composer send when the offer was made; a later one is the user's. */
+  composerSendSeq?: number;
   /** Where its note got to, once sending started; absent while it waits its turn. */
   delivery?: DeliveryState;
 }

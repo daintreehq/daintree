@@ -13,6 +13,8 @@ export interface WakeCandidate {
   agentId: string;
   worktreeId: string | null;
   outcome: "resumed" | "fresh" | "held";
+  /** Why a held pane is held, as restore recorded it. */
+  holdReason?: string;
   /** When the restore pass that launched it began (epoch ms). */
   restoredAt: number;
 }

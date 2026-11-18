@@ -40,7 +40,13 @@ describe("promptReadiness", () => {
     expect(promptReadiness({ agentState: "idle", lastTransitionAt: 1 })).toBe("not-yet");
     expect(promptReadiness({ agentState: "waiting", lastTransitionAt: 1 })).toBe("not-yet");
     expect(promptReadiness({ agentState: "waiting", waitingReason: "prompt" })).toBe("not-yet");
-    expect(promptReadiness({ agentState: "working", lastTransitionAt: 1 })).toBe("not-yet");
+    // A reason left over from the last wait says nothing once the agent moved on.
+    expect(
+      promptReadiness({ agentState: "working", waitingReason: "prompt", lastTransitionAt: 1 })
+    ).toBe("not-yet");
+    expect(
+      promptReadiness({ agentState: "idle", waitingReason: "prompt", lastTransitionAt: 1 })
+    ).toBe("not-yet");
     expect(promptReadiness({ agentState: null })).toBe("not-yet");
   });
 

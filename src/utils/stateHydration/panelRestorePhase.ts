@@ -1525,6 +1525,9 @@ export async function restorePanelsPhase(
                         : respawnArgs.restoreProvenance?.disposition === "resume"
                           ? "resumed"
                           : "fresh",
+                      ...(respawnArgs.restoreRecovery && {
+                        holdReason: respawnArgs.restoreRecovery.reason,
+                      }),
                       restoredAt,
                     },
                   });
