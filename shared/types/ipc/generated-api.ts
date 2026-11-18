@@ -1183,6 +1183,20 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["menu:show-context"]["args"]
     ): Promise<IpcInvokeMap["menu:show-context"]["result"]>;
   };
+  mergedWorktreeCleanup: {
+    ackReceipts(
+      ...args: IpcInvokeMap["merged-worktree-cleanup:ack-receipts"]["args"]
+    ): Promise<IpcInvokeMap["merged-worktree-cleanup:ack-receipts"]["result"]>;
+    preview(
+      ...args: IpcInvokeMap["merged-worktree-cleanup:preview"]["args"]
+    ): Promise<IpcInvokeMap["merged-worktree-cleanup:preview"]["result"]>;
+    setEnabled(
+      ...args: IpcInvokeMap["merged-worktree-cleanup:set-enabled"]["args"]
+    ): Promise<IpcInvokeMap["merged-worktree-cleanup:set-enabled"]["result"]>;
+    takeReceipts(
+      ...args: IpcInvokeMap["merged-worktree-cleanup:take-receipts"]["args"]
+    ): Promise<IpcInvokeMap["merged-worktree-cleanup:take-receipts"]["result"]>;
+  };
   onboarding: {
     complete(
       ...args: IpcInvokeMap["onboarding:complete"]["args"]

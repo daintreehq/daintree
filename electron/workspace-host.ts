@@ -691,6 +691,18 @@ port.on("message", async (rawMsg: any) => {
         );
         break;
 
+      case "remove-merged-worktree":
+        await workspaceService.deleteWorktree(
+          request.requestId,
+          request.worktreeId,
+          false,
+          false,
+          undefined,
+          false,
+          { unattended: request.guard }
+        );
+        break;
+
       case "list-branches":
         await workspaceService.listBranches(request.requestId, request.rootPath);
         break;

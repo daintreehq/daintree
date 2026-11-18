@@ -259,6 +259,13 @@ export const CHANNELS = {
   PROJECT_SAVE_SETTINGS: "project:save-settings",
   PROJECT_ADD_BROWSER_ALLOWED_HOST: "project:add-browser-allowed-host",
   PROJECT_LINKS_CHANGE: "project-links:change",
+  // The merged-worktree rule (#17321): its switch, its dry run, and the
+  // removals it made for this machine's views to put in their inbox.
+  MERGED_WORKTREE_CLEANUP_PREVIEW: "merged-worktree-cleanup:preview",
+  MERGED_WORKTREE_CLEANUP_SET_ENABLED: "merged-worktree-cleanup:set-enabled",
+  MERGED_WORKTREE_CLEANUP_TAKE_RECEIPTS: "merged-worktree-cleanup:take-receipts",
+  MERGED_WORKTREE_CLEANUP_ACK_RECEIPTS: "merged-worktree-cleanup:ack-receipts",
+  MERGED_WORKTREE_CLEANUP_RECEIPTS_READY: "merged-worktree-cleanup:receipts-ready",
   PROJECT_DETECT_RUNNERS: "project:detect-runners",
   PROJECT_LIST_REMOTES: "project:list-remotes",
   PROJECT_CLOSE: "project:close",

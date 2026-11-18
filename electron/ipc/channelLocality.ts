@@ -999,6 +999,12 @@ export const CHANNEL_LOCALITY = {
   "project-presence:changed": "host",
   "project-presence:get-snapshot": "host",
   "project-links:change": "host",
+  "merged-worktree-cleanup:preview": "host",
+  "merged-worktree-cleanup:set-enabled": "host",
+  // This machine's removals, for this machine's own notification inbox.
+  "merged-worktree-cleanup:take-receipts": "shell",
+  "merged-worktree-cleanup:ack-receipts": "shell",
+  "merged-worktree-cleanup:receipts-ready": "shell",
   "project-presentation:answer-suggestion": "host",
   "project-presentation:changed": "host",
   "project-presentation:get": "host",

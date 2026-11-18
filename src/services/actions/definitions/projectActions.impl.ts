@@ -626,6 +626,8 @@ export const projectActionRuns = {
     delete sanitized.daintreeMcpTier;
     delete sanitized.daintreeMcpSkipConfirmations;
     delete sanitized.exposeDaintreeMcpToAgents;
+    // Standing consent to unattended removals (#17321): Project Settings only.
+    delete sanitized.removeMergedWorktrees;
     // Changed only through the project link actions, which hold the Assistant
     // to its own links; main keeps the stored list through a save anyway. The
     // pre-#17243 key goes too, since a stored list under it is still read.

@@ -2080,6 +2080,10 @@ export class ProjectStore {
     return this.settingsManager.addBrowserAllowedHost(projectId, hostname);
   }
 
+  async setRemoveMergedWorktrees(projectId: string, enabled: boolean): Promise<void> {
+    return this.settingsManager.setRemoveMergedWorktrees(projectId, enabled);
+  }
+
   async changeLinks(
     projectId: string,
     actor: ProjectLinkActor,

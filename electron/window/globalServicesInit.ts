@@ -978,6 +978,17 @@ export async function initGlobalServices(
     },
   });
 
+  // The opt-in merged-worktree rule (#17321). Its first sweep waits out
+  // startup and reads nothing for a project that hasn't opted in.
+  registerDeferredTask({
+    name: "merged-worktree-cleanup",
+    run: async () => {
+      const { getMergedWorktreeCleanupService } =
+        await import("../services/mergedWorktreeCleanup/mergedWorktreeCleanupLive.js");
+      getMergedWorktreeCleanupService().start();
+    },
+  });
+
   // ── Group 2: telemetry ──
   // Registered immediately after the cheap group and BEFORE the heavy
   // dynamic-import group: trackEvent silently drops events while

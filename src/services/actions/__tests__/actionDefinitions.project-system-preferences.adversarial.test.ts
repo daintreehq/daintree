@@ -535,6 +535,7 @@ describe("project action hardening", () => {
       "resourceEnvironments",
       "daintreeMcpTier",
       "daintreeMcpSkipConfirmations",
+      "removeMergedWorktrees",
       "browserAllowedHosts",
     ]) {
       expect(entry?.outputSchema).not.toHaveProperty(["properties", hidden]);
@@ -588,6 +589,44 @@ describe("project action hardening", () => {
     expect(saved.daintreeMcpTier).toBe("core");
     expect(saved.exposeDaintreeMcpToAgents).toBeUndefined();
     expect(saved.devServerCommand).toBe("vite");
+  });
+
+  it("project.saveSettings can't turn the merged-worktree rule on or off (#17321)", async () => {
+    mocks.projectClient.getSettings.mockResolvedValueOnce({ runCommands: [] });
+    mocks.projectClient.saveSettings.mockResolvedValueOnce(undefined);
+    const { service } = buildService(registerProjectActions);
+
+    const result = await service.dispatch(
+      "project.saveSettings",
+      {
+        projectId: "project-1",
+        settings: { devServerCommand: "vite", removeMergedWorktrees: true },
+      },
+      { source: "agent" }
+    );
+
+    expect(result).toEqual({ ok: true, result: undefined });
+    const saved: unknown = mocks.projectClient.saveSettings.mock.calls[0]?.[1];
+    expect(saved).not.toHaveProperty("removeMergedWorktrees");
+    expect(saved).toHaveProperty("devServerCommand", "vite");
+  });
+
+  it("project.saveSettings can't turn off a merged-worktree rule the user turned on", async () => {
+    mocks.projectClient.getSettings.mockResolvedValueOnce({
+      runCommands: [],
+      removeMergedWorktrees: true,
+    });
+    mocks.projectClient.saveSettings.mockResolvedValueOnce(undefined);
+    const { service } = buildService(registerProjectActions);
+
+    await service.dispatch(
+      "project.saveSettings",
+      { projectId: "project-1", settings: { removeMergedWorktrees: false } },
+      { source: "agent" }
+    );
+
+    const saved = mocks.projectClient.saveSettings.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(saved.removeMergedWorktrees).toBe(true);
   });
 
   it("project.saveSettings stops an agent granting itself daintreeMcpSkipConfirmations", async () => {

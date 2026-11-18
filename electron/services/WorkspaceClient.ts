@@ -14,6 +14,7 @@ import { EventEmitter } from "events";
 import { resolve as pathResolve } from "path";
 import { CHANNELS } from "../ipc/channels.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { BrokerError } from "./rpc/RequestResponseBroker.js";
 import { type ProcessEntry, sendToEntryWindows } from "./workspace-client/types.js";
 import {
   WorkspaceHostPool,
@@ -23,6 +24,10 @@ import {
 import type { WorkspaceHostProcess } from "./WorkspaceHostProcess.js";
 import { getWebContentsForProject } from "../window/webContentsRegistry.js";
 import { hasPendingScheduledLaunch } from "./scheduledRuns/scheduledRunAdmission.js";
+import {
+  holdHostForMergedWorktreeRemoval,
+  isHostHeldForMergedWorktreeRemoval,
+} from "./mergedWorktreeCleanup/removalHolds.js";
 import { isCheckoutPendingPath } from "./projectClone/checkoutGate.js";
 import { AppError } from "../utils/errorTypes.js";
 import type { ForgeProviderMatcher } from "../../shared/utils/forgeHostnames.js";
@@ -35,6 +40,8 @@ import type {
   WorkspaceHostGovernanceSnapshot,
   WorkspaceFetchResult,
   WorkspaceHostEvent,
+  UnattendedRemovalGuard,
+  UnattendedRemovalOutcome,
 } from "../../shared/types/workspace-host.js";
 import type { WorktreeCreateResult, WorktreeSetupState } from "../../shared/types/worktree.js";
 import type {
@@ -113,6 +120,12 @@ function dedupeSnapshotsById(states: WorktreeSnapshot[]): WorktreeSnapshot[] {
 const FETCH_WORKTREE_TIMEOUT_MS = 5 * 60_000;
 
 /**
+ * `git worktree remove` deletes the whole checkout, `node_modules` and all,
+ * so it gets the same ceiling a view's delete over its port has.
+ */
+const MERGED_WORKTREE_REMOVAL_TIMEOUT_MS = 20 * 60_000;
+
+/**
  * A host's worktree snapshot read plus its own "is there a repository here"
  * verdict. `gitBacked: null` is "not classified" — never read it as `false`
  * (#11650). Main-process shape; the renderer sees `WorktreeListResult`.
@@ -163,7 +176,8 @@ export class WorkspaceClient extends EventEmitter {
       // A run's new worktree sets up in the host while its launch waits to spawn
       // (#16369), with no window at all when an OS job started Daintree, and
       // setup status goes with the host.
-      isHostBusy: hasPendingScheduledLaunch,
+      isHostBusy: (projectId) =>
+        hasPendingScheduledLaunch(projectId) || isHostHeldForMergedWorktreeRemoval(projectId),
     });
 
     this.copyTree = new WorkspaceCopyTreeClient({
@@ -1170,6 +1184,69 @@ export class WorkspaceClient extends EventEmitter {
       Extract<WorkspaceHostEvent, { type: "delete-preview-result" }>
     >({ type: "get-delete-preview", requestId, worktreeId });
     return { changes, risk, teardown };
+  }
+
+  /**
+   * Main's merged-worktree rule (#17321) removing one of a project's worktrees
+   * under the unattended guard, through that project's own host, started here
+   * when no window has started it. Project-scoped like {@link getDeletePreview}
+   * so a refusal never falls through to another project's host. `confirm` runs
+   * once the host is ready, right before the request goes, so a start that
+   * took a while can't carry a stale decision; false sends nothing. Never
+   * rejects: it says whether the request went, and what came back.
+   */
+  async removeMergedWorktree(
+    projectPath: string,
+    expectedProjectId: string,
+    worktreeId: string,
+    guard: UnattendedRemovalGuard,
+    confirm: () => Promise<boolean>
+  ): Promise<UnattendedRemovalOutcome> {
+    // Held before the prewarm: a host started for this has no window holding
+    // it, and the pool would otherwise reclaim it mid-removal.
+    const release = holdHostForMergedWorktreeRemoval(expectedProjectId);
+    try {
+      let entry;
+      try {
+        const normalized = this.pool.normalizeProjectPath(projectPath);
+        if (!this.pool.entries.has(normalized)) this.pool.prewarmProject(projectPath);
+        entry = this.pool.entries.get(normalized);
+        if (entry === undefined || entry.projectId !== expectedProjectId) {
+          throw new Error("The project's workspace host isn't running");
+        }
+        await entry.currentReadyPromise;
+        if (this.pool.entries.get(normalized) !== entry) {
+          throw new Error("The project's workspace host restarted");
+        }
+        if (!(await confirm())) return { outcome: "declined" };
+        if (this.pool.entries.get(normalized) !== entry) {
+          throw new Error("The project's workspace host restarted");
+        }
+      } catch (error) {
+        return { outcome: "not-sent", error: formatErrorMessage(error, "not sent") };
+      }
+      try {
+        const requestId = entry.host.generateRequestId();
+        await entry.host.sendWithResponse(
+          { type: "remove-merged-worktree", requestId, worktreeId, guard },
+          MERGED_WORKTREE_REMOVAL_TIMEOUT_MS
+        );
+        return { outcome: "removed" };
+      } catch (error) {
+        // The broker's own errors mean no answer came, and a failure after git
+        // started may have removed the checkout anyway: neither says what
+        // happened. Anything else is the host refusing before git ran.
+        const indeterminate =
+          error instanceof BrokerError ||
+          (error as { gitStarted?: unknown } | null)?.gitStarted === true;
+        return {
+          outcome: indeterminate ? "lost" : "refused",
+          error: formatErrorMessage(error, "removal failed"),
+        };
+      }
+    } finally {
+      release();
+    }
   }
 
   async getMonitorAsync(worktreeId: string): Promise<WorktreeSnapshot | null> {

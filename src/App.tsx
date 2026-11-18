@@ -46,6 +46,7 @@ import { useScheduledRunFinishBridge } from "./hooks/useScheduledRunFinishBridge
 import { useTerminalWhenDoneBridge } from "./hooks/useTerminalWhenDoneBridge";
 import { useHeldComposerSendBridge } from "./hooks/useHeldComposerSendBridge";
 import { useScheduledRunInboxBridge } from "./hooks/useScheduledRunInboxBridge";
+import { useMergedWorktreeReceiptBridge } from "./hooks/useMergedWorktreeReceiptBridge";
 import { usePluginPromptBridge } from "./hooks/usePluginPromptBridge";
 import { useFileDropGuard } from "./hooks/useFileDropGuard";
 import { notifyViewPainted } from "./utils/removeStartupSkeleton";
@@ -318,6 +319,7 @@ function AppInner() {
     gettingStarted,
   } = useAppBootstrap();
   useScheduledRunInboxBridge(isStateLoaded);
+  useMergedWorktreeReceiptBridge(isStateLoaded);
 
   const { emptyContent, workspaceId } = useEmptyCanvasContent(gettingStarted);
 

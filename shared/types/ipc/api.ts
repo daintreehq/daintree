@@ -1140,6 +1140,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   agentCliCopies: GeneratedElectronAPI["agentCliCopies"] & {
     onChanged(callback: (change: { agentId: string }) => void): () => void;
   };
+  // preview / setEnabled / takeReceipts / ackReceipts come from GeneratedElectronAPI.
+  mergedWorktreeCleanup: GeneratedElectronAPI["mergedWorktreeCleanup"] & {
+    onReceiptsReady(callback: () => void): () => void;
+  };
   // get / set come from GeneratedElectronAPI; onChanged is a renderer-only subscription.
   agentToolbarPins: GeneratedElectronAPI["agentToolbarPins"] & {
     onChanged(

@@ -2308,6 +2308,9 @@ export interface IpcEventMap {
   // Host-owned agent defaults changed (#13345)
   "agent-defaults:changed": AgentDefaultsSnapshot;
 
+  // The merged-worktree rule removed a worktree; its receipt waits to be taken (#17321)
+  "merged-worktree-cleanup:receipts-ready": void;
+
   // A saved agent settings change on the host, the whole slice (#14700)
   "agent-settings:changed": import("../agentSettings.js").AgentSettings;
 
