@@ -19,6 +19,7 @@ describe("dev launcher", () => {
     fs.mkdirSync(path.dirname(readyFile), { recursive: true });
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.stubEnv("DAINTREE_RESET_DATA", "");
+    vi.stubEnv("DAINTREE_DEV_SERVER_HOST", "127.0.0.1");
   });
 
   afterEach(() => {

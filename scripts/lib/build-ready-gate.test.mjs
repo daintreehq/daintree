@@ -256,7 +256,7 @@ describe("startWatchBuild with real esbuild contexts", { timeout: 30_000 }, () =
     starting = undefined;
     await watch?.dispose();
     fs.rmSync(workDir, { recursive: true, force: true });
-  });
+  }, 30_000);
 
   function start(options) {
     starting = startWatchBuild({ readyFile, createContext: context, delayMs: 10, ...options });

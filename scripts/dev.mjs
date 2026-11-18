@@ -2,6 +2,7 @@ import net from "node:net";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import concurrently from "concurrently";
 import { BUILD_READY_FILE, removeBuildReadyMarker } from "./lib/build-ready-gate.mjs";
 
@@ -119,7 +120,12 @@ export async function main({ readyFile = path.resolve(BUILD_READY_FILE) } = {}) 
   }
 }
 
-if (import.meta.main) {
+// `import.meta.main` is undefined on Node 24.0 and 24.1, which the engines range admits.
+const isEntry =
+  import.meta.main ??
+  (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href);
+
+if (isEntry) {
   for (const signal of ["SIGINT", "SIGTERM"]) {
     process.once(signal, () => {
       interrupted = true;
