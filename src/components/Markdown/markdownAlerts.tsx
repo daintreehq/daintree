@@ -130,7 +130,10 @@ function consume(leaves: Leaf[], count: number): boolean {
  * a blockquote at the top of the document; its first paragraph must start with
  * the marker, whose type is matched in any case; the marker must end its line,
  * by a line ending or a hard break; and a marker with nothing after it in the
- * blockquote stays as written. An unknown type stays as written too.
+ * blockquote stays as written. An unknown type stays as written too. One
+ * deliberate departure: raw HTML between a lone marker and its body doesn't
+ * hide the body, because `skipHtml` drops it and the reader would otherwise see
+ * a literal marker sitting directly above the text it was meant to title.
  *
  * Runs on hast, after every other rehype plugin, rather than on mdast: the
  * rendered diff marks changed words only when the rendered text matches its
