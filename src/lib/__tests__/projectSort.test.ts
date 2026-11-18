@@ -143,6 +143,9 @@ describe("shared collator comparators", () => {
   ];
 
   it("orders names exactly like localeCompare with base sensitivity", () => {
+    expect(compareProjectNames("Álpha", "alpha")).toBe(
+      "Álpha".localeCompare("alpha", undefined, { sensitivity: "base" })
+    );
     for (const a of samples) {
       for (const b of samples) {
         expect(sign(compareProjectNames(a, b))).toBe(
@@ -152,15 +155,22 @@ describe("shared collator comparators", () => {
     }
   });
 
-  it("treats names differing only in case or accents as equal, so the id decides", () => {
-    expect(compareProjectNames("alpha", "ALPHA")).toBe(0);
-    expect(compareProjectNames("Álpha", "alpha")).toBe(0);
-    const projects: SortableProject[] = [
-      { id: "b", name: "alpha", lastOpened: 1, frecencyScore: 1 },
-      { id: "a", name: "ALPHA", lastOpened: 1, frecencyScore: 1 },
-    ];
-    expect(order(projects, "alphabetical")).toEqual(["ALPHA", "alpha"]);
-  });
+  it.each(OTHER_PROJECTS_SORT_MODES)(
+    "treats names differing only in case as equal in %s, so the id decides",
+    (mode) => {
+      expect(compareProjectNames("alpha", "ALPHA")).toBe(0);
+      // Ids are assigned against the strict name order, so a caller that
+      // compared names strictly would seat these the other way round.
+      const [strictFirst, strictSecond] = ["alpha", "ALPHA"].sort(compareProjectStrict);
+      const projects: SortableProject[] = [
+        { id: "a", name: strictSecond, lastOpened: 1, frecencyScore: 1 },
+        { id: "b", name: strictFirst, lastOpened: 1, frecencyScore: 1 },
+      ];
+      for (const input of [projects, [...projects].reverse()]) {
+        expect(order(input, mode)).toEqual([strictSecond, strictFirst]);
+      }
+    }
+  );
 
   it("orders strictly like default localeCompare, still separating case and accents", () => {
     for (const a of samples) {
