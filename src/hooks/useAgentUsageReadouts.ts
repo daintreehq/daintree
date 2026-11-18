@@ -40,8 +40,11 @@ export function useAgentUsageReadouts(): AgentUsageReadout[] {
     if (!api) return;
     return api.onChanged((next) => {
       if (heldRevision.current !== null && next.revision < heldRevision.current) return;
+      // Only news confirms: a repeat of what this view holds says nothing new.
+      if (heldRevision.current === null || next.revision > heldRevision.current) {
+        confirmed.current++;
+      }
       heldRevision.current = next.revision;
-      confirmed.current++;
       setSnapshot((current) => newer(current, next));
     });
   }, []);

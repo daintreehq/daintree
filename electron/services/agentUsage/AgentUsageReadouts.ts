@@ -3,8 +3,9 @@
  * agents, from its watch, plus every linked host's, from the summaries those
  * hosts already send. One set per machine, whichever host a window shows.
  *
- * Wanted only while a view follows it. Following acquires this machine's
- * watch; hosts are only listened to, never dialled or kept linked for it.
+ * Wanted only while a view follows it, and sent only to views following it.
+ * Following acquires this machine's watch; hosts are only listened to, never
+ * dialled or kept linked for it.
  */
 
 import { LOCAL_HOST_ID, type HostId } from "../../../shared/types/remoteHosts.js";
@@ -14,8 +15,8 @@ import type {
   AgentUsageSnapshot,
 } from "../../../shared/types/ipc/agentUsage.js";
 import { getAgentUsageWatch, type AgentUsageWatch } from "./AgentUsageWatch.js";
+import { webContents } from "electron";
 import { CHANNELS } from "../../ipc/channels.js";
-import { broadcastToRenderer } from "../../ipc/utils.js";
 
 export interface RemoteAgentUsage {
   hostId: HostId;
@@ -33,7 +34,8 @@ export interface RemoteAgentUsageSource {
 
 export interface AgentUsageReadoutsDeps {
   watch(): AgentUsageWatch;
-  publish(snapshot: AgentUsageSnapshot): void;
+  /** To the views following now: never a broadcast, which a host forwards to its Shells' views. */
+  publish(snapshot: AgentUsageSnapshot, followers: ReadonlySet<number>): void;
 }
 
 export class AgentUsageReadouts {
@@ -116,7 +118,7 @@ export class AgentUsageReadouts {
     if (key === this.key) return;
     this.key = key;
     this.snapshot = { readouts, revision: this.snapshot.revision + 1 };
-    this.deps.publish(this.snapshot);
+    this.deps.publish(this.snapshot, this.followers);
   }
 }
 
@@ -126,7 +128,17 @@ let shared: AgentUsageReadouts | null = null;
 export function getAgentUsageReadouts(): AgentUsageReadouts {
   shared ??= new AgentUsageReadouts({
     watch: getAgentUsageWatch,
-    publish: (snapshot) => broadcastToRenderer(CHANNELS.AGENT_USAGE_CHANGED, snapshot),
+    publish: (snapshot, followers) => {
+      for (const id of followers) {
+        const view = webContents.fromId(id);
+        if (!view || view.isDestroyed()) continue;
+        try {
+          view.send(CHANNELS.AGENT_USAGE_CHANGED, snapshot);
+        } catch {
+          // A view on its way out takes the snapshot with it.
+        }
+      }
+    },
   });
   return shared;
 }

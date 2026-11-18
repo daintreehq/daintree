@@ -9,6 +9,7 @@ import type { SummaryReceipt } from "../summaryReceipt.js";
 import {
   createAgentUsageHostsSource,
   onShellClock,
+  shellClockOffset,
   type AgentUsageHostsDeps,
 } from "../agentUsageHosts.js";
 
@@ -36,35 +37,27 @@ function receipt(
   };
 }
 
-describe("onShellClock", () => {
+describe("shellClockOffset and onShellClock", () => {
   it("places a host's reading age on this machine's clock by differences taken on the host alone", () => {
     // The host's clock runs an hour ahead; its sample was 2s old when posted.
     const hourAhead = 3_600_000;
-    const summary = { sampledAt: 9_060_000 + hourAhead };
-    const placed = onShellClock(summary, receipt(9_062_000, 2_000), {
-      ...codex,
-      observedAt: 9_000_000 + hourAhead,
-    });
+    const offset = shellClockOffset(
+      { sampledAt: 9_060_000 + hourAhead },
+      receipt(9_062_000, 2_000)
+    );
+    const placed = onShellClock({ ...codex, observedAt: 9_000_000 + hourAhead }, offset);
     expect(placed.observedAt).toBe(9_000_000);
     // A reset comes from Codex's server or the message's own words, never the host's clock.
     expect(placed.resetsAt).toBe(codex.resetsAt);
   });
 
-  it("takes the host's own times when a summary came with no receipt", () => {
-    const placed = onShellClock({ sampledAt: 5_000_000 }, null, {
-      ...codex,
-      observedAt: 4_940_000,
-    });
-    expect(placed.observedAt).toBe(4_940_000);
+  it("counts the trip as well when the frame bounds it, so a delayed summary never reads younger", () => {
+    const offset = shellClockOffset({ sampledAt: 5_000_000 }, receipt(5_000_000, 2_000, 12_000));
+    expect(onShellClock({ ...codex, observedAt: 4_940_000 }, offset).observedAt).toBe(4_928_000);
   });
 
-  it("counts the trip as well when the frame bounds it, so a delayed summary never reads younger", () => {
-    const summary = { sampledAt: 5_000_000 };
-    const placed = onShellClock(summary, receipt(5_000_000, 2_000, 12_000), {
-      ...codex,
-      observedAt: 4_940_000,
-    });
-    expect(placed.observedAt).toBe(4_928_000);
+  it("takes the host's own times when a summary came with no receipt", () => {
+    expect(shellClockOffset({ sampledAt: 5_000_000 }, null)).toBe(0);
   });
 });
 
@@ -151,7 +144,7 @@ describe("createAgentUsageHostsSource", () => {
     expect(source.list()).toEqual([]);
   });
 
-  it("keeps a reading's placement while the host repeats it, and places it afresh on a new link", () => {
+  it("keeps one placement per link, so a host's readings hold their order and their age, and re-places on a new link", () => {
     const h = harness();
     const claude: AgentUsageReading = {
       agentId: "claude",
@@ -165,15 +158,28 @@ describe("createAgentUsageHostsSource", () => {
     };
     h.report("vps", [codex, claude]);
     const source = createAgentUsageHostsSource(h.deps);
-    const first = source.list()[0]!.readings[0]!;
-    // Claude's reading changes beside it; Codex's said the same, so it keeps its place.
+    const [first, beside] = source.list()[0]!.readings;
+    // A later frame on the same link, with a new reading beside it, moves neither.
     h.setReceipt(receipt(9_200_000, 0));
     h.report("vps", [codex, { ...claude, usedPercent: 40 }]);
-    expect(source.list()[0]!.readings[0]).toBe(first);
+    const [again, changed] = source.list()[0]!.readings;
+    expect(again!.observedAt).toBe(first!.observedAt);
+    expect(changed!.observedAt - again!.observedAt).toBe(beside!.observedAt - first!.observedAt);
     // A new link is a new placement.
     h.newSession();
     h.report("vps", [codex]);
-    expect(source.list()[0]!.readings[0]!.observedAt).toBe(first.observedAt + 100_000);
+    expect(source.list()[0]!.readings[0]!.observedAt).toBe(first!.observedAt + 100_000);
+  });
+
+  it("takes the offset again once a frame first bounds its trip", () => {
+    const h = harness();
+    h.setReceipt(receipt(9_100_000, 0));
+    h.report("vps", [codex]);
+    const source = createAgentUsageHostsSource(h.deps);
+    const unbounded = source.list()[0]!.readings[0]!.observedAt;
+    h.setReceipt(receipt(9_100_000, 0, 30_000));
+    h.report("vps", [codex]);
+    expect(source.list()[0]!.readings[0]!.observedAt).toBe(unbounded - 30_000);
   });
 
   it("drops a host the moment its link goes, and tells the watcher", () => {

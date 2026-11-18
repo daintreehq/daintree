@@ -24,26 +24,30 @@ export interface AgentUsageHostsDeps {
 }
 
 /**
- * A host's reading on this machine's clock. Only differences taken on one
- * machine's clock are used: when this machine had the sample, less the most
- * it can have aged on the way (its age on the host plus the trip, when the
- * frame bounds it), less how much earlier than the sample the host took the
- * reading. A host whose clock is off by an hour still reads its true age.
- * Resets are left as sent: Codex's come from its server and Claude Code's
- * from the time the message named, neither from the host's clock.
+ * How far a host's clock sits from this machine's, as one frame shows it.
+ * Only differences taken on one machine's clock are used: when this machine
+ * had the sample, less the most it can have aged on the way (its age on the
+ * host plus the trip, when the frame bounds it), against when the host took it.
  */
-export function onShellClock(
+export function shellClockOffset(
   summary: Pick<HostMetricsSummary, "sampledAt">,
-  receipt: SummaryReceipt | null,
-  reading: AgentUsageReading
-): AgentUsageReading {
-  const sampledHere = receipt
-    ? receipt.receivedAt - (receipt.maxAgeMs ?? receipt.hostAgeMs ?? 0)
-    : summary.sampledAt;
+  receipt: SummaryReceipt | null
+): number {
+  if (!receipt) return 0;
+  return receipt.receivedAt - (receipt.maxAgeMs ?? receipt.hostAgeMs ?? 0) - summary.sampledAt;
+}
+
+/**
+ * A host's reading on this machine's clock: its age, so a host whose clock is
+ * off by an hour still reads its true age. Resets are left as sent: Codex's
+ * come from its server and Claude Code's from the time the message named,
+ * neither from the host's clock.
+ */
+export function onShellClock(reading: AgentUsageReading, offset: number): AgentUsageReading {
   return {
     ...reading,
     accountNames: reading.accountNames.map(displaySafeText),
-    observedAt: sampledHere - (summary.sampledAt - reading.observedAt),
+    observedAt: reading.observedAt + offset,
   };
 }
 
@@ -53,12 +57,12 @@ export function onShellClock(
  * or keeps one linked.
  */
 export function createAgentUsageHostsSource(deps: AgentUsageHostsDeps): RemoteAgentUsageSource {
-  // Each reading is placed once per link, when the host first sends it, so a
-  // new frame every few seconds, or another reading changing beside it,
-  // doesn't move its age by the frames' own jitter.
-  const placed = new Map<
+  // One offset per link, so frames every few seconds don't move a reading's
+  // age by their own jitter, and a host's readings keep the order its clock
+  // gave them. Taken again once a frame first bounds its trip.
+  const links = new Map<
     HostId,
-    { session: LinkSession | null; byReading: Map<string, AgentUsageReading> }
+    { session: LinkSession | null; offset: number; bounded: boolean }
   >();
   return {
     list() {
@@ -73,27 +77,24 @@ export function createAgentUsageHostsSource(deps: AgentUsageHostsDeps): RemoteAg
           if (!summary?.agentUsage?.length) continue;
           const session = deps.sessionFor(host.id);
           if (metrics.cameOn(summary, session) !== true) continue;
-          let entry = placed.get(host.id);
-          if (entry?.session !== session) {
-            entry = { session, byReading: new Map() };
-            placed.set(host.id, entry);
-          }
-          const known = entry.byReading;
           const receipt = metrics.receiptOf(summary);
-          const byReading = new Map<string, AgentUsageReading>();
-          const readings = summary.agentUsage.map((reading) => {
-            const said = JSON.stringify(reading);
-            const here = known.get(said) ?? onShellClock(summary, receipt, reading);
-            byReading.set(said, here);
-            return here;
-          });
-          entry.byReading = byReading;
+          const bounded = receipt?.maxAgeMs != null;
+          let link = links.get(host.id);
+          if (!link || link.session !== session || (bounded && !link.bounded)) {
+            link = { session, offset: shellClockOffset(summary, receipt), bounded };
+            links.set(host.id, link);
+          }
+          const { offset } = link;
           listed.add(host.id);
-          out.push({ hostId: host.id, hostName: displaySafeText(host.name), readings });
+          out.push({
+            hostId: host.id,
+            hostName: displaySafeText(host.name),
+            readings: summary.agentUsage.map((reading) => onShellClock(reading, offset)),
+          });
         }
       }
-      for (const hostId of [...placed.keys()]) {
-        if (!listed.has(hostId)) placed.delete(hostId);
+      for (const hostId of [...links.keys()]) {
+        if (!listed.has(hostId)) links.delete(hostId);
       }
       return out;
     },

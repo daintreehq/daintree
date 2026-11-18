@@ -238,4 +238,16 @@ describe("SidebarAgentUsage", () => {
     await act(async () => answers[1]!(new Error("refused")));
     expect(container.querySelector("[data-sidebar-agent-usage]")).toBeNull();
   });
+
+  it("hands over to the next reading at the shown one's reset, not a minute later", async () => {
+    const resetsAt = Date.now() + 60;
+    installBridge([
+      { ...codex(95), reading: { ...codex(95).reading, resetsAt } },
+      { ...codex(70), reading: { ...codex(70).reading, windowDurationMins: 10080 } },
+    ]);
+    const { container } = await renderUsage();
+    expect(rows(container)[0]!.textContent).toMatch(/^Codex 95%/);
+    await act(() => new Promise((resolve) => setTimeout(resolve, 150)));
+    expect(rows(container)[0]!.textContent).toBe("Codex 70% · Work");
+  });
 });

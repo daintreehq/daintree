@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("../../../ipc/utils.js", () => ({ broadcastToRenderer: vi.fn() }));
+vi.mock("electron", () => ({ webContents: { fromId: vi.fn() } }));
 
 import type { AgentUsageReading } from "../../../../shared/types/ipc/agentUsage.js";
 import { AgentUsageReadouts, type RemoteAgentUsage } from "../AgentUsageReadouts.js";
@@ -64,11 +64,15 @@ function fakeRemote() {
 describe("AgentUsageReadouts", () => {
   it("watches this machine only while some view follows, however many do", () => {
     const w = fakeWatch();
-    const readouts = new AgentUsageReadouts({ watch: () => w.watch, publish: vi.fn() });
+    const publish = vi.fn();
+    const readouts = new AgentUsageReadouts({ watch: () => w.watch, publish });
     readouts.follow(1);
     readouts.follow(2);
     readouts.follow(2);
     expect(w.acquire).toHaveBeenCalledTimes(1);
+    w.set([reading(40)]);
+    // Sent to the views following, by id: never a broadcast a host would forward.
+    expect([...publish.mock.calls.at(-1)![1]]).toEqual([1, 2]);
     readouts.unfollow(1);
     expect(w.release).not.toHaveBeenCalled();
     readouts.unfollow(2);

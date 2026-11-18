@@ -389,11 +389,8 @@ function defaultDeps(): AgentUsageWatchDeps {
       return canonicalCodexHomeKey(home);
     },
     async claudeAccountKey(configDir) {
-      const [{ canonicalClaudeConfigDir }, { claudeUsageAccountKey }] = await Promise.all([
-        import("../claude/ClaudeUsageObservations.js"),
-        import("../claude/ClaudeUsageService.js"),
-      ]);
-      return claudeUsageAccountKey(await canonicalClaudeConfigDir(configDir));
+      const { claudeLiveAccountKey } = await import("../claude/ClaudeUsageService.js");
+      return claudeLiveAccountKey(configDir);
     },
     async readCodexHomes(homes) {
       const { readCodexQuotaForHomes } = await import("../codex/CodexQuotaService.js");

@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Gauge } from "lucide-react";
 import { getAgentConfig } from "@shared/config/agentRegistry";
 import type { AgentUsageReadout } from "@shared/types/ipc/agentUsage";
@@ -10,6 +11,8 @@ import { currentHostId } from "@/hooks/useHostPlatform";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { describeAgentUsage, THIS_MACHINE } from "@/utils/agentUsageFormat";
+
+const RESET_WAKE_HORIZON_MS = 60_000;
 
 const ROW_CLASS = "flex min-h-7 w-full min-w-0 items-center gap-2 py-1 pl-4 pr-3 text-left";
 
@@ -30,7 +33,7 @@ const BUTTON_CLASS = cn(
  */
 export function SidebarAgentUsage() {
   const readouts = useAgentUsageReadouts();
-  const now = useGlobalMinuteClock();
+  const now = useResetAwareClock(readouts, useGlobalMinuteClock());
   const shown = tightestAgentUsage(readouts, (readout) => readout.reading, now);
   if (shown.length === 0) return null;
   return (
@@ -41,6 +44,28 @@ export function SidebarAgentUsage() {
       ))}
     </div>
   );
+}
+
+/**
+ * The minute clock, moved on at a shown reading's reset as well: the next
+ * reading takes over then, not up to a minute later. A reset further off than
+ * the next minute is that minute's to catch.
+ */
+function useResetAwareClock(readouts: readonly AgentUsageReadout[], minute: number): number {
+  const [atReset, setAtReset] = useState(0);
+  const now = Math.max(minute, atReset);
+  const next = Math.min(
+    ...readouts.flatMap(({ reading }) =>
+      reading.resetsAt !== null && reading.resetsAt > now ? [reading.resetsAt] : []
+    )
+  );
+  useEffect(() => {
+    const wait = next - now;
+    if (!Number.isFinite(wait) || wait > RESET_WAKE_HORIZON_MS) return;
+    const timer = setTimeout(() => setAtReset(next), wait + 1);
+    return () => clearTimeout(timer);
+  }, [next, now]);
+  return now;
 }
 
 function AgentUsageRow({ readout, now }: { readout: AgentUsageReadout; now: number }) {
