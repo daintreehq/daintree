@@ -290,6 +290,11 @@ export const BUILT_IN_ACTION_IDS = [
   "canopy.toggle",
   "canopy.openWindow",
   "canopy.markAllRead",
+
+  // -- decisionsActions --
+  "decisions.openInbox",
+  "decisions.openNextQuestion",
+
   "project.getAll",
   "project.getCurrent",
   "project.add",

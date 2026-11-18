@@ -52,9 +52,32 @@ function getSnapshot(): DecisionsSwitch {
   return current;
 }
 
-/** Decisions' switch, telling a confirmed off from not yet known. */
-export function useDecisionsSwitch(): DecisionsSwitch {
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+function subscribeNothing(): () => void {
+  return () => {};
+}
+
+function getUnknown(): DecisionsSwitch {
+  return "unknown";
+}
+
+/**
+ * The switch as the view's watch last heard it, for code outside React (an
+ * action's gate). Unknown while nothing in the view holds the watch.
+ */
+export function readDecisionsSwitch(): DecisionsSwitch {
+  return current;
+}
+
+/**
+ * Decisions' switch, telling a confirmed off from not yet known. Inactive,
+ * nothing is watched and it reads unknown.
+ */
+export function useDecisionsSwitch(active = true): DecisionsSwitch {
+  return useSyncExternalStore(
+    active ? subscribe : subscribeNothing,
+    active ? getSnapshot : getUnknown,
+    active ? getSnapshot : getUnknown
+  );
 }
 
 /** Whether main has said Decisions is on. */

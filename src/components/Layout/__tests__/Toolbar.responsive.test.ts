@@ -146,8 +146,10 @@ describe("Toolbar responsive design — issue #4133", () => {
       const text = block![0];
       // Each signal the badge severity is derived from has a textual counterpart.
       expect(text).toMatch(/overflowIds\.includes\("problems"\) && errorCount > 0/);
-      // Unread and urgent ride on the same marks the menu rows wear.
-      expect(text).toMatch(/for \(const id of \["notification-center", "canopy"\] as const\)/);
+      // Unread, urgent and waiting ride on the same marks the menu rows wear.
+      expect(text).toMatch(
+        /for \(const id of \["notification-center", "canopy", "decisions-inbox"\] as const\)/
+      );
       expect(text).toMatch(/signalMark\(id\)/);
       // Agent observations come from the same per-session derivation as the
       // badge severity, never from the per-agent pip map — the name counts

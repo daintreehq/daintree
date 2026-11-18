@@ -56,6 +56,7 @@ const DEFAULT_RIGHT_BUTTONS: ToolbarButtonId[] = [
   "links-launcher",
   "plugin-tray",
   "canopy",
+  "decisions-inbox",
   "notification-center",
   "copy-tree",
   "resume-sessions",

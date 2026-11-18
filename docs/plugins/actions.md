@@ -284,6 +284,8 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
 | `action.palette.open` | Open command palette | safe | — |
+| `decisions.openInbox` | Open Decisions inbox | safe | — |
+| `decisions.openNextQuestion` | Open next Decisions question | safe | — |
 | `find.inFocusedPanel` | Find in focused panel | safe | — |
 | `nav.focusRegion.next` | Focus next region | safe | — |
 | `nav.focusRegion.prev` | Focus previous region | safe | — |

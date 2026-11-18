@@ -237,4 +237,13 @@ describe("session continuity tier placement (#11908)", () => {
     expect(HELP_TIER_CUMULATIVE.full).not.toContain("terminal.resumeSessions");
     expect(external.has("terminal.resumeSessions")).toBe(false);
   });
+
+  it("leaves the Decisions views off every tier, so no agent raises them in the user's window", () => {
+    // They only open the inbox or a question (#17236); a question is the
+    // person's to answer, and these are the person's ways to it.
+    for (const id of ["decisions.openInbox", "decisions.openNextQuestion"]) {
+      expect(HELP_TIER_CUMULATIVE.full, `${id} must stay off MCP`).not.toContain(id);
+      expect(external.has(id), `${id} must not reach external MCP clients`).toBe(false);
+    }
+  });
 });
