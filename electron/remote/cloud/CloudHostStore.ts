@@ -7,6 +7,7 @@ import {
   type CloudHostCreatedFor,
   type CloudHostError,
   type CloudHostProvisioning,
+  type CloudWorktreeRef,
   type CloudProviderId,
   type CloudProvisioningPick,
   type CloudProvisioningSelection,
@@ -53,6 +54,30 @@ export interface StoredCreationIntent {
   sentAt: number | null;
   name: string;
   machineType: string;
+}
+
+/**
+ * A stop or delete the person chose when deleting the worktree a machine was
+ * made for, written before that delete is sent and kept until it is done, so a
+ * restart at any point carries it on. It names the machine and worktree as
+ * confirmed: a binding whose machine or mark has changed since never acts on it.
+ * `waiting`: the worktree isn't known to be gone. `due`: it is, so the stop or
+ * delete runs (again, after a restart). `failed`: it didn't finish and waits
+ * for Retry; a restart never retries it by itself. `unconfirmed`: Daintree
+ * quit before hearing whether a worktree on another host went, so nothing is
+ * done until the person settles it. Each attempt at the delete writes a new
+ * `attemptId`, so an answer about an earlier attempt never changes a later one.
+ */
+export interface StoredWorktreeCleanup {
+  attemptId: string;
+  /** The worktree delete it came with, as its view named it; only that delete's answer settles it. */
+  mutationId: string | null;
+  choice: "stop" | "delete";
+  resourceId: string;
+  worktree: CloudWorktreeRef;
+  phase: "waiting" | "due" | "failed" | "unconfirmed";
+  error: CloudHostError | null;
+  requestedAt: number;
 }
 
 /** How the machine's sshd answered the last time access was resolved. Diagnostic and pinning only. */
@@ -102,6 +127,8 @@ export interface StoredCloudBinding {
   ownership: "created-by-daintree" | "imported";
   /** The worktree this machine was created for; kept after its create is settled. */
   createdFor: CloudHostCreatedFor | null;
+  /** What to do with the machine now that worktree is being deleted; null for nothing. */
+  worktreeCleanup: StoredWorktreeCleanup | null;
   /**
    * The region, image and network its create named, kept after the create
    * is settled: every retry sends these, and the host's details show them.
@@ -375,6 +402,54 @@ function readError(raw: unknown): CloudHostError | null {
   };
 }
 
+/**
+ * A cleanup reads only whole, and only for the machine and mark it was
+ * confirmed for: anything less never authorizes a call to the provider.
+ */
+function readWorktreeCleanup(
+  raw: unknown,
+  createdFor: CloudHostCreatedFor | null,
+  resourceId: string | null
+): StoredWorktreeCleanup | null {
+  const value = raw as Record<string, unknown> | null;
+  if (!value || typeof value !== "object" || !createdFor) return null;
+  const choice = value.choice === "stop" || value.choice === "delete" ? value.choice : null;
+  const phase =
+    value.phase === "waiting" ||
+    value.phase === "due" ||
+    value.phase === "failed" ||
+    value.phase === "unconfirmed"
+      ? value.phase
+      : null;
+  const attemptId = nonEmpty(value.attemptId);
+  const cleanupResourceId = nonEmpty(value.resourceId);
+  const worktree = value.worktree as Record<string, unknown> | null;
+  if (!attemptId || !choice || !phase) return null;
+  if (!cleanupResourceId || cleanupResourceId !== resourceId) return null;
+  if (!worktree || typeof worktree !== "object") return null;
+  if (
+    worktree.hostId !== createdFor.hostId ||
+    worktree.projectId !== createdFor.projectId ||
+    worktree.worktreeId !== createdFor.worktreeId
+  ) {
+    return null;
+  }
+  return {
+    attemptId,
+    mutationId: nonEmpty(value.mutationId),
+    choice,
+    resourceId: cleanupResourceId,
+    worktree: {
+      hostId: createdFor.hostId,
+      projectId: createdFor.projectId,
+      worktreeId: createdFor.worktreeId,
+    },
+    phase,
+    error: readError(value.error),
+    requestedAt: num(value.requestedAt) ?? 0,
+  };
+}
+
 function readBinding(raw: unknown): StoredCloudBinding | null {
   const value = raw as Record<string, unknown> | null;
   if (!value || !isValidCloudBindingId(value.id) || !isCloudProviderId(value.providerId))
@@ -383,15 +458,18 @@ function readBinding(raw: unknown): StoredCloudBinding | null {
   const hostId =
     typeof value.hostId === "string" && isValidRemoteHostId(value.hostId) ? value.hostId : null;
   const ownership = value.ownership === "imported" ? "imported" : "created-by-daintree";
+  // An imported machine was never created for anything, whatever a hand edit says.
+  const createdFor = ownership === "imported" ? null : readCreatedFor(value.createdFor);
+  const resourceId = str(value.resourceId);
   return {
     id: value.id,
     hostId,
     accountId: value.accountId,
     providerId: value.providerId,
-    resourceId: str(value.resourceId),
+    resourceId,
     ownership,
-    // An imported machine was never created for anything, whatever a hand edit says.
-    createdFor: ownership === "imported" ? null : readCreatedFor(value.createdFor),
+    createdFor,
+    worktreeCleanup: readWorktreeCleanup(value.worktreeCleanup, createdFor, resourceId),
     provisioning: ownership === "imported" ? null : readHostProvisioning(value.provisioning),
     creation: readCreation(value.creation),
     lifetimeSeconds: value.lifetimeSeconds === null ? null : (num(value.lifetimeSeconds) ?? null),

@@ -463,6 +463,57 @@ export interface CloudHostCreatedFor {
   hostName: string | null;
 }
 
+/** A worktree as a mark names it: where it lives, its project there, and its root path. */
+export type CloudWorktreeRef = Pick<CloudHostCreatedFor, "hostId" | "projectId" | "worktreeId">;
+
+/** Whether a machine's mark names this worktree. Names never count: only where it lives. */
+export function cloudMarkNamesWorktree(
+  mark: CloudHostCreatedFor | null,
+  worktree: CloudWorktreeRef
+): boolean {
+  return (
+    mark !== null &&
+    mark.hostId === worktree.hostId &&
+    mark.projectId === worktree.projectId &&
+    mark.worktreeId === worktree.worktreeId
+  );
+}
+
+/** What becomes of a machine made for a worktree when that worktree is deleted. */
+export type CloudWorktreeCleanupChoice = "keep" | "stop" | "delete";
+
+/** One machine to stop or delete once its worktree is gone, naming the machine the person confirmed. */
+export interface CloudWorktreeCleanupRequest {
+  hostId: HostId;
+  resourceId: string;
+  choice: Exclude<CloudWorktreeCleanupChoice, "keep">;
+}
+
+/**
+ * A stop or delete the person chose with a worktree's delete, until it is
+ * done. `waiting`: the worktree isn't known to be gone yet. `running`: it is,
+ * and the stop or delete is under way or will resume (with `error` saying why
+ * it can't yet, when its provider isn't available). `failed`: it didn't
+ * finish, and waits for Retry. `unconfirmed`: Daintree never heard whether a
+ * worktree on another host went, so nothing is done until the person decides.
+ */
+export interface CloudWorktreeCleanupStatus {
+  choice: Exclude<CloudWorktreeCleanupChoice, "keep">;
+  phase: "waiting" | "running" | "failed" | "unconfirmed";
+  /** Where the worktree lives: null for this device, whose worktree Daintree can look at itself. */
+  worktreeHostId: HostId | null;
+  error: CloudHostError | null;
+}
+
+/** How one machine's stop or delete ended, for whoever is waiting on the worktree's delete. */
+export interface CloudWorktreeCleanupOutcome {
+  hostId: HostId;
+  machineName: string;
+  choice: Exclude<CloudWorktreeCleanupChoice, "keep">;
+  /** Null when it was carried out, or wasn't due because the worktree is still there. */
+  error: string | null;
+}
+
 /**
  * A server key the machine presented that nobody has confirmed, for a
  * provider that can't vouch for one. The machine isn't dialled until the
@@ -502,6 +553,8 @@ export interface CloudHostStatus {
   ownership: "created-by-daintree" | "imported";
   /** The worktree it was created for; null for every other machine. */
   createdFor: CloudHostCreatedFor | null;
+  /** A stop or delete chosen with that worktree's delete and not yet done; null for none. */
+  worktreeCleanup: CloudWorktreeCleanupStatus | null;
   /** The region, image and network it was created with; null when none was named (imported, or a provider that takes none). */
   provisioning: CloudHostProvisioning | null;
   machine: CloudMachineState;

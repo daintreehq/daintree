@@ -33,14 +33,22 @@ function publish(next: CloudHostsState): void {
   for (const listener of [...listeners]) listener();
 }
 
+/** Whether this view can follow the cloud picture at all: not where Remote Hosts isn't supported. */
+function followable(): boolean {
+  return (
+    isRemoteShellSupported() &&
+    Boolean(window.electron?.remoteHosts) &&
+    Boolean(window.electron?.cloudHosts)
+  );
+}
+
 /**
  * Follows the cloud picture while anything shows it: one read, then every
  * `cloud-changed` event. Reading never wakes a machine.
  */
 function start(): () => void {
-  if (!isRemoteShellSupported()) return () => {};
   const remote = window.electron?.remoteHosts;
-  if (!remote || !window.electron?.cloudHosts) return () => {};
+  if (!remote || !followable()) return () => {};
   const current = ++generation;
   const dispose = remote.onEvent((event) => {
     if (event.type !== "cloud-changed" || current !== generation) return;
@@ -90,6 +98,30 @@ function getSnapshot(): CloudHostsState {
 export function useCloudHosts(): CloudHostsState & { refresh: () => Promise<void> } {
   const current = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   return { ...current, refresh };
+}
+
+const NO_SUBSCRIPTION = () => () => {};
+const getEmpty = () => EMPTY;
+
+/**
+ * The cloud picture while `active`, and nothing followed otherwise, so a
+ * surface that stays mounted while closed starts no read and no listener.
+ * `pending` while the first read is still on its way where there is one to
+ * wait for; never where cloud hosts can't be followed at all.
+ */
+export function useCloudHostsWhile(
+  active: boolean
+): CloudHostsState & { pending: boolean; refresh: () => Promise<void> } {
+  const current = useSyncExternalStore(
+    active ? subscribe : NO_SUBSCRIPTION,
+    active ? getSnapshot : getEmpty,
+    active ? getSnapshot : getEmpty
+  );
+  return {
+    ...current,
+    pending: active && !current.loaded && followable(),
+    refresh: () => refresh(),
+  };
 }
 
 /** The cloud status of one host, or null when it isn't a cloud host. */

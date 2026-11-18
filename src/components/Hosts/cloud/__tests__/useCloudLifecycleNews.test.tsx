@@ -16,6 +16,7 @@ function status(machine: CloudHostStatus["machine"]): CloudHostStatus {
     machineName: "build",
     ownership: "created-by-daintree",
     createdFor: null,
+    worktreeCleanup: null,
     provisioning: null,
     machine,
     rawState: null,

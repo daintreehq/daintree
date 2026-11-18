@@ -1,7 +1,10 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostDescriptor } from "../../../../shared/types/remoteHosts.js";
 import { events } from "../../../services/events.js";
-import { watchOwnedHostCleanup } from "../ownedHostCleanup.js";
+import { watchOwnedHostCleanup, worktreeRootGone } from "../ownedHostCleanup.js";
 
 function waiting(id: string, worktreeId: string, ownerWorktreeId?: string): HostDescriptor {
   return {
@@ -243,5 +246,79 @@ describe("watchOwnedHostCleanup", () => {
     removeWorktree("/wt/a");
 
     expect(probe).not.toHaveBeenCalled();
+  });
+});
+
+describe("worktreeRootGone (#17360)", () => {
+  const ROOT = "/Volumes/Work/app-worktrees/feature-login";
+  const PARENT = "/Volumes/Work/app-worktrees";
+  const fail = (code: string) => Promise.reject(Object.assign(new Error(code), { code }));
+  const root = (answer: "exists" | "missing" | "denied") =>
+    vi.fn(async (_target: string) =>
+      answer === "exists" ? {} : fail(answer === "denied" ? "EACCES" : "ENOENT")
+    );
+  const parent = (answer: "directory" | "file" | "missing") =>
+    vi.fn(async (_target: string) =>
+      answer === "missing" ? fail("ENOENT") : { isDirectory: () => answer === "directory" }
+    );
+
+  it("is gone only when the root is missing and the folder it sat in is a directory", async () => {
+    const parentProbe = parent("directory");
+    expect(await worktreeRootGone(ROOT, { root: root("missing"), parent: parentProbe })).toBe(true);
+    expect(parentProbe).toHaveBeenCalledWith(PARENT);
+    expect(
+      await worktreeRootGone(ROOT, { root: root("exists"), parent: parent("directory") })
+    ).toBe(false);
+  });
+
+  it("proves nothing when the parent doesn't read, as through a link into an unmounted drive", async () => {
+    expect(
+      await worktreeRootGone(ROOT, { root: root("missing"), parent: parent("missing") })
+    ).toBeNull();
+    expect(
+      await worktreeRootGone(ROOT, { root: root("missing"), parent: parent("file") })
+    ).toBeNull();
+  });
+
+  it("isn't gone when the root comes back while its parent is read, as a volume remounting", async () => {
+    const rootProbe = vi
+      .fn(async (_target: string): Promise<unknown> => ({}))
+      .mockImplementationOnce(() => fail("ENOENT"));
+    expect(await worktreeRootGone(ROOT, { root: rootProbe, parent: parent("directory") })).toBe(
+      false
+    );
+    expect(rootProbe).toHaveBeenCalledTimes(2);
+  });
+
+  it("proves nothing when the root can't be read", async () => {
+    const parentProbe = parent("directory");
+    expect(await worktreeRootGone(ROOT, { root: root("denied"), parent: parentProbe })).toBeNull();
+    expect(parentProbe).not.toHaveBeenCalled();
+  });
+});
+
+describe("worktreeRootGone on a real filesystem (#17360)", () => {
+  let base = "";
+  afterEach(async () => {
+    if (base) await fs.rm(base, { recursive: true, force: true });
+    base = "";
+  });
+
+  it("follows a parent link: gone only when its target is a folder that reads", async () => {
+    base = await fs.mkdtemp(path.join(os.tmpdir(), "worktree-gone-"));
+    const real = path.join(base, "app-worktrees");
+    await fs.mkdir(real);
+    expect(await worktreeRootGone(path.join(real, "feature-login"))).toBe(true);
+    await fs.mkdir(path.join(real, "feature-login"));
+    expect(await worktreeRootGone(path.join(real, "feature-login"))).toBe(false);
+
+    // A link into a drive that isn't mounted: nothing proven.
+    const dangling = path.join(base, "on-drive");
+    await fs.symlink(path.join(base, "unmounted", "app-worktrees"), dangling);
+    expect(await worktreeRootGone(path.join(dangling, "feature-login"))).toBeNull();
+
+    const linked = path.join(base, "linked");
+    await fs.symlink(real, linked);
+    expect(await worktreeRootGone(path.join(linked, "other"))).toBe(true);
   });
 });

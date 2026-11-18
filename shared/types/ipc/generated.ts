@@ -673,6 +673,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { hostId: string; resourceId: string | null }];
     result: void;
   };
+  "cloud-hosts:dismiss-worktree-cleanup": {
+    args: [payload: { hostId: string }];
+    result: void;
+  };
   "cloud-hosts:get-catalog": {
     args: [payload: { accountId: string; refresh?: boolean | undefined }];
     result: import("../cloudHosts.js").CloudCatalog;
@@ -688,6 +692,16 @@ export interface GeneratedIpcInvokeMap {
   "cloud-hosts:list-resources": {
     args: [payload: { accountId: string }];
     result: import("../cloudHosts.js").CloudResourceSummary[];
+  };
+  "cloud-hosts:prepare-worktree-cleanup": {
+    args: [
+      payload: {
+        worktree: import("../cloudHosts.js").CloudWorktreeRef;
+        machines: import("../cloudHosts.js").CloudWorktreeCleanupRequest[];
+        mutationId: string | null;
+      },
+    ];
+    result: void;
   };
   "cloud-hosts:refresh-host": {
     args: [payload: { hostId: string }];
@@ -711,9 +725,23 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { hostId: string }];
     result: void;
   };
+  "cloud-hosts:retry-worktree-cleanup": {
+    args: [payload: { hostId: string }];
+    result: void;
+  };
   "cloud-hosts:set-lifetime": {
     args: [payload: { hostId: string; lifetimeHours: number | null }];
     result: void;
+  };
+  "cloud-hosts:settle-worktree-cleanup": {
+    args: [
+      payload: {
+        worktree: import("../cloudHosts.js").CloudWorktreeRef;
+        deleted: boolean | null;
+        mutationId: string | null;
+      },
+    ];
+    result: import("../cloudHosts.js").CloudWorktreeCleanupOutcome[];
   };
   "cloud-hosts:start-host": {
     args: [payload: { hostId: string }];

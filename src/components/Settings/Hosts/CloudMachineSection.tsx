@@ -124,7 +124,10 @@ export function CloudMachineSection({
   const { snapshot } = useCloudHosts();
   const status = cloudStatusFor(snapshot, hostId);
   const machines = useCloudMachineActions();
-  const [busy, setBusy] = useState<"retry" | "lifetime" | "trust" | null>(null);
+  const [busy, setBusy] = useState<
+    "retry" | "lifetime" | "trust" | "cleanup-retry" | "cleanup-keep" | null
+  >(null);
+  const [cleanupError, setCleanupError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lifetimeError, setLifetimeError] = useState<string | null>(null);
   // Kept with the fingerprint it was about: a different key on show is a different decision.
@@ -312,8 +315,133 @@ export function CloudMachineSection({
   // What Daintree is doing to it, in its own words; the provider's raw state stays in diagnostics.
   const stateDetail = status.operation?.stage || null;
 
+  const cleanup = status.worktreeCleanup;
+  const cleanupAct = (
+    kind: "cleanup-retry" | "cleanup-keep",
+    work: () => Promise<void>,
+    fallback: string
+  ) => {
+    setBusy(kind);
+    setCleanupError(null);
+    work().then(
+      () => setBusy(null),
+      (err: unknown) => {
+        setBusy(null);
+        setCleanupError(errorText(err, fallback));
+      }
+    );
+  };
+  const worktreeLabel = status.createdFor ? `'${status.createdFor.worktreeName}'` : "its worktree";
+  const keepButton = (
+    <Button
+      variant="ghost"
+      size="sm"
+      loading={busy === "cleanup-keep"}
+      disabled={busy !== null}
+      onClick={() =>
+        cleanupAct(
+          "cleanup-keep",
+          () => cloudHostsClient.dismissWorktreeCleanup(hostId),
+          "Couldn't keep the machine"
+        )
+      }
+    >
+      Keep machine
+    </Button>
+  );
+  const consoleButton = provider && (
+    <Button
+      variant="outline"
+      size="sm"
+      onClick={() => void systemClient.openExternal(provider.dashboardUrl)}
+    >
+      <ExternalLink aria-hidden="true" />
+      Open {providerName} console
+    </Button>
+  );
+  let cleanupNotice: ReactNode = null;
+  if (cleanup) {
+    const verb = cleanup.choice === "delete" ? "delete" : "stop";
+    const done = cleanup.choice === "delete" ? "deleted" : "stopped";
+    const retryButton = (label: string) => (
+      <Button
+        variant="outline"
+        size="sm"
+        loading={busy === "cleanup-retry"}
+        disabled={busy !== null}
+        onClick={() =>
+          cleanupAct(
+            "cleanup-retry",
+            () => cloudHostsClient.retryWorktreeCleanup(hostId),
+            `Couldn't ${verb} the machine`
+          )
+        }
+      >
+        {label}
+      </Button>
+    );
+    if (cleanup.phase === "failed") {
+      cleanupNotice = (
+        <Callout
+          severity="error"
+          className="mb-3"
+          data-testid="cloud-machine-cleanup"
+          title={`Couldn't ${verb} it with ${worktreeLabel}`}
+          action={retryButton("Retry")}
+        >
+          <p role="alert">{cleanupError ?? cleanup.error?.message ?? "It didn't finish."}</p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {consoleButton}
+            {keepButton}
+          </div>
+        </Callout>
+      );
+    } else if (cleanup.phase === "unconfirmed") {
+      // Never a Retry here: nothing on this device can tell whether that worktree went.
+      cleanupNotice = (
+        <Callout
+          severity="warning"
+          className="mb-3"
+          data-testid="cloud-machine-cleanup"
+          title={`Not ${done} with ${worktreeLabel}`}
+        >
+          <p>
+            {cleanupError ??
+              `${cleanup.error?.message ?? "Daintree didn't hear whether the worktree was deleted."} If it was, ${verb} the machine here.`}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {consoleButton}
+            {keepButton}
+          </div>
+        </Callout>
+      );
+    } else if (cleanup.phase === "waiting") {
+      cleanupNotice = (
+        <Callout
+          severity="info"
+          className="mb-3"
+          data-testid="cloud-machine-cleanup"
+          // Only a worktree on this device can be looked at again from here.
+          action={cleanup.worktreeHostId === null ? retryButton("Check again") : undefined}
+        >
+          <p>{cleanupError ?? `It will be ${done} once ${worktreeLabel} is deleted.`}</p>
+          <div className="mt-2 flex flex-wrap gap-1.5">{keepButton}</div>
+        </Callout>
+      );
+    } else {
+      cleanupNotice = (
+        <Callout severity="info" className="mb-3" data-testid="cloud-machine-cleanup">
+          {cleanup.error
+            ? `It will be ${done} once ${providerName} is available again.`
+            : `It's being ${done} with ${worktreeLabel}.`}
+        </Callout>
+      );
+    }
+  }
+
   return (
     <SettingsSection title="Cloud machine" id="host-cloud-machine">
+      {cleanupNotice}
       <SettingsGroup>
         <SettingsRow
           label="Machine"

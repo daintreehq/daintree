@@ -1,4 +1,5 @@
-import { lstat } from "node:fs/promises";
+import { lstat, stat } from "node:fs/promises";
+import path from "node:path";
 import type { HostDescriptor, HostId } from "../../../shared/types/remoteHosts.js";
 import { events } from "../../services/events.js";
 import { withTimeout } from "../../utils/withTimeout.js";
@@ -34,6 +35,51 @@ async function isWorktreeGone(probe: Promise<unknown>): Promise<boolean> {
   } catch (err) {
     return (err as NodeJS.ErrnoException)?.code === "ENOENT";
   }
+}
+
+/**
+ * Whether a worktree's root on this device is gone: true only when the root
+ * is missing and the folder it sat in is a readable directory, false while it
+ * is there, and null when that couldn't be told. A parent that doesn't read
+ * proves nothing: an unmounted drive, a disconnected share, or a link into
+ * one loses the whole path, and the worktree comes back with it. The parent
+ * is followed through any link, so a link into a missing volume counts too.
+ */
+export async function worktreeRootGone(
+  worktreePath: string,
+  probes: {
+    root?: (target: string) => Promise<unknown>;
+    parent?: (target: string) => Promise<{ isDirectory(): boolean }>;
+  } = {}
+): Promise<boolean | null> {
+  const bounded = <T>(work: Promise<T>) =>
+    withTimeout(work, WORKTREE_GONE_PROBE_TIMEOUT_MS, "Worktree existence probe timed out");
+  try {
+    await bounded((probes.root ?? lstat)(worktreePath));
+    return false;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") return null;
+  }
+  const parent = path.dirname(worktreePath);
+  if (parent === worktreePath) return null;
+  try {
+    const found = await bounded((probes.parent ?? stat)(parent));
+    if (!found.isDirectory()) return null;
+  } catch {
+    return null;
+  }
+  // Read again: a volume that came back between the two reads brings the worktree with it.
+  try {
+    await bounded((probes.root ?? lstat)(worktreePath));
+    return false;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException)?.code === "ENOENT" ? true : null;
+  }
+}
+
+/** Each worktree whose monitor went away: a hint that it may be gone, never proof. */
+export function onWorktreeMonitorRemoved(listener: (worktreeId: string) => void): () => void {
+  return events.on("sys:worktree:remove", ({ worktreeId }) => listener(worktreeId));
 }
 
 /**

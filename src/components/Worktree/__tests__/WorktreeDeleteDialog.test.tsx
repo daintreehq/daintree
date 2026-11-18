@@ -60,6 +60,49 @@ vi.mock("@/clients", async (importOriginal) => {
   },
 };
 
+// No cloud machines unless a suite says so (#17360).
+const { cloudSnapshotMock, cloudStateMock, viewWorktreeRefMock, openExternalMock } = vi.hoisted(
+  () => ({
+    cloudStateMock: {
+      pending: false,
+      loadError: null as string | null,
+      refresh: vi.fn(async () => {}),
+    },
+    cloudSnapshotMock: {
+      value: {
+        providers: [],
+        accounts: [],
+        hosts: [],
+      } as import("@shared/types/cloudHosts").CloudHostsSnapshot,
+    },
+    viewWorktreeRefMock: {
+      value: null as import("@shared/types/cloudHosts").CloudWorktreeRef | null,
+    },
+    openExternalMock: vi.fn(),
+  })
+);
+
+vi.mock("@/components/Hosts/cloud/cloudHostsState", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/Hosts/cloud/cloudHostsState")>();
+  return {
+    ...actual,
+    useCloudHostsWhile: (active: boolean) => ({
+      snapshot: active ? cloudSnapshotMock.value : { providers: [], accounts: [], hosts: [] },
+      loaded: !cloudStateMock.pending,
+      loadError: cloudStateMock.loadError,
+      pending: active && cloudStateMock.pending,
+      refresh: cloudStateMock.refresh,
+    }),
+  };
+});
+
+vi.mock("@/components/Worktree/worktreeCloudMachines", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../worktreeCloudMachines")>();
+  return { ...actual, worktreeRefForView: () => viewWorktreeRefMock.value };
+});
+
+vi.mock("@/clients/systemClient", () => ({ systemClient: { openExternal: openExternalMock } }));
+
 vi.mock("@/store/createWorktreeStore", () => ({
   getCurrentViewStore: () => ({
     getState: () => ({ startDelete: startDeleteMock }),
@@ -2330,5 +2373,441 @@ describe("WorktreeDeleteDialog — untracked files past the enrichment cap (#155
     expect(screen.getByTestId("delete-worktree-change-tally").textContent).toBe(
       "2 tracked · 205 untracked"
     );
+  });
+});
+
+describe("WorktreeDeleteDialog — its cloud machine (#17360)", () => {
+  const REF = { hostId: null, projectId: "0f1e2d3c", worktreeId: "wt-1" };
+  const BOAT = {
+    id: "boat",
+    name: "Boat",
+    description: "",
+    apiKeyUrl: "https://boat.dev",
+    dashboardUrl: "https://boat.dev/dashboard",
+    docsUrl: "https://docs.boat.dev",
+    credentialFields: [],
+    capabilities: {
+      persistence: {
+        kept: "Files in its home folder",
+        lost: "/tmp, caches and memory",
+        retentionDays: 14,
+        saveRetryBilled: false,
+        stoppedComputeBilled: false,
+        stoppedStorageBilled: false,
+      },
+      typicalStartSeconds: 60,
+      lifetime: { kind: "renewable" as const },
+      sshTrust: "pinned-from-api" as const,
+      transport: "direct" as const,
+      tunnel: null,
+      provisioning: {
+        location: "none" as const,
+        image: "none" as const,
+        network: "none" as const,
+        sshKey: "after-create" as const,
+      },
+      deletion: true,
+    },
+    unsupportedReason: null,
+  };
+  function machine(
+    overrides: Partial<import("@shared/types/cloudHosts").CloudHostStatus> = {}
+  ): import("@shared/types/cloudHosts").CloudHostStatus {
+    return {
+      hostId: "login-host",
+      providerId: "boat",
+      providerUnavailable: null,
+      accountId: "ca_0123456789",
+      accountName: "Personal",
+      resourceId: "bx_23456789",
+      machineName: "login-box",
+      ownership: "created-by-daintree",
+      createdFor: { ...REF, projectName: "app", worktreeName: "feature/test", hostName: null },
+      worktreeCleanup: null,
+      provisioning: null,
+      machine: "running",
+      rawState: "ready",
+      machineType: "default",
+      vcpu: 4,
+      memoryGB: 8,
+      hourlyDollars: 0.036,
+      lifetime: { kind: "renewable" },
+      autoStopAt: null,
+      lifetimeSeconds: 7200,
+      stoppedAt: null,
+      stop: null,
+      lastSnapshotAt: null,
+      dataExpired: false,
+      operation: null,
+      lastError: null,
+      observedAt: Date.now(),
+      lastEndpoint: null,
+      hostKeyFingerprint: null,
+      hostKeyReview: null,
+      keptRunningAt: null,
+      asleep: false,
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    terminalCountsMock.total = 0;
+    terminalsMock.length = 0;
+    devPreviewGetByWorktreeMock.mockResolvedValue(null);
+    buildPreviewMock.mockResolvedValue(null);
+    viewWorktreeRefMock.value = REF;
+    cloudSnapshotMock.value = { providers: [BOAT], accounts: [], hosts: [machine()] };
+  });
+
+  afterEach(() => {
+    cleanup();
+    viewWorktreeRefMock.value = null;
+    cloudSnapshotMock.value = { providers: [], accounts: [], hosts: [] };
+    cloudStateMock.pending = false;
+    cloudStateMock.loadError = null;
+  });
+
+  async function open() {
+    render(
+      <WorktreeDeleteDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        worktree={makeWorktree(makeChanges([]))}
+      />
+    );
+    await settlePreview();
+  }
+
+  const choice = (value: "keep" | "stop" | "delete") =>
+    screen.getByTestId(`delete-worktree-machine-${value}`) as HTMLInputElement;
+
+  it("names the marked machine with keep, stop and delete, keeping it unless chosen otherwise", async () => {
+    await open();
+    const section = screen.getByTestId("delete-worktree-cloud-machines");
+    expect(section.textContent).toContain("'login-box' on Boat (Personal)");
+    expect(choice("keep").checked).toBe(true);
+    expect(choice("stop").checked).toBe(false);
+    expect(choice("delete").checked).toBe(false);
+    expect(section.textContent).toContain("keeps billing Personal until it stops on Boat");
+
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+    // Sent with no machines, so a Keep drops what an earlier attempt chose.
+    expect(startDeleteMock).toHaveBeenCalledWith("wt-1", {
+      force: false,
+      deleteBranch: false,
+      cloudCleanup: { worktree: REF, machines: [] },
+    });
+  });
+
+  it("carries a stop with the delete and lists it among what will happen", async () => {
+    await open();
+    fireEvent.click(choice("stop"));
+    expect(screen.getByTestId("delete-worktree-consequences").textContent).toContain(
+      "Cloud machine 'login-box' will be stopped"
+    );
+    expect(screen.queryByTestId("delete-worktree-confirm-input")).toBeNull();
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+    expect(startDeleteMock).toHaveBeenCalledWith("wt-1", {
+      force: false,
+      deleteBranch: false,
+      cloudCleanup: {
+        worktree: REF,
+        machines: [{ hostId: "login-host", resourceId: "bx_23456789", choice: "stop" }],
+      },
+    });
+  });
+
+  it("takes the name typed before deleting the machine with it, by keyboard too", async () => {
+    await open();
+    fireEvent.click(choice("delete"));
+    // Enter in the gate before the name matches sends nothing.
+    fireEvent.keyDown(screen.getByTestId("delete-worktree-confirm-input"), { key: "Enter" });
+    expect(startDeleteMock).not.toHaveBeenCalled();
+    const consequences = screen.getByTestId("delete-worktree-consequences");
+    expect(consequences.textContent).toContain(
+      "Cloud machine 'login-box' will be deleted from Boat"
+    );
+    expect(
+      screen.getByText(/'login-box' and everything on its disk will be deleted for good/)
+    ).toBeDefined();
+    const confirm = screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    fireEvent.click(confirm);
+    expect(startDeleteMock).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByTestId("delete-worktree-confirm-input"), {
+      target: { value: "feature/test" },
+    });
+    fireEvent.keyDown(screen.getByTestId("delete-worktree-confirm-input"), { key: "Enter" });
+    expect(startDeleteMock).toHaveBeenCalledWith("wt-1", {
+      force: false,
+      deleteBranch: false,
+      cloudCleanup: {
+        worktree: REF,
+        machines: [{ hostId: "login-host", resourceId: "bx_23456789", choice: "delete" }],
+      },
+    });
+  });
+
+  it("sends nothing from the typed name that the footer wouldn't send", async () => {
+    // A dirty tree without Force: the host would refuse, so the footer is unavailable.
+    buildPreviewMock.mockResolvedValue(makePreview([{ path: "src/a.ts", status: "modified" }]));
+    await open();
+    fireEvent.click(choice("delete"));
+    fireEvent.change(screen.getByTestId("delete-worktree-confirm-input"), {
+      target: { value: "feature/test" },
+    });
+    expect((screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement).disabled).toBe(
+      true
+    );
+    fireEvent.keyDown(screen.getByTestId("delete-worktree-confirm-input"), { key: "Enter" });
+    expect(startDeleteMock).not.toHaveBeenCalled();
+  });
+
+  it("asks again when the machine or its provider's offer changes after a choice", async () => {
+    const { rerender } = render(
+      <WorktreeDeleteDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        worktree={makeWorktree(makeChanges([]))}
+      />
+    );
+    await settlePreview();
+    fireEvent.click(choice("delete"));
+    // The provider withdraws deletion while the dialog is open.
+    cloudSnapshotMock.value = {
+      providers: [{ ...BOAT, capabilities: { ...BOAT.capabilities, deletion: false } }],
+      accounts: [],
+      hosts: [machine()],
+    };
+    rerender(
+      <WorktreeDeleteDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        worktree={makeWorktree(makeChanges([]))}
+      />
+    );
+    expect(screen.getByText("What can be done with it changed. Choose again.")).toBeDefined();
+    expect(choice("keep").checked).toBe(false);
+    expect(choice("stop").checked).toBe(false);
+    const confirm = screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    expect(screen.getByTestId("delete-worktree-hint").textContent).toBe(
+      "Choose again what happens to its cloud machine"
+    );
+    fireEvent.click(confirm);
+    expect(startDeleteMock).not.toHaveBeenCalled();
+
+    // A stop chosen for one machine never carries over to another under the same host.
+    fireEvent.click(choice("stop"));
+    cloudSnapshotMock.value = {
+      providers: [BOAT],
+      accounts: [],
+      hosts: [machine({ resourceId: "bx_99999999" })],
+    };
+    rerender(
+      <WorktreeDeleteDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        worktree={makeWorktree(makeChanges([]))}
+      />
+    );
+    expect((screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement).disabled).toBe(
+      true
+    );
+  });
+
+  it("gives a machine whose provider left a Keep to choose again, and never revives the old choice", async () => {
+    const view = (hosts: ReturnType<typeof machine>[], providers = [BOAT]) => {
+      cloudSnapshotMock.value = { providers, accounts: [], hosts };
+      return (
+        <WorktreeDeleteDialog
+          isOpen={true}
+          onClose={vi.fn()}
+          worktree={makeWorktree(makeChanges([]))}
+        />
+      );
+    };
+    const { rerender } = render(view([machine()]));
+    await settlePreview();
+    fireEvent.click(choice("delete"));
+    rerender(view([machine({ providerUnavailable: "Its plugin is disabled" })], []));
+    expect(screen.getByText("What can be done with it changed. Choose again.")).toBeDefined();
+    expect(screen.queryByTestId("delete-worktree-machine-delete")).toBeNull();
+    expect((screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement).disabled).toBe(
+      true
+    );
+
+    // The provider comes back: what was chosen before stays to be chosen again.
+    rerender(view([machine()]));
+    expect(choice("delete").checked).toBe(false);
+    expect((screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement).disabled).toBe(
+      true
+    );
+
+    rerender(view([machine({ providerUnavailable: "Its plugin is disabled" })], []));
+    fireEvent.click(choice("keep"));
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+    expect(startDeleteMock).toHaveBeenCalledWith("wt-1", {
+      force: false,
+      deleteBranch: false,
+      cloudCleanup: { worktree: REF, machines: [] },
+    });
+  });
+
+  it("holds a force delete whose machine's offer changed during its check", async () => {
+    const view = (hosts: ReturnType<typeof machine>[], providers = [BOAT]) => {
+      cloudSnapshotMock.value = { providers, accounts: [], hosts };
+      return (
+        <WorktreeDeleteDialog
+          isOpen={true}
+          onClose={vi.fn()}
+          worktree={makeWorktree(makeChanges([]))}
+        />
+      );
+    };
+    buildPreviewMock.mockResolvedValueOnce(makePreview([]));
+    const { rerender } = render(view([machine()]));
+    await settlePreview();
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+    fireEvent.click(choice("stop"));
+    let finishCheck: (preview: unknown) => void = () => {};
+    buildPreviewMock.mockImplementationOnce(
+      () => new Promise((resolve) => (finishCheck = resolve))
+    );
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+    // The provider goes while the tree is re-read.
+    rerender(view([machine({ providerUnavailable: "Its plugin is disabled" })], []));
+    await act(async () => finishCheck(makePreview([])));
+    expect(startDeleteMock).not.toHaveBeenCalled();
+    expect(screen.getByText("What can be done with it changed. Choose again.")).toBeDefined();
+  });
+
+  it("holds a force delete whose machine left the list during its check, and asks again if it returns", async () => {
+    const view = (hosts: ReturnType<typeof machine>[]) => {
+      cloudSnapshotMock.value = { providers: [BOAT], accounts: [], hosts };
+      return (
+        <WorktreeDeleteDialog
+          isOpen={true}
+          onClose={vi.fn()}
+          worktree={makeWorktree(makeChanges([]))}
+        />
+      );
+    };
+    buildPreviewMock.mockResolvedValueOnce(makePreview([]));
+    const { rerender } = render(view([machine()]));
+    await settlePreview();
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+    fireEvent.click(choice("stop"));
+    let finishCheck: (preview: unknown) => void = () => {};
+    buildPreviewMock.mockImplementationOnce(
+      () => new Promise((resolve) => (finishCheck = resolve))
+    );
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+    rerender(view([]));
+    await act(async () => finishCheck(makePreview([])));
+    // What was confirmed included a stop that is no longer on screen.
+    expect(startDeleteMock).not.toHaveBeenCalled();
+
+    // It comes back: the stop isn't revived, it's chosen again.
+    rerender(view([machine()]));
+    expect(screen.getByText("What can be done with it changed. Choose again.")).toBeDefined();
+    expect(choice("stop").checked).toBe(false);
+
+    // Gone again: nothing left to choose for, so the delete goes ahead without it.
+    rerender(view([]));
+    buildPreviewMock.mockResolvedValueOnce(makePreview([]));
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(startDeleteMock).toHaveBeenCalledWith("wt-1", { force: true, deleteBranch: false });
+  });
+
+  it("names only the machine in a gate its delete alone raised", async () => {
+    // The tree couldn't be checked, but without Force the worktree's own tier stays below D3.
+    buildPreviewMock.mockRejectedValue(new Error("refresh timeout"));
+    await open();
+    await waitFor(() =>
+      expect(screen.getByText(/Couldn't check this worktree for uncommitted work/)).toBeDefined()
+    );
+    fireEvent.click(choice("delete"));
+    // One preamble, and it holds the machine's sentence alone.
+    const preamble = screen.getByText(/everything on its disk will be deleted for good/);
+    expect(preamble.textContent).toBe(
+      "'login-box' and everything on its disk will be deleted for good."
+    );
+  });
+
+  it("waits for the cloud read before offering the delete, and says when it failed", async () => {
+    cloudStateMock.pending = true;
+    cloudSnapshotMock.value = { providers: [], accounts: [], hosts: [] };
+    const { rerender } = render(
+      <WorktreeDeleteDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        worktree={makeWorktree(makeChanges([]))}
+      />
+    );
+    await settlePreview();
+    expect((screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement).disabled).toBe(
+      true
+    );
+
+    cloudStateMock.pending = false;
+    cloudStateMock.loadError = "Couldn't read cloud accounts";
+    rerender(
+      <WorktreeDeleteDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        worktree={makeWorktree(makeChanges([]))}
+      />
+    );
+    const unread = screen.getByTestId("delete-worktree-cloud-machines-unread");
+    expect(unread.textContent).toContain("Any there is kept");
+    fireEvent.click(within(unread).getByRole("button", { name: "Retry" }));
+    expect(cloudStateMock.refresh).toHaveBeenCalled();
+    expect((screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement).disabled).toBe(
+      false
+    );
+  });
+
+  it("offers no delete through a provider that can't, pointing at its console instead", async () => {
+    cloudSnapshotMock.value = {
+      providers: [{ ...BOAT, capabilities: { ...BOAT.capabilities, deletion: false } }],
+      accounts: [],
+      hosts: [machine()],
+    };
+    await open();
+    expect(screen.queryByTestId("delete-worktree-machine-delete")).toBeNull();
+    expect(choice("stop")).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: /Open Boat console/ }));
+    expect(openExternalMock).toHaveBeenCalledWith("https://boat.dev/dashboard");
+  });
+
+  it("leaves a machine made for another worktree, or from Settings, out entirely", async () => {
+    cloudSnapshotMock.value = {
+      providers: [BOAT],
+      accounts: [],
+      hosts: [
+        machine({ hostId: "settings-host", createdFor: null }),
+        machine({
+          hostId: "sibling-host",
+          createdFor: {
+            ...REF,
+            worktreeId: "wt-2",
+            projectName: "app",
+            worktreeName: "other",
+            hostName: null,
+          },
+        }),
+      ],
+    };
+    await open();
+    expect(screen.queryByTestId("delete-worktree-cloud-machines")).toBeNull();
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+    expect(startDeleteMock).toHaveBeenCalledWith("wt-1", { force: false, deleteBranch: false });
   });
 });

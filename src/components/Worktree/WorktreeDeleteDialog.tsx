@@ -7,6 +7,18 @@ import { TitleEntity } from "@/components/ui/TitleEntity";
 import { AlertTriangle, Trash2 } from "lucide-react";
 import { PathText } from "@/components/Worktree/PathText";
 import { WorktreeDeleteNotes } from "@/components/Worktree/WorktreeDeleteNotes";
+import { WorktreeCloudMachineChoice } from "@/components/Worktree/WorktreeCloudMachineChoice";
+import {
+  cleanupConsequence,
+  machinesMarkedFor,
+  worktreeRefForView,
+} from "@/components/Worktree/worktreeCloudMachines";
+import { useCloudHostsWhile } from "@/components/Hosts/cloud/cloudHostsState";
+import type {
+  CloudWorktreeCleanupChoice,
+  CloudWorktreeCleanupRequest,
+} from "@shared/types/cloudHosts";
+import type { HostId } from "@shared/types/remoteHosts";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
 import { collectRunningAgentTerminals } from "@/utils/destructiveSessionConfirm";
 import { deriveEffectiveTier } from "@/services/actions/deriveEffectiveTier";
@@ -121,6 +133,73 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // of a bare total — closing an idle shell is cheap, interrupting a running
   // agent is not (#11344, mirrors the tracked/untracked split from #4927).
   const runningAgentCount = collectRunningAgentTerminals(terminals).length;
+
+  // The cloud machines made for this worktree (#17360), followed only while the
+  // dialog is open. A machine is matched by its mark alone, so an unmarked one,
+  // or one made for another worktree, never appears and is never touched.
+  const cloud = useCloudHostsWhile(isOpen);
+  const worktreeRef = worktreeRefForView(worktree.id);
+  const cloudMachines = worktreeRef ? machinesMarkedFor(cloud.snapshot, worktreeRef) : [];
+  // A choice holds for the machine it was made for: a different machine under
+  // the host, or an offer withdrawn since, has to be chosen again.
+  // Once one stops holding it stays "stale": an offer coming back doesn't revive it.
+  const [machineChoices, setMachineChoices] = useState<
+    Record<HostId, { choice: CloudWorktreeCleanupChoice | "stale"; resourceId: string | null }>
+  >({});
+  const machineSelections: Record<HostId, CloudWorktreeCleanupChoice | null> = {};
+  const chosenCleanups: Array<{
+    machine: (typeof cloudMachines)[number];
+    choice: "stop" | "delete";
+  }> = [];
+  const newlyStale: HostId[] = [];
+  for (const machine of cloudMachines) {
+    const hostId = machine.status.hostId;
+    const recorded = machineChoices[hostId];
+    if (!recorded) continue;
+    const choice = recorded.choice;
+    if (choice === "stale") {
+      machineSelections[hostId] = null;
+      continue;
+    }
+    const holds =
+      choice === "keep" ||
+      (recorded.resourceId === machine.status.resourceId &&
+        machine.status.resourceId !== null &&
+        machine.choices.includes(choice));
+    if (!holds) {
+      machineSelections[hostId] = null;
+      newlyStale.push(hostId);
+      continue;
+    }
+    machineSelections[hostId] = choice;
+    if (choice !== "keep") chosenCleanups.push({ machine, choice });
+  }
+  // A stop or delete chosen for a machine that has since gone from the list
+  // never comes back with it.
+  for (const [hostId, recorded] of Object.entries(machineChoices)) {
+    if (recorded.choice !== "stop" && recorded.choice !== "delete") continue;
+    if (!cloudMachines.some((machine) => machine.status.hostId === hostId)) newlyStale.push(hostId);
+  }
+  const machineChoiceStale = Object.values(machineSelections).some((choice) => choice === null);
+  const newlyStaleKey = newlyStale.join("\n");
+  useEffect(() => {
+    if (!newlyStaleKey) return;
+    const ids = newlyStaleKey.split("\n");
+    setMachineChoices((current) => {
+      const next = { ...current };
+      for (const id of ids) {
+        const was = current[id];
+        if (was) next[id] = { choice: "stale", resourceId: was.resourceId };
+      }
+      return next;
+    });
+  }, [newlyStaleKey]);
+  // What a force delete's re-check dispatches once it lands: the choices as they stand then.
+  const machineStateRef = useRef({ stale: machineChoiceStale, cleanups: chosenCleanups });
+  useEffect(() => {
+    machineStateRef.current = { stale: machineChoiceStale, cleanups: chosenCleanups };
+  });
+  const machineDeletes = chosenCleanups.filter(({ choice }) => choice === "delete");
 
   // Preview + tier derive from the FRESH fetch when available, else the prop
   // snapshot as an initial seed. A failed fetch fails closed via
@@ -258,11 +337,14 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
         : verifyFailed
           ? "This worktree's uncommitted work couldn't be checked — force-deleting it may permanently discard that work."
           : undefined;
+  const machinePreamble =
+    machineDeletes.length > 0
+      ? `${machineDeletes.map(({ machine }) => `'${machine.name}'`).join(" and ")} and everything on ${machineDeletes.length === 1 ? "its disk" : "their disks"} will be deleted for good.`
+      : undefined;
   // Never gate a delete that cannot proceed. A typed-name input on a blocked
   // state asks for the most emphatic consent the app has and then refuses
   // anyway; blocked is a different thing from D3, and this is where they part.
-  const isHighTier =
-    !isBlocked &&
+  const worktreeIsHighTier =
     deriveEffectiveTier("worktree.delete", {
       force,
       isProtectedBranch,
@@ -270,6 +352,14 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       hasTrackedChanges,
       submoduleFilesAtRisk: forceRequiredBySubmodules,
     }) === "D3";
+  // Deleting a machine with it takes the name typed too, as removing its host
+  // with the machine does: its disk goes for good.
+  const isHighTier = !isBlocked && (machineDeletes.length > 0 || worktreeIsHighTier);
+  // The worktree's own reason only while its own tier is what raised the gate.
+  const typedGatePreamble =
+    [worktreeIsHighTier ? highTierPreamble : undefined, machinePreamble]
+      .filter(Boolean)
+      .join(" ") || undefined;
   const isConfirmMatched = confirmInput === confirmTarget;
   // A standard (non-force) delete on a tree we KNOW is dirty is rejected by
   // the backend, so offering it as the primary action ships a button whose
@@ -287,12 +377,16 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // (rather than revalidating on the plain path) keeps the immediate dismiss
   // #8417 asks for, and the fetch is deadline-bounded by the port client, so
   // this cannot wedge.
+  // Nor before the cloud picture is read, where there is one: a fast click
+  // would delete the worktree without its machine ever being offered.
   const canSubmit =
     (!isHighTier || isConfirmMatched) &&
     !isDeleting &&
     !blockedByDirtyTree &&
     !isBlocked &&
-    !previewPending;
+    !previewPending &&
+    !cloud.pending &&
+    !machineChoiceStale;
 
   useEffect(() => {
     if (isOpen) {
@@ -302,6 +396,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       setConfirmInput("");
       setHasDevPreview(false);
       setIsDeleting(false);
+      setMachineChoices({});
     }
   }, [isOpen, worktree.id]);
 
@@ -491,12 +586,21 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     }
   }, [canDeleteBranch, deleteBranch]);
 
-  const dispatchDelete = () => {
+  const dispatchDelete = (cleanups: typeof chosenCleanups) => {
     const effectiveDeleteBranch = deleteBranch && canDeleteBranch;
+    const machines: CloudWorktreeCleanupRequest[] = cleanups.map(({ machine, choice }) => ({
+      hostId: machine.status.hostId,
+      resourceId: machine.status.resourceId!,
+      choice,
+    }));
     const options = {
       force,
       deleteBranch: effectiveDeleteBranch,
       ...(closeTerminals && hasTerminals ? { closeTerminals: true } : {}),
+      // Sent whenever it has machines, so a Keep here drops what an earlier attempt chose.
+      ...(worktreeRef && cloudMachines.length > 0
+        ? { cloudCleanup: { worktree: worktreeRef, machines } }
+        : {}),
     };
 
     // Fire-and-forget — progress and any failure surface on the card, not the
@@ -520,6 +624,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // the immediate dismiss #8417 asks for on all of them.
   const revalidateThenDelete = async () => {
     const session = sessionRef.current;
+    const confirmedMachines = cleanupKey(chosenCleanups);
     pendingCheckRef.current = "submit";
     setIsDeleting(true);
     const outcome = await settleWorktreeDeleteOutcome(buildWorktreeDeletePreview(worktree.id));
@@ -566,16 +671,24 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       setIsDeleting(false);
       return;
     }
-    dispatchDelete();
+    // A machine's offer that changed during the check is chosen again first.
+    const machinesNow = machineStateRef.current;
+    if (machinesNow.stale || cleanupKey(machinesNow.cleanups) !== confirmedMachines) {
+      setIsDeleting(false);
+      return;
+    }
+    dispatchDelete(machinesNow.cleanups);
   };
 
   const handleDelete = () => {
     if (isHighTier && !isConfirmMatched) return;
+    // Enter in the typed name reaches here without the footer button's state.
+    if (!canSubmit) return;
     // Guards the Enter-to-submit path in the typed-name input, which does not
     // read the footer button's disabled state.
     if (isDeleting || isBlocked || previewPending) return;
     if (!force) {
-      dispatchDelete();
+      dispatchDelete(chosenCleanups);
       return;
     }
     void revalidateThenDelete();
@@ -850,6 +963,14 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           Branch <span className="font-mono break-all">{worktree.branch}</span> is kept
         </span>
       ),
+    });
+  }
+
+  for (const { machine, choice } of chosenCleanups) {
+    consequences.push({
+      key: `machine:${machine.status.hostId}`,
+      tone: choice === "delete" ? "danger" : "neutral",
+      content: cleanupConsequence(machine, choice),
     });
   }
 
@@ -1322,6 +1443,24 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
             </fieldset>
           )}
 
+          {/* 3b. ITS CLOUD MACHINES — what happens to each machine made for
+              this worktree (#17360). Kept unless the person chooses otherwise. */}
+          {!isBlocked && (
+            <WorktreeCloudMachineChoice
+              machines={cloudMachines}
+              choices={machineSelections}
+              onChange={(hostId, choice) => {
+                const resourceId =
+                  cloudMachines.find((machine) => machine.status.hostId === hostId)?.status
+                    .resourceId ?? null;
+                setMachineChoices((current) => ({ ...current, [hostId]: { choice, resourceId } }));
+              }}
+              disabled={isDeleting}
+              loadError={cloud.loadError}
+              onRetryLoad={() => void cloud.refresh()}
+            />
+          )}
+
           {/* 4. THE EFFECT — computed from the options directly above. Only
               outcomes that will actually occur are listed — which is why a
               blocked delete lists none: the whole set would be a prediction
@@ -1395,7 +1534,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                 value={confirmInput}
                 onChange={setConfirmInput}
                 onMatchSubmit={handleDelete}
-                preamble={highTierPreamble}
+                preamble={typedGatePreamble}
                 disabled={isDeleting}
                 data-testid="delete-worktree-confirm-input"
               />
@@ -1416,7 +1555,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
             ? SUBMIT_CHECK_LABEL
             : isHighTier && !isConfirmMatched
               ? TYPED_GATE_HINT
-              : (blockedHint ?? undefined)
+              : machineChoiceStale
+                ? "Choose again what happens to its cloud machine"
+                : (blockedHint ?? undefined)
         }
         secondaryAction={{ label: "Cancel", onClick: onClose }}
         // A refused delete keeps the app's convention for a refusal: the
@@ -1434,6 +1575,19 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
 }
 
 const SUBMIT_CHECK_LABEL = "Checking current work before deleting";
+
+/** The machines' stops and deletes as confirmed, to tell whether they changed under a check. */
+function cleanupKey(
+  cleanups: ReadonlyArray<{
+    machine: { status: { hostId: string; resourceId: string | null } };
+    choice: string;
+  }>
+): string {
+  return cleanups
+    .map(({ machine, choice }) => `${machine.status.hostId}:${machine.status.resourceId}:${choice}`)
+    .sort()
+    .join("\n");
+}
 
 const TEARDOWN_COMMAND_LIMIT = 4;
 

@@ -441,6 +441,7 @@ function machine(overrides: Partial<CloudHostStatus> = {}): CloudHostsSnapshot {
         machineName: "studio-01",
         ownership: "created-by-daintree",
         createdFor: null,
+        worktreeCleanup: null,
         provisioning: null,
         machine: "stopped",
         rawState: "stopped",

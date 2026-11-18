@@ -83,7 +83,11 @@ import {
   type ViewSink,
 } from "./RemoteHostManager.js";
 import { RemoteHostsClient, type WindowControl } from "./RemoteHostsClient.js";
-import { watchOwnedHostCleanup } from "./ownedHostCleanup.js";
+import {
+  onWorktreeMonitorRemoved,
+  watchOwnedHostCleanup,
+  worktreeRootGone,
+} from "./ownedHostCleanup.js";
 import { RemoteRouterImpl, type SenderLookup } from "./RemoteRouter.js";
 import { answerReverseRequest } from "./reverseRequests.js";
 import { requireSupportedConnection, sshTargetOf } from "./connection.js";
@@ -1128,6 +1132,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     changed: () => cloud.cloudHosts.changed(),
     // The dials a start prompts nudge the link, which leaves the hold a person's Retry would clear.
     onMachineStarted: (hostId) => recheckStart(hostId),
+    worktreeGone: (worktreePath) => worktreeRootGone(worktreePath),
+    onWorktreeRemoved: onWorktreeMonitorRemoved,
     activity: (hostId) => {
       const state = manager.connectionState(hostId);
       // Only a summary that came on this link, and lately: one kept from before

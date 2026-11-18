@@ -1797,6 +1797,10 @@ export const CHANNELS = {
   CLOUD_HOSTS_DELETE_MACHINE: "cloud-hosts:delete-machine",
   CLOUD_HOSTS_SET_LIFETIME: "cloud-hosts:set-lifetime",
   CLOUD_HOSTS_TRUST_HOST_KEY: "cloud-hosts:trust-host-key",
+  CLOUD_HOSTS_PREPARE_WORKTREE_CLEANUP: "cloud-hosts:prepare-worktree-cleanup",
+  CLOUD_HOSTS_SETTLE_WORKTREE_CLEANUP: "cloud-hosts:settle-worktree-cleanup",
+  CLOUD_HOSTS_RETRY_WORKTREE_CLEANUP: "cloud-hosts:retry-worktree-cleanup",
+  CLOUD_HOSTS_DISMISS_WORKTREE_CLEANUP: "cloud-hosts:dismiss-worktree-cleanup",
 
   // Remote Hosts: hostMode (shell).
   HOST_MODE_GET_STATUS: "host-mode:get-status",

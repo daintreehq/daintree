@@ -11,6 +11,9 @@ import type {
   CloudCredentialValues,
   CloudHostsSnapshot,
   CloudResourceSummary,
+  CloudWorktreeCleanupOutcome,
+  CloudWorktreeCleanupRequest,
+  CloudWorktreeRef,
 } from "../../../shared/types/cloudHosts.js";
 
 const EMPTY_SNAPSHOT: CloudHostsSnapshot = { providers: [], accounts: [], hosts: [] };
@@ -147,6 +150,43 @@ export const cloudHostsNamespace = defineIpcNamespace({
           field(payload, "hostId"),
           field(payload, "fingerprint")
         )
+    ),
+    // Written before the worktree's delete is sent; each machine must carry that worktree's mark.
+    prepareWorktreeCleanup: op(
+      CLOUD_HOSTS_METHOD_CHANNELS.prepareWorktreeCleanup,
+      async (payload: {
+        worktree: CloudWorktreeRef;
+        machines: CloudWorktreeCleanupRequest[];
+        mutationId: string | null;
+      }): Promise<void> =>
+        requireRemoteService("cloudHosts").prepareWorktreeCleanup(
+          field(payload, "worktree"),
+          field(payload, "machines"),
+          field(payload, "mutationId")
+        )
+    ),
+    settleWorktreeCleanup: op(
+      CLOUD_HOSTS_METHOD_CHANNELS.settleWorktreeCleanup,
+      async (payload: {
+        worktree: CloudWorktreeRef;
+        deleted: boolean | null;
+        mutationId: string | null;
+      }): Promise<CloudWorktreeCleanupOutcome[]> =>
+        requireRemoteService("cloudHosts").settleWorktreeCleanup(
+          field(payload, "worktree"),
+          field(payload, "deleted"),
+          field(payload, "mutationId")
+        )
+    ),
+    retryWorktreeCleanup: op(
+      CLOUD_HOSTS_METHOD_CHANNELS.retryWorktreeCleanup,
+      async (payload: { hostId: string }): Promise<void> =>
+        requireRemoteService("cloudHosts").retryWorktreeCleanup(field(payload, "hostId"))
+    ),
+    dismissWorktreeCleanup: op(
+      CLOUD_HOSTS_METHOD_CHANNELS.dismissWorktreeCleanup,
+      async (payload: { hostId: string }): Promise<void> =>
+        requireRemoteService("cloudHosts").dismissWorktreeCleanup(field(payload, "hostId"))
     ),
   },
 });
