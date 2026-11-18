@@ -82,7 +82,6 @@ import {
   CAPTURE_DELIVERY_BUDGET_MS,
   CAPTURE_PERSISTENCE_DRAIN_BUDGET_MS,
   CANOPY_READER_DRAIN_BUDGET_MS,
-  CLAUDE_USAGE_SAVE_BUDGET_MS,
   CLEANUP_TIMEOUT_MS,
   POST_PTY_TEARDOWN_RESERVE_MS,
   PROJECT_GRACEFUL_KILL_TIMEOUT_MS,
@@ -1187,12 +1186,12 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         console.warn("[MAIN] Plugin update check dispose failed:", error);
       }
 
-      // The usage readings' last save lands, and none starts after, before the
-      // database closes (#17610).
+      // The usage readings' last change is written, and nothing after, before
+      // the database closes (#17610).
       try {
-        const { settleClaudeUsageSaves } =
+        const { sealClaudeUsageObservations } =
           await import("../services/claude/ClaudeUsageObservations.js");
-        await settleClaudeUsageSaves(CLAUDE_USAGE_SAVE_BUDGET_MS);
+        sealClaudeUsageObservations();
       } catch (error) {
         console.warn("[MAIN] Claude usage save at quit failed:", error);
       }

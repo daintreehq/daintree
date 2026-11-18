@@ -255,10 +255,11 @@ describe("readClaudeUsageAccounts (#16370)", () => {
       record({ terminalId: "saved-work", configDir: WORK, shell: null, savedIdentity: WORK })
     );
     recordClaudeUsageObservation(
+      // Its own pane was on WORK, but the launch that saw it couldn't tell.
       record({
         terminalId: "saved-unknown",
         window: "5-hour limit",
-        configDir: null,
+        configDir: WORK,
         shell: null,
         savedIdentity: null,
       })

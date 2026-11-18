@@ -73,12 +73,15 @@ function parseReading(value: unknown): SavedClaudeUsageReading | null {
   if (
     !WINDOWS.has(window) ||
     !STATEMENTS.has(statement) ||
-    !(usedPercent === null || isTime(usedPercent)) ||
+    !(usedPercent === null || (isTime(usedPercent) && usedPercent >= 0 && usedPercent <= 100)) ||
     !(resetsAt === null || isTime(resetsAt)) ||
     typeof terminalId !== "string" ||
+    terminalId === "" ||
     !isTime(observedAt) ||
     !isFolder(identity) ||
-    !isFolder(configDir)
+    !isFolder(configDir) ||
+    // A launch places a reading under the pane's own folder or under none.
+    (identity !== null && identity !== configDir)
   ) {
     return null;
   }

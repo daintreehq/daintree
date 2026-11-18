@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import {
   CLAUDE_USAGE_WINDOWS,
@@ -20,6 +21,7 @@ import {
 import {
   placeClaudeUsageRecord,
   readClaudeUsageProfile,
+  readClaudeUsageProfileSync,
   type ClaudeUsageProfile,
 } from "./claudeUsagePlacement.js";
 
@@ -72,11 +74,18 @@ interface Persistence {
   storage: ClaudeUsageStorage;
   now: () => number;
   readProfile: () => Promise<ClaudeUsageProfile>;
+  readProfileSync: () => ClaudeUsageProfile;
   unsubscribe: () => void;
+  /** Counts every change to what a save would write. */
+  changes: number;
+  /** {@link changes} as of the last save that landed. */
+  saved: number;
 }
 
 /** Null until {@link restoreClaudeUsageObservations}: until then nothing is saved. */
 let persistence: Persistence | null = null;
+/** Set at quit: from then on nothing is restored or saved. */
+let sealed = false;
 let saveQueued = false;
 let saves: Promise<void> = Promise.resolve();
 
@@ -93,6 +102,15 @@ function folderIdentity(dir: string): string {
 export async function canonicalClaudeConfigDir(dir: string): Promise<string> {
   try {
     return folderIdentity(await realpath(dir));
+  } catch {
+    return folderIdentity(dir);
+  }
+}
+
+/** {@link canonicalClaudeConfigDir} for quit, where nothing can be awaited. */
+export function canonicalClaudeConfigDirSync(dir: string): string {
+  try {
+    return folderIdentity(realpathSync(dir));
   } catch {
     return folderIdentity(dir);
   }
@@ -129,7 +147,7 @@ function keep(record: ClaudeUsageRecord): boolean {
 }
 
 export function recordClaudeUsageObservation(record: ClaudeUsageRecord): void {
-  if (keep(record)) queueSave();
+  if (keep(record)) markChanged();
 }
 
 function hasLiveRecords(): boolean {
@@ -176,14 +194,20 @@ function snapshot(profile: ClaudeUsageProfile, now: number): SavedClaudeUsageRea
   return [...newest.values()].filter((reading) => isRestorableClaudeUsageReading(reading, now));
 }
 
+function write(target: Persistence, profile: ClaudeUsageProfile): void {
+  const through = target.changes;
+  target.storage.write(serializeClaudeUsageDocument(snapshot(profile, target.now())));
+  target.saved = through;
+}
+
 async function save(target: Persistence): Promise<void> {
   if (persistence !== target) return;
   // A change from here on queues the next save, which reads it afresh.
   saveQueued = false;
   const profile = await target.readProfile();
-  // A clear while the profile resolved stops saving altogether.
+  // A clear or seal while the profile resolved stops this save.
   if (persistence !== target) return;
-  target.storage.write(serializeClaudeUsageDocument(snapshot(profile, target.now())));
+  write(target, profile);
 }
 
 /**
@@ -201,10 +225,17 @@ function queueSave(): void {
     });
 }
 
+function markChanged(): void {
+  if (persistence === null) return;
+  persistence.changes++;
+  queueSave();
+}
+
 export interface RestoreClaudeUsageOptions {
   now?: () => number;
   readShellObservation?: () => ShellEnvironmentObservation | undefined;
   canonicalKey?: (dir: string) => Promise<string>;
+  canonicalKeySync?: (dir: string) => string;
 }
 
 /**
@@ -217,7 +248,7 @@ export function restoreClaudeUsageObservations(
   storage: ClaudeUsageStorage,
   options: RestoreClaudeUsageOptions = {}
 ): void {
-  if (persistence !== null) return;
+  if (sealed || persistence !== null) return;
   const now = options.now ?? Date.now;
   let saved: SavedClaudeUsageReading[];
   try {
@@ -232,17 +263,42 @@ export function restoreClaudeUsageObservations(
   }
   const readShellObservation = options.readShellObservation ?? getShellEnvironmentObservation;
   const canonicalKey = options.canonicalKey ?? canonicalClaudeConfigDir;
+  const canonicalKeySync = options.canonicalKeySync ?? canonicalClaudeConfigDirSync;
   persistence = {
     storage,
     now,
     readProfile: () => readClaudeUsageProfile(readShellObservation(), canonicalKey),
+    readProfileSync: () => readClaudeUsageProfileSync(readShellObservation(), canonicalKeySync),
     // A probe answering late can move this launch's readings; the saved copy follows.
     unsubscribe: subscribeShellEnvironment(() => {
-      if (hasLiveRecords()) queueSave();
+      if (hasLiveRecords()) markChanged();
     }),
+    changes: 0,
+    saved: 0,
   };
   // Readings that showed before the store opened.
-  if (hasLiveRecords()) queueSave();
+  if (hasLiveRecords()) markChanged();
+}
+
+/**
+ * For quit, before the database closes: stop saving, then write once more,
+ * synchronously, if anything changed since the last save that landed, so a
+ * save still resolving the profile, or one that failed, isn't lost. Nothing
+ * is restored or saved after.
+ */
+export function sealClaudeUsageObservations(): void {
+  sealed = true;
+  const target = persistence;
+  if (target === null) return;
+  target.unsubscribe();
+  persistence = null;
+  saveQueued = false;
+  if (target.changes === target.saved) return;
+  try {
+    write(target, target.readProfileSync());
+  } catch (error) {
+    logError("Couldn't save the Claude usage readings at quit", error);
+  }
 }
 
 /**
@@ -286,35 +342,12 @@ export function readClaudeUsageObservations(): ClaudeUsageObservation[] {
   });
 }
 
-/**
- * For quit: let the save already under way land, within `budgetMs`, then
- * stop saving, so nothing writes once the database has closed. A probe that
- * answered just before quit leaves a save that moves readings to "unknown",
- * and the next launch would otherwise file them under the pane's folder.
- */
-export async function settleClaudeUsageSaves(budgetMs: number): Promise<void> {
-  const target = persistence;
-  if (target === null) return;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  await Promise.race([
-    saves,
-    new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, budgetMs);
-    }),
-  ]);
-  clearTimeout(timer);
-  if (persistence === target) {
-    target.unsubscribe();
-    persistence = null;
-    saveQueued = false;
-  }
-}
-
 /** Forget every reading and stop saving, saved copy untouched: for tests. */
 export function clearClaudeUsageObservations(): void {
   generation++;
   latest.clear();
   persistence?.unsubscribe();
   persistence = null;
+  sealed = false;
   saveQueued = false;
 }

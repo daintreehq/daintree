@@ -46,7 +46,11 @@ describe("appStateClaudeUsageStorage (#17610)", () => {
       key: string;
       value: string;
     }[];
-    expect(rows.map((row) => row.value)).toEqual(['{"second":2}', "untouched"]);
+    // The row's name is part of the saved format: a rename loses every saved reading.
+    expect(rows).toEqual([
+      { key: "claudeUsageObservations", value: '{"second":2}' },
+      { key: "openWindows", value: "untouched" },
+    ]);
   });
 
   it("drops a save that arrives once the database has closed, rather than reopening it", () => {

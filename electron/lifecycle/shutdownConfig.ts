@@ -44,11 +44,6 @@ export const VAD_DRAIN_BUDGET_MS = 1_000;
 // miss still meets the reader's own SIGKILL backstop.
 export const CANOPY_READER_DRAIN_BUDGET_MS = 1_000;
 
-// How long quit lets a Claude usage save already under way land before the
-// database closes (#17610). A save is one realpath and one row write, so it
-// lands in milliseconds; the budget only bounds a stalled filesystem.
-export const CLAUDE_USAGE_SAVE_BUDGET_MS = 500;
-
 // Bounds the post-cleanup tail — the telemetry flush and perf-trace flush that run
 // AFTER the cleanup race resolves and are therefore NOT covered by
 // CLEANUP_TIMEOUT_MS. Sized for the worst-case closeTelemetry(): the Sentry

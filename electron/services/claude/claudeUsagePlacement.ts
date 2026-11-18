@@ -20,20 +20,29 @@ export interface ClaudeUsageProfile {
   shell: string | undefined;
 }
 
+function exportedConfigDir(
+  observation: ShellEnvironmentObservation | undefined
+): string | null | undefined {
+  const exported = observation?.env[CONFIG_DIR_VAR];
+  if (exported === undefined) return undefined;
+  return resolveLaunchClaudeConfigDir({ [CONFIG_DIR_VAR]: exported }) ?? null;
+}
+
 export async function readClaudeUsageProfile(
   observation: ShellEnvironmentObservation | undefined,
   canonicalKey: (dir: string) => Promise<string>
 ): Promise<ClaudeUsageProfile> {
-  const exported = observation?.env[CONFIG_DIR_VAR];
-  const dir =
-    exported === undefined
-      ? undefined
-      : (resolveLaunchClaudeConfigDir({ [CONFIG_DIR_VAR]: exported }) ?? null);
-  return {
-    dir,
-    identity: dir ? await canonicalKey(dir) : dir,
-    shell: observation?.shell,
-  };
+  const dir = exportedConfigDir(observation);
+  return { dir, identity: dir ? await canonicalKey(dir) : dir, shell: observation?.shell };
+}
+
+/** {@link readClaudeUsageProfile} for quit, where nothing can be awaited. */
+export function readClaudeUsageProfileSync(
+  observation: ShellEnvironmentObservation | undefined,
+  canonicalKey: (dir: string) => string
+): ClaudeUsageProfile {
+  const dir = exportedConfigDir(observation);
+  return { dir, identity: dir ? canonicalKey(dir) : dir, shell: observation?.shell };
 }
 
 /**

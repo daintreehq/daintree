@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  UNDATED_CLAUDE_USAGE_TTL_MS,
   isCurrentClaudeUsageReading,
   parseClaudeUsageDocument,
   serializeClaudeUsageDocument,
@@ -8,6 +7,7 @@ import {
 } from "../claudeUsageDocument.js";
 
 const NOW = 1_800_000_000_000;
+const WEEK = 7 * 24 * 60 * 60 * 1000;
 
 const saved = (overrides: Partial<SavedClaudeUsageReading>): SavedClaudeUsageReading => ({
   window: "weekly limit",
@@ -26,17 +26,22 @@ const document = (readings: unknown[], version: unknown = 1) =>
 
 describe("claudeUsageDocument (#17610)", () => {
   it("reads back what it saved, and never the pane's shell", () => {
-    const reading = saved({ usedPercent: 92, statement: "used", identity: null, configDir: null });
-    const value = serializeClaudeUsageDocument([
-      { ...reading, shell: "/bin/zsh" } as SavedClaudeUsageReading,
-    ]);
+    const readings = [
+      saved({ usedPercent: 92, statement: "used", identity: "/work", configDir: "/work" }),
+      saved({ window: "5-hour limit", identity: null, configDir: "/personal" }),
+      saved({ window: "Opus limit", identity: null, configDir: null }),
+    ];
+    const value = serializeClaudeUsageDocument(
+      readings.map((reading) => ({ ...reading, shell: "/bin/zsh" }) as SavedClaudeUsageReading)
+    );
 
     expect(value).not.toContain("/bin/zsh");
-    expect(parseClaudeUsageDocument(value, NOW)).toEqual([reading]);
+    expect(parseClaudeUsageDocument(value, NOW)).toEqual(readings);
   });
 
   it("drops a reading at load once its reset has come", () => {
     const value = serializeClaudeUsageDocument([
+      saved({ terminalId: "past", resetsAt: NOW - 1 }),
       saved({ terminalId: "due", resetsAt: NOW }),
       saved({ terminalId: "ahead", resetsAt: NOW + 1 }),
     ]);
@@ -51,12 +56,12 @@ describe("claudeUsageDocument (#17610)", () => {
       saved({
         terminalId: "week-old",
         resetsAt: null,
-        observedAt: NOW - UNDATED_CLAUDE_USAGE_TTL_MS,
+        observedAt: NOW - WEEK,
       }),
       saved({
         terminalId: "just-inside",
         resetsAt: null,
-        observedAt: NOW - UNDATED_CLAUDE_USAGE_TTL_MS + 1,
+        observedAt: NOW - WEEK + 1,
       }),
     ]);
 
@@ -89,12 +94,27 @@ describe("claudeUsageDocument (#17610)", () => {
       { ...good, identity: 3 },
       { ...good, configDir: "" },
       { ...good, configDir: undefined },
+      // Placed under a folder the pane wasn't on, which no launch does.
+      { ...good, configDir: "/somewhere-else" },
+      { ...good, terminalId: "" },
+      { ...good, usedPercent: 101 },
+      { ...good, usedPercent: -1 },
       null,
       "reading",
       good,
     ]);
 
     expect(parseClaudeUsageDocument(value, NOW)).toEqual([good]);
+  });
+
+  it("skips a time JSON can only spell as out of range", () => {
+    const value = `{"version":1,"readings":[${JSON.stringify(saved({})).replace(
+      /"observedAt":\d+/,
+      '"observedAt":1e999'
+    )}]}`;
+
+    expect(value).toContain("1e999");
+    expect(parseClaudeUsageDocument(value, NOW)).toEqual([]);
   });
 
   it("reads nothing from no document, an unreadable one, or another version's", () => {
@@ -107,17 +127,11 @@ describe("claudeUsageDocument (#17610)", () => {
 
   it("treats a passed reset as current while the app runs, and an undated reading for a week", () => {
     expect(isCurrentClaudeUsageReading({ resetsAt: NOW - 1, observedAt: 0 }, NOW)).toBe(true);
-    expect(
-      isCurrentClaudeUsageReading(
-        { resetsAt: null, observedAt: NOW - UNDATED_CLAUDE_USAGE_TTL_MS + 1 },
-        NOW
-      )
-    ).toBe(true);
-    expect(
-      isCurrentClaudeUsageReading(
-        { resetsAt: null, observedAt: NOW - UNDATED_CLAUDE_USAGE_TTL_MS },
-        NOW
-      )
-    ).toBe(false);
+    expect(isCurrentClaudeUsageReading({ resetsAt: null, observedAt: NOW - WEEK + 1 }, NOW)).toBe(
+      true
+    );
+    expect(isCurrentClaudeUsageReading({ resetsAt: null, observedAt: NOW - WEEK }, NOW)).toBe(
+      false
+    );
   });
 });

@@ -24,6 +24,7 @@ const legacyAuditImport = vi.hoisted(() => ({
 }));
 const claudeUsageRestore = vi.hoisted(() => ({
   storage: { read: () => null, write: () => {} },
+  shouldThrow: false,
   calls: [] as { storage: unknown; migrationRuns: number; tasksRegistered: number }[],
 }));
 let mockLogRetentionDays: number | undefined = 30;
@@ -125,6 +126,7 @@ vi.mock("../../services/claude/ClaudeUsageObservations.js", async (importOrigina
       migrationRuns: migrationRunCalls.count,
       tasksRegistered: registeredTaskNames.length,
     });
+    if (claudeUsageRestore.shouldThrow) throw new Error("test-restore-failure");
   }),
 }));
 
@@ -920,6 +922,7 @@ describe("initGlobalServices task ordering", () => {
     legacyAuditImport.shouldThrow = false;
     legacyAuditImport.calls.length = 0;
     claudeUsageRestore.calls.length = 0;
+    claudeUsageRestore.shouldThrow = false;
     mockLogRetentionDays = 30;
     setGlobalServicesInitialized(false);
     _resetGlobalServiceStartsForTest();
@@ -2035,6 +2038,27 @@ describe("initGlobalServices task ordering", () => {
     expect(claudeUsageRestore.calls).toEqual([
       { storage: claudeUsageRestore.storage, migrationRuns: 1, tasksRegistered: 0 },
     ]);
+    expect(registeredTaskNames.length).toBeGreaterThan(0);
+  });
+
+  it("restores the saved Claude usage readings when no migration is pending", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+
+    await initGlobalServices(fakeRegistry);
+
+    expect(claudeUsageRestore.calls).toEqual([
+      { storage: claudeUsageRestore.storage, migrationRuns: 0, tasksRegistered: 0 },
+    ]);
+  });
+
+  it("keeps booting when the Claude usage restore throws", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    claudeUsageRestore.shouldThrow = true;
+
+    const result = await initGlobalServices(fakeRegistry);
+
+    expect(result).toBe("ok");
+    expect(claudeUsageRestore.calls).toHaveLength(1);
     expect(registeredTaskNames.length).toBeGreaterThan(0);
   });
 
