@@ -863,8 +863,9 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
 
         {/* A fixed height: the dialog keeps its size from folder to folder,
             so it never re-centres while browsing. It gives way only to a
-            window too short for the whole dialog. */}
-        <div className="relative flex h-72 min-h-0 flex-col">
+            window too short for the whole dialog, and never below what the
+            empty and error states need. */}
+        <div className="relative flex h-72 min-h-40 flex-col">
           <div
             ref={listRef}
             id={listId}
