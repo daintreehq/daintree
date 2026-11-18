@@ -1176,6 +1176,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "project.sleep",
   "project.restart",
   "project.sleepIdle",
+  "project.sleepAll",
   "schedules.runNow",
   "recipe.delete",
   "recipe.run",
@@ -1259,6 +1260,7 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   "project.sleep",
   "project.sleepIdle",
   "project.restart",
+  "project.sleepAll",
   // Deferred-promise via scheduleRunConfirmStore (#15980); run() awaits the
   // app-level ScheduleRunConfirmDialog only when earlier runs are still open.
   "schedules.runNow",

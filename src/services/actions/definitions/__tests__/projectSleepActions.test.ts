@@ -4,12 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const sleepProjectMock = vi.hoisted(() => vi.fn());
 const sleepIdleMock = vi.hoisted(() => vi.fn());
 const storeState = vi.hoisted(() => ({
-  projects: [] as Array<{ id: string; name: string; path: string }>,
+  projects: [] as Array<{ id: string; name: string; path: string; status?: string }>,
   currentProject: null as { id: string } | null,
   sleepProject: (...args: unknown[]): Promise<unknown> => sleepProjectMock(...args),
 }));
 
 const getAllTerminalsMock = vi.hoisted(() => vi.fn());
+const startSleepWaitMock = vi.hoisted(() => vi.fn());
+const sleepInOrderMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/clients", () => ({ projectClient: {} }));
 vi.mock("@/clients/terminalClient", () => ({
@@ -23,6 +25,10 @@ vi.mock("@/hooks/useSleepIdleProjects", () => ({
 }));
 vi.mock("@shared/utils/projectMru", () => ({ getMruProjects: () => [] }));
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
+vi.mock("@/services/projectSleepWait", () => ({
+  startSleepWait: (...args: unknown[]) => startSleepWaitMock(...args),
+  sleepProjectsInOrder: (...args: unknown[]) => sleepInOrderMock(...args),
+}));
 
 import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
@@ -37,7 +43,7 @@ import "../projectActions.impl";
 const ctx: ActionContext = {};
 const agentCtx: ActionContext = { dispatchSource: "agent" };
 
-function action(id: "project.sleep" | "project.sleepIdle") {
+function action(id: "project.sleep" | "project.sleepIdle" | "project.sleepAll") {
   const actions: ActionRegistry = new Map();
   const callbacks: ActionCallbacks = Object.create(null);
   registerProjectActions(actions, callbacks);
@@ -168,6 +174,18 @@ describe("project.sleep", () => {
     expect(result).toEqual({ slept: true });
   });
 
+  it("offers the wait, and on that choice starts it instead of sleeping", async () => {
+    useProjectStatsStore.setState({ stats: { cur: stats(), bg: stats({ activeAgentCount: 2 }) } });
+    const run = action("project.sleep").run({ projectId: "bg" }, ctx);
+    await vi.waitFor(() => expect(pending()).not.toBeNull());
+    expect(pending()!.request.offerWhenIdle).toBe(true);
+
+    useProjectSleepConfirmStore.getState().resolveChoice({ when: "idle", pauseNote: true });
+    expect(await run).toEqual({ slept: false });
+    expect(startSleepWaitMock).toHaveBeenCalledWith(["bg"], { pauseNote: true });
+    expect(sleepProjectMock).not.toHaveBeenCalled();
+  });
+
   it("sleeps nothing when the user cancels", async () => {
     const run = action("project.sleep").run({}, ctx);
     await vi.waitFor(() => expect(pending()).not.toBeNull());
@@ -218,5 +236,79 @@ describe("project.sleepIdle", () => {
     sleepIdleMock.mockResolvedValue(1);
     await action("project.sleepIdle").run(undefined, agentCtx);
     expect(sleepIdleMock).toHaveBeenCalledWith({ alreadyApproved: true });
+  });
+});
+
+describe("project.sleepAll", () => {
+  beforeEach(() => {
+    storeState.projects = [
+      { id: "cur", name: "Current", path: "/repos/cur", status: "active" },
+      { id: "bg", name: "Background", path: "/repos/bg", status: "background" },
+      { id: "shut", name: "Asleep", path: "/repos/shut", status: "closed" },
+      { id: "gone", name: "Missing", path: "/repos/gone", status: "missing" },
+    ];
+    sleepInOrderMock.mockResolvedValue(2);
+  });
+
+  it("is a confirm-tier command no agent may run", async () => {
+    const a = action("project.sleepAll");
+    expect(a.danger).toBe("confirm");
+    expect(a.dangerRationale).toBeTruthy();
+    expect(a.nonRepeatable).toBe(true);
+    await expect(a.run(undefined, agentCtx)).rejects.toThrow("only available to the user");
+    expect(pending()).toBeNull();
+    expect(sleepInOrderMock).not.toHaveBeenCalled();
+  });
+
+  it("previews every open project, with live terminal counts, and offers the wait", async () => {
+    useProjectStatsStore.setState({
+      stats: { cur: stats({ activeAgentCount: 1 }), bg: stats({ processCount: 1 }) },
+    });
+    getAllTerminalsMock.mockResolvedValue([
+      { id: "t1", projectId: "bg", cwd: "/", spawnedAt: 0 },
+      { id: "t2", projectId: "bg", cwd: "/", spawnedAt: 0 },
+      { id: "t3", projectId: "bg", cwd: "/", spawnedAt: 0, hasPty: false },
+    ]);
+    const run = action("project.sleepAll").run(undefined, ctx);
+    await vi.waitFor(() => expect(pending()).not.toBeNull());
+    const request = pending()!.request;
+    expect(request.kind).toBe("all");
+    expect(request.offerWhenIdle).toBe(true);
+    expect(request.projects).toEqual([
+      expect.objectContaining({ id: "cur", isActive: true, activeAgentCount: 1 }),
+      expect.objectContaining({ id: "bg", isActive: false, terminalCount: 2 }),
+    ]);
+
+    useProjectSleepConfirmStore.getState().resolveChoice(null);
+    expect(await run).toEqual({ slept: false, count: 0 });
+    expect(sleepInOrderMock).not.toHaveBeenCalled();
+    expect(startSleepWaitMock).not.toHaveBeenCalled();
+  });
+
+  it("sleeps them all at once on Sleep now", async () => {
+    const run = action("project.sleepAll").run(undefined, ctx);
+    await vi.waitFor(() => expect(pending()).not.toBeNull());
+    useProjectSleepConfirmStore.getState().resolveConfirmation(true);
+    expect(await run).toEqual({ slept: true, count: 2 });
+    expect(sleepInOrderMock).toHaveBeenCalledWith(["cur", "bg"]);
+  });
+
+  it("waits for their agents on Sleep when idle", async () => {
+    const run = action("project.sleepAll").run(undefined, ctx);
+    await vi.waitFor(() => expect(pending()).not.toBeNull());
+    useProjectSleepConfirmStore.getState().resolveChoice({ when: "idle", pauseNote: false });
+    expect(await run).toEqual({ slept: false, count: 0 });
+    expect(startSleepWaitMock).toHaveBeenCalledWith(["cur", "bg"], { pauseNote: false });
+    expect(sleepInOrderMock).not.toHaveBeenCalled();
+  });
+
+  it("asks nothing when no project is open", async () => {
+    storeState.projects = [{ id: "shut", name: "Asleep", path: "/repos/shut", status: "closed" }];
+    storeState.currentProject = null;
+    expect(await action("project.sleepAll").run(undefined, ctx)).toEqual({
+      slept: false,
+      count: 0,
+    });
+    expect(pending()).toBeNull();
   });
 });

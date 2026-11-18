@@ -375,6 +375,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `project.settings.open` | Open project settings | safe | — |
 | `project.silenceNotificationKind` | Silence notification kind | safe | `kind`, `projectId?` |
 | `project.sleep` | Sleep project | confirm | `projectId?` |
+| `project.sleepAll` | Sleep all projects | confirm | — |
 | `project.sleepIdle` | Sleep idle projects | confirm | — |
 | `project.switch` | Switch project | safe | `projectId` |
 | `project.switcherPalette` | Open project switcher | safe | — |

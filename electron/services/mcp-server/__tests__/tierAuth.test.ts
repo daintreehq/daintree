@@ -595,6 +595,16 @@ describe("project.restart stays off every tier (#14179)", () => {
   });
 });
 
+// Sleeping every project stops every assistant with it, the caller's own (#17882).
+describe("project.sleepAll stays off every tier (#17882)", () => {
+  it.each(["core", "full", "external"] as const)("is not on the %s tier", (tier) => {
+    expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain("project.sleepAll");
+    expect(TIER_ALLOWLISTS[tier].has("project.sleepAll")).toBe(false);
+    expect(isTierPermitted(tier, "project.sleepAll")).toBe(false);
+    expect(isTierPermitted(tier, "project.sleepAll", true)).toBe(false);
+  });
+});
+
 // Review marks are the user's acknowledgement of what they saw, and "reviewed"
 // is never something an agent gets to say (#14580, #14585).
 describe("review mark actions stay off every tier (#14585)", () => {

@@ -17,6 +17,7 @@ import path from "node:path";
 import ts from "typescript";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import type { ProjectStatusMap } from "@shared/types/ipc/project";
+import { actionService } from "@/services/ActionService";
 
 const { projectState, statsState } = vi.hoisted(() => {
   const statsState: { stats: ProjectStatusMap } = { stats: {} };
@@ -171,10 +172,6 @@ function idleSource(): ProjectSwitcherConfirmSource {
     setRemoveConfirmProject: vi.fn(),
     confirmRemoveProject: vi.fn().mockResolvedValue(undefined),
     isRemovingProject: false,
-    sleepConfirmProject: null,
-    setSleepConfirmProject: vi.fn(),
-    confirmSleep: vi.fn().mockResolvedValue(undefined),
-    isSleepingProject: false,
     deleteScratchConfirm: null,
     dismissDeleteScratchConfirm: vi.fn(),
     confirmDeleteScratch: vi.fn().mockResolvedValue(undefined),
@@ -198,7 +195,6 @@ function calledCallbacks(source: ProjectSwitcherConfirmSource): string[] {
 
 const BUSY_KEYS = [
   "isRemovingProject",
-  "isSleepingProject",
   "isDeletingScratch",
   "isDeletingAllScratches",
 ] as const;
@@ -224,14 +220,6 @@ const CONFIRMS: Array<{
     busyKey: "isRemovingProject",
     acceptKey: "confirmRemoveProject",
     cancelKey: "setRemoveConfirmProject",
-    cancelArgs: [null],
-  },
-  {
-    kind: "sleep project",
-    pending: { sleepConfirmProject: makeProject() },
-    busyKey: "isSleepingProject",
-    acceptKey: "confirmSleep",
-    cancelKey: "setSleepConfirmProject",
     cancelArgs: [null],
   },
   {
@@ -453,7 +441,11 @@ describe("cold requests with no switcher mounted", () => {
     expect(screen.queryAllByTestId("confirm-dialog")).toHaveLength(0);
   });
 
-  it("shows one Sleep confirm after the palette closes, and a cancel sleeps nothing", async () => {
+  it("hands Sleep to project.sleep after the palette closes, with no confirm of its own", async () => {
+    // The confirm, and its choice to wait for the agents, is the app-level
+    // sleep dialog the action raises (#17882).
+    const dispatch = vi.mocked(actionService.dispatch);
+    dispatch.mockResolvedValue({ ok: true, result: { slept: false } });
     const close = vi.fn();
     render(<ColdView project={makeProject({ processCount: 2 })} close={close} />);
 
@@ -462,16 +454,13 @@ describe("cold requests with no switcher mounted", () => {
     });
 
     expect(close).toHaveBeenCalledTimes(1);
-    expect(screen.getAllByTestId("confirm-dialog")).toHaveLength(1);
-    expect(screen.getByTestId("confirm-title").textContent).toBe("Sleep 'retry-queue'?");
-    expect(destructiveCalls()).toEqual(NOTHING_DESTROYED);
-
-    await act(async () => {
-      fireEvent.click(screen.getByTestId("confirm-cancel"));
-    });
-
-    expect(destructiveCalls()).toEqual(NOTHING_DESTROYED);
+    expect(dispatch).toHaveBeenCalledWith(
+      "project.sleep",
+      { projectId: "p1" },
+      { source: "user" }
+    );
     expect(screen.queryAllByTestId("confirm-dialog")).toHaveLength(0);
+    expect(destructiveCalls()).toEqual(NOTHING_DESTROYED);
   });
 });
 
