@@ -22,6 +22,8 @@ import {
   FileDecorationContributionSchema,
   ContextProviderContributionSchema,
   WorktreeDeleteNotesContributionSchema,
+  CloudCredentialFieldSchema,
+  CloudProviderContributionSchema,
   FileEditorContributionSchema,
   ElementPickerDetectionRuleSchema,
   ElementPickerProviderContributionSchema,
@@ -228,6 +230,7 @@ const SWEPT_SCHEMAS = {
   elementPickerProviders: ElementPickerProviderContributionSchema,
   fileDecorationProviders: FileDecorationContributionSchema,
   worktreeDeleteNotes: WorktreeDeleteNotesContributionSchema,
+  cloudProviders: CloudProviderContributionSchema,
   fileEditors: FileEditorContributionSchema,
   agents: AgentContributionSchema,
   processTools: ProcessToolContributionSchema,
@@ -263,6 +266,7 @@ const SWEPT_SCHEMAS = {
   "recipes.terminals": RecipeContributionTerminalSchema,
   "forgeProviders.credentialFields": CredentialFieldSchema,
   "forgeProviders.slots": ForgeProviderContributionSchema.shape.slots,
+  "cloudProviders.credentialFields": CloudCredentialFieldSchema,
   "elementPickerProviders.detection": ElementPickerDetectionRuleSchema,
   "tours.chapters": TourChapterSchema,
   "tours.chapters.captions": TourCaptionSchema,
@@ -314,6 +318,7 @@ const TOP_LEVEL_GROUPS = [
   "elementPickerProviders",
   "fileDecorationProviders",
   "worktreeDeleteNotes",
+  "cloudProviders",
   "fileEditors",
   "agents",
   "processTools",
@@ -408,6 +413,11 @@ type FieldConsumerCoverage = {
   >;
   worktreeDeleteNotes: Record<
     keyof z.infer<typeof WorktreeDeleteNotesContributionSchema>,
+    ConsumerDescriptor
+  >;
+  cloudProviders: Record<keyof z.infer<typeof CloudProviderContributionSchema>, ConsumerDescriptor>;
+  "cloudProviders.credentialFields": Record<
+    keyof z.infer<typeof CloudCredentialFieldSchema>,
     ConsumerDescriptor
   >;
   fileEditors: Record<keyof z.infer<typeof FileEditorContributionSchema>, ConsumerDescriptor>;
@@ -1894,6 +1904,159 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         },
       ],
       note: "Routes pulls to the provider only in projects whose code forge is that provider.",
+    },
+  },
+  cloudProviders: {
+    id: {
+      mode: "derived-input",
+      consumers: [
+        {
+          file: "electron/services/plugin/pluginCloudProviders.ts",
+          symbol: "publishPluginCloudProviders (pluginCloudProviderId)",
+        },
+      ],
+      note: "Joined to the plugin id as the provider's registered id, {pluginId}.{id}.",
+    },
+    name: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/remote/cloud/PluginCloudProvider.ts",
+          symbol: "PluginCloudProvider.info",
+        },
+      ],
+      note: "Shown wherever the provider, its accounts and its machines are named.",
+    },
+    description: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/remote/cloud/PluginCloudProvider.ts",
+          symbol: "PluginCloudProvider.info",
+        },
+      ],
+      note: "Shown with the provider in Settings.",
+    },
+    apiUrl: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/remote/cloud/pluginCloudProviderRegistrations.ts",
+          symbol: "watchPluginCloudProviders (registry apiUrl)",
+        },
+      ],
+      note: "The origin an account is tied to and its credentials are handed over for.",
+    },
+    apiKeyUrl: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/remote/cloud/PluginCloudProvider.ts",
+          symbol: "PluginCloudProvider.info",
+        },
+      ],
+      note: "Opened from Connect account.",
+    },
+    dashboardUrl: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/remote/cloud/PluginCloudProvider.ts",
+          symbol: "PluginCloudProvider.info",
+        },
+      ],
+      note: "Opened from the provider's account and machines.",
+    },
+    docsUrl: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/remote/cloud/PluginCloudProvider.ts",
+          symbol: "PluginCloudProvider.info",
+        },
+      ],
+      note: "Opened from the provider's help links.",
+    },
+    credentialFields: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/remote/cloud/PluginCloudProvider.ts",
+          symbol: "PluginCloudProvider.info",
+        },
+        {
+          file: "electron/remote/cloud/CloudProviderRegistry.ts",
+          symbol: "register (credentialFieldsProblem)",
+        },
+      ],
+      note: "What connecting an account asks for, and what the credentials are normalised against.",
+    },
+    capabilities: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/remote/cloud/PluginCloudProvider.ts",
+          symbol: "PluginCloudProvider constructor (conditional methods)",
+        },
+        {
+          file: "electron/services/plugin/pluginCloudProviderCalls.ts",
+          symbol: "cloudProviderMethodsNeeded",
+        },
+      ],
+      note: "Drives the lifecycle exactly as a built-in's do, and which methods the bound impl must have.",
+    },
+  },
+  "cloudProviders.credentialFields": {
+    id: {
+      mode: "verbatim",
+      consumers: [
+        { file: "electron/remote/cloud/cloudCredentials.ts", symbol: "normalizeCloudCredentials" },
+      ],
+      note: "The key each entered value is kept and handed to the provider under.",
+    },
+    label: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "src/components/Settings/Hosts/ConnectCloudAccountDialog.tsx",
+          symbol: "ConnectCloudAccountDialog",
+        },
+      ],
+      note: "The field's label in Connect account.",
+    },
+    secret: {
+      mode: "verbatim",
+      consumers: [
+        { file: "electron/remote/cloud/cloudCredentials.ts", symbol: "cloudCredentialHint" },
+      ],
+      note: "Masked as typed, and the only kind a key hint is taken from.",
+    },
+    input: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/remote/cloud/cloudCredentials.ts",
+          symbol: "normalizeCloudCredentials (normalizeValue)",
+        },
+      ],
+      note: "One line, several lines, or a key file chosen from disk.",
+    },
+    required: {
+      mode: "verbatim",
+      consumers: [
+        { file: "electron/remote/cloud/cloudCredentials.ts", symbol: "normalizeCloudCredentials" },
+      ],
+      note: "A blank required field is refused before the provider is asked.",
+    },
+    help: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "src/components/Settings/Hosts/ConnectCloudAccountDialog.tsx",
+          symbol: "ConnectCloudAccountDialog",
+        },
+      ],
+      note: "A short hint shown with the field.",
     },
   },
   worktreeDeleteNotes: {
