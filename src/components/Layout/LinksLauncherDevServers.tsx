@@ -447,6 +447,8 @@ function StatusLine({
   const status = (
     <span className="flex shrink-0 items-baseline gap-1.5">
       <span className={showLabel ? undefined : "sr-only"}>{label}</span>
+      {/* Read between the two; a flex container doesn't draw it. */}
+      {address && " "}
       {address && <span className="tabular-nums">{address}</span>}
     </span>
   );

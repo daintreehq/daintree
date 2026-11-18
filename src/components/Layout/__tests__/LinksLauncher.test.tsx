@@ -40,6 +40,13 @@ const h = vi.hoisted(() => ({
   listeners: new Set<() => void>(),
   restart: vi.fn((_target: unknown) => Promise.resolve()),
   stop: vi.fn((_target: unknown) => Promise.resolve()),
+  /** Whether a server's preview is a panel of this view. */
+  devServerInView: true,
+  openDevServer: vi.fn<(session: DevPreviewSessionState) => Promise<void>>(() =>
+    Promise.resolve()
+  ),
+  openDevServerExternally: vi.fn<(url: string) => Promise<void>>(() => Promise.resolve()),
+  expectHandoff: vi.fn(),
 }));
 
 function notify(): void {
@@ -105,6 +112,13 @@ vi.mock("@/services/openLinkUrl", () => ({
   openLinkUrl: (url: string) => h.openLinkUrl(url),
   openUrlExternally: (url: string, logPrefix: string) => h.openUrlExternally(url, logPrefix),
   opensInPanel: (url: string) => url.startsWith("http://localhost"),
+}));
+vi.mock("@/services/openDevServer", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/services/openDevServer")>()),
+  devServerPanelInView: (session: DevPreviewSessionState) =>
+    h.devServerInView ? { id: session.panelId } : undefined,
+  openDevServer: (session: DevPreviewSessionState) => h.openDevServer(session),
+  openDevServerExternally: (url: string) => h.openDevServerExternally(url),
 }));
 vi.mock("@/components/Terminal/contentGridFocus", () => ({
   enterFocusedPanel: (id: string | null) => h.enterFocusedPanel(id),
@@ -242,6 +256,12 @@ function rows(): HTMLElement[] {
   return Array.from(launcher()?.querySelectorAll<HTMLElement>("li > button") ?? []);
 }
 
+/** The rows of the launcher's section whose heading matches `heading`. */
+function sectionRows(heading: RegExp): HTMLElement[] {
+  const section = within(launcher()!).getByRole("region", { name: heading });
+  return Array.from(section.querySelectorAll<HTMLElement>("li > button"));
+}
+
 beforeAll(async () => {
   await primeRadix();
 });
@@ -252,6 +272,9 @@ beforeEach(() => {
   h.enterFocusedPanel.mockClear();
   h.restart.mockClear();
   h.stop.mockClear();
+  h.devServerInView = true;
+  h.openDevServer.mockClear();
+  h.openDevServerExternally.mockClear();
   h.links = { projectLinks: [STAGING, LOCAL], declaredLinks: [], globalLinks: [DOCS] };
   h.devSessions = { sessions: [], hydrated: true, fetchError: false };
   h.pullRequest = null;
@@ -641,6 +664,56 @@ describe("dev servers in the launcher", () => {
     expect(launcher()).not.toBeNull();
   });
 
+  it("opens a running server from its row, closing and leaving focus with the panel it brought forward", async () => {
+    const server = devSession({ url: "http://localhost:5824" });
+    h.devSessions.sessions = [server];
+    const panel = document.createElement("textarea");
+    document.body.append(panel);
+    h.openDevServer.mockImplementation(() => {
+      panel.focus();
+      return Promise.resolve();
+    });
+    try {
+      await openLauncher();
+      const [row] = sectionRows(/^Dev servers/);
+      expect(describeRow(row!)).toEqual({
+        name: "feature-foo",
+        description: "Running localhost:5824",
+      });
+      await act(async () => {
+        fireEvent.click(row!, { detail: 1 });
+      });
+      await flush();
+
+      expect(h.openDevServer).toHaveBeenCalledTimes(1);
+      expect(h.openDevServer).toHaveBeenCalledWith(server);
+      expect(h.openLinkUrl).not.toHaveBeenCalled();
+      expect(launcher()).toBeNull();
+      expect(document.activeElement).toBe(panel);
+    } finally {
+      panel.remove();
+    }
+  });
+
+  it("sends a running server to the system browser from its own button, and closes", async () => {
+    h.devSessions.sessions = [devSession({ url: "http://localhost:5824" })];
+    await openLauncher();
+    await act(async () => {
+      fireEvent.click(
+        within(launcher()!).getByRole("button", {
+          name: "Open dev server for feature-foo in external browser",
+        }),
+        { detail: 1 }
+      );
+    });
+    await flush();
+
+    expect(h.openDevServerExternally).toHaveBeenCalledWith("http://localhost:5824");
+    expect(h.openDevServer).not.toHaveBeenCalled();
+    expect(h.openUrlExternally).not.toHaveBeenCalled();
+    expect(launcher()).toBeNull();
+  });
+
   it("shows them alone, with no prompt to add a link, when there are no links", async () => {
     h.links = { projectLinks: [], declaredLinks: [], globalLinks: [] };
     h.devSessions.sessions = [devSession({ status: "error", terminalId: null })];
@@ -785,7 +858,7 @@ describe("the active worktree's pull request in the launcher", () => {
     ]);
     expect(h.getChecks).toHaveBeenCalledTimes(1);
     expect(h.getChecks).toHaveBeenCalledWith("/repo/wt-1", 42);
-    expect(rows().slice(3).map(describeRow)).toEqual([
+    expect(sectionRows(/^Pull request/).map(describeRow)).toEqual([
       { name: "Fix login", description: "PR #42 · Open" },
       { name: "unit", description: "Failed" },
       { name: "e2e", description: "Running" },
@@ -1341,6 +1414,8 @@ describe("the active worktree's deployments in the launcher", () => {
         devSessions={{ sessions: [], hydrated: true, fetchError: false }}
         onOpen={() => {}}
         onOpenExternal={() => {}}
+        onOpenDevServer={() => {}}
+        onOpenDevServerExternally={() => {}}
         onManage={() => {}}
       />
     );
