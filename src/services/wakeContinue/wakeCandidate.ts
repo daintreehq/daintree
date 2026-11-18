@@ -15,6 +15,8 @@ export interface WakeCandidate {
   outcome: "resumed" | "fresh" | "held";
   /** Why a held pane is held, as restore recorded it. */
   holdReason?: string;
+  /** The conversation a held pane was held with, when restore could name one. */
+  heldSessionId?: string;
   /** When the restore pass that launched it began (epoch ms). */
   restoredAt: number;
 }

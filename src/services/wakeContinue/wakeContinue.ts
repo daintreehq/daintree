@@ -57,7 +57,7 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export type WakeLiveOutcome = WakeCandidate["outcome"] | "restarted" | "closed";
 
 export function liveWakeOutcome(
-  entry: Pick<WakeContinueEntry, "restoredAt">,
+  entry: Pick<WakeContinueEntry, "restoredAt" | "outcome" | "heldSessionId">,
   panel: PanelInstance | undefined
 ): WakeLiveOutcome {
   if (!panel || panel.location === "trash" || !isPtyPanel(panel)) return "closed";
@@ -67,7 +67,16 @@ export function liveWakeOutcome(
   const provenance = panel.restoreProvenance;
   if (!provenance || provenance.at !== entry.restoredAt) return "restarted";
   if (provenance.disposition === "held") return "held";
-  return provenance.disposition === "resume" ? "resumed" : "fresh";
+  if (provenance.disposition !== "resume") return "fresh";
+  // A pane the user started from its hold counts only on the conversation it
+  // was held with; picking another one is a different session.
+  if (
+    entry.outcome === "held" &&
+    (!entry.heldSessionId || panel.agentSessionId !== entry.heldSessionId)
+  ) {
+    return "restarted";
+  }
+  return "resumed";
 }
 
 /**
@@ -165,8 +174,8 @@ export async function sendWakeContinueNotes(note: string): Promise<void> {
 
   while (owned() && (waiting.length > 0 || slots.some((slot) => slot.busy))) {
     const now = Date.now();
-    for (let i = waiting.length - 1; i >= 0; i--) {
-      const item = waiting[i]!;
+    // In offer order, so the panes go out in the order the grid shows them.
+    for (const item of [...waiting]) {
       const verdict = assess(item, panelOf(item.entry.terminalId), now);
       if (typeof verdict === "object" && "wait" in verdict) {
         const shown = useWakeContinueStore
@@ -181,16 +190,27 @@ export async function sendWakeContinueNotes(note: string): Promise<void> {
       if (verdict === "admit") {
         const slot = slots.find((candidate) => !candidate.busy && candidate.freeAt <= now);
         if (!slot) continue;
-        waiting.splice(i, 1);
+        waiting.splice(waiting.indexOf(item), 1);
         slot.busy = true;
-        const generation = startedAtOf(panelOf(item.entry.terminalId));
-        void deliverNote(offer, item.entry, text, generation, owned).finally(() => {
+        const panel = panelOf(item.entry.terminalId);
+        const admitted: Admission = {
+          generation: startedAtOf(panel),
+          settledAt: panel && isPtyPanel(panel) ? panel.lastStateChange : undefined,
+        };
+        void deliverNote(offer, item.entry, text, admitted, owned).then((outcome) => {
           slot.busy = false;
+          if (outcome === "lapsed") {
+            // Nothing went in: the pane left its prompt, so it waits for the
+            // next settle like any other, and the slot is free at once.
+            item.promptSince = undefined;
+            if (owned()) waiting.push(item);
+            return;
+          }
           slot.freeAt = Date.now() + WAKE_CONTINUE_SPACING_MS;
         });
         continue;
       }
-      waiting.splice(i, 1);
+      waiting.splice(waiting.indexOf(item), 1);
       if (typeof verdict === "object" && "failed" in verdict) {
         setDelivery(offer.id, item.entry.terminalId, {
           status: "failed",
@@ -238,32 +258,63 @@ function assess(
   return { wait: readiness === "needs-you" ? "needs-you" : "queued" };
 }
 
+/** What the scheduler saw when it let a note go: the process, and the prompt it timed. */
+interface Admission {
+  generation: number | undefined;
+  settledAt: number | undefined;
+}
+
+/**
+ * One note through the request lane. `lapsed` when the pane stopped being at
+ * the prompt the scheduler timed before anything was typed: the lane would
+ * otherwise wait on it in its slot, and take the next prompt untimed.
+ */
 async function deliverNote(
   offer: WakeContinueOffer,
   entry: WakeContinueEntry,
   note: string,
-  generation: number | undefined,
+  admitted: Admission,
   owned: () => boolean
-): Promise<void> {
+): Promise<"settled" | "lapsed"> {
   const setDelivery = useWakeContinueStore.getState().setDelivery;
   const panel = usePanelStore.getState().panelsById[entry.terminalId];
+  let lapsed = false;
   try {
     await deliverAgentRequest({
       ownerKey: ownerKeyFor(offer.id, entry.terminalId),
       destination: { kind: "terminal", terminalId: entry.terminalId, title: entry.title },
       worktreeId: panel?.worktreeId ?? null,
-      stillOwned: owned,
-      onState: (delivery) => setDelivery(offer.id, entry.terminalId, delivery.state),
+      // Once lapsed, the lane's next look ends the run before it types.
+      stillOwned: () => owned() && !lapsed,
+      onState: (delivery) => {
+        if (lapsed) return;
+        const { status } = delivery.state;
+        if (status === "queued" || status === "needs-you") {
+          lapsed = true;
+          return;
+        }
+        setDelivery(offer.id, entry.terminalId, delivery.state);
+      },
       buildPrompt: async () => note,
       readiness: promptReadiness,
-      verify: () => untouchedSinceWake(entry, offer.projectId, generation),
+      verify: async () => {
+        const panelNow = usePanelStore.getState().panelsById[entry.terminalId];
+        const settledAt = panelNow && isPtyPanel(panelNow) ? panelNow.lastStateChange : undefined;
+        if (settledAt !== admitted.settledAt) {
+          lapsed = true;
+          return "left its prompt";
+        }
+        return untouchedSinceWake(entry, offer.projectId, admitted);
+      },
     });
   } catch (error) {
+    if (lapsed) return "lapsed";
     setDelivery(offer.id, entry.terminalId, {
       status: "failed",
       message: formatErrorMessage(error, "Couldn't send the note"),
     });
   }
+  return lapsed ? "lapsed" : "settled";
 }
 
 /**
@@ -274,10 +325,10 @@ async function deliverNote(
 async function untouchedSinceWake(
   entry: WakeContinueEntry,
   projectId: string,
-  generation: number | undefined
+  admitted: Admission
 ): Promise<string | null> {
   const panel = usePanelStore.getState().panelsById[entry.terminalId];
-  if (liveWakeOutcome(entry, panel) !== "resumed" || startedAtOf(panel) !== generation) {
+  if (liveWakeOutcome(entry, panel) !== "resumed" || startedAtOf(panel) !== admitted.generation) {
     return `${entry.title} was restarted after it resumed — no note sent`;
   }
   const draft = useTerminalInputStore.getState().getDraftInput(entry.terminalId, projectId);
@@ -285,8 +336,6 @@ async function untouchedSinceWake(
   if (getLastComposerSend(entry.terminalId)?.seq !== entry.composerSendSeq) {
     return `${entry.title} was sent a message after it resumed — no note sent`;
   }
-  // The resumed process is a new pty, whose record starts with nothing typed:
-  // any typing on it at all is someone's.
   const activity = await terminalClient
     .getOutputActivity([entry.terminalId])
     .then((lookups) => lookups[entry.terminalId])
@@ -294,7 +343,12 @@ async function untouchedSinceWake(
   if (activity?.status !== "read") {
     return `Couldn't tell whether ${entry.title} was typed in — no note sent`;
   }
-  return activity.lastTypedInputAt !== undefined
+  // Read against the prompt the note goes in at, as the wake gate does: a
+  // launch that types its own command (a shell without the startup wrapper)
+  // stamps the pty before the agent ever settles, and is no one's draft.
+  const typedAt = activity.lastTypedInputAt;
+  return typedAt !== undefined &&
+    (admitted.settledAt === undefined || typedAt >= admitted.settledAt)
     ? `${entry.title} was typed in after it resumed — no note sent`
     : null;
 }

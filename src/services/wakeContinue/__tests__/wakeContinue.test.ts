@@ -68,6 +68,7 @@ type Pane = {
   lastStateChange?: number;
   startedAt?: number;
   restoreRecovery?: unknown;
+  agentSessionId?: string;
 };
 
 function setPane(id: string, pane: Pane = {}): void {
@@ -86,6 +87,7 @@ function setPane(id: string, pane: Pane = {}): void {
         lastStateChange: pane.lastStateChange ?? 1,
         restoreProvenance: { at: pane.at ?? RESTORED_AT, disposition },
         ...(pane.restoreRecovery !== undefined && { restoreRecovery: pane.restoreRecovery }),
+        ...(pane.agentSessionId !== undefined && { agentSessionId: pane.agentSessionId }),
       } as unknown as PanelInstance,
     },
   }));
@@ -190,15 +192,66 @@ describe("sendWakeContinueNotes", () => {
     }
   });
 
-  it("sends to a held pane the user started on its session before sending", async () => {
-    setPane("a", { disposition: "held", restoreRecovery: { reason: "resume-deferred" } });
+  it("sends to a held pane the user started on its own session, not on another", async () => {
+    for (const id of ["a", "b"]) {
+      setPane(id, { disposition: "held", restoreRecovery: { reason: "resume-deferred" } });
+    }
     publishWakeCandidates("p1", [
-      candidate("a", { outcome: "held", holdReason: "resume-deferred" }),
+      candidate("a", { outcome: "held", holdReason: "resume-deferred", heldSessionId: "s-a" }),
+      candidate("b", { outcome: "held", holdReason: "resume-deferred", heldSessionId: "s-b" }),
     ]);
-    setPane("a", { disposition: "resume" });
+    setPane("a", { disposition: "resume", agentSessionId: "s-a" });
+    // Started from its hold, but on a conversation picked from the list.
+    setPane("b", { disposition: "resume", agentSessionId: "s-other" });
     void sendWakeContinueNotes("Go on");
     await vi.advanceTimersByTimeAsync(SETTLE);
     expect(deliveries.map((d) => targetOf(d.options))).toEqual(["a"]);
+  });
+
+  it("offers nothing to a pane rebuilt by a different restore", async () => {
+    setPane("a", { at: RESTORED_AT + 1 });
+    publishWakeCandidates("p1", [candidate("a")]);
+    void sendWakeContinueNotes("Go on");
+    await vi.advanceTimersByTimeAsync(SETTLE);
+    expect(deliveries).toHaveLength(0);
+  });
+
+  it("hands a pane that leaves its prompt back to wait, freeing its slot", async () => {
+    for (const id of ["a", "b", "c", "d"]) setPane(id);
+    publishWakeCandidates(
+      "p1",
+      ["a", "b", "c", "d"].map((id) => candidate(id))
+    );
+    void sendWakeContinueNotes("Go on");
+    await vi.advanceTimersByTimeAsync(SETTLE);
+    expect(deliveries.map((d) => targetOf(d.options))).toEqual(["a", "b", "c"]);
+
+    // "a" picked something up before its note went in: the lane says so.
+    setPane("a", { agentState: "working" });
+    deliveries[0]!.options.onState({
+      id: "r",
+      state: { status: "queued" },
+      title: "",
+      terminalId: "a",
+    });
+    expect(deliveries[0]!.options.stillOwned()).toBe(false);
+    await vi.advanceTimersByTimeAsync(SETTLE);
+    expect(deliveries.map((d) => targetOf(d.options))).toEqual(["a", "b", "c"]);
+    // The lane ends the run on its next look; "d" takes the slot at once.
+    deliveries[0]!.settle();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(deliveries.map((d) => targetOf(d.options))).toEqual(["a", "b", "c", "d"]);
+    const a = useWakeContinueStore.getState().offer!.entries.find((e) => e.terminalId === "a");
+    expect(a?.delivery?.status).toBe("queued");
+
+    // Back at a prompt that has held: it goes again.
+    setPane("a", { lastStateChange: 50 });
+    await vi.advanceTimersByTimeAsync(SETTLE);
+    expect(deliveries.slice(4).map((d) => targetOf(d.options))).toEqual([]);
+    for (const d of deliveries.slice(1)) d.settle();
+    await vi.advanceTimersByTimeAsync(WAKE_CONTINUE_SPACING_MS + 500);
+    expect(deliveries.map((d) => targetOf(d.options))).toContain("a");
+    expect(deliveries.filter((d) => targetOf(d.options) === "a")).toHaveLength(2);
   });
 
   it("waits for a prompt to hold before typing at it", async () => {
@@ -232,7 +285,7 @@ describe("sendWakeContinueNotes", () => {
     await vi.advanceTimersByTimeAsync(SETTLE);
     const first = deliveries.map((d) => targetOf(d.options));
     expect(first).toHaveLength(3);
-    expect(first.every((id) => ready.includes(id))).toBe(true);
+    expect(first.every((id) => id !== null && ready.includes(id))).toBe(true);
 
     // Nothing more goes out until one settles and its slot has paused.
     await vi.advanceTimersByTimeAsync(30_000);
@@ -269,6 +322,12 @@ describe("sendWakeContinueNotes", () => {
 
     getOutputActivity.mockResolvedValueOnce({ x: { status: "read" }, a: { status: "unreadable" } });
     expect(await verify()).toBe("Couldn't tell whether Agent a was typed in — no note sent");
+    // The launch typing its own command, before the agent settled, is no one's draft.
+    getOutputActivity.mockResolvedValueOnce({
+      x: { status: "read" },
+      a: { status: "read", lastTypedInputAt: 0 },
+    });
+    expect(await verify()).toBeNull();
     getOutputActivity.mockResolvedValueOnce({
       x: { status: "read" },
       a: { status: "read", lastTypedInputAt: 1 },

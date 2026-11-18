@@ -65,10 +65,11 @@ export function wakeOfferCounts(
     if (status === "sent") counts.sent++;
     else if (status === "unconfirmed") counts.unconfirmed++;
     else if (status === "failed") counts.failed++;
-    // Once a note is on its way the pane counts as one it was sent to, whatever
-    // the pane has done since.
-    if (status !== undefined || outcomes[index] === "resumed") counts.resumed++;
-    else if (outcomes[index] === "held" && entry.holdReason === "resume-deferred") counts.held++;
+    // Once sending starts, the panes counted are the ones it took on, whatever
+    // they have done since; a pane started afterwards was never one of them.
+    if (offer.phase === "offered" ? outcomes[index] === "resumed" : status !== undefined) {
+      counts.resumed++;
+    } else if (outcomes[index] === "held" && entry.holdReason === "resume-deferred") counts.held++;
   });
   return counts;
 }

@@ -44,9 +44,11 @@ describe("promptReadiness", () => {
     expect(
       promptReadiness({ agentState: "working", waitingReason: "prompt", lastTransitionAt: 1 })
     ).toBe("not-yet");
-    expect(
-      promptReadiness({ agentState: "idle", waitingReason: "prompt", lastTransitionAt: 1 })
-    ).toBe("not-yet");
+    for (const agentState of ["idle", "completed", "exited"] as const) {
+      expect(promptReadiness({ agentState, waitingReason: "prompt", lastTransitionAt: 1 })).toBe(
+        "not-yet"
+      );
+    }
     expect(promptReadiness({ agentState: null })).toBe("not-yet");
   });
 

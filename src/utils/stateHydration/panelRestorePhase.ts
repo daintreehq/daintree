@@ -1527,6 +1527,9 @@ export async function restorePanelsPhase(
                           : "fresh",
                       ...(respawnArgs.restoreRecovery && {
                         holdReason: respawnArgs.restoreRecovery.reason,
+                        ...(respawnArgs.restoreRecovery.sessionId !== undefined && {
+                          heldSessionId: respawnArgs.restoreRecovery.sessionId,
+                        }),
                       }),
                       restoredAt,
                     },
