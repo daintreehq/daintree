@@ -137,7 +137,7 @@ describe("AgentUsageWatch", () => {
     await vi.advanceTimersByTimeAsync(CADENCE - TICK - 1);
     // Four minutes in, past four ticks of looking: still the one read.
     expect(h.readCodexHomes).toHaveBeenCalledTimes(1);
-    expect(h.watch.latest()).toMatchObject([{ agentId: "codex", usedPercent: 82 }]);
+    expect(h.watch.latest()[0]).toMatchObject({ agentId: "codex", usedPercent: 82 });
 
     await vi.advanceTimersByTimeAsync(TICK + 1);
     expect(h.readCodexHomes).toHaveBeenCalledTimes(2);
@@ -156,12 +156,12 @@ describe("AgentUsageWatch", () => {
     await vi.advanceTimersByTimeAsync(TICK);
     expect(h.readCodexHomes).toHaveBeenCalledTimes(2);
     expect([...h.readCodexHomes.mock.calls[1]![0].keys()]).toEqual(["/accts/b"]);
-    expect(h.watch.latest()).toMatchObject([{ agentId: "codex", usedPercent: 90 }]);
+    expect(h.watch.latest()[0]).toMatchObject({ agentId: "codex", usedPercent: 90 });
 
     // Once the agent on b exits, b's reading drops off at the next look.
     h.live.current = { complete: true, codexHomes: ["/accts/a"], claudeConfigDirs: [] };
     await vi.advanceTimersByTimeAsync(TICK);
-    expect(h.watch.latest()).toMatchObject([{ agentId: "codex", usedPercent: 20 }]);
+    expect(h.watch.latest()[0]).toMatchObject({ agentId: "codex", usedPercent: 20 });
     h.watch.dispose();
   });
 
@@ -178,7 +178,7 @@ describe("AgentUsageWatch", () => {
     }));
     await vi.advanceTimersByTimeAsync(CADENCE);
     expect(h.readCodexHomes).toHaveBeenCalledTimes(2);
-    expect(h.watch.latest()).toMatchObject([{ usedPercent: 70, observedAt: START }]);
+    expect(h.watch.latest()[0]).toMatchObject({ usedPercent: 70, observedAt: START });
     h.watch.dispose();
   });
 
@@ -225,10 +225,15 @@ describe("AgentUsageWatch", () => {
     ];
     h.watch.acquire();
     await settle();
-    expect(h.watch.latest()).toMatchObject([{ statement: "reached" }]);
+    // What shows once it resets travels with it.
+    expect(h.watch.latest()).toMatchObject([
+      { statement: "reached" },
+      { window: "weekly limit", usedPercent: 30 },
+    ]);
     // Woken at the reset itself, not a tick later.
     await vi.advanceTimersByTimeAsync(TICK / 2 + 1);
     expect(h.watch.latest()).toMatchObject([{ window: "weekly limit", usedPercent: 30 }]);
+    expect(h.watch.latest()).toHaveLength(1);
     h.watch.dispose();
   });
 
@@ -238,14 +243,14 @@ describe("AgentUsageWatch", () => {
     h.codexAnswers.set("/accts/work", () => codexQuota("/accts/work", 95));
     h.watch.acquire();
     await settle();
-    expect(h.watch.latest()).toMatchObject([{ usedPercent: 95 }]);
+    expect(h.watch.latest()[0]).toMatchObject({ usedPercent: 95 });
     // An account at 96% may be running on the shard that didn't answer: a lower one seen isn't the tightest.
     h.live.current = { complete: false, codexHomes: ["/accts/work"], claudeConfigDirs: [] };
     await vi.advanceTimersByTimeAsync(TICK);
     expect(h.watch.latest()).toEqual([]);
     h.live.current = { complete: true, codexHomes: ["/accts/work"], claudeConfigDirs: [] };
     await vi.advanceTimersByTimeAsync(TICK);
-    expect(h.watch.latest()).toMatchObject([{ usedPercent: 95 }]);
+    expect(h.watch.latest()[0]).toMatchObject({ usedPercent: 95 });
     expect(h.readCodexHomes).toHaveBeenCalledTimes(1);
     h.watch.dispose();
   });
@@ -269,7 +274,7 @@ describe("AgentUsageWatch", () => {
     answer();
     await settle();
     expect(h.readCodexHomes).toHaveBeenCalledTimes(1);
-    expect(h.watch.latest()).toMatchObject([{ usedPercent: 88 }]);
+    expect(h.watch.latest()[0]).toMatchObject({ usedPercent: 88 });
     h.watch.dispose();
   });
 
@@ -308,13 +313,13 @@ describe("AgentUsageWatch", () => {
     await settle();
     expect(h.readCodexHomes).toHaveBeenCalledTimes(1);
     expect([...h.readCodexHomes.mock.calls[0]![0].keys()]).toEqual(["/accts/a"]);
-    expect(h.watch.latest()).toMatchObject([{ usedPercent: 20 }]);
+    expect(h.watch.latest()[0]).toMatchObject({ usedPercent: 20 });
 
     // b stays due, so an agent back in it is read at the next look.
     h.live.current = { complete: true, codexHomes: ["/accts/a", "/accts/b"], claudeConfigDirs: [] };
     await vi.advanceTimersByTimeAsync(TICK);
     expect([...h.readCodexHomes.mock.calls[1]![0].keys()]).toEqual(["/accts/b"]);
-    expect(h.watch.latest()).toMatchObject([{ usedPercent: 90 }]);
+    expect(h.watch.latest()[0]).toMatchObject({ usedPercent: 90 });
     h.watch.dispose();
   });
 
@@ -378,10 +383,10 @@ describe("AgentUsageWatch membership", () => {
       result: { status: "unavailable", reason: "timeout", fetchedAt: Date.now() },
     }));
     await vi.advanceTimersByTimeAsync(CADENCE);
-    expect(h.watch.latest()).toMatchObject([{ usedPercent: 60 }]);
+    expect(h.watch.latest()[0]).toMatchObject({ usedPercent: 60 });
     h.codexAnswers.set("/accts/b", () => codexQuota("/accts/b", 75));
     await vi.advanceTimersByTimeAsync(CADENCE);
-    expect(h.watch.latest()).toMatchObject([{ usedPercent: 75 }]);
+    expect(h.watch.latest()[0]).toMatchObject({ usedPercent: 75 });
     h.watch.dispose();
   });
 
@@ -396,7 +401,7 @@ describe("AgentUsageWatch membership", () => {
     ];
     h.watch.acquire();
     await settle();
-    expect(h.watch.latest()).toMatchObject([{ statement: "approaching" }]);
+    expect(h.watch.latest()[0]).toMatchObject({ statement: "approaching" });
     h.watch.dispose();
   });
 });
@@ -441,6 +446,15 @@ describe("liveAgentFolders", () => {
     ).toEqual(["/a"]);
     expect(
       liveAgentOf({ launchAgentId: "codex", everDetectedAgent: true, detectedAgentId: "codex" })
+    ).toBe("codex");
+  });
+
+  it("never takes a session run again in the shell a launched one left", () => {
+    expect(
+      liveAgentOf({ launchAgentId: "codex", detectedAgentId: "codex", agentIncarnation: 1 })
+    ).toBeNull();
+    expect(
+      liveAgentOf({ launchAgentId: "codex", detectedAgentId: "codex", agentIncarnation: 0 })
     ).toBe("codex");
   });
 

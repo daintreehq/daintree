@@ -15,8 +15,8 @@ import type { AgentUsageReading } from "../../../shared/types/ipc/agentUsage.js"
 import type { ClaudeUsageAccount } from "../../../shared/types/ipc/agentQuota.js";
 import {
   AGENT_USAGE_CODEX_READ_INTERVAL_MS,
+  agentUsageWithSuccessors,
   boundAgentUsageAccountNames,
-  tightestAgentUsage,
 } from "../../../shared/utils/agentUsage.js";
 import type { CodexHomeQuota } from "../codex/CodexQuotaService.js";
 import { createLogger } from "../../utils/logger.js";
@@ -62,6 +62,8 @@ export interface LiveAgentTerminal {
   detectedAgentId?: string;
   launchAgentId?: string;
   everDetectedAgent?: boolean;
+  /** Agent sessions that took over the pane after an earlier one exited. */
+  agentIncarnation?: number;
   codexHome?: string;
   claudeConfigDir?: string;
 }
@@ -79,6 +81,8 @@ export function liveAgentOf(terminal: LiveAgentTerminal): "codex" | "claude" | n
   }
   const launched = terminal.launchAgentId;
   if (launched !== "codex" && launched !== "claude") return null;
+  // One run again in the shell the launched session left can name another folder too.
+  if ((terminal.agentIncarnation ?? 0) > 0) return null;
   if (terminal.detectedAgentId !== undefined) {
     return terminal.detectedAgentId === launched ? launched : null;
   }
@@ -139,6 +143,7 @@ export class AgentUsageWatch {
   private timer: ReturnType<typeof setInterval> | null = null;
   private resetTimer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
+  private again = false;
   /** Bumped on every stop, so a tick that outlived its demand publishes nothing. */
   private generation = 0;
   private latestReadings: AgentUsageReading[] = [];
@@ -169,7 +174,7 @@ export class AgentUsageWatch {
     };
   }
 
-  /** At most one reading per agent; empty while nothing wants them. */
+  /** Per agent the tightest reading and what follows its reset; empty while nothing wants them. */
   latest(): AgentUsageReading[] {
     return this.latestReadings;
   }
@@ -200,12 +205,16 @@ export class AgentUsageWatch {
     this.resetTimer = null;
     this.generation++;
     this.running = false;
+    this.again = false;
     this.publish([]);
   }
 
   private async tick(): Promise<void> {
-    // A slow read skips a beat rather than stacking reads.
-    if (this.running) return;
+    // A look asked for during a slow one runs once after it, never beside it.
+    if (this.running) {
+      this.again = true;
+      return;
+    }
     this.running = true;
     const generation = this.generation;
     try {
@@ -213,7 +222,13 @@ export class AgentUsageWatch {
     } catch (error) {
       logger.warn("Couldn't refresh agent usage", { error });
     } finally {
-      if (generation === this.generation) this.running = false;
+      if (generation === this.generation) {
+        this.running = false;
+        if (this.again) {
+          this.again = false;
+          void this.tick();
+        }
+      }
     }
   }
 
@@ -260,7 +275,8 @@ export class AgentUsageWatch {
         // Each read waits its turn behind the last: a home whose agent left
         // meanwhile isn't asked about, and stays due for when one returns.
         live = await this.readLive();
-        if (generation !== this.generation || !live) return;
+        if (generation !== this.generation) return;
+        if (!live) return this.publish([]);
         if (!live.codexHomes.has(home)) continue;
       }
       this.codexAskedAt.set(home, this.deps.monotonic());
@@ -281,7 +297,8 @@ export class AgentUsageWatch {
     if (due.length > 0) {
       // Membership as it stands after the reads, not as it stood before them.
       live = await this.readLive();
-      if (generation !== this.generation || !live) return;
+      if (generation !== this.generation) return;
+      if (!live) return this.publish([]);
     }
     const codexHomes = live.codexHomes;
 
@@ -301,7 +318,7 @@ export class AgentUsageWatch {
         .flatMap(claudeReadings),
     ];
     const now = this.deps.now();
-    const shown = tightestAgentUsage(readings, (reading) => reading, now);
+    const shown = agentUsageWithSuccessors(readings, now);
     this.publish(shown);
     this.wakeAtNextReset(shown, now);
   }

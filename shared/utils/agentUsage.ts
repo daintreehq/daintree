@@ -92,3 +92,30 @@ export function tightestAgentUsage<T>(
   }
   return [...best.values()];
 }
+
+/**
+ * Per agent, the tightest reading whose reset hasn't passed and, when that
+ * one names a reset, the tightest of the rest that outlast it: what shows
+ * once it resets. Sent together, so a machine whose clock reaches the reset
+ * first still has the next reading to show.
+ */
+export function agentUsageWithSuccessors(
+  readings: readonly AgentUsageReading[],
+  now: number
+): AgentUsageReading[] {
+  return tightestAgentUsage(readings, (reading) => reading, now).flatMap((winner) => {
+    const until = winner.resetsAt;
+    if (until === null) return [winner];
+    const [successor] = tightestAgentUsage(
+      readings.filter(
+        (reading) =>
+          reading !== winner &&
+          reading.agentId === winner.agentId &&
+          (reading.resetsAt === null || reading.resetsAt > until)
+      ),
+      (reading) => reading,
+      now
+    );
+    return successor ? [winner, successor] : [winner];
+  });
+}

@@ -18,7 +18,7 @@ type EnvLike = Readonly<Record<string, string | undefined>>;
  * and a guess here reads some other home.
  */
 export function resolveLaunchCodexHome(env: EnvLike): string | undefined {
-  const fallback = path.join(os.homedir(), ".codex");
+  const fallback = path.join(launchHomeDir(env), ".codex");
   if (!hasEnvVar(env, HOME_VAR)) return fallback;
   const home = getEnvVar(env, HOME_VAR);
   if (!home) return fallback;
@@ -32,4 +32,14 @@ export function resolveLaunchCodexHome(env: EnvLike): string | undefined {
 function isFullyQualified(value: string): boolean {
   if (process.platform !== "win32") return path.isAbsolute(value);
   return /^[A-Za-z]:[\\/]/.test(value) || /^[\\/]{2}[^\\/]+[\\/][^\\/]+/.test(value);
+}
+
+/**
+ * The home folder Codex resolves `~` against in that process: the env's own
+ * `HOME` (`USERPROFILE` on Windows) when a launch set an absolute one, else
+ * this process's.
+ */
+function launchHomeDir(env: EnvLike): string {
+  const named = getEnvVar(env, process.platform === "win32" ? "USERPROFILE" : "HOME");
+  return named && isFullyQualified(named) ? path.resolve(named) : os.homedir();
 }

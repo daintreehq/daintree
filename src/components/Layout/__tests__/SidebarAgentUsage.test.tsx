@@ -219,4 +219,23 @@ describe("SidebarAgentUsage", () => {
     expect(pushed).toBeNull();
     await act(async () => resolveSeed({ readouts: [codex(99)], revision: 1 }));
   });
+
+  it("clears what it held when a follow is refused and only an older push came meanwhile", async () => {
+    const answers: Array<(snapshot: AgentUsageSnapshot | Error) => void> = [];
+    installBridge(
+      () =>
+        new Promise<AgentUsageSnapshot>((resolve, reject) =>
+          answers.push((value) => (value instanceof Error ? reject(value) : resolve(value)))
+        )
+    );
+    const { container } = await renderUsage();
+    await act(async () => answers[0]!({ readouts: [codex(85)], revision: 3 }));
+    expect(rows(container)).toHaveLength(1);
+    setObservable(false);
+    setObservable(true);
+    await act(async () => {});
+    act(() => pushed!({ readouts: [codex(85)], revision: 2 }));
+    await act(async () => answers[1]!(new Error("refused")));
+    expect(container.querySelector("[data-sidebar-agent-usage]")).toBeNull();
+  });
 });

@@ -4,7 +4,12 @@ import type {
   ClaudeAgentUsageReading,
   CodexAgentUsageReading,
 } from "../../types/ipc/agentUsage.js";
-import { compareAgentUsage, isAgentUsagePastAttention, tightestAgentUsage } from "../agentUsage.js";
+import {
+  agentUsageWithSuccessors,
+  compareAgentUsage,
+  isAgentUsagePastAttention,
+  tightestAgentUsage,
+} from "../agentUsage.js";
 
 const NOW = 1_800_000_000_000;
 
@@ -139,5 +144,25 @@ describe("agent usage selection boundaries", () => {
 
   it("drops a reading whose reset is already behind", () => {
     expect(tightestAgentUsage([codex({ resetsAt: NOW - 1 })], (r) => r, NOW)).toEqual([]);
+  });
+});
+
+describe("agentUsageWithSuccessors", () => {
+  it("sends, beside each winner that resets, the tightest reading that outlasts it", () => {
+    const fiveHour = codex({ usedPercent: 95, resetsAt: NOW + 1_000 });
+    const weekly = codex({
+      usedPercent: 85,
+      windowDurationMins: 10080,
+      resetsAt: NOW + 86_400_000,
+    });
+    const sooner = codex({ usedPercent: 90, windowDurationMins: 60, resetsAt: NOW + 500 });
+    expect(agentUsageWithSuccessors([sooner, weekly, fiveHour], NOW)).toEqual([fiveHour, weekly]);
+  });
+
+  it("sends a winner alone when it names no reset, or nothing outlasts it", () => {
+    const open = claude({ statement: "approaching", usedPercent: null, resetsAt: null });
+    expect(agentUsageWithSuccessors([open, claude({ usedPercent: 10 })], NOW)).toEqual([open]);
+    const only = codex({ resetsAt: NOW + 1_000 });
+    expect(agentUsageWithSuccessors([only], NOW)).toEqual([only]);
   });
 });

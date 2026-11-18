@@ -11,6 +11,13 @@ describe("resolveLaunchCodexHome", () => {
     expect(resolveLaunchCodexHome({ CODEX_HOME: undefined })).toBe(fallback);
   });
 
+  it("resolves Codex's own home against the HOME the launch set, as Codex does", () => {
+    const paneHome = path.resolve(os.tmpdir(), "pane-home");
+    const homeVar = process.platform === "win32" ? "USERPROFILE" : "HOME";
+    expect(resolveLaunchCodexHome({ [homeVar]: paneHome })).toBe(path.join(paneHome, ".codex"));
+    expect(resolveLaunchCodexHome({ [homeVar]: "relative" })).toBe(fallback);
+  });
+
   it("names Codex's own home for an empty value, which Codex takes as unset", () => {
     expect(resolveLaunchCodexHome({ CODEX_HOME: "" })).toBe(fallback);
   });

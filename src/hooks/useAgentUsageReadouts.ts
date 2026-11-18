@@ -31,13 +31,17 @@ export function useAgentUsageReadouts(): AgentUsageReadout[] {
     subscribeProjectViewObservability,
     isProjectViewObservable
   );
-  const pushes = useRef(0);
+  // Pushes that were newer than what this view held: only those confirm it.
+  const confirmed = useRef(0);
+  const heldRevision = useRef<number | null>(null);
 
   useEffect(() => {
     const api = window.electron?.agentUsage;
     if (!api) return;
     return api.onChanged((next) => {
-      pushes.current++;
+      if (heldRevision.current !== null && next.revision < heldRevision.current) return;
+      heldRevision.current = next.revision;
+      confirmed.current++;
       setSnapshot((current) => newer(current, next));
     });
   }, []);
@@ -48,15 +52,18 @@ export function useAgentUsageReadouts(): AgentUsageReadout[] {
     let cancelled = false;
     let retry: ReturnType<typeof setTimeout> | undefined;
     let attempt = 0;
-    const pushesAtStart = pushes.current;
+    const confirmedAtStart = confirmed.current;
     const follow = () => {
       api.setFollowing({ following: true }).then(
         (seed) => {
-          if (!cancelled) setSnapshot((current) => newer(current, seed));
+          if (cancelled || seed === null) return;
+          if (heldRevision.current !== null && seed.revision < heldRevision.current) return;
+          heldRevision.current = seed.revision;
+          setSnapshot((current) => newer(current, seed));
         },
         () => {
           if (cancelled) return;
-          if (pushes.current === pushesAtStart) setSnapshot(null);
+          if (confirmed.current === confirmedAtStart) setSnapshot(null);
           retry = setTimeout(follow, Math.min(RETRY_CAP_MS, RETRY_BASE_MS * 2 ** attempt++));
         }
       );
