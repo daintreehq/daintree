@@ -361,8 +361,7 @@ export function findMissingCorePickerAssets(distRoot) {
 
 /**
  * Same severity model as `validateCopiedPluginAssets`: a warning under watch,
- * where a cold build may not have emitted the bundle yet, and a hard failure
- * otherwise.
+ * where it runs once the first build is ready, and a hard failure otherwise.
  */
 function validateGuestAssets() {
   const missing = findMissingCorePickerAssets(path.join(root, "dist-electron"));
@@ -642,9 +641,9 @@ async function run() {
             initialSync: true,
             onChange: recheckSyncedPluginAssets,
           });
-          validateCopiedPluginAssets();
         },
         onFirstReady: () => {
+          validateCopiedPluginAssets();
           validateGuestAssets();
           console.log("[Build] Initial build ready.");
         },

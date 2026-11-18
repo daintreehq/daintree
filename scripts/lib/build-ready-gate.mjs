@@ -20,7 +20,8 @@ export function writeBuildReadyMarker(file) {
  * fast preload can't release Electron while main is still building or broken.
  * After the first open, every later success that leaves all builds green
  * rewrites the marker again, debounced so one edit that rebuilds several
- * contexts writes once.
+ * contexts writes once. `onFirstReady` runs once, just before the first write,
+ * so checks of the finished output report before Electron can start.
  */
 export function createBuildReadyGate({
   names,
@@ -49,11 +50,11 @@ export function createBuildReadyGate({
   const fire = () => {
     timer = null;
     if (!isReady()) return;
-    write();
     if (!opened) {
       opened = true;
       onFirstReady();
     }
+    write();
   };
 
   const schedule = () => {
@@ -120,9 +121,11 @@ export async function startWatchBuild({
   gate.markAssetsReady();
 
   const settled = await Promise.allSettled(
-    names.map((name) =>
+    // Async so a synchronous throw still settles here and the others get disposed.
+    names.map(async (name) =>
       createContext({
         ...configs[name],
+        // Last, so it sees errors an earlier plugin's onEnd adds.
         plugins: [...(configs[name].plugins ?? []), gate.plugin(name)],
       })
     )

@@ -156,15 +156,19 @@ describe("startWatchBuild with real esbuild contexts", () => {
   let workDir;
   let readyFile;
   let watch;
+  let holds;
 
   beforeEach(() => {
     workDir = fs.mkdtempSync(path.join(os.tmpdir(), "build-ready-gate-"));
     readyFile = path.join(workDir, "out/.build-ready.js");
+    holds = [];
     fs.writeFileSync(path.join(workDir, "main.js"), 'export const main = "new main";\n');
     fs.writeFileSync(path.join(workDir, "preload.js"), 'export const preload = "new preload";\n');
   });
 
   afterEach(async () => {
+    // dispose() waits for a held onStart, so release first or a failed test hangs here.
+    for (const hold of holds) hold.release();
     await watch?.dispose();
     watch = undefined;
     fs.rmSync(workDir, { recursive: true, force: true });
@@ -186,7 +190,7 @@ describe("startWatchBuild with real esbuild contexts", () => {
     let release;
     const held = new Promise((resolve) => (release = resolve));
     let first = true;
-    return {
+    const hold = {
       release: () => release(),
       plugin: {
         name: "hold-first-build",
@@ -199,6 +203,8 @@ describe("startWatchBuild with real esbuild contexts", () => {
         },
       },
     };
+    holds.push(hold);
+    return hold;
   }
 
   function endCounter() {
@@ -226,7 +232,8 @@ describe("startWatchBuild with real esbuild contexts", () => {
 
     const hold = holdFirstBuild();
     const preloadEnds = endCounter();
-    const onFirstReady = vi.fn();
+    const markerAtFirstReady = [];
+    const onFirstReady = vi.fn(() => markerAtFirstReady.push(fs.existsSync(readyFile)));
     watch = await startWatchBuild({
       configs: { main: config("main", [hold.plugin]), preload: config("preload", [preloadEnds.plugin]) },
       readyFile,
@@ -247,6 +254,8 @@ describe("startWatchBuild with real esbuild contexts", () => {
     await waitFor(() => fs.existsSync(readyFile));
     expect(read("out/main.js")).toContain("new main");
     expect(onFirstReady).toHaveBeenCalledTimes(1);
+    // Output checks run before the marker can release Electron.
+    expect(markerAtFirstReady).toEqual([false]);
   });
 
   it("stays shut through an initial compile error and opens after the watcher rebuilds the repair", async () => {
@@ -286,6 +295,22 @@ describe("startWatchBuild with real esbuild contexts", () => {
     fs.writeFileSync(path.join(workDir, "preload.js"), 'export const preload = "edited";\n');
     await waitFor(() => preloadEnds.results.length > builds && fs.existsSync(readyFile));
     expect(read("out/preload.js")).toContain("edited");
+  });
+
+  it("disposes the contexts it made when another one throws synchronously", async () => {
+    const made = { dispose: vi.fn(async () => {}), watch: vi.fn(async () => {}) };
+    const createContext = vi.fn((options) => {
+      if (options.entryPoints[0] === "preload.js") throw new Error("sync bad config");
+      return Promise.resolve(made);
+    });
+    await expect(
+      startWatchBuild({
+        configs: { main: config("main"), preload: config("preload") },
+        readyFile,
+        createContext,
+      })
+    ).rejects.toThrow("sync bad config");
+    expect(made.dispose).toHaveBeenCalledTimes(1);
   });
 
   it("disposes the contexts it made when another one fails to start", async () => {

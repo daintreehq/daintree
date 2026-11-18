@@ -2,6 +2,7 @@ import net from "node:net";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import concurrently from "concurrently";
 import { BUILD_READY_FILE, removeBuildReadyMarker } from "./lib/build-ready-gate.mjs";
 
@@ -47,7 +48,7 @@ async function findAvailablePort(host, startPort) {
   );
 }
 
-async function main() {
+export async function main({ readyFile = path.resolve(BUILD_READY_FILE) } = {}) {
   const host = process.env.DAINTREE_DEV_SERVER_HOST?.trim() || DEFAULT_HOST;
   const requestedPort = parsePort(process.env.DAINTREE_DEV_SERVER_PORT) ?? DEFAULT_PORT;
   const port = await findAvailablePort(host, requestedPort);
@@ -81,7 +82,7 @@ async function main() {
 
   // A marker left by the last session would let wait-on start Electron on old
   // output before the watcher's own startup gets to remove it.
-  removeBuildReadyMarker(path.resolve(BUILD_READY_FILE));
+  removeBuildReadyMarker(readyFile);
 
   const { result } = concurrently(
     [
@@ -119,22 +120,24 @@ async function main() {
   }
 }
 
-for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.once(signal, () => {
-    interrupted = true;
-  });
-}
-
-main().catch((error) => {
-  if (
-    interrupted ||
-    (Array.isArray(error) &&
-      error.length > 0 &&
-      error.every((entry) => entry?.killed || entry?.exitCode === "SIGTERM"))
-  ) {
-    process.exit(0);
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.once(signal, () => {
+      interrupted = true;
+    });
   }
 
-  console.error("[dev] Failed to start development environment:", error);
-  process.exit(1);
-});
+  main().catch((error) => {
+    if (
+      interrupted ||
+      (Array.isArray(error) &&
+        error.length > 0 &&
+        error.every((entry) => entry?.killed || entry?.exitCode === "SIGTERM"))
+    ) {
+      process.exit(0);
+    }
+
+    console.error("[dev] Failed to start development environment:", error);
+    process.exit(1);
+  });
+}
