@@ -6,6 +6,7 @@ import {
   cancelTitle,
   dismissBody,
   dismissFallback,
+  dismissOutcomeText,
   dismissProgressText,
   dismissTitle,
   dismissVerdict,
@@ -126,18 +127,53 @@ describe("decisionCancelModel", () => {
         });
         expect(dismissFallback("q-42", phase)).toMatch(reason);
       }
-      // Anything else isn't a reason to withdraw instead.
-      for (const phase of [
-        settled({ status: "already-answered" }),
-        settled({ status: "closed", reason: "expired" }),
-        settled({ status: "closed", reason: "cancelled" }),
-        settled({ status: "rejected", code: "conflict" }),
-        { kind: "refused", reason: "not-found" } as const,
-        { kind: "lost" } as const,
-      ]) {
+      // Anything else isn't a reason to withdraw instead, and says what it is.
+      const problems: Array<[DeclinePhase, RegExp, boolean]> = [
+        [settled({ status: "already-answered" }), /^q-42 was answered first/, false],
+        [settled({ status: "closed", reason: "expired" }), /^q-42 expired first/, false],
+        [settled({ status: "closed", reason: "cancelled" }), /withdrawn or dismissed first/, false],
+        [
+          settled({ status: "rejected", code: "conflict" }),
+          /refused the dismissal of q-42 \(conflict\)/,
+          true,
+        ],
+        [
+          { kind: "refused", reason: "not-found" },
+          /no longer one of this terminal's questions/,
+          false,
+        ],
+        [{ kind: "refused", reason: "invalid" }, /couldn't sign a dismissal of q-42/, true],
+        [{ kind: "lost" }, /^Couldn't confirm whether q-42 was dismissed/, true],
+      ];
+      for (const [phase, message, retry] of problems) {
         expect(dismissFallback("q-42", phase)).toBeNull();
-        expect(dismissVerdict(TARGET, { kind: "submitted", key: "k", phase }).kind).toBe("problem");
+        expect(dismissVerdict(TARGET, { kind: "submitted", key: "k", phase })).toEqual({
+          kind: "problem",
+          problem: expect.objectContaining({ message: expect.stringMatching(message), retry }),
+        });
       }
+    });
+
+    it("stops offering withdrawal for a question the relay didn't hold once it reads as sent", () => {
+      const notHeld = settled({ status: "closed", reason: "not-found" });
+      expect(dismissFallback("q-42", notHeld, "queued")).toMatch(/^The relay doesn't hold q-42/);
+      expect(dismissFallback("q-42", notHeld, "open")).toBeNull();
+      // A relay or computer that needs updating stays a reason whatever the question reads as.
+      expect(
+        dismissFallback("q-42", settled({ status: "unsupported", by: "relay" }), "open")
+      ).toMatch(/^Your relay needs an update/);
+    });
+
+    it("says why one that settled out of the dialog wasn't taken, and nothing while it's under way or taken", () => {
+      expect(
+        dismissOutcomeText({ ...TARGET, revision: 2 }, settled({ status: "changed" }))
+      ).toMatch(/Review it, then dismiss it again/);
+      expect(dismissOutcomeText(TARGET, settled({ status: "declined" }))).toBeNull();
+      expect(dismissOutcomeText(TARGET, settled({ status: "queued" }))).toBeNull();
+      expect(dismissOutcomeText(TARGET, { kind: "lost" })).toBeNull();
+      expect(
+        dismissOutcomeText(TARGET, settled({ status: "unsupported", by: "relay" }))
+      ).toBeNull();
     });
 
     it("lets a changed question be dismissed again from a row, but sends the view's reader back to review it", () => {

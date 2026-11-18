@@ -4,7 +4,11 @@ import { z } from "zod";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op, opValidated } from "../define.js";
 import { store } from "../../store.js";
-import { decisionsServesPanes, loadDecisionsModule } from "../../window/serviceRefs.js";
+import {
+  decisionsHostServes,
+  decisionsServesPanes,
+  loadDecisionsModule,
+} from "../../window/serviceRefs.js";
 import {
   getDeviceAnswerService,
   peekDeviceAnswerService,
@@ -609,13 +613,19 @@ export const decisionsNamespace = defineIpcNamespace({
     ),
     // The person's decline (#17239), from Daintree's own view: `shell` like
     // their answer, so this computer signs it with its owner key whichever
-    // machine asked. No action, MCP tool or plugin surface reaches it.
-    // Never starts Decisions.
+    // machine asked. No action, MCP tool or plugin surface reaches it. An
+    // enrolled Remote Host serves its panes with the owner's switch off here,
+    // and its key never signs for the person: it says so, without loading
+    // anything, so its view offers withdrawing instead. Never starts Decisions.
     declineQuestion: opValidated(
       CHANNELS.DECISIONS_DECLINE_QUESTION,
       declineQuestionSchema,
       async (payload: DeclineDecisionQuestionPayload): Promise<DecisionQuestionDeclineResult> => {
-        if (!decisionsOn()) return { result: "off" };
+        if (!decisionsOn()) {
+          return decisionsHostServes(store.get("decisionsHost"))
+            ? { result: "refused", reason: "not-owner" }
+            : { result: "off" };
+        }
         const decisions = await loadDecisions();
         if (!decisions) return { result: "not-running" };
         return decisions.declineDecisionQuestion(payload);

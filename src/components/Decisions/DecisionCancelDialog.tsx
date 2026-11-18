@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Callout } from "@/components/ui/Callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
@@ -52,6 +52,8 @@ interface Asked {
   mode: DecisionCancelMode;
   reason: string | null;
   problem: DecisionCancelProblem | null;
+  /** Where its last dismissal is kept, so trying again reads that one by its id first. */
+  key: string | null;
 }
 
 /**
@@ -76,8 +78,14 @@ export function DecisionCancelDialog({
   onDismissing,
   restoreFocusTo,
 }: DecisionCancelDialogProps) {
-  const [pending, setPending] = useState(false);
+  // The opening whose confirm is with main: it alone is locked, and only it closes when main answers.
+  const [busyFor, setBusyFor] = useState<DecisionCancelTarget | null>(null);
   const [asked, setAsked] = useState<Asked | null>(null);
+  const shown = useRef<DecisionCancelTarget | null>(null);
+  useEffect(() => {
+    shown.current = isOpen ? target : null;
+  });
+  const pending = busyFor !== null && busyFor === target;
   // The opening line, read here when the row hadn't read it yet, so the
   // question is shown by its words before anything is dismissed.
   const [read, setRead] = useState<{ target: DecisionCancelTarget; line: string | null } | null>(
@@ -120,19 +128,29 @@ export function DecisionCancelDialog({
     const subject = target;
     const step = mode;
     const why = reason;
-    const report = (next: Omit<Asked, "target">) => setAsked({ target: subject, ...next });
-    setPending(true);
+    let key = current?.key ?? null;
+    // A late answer for an opening since replaced never overwrites the newer one's state.
+    const report = (next: Omit<Asked, "target" | "key">) =>
+      setAsked((prev) =>
+        prev !== null && prev.target !== subject && shown.current !== subject
+          ? prev
+          : { target: subject, key, ...next }
+      );
+    // Main's answer closes only the opening it was for, never one opened since.
+    const close = () => {
+      if (shown.current === subject) onClose();
+    };
+    setBusyFor(subject);
     report({ mode: step, reason: why, problem: null });
     try {
       if (step === "dismiss") {
-        const verdict = dismissVerdict(
-          subject,
-          await dismissQuestion(subject.question, subject.revision)
-        );
+        const attempt = await dismissQuestion(subject.question, subject.revision, key);
+        if (attempt.kind === "submitted") key = attempt.key;
+        const verdict = dismissVerdict(subject, attempt);
         switch (verdict.kind) {
           case "done":
             onDismissing?.(questionOf(subject.question).questionId, verdict.key);
-            onClose();
+            close();
             return;
           case "withdraw":
             report({ mode: "withdraw", reason: verdict.message, problem: null });
@@ -149,7 +167,7 @@ export function DecisionCancelDialog({
         return;
       }
       if (outcome.result === "cancelling") onCancelling(questionOf(subject.question).questionId);
-      onClose();
+      close();
     } catch (error) {
       const verb = step === "dismiss" ? "dismiss" : "withdraw";
       report({
@@ -162,7 +180,7 @@ export function DecisionCancelDialog({
         },
       });
     } finally {
-      setPending(false);
+      setBusyFor((locked) => (locked === subject ? null : locked));
     }
   };
 

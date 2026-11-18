@@ -1347,12 +1347,10 @@ describe("QuestionBridge", () => {
       };
     }
 
-    async function nothingSigned(): Promise<void> {
+    /** Nothing was signed for `questionId`, held here or not: no record of the id, and no outbox item. */
+    async function nothingSigned(questionId: string): Promise<void> {
       expect(await store.getMeta(`owner-decline:${DECLINE_ID}`)).toBeNull();
-      const items = await Promise.all(
-        (await store.listQuestions()).map((row) => store.outboxFor(row.question_id))
-      );
-      expect(items.flat().filter((item) => item.kind === "owner-decline")).toEqual([]);
+      expect(await store.outboxFor(questionId)).toEqual([]);
     }
 
     it("refuses an agent's decline on the bridge agents ask on, signing nothing", async () => {
@@ -1371,7 +1369,7 @@ describe("QuestionBridge", () => {
 
       expect(live.declineQuestion).not.toHaveBeenCalled();
       expect(live.getDeclineResult).not.toHaveBeenCalled();
-      await nothingSigned();
+      await nothingSigned(asked.questionId);
     });
 
     it("declines this computer's own question on the live attempt at the revision read, even after the run that asked was relaunched", async () => {
@@ -1498,7 +1496,30 @@ describe("QuestionBridge", () => {
         )
       ).resolves.toEqual({ result: "refused", reason: "not-owner" });
       expect(live.declineQuestion).not.toHaveBeenCalled();
-      await nothingSigned();
+      await nothingSigned(questionId);
+    });
+
+    it("is not running once the connection ends under the signing, and lets anything else through", async () => {
+      const b = bridge();
+      live = liveBridge();
+      const questionId = "q_remote_host_0001";
+      const request = payload(questionId, {
+        reference: { hostId: "host_studio", projectId: "p9", terminalId: "pane-9", questionId },
+      });
+      // Revoked after the role was read: the library refuses before it signs.
+      live.declineQuestion.mockRejectedValueOnce(new BridgeError("forbidden", "revoked"));
+      await expect(b.declineForPerson(request, HOST)).resolves.toEqual({ result: "not-running" });
+      live.getDeclineResult.mockRejectedValueOnce(new BridgeError("forbidden", "revoked"));
+      await expect(b.declineResultForPerson(DECLINE_ID)).resolves.toEqual({
+        result: "not-running",
+      });
+
+      live.declineQuestion.mockRejectedValueOnce(new BridgeError("invalid_state", "unexpected"));
+      await expect(b.declineForPerson(request, HOST)).rejects.toMatchObject({
+        code: "invalid_state",
+      });
+      live.declineQuestion.mockRejectedValueOnce(new Error("store closed"));
+      await expect(b.declineForPerson(request, HOST)).rejects.toThrow("store closed");
     });
 
     it("is not running once the connection has ended", async () => {

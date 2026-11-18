@@ -1,5 +1,8 @@
 import type { DeclinePhase } from "@/store/decisionsAnswerStore";
-import type { DecisionQuestionCancelResult } from "@shared/types/decisionsQuestion";
+import type {
+  DecisionQuestionCancelResult,
+  DecisionQuestionStatus,
+} from "@shared/types/decisionsQuestion";
 import type { DismissAttempt } from "./decisionDeclineSend";
 import type { DecisionQuestionTarget } from "./decisionQuestionTarget";
 
@@ -76,8 +79,14 @@ export function noLongerWaiting(
  * can: the relay or the computer that asked doesn't take one yet, this
  * computer doesn't sign for the person, or the relay doesn't hold the
  * question yet (a Remote Host hasn't sent it). Null for any other phase.
+ * Given the question's `status` as read now, a relay that didn't hold it
+ * stops being a reason once it reads as sent: it can be dismissed again.
  */
-export function dismissFallback(label: string, phase: DeclinePhase): string | null {
+export function dismissFallback(
+  label: string,
+  phase: DeclinePhase,
+  status?: DecisionQuestionStatus
+): string | null {
   const instead = "You can withdraw it instead.";
   if (phase.kind === "refused" && phase.reason === "not-owner") {
     return `This computer doesn't sign for you, so ${label} can't be dismissed here. Dismiss it on your phone, or withdraw it instead.`;
@@ -89,7 +98,11 @@ export function dismissFallback(label: string, phase: DeclinePhase): string | nu
       ? `Your relay needs an update before it takes a dismissal from this computer, so ${label} wasn't dismissed. ${instead}`
       : `Daintree on the computer that asked ${label} needs an update before it takes a dismissal from this computer, so it wasn't dismissed. ${instead}`;
   }
-  if (outcome.status === "closed" && outcome.reason === "not-found") {
+  if (
+    outcome.status === "closed" &&
+    outcome.reason === "not-found" &&
+    (status === undefined || status === "queued")
+  ) {
     return `The relay doesn't hold ${label} yet, so it wasn't dismissed. ${instead}`;
   }
   return null;
@@ -303,4 +316,19 @@ export function cancelProblem(
           };
       }
   }
+}
+
+/**
+ * Why a dismissal from here ended without being taken, once it settled out
+ * of the dialog (a queued one read again, or a Retry), for the view to say
+ * beside Dismiss; null while it's under way, once taken, and where
+ * withdrawing is offered instead.
+ */
+export function dismissOutcomeText(
+  target: DecisionCancelTarget,
+  phase: DeclinePhase
+): string | null {
+  if (phase.kind !== "settled" && phase.kind !== "refused") return null;
+  const verdict = dismissVerdict(target, { kind: "submitted", key: "", phase });
+  return verdict.kind === "problem" ? verdict.problem.message : null;
 }

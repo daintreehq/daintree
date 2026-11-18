@@ -856,13 +856,34 @@ describe("decisions IPC", () => {
     "signs and reads no person's dismissal with the setting %s, saying it's off, loading none of Decisions (#17239)",
     async (_label, value) => {
       saved.value = value;
-      saved.host = { deviceId: "dev_host_1", ownerOffAt: null, revokedAt: null };
 
       await expect(declineQuestion(DECLINE)).resolves.toEqual({ result: "off" });
       await expect(getDeclineResult({ declineId: DECLINE.declineId })).resolves.toEqual({
         result: "off",
       });
 
+      expect(decisionsEntry.evaluated).toBe(0);
+      expect(decisionsEntry.libraries).toBe(0);
+    }
+  );
+
+  it.each([
+    [
+      "serving its panes",
+      { deviceId: "dev_host_1", ownerOffAt: null, revokedAt: null },
+      "not-owner",
+    ],
+    ["turned off by its owner", { deviceId: "dev_host_1", ownerOffAt: 1, revokedAt: null }, "off"],
+    ["revoked", { deviceId: "dev_host_1", ownerOffAt: null, revokedAt: 1 }, "off"],
+  ] as const)(
+    "on an enrolled Remote Host %s, says its key never signs a dismissal, loading none of Decisions (#17239)",
+    async (_label, host, said) => {
+      saved.value = { enabled: false };
+      saved.host = host;
+
+      await expect(declineQuestion(DECLINE)).resolves.toEqual(
+        said === "not-owner" ? { result: "refused", reason: "not-owner" } : { result: "off" }
+      );
       expect(decisionsEntry.evaluated).toBe(0);
       expect(decisionsEntry.libraries).toBe(0);
     }

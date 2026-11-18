@@ -329,6 +329,14 @@ describe("a person's dismissal or withdrawal", () => {
     expect(itemSentence(dismissed[0]!)).toMatch(/^Question q-1 was dismissed here/);
     expect(deliveryNotes(dismissed)).toEqual([]);
     expect(cancelNote(dismissed)).toBeNull();
+    // A follow-up held on a question being dismissed lists it under attention too, but it isn't answered.
+    const held = decisionItems(
+      pane({ open: [open(1)], attention: [stopped(1)] }),
+      "composer",
+      undefined,
+      new Set(["q1"])
+    );
+    expect(cancelNote(held)).toBeNull();
   });
 
   it("marks only questions the pane still lists as waiting", () => {

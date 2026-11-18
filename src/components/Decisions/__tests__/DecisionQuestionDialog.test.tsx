@@ -809,8 +809,13 @@ describe("DecisionQuestionDialog", () => {
     });
 
     it("dismisses a waiting question by its reference, after a confirmation naming it, at the revision read (#17239)", async () => {
-      QUESTIONS.qw = content("qw", 11, { status: "open", thread: [], revision: 4 });
       const waiting = { ...OTHER_PROJECT, questionId: "qw" };
+      QUESTIONS.qw = content("qw", 11, {
+        status: "open",
+        thread: [],
+        revision: 4,
+        reference: waiting,
+      });
       getQuestionSummariesByReference.mockResolvedValue({
         result: "read",
         summaries: [{ questionId: "qw", result: "read", line: "Ship the migration?" }],
@@ -828,7 +833,7 @@ describe("DecisionQuestionDialog", () => {
           fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
         });
         expect(declineQuestion).toHaveBeenCalledExactlyOnceWith({
-          reference: QUESTIONS.qw!.reference,
+          reference: waiting,
           declineId: expect.any(String),
           expectedRevision: 4,
         });
@@ -842,6 +847,36 @@ describe("DecisionQuestionDialog", () => {
         expect(screen.getByTestId("decision-question-dismiss-status").textContent).toMatch(
           /^Dismissed/
         );
+      } finally {
+        delete QUESTIONS.qw;
+      }
+    });
+
+    it("signs nothing for a question that moved on since the view read it, sending the person back to it", async () => {
+      const waiting = { ...OTHER_PROJECT, questionId: "qw" };
+      QUESTIONS.qw = content("qw", 11, {
+        status: "open",
+        thread: [],
+        revision: 4,
+        reference: waiting,
+      });
+      try {
+        openReference([waiting]);
+        fireEvent.click(await screen.findByTestId("decision-question-dismiss"));
+        const confirm = await screen.findByRole("alertdialog");
+        // Reopened on the relay since: the view still shows revision 4.
+        QUESTIONS.qw = { ...QUESTIONS.qw!, revision: 5 };
+        await act(async () => {
+          fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+        });
+
+        expect(declineQuestion).not.toHaveBeenCalled();
+        expect(confirm.textContent).toContain("q-11 changed since you opened it");
+        expect(
+          within(confirm)
+            .getByRole("button", { name: "Dismiss question" })
+            .getAttribute("aria-disabled")
+        ).toBe("true");
       } finally {
         delete QUESTIONS.qw;
       }
@@ -959,14 +994,14 @@ describe("DecisionQuestionDialog", () => {
     }
   });
 
-  it("follows a queued dismissal by its id while shown, offering no answer meanwhile, and offers withdrawing once it can't be taken (#17239)", async () => {
+  it("follows a queued dismissal by its id on its own, offering no answer meanwhile, and offers withdrawing once it can't be taken (#17239)", async () => {
     QUESTIONS.qw = content("qw", 11, { status: "open", thread: [] });
     declinedOnce({ status: "queued" });
     try {
       openView(["qw"], "qw");
       await screen.findByTestId("decision-question-content");
-      // It takes an answer here: the options are the composer's.
-      expect(document.querySelector("section[aria-label='Options']")).toBeNull();
+      // It takes an answer here.
+      expect(screen.queryByTestId("decision-answer-send")).not.toBeNull();
       fireEvent.click(screen.getByTestId("decision-question-dismiss"));
       const confirm = await screen.findByRole("alertdialog");
       await act(async () => {
@@ -978,7 +1013,7 @@ describe("DecisionQuestionDialog", () => {
       expect(status.textContent).toMatch(/Dismissal queued/);
       expect(screen.queryByTestId("decision-question-dismiss")).toBeNull();
       // Nothing is answered from here while it's being dismissed.
-      expect(document.querySelector("section[aria-label='Options']")).not.toBeNull();
+      expect(screen.queryByTestId("decision-answer-send")).toBeNull();
 
       const declineId = declineQuestion.mock.calls[0]![0].declineId;
       getDeclineResult.mockResolvedValue({
@@ -987,10 +1022,14 @@ describe("DecisionQuestionDialog", () => {
         expectedRevision: 1,
         outcome: { status: "unsupported", by: "relay" },
       });
-      await waitFor(() => expect(getDeclineResult).toHaveBeenCalledWith({ declineId }));
+      await vi.waitFor(() => expect(getDeclineResult).toHaveBeenCalledWith({ declineId }), {
+        timeout: 9000,
+      });
       const fallback = await screen.findByTestId("decision-question-dismiss-fallback");
       expect(fallback.textContent).toContain("Your relay needs an update");
       expect(declineQuestion).toHaveBeenCalledOnce();
+      // Not taken: it can be answered here again.
+      expect(screen.queryByTestId("decision-answer-send")).not.toBeNull();
 
       fireEvent.click(screen.getByTestId("decision-question-withdraw"));
       const asked = await screen.findByRole("alertdialog");
@@ -1006,7 +1045,39 @@ describe("DecisionQuestionDialog", () => {
     } finally {
       delete QUESTIONS.qw;
     }
-  });
+  }, 20_000);
+
+  it("reads the question again once a queued dismissal is taken, and says why one wasn't (#17239)", async () => {
+    QUESTIONS.qw = content("qw", 11, { status: "open", thread: [] });
+    declinedOnce({ status: "queued" });
+    try {
+      openView(["qw"], "qw");
+      fireEvent.click(await screen.findByTestId("decision-question-dismiss"));
+      const confirm = await screen.findByRole("alertdialog");
+      await act(async () => {
+        fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+      });
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      const reads = getQuestionContent.mock.calls.length;
+
+      getDeclineResult.mockResolvedValue({
+        result: "read",
+        questionId: "qw",
+        expectedRevision: 1,
+        outcome: { status: "rejected", code: "conflict" },
+      });
+      const outcome = await vi.waitFor(
+        () => screen.getByTestId("decision-question-dismiss-outcome"),
+        { timeout: 9000 }
+      );
+      expect(outcome.textContent).toContain("The relay refused the dismissal of q-11 (conflict)");
+      expect(getQuestionContent.mock.calls.length).toBeGreaterThan(reads);
+      // Dismiss is offered again, under a new id.
+      expect(screen.queryByTestId("decision-question-dismiss")).not.toBeNull();
+    } finally {
+      delete QUESTIONS.qw;
+    }
+  }, 20_000);
 
   it.each([
     ["queued", true],

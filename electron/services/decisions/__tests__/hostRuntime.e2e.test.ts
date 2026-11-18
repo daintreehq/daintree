@@ -328,6 +328,23 @@ class FakeRelay {
         });
       }
       const revision = Number(action.record.expected_revision);
+      // A question already closed, or open at another revision, takes no cancel: the
+      // relay says how it stands, and the client settles the decline from that.
+      const ledger = this.events.filter((e) => e.question_id === questionId);
+      const last = ledger.at(-1)!;
+      const status =
+        last.event_type === "decision.cancelled"
+          ? "cancelled"
+          : last.event_type === "decision.answer.committed"
+            ? "human-answered"
+            : "open";
+      if (status !== "open" || last.question_revision !== revision) {
+        return json(409, {
+          code: "revision_conflict",
+          message: "the question moved on",
+          details: { status, revision: last.question_revision },
+        });
+      }
       const event = this.append({
         event_type: "decision.cancelled",
         question_id: questionId,
@@ -1171,6 +1188,10 @@ describe("Answers the person makes on the owner computer (#17101)", () => {
         .filter((r) => r.path === `/api/v1/questions/${asked}/cancel`)
         .map((r) => r.deviceId)
     ).toEqual([owner.deviceId]);
+    // A second dismissal, under a new id, finds it closed already: never declined twice.
+    await expect(
+      service.declineQuestion({ ...decline, declineId: "0190f0aa-1111-4222-8333-44445555ffff" })
+    ).resolves.toMatchObject({ outcome: { status: "closed", reason: "cancelled" } });
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(terminals.submitted).toHaveLength(1);
   }, 60_000);

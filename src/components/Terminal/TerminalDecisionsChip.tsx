@@ -33,7 +33,7 @@ import {
 } from "@/components/ui/popoverHeader";
 import { pluralize } from "@/lib/pluralize";
 import { DecisionCancelDialog } from "@/components/Decisions/DecisionCancelDialog";
-import { isDeclineCommitted } from "@/components/Decisions/decisionAnswerSend";
+import { dismissingQuestionIds } from "@/components/Decisions/decisionDeclineSend";
 import type { DecisionCancelTarget } from "@/components/Decisions/decisionCancelModel";
 import { paneQuestion, questionOf } from "@/components/Decisions/decisionQuestionTarget";
 import type { PaneDecisionState } from "@shared/types/decisions";
@@ -293,19 +293,12 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
   // Withdrawals main committed and the relay hasn't confirmed, held in memory
   // for as long as this view shows the pane; each shows until the pane's state drops it.
   const [cancelling, setCancelling] = useState<ReadonlySet<string>>(() => new Set());
-  // Questions dismissed from here (#17239), by the key their dismissal is kept
-  // under: each shows as dismissing while that dismissal is under way or taken,
-  // and as waiting again if it couldn't be.
-  const [dismissed, setDismissed] = useState<ReadonlyMap<string, string>>(() => new Map());
-  // Joined so the chip renders again only when the set changes, not on every draft keystroke.
+  // The pane's questions dismissed from this computer (#17239), here or in the
+  // question view: each shows as dismissing while its decline is under way or
+  // taken, and as waiting again if it couldn't be. Joined, so the chip renders
+  // again only when the set changes, not on every draft keystroke.
   const dismissingIds = useDecisionsAnswerStore((store) =>
-    [...dismissed]
-      .filter(([, key]) => {
-        const record = store.records[key];
-        return record !== undefined && isDeclineCommitted(record);
-      })
-      .map(([questionId]) => questionId)
-      .join("\u0000")
+    dismissingQuestionIds(store.records, terminalId)
   );
   const dismissing = new Set(dismissingIds === "" ? [] : dismissingIds.split("\u0000"));
   const [cancel, setCancel] = useState<{ target: DecisionCancelTarget; open: boolean } | null>(
@@ -324,7 +317,11 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
     <DecisionCancelDialog
       target={cancel?.target ?? null}
       isOpen={cancel?.open === true}
-      waiting={items.some((item) => asked?.(item.questionId) === true && isCancellable(item))}
+      // A question being dismissed from here still waits until it closes.
+      waiting={items.some(
+        (item) =>
+          asked?.(item.questionId) === true && (isCancellable(item) || item.kind === "dismissing")
+      )}
       queued={items.some((item) => asked?.(item.questionId) === true && item.kind === "queued")}
       onClose={() =>
         setCancel((current) => (current === null ? null : { ...current, open: false }))
@@ -333,12 +330,6 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
       onCancelling={(questionId) =>
         setCancelling((current) =>
           new Set([...current].filter((id) => openIds.has(id))).add(questionId)
-        )
-      }
-      // So are dismissals.
-      onDismissing={(questionId, key) =>
-        setDismissed((current) =>
-          new Map([...current].filter(([id]) => openIds.has(id))).set(questionId, key)
         )
       }
       restoreFocusTo={() => {

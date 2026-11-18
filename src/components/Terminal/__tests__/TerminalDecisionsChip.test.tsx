@@ -48,7 +48,12 @@ import {
   OverlayFocusRestoreContext,
   type OverlayFocusRestore,
 } from "@/components/ui/overlay-focus-restore";
-import { useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
+import {
+  answerKey,
+  useDecisionsAnswerStore,
+  type DeclinePhase,
+} from "@/store/decisionsAnswerStore";
+import { dismissingQuestionIds } from "@/components/Decisions/decisionDeclineSend";
 import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
@@ -139,7 +144,7 @@ function q42Content(over: Partial<DecisionQuestionContent> = {}): DecisionQuesti
     expiresAt: null,
     status: "open",
     closedReason: null,
-    deliveryStatus: null,
+    deliveryStatus: "not-sent",
     attachments: [],
     thread: [],
     ...over,
@@ -762,6 +767,9 @@ describe("TerminalDecisionsChip", () => {
       render(<TerminalDecisionsChip terminalId="t1" />);
       await askToDismiss();
       await screen.findByRole("alertdialog");
+      // The person pressed Dismiss itself, so focus was on it.
+      await waitFor(() => expect(document.activeElement).toBe(dialogButton("Keep question")));
+      act(() => dialogButton("Dismiss question").focus());
 
       await confirm("Dismiss question");
       const dialog = screen.getByRole("alertdialog");
@@ -770,8 +778,10 @@ describe("TerminalDecisionsChip", () => {
         "Your relay needs an update before it takes a dismissal from this computer, so q-42 wasn't dismissed."
       );
       expect(dialog.textContent).toContain("Nothing is typed into this terminal");
-      // The press that got the refusal never withdraws: Keep question has focus.
+      // The press that got the refusal never withdraws: focus moves to Keep question, and a
+      // second press where Dismiss was does nothing yet.
       await waitFor(() => expect(document.activeElement).toBe(dialogButton("Keep question")));
+      await confirm("Withdraw question");
       expect(cancelQuestion).not.toHaveBeenCalled();
       // Not dismissing: the chip still shows it waiting.
       expect(screen.getByTestId("terminal-decisions-chip").textContent).not.toContain("dismissing");
@@ -814,7 +824,7 @@ describe("TerminalDecisionsChip", () => {
       expect(cancelQuestion).not.toHaveBeenCalled();
     });
 
-    it("offers withdrawing on a Remote Host's own window, which doesn't sign for the person", async () => {
+    it("offers withdrawing when this computer doesn't sign for the person, as on a Remote Host", async () => {
       getStatus.mockResolvedValue({ state: "connected", revision: 1 });
       declineQuestion.mockResolvedValueOnce({ result: "refused", reason: "not-owner" });
       render(<TerminalDecisionsChip terminalId="t1" />);
@@ -825,6 +835,40 @@ describe("TerminalDecisionsChip", () => {
       const dialog = screen.getByRole("alertdialog");
       expect(dialog.textContent).toContain("Withdraw question q-42?");
       expect(dialog.textContent).toContain("This computer doesn't sign for you");
+    });
+
+    it("shows a dismissal from the question view as dismissing too, and waiting again once it can't be taken", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      const chip = await screen.findByTestId("terminal-decisions-chip");
+      const key = answerKey(q42Content().reference);
+      const queued = (outcome: Extract<DeclinePhase, { kind: "settled" }>["outcome"]) =>
+        act(() =>
+          useDecisionsAnswerStore.getState().update(key, (record) => ({
+            ...record,
+            decline: {
+              declineId: "0190f0aa-1111-4222-8333-44445555dddd",
+              payload: {
+                reference: q42Content().reference,
+                declineId: "0190f0aa-1111-4222-8333-44445555dddd",
+                expectedRevision: 3,
+              },
+              phase: { kind: "settled", outcome },
+              resubmitted: false,
+            },
+          }))
+        );
+
+      queued({ status: "queued" });
+      expect(chip.textContent).toContain("q-42 dismissing");
+      // Another pane's chip isn't told about it.
+      expect(dismissingQuestionIds(useDecisionsAnswerStore.getState().records, "t2")).toBe("");
+
+      queued({ status: "unsupported", by: "relay" });
+      expect(chip.textContent).not.toContain("dismissing");
+      fireEvent.click(chip);
+      await screen.findAllByTestId("terminal-decisions-row");
+      expect(screen.getAllByTestId("terminal-decisions-dismiss")).toHaveLength(1);
     });
 
     it("keeps a withdrawal's refusal in the dialog, naming the question, with only a way out", async () => {
