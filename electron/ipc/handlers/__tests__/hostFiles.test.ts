@@ -39,6 +39,21 @@ describe("listHostDirectory", () => {
     ]);
   });
 
+  it("orders names numerically and case-insensitively like localeCompare, with kind first", async () => {
+    const names = ["file10", "file2", "File1", "Zeta", "alpha", "école", "eclair", "Ecole", "a"];
+    for (const name of names) await fs.writeFile(path.join(dir, name), "");
+    await fs.mkdir(path.join(dir, "zdir"));
+    const listing = await listHostDirectory({ path: dir });
+    const files = listing.entries.filter((e) => e.kind === "file").map((e) => e.name);
+    const expected = [...names].sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })
+    );
+    expect(listing.entries[0].name).toBe("zdir");
+    const base = (n: string) => n.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+    expect(files.map(base)).toEqual(expected.map(base));
+    expect(files.indexOf("file2")).toBeLessThan(files.indexOf("file10"));
+  });
+
   it("hides dotfiles unless asked", async () => {
     await fs.writeFile(path.join(dir, ".env"), "x");
     await fs.writeFile(path.join(dir, "visible"), "x");
