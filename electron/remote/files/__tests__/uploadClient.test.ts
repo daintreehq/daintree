@@ -774,25 +774,41 @@ describe("hashing an in-memory payload", () => {
     return () => spy.mock.calls.filter(([algorithm]) => algorithm === "sha256").length;
   }
 
-  /** Every attempt reads the whole source as the link would; the first is turned away busy. */
-  function busyOnce(upload: ReturnType<typeof setup>["upload"]) {
+  /**
+   * Every attempt reads the whole source as the link would. The first is turned
+   * away busy and the second loses its answer, so the third is a reconcile.
+   */
+  function busyThenLost(upload: ReturnType<typeof setup>["upload"]) {
     const sent: Array<{ advertised: string; bytes: Buffer }> = [];
+    const failures = ["RATE_LIMITED", "OUTCOME_UNKNOWN"];
     upload.mockImplementation(async (_hostId, source, opts) => {
       const chunks: Uint8Array[] = [];
       for (let offset = 0; offset < source.size; offset += BULK_CHUNK_BYTES) {
         chunks.push(await source.read(offset, Math.min(BULK_CHUNK_BYTES, source.size - offset)));
       }
       sent.push({ advertised: source.sha256, bytes: Buffer.concat(chunks) });
-      if (sent.length === 1) throw Object.assign(new Error("busy"), { code: "RATE_LIMITED" });
+      const code = failures[sent.length - 1];
+      if (code) throw Object.assign(new Error(code), { code });
       return { hostPath: `/tmp/${opts.name}`, bytes: source.size, deduplicated: false };
     });
     return sent;
   }
 
-  it("hashes uploaded bytes once across a busy retry, and sends what it advertised", async () => {
-    const { client, upload } = setup({ random: () => 0 });
+  /** The caller's bytes and their digest, taken before the upload can touch them. */
+  function original(bytes: Uint8Array) {
+    return {
+      bytes: Buffer.from(bytes),
+      digest: crypto.createHash("sha256").update(bytes).digest("hex"),
+    };
+  }
+
+  const retrying = () => setup({ random: () => 0, whenReachable: async () => true });
+
+  it("hashes uploaded bytes once across a busy retry and a reconcile, and sends what it advertised", async () => {
+    const { client, upload } = retrying();
     const payload = crypto.randomBytes(2 * BULK_CHUNK_BYTES + 3);
-    const sent = busyOnce(upload);
+    const expected = original(payload);
+    const sent = busyThenLost(upload);
     const digests = countDigests();
     await expect(
       client.uploadBytes(7, {
@@ -805,30 +821,27 @@ describe("hashing an in-memory payload", () => {
       })
     ).resolves.toMatchObject({ hostPath: "/tmp/big.bin" });
     expect(digests()).toBe(1);
-
-    const expected = crypto.createHash("sha256").update(payload).digest("hex");
-    expect(sent).toHaveLength(2);
+    expect(sent).toHaveLength(3);
     for (const attempt of sent) {
-      expect(attempt.advertised).toBe(expected);
-      expect(attempt.bytes.equals(payload)).toBe(true);
+      expect(attempt.advertised).toBe(expected.digest);
+      expect(attempt.bytes.equals(expected.bytes)).toBe(true);
     }
   });
 
-  it("hashes a pasted image once across a busy retry, and sends what it advertised", async () => {
-    const { client, upload } = setup({ random: () => 0 });
+  it("hashes a pasted image once across a busy retry and a reconcile, and sends what it advertised", async () => {
+    const { client, upload } = retrying();
     const png = crypto.randomBytes(BULK_CHUNK_BYTES + 7);
-    const sent = busyOnce(upload);
+    const expected = original(png);
+    const sent = busyThenLost(upload);
     const digests = countDigests();
     await expect(client.uploadClipboardImage(7, "studio-01", png, "op-paste")).resolves.toBe(
       "/tmp/clipboard.png"
     );
     expect(digests()).toBe(1);
-
-    const expected = crypto.createHash("sha256").update(png).digest("hex");
-    expect(sent).toHaveLength(2);
+    expect(sent).toHaveLength(3);
     for (const attempt of sent) {
-      expect(attempt.advertised).toBe(expected);
-      expect(attempt.bytes.equals(png)).toBe(true);
+      expect(attempt.advertised).toBe(expected.digest);
+      expect(attempt.bytes.equals(expected.bytes)).toBe(true);
     }
   });
 });
