@@ -3,9 +3,10 @@
  * `forgeProviders.slots` ref, every `fileEditors[].slot` (#12323) and every
  * panel view in a built-in plugin's manifest must have a matching
  * `registerBuiltinView` call in that plugin's renderer entry, under the
- * declaring plugin's own id. A built-in panel view has no `plugin://` bundle to
- * fall back on, so its slot is the runtime panel kind id `{name}.{viewId}`; a
- * missing registration is a panel that opens onto an import error.
+ * declaring plugin's own id. A built-in view has no `plugin://` bundle to fall
+ * back on, so its slot is the runtime panel kind id `{name}.{viewId}` for a
+ * panel view and the hosted view kind id for any other location; a missing
+ * registration is a view that opens onto an import error.
  *
  * Nothing else checks this. The main process validates `slots` for shape only —
  * it cannot see the renderer bundle the ids resolve against (see
@@ -27,6 +28,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { pluginHostedViewKindId } from "@shared/types/plugin";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BUILTIN_PLUGINS_DIR = path.resolve(HERE, "../../../plugins/builtin");
@@ -77,13 +79,18 @@ function readSlotRefs(manifest: unknown): string[] {
     : [];
   const name = typeof manifest.name === "string" ? manifest.name : null;
   const views = contributes.views;
+  // A panel view mounts as the panel kind `{name}.{viewId}`; a view mounted
+  // outside the grid (a file editor's, a settings section) mounts as its hosted
+  // view kind id, which `PluginContributionRegistrar` builds the same way.
   const viewRefs =
     name !== null && Array.isArray(views)
-      ? views.flatMap((view) =>
-          isRecord(view) && typeof view.id === "string" && view.id !== ""
-            ? [`${name}.${view.id}`]
-            : []
-        )
+      ? views.flatMap((view) => {
+          if (!isRecord(view) || typeof view.id !== "string" || view.id === "") return [];
+          const location = typeof view.location === "string" ? view.location : "panel";
+          return [
+            location === "panel" ? `${name}.${view.id}` : pluginHostedViewKindId(name, view.id),
+          ];
+        })
       : [];
   return [...forgeRefs, ...editorRefs, ...viewRefs];
 }
