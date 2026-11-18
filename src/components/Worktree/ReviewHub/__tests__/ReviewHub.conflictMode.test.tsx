@@ -1979,7 +1979,7 @@ describe("ReviewHub", () => {
 
       fireEvent.click(screen.getByRole("button", { name: /^Abort patch apply/i }));
       const dialog = await screen.findByRole("alertdialog");
-      expect(dialog.textContent).toMatch(/Discards 1 staged resolution and/);
+      expect(dialog.textContent).toMatch(/Discards 1 staged change and/);
       expect(dialog.textContent).toMatch(/git am/);
       expect(dialog.textContent).not.toMatch(/replayed commit/);
     });
