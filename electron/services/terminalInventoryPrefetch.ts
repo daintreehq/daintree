@@ -16,7 +16,10 @@ import { logInfo } from "../utils/logger.js";
  * Consume-once with a short TTL: the inventory is a snapshot and a terminal
  * can exit between prefetch and hydrate, so a stale answer must never outlive
  * the switch it was taken for. A rejected prefetch is dropped so the handler
- * falls back to a live fetch.
+ * falls back to a live fetch. A switch whose swap fails, or whose view never
+ * hydrates, never consumes its entry, so one shared timer evicts entries as
+ * they expire (#17793); expiry runs on the monotonic clock so a wall-clock
+ * jump can't stretch an entry's life.
  */
 const PREFETCH_TTL_MS = 5_000;
 
@@ -26,6 +29,37 @@ interface Entry {
 }
 
 const inflight = new Map<string, Entry>();
+let sweepTimer: ReturnType<typeof setTimeout> | null = null;
+
+function now(): number {
+  return performance.now();
+}
+
+function scheduleSweep(): void {
+  // Every new entry expires no earlier than the ones already here, so a
+  // pending sweep is already due first.
+  if (sweepTimer !== null) return;
+  let next = Infinity;
+  for (const entry of inflight.values()) next = Math.min(next, entry.expiresAt);
+  if (next === Infinity) return;
+  sweepTimer = setTimeout(sweepExpired, Math.max(0, next - now()));
+  sweepTimer.unref?.();
+}
+
+function sweepExpired(): void {
+  sweepTimer = null;
+  const at = now();
+  for (const [projectId, entry] of inflight) {
+    if (entry.expiresAt <= at) inflight.delete(projectId);
+  }
+  scheduleSweep();
+}
+
+function stopSweepIfIdle(): void {
+  if (inflight.size > 0 || sweepTimer === null) return;
+  clearTimeout(sweepTimer);
+  sweepTimer = null;
+}
 
 type InventoryPtyClient = Pick<PtyClient, "getTerminalsForProjectAsync" | "getTerminalAsync">;
 
@@ -96,16 +130,19 @@ export function prefetchTerminalInventory(
   build: (projectId: string) => Promise<BackendTerminalInfo[]>
 ): Promise<BackendTerminalInfo[]> {
   const existing = inflight.get(projectId);
-  if (existing && existing.expiresAt > Date.now()) return existing.promise;
+  if (existing && existing.expiresAt > now()) return existing.promise;
 
   const entry: Entry = {
     promise: build(projectId),
-    expiresAt: Date.now() + PREFETCH_TTL_MS,
+    expiresAt: now() + PREFETCH_TTL_MS,
   };
   entry.promise.catch(() => {
-    if (inflight.get(projectId) === entry) inflight.delete(projectId);
+    if (inflight.get(projectId) !== entry) return;
+    inflight.delete(projectId);
+    stopSweepIfIdle();
   });
   inflight.set(projectId, entry);
+  scheduleSweep();
   return entry.promise;
 }
 
@@ -116,18 +153,22 @@ export function consumeTerminalInventoryPrefetch(
   const entry = inflight.get(projectId);
   if (!entry) return null;
   inflight.delete(projectId);
-  if (entry.expiresAt <= Date.now()) return null;
+  stopSweepIfIdle();
+  if (entry.expiresAt <= now()) return null;
   return entry.promise;
 }
 
 export function invalidateTerminalInventoryPrefetch(projectId?: string): void {
-  if (projectId === undefined) {
-    inflight.clear();
-    return;
-  }
-  inflight.delete(projectId);
+  if (projectId === undefined) inflight.clear();
+  else inflight.delete(projectId);
+  stopSweepIfIdle();
 }
 
 export function _resetTerminalInventoryPrefetchForTests(): void {
   inflight.clear();
+  stopSweepIfIdle();
+}
+
+export function _pendingTerminalInventoryPrefetchesForTests(): string[] {
+  return [...inflight.keys()];
 }

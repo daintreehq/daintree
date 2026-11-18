@@ -238,6 +238,12 @@ function makeWindowRegistry(contexts: WindowContext[]): WindowRegistry {
   } as unknown as WindowRegistry;
 }
 
+// A cold switch with a ptyClient leaves a prefetched inventory and its expiry
+// timer behind; drop both so no test inherits another's.
+afterEach(() => {
+  _resetTerminalInventoryPrefetchForTests();
+});
+
 // #11136: the File-menu "Close Project" / "Project Settings…" gates are computed
 // when the menu is built, so every path that opens a project has to refresh them
 // or they stay disabled until something unrelated rebuilds the menu.
