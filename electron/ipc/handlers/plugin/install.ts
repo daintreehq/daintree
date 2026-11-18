@@ -895,7 +895,11 @@ async function browseSourceUrls(
  */
 async function parseCatalogRequest(
   request: unknown
-): Promise<{ pluginId: string; version: string | undefined; sourceUrl: string | undefined } | null> {
+): Promise<{
+  pluginId: string;
+  version: string | undefined;
+  sourceUrl: string | undefined;
+} | null> {
   if (typeof request !== "object" || request === null) return null;
   const { pluginId, version, sourceUrl: rawSource } = request as Record<string, unknown>;
   if (typeof pluginId !== "string" || !isCommunityPluginId(pluginId)) return null;

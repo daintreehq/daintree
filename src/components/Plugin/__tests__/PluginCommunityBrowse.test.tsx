@@ -72,7 +72,8 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-const browseCatalog = vi.fn<() => Promise<PluginCatalogsBrowseResult | PluginCatalogBrowseResult>>();
+const browseCatalog =
+  vi.fn<() => Promise<PluginCatalogsBrowseResult | PluginCatalogBrowseResult>>();
 const sourcesChanged = vi.hoisted(() => ({ listener: null as null | (() => void) }));
 const onCatalogSourcesChanged = vi.fn((listener: () => void) => {
   sourcesChanged.listener = listener;
@@ -331,7 +332,9 @@ describe("PluginCommunityBrowse", () => {
 
   it("asks once per retry, holding Retry until the answer lands", async () => {
     const retried = deferred<PluginCatalogsBrowseResult>();
-    browseCatalog.mockResolvedValueOnce(unavailable("unreachable")).mockReturnValueOnce(retried.promise);
+    browseCatalog
+      .mockResolvedValueOnce(unavailable("unreachable"))
+      .mockReturnValueOnce(retried.promise);
     renderBrowse();
     const retry = await screen.findByRole("button", { name: "Retry" });
 
@@ -458,14 +461,12 @@ describe("PluginCommunityBrowse", () => {
     });
 
     it("reads the catalogs again when the person's list changes", async () => {
-      browseCatalog
-        .mockResolvedValueOnce(available([SESSION]))
-        .mockResolvedValueOnce({
-          catalogs: [
-            { result: catalog([SESSION]) },
-            { sourceUrl: ADDED, result: catalog([fromAdded(LINEAR)]) },
-          ],
-        });
+      browseCatalog.mockResolvedValueOnce(available([SESSION])).mockResolvedValueOnce({
+        catalogs: [
+          { result: catalog([SESSION]) },
+          { sourceUrl: ADDED, result: catalog([fromAdded(LINEAR)]) },
+        ],
+      });
       renderBrowse();
       await screen.findByText(SESSION.id);
       expect(screen.queryByText(LINEAR.id)).toBeNull();

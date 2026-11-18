@@ -35,7 +35,8 @@ function canonicalize(raw: unknown): CatalogSourceUrlResult {
   if (trimmed.length === 0 || CONTROL_CHARACTERS.test(trimmed)) {
     return { ok: false, reason: "malformed" };
   }
-  if (trimmed.length > PLUGIN_CATALOG_SOURCE_URL_MAX_LENGTH) return { ok: false, reason: "too-long" };
+  if (trimmed.length > PLUGIN_CATALOG_SOURCE_URL_MAX_LENGTH)
+    return { ok: false, reason: "too-long" };
   let url: URL;
   try {
     url = new URL(trimmed);

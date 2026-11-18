@@ -94,7 +94,9 @@ describe("PluginCatalogSourcesSection (#17434)", () => {
       '[data-testid="plugin-catalog-source"]'
     ) as HTMLElement;
 
-    fireEvent.click(within(row).getByRole("button", { name: "Remove plugins.example.org/catalog.json" }));
+    fireEvent.click(
+      within(row).getByRole("button", { name: "Remove plugins.example.org/catalog.json" })
+    );
 
     await waitFor(() => expect(screen.queryByText("plugins.example.org/catalog.json")).toBeNull());
     expect(plugin.removeCatalogSource).toHaveBeenCalledWith(SOURCE);
@@ -106,7 +108,9 @@ describe("PluginCatalogSourcesSection (#17434)", () => {
     render(<PluginCatalogSourcesSection />);
     await screen.findByText("plugins.example.org/catalog.json");
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove plugins.example.org/catalog.json" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove plugins.example.org/catalog.json" })
+    );
     expect(await screen.findByText(/is still in the list/)).toBeTruthy();
     expect(screen.getByText("plugins.example.org/catalog.json")).toBeTruthy();
 

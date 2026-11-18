@@ -1138,8 +1138,12 @@ describe("a catalog the person added (#17434)", () => {
       pluginId: preview.catalog!.id,
       version: preview.catalog!.version,
       repo: preview.catalog!.repo,
-      ...(preview.catalog!.sourceUrl === undefined ? {} : { sourceUrl: preview.catalog!.sourceUrl }),
-      ...(preview.replacesCatalog === undefined ? {} : { replacesCatalog: preview.replacesCatalog }),
+      ...(preview.catalog!.sourceUrl === undefined
+        ? {}
+        : { sourceUrl: preview.catalog!.sourceUrl }),
+      ...(preview.replacesCatalog === undefined
+        ? {}
+        : { replacesCatalog: preview.replacesCatalog }),
       expected: approval(preview, replaces),
     });
   }
@@ -1163,9 +1167,17 @@ describe("a catalog the person added (#17434)", () => {
 
     const preview = await reviewFrom(`${SOURCE}#listing`);
     expect(catalogFor).toHaveBeenCalledWith(SOURCE);
-    expect(preview.catalog).toEqual({ id: "acme.listed", version: "1.0.0", repo: REPO, sourceUrl: SOURCE });
+    expect(preview.catalog).toEqual({
+      id: "acme.listed",
+      version: "1.0.0",
+      repo: REPO,
+      sourceUrl: SOURCE,
+    });
 
-    expect(await confirmReview(preview, false)).toEqual({ status: "installed", pluginId: "acme.listed" });
+    expect(await confirmReview(preview, false)).toEqual({
+      status: "installed",
+      pluginId: "acme.listed",
+    });
     expect(catalogFor).toHaveBeenLastCalledWith(SOURCE);
     expect(record("acme.listed")?.catalog).toEqual({
       id: "acme.listed",
@@ -1261,7 +1273,10 @@ describe("a catalog the person added (#17434)", () => {
 
     lists(next.entry);
     servesInOrder(next.archive);
-    expect(await confirmReview(preview, true)).toEqual({ status: "installed", pluginId: "acme.listed" });
+    expect(await confirmReview(preview, true)).toEqual({
+      status: "installed",
+      pluginId: "acme.listed",
+    });
     expect(record("acme.listed")?.catalog?.sourceUrl).toBe(SOURCE);
   });
 
@@ -1293,13 +1308,22 @@ describe("a catalog the person added (#17434)", () => {
     await installFrom(SOURCE);
     addSource();
     const next = await release("1.0.1");
-    catalogMock.lookupUpdate.mockResolvedValueOnce({ status: "update", entry: next.entry, fetchedAt: 2 });
+    catalogMock.lookupUpdate.mockResolvedValueOnce({
+      status: "update",
+      entry: next.entry,
+      fetchedAt: 2,
+    });
     servesInOrder(next.archive, next.archive);
 
     const offer = await service.checkForUpdate("acme.listed");
     if (offer.status !== "available") throw new Error(JSON.stringify(offer));
     expect(catalogFor).toHaveBeenCalledWith(SOURCE);
-    expect(offer.catalog).toEqual({ id: "acme.listed", version: "1.0.1", repo: REPO, sourceUrl: SOURCE });
+    expect(offer.catalog).toEqual({
+      id: "acme.listed",
+      version: "1.0.1",
+      repo: REPO,
+      sourceUrl: SOURCE,
+    });
 
     lists(next.entry);
     const result = await handleInstallFromCatalog({

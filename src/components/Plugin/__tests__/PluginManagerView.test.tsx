@@ -1476,7 +1476,9 @@ describe("PluginManagerView", () => {
     it("holds an update from an added catalog to that catalog (#17434)", async () => {
       const SOURCE = "https://plugins.example.org/catalog.json";
       vi.mocked(window.electron.plugin.list).mockResolvedValue([
-        catalogPlugin({ catalog: { id: "acme.demo", version: "1.0.0", repo: REPO, sourceUrl: SOURCE } }),
+        catalogPlugin({
+          catalog: { id: "acme.demo", version: "1.0.0", repo: REPO, sourceUrl: SOURCE },
+        }),
       ]);
       vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue({
         ...offer(),
@@ -2502,7 +2504,9 @@ describe("PluginManagerView", () => {
         );
         // The curator, not Daintree, is named as the reviewer.
         const source = within(dialog).getByTestId("archive-install-source").textContent ?? "";
-        expect(source).toContain("Listed by plugins.example.org/catalog.json from github.com/acme/demo");
+        expect(source).toContain(
+          "Listed by plugins.example.org/catalog.json from github.com/acme/demo"
+        );
         expect(source).toMatch(/not Daintree/);
 
         await approveUrlReview();
@@ -4585,19 +4589,21 @@ describe("PluginManagerView — unsaved plugin panels (#15031)", () => {
       .mockResolvedValueOnce([])
       .mockReturnValueOnce(read.promise)
       .mockResolvedValue([]);
-    window.electron.plugin.browseCatalog = vi.fn(async () => ownCatalog({
-      status: "available" as const,
-      listings: [
-        {
-          id: "acme.other",
-          version: "1.0.0",
-          repo: "https://github.com/acme/other",
-          capabilities: [],
-        },
-      ],
-      fetchedAt: Date.now(),
-      stale: false as const,
-    }));
+    window.electron.plugin.browseCatalog = vi.fn(async () =>
+      ownCatalog({
+        status: "available" as const,
+        listings: [
+          {
+            id: "acme.other",
+            version: "1.0.0",
+            repo: "https://github.com/acme/other",
+            capabilities: [],
+          },
+        ],
+        fetchedAt: Date.now(),
+        stale: false as const,
+      })
+    );
     window.electron.plugin.previewFromCatalog = vi.fn(async () => ({
       status: "cancelled" as const,
     }));
@@ -4918,7 +4924,10 @@ describe("PluginManagerView — Browse (#16782)", () => {
     vi.mocked(window.electron.plugin.browseCatalog).mockResolvedValue(
       ownCatalog({
         status: "available",
-        listings: [LISTING, { ...LISTING, id: "acme.other", repo: "https://github.com/acme/other" }],
+        listings: [
+          LISTING,
+          { ...LISTING, id: "acme.other", repo: "https://github.com/acme/other" },
+        ],
         fetchedAt: Date.now(),
         stale: false,
       })

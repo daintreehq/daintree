@@ -97,10 +97,16 @@ describe("catalog source URLs (#17434)", () => {
 
   it("reads an install record's catalog, with no field meaning Daintree's own", () => {
     const record = (overrides: Partial<InstalledPluginRecord>) =>
-      ({ source: "catalog", catalog: { id: "a.b", version: "1.0.0", repo: "r" }, ...overrides }) as InstalledPluginRecord;
+      ({
+        source: "catalog",
+        catalog: { id: "a.b", version: "1.0.0", repo: "r" },
+        ...overrides,
+      }) as InstalledPluginRecord;
     expect(installedCatalogOf(record({}))).toEqual({});
     expect(
-      installedCatalogOf(record({ catalog: { id: "a.b", version: "1.0.0", repo: "r", sourceUrl: SOURCE } }))
+      installedCatalogOf(
+        record({ catalog: { id: "a.b", version: "1.0.0", repo: "r", sourceUrl: SOURCE } })
+      )
     ).toEqual({ sourceUrl: SOURCE });
     expect(installedCatalogOf(record({ source: "url" }))).toBeNull();
     expect(installedCatalogOf(undefined)).toBeNull();
@@ -120,7 +126,11 @@ describe("the person's catalog list (#17434)", () => {
 
   it("adds a catalog once, in its canonical spelling, after the ones already there", () => {
     const first = "https://a.example.com/catalog.json";
-    expect(addPluginCatalogSource(first)).toEqual({ status: "added", sourceUrl: first, sources: [first] });
+    expect(addPluginCatalogSource(first)).toEqual({
+      status: "added",
+      sourceUrl: first,
+      sources: [first],
+    });
     expect(addPluginCatalogSource("https://PLUGINS.example.org/catalog.json#x")).toEqual({
       status: "added",
       sourceUrl: SOURCE,

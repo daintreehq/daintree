@@ -393,7 +393,20 @@ export class PluginUpdateCheckService {
     // Every catalog install in the pass reads one catalog rather than fetching
     // its own (#17805). Opened by the first catalog lookup, whatever the list
     // said, so a pass with no catalog install never loads the catalog client.
-    const options = { catalog: passCatalog() };
+    // A catalog the person added gets its own (#17434), so no install is ever
+    // checked against another catalog than the one it came from.
+    const added = new Map<string, PluginCatalogUpdateSource>();
+    const options = {
+      catalog: passCatalog(),
+      catalogFor: (sourceUrl: string) => {
+        let catalog = added.get(sourceUrl);
+        if (!catalog) {
+          catalog = passCatalog(sourceUrl);
+          added.set(sourceUrl, catalog);
+        }
+        return catalog;
+      },
+    };
 
     const worker = async (): Promise<void> => {
       while (cursor < ids.length) {
@@ -439,13 +452,13 @@ interface PassOutcome {
   failedEntirely: boolean;
 }
 
-/** One pass's catalog, opened on its first lookup. */
-function passCatalog(): PluginCatalogUpdateSource {
+/** One pass's copy of a catalog (Daintree's own when `sourceUrl` is omitted), opened on its first lookup. */
+function passCatalog(sourceUrl?: string): PluginCatalogUpdateSource {
   let batch: Promise<PluginCatalogUpdateSource> | null = null;
   return {
     lookupUpdate: async (id, installedVersion) => {
       batch ??= import("./plugin/PluginCatalogService.js").then((m) =>
-        m.getPluginCatalogService().openUpdateBatch()
+        m.getPluginCatalogService(sourceUrl).openUpdateBatch()
       );
       return (await batch).lookupUpdate(id, installedVersion);
     },

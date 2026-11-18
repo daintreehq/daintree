@@ -24,7 +24,17 @@ function call(args: unknown[], answer: unknown = { status: "cancelled" }) {
   const local = vi.fn(async () => {
     throw new Error("a catalog read never runs on this machine");
   });
-  return { input: { hostId: "host-1", webContentsId: -3, args, local, remote } as Parameters<HybridSplit>[0], remote, local };
+  return {
+    input: {
+      hostId: "host-1",
+      webContentsId: -3,
+      args,
+      local,
+      remote,
+    } as Parameters<HybridSplit>[0],
+    remote,
+    local,
+  };
 }
 
 function preview(sourceUrl?: string) {
@@ -35,7 +45,12 @@ function preview(sourceUrl?: string) {
       archiveHash: "a".repeat(64),
       installedOnDisk: false,
       manifest: {},
-      catalog: { id: "acme.listed", version: "1.0.0", repo: REPO, ...(sourceUrl ? { sourceUrl } : {}) },
+      catalog: {
+        id: "acme.listed",
+        version: "1.0.0",
+        repo: REPO,
+        ...(sourceUrl ? { sourceUrl } : {}),
+      },
     },
   };
 }
@@ -93,7 +108,12 @@ describe("catalog splits for a window attached to a host (#17434)", () => {
     const { input } = call([{ pluginId: "acme.listed", sourceUrl: SOURCE }], preview());
     expect(await pluginPreviewFromCatalog(input)).toMatchObject({
       status: "failed",
-      errors: [{ code: "catalog_unavailable", message: expect.stringMatching(/Update Daintree on the host/) }],
+      errors: [
+        {
+          code: "catalog_unavailable",
+          message: expect.stringMatching(/Update Daintree on the host/),
+        },
+      ],
     });
   });
 

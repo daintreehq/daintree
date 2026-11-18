@@ -682,7 +682,10 @@ export class PluginInstaller {
           opts.catalog?.sourceUrl
         );
         const reviewed = opts.catalogReplaces;
-        if ((replaced === null) !== (reviewed === null) || replaced?.sourceUrl !== reviewed?.sourceUrl) {
+        if (
+          (replaced === null) !== (reviewed === null) ||
+          replaced?.sourceUrl !== reviewed?.sourceUrl
+        ) {
           return fail(
             "archive_mismatch",
             `The installed copy of "${pluginId}" changed catalogs since this was reviewed, so it wasn't replaced`
@@ -1255,7 +1258,10 @@ export class PluginInstaller {
     }
     // Lazy: the catalog client costs nothing until a catalog install is checked.
     const [{ getPluginCatalogService, isComparableVersion }, { catalogSourceOf }] =
-      await Promise.all([import("./PluginCatalogService.js"), import("./pluginCatalogSourceUrl.js")]);
+      await Promise.all([
+        import("./PluginCatalogService.js"),
+        import("./pluginCatalogSourceUrl.js"),
+      ]);
     // The pattern admits numbers semver can't hold, and its comparisons throw.
     if (!isComparableVersion(installed.version)) return unusable;
     // The catalog the record names, whether or not this machine's person still
@@ -1268,10 +1274,7 @@ export class PluginInstaller {
       sourceUrl === undefined
         ? (options.catalog ?? getPluginCatalogService())
         : (options.catalogFor?.(sourceUrl) ?? getPluginCatalogService(sourceUrl));
-    const lookup = await source.lookupUpdate(
-      pluginId,
-      installed.version
-    );
+    const lookup = await source.lookupUpdate(pluginId, installed.version);
     switch (lookup.status) {
       case "stale":
       case "unavailable":

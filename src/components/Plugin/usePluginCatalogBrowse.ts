@@ -17,7 +17,10 @@ function normalize(answer: unknown): CatalogBrowseAnswer {
     return { kind: "result", result: answer as PluginCatalogsBrowseResult };
   }
   if ("status" in answer) {
-    return { kind: "result", result: { catalogs: [{ result: answer as PluginCatalogBrowseResult }] } };
+    return {
+      kind: "result",
+      result: { catalogs: [{ result: answer as PluginCatalogBrowseResult }] },
+    };
   }
   return { kind: "error" };
 }

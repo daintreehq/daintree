@@ -16,7 +16,10 @@ function loadSources() {
 }
 
 function broadcastSourcesChanged(): void {
-  broadcastToRenderer(CHANNELS.EVENTS_PUSH, { name: "plugin:catalog-sources-changed", payload: {} });
+  broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+    name: "plugin:catalog-sources-changed",
+    payload: {},
+  });
 }
 
 export async function handleGetCatalogSources(): Promise<PluginCatalogSources> {

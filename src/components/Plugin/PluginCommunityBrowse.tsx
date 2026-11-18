@@ -276,8 +276,8 @@ function CatalogProblem({
       >
         <p>
           {sourceUrl === undefined ? "Showing the catalog" : `Showing ${name}`} from{" "}
-          <TimeAgo timestamp={result.fetchedAt} verbose />. It couldn&apos;t be refreshed, so it
-          may be out of date.
+          <TimeAgo timestamp={result.fetchedAt} verbose />. It couldn&apos;t be refreshed, so it may
+          be out of date.
         </p>
       </Callout>
     );
@@ -362,7 +362,8 @@ export function PluginCommunityBrowse({
   const problems = useMemo(
     () =>
       (catalogs ?? []).filter(
-        (c) => c.result.status === "unavailable" || (c.result.status === "available" && c.result.stale)
+        (c) =>
+          c.result.status === "unavailable" || (c.result.status === "available" && c.result.stale)
       ),
     [catalogs]
   );

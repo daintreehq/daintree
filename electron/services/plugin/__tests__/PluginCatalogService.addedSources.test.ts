@@ -31,7 +31,10 @@ import {
   getPluginCatalogService,
 } from "../PluginCatalogService.js";
 import { createManualRedirectFetch } from "../../../utils/netManualRedirectFetch.js";
-import { FakeElectronNet, type FakeRoute } from "../../../utils/__tests__/helpers/fakeElectronNet.js";
+import {
+  FakeElectronNet,
+  type FakeRoute,
+} from "../../../utils/__tests__/helpers/fakeElectronNet.js";
 import { PLUGIN_CATALOG_SOURCE_CACHE_DIR } from "../../../../shared/config/pluginCatalog.js";
 import { VALID_CATALOG, catalogEntry } from "./pluginCatalogFixtures.js";
 
@@ -130,7 +133,10 @@ describe("PluginCatalogService for a catalog the person added (#17434)", () => {
     ["plain http", "http://plugins.example.org/catalog.json"],
     ["a URL with credentials", "https://user:pass@plugins.example.org/catalog.json"],
   ])("refuses a redirect to %s without connecting to it", async (_, target) => {
-    const net = new FakeElectronNet({ [SOURCE]: { redirect: target }, [target]: json(VALID_CATALOG) });
+    const net = new FakeElectronNet({
+      [SOURCE]: { redirect: target },
+      [target]: json(VALID_CATALOG),
+    });
     const lookup = await service(net).lookup("daintreehq.continue-session");
 
     expect(lookup).toEqual({ status: "unavailable", failure: "unreachable" });

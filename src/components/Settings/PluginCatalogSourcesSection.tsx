@@ -35,9 +35,7 @@ export function PluginCatalogSourcesSection() {
   const [loadNonce, setLoadNonce] = useState(0);
   const [draft, setDraft] = useState("");
   const [refusal, setRefusal] = useState<PluginCatalogSourceRefusal | null>(null);
-  const [failedSave, setFailedSave] = useState<{ message: string; retry: () => void } | null>(
-    null
-  );
+  const [failedSave, setFailedSave] = useState<{ message: string; retry: () => void } | null>(null);
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   // Only the latest request may settle the list, so a slow read can't put back
@@ -175,40 +173,40 @@ export function PluginCatalogSourcesSection() {
           error={refusal ? CATALOG_SOURCE_REFUSAL_COPY[refusal] : undefined}
           control={({ labelId, descriptionId, disabled }) => (
             <form
-                className="flex items-center gap-2"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  add();
+              className="flex items-center gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                add();
+              }}
+            >
+              <Input
+                ref={inputRef}
+                type="url"
+                inputMode="url"
+                spellCheck={false}
+                autoComplete="off"
+                placeholder="https://example.com/plugins/catalog.json"
+                value={draft}
+                onChange={(event) => {
+                  setDraft(event.target.value);
+                  setRefusal(null);
                 }}
+                disabled={disabled || sources === null}
+                aria-labelledby={labelId}
+                aria-describedby={descriptionId}
+                aria-invalid={refusal !== null}
+                className="min-w-0 flex-1"
+              />
+              <Button
+                type="submit"
+                variant="outline"
+                size="sm"
+                disabled={disabled || busy || sources === null || draft.trim().length === 0}
+                loading={busy}
               >
-                <Input
-                  ref={inputRef}
-                  type="url"
-                  inputMode="url"
-                  spellCheck={false}
-                  autoComplete="off"
-                  placeholder="https://example.com/plugins/catalog.json"
-                  value={draft}
-                  onChange={(event) => {
-                    setDraft(event.target.value);
-                    setRefusal(null);
-                  }}
-                  disabled={disabled || sources === null}
-                  aria-labelledby={labelId}
-                  aria-describedby={descriptionId}
-                  aria-invalid={refusal !== null}
-                  className="min-w-0 flex-1"
-                />
-                <Button
-                  type="submit"
-                  variant="outline"
-                  size="sm"
-                  disabled={disabled || busy || sources === null || draft.trim().length === 0}
-                  loading={busy}
-                >
-                  Add catalog
-                </Button>
-              </form>
+                Add catalog
+              </Button>
+            </form>
           )}
         />
       </SettingsGroup>
