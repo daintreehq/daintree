@@ -52,6 +52,19 @@ export const LEGACY_ANSWER: EntryOverrides = {
   model_id: SECRET,
 };
 
+/**
+ * A person's decline from their phone (#17234), as the library's inbox
+ * stores one: content-free, at the revision the question was cancelled at.
+ */
+export const DECLINE: EntryOverrides = {
+  entry_id: "decline-1",
+  kind: "declined",
+  action: "cancel",
+  source: "human",
+  sealed: null,
+  created_at: "2026-11-01T11:07:00.000Z",
+};
+
 export function row(
   alias: number,
   overrides: Partial<Omit<QuestionRow, "origin">> & { origin?: Partial<QuestionRow["origin"]> } = {}

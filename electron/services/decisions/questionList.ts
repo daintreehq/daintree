@@ -16,6 +16,7 @@ import {
   pendingEntries,
   type HandledAnswers,
 } from "./attentionList.js";
+import { closedReasonOf, declineOf } from "./questionClosed.js";
 
 type AnsweredStatus = Extract<QuestionRow["local_status"], "human-answered" | "proxy-answered">;
 
@@ -96,7 +97,10 @@ export function standingOf(row: QuestionRow, handled: HandledAnswers): DecisionQ
   }
   switch (row.local_status) {
     case "cancelled":
-      return { kind: "settled", outcome: "withdrawn" };
+      return {
+        kind: "settled",
+        outcome: closedReasonOf(row) === "declined" ? "declined" : "withdrawn",
+      };
     case "expired":
       return { kind: "settled", outcome: "expired" };
     case "queued":
@@ -150,13 +154,15 @@ function lastHumanActionSeq(row: QuestionRow): number | null {
 /**
  * When a settled question settled: its newest answer, or the person's reply
  * to the agent's latest request for one when that came later; its expiry
- * notice, else the time it was set to expire. A withdrawal records no time.
+ * notice, else the time it was set to expire; the person's decline. A
+ * withdrawal records no time.
  */
 function settledAt(
   row: QuestionRow,
   outcome: "answered" | "withdrawn" | "expired" | "declined"
 ): string | null {
-  if (outcome === "withdrawn" || outcome === "declined") return null;
+  if (outcome === "withdrawn") return null;
+  if (outcome === "declined") return declineOf(row)?.created_at ?? null;
   const kind = outcome === "answered" ? "answer" : "expired";
   let newest: { revision: number; at: string } | null = null;
   for (const entry of parseAnswers(row.answers_json)) {

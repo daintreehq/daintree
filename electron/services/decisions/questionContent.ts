@@ -23,6 +23,7 @@ import type {
   DecisionThreadMessage,
 } from "../../../shared/types/decisionsQuestion.js";
 import { questionLine } from "./attentionList.js";
+import { closedReasonOf } from "./questionClosed.js";
 import { RetiredAttemptError } from "./relayTransport.js";
 
 /**
@@ -90,6 +91,7 @@ export async function readQuestionContent(
     askedAt: row.origin_created_at,
     expiresAt: row.expires_at,
     status: row.local_status,
+    closedReason: closedReasonOf(row),
     deliveryStatus: row.delivery_status,
     attachments: content.attachments.map((attachment) => ({
       attachmentId: attachment.attachment_id,
@@ -269,18 +271,19 @@ async function openedQuestion(
 }
 
 /**
- * Answers, expiry notices and follow-ups merged by the ledger seq of the
- * event that carried each, as the library orders a thread: answers stored
- * before threads existed carry none and come first, in the order stored.
+ * Answers, expiry and decline notices, and follow-ups merged by the ledger
+ * seq of the event that carried each, as the library orders a thread: answers
+ * stored before threads existed carry none and come first, in the order stored.
  */
 async function readThread(ctx: SealContext, row: QuestionRow): Promise<DecisionThreadEntry[]> {
   const placed: { seq: number; entry: DecisionThreadEntry }[] = [];
   for (const entry of parseAnswers(row.answers_json)) {
     const seq = entry.event_seq ?? 0;
-    if (entry.kind === "expired") {
+    // Content-free notices: nothing to open, and never an answer.
+    if (entry.kind === "expired" || entry.kind === "declined") {
       placed.push({
         seq,
-        entry: { type: "expired", entryId: entry.entry_id, sentAt: entry.created_at },
+        entry: { type: entry.kind, entryId: entry.entry_id, sentAt: entry.created_at },
       });
       continue;
     }

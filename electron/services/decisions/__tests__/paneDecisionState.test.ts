@@ -3,6 +3,7 @@ import type { QuestionRow } from "@daintreehq/decisions-client";
 import { PaneDecisionStates, projectPaneDecisionStates } from "../paneDecisionState.js";
 import type { PaneDecisionState } from "../../../../shared/types/decisions.js";
 import {
+  DECLINE,
   LEGACY_ANSWER,
   SECRET,
   answers,
@@ -188,6 +189,46 @@ describe("projectPaneDecisionStates", () => {
       { alias: 1, kind: "expired" },
       { alias: 2, kind: "answer" },
     ]);
+  });
+
+  it("drops a question the person declined, whether its notice waits, was typed or stopped (#17234)", () => {
+    const declined = { local_status: "cancelled" as const, answers_json: answers(DECLINE) };
+    const state = only([
+      row(1, { ...declined, delivery_status: "desktop-received" }),
+      row(2, { ...declined, delivery_status: "pending-host" }),
+      row(3, {
+        ...declined,
+        delivery_status: "delivery-uncertain",
+        error_code: "inject_ambiguous",
+      }),
+      row(4, { ...declined, delivery_status: "needs-attention", error_code: "pane_gone" }),
+      row(5, {
+        ...declined,
+        delivery_status: "terminal-delivered",
+        answers_json: answers({ ...DECLINE, delivered: true }),
+      }),
+      row(6),
+    ]);
+
+    expect(state).toEqual({
+      ...empty("pane-a"),
+      openQuestions: [expect.objectContaining({ questionId: qid(6), alias: 6 })],
+    });
+  });
+
+  it("still asks a person about a withdrawal's stopped delivery, and a decline a reopen superseded", () => {
+    const stopped = {
+      local_status: "cancelled" as const,
+      delivery_status: "needs-attention" as const,
+      error_code: "pane_gone",
+    };
+    const state = only([
+      row(1, { ...stopped, answers_json: answers({}) }),
+      // Declined at revision 1, reopened, then withdrawn at revision 2.
+      row(2, { ...stopped, question_revision: 2, answers_json: answers(DECLINE) }),
+    ]);
+
+    expect(state?.needsAttention.map(({ alias }) => alias)).toEqual([1, 2]);
   });
 
   it("lists stopped deliveries as needing attention with the recorded reason, not as waiting", () => {

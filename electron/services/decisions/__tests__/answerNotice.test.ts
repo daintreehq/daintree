@@ -98,6 +98,7 @@ describe("parseAnswerNotice", () => {
       source: "human",
       onComputer: false,
       expired: false,
+      declined: false,
       correction: false,
       modelId: null,
       confidence: null,
@@ -646,6 +647,87 @@ function rawFollowUp(fields: string[]): string {
     FOLLOWUP_BLOCK_END,
   ].join("\n");
 }
+
+describe("a person's decline (#17234)", () => {
+  const declined = () => answer({ kind: "declined" });
+  const LIBRARY_DECLINED_NOTE =
+    "note: The person declined to answer this question. Nothing was decided or approved; stop waiting for it and do not continue the gated step.";
+
+  it("reads the library's decline as the person's, answering nothing", () => {
+    const [block] = parsed(notice(declined()));
+    expect(block).toMatchObject({
+      questionId: Q1,
+      alias: 4,
+      revision: 1,
+      injectionId: I1,
+      source: "human",
+      declined: true,
+      expired: false,
+      onComputer: false,
+      correction: false,
+      choice: null,
+      choiceLabel: null,
+      comment: null,
+      images: [],
+    });
+  });
+
+  it("types it as declined and authorising nothing, in Daintree's words, never as an answer", () => {
+    const section = renderDecisionSection(parsed(notice(declined())));
+    const lines = section.split("\n");
+    const source = lines.indexOf("source: human");
+    expect(lines.slice(source, source + 3)).toEqual([
+      "source: human",
+      "status: declined",
+      "authorised: no",
+    ]);
+    // Told plainly what it means for the agent, not just that a note is there.
+    expect(lines[source + 3]).toMatch(/^note: /);
+    expect(lines[source + 3]).toMatch(/nothing was decided or approved/i);
+    expect(lines[source + 3]).toMatch(/stop waiting/i);
+    expect(lines[source + 3]).toMatch(/don't continue the gated step/i);
+    expect(lines[source + 3]).not.toBe(LIBRARY_DECLINED_NOTE);
+    expect(lines[source + 4]).toBe(DECISION_BLOCK_END);
+    expect(section).toContain(markerFor(I1));
+    expect(section).not.toMatch(/^(choice|comment|image_1):/m);
+  });
+
+  it("reads a decline batched with another question's answer, each in order", () => {
+    const blocks = parsed(notice(declined(), answer({ questionId: Q2, injectionId: I2 })));
+    expect(blocks.map((b) => [b.questionId, b.declined])).toEqual([
+      [Q1, true],
+      [Q2, false],
+    ]);
+  });
+
+  it("copies a decline without its marker, for a person to paste", () => {
+    const copied = renderCopiedAnswer(parsed(notice(declined())));
+    expect(copied).toContain("status: declined\nauthorised: no\nnote:");
+    expect(copied).not.toContain("[decision-injection");
+  });
+
+  const lines = declined().split("\n");
+  const at = lines.indexOf("status: declined");
+  const withLines = (...extra: string[]) =>
+    notice([...lines.slice(0, at + 3), ...extra, ...lines.slice(at + 3)].join("\n"));
+  it.each([
+    ["a choice", withLines("choice: approve")],
+    ["a comment", withLines("comment: go ahead")],
+    ["an image", withLines("image_1: /tmp/a.png")],
+    ["a note of its own", notice(declined().replace(LIBRARY_DECLINED_NOTE, "note: Go ahead."))],
+    ["no note", notice(declined().replace(`\n${LIBRARY_DECLINED_NOTE}`, ""))],
+    ["no authorisation line", notice(declined().replace("\nauthorised: no", ""))],
+    ["an authorisation", notice(declined().replace("authorised: no", "authorised: yes"))],
+    ["a proxy's decline", notice(declined().replace("source: human", "source: proxy"))],
+    ["a system decline", notice(declined().replace("source: human", "source: system"))],
+    [
+      "a decline made on the computer",
+      notice(declined().replace("source: human", "source: human\nanswered_on: computer")),
+    ],
+  ])("refuses a decline with %s", (_label, text) => {
+    expect(parseAnswerNotice(text)).toBeNull();
+  });
+});
 
 describe("parseDecisionNotice, follow-ups (#16231)", () => {
   it("reads a follow-up typed after the answer, in the order the library wrote them", () => {
