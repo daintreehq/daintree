@@ -97,7 +97,7 @@ Options:
 Exit status:
   0  the tool succeeded; its text is on stdout
   1  the tool reported an error (its text is on stderr), or Daintree refused
-     the call
+     the call or its session
   2  usage error
   3  no answer: Daintree isn't reachable, or the reply wasn't understood. A
      call that was already sent may have run, so check before repeating it
@@ -112,7 +112,7 @@ USAGE
 }
 
 daintree_call_fail() {
-  echo "daintree call: $2" >&2
+  echo "daintree call: $2" >&2 || true
   exit "$1"
 }
 
@@ -134,14 +134,24 @@ daintree_call_quote() {
   DTC_QUOTED="\"$s\""
 }
 
+# The headers for the next request, written fresh each time so the session id
+# is sent exactly once. A file, not argv: argv is visible to other users.
+daintree_call_write_headers() {
+  local extra=""
+  [[ -z $DTC_SESSION ]] || extra="${extra}Mcp-Session-Id: $DTC_SESSION"$'\n'
+  [[ -z $DTC_VERSION ]] || extra="${extra}MCP-Protocol-Version: $DTC_VERSION"$'\n'
+  printf 'Authorization: Bearer %s\nContent-Type: application/json\nAccept: application/json, text/event-stream\nExpect:\n%s' \
+    "$DTC_TOKEN" "$extra" > "$DTC_TMP/request-headers"
+}
+
 # One request to the endpoint. Run in the background and waited on, so a
 # signal reaches the trap while curl is still out instead of after it returns.
-# The bearer and the body go through files: argv is visible to other users.
 daintree_call_request() {
   local body=$1 max_time=$2 headers_out=$3 rc=0
   rm -f "$DTC_TMP/reply" "$headers_out" "$DTC_TMP/status"
+  daintree_call_write_headers || daintree_call_fail 3 "could not write the request"
   curl -q -sS --noproxy '*' --proto =http --connect-timeout 3 ${max_time:+--max-time "$max_time"} \
-    -H @"$DTC_TMP/headers" --data-binary @"$body" \
+    -H @"$DTC_TMP/request-headers" --data-binary @"$body" \
     -o "$DTC_TMP/reply" -D "$headers_out" -w '%{http_code}' \
     "$DTC_ENDPOINT" > "$DTC_TMP/status" 2> "$DTC_TMP/curl-error" &
   wait "$!" || rc=$?
@@ -168,7 +178,6 @@ daintree_call_adopt_session() {
   [[ -z $DTC_SESSION && -n $DTC_TMP && -f $DTC_TMP/init-headers ]] || return 0
   id=$(awk '{ sub(/\r$/, ""); i = index($0, ":"); if (i > 1 && tolower(substr($0, 1, i - 1)) == "mcp-session-id") { v = substr($0, i + 1); sub(/^[ \t]+/, "", v); sub(/[ \t]+$/, "", v); id = v } } END { print id }' "$DTC_TMP/init-headers" 2>/dev/null || true)
   [[ $id =~ ^[!-~]+$ ]] || return 0
-  printf 'Mcp-Session-Id: %s\n' "$id" >> "$DTC_TMP/headers" || return 0
   DTC_SESSION=$id
 }
 
@@ -177,15 +186,17 @@ daintree_call_adopt_session() {
 daintree_call_cleanup() {
   trap '' INT TERM HUP
   local pid
+  # The only children are requests; KILL, since one started with TERM ignored
+  # would otherwise hold the wait below forever.
   for pid in $(jobs -p); do
-    kill "$pid" 2> /dev/null || true
+    kill -KILL "$pid" 2> /dev/null || true
   done
   wait 2> /dev/null || true
   daintree_call_adopt_session || true
-  if [[ -n $DTC_SESSION && -n $DTC_TMP ]]; then
+  if [[ -n $DTC_SESSION && -n $DTC_TMP ]] && daintree_call_write_headers 2> /dev/null; then
     # Best effort, bounded: a refused DELETE must not read as a failed call.
     curl -q -sS --noproxy '*' --proto =http --connect-timeout 2 --max-time 2 \
-      -X DELETE -H @"$DTC_TMP/headers" -o /dev/null "$DTC_ENDPOINT" > /dev/null 2>&1 || true
+      -X DELETE -H @"$DTC_TMP/request-headers" -o /dev/null "$DTC_ENDPOINT" > /dev/null 2>&1 || true
   fi
   if [[ -n $DTC_TMP ]]; then
     rm -rf "$DTC_TMP" 2> /dev/null || true
@@ -242,7 +253,8 @@ daintree_call() {
           args_json=${1#--args=}
         fi
         if [[ $args_json == - ]]; then
-          args_json=$(cat) || daintree_call_fail 2 "--args - couldn't read stdin"
+          # Bash drops NUL bytes silently; as \001 the validator refuses them.
+          args_json=$(tr '\000' '\001') || daintree_call_fail 2 "--args - couldn't read stdin"
         fi
         [[ -n $args_json ]] || daintree_call_fail 2 "--args needs a JSON object"
         ;;
@@ -300,7 +312,9 @@ function val(path, depth,   c, k, i, start, lit) {
       if (p > n || C[p] != "\"") return fail("expected a key")
       if (!str()) return 0
       k = substr(s, sb, se - sb + 1)
-      if (index(k, "\\") > 0) k = unesc(k)
+      # A key escaping a control character stays raw: decoded, it could
+      # collide with a plain key or with SUBSEP.
+      if (index(k, "\\") > 0 && k !~ /\\u00[01]/) k = unesc(k)
       ws()
       if (p > n || C[p] != ":") return fail("expected a colon")
       p++
@@ -432,6 +446,13 @@ function texts(   ct, i, item, shown) {
   }
   return shown
 }
+function rpcerror(   er) {
+  er = "$" SUBSEP "error"
+  toerr = 1
+  if (T[er SUBSEP "message"] == "string") emitstr(er SUBSEP "message"); else put("JSON-RPC error")
+  if (T[er SUBSEP "code"] == "number") put(" (code " raw(er SUBSEP "code") ")")
+  put("\n")
+}
 BEGIN { wide = (sprintf("%c", 233) == "\303\251") }
 { sub(/\r$/, ""); lines[++nl] = $0 }
 END {
@@ -441,6 +462,14 @@ END {
     if (!parse(body)) { print perr > "/dev/stderr"; exit 1 }
     if (T["$"] != "object") { print "not a JSON object" > "/dev/stderr"; exit 1 }
     exit 0
+  }
+  # A refused handshake: one JSON body carrying an error, whatever its id.
+  if (mode == "refusal") {
+    body = ""
+    for (i = 1; i <= nl; i++) body = body (i > 1 ? "\n" : "") lines[i]
+    if (!parse(body) || T["$"] != "object" || T["$" SUBSEP "error"] != "object") exit 12
+    rpcerror()
+    exit 11
   }
   sse = 0
   for (i = 1; i <= nl; i++) if (lines[i] ~ /^(data|event|id|retry):/) { sse = 1; break }
@@ -461,17 +490,15 @@ END {
     if (!found && has) event(data)
   }
   if (!found) exit 12
-  er = "$" SUBSEP "error"
-  if (T[er] == "object") {
-    toerr = 1
-    if (T[er SUBSEP "message"] == "string") emitstr(er SUBSEP "message"); else put("JSON-RPC error")
-    if (T[er SUBSEP "code"] == "number") put(" (code " raw(er SUBSEP "code") ")")
-    put("\n")
-    exit 11
-  }
+  if (T["$" SUBSEP "error"] == "object") { rpcerror(); exit 11 }
   rs = "$" SUBSEP "result"
   failed = T[rs SUBSEP "isError"] == "true"
-  if (mode == "init") { print sval(rs SUBSEP "protocolVersion"); exit 0 }
+  if (mode == "init") {
+    version = sval(rs SUBSEP "protocolVersion")
+    if (version !~ /^[0-9A-Za-z.-]+$/) exit 12
+    print version
+    exit 0
+  }
   if (mode == "json") {
     print raw(rs)
     if (failed) { toerr = 1; texts() }
@@ -513,8 +540,10 @@ AWK
 
   local arguments="{$pairs}"
   [[ $args_given -eq 0 ]] || arguments=$args_json
+  DTC_TOKEN=$token
   DTC_TMP=""
   DTC_SESSION=""
+  DTC_VERSION=""
   DTC_STATUS=""
   trap daintree_call_cleanup EXIT
   trap 'exit 130' INT
@@ -523,12 +552,6 @@ AWK
   umask 077
   DTC_TMP=$(mktemp -d "${TMPDIR:-/tmp}/daintree-call.XXXXXX") || daintree_call_fail 3 "could not create a private temporary directory"
 
-  {
-    printf 'Authorization: Bearer %s\n' "$token"
-    printf 'Content-Type: application/json\n'
-    printf 'Accept: application/json, text/event-stream\n'
-    printf 'Expect:\n'
-  } > "$DTC_TMP/headers" || daintree_call_fail 3 "could not write the request"
   printf '%s' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"daintree-cli","version":"1.0.0"}}}' > "$DTC_TMP/initialize" ||
     daintree_call_fail 3 "could not write the request"
 
@@ -537,28 +560,37 @@ AWK
   # Before anything can fail: a session opened with a body that never arrived
   # still has to be closed.
   daintree_call_adopt_session
+  daintree_call_refused
   if [[ $rc -ne 0 ]]; then
     daintree_call_fail 3 "could not reach Daintree at $DTC_ENDPOINT: $(daintree_call_curl_error)"
   fi
-  daintree_call_refused
   if [[ $DTC_STATUS != 200 ]]; then
+    # A refused handshake says why in a JSON-RPC error; nothing ran.
+    if awk -v mode=refusal "$awk_program" < "$DTC_TMP/reply" > /dev/null 2> "$DTC_TMP/refusal"; then :; elif [[ $? -eq 11 ]]; then
+      daintree_call_fail 1 "Daintree refused the session: $(head -c 300 "$DTC_TMP/refusal" 2> /dev/null || true)"
+    fi
     daintree_call_fail 3 "Daintree refused the session (HTTP ${DTC_STATUS:-none}): $(daintree_call_reply_excerpt)"
   fi
   [[ -n $DTC_SESSION ]] || daintree_call_fail 3 "Daintree opened no session"
   local version
   rc=0
   version=$(awk -v mode=init -v want=1 "$awk_program" < "$DTC_TMP/reply" 2> "$DTC_TMP/init-error") || rc=$?
-  if [[ $rc -ne 0 || ! $version =~ ^[0-9A-Za-z.-]+$ ]]; then
-    daintree_call_fail 3 "Daintree's reply to initialize wasn't understood $(head -c 200 "$DTC_TMP/init-error" 2> /dev/null || true)"
+  if [[ $rc -eq 11 ]]; then
+    daintree_call_fail 1 "Daintree refused the session: $(head -c 300 "$DTC_TMP/init-error" 2> /dev/null || true)"
   fi
-  printf 'MCP-Protocol-Version: %s\n' "$version" >> "$DTC_TMP/headers" || daintree_call_fail 3 "could not write the request"
+  if [[ $rc -ne 0 || -z $version ]]; then
+    daintree_call_fail 3 "Daintree's reply to initialize wasn't understood"
+  fi
+  DTC_VERSION=$version
 
   printf '%s' '{"jsonrpc":"2.0","method":"notifications/initialized"}' > "$DTC_TMP/initialized" ||
     daintree_call_fail 3 "could not write the request"
-  if ! daintree_call_request "$DTC_TMP/initialized" 10 "$DTC_TMP/reply-headers"; then
+  rc=0
+  daintree_call_request "$DTC_TMP/initialized" 10 "$DTC_TMP/reply-headers" || rc=$?
+  daintree_call_refused
+  if [[ $rc -ne 0 ]]; then
     daintree_call_fail 3 "lost Daintree while opening the session: $(daintree_call_curl_error)"
   fi
-  daintree_call_refused
   case "$DTC_STATUS" in
     200|202|204) ;;
     *) daintree_call_fail 3 "Daintree refused the session (HTTP ${DTC_STATUS:-none}): $(daintree_call_reply_excerpt)" ;;
@@ -568,10 +600,12 @@ AWK
   printf '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":%s,"arguments":%s}}' "$DTC_QUOTED" "$arguments" > "$DTC_TMP/call" ||
     daintree_call_fail 3 "could not write the request"
   # No time limit: a call can wait on an approval dialog or on an agent.
-  if ! daintree_call_request "$DTC_TMP/call" "" "$DTC_TMP/reply-headers"; then
+  rc=0
+  daintree_call_request "$DTC_TMP/call" "" "$DTC_TMP/reply-headers" || rc=$?
+  daintree_call_refused
+  if [[ $rc -ne 0 ]]; then
     daintree_call_fail 3 "the call to $tool was sent, but its answer was lost ($(daintree_call_curl_error)); it may have run"
   fi
-  daintree_call_refused
   if [[ $DTC_STATUS != 200 ]]; then
     daintree_call_fail 3 "Daintree didn't answer the call to $tool (HTTP ${DTC_STATUS:-none}): $(daintree_call_reply_excerpt)"
   fi

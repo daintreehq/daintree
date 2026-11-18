@@ -1155,6 +1155,18 @@ describe("SessionStore.nextFigureNumber (#9828)", () => {
     expect(store.figureCounters.has("help-s")).toBe(false);
   });
 
+  it("doesn't keep the count for a sibling row with no live transport", () => {
+    // A handshake that failed after its help id was filed leaves a row behind.
+    store.httpSessions.set("assistant", fakeHttpSession());
+    store.sessionHelpIdMap.set("assistant", "help-t");
+    store.sessionHelpIdMap.set("never-filed", "help-t");
+    store.nextFigureNumber("help-t");
+
+    store.retireSession("assistant", "session-ended");
+
+    expect(store.figureCounters.has("help-t")).toBe(false);
+  });
+
   it("clears all counters on drain()", () => {
     store.nextFigureNumber("help-1");
     store.nextFigureNumber("help-2");

@@ -40,6 +40,12 @@ interface FixtureOptions {
   jsonResponse?: boolean;
   /** Opens a session for initialize, then sends a reply body that never completes. */
   brokenInitialize?: boolean;
+  /** Opens a session for initialize, then drops the connection after the headers. */
+  droppedInitialize?: boolean;
+  /** Refuses initialize the way Daintree refuses a handshake: HTTP 400 and a JSON-RPC error. */
+  refusedHandshake?: boolean;
+  /** Answers tools/call with this body as an SSE stream instead of running a tool. */
+  callReply?: string;
   /** Answers this JSON-RPC method with a 401, as for a bearer revoked mid-call. */
   refuse?: string;
 }
@@ -172,6 +178,26 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
     }
     if (req.url !== "/mcp") {
       res.writeHead(404, { "Content-Type": "text/plain" }).end("Not found");
+      return;
+    }
+    if (options.droppedInitialize && rpc?.method === "initialize") {
+      res.writeHead(200, { "Content-Type": "text/event-stream", "Mcp-Session-Id": "dropped" });
+      res.flushHeaders();
+      res.socket?.destroy();
+      return;
+    }
+    if (options.refusedHandshake && rpc?.method === "initialize") {
+      res.writeHead(400, { "Content-Type": "application/json" }).end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          error: { code: -32010, message: "Start the Assistant again." },
+          id: null,
+        })
+      );
+      return;
+    }
+    if (options.callReply !== undefined && rpc?.method === "tools/call") {
+      res.writeHead(200, { "Content-Type": "text/event-stream" }).end(options.callReply);
       return;
     }
     if (options.brokenInitialize && rpc?.method === "initialize") {
@@ -517,6 +543,74 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
     expect(fs.readdirSync(tmpDir)).toEqual([]);
   });
 
+  it("closes a session whose initialize connection dropped after its headers", async () => {
+    await fixture.close();
+    fixture = await startFixture({ droppedInitialize: true });
+
+    const run = await call(["fixture.echo"]);
+
+    expect(run.status).toBe(3);
+    expect(fixture.seen.map((request) => [request.method, request.sessionId])).toEqual([
+      ["POST", undefined],
+      ["DELETE", "dropped"],
+    ]);
+  });
+
+  it("exits 1 with Daintree's reason when it refuses the handshake", async () => {
+    await fixture.close();
+    fixture = await startFixture({ refusedHandshake: true });
+
+    const run = await call(["fixture.echo"]);
+
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain("Start the Assistant again.");
+    expect(fixture.seen.map((request) => request.rpc?.method)).toEqual(["initialize"]);
+  });
+
+  const sse = (...events: unknown[]) =>
+    events.map((event) => `event: message\ndata: ${JSON.stringify(event)}\n\n`).join("");
+  const text = (value: string) => ({ content: [{ type: "text", text: value }] });
+
+  // Replies the SDK would never send, read the way the protocol defines them.
+  it.each([
+    [
+      "an escaped isError key",
+      '{"jsonrpc":"2.0","id":2,"result":{"is\\u0045rror":true,"content":[]}}',
+      1,
+    ],
+    [
+      "a key that only differs by an escaped control character",
+      '{"jsonrpc":"2.0","id":2,"result":{"isError":true,"isError\\u0000":false,"content":[]}}',
+      1,
+    ],
+    ["a null result", sse({ jsonrpc: "2.0", id: 2, result: null }), 3],
+    ["no jsonrpc version", sse({ id: 2, result: text("x") }), 3],
+    ["only another request's answer", sse({ jsonrpc: "2.0", id: 1, result: text("x") }), 3],
+    ["an id written as 2.0", 'data: {"jsonrpc":"2.0","id":2.0,"result":{"content":[]}}\n\n', 0],
+    [
+      "a JSON-RPC error",
+      sse({ jsonrpc: "2.0", id: 2, error: { code: -32602, message: "bad" } }),
+      1,
+    ],
+    [
+      "the answer after another id's",
+      sse(
+        { jsonrpc: "2.0", id: 7, result: text("no") },
+        { jsonrpc: "2.0", id: 2, result: text("yes") }
+      ),
+      0,
+    ],
+  ])("reads a reply with %s", async (_name, reply, status) => {
+    await fixture.close();
+    fixture = await startFixture({
+      callReply: reply.startsWith("{") ? `event: message\ndata: ${reply}\n\n` : reply,
+    });
+
+    const run = await call(["fixture.echo"]);
+
+    expect(run.status).toBe(status);
+  });
+
   it("exits 3 when the connection drops without an answer", async () => {
     const dropping = net.createServer((socket) => socket.destroy());
     await new Promise<void>((resolve) => dropping.listen(0, "127.0.0.1", resolve));
@@ -542,7 +636,7 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
     const [privateDir] = fs.readdirSync(tmpDir);
     expect(privateDir).toMatch(/^daintree-call\./);
     expect(fs.statSync(path.join(tmpDir, privateDir)).mode & 0o777).toBe(0o700);
-    expect(fs.statSync(path.join(tmpDir, privateDir, "headers")).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(path.join(tmpDir, privateDir, "request-headers")).mode & 0o777).toBe(0o600);
 
     child.kill("SIGTERM");
     const run = await done;

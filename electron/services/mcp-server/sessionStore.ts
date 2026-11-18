@@ -514,7 +514,13 @@ export class SessionStore {
     const helpSessionId = this.sessionHelpIdMap.get(sessionId);
     if (helpSessionId === undefined) return;
     for (const [otherSessionId, otherHelpSessionId] of this.sessionHelpIdMap) {
-      if (otherSessionId !== sessionId && otherHelpSessionId === helpSessionId) return;
+      if (
+        otherSessionId !== sessionId &&
+        otherHelpSessionId === helpSessionId &&
+        this.hasLiveTransport(otherSessionId)
+      ) {
+        return;
+      }
     }
     this.figureCounters.delete(helpSessionId);
   }
