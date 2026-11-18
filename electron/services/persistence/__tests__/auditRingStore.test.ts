@@ -725,3 +725,87 @@ describe("AuditRingStore", () => {
     expect(sentOps()[1]!.op).toBe("ringWriteAll");
   });
 });
+
+describe("replaceRing trim", () => {
+  let db: Database.Database;
+
+  beforeEach(() => {
+    db = new Database(":memory:");
+    createSchema(db);
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  const rows = (...ids: (string | null)[]) =>
+    ids.map((id, i) => ({ recordId: id, record: JSON.stringify({ i }) }));
+
+  const ringIds = (ring: string): (string | null)[] =>
+    (
+      db.prepare("SELECT record_id FROM audit_rings WHERE ring = ? ORDER BY id ASC").all(ring) as {
+        record_id: string | null;
+      }[]
+    ).map((r) => r.record_id);
+
+  function withTrimSpy() {
+    const stmts = prepareRingStatements(db);
+    const trimRun = vi.spyOn(stmts.trim, "run");
+    return { stmts, trimRun };
+  }
+
+  it("skips the SQL trim when the batch is within the limit", () => {
+    const { stmts, trimRun } = withTrimSpy();
+    expect(replaceRing(db, stmts, "mcpAuditLog", rows("a", "b", "c"), 3)).toBe(true);
+    expect(replaceRing(db, stmts, "mcpAuditLog", rows("a", "b"), 3)).toBe(true);
+    expect(trimRun).not.toHaveBeenCalled();
+    expect(ringIds("mcpAuditLog")).toEqual(["a", "b"]);
+  });
+
+  it("skips the SQL trim when no limit is set", () => {
+    const { stmts, trimRun } = withTrimSpy();
+    replaceRing(db, stmts, "mcpAuditLog", rows("a", "b", "c", "d"), 0);
+    expect(trimRun).not.toHaveBeenCalled();
+    expect(ringIds("mcpAuditLog")).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("still keeps the newest rows of an oversized batch", () => {
+    const { stmts, trimRun } = withTrimSpy();
+    replaceRing(db, stmts, "mcpAuditLog", rows("a", "b", "c", "d", "e"), 3);
+    expect(trimRun).toHaveBeenCalledTimes(1);
+    expect(ringIds("mcpAuditLog")).toEqual(["c", "d", "e"]);
+  });
+
+  it("keeps duplicate and unkeyed rows up to the limit", () => {
+    const { stmts, trimRun } = withTrimSpy();
+    replaceRing(db, stmts, "mcpAuditLog", rows(null, null, null, null), 4);
+    expect(trimRun).not.toHaveBeenCalled();
+    expect(ringIds("mcpAuditLog")).toEqual([null, null, null, null]);
+
+    replaceRing(db, stmts, "mcpAuditLog", rows(null, null, null, null, null), 4);
+    expect(trimRun).toHaveBeenCalledTimes(1);
+    expect(ringIds("mcpAuditLog")).toHaveLength(4);
+  });
+
+  it("leaves other rings untouched whichever way the replacement trims", () => {
+    const { stmts } = withTrimSpy();
+    replaceRing(db, stmts, "forgeAuditLog", rows("x", "y", "z"), 10);
+    replaceRing(db, stmts, "mcpAuditLog", rows("a", "b"), 2);
+    replaceRing(db, stmts, "mcpAuditLog", rows("a", "b", "c", "d"), 2);
+    expect(ringIds("mcpAuditLog")).toEqual(["c", "d"]);
+    expect(ringIds("forgeAuditLog")).toEqual(["x", "y", "z"]);
+  });
+
+  it("holds a full-size ring at the maximum retention setting", () => {
+    const { stmts, trimRun } = withTrimSpy();
+    const max = 10_000;
+    const ids = Array.from({ length: max }, (_, i) => `r${i}`);
+    replaceRing(db, stmts, "mcpAuditLog", rows(...ids), max);
+    replaceRing(db, stmts, "mcpAuditLog", rows(...ids, "extra"), max);
+    expect(trimRun).toHaveBeenCalledTimes(1);
+    const kept = ringIds("mcpAuditLog");
+    expect(kept).toHaveLength(max);
+    expect(kept[0]).toBe("r1");
+    expect(kept.at(-1)).toBe("extra");
+  });
+});
