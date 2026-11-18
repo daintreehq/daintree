@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
-import type { PluginCatalogBrowseResult, PluginCatalogSourceBrowse } from "@shared/types/plugin";
+import type {
+  PluginCatalogBrowseResult,
+  PluginCatalogFailure,
+  PluginCatalogListing,
+  PluginCatalogSourceBrowse,
+} from "@shared/types/plugin";
 import { logError } from "@/utils/logger";
 
 /** Every catalog a Browse read covers: Daintree's own first, then each one added (#17434). */
@@ -10,26 +15,60 @@ export interface BrowsedCatalogs {
 /** What a read of the catalogs came back with: main's answer, or a call that failed outright. */
 export type CatalogBrowseAnswer = { kind: "result"; result: BrowsedCatalogs } | { kind: "error" };
 
+const FAILURES: ReadonlySet<unknown> = new Set<PluginCatalogFailure>([
+  "not-published",
+  "unreachable",
+  "invalid",
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isListing(value: unknown): value is PluginCatalogListing {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.version === "string" &&
+    typeof value.repo === "string" &&
+    Array.isArray(value.capabilities) &&
+    value.capabilities.every((c) => typeof c === "string") &&
+    (value.sourceUrl === undefined || typeof value.sourceUrl === "string")
+  );
+}
+
+/** One catalog's answer, checked down to each listing, so a broken reply can't break the pane. */
 function isBrowseResult(value: unknown): value is PluginCatalogBrowseResult {
-  if (typeof value !== "object" || value === null || !("status" in value)) return false;
-  return value.status === "available" || value.status === "unavailable";
+  if (!isRecord(value)) return false;
+  if (value.status === "unavailable") return FAILURES.has(value.failure);
+  if (value.status !== "available") return false;
+  if (typeof value.fetchedAt !== "number" || typeof value.stale !== "boolean") return false;
+  if (value.stale && !FAILURES.has(value.failure)) return false;
+  return Array.isArray(value.listings) && value.listings.every(isListing);
 }
 
 function isSourceBrowse(value: unknown): value is PluginCatalogSourceBrowse {
-  if (typeof value !== "object" || value === null || !("result" in value)) return false;
-  const sourceUrl = "sourceUrl" in value ? value.sourceUrl : undefined;
-  return (sourceUrl === undefined || typeof sourceUrl === "string") && isBrowseResult(value.result);
+  return (
+    isRecord(value) &&
+    (value.sourceUrl === undefined || typeof value.sourceUrl === "string") &&
+    isBrowseResult(value.result)
+  );
 }
 
 /**
  * Daintree's own catalog in the shape it always had, and the added ones under
  * `added`. A host running an older Daintree answers without `added`; anything
- * else reads as a call that failed.
+ * that isn't a well-formed answer reads as a call that failed.
  */
 function normalize(answer: unknown): CatalogBrowseAnswer {
   if (!isBrowseResult(answer)) return { kind: "error" };
   const added: unknown = "added" in answer ? answer.added : undefined;
-  const extra = Array.isArray(added) ? added.filter(isSourceBrowse) : [];
+  let extra: PluginCatalogSourceBrowse[] = [];
+  if (added !== undefined) {
+    if (!Array.isArray(added)) return { kind: "error" };
+    extra = added.filter(isSourceBrowse);
+    if (extra.length !== added.length) return { kind: "error" };
+  }
   return { kind: "result", result: { catalogs: [{ result: answer }, ...extra] } };
 }
 

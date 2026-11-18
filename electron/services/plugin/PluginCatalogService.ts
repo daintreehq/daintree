@@ -181,6 +181,7 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
       return await this.readCatalog(mode);
     } finally {
       this.activeReads -= 1;
+      this.settledSome();
     }
   }
 
@@ -277,6 +278,7 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
       if (!held) return;
       held = false;
       this.batchHolds -= 1;
+      this.settledSome();
     };
     return {
       lookupUpdate: async (id, installedVersion) => {
@@ -292,6 +294,15 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
         return updateFor(catalog.byId.get(id) ?? [], installedVersion, catalog.fetchedAt);
       },
     };
+  }
+
+  /**
+   * An added catalog's client that has gone idle may leave the clients or the
+   * cache folder past their limit (a burst of busy clients, a write after the
+   * last sweep), so it asks for one coalesced settle (#17434).
+   */
+  private settledSome(): void {
+    if (this.deps.sourceUrl !== undefined && this.isIdle()) scheduleSettle();
   }
 
   /** A clock that went backwards must not make an old catalog look fresh. */
@@ -333,6 +344,7 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
             .then(() => this.writeDisk(snapshot))
             .finally(() => {
               this.pendingWrites -= 1;
+              this.settledSome();
             });
         }
         return outcome;
@@ -612,6 +624,19 @@ export async function settlePluginCatalogSources(cacheDir?: string | null): Prom
       .filter(({ name }) => !stillLive.has(name))
       .map(({ name }) => fs.rm(path.join(dir, name), { force: true }).catch(() => {}))
   );
+}
+
+let settleScheduled = false;
+
+/** One settle after a burst of added-catalog activity, never one per client. */
+function scheduleSettle(): void {
+  if (settleScheduled) return;
+  settleScheduled = true;
+  const timer = setTimeout(() => {
+    settleScheduled = false;
+    void settlePluginCatalogSources().catch(() => {});
+  }, 0);
+  timer.unref?.();
 }
 
 /** Test seam: forget every added catalog's client. */

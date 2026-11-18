@@ -382,10 +382,24 @@ describe("PluginCommunityBrowse", () => {
     expect(await screen.findByText(/isn't published yet/)).toBeTruthy();
   });
 
-  it("reads an answer it can't make sense of as a catalog that couldn't be read", async () => {
-    browseCatalog.mockResolvedValue({ unexpected: true } as never);
+  it.each([
+    ["no status", { unexpected: true }],
+    ["an available answer without listings", { status: "available", fetchedAt: 1, stale: false }],
+    [
+      "a listing that isn't one",
+      { status: "available", listings: [{ id: 5 }], fetchedAt: 1, stale: false },
+    ],
+    ["an unknown failure", { status: "unavailable", failure: "on-fire" }],
+    ["added catalogs that aren't a list", { ...catalog([SESSION]), added: "nope" }],
+    [
+      "an added catalog that isn't one",
+      { ...catalog([SESSION]), added: [{ sourceUrl: ADDED, result: { status: "maybe" } }] },
+    ],
+  ])("reads %s as a catalog that couldn't be read", async (_, answer) => {
+    browseCatalog.mockResolvedValue(answer as never);
     renderBrowse();
     expect(await screen.findByText("Try browsing again later")).toBeTruthy();
+    expect(screen.queryByRole("list", { name: "Community plugins" })).toBeNull();
   });
 
   describe("catalogs the person added (#17434)", () => {

@@ -264,4 +264,28 @@ describe("PluginCatalogService for a catalog the person added (#17434)", () => {
     await batch.lookupUpdate("daintreehq.continue-session", "0.1.1");
     expect(held.isIdle()).toBe(true);
   });
+
+  it("sweeps the cache folder on its own once an added catalog's activity settles", async () => {
+    const dir = path.join(tmpDir, PLUGIN_CATALOG_SOURCE_CACHE_DIR);
+    await fs.mkdir(dir, { recursive: true });
+    for (let i = 0; i < PLUGIN_CATALOG_SOURCES_KEPT + 2; i++) {
+      const file = cacheFile(tmpDir, `https://old${i}.example.com/catalog.json`);
+      await fs.writeFile(file, "{}");
+      // Written in earlier runs, before the fetch below writes its own.
+      const at = new Date(Date.now() - (100 - i) * 1000);
+      await fs.utimes(file, at, at);
+    }
+    const net = new FakeElectronNet({ [SOURCE]: json(VALID_CATALOG) });
+    await new PluginCatalogService({
+      sourceUrl: SOURCE,
+      manualFetch: createManualRedirectFetch(net.request),
+      now: () => T0,
+    }).browse();
+
+    // An update check or preview writes a cache without a Browse to sweep after it.
+    await vi.waitFor(async () =>
+      expect((await fs.readdir(dir)).length).toBeLessThanOrEqual(PLUGIN_CATALOG_SOURCES_KEPT)
+    );
+    expect(await fs.readdir(dir)).toContain(path.basename(cacheFile(tmpDir, SOURCE)));
+  });
 });
