@@ -560,7 +560,12 @@ export function createContributionsFacet(
     registerCloudProvider(descriptor, impl) {
       // Structural checks only: the mock has no manifest model (#9878), so the
       // declared-id and declared-capability method checks are skipped.
-      if (!descriptor || typeof descriptor !== "object" || typeof descriptor.id !== "string") {
+      if (
+        !descriptor ||
+        typeof descriptor !== "object" ||
+        typeof descriptor.id !== "string" ||
+        descriptor.id.length === 0
+      ) {
         throw new Error("registerCloudProvider: descriptor.id must be a non-empty string");
       }
       if (!impl || typeof impl !== "object") {

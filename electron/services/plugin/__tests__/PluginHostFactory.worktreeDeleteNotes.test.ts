@@ -45,6 +45,12 @@ import {
   type WorktreeDeleteNotesProviderImpl,
 } from "../../../../shared/types/plugin.js";
 import type { LoadedPlugin } from "../PluginServiceTypes.js";
+import {
+  clearPluginCloudProviders,
+  pluginCloudProviderBinding,
+  publishPluginCloudProviders,
+} from "../pluginCloudProviders.js";
+import type { CloudProviderImpl } from "../../../../shared/types/pluginCloudProvider.js";
 
 const PLUGIN_ID = "acme";
 
@@ -181,5 +187,104 @@ describe("host.registerWorktreeDeleteNotesProvider (#13805)", () => {
     expect(getWorktreeDeleteNotesBinding(PLUGIN_ID)).toBe(current);
     disposeSecond();
     expect(getWorktreeDeleteNotesBinding(PLUGIN_ID)).toBeUndefined();
+  });
+});
+
+describe("host.registerCloudProvider (#17351)", () => {
+  const capabilities = {
+    persistence: {
+      kept: "Its disk",
+      lost: "Memory",
+      retentionDays: null,
+      saveRetryBilled: false,
+      stoppedComputeBilled: false,
+    },
+    typicalStartSeconds: null,
+    lifetime: { kind: "none" as const },
+    sshTrust: "confirm-on-first-connect" as const,
+    transport: "direct" as const,
+    tunnel: null,
+    provisioning: {
+      location: "none" as const,
+      image: "none" as const,
+      network: "none" as const,
+      sshKey: "at-create" as const,
+    },
+    deletion: true,
+  };
+  const providerImpl = (): CloudProviderImpl => {
+    const answer = vi.fn(async () => {
+      throw new Error("unused");
+    });
+    return {
+      checkCredentials: answer,
+      validate: answer,
+      catalog: answer,
+      list: answer,
+      inspect: answer,
+      create: answer,
+      start: answer,
+      stop: answer,
+      rename: answer,
+      delete: answer,
+      sshAccess: answer,
+    };
+  };
+
+  afterEach(() => clearPluginCloudProviders());
+
+  function declare() {
+    publishPluginCloudProviders("acme.clouds", [
+      {
+        id: "ec2",
+        name: "EC2",
+        description: "Machines",
+        apiUrl: "https://ec2.example.com",
+        apiKeyUrl: "https://example.com/keys",
+        dashboardUrl: "https://example.com",
+        docsUrl: "https://example.com/docs",
+        credentialFields: [
+          {
+            id: "token",
+            label: "Token",
+            secret: true,
+            input: "single-line",
+            required: true,
+            help: null,
+          },
+        ],
+        capabilities,
+      },
+    ]);
+  }
+
+  it("binds a declared provider, and names the plugin when it refuses one", async () => {
+    declare();
+    const { deps } = makeDeps();
+    const { host } = createHost(deps, "acme.clouds", UNBOUND_PLUGIN_HOST_BINDING);
+    expect(() => host.registerCloudProvider({ id: "gce" }, providerImpl())).toThrow(
+      /Plugin "acme\.clouds" registerCloudProvider: "gce" is not declared/
+    );
+    const { sshAccess: _missing, ...partial } = providerImpl();
+    expect(() => host.registerCloudProvider({ id: "ec2" }, partial as CloudProviderImpl)).toThrow(
+      /has no sshAccess/
+    );
+    const dispose = await host.registerCloudProvider({ id: "ec2" }, providerImpl());
+    expect(pluginCloudProviderBinding("acme.clouds.ec2")).toBeDefined();
+    dispose();
+    expect(pluginCloudProviderBinding("acme.clouds.ec2")).toBeUndefined();
+  });
+
+  it("refuses a project's plugin, and a host past activation", () => {
+    declare();
+    const { deps } = makeDeps();
+    const project = createHost(deps, "acme.clouds", { projectId: "p1", projectRoot: "/repo" });
+    expect(() => project.host.registerCloudProvider({ id: "ec2" }, providerImpl())).toThrow(
+      /project plugin can't contribute cloud providers/
+    );
+    const { host, revoke } = createHost(deps, "acme.clouds", UNBOUND_PLUGIN_HOST_BINDING);
+    revoke();
+    expect(() => host.registerCloudProvider({ id: "ec2" }, providerImpl())).toThrow(/host revoked/);
+    expect(pluginCloudProviderBinding("acme.clouds.ec2")).toBeUndefined();
   });
 });
