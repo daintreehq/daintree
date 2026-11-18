@@ -1145,3 +1145,67 @@ describe("RenderedMarkdownDiff staged mounting", () => {
     expect(frames.size).toBe(0);
   });
 });
+
+describe("RenderedMarkdownDiff GitHub alerts (#17333)", () => {
+  function alertsIn(container: HTMLElement, kind: "added" | "removed"): Element[] {
+    return [
+      ...container.querySelectorAll(`.rendered-markdown-diff__block--${kind} .markdown-alert`),
+    ];
+  }
+
+  it("draws an edited alert as an alert on both sides, keeping its word marks", () => {
+    const source = "> [!WARNING]\n> This migration drops the new table.\n";
+    const diff = patch([
+      "@@ -1,2 +1,2 @@",
+      " > [!WARNING]",
+      "-> This migration drops the old table.",
+      "+> This migration drops the new table.",
+    ]);
+
+    const { container } = renderDiff(diff, source);
+    const [removed] = alertsIn(container, "removed");
+    const [added] = alertsIn(container, "added");
+
+    expect(removed?.getAttribute("data-markdown-alert")).toBe("warning");
+    expect(added?.getAttribute("data-markdown-alert")).toBe("warning");
+    expect(visibleText(removed?.querySelector(".rendered-markdown-diff__inline--removed"))).toBe(
+      "old"
+    );
+    expect(visibleText(added?.querySelector(".rendered-markdown-diff__inline--added"))).toBe("new");
+    expect(container.textContent).not.toContain("[!WARNING]");
+  });
+
+  it("takes a changed marker out whole, leaving no empty mark behind", () => {
+    const source = "> [!WARNING]\n> Back up the database first.\n";
+    const diff = patch([
+      "@@ -1,2 +1,2 @@",
+      "-> [!NOTE]",
+      "+> [!WARNING]",
+      " > Back up the database first.",
+    ]);
+
+    const { container } = renderDiff(diff, source);
+
+    expect(
+      alertsIn(container, "removed").map((box) => box.getAttribute("data-markdown-alert"))
+    ).toEqual(["note"]);
+    expect(
+      alertsIn(container, "added").map((box) => box.getAttribute("data-markdown-alert"))
+    ).toEqual(["warning"]);
+    expect(container.textContent).not.toContain("[!");
+    for (const mark of container.querySelectorAll(".rendered-markdown-diff__inline")) {
+      expect(visibleText(mark)).not.toBe("");
+    }
+  });
+
+  it("draws a whole added alert as an alert", () => {
+    const source = "# Guide\n\n> [!CAUTION]\n> Irreversible.\n";
+    const diff = patch(["@@ -1,1 +1,4 @@", " # Guide", "+", "+> [!CAUTION]", "+> Irreversible."]);
+
+    const { container } = renderDiff(diff, source);
+
+    expect(
+      alertsIn(container, "added").map((box) => box.getAttribute("data-markdown-alert"))
+    ).toEqual(["caution"]);
+  });
+});
