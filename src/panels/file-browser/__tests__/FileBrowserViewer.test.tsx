@@ -2819,20 +2819,50 @@ describe("a built-in viewer in the file browser (#17336)", () => {
     expect(screen.getByTestId("code-viewer-mock")).toBeTruthy();
   });
 
-  it("offers no installed plugin's viewer, and none outside a governed root", async () => {
+  it("offers no installed plugin's viewer", async () => {
     seedPlugins([{ id: "acme.csv", name: "Acme CSV", builtin: false }]);
-    const viewer = renderViewer("/repo/users.csv", { editorContext: context });
+    renderViewer("/repo/users.csv", { editorContext: context });
     expect(await screen.findByTestId("code-viewer-mock")).toBeTruthy();
+    await act(async () => {});
     expect(screen.queryByRole("radio", { name: /Rendered/ })).toBeNull();
-    viewer.unmount();
-
-    seedPlugins([{ id: "daintree.csv-viewer", name: "CSV viewer", builtin: true }]);
-    renderViewer("/repo/users.csv");
-    expect(await screen.findByTestId("code-viewer-mock")).toBeTruthy();
-    expect(screen.queryByTestId("plugin-viewer-host")).toBeNull();
+    expect(viewerHostProps).toHaveLength(0);
   });
 
-  it("shows a CSV too large for Source in the table, and one too large for both in neither", async () => {
+  it("offers the built-in viewer only inside a governed root", async () => {
+    seedPlugins([{ id: "daintree.csv-viewer", name: "CSV viewer", builtin: true }]);
+    const viewer = renderViewer("/repo/users.csv", { editorContext: context });
+    expect(await screen.findByTestId("plugin-viewer-host")).toBeTruthy();
+
+    viewer.rerender(viewerJsx("/repo/users.csv"));
+    expect(await screen.findByTestId("code-viewer-mock")).toBeTruthy();
+    expect(screen.queryByTestId("plugin-viewer-host")).toBeNull();
+    expect(screen.queryByRole("radio", { name: /Rendered/ })).toBeNull();
+  });
+
+  it("never hands the next file the last file's size", async () => {
+    seedPlugins([{ id: "daintree.csv-viewer", name: "CSV viewer", builtin: true }]);
+    const viewer = renderViewer("/repo/small.csv", { editorContext: context });
+    expect(await screen.findByTestId("plugin-viewer-host")).toBeTruthy();
+
+    let refuse: (error: unknown) => void = () => {};
+    readMock.mockReturnValueOnce(new Promise((_resolve, reject) => (refuse = reject)));
+    viewer.rerender(viewerJsx("/repo/big.csv", { editorContext: context }));
+    await act(async () => {});
+    expect(viewerHostProps.some((props) => props.filePath === "/repo/big.csv")).toBe(false);
+
+    await act(async () =>
+      refuse(
+        new ClientAppError("FILE_TOO_LARGE", "too big", undefined, {
+          code: "FILE_TOO_LARGE",
+          sizeBytes: 3 * 1024 * 1024,
+        })
+      )
+    );
+    expect(await screen.findByTestId("file-browser-unavailable")).toBeTruthy();
+    expect(viewerHostProps.some((props) => props.filePath === "/repo/big.csv")).toBe(false);
+  });
+
+  it("shows a CSV too large for Source in the table, and Source points at it", async () => {
     seedPlugins([{ id: "daintree.csv-viewer", name: "CSV viewer", builtin: true }]);
     readMock.mockRejectedValue(
       new ClientAppError("FILE_TOO_LARGE", "too big", undefined, {
@@ -2840,7 +2870,7 @@ describe("a built-in viewer in the file browser (#17336)", () => {
         sizeBytes: 1024 * 1024,
       })
     );
-    const viewer = renderViewer("/repo/users.csv", { editorContext: context });
+    renderViewer("/repo/users.csv", { editorContext: context });
     expect(await screen.findByTestId("plugin-viewer-host")).toBeTruthy();
 
     await clickMode("Source");
@@ -2848,17 +2878,14 @@ describe("a built-in viewer in the file browser (#17336)", () => {
     expect(unavailable.textContent).toContain("Too large for Source");
     fireEvent.click(screen.getByRole("button", { name: "Show in Rendered" }));
     expect(await screen.findByTestId("plugin-viewer-host")).toBeTruthy();
-    viewer.unmount();
+  });
 
-    viewerHostProps.length = 0;
-    readMock.mockRejectedValue(
-      new ClientAppError("FILE_TOO_LARGE", "too big", undefined, {
-        code: "FILE_TOO_LARGE",
-        sizeBytes: 3 * 1024 * 1024,
-      })
-    );
-    renderViewer("/repo/big.csv", { editorContext: context });
-    expect(await screen.findByTestId("file-browser-unavailable")).toBeTruthy();
+  it("keeps Source for a CSV the read found isn't UTF-8", async () => {
+    seedPlugins([{ id: "daintree.csv-viewer", name: "CSV viewer", builtin: true }]);
+    readMock.mockResolvedValue({ content: "caf\ufffd\n", byteLength: 5, encoding: "invalid" });
+    renderViewer("/repo/legacy.csv", { editorContext: context });
+    expect(await screen.findByTestId("code-viewer-mock")).toBeTruthy();
+    await act(async () => {});
     expect(viewerHostProps).toHaveLength(0);
   });
 });

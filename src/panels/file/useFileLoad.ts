@@ -198,8 +198,15 @@ export function useFileLoad(filePath: string | undefined, effectiveRootPath: str
         setContent(null);
         setLoadState("idle");
         setErrorCode(null);
+        setObservedSize(null);
         return;
       }
+      // A size seen for another file says nothing about this one, even when
+      // this file was the one seen before something else was opened between.
+      const requestIdentity = `${effectiveRootPath}\u0000${filePath}`;
+      setObservedSize((previous) =>
+        previous !== null && previous.identity !== requestIdentity ? null : previous
+      );
       requestRef.current += 1;
       const requestId = requestRef.current;
       if (!silent) {
@@ -287,7 +294,6 @@ export function useFileLoad(filePath: string | undefined, effectiveRootPath: str
         return;
       }
 
-      const requestIdentity = `${effectiveRootPath}\u0000${filePath}`;
       // Nothing may skip a tick on the strength of a read that is still being
       // repeated: the answer this one brings back is the one that counts.
       setCanonicalFilePath(null);
@@ -376,20 +382,22 @@ export function useFileLoad(filePath: string | undefined, effectiveRootPath: str
         .catch((error: unknown) => {
           if (requestRef.current !== requestId) return;
           const code = isClientAppError(error) ? toFileReadErrorCode(error.code) : "INVALID_PATH";
-          // A size refusal is news about the file even when the failure is
-          // swallowed below: a file that grew past every viewer's cap must
-          // stop being offered to them while Source keeps the last good text.
-          const refusedBytes = refusedFileSize(error);
-          if (refusedBytes !== null) observe(requestIdentity, refusedBytes);
           // Silent background refreshes keep showing the last good content on
           // transient failures, but a permanently-gone file (deleted, perms
           // revoked) must surface rather than display stale text forever.
           // Only worth swallowing when there is good content to keep — and it
           // has to be restored rather than merely left alone: this read may
           // have superseded an explicit one that already showed the skeleton,
-          // in which case nothing else would ever settle it.
+          // in which case nothing else would ever settle it. A file that grew
+          // past the read's cap is no passing failure either: its last good
+          // text is no longer the file, and a viewer may still show it whole
+          // (#17336), so it surfaces and the old text is no longer good.
           const permanent =
-            code === "NOT_FOUND" || code === "PERMISSION" || code === "OUTSIDE_ROOT";
+            code === "NOT_FOUND" ||
+            code === "PERMISSION" ||
+            code === "OUTSIDE_ROOT" ||
+            code === "FILE_TOO_LARGE";
+          if (code === "FILE_TOO_LARGE") lastGoodStateRef.current = null;
           // A swallowed failure still leaves the reset canonical flag above
           // cleared, so every tick keeps retrying while the last good content
           // stays on screen.
@@ -397,7 +405,9 @@ export function useFileLoad(filePath: string | undefined, effectiveRootPath: str
             setLoadState(lastGoodStateRef.current);
             return;
           }
-          if (refusedBytes === null) observe(requestIdentity, null);
+          // The size a too-large refusal reports, else nothing: an older size
+          // must not admit a file that has since outgrown it.
+          observe(requestIdentity, refusedFileSize(error));
           setErrorCode(code);
           setErrorMessage(null);
           setLoadState("error");

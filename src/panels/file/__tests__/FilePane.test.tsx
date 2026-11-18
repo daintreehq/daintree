@@ -384,6 +384,7 @@ function FileEditorMock(props: Record<string, unknown>) {
 import { FilePane } from "../FilePane";
 import { useFileDocumentStore } from "@/store/fileDocumentStore";
 import { useFileEditorChoicesStore } from "@/store/fileEditorChoicesStore";
+import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import {
   _resetPluginProjectSurfacesStoreForTest,
   usePluginProjectSurfacesStore,
@@ -4676,14 +4677,29 @@ describe("FilePane edit mode (#12323)", () => {
       return screen.queryAllByRole("radio").map((b) => b.textContent ?? "");
     }
 
+    // Viewers wait for the runtime snapshot to say which claimants ship with
+    // Daintree (#17336), so the plugins these tests name are known.
+    function knowPlugins(ids: Record<string, boolean>) {
+      usePluginRuntimeStore.setState({
+        pluginMetaById: new Map(
+          Object.entries(ids).map(([id, builtin]) => [
+            id,
+            { devMode: false, displayName: id, ...(builtin ? { builtin: true } : {}) },
+          ])
+        ),
+      });
+    }
+
     beforeEach(() => {
       fileEditorState.pluginHostProps = [];
       useFileEditorChoicesStore.setState({ choices: {}, loaded: true });
+      knowPlugins({ "acme.csv": false, "daintree.csv-viewer": true });
     });
 
     afterEach(() => {
       fileEditorState.plugin = { edit: [], view: [] };
       useFileEditorChoicesStore.setState({ choices: {}, loaded: false });
+      usePluginRuntimeStore.setState({ pluginMetaById: new Map() });
     });
 
     it("keeps the built-in editor by default and offers the plugin through Edit with…", async () => {
@@ -4790,7 +4806,8 @@ describe("FilePane edit mode (#12323)", () => {
     }
 
     it("draws only the plugin viewer when the host's own reader refused a file it fits", async () => {
-      seedRefusedCsv(1024 * 1024, "rendered");
+      // Exactly the viewer's ceiling still fits.
+      seedRefusedCsv(2 * 1024 * 1024, "rendered");
       render(paneElement());
       await act(async () => {});
       expect(await screen.findByTestId("plugin-file-editor-mock")).toBeTruthy();
@@ -4853,11 +4870,68 @@ describe("FilePane edit mode (#12323)", () => {
       fileEditorState.plugin.view = [
         { ...candidate("daintree.csv-viewer", "CSV viewer", "view"), builtin: true },
       ];
-      await renderPane({ filePath: "/repo/data/table.csv", content: "a,b\n" });
+      const view = await renderPane({ filePath: "/repo/data/table.csv", content: "a,b\n" });
+      expect(await screen.findByTestId("plugin-file-editor-mock")).toBeTruthy();
       await act(async () => {
         screen.getByRole("radio", { name: "Source" }).click();
       });
       expect(setFileViewModeMock).toHaveBeenCalledWith("file-1", "source");
+
+      panelsById["file-1"] = { ...panelsById["file-1"]!, fileViewMode: "source" };
+      view.rerender(paneElement());
+      await act(async () => {});
+      expect(screen.queryByTestId("plugin-file-editor-mock")).toBeNull();
+      expect(screen.getByRole("radio", { name: "Source" }).getAttribute("aria-checked")).toBe(
+        "true"
+      );
+    });
+
+    describe("which viewer an unset mode opens", () => {
+      const builtin = () => ({
+        ...candidate("daintree.csv-viewer", "CSV viewer", "view"),
+        builtin: true,
+      });
+      const installed = () => candidate("acme.csv", "Acme CSV", "view");
+
+      async function openUnset() {
+        seedWorktree();
+        fileEditorState.resolved = null;
+        // Installed first, the order the candidates sort in by id.
+        fileEditorState.plugin.view = [installed(), builtin()];
+        await renderPane({ filePath: "/repo/data/table.csv", content: "a,b\n" });
+        await act(async () => {});
+      }
+
+      const mounted = () =>
+        (fileEditorState.pluginHostProps.at(-1)?.candidate as { choiceId?: string } | undefined)
+          ?.choiceId;
+
+      it("is the built-in while the answers are still loading", async () => {
+        useFileEditorChoicesStore.setState({ choices: {}, loaded: false });
+        await openUnset();
+        expect(mounted()).toBe("daintree.csv-viewer/main");
+      });
+
+      it("is the built-in when nothing is remembered", async () => {
+        await openUnset();
+        expect(mounted()).toBe("daintree.csv-viewer/main");
+      });
+
+      it("is the remembered viewer when the user picked an installed one", async () => {
+        useFileEditorChoicesStore.setState({
+          choices: { "view:csv": "acme.csv/main" },
+          loaded: true,
+        });
+        await openUnset();
+        expect(mounted()).toBe("acme.csv/main");
+      });
+
+      it("is none until the runtime snapshot says which viewer is built in", async () => {
+        knowPlugins({ "daintree.csv-viewer": true });
+        await openUnset();
+        expect(fileEditorState.pluginHostProps).toHaveLength(0);
+        expect(screen.queryByTestId("plugin-file-editor-mock")).toBeNull();
+      });
     });
 
     it("never offers plugin editors in the read-only dialog", async () => {

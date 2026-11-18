@@ -247,15 +247,26 @@ export function registerFilesHandlers(): () => void {
       throw fsErrorToAppError(error, "Could not stat file");
     }
 
-    if (stat.size > FILE_PREVIEW_MAX_BYTES) {
-      throw new AppError({
+    // A refusal's size lets a viewer that opens larger files take over
+    // (#17336). Only for an ordinary contained read: a remote caller reading
+    // through an upload or click grant hasn't had the file checked against it
+    // yet, and no viewer is offered there anyway.
+    const reportsSize = ownUpload === null && !clicked;
+    const tooLarge = (sizeBytes: number | null) =>
+      new AppError({
         code: "FILE_TOO_LARGE",
         message: `File exceeds ${FILE_PREVIEW_MAX_BYTES} byte limit`,
         userMessage: "This file is too large to preview.",
-        context: { filePath, size: stat.size, limit: FILE_PREVIEW_MAX_BYTES },
-        details: { code: "FILE_TOO_LARGE", sizeBytes: stat.size },
+        context: {
+          filePath,
+          ...(sizeBytes !== null && { size: sizeBytes }),
+          limit: FILE_PREVIEW_MAX_BYTES,
+        },
+        ...(reportsSize &&
+          sizeBytes !== null && { details: { code: "FILE_TOO_LARGE" as const, sizeBytes } }),
       });
-    }
+
+    if (stat.size > FILE_PREVIEW_MAX_BYTES) throw tooLarge(stat.size);
 
     // Open the contained realFile, not the path as asked, with O_NOFOLLOW: a
     // link inside the project resolves to a real path that was just checked,
@@ -289,15 +300,8 @@ export function registerFilesHandlers(): () => void {
           context: { filePath },
         });
       }
-      if (opened.size > FILE_PREVIEW_MAX_BYTES) {
-        throw new AppError({
-          code: "FILE_TOO_LARGE",
-          message: `File exceeds ${FILE_PREVIEW_MAX_BYTES} byte limit`,
-          userMessage: "This file is too large to preview.",
-          context: { filePath, size: opened.size, limit: FILE_PREVIEW_MAX_BYTES },
-          details: { code: "FILE_TOO_LARGE", sizeBytes: opened.size },
-        });
-      }
+      // Identity before size, so a size is only ever reported for the very
+      // file the contained path named.
       if (String(opened.ino) !== String(stat.ino) || String(opened.dev) !== String(stat.dev)) {
         throw new AppError({
           code: "OUTSIDE_ROOT",
@@ -305,6 +309,7 @@ export function registerFilesHandlers(): () => void {
           context: { filePath, rootPath },
         });
       }
+      if (opened.size > FILE_PREVIEW_MAX_BYTES) throw tooLarge(opened.size);
       if (ownUpload && !(await isPlacedUpload(fileHandle, ownUpload))) {
         throw new AppError({
           code: "OUTSIDE_ROOT",
@@ -316,12 +321,10 @@ export function registerFilesHandlers(): () => void {
       // the read itself holds the budget and never returns oversized text.
       const read = await readBoundedFromHandle(fileHandle, opened.size, FILE_PREVIEW_MAX_BYTES);
       if (read === null) {
-        throw new AppError({
-          code: "FILE_TOO_LARGE",
-          message: `File exceeds ${FILE_PREVIEW_MAX_BYTES} byte limit`,
-          userMessage: "This file is too large to preview.",
-          context: { filePath, limit: FILE_PREVIEW_MAX_BYTES },
-        });
+        // It grew past the limit mid-read. The descriptor it was read through
+        // says how large it is now; without that, the size stays unknown.
+        const grown = await fileHandle.stat().catch(() => null);
+        throw tooLarge(grown !== null && grown.size > FILE_PREVIEW_MAX_BYTES ? grown.size : null);
       }
       // A grant rests on the lease, which may have moved while this read ran.
       if (clicked && !remoteCallerClicked(ctx, filePath, rootPath)) {

@@ -281,6 +281,103 @@ describe("pluginFileDocument (#13809)", () => {
     expect(listener).toHaveBeenCalledWith({ reason: "disk", revision: REV_A });
   });
 
+  it("tells a view whose first read threw once the file reads", async () => {
+    bridge.read.mockRejectedValueOnce(new Error("link dropped"));
+    const handle = openPluginFileDocument(target({ mode: "view" }));
+    handle.retain();
+    await expect(handle.document.read()).resolves.toEqual({ status: "unavailable" });
+    const listener = vi.fn();
+    handle.document.onDidChange(listener);
+    bridge.read.mockResolvedValue({ status: "ok", text: "a,b", revision: REV_A });
+    await handle.notifyDiskChange();
+    expect(listener).toHaveBeenCalledWith({ reason: "disk", revision: REV_A });
+  });
+
+  it("tells a view showing a refusal when the file goes back to the revision it had", async () => {
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "a,b", revision: REV_A });
+    const handle = openPluginFileDocument(target({ mode: "view" }));
+    handle.retain();
+    await handle.document.read();
+    const listener = vi.fn();
+    handle.document.onDidChange(listener);
+
+    bridge.read.mockResolvedValue({ status: "not-text" });
+    await handle.notifyDiskChange();
+    await handle.document.read();
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    bridge.read.mockResolvedValue({ status: "ok", text: "a,b", revision: REV_A });
+    await handle.notifyDiskChange();
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenLastCalledWith({ reason: "disk", revision: REV_A });
+  });
+
+  it("makes the view read again when a check overtakes its first read", async () => {
+    let finishFirst: (value: unknown) => void = () => {};
+    bridge.read.mockImplementationOnce(() => new Promise((resolve) => (finishFirst = resolve)));
+    const handle = openPluginFileDocument(target({ mode: "view" }));
+    handle.retain();
+    const listener = vi.fn();
+    handle.document.onDidChange(listener);
+    const first = handle.document.read();
+
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "new", revision: REV_B });
+    await handle.notifyDiskChange();
+    finishFirst({ status: "ok", text: "old", revision: REV_A });
+    await first;
+    await Promise.resolve();
+
+    expect(listener).toHaveBeenCalledWith({ reason: "disk", revision: REV_B });
+  });
+
+  it("conflicts a draft when a read finds the file no longer reads as text", async () => {
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_A });
+    const handle = openPluginFileDocument(target());
+    handle.retain();
+    await handle.document.read();
+    handle.document.setDraft("mine");
+
+    bridge.read.mockResolvedValue({ status: "not-text" });
+    await handle.document.read();
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.conflict).toBe(true);
+  });
+
+  it("keeps the draft owner's save ceiling when a viewer opens the same document", async () => {
+    bridge.read.mockResolvedValue({ status: "ok", text: "{}", revision: REV_A });
+    bridge.save.mockResolvedValue({ status: "saved", revision: REV_B });
+    const editor = openPluginFileDocument(target({ maxBytes: 10 }));
+    editor.retain();
+    await editor.document.read();
+    editor.document.setDraft("mine");
+
+    const viewer = openPluginFileDocument(target({ mode: "view", maxBytes: 2048 }));
+    await viewer.document.read();
+    expect(bridge.read).toHaveBeenLastCalledWith(expect.objectContaining({ maxBytes: 2048 }));
+
+    await useFileDocumentStore.getState().byPanelId["panel-1"]!.save();
+    expect(bridge.save).toHaveBeenCalledWith(expect.objectContaining({ maxBytes: 10 }));
+  });
+
+  it("runs one disk check at a time, and one more for changes meanwhile", async () => {
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_A });
+    const handle = openPluginFileDocument(target({ mode: "view" }));
+    handle.retain();
+    await handle.document.read();
+    bridge.read.mockClear();
+    let finish: (value: unknown) => void = () => {};
+    bridge.read.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+    bridge.read.mockResolvedValue({ status: "ok", text: "{}", revision: REV_C });
+
+    const checks = [
+      handle.notifyDiskChange(),
+      handle.notifyDiskChange(),
+      handle.notifyDiskChange(),
+    ];
+    finish({ status: "ok", text: "{}", revision: REV_B });
+    await Promise.all(checks);
+    expect(bridge.read).toHaveBeenCalledTimes(2);
+  });
+
   it("stays quiet on a disk change before anything was read", async () => {
     const handle = openPluginFileDocument(target({ mode: "view" }));
     handle.retain();

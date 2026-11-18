@@ -370,7 +370,9 @@ export function FilePane({
     pluginEditorsAllowed: location !== "dialog" && isInsideGovernedRoot,
     isRenderable,
     loadedBytes: loadState === "loaded" ? contentBytes : null,
-    fileBytes: observedBytes,
+    // A file the read already found isn't UTF-8 is one the document read, which
+    // is strict, would refuse: Source shows it, a viewer can't.
+    fileBytes: loadState === "loaded" && byteFacts.encoding === "invalid" ? null : observedBytes,
     pinnedEditor,
   });
   const {
@@ -523,7 +525,7 @@ export function FilePane({
     loadFile("explicit");
   }, [loadFile]);
 
-  const { refreshing, handleToolbarRefresh, imageRefreshEpoch } = useFileRefresh({
+  const { refreshing, handleToolbarRefresh, imageRefreshEpoch, fileChangeCount } = useFileRefresh({
     panelId: id,
     location,
     isFocused,
@@ -927,7 +929,12 @@ export function FilePane({
                 renderedBy={!isRenderable ? (pluginViewer?.pluginName ?? null) : null}
                 onShowRendered={
                   availableModes.includes("rendered")
-                    ? () => handleViewModeChange("rendered")
+                    ? (event) => {
+                        // The button unmounts with the state it leaves, so focus
+                        // goes to the toggle, as from HTML's View source.
+                        sourceFocusRef.current = { focusVisible: event.detail === 0 };
+                        handleViewModeChange("rendered");
+                      }
                     : undefined
                 }
                 onRetry={() => loadFile("explicit")}
@@ -1042,14 +1049,19 @@ export function FilePane({
           {filePath && showPluginViewer && pluginViewer && (
             <Suspense fallback={<EditorLoadingSkeleton />}>
               <LazyPluginFileEditorHost
-                key={`${pluginViewer.choiceId}\u0000${effectiveRootPath}\u0000${filePath}`}
+                // Every input the host captures at mount: a tab group reuses
+                // this pane for another panel, which must not keep this one's
+                // document.
+                key={`${id}\u0000${projectId}\u0000${pluginViewer.choiceId}\u0000${effectiveRootPath}\u0000${filePath}`}
                 panelId={id}
                 projectId={projectId}
                 filePath={filePath}
                 fileName={fileName ?? filePath}
                 rootPath={effectiveRootPath}
                 candidate={pluginViewer}
-                changeTick={changeTick}
+                // A viewer has no draft to protect, so it re-checks only on a
+                // write that could have touched its file, not every worktree tick.
+                changeTick={fileChangeCount}
                 refreshEpoch={imageRefreshEpoch}
               />
             </Suspense>

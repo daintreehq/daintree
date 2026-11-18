@@ -5,68 +5,93 @@ const QUOTE = 34;
 const LF = 10;
 const CR = 13;
 
-/**
- * Splits delimited text into records of fields, RFC 4180 style: a field that
- * starts with a double quote runs to the matching closing quote, `""` inside it
- * is one quote, and delimiters and line breaks inside it are part of the
- * field. Lenient where files are: a quote in the middle of an unquoted field is
- * literal, text after a closing quote is kept, and an unclosed quote runs to
- * the end of the file. A trailing line break ends the last record rather than
- * starting an empty one. `limit` stops after that many records, for sampling.
- */
-export function parseDelimited(text: string, delimiter: Delimiter, limit = Infinity): string[][] {
-  const records: string[][] = [];
-  const delim = delimiter.charCodeAt(0);
-  const length = text.length;
-  let record: string[] = [];
-  let i = 0;
+interface RecordScan {
+  /** Where the next record starts. */
+  next: number;
+  /** How many fields the record has. */
+  fields: number;
+  /** A quote the record's fields can't account for: mid-field, after a closing quote, or never closed. */
+  stray: boolean;
+}
 
-  while (i < length && records.length < limit) {
+/**
+ * Reads one record starting at `start`, RFC 4180 style: a field that starts
+ * with a double quote runs to the matching closing quote, `""` inside it is
+ * one quote, and delimiters and line breaks inside it are part of the field.
+ * Lenient where files are: a quote in the middle of an unquoted field is
+ * literal, text after a closing quote is kept, and an unclosed quote runs to
+ * the end of the file; each marks the record `stray`. A trailing line break
+ * ends the record rather than starting an empty one. Fields are collected
+ * into `out` when given, and only counted otherwise.
+ */
+function scanRecord(text: string, start: number, delim: number, out: string[] | null): RecordScan {
+  const length = text.length;
+  let i = start;
+  let fields = 0;
+  let stray = false;
+  for (;;) {
     let field = "";
-    if (text.charCodeAt(i) === QUOTE) {
+    if (i < length && text.charCodeAt(i) === QUOTE) {
       i += 1;
-      let start = i;
+      let from = i;
       for (;;) {
         const close = text.indexOf('"', i);
         if (close === -1) {
-          field += text.slice(start);
+          if (out) field += text.slice(from);
           i = length;
+          stray = true;
           break;
         }
-        field += text.slice(start, close);
+        if (out) field += text.slice(from, close);
         if (text.charCodeAt(close + 1) === QUOTE) {
-          field += '"';
+          if (out) field += '"';
           i = close + 2;
-          start = i;
+          from = i;
           continue;
         }
         i = close + 1;
         break;
       }
     }
-    const start = i;
+    const from = i;
     while (i < length) {
       const code = text.charCodeAt(i);
       if (code === delim || code === LF || code === CR) break;
+      if (code === QUOTE) stray = true;
       i += 1;
     }
-    if (i > start) field += text.slice(start, i);
-    record.push(field);
+    // Text left between a closing quote and the delimiter is stray too.
+    if (i > from && from > start && text.charCodeAt(from - 1) === QUOTE) stray = true;
+    if (out) out.push(i > from ? field + text.slice(from, i) : field);
+    fields += 1;
 
-    if (i >= length) break;
+    if (i >= length) return { next: length, fields, stray };
     const code = text.charCodeAt(i);
     i += 1;
     if (code === delim) {
       // A delimiter as the file's last character still owes the record an
       // empty final field.
-      if (i >= length) record.push("");
+      if (i >= length) {
+        if (out) out.push("");
+        return { next: length, fields: fields + 1, stray };
+      }
       continue;
     }
     if (code === CR && text.charCodeAt(i) === LF) i += 1;
-    records.push(record);
-    record = [];
+    return { next: i, fields, stray };
   }
-  if (record.length > 0 && records.length < limit) records.push(record);
+}
+
+/** Splits delimited text into records of fields; `limit` stops after that many records. */
+export function parseDelimited(text: string, delimiter: Delimiter, limit = Infinity): string[][] {
+  const delim = delimiter.charCodeAt(0);
+  const records: string[][] = [];
+  let i = 0;
+  while (i < text.length && records.length < limit) {
+    const fields: string[] = [];
+    i = scanRecord(text, i, delim, fields).next;
+    records.push(fields);
+  }
   return records;
 }
 
@@ -78,24 +103,32 @@ const SAMPLE_CHARS = 64 * 1024;
 /**
  * The delimiter that splits the start of the file into the most rows of one
  * consistent width wider than a single column, the wider width breaking a tie.
- * A `.tsv` prefers tab on a full tie, anything else comma, then semicolon, then
- * tab, so a single-column file or one the sample can't decide keeps the
- * delimiter its extension names.
+ * A record only counts when its quotes make sense under that delimiter, so a
+ * delimiter that only appears inside quoted values can't win. A `.tsv` prefers
+ * tab on a full tie, anything else comma, then semicolon, then tab, so a
+ * single-column file or one the sample can't decide keeps the delimiter its
+ * extension names.
  */
 export function detectDelimiter(text: string, extension: string | null): Delimiter {
   const order: readonly Delimiter[] =
     extension?.toLowerCase() === "tsv" ? ["\t", ",", ";"] : [",", ";", "\t"];
   const sample = text.length > SAMPLE_CHARS ? text.slice(0, SAMPLE_CHARS) : text;
+  const truncated = text.length > SAMPLE_CHARS;
   let best: Delimiter = order[0]!;
   let bestRows = 0;
   let bestWidth = 0;
   for (const delimiter of order) {
-    const records = parseDelimited(sample, delimiter, SAMPLE_RECORDS);
-    // A sample cut mid-file may end in a partial record; it says nothing.
-    if (text.length > SAMPLE_CHARS && records.length > 1) records.pop();
+    const delim = delimiter.charCodeAt(0);
     const widths = new Map<number, number>();
-    for (const record of records) {
-      if (record.length > 1) widths.set(record.length, (widths.get(record.length) ?? 0) + 1);
+    let i = 0;
+    for (let n = 0; n < SAMPLE_RECORDS && i < sample.length; n += 1) {
+      const scan = scanRecord(sample, i, delim, null);
+      i = scan.next;
+      // A sample cut mid-file may end in a partial record; it says nothing.
+      if (truncated && i >= sample.length && n > 0) break;
+      if (scan.fields > 1 && !scan.stray) {
+        widths.set(scan.fields, (widths.get(scan.fields) ?? 0) + 1);
+      }
     }
     for (const [width, rows] of widths) {
       if (rows > bestRows || (rows === bestRows && width > bestWidth)) {
@@ -110,23 +143,54 @@ export function detectDelimiter(text: string, extension: string | null): Delimit
 
 export interface DelimitedTable {
   delimiter: Delimiter;
-  /** The first record, padded with empty names to {@link columnCount}. */
-  header: string[];
-  /** Every record after the first, as written: rows may be shorter or longer than the header. */
-  rows: string[][];
-  /** The widest record's field count. */
+  /** The first record's fields, as written. */
+  header: readonly string[];
+  /** Records after the first. */
+  rowCount: number;
+  /** The widest record's field count, the header included. */
   columnCount: number;
+  /**
+   * Data rows `from` up to `to`, parsed on demand: a 2 MiB file can hold
+   * millions of records, and only the ones on screen need to exist as arrays.
+   * Rows may be shorter or longer than the header.
+   */
+  rows(from: number, to: number): string[][];
 }
 
-/** Reads a delimited file as a header row over data rows. */
+/**
+ * Reads a delimited file as a header row over data rows. One pass finds where
+ * every record starts and how wide the widest is without building a field;
+ * rows are parsed when asked for.
+ */
 export function readDelimitedTable(text: string, extension: string | null): DelimitedTable {
   const delimiter = detectDelimiter(text, extension);
-  const records = parseDelimited(text, delimiter);
+  const delim = delimiter.charCodeAt(0);
+  const starts: number[] = [];
   let columnCount = 0;
-  for (const record of records) {
-    if (record.length > columnCount) columnCount = record.length;
+  let i = 0;
+  while (i < text.length) {
+    starts.push(i);
+    const scan = scanRecord(text, i, delim, null);
+    if (scan.fields > columnCount) columnCount = scan.fields;
+    i = scan.next;
   }
-  const first = records[0] ?? [];
-  const header = Array.from({ length: columnCount }, (_, index) => first[index] ?? "");
-  return { delimiter, header, rows: records.slice(1), columnCount };
+  const header: string[] = [];
+  if (starts.length > 0) scanRecord(text, 0, delim, header);
+  const rowCount = Math.max(0, starts.length - 1);
+  return {
+    delimiter,
+    header,
+    rowCount,
+    columnCount,
+    rows(from, to) {
+      const out: string[][] = [];
+      const end = Math.min(to, rowCount);
+      for (let row = Math.max(0, from); row < end; row += 1) {
+        const fields: string[] = [];
+        scanRecord(text, starts[row + 1]!, delim, fields);
+        out.push(fields);
+      }
+      return out;
+    },
+  };
 }

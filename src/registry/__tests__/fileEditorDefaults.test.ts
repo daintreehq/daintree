@@ -10,11 +10,13 @@ import {
 } from "@shared/types/plugin";
 import {
   currentFileEditorDefault,
+  currentFileViewerClaim,
   resolveFileEditorDefault,
   type FileEditorDefaultInput,
 } from "../fileEditorDefaults";
 import { useProjectStore } from "@/store/projectStore";
 import { usePluginHostedViewsStore } from "@/store/pluginHostedViewsStore";
+import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import {
   _resetPluginProjectSurfacesStoreForTest,
   usePluginProjectSurfacesStore,
@@ -254,5 +256,59 @@ describe("currentFileEditorDefault (#13811)", () => {
       currentProject: { id: "p1", path: "/repo", name: "repo", emoji: "", lastOpened: 0 },
     });
     expect(currentFileEditorDefault("/repo/content/about.json")?.slot).toBe(JSON_SLOT);
+  });
+});
+
+describe("currentFileViewerClaim (#17336)", () => {
+  afterEach(() => {
+    usePluginHostedViewsStore.setState({ views: null, loadFailed: false });
+    usePluginRuntimeStore.setState({ disabledPluginIds: new Set() });
+    setWorktreePathIndexAccessor(() => null);
+    useProjectStore.setState({ currentProject: null });
+  });
+
+  function viewer(pluginId: string, claim: { extensions?: string[]; paths?: string[] }) {
+    const view = editorView(pluginId, [{ id: "table", paths: claim.paths ?? [], mode: "view" }]);
+    view.fileEditors![0]!.extensions.push(...(claim.extensions ?? []));
+    return view;
+  }
+
+  it("says nothing until the hosted views have loaded", () => {
+    expect(currentFileViewerClaim("/repo/data/users.csv")).toBeNull();
+  });
+
+  it("claims by extension with no root, unless the plugin is off", () => {
+    usePluginHostedViewsStore.setState({
+      views: [viewer("daintree.csv-viewer", { extensions: ["csv"] })],
+    });
+    expect(currentFileViewerClaim("/anywhere/users.csv")).toBe(true);
+    expect(currentFileViewerClaim("/anywhere/users.json")).toBe(false);
+    usePluginRuntimeStore.setState({ disabledPluginIds: new Set(["daintree.csv-viewer"]) });
+    expect(currentFileViewerClaim("/anywhere/users.csv")).toBe(false);
+  });
+
+  it("ignores an editor that fills Edit", () => {
+    usePluginHostedViewsStore.setState({
+      views: [editorView(ACME, [{ id: "records", paths: ["data/*.record"] }])],
+    });
+    expect(currentFileViewerClaim("/repo/data/a.record")).toBe(false);
+  });
+
+  it("tries a path claim against every root the file sits under, and waits for one", () => {
+    usePluginHostedViewsStore.setState({
+      views: [viewer(ACME, { paths: ["data/*.record"] })],
+    });
+    expect(currentFileViewerClaim("/repo/nested/data/a.record")).toBeNull();
+
+    setWorktreePathIndexAccessor(
+      () =>
+        new Map([
+          ["main", "/repo"],
+          ["nested", "/repo/nested"],
+        ])
+    );
+    // `data/a.record` from the nested worktree, though not from `/repo`.
+    expect(currentFileViewerClaim("/repo/nested/data/a.record")).toBe(true);
+    expect(currentFileViewerClaim("/repo/nested/other/a.record")).toBe(false);
   });
 });

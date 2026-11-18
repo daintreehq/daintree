@@ -134,16 +134,20 @@ function loadBuiltinPlugins(): BuiltinPlugin[] {
     .flatMap((entry) => {
       const dir = path.join(BUILTIN_PLUGINS_DIR, entry.name);
       const manifestPath = path.join(dir, "plugin.json");
-      const rendererSource = readRendererSource(dir);
-      if (!fs.existsSync(manifestPath) || rendererSource === null) return [];
-
+      if (!fs.existsSync(manifestPath)) return [];
       const manifest: unknown = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      const slotRefs = readSlotRefs(manifest);
+      // A manifest that declares views with no renderer entry to register them
+      // is the drift itself, so it is checked against an empty entry rather
+      // than skipped.
+      const rendererSource = readRendererSource(dir);
+      if (rendererSource === null && slotRefs.length === 0) return [];
       return [
         {
           name: readManifestName(manifest, entry.name),
           dir,
-          rendererSource,
-          slotRefs: readSlotRefs(manifest),
+          rendererSource: rendererSource ?? "",
+          slotRefs,
         },
       ];
     });

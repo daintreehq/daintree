@@ -55,7 +55,13 @@ export function useFileRefresh({
   diffSubject: DiffSubject | null;
   diffContent: unknown;
   retryDiff: () => void;
-}): { refreshing: boolean; handleToolbarRefresh: () => void; imageRefreshEpoch: number } {
+}): {
+  refreshing: boolean;
+  handleToolbarRefresh: () => void;
+  imageRefreshEpoch: number;
+  /** Moves on a tick that could have touched this file, the same filter the source re-read uses. */
+  fileChangeCount: number;
+} {
   // A preview the host refused to a watching window loads once this one has control.
   useRetryOnControl(loadState === "error" && errorCode === "DRIVEN_ELSEWHERE", () =>
     loadFile("explicit")
@@ -247,5 +253,10 @@ export function useFileRefresh({
     { enabled: !isDockParked }
   );
 
-  return { refreshing: refreshingMode !== null, handleToolbarRefresh, imageRefreshEpoch };
+  return {
+    refreshing: refreshingMode !== null,
+    handleToolbarRefresh,
+    imageRefreshEpoch,
+    fileChangeCount,
+  };
 }

@@ -292,13 +292,20 @@ type ViewerState =
   | { status: "video" }
   | { status: "audio" }
   | { status: "pdf" }
-  | {
-      status: "error";
-      reason: UnavailableReason;
-      message: string;
-      /** The size a too-large refusal reported, when it did. */
-      sizeBytes?: number;
-    };
+  | { status: "error"; reason: UnavailableReason; message: string };
+
+/**
+ * What the latest settled read of a file said about its size, for the viewers
+ * that may show it (#17336): the bytes it loaded, or the size a too-large
+ * refusal reported; null when it said nothing, or the text isn't UTF-8 (the
+ * document read is strict). Kept with the file it describes, because `state`
+ * still holds the previous file's read for the render that selects the next.
+ */
+interface SizeEvidence {
+  filePath: string;
+  rootPath: string;
+  bytes: number | null;
+}
 
 // The toggle's segments, in toggle order. Rendered is offered for markdown and
 // HTML, Diff for a file the worktree reports as changed, Edit for a file a
@@ -392,6 +399,7 @@ export function FileBrowserViewer({
   onOpenAsPanel,
 }: FileBrowserViewerProps) {
   const [state, setState] = useState<ViewerState>({ status: "idle" });
+  const [sizeEvidence, setSizeEvidence] = useState<SizeEvidence | null>(null);
   // The reader's explicit Source/Rendered choice, `null` until they touch the
   // toggle. Untouched, each type opens on its own default, the one FilePane's
   // picker uses too (`defaultFileViewMode`, #12205). Once chosen the mode is
@@ -446,11 +454,11 @@ export function FileBrowserViewer({
     rootPath,
     enabled: !!editorContext && !isRenderable,
     fileBytes:
-      state.status === "text"
-        ? contentBytes
-        : state.status === "error"
-          ? (state.sizeBytes ?? null)
-          : null,
+      sizeEvidence !== null &&
+      sizeEvidence.filePath === filePath &&
+      sizeEvidence.rootPath === rootPath
+        ? sizeEvidence.bytes
+        : null,
     builtinOnly: true,
   });
   const editable =
@@ -782,18 +790,21 @@ export function FileBrowserViewer({
           });
           return;
         }
+        setSizeEvidence({
+          filePath,
+          rootPath,
+          bytes:
+            result.encoding === "invalid"
+              ? null
+              : (result.byteLength ?? utf8ByteLength(result.content)),
+        });
         setState({ status: "text", content: result.content, byteLength: result.byteLength });
       })
       .catch((error: unknown) => {
         if (cancelled) return;
+        setSizeEvidence({ filePath, rootPath, bytes: refusedFileSize(error) });
         if (isClientAppError(error)) {
-          const sizeBytes = refusedFileSize(error);
-          setState({
-            status: "error",
-            reason: toFileReadErrorCode(error.code),
-            message: "",
-            ...(sizeBytes !== null && { sizeBytes }),
-          });
+          setState({ status: "error", reason: toFileReadErrorCode(error.code), message: "" });
           return;
         }
         logError("[fileBrowser] failed to read file", error);
@@ -1378,14 +1389,19 @@ export function FileBrowserViewer({
             }
           >
             <LazyPluginFileEditorHost
-              key={`${pluginViewer.choiceId}\u0000${rootPath}\u0000${filePath}`}
+              // Every input the host captures at mount: a tab group reuses this
+              // viewer for another panel, which must not keep this one's document.
+              key={`${panelId}\u0000${editorContext.projectId}\u0000${pluginViewer.choiceId}\u0000${rootPath}\u0000${filePath}`}
               panelId={panelId}
               projectId={editorContext.projectId}
               filePath={filePath}
               fileName={fileName}
               rootPath={rootPath}
               candidate={pluginViewer}
-              changeTick={changeTick}
+              // Only a write that could have touched the file, and a foreground
+              // refresh, re-check it: a viewer has no draft to protect.
+              changeTick={fileChangeCount}
+              refreshEpoch={surfaceRefreshNonce}
             />
           </Suspense>
         </div>
@@ -1454,7 +1470,16 @@ export function FileBrowserViewer({
         );
         const wayOut =
           copy.action === "rendered" ? (
-            <Button variant="subtle" size="sm" onClick={() => setExplicitRenderMode("rendered")}>
+            <Button
+              variant="subtle"
+              size="sm"
+              onClick={(event) => {
+                // The button unmounts with the state it leaves; hand focus to
+                // the toggle, as HTML's View source does.
+                sourceFocusRef.current = { focusVisible: event.detail === 0 };
+                setExplicitRenderMode("rendered");
+              }}
+            >
               Show in Rendered
             </Button>
           ) : copy.action === "save" ? (

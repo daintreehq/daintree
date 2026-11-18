@@ -159,6 +159,11 @@ describe("file panel state setters", () => {
     const stored = usePanelStore.getState().panelsById["file-1"] as FilePanelData | undefined;
     expect(stored?.filePath).toBe("/repo/users.csv");
     expect(stored && "fileViewMode" in stored).toBe(false);
+    const saved = (saveMock.mock.calls.at(-1)?.[0] as FilePanelData[] | undefined)?.find(
+      (panel) => panel.id === "file-1"
+    );
+    expect(saved?.filePath).toBe("/repo/users.csv");
+    expect(saved && "fileViewMode" in saved).toBe(false);
   });
 
   it.each([

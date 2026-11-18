@@ -50,6 +50,7 @@ interface DocumentRecord {
   filePath: string;
   fileName: string;
   rootPath: string;
+  /** The ceiling a save is held to: the editor that owns the draft's, never a viewer's. */
   maxBytes: number;
   /**
    * The revision the draft is based on: the last one read or saved while
@@ -57,8 +58,21 @@ interface DocumentRecord {
    * prompt's Save would quietly write the draft over a change it never saw.
    */
   revision: string | null;
-  /** The last disk state a disk-change check saw, so one change is reported once. */
+  /**
+   * The latest disk state a read or a disk-change check saw — a revision, or
+   * `status:<refusal>` — so one change is reported once. Reads and checks run
+   * concurrently; `observedSeq` is the start order of the one recorded, so an
+   * older answer that lands late never replaces a newer one.
+   */
   observedState: string | null;
+  observedSeq: number;
+  /** Start order handed to each read and check. */
+  seq: number;
+  /** What the view's own last read returned, the same way: what it is showing. */
+  shown: string | null;
+  /** The disk-change check in flight, and whether another was asked for meanwhile. */
+  probing: Promise<void> | null;
+  probeAgain: boolean;
   draft: string | null;
   /** Observed by the host: a save refused as stale, or the disk moving under a draft. */
   hostConflict: boolean;
@@ -120,30 +134,92 @@ function emit(record: DocumentRecord, change: PluginFileDocumentChange): void {
   }
 }
 
-async function read(record: DocumentRecord): Promise<PluginFileDocumentReadResult> {
+function stateOf(result: PluginFileDocumentReadResult): string {
+  return result.status === "ok" ? result.revision : `status:${result.status}`;
+}
+
+/** The disk moved off the revision a standing draft is based on: the host's conflict. */
+function reconcileDraft(record: DocumentRecord, state: string): void {
+  if (
+    record.draft !== null &&
+    record.revision !== null &&
+    state !== record.revision &&
+    !record.hostConflict
+  ) {
+    record.hostConflict = true;
+    publish(record);
+  }
+}
+
+async function read(
+  record: DocumentRecord,
+  maxBytes: number
+): Promise<PluginFileDocumentReadResult> {
+  const seq = ++record.seq;
+  let result: PluginFileDocumentReadResult;
   try {
-    const result = await window.electron.fileDocument.read({
+    result = await window.electron.fileDocument.read({
       rootPath: record.rootPath,
       filePath: record.filePath,
-      maxBytes: record.maxBytes,
+      maxBytes,
     });
-    // A refused read is an observation too, so the next disk change that makes
-    // the file readable again reaches a view still showing the refusal.
-    record.observedState = result.status === "ok" ? result.revision : `status:${result.status}`;
-    if (result.status === "ok") {
-      if (record.draft === null) {
-        record.revision = result.revision;
-        if (record.hostConflict) {
-          record.hostConflict = false;
-          publish(record);
-        }
-      }
-    }
-    return result;
   } catch (err) {
     logWarn("[PluginFileDocument] Read failed", { error: err });
-    return { status: "unavailable" };
+    result = { status: "unavailable" };
   }
+  // A refused read is an observation too, so the next disk change that makes
+  // the file readable again reaches a view still showing the refusal.
+  const state = stateOf(result);
+  if (seq > record.observedSeq) {
+    record.observedState = state;
+    record.observedSeq = seq;
+  } else if (record.observedState !== state) {
+    // A check that started later saw the disk differently while this read was
+    // in flight: what it returns is already stale, so the view reads again.
+    queueMicrotask(() => emit(record, { reason: "disk", revision: diskRevisionOf(record) }));
+  }
+  record.shown = state;
+  if (result.status === "ok" && record.draft === null) {
+    record.revision = result.revision;
+    if (record.hostConflict) {
+      record.hostConflict = false;
+      publish(record);
+    }
+  } else {
+    reconcileDraft(record, state);
+  }
+  return result;
+}
+
+/** One disk-change check: re-read, and tell the view when the disk moved from what it shows. */
+async function probe(record: DocumentRecord, maxBytes: number): Promise<void> {
+  const seq = ++record.seq;
+  let state: string;
+  try {
+    // A file that grew past the ceiling or stopped decoding changed too; the
+    // view hears about it as a change with no readable revision.
+    state = stateOf(
+      await window.electron.fileDocument.read({
+        rootPath: record.rootPath,
+        filePath: record.filePath,
+        maxBytes,
+      })
+    );
+  } catch {
+    return;
+  }
+  if (seq < record.observedSeq) return;
+  const previous = record.observedState;
+  record.observedSeq = seq;
+  if (state === previous) return;
+  record.observedState = state;
+  // Nothing observed yet means nothing to be stale against; the view's first
+  // read sees whatever is there now.
+  if (previous === null) return;
+  reconcileDraft(record, state);
+  // Back to exactly what the view already shows: nothing for it to re-read.
+  if (state === record.shown) return;
+  emit(record, { reason: "disk", revision: diskRevisionOf(record) });
 }
 
 async function save(
@@ -171,6 +247,9 @@ async function save(
   if (result.status === "saved") {
     record.revision = result.revision;
     record.observedState = result.revision;
+    record.observedSeq = ++record.seq;
+    // The editor holds what it just wrote.
+    record.shown = result.revision;
     // Typing that landed while the save was in flight stays a draft.
     if (record.draft === text) record.draft = null;
     record.hostConflict = false;
@@ -178,6 +257,7 @@ async function save(
     publish(record);
   } else if (result.status === "conflict") {
     record.observedState = result.revision;
+    record.observedSeq = ++record.seq;
     record.hostConflict = true;
     publish(record);
   } else {
@@ -236,7 +316,11 @@ function discardDraft(record: DocumentRecord): void {
   publish(record);
 }
 
-function createDocument(record: DocumentRecord, mode: FileEditorMode): PluginFileDocument {
+function createDocument(
+  record: DocumentRecord,
+  mode: FileEditorMode,
+  maxBytes: number
+): PluginFileDocument {
   const readOnly = mode === "view";
   return Object.freeze({
     filePath: record.filePath,
@@ -245,7 +329,7 @@ function createDocument(record: DocumentRecord, mode: FileEditorMode): PluginFil
     fileName: record.fileName,
     mode,
     readOnly,
-    read: () => read(record),
+    read: () => read(record, maxBytes),
     save: async (text: string, options: { expectedRevision: string }) => {
       if (readOnly) return { status: "refused", reason: "read-only" } as const;
       if (typeof text !== "string" || typeof options?.expectedRevision !== "string") {
@@ -303,6 +387,11 @@ export function openPluginFileDocument(target: PluginFileDocumentTarget): Plugin
       maxBytes: target.maxBytes,
       revision: null,
       observedState: null,
+      observedSeq: 0,
+      seq: 0,
+      shown: null,
+      probing: null,
+      probeAgain: false,
       draft: null,
       hostConflict: false,
       viewConflict: false,
@@ -313,13 +402,14 @@ export function openPluginFileDocument(target: PluginFileDocumentTarget): Plugin
     };
     records.set(key, record);
   }
-  // The editor in front decides the ceiling; a draft from a roomier one is
-  // refused at save rather than dropped.
-  record.maxBytes = target.maxBytes;
+  // The editor in front decides the save ceiling; a draft from a roomier one is
+  // refused at save rather than dropped. A viewer saves nothing, so it reads
+  // with its own ceiling and leaves the draft owner's alone.
+  if (target.mode === "edit") record.maxBytes = target.maxBytes;
   record.rootPath = target.rootPath;
   const live = record;
   return {
-    document: createDocument(live, target.mode),
+    document: createDocument(live, target.mode, target.maxBytes),
     retain: () => {
       live.mounts += 1;
       if (!records.has(live.key)) records.set(live.key, live);
@@ -332,31 +422,23 @@ export function openPluginFileDocument(target: PluginFileDocumentTarget): Plugin
         publish(live);
       };
     },
-    notifyDiskChange: async () => {
-      let state: string;
-      try {
-        const result = await window.electron.fileDocument.read({
-          rootPath: live.rootPath,
-          filePath: live.filePath,
-          maxBytes: live.maxBytes,
-        });
-        // A file that grew past the ceiling or stopped decoding changed too;
-        // the view hears about it as a change with no readable revision.
-        state = result.status === "ok" ? result.revision : `status:${result.status}`;
-      } catch {
-        return;
+    notifyDiskChange: () => {
+      // One check at a time per document, with one more after it when asked
+      // meanwhile: a burst of writes costs two reads, not one per tick.
+      if (live.probing !== null) {
+        live.probeAgain = true;
+        return live.probing;
       }
-      const previous = live.observedState;
-      if (state === previous) return;
-      live.observedState = state;
-      // Nothing observed yet means nothing to be stale against; the view's
-      // first read sees whatever is there now.
-      if (previous === null || state === live.revision) return;
-      if (live.draft !== null && !live.hostConflict) {
-        live.hostConflict = true;
-        publish(live);
-      }
-      emit(live, { reason: "disk", revision: diskRevisionOf(live) });
+      const run = async () => {
+        do {
+          live.probeAgain = false;
+          await probe(live, target.maxBytes);
+        } while (live.probeAgain);
+      };
+      live.probing = run().finally(() => {
+        live.probing = null;
+      });
+      return live.probing;
     },
   };
 }

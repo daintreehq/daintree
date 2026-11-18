@@ -791,6 +791,48 @@ describe("files:read handler", () => {
     expect(handle.close).toHaveBeenCalledTimes(1);
   });
 
+  it("reports the descriptor's size when the file grew between the stats", async () => {
+    fsMock.stat.mockResolvedValue({ size: 10 });
+    const handle = {
+      read: readsFrom(Buffer.alloc(10, 0x61)),
+      close: vi.fn().mockResolvedValue(undefined),
+      stat: vi
+        .fn()
+        .mockResolvedValue({ isFile: () => true, isDirectory: () => false, size: 900 * 1024 }),
+    };
+    fsMock.open.mockResolvedValue(handle);
+    registerFilesHandlers();
+
+    await expect(getReadHandler()({}, { path: file, rootPath: root })).rejects.toMatchObject({
+      code: "FILE_TOO_LARGE",
+      details: { code: "FILE_TOO_LARGE", sizeBytes: 900 * 1024 },
+    });
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports the size the descriptor shows once a read outgrows the limit", async () => {
+    const limit = 512 * 1024;
+    fsMock.stat.mockResolvedValue({ size: 10 });
+    const read = readsFrom(Buffer.alloc(limit * 2, 0x61));
+    const handle = {
+      read,
+      close: vi.fn().mockResolvedValue(undefined),
+      stat: vi
+        .fn()
+        .mockResolvedValueOnce({ isFile: () => true, isDirectory: () => false, size: 10 })
+        .mockResolvedValue({ isFile: () => true, isDirectory: () => false, size: limit * 2 }),
+    };
+    fsMock.open.mockResolvedValue(handle);
+    registerFilesHandlers();
+
+    await expect(getReadHandler()({}, { path: file, rootPath: root })).rejects.toMatchObject({
+      code: "FILE_TOO_LARGE",
+      details: { code: "FILE_TOO_LARGE", sizeBytes: limit * 2 },
+    });
+    expect(read.requested).toBeLessThanOrEqual(limit + 1);
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
   it("returns content that grew after the stat but stays within the limit", async () => {
     fsMock.stat.mockResolvedValue({ size: 2 });
     const handle = {

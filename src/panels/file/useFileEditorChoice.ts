@@ -37,8 +37,11 @@ function fitsViewer(maxBytes: number, fileBytes: number | null): boolean {
  * A viewer is on offer once the file's size is known to fit it. The user's
  * remembered "View with…" answer wins while it is on offer; otherwise a
  * built-in viewer, then the rest in their deterministic order. Until the
- * answers have loaded only a built-in may show, as with Edit. `builtinOnly`
- * narrows the offer to viewers that ship with Daintree, for the browser.
+ * answers have loaded only a built-in may show, as with Edit, and nothing is
+ * chosen until the runtime snapshot says which claimants ship with Daintree:
+ * an installed viewer must not get the file first because the built-in's
+ * provenance arrived late. `builtinOnly` narrows the offer to viewers that
+ * ship with Daintree, for the browser.
  */
 export function useFileViewerChoice({
   filePath,
@@ -56,6 +59,7 @@ export function useFileViewerChoice({
   builtinOnly?: boolean;
 }) {
   const candidates = usePluginFileEditorCandidates(filePath, rootPath, "view", enabled);
+  const pluginMeta = usePluginRuntimeStore((s) => s.pluginMetaById);
   const initEditorChoices = useFileEditorChoicesStore((s) => s.init);
   useEffect(() => {
     initEditorChoices();
@@ -64,6 +68,7 @@ export function useFileViewerChoice({
   const editorChoices = useFileEditorChoicesStore((s) => s.choices);
 
   const pluginViewCandidates = useMemo(() => {
+    if (candidates.some((candidate) => !pluginMeta.has(candidate.pluginId))) return [];
     const offered = candidates.filter(
       (candidate) =>
         (!builtinOnly || candidate.builtin) && fitsViewer(candidate.editor.maxBytes, fileBytes)
@@ -72,7 +77,7 @@ export function useFileViewerChoice({
       ...offered.filter((candidate) => candidate.builtin),
       ...offered.filter((candidate) => !candidate.builtin),
     ];
-  }, [candidates, builtinOnly, fileBytes]);
+  }, [candidates, pluginMeta, builtinOnly, fileBytes]);
   const viewOptions = useMemo(
     () => pluginViewCandidates.map((candidate) => candidate.choiceId),
     [pluginViewCandidates]

@@ -1,3 +1,4 @@
+import type { MouseEvent } from "react";
 import { ExternalLink, Globe, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getFileTypeIcon } from "@/panels/file-browser/fileTypeIcons";
@@ -105,7 +106,7 @@ export function FilePaneUnavailable({
   /** The plugin viewer that still shows a file too large for Source, by name. */
   renderedBy?: string | null;
   /** Switches the pane to Rendered, where that viewer is. */
-  onShowRendered?: () => void;
+  onShowRendered?: (event: MouseEvent<HTMLButtonElement>) => void;
   onRetry: () => void;
   /** Resolves true once the hand-off succeeded; the pane reports a failure. */
   onExternal: (target: ExternalTarget) => Promise<boolean>;

@@ -17,6 +17,16 @@ import { readDelimitedTable, type DelimitedTable, type Delimiter } from "./delim
  */
 export const COLUMN_WINDOW = 200;
 
+/**
+ * Rows handed to the table at once. It keeps a model object per row, and a
+ * file under the size cap can hold millions of short records, so a longer file
+ * is shown a window of rows at a time, each parsed only when shown.
+ */
+export const ROW_WINDOW = 50_000;
+
+/** The manifest's `maxBytes`: a draft longer than this is more than the table opens. */
+const MAX_TABLE_CHARS = 2 * 1024 * 1024;
+
 /** Rows read to size the columns; enough to see a column's usual width. */
 const WIDTH_SAMPLE_ROWS = 200;
 const CHAR_PX = 7;
@@ -46,59 +56,73 @@ function columnWidth(chars: number): number {
   return Math.min(MAX_COLUMN_PX, Math.max(MIN_COLUMN_PX, chars * CHAR_PX + CELL_PADDING_PX));
 }
 
-/** Each column's width from its header and the first rows, so a wide table scrolls sideways. */
-function columnWidths(table: DelimitedTable): number[] {
-  const longest = table.header.map((name) => name.length);
-  const sampled = table.rows.length > WIDTH_SAMPLE_ROWS ? WIDTH_SAMPLE_ROWS : table.rows.length;
-  for (let r = 0; r < sampled; r += 1) {
-    const row = table.rows[r]!;
-    for (let c = 0; c < row.length; c += 1) {
-      const length = row[c]!.length;
-      if (length > longest[c]!) longest[c] = length;
-    }
-  }
-  return longest.map(columnWidth);
+/** A window's start that exists: the first one when everything fits, else clamped to the last. */
+function clampWindow(offset: number, total: number, size: number): number {
+  if (total <= size) return 0;
+  const last = Math.floor((total - 1) / size) * size;
+  return Math.min(Math.max(0, offset - (offset % size)), last);
 }
 
 /**
  * A CSV or TSV file as a read-only table (#17336): the first record as the
  * header, every record after it as a row in file order, through the host-owned
- * document. Nothing here can write the file.
+ * document. Nothing here can write the file. While another editor holds an
+ * unsaved draft of it, the table previews that draft, as Rendered does.
  */
 export function CsvTableView({ fileDocument }: PanelViewProps) {
   const [state, setState] = useState<ViewState>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
   const [columnOffset, setColumnOffset] = useState(0);
+  const [rowOffset, setRowOffset] = useState(0);
   const extension = fileDocument ? extensionOf(fileDocument.fileName) : null;
 
   useEffect(() => {
     if (!fileDocument) return;
     let disposed = false;
     let latest = 0;
-    let shownRevision: string | null = null;
+    // What the table shows now, so a change that leaves it the same parses nothing.
+    let shown: { draft: string } | { revision: string } | null = null;
+    const show = (source: { draft: string } | { revision: string }, text: string) => {
+      if (
+        shown !== null &&
+        ("draft" in source
+          ? "draft" in shown && shown.draft === source.draft
+          : "revision" in shown && shown.revision === source.revision)
+      ) {
+        return;
+      }
+      shown = source;
+      setState({ status: "ready", table: readDelimitedTable(text, extension) });
+    };
     const load = () => {
       const request = ++latest;
+      const draft = fileDocument.getDraft();
+      if (draft !== null) {
+        if (draft.length > MAX_TABLE_CHARS) {
+          shown = null;
+          setState({ status: "too-large" });
+        } else {
+          show({ draft }, draft);
+        }
+        return;
+      }
       fileDocument.read().then(
         (result) => {
           if (disposed || request !== latest) return;
           if (result.status !== "ok") {
-            shownRevision = null;
+            shown = null;
             setState({ status: result.status });
             return;
           }
-          if (result.revision === shownRevision) return;
-          shownRevision = result.revision;
-          setState({ status: "ready", table: readDelimitedTable(result.text, extension) });
+          show({ revision: result.revision }, result.text);
         },
         () => {
           if (disposed || request !== latest) return;
-          shownRevision = null;
+          shown = null;
           setState({ status: "unavailable" });
         }
       );
     };
-    // Subscribed before the first read, so a change that lands while it is in
-    // flight starts a newer read rather than being lost.
     const unsubscribe = fileDocument.onDidChange(load);
     load();
     return () => {
@@ -109,37 +133,53 @@ export function CsvTableView({ fileDocument }: PanelViewProps) {
 
   const table = state.status === "ready" ? state.table : null;
   const columnCount = table?.columnCount ?? 0;
-  // A file that lost columns since the window moved keeps a window that exists.
-  const offset =
-    columnOffset < columnCount ? columnOffset : Math.max(0, columnCount - COLUMN_WINDOW);
-  const widths = useMemo(() => (table ? columnWidths(table) : []), [table]);
+  const rowCount = table?.rowCount ?? 0;
+  // A file that changed under a moved window keeps a window that exists.
+  const colStart = clampWindow(columnOffset, columnCount, COLUMN_WINDOW);
+  const colEnd = Math.min(columnCount, colStart + COLUMN_WINDOW);
+  const rowStart = clampWindow(rowOffset, rowCount, ROW_WINDOW);
+  const rowEnd = Math.min(rowCount, rowStart + ROW_WINDOW);
+  const rows = useMemo(
+    () => (table ? table.rows(rowStart, rowEnd) : []),
+    [table, rowStart, rowEnd]
+  );
 
   const columns = useMemo<DataTableColumn<Row>[]>(() => {
     if (!table) return [];
-    const end = Math.min(columnCount, offset + COLUMN_WINDOW);
-    const digits = String(table.rows.length).length;
+    // Sized from the header and the window's first rows, so a wide table
+    // scrolls sideways rather than squeezing every column.
+    const longest = new Map<number, number>();
+    const sample = rows.length > WIDTH_SAMPLE_ROWS ? rows.slice(0, WIDTH_SAMPLE_ROWS) : rows;
+    for (let index = colStart; index < colEnd; index += 1) {
+      let max = (table.header[index] ?? "").length;
+      for (const row of sample) {
+        const length = row[index]?.length ?? 0;
+        if (length > max) max = length;
+      }
+      longest.set(index, max);
+    }
     const out: DataTableColumn<Row>[] = [
       {
         id: "row",
         header: "#",
         menuLabel: "Row",
-        width: columnWidth(Math.max(2, digits)),
+        width: columnWidth(Math.max(2, String(rowEnd).length)),
         numeric: true,
-        render: (_row, index) => index + 1,
+        render: (_row, index) => rowStart + index + 1,
       },
     ];
-    for (let index = offset; index < end; index += 1) {
+    for (let index = colStart; index < colEnd; index += 1) {
       const name = table.header[index] ?? "";
       out.push({
         id: `c${index}`,
         header: name === "" ? `Column ${index + 1}` : name,
-        width: widths[index] ?? MIN_COLUMN_PX,
+        width: columnWidth(longest.get(index) ?? 0),
         resizable: true,
         render: (row) => row[index] ?? "",
       });
     }
     return out;
-  }, [table, columnCount, offset, widths]);
+  }, [table, rows, colStart, colEnd, rowStart, rowEnd]);
 
   // A file editor host always hands over the document; without one there is
   // nothing to read.
@@ -191,16 +231,45 @@ export function CsvTableView({ fileDocument }: PanelViewProps) {
     );
   }
 
-  const windowed = columnCount > COLUMN_WINDOW;
-  const windowEnd = Math.min(columnCount, offset + COLUMN_WINDOW);
+  const windowControls = (
+    noun: string,
+    start: number,
+    end: number,
+    total: number,
+    size: number,
+    setOffset: (offset: number) => void
+  ) =>
+    total > size
+      ? [
+          `${noun} ${(start + 1).toLocaleString()}–${end.toLocaleString()} of ${total.toLocaleString()}`,
+          <IconButton
+            key={`${noun}-previous`}
+            icon="chevron-left"
+            aria-label={`Previous ${noun.toLowerCase()}`}
+            disabled={start === 0}
+            onClick={() => setOffset(Math.max(0, start - size))}
+          />,
+          <IconButton
+            key={`${noun}-next`}
+            icon="chevron-right"
+            aria-label={`Next ${noun.toLowerCase()}`}
+            disabled={end >= total}
+            onClick={() => setOffset(start + size)}
+          />,
+        ]
+      : [];
+  const controls = [
+    ...windowControls("Rows", rowStart, rowEnd, rowCount, ROW_WINDOW, setRowOffset),
+    ...windowControls("Columns", colStart, colEnd, columnCount, COLUMN_WINDOW, setColumnOffset),
+  ];
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="csv-table-view">
       <div className="min-h-0 flex-1">
         <DataTable<Row>
           aria-label={fileDocument.fileName}
           columns={columns}
-          rows={table.rows}
-          rowKey={(_row, index) => index}
+          rows={rows}
+          rowKey={(_row, index) => rowStart + index}
           density="compact"
           rowDividers
           stickyFirstColumn
@@ -209,31 +278,11 @@ export function CsvTableView({ fileDocument }: PanelViewProps) {
       <StatusBar
         aria-label="Table details"
         left={[
-          pluralize(table.rows.length, "row"),
+          pluralize(rowCount, "row"),
           pluralize(columnCount, "column"),
           DELIMITER_NAMES[table.delimiter],
         ]}
-        right={
-          windowed
-            ? [
-                `Columns ${(offset + 1).toLocaleString()}–${windowEnd.toLocaleString()} of ${columnCount.toLocaleString()}`,
-                <IconButton
-                  key="previous"
-                  icon="chevron-left"
-                  aria-label="Previous columns"
-                  disabled={offset === 0}
-                  onClick={() => setColumnOffset(Math.max(0, offset - COLUMN_WINDOW))}
-                />,
-                <IconButton
-                  key="next"
-                  icon="chevron-right"
-                  aria-label="Next columns"
-                  disabled={windowEnd >= columnCount}
-                  onClick={() => setColumnOffset(offset + COLUMN_WINDOW)}
-                />,
-              ]
-            : undefined
-        }
+        right={controls.length > 0 ? controls : undefined}
       />
     </div>
   );

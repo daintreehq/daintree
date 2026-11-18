@@ -17,7 +17,7 @@ vi.mock("@/services/ActionService", () => ({
 
 import * as kit from "@daintreehq/plugin-ui";
 import "@/components/PluginKit/PluginKit";
-import { COLUMN_WINDOW, CsvTableView } from "../CsvTableView";
+import { COLUMN_WINDOW, CsvTableView, ROW_WINDOW } from "../CsvTableView";
 
 beforeAll(async () => {
   await primeRadix();
@@ -50,7 +50,7 @@ interface FakeDocument {
   setDraft: ReturnType<typeof vi.fn>;
 }
 
-function fakeDocument(fileName = "users.csv"): FakeDocument {
+function fakeDocument(fileName = "users.csv", draft: string | null = null): FakeDocument {
   const listeners = new Set<(change: PluginFileDocumentChange) => void>();
   const read = vi.fn<() => Promise<PluginFileDocumentReadResult>>();
   const save = vi.fn();
@@ -63,7 +63,7 @@ function fakeDocument(fileName = "users.csv"): FakeDocument {
     readOnly: true,
     read,
     save,
-    getDraft: () => null,
+    getDraft: () => draft,
     setDraft,
     setConflict: vi.fn(),
     onDidChange: (listener) => {
@@ -199,5 +199,66 @@ describe("CsvTableView", () => {
     expect(screen.getByRole("columnheader", { name: `h${width - 1}` })).toBeTruthy();
     expect(cellTexts(container)[0]).toContain(`v${width - 1}`);
     expect(screen.queryByRole("columnheader", { name: "h0" })).toBeNull();
+  });
+
+  it("keeps the window of columns on one that exists when the file loses columns", async () => {
+    const wide = (width: number) =>
+      `${Array.from({ length: width }, (_, i) => `h${i}`).join(",")}\n${Array.from({ length: width }, (_, i) => `v${i}`).join(",")}\n`;
+    const fake = fakeDocument();
+    fake.read.mockResolvedValueOnce(ok(wide(601), "r1"));
+    await renderView(fake);
+    for (let page = 0; page < 3; page += 1) {
+      fireEvent.click(screen.getByRole("button", { name: "Next columns" }));
+    }
+    expect(screen.getByRole("columnheader", { name: "h600" })).toBeTruthy();
+
+    fake.read.mockResolvedValueOnce(ok(wide(550), "r2"));
+    await act(async () => fake.change({ reason: "disk", revision: "r2" }));
+    expect(screen.getByRole("columnheader", { name: "h549" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Previous columns" }));
+    expect(screen.getByRole("columnheader", { name: "h200" })).toBeTruthy();
+
+    fake.read.mockResolvedValueOnce(ok(wide(180), "r3"));
+    await act(async () => fake.change({ reason: "disk", revision: "r3" }));
+    expect(screen.getByRole("columnheader", { name: "h0" })).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: "h179" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Previous columns" })).toBeNull();
+  });
+
+  it("hands the table a window of rows and mounts only the ones in view", async () => {
+    const fake = fakeDocument();
+    fake.read.mockResolvedValue(ok(`id\n${"x\n".repeat(ROW_WINDOW + 10)}`));
+    const { container } = await renderView(fake);
+
+    expect(
+      screen.getByText(
+        `Rows 1–${ROW_WINDOW.toLocaleString()} of ${(ROW_WINDOW + 10).toLocaleString()}`
+      )
+    ).toBeTruthy();
+    expect(container.querySelectorAll("tbody tr").length).toBeLessThan(100);
+
+    fireEvent.click(screen.getByRole("button", { name: "Next rows" }));
+    expect(cellTexts(container)[0]?.[0]).toBe(String(ROW_WINDOW + 1));
+  });
+
+  it("opens no editor on a cell", async () => {
+    const fake = fakeDocument();
+    fake.read.mockResolvedValue(ok("id,name\n1,Ada\n"));
+    const { container } = await renderView(fake);
+    const cell = [...container.querySelectorAll("tbody td")].find(
+      (td) => td.textContent === "Ada"
+    )!;
+    fireEvent.doubleClick(cell);
+    fireEvent.keyDown(cell, { key: "Enter" });
+    expect(container.querySelector("tbody input, tbody textarea")).toBeNull();
+    expect(fake.save).not.toHaveBeenCalled();
+  });
+
+  it("previews another editor's unsaved draft instead of the file on disk", async () => {
+    const fake = fakeDocument("users.csv", "id\ndraft\n");
+    fake.read.mockResolvedValue(ok("id\ndisk\n"));
+    const { container } = await renderView(fake);
+    expect(cellTexts(container).map((row) => row[1])).toEqual(["draft"]);
+    expect(fake.read).not.toHaveBeenCalled();
   });
 });

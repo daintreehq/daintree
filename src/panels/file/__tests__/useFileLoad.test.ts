@@ -160,24 +160,61 @@ describe("useFileLoad observed size (#17336)", () => {
     expect(result.current.observedBytes).toBe(2);
   });
 
-  it("takes the size a too-large refusal reports, even when a silent pass keeps the old text", async () => {
+  it("surfaces a file that grew too large on a silent pass, with the size it reached", async () => {
     readMock.mockResolvedValueOnce(read("small"));
     const { result } = renderLoad({ filePath: "/a/t.csv", root: "/a" });
     await load(result, "explicit");
 
-    readMock.mockRejectedValueOnce(tooLarge(3_000_000));
+    readMock.mockRejectedValueOnce(tooLarge(1_000_000));
     await load(result, "ambient");
-    expect(result.current.content).toBe("small");
-    expect(result.current.observedBytes).toBe(3_000_000);
+    expect(result.current.loadState).toBe("error");
+    expect(result.current.errorCode).toBe("FILE_TOO_LARGE");
+    expect(result.current.observedBytes).toBe(1_000_000);
+
+    // The old text is no longer good: a passing failure after it can't bring
+    // it back.
+    readMock.mockRejectedValueOnce(new Error("EBUSY"));
+    await load(result, "ambient");
+    expect(result.current.loadState).toBe("error");
   });
 
-  it("knows no size after a failure that doesn't give one", async () => {
-    readMock.mockResolvedValueOnce(read("small"));
+  it.each(["ambient", "explicit"] as const)(
+    "drops the old size on a %s refusal that doesn't give one",
+    async (intent) => {
+      readMock.mockResolvedValueOnce({ ...read("small"), byteLength: 5 });
+      const { result } = renderLoad({ filePath: "/a/t.csv", root: "/a" });
+      await load(result, "explicit");
+      readMock.mockRejectedValueOnce(tooLarge());
+      await load(result, intent);
+      expect(result.current.loadState).toBe("error");
+      expect(result.current.observedBytes).toBeNull();
+    }
+  );
+
+  it("keeps the size through a passing failure", async () => {
+    readMock.mockResolvedValueOnce({ ...read("small"), byteLength: 5 });
     const { result } = renderLoad({ filePath: "/a/t.csv", root: "/a" });
     await load(result, "explicit");
-    readMock.mockRejectedValueOnce(tooLarge());
+    readMock.mockRejectedValueOnce(new Error("EBUSY"));
+    await load(result, "ambient");
+    expect(result.current.loadState).toBe("loaded");
+    expect(result.current.observedBytes).toBe(5);
+  });
+
+  it("takes the read's own byte count over re-encoding the decoded text", async () => {
+    // One invalid byte decodes to U+FFFD, three bytes when re-encoded.
+    readMock.mockResolvedValueOnce({ ...read("caf\ufffd"), byteLength: 4, encoding: "invalid" });
+    const { result } = renderLoad({ filePath: "/a/t.csv", root: "/a" });
     await load(result, "explicit");
-    expect(result.current.loadState).toBe("error");
+    expect(result.current.observedBytes).toBe(4);
+  });
+
+  it("drops the size when only the root changes", async () => {
+    readMock.mockResolvedValueOnce({ ...read("small"), byteLength: 5 });
+    const { result, rerender } = renderLoad({ filePath: "/a/t.csv", root: "/a" });
+    await load(result, "explicit");
+    expect(result.current.observedBytes).toBe(5);
+    rerender({ filePath: "/a/t.csv", root: "/" });
     expect(result.current.observedBytes).toBeNull();
   });
 
