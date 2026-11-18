@@ -58,19 +58,35 @@ function invalidFiles(dir, manifest = readManifest()) {
  * Fetches every file `dir` lacks or holds wrong from the pinned revision, each
  * checked before it replaces anything. A folder already right asks nothing of
  * Hugging Face, so a cached build counts no download.
+ *
+ * Pinned by `manifestFile` unless handed a `manifest`, and that file is read
+ * again before each file goes in place: a dev watch's fetch can still be out
+ * when a branch switch moves the checkout's pin (#17818), and a file the
+ * checkout no longer pins must never replace one a running app may be reading.
  */
 async function prepareModel({
   dir = MODEL_DIR,
-  manifest = readManifest(),
+  manifestFile = MANIFEST_PATH,
+  manifest,
   fetchImpl = globalThis.fetch,
   log = console.log,
 } = {}) {
-  const missing = invalidFiles(dir, manifest);
+  const pinned = manifest ?? readManifest(manifestFile);
+  const stillPinned = manifest
+    ? () => true
+    : () => {
+        try {
+          return readManifest(manifestFile).revision === pinned.revision;
+        } catch {
+          return false;
+        }
+      };
+  const missing = invalidFiles(dir, pinned);
   if (missing.length === 0) return { fetched: [] };
-  await checkPublished(manifest, fetchImpl);
+  await checkPublished(pinned, fetchImpl);
   fs.mkdirSync(dir, { recursive: true });
   for (const spec of missing) {
-    await fetchFile(dir, manifest, spec, fetchImpl, log);
+    await fetchFile(dir, pinned, spec, fetchImpl, log, stillPinned);
   }
   return { fetched: missing.map((spec) => spec.name) };
 }
@@ -109,7 +125,7 @@ async function checkPublished(manifest, fetchImpl) {
  * dev watch prepares the model while the app runs and `npm run
  * fetch:canopy-model` may run beside it (#17818).
  */
-async function fetchFile(dir, manifest, spec, fetchImpl, log) {
+async function fetchFile(dir, manifest, spec, fetchImpl, log, stillPinned) {
   const url = `${HF}/${manifest.id}/resolve/${manifest.revision}/${spec.name}`;
   log(
     `[canopy-reader] Fetching ${spec.name} (${spec.size} bytes) at ${manifest.revision.slice(0, 12)}`
@@ -129,6 +145,11 @@ async function fetchFile(dir, manifest, spec, fetchImpl, log) {
   const part = `${target}.${process.pid}-${crypto.randomBytes(6).toString("hex")}.part`;
   try {
     fs.writeFileSync(part, content, { flag: "wx" });
+    if (!stillPinned()) {
+      throw new Error(
+        `The manifest no longer pins ${manifest.revision.slice(0, 12)}: ${spec.name} wasn't put in place`
+      );
+    }
     fs.renameSync(part, target);
   } finally {
     fs.rmSync(part, { force: true });

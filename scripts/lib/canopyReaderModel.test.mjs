@@ -180,6 +180,50 @@ describe("prepareModel", () => {
     expect(existsSync(path.join(dir, "model.int8.onnx", "keep"))).toBe(true);
   });
 
+  it("pins by the manifest file it is pointed at", async () => {
+    const manifestFile = `${dir}.manifest.json`;
+    writeFileSync(manifestFile, JSON.stringify(manifest));
+    try {
+      const { fetched } = await prepareModel({
+        dir,
+        manifestFile,
+        fetchImpl: serving(),
+        log: () => {},
+      });
+      expect(fetched).toEqual(["config.json", "model.int8.onnx"]);
+      expect(invalidFiles(dir, manifest)).toEqual([]);
+    } finally {
+      rmSync(manifestFile, { force: true });
+    }
+  });
+
+  it("puts nothing in place for a pin the checkout moved off while the fetch was out", async () => {
+    // Another branch's copy, which an app built from that branch may be reading.
+    writeFileSync(path.join(dir, "config.json"), CONFIG);
+    writeFileSync(path.join(dir, "model.int8.onnx"), Buffer.from("the other pin's weights"));
+    const manifestFile = `${dir}.manifest.json`;
+    writeFileSync(manifestFile, JSON.stringify(manifest));
+    const serve = serving();
+    // Switched back to that branch while the weights were on their way.
+    const fetchImpl = vi.fn(async (url, init) => {
+      if (url.endsWith("/model.int8.onnx")) {
+        writeFileSync(manifestFile, JSON.stringify({ ...manifest, revision: "f".repeat(40) }));
+      }
+      return serve(url, init);
+    });
+    try {
+      await expect(prepareModel({ dir, manifestFile, fetchImpl, log: () => {} })).rejects.toThrow(
+        /no longer pins 0123456789ab/
+      );
+      expect(readFileSync(path.join(dir, "model.int8.onnx"), "utf8")).toBe(
+        "the other pin's weights"
+      );
+      expect(readdirSync(dir).sort()).toEqual(["config.json", "model.int8.onnx"]);
+    } finally {
+      rmSync(manifestFile, { force: true });
+    }
+  });
+
   it("refuses a manifest whose published date isn't the pinned revision's, fetching nothing", async () => {
     const fetchImpl = serving(BODIES, "2026-10-24T00:00:00.000Z");
 
