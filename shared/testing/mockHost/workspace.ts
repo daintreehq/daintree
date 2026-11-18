@@ -703,12 +703,9 @@ export function createWorkspaceFacet(
       });
       let delivered: PluginFocusedPanel | null = null;
       let disposed = false;
-      const subscription = (raw: PluginFocusedPanel) => {
+      // A project plugin's simulated focus is taken to be inside its own project.
+      const subscription = (focus: PluginFocusedPanel) => {
         if (disposed) return;
-        // A project plugin's simulated focus is taken to be inside its own
-        // project, except the Portal, which production never attributes to one.
-        const focus =
-          mockProjectId !== null && raw.kind === "portal" ? toPluginFocusedPanel(null) : raw;
         if (delivered !== null && pluginFocusedPanelEquals(delivered, focus)) return;
         delivered = focus;
         // Logged and swallowed, sync or async, as the host does for a listener.

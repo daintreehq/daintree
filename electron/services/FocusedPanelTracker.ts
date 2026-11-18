@@ -5,7 +5,7 @@ import {
   toPluginFocusedPanel,
 } from "../../shared/utils/pluginFocusedPanel.js";
 
-/** The focused panel, plus the project view it was reported from (`null` for a `"portal"` report). */
+/** The focused panel, plus the project view it was reported from, when that is known. */
 export interface FocusedPanelState {
   readonly panel: PluginFocusedPanel;
   readonly workspaceId: string | null;
@@ -13,11 +13,6 @@ export interface FocusedPanelState {
 
 export const NO_FOCUSED_PANEL_STATE: FocusedPanelState = Object.freeze({
   panel: NO_FOCUSED_PANEL,
-  workspaceId: null,
-});
-
-const PORTAL_FOCUSED_STATE: FocusedPanelState = Object.freeze({
-  panel: Object.freeze({ kind: "portal", agent: false, worktreeId: null }),
   workspaceId: null,
 });
 
@@ -189,7 +184,6 @@ export class FocusedPanelTracker {
       return this.resolveLocal();
     }
     if (remote.panel.kind === null) return NO_FOCUSED_PANEL_STATE;
-    if (remote.panel.kind === "portal") return PORTAL_FOCUSED_STATE;
     return { panel: remote.panel, workspaceId: remote.workspaceId };
   }
 
@@ -211,9 +205,6 @@ export class FocusedPanelTracker {
     }
     if (latest === null || latest[1].panel.kind === null) return NO_FOCUSED_PANEL_STATE;
     const [id, report] = latest;
-    // The Portal is app-wide however it was observed, so it never carries a
-    // project — a project plugin must not see it through the dock's chrome.
-    if (report.panel.kind === "portal") return PORTAL_FOCUSED_STATE;
     return { panel: report.panel, workspaceId: workspaceOf?.(id) ?? report.workspaceId };
   }
 

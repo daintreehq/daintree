@@ -4077,8 +4077,11 @@ interface PluginAllAgentsSnapshot {
  * The kind of surface that has focus, as
  * {@link PluginActivationApi.onDidChangeFocusedPanel} reports it. A built-in
  * panel kind passes through as-is; every plugin-contributed panel, this
- * plugin's own included, is `"plugin"`; `"portal"` is the Portal (web chat)
- * dock.
+ * plugin's own included, is `"plugin"`.
+ *
+ * `"portal"` is deprecated and never reported: it was the Portal (web chat)
+ * dock, which Daintree no longer has. It stays in the type only so a plugin
+ * that still compares against it keeps compiling; drop the comparison.
  */
 type PluginFocusedPanelKind = "terminal" | "browser" | "dev-preview" | "review" | "file" | "file-browser" | "diff" | "plugin" | "portal";
 /**
@@ -4094,7 +4097,7 @@ interface PluginFocusedPanel {
     readonly kind: PluginFocusedPanelKind | null;
     /** The focused panel is a terminal currently running an agent. */
     readonly agent: boolean;
-    /** The focused panel's worktree, when it belongs to one. Always `null` for `"portal"`. */
+    /** The focused panel's worktree, when it belongs to one. */
     readonly worktreeId: string | null;
 }
 /**
@@ -5944,11 +5947,11 @@ interface PluginActivationApi {
     onDidChangeAllAgents(callback: (snapshot: PluginAllAgentsSnapshot) => void, options?: PluginHostSubscriptionOptions): Promise<() => void>;
     /**
      * Subscribe to which kind of panel has focus (#13221): a terminal, a browser
-     * panel, a diff, the Portal, … The callback receives a frozen
+     * panel, a diff, … The callback receives a frozen
      * {@link PluginFocusedPanel} with `kind: null` while Daintree is not the
      * foreground window or nothing that is a panel has focus. Gated on
      * `panel:focus-read`. A project plugin sees focus only inside its own
-     * project, and `kind: null` everywhere else, the Portal included.
+     * project, and `kind: null` everywhere else.
      *
      * The current focus is delivered once after subscribing, then every change.
      * Coalesced to the latest value with a 250ms default window, and a value
@@ -7574,7 +7577,9 @@ interface MockHostState {
     /**
      * Move focus and push it, reduced to the allowlist and frozen like
      * production, to every `onDidChangeFocusedPanel` subscriber. A value equal to
-     * the one a subscriber last received is not repeated, as in production.
+     * the one a subscriber last received is not repeated, as in production. The
+     * deprecated `"portal"` reads as `kind: null`, so it arrives as no panel, or
+     * not at all after one.
      */
     simulateFocusedPanelChange(focus: PluginFocusedPanel): void;
     /**
@@ -7768,7 +7773,8 @@ interface CreateMockHostOptions {
     /**
      * The focus `onDidChangeFocusedPanel` replays on subscribe. Defaults to no
      * focused panel (`kind: null`). For a project plugin it is taken to be inside
-     * its own project; `"portal"` reads as `kind: null`, as in production.
+     * its own project. The deprecated `"portal"` reads as `kind: null`, as in
+     * production.
      */
     focusedPanel?: PluginFocusedPanel;
     /**

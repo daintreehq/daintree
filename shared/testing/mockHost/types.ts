@@ -664,7 +664,9 @@ export interface MockHostState {
   /**
    * Move focus and push it, reduced to the allowlist and frozen like
    * production, to every `onDidChangeFocusedPanel` subscriber. A value equal to
-   * the one a subscriber last received is not repeated, as in production.
+   * the one a subscriber last received is not repeated, as in production. The
+   * deprecated `"portal"` reads as `kind: null`, so it arrives as no panel, or
+   * not at all after one.
    */
   simulateFocusedPanelChange(focus: PluginFocusedPanel): void;
   /**
@@ -863,7 +865,8 @@ export interface CreateMockHostOptions {
   /**
    * The focus `onDidChangeFocusedPanel` replays on subscribe. Defaults to no
    * focused panel (`kind: null`). For a project plugin it is taken to be inside
-   * its own project; `"portal"` reads as `kind: null`, as in production.
+   * its own project. The deprecated `"portal"` reads as `kind: null`, as in
+   * production.
    */
   focusedPanel?: PluginFocusedPanel;
   /**
