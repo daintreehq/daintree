@@ -88,8 +88,8 @@ function lastLineBreak(text: string, end: number, floor: number): number {
 
 /**
  * The last SEMANTIC_BUFFER_MAX_LINES entries of `text.slice(start)` split on CRLF, CR and LF,
- * capped, with empty entries dropped unless `keepEmpty`. Only the returned entries are built, so a
- * newline-heavy burst costs the same as a short one.
+ * capped, with empty entries dropped unless `keepEmpty`. Only the returned entries are built; when
+ * blanks are dropped, a mostly blank chunk is still scanned through to find them.
  */
 function retainedLines(text: string, start: number, keepEmpty: boolean): string[] {
   const lines: string[] = [];
