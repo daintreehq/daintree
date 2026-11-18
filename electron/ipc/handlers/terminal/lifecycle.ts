@@ -53,6 +53,7 @@ import {
   normalizeTerminalGridDimension,
   type TerminalKillOptions,
 } from "../../../../shared/types/terminal.js";
+import { stripCommandArgs } from "./stripCommandArgs.js";
 import {
   DEFAULT_DANGEROUS_ARGS,
   getPermissionAutoArgs,
@@ -899,6 +900,15 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // then leaves no agent behind to be offered a relaunch.
     let pluginToolsLaunchProjectId: string | null = null;
 
+    // The terminal setting's Auto mode (#17435) reaches an assistant's command
+    // through the agent's launch flags, and a restart rebuilds it from them
+    // with no help token, but the assistant's permission level is its own. So
+    // the declared Auto args never survive on an assistant launch, fresh or
+    // restarted, as its bypass flag never survives on its own.
+    if (typeof launchAgentId === "string" && (isHelpLaunch || isBoundHelpTerminal(id))) {
+      safeCommand = stripCommandArgs(safeCommand, getPermissionAutoArgs(launchAgentId));
+    }
+
     if (isHelpLaunch && launchAgentId) {
       const dangerous = DEFAULT_DANGEROUS_ARGS[launchAgentId];
       const bypassPermissions = helpSessions.getBypassPermissions(helpToken);
@@ -937,22 +947,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         if (bypassPermissions && agentAllowsBypass) {
           safeCommand = safeCommand.length > 0 ? `${safeCommand} ${dangerous}` : dangerous;
         }
-      }
-      // The terminal setting's Auto mode (#17435) reaches this command through
-      // the agent's launch flags, but the assistant's permission level is its
-      // own, so the declared Auto args (and their `--option=value` form) never
-      // survive here, as the bypass flag above never survives on its own. A
-      // value is matched bare or quoted, as the launch command quotes it.
-      const autoArgs = getPermissionAutoArgs(launchAgentId).map((arg) =>
-        arg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-      );
-      if (autoArgs.length > 0) {
-        const [option, ...values] = autoArgs;
-        const quoted = values.map((value) => `(?:${value}|'${value}'|"${value}")`);
-        const body =
-          quoted.length > 0 ? `${option}(?:\\s+|=)${quoted.join("\\s+")}` : `${option}(?:=\\S*)?`;
-        const autoPattern = new RegExp(`(^|\\s+)${body}(?=\\s|$)`, "g");
-        safeCommand = safeCommand.replace(autoPattern, "").trim();
       }
       // Codex doesn't read project-scoped `.codex/config.toml` from cwd —
       // its only override mechanism is the `-c key=value` CLI flag. The
