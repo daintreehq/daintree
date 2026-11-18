@@ -174,7 +174,9 @@ describe("LogBuffer", () => {
       }
 
       expect(buffer.getFiltered({ levels: ["error"] }).map((e) => e.timestamp)).toEqual([8, 10]);
-      expect(buffer.getFiltered({ sources: ["a"] }).map((e) => e.timestamp)).toEqual([9]);
+      expect(buffer.getFiltered({ sources: ["b"] }).map((e) => e.timestamp)).toEqual([
+        7, 8, 10, 11,
+      ]);
       expect(buffer.getFiltered({ startTime: 8, endTime: 10 }).map((e) => e.timestamp)).toEqual([
         8, 9, 10,
       ]);
@@ -182,21 +184,29 @@ describe("LogBuffer", () => {
       expect(buffer.getSources()).toEqual(["a", "b"]);
     });
 
-    it("getFiltered without active filters returns a fresh array, not internal storage", () => {
-      const buffer = new LogBuffer(5);
-      push(buffer, 8);
+    it.each([
+      { pushed: 3, expected: [0, 1, 2] },
+      { pushed: 5, expected: [0, 1, 2, 3, 4] },
+      { pushed: 8, expected: [3, 4, 5, 6, 7] },
+    ])(
+      "getFiltered without active filters returns a fresh array after $pushed pushes",
+      ({ pushed, expected }) => {
+        const buffer = new LogBuffer(5);
+        push(buffer, pushed);
 
-      const unfiltered = buffer.getFiltered({});
-      const emptyLevels = buffer.getFiltered({ levels: [], sources: [] });
-      expect(unfiltered).not.toBe(emptyLevels);
-      expect(unfiltered.map((e) => e.timestamp)).toEqual([3, 4, 5, 6, 7]);
+        const unfiltered = buffer.getFiltered({});
+        const emptyLists = buffer.getFiltered({ levels: [], sources: [] });
+        expect(unfiltered).not.toBe(emptyLists);
+        expect(unfiltered.map((e) => e.timestamp)).toEqual(expected);
+        expect(emptyLists.map((e) => e.timestamp)).toEqual(expected);
 
-      unfiltered.length = 0;
-      emptyLevels.push({ id: "fake", timestamp: 999, level: "error", message: "fake" });
+        unfiltered.length = 0;
+        emptyLists.push({ id: "fake", timestamp: 999, level: "error", message: "fake" });
 
-      expect(buffer.getAll().map((e) => e.timestamp)).toEqual([3, 4, 5, 6, 7]);
-      expect(buffer.getFiltered({}).map((e) => e.timestamp)).toEqual([3, 4, 5, 6, 7]);
-    });
+        expect(buffer.getAll().map((e) => e.timestamp)).toEqual(expected);
+        expect(buffer.getFiltered({}).map((e) => e.timestamp)).toEqual(expected);
+      }
+    );
 
     it("an array returned before later pushes does not change when the ring wraps", () => {
       const buffer = new LogBuffer(3);
@@ -220,12 +230,12 @@ describe("LogBuffer", () => {
       };
       buffer.push({ timestamp: 1, level: "info", message: "A" });
       buffer.push({ timestamp: 2, level: "info", message: "B", context: reentrant });
-      buffer.push({ timestamp: 3, level: "info", message: "C" });
+      buffer.push({ timestamp: 3, level: "info", message: "C needle" });
       buffer.push({ timestamp: 4, level: "info", message: "D" });
 
       const results = buffer.getFiltered({ search: "needle" });
 
-      expect(results.map((e) => e.message)).toEqual(["B"]);
+      expect(results.map((e) => e.message)).toEqual(["B", "C needle"]);
       expect(buffer.getAll().map((e) => e.message)).toEqual(["D", "E", "F"]);
     });
 
