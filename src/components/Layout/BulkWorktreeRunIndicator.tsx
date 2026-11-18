@@ -172,7 +172,7 @@ export function BulkWorktreeRunIndicator() {
             data-tone={chip.tone}
             aria-label={chip.ariaLabel}
             className={cn(
-              "relative flex h-7 min-w-0 max-w-72 shrink items-center gap-1.5 overflow-hidden rounded-[var(--radius-md)] border border-border-default px-2 text-xs",
+              "flex h-7 min-w-0 max-w-80 shrink items-center gap-1.5 overflow-hidden rounded-[var(--radius-md)] border border-border-default px-2 text-xs",
               "text-text-primary transition-colors duration-150 ease-out hover:bg-overlay-subtle aria-expanded:bg-overlay-subtle",
               "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-2"
             )}
@@ -182,6 +182,21 @@ export function BulkWorktreeRunIndicator() {
             {chip.count && (
               <span className="shrink-0 tabular-nums text-text-secondary">{chip.count}</span>
             )}
+            {chip.gauge && (
+              // The count says how far; this says it at a glance. A gauge of its
+              // own beside the count, never under the label, where a thin line
+              // reads as an underline. On a crowded toolbar it gives way before
+              // the label does: gone outright on a narrow toolbar, and the first
+              // to shrink on a crowded one. Drawn only: the count is in the
+              // button's name.
+              <ProgressBar
+                decorative
+                size="inline"
+                value={chip.created}
+                max={Math.max(1, chip.total)}
+                className="w-10 min-w-0 shrink-[100] @max-6xl/toolbar:hidden"
+              />
+            )}
             {showWarning && (
               <span
                 className="flex shrink-0 items-center gap-0.5 tabular-nums text-text-secondary"
@@ -190,17 +205,6 @@ export function BulkWorktreeRunIndicator() {
                 <SeverityGlyph tone="warning" className="h-3 w-3" />
                 {chip.attention}
               </span>
-            )}
-            {chip.count && (
-              // The count says how far; this says it at a glance. Inside a
-              // button its semantics are flattened; the count is in the name.
-              <ProgressBar
-                size="thin"
-                value={chip.created}
-                max={Math.max(1, chip.total)}
-                label="Worktrees created"
-                className="absolute inset-x-2 bottom-0.5 w-auto"
-              />
             )}
           </button>
         </PopoverTrigger>
@@ -546,16 +550,21 @@ function RunDetail({
           </div>
         </div>
         <p className="mt-0.5 truncate pl-6 text-xs text-text-secondary">{scope}</p>
-        {/* A clean finish is its title; a full bar and "20 of 20" would only repeat it. */}
+        {/* A clean finish is its title; a full bar and "20 of 20" would only repeat it.
+            In the setup tail or a cancel the bar can no longer move while work
+            goes on, so the detail line ("10 of 10 created · 4 setting up")
+            says it alone. */}
         {summary.tone !== "success" && (
           <>
-            <ProgressBar
-              className="mt-2.5"
-              value={facts.created}
-              max={Math.max(1, facts.total)}
-              label={`Worktrees created for ${isCurrentProject ? "this batch" : projectName}`}
-              valueText={`${facts.created} of ${facts.total} created`}
-            />
+            {summary.activity !== "setting-up" && summary.activity !== "cancelling" && (
+              <ProgressBar
+                className="mt-2.5"
+                value={facts.created}
+                max={Math.max(1, facts.total)}
+                label={`Worktrees created for ${isCurrentProject ? "this batch" : projectName}`}
+                valueText={`${facts.created} of ${facts.total} created`}
+              />
+            )}
             <p className="mt-2 text-xs tabular-nums text-text-secondary">{summary.detail}</p>
           </>
         )}

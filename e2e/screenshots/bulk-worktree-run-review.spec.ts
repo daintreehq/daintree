@@ -295,6 +295,35 @@ const RUNS = {
       ...numbers(12, 9).map((n) => item(n)),
     ],
   }),
+  // Every worktree is on disk and the last few are still setting up: the
+  // count has reached the total while the batch is still working.
+  finishing: (): RunSpec => ({
+    runId: "shot-finishing",
+    phase: "running",
+    items: [
+      ...numbers(1, 6).map(succeeded),
+      item(ISSUE_BASE + 7, { stage: "worktree-created", attempt: 1, worktreeId: "wt-7" }),
+      item(ISSUE_BASE + 8, { stage: "terminals-spawning", attempt: 1, worktreeId: "wt-8" }),
+      item(ISSUE_BASE + 9, { stage: "assigning", attempt: 1, worktreeId: "wt-9" }),
+      item(ISSUE_BASE + 10, { stage: "verifying", attempt: 1, worktreeId: "wt-10" }),
+    ],
+  }),
+  // One creation failed and the rest are setting up: nothing is left to
+  // create, so this is the setup tail even though the count stops at 9/10.
+  finishingWithFailure: (): RunSpec => ({
+    runId: "shot-finishing-failure",
+    phase: "running",
+    items: [
+      ...numbers(1, 8).map(succeeded),
+      item(ISSUE_BASE + 9, { stage: "verifying", attempt: 1, worktreeId: "wt-9" }),
+      item(ISSUE_BASE + 10, {
+        stage: "failed",
+        attempt: 3,
+        failedStep: "worktree",
+        error: "fatal: invalid reference: origin/feature/issue-4110",
+      }),
+    ],
+  }),
   partial: (): RunSpec => ({
     runId: "shot-partial",
     phase: "done",
@@ -624,6 +653,12 @@ test("bulk worktree run review — states and themes", async () => {
       await clearRuns(page).catch(() => {});
 
       const states: Array<{ slug: string; runs: RunSpec[]; expect: string | RegExp }> = [
+        { slug: "19-finishing-setup", runs: [RUNS.finishing()], expect: "Finishing setup" },
+        {
+          slug: "19b-finishing-with-failure",
+          runs: [RUNS.finishingWithFailure()],
+          expect: "1 setting up",
+        },
         { slug: "20-running-7of20", runs: [RUNS.running7()], expect: "Attempt 2" },
         { slug: "21-partial-failure", runs: [RUNS.partial()], expect: "Retry 3 failed" },
         {
@@ -631,7 +666,7 @@ test("bulk worktree run review — states and themes", async () => {
           runs: [RUNS.partialRetrying()],
           expect: "Retrying 3 failed",
         },
-        { slug: "23-all-failed", runs: [RUNS.allFailed()], expect: "Couldn't create worktrees" },
+        { slug: "23-all-failed", runs: [RUNS.allFailed()], expect: "Couldn't create 6 worktrees" },
         { slug: "24-cancelling", runs: [RUNS.cancelling()], expect: "Cancelling…" },
         { slug: "25-cancelled", runs: [RUNS.cancelled()], expect: "Creation cancelled" },
         {
@@ -698,7 +733,24 @@ test("bulk worktree run review — states and themes", async () => {
         value: "Retry 3 failed",
       });
       await closePopover(page);
+      await clearRuns(page);
+      await publish(page, RUNS.running7());
+      await expect(chipOf(page)).toContainText("9/20", { timeout: T_LONG });
+      await page.mouse.move(800, 600);
+      await snap(page, `28b-forced-colors-running-chip--${THEMES[0]}`, chipOf(page));
       await page.emulateMedia({ forcedColors: "none" });
+    });
+
+    await step("more-contrast", async () => {
+      await clearRuns(page);
+      await page.emulateMedia({ contrast: "more" });
+      const on = await page.evaluate(() => matchMedia("(prefers-contrast: more)").matches);
+      if (!on) throw new Error("prefers-contrast emulation did not take");
+      await publish(page, RUNS.running7());
+      await expect(chipOf(page)).toContainText("9/20", { timeout: T_LONG });
+      await page.mouse.move(800, 600);
+      await snap(page, `28c-more-contrast-running-chip--${THEMES[0]}`, chipOf(page));
+      await page.emulateMedia({ contrast: "no-preference" });
     });
 
     await step("reduced-motion", async () => {
@@ -730,6 +782,12 @@ test("bulk worktree run review — states and themes", async () => {
           value: "Retry 3 failed",
         });
         await closePopover(page);
+        // The live chip on its own, gauge included, in the same theme.
+        await clearRuns(page);
+        await publish(page, RUNS.running7());
+        await expect(chipOf(page)).toContainText("9/20", { timeout: T_LONG });
+        await page.mouse.move(800, 600);
+        await snap(page, `91-sweep-chip--${theme}`, chipOf(page));
       });
     }
 
