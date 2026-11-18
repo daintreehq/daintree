@@ -171,6 +171,13 @@ export interface CloudHostLifecycleDeps {
    * Daintree's own observations; passive polling never counts as use.
    */
   activity?(hostId: HostId): { connected: boolean; busy: boolean; shown: boolean } | null;
+  /**
+   * The host's machine was seen running where the last look saw it otherwise,
+   * or with a different reported stop time: it may have restarted, so what was
+   * last found about starting Daintree there is worth checking again. Called
+   * before the change reaches any view, ahead of the dials it prompts.
+   */
+  onMachineStarted?(hostId: HostId): void;
   now?: () => number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   /** Where a tunnel's command is on this device's PATH; null when it isn't there. */
@@ -1390,10 +1397,15 @@ export class CloudHostLifecycle {
   }
 
   private async resolveAccess(bindingId: string): Promise<CloudSshRoute> {
-    let binding = this.deps.store.binding(bindingId);
-    if (!binding) {
-      throw new UnusableConnectionError("This cloud host isn't set up on this device", null);
-    }
+    // Read again past each await: a removal there must not have its access resolved after all.
+    const current = (): StoredCloudBinding => {
+      const found = this.deps.store.binding(bindingId);
+      if (!found) {
+        throw new UnusableConnectionError("This cloud host isn't set up on this device", null);
+      }
+      return found;
+    };
+    let binding = current();
     if (!binding.resourceId) {
       throw new UnusableConnectionError(
         "The cloud machine hasn't been created yet",
@@ -1410,6 +1422,9 @@ export class CloudHostLifecycle {
           : "The cloud account can't be used";
       throw new UnusableConnectionError(said, said);
     }
+    // A start may have seen the machine running meanwhile: a dial left to finish
+    // across it must not be refused on the stop it read first (#17546).
+    binding = current();
     const { provider, credentials } = context;
     const fresh =
       binding.observation && this.now() - binding.observation.observedAt < DIAL_OBSERVATION_MS;
@@ -1426,10 +1441,7 @@ export class CloudHostLifecycle {
         }
         throw new UnusableConnectionError(described.message, described.message);
       }
-      binding = this.deps.store.binding(bindingId);
-      if (!binding) {
-        throw new UnusableConnectionError("This cloud host isn't set up on this device", null);
-      }
+      binding = current();
     }
     const machine = machineOf(binding);
     if (machine === "starting") {
@@ -1827,6 +1839,7 @@ export class CloudHostLifecycle {
     extra?: (binding: StoredCloudBinding) => StoredCloudBinding
   ): boolean {
     if (this.overtaken(bindingId, ticket)) return false;
+    let started = false;
     const written = this.deps.store.updateBinding(bindingId, (current) => {
       const before = current.observation;
       // Any stop, or a start seen from outside, may bring a new address or
@@ -1836,6 +1849,7 @@ export class CloudHostLifecycle {
         (before !== null && before.machine !== "running") ||
         (before?.stoppedAt ?? null) !== resource.stoppedAt;
       if (restarted) this.renewals.delete(bindingId);
+      started = before !== null && restarted && resource.machine === "running";
       const next: StoredCloudBinding = {
         ...current,
         access: restarted ? null : current.access,
@@ -1846,6 +1860,7 @@ export class CloudHostLifecycle {
     // A binding forgotten while the request was out keeps no mark behind.
     if (!written) return false;
     this.observedTicket.set(bindingId, ticket);
+    if (started && written.hostId) this.deps.onMachineStarted?.(written.hostId);
     return true;
   }
 

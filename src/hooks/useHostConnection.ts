@@ -1547,6 +1547,18 @@ export function reconnectHost(): void {
   });
 }
 
+/**
+ * Dial the window's host now, leaving a dial already under way to finish:
+ * what a machine coming up asks for, from every window showing it, never a
+ * person's Retry (#17546). Nothing once the view has moved to another host.
+ */
+export function nudgeHostReconnect(hostId: HostId): void {
+  if (useHostConnectionStore.getState().hostId !== hostId) return;
+  safeFireAndForget(window.electron.remoteHosts.connect({ hostId }), {
+    context: "Dialling the window's host",
+  });
+}
+
 /** The module's state as a reloaded view starts it: memory gone, sessionStorage kept. */
 export function _reloadHostConnectionSyncForTesting(): void {
   stopSync?.();

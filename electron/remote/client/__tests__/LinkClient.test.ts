@@ -1497,6 +1497,17 @@ describe("LinkClient retry during an attempt (#13926)", () => {
       // Waiting on the host's answer to HELLO: past the transport, which the signal no longer reaches.
       await waitFor(() => hellos === 1);
 
+      // A machine coming up asks for the link from every window showing it: one dial, kept (#17546).
+      client.retryNow();
+      client.retryNow();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect({ opens, hellos, disposed: disposes[0] }).toEqual({
+        opens: 1,
+        hellos: 1,
+        disposed: 0,
+      });
+      expect(client.getState()).toEqual({ status: "connecting", attempt: 1 });
+
       client.retryNow({ restart: true });
       await waitFor(() => hellos === 2);
       expect(disposes[0]).toBe(1);

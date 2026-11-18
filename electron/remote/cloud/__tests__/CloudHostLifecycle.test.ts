@@ -21,6 +21,7 @@ import { BoatProvider } from "../boat/BoatProvider.js";
 import { CloudAccountService } from "../CloudAccountService.js";
 import { MemoryCloudCredentialVault } from "../CloudCredentialVault.js";
 import { CloudHostLifecycle } from "../CloudHostLifecycle.js";
+import { CloudHosts } from "../CloudHosts.js";
 import { CloudHostStore, type CloudHostsValue } from "../CloudHostStore.js";
 import { CloudSshFiles } from "../CloudSshFiles.js";
 import type {
@@ -188,6 +189,7 @@ async function setup(
     findCommand?: (command: string) => Promise<string | null>;
     lifetime?: CloudLifetimeModel;
     sshKey?: "at-create" | "after-create";
+    onMachineStarted?: (hostId: string) => void;
   } = {}
 ) {
   const state = { machine: resource(initial) };
@@ -280,6 +282,7 @@ async function setup(
       changed: () => {},
       sleep: async () => {},
       activity: options.activity,
+      onMachineStarted: options.onMachineStarted,
       now: options.now,
       findCommand: options.findCommand,
     });
@@ -1017,6 +1020,79 @@ describe("CloudHostLifecycle start, stop, import and removal", () => {
     expect(lifecycle.statuses()[0]!.machine).toBe("stopped");
   });
 
+  // What was last found about starting Daintree there went with the reboot (#17546).
+  it("says once that a machine it started came up, before any view hears it is running", async () => {
+    const onMachineStarted = vi.fn();
+    const { lifecycle, accounts, store } = await setup(
+      { machine: "stopped" },
+      { onMachineStarted }
+    );
+    await lifecycle.importMachine({
+      accountId: store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    await lifecycle.refresh("build");
+    expect(onMachineStarted).not.toHaveBeenCalled();
+    const toldWhenViewsHeard: boolean[] = [];
+    const views = new CloudHosts({
+      accounts,
+      store,
+      emit: (snapshot) => {
+        if (snapshot.hosts[0]?.machine === "running") {
+          toldWhenViewsHeard.push(onMachineStarted.mock.calls.length > 0);
+        }
+      },
+    });
+    views.attachLifecycle(lifecycle);
+    try {
+      await lifecycle.startMachine("build");
+      expect(onMachineStarted).toHaveBeenCalledExactlyOnceWith("build");
+      expect(toldWhenViewsHeard[0]).toBe(true);
+      await lifecycle.refresh("build");
+      expect(onMachineStarted).toHaveBeenCalledOnce();
+    } finally {
+      views.dispose();
+    }
+  });
+
+  it("doesn't take a first look at a running machine for one coming up", async () => {
+    const onMachineStarted = vi.fn();
+    const { lifecycle, store, state } = await setup({}, { onMachineStarted });
+    await lifecycle.importMachine({
+      accountId: store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    // A binding kept without an observation: its next look is its first.
+    store.updateBinding(store.bindings()[0]!.id, (current) => ({ ...current, observation: null }));
+    state.machine = resource({ machine: "running", stoppedAt: "2026-11-14T10:00:00Z" });
+    await lifecycle.refresh("build");
+    expect(onMachineStarted).not.toHaveBeenCalled();
+  });
+
+  it("says a machine came up when a stop and start were only observed, and not for one that never stopped", async () => {
+    const onMachineStarted = vi.fn();
+    const { lifecycle, store, state } = await setup({}, { onMachineStarted });
+    await lifecycle.importMachine({
+      accountId: store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    await lifecycle.refresh("build");
+    expect(onMachineStarted).not.toHaveBeenCalled();
+    // Stopped and started again between two looks: only its stop time says so.
+    state.machine = resource({ machine: "running", stoppedAt: "2026-11-14T10:00:00Z" });
+    await lifecycle.refresh("build");
+    expect(onMachineStarted).toHaveBeenCalledExactlyOnceWith("build");
+    state.machine = resource({ machine: "stopped", stoppedAt: "2026-11-14T11:00:00Z" });
+    await lifecycle.refresh("build");
+    state.machine = resource({ machine: "running", stoppedAt: null });
+    await lifecycle.refresh("build");
+    await lifecycle.refresh("build");
+    expect(onMachineStarted).toHaveBeenCalledTimes(2);
+  });
+
   it("drops a save failure it saw on the way once the stop completes", async () => {
     const { lifecycle, provider, store } = await setup({ machine: "running" });
     await lifecycle.importMachine({
@@ -1272,6 +1348,52 @@ describe("CloudHostLifecycle review fixes", () => {
     await lifecycle.refresh("build");
     await lifecycle.ensureAccess(bindingId);
     expect(provider.authorizeSsh).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets a dial reading the account across a running observation reach the machine, not the stop it read first", async () => {
+    const { lifecycle, accounts, provider, store, state } = await setup({ machine: "stopped" });
+    await lifecycle.importMachine({
+      accountId: store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    await lifecycle.refresh("build");
+    const bindingId = store.bindings()[0]!.id;
+    let release: () => void = () => {};
+    const credentials = accounts.credentials.bind(accounts);
+    vi.spyOn(accounts, "credentials").mockImplementationOnce(async (...args) => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return credentials(...args);
+    });
+    const dial = lifecycle.ensureAccess(bindingId);
+    await vi.waitFor(() => expect(accounts.credentials).toHaveBeenCalled());
+    state.machine = resource({ machine: "running" });
+    await lifecycle.refresh("build");
+    release();
+    await expect(dial).resolves.toMatchObject({ target: `dtc-${bindingId}` });
+    expect(provider.authorizeSsh).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves no access for a host removed while a dial read the account", async () => {
+    const { lifecycle, accounts, provider, store } = await setup();
+    await lifecycle.importMachine({
+      accountId: store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    const bindingId = store.bindings()[0]!.id;
+    let release: () => void = () => {};
+    const credentials = accounts.credentials.bind(accounts);
+    vi.spyOn(accounts, "credentials").mockImplementationOnce(async (...args) => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return credentials(...args);
+    });
+    const dial = lifecycle.ensureAccess(bindingId);
+    await vi.waitFor(() => expect(accounts.credentials).toHaveBeenCalled());
+    store.removeBinding(bindingId);
+    release();
+    await expect(dial).rejects.toBeInstanceOf(UnusableConnectionError);
+    expect(provider.authorizeSsh).not.toHaveBeenCalled();
   });
 
   it("lets one caller give up without failing the others waiting on the same access", async () => {
