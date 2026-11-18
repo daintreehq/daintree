@@ -614,3 +614,51 @@ describe("HostFilePickerHost keyboard", () => {
     }
   });
 });
+
+describe("HostFilePickerHost start folder", () => {
+  // Places come from stat calls on project parents, any of which can sit on a
+  // stalled mount; the home folder must not wait for them.
+  function holdRoots() {
+    let finish!: (roots: {
+      home: string;
+      projectsDir: string | null;
+      roots: Array<{ label: string; path: string }>;
+    }) => void;
+    const getPickerRoots = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    Object.assign(window.electron.hostFiles, { getPickerRoots });
+    return { getPickerRoots, finish: (roots: Parameters<typeof finish>[0]) => finish(roots) };
+  }
+
+  it("lists the home folder before the host's places are known", async () => {
+    const roots = holdRoots();
+    render(<HostFilePickerHost />);
+    const picked = openPick({ mode: "file", title: "Choose file" });
+    await findRow("notes.md");
+    expect(roots.getPickerRoots).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Projects" })).toBeNull();
+
+    fireEvent.click(getRow("notes.md"));
+    expect(confirmButton("Select 1 file").getAttribute("aria-disabled")).toBeNull();
+
+    await act(async () =>
+      roots.finish({
+        home: "/home/greg",
+        projectsDir: null,
+        roots: [
+          { label: "Home", path: "/home/greg" },
+          { label: "Projects", path: "/home/greg/work" },
+        ],
+      })
+    );
+    await screen.findByRole("button", { name: "Projects" });
+    // The places arriving changes nothing about the folder on screen.
+    expect(getRow("notes.md").getAttribute("aria-selected")).toBe("true");
+    fireEvent.click(confirmButton("Select 1 file"));
+    await expect(picked).resolves.toEqual(["/home/greg/notes.md"]);
+  });
+});
