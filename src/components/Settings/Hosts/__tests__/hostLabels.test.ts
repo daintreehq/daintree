@@ -111,6 +111,40 @@ describe("connectionLabel", () => {
       "Unreachable · never seen · not retrying until you connect · greg@studio: Permission denied (publickey)."
     );
   });
+
+  it("leads with an unusable connection's own words, and says them once", () => {
+    const unusable = (message: string, detail: string | null) =>
+      connectionLabel({
+        status: "unreachable",
+        lastSeenAt: null,
+        detail,
+        stoppedRetrying: true,
+        blocker: { kind: "unusable", message },
+      });
+    expect(unusable("WSL isn't available on this PC", null)).toBe(
+      "WSL isn't available on this PC · never seen · not retrying until you connect"
+    );
+    expect(unusable("WSL isn't available on this PC", "spawn wsl.exe ENOENT")).toBe(
+      "WSL isn't available on this PC · never seen · not retrying until you connect · spawn wsl.exe ENOENT"
+    );
+    expect(unusable("The cloud machine was deleted", " The cloud machine was deleted.\n")).toBe(
+      "The cloud machine was deleted · never seen · not retrying until you connect"
+    );
+  });
+
+  it("names the WSL distribution it couldn't find", () => {
+    expect(
+      connectionLabel({
+        status: "unreachable",
+        lastSeenAt: null,
+        detail: "There is no distribution with the supplied name.",
+        stoppedRetrying: true,
+        blocker: { kind: "wsl-distro-missing", distro: "Ubuntu-24.04" },
+      })
+    ).toBe(
+      "WSL couldn't find Ubuntu-24.04 · never seen · not retrying until you connect · There is no distribution with the supplied name."
+    );
+  });
 });
 
 describe("restart impact", () => {

@@ -139,6 +139,9 @@ export type AppErrorCode =
   // ssh reached the host and couldn't log in: authentication or the host key
   // failed. Trying again finds the same until it is fixed outside Daintree.
   | "HOST_SSH_ACCESS_DENIED"
+  // The link stopped retrying for something other than ssh or Host mode: a WSL
+  // distribution that isn't there, a connection this machine can't use as set up.
+  | "HOST_CONNECTION_UNUSABLE"
   // An action that is inherently UI (focus a panel, open a dialog) was
   // dispatched with no frontend attached to the host.
   | "NO_FRONTEND_ATTACHED"

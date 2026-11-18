@@ -75,6 +75,7 @@ describe("createHostSwitchService", () => {
                   lastSeenAt: null,
                   detail: "Host key verification failed.",
                   stoppedRetrying: true,
+                  blocker: { kind: "ssh-access" },
                 },
               },
             ] as never
@@ -85,6 +86,36 @@ describe("createHostSwitchService", () => {
     await expect(service.pickerRoots({ toHostId: "studio-03" })).rejects.toMatchObject({
       code: "HOST_SSH_ACCESS_DENIED",
       userMessage: "ssh couldn't log in to Studio 3: Host key verification failed.",
+    });
+  });
+
+  it("names a missing WSL distribution rather than an ssh refusal", async () => {
+    const service = createHostSwitchService({
+      client: {
+        connectAndWait: vi.fn(async () => "stopped-retrying" as never),
+        getWindowHost: vi.fn(() => ({ hostId: "local" }) as never),
+        list: vi.fn(
+          () =>
+            [
+              {
+                descriptor: { id: "wsl-ubuntu", name: "Ubuntu" },
+                connection: {
+                  status: "unreachable",
+                  lastSeenAt: null,
+                  detail: "There is no distribution with the supplied name.",
+                  stoppedRetrying: true,
+                  blocker: { kind: "wsl-distro-missing", distro: "Ubuntu-24.04" },
+                },
+              },
+            ] as never
+        ),
+      },
+      sessionFor: () => null,
+    });
+    await expect(service.pickerRoots({ toHostId: "wsl-ubuntu" })).rejects.toMatchObject({
+      code: "HOST_CONNECTION_UNUSABLE",
+      userMessage:
+        "WSL couldn't find Ubuntu-24.04 for Ubuntu. Restore it under that name, then try again.",
     });
   });
 

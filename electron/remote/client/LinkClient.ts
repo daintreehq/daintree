@@ -3,6 +3,7 @@ import {
   compareHandshake,
   isBlockingMismatch,
   type HandshakeMismatch,
+  type HostConnectionBlocker,
   type HostHandshakeInfo,
   type HostPreviousEnd,
 } from "../../../shared/types/remoteHosts.js";
@@ -22,6 +23,7 @@ import {
   SshAccessError,
   UnusableConnectionError,
   TransportError,
+  WslDistroMissingError,
   type LinkTransport,
   type LinkTransportConnection,
 } from "./transport.js";
@@ -82,6 +84,8 @@ export type LinkClientState =
        * {@link LinkClient.retryNow}.
        */
       retryAt: number | null;
+      /** Why `retryAt` is null, when it isn't Host mode being off. */
+      blocker?: HostConnectionBlocker;
     }
   | {
       status: "version-mismatch";
@@ -158,6 +162,15 @@ const MAX_LOGGED_DETAIL_CHARS = 300;
 function clipDetail(detail: string | null): string | null {
   if (detail === null || detail.length <= MAX_LOGGED_DETAIL_CHARS) return detail;
   return `${detail.slice(0, MAX_LOGGED_DETAIL_CHARS)}…`;
+}
+
+/** A dial failure trying again can't change, as the transport named it; null for any other. */
+function blockerOf(err: unknown): HostConnectionBlocker | null {
+  if (err instanceof SshAccessError) return { kind: "ssh-access" };
+  if (err instanceof WslDistroMissingError)
+    return { kind: "wsl-distro-missing", distro: err.distro };
+  if (err instanceof UnusableConnectionError) return { kind: "unusable", message: err.message };
+  return null;
 }
 
 /** Past the 5 s ping and its answer: long enough that one is overdue. */
@@ -460,13 +473,12 @@ export class LinkClient {
           (this.restartAnnounced ||
             (sinceHeard !== null && sinceHeard >= 0 && sinceHeard < HOST_RESTART_GRACE_MS));
         this.restartSeen = restarting;
+        const blocker = blockerOf(err);
         this.fail(err instanceof TransportError ? err.detail : formatErrorMessage(err, "failed"), {
           hostModeOff,
           // Otherwise nothing a later attempt does differently would change these.
-          parked:
-            (hostModeOff && !restarting) ||
-            err instanceof SshAccessError ||
-            err instanceof UnusableConnectionError,
+          parked: (hostModeOff && !restarting) || blocker !== null,
+          ...(blocker ? { blocker } : {}),
           // The transport's own words for what failed; its detail is often null.
           ...(err instanceof TransportError ? { failure: err.message } : {}),
         });
@@ -855,7 +867,13 @@ export class LinkClient {
 
   private fail(
     detail: string | null,
-    options: { hostModeOff?: boolean; parked?: boolean; failure?: string; answered?: boolean } = {}
+    options: {
+      hostModeOff?: boolean;
+      parked?: boolean;
+      blocker?: HostConnectionBlocker;
+      failure?: string;
+      answered?: boolean;
+    } = {}
   ): void {
     this.failures++;
     const { initialMs = 500, maxMs = 30_000, jitter = 0.3 } = this.options.backoff ?? {};
@@ -892,6 +910,7 @@ export class LinkClient {
       ...(announced && !options.parked ? { restarting: true as const } : {}),
       ...(options.answered ? { answered: true as const } : {}),
       retryAt: options.parked ? null : this.now() + delay,
+      ...(options.parked && options.blocker ? { blocker: options.blocker } : {}),
     });
     if (options.parked) return;
     this.scheduleRetry(delay);

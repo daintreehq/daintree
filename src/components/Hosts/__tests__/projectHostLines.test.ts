@@ -111,6 +111,24 @@ describe("hostRowTooltip", () => {
     ]);
   });
 
+  it("keeps WSL and the distribution's case when it says one is missing", () => {
+    const host = projectHost(
+      {
+        connection: {
+          status: "unreachable",
+          lastSeenAt: null,
+          detail: null,
+          stoppedRetrying: true,
+          blocker: { kind: "wsl-distro-missing", distro: "Ubuntu-24.04" },
+        },
+      },
+      { away: "Distro not found" }
+    );
+    expect(hostRowTooltip(host, null, "Cmd", NOW).lines).toEqual([
+      "Distro not found · WSL couldn't find Ubuntu-24.04",
+    ]);
+  });
+
   it("says when a host was last heard from once its link goes silent", () => {
     const host = projectHost(
       {

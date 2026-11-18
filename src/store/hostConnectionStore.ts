@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { HostConnectionState, HostId } from "@shared/types/remoteHosts";
+import type { HostConnectionBlocker, HostConnectionState, HostId } from "@shared/types/remoteHosts";
 
 /**
  * The link between this view and the host it runs on, as last observed. Only
@@ -146,6 +146,8 @@ export type HostBannerVariant =
   | "unreachable"
   | "host-mode-off"
   | "access-denied"
+  | "wsl-distro-missing"
+  | "connection-unavailable"
   | "version-mismatch"
   | "disconnected"
   | "checking";
@@ -170,10 +172,9 @@ export function selectHostBannerVariant(state: BannerInputs): HostBannerVariant 
       return state.everConnected ? "reconnecting" : "connecting";
     case "unreachable":
       if (state.connection.restarting) return "restarting";
-      // The machine answered in both: Daintree there isn't hosting, or ssh
-      // couldn't log in. Neither is a host that can't be reached.
+      // The machine answered: Daintree there isn't hosting. Not a host that can't be reached.
       if (state.connection.hostModeOff) return "host-mode-off";
-      if (state.connection.stoppedRetrying) return "access-denied";
+      if (state.connection.stoppedRetrying) return parkedBannerVariant(state.connection.blocker);
       return "unreachable";
     case "version-mismatch":
       return "version-mismatch";
@@ -181,6 +182,23 @@ export function selectHostBannerVariant(state: BannerInputs): HostBannerVariant 
       return "disconnected";
     default:
       return null;
+  }
+}
+
+/**
+ * A link that stopped retrying, by what stopped it. Only ssh's own refusal is
+ * a login failure; one with no word on why says no more than that it stopped.
+ */
+function parkedBannerVariant(
+  blocker: HostConnectionBlocker | undefined
+): "access-denied" | "wsl-distro-missing" | "connection-unavailable" {
+  switch (blocker?.kind) {
+    case "ssh-access":
+      return "access-denied";
+    case "wsl-distro-missing":
+      return "wsl-distro-missing";
+    default:
+      return "connection-unavailable";
   }
 }
 

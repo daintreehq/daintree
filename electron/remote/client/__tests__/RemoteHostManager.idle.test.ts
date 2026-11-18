@@ -3,7 +3,12 @@ import type { HostDescriptor } from "../../../../shared/types/remoteHosts.js";
 import { TEST_HANDSHAKE, waitFor } from "../../link/__tests__/linkTestUtils.js";
 import { HostRegistry, type RemoteHostsStore } from "../HostRegistry.js";
 import { RemoteHostManager } from "../RemoteHostManager.js";
-import { SshAccessError, TransportError, type LinkTransport } from "../transport.js";
+import {
+  SshAccessError,
+  TransportError,
+  WslDistroMissingError,
+  type LinkTransport,
+} from "../transport.js";
 import { logBuffer } from "../../../services/LogBuffer.js";
 
 function memoryStore(): RemoteHostsStore {
@@ -107,12 +112,35 @@ describe("RemoteHostManager idle release", () => {
     });
     h.manager.connect(h.hostId);
     await waitFor(() => h.manager.connectionState(h.hostId).status === "unreachable");
-    expect(h.manager.connectionState(h.hostId)).toMatchObject({ stoppedRetrying: true });
+    expect(h.manager.connectionState(h.hostId)).toMatchObject({
+      stoppedRetrying: true,
+      blocker: { kind: "ssh-access" },
+    });
     h.advance(10_000);
     h.manager.sweepIdle();
     expect(h.manager.connectionState(h.hostId)).toMatchObject({
       status: "unreachable",
       stoppedRetrying: true,
+      blocker: { kind: "ssh-access" },
+    });
+  });
+
+  it("carries the WSL distribution it couldn't find to every reader", async () => {
+    const h = setup({
+      async open() {
+        throw new WslDistroMissingError(
+          "Ubuntu-24.04",
+          "There is no distribution with the supplied name."
+        );
+      },
+    });
+    h.manager.connect(h.hostId);
+    await waitFor(() => h.manager.connectionState(h.hostId).status === "unreachable");
+    expect(h.manager.connectionState(h.hostId)).toMatchObject({
+      status: "unreachable",
+      detail: "There is no distribution with the supplied name.",
+      stoppedRetrying: true,
+      blocker: { kind: "wsl-distro-missing", distro: "Ubuntu-24.04" },
     });
   });
 

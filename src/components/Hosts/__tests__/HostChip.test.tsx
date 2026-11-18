@@ -215,6 +215,46 @@ describe("HostChip", () => {
     }
   });
 
+  it.each([
+    [
+      { kind: "wsl-distro-missing", distro: "Ubuntu-24.04" },
+      "Working on WSL · Ubuntu, distro not found",
+    ],
+    [
+      { kind: "unusable", message: "WSL isn't available on this PC" },
+      "Working on WSL · Ubuntu, unavailable",
+    ],
+  ] as const)(
+    "marks a parked WSL link as trouble without a word about ssh",
+    async (blocker, label) => {
+      const shown = label.slice(label.lastIndexOf(", ") + 2);
+      connectionKind.value = "wsl";
+      mac.value = false;
+      window.__DAINTREE_HOST_ID__ = { id: "h1" };
+      try {
+        useHostConnectionStore.setState({
+          hostId: "h1",
+          hostName: "Ubuntu",
+          connection: {
+            status: "unreachable",
+            lastSeenAt: 1,
+            detail: null,
+            stoppedRetrying: true,
+            blocker,
+          },
+        });
+        const { container } = await renderWithHosts([host("h1", "Ubuntu")]);
+        const chip = container.querySelector<HTMLElement>("[data-testid='host-chip']")!;
+        expect(chip.getAttribute("aria-label")).toBe(label);
+        expect(container.querySelector("[data-link-trouble]")?.textContent).toBe(shown);
+        expect(container.querySelector("[data-link-trouble] svg")).not.toBeNull();
+        expect(chip.textContent?.toLowerCase()).not.toContain("log in");
+      } finally {
+        delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
+      }
+    }
+  );
+
   it("says a Windows Shell's remote window is in a WSL distro", async () => {
     connectionKind.value = "wsl";
     mac.value = false;

@@ -4,7 +4,12 @@ import { describe, expect, it, vi } from "vitest";
 import { formatAttachPreamble } from "../../host/attachStdio.js";
 import type { CommandResult, CommandRunner } from "../commandRunner.js";
 import type { StreamCommandChild } from "../commandStreamTransport.js";
-import { HostModeOffError, TransportError, UnusableConnectionError } from "../transport.js";
+import {
+  HostModeOffError,
+  TransportError,
+  UnusableConnectionError,
+  WslDistroMissingError,
+} from "../transport.js";
 import {
   WslTransport,
   buildWslAttachArgv,
@@ -181,6 +186,8 @@ describe("WslTransport", () => {
     const error = await transport.open(signal()).catch((e: unknown) => e);
     // Nothing a retry does differently changes this: the link waits for a Connect.
     expect(error).toBeInstanceOf(UnusableConnectionError);
+    expect(error).toBeInstanceOf(WslDistroMissingError);
+    expect((error as WslDistroMissingError).distro).toBe("Ubuntu-24.04");
     expect((error as TransportError).message).toBe("Ubuntu-24.04 isn't installed in WSL");
     expect((error as TransportError).detail).toContain("WSL_E_DISTRO_NOT_FOUND");
     expect(ensureRunning).not.toHaveBeenCalled();
@@ -191,6 +198,7 @@ describe("WslTransport", () => {
     const { transport } = setup([result({ code: null, spawnError: "spawn wsl.exe ENOENT" })]);
     const error = await transport.open(signal()).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(UnusableConnectionError);
+    expect(error).not.toBeInstanceOf(WslDistroMissingError);
     expect(error).toMatchObject({
       message: "WSL isn't available on this PC",
       detail: "spawn wsl.exe ENOENT",

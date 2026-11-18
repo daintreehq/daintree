@@ -48,6 +48,7 @@ vi.mock("@/utils/logger", () => ({
 import { HostConnectionBanner } from "../HostConnectionBanner";
 import { getHostConnectionBannerCopy } from "../recoveryCopy";
 import { useHostConnectionStore, type HostBannerVariant } from "@/store/hostConnectionStore";
+import { takePendingHostSettings } from "@/components/Settings/Hosts/hostSettingsRequests";
 
 const HANDSHAKE = {
   version: "1.0.0",
@@ -325,6 +326,7 @@ describe("HostConnectionBanner", () => {
       lastSeenAt: null,
       detail: "Warning: something\ngreg@studio-01: Permission denied (publickey).",
       stoppedRetrying: true,
+      blocker: { kind: "ssh-access" },
     });
     render(<HostConnectionBanner />);
     expect(screen.getByText("Couldn't log in to studio-01 over ssh")).toBeTruthy();
@@ -333,6 +335,74 @@ describe("HostConnectionBanner", () => {
     );
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Host details…" })).toBeTruthy();
+  });
+
+  it("names a WSL distribution that's gone, without a word about ssh, and offers Retry", () => {
+    seed({
+      status: "unreachable",
+      lastSeenAt: null,
+      detail:
+        "There is no distribution with the supplied name.\nWsl/Service/WSL_E_DISTRO_NOT_FOUND",
+      stoppedRetrying: true,
+      blocker: { kind: "wsl-distro-missing", distro: "Ubuntu-24.04" },
+    });
+    render(<HostConnectionBanner />);
+    const banner = screen.getByRole("status");
+    expect(screen.getByText("WSL couldn't find Ubuntu-24.04 for studio-01")).toBeTruthy();
+    expect(banner.textContent).toContain("Restore it under that name in WSL, then retry.");
+    expect(banner.textContent?.toLowerCase()).not.toMatch(/ssh|log ?in/);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(connect).toHaveBeenCalledWith({ hostId: "studio-01", restart: true });
+    expect(screen.getByRole("button", { name: "Host details…" })).toBeTruthy();
+  });
+
+  it.each([
+    ["a missing WSL distribution", { kind: "wsl-distro-missing", distro: "Ubuntu-24.04" }],
+    ["an unusable connection", { kind: "unusable", message: "WSL isn't available on this PC" }],
+  ] as const)("opens the host's details from %s", (_what, blocker) => {
+    seed({ status: "unreachable", lastSeenAt: null, detail: null, stoppedRetrying: true, blocker });
+    render(<HostConnectionBanner />);
+    const opened = vi.fn();
+    window.addEventListener("daintree:open-settings-tab", opened);
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Host details…" }));
+    } finally {
+      window.removeEventListener("daintree:open-settings-tab", opened);
+    }
+    expect(takePendingHostSettings()).toEqual({ kind: "detail", hostId: "studio-01" });
+    const event: unknown = opened.mock.calls[0]?.[0];
+    expect(event instanceof CustomEvent && event.detail).toEqual({ tab: "hosts" });
+  });
+
+  it("says only that retries stopped when an unusable connection gave no words", () => {
+    const copy = getHostConnectionBannerCopy(
+      "connection-unavailable",
+      "studio-01",
+      null,
+      0,
+      null,
+      null,
+      { kind: "unusable", message: "   " }
+    );
+    expect(copy.description).toBe(
+      "Automatic retries have stopped. Terminals are read-only until it connects."
+    );
+  });
+
+  it("says a connection that can't be used in the transport's words", () => {
+    seed({
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: "spawn wsl.exe ENOENT",
+      stoppedRetrying: true,
+      blocker: { kind: "unusable", message: "WSL isn't available on this PC" },
+    });
+    render(<HostConnectionBanner />);
+    expect(screen.getByText("Couldn't connect to studio-01")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain(
+      "WSL isn't available on this PC. Automatic retries have stopped."
+    );
+    expect(screen.getByRole("status").textContent).not.toContain("ssh");
   });
 
   it("says which build is behind and offers updating that side", () => {
@@ -585,6 +655,8 @@ describe("getHostConnectionBannerCopy", () => {
     "unreachable",
     "host-mode-off",
     "access-denied",
+    "wsl-distro-missing",
+    "connection-unavailable",
     "version-mismatch",
     "disconnected",
     "checking",

@@ -3,6 +3,7 @@ import type {
   HandshakeMismatch,
   HostArch,
   HostConnection,
+  HostConnectionBlocker,
   HostConnectionState,
   HostDescriptor,
   HostPlatform,
@@ -76,6 +77,17 @@ export function stagedUpdateLabel(staged: StagedHostUpdate): string {
     : `Daintree ${staged.version}`;
 }
 
+/** What stopped the retries, as the label's lead; null for an ssh refusal, said by its detail. */
+function parkedLead(blocker: HostConnectionBlocker | undefined): string | null {
+  if (blocker?.kind === "wsl-distro-missing") return `WSL couldn't find ${blocker.distro}`;
+  if (blocker?.kind === "unusable") return withoutStop(blocker.message) || null;
+  return null;
+}
+
+function withoutStop(text: string): string {
+  return text.trim().replace(/\.$/, "");
+}
+
 function formatSeen(at: number | null, now: number): string {
   if (at === null) return "never seen";
   return `last seen ${formatRelativeTime(at, now)}`;
@@ -98,17 +110,20 @@ export function connectionLabel(state: HostConnectionState, now: number = Date.n
       // A build that differs but connected is the Build row's to say, not the link's.
       return state.rttMs === null ? "Connected" : `Connected · ${Math.round(state.rttMs)} ms`;
     }
-    case "unreachable":
+    case "unreachable": {
       if (state.restarting) return "Restarting…";
       // The host menus' word for the same state.
       if (state.hostModeOff) return `Not listening · ${formatSeen(state.lastSeenAt, now)}`;
-      // What was seen, when there is something: ssh's own words for why it couldn't reach it.
+      // What was seen, when there is something: the transport's words for why it couldn't reach it.
+      const lead = parkedLead(state.blocker);
       return [
-        "Unreachable",
+        lead ?? "Unreachable",
         formatSeen(state.lastSeenAt, now),
         ...(state.stoppedRetrying ? ["not retrying until you connect"] : []),
-        ...(state.detail ? [state.detail] : []),
+        // A transport that said the same thing twice (cloud hosts do) is said once.
+        ...(state.detail && withoutStop(state.detail) !== lead ? [state.detail] : []),
       ].join(" · ");
+    }
     case "version-mismatch":
       // Exact builds are the Build row's; here, what it means for connecting.
       return "Can't connect · needs a compatible build";
