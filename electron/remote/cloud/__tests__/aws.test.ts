@@ -896,6 +896,21 @@ describe("AwsProvider", () => {
     expect(probe("StopInstances").get("InstanceId.1")).toBe(fake.instances[0]!.id);
   });
 
+  it("names no stand-in group, and carries a create's tag keys, when nothing of Daintree's exists", async () => {
+    const { provider, fake } = setup();
+    await provider.checkCredentials(VALUES, API);
+    const probe = (action: string) =>
+      fake.calls.find((call) => call.action === action && call.dryRun)!.params;
+    expect(probe("AuthorizeSecurityGroupIngress").get("GroupId")).toBe("sg-0000000000000000d");
+    expect(probe("RunInstances").has("SecurityGroupId.1")).toBe(false);
+    const keys = [...probe("RunInstances").entries()]
+      .filter(([key]) => /^TagSpecification\.1\.Tag\.\d+\.Key$/.test(key))
+      .map(([, value]) => value);
+    expect(keys).toEqual(
+      expect.arrayContaining(["daintree", "daintree-binding", "daintree-ssh-key"])
+    );
+  });
+
   it("fails the check when AWS can't be asked, rather than passing it unverified", async () => {
     const { provider } = setup({
       dryRunAnswer: () => new Response("", { status: 500 }),
@@ -1064,6 +1079,35 @@ describe("AwsProvider", () => {
     await expect(
       provider.list(credentials, { label: "daintree-binding=bind-1" })
     ).resolves.toMatchObject([{ resourceId: created.resourceId }]);
+    // Where a create was sent, a refusal is no answer: it never reads as nothing there.
+    await expect(
+      provider.list(credentials, { label: "daintree-binding=bind-1", location: "eu-west-1" })
+    ).resolves.toMatchObject([{ resourceId: created.resourceId }]);
+    await expect(
+      provider.list(credentials, { label: "daintree-binding=bind-1", location: "us-east-2" })
+    ).rejects.toMatchObject({ kind: "forbidden" });
+  });
+
+  it("never launches into a group that doesn't let SSH in yet", async () => {
+    const { credentials, fake } = setup();
+    const original = fake.fetch;
+    const unseen = new AwsProvider({
+      client: new AwsClient({
+        fetch: (async (input: URL | string, init?: RequestInit) => {
+          const action = new URLSearchParams(String(init?.body ?? "")).get("Action");
+          if (action === "AuthorizeSecurityGroupIngress") {
+            return ec2Error("InvalidGroup.NotFound", "The security group does not exist");
+          }
+          return original(input, init);
+        }) as typeof fetch,
+        sleep: async () => {},
+      }),
+      sleep: async () => {},
+    });
+    await expect(unseen.create(credentials, CREATE)).rejects.toMatchObject({
+      code: "InvalidGroup.NotFound",
+    });
+    expect(fake.instances).toHaveLength(0);
   });
 
   it("lists only the machines Daintree created", async () => {
@@ -1140,6 +1184,33 @@ describe("AwsProvider", () => {
     await expect(provider.start(credentials, resourceId, {})).rejects.toMatchObject({
       code: "IncorrectInstanceState",
     });
+  });
+
+  it("joins a start whose answer was lost and whose resend EC2 refuses", async () => {
+    const { provider, credentials, fake } = setup();
+    const { resourceId } = await provider.create(credentials, CREATE);
+    fake.instances[0]!.state = "stopped";
+    const original = fake.fetch;
+    let starts = 0;
+    const lossy = new AwsProvider({
+      client: new AwsClient({
+        fetch: (async (input: URL | string, init?: RequestInit) => {
+          const action = new URLSearchParams(String(init?.body ?? "")).get("Action");
+          // The first start lands, and its answer never arrives.
+          if (action === "StartInstances" && ++starts === 1) {
+            await original(input, init);
+            throw new TypeError("socket hang up");
+          }
+          return original(input, init);
+        }) as typeof fetch,
+        sleep: async () => {},
+      }),
+      sleep: async () => {},
+    });
+    await expect(lossy.start(credentials, resourceId, {})).resolves.toMatchObject({
+      machine: "starting",
+    });
+    expect(starts).toBe(2);
   });
 
   it("starts, stops, renames and terminates the instance in its region", async () => {
@@ -1248,6 +1319,34 @@ describe("AwsProvider", () => {
     expect(
       quiet.fake.calls.slice(before).filter((call) => call.action === "GetConsoleOutput")
     ).toHaveLength(1);
+  });
+
+  it("gives up on a console that never answers at the deadline, but not on a cancelled caller", async () => {
+    const fake = fakeAws({ console: () => null });
+    const stalling = (async (input: URL | string, init?: RequestInit) => {
+      const action = new URLSearchParams(String(init?.body ?? "")).get("Action");
+      if (action !== "GetConsoleOutput") return fake.fetch(input, init);
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () =>
+          reject(new DOMException("aborted", "AbortError"))
+        );
+      });
+    }) as typeof fetch;
+    const provider = new AwsProvider({
+      client: new AwsClient({ fetch: stalling, sleep: async () => {} }),
+      consoleDeadlineMs: 50,
+    });
+    const credentials: ProviderCredentials = { values: VALUES, scopeId: ACCOUNT, apiUrl: API };
+    const { resourceId } = await provider.create(credentials, CREATE);
+    fake.instances[0]!.state = "running";
+    await expect(provider.sshAccess(credentials, resourceId)).resolves.toMatchObject({
+      hostKey: null,
+    });
+
+    const caller = new AbortController();
+    const pending = provider.sshAccess({ ...credentials, signal: caller.signal }, resourceId);
+    caller.abort();
+    await expect(pending).rejects.toMatchObject({ kind: "cancelled" });
   });
 
   it("leaves the key to the person when the console can't be read", async () => {

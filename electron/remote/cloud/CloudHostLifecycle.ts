@@ -1009,7 +1009,13 @@ export class CloudHostLifecycle {
     provider: CloudProvider,
     credentials: ProviderCredentials
   ): Promise<ProviderResource | null> {
-    const found = await provider.list(credentials, { label: `${LABEL_BINDING}=${bindingId}` });
+    // Where the create was sent: a provider whose machines live per location looks there only.
+    const picks = this.deps.store.binding(bindingId)?.provisioning;
+    const location = picks && picks !== "unreadable" ? (picks.location?.id ?? null) : null;
+    const found = await provider.list(credentials, {
+      label: `${LABEL_BINDING}=${bindingId}`,
+      ...(location ? { location } : {}),
+    });
     const matches = found.filter(
       (candidate) =>
         candidate.labels[LABEL_BINDING] === bindingId && candidate.machine !== "deleted"
@@ -2243,6 +2249,20 @@ export class CloudHostLifecycle {
         throw new UnusableConnectionError(said, said);
       }
     };
+    // A first key on offer that the API now contradicts is withdrawn before anything is scanned.
+    const before = this.deps.store.binding(bindingId);
+    if (
+      vouched &&
+      !before?.trustedHostKey &&
+      before?.offeredHostKey &&
+      before.offeredHostKey.key !== vouched
+    ) {
+      this.deps.store.updateBinding(bindingId, (current) =>
+        current.offeredHostKey && current.offeredHostKey.key !== vouched
+          ? { ...current, offeredHostKey: null }
+          : current
+      );
+    }
     let scanned = await scan();
     const trustedBefore = this.deps.store.binding(bindingId)?.trustedHostKey?.key ?? null;
     if (trustedBefore && !scanned.includes(trustedBefore)) {

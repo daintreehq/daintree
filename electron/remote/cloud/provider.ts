@@ -174,8 +174,15 @@ export interface CloudProvider {
   ): Promise<CloudAccountCheckResult>;
   validate(credentials: ProviderCredentials): Promise<{ identity: string | null }>;
   catalog(credentials: ProviderCredentials): Promise<ProviderCatalog>;
-  /** Every machine in the scope; with `label`, only those carrying that `key=value`. */
-  list(credentials: ProviderCredentials, options?: { label?: string }): Promise<ProviderResource[]>;
+  /**
+   * Every machine in the scope; with `label`, only those carrying that
+   * `key=value`; with `location`, only those in that location, for a provider
+   * whose create takes one (where a create was sent, when one is looked for).
+   */
+  list(
+    credentials: ProviderCredentials,
+    options?: { label?: string; location?: string }
+  ): Promise<ProviderResource[]>;
   inspect(credentials: ProviderCredentials, resourceId: string): Promise<ProviderResource>;
   create(
     credentials: ProviderCredentials,

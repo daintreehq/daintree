@@ -25,6 +25,7 @@ import {
   isEc2InstanceId,
   type AwsRequestContext,
   type Ec2Instance,
+  type Ec2SecurityGroup,
 } from "./AwsClient.js";
 import {
   CANONICAL_OWNER_ID,
@@ -62,6 +63,11 @@ const LIVE_STATES = ["pending", "running", "stopping", "stopped"];
 const DAINTREE_TAG = "daintree";
 /** Waits before asking again about an instance EC2 doesn't list yet. */
 const NOT_FOUND_RETRIES = [2_000, 4_000, 8_000];
+/**
+ * A terminate waits longer: forgetting a machine that still runs would leave it
+ * billing unseen, and a terminated one stays listed for about an hour.
+ */
+const TERMINATE_RETRIES = [2_000, 4_000, 8_000, 16_000, 16_000];
 
 /**
  * The permissions creating and managing machines needs, each with the DryRun
@@ -218,6 +224,8 @@ export interface AwsProviderDeps {
   client: AwsClient;
   now?: () => number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  /** The most one look for the console's host key may take, requests and retries included. */
+  consoleDeadlineMs?: number;
 }
 
 /**
@@ -230,11 +238,13 @@ export interface AwsProviderDeps {
 export class AwsProvider implements CloudProvider {
   readonly id = "aws" as const;
   private readonly client: AwsClient;
+  private readonly consoleDeadlineMs: number | null;
   private readonly now: () => number;
   private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
 
   constructor(deps: AwsProviderDeps) {
     this.client = deps.client;
+    this.consoleDeadlineMs = deps.consoleDeadlineMs ?? null;
     this.now = deps.now ?? Date.now;
     this.sleep =
       deps.sleep ??
@@ -427,18 +437,24 @@ export class AwsProvider implements CloudProvider {
         ? await optional(async () => {
             const groups = await this.client.describeSecurityGroups(ctx, [
               { name: "vpc-id", values: [vpcId] },
-              { name: "group-name", values: [EC2_SECURITY_GROUP_NAME, "default"] },
+              { name: "group-name", values: [EC2_SECURITY_GROUP_NAME] },
             ]);
             const owned = groups.find(
               (group) => group.groupName === EC2_SECURITY_GROUP_NAME && DAINTREE_TAG in group.tags
             );
-            return (
-              (owned ?? groups.find((group) => group.groupName === "default"))?.groupId ?? null
-            );
+            // The default group may be governed by other rules than Daintree's own: no stand-in.
+            return owned?.groupId ?? null;
           })
         : null;
     const instanceId = instance?.instanceId ?? PROBE_INSTANCE_ID;
     const marker = { [DAINTREE_TAG]: "1" };
+    // The tag keys a create carries, for a policy that decides by them.
+    const launchTags = {
+      ...marker,
+      "daintree-binding": "permission-check",
+      "daintree-ssh-key": "SHA256:permission-check",
+      Name: "daintree-permission-check",
+    };
     await Promise.all([
       probe("CreateSecurityGroup", [
         ["GroupName", "daintree-permission-check"],
@@ -461,8 +477,8 @@ export class AwsProvider implements CloudProvider {
         ...(groupId ? ([["SecurityGroupId.1", groupId]] as Params) : []),
         ["MetadataOptions.HttpTokens", "required"],
         // Tagging at launch is its own permission, for the instance and its volume alike.
-        ...tagSpecification(1, "instance", { ...marker, Name: "daintree-permission-check" }),
-        ...tagSpecification(2, "volume", marker),
+        ...tagSpecification(1, "instance", launchTags),
+        ...tagSpecification(2, "volume", launchTags),
       ]),
       probe("CreateTags", [
         ["ResourceId.1", instanceId],
@@ -547,7 +563,7 @@ export class AwsProvider implements CloudProvider {
    */
   async list(
     credentials: ProviderCredentials,
-    options: { label?: string } = {}
+    options: { label?: string; location?: string } = {}
   ): Promise<ProviderResource[]> {
     const home = this.ctx(credentials);
     const filters = [
@@ -561,6 +577,13 @@ export class AwsProvider implements CloudProvider {
         name: `tag:${options.label.slice(0, eq)}`,
         values: [options.label.slice(eq + 1)],
       });
+    }
+    // Looking where a create was sent: that region alone, and a refusal there is no answer.
+    if (options.location !== undefined) {
+      if (!isAwsRegion(options.location)) throw invalid("Not an AWS region.");
+      const region = options.location;
+      const instances = await this.client.describeInstances({ ...home, region }, { filters });
+      return instances.map((instance) => ec2Resource(region, instance));
     }
     const regions = await this.client.describeRegions(home);
     const found = await inBatches(regions, REGION_CONCURRENCY, async (region) => {
@@ -725,7 +748,10 @@ export class AwsProvider implements CloudProvider {
         null
       );
     }
-    return { vpcId, subnetId: public_.length === subnets.length ? null : public_[0]!.subnetId };
+    // The same subnet every time while they stay as they are: a resend of a lost create
+    // goes to the zone its client token already launched in.
+    const chosen = public_.map((subnet) => subnet.subnetId).sort()[0]!;
+    return { vpcId, subnetId: public_.length === subnets.length ? null : chosen };
   }
 
   /**
@@ -736,7 +762,7 @@ export class AwsProvider implements CloudProvider {
    * else it guards.
    */
   private async ensureSecurityGroup(ctx: AwsRequestContext, vpcId: string): Promise<string> {
-    const find = async () => {
+    const find = async (): Promise<Ec2SecurityGroup | null> => {
       const [group] = await this.client.describeSecurityGroups(ctx, [
         { name: "vpc-id", values: [vpcId] },
         { name: "group-name", values: [EC2_SECURITY_GROUP_NAME] },
@@ -752,7 +778,7 @@ export class AwsProvider implements CloudProvider {
       }
       return group ?? null;
     };
-    let group = await find();
+    let group: Ec2SecurityGroup | null = await find();
     if (!group) {
       try {
         const groupId = await this.client.createSecurityGroup(ctx, {
@@ -778,7 +804,7 @@ export class AwsProvider implements CloudProvider {
     if (!group.allowsSshFromAnywhere) {
       const groupId = group.groupId;
       // A group just made may not be known to every part of EC2 yet.
-      await this.untilVisible(ctx, async () => {
+      const allowed = await this.untilVisible(ctx, async () => {
         try {
           await this.client.allowSshFromAnywhere(ctx, groupId);
           return true;
@@ -787,6 +813,16 @@ export class AwsProvider implements CloudProvider {
           throw error;
         }
       });
+      // Never launch into a group that doesn't let SSH in yet.
+      if (!allowed) {
+        throw new AwsApiError(
+          "server",
+          "AWS didn't let SSH into the machines' security group yet",
+          null,
+          "InvalidGroup.NotFound",
+          null
+        );
+      }
     }
     return group.groupId;
   }
@@ -835,8 +871,9 @@ export class AwsProvider implements CloudProvider {
 
   /**
    * A start or stop EC2 refused because the instance's state already moved
-   * (a repeat of a send whose answer was lost, or another device's): when it
-   * is already on its way there, that is the transition asked for.
+   * (a repeat of a send whose answer was lost, or another device's), or one
+   * whose answer never came: when the instance is on its way there, that is
+   * the transition asked for.
    */
   private async joinTransition(
     credentials: ProviderCredentials,
@@ -844,8 +881,19 @@ export class AwsProvider implements CloudProvider {
     error: unknown,
     joining: CloudMachineState[]
   ): Promise<ProviderResource> {
-    if (!(error instanceof AwsApiError) || error.code !== "IncorrectInstanceState") throw error;
-    const resource = await this.inspect(credentials, resourceId);
+    // Refused for its state, or a send whose answer was lost: what the machine is doing decides.
+    if (
+      !(error instanceof AwsApiError) ||
+      (error.code !== "IncorrectInstanceState" && !error.outcomeUnknown)
+    ) {
+      throw error;
+    }
+    let resource: ProviderResource;
+    try {
+      resource = await this.inspect(credentials, resourceId);
+    } catch {
+      throw error;
+    }
     if (joining.includes(resource.machine)) return resource;
     throw error;
   }
@@ -888,11 +936,11 @@ export class AwsProvider implements CloudProvider {
         if (
           !(error instanceof AwsApiError) ||
           error.kind !== "not-found" ||
-          attempt >= NOT_FOUND_RETRIES.length
+          attempt >= TERMINATE_RETRIES.length
         ) {
           throw error;
         }
-        await this.sleep(NOT_FOUND_RETRIES[attempt]!, ctx.signal);
+        await this.sleep(TERMINATE_RETRIES[attempt]!, ctx.signal);
       }
     }
   }
@@ -943,7 +991,7 @@ export class AwsProvider implements CloudProvider {
     const deadline = new AbortController();
     const timer = setTimeout(
       () => deadline.abort(),
-      fresh ? CONSOLE_KEYS_WAIT_MS : CONSOLE_POLL_MS * 6
+      this.consoleDeadlineMs ?? (fresh ? CONSOLE_KEYS_WAIT_MS : CONSOLE_POLL_MS * 6)
     );
     const ctx: AwsRequestContext = {
       ...outer,

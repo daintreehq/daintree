@@ -1137,6 +1137,20 @@ describe("CloudHostLifecycle host keys confirmed on first connect", () => {
       ).rejects.toThrow(/no new host key/);
     });
 
+    it("withdraws an offered key as soon as the API reports another, before the machine answers", async () => {
+      const env = await vouching();
+      reports(env, null);
+      await env.lifecycle.ensureAccess(env.bindingId).catch(() => {});
+      expect(env.lifecycle.statuses()[0]!.hostKeyReview).not.toBeNull();
+      // sshd doesn't answer this time: the earlier offer still can't be trusted.
+      reports(env, OTHER_KEY);
+      env.scan.output = "";
+      await expect(env.lifecycle.ensureAccess(env.bindingId)).rejects.toThrow(
+        /didn't present a host key|didn't answer with a host key/
+      );
+      expect(env.lifecycle.statuses()[0]!.hostKeyReview).toBeNull();
+    });
+
     it("lets the person confirm the key while the API still has none", async () => {
       const env = await vouching();
       reports(env, null);
@@ -2776,6 +2790,25 @@ describe("CloudHostLifecycle provisioning", () => {
     expect(vi.mocked(provider.create).mock.calls[0]?.[1].provisioning).toEqual(IRELAND);
     expect(lifecycle.statuses()[0]?.provisioning).toEqual(picks);
     expect(store.account(account.id)?.lastProvisioning).toEqual(IRELAND);
+  });
+
+  it("looks for an unanswered create's machine where it was sent", async () => {
+    const { lifecycle, provider, account, store } = await setup({}, { adapt: offerRegions });
+    vi.mocked(provider.create).mockRejectedValueOnce(
+      new BoatApiError("timeout", "slow", null, null, null)
+    );
+    await lifecycle.create(request(account.id));
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    const bindingId = store.bindings()[0]!.id;
+    vi.mocked(provider.list).mockResolvedValueOnce([
+      resource({ resourceId: "bx_found0000", labels: { "daintree-binding": bindingId } }),
+    ]);
+    await lifecycle.retryCreate("build");
+    expect(provider.list).toHaveBeenCalledWith(expect.anything(), {
+      label: `daintree-binding=${bindingId}`,
+      location: "eu-west-1",
+    });
+    expect(store.bindings()[0]!.resourceId).toBe("bx_found0000");
   });
 
   it("offers the account's last choice with every catalog, cached or read again", async () => {
