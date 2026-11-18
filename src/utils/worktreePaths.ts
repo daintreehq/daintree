@@ -1,4 +1,4 @@
-import { isHostWindows } from "@/hooks/useHostPlatform";
+import { isHostWindows, isRemoteWindow } from "@/hooks/useHostPlatform";
 
 // Normalizes separators (backslash → forward slash) and trims trailing slashes
 // so cwd and worktree paths compare apples-to-apples on Windows, where node-pty
@@ -8,6 +8,21 @@ import { isHostWindows } from "@/hooks/useHostPlatform";
 function normalizeForComparison(p: string, caseInsensitive: boolean): string {
   const normalized = p.replace(/\\/g, "/").replace(/\/+$/, "");
   return caseInsensitive ? normalized.toLowerCase() : normalized;
+}
+
+/**
+ * The absolute path of a file git reported relative to a worktree, spelled by
+ * the host's rules. Git separates with "/" everywhere, so on a POSIX host a
+ * backslash belongs to a name (`a\b.txt` is not `a/b.txt`) and survives. A
+ * Windows host can't name a file with one and takes either separator.
+ * Remote hosts are macOS or Linux, so a remote window is POSIX even before
+ * its platform arrives, when `isHostWindows` would answer for this machine.
+ */
+export function joinWorktreeFilePath(worktreePath: string, relativePath: string): string {
+  const windows = !isRemoteWindow() && isHostWindows();
+  const base = windows ? worktreePath.replace(/\\/g, "/") : worktreePath;
+  const tail = windows ? relativePath.replace(/\\/g, "/") : relativePath;
+  return `${base.replace(/\/+$/, "")}/${tail.replace(/^\/+/, "")}`;
 }
 
 /**

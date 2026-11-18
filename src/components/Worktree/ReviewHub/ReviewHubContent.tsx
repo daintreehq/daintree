@@ -106,6 +106,7 @@ import {
 import { useShallow } from "zustand/react/shallow";
 import { systemClient } from "@/clients/systemClient";
 import { announceOpenInEditorFallback } from "@/utils/openInEditorFallback";
+import { joinWorktreeFilePath } from "@/utils/worktreePaths";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
@@ -1385,10 +1386,8 @@ export function ReviewHubContent({
         // chaining inside one. Read at click time rather than subscribing —
         // without it the main process never loads the project's preferred-editor
         // setting.
-        const base = worktreePath.replace(/\\/g, "/").replace(/\/+$/, "");
-        const tail = filePath.replace(/\\/g, "/").replace(/^\/+/, "");
         const payload: { path: string; line?: number; projectId?: string } = {
-          path: `${base}/${tail}`,
+          path: joinWorktreeFilePath(worktreePath, filePath),
           projectId: useProjectStore.getState().currentProject?.id,
         };
         if (typeof line === "number" && Number.isFinite(line) && line > 0) {
