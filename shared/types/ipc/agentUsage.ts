@@ -1,6 +1,10 @@
 import type { HostId } from "../remoteHosts.js";
 import type { ClaudeUsageStatement, ClaudeUsageWindow } from "./agentQuota.js";
 
+/** Account names one reading carries across a link, and the length of each. */
+export const MAX_AGENT_USAGE_ACCOUNT_NAMES = 32;
+export const MAX_AGENT_USAGE_ACCOUNT_NAME_CHARS = 256;
+
 interface AgentUsageReadingBase {
   /**
    * Names the user gave the accounts on this login (#16040), or for a Codex

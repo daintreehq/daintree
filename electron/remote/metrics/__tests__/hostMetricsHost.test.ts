@@ -221,6 +221,8 @@ describe("installHostMetricsHostWith", () => {
     expect(watchAgentUsage).not.toHaveBeenCalled();
     const p = await pair();
     server.attach(p.host, "shell");
+    const q = await pair();
+    server.attach(q.host, "shell-2");
     expect(watchAgentUsage).toHaveBeenCalledTimes(1);
     // The last Shell gone, the next sample stops the loop and lets the watch go.
     server.sessions = [];

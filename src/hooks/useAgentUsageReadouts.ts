@@ -1,8 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { AgentUsageReadout, AgentUsageSnapshot } from "@shared/types/ipc/agentUsage";
 import { isProjectViewObservable, subscribeProjectViewObservability } from "@/lib/viewCacheState";
 
 const NONE: AgentUsageReadout[] = [];
+
+/** First retry after a refused follow; doubles up to the cap while the view stays observable. */
+const RETRY_BASE_MS = 2_000;
+const RETRY_CAP_MS = 30_000;
 
 function newer(
   current: AgentUsageSnapshot | null,
@@ -16,34 +20,51 @@ function newer(
  * Every usage readout this machine knows of (#17318): its own agents' and
  * every linked host's. Main watches them only while some view that shows
  * them can be seen, so this follows while this view is observable; changes
- * arrive pushed, and a seed a newer push overtook is dropped.
+ * arrive pushed, and a seed a newer push overtook is dropped. A refused
+ * follow clears what this view held from before, unless a push has since
+ * confirmed it, and tries again while the view stays observable.
  */
 export function useAgentUsageReadouts(): AgentUsageReadout[] {
   const [snapshot, setSnapshot] = useState<AgentUsageSnapshot | null>(null);
-  const [observable, setObservable] = useState(isProjectViewObservable);
-
-  useEffect(() => subscribeProjectViewObservability(setObservable), []);
+  // Read around the subscription by React, so an edge between render and subscribe isn't lost.
+  const observable = useSyncExternalStore(
+    subscribeProjectViewObservability,
+    isProjectViewObservable
+  );
+  const pushes = useRef(0);
 
   useEffect(() => {
     const api = window.electron?.agentUsage;
     if (!api) return;
-    return api.onChanged((next) => setSnapshot((current) => newer(current, next)));
+    return api.onChanged((next) => {
+      pushes.current++;
+      setSnapshot((current) => newer(current, next));
+    });
   }, []);
 
   useEffect(() => {
     const api = window.electron?.agentUsage;
     if (!api || !observable) return;
     let cancelled = false;
-    api.setFollowing({ following: true }).then(
-      (seed) => {
-        if (!cancelled) setSnapshot((current) => newer(current, seed));
-      },
-      () => {
-        // Nothing to show is the answer: the row stays hidden.
-      }
-    );
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let attempt = 0;
+    const pushesAtStart = pushes.current;
+    const follow = () => {
+      api.setFollowing({ following: true }).then(
+        (seed) => {
+          if (!cancelled) setSnapshot((current) => newer(current, seed));
+        },
+        () => {
+          if (cancelled) return;
+          if (pushes.current === pushesAtStart) setSnapshot(null);
+          retry = setTimeout(follow, Math.min(RETRY_CAP_MS, RETRY_BASE_MS * 2 ** attempt++));
+        }
+      );
+    };
+    follow();
     return () => {
       cancelled = true;
+      clearTimeout(retry);
       void api.setFollowing({ following: false }).catch(() => {});
     };
   }, [observable]);

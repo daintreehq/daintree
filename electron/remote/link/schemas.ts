@@ -6,7 +6,11 @@ import {
   CLAUDE_USAGE_STATEMENTS,
   CLAUDE_USAGE_WINDOWS,
 } from "../../../shared/types/ipc/agentQuota.js";
-import type { AgentUsageReading } from "../../../shared/types/ipc/agentUsage.js";
+import {
+  MAX_AGENT_USAGE_ACCOUNT_NAMES,
+  MAX_AGENT_USAGE_ACCOUNT_NAME_CHARS,
+  type AgentUsageReading,
+} from "../../../shared/types/ipc/agentUsage.js";
 import { BULK_CHUNK_BYTES, Lane, type LinkFrame } from "./frames.js";
 import {
   BulkKind,
@@ -145,7 +149,9 @@ const count = z.number().int().min(0);
 const coreCount = z.number().int().min(1);
 const percent = z.number().finite().min(0).max(100);
 
-const usageAccountNames = z.array(z.string().max(256)).max(32);
+const usageAccountNames = z
+  .array(z.string().max(MAX_AGENT_USAGE_ACCOUNT_NAME_CHARS))
+  .max(MAX_AGENT_USAGE_ACCOUNT_NAMES);
 
 const AgentUsageReadingSchema = z.discriminatedUnion("agentId", [
   z.object({
@@ -169,6 +175,13 @@ const AgentUsageReadingSchema = z.discriminatedUnion("agentId", [
   }),
 ]);
 
+/** `used` names a percent and `over` a floor; a message that gave no figure never ranks as one. */
+function figureMatchesStatement(reading: AgentUsageReading): boolean {
+  if (reading.agentId !== "claude") return true;
+  const figured = reading.statement === "used" || reading.statement === "over";
+  return figured === (reading.usedPercent !== null);
+}
+
 // Each reading on its own: an agent or a limit a later build reports is left
 // out rather than failing this Shell's whole summary.
 const AgentUsageSchema = z
@@ -177,7 +190,7 @@ const AgentUsageSchema = z
   .transform((items) =>
     items.flatMap((item): AgentUsageReading[] => {
       const parsed = AgentUsageReadingSchema.safeParse(item);
-      return parsed.success ? [parsed.data] : [];
+      return parsed.success && figureMatchesStatement(parsed.data) ? [parsed.data] : [];
     })
   );
 

@@ -4,6 +4,9 @@ import { claudeWindowLabel, formatResetClock } from "./agentAccountHeadroom";
 import { windowLabel } from "./codexQuotaFormat";
 import { formatTimeAgo } from "./timeAgo";
 
+/** How a window on a host names a reading from the machine it runs on. */
+export const THIS_MACHINE = "This machine";
+
 export interface AgentUsageLine {
   /** The row: "Codex 82% · Work · resets 14:05". */
   text: string;
@@ -13,6 +16,12 @@ export interface AgentUsageLine {
   attention: boolean;
   /** A Codex reading that missed its read; already spoken in `text`. */
   stale: boolean;
+  /**
+   * How long ago Claude Code printed it, for a slot of its own that the row
+   * never cuts: a message's age is part of what it says. Null for Codex,
+   * whose cadence `stale` already speaks for.
+   */
+  age: string | null;
 }
 
 // Floored, so a figure shown as 80% always carries the tone 80% does.
@@ -68,9 +77,11 @@ function accountLabel(readout: AgentUsageReadout): string {
 export function describeAgentUsage(
   readout: AgentUsageReadout,
   agentName: string,
-  now: number
+  now: number,
+  /** The machine to name: the host's name, "This machine" in a window on another, or null. */
+  machine: string | null = readout.hostName
 ): AgentUsageLine {
-  const { reading, hostName } = readout;
+  const { reading } = readout;
   const stale =
     reading.agentId === "codex" && now - reading.observedAt > AGENT_USAGE_STALE_AFTER_MS;
   const reset =
@@ -78,7 +89,7 @@ export function describeAgentUsage(
   const parts = [
     `${agentName} ${figure(readout)}`,
     reading.accountNames.length > 0 ? reading.accountNames.join(", ") : undefined,
-    hostName ?? undefined,
+    machine ?? undefined,
     reset,
   ].filter((part): part is string => Boolean(part));
   const text = parts.join(" · ");
@@ -88,10 +99,11 @@ export function describeAgentUsage(
     text: stale ? `Stale · ${text}` : text,
     detail: [
       [limitLine(readout), reset].filter(Boolean).join(" · "),
-      hostName ? `${account} on ${hostName}` : account,
+      machine ? `${account} on ${machine === THIS_MACHINE ? "this machine" : machine}` : account,
       reading.agentId === "codex" ? `Read from Codex ${age}` : `Printed in a terminal ${age}`,
     ],
     attention: isAgentUsagePastAttention(reading),
     stale,
+    age: reading.agentId === "claude" ? age : null,
   };
 }

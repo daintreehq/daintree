@@ -224,7 +224,11 @@ describe("link messages", () => {
       { ...claude, window: "hourly limit" },
       { ...codex, usedPercent: 140 },
       { ...codex, usedPercent: null },
+      { ...codex, windowDurationMins: 0 },
       { ...codex, accountNames: [42] },
+      // A figure without a statement that names one, or the other way round, never ranks.
+      { ...claude, statement: "used", usedPercent: null },
+      { ...claude, statement: "approaching", usedPercent: 90 },
     ]) {
       expect(hostSummary({ agentUsage: [bad, claude] }).agentUsage).toEqual([claude]);
     }

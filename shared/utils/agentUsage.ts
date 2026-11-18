@@ -1,4 +1,15 @@
-import type { AgentUsageReading } from "../types/ipc/agentUsage.js";
+import {
+  MAX_AGENT_USAGE_ACCOUNT_NAMES,
+  MAX_AGENT_USAGE_ACCOUNT_NAME_CHARS,
+  type AgentUsageReading,
+} from "../types/ipc/agentUsage.js";
+
+/** Names cut to what a link carries, so a long preset list never costs a host its reading. */
+export function boundAgentUsageAccountNames(names: readonly string[]): string[] {
+  return names
+    .slice(0, MAX_AGENT_USAGE_ACCOUNT_NAMES)
+    .map((name) => name.slice(0, MAX_AGENT_USAGE_ACCOUNT_NAME_CHARS));
+}
 
 /**
  * The fixed point past which a reading takes the attention tone (#17318). It

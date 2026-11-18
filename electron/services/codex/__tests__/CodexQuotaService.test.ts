@@ -264,6 +264,15 @@ describe("readCodexQuotaProfiles (#13686)", () => {
       expect(runSession.mock.calls.map((call) => call[1])).toEqual([{ codexHome: second }]);
     });
 
+    it("names a saved account's home by the account", async () => {
+      agentSettings.value = {
+        agents: { codex: { accounts: [{ id: "company", name: "Company", configDir: second }] } },
+      };
+      respondPerHome(() => 55);
+      const readings = await readCodexQuotaForHomes(await homes(second));
+      expect(readings).toMatchObject([{ accountNames: ["Company"], presetNames: [] }]);
+    });
+
     it("reads a home no profile names the way the pane runs it, unlabelled", async () => {
       const projectHome = path.join(root, "project-home");
       mkdirSync(projectHome);

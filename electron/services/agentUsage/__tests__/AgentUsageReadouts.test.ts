@@ -122,4 +122,28 @@ describe("AgentUsageReadouts", () => {
     remove();
     expect(remote.watching()).toBe(false);
   });
+
+  it("raises the revision on every change, takes in every host, and drops a removed source's readings", () => {
+    const w = fakeWatch();
+    const remote = fakeRemote();
+    const publish = vi.fn();
+    const readouts = new AgentUsageReadouts({ watch: () => w.watch, publish });
+    const remove = readouts.setRemoteSource(remote.source);
+    readouts.follow(1);
+    remote.set([
+      { hostId: "vps", hostName: "Build VPS", readings: [reading(90)] },
+      { hostId: "mini", hostName: "Mini", readings: [reading(20)] },
+    ]);
+    w.set([reading(50)]);
+    const revisions = publish.mock.calls.map(([snapshot]) => snapshot.revision);
+    expect(revisions).toEqual([...revisions].sort((a, b) => a - b));
+    expect(new Set(revisions).size).toBe(revisions.length);
+    expect(publish.mock.calls.at(-1)![0].readouts.map((r: { hostId: string }) => r.hostId)).toEqual(
+      ["local", "vps", "mini"]
+    );
+    remove();
+    expect(publish.mock.calls.at(-1)![0].readouts.map((r: { hostId: string }) => r.hostId)).toEqual(
+      ["local"]
+    );
+  });
 });

@@ -24,24 +24,27 @@ export interface AgentUsageHostsDeps {
 }
 
 /**
- * A host's reading times in this machine's clock. Only differences taken on
- * one machine's clock are used: when this machine had the sample, less its
- * age on the host when posted, less how much earlier than the sample the host
- * took the reading. A host whose clock is off by an hour still reads its true age.
+ * A host's reading on this machine's clock. Only differences taken on one
+ * machine's clock are used: when this machine had the sample, less the most
+ * it can have aged on the way (its age on the host plus the trip, when the
+ * frame bounds it), less how much earlier than the sample the host took the
+ * reading. A host whose clock is off by an hour still reads its true age.
+ * Resets are left as sent: Codex's come from its server and Claude Code's
+ * from the time the message named, neither from the host's clock.
  */
 export function onShellClock(
   summary: Pick<HostMetricsSummary, "sampledAt">,
   receipt: SummaryReceipt | null,
-  readings: readonly AgentUsageReading[]
-): AgentUsageReading[] {
-  const sampledHere = receipt ? receipt.receivedAt - (receipt.hostAgeMs ?? 0) : summary.sampledAt;
-  const here = (hostTime: number) => sampledHere - (summary.sampledAt - hostTime);
-  return readings.map((reading) => ({
+  reading: AgentUsageReading
+): AgentUsageReading {
+  const sampledHere = receipt
+    ? receipt.receivedAt - (receipt.maxAgeMs ?? receipt.hostAgeMs ?? 0)
+    : summary.sampledAt;
+  return {
     ...reading,
     accountNames: reading.accountNames.map(displaySafeText),
-    observedAt: here(reading.observedAt),
-    resetsAt: reading.resetsAt === null ? null : here(reading.resetsAt),
-  }));
+    observedAt: sampledHere - (summary.sampledAt - reading.observedAt),
+  };
 }
 
 /**
@@ -50,9 +53,13 @@ export function onShellClock(
  * or keeps one linked.
  */
 export function createAgentUsageHostsSource(deps: AgentUsageHostsDeps): RemoteAgentUsageSource {
-  // Placed once per change of what the host said, so a new frame every few
-  // seconds doesn't move a reading's times by its own jitter.
-  const placed = new Map<HostId, { said: string; readings: AgentUsageReading[] }>();
+  // Each reading is placed once per link, when the host first sends it, so a
+  // new frame every few seconds, or another reading changing beside it,
+  // doesn't move its age by the frames' own jitter.
+  const placed = new Map<
+    HostId,
+    { session: LinkSession | null; byReading: Map<string, AgentUsageReading> }
+  >();
   return {
     list() {
       const metrics = deps.metrics();
@@ -64,22 +71,25 @@ export function createAgentUsageHostsSource(deps: AgentUsageHostsDeps): RemoteAg
           if (deps.manager.connectionState(host.id).status !== "connected") continue;
           const summary = metrics.latest(host.id);
           if (!summary?.agentUsage?.length) continue;
-          if (metrics.cameOn(summary, deps.sessionFor(host.id)) !== true) continue;
-          const said = JSON.stringify(summary.agentUsage);
+          const session = deps.sessionFor(host.id);
+          if (metrics.cameOn(summary, session) !== true) continue;
           let entry = placed.get(host.id);
-          if (entry?.said !== said) {
-            entry = {
-              said,
-              readings: onShellClock(summary, metrics.receiptOf(summary), summary.agentUsage),
-            };
+          if (entry?.session !== session) {
+            entry = { session, byReading: new Map() };
             placed.set(host.id, entry);
           }
-          listed.add(host.id);
-          out.push({
-            hostId: host.id,
-            hostName: displaySafeText(host.name),
-            readings: entry.readings,
+          const known = entry.byReading;
+          const receipt = metrics.receiptOf(summary);
+          const byReading = new Map<string, AgentUsageReading>();
+          const readings = summary.agentUsage.map((reading) => {
+            const said = JSON.stringify(reading);
+            const here = known.get(said) ?? onShellClock(summary, receipt, reading);
+            byReading.set(said, here);
+            return here;
           });
+          entry.byReading = byReading;
+          listed.add(host.id);
+          out.push({ hostId: host.id, hostName: displaySafeText(host.name), readings });
         }
       }
       for (const hostId of [...placed.keys()]) {

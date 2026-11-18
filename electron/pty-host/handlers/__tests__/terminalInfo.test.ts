@@ -121,7 +121,7 @@ describe("mapTerminalInfo", () => {
     expect(mapTerminalInfo(makeTerminal(), ctx).claudeConfigDir).toBeUndefined();
   });
 
-  it("reports the Codex home the launch env named, so main can tell which account an agent is on", () => {
+  it("forwards the Codex home the launch env named, so main can tell which account an agent is on", () => {
     // #17318: the sidebar's usage readout reads quota only for homes an agent runs in.
     const ctx = createCtx();
     expect(

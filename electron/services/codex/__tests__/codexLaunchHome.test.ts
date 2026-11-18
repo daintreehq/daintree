@@ -24,6 +24,11 @@ describe("resolveLaunchCodexHome", () => {
     ).toBe(accountHome);
   });
 
+  it("keeps a value as the pane gets it, untrimmed", () => {
+    const spaced = path.resolve(os.tmpdir(), "accounts", "work ");
+    expect(resolveLaunchCodexHome({ CODEX_HOME: spaced })).toBe(spaced);
+  });
+
   it("names no home for a relative value, which Codex would resolve against the pane's folder", () => {
     expect(resolveLaunchCodexHome({ CODEX_HOME: "accounts/work" })).toBeUndefined();
   });

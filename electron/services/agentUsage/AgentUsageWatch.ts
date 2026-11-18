@@ -15,6 +15,7 @@ import type { AgentUsageReading } from "../../../shared/types/ipc/agentUsage.js"
 import type { ClaudeUsageAccount } from "../../../shared/types/ipc/agentQuota.js";
 import {
   AGENT_USAGE_CODEX_READ_INTERVAL_MS,
+  boundAgentUsageAccountNames,
   tightestAgentUsage,
 } from "../../../shared/utils/agentUsage.js";
 import type { CodexHomeQuota } from "../codex/CodexQuotaService.js";
@@ -25,12 +26,13 @@ const logger = createLogger("main:agentUsage");
 /** How often membership and Claude readings are looked at again while wanted. */
 export const AGENT_USAGE_TICK_MS = 60_000;
 
-/**
- * The folders the live Codex and Claude Code agents launched on, as their
- * panes recorded them. From the pty hosts that answered: an agent on one that
- * didn't is unseen until it does, never assumed still running.
- */
+/** The folders the live Codex and Claude Code agents launched on, as their panes recorded them. */
 export interface LiveAgentFolders {
+  /**
+   * False when a pty host didn't answer: an account may be running unseen,
+   * so the machine's tightest window can't be told.
+   */
+  complete: boolean;
   codexHomes: string[];
   claudeConfigDirs: string[];
 }
@@ -44,6 +46,8 @@ export interface AgentUsageWatchDeps {
   readCodexHomes(homes: ReadonlyMap<string, string>): Promise<CodexHomeQuota[]>;
   readClaudeAccounts(): Promise<ClaudeUsageAccount[]>;
   now(): number;
+  /** Elapsed time for the Codex cadence, which a wall-clock correction mustn't stretch or shrink. */
+  monotonic(): number;
   tickMs?: number;
   codexIntervalMs?: number;
 }
@@ -63,21 +67,29 @@ export interface LiveAgentTerminal {
 }
 
 /**
- * The agent running in a terminal now: the detected one, or the launched one
- * until detection first speaks. One detected before and gone since has exited,
- * however the pane was launched. A trashed pane isn't running for anyone.
+ * The agent Daintree launched in a terminal, while it runs there: detected
+ * as that agent, or not yet seen by detection. Only a launch's own env is
+ * known to be the agent's; one typed into a shell can name another folder on
+ * its own command line, so it is never taken for any account. One detected
+ * before and gone since has exited. A trashed pane isn't running for anyone.
  */
 export function liveAgentOf(terminal: LiveAgentTerminal): "codex" | "claude" | null {
   if (terminal.hasPty === false || terminal.isExited === true || terminal.isTrashed === true) {
     return null;
   }
-  const agentId =
-    terminal.detectedAgentId ?? (terminal.everDetectedAgent ? undefined : terminal.launchAgentId);
-  return agentId === "codex" || agentId === "claude" ? agentId : null;
+  const launched = terminal.launchAgentId;
+  if (launched !== "codex" && launched !== "claude") return null;
+  if (terminal.detectedAgentId !== undefined) {
+    return terminal.detectedAgentId === launched ? launched : null;
+  }
+  return terminal.everDetectedAgent ? null : launched;
 }
 
 /** The folders of every live Codex and Claude Code agent in an inventory. */
-export function liveAgentFolders(terminals: readonly LiveAgentTerminal[]): LiveAgentFolders {
+export function liveAgentFolders(
+  terminals: readonly LiveAgentTerminal[],
+  complete: boolean
+): LiveAgentFolders {
   const codexHomes = new Set<string>();
   const claudeConfigDirs = new Set<string>();
   for (const terminal of terminals) {
@@ -88,13 +100,15 @@ export function liveAgentFolders(terminals: readonly LiveAgentTerminal[]): LiveA
       claudeConfigDirs.add(terminal.claudeConfigDir);
     }
   }
-  return { codexHomes: [...codexHomes], claudeConfigDirs: [...claudeConfigDirs] };
+  return { complete, codexHomes: [...codexHomes], claudeConfigDirs: [...claudeConfigDirs] };
 }
 
 function codexReadings(quota: CodexHomeQuota): AgentUsageReading[] {
   if (quota.result.status !== "ok") return [];
   const { windows, fetchedAt } = quota.result;
-  const accountNames = quota.accountNames.length > 0 ? quota.accountNames : quota.presetNames;
+  const accountNames = boundAgentUsageAccountNames(
+    quota.accountNames.length > 0 ? quota.accountNames : quota.presetNames
+  );
   return windows.map((window) => ({
     agentId: "codex",
     accountNames,
@@ -107,9 +121,10 @@ function codexReadings(quota: CodexHomeQuota): AgentUsageReading[] {
 }
 
 function claudeReadings(account: ClaudeUsageAccount): AgentUsageReading[] {
+  const accountNames = boundAgentUsageAccountNames(account.accountNames);
   return account.readings.map((reading) => ({
     agentId: "claude",
-    accountNames: account.accountNames,
+    accountNames,
     isDefault: account.kind === "default",
     window: reading.window,
     statement: reading.statement,
@@ -122,6 +137,7 @@ function claudeReadings(account: ClaudeUsageAccount): AgentUsageReading[] {
 export class AgentUsageWatch {
   private demand = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private resetTimer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
   /** Bumped on every stop, so a tick that outlived its demand publishes nothing. */
   private generation = 0;
@@ -180,6 +196,8 @@ export class AgentUsageWatch {
   private stop(): void {
     if (this.timer !== null) clearInterval(this.timer);
     this.timer = null;
+    if (this.resetTimer !== null) clearTimeout(this.resetTimer);
+    this.resetTimer = null;
     this.generation++;
     this.running = false;
     this.publish([]);
@@ -199,13 +217,16 @@ export class AgentUsageWatch {
     }
   }
 
-  /** Live agents' folders, Codex homes by canonical key; null when nothing can be seen. */
+  /**
+   * Live agents' folders, Codex homes by canonical key; null when nothing can
+   * be seen, or when a pty host didn't answer and some may be unseen.
+   */
   private async readLive(): Promise<{
     codexHomes: Map<string, string>;
     claudeDirs: string[];
   } | null> {
     const live = await this.deps.listLiveAgents();
-    if (!live) return null;
+    if (!live?.complete) return null;
     const keys = await Promise.all(
       live.codexHomes.map((home) => this.deps.canonicalCodexHome(home))
     );
@@ -218,10 +239,15 @@ export class AgentUsageWatch {
 
   private async refresh(generation: number): Promise<void> {
     let live = await this.readLive();
-    if (generation !== this.generation || !live) return;
+    if (generation !== this.generation) return;
+    if (!live) {
+      // An account may be running unseen: the machine's tightest window is unknown.
+      this.publish([]);
+      return;
+    }
 
     const interval = this.deps.codexIntervalMs ?? AGENT_USAGE_CODEX_READ_INTERVAL_MS;
-    const askedBefore = this.deps.now() - interval;
+    const askedBefore = this.deps.monotonic() - interval;
     for (const [home, at] of this.codexAskedAt) {
       if (at > askedBefore) continue;
       this.codexAskedAt.delete(home);
@@ -233,12 +259,11 @@ export class AgentUsageWatch {
       if (index > 0) {
         // Each read waits its turn behind the last: a home whose agent left
         // meanwhile isn't asked about, and stays due for when one returns.
-        const now = await this.readLive();
-        if (generation !== this.generation) return;
-        if (now) live = now;
+        live = await this.readLive();
+        if (generation !== this.generation || !live) return;
         if (!live.codexHomes.has(home)) continue;
       }
-      this.codexAskedAt.set(home, this.deps.now());
+      this.codexAskedAt.set(home, this.deps.monotonic());
       const answers = await this.deps.readCodexHomes(new Map([[home, live.codexHomes.get(home)!]]));
       // Kept even when the watch stopped meanwhile: the read was made and counted.
       for (const answer of answers) {
@@ -247,13 +272,23 @@ export class AgentUsageWatch {
         if (answer.result.status !== "ok" && kept?.result.status === "ok") continue;
         this.codexByHome.set(answer.homeKey, answer);
       }
-      if (generation !== this.generation) return;
+      if (generation !== this.generation) {
+        // Wanted again since: the look that skipped this read as asked shows its answer.
+        if (this.demand > 0) void this.tick();
+        return;
+      }
+    }
+    if (due.length > 0) {
+      // Membership as it stands after the reads, not as it stood before them.
+      live = await this.readLive();
+      if (generation !== this.generation || !live) return;
     }
     const codexHomes = live.codexHomes;
 
     const claudeKeys = new Set(
       await Promise.all(live.claudeDirs.map((dir) => this.deps.claudeAccountKey(dir)))
     );
+    if (generation !== this.generation) return;
     const claudeAccounts = claudeKeys.size > 0 ? await this.deps.readClaudeAccounts() : [];
     if (generation !== this.generation) return;
 
@@ -265,7 +300,26 @@ export class AgentUsageWatch {
         .filter((account) => account.kind !== "unknown" && claudeKeys.has(account.key))
         .flatMap(claudeReadings),
     ];
-    this.publish(tightestAgentUsage(readings, (reading) => reading, this.deps.now()));
+    const now = this.deps.now();
+    const shown = tightestAgentUsage(readings, (reading) => reading, now);
+    this.publish(shown);
+    this.wakeAtNextReset(shown, now);
+  }
+
+  /** The runner-up shows as a window resets, not up to a tick later. */
+  private wakeAtNextReset(shown: readonly AgentUsageReading[], now: number): void {
+    if (this.resetTimer !== null) clearTimeout(this.resetTimer);
+    this.resetTimer = null;
+    const next = Math.min(
+      ...shown.flatMap((reading) =>
+        reading.resetsAt !== null && reading.resetsAt > now ? [reading.resetsAt] : []
+      )
+    );
+    const tickMs = this.deps.tickMs ?? AGENT_USAGE_TICK_MS;
+    // A reset past the next tick is that tick's to see.
+    if (!Number.isFinite(next) || next - now >= tickMs) return;
+    this.resetTimer = setTimeout(() => void this.tick(), next - now + 1);
+    this.resetTimer.unref?.();
   }
 
   private publish(readings: AgentUsageReading[]): void {
@@ -310,9 +364,8 @@ function defaultDeps(): AgentUsageWatchDeps {
       ]);
       const pty = getPtyClient();
       if (!pty) return null;
-      // A shard that didn't answer leaves its agents unseen, never assumed running.
-      const { terminals } = await getSharedTerminalSnapshot(pty);
-      return liveAgentFolders(terminals);
+      const { terminals, degraded } = await getSharedTerminalSnapshot(pty);
+      return liveAgentFolders(terminals, !degraded);
     },
     async canonicalCodexHome(home) {
       const { canonicalCodexHomeKey } = await import("../codex/CodexQuotaProfiles.js");
@@ -335,5 +388,6 @@ function defaultDeps(): AgentUsageWatchDeps {
       return readClaudeUsageAccountsWithoutPanes();
     },
     now: Date.now,
+    monotonic: () => performance.now(),
   };
 }

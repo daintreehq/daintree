@@ -4,7 +4,7 @@ import type {
   ClaudeAgentUsageReading,
   CodexAgentUsageReading,
 } from "@shared/types/ipc/agentUsage";
-import { describeAgentUsage } from "../agentUsageFormat";
+import { describeAgentUsage, THIS_MACHINE } from "../agentUsageFormat";
 
 const NOW = new Date(2026, 10, 18, 12, 0, 0).getTime();
 
@@ -109,5 +109,36 @@ describe("describeAgentUsage", () => {
     const low = describeAgentUsage(claude({ isDefault: false }), "Claude", NOW);
     expect(low.attention).toBe(false);
     expect(low.detail[1]).toBe("Other config folder");
+  });
+
+  it("takes the tone at exactly 80%", () => {
+    expect(describeAgentUsage(codex({ usedPercent: 80 }), "Codex", NOW).attention).toBe(true);
+  });
+
+  it("names every account on a login, and this machine in a window on a host", () => {
+    const line = describeAgentUsage(
+      codex({ accountNames: ["Work", "Team"], isDefault: false }),
+      "Codex",
+      NOW,
+      THIS_MACHINE
+    );
+    expect(line.text).toBe("Codex 82% · Work, Team · This machine");
+    expect(line.detail[1]).toBe("Work, Team on this machine");
+  });
+
+  it("turns stale just past the five-minute cadence and its slack, not before", () => {
+    const edge = 7 * 60_000;
+    expect(describeAgentUsage(codex({ observedAt: NOW - edge }), "Codex", NOW).stale).toBe(false);
+    expect(describeAgentUsage(codex({ observedAt: NOW - edge - 1 }), "Codex", NOW).stale).toBe(
+      true
+    );
+  });
+
+  it("words a used figure as printed, and gives Claude Code's age its own slot", () => {
+    const line = describeAgentUsage(claude({ usedPercent: 85.6 }), "Claude", NOW);
+    expect(line.text).toBe("Claude 85%");
+    expect(line.detail[0]).toBe("Weekly limit 85% used");
+    expect(line.age).toBe("12m ago");
+    expect(describeAgentUsage(codex(), "Codex", NOW).age).toBeNull();
   });
 });

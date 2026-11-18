@@ -103,3 +103,41 @@ describe("tightestAgentUsage", () => {
     expect(tightestAgentUsage([over], (r) => r, NOW)).toEqual([]);
   });
 });
+
+describe("agent usage selection boundaries", () => {
+  it("keeps an over floor under the threshold neutral, and puts exactly 80% above approaching", () => {
+    expect(isAgentUsagePastAttention(claude({ statement: "over", usedPercent: 79 }))).toBe(false);
+    const approaching = claude({ statement: "approaching", usedPercent: null });
+    expect(compareAgentUsage(claude({ usedPercent: 80 }), approaching)).toBeGreaterThan(0);
+    expect(compareAgentUsage(approaching, claude({ usedPercent: 80 }))).toBeLessThan(0);
+    expect(
+      compareAgentUsage(
+        claude({ statement: "reached", usedPercent: null }),
+        codex({ usedPercent: 100 })
+      )
+    ).toBeGreaterThan(0);
+  });
+
+  it("orders both ways, and takes the newer reading before the shorter window", () => {
+    expect(compareAgentUsage(codex({ usedPercent: 81 }), codex({ usedPercent: 82 }))).toBeLessThan(
+      0
+    );
+    expect(
+      compareAgentUsage(
+        codex({ windowDurationMins: 10080, observedAt: NOW }),
+        codex({ windowDurationMins: 300, observedAt: NOW - 1 })
+      )
+    ).toBeGreaterThan(0);
+  });
+
+  it("keeps the first of two equal readings, and the winner over a weaker one after it", () => {
+    const first = codex({ usedPercent: 70 });
+    const tie = codex({ usedPercent: 70 });
+    const weaker = codex({ usedPercent: 10 });
+    expect(tightestAgentUsage([first, tie, weaker], (r) => r, NOW)[0]).toBe(first);
+  });
+
+  it("drops a reading whose reset is already behind", () => {
+    expect(tightestAgentUsage([codex({ resetsAt: NOW - 1 })], (r) => r, NOW)).toEqual([]);
+  });
+});
