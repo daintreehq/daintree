@@ -5,11 +5,12 @@ import { defineIpcNamespace, op } from "../define.js";
 import { HOST_FILES_METHOD_CHANNELS } from "./hostFiles.preload.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { AppError } from "../../utils/errorTypes.js";
-import type {
-  HostDirectoryEntry,
-  HostDirectoryListing,
-  HostPickerRoots,
-  ListHostDirectoryPayload,
+import {
+  HOST_HOME_PATH,
+  type HostDirectoryEntry,
+  type HostDirectoryListing,
+  type HostPickerRoots,
+  type ListHostDirectoryPayload,
 } from "../../../shared/types/ipc/hostFiles.js";
 
 /**
@@ -108,7 +109,8 @@ export async function listHostDirectory(
   payload: ListHostDirectoryPayload,
   maxEntries = HOST_DIRECTORY_MAX_ENTRIES
 ): Promise<HostDirectoryListing> {
-  const directory = validatePath(payload?.path);
+  const requested = payload?.path;
+  const directory = validatePath(requested === HOST_HOME_PATH ? os.homedir() : requested);
   const showHidden = payload?.showHidden === true;
 
   const names: Array<{ name: string; kind: HostDirectoryEntry["kind"] }> = [];

@@ -1,4 +1,12 @@
+/**
+ * Lists the host's home folder without first asking where it is: the
+ * listing's `path` is the absolute home. A host from before it refuses the
+ * token as a relative path (`INVALID_PATH`).
+ */
+export const HOST_HOME_PATH = "~";
+
 export interface ListHostDirectoryPayload {
+  /** An absolute path on the host, or `HOST_HOME_PATH`. */
   path: string;
   showHidden?: boolean;
 }

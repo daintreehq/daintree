@@ -19,6 +19,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await fs.rm(dir, { recursive: true, force: true });
 });
 
@@ -70,6 +71,22 @@ describe("listHostDirectory", () => {
     expect(all.truncated).toBe(false);
   });
 
+  it("lists the home folder for the home token, and only for the exact token", async () => {
+    const home = path.join(dir, "home");
+    await fs.mkdir(home);
+    await fs.writeFile(path.join(home, "notes.md"), "x");
+    vi.spyOn(os, "homedir").mockReturnValue(home);
+    const listing = await listHostDirectory({ path: "~" });
+    expect(listing.path).toBe(home);
+    expect(listing.parent).toBe(dir);
+    expect(listing.entries.map((entry) => entry.name)).toEqual(["notes.md"]);
+    for (const near of ["~/notes", "~ ", " ~"]) {
+      await expect(listHostDirectory({ path: near })).rejects.toMatchObject({
+        code: "INVALID_PATH",
+      });
+    }
+  });
+
   it("refuses relative, empty and NUL paths", async () => {
     await expect(listHostDirectory({ path: "relative" })).rejects.toMatchObject({
       code: "INVALID_PATH",
@@ -107,5 +124,47 @@ describe("getHostPickerRoots", () => {
     expect(paths).toContain(dir);
     expect(paths).not.toContain(path.join(dir, "gone"));
     expect(paths.at(-1)).toBe(path.parse(os.homedir()).root);
+  });
+
+  it("never holds the home listing behind a project parent that stalls", async () => {
+    const home = path.join(dir, "home");
+    const stalled = path.join(dir, "mounts", "slow");
+    await fs.mkdir(home);
+    await fs.mkdir(stalled, { recursive: true });
+    await fs.writeFile(path.join(home, "notes.md"), "x");
+    vi.spyOn(os, "homedir").mockReturnValue(home);
+    projects.list = [{ path: path.join(stalled, "app") }];
+
+    const realStat = fs.stat.bind(fs);
+    let entered!: () => void;
+    const reached = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(fs, "stat").mockImplementation(async (target, ...rest) => {
+      if (String(target) === stalled) {
+        entered();
+        await gate;
+      }
+      return realStat(target, ...rest);
+    });
+
+    let rootsSettled = false;
+    const roots = getHostPickerRoots().finally(() => {
+      rootsSettled = true;
+    });
+    try {
+      await reached;
+      const listing = await listHostDirectory({ path: "~" });
+      expect(listing.path).toBe(home);
+      expect(listing.entries.map((entry) => entry.name)).toEqual(["notes.md"]);
+      expect(rootsSettled).toBe(false);
+    } finally {
+      release();
+    }
+    expect((await roots).roots.map((root) => root.path)).toContain(stalled);
   });
 });
