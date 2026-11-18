@@ -98,6 +98,10 @@ vi.mock("@/components/Settings/ProjectToolbarProfileNotice", () => ({
 }));
 vi.mock("@/lib/notify", () => ({ notify: (...args: unknown[]) => mockNotify(...args) }));
 
+// Decisions as main last reported it; off unless a case turns it on.
+let mockDecisionsSwitch: "on" | "off" | "unknown" = "off";
+vi.mock("@/hooks/useDecisionsOn", () => ({ useDecisionsSwitch: () => mockDecisionsSwitch }));
+
 // The toolbar's agent pins are this machine's (#14702).
 vi.mock("@/store/agentToolbarPinsStore", () => ({
   useAgentToolbarPinsStore: (
@@ -1490,6 +1494,38 @@ describe("ToolbarSettingsTab — a hidden Canopy", () => {
     useCanopyStore.setState({ mode: "hidden" });
     const { container } = render(<ToolbarSettingsTab />);
     expect(switchNamesIn(container)).not.toContain(switchName("Canopy"));
+    expect(setRightButtonsMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("ToolbarSettingsTab — the Decisions inbox while Decisions is off", () => {
+  beforeEach(() => {
+    clearStoreMocks();
+    vi.mocked(useSortable).mockImplementation(defaultSortable);
+    mockAgentPins = null;
+    mockToolbarState = makeToolbarState({
+      leftButtons: ["launcher", "terminal"],
+      rightButtons: ["decisions-inbox", "settings"],
+      pinnedButtons: {},
+    });
+  });
+
+  afterEach(() => {
+    mockDecisionsSwitch = "off";
+    mockToolbarState = makeToolbarState();
+  });
+
+  it("drops its row until Decisions is on, keeping its place for when it is", () => {
+    for (const known of ["unknown", "off"] as const) {
+      mockDecisionsSwitch = known;
+      const { container, unmount } = render(<ToolbarSettingsTab />);
+      expect(switchNamesIn(container)).not.toContain(switchName("Decisions inbox"));
+      unmount();
+    }
+
+    mockDecisionsSwitch = "on";
+    const { container } = render(<ToolbarSettingsTab />);
+    expect(switchNamesIn(rightColumn(container))).toContain(switchName("Decisions inbox"));
     expect(setRightButtonsMock).not.toHaveBeenCalled();
   });
 });

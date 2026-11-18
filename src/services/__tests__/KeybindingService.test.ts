@@ -700,6 +700,29 @@ describe("KeybindingService", () => {
 
       expect(conflict?.combo).toBe("Cmd+Alt+Shift+J");
     });
+
+    it.each(["decisions.openInbox", "decisions.openNextQuestion"])(
+      "lists %s unbound, and fires it from a binding the person gives it",
+      (actionId) => {
+        setPlatform("MacIntel");
+        const service = new KeybindingService();
+        const row = service
+          .getAllBindingsWithEffectiveCombos()
+          .find((b) => b.actionId === actionId);
+        expect(row?.effectiveCombo).toBe("");
+        expect(service.findConflicts("Cmd+Alt+Shift+J")).toEqual([]);
+
+        seedOverride(service, actionId, ["Cmd+Alt+Shift+J"]);
+        const press = createKeyboardEvent({
+          key: "J",
+          code: "KeyJ",
+          metaKey: true,
+          altKey: true,
+          shiftKey: true,
+        });
+        expect(service.resolveKeybinding(press).match?.actionId).toBe(actionId);
+      }
+    );
   });
 
   describe("shortcut capture ownership", () => {

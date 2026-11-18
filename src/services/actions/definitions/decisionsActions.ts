@@ -9,26 +9,35 @@ import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStor
 const REMOTE_REASON =
   "Decisions questions belong to this computer, not a Remote Host. Open them from one of its own windows.";
 const OFF_REASON = "Decisions is off. Turn it on in Settings > Decisions.";
+const UNKNOWN_REASON = "Decisions hasn't said whether it's on yet.";
 
 /**
- * Offered in this computer's windows unless Decisions is known to be off:
- * the inbox lists this computer's questions, which a Remote Host window's
- * panes never asked. Before the view has heard, `run` asks main.
+ * Listed in this computer's windows unless Decisions is known to be off: the
+ * inbox lists this computer's questions, which a Remote Host window's panes
+ * never asked.
  */
-function offered(): boolean {
+function listed(): boolean {
   return !isRemoteWindow() && readDecisionsSwitch() !== "off";
 }
 
-function notOfferedReason(): string | undefined {
-  if (isRemoteWindow()) return REMOTE_REASON;
-  return readDecisionsSwitch() === "off" ? OFF_REASON : undefined;
+/**
+ * Run only once the view's switch says on, the same switch the inbox and the
+ * question view read before they read any question.
+ */
+function runnable(): boolean {
+  return !isRemoteWindow() && readDecisionsSwitch() === "on";
 }
 
-/** Whether Decisions is on, asking main when the view hasn't heard yet. */
-async function confirmOn(): Promise<boolean> {
-  const known = readDecisionsSwitch();
-  if (known !== "unknown") return known === "on";
-  return (await decisionsClient.getStatus()).state !== "off";
+function notRunnableReason(): string | undefined {
+  if (isRemoteWindow()) return REMOTE_REASON;
+  switch (readDecisionsSwitch()) {
+    case "on":
+      return undefined;
+    case "off":
+      return OFF_REASON;
+    case "unknown":
+      return UNKNOWN_REASON;
+  }
 }
 
 /**
@@ -40,19 +49,18 @@ export function registerDecisionsActions(actions: ActionRegistry): void {
     id: "decisions.openInbox",
     title: "Open Decisions inbox",
     description:
-      "Open the Decisions inbox: every question agents asked on this computer, those waiting on the user first, then answers being delivered and past decisions. Only opens the view",
+      "Open the Decisions inbox: every question agents asked through Decisions on this computer or a Remote Host it enrolled, those waiting on the user first, then answers being delivered and past decisions. Only opens the view",
     paletteDescription: "Every question your agents asked through Decisions",
     category: "navigation",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     nonRepeatable: true,
-    isVisible: offered,
-    isEnabled: offered,
-    disabledReason: notOfferedReason,
+    isVisible: listed,
+    isEnabled: runnable,
+    disabledReason: notRunnableReason,
     keywords: ["decisions", "inbox", "questions", "waiting", "asked", "answers"],
     run: async () => {
-      if (!(await confirmOn())) throw new Error(OFF_REASON);
       useDecisionsInboxStore.getState().open();
     },
   }));
@@ -68,17 +76,16 @@ export function registerDecisionsActions(actions: ActionRegistry): void {
     danger: "safe",
     scope: "renderer",
     nonRepeatable: true,
-    isVisible: offered,
-    isEnabled: offered,
-    disabledReason: notOfferedReason,
+    isVisible: listed,
+    isEnabled: runnable,
+    disabledReason: notRunnableReason,
     keywords: ["decisions", "question", "next", "waiting", "answer", "reply"],
     run: async () => {
-      if (!(await confirmOn())) throw new Error(OFF_REASON);
       const list = await decisionsClient.listQuestions();
       const waiting = list.questions.filter(isWaitingOnPerson);
       const next = waiting[0];
       // Switched off while the list was read: nothing it held is still asked.
-      if (next === undefined || !offered()) return;
+      if (next === undefined || !runnable()) return;
       useDecisionsQuestionViewStore.getState().openReference(
         waiting.map((item) => item.reference),
         next.reference,

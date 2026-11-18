@@ -1341,7 +1341,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "navigation",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Open the Decisions inbox: every question agents asked on this computer, those waiting on the user first, then answers being delivered and past decisions. Only opens the view",
+    "description": "Open the Decisions inbox: every question agents asked through Decisions on this computer or a Remote Host it enrolled, those waiting on the user first, then answers being delivered and past decisions. Only opens the view",
     "examples": undefined,
     "id": "decisions.openInbox",
     "keywords": [

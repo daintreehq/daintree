@@ -78,6 +78,7 @@ import {
   useOverflowAgentObservations,
   useOverflowBadgeSeverity,
 } from "../useOverflowBadgeSeverity";
+import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 
 function makePanel(overrides: {
   id: string;
@@ -133,6 +134,20 @@ describe("useOverflowBadgeSeverity", () => {
     expect(
       renderHook(() => useOverflowBadgeSeverity(["copy-tree"], 0, 2)).result.current
     ).toBeNull();
+  });
+
+  it("marks questions waiting on the person only while the inbox button is folded in and the inbox is closed", () => {
+    const severity = (ids: Parameters<typeof useOverflowBadgeSeverity>[0], waiting: number) =>
+      renderHook(() => useOverflowBadgeSeverity(ids, 0, 0, false, false, waiting)).result.current;
+    expect(severity(["decisions-inbox"], 2)).toBe("waiting");
+    expect(severity(["decisions-inbox"], 0)).toBeNull();
+    expect(severity(["copy-tree"], 2)).toBeNull();
+    useDecisionsInboxStore.setState({ isOpen: true });
+    try {
+      expect(severity(["decisions-inbox"], 2)).toBeNull();
+    } finally {
+      useDecisionsInboxStore.setState({ isOpen: false });
+    }
   });
 
   it("returns critical when problems is overflowed and errorCount > 0", () => {

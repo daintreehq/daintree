@@ -34,8 +34,22 @@ function Probe({ active }: { active: boolean }) {
   return null;
 }
 
-function question(standing: DecisionQuestionStanding): DecisionQuestionListItem {
-  return { standing } as DecisionQuestionListItem;
+function question(standing: DecisionQuestionStanding, index: number): DecisionQuestionListItem {
+  return {
+    reference: { hostId: "local", projectId: "p1", terminalId: "t1", questionId: `q${index}` },
+    alias: index + 1,
+    agentKind: "claude",
+    projectLabel: "Project",
+    worktreeId: "wt",
+    worktreeRoot: "/repo",
+    requirement: "human-required",
+    askedAt: "2026-11-18T00:00:00.000Z",
+    expiresAt: null,
+    settledAt: null,
+    standing,
+    replyRequest: null,
+    stall: null,
+  };
 }
 
 const list = (revision: number, ...standings: DecisionQuestionStanding[]) =>

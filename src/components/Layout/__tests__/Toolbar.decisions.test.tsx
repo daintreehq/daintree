@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 /**
  * The Decisions inbox button (#17236) through the real Toolbar: absent while
- * Decisions is off or not yet known, and in a Remote Host's window, and while
- * absent it reads no questions; on, it counts those waiting on the person.
+ * Decisions is off or not yet known, in a Remote Host's window, and while the
+ * person has hidden it, and in none of those does it read any question; on,
+ * it counts those waiting on the person.
  */
 import "../__preview__/toolbarShims";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, cleanup, fireEvent, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { CliAvailability } from "@shared/types";
 import type { DecisionsStatus } from "@shared/types/decisions";
 import type {
@@ -42,12 +43,6 @@ vi.mock("@/clients/decisionsClient", () => ({
   },
 }));
 
-const dispatchMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
-vi.mock("@/services/ActionService", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/services/ActionService")>();
-  return { ...actual, actionService: { ...actual.actionService, dispatch: dispatchMock } };
-});
-
 vi.mock("@/hooks/useHostPlatform", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/hooks/useHostPlatform")>();
   return { ...actual, isRemoteWindow: () => decisions.remote };
@@ -58,12 +53,15 @@ import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
+import { actionService } from "@/services/ActionService";
 import { PREVIEW_PROJECT } from "../__preview__/toolbarShims";
 import { Toolbar } from "../Toolbar";
 import { useProjectSwitcherPalette } from "@/hooks/useProjectSwitcherPalette";
 
 const noop = () => {};
+const initialLayout = useToolbarPreferencesStore.getState().layout;
 
 function Harness() {
   const projectSwitcherPalette = useProjectSwitcherPalette();
@@ -87,24 +85,8 @@ async function settle(): Promise<void> {
 async function mount(): Promise<void> {
   initBuiltInPanelKinds();
   const worktreeStore = createWorktreeStore();
-  worktreeStore.setState({
-    worktrees: new Map([
-      [
-        "wt-main",
-        {
-          id: "wt-main",
-          worktreeId: "wt-main",
-          path: PREVIEW_PROJECT.path,
-          name: "main",
-          branch: "develop",
-          isCurrent: true,
-          isMainWorktree: true,
-        },
-      ],
-    ]),
-  } as never);
   setCurrentViewStore(worktreeStore);
-  useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-main" });
+  useWorktreeSelectionStore.setState({ activeWorktreeId: null });
   useProjectStore.setState({ currentProject: PREVIEW_PROJECT });
   render(
     <TooltipProvider>
@@ -117,27 +99,72 @@ async function mount(): Promise<void> {
 }
 
 function reportStatus(state: DecisionsStatus["state"]): Promise<void> {
-  act(() => decisions.onStatus?.({ state } as DecisionsStatus));
+  act(() => decisions.onStatus?.({ state }));
   return settle();
 }
 
-function question(id: string, standing: DecisionQuestionStanding): DecisionQuestionListItem {
+function question(index: number, standing: DecisionQuestionStanding): DecisionQuestionListItem {
   return {
-    reference: { hostId: "local", projectId: "p1", terminalId: "t1", questionId: id },
+    reference: { hostId: "local", projectId: "p1", terminalId: "t1", questionId: `q${index}` },
+    alias: index,
+    agentKind: "claude",
+    projectLabel: "Project",
+    worktreeId: "wt",
+    worktreeRoot: "/repo",
+    requirement: "human-required",
+    askedAt: "2026-11-18T00:00:00.000Z",
+    expiresAt: null,
+    settledAt: null,
     standing,
-  } as DecisionQuestionListItem;
+    replyRequest: null,
+    stall: null,
+  };
 }
 
-function listQuestions(questions: DecisionQuestionListItem[], revision = 1): Promise<void> {
-  act(() => decisions.onList?.({ revision, questions }));
+function listQuestions(revision: number, ...standings: DecisionQuestionStanding[]): Promise<void> {
+  act(() =>
+    decisions.onList?.({
+      revision,
+      questions: standings.map((standing, index) => question(index + 1, standing)),
+    })
+  );
   return settle();
 }
 
-function inboxButton(): HTMLButtonElement | null {
-  return document.querySelector<HTMLButtonElement>('button[aria-label^="Decisions inbox"]');
+/** The slot the strip gives the button, measuring copy included: null when it has none. */
+const slot = () => document.querySelector('[data-toolbar-button-id="decisions-inbox"]');
+/** The button as the person reaches it, on the strip. */
+const inboxButton = () => screen.queryByRole("button", { name: /^Decisions inbox/ });
+
+function setPinned(shown: boolean): Promise<void> {
+  act(() => {
+    useToolbarPreferencesStore.setState((state) => ({
+      layout: {
+        ...state.layout,
+        pinnedButtons: { ...state.layout.pinnedButtons, "decisions-inbox": shown },
+      },
+    }));
+  });
+  return settle();
 }
 
 beforeEach(() => {
+  // Room for every button, so the strip holds the inbox button rather than
+  // folding it into `…`. A divider keeps its hairline width.
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+    const width = this.classList.contains("toolbar-divider") ? 1 : 5000;
+    return {
+      width,
+      height: 40,
+      top: 0,
+      left: 0,
+      right: width,
+      bottom: 40,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    };
+  });
   Object.assign(decisions, {
     onStatus: null,
     statusWatches: 0,
@@ -145,28 +172,29 @@ beforeEach(() => {
     questionWatches: 0,
     remote: false,
   });
-  dispatchMock.mockClear();
 });
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
+  useToolbarPreferencesStore.setState({ layout: initialLayout });
 });
 
 describe("Toolbar's Decisions inbox button", () => {
-  it("is absent and reads no questions until Decisions is on, and while it is off", async () => {
+  it("has no slot and reads no questions until Decisions is on, and again once it is off", async () => {
     await mount();
-    expect(inboxButton()).toBeNull();
+    expect(slot()).toBeNull();
 
     await reportStatus("off");
-    expect(inboxButton()).toBeNull();
+    expect(slot()).toBeNull();
     expect(decisions.questionWatches).toBe(0);
 
     await reportStatus("connected");
     expect(inboxButton()).not.toBeNull();
+    expect(decisions.onList).not.toBeNull();
 
     await reportStatus("off");
-    expect(inboxButton()).toBeNull();
-    // Off, the question watch the button held is stopped.
+    expect(slot()).toBeNull();
     expect(decisions.onList).toBeNull();
   });
 
@@ -175,15 +203,16 @@ describe("Toolbar's Decisions inbox button", () => {
     await reportStatus("connected");
     expect(inboxButton()!.getAttribute("aria-label")).toBe("Decisions inbox");
 
-    await listQuestions([
-      question("q1", { kind: "waiting", reason: "open" }),
-      question("q2", { kind: "waiting", reason: "reply" }),
-      question("q3", { kind: "queued" }),
-      question("q4", { kind: "to-type" }),
-      question("q5", { kind: "needs-attention", deliveryStatus: "needs-attention" }),
-      question("q6", { kind: "send-failed" }),
-      question("q7", { kind: "settled", outcome: "answered", handled: false }),
-    ]);
+    await listQuestions(
+      1,
+      { kind: "waiting", reason: "open" },
+      { kind: "waiting", reason: "reply" },
+      { kind: "queued" },
+      { kind: "to-type" },
+      { kind: "needs-attention", deliveryStatus: "needs-attention" },
+      { kind: "send-failed" },
+      { kind: "settled", outcome: "answered", handled: false }
+    );
     const button = inboxButton()!;
     expect(button.getAttribute("aria-label")).toBe("Decisions inbox — 3 questions waiting");
     const badge = button.querySelector(".toolbar-count")!;
@@ -192,15 +221,13 @@ describe("Toolbar's Decisions inbox button", () => {
 
     // One answered: it leaves the count.
     await listQuestions(
-      [
-        question("q1", { kind: "settled", outcome: "answered", handled: false }),
-        question("q2", { kind: "waiting", reason: "reply" }),
-      ],
-      2
+      2,
+      { kind: "settled", outcome: "answered", handled: false },
+      { kind: "waiting", reason: "reply" }
     );
     expect(inboxButton()!.getAttribute("aria-label")).toBe("Decisions inbox — 1 question waiting");
 
-    await listQuestions([], 3);
+    await listQuestions(3);
     expect(inboxButton()!.getAttribute("aria-label")).toBe("Decisions inbox");
     expect(inboxButton()!.querySelector(".toolbar-count")!.getAttribute("data-visible")).toBe(
       "false"
@@ -208,24 +235,35 @@ describe("Toolbar's Decisions inbox button", () => {
   });
 
   it("opens the inbox through its action", async () => {
+    const dispatch = vi
+      .spyOn(actionService, "dispatch")
+      .mockResolvedValue({ ok: true, result: undefined });
     await mount();
     await reportStatus("connected");
     fireEvent.click(inboxButton()!);
-    expect(dispatchMock).toHaveBeenCalledWith("decisions.openInbox", undefined, {
-      source: "user",
-    });
+    expect(dispatch).toHaveBeenCalledWith("decisions.openInbox", undefined, { source: "user" });
   });
 
-  it("shares one question watch between the strip and its overflow reading", async () => {
+  it("reads no questions while the person has hidden it, and keeps the hide through on and off", async () => {
     await mount();
+    await setPinned(false);
     await reportStatus("connected");
-    expect(decisions.questionWatches).toBe(1);
+    expect(slot()).toBeNull();
+    expect(decisions.questionWatches).toBe(0);
+
+    await setPinned(true);
+    expect(inboxButton()).not.toBeNull();
+    expect(decisions.onList).not.toBeNull();
+
+    await setPinned(false);
+    expect(slot()).toBeNull();
+    expect(decisions.onList).toBeNull();
   });
 
   it("is absent from a Remote Host's window, which watches neither the switch nor the questions", async () => {
     decisions.remote = true;
     await mount();
-    expect(inboxButton()).toBeNull();
+    expect(slot()).toBeNull();
     expect(decisions.statusWatches).toBe(0);
     expect(decisions.questionWatches).toBe(0);
   });

@@ -2,7 +2,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionRegistry } from "../../actionTypes";
 import type { DecisionsSwitch } from "@/hooks/useDecisionsOn";
-import type { DecisionsStatus } from "@shared/types/decisions";
 import type {
   DecisionQuestionList,
   DecisionQuestionListItem,
@@ -14,17 +13,22 @@ const env = vi.hoisted(() => ({
   remote: false,
 }));
 
-const client = vi.hoisted(() => ({
-  getStatus: vi.fn<() => Promise<DecisionsStatus>>(),
-  listQuestions: vi.fn<() => Promise<DecisionQuestionList>>(),
+/** Every way the client can change a question or an answer: none may run. */
+const writes = vi.hoisted(() => ({
   answerQuestion: vi.fn(),
-  cancelQuestion: vi.fn(),
   declineQuestion: vi.fn(),
+  cancelQuestion: vi.fn(),
+  cancelQuestionByReference: vi.fn(),
   resumeAnswer: vi.fn(),
+  reassignAnswer: vi.fn(),
   markAnswerHandled: vi.fn(),
 }));
 
-vi.mock("@/clients/decisionsClient", () => ({ decisionsClient: client }));
+const listQuestions = vi.hoisted(() => vi.fn<() => Promise<DecisionQuestionList>>());
+
+vi.mock("@/clients/decisionsClient", () => ({
+  decisionsClient: { ...writes, listQuestions },
+}));
 vi.mock("@/hooks/useDecisionsOn", () => ({ readDecisionsSwitch: () => env.switch }));
 vi.mock("@/hooks/useHostPlatform", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/hooks/useHostPlatform")>();
@@ -35,6 +39,7 @@ import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
 
 const IDS = ["decisions.openInbox", "decisions.openNextQuestion"] as const;
+type DecisionsActionId = (typeof IDS)[number];
 
 function question(
   id: string,
@@ -43,13 +48,30 @@ function question(
 ): DecisionQuestionListItem {
   return {
     reference: { hostId: "local", projectId: "p1", terminalId: `t-${id}`, questionId: id },
+    alias: 1,
+    agentKind: "claude",
+    projectLabel: "Project",
+    worktreeId: "wt",
+    worktreeRoot: "/repo",
+    requirement: "human-required",
+    askedAt: "2026-11-18T00:00:00.000Z",
+    expiresAt: null,
+    settledAt: null,
     standing,
     replyRequest,
-  } as DecisionQuestionListItem;
+    stall: null,
+  };
 }
 
 function listed(...questions: DecisionQuestionListItem[]): void {
-  client.listQuestions.mockResolvedValue({ revision: 1, questions });
+  listQuestions.mockResolvedValue({ revision: 1, questions });
+}
+
+/** Which view is open: the inbox, the question view, or none. */
+function opened(): "inbox" | "question" | "none" | "both" {
+  const inbox = useDecisionsInboxStore.getState().isOpen;
+  const view = useDecisionsQuestionViewStore.getState().isOpen;
+  return inbox && view ? "both" : inbox ? "inbox" : view ? "question" : "none";
 }
 
 describe("Decisions actions", () => {
@@ -63,7 +85,8 @@ describe("Decisions actions", () => {
   beforeEach(() => {
     env.switch = "on";
     env.remote = false;
-    for (const fn of Object.values(client)) fn.mockReset();
+    listQuestions.mockReset();
+    for (const fn of Object.values(writes)) fn.mockReset();
   });
 
   afterEach(() => {
@@ -73,7 +96,7 @@ describe("Decisions actions", () => {
 
   const definition = (id: string) => registry.get(id)!();
 
-  async function dispatch(id: (typeof IDS)[number], source: "user" | "agent" = "user") {
+  async function dispatch(id: DecisionsActionId, source: "user" | "keybinding" | "agent" = "user") {
     const { ActionService } = await import("@/services/ActionService");
     const service = new ActionService();
     for (const factory of registry.values()) service.register(factory());
@@ -81,73 +104,59 @@ describe("Decisions actions", () => {
   }
 
   describe.each(IDS)("%s", (id) => {
-    it("is offered in this computer's windows unless Decisions is known to be off", () => {
-      for (const known of ["on", "unknown"] as const) {
-        env.switch = known;
-        expect(definition(id).isVisible?.({})).toBe(true);
-        expect(definition(id).isEnabled?.({})).toBe(true);
-        expect(definition(id).disabledReason?.({})).toBeUndefined();
-      }
+    it("runs in this computer's windows once Decisions says it is on", () => {
+      expect(definition(id).isVisible?.({})).toBe(true);
+      expect(definition(id).isEnabled?.({})).toBe(true);
+      expect(definition(id).disabledReason?.({})).toBeUndefined();
+    });
+
+    it("is listed but waits while Decisions hasn't said whether it is on", async () => {
+      env.switch = "unknown";
+      expect(definition(id).isVisible?.({})).toBe(true);
+      expect(definition(id).isEnabled?.({})).toBe(false);
+      expect(definition(id).disabledReason?.({})).toMatch(/hasn't said/);
+      expect((await dispatch(id)).ok).toBe(false);
+      expect(opened()).toBe("none");
+      expect(listQuestions).not.toHaveBeenCalled();
+    });
+
+    it("is gone while Decisions is off, and a dispatch opens nothing", async () => {
       env.switch = "off";
       expect(definition(id).isVisible?.({})).toBe(false);
       expect(definition(id).isEnabled?.({})).toBe(false);
       expect(definition(id).disabledReason?.({})).toMatch(/Decisions is off/);
+      expect((await dispatch(id)).ok).toBe(false);
+      expect(opened()).toBe("none");
     });
 
-    it("is not offered in a Remote Host's window, whose panes never asked this computer's questions", () => {
+    it("is gone from a Remote Host's window, whose panes never asked this computer's questions", () => {
       env.remote = true;
       expect(definition(id).isVisible?.({})).toBe(false);
       expect(definition(id).isEnabled?.({})).toBe(false);
       expect(definition(id).disabledReason?.({})).toMatch(/Remote Host/);
     });
 
-    it("refuses a dispatch while Decisions is off, opening nothing", async () => {
-      env.switch = "off";
-      const result = await dispatch(id);
-      expect(result.ok).toBe(false);
-      expect(useDecisionsInboxStore.getState().isOpen).toBe(false);
-      expect(useDecisionsQuestionViewStore.getState().isOpen).toBe(false);
-    });
-
-    it("only opens a view when an agent dispatches it, answering, declining and cancelling nothing", async () => {
-      listed(question("q1", { kind: "waiting", reason: "open" }));
-      const result = await dispatch(id, "agent");
-      expect(result.ok).toBe(true);
-      expect(
-        useDecisionsInboxStore.getState().isOpen || useDecisionsQuestionViewStore.getState().isOpen
-      ).toBe(true);
-      for (const write of [
-        client.answerQuestion,
-        client.cancelQuestion,
-        client.declineQuestion,
-        client.resumeAnswer,
-        client.markAnswerHandled,
-      ]) {
-        expect(write).not.toHaveBeenCalled();
+    it.each(["user", "keybinding", "agent"] as const)(
+      "only opens its view when dispatched by %s, answering, declining and cancelling nothing",
+      async (source) => {
+        listed(question("q1", { kind: "waiting", reason: "open" }));
+        expect((await dispatch(id, source)).ok).toBe(true);
+        expect(opened()).toBe(id === "decisions.openInbox" ? "inbox" : "question");
+        for (const [name, write] of Object.entries(writes)) {
+          expect(write, name).not.toHaveBeenCalled();
+        }
       }
-    });
+    );
   });
 
   describe("decisions.openInbox", () => {
     it("opens the inbox at no pane's question, and again while it is open", async () => {
-      expect((await dispatch("decisions.openInbox")).ok).toBe(true);
+      await dispatch("decisions.openInbox");
       const first = useDecisionsInboxStore.getState();
-      expect(first.isOpen).toBe(true);
       expect(first.request.terminalId).toBeNull();
 
       await dispatch("decisions.openInbox");
       expect(useDecisionsInboxStore.getState().request.seq).toBeGreaterThan(first.request.seq);
-    });
-
-    it("asks main before the view has heard, and opens only if Decisions is on", async () => {
-      env.switch = "unknown";
-      client.getStatus.mockResolvedValue({ state: "off" } as DecisionsStatus);
-      expect((await dispatch("decisions.openInbox")).ok).toBe(false);
-      expect(useDecisionsInboxStore.getState().isOpen).toBe(false);
-
-      client.getStatus.mockResolvedValue({ state: "connecting" } as DecisionsStatus);
-      expect((await dispatch("decisions.openInbox")).ok).toBe(true);
-      expect(useDecisionsInboxStore.getState().isOpen).toBe(true);
     });
   });
 
@@ -162,16 +171,15 @@ describe("Decisions actions", () => {
       );
       expect((await dispatch("decisions.openNextQuestion")).ok).toBe(true);
 
-      const view = useDecisionsQuestionViewStore.getState();
-      expect(view.isOpen).toBe(true);
-      expect(view.request!.index).toBe(0);
-      expect(view.request!.threadMessageId).toBeUndefined();
+      expect(opened()).toBe("question");
+      const request = useDecisionsQuestionViewStore.getState().request!;
+      expect(request.index).toBe(0);
+      expect(request.threadMessageId).toBeUndefined();
       expect(
-        view.request!.questions.map((target) =>
+        request.questions.map((target) =>
           target.scope === "reference" ? target.reference.questionId : null
         )
       ).toEqual(["q1", "q2"]);
-      expect(useDecisionsInboxStore.getState().isOpen).toBe(false);
     });
 
     it("opens an answered question at the follow-up asking for a reply", async () => {
@@ -181,24 +189,27 @@ describe("Decisions actions", () => {
     });
 
     it("opens nothing when no question waits on the person", async () => {
-      listed(question("done", { kind: "settled", outcome: "declined" }));
+      listed(
+        question("done", { kind: "settled", outcome: "declined" }),
+        question("typing", { kind: "to-type" })
+      );
       expect((await dispatch("decisions.openNextQuestion")).ok).toBe(true);
-      expect(useDecisionsQuestionViewStore.getState().isOpen).toBe(false);
+      expect(opened()).toBe("none");
     });
 
     it("opens nothing when Decisions is switched off while the list is read", async () => {
-      client.listQuestions.mockImplementation(async () => {
+      listQuestions.mockImplementation(async () => {
         env.switch = "off";
         return { revision: 1, questions: [question("q1", { kind: "queued" })] };
       });
       await dispatch("decisions.openNextQuestion");
-      expect(useDecisionsQuestionViewStore.getState().isOpen).toBe(false);
+      expect(opened()).toBe("none");
     });
 
     it("fails, opening nothing, when the list can't be read", async () => {
-      client.listQuestions.mockRejectedValue(new Error("store closed"));
+      listQuestions.mockRejectedValue(new Error("store closed"));
       expect((await dispatch("decisions.openNextQuestion")).ok).toBe(false);
-      expect(useDecisionsQuestionViewStore.getState().isOpen).toBe(false);
+      expect(opened()).toBe("none");
     });
   });
 });

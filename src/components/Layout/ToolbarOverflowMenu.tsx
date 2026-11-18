@@ -637,6 +637,8 @@ export function OverflowMenu({
         disabled={disabled}
         onClick={() => overflowActions[id]?.()}
         keybinding={keybindingById[id]}
+        // The inbox takes focus; the closing menu mustn't take it back to `…`.
+        focusHandoff={id === "decisions-inbox"}
       >
         {rowContent}
       </DropdownMenuItem>,
