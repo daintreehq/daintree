@@ -2745,6 +2745,38 @@ export class PtyClient extends EventEmitter {
   }
 
   /**
+   * A project's terminal records, read in one request from the shard that
+   * owns the project, where `getTerminalsForProjectAsync` plus a
+   * `getTerminalAsync` per id costs a request per terminal (#17776). Resolves
+   * `[]` when the host doesn't answer, as the id read does.
+   *
+   * Each record is read from the shard that owns its id, where every id-based
+   * call for it goes, as the per-id read did. An id that moved to another
+   * shard while the host answered is read again from its owner, and kept only
+   * when that record names this project: a preserved exit lingers on its old
+   * shard after the id respawns elsewhere (#16811).
+   */
+  async getProjectTerminalsAsync(projectId: string): Promise<TerminalInfoResponse[]> {
+    const shard = this.shardForProjectQuery(projectId);
+    const terminals = await sendPtyHostRpc<TerminalInfoResponse[]>(
+      shard,
+      `project-terminals-${projectId}`,
+      (requestId) => ({ type: "get-project-terminals", projectId, requestId })
+    ).catch(() => []);
+    if (terminals.every((terminal) => this.shardForTerminal(terminal.id) === shard)) {
+      return terminals;
+    }
+    const owned = await Promise.all(
+      terminals.map(async (terminal) => {
+        if (this.shardForTerminal(terminal.id) === shard) return terminal;
+        const moved = await this.getTerminalAsync(terminal.id);
+        return moved?.projectId === projectId ? moved : null;
+      })
+    );
+    return owned.filter((terminal) => terminal !== null);
+  }
+
+  /**
    * Get terminal info by ID. Passing `submissionToken` additionally resolves
    * that submission's correlation record onto the response (#12337) — the same
    * round trip, so a status read correlating a send costs no extra RPC.

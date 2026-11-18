@@ -85,6 +85,21 @@ export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
       });
     },
 
+    // Restore's whole inventory in one reply (#17776), in the registry's id
+    // order. An id whose record is gone by the time it is read is skipped,
+    // the same answer a per-id `get-terminal` would have given it.
+    "get-project-terminals": (msg) => {
+      sendEvent({
+        type: "project-terminals",
+        requestId: msg.requestId,
+        terminals: ptyManager
+          .getTerminalsForProject(msg.projectId)
+          .map((id) => ptyManager.getTerminal(id))
+          .filter((terminal) => terminal !== undefined)
+          .map((terminal) => mapTerminalInfo(terminal, ctx)),
+      });
+    },
+
     "get-terminal-info": (msg) => {
       const info = ptyManager.getTerminalInfo(msg.id);
       sendEvent({

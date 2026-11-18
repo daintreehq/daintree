@@ -8,7 +8,7 @@ import { logInfo } from "../utils/logger.js";
  *
  * A cold view asks `terminal:get-for-project` only once React has booted,
  * ~240 ms after the switch reached main, and then waits ~100 ms for the
- * pty-host to answer (one id list plus one `get-terminal` per id) before it
+ * pty-host to answer (one `get-project-terminals` request) before it
  * can restore a single pane. Main knows the target the instant the switch
  * arrives, so it starts that fetch right away and the handler consumes the
  * in-flight result instead of paying the round trip on the critical path.
@@ -69,15 +69,15 @@ function stopSweepIfIdle(): void {
   sweepTimer = null;
 }
 
-type InventoryPtyClient = Pick<PtyClient, "getTerminalsForProjectAsync" | "getTerminalAsync">;
+type InventoryPtyClient = Pick<PtyClient, "getProjectTerminalsAsync">;
 
 /** The inventory `terminal:get-for-project` returns, minus panes hydration must never rebuild. */
 export async function buildTerminalInventory(
   ptyClient: InventoryPtyClient,
   projectId: string
 ): Promise<BackendTerminalInfo[]> {
-  const terminalIds = await ptyClient.getTerminalsForProjectAsync(projectId);
-  const infos = await Promise.all(terminalIds.map((id) => ptyClient.getTerminalAsync(id)));
+  // One request for every record, in the host's id order (#17776).
+  const infos = await ptyClient.getProjectTerminalsAsync(projectId);
 
   const terminals: BackendTerminalInfo[] = [];
   for (const terminal of infos) {
@@ -87,7 +87,7 @@ export async function buildTerminalInventory(
     // appended by `restorePanelsPhase` as a grid orphan (#12183) — which is
     // how a renderer crash could surface the assistant's conversation as a
     // pane in the main area.
-    if (terminal && terminal.kind !== "dev-preview" && !isAssistantTerminalRecord(terminal)) {
+    if (terminal.kind !== "dev-preview" && !isAssistantTerminalRecord(terminal)) {
       terminals.push({
         id: terminal.id,
         projectId: terminal.projectId,

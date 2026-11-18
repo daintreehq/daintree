@@ -19,16 +19,19 @@ function terminal(id: string, kind = "terminal", extra: Record<string, unknown> 
 }
 
 describe("buildTerminalInventory", () => {
-  it("lists the project's terminals and drops dev-preview and help PTYs", async () => {
+  it("lists the project's terminals in host order and drops dev-preview and help PTYs", async () => {
     const ptyClient = {
-      getTerminalsForProjectAsync: vi.fn(async () => ["t1", "dp", "help-1", "gone"]),
-      getTerminalAsync: vi.fn(async (id: string) =>
-        id === "gone" ? null : terminal(id, id === "dp" ? "dev-preview" : "terminal")
-      ),
+      getProjectTerminalsAsync: vi.fn(async () => [
+        terminal("t2"),
+        terminal("dp", "dev-preview"),
+        terminal("help-1"),
+        terminal("t1"),
+      ]),
     };
     const inventory = await buildTerminalInventory(ptyClient, "p1");
-    expect(inventory.map((t) => t.id)).toEqual(["t1"]);
-    expect(ptyClient.getTerminalAsync).toHaveBeenCalledTimes(4);
+    expect(inventory.map((t) => t.id)).toEqual(["t2", "t1"]);
+    expect(ptyClient.getProjectTerminalsAsync).toHaveBeenCalledTimes(1);
+    expect(ptyClient.getProjectTerminalsAsync).toHaveBeenCalledWith("p1");
   });
 
   it("drops an assistant PTY the renderer has not marked yet", async () => {
@@ -39,13 +42,27 @@ describe("buildTerminalInventory", () => {
     // saved panel as a grid orphan. The spawn-time record stamp closes that
     // window, since it is on the record before the PTY is reachable at all.
     const ptyClient = {
-      getTerminalsForProjectAsync: vi.fn(async () => ["t1", "assistant"]),
-      getTerminalAsync: vi.fn(async (id: string) =>
-        terminal(id, "terminal", id === "assistant" ? { isAssistantTerminal: true } : {})
-      ),
+      getProjectTerminalsAsync: vi.fn(async () => [
+        terminal("t1"),
+        terminal("assistant", "terminal", { isAssistantTerminal: true }),
+      ]),
     };
     const inventory = await buildTerminalInventory(ptyClient, "p1");
     expect(inventory.map((t) => t.id)).toEqual(["t1"]);
+  });
+
+  it("keeps each pane's live grid, and an exited terminal without one", async () => {
+    const ptyClient = {
+      getProjectTerminalsAsync: vi.fn(async () => [
+        terminal("live", "terminal", { ptyCols: 203, ptyRows: 51 }),
+        terminal("exited", "terminal", { hasPty: false }),
+      ]),
+    };
+    const [live, exited] = await buildTerminalInventory(ptyClient, "p1");
+    expect(live).toMatchObject({ id: "live", ptyCols: 203, ptyRows: 51, hasPty: true });
+    expect(exited).toMatchObject({ id: "exited", hasPty: false });
+    expect(exited?.ptyCols).toBeUndefined();
+    expect(exited?.ptyRows).toBeUndefined();
   });
 });
 
