@@ -167,6 +167,7 @@ describe("getRetryability", () => {
       "push-rejected-outdated",
       "push-rejected-policy",
       "pull-rebase-review-stale",
+      "repo-operation-changed",
       "pathspec-invalid",
       "lfs-missing",
       "lfs-quota-exceeded",
@@ -175,6 +176,15 @@ describe("getRetryability", () => {
       const err = new GitOperationError(reason, "boom");
       expect(getRetryability(err)).toBe("none");
     }
+  });
+
+  it("never auto-retries an abort or continue refused because the operation changed", () => {
+    // Retrying would only send the same stale choice again (#17559). An errno
+    // that is otherwise transient must not override the reason.
+    const err = Object.assign(new GitOperationError("repo-operation-changed", "changed"), {
+      code: "EBUSY",
+    });
+    expect(getRetryability(err)).toBe("none");
   });
 
   it("falls through to errno when gitReason is 'unknown'", () => {

@@ -10,7 +10,8 @@ import {
   useState,
 } from "react";
 import type { ConflictSideChoice, StagingFileEntry, GitStatus } from "@shared/types";
-import type { GitDiffSide } from "@shared/types/git";
+import type { GitDiffSide, RepoOperationPin } from "@shared/types/git";
+import { isClientGitError } from "@/utils/clientGitError";
 import type { PanelLocation } from "@shared/types/panel";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
 import { cn } from "@/lib/utils";
@@ -1256,6 +1257,17 @@ export function ReviewHubContent({
     if (!isOpen || !autoStageOnOpen) return;
     if (!status || !statusIsFresh) return;
     if (hasAutoStagedRef.current) return;
+    // Never over a conflict or a halted operation: staging everything would
+    // stage conflicted files markers and all, which marks them resolved, and
+    // the conflict panel owns what gets staged there. Opening the hub to
+    // resolve or continue one is ordinary (#17559), not an edge case. The
+    // one-shot is spent here too, as it is over staged files below: the
+    // tree the operation leaves when it finishes is not what was opened.
+    const halted = status.repoState !== "CLEAN" && status.repoState !== "DIRTY";
+    if (status.conflicted.length > 0 || halted) {
+      hasAutoStagedRef.current = true;
+      return;
+    }
     if (status.staged.length > 0) {
       // Already staged from a prior session — skip and mark as handled.
       hasAutoStagedRef.current = true;
@@ -1337,43 +1349,60 @@ export function ReviewHubContent({
       setSelectedBaseBranchFile(null);
     }
   }, [statusBranch, mainBranch, diffMode, invalidateBaseBranch]);
-  const handleAbortOperation = useCallback(async () => {
-    setActionError(null);
-    debouncedBgRefreshRef.current?.cancel();
-    try {
-      await window.electron.git.abortRepositoryOperation(worktreePath);
-      await refresh();
-    } catch (err) {
-      setActionError({
-        title: "Couldn't abort repository operation",
-        detail: formatErrorMessage(err, "Failed to abort repository operation"),
-      });
-      throw err;
-    }
-  }, [worktreePath, refresh, debouncedBgRefreshRef]);
+  // Both carry the operation the panel showed when the user chose (#17559),
+  // and Main refuses if another has replaced it. That refusal ran no git, so
+  // the banner offers no Retry, which would only send the same stale choice
+  // again; the refresh puts the operation that is there now on screen to
+  // choose from instead.
+  const handleAbortOperation = useCallback(
+    async (chosen: RepoOperationPin) => {
+      setActionError(null);
+      debouncedBgRefreshRef.current?.cancel();
+      try {
+        await window.electron.git.abortRepositoryOperation(worktreePath, chosen);
+        await refresh();
+      } catch (err) {
+        const changed = isClientGitError(err) && err.gitReason === "repo-operation-changed";
+        setActionError({
+          title: "Couldn't abort repository operation",
+          detail: formatErrorMessage(err, "Failed to abort repository operation"),
+        });
+        if (changed) void refresh().catch(() => {});
+        throw err;
+      }
+    },
+    [worktreePath, refresh, debouncedBgRefreshRef]
+  );
 
   // Each handler retries itself from its own error banner. A named function
   // expression referenced from inside its own body is a declaration the React
   // Compiler cannot hoist, and it abandons the whole component over it, so the
-  // recursion goes through a local const instead.
-  const handleContinueOperation = useCallback((): Promise<void> => {
-    const continueOperation = async (): Promise<void> => {
-      setActionError(null);
-      debouncedBgRefreshRef.current?.cancel();
-      try {
-        await window.electron.git.continueRepositoryOperation(worktreePath);
-        await refresh();
-      } catch (err) {
-        setActionError({
-          title: "Couldn't continue repository operation",
-          detail: formatErrorMessage(err, "Failed to continue repository operation"),
-          retry: () => void continueOperation().catch(() => {}),
-        });
-        throw err;
-      }
-    };
-    return continueOperation();
-  }, [worktreePath, refresh, debouncedBgRefreshRef]);
+  // recursion goes through a local const instead. The retry keeps the choice it
+  // was made for, so it continues that operation or is refused, never whichever
+  // one has replaced it since.
+  const handleContinueOperation = useCallback(
+    (chosen: RepoOperationPin): Promise<void> => {
+      const continueOperation = async (): Promise<void> => {
+        setActionError(null);
+        debouncedBgRefreshRef.current?.cancel();
+        try {
+          await window.electron.git.continueRepositoryOperation(worktreePath, chosen);
+          await refresh();
+        } catch (err) {
+          const changed = isClientGitError(err) && err.gitReason === "repo-operation-changed";
+          setActionError({
+            title: "Couldn't continue repository operation",
+            detail: formatErrorMessage(err, "Failed to continue repository operation"),
+            ...(changed ? {} : { retry: () => void continueOperation().catch(() => {}) }),
+          });
+          if (changed) void refresh().catch(() => {});
+          throw err;
+        }
+      };
+      return continueOperation();
+    },
+    [worktreePath, refresh, debouncedBgRefreshRef]
+  );
 
   const handleOpenInEditor = useCallback(
     (args: string | { path: string; line?: number }): Promise<void> => {

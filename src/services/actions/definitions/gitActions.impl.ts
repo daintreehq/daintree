@@ -32,6 +32,7 @@ import type {
   ConflictedFileEntry,
   GitPullRebaseReview,
   GitPushReview,
+  RepoOperationPin,
   StagingFileEntry,
 } from "@shared/types/git";
 import { projectPulseForAction } from "@shared/utils/pulseProjection";
@@ -750,6 +751,10 @@ export const gitActionRuns = {
       operation?: RepoOperationState;
     };
     const resolvedCwd = requireWorktreePath(location, ctx);
+    // The operation the user approved, so Main can refuse one that replaced it
+    // while the confirm sat open (#17559). An agent dispatch confirms nothing,
+    // has nothing to bind to, and aborts what it finds.
+    let chosen: RepoOperationPin | undefined;
     if (ctx.dispatchSource !== "agent") {
       const result = await useGitWorktreeOperationConfirmStore.getState().requestConfirmation({
         kind: "abort-operation",
@@ -758,10 +763,11 @@ export const gitActionRuns = {
         // only the label to show while that read is in flight.
         operation: operation ?? "REBASING",
       });
-      if (!result.confirmed) return;
+      if (!result.confirmed || !result.operation) return;
+      chosen = result.operation;
     }
     try {
-      await window.electron.git.abortRepositoryOperation(resolvedCwd);
+      await window.electron.git.abortRepositoryOperation(resolvedCwd, chosen);
     } catch (error) {
       await refreshWorktree(location, ctx);
       reportGitFailure(error, location, ctx);

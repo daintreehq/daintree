@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { GitBaseIntegrationKind } from "@shared/types/git";
+import type { GitBaseIntegrationKind, RepoOperationPin } from "@shared/types/git";
 import type { RepoOperationState } from "@/components/Git/repoOperationCopy";
 
 /**
@@ -42,9 +42,20 @@ export type GitWorktreeOperationConfirmRequest =
 export interface GitWorktreeOperationConfirmResult {
   confirmed: boolean;
   pinned: { branch?: string; headOid?: string; baseOid?: string } | null;
+  /**
+   * The abort kind's equivalent of `pinned`: the operation the dialog's own
+   * read found, which is what the user agreed to discard (#17559). The abort
+   * hands it to Main, which refuses if a different operation is there by
+   * then, same kind included. `null` for the base kinds and when declined.
+   */
+  operation: RepoOperationPin | null;
 }
 
-const DECLINED: GitWorktreeOperationConfirmResult = { confirmed: false, pinned: null };
+const DECLINED: GitWorktreeOperationConfirmResult = {
+  confirmed: false,
+  pinned: null,
+  operation: null,
+};
 
 interface PendingConfirmation {
   resolve: (result: GitWorktreeOperationConfirmResult) => void;
@@ -65,7 +76,8 @@ interface GitWorktreeOperationConfirmState {
   ) => Promise<GitWorktreeOperationConfirmResult>;
   resolveConfirmation: (
     ok: boolean,
-    pinned?: { branch?: string; headOid?: string; baseOid?: string } | null
+    pinned?: { branch?: string; headOid?: string; baseOid?: string } | null,
+    operation?: RepoOperationPin | null
   ) => void;
 }
 
@@ -92,11 +104,12 @@ export const useGitWorktreeOperationConfirmStore = create<GitWorktreeOperationCo
 
     resolveConfirmation: (
       ok: boolean,
-      pinned: { branch?: string; headOid?: string; baseOid?: string } | null = null
+      pinned: { branch?: string; headOid?: string; baseOid?: string } | null = null,
+      operation: RepoOperationPin | null = null
     ) => {
       const pending = get().pendingConfirm;
       if (pending) {
-        pending.resolve(ok ? { confirmed: true, pinned } : DECLINED);
+        pending.resolve(ok ? { confirmed: true, pinned, operation } : DECLINED);
         set({ pendingConfirm: null });
       }
     },

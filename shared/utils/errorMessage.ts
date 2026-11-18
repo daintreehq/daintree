@@ -96,6 +96,7 @@ const GIT_REASON_TITLES = {
   "push-config-unsupported": "Push not possible with this remote's settings",
   "push-review-stale": "Branch changed since review",
   "pull-rebase-review-stale": "Branch changed since preview",
+  "repo-operation-changed": "Git operation changed",
   "pathspec-invalid": "Branch or path not found",
   "lfs-missing": "Git LFS object missing",
   "lfs-quota-exceeded": "Git LFS quota exceeded",

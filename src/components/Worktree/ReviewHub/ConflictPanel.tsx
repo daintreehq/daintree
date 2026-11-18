@@ -7,6 +7,8 @@ import type {
   StagingStatus,
 } from "@shared/types";
 import type { ConflictMarkerScanEntry } from "@shared/types/ipc/git";
+import type { RepoOperationPin } from "@shared/types/git";
+import { isClientGitError } from "@/utils/clientGitError";
 import { cn } from "@/lib/utils";
 import { PathTail } from "@/components/ui/PathTail";
 import { UI_EXIT_DURATION } from "@/lib/animationUtils";
@@ -72,8 +74,12 @@ interface ConflictPanelProps {
   onMarkResolved: (filePath: string) => Promise<void> | void;
   onOpenInEditor: (args: { path: string; line?: number }) => Promise<void> | void;
   onCheckoutOursTheirs: (filePath: string, choice: ConflictSideChoice) => Promise<void> | void;
-  onAbort: () => Promise<void>;
-  onContinue: () => Promise<void>;
+  /**
+   * Both receive the operation the panel showed when the user chose, so Main
+   * can refuse one that replaced it in the meantime (#17559).
+   */
+  onAbort: (chosen: RepoOperationPin) => Promise<void>;
+  onContinue: (chosen: RepoOperationPin) => Promise<void>;
   /**
    * `operation` (default) owns the whole pane during a merge, rebase,
    * cherry-pick or revert: the operation header, the worklist, the resolved
@@ -458,6 +464,9 @@ export function ConflictPanel({
 }: ConflictPanelProps) {
   const isWorklist = variant === "worklist";
   const [isAbortOpen, setIsAbortOpen] = useState(false);
+  // The operation on screen when Abort opened its confirm, which is the one
+  // the confirm asks about and the one its approval may end.
+  const [abortChosen, setAbortChosen] = useState<RepoOperationPin | null>(null);
   const [pendingCheckout, setPendingCheckout] = useState<{
     filePath: string;
     choice: ConflictSideChoice;
@@ -522,6 +531,26 @@ export function ConflictPanel({
   );
   const operationLabel = operationKey ? OPERATION_LABEL[operationKey] : "Operation";
   const operationNoun = operationLabel.toLowerCase();
+  const shownOperationId = status.repoOperationId;
+  // A halted operation this read couldn't identify (an unreadable sentinel, or
+  // one that changed while the status was read): Main refuses any choice of it,
+  // so neither Abort nor Continue is offered until a read can say which it is.
+  const unidentified = operationKey !== null && shownOperationId == null;
+
+  // A status read showing a different operation than the open abort confirm
+  // asks about closes it: its question, and any approval of it, are about an
+  // operation that is gone. An unidentified read leaves it open; Main checks
+  // the approval against the worktree anyway, and refuses a mismatch. Never
+  // mid-abort, when the operation ending is the abort itself succeeding.
+  if (
+    isAbortOpen &&
+    !isAborting &&
+    abortChosen !== null &&
+    (abortChosen.operation !== operationKey ||
+      (shownOperationId != null && shownOperationId !== abortChosen.operationId))
+  ) {
+    setIsAbortOpen(false);
+  }
 
   // Filter optimistic resolves out of the live worklist so the row leaves the
   // list as soon as `onMarkResolved` is called. The parent status refresh
@@ -608,7 +637,8 @@ export function ConflictPanel({
     operationKey === "APPLYING_MAILBOX" && !hasStagedChanges && optimisticResolved.size === 0;
   const canContinue = conflictCount === 0 && !mailboxNeedsChanges;
   const needsUser = conflictCount > 0 || mailboxNeedsChanges;
-  const continueBlocked = !canContinue || isAborting || isContinuing || busyFile !== null;
+  const continueBlocked =
+    !canContinue || unidentified || isAborting || isContinuing || busyFile !== null;
 
   // Scan for hunk counts + first-marker line on every status read that lands,
   // not only when the conflicted path set moves. Fixing a region inside
@@ -658,27 +688,39 @@ export function ConflictPanel({
   }, [worktreePath, conflictedFiles, scanNonce]);
 
   const handleAbort = useCallback(async () => {
+    // A closed confirm keeps its footer through the exit animation, and a key
+    // press there must not approve what was just dismissed.
+    if (abortChosen === null || !isAbortOpen) return;
     const unmoved = startUnmoved();
     setIsAborting(true);
     try {
-      await onAbort();
+      await onAbort(abortChosen);
       if (unmoved()) setIsAbortOpen(false);
+    } catch (err) {
+      // The hub's banner reports it, and the confirm stays open over any other
+      // failure. One refused because the operation changed asks about an
+      // operation that is gone, so it closes and the banner says why. These
+      // run from click handlers, where a rethrow is only an unhandled rejection.
+      const changed = isClientGitError(err) && err.gitReason === "repo-operation-changed";
+      if (changed && unmoved()) setIsAbortOpen(false);
     } finally {
       if (unmoved()) setIsAborting(false);
     }
-  }, [onAbort]);
+  }, [abortChosen, isAbortOpen, onAbort]);
 
   const handleContinue = useCallback(async () => {
     // `aria-disabled` keeps Continue focusable, so the veto lives here.
-    if (continueBlocked) return;
+    if (continueBlocked || operationKey === null) return;
     const unmoved = startUnmoved();
     setIsContinuing(true);
     try {
-      await onContinue();
+      await onContinue({ operation: operationKey, operationId: shownOperationId });
+    } catch {
+      // Reported by the hub's banner, as for abort.
     } finally {
       if (unmoved()) setIsContinuing(false);
     }
-  }, [continueBlocked, onContinue]);
+  }, [continueBlocked, onContinue, operationKey, shownOperationId]);
 
   // Read at the moment of intent: by the time a resolve starts, the busy row
   // has disabled the control that held focus, or a dialog holds it.
@@ -824,8 +866,9 @@ export function ConflictPanel({
     status.rebaseStep != null &&
     status.rebaseTotalSteps != null &&
     status.rebaseStep < status.rebaseTotalSteps;
-  const summary =
-    conflictCount > 0
+  const summary = unidentified
+    ? "Abort and Continue wait until it can be read — Refresh, or finish it from a terminal"
+    : conflictCount > 0
       ? `${pluralize(conflictCount, "conflicted file")} — resolve each, then continue`
       : mailboxNeedsChanges
         ? "Stage this patch's changes to continue, or run git am --skip in a terminal to drop it"
@@ -884,11 +927,13 @@ export function ConflictPanel({
             <div className="flex-1 min-w-0">
               <div className="flex items-baseline gap-2 flex-wrap">
                 <h3 className="text-sm font-semibold text-text-primary">
-                  {conflictCount > 0
-                    ? `Resolve ${operationNoun} conflicts`
-                    : mailboxNeedsChanges
-                      ? "Nothing staged for this patch"
-                      : `Ready to continue ${operationNoun}`}
+                  {unidentified
+                    ? `Couldn't identify this ${operationNoun}`
+                    : conflictCount > 0
+                      ? `Resolve ${operationNoun} conflicts`
+                      : mailboxNeedsChanges
+                        ? "Nothing staged for this patch"
+                        : `Ready to continue ${operationNoun}`}
                 </h3>
                 {operationState === "REBASING" &&
                   status.rebaseStep != null &&
@@ -915,8 +960,12 @@ export function ConflictPanel({
             <Button
               variant="ghost-danger"
               size="xs"
-              onClick={() => setIsAbortOpen(true)}
-              disabled={isAborting || isContinuing}
+              onClick={() => {
+                if (operationKey === null) return;
+                setAbortChosen({ operation: operationKey, operationId: shownOperationId });
+                setIsAbortOpen(true);
+              }}
+              disabled={unidentified || isAborting || isContinuing}
               className="shrink-0"
               data-testid="conflict-abort"
             >

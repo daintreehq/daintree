@@ -1,6 +1,6 @@
 import type { PushProgressEvent } from "./gitPush.js";
 import type { IdArrayFieldEdit } from "../../utils/layoutMerge.js";
-import type { GitStatus, StagingStatus } from "../git.js";
+import type { GitStatus, RepoOperationPin, StagingStatus } from "../git.js";
 import type { AgentId } from "../agent.js";
 import type { TabGroup, PanelTitleMode } from "../panel.js";
 import type { WorktreeState } from "../worktree.js";
@@ -1362,8 +1362,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): Promise<void>;
     onPushProgress(callback: (event: PushProgressEvent) => void): () => void;
     getStagingStatus(cwd: string): Promise<StagingStatus>;
-    abortRepositoryOperation(cwd: string): Promise<void>;
-    continueRepositoryOperation(cwd: string): Promise<void>;
+    /**
+     * `expected` is the operation the user chose, from the status they saw:
+     * the handler refuses with `repo-operation-changed`, running no git, unless
+     * that same operation is still in progress. Every surface that shows an
+     * operation passes one; it is omitted only by a caller that showed none
+     * (an agent, the palette's generic command), which acts on what it finds.
+     */
+    abortRepositoryOperation(cwd: string, expected?: RepoOperationPin): Promise<void>;
+    continueRepositoryOperation(cwd: string, expected?: RepoOperationPin): Promise<void>;
     scanConflictMarkers(
       cwd: string,
       filePaths: string[]

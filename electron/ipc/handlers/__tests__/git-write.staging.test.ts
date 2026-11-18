@@ -4,7 +4,7 @@ import { syncBuiltinESMExports } from "node:module";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { StagingStatus } from "../../../../shared/types/git.js";
+import type { RepoOperationPin, StagingStatus } from "../../../../shared/types/git.js";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -59,6 +59,8 @@ const originalSpawn = childProcess.spawn;
 // A `git status` that exits non-zero without a word, which the default profile
 // would read as an empty, clean status.
 const silentStatusFailure = { on: false };
+/** Runs once, synchronously, as the next `git status` is spawned. */
+let duringNextStatus: (() => void) | null = null;
 
 /** The git subcommand, past the `-c key=value` pairs every hardened call leads with. */
 function subcommand(args: readonly string[]): string | undefined {
@@ -119,7 +121,14 @@ beforeAll(async () => {
   process.env.XDG_CONFIG_HOME = path.join(home, ".config");
   process.env.GIT_CONFIG_NOSYSTEM = "1";
   (childProcess as { spawn: typeof originalSpawn }).spawn = ((...args: unknown[]) => {
-    if (Array.isArray(args[1])) spawned.push(args[1] as string[]);
+    if (Array.isArray(args[1])) {
+      spawned.push(args[1] as string[]);
+      if (duringNextStatus && subcommand(args[1] as string[]) === "status") {
+        const run = duringNextStatus;
+        duringNextStatus = null;
+        run();
+      }
+    }
     if (silentStatusFailure.on && subcommand(args[1] as string[]) === "status") {
       args = [process.execPath, ["-e", "process.exit(1)"], args[2]];
     }
@@ -882,6 +891,10 @@ describe("git-write repository operation handlers on a halted git am (real git)"
     handler(CHANNELS.GIT_CONTINUE_REPOSITORY_OPERATION)(null, repo) as Promise<void>;
   const abortOperation = () =>
     handler(CHANNELS.GIT_ABORT_REPOSITORY_OPERATION)(null, repo) as Promise<void>;
+  const continueOperationWith = (pin: RepoOperationPin) =>
+    handler(CHANNELS.GIT_CONTINUE_REPOSITORY_OPERATION)(null, repo, pin) as Promise<void>;
+  const abortOperationWith = (pin: RepoOperationPin) =>
+    handler(CHANNELS.GIT_ABORT_REPOSITORY_OPERATION)(null, repo, pin) as Promise<void>;
   const amMarker = () => path.join(repo, ".git", "rebase-apply", "applying");
 
   /**
@@ -970,5 +983,206 @@ describe("git-write repository operation handlers on a halted git am (real git)"
     expect(fs.existsSync(path.join(repo, ".git", "rebase-apply"))).toBe(false);
     expect(git(repo, "rev-parse", "HEAD").trim()).toBe(tip);
     expect(git(repo, "status", "--porcelain")).toBe("");
+  });
+
+  // Review Hub pins Abort and Continue to the session it shows (#17559), so a
+  // halted am needs an identity of its own, and one a restart changes.
+  it("pins the session it shows, and refuses the pin once the same series restarts", async () => {
+    haltGitAm();
+    const shown = await stagingStatus();
+    expect(shown.repoOperationId).toEqual(expect.any(String));
+    const chosen: RepoOperationPin = {
+      operation: "APPLYING_MAILBOX",
+      operationId: shown.repoOperationId,
+    };
+
+    git(repo, "am", "--abort");
+    // Past the coarse clock some filesystems stamp from, as a real restart is.
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const patches = path.join(tmp, "patches");
+    const series = fs
+      .readdirSync(patches)
+      .sort()
+      .map((name) => path.join(patches, name));
+    expect(() =>
+      execFileSync("git", ["am", "-3", ...series], { cwd: repo, env: GIT_ENV, stdio: "ignore" })
+    ).toThrow();
+    // Resolved and staged, so a continue that ran would commit the new session's patch.
+    fs.writeFileSync(path.join(repo, "f.txt"), "resolved\n");
+    git(repo, "add", "f.txt");
+
+    const mark = spawned.length;
+    await expect(abortOperationWith(chosen)).rejects.toMatchObject({
+      reason: "repo-operation-changed",
+    });
+    await expect(continueOperationWith(chosen)).rejects.toMatchObject({
+      reason: "repo-operation-changed",
+    });
+    expect(spawnedSince(mark).map(subcommand)).not.toContain("am");
+    expect(fs.existsSync(amMarker())).toBe(true);
+
+    const current = (await stagingStatus()).repoOperationId;
+    expect(current).toEqual(expect.any(String));
+    expect(current).not.toBe(chosen.operationId);
+    await continueOperationWith({ operation: "APPLYING_MAILBOX", operationId: current });
+    expect(fs.existsSync(path.join(repo, ".git", "rebase-apply"))).toBe(false);
+    expect(git(repo, "log", "-1", "--format=%s").trim()).toBe("topic change");
+  });
+});
+
+describe("abort and continue act only on the operation the user chose (real git, #17559)", () => {
+  /** A git command expected to stop on a conflict, which exits non-zero. */
+  function gitHalting(cwd: string, ...args: string[]): void {
+    try {
+      git(cwd, ...args);
+    } catch {
+      // The halt is the point; the tests assert on the state it leaves.
+    }
+  }
+
+  const statusAt = (cwd: string) =>
+    handler(CHANNELS.GIT_GET_STAGING_STATUS)(null, cwd) as Promise<StagingStatus>;
+  const abortAt = (cwd: string, pin?: RepoOperationPin) =>
+    handler(CHANNELS.GIT_ABORT_REPOSITORY_OPERATION)(null, cwd, pin);
+  const continueAt = (cwd: string, pin?: RepoOperationPin) =>
+    handler(CHANNELS.GIT_CONTINUE_REPOSITORY_OPERATION)(null, cwd, pin);
+
+  async function pinAt(cwd: string): Promise<RepoOperationPin> {
+    const status = await statusAt(cwd);
+    expect(status.repoState).not.toMatch(/^(CLEAN|DIRTY)$/);
+    expect(status.repoOperationId).toEqual(expect.any(String));
+    return {
+      operation: status.repoState as RepoOperationPin["operation"],
+      operationId: status.repoOperationId,
+    };
+  }
+
+  /** `main` and `side` both change f.txt, so merging or rebasing one onto the other conflicts. */
+  function divergedBranches(sideCommits = 1): void {
+    // The handlers' own git commits on continue, and reads no identity from the
+    // test's environment.
+    git(repo, "config", "user.name", "Test");
+    git(repo, "config", "user.email", "test@example.test");
+    commitFiles({ "f.txt": "base\n" });
+    git(repo, "checkout", "-q", "-b", "side");
+    for (let i = 1; i <= sideCommits; i++) {
+      fs.writeFileSync(path.join(repo, "f.txt"), `side ${i}\n`);
+      git(repo, "commit", "-q", "-am", `side ${i}`);
+    }
+    git(repo, "checkout", "-q", "main");
+    fs.writeFileSync(path.join(repo, "f.txt"), "main\n");
+    git(repo, "commit", "-q", "-am", "main");
+  }
+
+  // Linux stamps files from a coarse clock, a jiffy (up to 10ms) wide, and can
+  // hand a just-freed inode straight back: a restart inside the same tick could
+  // otherwise land on an identical file identity. Real clients take far longer
+  // than this between an abort and a fresh start.
+  const pastTimestampGranularity = () => new Promise((resolve) => setTimeout(resolve, 25));
+
+  it("refuses a merge restarted on the same commits, for abort and continue, then accepts a fresh choice", async () => {
+    divergedBranches();
+    gitHalting(repo, "merge", "side");
+    const chosen = await pinAt(repo);
+    expect(chosen.operation).toBe("MERGING");
+
+    git(repo, "merge", "--abort");
+    await pastTimestampGranularity();
+    gitHalting(repo, "merge", "side");
+    // Resolved and staged, so a continue that ran would commit the new merge.
+    fs.writeFileSync(path.join(repo, "f.txt"), "resolved\n");
+    git(repo, "add", "f.txt");
+    const mergeHead = path.join(repo, ".git", "MERGE_HEAD");
+
+    const mark = spawned.length;
+    await expect(abortAt(repo, chosen)).rejects.toMatchObject({
+      reason: "repo-operation-changed",
+    });
+    await expect(continueAt(repo, chosen)).rejects.toMatchObject({
+      reason: "repo-operation-changed",
+    });
+    expect(spawnedSince(mark).map(subcommand)).not.toContain("merge");
+    expect(fs.existsSync(mergeHead)).toBe(true);
+    expect(git(repo, "diff", "--cached", "--name-only")).toBe("f.txt\n");
+
+    const current = await pinAt(repo);
+    expect(current.operationId).not.toBe(chosen.operationId);
+    await abortAt(repo, current);
+    expect(fs.existsSync(mergeHead)).toBe(false);
+  });
+
+  it("refuses an operation of another kind, and one that has ended", async () => {
+    divergedBranches();
+    gitHalting(repo, "merge", "side");
+    const chosen = await pinAt(repo);
+
+    git(repo, "merge", "--abort");
+    await expect(abortAt(repo, chosen)).rejects.toThrow(/no longer in progress/);
+
+    gitHalting(repo, "cherry-pick", "side");
+    await expect(abortAt(repo, chosen)).rejects.toThrow(/cherry-pick is in progress now/);
+    expect(fs.existsSync(path.join(repo, ".git", "CHERRY_PICK_HEAD"))).toBe(true);
+  });
+
+  it("keeps one rebase's pin across its steps in a linked worktree", async () => {
+    divergedBranches(2);
+    const linked = path.join(tmp, "linked");
+    git(repo, "worktree", "add", "-q", linked, "side");
+    gitHalting(linked, "rebase", "main");
+    const chosen = await pinAt(linked);
+    expect(chosen.operation).toBe("REBASING");
+
+    // Resolving step 1 and continuing stops again on step 2's conflict, which
+    // the handler reports as a failure while the rebase has moved on.
+    fs.writeFileSync(path.join(linked, "f.txt"), "resolved 1\n");
+    git(linked, "add", "f.txt");
+    await expect(continueAt(linked, chosen)).rejects.toThrow(/could not apply/i);
+    const second = await statusAt(linked);
+    expect(second.repoState).toBe("REBASING");
+    expect(second.rebaseStep).toBe(2);
+    expect(second.repoOperationId).toBe(chosen.operationId);
+
+    await abortAt(linked, chosen);
+    expect((await statusAt(linked)).repoState).toBe("CLEAN");
+    expect(git(linked, "log", "-1", "--format=%s")).toBe("side 2\n");
+  });
+
+  it("withholds the id when the merge is replaced while the status is read", async () => {
+    divergedBranches();
+    gitHalting(repo, "merge", "side");
+    const mergeHead = path.join(repo, ".git", "MERGE_HEAD");
+    // Another merge in its place mid-read: the counts would be the old one's.
+    const otherCommit = git(repo, "rev-parse", "main");
+    duringNextStatus = () => {
+      fs.rmSync(mergeHead);
+      fs.writeFileSync(mergeHead, otherCommit);
+    };
+
+    const status = await statusAt(repo);
+    expect(duringNextStatus).toBeNull();
+    expect(status.repoState).toBe("MERGING");
+    expect(status.repoOperationId).toBeNull();
+    // The next read, with nothing changing under it, identifies it again.
+    expect((await statusAt(repo)).repoOperationId).toEqual(expect.any(String));
+  });
+
+  it("withholds the id when a merge starts while the status is read", async () => {
+    divergedBranches();
+    const sideCommit = git(repo, "rev-parse", "side");
+    duringNextStatus = () => {
+      fs.writeFileSync(path.join(repo, ".git", "MERGE_HEAD"), sideCommit);
+    };
+
+    const status = await statusAt(repo);
+    expect(duringNextStatus).toBeNull();
+    expect(status.repoState).toBe("MERGING");
+    expect(status.repoOperationId).toBeNull();
+  });
+
+  it("reports no operation id for a clean worktree", async () => {
+    commitFiles({ "f.txt": "base\n" });
+    const status = await stagingStatus();
+    expect(status.repoState).toBe("CLEAN");
+    expect(status.repoOperationId).toBeNull();
   });
 });

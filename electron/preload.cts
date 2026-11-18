@@ -42,6 +42,7 @@ import type {
   ConflictSideChoice,
   GitPullRebaseReview,
   GitPushReview,
+  RepoOperationPin,
 } from "../shared/types/git.js";
 import type { PluginPerfSnapshot } from "../shared/types/pluginMetrics.js";
 import type { PluginRendererMetricsEnvelope } from "../shared/types/ipc/pluginMetrics.js";
@@ -2285,11 +2286,11 @@ function buildElectronApi(): ElectronAPI {
 
       getStagingStatus: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_GET_STAGING_STATUS, cwd),
 
-      abortRepositoryOperation: (cwd: string) =>
-        _unwrappingInvoke(CHANNELS.GIT_ABORT_REPOSITORY_OPERATION, cwd),
+      abortRepositoryOperation: (cwd: string, expected?: RepoOperationPin) =>
+        _unwrappingInvoke(CHANNELS.GIT_ABORT_REPOSITORY_OPERATION, cwd, expected),
 
-      continueRepositoryOperation: (cwd: string) =>
-        _unwrappingInvoke(CHANNELS.GIT_CONTINUE_REPOSITORY_OPERATION, cwd),
+      continueRepositoryOperation: (cwd: string, expected?: RepoOperationPin) =>
+        _unwrappingInvoke(CHANNELS.GIT_CONTINUE_REPOSITORY_OPERATION, cwd, expected),
 
       scanConflictMarkers: (cwd: string, filePaths: string[]) =>
         _unwrappingInvoke(CHANNELS.GIT_SCAN_CONFLICT_MARKERS, { cwd, filePaths }),

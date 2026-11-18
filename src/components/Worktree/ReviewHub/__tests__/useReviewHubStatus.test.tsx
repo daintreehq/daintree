@@ -32,6 +32,7 @@ const status: StagingStatus = {
   pushDestination: { remote: "origin", branch: "feature" },
   pullSource: { remote: "origin", branch: "feature" },
   repoState: "DIRTY",
+  repoOperationId: null,
   rebaseStep: null,
   rebaseTotalSteps: null,
   rebaseSequence: null,
