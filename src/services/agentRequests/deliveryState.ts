@@ -22,10 +22,12 @@ export type DeliveryState =
  * observed waiting at its own prompt qualifies: a trust or approval question is
  * also "waiting", and a request typed into it would answer the question.
  */
+export type AgentReadiness = "ready" | "needs-you" | "not-yet";
+
 export function launchReadiness(
   agentState: AgentState | null | undefined,
   waitingReason: string | undefined
-): "ready" | "needs-you" | "not-yet" {
+): AgentReadiness {
   if (agentState === "waiting") {
     return waitingReason === "question" || waitingReason === "approval" || waitingReason === "error"
       ? "needs-you"
@@ -33,6 +35,26 @@ export function launchReadiness(
   }
   if (agentState === "idle") return "ready";
   return "not-yet";
+}
+
+/**
+ * Whether an agent that was already running can take a typed line now: only
+ * one observed waiting at its own prompt, settled there at a known time. Idle
+ * is what a pane reads before its agent has drawn anything, when a line would
+ * go to the shell beneath it, so it never qualifies; a waiting reading with no
+ * reason yet is not a prompt either.
+ */
+export function promptReadiness(entry: {
+  agentState?: AgentState | null;
+  waitingReason?: string;
+  lastTransitionAt?: number;
+}): AgentReadiness {
+  if (entry.agentState !== "waiting") return "not-yet";
+  const { waitingReason } = entry;
+  if (waitingReason === "question" || waitingReason === "approval" || waitingReason === "error") {
+    return "needs-you";
+  }
+  return waitingReason === "prompt" && entry.lastTransitionAt !== undefined ? "ready" : "not-yet";
 }
 
 /**
