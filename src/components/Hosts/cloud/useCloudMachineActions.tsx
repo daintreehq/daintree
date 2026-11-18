@@ -193,7 +193,7 @@ export function useCloudMachineActions(): {
         description={
           stopBusy
             ? undefined
-            : `Terminals, agents and anything else running on it end${stopBilling ? `. ${stopBilling}` : ", and billing for the machine stops."}${stopProvider ? ` ${stopKeepsSentence(stopProvider.capabilities.persistence)}` : ""}`
+            : `Terminals, agents and anything else running on it end${stopBilling ? `. ${stopBilling}` : ", and billing for its compute stops."}${stopProvider ? ` ${stopKeepsSentence(stopProvider.capabilities.persistence)}` : ""}`
         }
         confirmLabel={stopBusy ? "Stopping…" : "Stop machine"}
         confirmDisabled={stopBusy}

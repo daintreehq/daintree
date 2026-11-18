@@ -29,6 +29,7 @@ import { CloudProvisioningSelect, provisioningChoiceDescription } from "./CloudP
 import { LIFETIME_VALUES, useCloudMachineForm } from "./useCloudMachineForm";
 import {
   canStartMachine,
+  credentialsNoun,
   formatHourly,
   stopKeepsSentence,
   stoppedBillingFact,
@@ -229,7 +230,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     body = (
       <div className="space-y-3">
         <p className="text-sm text-text-secondary">
-          {`Connect a cloud provider account first. Daintree uses its API key to create, start${usable.every((entry) => entry.capabilities.deletion) ? ", stop and delete" : " and stop"} machines; the account pays for them.`}
+          {`Connect a cloud provider account first. Daintree uses its ${usable.length > 0 && usable.every((entry) => credentialsNoun(entry) === "key") ? "API key" : "credentials"} to create, start${usable.every((entry) => entry.capabilities.deletion) ? ", stop and delete" : " and stop"} machines; the account pays for them.`}
         </p>
         <div className="flex flex-wrap gap-2">
           {usable.map((entry) => (
@@ -587,7 +588,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
           <AppDialog.Title>
             {added
               ? `${mode === "create" ? "Creating" : "Adding"} ${added.name}`
-              : `Add a cloud machine${provider ? ` on ${provider.name}` : ""}`}
+              : `Add a cloud machine${provider && (account || usable.length === 1) ? ` on ${provider.name}` : ""}`}
           </AppDialog.Title>
           <AppDialog.CloseButton />
         </AppDialog.Header>

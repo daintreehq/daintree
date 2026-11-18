@@ -268,3 +268,28 @@ describe("AddCloudHostDialog lifetime", () => {
     expect(lifetimeNote()).toBe("Acme puts it to sleep by itself once it's been idle for a while.");
   });
 });
+
+describe("AddCloudHostDialog for a provider that takes the key at create", () => {
+  function atCreate(id: string, name: string): CloudProviderInfo {
+    const base = provider({ kind: "fixed-at-create", canChangeWhileStopped: true });
+    return {
+      ...base,
+      id,
+      name,
+      capabilities: {
+        ...base.capabilities,
+        provisioning: { ...base.capabilities.provisioning, sshKey: "at-create" },
+      },
+    };
+  }
+
+  it("names no provider in its title before an account is chosen from several", () => {
+    cloud.snapshot = {
+      providers: [provider({ kind: "renewable" }), atCreate("acme.clouds.gce", "Acme Compute")],
+      accounts: [],
+      hosts: [],
+    };
+    render(<AddCloudHostDialog isOpen onClose={() => {}} onReady={() => {}} />);
+    expect(screen.getByRole("heading").textContent).toBe("Add a cloud machine");
+  });
+});

@@ -19,7 +19,7 @@ import type { HostId } from "./remoteHosts.js";
 export type CloudProviderId = BuiltInCloudProviderId | (string & {});
 
 /** The providers compiled into this build; the open union keeps their names autocompleting. */
-export type BuiltInCloudProviderId = "boat" | "agent37" | "digitalocean";
+export type BuiltInCloudProviderId = "boat" | "agent37" | "digitalocean" | "gce";
 
 /** Where a provider's id lives: Daintree's own bare names, or one plugin's namespace. */
 export type CloudProviderNamespace = { kind: "built-in" } | { kind: "plugin"; pluginId: string };
@@ -218,11 +218,12 @@ export interface CloudProviderInfo {
 }
 
 /**
- * A wallet an account may bill: the person's own, an organization they belong
- * to, or the one workspace a provider binds each key to.
+ * What an account bills: the person's own wallet, an organization they belong
+ * to, the one workspace a provider binds each key to, or a cloud project
+ * (Google Cloud's unit of billing and access).
  */
 export interface CloudBillingScope {
-  kind: "personal" | "organization" | "workspace";
+  kind: "personal" | "organization" | "workspace" | "project";
   /** The provider's id for it: what every request names. */
   id: string;
   name: string;

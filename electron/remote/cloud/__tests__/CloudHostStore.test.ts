@@ -389,6 +389,20 @@ describe("CloudHostStore accounts", () => {
     );
   });
 
+  it("keeps an account that bills a cloud project across a restart", () => {
+    const backend = disk();
+    const project = {
+      ...account,
+      providerId: "gce",
+      scope: { kind: "project" as const, id: "daintree-build", name: "daintree-build" },
+      apiUrl: "https://compute.googleapis.com/compute/v1",
+      credentialRevision: "0011223344556677",
+      lastProvisioning: null,
+    };
+    new CloudHostStore(backend).putAccount(project);
+    expect(new CloudHostStore(backend).account(account.id)?.scope).toEqual(project.scope);
+  });
+
   it("reads an account saved before revisions existed as having none", () => {
     const backend = disk();
     backend.write({ version: 1, accounts: [account], bindings: [] });

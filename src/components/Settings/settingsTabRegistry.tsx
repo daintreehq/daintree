@@ -330,6 +330,8 @@ const HOSTS_TAB = {
     "agent37",
     "digitalocean",
     "droplet",
+    "google cloud",
+    "compute engine",
   ],
   sections: [
     {
@@ -352,6 +354,10 @@ const HOSTS_TAB = {
         "digitalocean",
         "digital ocean",
         "droplet",
+        "google cloud",
+        "gcp",
+        "compute engine",
+        "service account",
         "cloud",
         "api key",
         "access token",

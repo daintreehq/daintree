@@ -210,6 +210,33 @@ describe("ConnectCloudAccountDialog", () => {
     });
   });
 
+  it("describes a project scope by its id, and names the account after it by default", async () => {
+    cloudClient.checkAccountCredentials.mockResolvedValueOnce({
+      identity: "daintree@key-home.iam.gserviceaccount.com",
+      scopes: [
+        { scope: { kind: "project", id: "acme-build", name: "Acme Build" }, active: true },
+        { scope: { kind: "organization", id: "org_1", name: "Acme Org" }, active: false },
+      ],
+    });
+    render(<ConnectCloudAccountDialog isOpen onClose={() => {}} provider={GCE} />);
+    chooseFile(
+      "cloud-account-credential-keyFile",
+      new File([KEY_FILE_TEXT], "build-key.json", { type: "application/json" })
+    );
+    await screen.findByText("build-key.json");
+    type("cloud-account-credential-project", "acme-build");
+    fireEvent.click(button("Check credentials"));
+    const project = await screen.findByRole("radio", { name: /Acme Build/ });
+    const row = (radio: HTMLElement) => radio.closest("label")?.textContent ?? "";
+    expect(row(project)).toContain("Project acme-build: machines are created and billed here");
+    expect(row(screen.getByRole("radio", { name: /Acme Org/ }))).toContain(
+      "An organization you belong to"
+    );
+    expect(screen.getByPlaceholderText("Acme Build")).toBeTruthy();
+    fireEvent.click(screen.getByRole("radio", { name: /Acme Org/ }));
+    expect(screen.getByPlaceholderText("Acme Org")).toBeTruthy();
+  });
+
   it("drops the file it held when the next one can't be used", async () => {
     render(<ConnectCloudAccountDialog isOpen onClose={() => {}} provider={GCE} />);
     type("cloud-account-credential-project", "acme-build");

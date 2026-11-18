@@ -132,6 +132,28 @@ describe("CloudAccountService", () => {
     expect(vault.sets.get(summary.id)).toEqual({ apiKey: "boat_live_0123456789abcd" });
   });
 
+  it("names a project account for its project and a workspace one for its sign-in by default", async () => {
+    const scoped = (kind: "project" | "workspace") =>
+      fakeProvider({
+        checkCredentials: vi.fn(async () => ({
+          identity: "daintree@acme-build.iam.gserviceaccount.com",
+          scopes: [{ scope: { kind, id: "acme-build", name: "Acme Build" }, active: true }],
+        })),
+      });
+    for (const [kind, expected] of [
+      ["project", "Acme Build"],
+      ["workspace", "daintree@acme-build.iam.gserviceaccount.com"],
+    ] as const) {
+      const { accounts } = service({ provider: scoped(kind) });
+      const summary = await accounts.addAccount({
+        providerId: "boat",
+        credentials: { apiKey: "boat_live_0123456789abcd" },
+        scopeId: "acme-build",
+      });
+      expect(summary.displayName).toBe(expected);
+    }
+  });
+
   function anonymousProvider(overrides: Partial<CloudProvider> = {}): CloudProvider {
     const base = fakeProvider();
     return fakeProvider({
