@@ -2,6 +2,8 @@ import { use, useCallback, useEffect, useRef, useState, useSyncExternalStore } f
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import {
+  getFileDiffEpoch,
+  subscribeFileDiffEpochs,
   diffCacheKey,
   isCacheableDiffSource,
   purgeWhitespaceEntriesExcept,
@@ -79,6 +81,22 @@ export function useDiffContent(
   const worktreePath = subject?.worktreePath;
   const filePath = subject?.filePath;
 
+  // A hunk staged or unstaged anywhere moves the index under both sides of
+  // this file while the file itself, which the freshness key reads, stays put.
+  // The cache drops those diffs and bumps the file's epoch; a side-specific
+  // diff reads again when it moves, here and in any other pane showing it.
+  const indexSensitive = subject?.source === "staged" || subject?.source === "unstaged";
+  const fileEpoch = useSyncExternalStore(
+    subscribeFileDiffEpochs,
+    useCallback(
+      () =>
+        indexSensitive && worktreePath !== undefined && filePath !== undefined
+          ? getFileDiffEpoch(worktreePath, filePath)
+          : 0,
+      [indexSensitive, worktreePath, filePath]
+    )
+  );
+
   const liveFreshnessKey = useSyncExternalStore(
     useCallback(
       (onStoreChange: () => void) =>
@@ -151,7 +169,7 @@ export function useDiffContent(
       return;
     }
     void fetchDiff(false);
-  }, [subjectKey, fetchDiff]);
+  }, [subjectKey, fetchDiff, fileEpoch]);
 
   // Once the current diff has landed and the user has dwelled on it, warm the
   // next file's diff so forward stepping renders from cache instead of a

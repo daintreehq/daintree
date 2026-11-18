@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { FileDiff as FileDiffIcon, Minus, Plus, RefreshCw, XCircle } from "lucide-react";
 import type { HunkData } from "react-diff-view";
 import { Button } from "@/components/ui/button";
@@ -60,8 +60,6 @@ interface UseHunkStagingInput {
   worktreeId: string | undefined;
   worktreePath: string;
   filePath: string | undefined;
-  /** Read the diff again. */
-  onReload: () => void;
 }
 
 interface UseHunkStagingResult {
@@ -75,7 +73,8 @@ interface UseHunkStagingResult {
  * several of git's (expanded context, or the full-file view, merges them), so
  * each button stages exactly the git hunks inside its header and says how many.
  * Main reads the side again before it writes and refuses a hunk that changed;
- * either way both sides' cached diffs are dropped and the pane reads again.
+ * either way both sides' cached diffs are dropped, and every pane showing one
+ * of them reads it again (`useDiffContent` follows the file's eviction epoch).
  */
 export function useHunkStaging({
   content,
@@ -84,33 +83,40 @@ export function useHunkStaging({
   worktreeId,
   worktreePath,
   filePath,
-  onReload,
 }: UseHunkStagingInput): UseHunkStagingResult {
   const patch = useMemo(
     () => stageablePatch(content, side, ignoreWhitespace),
     [content, side, ignoreWhitespace]
   );
   const target = `${worktreePath}\u0000${filePath ?? ""}\u0000${side ?? ""}`;
-  // A write outlives a step to another file: its answer must not reload, or
-  // report on, whatever the pane shows by then.
-  const targetRef = useRef(target);
-  useEffect(() => {
-    targetRef.current = target;
+  // A write outlives a step to another file or side, and the pane itself: its
+  // answer reports only to the target committed when it lands.
+  const latestTargetRef = useRef<string | null>(target);
+  useLayoutEffect(() => {
+    latestTargetRef.current = target;
+    return () => {
+      latestTargetRef.current = null;
+    };
   }, [target]);
 
   const inFlightRef = useRef(false);
-  const [pendingTarget, setPendingTarget] = useState<string | null>(null);
-  const [notice, setNotice] = useState<{ target: string; notice: HunkStagingNotice } | null>(null);
+  const [pending, setPending] = useState(false);
+  const [notice, setNotice] = useState<{
+    target: string;
+    /** The diff a failure's Retry would stage from; it goes when that diff does. */
+    patch: FilePatch;
+    notice: HunkStagingNotice;
+  } | null>(null);
 
   const stage = useCallback(
     async (indices: readonly number[]): Promise<void> => {
       if (!patch || !side || !filePath || inFlightRef.current) return;
       inFlightRef.current = true;
       const requestTarget = target;
-      setPendingTarget(requestTarget);
+      setPending(true);
       const show = (outcome: HunkStagingOutcome | null) => {
-        if (targetRef.current !== requestTarget) return;
-        setNotice(outcome ? { target: requestTarget, notice: { side, outcome } } : null);
+        if (latestTargetRef.current !== requestTarget) return;
+        setNotice(outcome ? { target: requestTarget, patch, notice: { side, outcome } } : null);
       };
       try {
         const result = await actionService.dispatch<GitHunkStagingResult>(
@@ -131,25 +137,29 @@ export function useHunkStaging({
           return;
         }
         // Every answer read the side again, so the diff on screen may be old
-        // even when nothing was written.
-        evictCachedDiffsForFile(worktreePath, filePath);
+        // even when nothing was written; eviction has each pane read it again.
         const { status } = result.result;
         show(status === "applied" ? null : { kind: status });
-        if (targetRef.current === requestTarget) onReload();
+        evictCachedDiffsForFile(worktreePath, filePath);
       } finally {
         inFlightRef.current = false;
-        setPendingTarget(null);
+        setPending(false);
       }
     },
-    [patch, side, filePath, target, worktreeId, worktreePath, onReload]
+    [patch, side, filePath, target, worktreeId, worktreePath]
   );
 
-  const pending = pendingTarget === target;
+  // Every button waits while any write is out: one pane runs one at a time.
   const renderHunkActions = useMemo(() => {
     if (!patch || !side) return undefined;
     const renderActions = (hunk: HunkData) => {
       const indices = hunksWithin(patch, hunk);
       if (indices.length === 0) return null;
+      // The pane's diff is decoded leniently, so U+FFFD may stand for bytes
+      // that aren't UTF-8; Main refuses such a hunk, so offer none.
+      if (indices.some((index) => patch.hunks[index]!.lines.some((l) => l.includes("\uFFFD")))) {
+        return null;
+      }
       return (
         <Button
           type="button"
@@ -169,11 +179,16 @@ export function useHunkStaging({
 
   const dismissNotice = useCallback(() => setNotice(null), []);
 
-  return {
-    renderHunkActions,
-    notice: notice && notice.target === target ? notice.notice : null,
-    dismissNotice,
-  };
+  // A failure's Retry would stage from the diff it was read in, so it goes once
+  // that diff is replaced; a refusal is about the reload, so it stays for it.
+  const shown =
+    notice &&
+    notice.target === target &&
+    (notice.notice.outcome.kind !== "failed" || notice.patch === patch)
+      ? notice.notice
+      : null;
+
+  return { renderHunkActions, notice: shown, dismissNotice };
 }
 
 const STALE_COPY: Record<HunkStagingSide, string> = {

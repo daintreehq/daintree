@@ -60,6 +60,12 @@ export interface RunGitOptions {
    */
   config?: ReadonlyArray<readonly [key: string, value: string]>;
   platform?: NodeJS.Platform;
+  /**
+   * Resolve objects through replace refs, as plain git and the diff pane do.
+   * Off for a review point, where a replaced commit would mislead; on for a
+   * caller that has to see the same content the pane showed.
+   */
+  honorReplaceObjects?: boolean;
 }
 
 export interface RunGitResult {
@@ -76,7 +82,7 @@ export async function runGitForBytes(
   const env: NodeJS.ProcessEnv = {
     ...buildHardenedGitEnv(platform),
     GIT_NO_LAZY_FETCH: "1",
-    GIT_NO_REPLACE_OBJECTS: "1",
+    ...(options.honorReplaceObjects ? {} : { GIT_NO_REPLACE_OBJECTS: "1" }),
   };
   const config = options.config ?? [];
   if (config.length > 0) {

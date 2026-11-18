@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { execFileSync } from "node:child_process";
+import childProcess, { execFileSync } from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { formatHunk, parseFilePatch } from "../../../../shared/utils/patchHunks.js";
-import { applyReadHunks, parseReadHunks } from "../hunkStaging.js";
+import { applyReadHunks, gitPathFor, parseReadHunks } from "../hunkStaging.js";
 
 // Inherited GIT_* (a hook's GIT_DIR or GIT_INDEX_FILE) would point fixture git
 // at another repository.
@@ -20,6 +21,18 @@ const GIT_ENV = {
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, env: GIT_ENV, encoding: "utf8" });
+}
+
+// Real git through the real spawn, which a test can intercept to run another
+// writer at an exact moment of the service's sequence.
+const originalSpawn = childProcess.spawn;
+let onSpawn: ((args: readonly string[]) => void) | null = null;
+
+/** The git subcommand, past the `-c key=value` pairs every hardened call leads with. */
+function subcommand(args: readonly string[]): string | undefined {
+  let i = 0;
+  while (args[i] === "-c") i += 2;
+  return args[i];
 }
 
 let home: string;
@@ -38,9 +51,16 @@ beforeAll(() => {
   process.env.USERPROFILE = home;
   process.env.XDG_CONFIG_HOME = path.join(home, ".config");
   process.env.GIT_CONFIG_NOSYSTEM = "1";
+  (childProcess as { spawn: typeof originalSpawn }).spawn = ((...args: unknown[]) => {
+    if (Array.isArray(args[1])) onSpawn?.(args[1] as string[]);
+    return (originalSpawn as (...a: unknown[]) => ReturnType<typeof originalSpawn>)(...args);
+  }) as typeof originalSpawn;
+  syncBuiltinESMExports();
 });
 
 afterAll(() => {
+  (childProcess as { spawn: typeof originalSpawn }).spawn = originalSpawn;
+  syncBuiltinESMExports();
   for (const [key, value] of Object.entries(savedEnv)) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
@@ -49,6 +69,7 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  onSpawn = null;
   tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "hunk-staging-")));
   repo = path.join(tmp, "repo");
   git(tmp, "init", "-q", "-b", "main", repo);
@@ -102,6 +123,63 @@ describe("applyReadHunks (real git)", () => {
 
     expect(result).toEqual({ status: "applied" });
     expect(indexBlob()).toBe(text([...BASE.slice(0, 25), "line 26 changed", ...BASE.slice(26)]));
+  });
+
+  it("stages several hunks of one selection together", async () => {
+    commit(BASE);
+    write(BOTH);
+
+    const result = await applyReadHunks(
+      repo,
+      "f.txt",
+      parseReadHunks(readHunks("unstaged")),
+      "stage"
+    );
+
+    expect(result).toEqual({ status: "applied" });
+    expect(indexBlob()).toBe(text(BOTH));
+  });
+
+  it("writes nothing when one hunk of a selection was rewritten", async () => {
+    commit(BASE);
+    write(BOTH);
+    const read = readHunks("unstaged");
+    write([...TOP.slice(0, 25), "line 26 rewritten", ...TOP.slice(26)]);
+
+    const result = await applyReadHunks(repo, "f.txt", parseReadHunks(read), "stage");
+
+    expect(result).toEqual({ status: "stale" });
+    expect(indexBlob()).toBe(text(BASE));
+  });
+
+  it("stages a zero-context insertion at its own line past a skipped deletion", async () => {
+    commit(BASE);
+    git(repo, "config", "diff.context", "0");
+    write([...BASE.slice(0, 2), ...BASE.slice(6, 20), "inserted", ...BASE.slice(20)]);
+    const read = readHunks("unstaged");
+    expect(read).toHaveLength(2);
+
+    const result = await applyReadHunks(repo, "f.txt", parseReadHunks([read[1]!]), "stage");
+
+    expect(result).toEqual({ status: "applied" });
+    expect(indexBlob()).toBe(text([...BASE.slice(0, 20), "inserted", ...BASE.slice(20)]));
+  });
+
+  it("refuses as stale when another writer moves the entry after the hunk was checked", async () => {
+    commit(BASE);
+    git(repo, "config", "diff.context", "0");
+    write([...BASE.slice(0, 20), "inserted", ...BASE.slice(20)]);
+    const [insertion] = readHunks("unstaged");
+    // The same insertion staged by someone else, just before the apply.
+    let listed = 0;
+    onSpawn = (args) => {
+      if (subcommand(args) === "ls-files" && ++listed === 2) git(repo, "add", "f.txt");
+    };
+
+    const result = await applyReadHunks(repo, "f.txt", parseReadHunks([insertion!]), "stage");
+
+    expect(result).toEqual({ status: "stale" });
+    expect(indexBlob()).toBe(text([...BASE.slice(0, 20), "inserted", ...BASE.slice(20)]));
   });
 
   it("still stages the hunk that was read after an agent adds lines above it", async () => {
@@ -163,19 +241,23 @@ describe("applyReadHunks (real git)", () => {
     expect(indexBlob()).toBe(text(TOP));
   });
 
-  it("keeps the index's mode when the file also became executable", async () => {
-    commit(BASE);
-    git(repo, "config", "core.fileMode", "true");
-    write(BOTH);
-    fs.chmodSync(path.join(repo, "f.txt"), 0o755);
-    const [first] = readHunks("unstaged");
+  // A worktree chmod sets no executable bit git can see on Windows.
+  it.skipIf(process.platform === "win32")(
+    "keeps the index's mode when the file also became executable",
+    async () => {
+      commit(BASE);
+      git(repo, "config", "core.fileMode", "true");
+      write(BOTH);
+      fs.chmodSync(path.join(repo, "f.txt"), 0o755);
+      const [first] = readHunks("unstaged");
 
-    const result = await applyReadHunks(repo, "f.txt", parseReadHunks([first!]), "stage");
+      const result = await applyReadHunks(repo, "f.txt", parseReadHunks([first!]), "stage");
 
-    expect(result).toEqual({ status: "applied" });
-    expect(git(repo, "ls-files", "-s", "f.txt")).toMatch(/^100644 /);
-    expect(indexBlob()).toBe(text(TOP));
-  });
+      expect(result).toEqual({ status: "applied" });
+      expect(git(repo, "ls-files", "-s", "f.txt")).toMatch(/^100644 /);
+      expect(indexBlob()).toBe(text(TOP));
+    }
+  );
 
   it("refuses a file git doesn't track, and one whose diff isn't UTF-8", async () => {
     commit(BASE);
@@ -193,6 +275,40 @@ describe("applyReadHunks (real git)", () => {
     expect(indexBlob()).toBe(text(BASE));
   });
 
+  it("refuses a hunk read with a replacement character, which could stand for other bytes", async () => {
+    commit(BASE);
+    write(["line 1 \ufffd", ...BASE.slice(1)]);
+    const [read] = readHunks("unstaged");
+
+    const result = await applyReadHunks(repo, "f.txt", parseReadHunks([read!]), "stage");
+
+    expect(result).toEqual({ status: "unsupported" });
+    expect(indexBlob()).toBe(text(BASE));
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "stages the file named with a backslash, not its slash-named neighbour",
+    async () => {
+      fs.mkdirSync(path.join(repo, "a"));
+      for (const file of ["a\\b.txt", "a/b.txt"]) write(BASE, file);
+      git(repo, "add", ".");
+      git(repo, "commit", "-q", "-m", "base");
+      for (const file of ["a\\b.txt", "a/b.txt"]) write(TOP, file);
+      const [read] = readHunks("unstaged", "a\\b.txt");
+
+      const result = await applyReadHunks(
+        repo,
+        gitPathFor("a\\b.txt"),
+        parseReadHunks([read!]),
+        "stage"
+      );
+
+      expect(result).toEqual({ status: "applied" });
+      expect(indexBlob("a\\b.txt")).toBe(text(TOP));
+      expect(indexBlob("a/b.txt")).toBe(text(BASE));
+    }
+  );
+
   it("reports a held index lock as GIT_INDEX_LOCKED and writes nothing", async () => {
     commit(BASE);
     write(BOTH);
@@ -205,6 +321,14 @@ describe("applyReadHunks (real git)", () => {
 
     fs.rmSync(path.join(repo, ".git", "index.lock"));
     expect(indexBlob()).toBe(text(BASE));
+  });
+});
+
+describe("gitPathFor", () => {
+  it("turns separators into git's slashes on Windows only", () => {
+    expect(gitPathFor("src\\a.ts", "win32")).toBe("src/a.ts");
+    expect(gitPathFor("src\\a.ts", "darwin")).toBe("src\\a.ts");
+    expect(gitPathFor("src\\a.ts", "linux")).toBe("src\\a.ts");
   });
 });
 

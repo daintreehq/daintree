@@ -1,15 +1,15 @@
-import path from "node:path";
 import { GIT_FILE_DIFF_MAX_PATCH_BYTES } from "../../../shared/config/gitReadLimits.js";
 import type { GitHunkStagingResult } from "../../../shared/types/ipc/git.js";
 import {
   buildHunkPatch,
-  findHunk,
   hasNoContext,
   isPlainModification,
+  matchHunks,
   parseFilePatch,
   type PatchHunk,
 } from "../../../shared/utils/patchHunks.js";
 import { runExclusive } from "../../utils/keyedMutex.js";
+import { gitIndexWriteKey } from "../../utils/gitIndexWriteKey.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { GitCommandError, runGitForBytes } from "./reviewPoint/runGit.js";
 
@@ -18,6 +18,18 @@ export type HunkStagingDirection = "stage" | "unstage";
 const GIT_TIMEOUT_MS = 30_000;
 const SMALL_OUTPUT_BYTES = 64 * 1024;
 const REGULAR_INDEX_ENTRY = /^(100644|100755) [0-9a-f]+ 0\t/;
+// Object resolution as the pane's own diff read has it, replace refs included,
+// or a replaced HEAD would show one preimage there and another here.
+const AS_THE_PANE_READS = { honorReplaceObjects: true } as const;
+
+/**
+ * The path git knows a file by. A backslash is a separator only on Windows;
+ * elsewhere it is part of a name, and `a\\b.ts` is a different file from
+ * `a/b.ts`, so rewriting it there would verify and stage the wrong one.
+ */
+export function gitPathFor(filePath: string, platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32" ? filePath.replaceAll("\\", "/") : filePath;
+}
 
 /**
  * Parse the hunks a renderer read. Each must be one bare hunk, header line
@@ -36,16 +48,22 @@ export function parseReadHunks(texts: readonly string[]): PatchHunk[] {
   });
 }
 
-/** The one index entry for `gitPath`, when it is a regular file with no conflict. */
-async function hasRegularIndexEntry(cwd: string, gitPath: string): Promise<boolean> {
+/**
+ * The one index entry for `gitPath` (its mode, blob and stage, as `ls-files -s`
+ * prints them), or null unless it is a regular file with no conflict.
+ */
+async function readRegularIndexEntry(cwd: string, gitPath: string): Promise<string | null> {
   const { stdout } = await runGitForBytes(cwd, ["ls-files", "-s", "-z", "--", gitPath], {
     timeoutMs: GIT_TIMEOUT_MS,
     maxStdoutBytes: SMALL_OUTPUT_BYTES,
+    ...AS_THE_PANE_READS,
   });
   const entries = stdout.toString("utf8").split("\0").filter(Boolean);
-  if (entries.length !== 1) return false;
+  if (entries.length !== 1) return null;
   const entry = entries[0]!;
-  return REGULAR_INDEX_ENTRY.test(entry) && entry.slice(entry.indexOf("\t") + 1) === gitPath;
+  const regular =
+    REGULAR_INDEX_ENTRY.test(entry) && entry.slice(entry.indexOf("\t") + 1) === gitPath;
+  return regular ? entry : null;
 }
 
 /**
@@ -76,7 +94,11 @@ async function readSideDiff(
       "--",
       gitPath,
     ],
-    { timeoutMs: GIT_TIMEOUT_MS, maxStdoutBytes: GIT_FILE_DIFF_MAX_PATCH_BYTES }
+    {
+      timeoutMs: GIT_TIMEOUT_MS,
+      maxStdoutBytes: GIT_FILE_DIFF_MAX_PATCH_BYTES,
+      ...AS_THE_PANE_READS,
+    }
   );
   try {
     return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(stdout);
@@ -89,8 +111,20 @@ function isIndexLocked(error: GitCommandError): boolean {
   return /index\.lock'?: File exists|another git process seems to be running/i.test(error.stderr);
 }
 
-function isPreimageMismatch(error: GitCommandError): boolean {
-  return /patch does not apply|patch failed/i.test(error.stderr);
+// The index moved under the patch: its lines aren't where they were, or the
+// entry is gone.
+function isIndexMismatch(error: GitCommandError): boolean {
+  return /patch does not apply|patch failed|does not exist in index/i.test(error.stderr);
+}
+
+/**
+ * Whether a hunk the renderer sent can't be trusted to hold the file's bytes.
+ * The pane decodes its diff leniently, so a byte that isn't UTF-8 reaches it
+ * as U+FFFD, and the same character written into the file afterwards would
+ * then compare equal to it. A file that really holds U+FFFD is refused with it.
+ */
+function readLossily(read: readonly PatchHunk[]): boolean {
+  return read.some((hunk) => hunk.lines.some((line) => line.includes("\uFFFD")));
 }
 
 /**
@@ -105,10 +139,12 @@ function isPreimageMismatch(error: GitCommandError): boolean {
  * built from that fresh read, never from the renderer's text, with each hunk's
  * start shifted past the hunks left out, as `git add -p` does.
  *
- * Every write to one worktree's index from here runs one at a time with the
- * other batched index writes, so nothing Daintree does lands between the read
- * and the apply. Another git process still can, as it can under `git add -p`;
- * the apply then fails or lands where git finds the same lines.
+ * Every write Daintree makes to one worktree's index runs one at a time under
+ * the same key, so none of them lands between the read and the apply. Another
+ * git process still can, as it can under `git add -p`. The entry is read again
+ * just before the apply and a change refuses it, which leaves only the moment
+ * between that read and git taking its own lock; a context line then refuses
+ * a hunk whose place moved, while a zero-context hunk has none to check.
  */
 export function applyReadHunks(
   cwd: string,
@@ -116,8 +152,10 @@ export function applyReadHunks(
   read: readonly PatchHunk[],
   direction: HunkStagingDirection
 ): Promise<GitHunkStagingResult> {
-  return runExclusive(`git-index-batches:${path.resolve(cwd)}`, async () => {
-    if (!(await hasRegularIndexEntry(cwd, gitPath))) return { status: "unsupported" };
+  return runExclusive(gitIndexWriteKey(cwd), async () => {
+    if (readLossily(read)) return { status: "unsupported" };
+    const entry = await readRegularIndexEntry(cwd, gitPath);
+    if (entry === null) return { status: "unsupported" };
 
     const text = await readSideDiff(cwd, gitPath, direction);
     if (text === null) return { status: "unsupported" };
@@ -126,15 +164,12 @@ export function applyReadHunks(
       return { status: "stale" };
     }
 
-    const selected = new Set<number>();
-    for (const hunk of read) {
-      const index = findHunk(fresh, hunk, selected);
-      if (index === null) return { status: "stale" };
-      selected.add(index);
-    }
+    const selected = matchHunks(fresh, read);
+    if (selected === null) return { status: "stale" };
 
     const patch = buildHunkPatch(fresh, selected, direction === "stage" ? "forward" : "reverse");
     const zeroContext = [...selected].some((index) => hasNoContext(fresh.hunks[index]!));
+    if ((await readRegularIndexEntry(cwd, gitPath)) !== entry) return { status: "stale" };
     try {
       await runGitForBytes(
         cwd,
@@ -153,6 +188,7 @@ export function applyReadHunks(
           // A user's `apply.ignoreWhitespace` would let a hunk match lines
           // that differ from the ones it was checked against.
           config: [["apply.ignoreWhitespace", "no"]],
+          ...AS_THE_PANE_READS,
         }
       );
     } catch (error) {
@@ -161,7 +197,7 @@ export function applyReadHunks(
           throw new AppError({ code: "GIT_INDEX_LOCKED", message: error.message, cause: error });
         }
         // Another process moved the index between the read and the apply.
-        if (isPreimageMismatch(error)) return { status: "stale" };
+        if (isIndexMismatch(error)) return { status: "stale" };
       }
       throw error;
     }

@@ -171,3 +171,48 @@ describe("useDiffContent", () => {
     expect(requestDiffMock).not.toHaveBeenCalled();
   });
 });
+
+describe("useDiffContent — a hunk staged under an open diff (#17331)", () => {
+  function useSideSubject(source: "staged" | "unstaged" | "base-branch"): DiffSubject {
+    return useMemo(
+      () =>
+        source === "base-branch"
+          ? {
+              source,
+              worktreePath: "/repo",
+              filePath: "a.ts",
+              baseBranch: "main",
+              currentBranch: "feature",
+            }
+          : { source, worktreePath: "/repo", filePath: "a.ts", status: "modified" },
+      [source]
+    );
+  }
+
+  it("reads a staged or unstaged diff again once that file's diffs are evicted", async () => {
+    const { evictCachedDiffsForFile } = await import("../diffContentCache");
+    let read = 0;
+    requestDiffMock.mockImplementation(async () => ({ content: `${PATCH_A}\n# read ${++read}` }));
+    const { result } = renderHook(() => useDiffContent(useSideSubject("staged")));
+    await waitFor(() => expect(result.current.content).toBe(`${PATCH_A}\n# read 1`));
+
+    act(() => evictCachedDiffsForFile("/repo", "a.ts"));
+
+    await waitFor(() => expect(result.current.content).toBe(`${PATCH_A}\n# read 2`));
+    act(() => evictCachedDiffsForFile("/repo", "b.ts"));
+    await act(async () => {});
+    expect(requestDiffMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves a diff that doesn't read the index alone", async () => {
+    const { evictCachedDiffsForFile } = await import("../diffContentCache");
+    requestDiffMock.mockResolvedValue({ content: PATCH_A });
+    const { result } = renderHook(() => useDiffContent(useSideSubject("base-branch")));
+    await waitFor(() => expect(result.current.content).toBe(PATCH_A));
+
+    act(() => evictCachedDiffsForFile("/repo", "a.ts"));
+    await act(async () => {});
+
+    expect(requestDiffMock).toHaveBeenCalledTimes(1);
+  });
+});

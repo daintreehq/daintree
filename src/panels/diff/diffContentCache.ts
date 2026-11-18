@@ -35,8 +35,20 @@ const diffCache = new Map<string, CachedDiff>();
 const inflightDiffRequests = new Map<string, Promise<CachedDiff | null>>();
 let diffCacheGeneration = 0;
 // Per file, bumped when its diffs are evicted, so a read that started before
-// the eviction can't put the old patch back when it lands.
+// the eviction can't put the old patch back when it lands, and a pane showing
+// one of its sides reads it again.
 const fileEpochs = new Map<string, number>();
+const fileEpochListeners = new Set<() => void>();
+
+/** How many times this file's diffs were evicted; a change means read again. */
+export function getFileDiffEpoch(worktreePath: string, filePath: string): number {
+  return fileEpochs.get(fileEpochKey(worktreePath, filePath)) ?? 0;
+}
+
+export function subscribeFileDiffEpochs(listener: () => void): () => void {
+  fileEpochListeners.add(listener);
+  return () => fileEpochListeners.delete(listener);
+}
 
 function fileEpochKey(worktreePath: string, filePath: string): string {
   return `${worktreePath}\u0000${filePath}`;
@@ -77,9 +89,10 @@ export function _resetDiffCacheForTests(): void {
 
 /**
  * Drop every working-tree, staged and unstaged diff of one file, and any read
- * of one still in flight. Staging a hunk moves the index under both sides
- * without touching the file, so the freshness key, which reads the file's
- * status, time and line counts, never notices.
+ * of one still in flight, and have every pane showing one of its sides read
+ * it again. Staging a hunk moves the index under both sides without touching
+ * the file, so the freshness key, which reads the file's status, time and line
+ * counts, never notices.
  */
 export function evictCachedDiffsForFile(worktreePath: string, filePath: string): void {
   const epochKey = fileEpochKey(worktreePath, filePath);
@@ -92,6 +105,7 @@ export function evictCachedDiffsForFile(worktreePath: string, filePath: string):
       if (prefixes.some((prefix) => key.startsWith(prefix))) map.delete(key);
     }
   }
+  for (const listener of [...fileEpochListeners]) listener();
 }
 
 export function diffCacheKey(subject: DiffSubject, ignoreWhitespace: boolean): string {

@@ -30,7 +30,9 @@ export interface FilePatch {
   hunks: PatchHunk[];
 }
 
-const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/;
+// The section is everything after the closing `@@`. `[\s\S]`, not `.`: a
+// function line can end in a CRLF file's `\r` or hold U+2028, which `.` refuses.
+const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@([\s\S]*)$/;
 const MODE_LINE = /^(?:old|new) mode /;
 
 /**
@@ -108,24 +110,33 @@ export function sameHunkBody(a: PatchHunk, b: PatchHunk): boolean {
 }
 
 /**
- * The hunk of `patch` that is `read`: the same lines, at the same old start.
+ * The hunks of `patch` that are `read`, each the same lines at the same old
+ * start, or null when any one of them isn't there.
  *
- * The old side is what the hunk applies to (the index for an unstaged hunk,
+ * The old side is what a hunk applies to (the index for an unstaged hunk,
  * HEAD for a staged one), so an edit elsewhere on the new side moves only the
  * new start, and the hunk is still found. A body that turns up at another old
  * start is never taken for it: when the hunk the user read was rewritten, an
  * identical one elsewhere in the file is a different change, and staging it
- * would put in lines nobody chose.
+ * would put in lines nobody chose. Candidates are looked up by old start
+ * rather than scanned for, so a large selection costs one pass.
  */
-export function findHunk(
-  patch: FilePatch,
-  read: PatchHunk,
-  taken: ReadonlySet<number> = new Set()
-): number | null {
-  const index = patch.hunks.findIndex(
-    (hunk, i) => !taken.has(i) && hunk.oldStart === read.oldStart && sameHunkBody(hunk, read)
-  );
-  return index === -1 ? null : index;
+export function matchHunks(patch: FilePatch, read: readonly PatchHunk[]): Set<number> | null {
+  const byOldStart = new Map<number, number[]>();
+  patch.hunks.forEach((hunk, index) => {
+    const at = byOldStart.get(hunk.oldStart);
+    if (at) at.push(index);
+    else byOldStart.set(hunk.oldStart, [index]);
+  });
+  const matched = new Set<number>();
+  for (const hunk of read) {
+    const index = byOldStart
+      .get(hunk.oldStart)
+      ?.find((candidate) => !matched.has(candidate) && sameHunkBody(patch.hunks[candidate]!, hunk));
+    if (index === undefined) return null;
+    matched.add(index);
+  }
+  return matched;
 }
 
 function formatRange(start: number, count: number): string {

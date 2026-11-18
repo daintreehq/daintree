@@ -986,7 +986,6 @@ export function DiffPane({
     worktreeId,
     worktreePath,
     filePath,
-    onReload: refreshAll,
   });
 
   // One line explaining why a requested whole-file view isn't on screen. The

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   buildHunkPatch,
-  findHunk,
+  matchHunks,
   formatHunk,
   hasNoContext,
   hunksWithin,
@@ -105,6 +105,13 @@ describe("parseFilePatch", () => {
     expect(sameHunkBody(suppressed!.hunks[0]!, plain!.hunks[0]!)).toBe(true);
   });
 
+  it("keeps a section that ends in a carriage return or holds a line separator", () => {
+    const patch = parseFilePatch(
+      "@@ -1 +1 @@ function f() {\r\n-a\n+b\n@@ -9 +9 @@ g\u2028h\n-c\n+d\n"
+    );
+    expect(patch?.hunks.map((hunk) => hunk.section)).toEqual([" function f() {\r", " g\u2028h"]);
+  });
+
   it("reads a line that looks like a hunk header as content when the counts say so", () => {
     const patch = parseFilePatch("@@ -1,2 +1,2 @@\n-x\n+@@ -9 +9 @@\n y\n");
     expect(patch?.hunks).toHaveLength(1);
@@ -121,37 +128,42 @@ describe("parseFilePatch", () => {
   });
 });
 
-describe("findHunk", () => {
+describe("matchHunks", () => {
   const patch = parseFilePatch(
     "@@ -1,2 +1,2 @@\n-a\n+b\n c\n@@ -10,2 +10,2 @@\n-a\n+b\n c\n@@ -20,2 +20,2 @@\n-x\n+y\n z\n"
   )!;
+  const hunk = (text: string) => parseFilePatch(text)!.hunks[0]!;
 
-  it("takes a matching body at the old start it was read at", () => {
-    const read = parseFilePatch("@@ -10,2 +14,2 @@\n-a\n+b\n c\n")!.hunks[0]!;
-    expect(findHunk(patch, read)).toBe(1);
+  it("takes a matching body at the old start it was read at, wherever its new start moved", () => {
+    expect([...matchHunks(patch, [hunk("@@ -10,2 +14,2 @@\n-a\n+b\n c\n")])!]).toEqual([1]);
+  });
+
+  it("takes every hunk of a selection, or none when one of them is missing", () => {
+    const first = hunk("@@ -1,2 +1,2 @@\n-a\n+b\n c\n");
+    const third = hunk("@@ -20,2 +20,2 @@\n-x\n+y\n z\n");
+    expect([...matchHunks(patch, [first, third])!]).toEqual([0, 2]);
+    expect(matchHunks(patch, [first, hunk("@@ -20,2 +20,2 @@\n-x\n+q\n z\n")])).toBeNull();
   });
 
   it("never takes the same body at another old start", () => {
-    const moved = parseFilePatch("@@ -17,2 +17,2 @@\n-x\n+y\n z\n")!.hunks[0]!;
-    expect(findHunk(patch, moved)).toBeNull();
+    expect(matchHunks(patch, [hunk("@@ -17,2 +17,2 @@\n-x\n+y\n z\n")])).toBeNull();
   });
 
   it("refuses the surviving twin once the hunk that was read is rewritten", () => {
-    const read = parseFilePatch("@@ -1,2 +1,2 @@\n-a\n+b\n c\n")!.hunks[0]!;
     const rewritten = parseFilePatch(
       "@@ -1,2 +1,2 @@\n-a\n+q\n c\n@@ -10,2 +10,2 @@\n-a\n+b\n c\n"
     )!;
-    expect(findHunk(rewritten, read)).toBeNull();
+    expect(matchHunks(rewritten, [hunk("@@ -1,2 +1,2 @@\n-a\n+b\n c\n")])).toBeNull();
   });
 
-  it("skips a hunk an earlier request already took", () => {
-    const read = parseFilePatch("@@ -10,2 +10,2 @@\n-a\n+b\n c\n")!.hunks[0]!;
-    expect(findHunk(patch, read, new Set([1]))).toBeNull();
+  it("matches one fresh hunk once, however often it was sent", () => {
+    const read = hunk("@@ -10,2 +10,2 @@\n-a\n+b\n c\n");
+    expect(matchHunks(patch, [read, read])).toBeNull();
   });
 
   it("finds nothing once the lines were rewritten", () => {
-    const rewritten = parseFilePatch("@@ -20,2 +20,2 @@\n-x\n+q\n z\n")!.hunks[0]!;
-    expect(findHunk(patch, rewritten)).toBeNull();
+    const rewritten = hunk("@@ -20,2 +20,2 @@\n-x\n+q\n z\n");
+    expect(matchHunks(patch, [rewritten])).toBeNull();
     expect(sameHunkBody(patch.hunks[2]!, rewritten)).toBe(false);
   });
 });
@@ -209,6 +221,27 @@ describe("hunksWithin", () => {
       1,
     ]);
     expect(hunksWithin(patch, { oldStart: 40, oldLines: 0, newStart: 40, newLines: 1 })).toEqual([
+      2,
+    ]);
+  });
+
+  it("leaves out a git hunk that only one side of the rendered range holds", () => {
+    // Old side covers the second hunk; the new side stops short of it.
+    expect(hunksWithin(patch, { oldStart: 18, oldLines: 6, newStart: 10, newLines: 5 })).toEqual(
+      []
+    );
+    // New side covers it; the old side starts past it.
+    expect(hunksWithin(patch, { oldStart: 21, oldLines: 5, newStart: 19, newLines: 6 })).toEqual(
+      []
+    );
+  });
+
+  it("places a zero-count change after the line its header names", () => {
+    // `-40,0` sits between old lines 40 and 41: a range ending at 40 doesn't hold it.
+    expect(hunksWithin(patch, { oldStart: 38, oldLines: 3, newStart: 38, newLines: 2 })).toEqual(
+      []
+    );
+    expect(hunksWithin(patch, { oldStart: 39, oldLines: 3, newStart: 39, newLines: 3 })).toEqual([
       2,
     ]);
   });
@@ -295,6 +328,53 @@ describe("buildHunkPatch against real git", () => {
     expect(indexBlob(dir)).toBe(`${["added 1", "added 2", "added 3", ...base].join("\n")}\n`);
   });
 
+  it("unstages the later hunk at its own place when an identical staged block sits nearer the unshifted start", () => {
+    // Reverse: git looks for the hunk's staged text in the index, starting at
+    // its old (HEAD) start. The staged first hunk adds 10 lines the index
+    // keeps, so that start is 10 short of the hunk's place. HEAD already holds
+    // the same changed block 6 lines above it, nearer the unshifted start, so
+    // an unshifted patch would unstage that one instead.
+    const dups = (count: number): string[] => Array.from({ length: count }, () => "dup");
+    const baseLines = [
+      ...numbered(10),
+      ...dups(3),
+      "target changed",
+      ...dups(5),
+      "target",
+      ...dups(3),
+      ...numbered(10, "tail"),
+    ];
+    const staged = [...numbered(10, "new"), ...baseLines];
+    staged[10 + 19] = "target changed";
+    const dir = repoWith(`${baseLines.join("\n")}\n`);
+    fs.writeFileSync(path.join(dir, "f.txt"), `${staged.join("\n")}\n`);
+    git(dir, ["add", "f.txt"]);
+    const patch = parseFilePatch(git(dir, ["diff", "--cached", "--", "f.txt"]))!;
+    expect(patch.hunks).toHaveLength(2);
+
+    const unshifted = buildHunkPatch(
+      { ...patch, hunks: [patch.hunks[1]!] },
+      new Set([0]),
+      "reverse"
+    );
+    const scratch = repoWith(`${baseLines.join("\n")}\n`);
+    fs.writeFileSync(path.join(scratch, "f.txt"), `${staged.join("\n")}\n`);
+    git(scratch, ["add", "f.txt"]);
+    let unshiftedResult: string | null = null;
+    try {
+      git(scratch, ["apply", "--cached", "-R", "-"], unshifted);
+      unshiftedResult = indexBlob(scratch);
+    } catch {
+      unshiftedResult = null;
+    }
+    const expected = `${[...numbered(10, "new"), ...baseLines].join("\n")}\n`;
+    expect(unshiftedResult).not.toBe(expected);
+
+    git(dir, ["apply", "--cached", "-R", "-"], buildHunkPatch(patch, new Set([1]), "reverse"));
+
+    expect(indexBlob(dir)).toBe(expected);
+  });
+
   it("unstages the earlier hunk and leaves the later one staged", () => {
     const dir = repoWith(`${base.join("\n")}\n`);
     fs.writeFileSync(path.join(dir, "f.txt"), `${edited.join("\n")}\n`);
@@ -355,17 +435,21 @@ describe("buildHunkPatch against real git", () => {
     );
   });
 
-  it("stages a last line that gains its newline, and leaves out a mode change", () => {
-    const dir = repoWith(`${numbered(3).join("\n")}`);
-    fs.writeFileSync(path.join(dir, "f.txt"), `${numbered(3).join("\n")}\n`);
-    fs.chmodSync(path.join(dir, "f.txt"), 0o755);
-    const diff = git(dir, ["-c", "core.fileMode=true", "diff", "--", "f.txt"]);
-    expect(diff).toContain("new mode 100755");
-    const patch = parseFilePatch(diff)!;
+  // A worktree chmod sets no executable bit git can see on Windows.
+  it.skipIf(process.platform === "win32")(
+    "stages a last line that gains its newline, and leaves out a mode change",
+    () => {
+      const dir = repoWith(`${numbered(3).join("\n")}`);
+      fs.writeFileSync(path.join(dir, "f.txt"), `${numbered(3).join("\n")}\n`);
+      fs.chmodSync(path.join(dir, "f.txt"), 0o755);
+      const diff = git(dir, ["-c", "core.fileMode=true", "diff", "--", "f.txt"]);
+      expect(diff).toContain("new mode 100755");
+      const patch = parseFilePatch(diff)!;
 
-    git(dir, ["apply", "--cached", "-"], buildHunkPatch(patch, new Set([0]), "forward"));
+      git(dir, ["apply", "--cached", "-"], buildHunkPatch(patch, new Set([0]), "forward"));
 
-    expect(indexBlob(dir)).toBe(`${numbered(3).join("\n")}\n`);
-    expect(git(dir, ["ls-files", "-s", "f.txt"])).toMatch(/^100644 /);
-  });
+      expect(indexBlob(dir)).toBe(`${numbered(3).join("\n")}\n`);
+      expect(git(dir, ["ls-files", "-s", "f.txt"])).toMatch(/^100644 /);
+    }
+  );
 });
