@@ -5,6 +5,7 @@ import type { LogEntry } from "@shared/types";
 import { LogsContent } from "../LogsContent";
 import { UI_SKELETON_GATE_MS } from "@/lib/animationUtils";
 import { useLogsStore } from "@/store";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 vi.mock("../../Logs/LogFilters", () => ({
   LogFilters: ({
@@ -31,20 +32,35 @@ const virtuoso = vi.hoisted(() => ({
     followOutput: false | FollowOutput;
   } | null,
   scrollToIndex: vi.fn(),
+  renderItems: false,
 }));
 
 vi.mock("react-virtuoso", async () => {
   const React = await import("react");
   return {
     Virtuoso: React.forwardRef(function VirtuosoMock(
-      props: { data: unknown[] } & NonNullable<typeof virtuoso.props>,
+      props: {
+        data: unknown[];
+        itemContent: (index: number, item: unknown) => React.ReactNode;
+        computeItemKey: (index: number, item: unknown) => React.Key;
+      } & NonNullable<typeof virtuoso.props>,
       ref: React.Ref<{ scrollToIndex: typeof virtuoso.scrollToIndex }>
     ) {
       React.useLayoutEffect(() => {
         virtuoso.props = props;
       });
       React.useImperativeHandle(ref, () => ({ scrollToIndex: virtuoso.scrollToIndex }));
-      return <div data-testid="virtuoso" data-count={props.data.length} />;
+      return (
+        <div data-testid="virtuoso" data-count={props.data.length}>
+          {virtuoso.renderItems
+            ? props.data.map((item, index) => (
+                <React.Fragment key={props.computeItemKey(index, item)}>
+                  {props.itemContent(index, item)}
+                </React.Fragment>
+              ))
+            : null}
+        </div>
+      );
     }),
   };
 });
@@ -445,5 +461,67 @@ describe("LogsContent — first-read skeleton onset", () => {
     });
     expect(queryByTestId("virtuoso")?.getAttribute("data-count")).toBe("1");
     expect(queryByRole("status")).toBeNull();
+  });
+});
+
+describe("LogsContent — collapsed groups", () => {
+  beforeEach(() => {
+    mockGetAll.mockReset().mockResolvedValue([]);
+    mockGetSources.mockReset().mockResolvedValue([]);
+    useLogsStore.setState({ logs: [], filters: {}, autoScroll: true, expandedIds: new Set() });
+    virtuoso.renderItems = true;
+  });
+
+  afterEach(() => {
+    virtuoso.renderItems = false;
+  });
+
+  it("keeps every request's context reachable from one collapsed row", async () => {
+    const request = (id: string, timestamp: number, requestId: string) =>
+      makeLog(id, { timestamp, source: "s1", message: "same", context: { requestId } });
+    mockGetAll.mockResolvedValue([request("r1", 1000, "a"), request("r2", 1001, "b")]);
+
+    const { findByTestId, getByRole, queryByRole } = render(
+      <TooltipProvider>
+        <LogsContent />
+      </TooltipProvider>
+    );
+    await waitFor(async () =>
+      expect((await findByTestId("virtuoso")).getAttribute("data-count")).toBe("1")
+    );
+
+    const copyPayload = async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      fireEvent.click(getByRole("button", { name: "Copy log entry" }));
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+      return String(writeText.mock.calls[0]?.[0]);
+    };
+
+    const copied = await copyPayload();
+    expect(copied).toContain('"requestId": "a"');
+    expect(copied).toContain('"requestId": "b"');
+
+    const disclosure = getByRole("button", { expanded: false });
+    expect(disclosure.getAttribute("aria-label")).toContain("repeated 2 times");
+    const panelId = disclosure.getAttribute("aria-controls") ?? "";
+    expect(document.getElementById(panelId)).toBeNull();
+    await act(async () => {
+      fireEvent.click(disclosure);
+    });
+    expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+    expect(document.getElementById(panelId)?.textContent).toMatch(
+      /"requestId": "a".*"requestId": "b"/s
+    );
+
+    // A repeat arriving while the group is open joins it without closing it.
+    await act(async () => {
+      useLogsStore.getState().addLogs([request("r3", 1002, "c")]);
+    });
+    expect(queryByRole("button", { expanded: true })).toBe(disclosure);
+    expect(disclosure.getAttribute("aria-label")).toContain("repeated 3 times");
+    const allThree = /"requestId": "a".*"requestId": "b".*"requestId": "c"/s;
+    expect(document.getElementById(panelId)?.textContent).toMatch(allThree);
+    expect(await copyPayload()).toMatch(allThree);
   });
 });

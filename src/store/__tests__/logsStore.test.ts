@@ -172,8 +172,8 @@ describe("collapseConsecutiveDuplicates", () => {
     ];
     const result = collapseConsecutiveDuplicates(logs);
     expect(result).toEqual([
-      { entry: logs[0], count: 1 },
-      { entry: logs[1], count: 1 },
+      { entry: logs[0], count: 1, members: [logs[0]] },
+      { entry: logs[1], count: 1, members: [logs[1]] },
     ]);
   });
 
@@ -235,5 +235,6 @@ describe("collapseConsecutiveDuplicates", () => {
     expect(result).toHaveLength(1);
     expect(result[0]?.count).toBe(2);
     expect(result[0]?.entry.id).toBe("log-0");
+    expect(result[0]?.members.map((member) => member.context?.requestId)).toEqual(["a", "b"]);
   });
 });

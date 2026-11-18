@@ -58,6 +58,7 @@ function LogEntryRow({ display, copyMeta, isExpanded, toggleExpanded }: LogEntry
   return (
     <LogEntry
       entry={display.entry}
+      members={display.members}
       count={display.count}
       copyMeta={copyMeta}
       isExpanded={isExpanded}
