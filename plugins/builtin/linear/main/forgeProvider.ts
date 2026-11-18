@@ -101,7 +101,21 @@ const COUNT_PAGE_LIMIT = 8;
  */
 const STATS_CACHE_TTL_MS = 5 * 60_000;
 
-const statsCache = new Map<string, { version: number; at: number; issueCount: number | null }>();
+/** An open-issue count, stamped with when its first page was asked for. */
+interface IssueCountRead {
+  at: number;
+  issueCount: number | null;
+}
+
+/** Keyed by key version and team: the count is one team filter's pages under one key. */
+const statsCache = new Map<string, IssueCountRead>();
+/**
+ * The latest count started per key, which reads missing the cache join rather
+ * than paging through the same team again. Only that count may cache its
+ * answer: an older one finishing after a refresh would put back what the
+ * refresh replaced.
+ */
+const statsCounts = new Map<string, Promise<IssueCountRead>>();
 /** Team key → team, per key version: every issue call resolves the project's team first. */
 const teamCache = new Map<string, { id: string; key: string }>();
 /** What a run of assignments in a row found (a user id, `null` for nobody), and how many of their Undos are left. */
@@ -189,6 +203,7 @@ function queueAssignment<T>(repo: RepoRef, issueNumber: number, run: () => Promi
 export function clearLinearCaches(): void {
   cachedViewer = null;
   statsCache.clear();
+  statsCounts.clear();
   teamCache.clear();
   previousAssignees.clear();
 }
@@ -365,6 +380,26 @@ async function countOpenIssues(repo: RepoRef, op: Op): Promise<number | null> {
   return null;
 }
 
+function startIssueCount(repo: RepoRef, op: Op, key: string): Promise<IssueCountRead> {
+  const at = Date.now();
+  const count: Promise<IssueCountRead> = countOpenIssues(repo, op).then(
+    (issueCount) => {
+      const read = { at, issueCount };
+      if (statsCounts.get(key) === count) {
+        statsCounts.delete(key);
+        if (isCurrent(op)) statsCache.set(key, read);
+      }
+      return read;
+    },
+    (err: unknown) => {
+      if (statsCounts.get(key) === count) statsCounts.delete(key);
+      throw err;
+    }
+  );
+  statsCounts.set(key, count);
+  return count;
+}
+
 /**
  * Without this the host would count the toolbar's issues by listing one issue
  * per poll, which carries no total and so marks every stats poll unclean.
@@ -373,16 +408,10 @@ async function countOpenIssues(repo: RepoRef, op: Op): Promise<number | null> {
  */
 const repoStatsCapability: RepoStatsCapability = {
   async getRepoStats(repo: RepoRef, opts?: { bypassCache?: boolean }): Promise<RepoStatsSnapshot> {
-    const key = `${repo.owner}/${teamKeyOf(repo)}`;
     const op = beginOp();
-    const now = Date.now();
-    const cached = statsCache.get(key);
-    if (
-      !opts?.bypassCache &&
-      cached &&
-      cached.version === op.version &&
-      now - cached.at < STATS_CACHE_TTL_MS
-    ) {
+    const key = `${op.version}\u0000${teamKeyOf(repo)}`;
+    const cached = opts?.bypassCache ? undefined : statsCache.get(key);
+    if (cached && Date.now() - cached.at < STATS_CACHE_TTL_MS) {
       return {
         counts: {
           issueCount: cached.issueCount,
@@ -393,10 +422,12 @@ const repoStatsCapability: RepoStatsCapability = {
         source: "memory-cache",
       };
     }
-    const issueCount = await countOpenIssues(repo, op);
-    if (isCurrent(op)) statsCache.set(key, { version: op.version, at: now, issueCount });
+    // A bypassing read asks for pages read after it, so it never joins a count
+    // already under way; the reads after it join its count instead.
+    const underWay = opts?.bypassCache ? undefined : statsCounts.get(key);
+    const { at, issueCount } = await (underWay ?? startIssueCount(repo, op, key));
     return {
-      counts: { issueCount, prCount: null, lastUpdated: now, issueCountRefreshedAt: now },
+      counts: { issueCount, prCount: null, lastUpdated: at, issueCountRefreshedAt: at },
       source: "network",
     };
   },
