@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
+  compareProjectNames,
+  compareProjectStrict,
   compareProjectsByMode,
   isOtherProjectsSortMode,
   OTHER_PROJECTS_SORT_MODES,
@@ -122,5 +124,61 @@ describe("isOtherProjectsSortMode", () => {
     ]) {
       expect(isOtherProjectsSortMode(value)).toBe(false);
     }
+  });
+});
+
+describe("shared collator comparators", () => {
+  const sign = (n: number) => (n > 0 ? 1 : n < 0 ? -1 : 0);
+  const samples = [
+    "Alpha",
+    "alpha",
+    "Álpha",
+    "alpha-2",
+    "module-10.ts",
+    "module-2.ts",
+    "Zulu",
+    "",
+    "ß",
+    "ss",
+  ];
+
+  it("orders names exactly like localeCompare with base sensitivity", () => {
+    expect(compareProjectNames("Álpha", "alpha")).toBe(
+      "Álpha".localeCompare("alpha", undefined, { sensitivity: "base" })
+    );
+    for (const a of samples) {
+      for (const b of samples) {
+        expect(sign(compareProjectNames(a, b))).toBe(
+          sign(a.localeCompare(b, undefined, { sensitivity: "base" }))
+        );
+      }
+    }
+  });
+
+  it.each(OTHER_PROJECTS_SORT_MODES)(
+    "treats names differing only in case as equal in %s, so the id decides",
+    (mode) => {
+      expect(compareProjectNames("alpha", "ALPHA")).toBe(0);
+      // Ids are assigned against the strict name order, so a caller that
+      // compared names strictly would seat these the other way round.
+      const names: [string, string] = ["alpha", "ALPHA"];
+      const [strictFirst, strictSecond] = names.sort(compareProjectStrict);
+      const projects: SortableProject[] = [
+        { id: "a", name: strictSecond, lastOpened: 1, frecencyScore: 1 },
+        { id: "b", name: strictFirst, lastOpened: 1, frecencyScore: 1 },
+      ];
+      for (const input of [projects, [...projects].reverse()]) {
+        expect(order(input, mode)).toEqual([strictSecond, strictFirst]);
+      }
+    }
+  );
+
+  it("orders strictly like default localeCompare, still separating case and accents", () => {
+    for (const a of samples) {
+      for (const b of samples) {
+        expect(sign(compareProjectStrict(a, b))).toBe(sign(a.localeCompare(b)));
+      }
+    }
+    expect(compareProjectStrict("alpha", "ALPHA")).not.toBe(0);
   });
 });
