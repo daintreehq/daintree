@@ -16,13 +16,18 @@ vi.mock("../GitHubAuth.js", () => ({
   GITHUB_API_TIMEOUT_MS: 5000,
 }));
 
-vi.mock("../GitHubRateLimitService.js", () => ({
-  gitHubRateLimitService: {
+vi.mock("../GitHubRateLimitService.js", () => {
+  const gitHubRateLimitService = {
     updateFromGraphQL: vi.fn(),
     shouldBlockRequest: vi.fn(() => ({ blocked: false, reason: null })),
     getState: vi.fn(() => ({ blocked: false })),
-  },
-}));
+  };
+  return {
+    gitHubRateLimitService,
+    rateLimitServiceForHost: () => gitHubRateLimitService,
+    releaseRateLimitServiceForHost: () => {},
+  };
+});
 
 const mockGetRepoContext = vi.fn();
 vi.mock("../GitHubRepoContext.js", () => ({
@@ -92,7 +97,11 @@ describe("getProjectHealth — issue/PR count dedup", () => {
   beforeEach(() => {
     mockClient.mockReset();
     mockGetRepoContext.mockReset();
-    mockGetRepoContext.mockResolvedValue({ owner: "testowner", repo: "testrepo" });
+    mockGetRepoContext.mockResolvedValue({
+      host: "github.com",
+      owner: "testowner",
+      repo: "testrepo",
+    });
     mockStatsCache.get.mockReset();
     mockStatsCache.get.mockReturnValue(null);
     repoStatsCache.clear();
@@ -145,7 +154,11 @@ describe("getProjectHealth — merged-PR velocity cadence", () => {
   beforeEach(() => {
     mockClient.mockReset();
     mockGetRepoContext.mockReset();
-    mockGetRepoContext.mockResolvedValue({ owner: "testowner", repo: "testrepo" });
+    mockGetRepoContext.mockResolvedValue({
+      host: "github.com",
+      owner: "testowner",
+      repo: "testrepo",
+    });
     mockStatsCache.get.mockReset();
     mockStatsCache.get.mockReturnValue(null);
     repoStatsCache.clear();

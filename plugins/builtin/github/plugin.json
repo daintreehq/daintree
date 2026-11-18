@@ -2,8 +2,8 @@
   "name": "daintree.github",
   "version": "0.1.0",
   "displayName": "GitHub",
-  "description": "First-party GitHub forge provider — issues, pull requests, reviews, CI status, and rate-limit handling for github.com repositories.",
-  "tagline": "Pull requests, issues, and CI checks for github.com repositories",
+  "description": "First-party GitHub forge provider — issues, pull requests, reviews, CI status, and rate-limit handling for github.com and GitHub Enterprise Server repositories.",
+  "tagline": "Pull requests, issues, and CI checks for GitHub repositories",
   "category": "forge",
   "main": "main/index.js",
   "engines": {
@@ -11,11 +11,27 @@
   },
   "capabilities": [],
   "contributes": {
+    "settings": [
+      {
+        "id": "enterpriseHost",
+        "type": "string",
+        "label": "GitHub Enterprise Server host",
+        "description": "Hostname of a GitHub Enterprise Server instance (github.example.com). Its repositories get the same pull request, issue and CI context as github.com ones.",
+        "default": ""
+      },
+      {
+        "id": "enterpriseToken",
+        "type": "secret",
+        "label": "GitHub Enterprise Server token",
+        "description": "Set it in Settings → Code forge → GitHub, which checks it against the server first and stores it with the host it was saved for. A token entered here is ignored."
+      }
+    ],
     "forgeProviders": [
       {
         "id": "github",
         "name": "GitHub",
         "matches": ["github.com"],
+        "matchesSettingRef": "enterpriseHost",
         "capabilities": [
           "issues",
           "pulls",

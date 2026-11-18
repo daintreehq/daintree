@@ -9,12 +9,14 @@ import {
   buildBatchPRsQuery,
   GRAPHQL_BATCH_CHUNK_SIZE,
 } from "./GitHubQueries.js";
-import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
+import { rateLimitServiceForHost } from "./GitHubRateLimitService.js";
+import { requireGitHubClient } from "./queryInfra.js";
 import { parseGitHubError } from "./GitHubErrors.js";
 import { withRepoContextRetry } from "./GitHubRepoContext.js";
 import {
   repoStatsCache,
   repoStatsAndPageSnapshotCache,
+  cacheOwner,
   prListCache,
   prTooltipCache,
   prTooltipWrittenAt,
@@ -301,12 +303,13 @@ export async function getPRTooltipForContext(
   context: RepoContext,
   prNumber: number
 ): Promise<PRTooltipData | null> {
-  const client = GitHubAuth.createClient();
+  const client = GitHubAuth.createClient(context.host);
   if (!client) {
     return null;
   }
+  const rateLimits = rateLimitServiceForHost(context.host);
 
-  const cacheKey = `${context.owner}/${context.repo}:${prNumber}`;
+  const cacheKey = `${cacheOwner(context)}/${context.repo}:${prNumber}`;
   const cached = prTooltipCache.get(cacheKey);
   if (cached) {
     return cached;
@@ -324,7 +327,7 @@ export async function getPRTooltipForContext(
       request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
     })) as GraphQlQueryResponseData;
 
-    gitHubRateLimitService.updateFromGraphQL(response, "GET_PR_QUERY");
+    rateLimits.updateFromGraphQL(response, "GET_PR_QUERY");
 
     const pr = response?.repository?.pullRequest;
     if (!pr) {
@@ -392,7 +395,8 @@ async function enrichPRsWithRequiredStatus(
   );
   if (candidates.length === 0) return prs;
 
-  const cacheKeyFor = (n: number) => `${context.owner}/${context.repo}:${n}`;
+  const cacheKeyFor = (n: number) => `${cacheOwner(context)}/${context.repo}:${n}`;
+  const rateLimits = rateLimitServiceForHost(context.host);
   const numbersToFetch: number[] = [];
   const cached = new Map<number, PRRequiredStatusEntry>();
 
@@ -413,7 +417,7 @@ async function enrichPRsWithRequiredStatus(
         const response = (await client(query, {
           request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
         })) as Record<string, unknown>;
-        gitHubRateLimitService.updateFromGraphQL(response, "BATCH_REQUIRED_CHECKS_QUERY");
+        rateLimits.updateFromGraphQL(response, "BATCH_REQUIRED_CHECKS_QUERY");
         fetched = parseBatchRequiredChecksResponse(response, numbersToFetch);
         for (const [num, entry] of fetched) {
           prRequiredStatusCache.set(cacheKeyFor(num), entry);
@@ -524,11 +528,6 @@ function prewarmPRTooltips(
 export async function listPullRequests(
   options: GitHubListOptions
 ): Promise<GitHubListResponse<GitHubPR>> {
-  const client = GitHubAuth.createClient();
-  if (!client) {
-    throw new Error("GitHub token not configured. Set it in Settings.");
-  }
-
   const resolvedSortOrder = options.sortOrder ?? "created";
   const orderBy = {
     field: resolvedSortOrder === "updated" ? "UPDATED_AT" : "CREATED_AT",
@@ -536,9 +535,11 @@ export async function listPullRequests(
   };
 
   return withRepoContextRetry(options.cwd, async (context) => {
+    const client = requireGitHubClient(context.host);
+    const rateLimits = rateLimitServiceForHost(context.host);
     const cacheKey = buildListCacheKey({
       type: "pr",
-      owner: context.owner,
+      owner: cacheOwner(context),
       repo: context.repo,
       state: options.state ?? "open",
       search: options.search ?? "",
@@ -558,7 +559,7 @@ export async function listPullRequests(
     // Captured before the network call: if the count-as-cache-buster bumps
     // the epoch mid-flight, this page predates the observed change and must
     // not repopulate the just-busted cache.
-    const epochAtStart = getRepoListEpoch("pr", context.owner, context.repo);
+    const epochAtStart = getRepoListEpoch("pr", cacheOwner(context), context.repo);
     const readAt = issueReadStamp();
 
     try {
@@ -583,13 +584,13 @@ export async function listPullRequests(
           request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
         })) as GraphQlQueryResponseData;
 
-        gitHubRateLimitService.updateFromGraphQL(response, "SEARCH_PRS_QUERY");
+        rateLimits.updateFromGraphQL(response, "SEARCH_PRS_QUERY");
 
         const search = response?.search;
         const nodes = (search?.nodes ?? []) as Array<Record<string, unknown>>;
         const filteredNodes = nodes.filter(Boolean);
 
-        prewarmPRTooltips(context.owner, context.repo, filteredNodes);
+        prewarmPRTooltips(cacheOwner(context), context.repo, filteredNodes);
 
         const parsedItems = filteredNodes.map(parsePRNode);
         const enrichedItems = await enrichPRsWithRequiredStatus(
@@ -618,7 +619,7 @@ export async function listPullRequests(
           request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
         })) as GraphQlQueryResponseData;
 
-        gitHubRateLimitService.updateFromGraphQL(response, "LIST_PRS_QUERY");
+        rateLimits.updateFromGraphQL(response, "LIST_PRS_QUERY");
 
         if (!response?.repository) {
           throw new Error("Repository not found or token lacks access.");
@@ -629,7 +630,7 @@ export async function listPullRequests(
         const totalCount = (pullRequests?.totalCount as number) ?? undefined;
         const filteredNodes = nodes.filter(Boolean);
 
-        prewarmPRTooltips(context.owner, context.repo, filteredNodes);
+        prewarmPRTooltips(cacheOwner(context), context.repo, filteredNodes);
 
         const parsedItems = filteredNodes.map(parsePRNode);
         const enrichedItems = await enrichPRsWithRequiredStatus(
@@ -651,7 +652,7 @@ export async function listPullRequests(
         // total is held outside it: the ledger orders it by when this read was
         // issued, and an epoch moved by an unconfirmed REST delta must not
         // swallow it (#16866).
-        if (getRepoListEpoch("pr", context.owner, context.repo) === epochAtStart) {
+        if (getRepoListEpoch("pr", cacheOwner(context), context.repo) === epochAtStart) {
           prListCache.set(cacheKey, result);
         }
         if (
@@ -661,25 +662,22 @@ export async function listPullRequests(
           Number.isSafeInteger(totalCount) &&
           totalCount >= 0
         ) {
-          updateRepoStatsCount(`${context.owner}/${context.repo}`, "pr", totalCount, readAt);
+          updateRepoStatsCount(`${cacheOwner(context)}/${context.repo}`, "pr", totalCount, readAt);
         }
       }
 
       return result;
     } catch (error) {
-      throw new Error(parseGitHubError(error));
+      throw new Error(parseGitHubError(error, context.host));
     }
   });
 }
 
 export async function getPRByNumber(cwd: string, prNumber: number): Promise<GitHubPR | null> {
-  const client = GitHubAuth.createClient();
-  if (!client) {
-    throw new Error("GitHub token not configured. Set it in Settings.");
-  }
-
   try {
     return await withRepoContextRetry(cwd, async (context) => {
+      const client = requireGitHubClient(context.host);
+      const rateLimits = rateLimitServiceForHost(context.host);
       const response = (await client(GET_PR_QUERY, {
         owner: context.owner,
         repo: context.repo,
@@ -687,7 +685,7 @@ export async function getPRByNumber(cwd: string, prNumber: number): Promise<GitH
         request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
       })) as GraphQlQueryResponseData;
 
-      gitHubRateLimitService.updateFromGraphQL(response, "GET_PR_QUERY");
+      rateLimits.updateFromGraphQL(response, "GET_PR_QUERY");
 
       const pr = response?.repository?.pullRequest;
       if (!pr) {
@@ -717,10 +715,8 @@ export async function getPRsByNumbersForContext(
   context: RepoContext,
   numbers: number[]
 ): Promise<Array<GitHubPR | null>> {
-  const client = GitHubAuth.createClient();
-  if (!client) {
-    throw new Error("GitHub token not configured. Set it in Settings.");
-  }
+  const client = requireGitHubClient(context.host);
+  const rateLimits = rateLimitServiceForHost(context.host);
 
   const valid = numbers.filter((n) => typeof n === "number" && Number.isInteger(n) && n > 0);
   if (valid.length === 0) return [];
@@ -736,7 +732,7 @@ export async function getPRsByNumbersForContext(
       request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
     })) as GraphQlQueryResponseData;
 
-    gitHubRateLimitService.updateFromGraphQL(response);
+    rateLimits.updateFromGraphQL(response);
 
     const repo = response?.repository as Record<string, unknown> | undefined;
     for (const num of chunk) {
@@ -753,11 +749,6 @@ export async function getPRsByNumbers(
   cwd: string,
   numbers: number[]
 ): Promise<Array<GitHubPR | null>> {
-  const client = GitHubAuth.createClient();
-  if (!client) {
-    throw new Error("GitHub token not configured. Set it in Settings.");
-  }
-
   const valid = numbers.filter((n) => typeof n === "number" && Number.isInteger(n) && n > 0);
   if (valid.length === 0) return [];
 
@@ -781,14 +772,12 @@ export async function getPRReviewThreads(
   cwd: string,
   prNumber: number
 ): Promise<Record<string, number>> {
-  const client = GitHubAuth.createClient();
-  if (!client) {
-    return {};
-  }
-
   try {
     return await withRepoContextRetry(cwd, async (context) => {
-      const cacheKey = `${context.owner}/${context.repo}:${prNumber}`;
+      const client = GitHubAuth.createClient(context.host);
+      if (!client) return {};
+      const rateLimits = rateLimitServiceForHost(context.host);
+      const cacheKey = `${cacheOwner(context)}/${context.repo}:${prNumber}`;
       const cached = reviewThreadsCache.get(cacheKey);
       if (cached) {
         return cached;
@@ -808,7 +797,7 @@ export async function getPRReviewThreads(
           request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
         })) as GraphQlQueryResponseData;
 
-        gitHubRateLimitService.updateFromGraphQL(response, "GET_PR_REVIEW_THREADS_QUERY");
+        rateLimits.updateFromGraphQL(response, "GET_PR_REVIEW_THREADS_QUERY");
 
         const threads = response?.repository?.pullRequest?.reviewThreads;
         const nodes = (threads?.nodes ?? []) as Array<{

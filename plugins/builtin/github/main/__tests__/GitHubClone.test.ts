@@ -16,8 +16,8 @@ vi.mock("../../../../../electron/utils/windowsTreeKill.js", async (importOrigina
 
 vi.mock("../GitHubRepoContext.js", () => ({
   parseGitHubRepoUrl: (url: string) => {
-    const m = /^https?:\/\/github\.com\/([^/]+)\/([^/.]+)/i.exec(url);
-    return m ? { owner: m[1], repo: m[2] } : null;
+    const m = /^https?:\/\/(github\.com|github\.example\.com)\/([^/]+)\/([^/.]+)/i.exec(url);
+    return m ? { host: m[1]!.toLowerCase(), owner: m[2], repo: m[3] } : null;
   },
 }));
 
@@ -108,6 +108,20 @@ describe("GitHubClone — probeAuth", () => {
     );
   });
 
+  it.each([
+    ["https://github.example.com/team/app.git", "github.example.com"],
+    ["https://github.com/owner/repo", "github.com"],
+  ])("asks gh only about the host %s targets", async (url, host) => {
+    setAuthResult(null);
+    await cloneCapability.probeAuth(undefined, url);
+    expect(childProcessMock.execFile).toHaveBeenCalledWith(
+      GH,
+      ["auth", "status", "--hostname", host],
+      expect.objectContaining({ windowsHide: true }),
+      expect.any(Function)
+    );
+  });
+
   it("reports unauthenticated when `gh auth status` fails", async () => {
     setAuthResult(new Error("not authed"));
     const probe = await cloneCapability.probeAuth();
@@ -124,7 +138,7 @@ describe("GitHubClone — probeAuth", () => {
 });
 
 describe("GitHubClone — cloneRepository", () => {
-  it("spawns `gh repo clone owner/repo <targetDir>` with the parent as cwd", async () => {
+  it("spawns `gh repo clone github.com/owner/repo <targetDir>` with the parent as cwd", async () => {
     let spawnedArgs: string[] | undefined;
     childProcessMock.spawn.mockImplementation((_cmd: string, args: string[]) => {
       spawnedArgs = args;
@@ -135,10 +149,23 @@ describe("GitHubClone — cloneRepository", () => {
 
     expect(childProcessMock.spawn).toHaveBeenCalledWith(
       GH,
-      expect.arrayContaining(["repo", "clone", "owner/repo"]),
+      expect.arrayContaining(["repo", "clone", "github.com/owner/repo"]),
       expect.objectContaining({ cwd: path.dirname(TARGET_DIR), windowsHide: true })
     );
-    expect(spawnedArgs).toEqual(["repo", "clone", "owner/repo", TARGET_DIR]);
+    // Host-qualified even for github.com: GH_HOST could point gh elsewhere.
+    expect(spawnedArgs).toEqual(["repo", "clone", "github.com/owner/repo", TARGET_DIR]);
+  });
+
+  it("names an Enterprise Server host so gh can't clone a same-named github.com repository", async () => {
+    let spawnedArgs: string[] | undefined;
+    childProcessMock.spawn.mockImplementation((_cmd: string, args: string[]) => {
+      spawnedArgs = args;
+      return makeChild();
+    });
+
+    await cloneCapability.cloneRepository!("https://github.example.com/team/app", TARGET_DIR, {});
+
+    expect(spawnedArgs).toEqual(["repo", "clone", "github.example.com/team/app", TARGET_DIR]);
   });
 
   it("appends -- --depth 1 when shallow is true", async () => {
@@ -152,7 +179,15 @@ describe("GitHubClone — cloneRepository", () => {
       shallow: true,
     });
 
-    expect(spawnedArgs).toEqual(["repo", "clone", "owner/repo", TARGET_DIR, "--", "--depth", "1"]);
+    expect(spawnedArgs).toEqual([
+      "repo",
+      "clone",
+      "github.com/owner/repo",
+      TARGET_DIR,
+      "--",
+      "--depth",
+      "1",
+    ]);
   });
 
   it("relays the four stderr stage patterns through onProgress", async () => {

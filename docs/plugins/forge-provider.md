@@ -72,6 +72,7 @@ Add a `forgeProviders` contribution to `plugin.json`. Daintree reads this eagerl
 | `capabilities` | no | Informational hints driving the "Supports" row in the provider's Settings → Code forge page only. The host does **not** gate behavior on this array — see [Add optional capabilities](#add-optional-capabilities). |
 | `credentialFields` | no | Credential inputs the host renders a settings form from. See [Credential fields](#credential-fields). |
 | `settingsScopeRef` | no | Must exactly equal the `id` of one of this plugin's `contributes.settings[]` entries (not a prefix); anything else fails manifest parsing with `forge_settings_scope_ref_unknown`. No host code reads it today. |
+| `matchesSettingRef` | no | The `id` of one of this plugin's `contributes.settings[]` entries that is a user-scoped `string`; anything else fails manifest parsing with `forge_matches_setting_ref_invalid`. Its value, a bare hostname or an `https://` origin, is matched like one more `matches` entry: the host reads it when the plugin loads, before a lazy plugin activates, and again whenever the setting changes, then re-pushes the matcher table to workspace hosts. An empty or unreadable value adds nothing. GitHub's `enterpriseHost` setting routes a GitHub Enterprise Server host this way. |
 | `viewRefs` | no | Each entry must exactly equal a `contributes.views[].id`; anything else fails manifest parsing with `forge_view_ref_unknown`. No host code reads it today. |
 | `slots` | no | Renderer view-slot refs for provider-owned UI. See [View slots](#view-slots). |
 
@@ -351,7 +352,7 @@ When you add a provider whose CLI the assistant should be able to drive, add an 
 
 Mirror the GitHub provider's `__tests__/` coverage. A new provider ships unit tests for:
 
-- **`parseRemote`** — HTTPS, SSH, and SCP-form URLs resolve; a URL you can't serve returns `null`. A self-hostable forge still parses a hostname outside its `matches`, since an override can route one to it (GitLab's does; GitHub's returns `null` for anything but `github.com`).
+- **`parseRemote`** — HTTPS, SSH, and SCP-form URLs resolve; a URL you can't serve returns `null`. A self-hostable forge still parses a hostname outside its `matches`, since an override can route one to it (GitLab's does; GitHub's returns `null` for anything but `github.com` and its configured Enterprise Server host).
 - **State normalization** — every provider state value maps to the right `Normalized*` value, and `rawState` round-trips verbatim.
 - **Core CRUD** — `listIssues`, `listPRs`, `getIssue`, `getPR`, `findPRByBranch`, `getCIStatus`, `getRepoMetadata` against a mocked transport, including empty pages and not-found.
 - **`getRateLimit`** — if you implement it, the provider's rate-limit transport projects into `RateLimitInfo` correctly, including the `null`-per-dimension case.

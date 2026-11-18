@@ -1,23 +1,32 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { PluginHostApi } from "../../../../../shared/types/plugin.js";
 
-const { gitHubAuthMock, secureStorageMock, tokenHealthMock, updateForgeCredentialsMock } =
-  vi.hoisted(() => ({
-    gitHubAuthMock: {
-      initializeStorage: vi.fn(),
-      getToken: vi.fn<() => string | undefined>(),
-      getTokenVersion: vi.fn(() => 0),
-      validate: vi.fn(),
-      setValidatedUserInfo: vi.fn(),
-      setMemoryToken: vi.fn(),
-    },
-    secureStorageMock: { get: vi.fn(), set: vi.fn(), delete: vi.fn() },
-    tokenHealthMock: { start: vi.fn(), stop: vi.fn(), resetState: vi.fn() },
-    updateForgeCredentialsMock: vi.fn(),
-  }));
+const {
+  gitHubAuthMock,
+  secureStorageMock,
+  tokenHealthMock,
+  updateForgeCredentialsMock,
+  registerEnterpriseMock,
+  disposeEnterpriseMock,
+} = vi.hoisted(() => ({
+  gitHubAuthMock: {
+    initializeStorage: vi.fn(),
+    getToken: vi.fn<() => string | undefined>(),
+    getTokenVersion: vi.fn(() => 0),
+    validate: vi.fn(),
+    setValidatedUserInfo: vi.fn(),
+    setMemoryToken: vi.fn(),
+  },
+  secureStorageMock: { get: vi.fn(), set: vi.fn(), delete: vi.fn() },
+  tokenHealthMock: { start: vi.fn(), stop: vi.fn(), resetState: vi.fn() },
+  updateForgeCredentialsMock: vi.fn(),
+  registerEnterpriseMock: vi.fn(),
+  disposeEnterpriseMock: vi.fn(),
+}));
 
 vi.mock("../GitHubAuth.js", () => ({ GitHubAuth: gitHubAuthMock }));
 vi.mock("../forgeProvider.js", () => ({ githubForgeProvider: {} }));
+vi.mock("../GitHubEnterprise.js", () => ({ registerGitHubEnterprise: registerEnterpriseMock }));
 vi.mock("../reviewDecorationProvider.js", () => ({
   registerReviewDecorationProvider: vi.fn(() => vi.fn()),
   createReviewDecorationProvider: vi.fn(),
@@ -50,12 +59,17 @@ describe("github plugin activate", () => {
     vi.clearAllMocks();
     gitHubAuthMock.getToken.mockReturnValue(undefined);
     gitHubAuthMock.getTokenVersion.mockReturnValue(0);
+    registerEnterpriseMock.mockResolvedValue(disposeEnterpriseMock);
   });
 
-  it("initializes token storage before registering the forge provider", async () => {
+  it("loads token storage and the Enterprise Server host before registering the forge provider", async () => {
     const host = makeHost();
     const order: string[] = [];
     gitHubAuthMock.initializeStorage.mockImplementation(() => order.push("storage"));
+    registerEnterpriseMock.mockImplementation(async () => {
+      order.push("enterprise");
+      return disposeEnterpriseMock;
+    });
     vi.mocked(host.registerForgeProvider).mockImplementation(() => {
       order.push("provider");
       return Promise.resolve(vi.fn());
@@ -63,7 +77,25 @@ describe("github plugin activate", () => {
 
     await activate(host);
 
-    expect(order).toEqual(["storage", "provider"]);
+    expect(order).toEqual(["storage", "enterprise", "provider"]);
+  });
+
+  it("empties the Enterprise Server session when the provider can't register", async () => {
+    const host = makeHost();
+    vi.mocked(host.registerForgeProvider).mockRejectedValue(new Error("registry refused"));
+
+    await expect(activate(host)).rejects.toThrow("registry refused");
+
+    expect(disposeEnterpriseMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("empties the Enterprise Server session on deactivation", async () => {
+    const dispose = await activate(makeHost());
+    expect(disposeEnterpriseMock).not.toHaveBeenCalled();
+
+    dispose();
+
+    expect(disposeEnterpriseMock).toHaveBeenCalledTimes(1);
   });
 
   it("returns synchronously even while a stored-token validate hangs (#10325)", async () => {

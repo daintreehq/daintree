@@ -32,6 +32,7 @@ import {
 } from "./GitHubQueries.js";
 import {
   bumpIssueCommentsEpoch,
+  cacheOwner,
   clearGitHubCaches,
   clearPRCaches,
   invalidateRepoIssueCachesForAssignment,
@@ -47,12 +48,13 @@ import {
   restToForgeReview,
   restUserToForgeUser,
 } from "./mappers.js";
-import { dispatchQuery } from "./queryInfra.js";
+import { dispatchQuery, missingTokenMessage } from "./queryInfra.js";
+import { githubApiBase } from "./GitHubHost.js";
 
-function requireGitHubToken(): string {
-  const token = GitHubAuth.getToken();
+function requireGitHubToken(host: string): string {
+  const token = GitHubAuth.getToken(host);
   if (!token) {
-    throw new Error("GitHub token not configured. Set it in Settings.");
+    throw new Error(missingTokenMessage(host));
   }
   return token;
 }
@@ -78,8 +80,8 @@ async function patchIssue(
   fields: Record<string, unknown>,
   failurePrefix: string
 ): Promise<Issue> {
-  const token = requireGitHubToken();
-  const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/issues/${issueNumber}`;
+  const token = requireGitHubToken(repo.host);
+  const url = `${githubApiBase(repo.host)}/repos/${repo.owner}/${repo.repo}/issues/${issueNumber}`;
   const response = await fetch(url, {
     method: "PATCH",
     headers: githubMutationHeaders(token),
@@ -127,8 +129,8 @@ async function patchPRState(
   prNumber: number,
   state: "open" | "closed"
 ): Promise<PR> {
-  const token = requireGitHubToken();
-  const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/pulls/${prNumber}`;
+  const token = requireGitHubToken(repo.host);
+  const url = `${githubApiBase(repo.host)}/repos/${repo.owner}/${repo.repo}/pulls/${prNumber}`;
   const response = await fetch(url, {
     method: "PATCH",
     headers: githubMutationHeaders(token),
@@ -162,8 +164,8 @@ async function patchIssueAssignees(
   method: "POST" | "DELETE",
   failurePrefix: string
 ): Promise<ForgeUser[]> {
-  const token = requireGitHubToken();
-  const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/issues/${issueNumber}/assignees`;
+  const token = requireGitHubToken(repo.host);
+  const url = `${githubApiBase(repo.host)}/repos/${repo.owner}/${repo.repo}/issues/${issueNumber}/assignees`;
   const response = await fetch(url, {
     method,
     headers: githubMutationHeaders(token),
@@ -176,7 +178,7 @@ async function patchIssueAssignees(
       `${failurePrefix}: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
     );
   }
-  invalidateRepoIssueCachesForAssignment(repo.owner, repo.repo, issueNumber);
+  invalidateRepoIssueCachesForAssignment(cacheOwner(repo), repo.repo, issueNumber);
   const data = await readMutationJson(response, "missing issue payload");
   if (!Array.isArray(data.assignees)) {
     throw new Error("Unexpected response from GitHub: missing issue assignees.");
@@ -187,6 +189,7 @@ async function patchIssueAssignees(
 // Resolve a PR's GraphQL node id for the draft-toggle mutations.
 async function fetchPRNodeId(repo: RepoRef, prNumber: number): Promise<string> {
   const response = await dispatchQuery(
+    repo.host,
     GET_PR_NODE_ID_QUERY,
     { owner: repo.owner, repo: repo.repo, number: prNumber },
     "GET_PR_NODE_ID_QUERY"
@@ -217,11 +220,11 @@ export async function submitReviewImpl(
   event: "APPROVE" | "REQUEST_CHANGES",
   body?: string
 ): Promise<PullRequestReview> {
-  const token = GitHubAuth.getToken();
+  const token = GitHubAuth.getToken(repo.host);
   if (!token) {
-    throw new Error("GitHub token not configured. Set it in Settings.");
+    throw new Error(missingTokenMessage(repo.host));
   }
-  const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/pulls/${prNumber}/reviews`;
+  const url = `${githubApiBase(repo.host)}/repos/${repo.owner}/${repo.repo}/pulls/${prNumber}/reviews`;
   const payload: Record<string, unknown> = { event };
   if (body !== undefined) payload.body = body;
   const response = await fetch(url, {
@@ -253,11 +256,11 @@ export async function dismissReviewImpl(
   reviewId: number,
   message: string
 ): Promise<PullRequestReview> {
-  const token = GitHubAuth.getToken();
+  const token = GitHubAuth.getToken(repo.host);
   if (!token) {
-    throw new Error("GitHub token not configured. Set it in Settings.");
+    throw new Error(missingTokenMessage(repo.host));
   }
-  const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/pulls/${prNumber}/reviews/${reviewId}/dismissals`;
+  const url = `${githubApiBase(repo.host)}/repos/${repo.owner}/${repo.repo}/pulls/${prNumber}/reviews/${reviewId}/dismissals`;
   const response = await fetch(url, {
     method: "PUT",
     headers: REVIEW_WRITE_HEADERS(token),
@@ -283,16 +286,16 @@ export async function requestReviewersImpl(
   prNumber: number,
   reviewers: ReviewerRequest
 ): Promise<RequestReviewersResult> {
-  const token = GitHubAuth.getToken();
+  const token = GitHubAuth.getToken(repo.host);
   if (!token) {
-    throw new Error("GitHub token not configured. Set it in Settings.");
+    throw new Error(missingTokenMessage(repo.host));
   }
   const users = reviewers.users ?? [];
   const teams = reviewers.teams ?? [];
   if (users.length === 0 && teams.length === 0) {
     throw new Error("Provide at least one user or team to request a review from");
   }
-  const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/pulls/${prNumber}/requested_reviewers`;
+  const url = `${githubApiBase(repo.host)}/repos/${repo.owner}/${repo.repo}/pulls/${prNumber}/requested_reviewers`;
   const response = await fetch(url, {
     method: "POST",
     headers: REVIEW_WRITE_HEADERS(token),
@@ -338,9 +341,9 @@ function pluckStrings(list: unknown, field: string): string[] {
 }
 
 export async function createIssueImpl(repo: RepoRef, input: CreateIssueInput): Promise<Issue> {
-  const token = GitHubAuth.getToken();
+  const token = GitHubAuth.getToken(repo.host);
   if (!token) {
-    throw new Error("GitHub token not configured. Set it in Settings.");
+    throw new Error(missingTokenMessage(repo.host));
   }
   const title = input.title?.trim();
   if (!title) {
@@ -350,7 +353,7 @@ export async function createIssueImpl(repo: RepoRef, input: CreateIssueInput): P
   if (input.body) requestBody.body = input.body;
   if (input.labels && input.labels.length > 0) requestBody.labels = input.labels;
 
-  const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/issues`;
+  const url = `${githubApiBase(repo.host)}/repos/${repo.owner}/${repo.repo}/issues`;
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -413,7 +416,7 @@ export async function unassignIssueImpl(
 }
 
 export async function createPRImpl(repo: RepoRef, input: CreatePRInput): Promise<PR> {
-  const token = requireGitHubToken();
+  const token = requireGitHubToken(repo.host);
   const head = input.head?.trim();
   const base = input.base?.trim();
   const title = input.title?.trim();
@@ -424,7 +427,7 @@ export async function createPRImpl(repo: RepoRef, input: CreatePRInput): Promise
   if (input.body) requestBody.body = input.body;
   if (input.draft) requestBody.draft = true;
 
-  const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/pulls`;
+  const url = `${githubApiBase(repo.host)}/repos/${repo.owner}/${repo.repo}/pulls`;
   const response = await fetch(url, {
     method: "POST",
     headers: githubMutationHeaders(token),
@@ -460,7 +463,7 @@ export async function mergePRImpl(
   prNumber: number,
   input?: MergePRInput
 ): Promise<MergePRResult> {
-  const token = requireGitHubToken();
+  const token = requireGitHubToken(repo.host);
   // REST `sha` pins the head; only a read before the write can pin the base.
   if (input?.expectedBaseRef) {
     assertPinned(prNumber, await fetchPRMergeState(repo, prNumber), {
@@ -475,7 +478,7 @@ export async function mergePRImpl(
   // can never fire.
   if (input?.expectedHeadSha) requestBody.sha = input.expectedHeadSha;
 
-  const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/pulls/${prNumber}/merge`;
+  const url = `${githubApiBase(repo.host)}/repos/${repo.owner}/${repo.repo}/pulls/${prNumber}/merge`;
   const response = await fetch(url, {
     method: "PUT",
     headers: githubMutationHeaders(token),
@@ -538,6 +541,7 @@ interface PRMergeStateRead {
 // Uncached on purpose: every caller is about to write against this state.
 async function fetchPRMergeState(repo: RepoRef, prNumber: number): Promise<PRMergeStateRead> {
   const response = await dispatchQuery(
+    repo.host,
     GET_PR_MERGE_STATE_QUERY,
     { owner: repo.owner, repo: repo.repo, number: prNumber },
     "GET_PR_MERGE_STATE_QUERY"
@@ -615,6 +619,7 @@ export async function enableAutoMergeImpl(
   let response: unknown;
   try {
     response = await dispatchQuery(
+      repo.host,
       ENABLE_PR_AUTO_MERGE_MUTATION,
       {
         id: before.id,
@@ -654,12 +659,13 @@ export async function disableAutoMergeImpl(
 ): Promise<DisableAutoMergeResult> {
   const state = await fetchPRMergeState(repo, prNumber);
   if (state.inQueue) {
-    await dispatchQuery(DEQUEUE_PR_MUTATION, { id: state.id }, "dequeuePullRequest");
+    await dispatchQuery(repo.host, DEQUEUE_PR_MUTATION, { id: state.id }, "dequeuePullRequest");
     clearPRCaches();
     return { prNumber, outcome: "dequeued" };
   }
   if (!state.autoMergeArmed) return { prNumber, outcome: "not-pending" };
   await dispatchQuery(
+    repo.host,
     DISABLE_PR_AUTO_MERGE_MUTATION,
     { id: state.id },
     "disablePullRequestAutoMerge"
@@ -689,6 +695,7 @@ async function setPRDraftState(
   const nodeId = await fetchPRNodeId(repo, prNumber);
   const mutationField = draft ? "convertPullRequestToDraft" : "markPullRequestReadyForReview";
   const response = await dispatchQuery(
+    repo.host,
     draft ? CONVERT_PR_TO_DRAFT_MUTATION : MARK_PR_READY_FOR_REVIEW_MUTATION,
     { id: nodeId },
     mutationField
@@ -718,12 +725,12 @@ export async function commentOnPRImpl(
   prNumber: number,
   body: string
 ): Promise<IssueComment> {
-  const token = requireGitHubToken();
+  const token = requireGitHubToken(repo.host);
   // Reject an empty/whitespace body, but post the original text verbatim —
   // trimming would mangle leading indentation in fenced code blocks.
   if (!body?.trim()) throw new Error("Comment body is required.");
   // PR comments use the issues endpoint — PR number === issue number on GitHub.
-  const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/issues/${prNumber}/comments`;
+  const url = `${githubApiBase(repo.host)}/repos/${repo.owner}/${repo.repo}/issues/${prNumber}/comments`;
   const response = await fetch(url, {
     method: "POST",
     headers: githubMutationHeaders(token),
@@ -754,7 +761,7 @@ export async function commentOnPRImpl(
 }
 
 export async function editPRImpl(repo: RepoRef, prNumber: number, input: EditPRInput): Promise<PR> {
-  const token = requireGitHubToken();
+  const token = requireGitHubToken(repo.host);
   const requestBody: Record<string, unknown> = {};
   if (typeof input.title === "string") {
     const title = input.title.trim();
@@ -765,7 +772,7 @@ export async function editPRImpl(repo: RepoRef, prNumber: number, input: EditPRI
   if (Object.keys(requestBody).length === 0) {
     throw new Error("Provide a title or body to edit.");
   }
-  const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/pulls/${prNumber}`;
+  const url = `${githubApiBase(repo.host)}/repos/${repo.owner}/${repo.repo}/pulls/${prNumber}`;
   const response = await fetch(url, {
     method: "PATCH",
     headers: githubMutationHeaders(token),
@@ -826,14 +833,14 @@ export async function addIssueCommentImpl(
   issueNumber: number,
   body: string
 ): Promise<IssueComment> {
-  const token = GitHubAuth.getToken();
+  const token = GitHubAuth.getToken(repo.host);
   if (!token) {
-    throw new Error("GitHub token not configured. Set it in Settings.");
+    throw new Error(missingTokenMessage(repo.host));
   }
   if (!body || !body.trim()) {
     throw new Error("Comment body is required.");
   }
-  const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/issues/${issueNumber}/comments`;
+  const url = `${githubApiBase(repo.host)}/repos/${repo.owner}/${repo.repo}/issues/${issueNumber}/comments`;
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -859,11 +866,11 @@ export async function addIssueCommentImpl(
   // A new comment changes the issue's comment count, which the tooltip cache
   // holds. List/stat caches are unaffected, so a targeted invalidation is
   // enough (avoids the heavier clearGitHubCaches()).
-  issueTooltipCache.invalidate(`${repo.owner}/${repo.repo}:${issueNumber}`);
+  issueTooltipCache.invalidate(`${cacheOwner(repo)}/${repo.repo}:${issueNumber}`);
   // Retire any comment read already in flight for this repo, so the caller's
   // follow-up read can't coalesce onto a request that predates this write and
   // come back without the comment just posted (#11545).
-  bumpIssueCommentsEpoch(repo.owner, repo.repo);
+  bumpIssueCommentsEpoch(cacheOwner(repo), repo.repo);
   const data = (await response.json()) as Record<string, unknown>;
   if (typeof data.id !== "number" || typeof data.html_url !== "string") {
     throw new Error("Unexpected response from GitHub: missing comment id or URL.");
@@ -883,15 +890,15 @@ export async function addIssueLabelImpl(
   issueNumber: number,
   label: string
 ): Promise<ForgeLabel[]> {
-  const token = GitHubAuth.getToken();
+  const token = GitHubAuth.getToken(repo.host);
   if (!token) {
-    throw new Error("GitHub token not configured. Set it in Settings.");
+    throw new Error(missingTokenMessage(repo.host));
   }
   const name = label?.trim();
   if (!name) {
     throw new Error("Label name is required.");
   }
-  const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/issues/${issueNumber}/labels`;
+  const url = `${githubApiBase(repo.host)}/repos/${repo.owner}/${repo.repo}/issues/${issueNumber}/labels`;
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -919,15 +926,15 @@ export async function removeIssueLabelImpl(
   issueNumber: number,
   label: string
 ): Promise<ForgeLabel[]> {
-  const token = GitHubAuth.getToken();
+  const token = GitHubAuth.getToken(repo.host);
   if (!token) {
-    throw new Error("GitHub token not configured. Set it in Settings.");
+    throw new Error(missingTokenMessage(repo.host));
   }
   const name = label?.trim();
   if (!name) {
     throw new Error("Label name is required.");
   }
-  const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/issues/${issueNumber}/labels/${encodeURIComponent(name)}`;
+  const url = `${githubApiBase(repo.host)}/repos/${repo.owner}/${repo.repo}/issues/${issueNumber}/labels/${encodeURIComponent(name)}`;
   const response = await fetch(url, {
     method: "DELETE",
     headers: {

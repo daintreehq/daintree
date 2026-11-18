@@ -6,6 +6,8 @@ import type {
 import type { PluginHostApi, PluginWorktreeLinked } from "../../../../shared/types/plugin.js";
 import { getETagCacheVersion, REVIEW_THREADS_TTL_MS } from "./GitHubCaches.js";
 import { getPRReviewThreads } from "./GitHubPRs.js";
+import { getRepoContext } from "./GitHubRepoContext.js";
+import { GITHUB_COM_HOST } from "./GitHubHost.js";
 
 const SCOPE_PREFIX = "worktree-diff:";
 const WORKTREE_CHANGE_OPTIONS = { debounceMs: 300 };
@@ -44,6 +46,8 @@ export function createReviewDecorationProvider(
       if (typeof prNumber !== "number" || prRef === undefined) return {};
 
       const counts = await getPRReviewThreads(worktreePath, prNumber);
+      // A linked PR ref carries no host; it lives on the worktree's own remote.
+      const repoHost = (await getRepoContext(worktreePath))?.host ?? GITHUB_COM_HOST;
       const { __clampedAt: _clamped, ...pathCounts } = counts as Record<string, number> & {
         __clampedAt?: number;
       };
@@ -76,7 +80,7 @@ export function createReviewDecorationProvider(
           };
           if (buildFileUrl && hasRepoRef) {
             decoration.url = buildFileUrl(
-              { host: "github.com", owner: prRef.owner, repo: prRef.repo, rawData: prRef.rawData },
+              { host: repoHost, owner: prRef.owner, repo: prRef.repo, rawData: prRef.rawData },
               prNumber,
               path
             );

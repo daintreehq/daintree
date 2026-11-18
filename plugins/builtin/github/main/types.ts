@@ -2,6 +2,8 @@ import type { GitHubIssue, GitHubPR, GitHubPRCIStatus } from "../shared/types.js
 import type { PRTooltipData } from "../../../../shared/types/forge.js";
 
 export interface RepoContext {
+  /** The GitHub host the repository lives on: github.com or the Enterprise Server host. */
+  host: string;
   owner: string;
   repo: string;
 }

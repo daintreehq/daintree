@@ -1478,6 +1478,8 @@ export class PluginService {
         else if (change === "removed") this.pluginThemeRemovals.add(pluginId);
         this.schedulePluginThemeSync();
       },
+      readUserSetting: (pluginId, key, manifest) =>
+        this.readUserSettingForHost(pluginId, key, manifest),
     });
 
     this.promptDispatcher = new PluginUIPromptDispatcher({
@@ -1491,7 +1493,10 @@ export class PluginService {
       // renders a settings form whether or not the plugin is running.
       getManifest: (pluginId) =>
         (this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId))?.manifest,
-      onSettingChanged: (pluginId) => this.emitSettingsChanged(pluginId),
+      onSettingChanged: (pluginId) => {
+        this.emitSettingsChanged(pluginId);
+        void this.contributions.refreshForgeSettingMatches(pluginId).catch(() => undefined);
+      },
     });
 
     this.accounts = new PluginAccountService({
@@ -6377,6 +6382,31 @@ export class PluginService {
    * them (the panel "needs setup" strip) re-reads. Scoped like runtime status:
    * a project instance's key stays in its own project's views.
    */
+  /**
+   * A user-scope setting's stored value, or its declared default, read the way
+   * `host.settings.get` reads it. Never a secret: the host routes on this.
+   */
+  private async readUserSettingForHost(
+    pluginId: string,
+    key: string,
+    manifest: Readonly<PluginManifest>
+  ): Promise<unknown> {
+    if (this.settings.isSecretKey(pluginId, key, manifest)) return undefined;
+    const filePath = this.settings.resolveSettingsFilePathForKey(
+      pluginId,
+      key,
+      "user",
+      null,
+      manifest
+    );
+    const stored = filePath
+      ? await this.settings.getOrCreateSettingsStore(pluginId, filePath).get<unknown>(key)
+      : undefined;
+    return stored !== undefined
+      ? stored
+      : this.settings.getDeclaredDefault(pluginId, key, manifest);
+  }
+
   private emitSettingsChanged(pluginId: string): void {
     if (this.disposed) return;
     const event = { name: "plugin:settings-changed" as const, payload: { pluginId } };

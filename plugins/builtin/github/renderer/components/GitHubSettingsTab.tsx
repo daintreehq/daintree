@@ -20,6 +20,7 @@ import {
   describeImportFailure,
   useGitHubCliAvailable,
 } from "./GitHubCliImport";
+import { GitHubEnterpriseSection } from "./GitHubEnterpriseSection";
 import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
 import { useTabLoad } from "@/hooks";
 import { forgeNotConnectedLabel, useRemoteHostName } from "@/hooks/useSettingsOwner";
@@ -457,6 +458,11 @@ export function GitHubSettingsTab() {
           </SettingsGroup>
         )}
       </SettingsSection>
+
+      <GitHubEnterpriseSection
+        isGhAvailable={isGhAvailable}
+        onTokenChanged={() => void refresh()}
+      />
 
       {/* `nested`: this tab renders inside the Settings modal. */}
       <ConfirmDialog

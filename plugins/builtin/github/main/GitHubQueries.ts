@@ -138,6 +138,7 @@ export const PROJECT_HEALTH_QUERY = `
       cost
       remaining
       resetAt
+      limit
     }
   }
 `;

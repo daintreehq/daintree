@@ -19,6 +19,7 @@ import {
   onForgeProviderMatchersChanged,
   registerForgeProviderImpl,
   registerForgeProviders,
+  setForgeProviderSettingMatch,
   unregisterForgeProviderImpl,
   unregisterForgeProviderImpls,
   unregisterForgeProviders,
@@ -526,5 +527,78 @@ describe("forgeProviderRegistry — installed plugins' providers (#15583)", () =
     const legacy = getRegisteredForgeProviders().find((p) => p.pluginId === "acme.legacy");
     expect(legacy).not.toHaveProperty("unavailableReason");
     expect(getForgeProviderUnavailableError("acme.legacy.legacy")).toBeNull();
+  });
+});
+
+describe("forgeProviderRegistry — setting-backed hostnames (#17324)", () => {
+  const withRef = () =>
+    makeContribution("github", ["github.com"], { matchesSettingRef: "enterpriseHost" });
+
+  it("routes the setting's hostname from registration, beside the manifest hostnames", () => {
+    registerForgeProviders("acme.github", [withRef()], {
+      settingMatches: new Map([["github", "GitHub.Example.com"]]),
+    });
+
+    expect(getActiveProvider("https://github.example.com/team/app.git")?.pluginId).toBe(
+      "acme.github"
+    );
+    expect(getActiveProvider(makeRepoRef("github.example.com"))?.pluginId).toBe("acme.github");
+    expect(getActiveProvider("git@github.com:team/app.git")?.pluginId).toBe("acme.github");
+    expect(listForgeProviderMatchers()).toEqual([
+      { providerId: "acme.github.github", hostnames: ["github.com", "github.example.com"] },
+    ]);
+    expect(getRegisteredForgeProviders()[0]?.contribution.matches).toEqual([
+      "github.com",
+      "github.example.com",
+    ]);
+  });
+
+  it("follows a changed setting and tells matcher listeners once per real change", () => {
+    registerForgeProviders("acme.github", [withRef()]);
+    let notified = 0;
+    const off = onForgeProviderMatchersChanged(() => notified++);
+    try {
+      expect(listMatchingProviders("https://ghe.one.example/team/app")).toEqual([]);
+
+      setForgeProviderSettingMatch("acme.github", "github", "ghe.one.example");
+      expect(listMatchingProviders("https://ghe.one.example/team/app")).toHaveLength(1);
+      expect(notified).toBe(1);
+
+      setForgeProviderSettingMatch("acme.github", "github", "ghe.one.example");
+      expect(notified).toBe(1);
+
+      setForgeProviderSettingMatch("acme.github", "github", "ghe.two.example");
+      expect(listMatchingProviders("https://ghe.one.example/team/app")).toEqual([]);
+      expect(listMatchingProviders("https://ghe.two.example/team/app")).toHaveLength(1);
+
+      setForgeProviderSettingMatch("acme.github", "github", null);
+      expect(listMatchingProviders("https://ghe.two.example/team/app")).toEqual([]);
+      expect(notified).toBe(3);
+    } finally {
+      off();
+    }
+  });
+
+  it("adds nothing for a value that isn't a hostname, or for a contribution without the ref", () => {
+    registerForgeProviders("acme.github", [withRef()], {
+      settingMatches: new Map([["github", "https://ghe.example.com/team"]]),
+    });
+    registerForgeProviders("acme.gitea", [makeContribution("gitea", ["gitea.com"])]);
+    setForgeProviderSettingMatch("acme.gitea", "gitea", "ghe.example.com");
+
+    expect(listMatchingProviders("https://ghe.example.com/team/app")).toEqual([]);
+    expect(
+      getRegisteredForgeProviders().find((p) => p.pluginId === "acme.gitea")?.contribution.matches
+    ).toEqual(["gitea.com"]);
+  });
+
+  it("drops the setting's hostname with the plugin's descriptors", () => {
+    registerForgeProviders("acme.github", [withRef()], {
+      settingMatches: new Map([["github", "ghe.example.com"]]),
+    });
+    unregisterForgeProviders("acme.github");
+    setForgeProviderSettingMatch("acme.github", "github", "ghe.example.com");
+
+    expect(listMatchingProviders("https://ghe.example.com/team/app")).toEqual([]);
   });
 });

@@ -194,6 +194,22 @@ export function validateForgeProviderRefs(
         params: { errorCode: "forge_settings_scope_ref_unknown" },
       });
     }
+    if (provider.matchesSettingRef !== undefined) {
+      // The host reads this setting to route remotes before the plugin runs,
+      // and routing is the same for every project: only a plain user-scoped
+      // string can name a hostname there.
+      const setting = manifest.contributes.settings.find(
+        (s) => s.id === provider.matchesSettingRef
+      );
+      if (!setting || (setting.type ?? "string") !== "string" || setting.scope !== "user") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["contributes", "forgeProviders", index, "matchesSettingRef"],
+          message: `forgeProvider matchesSettingRef "${provider.matchesSettingRef}" must name a user-scoped string setting in contributes.settings.`,
+          params: { errorCode: "forge_matches_setting_ref_invalid" },
+        });
+      }
+    }
     provider.viewRefs?.forEach((ref, refIndex) => {
       if (!viewIds.has(ref)) {
         ctx.addIssue({

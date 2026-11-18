@@ -489,8 +489,8 @@ export function registerForgeDataHandlers(): () => void {
       const cwd = requireCwd(payload.cwd);
       // The viewer this answers for is the one "Assign to me" then assigns, so
       // it must be the issues provider's account, not the code forge's.
-      const { impl } = await resolveForCwd(cwd, "issues");
-      return impl.identity ? impl.identity.getCurrentUser() : null;
+      const { impl, repoRef } = await resolveForCwd(cwd, "issues");
+      return impl.identity ? impl.identity.getCurrentUser(repoRef) : null;
     })
   );
 
@@ -1481,7 +1481,7 @@ async function handleForgeResolveAuthorAvatar(payload: {
   const lookup = async (): Promise<string | null> => {
     checkRateLimit(CHANNELS.FORGE_RESOLVE_AUTHOR_AVATAR, 30, 60_000);
     try {
-      return (await avatars.resolveAuthorAvatar(email)) ?? null;
+      return (await avatars.resolveAuthorAvatar(email, repoRef)) ?? null;
     } catch {
       return null;
     }

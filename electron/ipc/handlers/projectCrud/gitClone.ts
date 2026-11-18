@@ -219,7 +219,7 @@ export async function executeClone(options: ExecuteCloneOptions): Promise<void> 
   let authProbe: CloneAuthProbe = { authenticated: false };
   if (cloneCapability) {
     try {
-      authProbe = await cloneCapability.probeAuth(signal);
+      authProbe = await cloneCapability.probeAuth(signal, url);
     } catch {
       // Fall back to plain git.
     }

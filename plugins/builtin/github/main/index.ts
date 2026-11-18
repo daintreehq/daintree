@@ -7,6 +7,7 @@ import { gitHubTokenHealthService } from "./GitHubTokenHealthService.js";
 import { GitHubAuth } from "./GitHubAuth.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../../../../shared/utils/forgeProviderIds.js";
 import { store } from "../../../../electron/store.js";
+import { registerGitHubEnterprise } from "./GitHubEnterprise.js";
 
 // Token STORAGE is plugin-owned (formerly eager in globalServicesInit) and
 // wires up at the top of activate(): persisted tokens live in electron-store
@@ -108,6 +109,21 @@ async function syncCredentialsToWorkspaceHosts(): Promise<void> {
 }
 
 /**
+ * An Enterprise Server token came or went. Workspace hosts only hear whether
+ * the provider can authenticate at all (they never use the value), so PR
+ * detection refreshes, or resets when no token is left for either host.
+ */
+async function syncCredentialPresenceToWorkspaceHosts(): Promise<void> {
+  try {
+    const credentials = await githubForgeProvider.getCredentials();
+    const { getWorkspaceClient } = await import("../../../../electron/services/WorkspaceClient.js");
+    getWorkspaceClient().updateForgeCredentials(BUILTIN_GITHUB_PROVIDER_ID, credentials);
+  } catch {
+    // No workspace client yet: hosts that start later replay from the registry.
+  }
+}
+
+/**
  * Plugin activation entry point — called by `PluginService` after manifest
  * validation. Registers the `github` forge provider plus the
  * `worktree-diff-review` file-decoration provider, both declared in
@@ -116,7 +132,20 @@ async function syncCredentialsToWorkspaceHosts(): Promise<void> {
  */
 export async function activate(host: PluginHostApi): Promise<() => void> {
   initializeTokenStorage();
-  const disposeForge = await host.registerForgeProvider({ id: "github" }, githubForgeProvider);
+  // Before the provider registers: remote parsing and the URL builders read
+  // the Enterprise Server host synchronously from the first call.
+  const disposeEnterprise = await registerGitHubEnterprise(host, () => {
+    void syncCredentialPresenceToWorkspaceHosts();
+  });
+  let disposeForge: () => void;
+  try {
+    disposeForge = await host.registerForgeProvider({ id: "github" }, githubForgeProvider);
+  } catch (error) {
+    // A failed activation returns no disposer, so the Enterprise Server
+    // session it hydrated would otherwise outlive it.
+    disposeEnterprise();
+    throw error;
+  }
   validateStoredTokenInBackground();
   void syncCredentialsToWorkspaceHosts();
   // Pass the registered forge provider so the decoration hook can author
@@ -137,6 +166,7 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
   return () => {
     disposeForge();
     disposeDecorations();
+    disposeEnterprise();
     stopCacheSweep();
     // stop(), not dispose(): listeners belong to host transports (the forge
     // health relay) which manage their own subscription lifecycle across a

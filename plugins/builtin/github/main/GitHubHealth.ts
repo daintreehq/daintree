@@ -1,10 +1,16 @@
 import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import { GitHubAuth, GITHUB_API_TIMEOUT_MS } from "./GitHubAuth.js";
 import { PROJECT_HEALTH_QUERY, MERGE_VELOCITY_QUERY } from "./GitHubQueries.js";
-import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
+import {
+  rateLimitServiceForHost,
+  type GitHubRateLimitServiceImpl,
+} from "./GitHubRateLimitService.js";
+import { githubWebBase } from "./GitHubHost.js";
+import { missingTokenMessage } from "./queryInfra.js";
 import { rateLimitMessage, parseGitHubError } from "./GitHubErrors.js";
 import { getRepoContext, isRepoNotFoundError } from "./GitHubRepoContext.js";
 import {
+  cacheOwner,
   repoContextCache,
   projectHealthCache,
   repoStatsCache,
@@ -101,7 +107,8 @@ function readCachedCounts(cacheKey: string): { issueCount: number; prCount: numb
 async function fetchMergeVelocity(
   client: GraphQLClient,
   owner: string,
-  repo: string
+  repo: string,
+  rateLimits: GitHubRateLimitServiceImpl
 ): Promise<Record<60 | 120 | 180, number> | null> {
   try {
     const mergedSearchBase = `repo:${owner}/${repo} is:pr is:merged`;
@@ -119,7 +126,7 @@ async function fetchMergeVelocity(
       request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
     })) as GraphQlQueryResponseData;
 
-    gitHubRateLimitService.updateFromGraphQL(result, "MERGE_VELOCITY_QUERY");
+    rateLimits.updateFromGraphQL(result, "MERGE_VELOCITY_QUERY");
     return extractMergedCounts(result);
   } catch (error) {
     console.warn("[github] merged-PR velocity fetch failed:", error);
@@ -182,12 +189,13 @@ async function resolveMergeVelocity(
   client: GraphQLClient,
   owner: string,
   repo: string,
-  velocityKey: string
+  velocityKey: string,
+  rateLimits: GitHubRateLimitServiceImpl
 ): Promise<Record<60 | 120 | 180, number>> {
   const cached = velocityCache.get(velocityKey);
   if (cached) return cached;
 
-  const fetched = await fetchMergeVelocity(client, owner, repo);
+  const fetched = await fetchMergeVelocity(client, owner, repo, rateLimits);
   if (fetched) {
     velocityCache.set(velocityKey, fetched);
     return fetched;
@@ -211,15 +219,16 @@ export async function getProjectHealthForContext(
   _retried = false
 ): Promise<ProjectHealthResult> {
   const bypassCache = options.bypassCache === true;
-  const cacheKey = `${context.owner}/${context.repo}`;
-  const repoUrl = `https://github.com/${context.owner}/${context.repo}`;
+  const cacheKey = `${cacheOwner(context)}/${context.repo}`;
+  const repoUrl = `${githubWebBase(context.host)}/${context.owner}/${context.repo}`;
 
-  const client = GitHubAuth.createClient();
+  const client = GitHubAuth.createClient(context.host);
   if (!client) {
-    return { health: null, error: "GitHub token not configured. Set it in Settings." };
+    return { health: null, error: missingTokenMessage(context.host) };
   }
 
-  const rateLimitBlock = gitHubRateLimitService.shouldBlockRequest("graphql");
+  const rateLimits = rateLimitServiceForHost(context.host);
+  const rateLimitBlock = rateLimits.shouldBlockRequest("graphql");
   if (rateLimitBlock.blocked && rateLimitBlock.reason && rateLimitBlock.resumeAt) {
     return {
       health: null,
@@ -242,7 +251,8 @@ export async function getProjectHealthForContext(
       client,
       context.owner,
       context.repo,
-      velocityKey
+      velocityKey,
+      rateLimits
     );
 
     const result = (await client(PROJECT_HEALTH_QUERY, {
@@ -251,7 +261,7 @@ export async function getProjectHealthForContext(
       request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
     })) as GraphQlQueryResponseData;
 
-    gitHubRateLimitService.updateFromGraphQL(result, "PROJECT_HEALTH_QUERY");
+    rateLimits.updateFromGraphQL(result, "PROJECT_HEALTH_QUERY");
 
     const repository = result?.repository;
     if (!repository) {
@@ -289,13 +299,15 @@ export async function getProjectHealthForContext(
       const freshContext = await options.refreshContext();
       if (
         freshContext &&
-        (freshContext.owner !== context.owner || freshContext.repo !== context.repo)
+        (freshContext.host !== context.host ||
+          freshContext.owner !== context.owner ||
+          freshContext.repo !== context.repo)
       ) {
         return getProjectHealthForContext(freshContext, options, true);
       }
     }
 
-    return { health: null, error: parseGitHubError(error) };
+    return { health: null, error: parseGitHubError(error, context.host) };
   }
 }
 

@@ -43,6 +43,46 @@ export function extractHostname(url: string): string | null {
   }
 }
 
+const HOSTNAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/;
+
+/**
+ * Canonical bare hostname for a user-configured forge host (a self-hosted
+ * instance a setting names), or `null` when the value is empty or isn't one.
+ * Accepts a bare hostname or a pasted `https://` origin; refuses anything a
+ * bare hostname can't carry — a scheme other than https, credentials, a port
+ * other than 443, a path, query or fragment — because the host builds its own
+ * endpoints from the name and a dropped part would point them somewhere else.
+ * The result also names the origin a credential is bound to, so a leading
+ * `www.` (which {@link normalizeHostname} strips for matching) is refused.
+ */
+export function normalizeConfiguredForgeHost(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return null;
+  const withScheme = trimmed.includes("://") ? trimmed : `https://${trimmed}`;
+  let parsed: URL;
+  try {
+    parsed = new URL(withScheme);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "https:") return null;
+  if (parsed.username || parsed.password || parsed.port) return null;
+  if (parsed.search || parsed.hash) return null;
+  if (parsed.pathname !== "/" && parsed.pathname !== "") return null;
+  // `new URL` repairs some inputs (a trailing `?`, a backslash); refuse the
+  // ones it changed beyond case and a bare trailing slash.
+  const echoed = withScheme.replace(/\/$/, "").toLowerCase();
+  if (echoed !== `https://${parsed.hostname}` && echoed !== `https://${parsed.hostname}:443`) {
+    return null;
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  // Matching ignores a leading `www.`, so `www.x` would route remotes on `x`
+  // while naming a different origin: refuse it rather than mean either.
+  if (hostname.startsWith("www.")) return null;
+  return HOSTNAME_PATTERN.test(hostname) ? hostname : null;
+}
+
 /** Exact-match a normalized hostname against provider `matches` patterns. */
 export function hostnameMatchesAny(hostname: string, patterns: readonly string[]): boolean {
   for (const pattern of patterns) {

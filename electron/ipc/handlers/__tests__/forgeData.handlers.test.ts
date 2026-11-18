@@ -1007,7 +1007,8 @@ describe("registerForgeDataHandlers", () => {
 
     const result = await findHandler("forge:get-current-user")(null, { cwd: "/repo" });
 
-    expect(implWithIdentity.identity.getCurrentUser).toHaveBeenCalledTimes(1);
+    // The viewer is asked for this repository: a provider can hold an account per host.
+    expect(implWithIdentity.identity.getCurrentUser).toHaveBeenCalledWith(repoRef);
     expect(result).toEqual(user);
   });
 
@@ -2051,7 +2052,11 @@ describe("forge:resolve-author-avatar coalescing (#13598)", () => {
       Array.from({ length: 20 }, () => "https://avatars.test/dev.png")
     );
     expect(resolveAuthorAvatar).toHaveBeenCalledTimes(1);
-    expect(resolveAuthorAvatar).toHaveBeenCalledWith("dev@example.com");
+    // The repository travels with the email: a provider answers only from its own host.
+    expect(resolveAuthorAvatar).toHaveBeenCalledWith(
+      "dev@example.com",
+      expect.objectContaining({ host: "fake.test", owner: "acme", repo: "widgets" })
+    );
 
     // Only the one admitted lookup spent quota: 29 distinct emails still fit
     // the 30/min budget, and the 30th distinct one is refused.

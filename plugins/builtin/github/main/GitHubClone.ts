@@ -96,8 +96,14 @@ function parseGhStderrLine(line: string): { stage: string; progress: number } | 
  * to a plain anonymous git clone, preserving the pre-capability behavior
  * where gh unavailability was never a clone failure.
  */
-async function probeGhAuth(externalSignal?: AbortSignal): Promise<CloneAuthProbe> {
+async function probeGhAuth(externalSignal?: AbortSignal, url?: string): Promise<CloneAuthProbe> {
   if (externalSignal?.aborted) return { authenticated: false, reason: "Probe aborted" };
+  // A clone goes through gh only when gh is signed in to the host it targets.
+  // Asking about that host alone keeps an expired login elsewhere from failing
+  // the probe, and an Enterprise Server gh isn't signed in to clones with the
+  // user's own git credentials, as it did before the host was configured.
+  const host = url ? parseGitHubRepoUrl(url)?.host : undefined;
+  const statusArgs = host ? ["auth", "status", "--hostname", host] : ["auth", "status"];
   const env = { ...process.env, ...GH_NON_INTERACTIVE_ENV };
   let gh: string;
   try {
@@ -127,7 +133,7 @@ async function probeGhAuth(externalSignal?: AbortSignal): Promise<CloneAuthProbe
 
     execFile(
       gh,
-      ["auth", "status"],
+      statusArgs,
       {
         env,
         signal: controller.signal,
@@ -139,6 +145,7 @@ async function probeGhAuth(externalSignal?: AbortSignal): Promise<CloneAuthProbe
 }
 
 async function cloneWithGh(
+  host: string,
   owner: string,
   repo: string,
   targetDir: string,
@@ -152,7 +159,10 @@ async function cloneWithGh(
   const args = [
     "repo",
     "clone",
-    `${owner}/${repo}`,
+    // Always host-qualified: gh resolves a bare OWNER/REPO against its default
+    // host (GH_HOST may point at an Enterprise Server), which would clone a
+    // same-named repository from the other server.
+    `${host}/${owner}/${repo}`,
     targetDir,
     ...(shallow ? ["--", "--depth", "1"] : []),
   ];
@@ -243,6 +253,6 @@ export const cloneCapability: CloneCapability = {
     if (!parsed) {
       throw new Error("Unrecognized GitHub repository URL");
     }
-    await cloneWithGh(parsed.owner, parsed.repo, targetDir, opts);
+    await cloneWithGh(parsed.host, parsed.owner, parsed.repo, targetDir, opts);
   },
 };

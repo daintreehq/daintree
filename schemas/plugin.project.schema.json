@@ -1593,6 +1593,10 @@
                   "minLength": 1
                 }
               },
+              "matchesSettingRef": {
+                "type": "string",
+                "minLength": 1
+              },
               "roles": {
                 "minItems": 1,
                 "type": "array",

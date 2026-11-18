@@ -996,7 +996,11 @@ interface BatchLookupCapability {
  * self-assignment" rather than an error.
  */
 interface IdentityCapability {
-    getCurrentUser(): Promise<ForgeUser | null>;
+    /**
+     * `repo` is the repository the viewer is wanted for, for a provider whose
+     * account differs per host (a self-hosted instance beside the public one).
+     */
+    getCurrentUser(repo?: RepoRef): Promise<ForgeUser | null>;
 }
 /**
  * Hover-tooltip projection of an issue — the subset a hover card renders
@@ -1165,7 +1169,12 @@ interface ProjectHealthCapability {
  * Providers cache internally; the lookup must be cheap to call repeatedly.
  */
 interface AvatarCapability {
-    resolveAuthorAvatar(email: string): Promise<string | null>;
+    /**
+     * `repo` is the repository the author committed to. A provider that serves
+     * more than one host answers only from that repository's own host, so an
+     * author's address never goes to a server the repository isn't on.
+     */
+    resolveAuthorAvatar(email: string, repo?: RepoRef): Promise<string | null>;
     /**
      * Synchronous counter that changes whenever a credential or instance change
      * invalidates earlier lookups. When present, the host shares one in-flight
@@ -1273,9 +1282,11 @@ interface CloneCapability {
      * (tooling installed and signed in, or a valid stored credential). Drives
      * the host's path selection; an unauthenticated probe also means the clone
      * dialog shows no provider sign-in recovery affordance beyond the standard
-     * auth-failure banner.
+     * auth-failure banner. `url` is the repository about to be cloned, for a
+     * provider whose sign-in is per host (a self-hosted instance beside the
+     * public one).
      */
-    probeAuth(signal?: AbortSignal): Promise<CloneAuthProbe>;
+    probeAuth(signal?: AbortSignal, url?: string): Promise<CloneAuthProbe>;
     /**
      * Rewrite a clone URL to carry the provider's credentials (e.g. an
      * embedded token). Return `null` when no authenticated URL is available;
@@ -1774,6 +1785,16 @@ interface ForgeProviderContribution {
      * must list at least one hostname.
      */
     matches: string[];
+    /**
+     * Exact `contributes.settings[].id` of a user-scoped `string` setting whose
+     * value is one more hostname this provider matches — a self-hosted instance
+     * the user names (GitHub Enterprise Server). The host reads it when the
+     * plugin loads and re-reads it whenever the setting changes, so routing
+     * follows the setting before the plugin activates. An empty value adds
+     * nothing; a value that isn't a bare hostname or an `https://` origin is
+     * ignored.
+     */
+    matchesSettingRef?: string;
     /**
      * Which roles the provider serves (#13700). Omitted means both, which is
      * every provider written before roles existed. An issues-only provider
