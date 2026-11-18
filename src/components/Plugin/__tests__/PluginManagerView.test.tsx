@@ -1169,7 +1169,9 @@ describe("PluginManagerView", () => {
       const keep = screen.getByRole("radio", { name: "Keep cloud accounts" }) as HTMLInputElement;
       expect(keep.checked).toBe(true);
       expect(
-        screen.getByRole("radio", { name: "Remove cloud accounts" }).getAttribute("aria-describedby")
+        screen
+          .getByRole("radio", { name: "Remove cloud accounts" })
+          .getAttribute("aria-describedby")
       ).toBeTruthy();
 
       fireEvent.click(screen.getByRole("button", { name: "Uninstall plugin" }));

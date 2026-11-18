@@ -26,8 +26,8 @@ export function PluginUninstallCloudAccounts({
       <ul className="space-y-1 text-xs text-text-secondary">
         {accounts.map((account) => (
           <li key={account.id}>
-            <span className="font-medium text-text-primary">{account.name}</span>{" "}
-            <FactSeparator /> {account.providerName} <FactSeparator />{" "}
+            <span className="font-medium text-text-primary">{account.name}</span> <FactSeparator />{" "}
+            {account.providerName} <FactSeparator />{" "}
             {account.hosts.length > 0
               ? account.hosts.map((host) => host.name).join(", ")
               : "No hosts"}

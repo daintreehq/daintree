@@ -127,7 +127,9 @@ afterEach(async () => {
  * the plugin service would: published and bound while it is on, withdrawn
  * otherwise, and its reasons worded by state.
  */
-function runtime(options: { backend?: { value: unknown }; impl?: Partial<CloudProviderImpl> } = {}) {
+function runtime(
+  options: { backend?: { value: unknown }; impl?: Partial<CloudProviderImpl> } = {}
+) {
   const backend = options.backend ?? { value: undefined };
   const plugin = { state: "uninstalled" as PluginState };
   setPluginCloudProviderRuntime({
@@ -444,7 +446,11 @@ describe("a plugin's cloud accounts and machines when the plugin goes", () => {
   it("names each account a removal couldn't finish, and still removes the rest", async () => {
     const env = runtime();
     await connectedWithHost(env);
-    env.store.putAccount({ ...env.store.account(ACCOUNT)!, id: "ca_acmeplugin2", displayName: "Spare" });
+    env.store.putAccount({
+      ...env.store.account(ACCOUNT)!,
+      id: "ca_acmeplugin2",
+      displayName: "Spare",
+    });
     await env.vault.put("ca_acmeplugin2", CREDENTIALS);
     env.set("uninstalled");
     const remove = env.accounts.removeAccount.bind(env.accounts);
@@ -456,7 +462,9 @@ describe("a plugin's cloud accounts and machines when the plugin goes", () => {
     await expect(
       env.cloudHosts.removePluginAccounts(PLUGIN, [ACCOUNT, "ca_acmeplugin2"])
     ).rejects.toMatchObject({
-      userMessage: expect.stringMatching(/uninstalled, but this cloud account is still on this device: Work \(the keychain is locked\)/),
+      userMessage: expect.stringMatching(
+        /uninstalled, but this cloud account is still on this device: Work \(the keychain is locked\)/
+      ),
     });
     expect(env.store.account("ca_acmeplugin2")).toBeNull();
     expect(await env.vault.get("ca_acmeplugin2")).toBeNull();

@@ -1240,8 +1240,16 @@ describe("registerPluginHandlers", () => {
 
     it("lists an installed plugin's cloud accounts with it, and leaves the rest as they were", async () => {
       cloud();
-      const installed = { instanceId: "acme.clouds", origin: "global", manifest: { name: "acme.clouds" } };
-      const other = { instanceId: "acme.other", origin: "global", manifest: { name: "acme.other" } };
+      const installed = {
+        instanceId: "acme.clouds",
+        origin: "global",
+        manifest: { name: "acme.clouds" },
+      };
+      const other = {
+        instanceId: "acme.other",
+        origin: "global",
+        manifest: { name: "acme.other" },
+      };
       mockListPlugins.mockReturnValueOnce([installed, other]);
       const listed = (await getHandler("plugin:list")()) as Array<Record<string, unknown>>;
       expect(listed[0]!.cloudAccounts).toEqual([

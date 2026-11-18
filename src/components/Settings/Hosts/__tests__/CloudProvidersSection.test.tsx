@@ -229,7 +229,8 @@ describe("CloudProvidersSection", () => {
       ({
         hostId: "host-1",
         providerId: PLUGIN.id,
-        providerUnavailable: "Its cloud provider comes from the acme.droplets plugin, which isn't installed.",
+        providerUnavailable:
+          "Its cloud provider comes from the acme.droplets plugin, which isn't installed.",
         accountId: "ca_0123456789",
         machineName: "build",
         machine: "running",
