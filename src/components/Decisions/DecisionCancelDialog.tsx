@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { DeclinePhase } from "@/store/decisionsAnswerStore";
 import { Callout } from "@/components/ui/Callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
@@ -9,6 +10,7 @@ import {
   cancelProblem,
   cancelTitle,
   dismissBody,
+  dismissFallback,
   dismissTitle,
   dismissVerdict,
   noLongerWaiting,
@@ -32,8 +34,8 @@ interface DecisionCancelDialogProps {
   isOpen: boolean;
   /** What this opening asks first: a dismissal, or the withdrawal offered when one can't be taken. */
   mode?: DecisionCancelMode;
-  /** Why a dismissal can't be taken, when the opening asks to withdraw for that reason. */
-  reason?: string | null;
+  /** The dismissal that couldn't be taken, when the opening asks to withdraw because of it. */
+  fallback?: DeclinePhase | null;
   /** Whether the pane's state still lists the question as waiting for an answer. */
   waiting: boolean;
   /** Whether the pane's state still lists it as not yet sent to the relay. */
@@ -50,7 +52,8 @@ interface DecisionCancelDialogProps {
 interface Asked {
   target: DecisionCancelTarget;
   mode: DecisionCancelMode;
-  reason: string | null;
+  /** The dismissal that couldn't be taken, which withdrawing is offered for. */
+  fallback: DeclinePhase | null;
   problem: DecisionCancelProblem | null;
   /** Where its last dismissal is kept, so trying again reads that one by its id first. */
   key: string | null;
@@ -70,7 +73,7 @@ export function DecisionCancelDialog({
   target,
   isOpen,
   mode: openingMode = "dismiss",
-  reason: openingReason = null,
+  fallback: openingFallback = null,
   waiting,
   queued,
   onClose,
@@ -81,8 +84,9 @@ export function DecisionCancelDialog({
   // The opening whose confirm is with main: it alone is locked, and only it closes when main answers.
   const [busyFor, setBusyFor] = useState<DecisionCancelTarget | null>(null);
   const [asked, setAsked] = useState<Asked | null>(null);
+  // The opening on screen, as of the last commit: a layout effect, so no reply from main lands in between.
   const shown = useRef<DecisionCancelTarget | null>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     shown.current = isOpen ? target : null;
   });
   const pending = busyFor !== null && busyFor === target;
@@ -115,8 +119,15 @@ export function DecisionCancelDialog({
 
   // What main said belongs to the opening it was about: each opening is a target of its own.
   const current = target !== null && asked?.target === target ? asked : null;
-  const mode = current?.mode ?? openingMode;
-  const reason = current !== null ? current.reason : openingReason;
+  const fallback = current !== null ? current.fallback : openingFallback;
+  // Withdrawing is offered only while the reason still holds: a question the
+  // relay didn't hold yet can be dismissed once it has been sent.
+  const reason =
+    target !== null && fallback !== null
+      ? dismissFallback(target.label, fallback, queued ? "queued" : "open")
+      : null;
+  const mode: DecisionCancelMode =
+    (current?.mode ?? openingMode) === "withdraw" && reason !== null ? "withdraw" : "dismiss";
   const reported = current?.problem ?? null;
   // A refusal stands; a call that failed gives way once the question has stopped waiting.
   const gone =
@@ -127,7 +138,7 @@ export function DecisionCancelDialog({
     if (target === null || pending || reading) return;
     const subject = target;
     const step = mode;
-    const why = reason;
+    const because = fallback;
     let key = current?.key ?? null;
     // A late answer for an opening since replaced never overwrites the newer one's state.
     const report = (next: Omit<Asked, "target" | "key">) =>
@@ -140,48 +151,53 @@ export function DecisionCancelDialog({
     const close = () => {
       if (shown.current === subject) onClose();
     };
-    setBusyFor(subject);
-    report({ mode: step, reason: why, problem: null });
-    try {
-      if (step === "dismiss") {
-        const attempt = await dismissQuestion(subject.question, subject.revision, key);
-        if (attempt.kind === "submitted") key = attempt.key;
-        const verdict = dismissVerdict(subject, attempt);
-        switch (verdict.kind) {
-          case "done":
-            onDismissing?.(questionOf(subject.question).questionId, verdict.key);
-            close();
-            return;
-          case "withdraw":
-            report({ mode: "withdraw", reason: verdict.message, problem: null });
-            return;
-          case "problem":
-            report({ mode: step, reason: why, problem: verdict.problem });
-            return;
-        }
+    const dismiss = async () => {
+      const attempt = await dismissQuestion(subject.question, subject.revision, key);
+      if (attempt.kind === "submitted") key = attempt.key;
+      const verdict = dismissVerdict(subject, attempt);
+      switch (verdict.kind) {
+        case "done":
+          onDismissing?.(questionOf(subject.question).questionId, verdict.key);
+          close();
+          return;
+        case "withdraw":
+          report({
+            mode: "withdraw",
+            fallback: attempt.kind === "submitted" ? attempt.phase : null,
+            problem: null,
+          });
+          return;
+        case "problem":
+          report({ mode: step, fallback: because, problem: verdict.problem });
+          return;
       }
+    };
+    const withdraw = async () => {
       const outcome = await cancelTarget(subject.question);
       const refused = cancelProblem(subject, outcome);
       if (refused !== null) {
-        report({ mode: step, reason: why, problem: refused });
+        report({ mode: step, fallback: because, problem: refused });
         return;
       }
       if (outcome.result === "cancelling") onCancelling(questionOf(subject.question).questionId);
       close();
-    } catch (error) {
+    };
+    setBusyFor(subject);
+    report({ mode: step, fallback: because, problem: null });
+    // Chained rather than try/finally, which the React Compiler can't compile.
+    await (step === "dismiss" ? dismiss() : withdraw()).catch((error: unknown) => {
       const verb = step === "dismiss" ? "dismiss" : "withdraw";
       report({
         mode: step,
-        reason: why,
+        fallback: because,
         problem: {
           severity: "error",
           message: formatErrorMessage(error, `Couldn't ${verb} ${subject.label}`),
           retry: true,
         },
       });
-    } finally {
-      setBusyFor((locked) => (locked === subject ? null : locked));
-    }
+    });
+    setBusyFor((locked) => (locked === subject ? null : locked));
   };
 
   const closed = problem !== null && !problem.retry;
@@ -209,7 +225,7 @@ export function DecisionCancelDialog({
       focusResetKey={mode}
       cooldownKey={mode}
       confirmCooldownMs={
-        !dismissing && current !== null && current.reason !== null
+        !dismissing && current !== null && current.fallback !== null
           ? WITHDRAW_COOLDOWN_MS
           : undefined
       }

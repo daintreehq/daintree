@@ -28,6 +28,9 @@ import { readTargetContent, type DecisionQuestionTarget } from "./decisionQuesti
 /** While a dismissal is queued, how long after one read of its standing the next starts. */
 export const QUEUED_DECLINE_READ_MS = 5_000;
 
+/** The longest wait between reads while main can't say where a dismissal stands. */
+const LOST_DECLINE_READ_MAX_MS = 60_000;
+
 /** The dismissal one send or one recovery is about: the store's generation then, and its id. */
 interface Claim {
   generation: number;
@@ -70,9 +73,14 @@ function isQueued(phase: DeclinePhase): boolean {
   return phase.kind === "settled" && phase.outcome.status === "queued";
 }
 
+/** Waiting on main to say where it stands: queued there, or its standing couldn't be read. */
+function isUnsettled(phase: DeclinePhase): boolean {
+  return isQueued(phase) || phase.kind === "lost";
+}
+
 function setPhase(key: string, claim: Claim, phase: DeclinePhase): void {
   updateClaimed(key, claim, (decline) => ({ ...decline, phase }));
-  if (isQueued(phase)) watchQueued(key, claim);
+  if (isUnsettled(phase)) watchUnsettled(key, claim);
 }
 
 /** Whether a new dismissal may start: no answer or dismissal from here under way or taken. */
@@ -181,28 +189,41 @@ function follow(key: string, claim: Claim, retry: boolean): Promise<void> {
   return exclusive(key, claim, () => followOnce(key, claim, retry));
 }
 
-/** Queued dismissals read again on a timer, by question and id. */
+/** Unsettled dismissals read again on a timer, by question and id. */
 const watching = new Set<string>();
 
 /**
  * Reads a queued dismissal's standing again every few seconds until it
  * settles, the record moves on to another dismissal, or Decisions is cleared,
  * so the chip and the view both learn when the relay takes it or why not,
- * however long the relay stays out of reach.
+ * however long the relay stays out of reach. One whose standing main couldn't
+ * give is read the same way, less often each time, up to a minute: it keeps
+ * its id, so reading it again never declines anything twice.
  */
-function watchQueued(key: string, claim: Claim): void {
+function watchUnsettled(key: string, claim: Claim): void {
   const lock = lockOf(key, claim);
   if (watching.has(lock)) return;
   watching.add(lock);
+  let wait = QUEUED_DECLINE_READ_MS;
   const next = () => {
     const decline = claimed(key, claim);
-    if (decline === null || !isQueued(decline.phase)) {
+    if (decline === null || !isUnsettled(decline.phase)) {
       watching.delete(lock);
       return;
     }
+    wait =
+      decline.phase.kind === "lost"
+        ? Math.min(wait * 2, LOST_DECLINE_READ_MAX_MS)
+        : QUEUED_DECLINE_READ_MS;
     setTimeout(() => {
+      // Settled meanwhile by a Retry or another surface: nothing more to read.
+      const now = claimed(key, claim);
+      if (now === null || !isUnsettled(now.phase)) {
+        watching.delete(lock);
+        return;
+      }
       void follow(key, claim, false).finally(next);
-    }, QUEUED_DECLINE_READ_MS);
+    }, wait);
   };
   next();
 }

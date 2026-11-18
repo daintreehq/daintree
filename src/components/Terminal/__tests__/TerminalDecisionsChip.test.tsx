@@ -801,18 +801,9 @@ describe("TerminalDecisionsChip", () => {
       );
     });
 
-    it.each([
-      [
-        { status: "unsupported", by: "asking-desktop" } as const,
-        "Daintree on the computer that asked q-42 needs an update",
-      ],
-      [
-        { status: "closed", reason: "not-found" } as const,
-        "The relay doesn't hold q-42 yet, so it wasn't dismissed.",
-      ],
-    ])("offers withdrawing when the dismissal comes back %o", async (outcome, reason) => {
+    it("says Daintree on the computer that asked needs updating, and offers withdrawing", async () => {
       getStatus.mockResolvedValue({ state: "connected", revision: 1 });
-      declinedOnce(outcome);
+      declinedOnce({ status: "unsupported", by: "asking-desktop" });
       render(<TerminalDecisionsChip terminalId="t1" />);
       await askToDismiss();
       await screen.findByRole("alertdialog");
@@ -820,7 +811,35 @@ describe("TerminalDecisionsChip", () => {
       await confirm("Dismiss question");
       const dialog = screen.getByRole("alertdialog");
       expect(dialog.textContent).toContain("Withdraw question q-42?");
-      expect(dialog.textContent).toContain(reason);
+      expect(dialog.textContent).toContain(
+        "Daintree on the computer that asked q-42 needs an update"
+      );
+      expect(cancelQuestion).not.toHaveBeenCalled();
+    });
+
+    it("stops offering withdrawal once a question the relay didn't hold yet has been sent, asking to dismiss it again", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      const unsent = paneState({
+        openQuestions: [{ ...paneState().openQuestions[0]!, status: "queued" }],
+      });
+      getPaneState.mockResolvedValue(unsent);
+      getQuestionContent.mockResolvedValue({
+        result: "read",
+        question: q42Content({ status: "queued" }),
+      });
+      declinedOnce({ status: "closed", reason: "not-found" });
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      await askToDismiss();
+      await screen.findByRole("alertdialog");
+      await confirm("Dismiss question");
+      expect(screen.getByRole("alertdialog").textContent).toContain("Withdraw question q-42?");
+
+      // The Host sends it: the relay holds it now, so it can be dismissed after all.
+      act(() => paneListeners[0]!(paneState({ revision: 2 })));
+      const dialog = screen.getByRole("alertdialog");
+      expect(dialog.textContent).toContain("Dismiss question q-42?");
+      expect(dialog.textContent).not.toContain("doesn't hold");
+      expect(screen.queryByRole("button", { name: "Withdraw question" })).toBeNull();
       expect(cancelQuestion).not.toHaveBeenCalled();
     });
 

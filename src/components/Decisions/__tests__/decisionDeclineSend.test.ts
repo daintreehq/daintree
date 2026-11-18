@@ -199,6 +199,28 @@ describe("dismissing a question from this computer (#17239)", () => {
     expect(getDeclineResult).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps reading a queued one through a read main couldn't answer, less often, until it settles", async () => {
+    vi.useFakeTimers();
+    declineQuestion.mockImplementation(submitted({ status: "queued" }));
+    await dismissQuestion(TARGET, null);
+    getDeclineResult.mockRejectedValueOnce(new Error("main didn't answer"));
+
+    await vi.advanceTimersByTimeAsync(QUEUED_DECLINE_READ_MS);
+    expect(readAnswerRecord(KEY).decline?.phase).toEqual({ kind: "lost" });
+    getDeclineResult.mockResolvedValue(read({ status: "declined" }));
+    // Backed off: not read again at the queued pace.
+    await vi.advanceTimersByTimeAsync(QUEUED_DECLINE_READ_MS);
+    expect(getDeclineResult).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(QUEUED_DECLINE_READ_MS);
+    expect(getDeclineResult).toHaveBeenCalledTimes(2);
+    expect(readAnswerRecord(KEY).decline?.phase).toEqual({
+      kind: "settled",
+      outcome: { status: "declined" },
+    });
+    // Never sent again: it was committed.
+    expect(declineQuestion).toHaveBeenCalledOnce();
+  });
+
   it("stops reading a queued one once Decisions is turned off", async () => {
     vi.useFakeTimers();
     declineQuestion.mockImplementation(submitted({ status: "queued" }));
