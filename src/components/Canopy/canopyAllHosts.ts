@@ -7,6 +7,8 @@ import {
   remoteCanopyApi,
   remoteCanopyTerminalApi,
   type CanopyApi,
+  type CanopyScreenSearch,
+  type CanopyScreenSearchOutcome,
   type CanopyTerminalApi,
 } from "./canopyHostSource";
 import {
@@ -292,6 +294,8 @@ const LEFT_THE_TRASH = "That terminal has left the trash.";
 export interface AllHostsRoute {
   api: CanopyApi;
   terminalApi: CanopyTerminalApi;
+  /** Each host's screens searched on that host, its answer or its failure kept apart. */
+  searchScreens: CanopyScreenSearch;
   /** The panel closed: searches and bulk calls still queued do not start. */
   close: () => void;
   open: () => void;
@@ -330,6 +334,25 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
   };
 
   const trashed = createTrashReceipts();
+
+  const searchScreens: CanopyScreenSearch = async (targets) => {
+    const groups = [...groupByHost(targets, (target) => target.runId)].filter(([hostId]) =>
+      known.has(hostId)
+    );
+    const alive = aliveNow();
+    const settled = await mapLimited(groups, SEARCH_CONCURRENCY, alive, ([hostId, group]) =>
+      apiFor(hostId)
+        .searchScreens(group.map(({ item, id }) => ({ ...item, runId: id })))
+        .then((ids) => ids.map((id) => allHostsKey(hostId, id)))
+    );
+    // Work the closed panel never sent is no host's failure: nothing is said for it.
+    if (!alive()) return [];
+    return settled.map((result, index): CanopyScreenSearchOutcome =>
+      result.status === "fulfilled"
+        ? { hostId: groups[index]![0], runIds: result.value }
+        : { hostId: groups[index]![0], failed: true }
+    );
+  };
 
   const api: CanopyApi = {
     setShown: async (runIds) => {
@@ -376,20 +399,11 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
     refresh: async () => {
       answered(await Promise.allSettled(hostIds.map((hostId) => apiFor(hostId).refresh())));
     },
-    searchScreens: async (targets: CanopyScreenSearchTarget[]) => {
-      const groups = groupByHost(targets, (target) => target.runId);
-      const settled = await mapLimited(
-        [...groups],
-        SEARCH_CONCURRENCY,
-        aliveNow(),
-        ([hostId, group]) =>
-          apiFor(hostId)
-            .searchScreens(group.map(({ item, id }) => ({ ...item, runId: id })))
-            .then((ids) => ids.map((id) => allHostsKey(hostId, id)))
-      );
-      // A host that can't search still matches what the panel holds of it.
-      return settled.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
-    },
+    // The hosts that answered: which couldn't is said by the route's own `searchScreens`.
+    searchScreens: async (targets: CanopyScreenSearchTarget[]) =>
+      (await searchScreens(targets)).flatMap((outcome) =>
+        "runIds" in outcome ? outcome.runIds : []
+      ),
     // A host that can't read its input lines leaves its runs unread.
     readInputLines: async (targets) => {
       const groups = groupByHost(targets, (target) => target.runId);
@@ -693,6 +707,7 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
   return {
     api,
     terminalApi,
+    searchScreens,
     close: () => {
       closed = true;
       session += 1;

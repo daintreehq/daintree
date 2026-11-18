@@ -687,6 +687,57 @@ describe("createAllHostsRoute", () => {
     expect(hits).toEqual([allHostsKey("own", "t1")]);
   });
 
+  it("tells a host that couldn't search from one that found nothing (#17594)", async () => {
+    invoke.mockImplementation(async (host: string) => {
+      if (host === "down") throw new Error("offline");
+      return [];
+    });
+    const route = createAllHostsRoute("own", ["own", "quiet", "down"]);
+    const outcomes = await route.searchScreens([
+      { runId: allHostsKey("own", "t1"), spawnedAt: 1, terms: ["x"] },
+      { runId: allHostsKey("quiet", "t1"), spawnedAt: 1, terms: ["x"] },
+      { runId: allHostsKey("down", "t1"), spawnedAt: 1, terms: ["x"] },
+      // A host this route doesn't show is never asked, nor said to have failed.
+      { runId: allHostsKey("gone", "t1"), spawnedAt: 1, terms: ["x"] },
+    ]);
+    expect(outcomes).toEqual([
+      { hostId: "own", runIds: [allHostsKey("own", "t1")] },
+      { hostId: "quiet", runIds: [] },
+      { hostId: "down", failed: true },
+    ]);
+    expect(invoke.mock.calls.map((call) => call[0])).not.toContain("gone");
+  });
+
+  it("says nothing of a search the panel closed on, its own or its hosts'", async () => {
+    let ownAnswer: (ids: string[]) => void = () => {};
+    ownCalls.searchScreens.mockImplementationOnce(
+      () =>
+        new Promise<string[]>((resolve) => {
+          ownAnswer = resolve;
+        })
+    );
+    const refusals: Array<() => void> = [];
+    invoke.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          refusals.push(() => reject(new Error("offline")));
+        })
+    );
+    const hosts = ["own", "h1", "h2", "h3"];
+    const route = createAllHostsRoute("own", hosts);
+    const pending = route.searchScreens(
+      hosts.map((host) => ({ runId: allHostsKey(host, "t1"), spawnedAt: 1, terms: ["x"] }))
+    );
+    // Three at once: the fourth host is still queued when the panel closes.
+    expect(invoke).toHaveBeenCalledTimes(2);
+    route.close();
+    route.open();
+    ownAnswer(["t1"]);
+    refusals.forEach((refuse) => refuse());
+    await expect(pending).resolves.toEqual([]);
+    expect(invoke.mock.calls.map((call) => call[0])).not.toContain("h3");
+  });
+
   it("runs no more than three host searches at once", async () => {
     let live = 0;
     let peak = 0;

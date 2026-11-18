@@ -5,6 +5,7 @@ import {
   CANOPY_SEARCH_MAX_TERMS,
 } from "@shared/types/ipc/canopy";
 import {
+  canopyScreenGapWords,
   canopySearchNotes,
   parseCanopySearch,
   searchPasteText,
@@ -121,5 +122,18 @@ describe("canopySearchNotes", () => {
     for (const note of notes) {
       expect(note).not.toMatch(/\.$/);
     }
+  });
+});
+
+describe("canopyScreenGapWords", () => {
+  it("names each host that couldn't search, and none when the panel shows only its own", () => {
+    expect(canopyScreenGapWords([])).toBe("Couldn't search terminals");
+    expect(canopyScreenGapWords(["studio-01"])).toBe("Couldn't search terminals on studio-01");
+    expect(canopyScreenGapWords(["studio-01", "lab"])).toBe(
+      "Couldn't search terminals on studio-01 and lab"
+    );
+    expect(canopyScreenGapWords(["This Mac", "studio-01", "lab"])).toBe(
+      "Couldn't search terminals on This Mac, studio-01 and lab"
+    );
   });
 });

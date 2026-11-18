@@ -353,6 +353,7 @@ beforeEach(() => {
     if (channel === "fleet:get-snapshot") return remoteFleet;
     if (channel === "canopy:run-branch") return "remote-branch";
     if (channel === "canopy:trash") return 7;
+    if (channel === "canopy:search-screens") return [];
     return null;
   });
   useProjectStore.setState({
@@ -434,6 +435,26 @@ describe("the Canopy host picker", () => {
       expect.objectContaining({ runId: "remote-run", terms: ["segfault"] }),
     ]);
     expect(own.searchScreens).not.toHaveBeenCalled();
+  });
+
+  it("names the picked host when its terminals couldn't be searched (#17594)", async () => {
+    installElectron();
+    state.invoke.mockImplementation(async (_hostId: string, channel: string) => {
+      if (channel === "canopy:set-active") return remoteCanopy;
+      if (channel === "fleet:get-snapshot") return remoteFleet;
+      if (channel === "canopy:search-screens") throw new Error("offline");
+      return null;
+    });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    act(() => useCanopyStore.getState().setHostId("studio"));
+    await settle();
+    const input = document.querySelector<HTMLInputElement>("input[role=combobox]")!;
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "segfault" } });
+    });
+    await screenSearchSettled();
+    expect(screen.getByText("Couldn't search terminals on studio-01").id).toBe("canopy-search-gap");
   });
 
   it("draws no counts for a host that isn't connected, rather than zero", async () => {
@@ -1137,6 +1158,103 @@ describe("All hosts", () => {
     expect(own.searchScreens).toHaveBeenCalledWith([
       expect.objectContaining({ runId: "shared-run", terms: ["segfault"] }),
     ]);
+  });
+
+  it("names a host whose terminals went unsearched, keeps the others' matches, and retries the same search (#17594)", async () => {
+    const own = installElectron();
+    own.searchScreens.mockResolvedValue(["shared-run"]);
+    let studioSearches = false;
+    state.invoke.mockImplementation(async (_hostId: string, channel: string) => {
+      if (channel === "canopy:set-active") return remoteCanopy;
+      if (channel === "fleet:get-snapshot") return remoteFleet;
+      if (channel === "canopy:search-screens") {
+        if (!studioSearches) throw new Error("offline");
+        return ["shared-run"];
+      }
+      return null;
+    });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    const input = document.querySelector<HTMLInputElement>("input[role=combobox]")!;
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "segfault" } });
+    });
+    await screenSearchSettled();
+    expect(cardOf("local", "shared-run")).not.toBeNull();
+    expect(cardOf("studio", "shared-run")).toBeNull();
+    const note = screen.getByTestId("canopy-search-incomplete");
+    expect(screen.getByText("Couldn't search terminals on studio-01").id).toBe("canopy-search-gap");
+
+    studioSearches = true;
+    const searchesBefore = state.invoke.mock.calls.filter(
+      (call) => call[1] === "canopy:search-screens"
+    ).length;
+    await act(async () => {
+      fireEvent.click(within(note).getByRole("button", { name: "Retry" }));
+    });
+    await screenSearchSettled();
+    const retried = state.invoke.mock.calls.filter((call) => call[1] === "canopy:search-screens");
+    expect(retried).toHaveLength(searchesBefore + 1);
+    expect(retried.at(-1)![2]).toEqual([
+      expect.objectContaining({ runId: "shared-run", terms: ["segfault"] }),
+    ]);
+    expect(input.value).toBe("segfault");
+    expect(cardOf("local", "shared-run")).not.toBeNull();
+    expect(cardOf("studio", "shared-run")).not.toBeNull();
+    expect(screen.queryByTestId("canopy-search-incomplete")).toBeNull();
+  });
+
+  it("names every host that couldn't search in the host list's order (#17594)", async () => {
+    state.hosts = [host("studio", "studio-01"), host("lab", "lab-02")];
+    const own = installElectron();
+    own.searchScreens.mockResolvedValue([]);
+    state.invoke.mockImplementation(async (hostId: string, channel: string) => {
+      if (channel === "canopy:set-active") {
+        // The studio's run asks for the user, so it is listed, and asked, first.
+        return hostId === "studio"
+          ? canopySnapshot({ cards: [approvalCard("shared-run")] })
+          : remoteCanopy;
+      }
+      if (channel === "fleet:get-snapshot") return remoteFleet;
+      if (channel === "canopy:search-screens") throw new Error("offline");
+      return null;
+    });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    const input = document.querySelector<HTMLInputElement>("input[role=combobox]")!;
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "segfault" } });
+    });
+    await screenSearchSettled();
+    const asked = state.invoke.mock.calls
+      .filter((call) => call[1] === "canopy:search-screens")
+      .map((call) => call[0]);
+    expect(asked).toEqual(["studio", "lab"]);
+    expect(screen.getByText("Couldn't search terminals on lab-02 and studio-01")).not.toBeNull();
+  });
+
+  it("never calls a search with an unsearched host's terminals a search with no match (#17594)", async () => {
+    installElectron();
+    state.invoke.mockImplementation(async (_hostId: string, channel: string) => {
+      if (channel === "canopy:set-active") return remoteCanopy;
+      if (channel === "fleet:get-snapshot") return remoteFleet;
+      if (channel === "canopy:search-screens") throw new Error("offline");
+      return null;
+    });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    const input = document.querySelector<HTMLInputElement>("input[role=combobox]")!;
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "segfault" } });
+    });
+    await screenSearchSettled();
+    expect(cardOf("local", "shared-run")).toBeNull();
+    expect(cardOf("studio", "shared-run")).toBeNull();
+    expect(screen.getByTestId("canopy-search-incomplete").textContent).toContain("studio-01");
+    const said = [...document.querySelectorAll("p")].map((p) => p.textContent);
+    expect(said).not.toContain("No agent matches");
+    expect(said).toContain("No agent matches so far");
+    expect(document.body.textContent).toContain("Nothing matches “segfault” so far");
   });
 
   it("says once, in the empty Assistants line, that only this machine's assistants are listed", async () => {

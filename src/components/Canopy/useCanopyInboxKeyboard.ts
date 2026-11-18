@@ -72,6 +72,7 @@ export function useCanopyInboxKeyboard({
   onSelectAll,
   onPastEnd,
   sectionStop,
+  retryStop,
 }: {
   /** What the keyboard walks: the list, then the archived runs once shown. */
   visible: CanopyItem[];
@@ -105,6 +106,11 @@ export function useCanopyInboxKeyboard({
    * false when there is no shut bar to stop on, and the walk goes on as rows.
    */
   sectionStop?: { before: number; focus: () => boolean };
+  /**
+   * The Retry under the search for the terminals it couldn't search: plain Tab
+   * from the search goes there first. False when there is none.
+   */
+  retryStop?: () => boolean;
 }) {
   const focusEntryNow = (entry: CanopyInboxEntry) =>
     entry.role === "worker" ? focusCardNow(entry.item.runId) : focusAssistantNow(entry.item.id);
@@ -335,6 +341,12 @@ export function useCanopyInboxKeyboard({
       return;
     }
     const plain = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+    if (plain && event.key === "Tab" && retryStop?.()) {
+      event.preventDefault();
+      // The dialog's own Tab wrap must not take the keyboard on from the search.
+      event.stopPropagation();
+      return;
+    }
     if (plain && searchAssistant !== null) {
       const target = searchAssistant;
       if (event.key === "Tab" || (event.key === "ArrowDown" && listed.length === 0)) {

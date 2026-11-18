@@ -10,6 +10,7 @@ import {
   ownCanopyTerminalApi,
   remoteCanopyApi,
   remoteCanopyTerminalApi,
+  singleHostScreenSearch,
   useRemoteCanopies,
   useRemoteCanopy,
 } from "./canopyHostSource";
@@ -83,6 +84,11 @@ export function useCanopyInboxData({
   const api = useMemo(
     () => route?.api ?? (hostId === null || everyHost ? ownCanopyApi : remoteCanopyApi(hostId)),
     [route, hostId, everyHost]
+  );
+  // Each host's answer kept apart, so one that couldn't search is said, not read as no match.
+  const searchScreens = useMemo(
+    () => route?.searchScreens ?? singleHostScreenSearch(api, hostId ?? ownHostId),
+    [route, api, hostId, ownHostId]
   );
   const terminalApi = useMemo(
     () =>
@@ -258,6 +264,7 @@ export function useCanopyInboxData({
     remotes,
     participants: present,
     api,
+    searchScreens,
     terminalApi,
     readings,
     canopy,
