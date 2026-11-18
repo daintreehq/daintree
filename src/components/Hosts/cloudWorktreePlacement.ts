@@ -40,10 +40,14 @@ export function canOfferCloudMachine(): boolean {
   return isRemoteShellSupported() && getViewHostId() === null;
 }
 
-/** Every connected account on a provider this machine can use, in the snapshot's order. */
+/**
+ * Every connected account on a provider this machine can use, and may hand
+ * its credentials to now, in the snapshot's order.
+ */
 export function cloudMachineAccounts(snapshot: CloudHostsSnapshot): CloudMachineAccount[] {
   const out: CloudMachineAccount[] = [];
   for (const account of snapshot.accounts) {
+    if (account.providerUnavailable !== null) continue;
     const provider = snapshot.providers.find((entry) => entry.id === account.providerId);
     if (provider && provider.unsupportedReason === null) out.push({ account, provider });
   }

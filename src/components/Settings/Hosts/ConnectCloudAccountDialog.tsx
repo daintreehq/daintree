@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { Textarea } from "@/components/ui/textarea";
 import { credentialsNoun } from "@/components/Hosts/cloud/cloudHostLabels";
+import { CloudProviderConsentDialog } from "./CloudProviderConsentDialog";
 import { cloudHostsClient } from "@/clients/cloudHostsClient";
 import { systemClient } from "@/clients/systemClient";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
@@ -173,7 +174,15 @@ export function ConnectCloudAccountDialog({
   const [name, setName] = useState("");
   const [busy, setBusy] = useState<"check" | "connect" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** The plugin declarations the person agreed to in this dialog; nothing is kept until an account is. */
+  const [agreed, setAgreed] = useState<string | null>(null);
 
+  const plugin = provider.plugin;
+  // Asked again whenever what the plugin declares changes, even with the form open.
+  const needsConsent = plugin !== undefined && !plugin.granted && agreed !== plugin.fingerprint;
+  const consent = plugin?.fingerprint;
+  // A built-in's calls stay as they were: there is nothing to have agreed to.
+  const consentArgs: [] | [string] = consent === undefined ? [] : [consent];
   const entered = enteredValues(fields, values);
   // A file that couldn't be used is cleared or replaced before anything is sent without it.
   const complete =
@@ -258,7 +267,7 @@ export function ConnectCloudAccountDialog({
     setBusy("check");
     setError(null);
     const asked = editsRef.current;
-    cloudHostsClient.checkAccountCredentials(provider.id, entered).then(
+    cloudHostsClient.checkAccountCredentials(provider.id, entered, ...consentArgs).then(
       (result) => {
         setBusy(null);
         if (editsRef.current !== asked) return;
@@ -294,6 +303,7 @@ export function ConnectCloudAccountDialog({
         credentials: entered,
         scopeId,
         displayName: name.trim() || undefined,
+        ...(consent !== undefined ? { consent } : {}),
       })
       .then(finish, (err: unknown) => {
         setBusy(null);
@@ -306,7 +316,7 @@ export function ConnectCloudAccountDialog({
     setBusy("connect");
     setError(null);
     cloudHostsClient
-      .replaceAccountCredentials(replacing.id, entered)
+      .replaceAccountCredentials(replacing.id, entered, ...consentArgs)
       .then(finish, (err: unknown) => {
         setBusy(null);
         setError(errorText(err, `Couldn't replace the ${noun}`));
@@ -357,6 +367,19 @@ export function ConnectCloudAccountDialog({
       chosenScope.kind === "account")
       ? chosenScope.name
       : (checked?.identity ?? provider.name);
+
+  if (needsConsent) {
+    return (
+      <CloudProviderConsentDialog
+        isOpen={isOpen}
+        onClose={onClose}
+        provider={provider}
+        plugin={plugin}
+        purpose="connect"
+        onAllow={() => setAgreed(plugin.fingerprint)}
+      />
+    );
+  }
 
   return (
     <AppDialog

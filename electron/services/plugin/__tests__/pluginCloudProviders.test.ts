@@ -14,6 +14,8 @@ import {
 import {
   bindPluginCloudProvider,
   clearPluginCloudProviders,
+  forgetPluginCloudProviderConsent,
+  setPluginCloudConsentForgetter,
   listPluginCloudProviders,
   onPluginCloudProvidersChanged,
   pluginCloudProviderBinding,
@@ -330,5 +332,75 @@ describe("cloud provider answers across the port", () => {
     expect(
       cloudProviderWireArgs("stop", [{ values: {}, scopeId: "s", apiUrl: "u", signal }, "i-1"])
     ).toEqual({ args: [{ values: {}, scopeId: "s", apiUrl: "u" }, "i-1"], signal });
+  });
+});
+
+describe("consent to a plugin's cloud providers", () => {
+  afterEach(() => clearPluginCloudProviders());
+
+  function fingerprintAfter(contributions: CloudProviderContribution[]): string {
+    publishPluginCloudProviders("acme.clouds", contributions, "Acme Clouds");
+    const prints = new Set(listPluginCloudProviders().map((entry) => entry.consentFingerprint));
+    expect(prints.size).toBe(1);
+    return [...prints][0]!;
+  }
+
+  it("names the plugin, by its id when it has no display name, with one fingerprint for all its providers", () => {
+    publishPluginCloudProviders("acme.clouds", [contribution(), contribution({ id: "gce" })], "Acme");
+    const declared = listPluginCloudProviders();
+    expect(declared.map((entry) => entry.pluginName)).toEqual(["Acme", "Acme"]);
+    expect(declared[0]!.consentFingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(declared[1]!.consentFingerprint).toBe(declared[0]!.consentFingerprint);
+    publishPluginCloudProviders("other.clouds", [contribution()], "  ");
+    expect(
+      listPluginCloudProviders().find((entry) => entry.pluginId === "other.clouds")!.pluginName
+    ).toBe("other.clouds");
+  });
+
+  it("keeps it for an update that only rewords, reorders or restates a default", () => {
+    const before = fingerprintAfter([contribution(), contribution({ id: "gce", name: "GCE" })]);
+    const reworded = fingerprintAfter([
+      contribution({ id: "gce", name: "Compute" }),
+      contribution({
+        name: "Elastic Compute",
+        description: "Other words.",
+        apiUrl: "https://ec2.example.com/",
+        apiKeyUrl: "https://elsewhere.example.com/keys",
+        dashboardUrl: "https://elsewhere.example.com",
+        docsUrl: "https://elsewhere.example.com/docs",
+        createReplay: "same-key",
+      }),
+    ]);
+    expect(reworded).toBe(before);
+  });
+
+  it("changes it when a provider asks for or does something else, or one is added", () => {
+    const base = contribution();
+    const before = fingerprintAfter([base]);
+    const changed = [
+      [contribution({ capabilities: { ...base.capabilities, deletion: false } })],
+      [contribution({ capabilities: { ...base.capabilities, sshTrust: "pinned-from-api" } })],
+      [contribution({ credentialFields: [{ ...base.credentialFields[0]!, secret: true }] })],
+      [contribution({ apiUrl: "https://ec2.elsewhere.example.com" })],
+      [contribution({ createReplay: "lookup-only" })],
+      [base, contribution({ id: "gce" })],
+    ];
+    const prints = changed.map((contributions) => fingerprintAfter(contributions));
+    expect(prints).not.toContain(before);
+    expect(new Set(prints).size).toBe(prints.length);
+  });
+
+  it("forgets an uninstalled plugin's consent, holding one heard before the cloud side was there", () => {
+    forgetPluginCloudProviderConsent("early.clouds");
+    const forgotten: string[] = [];
+    setPluginCloudConsentForgetter((pluginId) => forgotten.push(pluginId));
+    expect(forgotten).toEqual(["early.clouds"]);
+    forgetPluginCloudProviderConsent("acme.clouds");
+    expect(forgotten).toEqual(["early.clouds", "acme.clouds"]);
+    // Heard once: a forgetter set again doesn't replay it.
+    setPluginCloudConsentForgetter(null);
+    const later: string[] = [];
+    setPluginCloudConsentForgetter((pluginId) => later.push(pluginId));
+    expect(later).toEqual([]);
   });
 });

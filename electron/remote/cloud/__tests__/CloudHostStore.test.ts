@@ -562,3 +562,57 @@ describe("CloudHostStore machine keys (#17361)", () => {
     expect((backend.raw() as unknown as { machineKeys: unknown[] }).machineKeys).toHaveLength(1);
   });
 });
+
+describe("CloudHostStore plugin provider consents", () => {
+  const consent = { pluginId: "acme.clouds", fingerprint: "fp-1", approvedAt: 5 };
+
+  it("keeps one per plugin through every other write, and across a new store over the file", () => {
+    const backend = disk();
+    const store = new CloudHostStore(backend);
+    store.putProviderConsent(consent);
+    store.putBinding(binding());
+    store.removeBinding("cb_abcdefgh12");
+    store.putProviderConsent({ ...consent, fingerprint: "fp-2" });
+    const reopened = new CloudHostStore(backend);
+    expect(reopened.providerConsent("acme.clouds")).toEqual({ ...consent, fingerprint: "fp-2" });
+    expect(
+      (backend.raw() as unknown as { providerConsents: unknown[] }).providerConsents
+    ).toHaveLength(1);
+  });
+
+  it("reads one that doesn't name a plugin and a fingerprint as none, and leaves the value alone without one", () => {
+    const backend = disk();
+    backend.write({
+      version: 1,
+      accounts: [],
+      bindings: [],
+      providerConsents: [{ pluginId: "acme.clouds" }, { fingerprint: "fp-1" }, null],
+    });
+    const store = new CloudHostStore(backend);
+    expect(store.providerConsent("acme.clouds")).toBeNull();
+
+    const empty = disk();
+    new CloudHostStore(empty).putBinding(binding());
+    expect(Object.keys(empty.raw())).not.toContain("providerConsents");
+  });
+
+  it("forgets one plugin's consent only, and writes nothing when it had none", () => {
+    const backend = disk();
+    const store = new CloudHostStore(backend);
+    store.putProviderConsent(consent);
+    store.putProviderConsent({ ...consent, pluginId: "other.clouds" });
+    store.removeProviderConsent("acme.clouds");
+    expect(store.providerConsent("acme.clouds")).toBeNull();
+    expect(store.providerConsent("other.clouds")).not.toBeNull();
+    let writes = 0;
+    const counting = new CloudHostStore({
+      get: backend.get,
+      set: (key, value) => {
+        writes += 1;
+        backend.set(key, value);
+      },
+    });
+    counting.removeProviderConsent("acme.clouds");
+    expect(writes).toBe(0);
+  });
+});

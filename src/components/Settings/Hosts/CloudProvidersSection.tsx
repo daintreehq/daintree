@@ -17,13 +17,10 @@ import { credentialsNoun, sentenceCase } from "@/components/Hosts/cloud/cloudHos
 import { useCloudHosts } from "@/components/Hosts/cloud/cloudHostsState";
 import { pluralize } from "@/lib/pluralize";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
-import {
-  canConnectCloudAccount,
-  type CloudAccountSummary,
-  type CloudProviderInfo,
-} from "@shared/types/cloudHosts";
+import type { CloudAccountSummary, CloudProviderInfo } from "@shared/types/cloudHosts";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
+import { CloudProviderConsentDialog } from "./CloudProviderConsentDialog";
 import { ConnectCloudAccountDialog } from "./ConnectCloudAccountDialog";
 
 function errorText(err: unknown, fallback: string): string {
@@ -60,14 +57,22 @@ export function CloudProvidersSection() {
   const [removeTarget, setRemoveTarget] = useState<CloudAccountSummary | null>(null);
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  const [reviewing, setReviewing] = useState<CloudAccountSummary | null>(null);
+  const [allowing, setAllowing] = useState(false);
+  const [allowError, setAllowError] = useState<string | null>(null);
 
   const providers = snapshot.providers;
-  // A plugin's provider isn't offered for a new account until it can ask consent (#17352).
-  const connectable = providers.filter((provider) => canConnectCloudAccount(provider.id));
-  const usable = connectable.filter((provider) => provider.unsupportedReason === null);
+  const usable = providers.filter((provider) => provider.unsupportedReason === null);
   const accounts = snapshot.accounts;
   const providerFor = (account: CloudAccountSummary) =>
     providers.find((provider) => provider.id === account.providerId) ?? null;
+  // As it is now: a plugin update while the dialog is open asks its consent again.
+  const connectingProvider = connecting
+    ? (providers.find((provider) => provider.id === connecting.provider.id) ?? connecting.provider)
+    : null;
+  const reviewingProvider = reviewing ? providerFor(reviewing) : null;
+  const reviewingPlugin =
+    reviewingProvider?.plugin && !reviewingProvider.plugin.granted ? reviewingProvider.plugin : null;
 
   const clearRowError = (accountId: string) =>
     setRowErrors((errors) => {
@@ -94,6 +99,23 @@ export function CloudProvidersSection() {
           ...errors,
           [account.id]: errorText(err, "Couldn't check the account"),
         }));
+      }
+    );
+  };
+
+  const allowReviewed = () => {
+    if (!reviewing || !reviewingPlugin) return;
+    setAllowing(true);
+    setAllowError(null);
+    cloudHostsClient.allowAccountProvider(reviewing.id, reviewingPlugin.fingerprint).then(
+      (account) => {
+        setAllowing(false);
+        setReviewing(null);
+        clearRowError(account.id);
+      },
+      (err: unknown) => {
+        setAllowing(false);
+        setAllowError(errorText(err, "Couldn't allow the plugin"));
       }
     );
   };
@@ -147,7 +169,7 @@ export function CloudProvidersSection() {
       </DropdownMenu>
     );
 
-  const unsupported = connectable.length > 0 && usable.length === 0;
+  const unsupported = providers.length > 0 && usable.length === 0;
 
   return (
     <SettingsSection
@@ -172,7 +194,7 @@ export function CloudProvidersSection() {
             {!loaded
               ? "Loading cloud accounts"
               : unsupported
-                ? connectable[0]!.unsupportedReason
+                ? providers[0]!.unsupportedReason
                 : "Connect a cloud provider account to create machines that run projects and agents, then stop or delete them when you're done"}
           </SettingsEmptyRow>
         ) : (
@@ -185,6 +207,8 @@ export function CloudProvidersSection() {
               rowErrors[account.id] ??
               account.providerUnavailable ??
               (validation.status === "invalid" ? validation.detail : undefined);
+            // Paused until the person allows the plugin behind it as it is declared now.
+            const needsReview = provider?.plugin !== undefined && !provider.plugin.granted;
             return (
               <SettingsRow
                 key={account.id}
@@ -228,6 +252,19 @@ export function CloudProvidersSection() {
                 error={rowError ? <span role="alert">{rowError}</span> : undefined}
                 control={
                   <div className="flex items-center gap-1.5" data-cloud-account={account.id}>
+                    {needsReview && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        aria-label={`Review access for ${account.displayName}`}
+                        onClick={() => {
+                          setAllowError(null);
+                          setReviewing(account);
+                        }}
+                      >
+                        Review access
+                      </Button>
+                    )}
                     <Button
                       variant="outline"
                       size="sm"
@@ -270,13 +307,25 @@ export function CloudProvidersSection() {
           })
         )}
       </SettingsGroup>
-      {connecting && (
+      {connecting && connectingProvider && (
         <ConnectCloudAccountDialog
           isOpen
           onClose={() => setConnecting(null)}
-          provider={connecting.provider}
+          provider={connectingProvider}
           replacing={connecting.replacing}
           onConnected={(account) => clearRowError(account.id)}
+        />
+      )}
+      {reviewingProvider && reviewingPlugin && (
+        <CloudProviderConsentDialog
+          isOpen
+          onClose={() => setReviewing(null)}
+          provider={reviewingProvider}
+          plugin={reviewingPlugin}
+          purpose="review"
+          onAllow={allowReviewed}
+          busy={allowing}
+          error={allowError}
         />
       )}
       <ConfirmDialog

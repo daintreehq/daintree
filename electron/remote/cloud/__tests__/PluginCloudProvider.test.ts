@@ -88,8 +88,10 @@ function declaration(
 ): PluginCloudProviderDeclaration {
   return {
     pluginId: "acme.clouds",
+    pluginName: "Acme Clouds",
     providerId: "acme.clouds.ec2",
     contribution: contribution(overrides),
+    consentFingerprint: "fp-1",
   };
 }
 

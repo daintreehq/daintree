@@ -350,6 +350,9 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
     });
     const registry = new CloudProviderRegistry();
     const vault = new MemoryCloudCredentialVault();
+    // What the plugin declares now, as its consent fingerprint.
+    const declared = { fingerprint: "fp-1" };
+    let consentGranted = () => {};
     const accounts = new CloudAccountService({
       store,
       vault,
@@ -357,6 +360,16 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
       apiUrlFor: (id) => registry.apiUrlFor(id),
       platform: "darwin",
       now: () => clock.now,
+      pluginConsent: (id) =>
+        id === PLUGIN_PROVIDER && registry.get(id)
+          ? {
+              pluginId: "acme.clouds",
+              pluginName: "Acme Clouds",
+              fingerprint: declared.fingerprint,
+              providerNames: ["EC2"],
+            }
+          : null,
+      onConsentGranted: () => consentGranted(),
     });
     const hosts: HostDescriptor[] = [];
     const disconnect = vi.fn(async () => {});
@@ -393,7 +406,9 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
     const cloudHosts = new CloudHosts({ accounts, store, emit: (s) => emitted.push(s) });
     cloudHosts.attachLifecycle(lifecycle);
     registry.onChange(() => cloudHosts.providersChanged());
+    consentGranted = () => cloudHosts.providersChanged();
     return {
+      declared,
       store,
       registry,
       vault,
@@ -417,22 +432,24 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
       owner: pluginOwner,
       apiUrl: "https://api.acme.test",
     });
-    // Connect refuses a plugin's provider until it can ask consent (#17352), so its account is
-    // seeded as one connected then would be kept.
+    // Seeded as connect keeps it: with the consent the person gave for it (#17352).
     const account = { id: "ca_acmeplugin" };
-    env.store.putAccount({
-      id: account.id,
-      providerId: PLUGIN_PROVIDER,
-      displayName: "octocat",
-      identity: "octocat",
-      scope: { kind: "personal", id: "personal", name: "Personal" },
-      apiUrl: "https://api.acme.test",
-      keyHint: null,
-      credentialRevision: "rev-1",
-      addedAt: NOW,
-      validation: { status: "valid", checkedAt: NOW },
-      lastProvisioning: null,
-    });
+    env.store.putAccount(
+      {
+        id: account.id,
+        providerId: PLUGIN_PROVIDER,
+        displayName: "octocat",
+        identity: "octocat",
+        scope: { kind: "personal", id: "personal", name: "Personal" },
+        apiUrl: "https://api.acme.test",
+        keyHint: null,
+        credentialRevision: "rev-1",
+        addedAt: NOW,
+        validation: { status: "valid", checkedAt: NOW },
+        lastProvisioning: null,
+      },
+      { pluginId: "acme.clouds", fingerprint: "fp-1", approvedAt: NOW }
+    );
     await env.vault.put(account.id, { apiKey: "acme_live_x" });
     const { hostId } = await env.lifecycle.importMachine({
       accountId: account.id,
@@ -481,6 +498,35 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
     // A catalog read while it was registered is no way around it.
     await expect(env.accounts.catalog(env.account.id)).rejects.toBeInstanceOf(AppError);
     expect(env.provider.catalog).toHaveBeenCalledTimes(1);
+  });
+
+  it("pauses them like a missing provider while its plugin isn't allowed, and resumes them once it is", async () => {
+    const env = await importedHost();
+    // An update that changes what the plugin declares: registered still, and no longer agreed to.
+    env.declared.fingerprint = "fp-2";
+    env.cloudHosts.providersChanged();
+    expect(env.accounts.summaries()[0]!.providerUnavailable).toContain("Acme Clouds");
+    expect(env.lifecycle.statuses()[0]!.providerUnavailable).toContain("Acme Clouds");
+    // Listed, so the person can review it.
+    expect(env.cloudHosts.snapshot().providers[0]!.plugin).toMatchObject({ granted: false });
+
+    vi.mocked(env.provider.inspect).mockClear();
+    await env.lifecycle.renewDue();
+    await (env.lifecycle as unknown as { pollDue(): Promise<void> }).pollDue();
+    expect(env.provider.renewLifetime).not.toHaveBeenCalled();
+    expect(env.provider.inspect).not.toHaveBeenCalled();
+    await expect(env.lifecycle.startMachine(env.hostId)).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+      userMessage: expect.stringContaining("Acme Clouds"),
+    });
+    expect(env.provider.start).not.toHaveBeenCalled();
+
+    const resumed = vi.spyOn(env.lifecycle, "providersChanged");
+    env.accounts.allowAccountProvider(env.account.id, "fp-2");
+    expect(resumed).toHaveBeenCalledTimes(1);
+    expect(env.lifecycle.statuses()[0]!.providerUnavailable).toBeNull();
+    await env.lifecycle.renewDue();
+    expect(env.provider.renewLifetime).toHaveBeenCalledTimes(1);
   });
 
   it("refuses a person's start, stop or lifetime change before anything here changes", async () => {
@@ -804,6 +850,8 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
           createdAt: 1,
         },
       ],
+      // Connected with the person's consent to the plugin as it is declared (#17352).
+      providerConsents: [{ pluginId: "acme.clouds", fingerprint: "fp-1", approvedAt: 1 }],
     };
   }
 
