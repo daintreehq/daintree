@@ -133,12 +133,40 @@ describe("useParkReleaseNotifications", () => {
       supersedeKey: "park-released:t1",
       context: { projectId: "p1", panelId: "t1" },
     });
-    expect(payload.action).toMatchObject({
-      actionId: "pilot.openRun",
-      actionArgs: { runId: "t1", workspaceId: "p1" },
+    expect(payload.action).toMatchObject({ actionId: "pilot.openRun" });
+    // Strict: a run with no worktree carries no `worktreeId` key to replay.
+    expect(payload.action?.actionArgs).toStrictEqual({
+      runId: "t1",
+      workspaceId: "p1",
     });
     // The view's own snapshot named the run, so main was never asked.
     expect(getSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("opens the run with its worktree, from the toast and from the inbox alike", async () => {
+    // A run that exits while its project opens lands in its own worktree.
+    const { useParkReleaseNotifications, useFleetSnapshotStore } = await load();
+    useFleetSnapshotStore.setState({
+      snapshot: snapshotOf([seedRun({ worktreeId: "/repo/wt/alpha" })]),
+    });
+    dispatchMock.mockResolvedValue({ ok: true });
+    renderHook(() => useParkReleaseNotifications());
+
+    act(() => {
+      captured!({ id: "t1", gateRunId: "g1", reason: "gate-ready", timestamp: NOW });
+    });
+
+    const expected = { runId: "t1", workspaceId: "p1", worktreeId: "/repo/wt/alpha" };
+    const action = notifyArg(0).action as {
+      label: string;
+      actionId: string;
+      actionArgs: unknown;
+      onClick: () => Promise<void>;
+    };
+    expect(action).toMatchObject({ label: "Open", actionId: "pilot.openRun" });
+    expect(action.actionArgs).toStrictEqual(expected);
+    await action.onClick();
+    expect(dispatchMock).toHaveBeenCalledWith("pilot.openRun", expected);
   });
 
   it("says so when the gate closed rather than finished — and still carries the note", async () => {

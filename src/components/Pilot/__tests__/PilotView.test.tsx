@@ -457,9 +457,25 @@ describe("PilotView", () => {
 
     screen.getByTestId("pilot-row").click();
 
+    // Strict: a run with no worktree sends no `worktreeId` key at all.
+    expect(dispatchMock.mock.calls.find(([id]) => id === "pilot.openRun")).toStrictEqual([
+      "pilot.openRun",
+      { runId: "t9", workspaceId: "p1" },
+    ]);
+  });
+
+  it("names the row's worktree when opening its run", () => {
+    // A run that exits while its project opens lands in this worktree instead of
+    // whichever one the project last showed.
+    seed([run({ runId: "t9", workspaceId: "p1", worktreeId: "/repo/wt/alpha" })]);
+    render(<PilotView />);
+
+    screen.getByTestId("pilot-row").click();
+
     expect(dispatchMock).toHaveBeenCalledWith("pilot.openRun", {
       runId: "t9",
       workspaceId: "p1",
+      worktreeId: "/repo/wt/alpha",
     });
   });
 
@@ -2969,6 +2985,7 @@ describe("PilotView worktree scope", () => {
       expect(dispatchMock).toHaveBeenCalledWith("pilot.openRun", {
         runId: "alpha-1",
         workspaceId: "p1",
+        worktreeId: "/repo/wt/alpha",
       });
     });
 

@@ -10,7 +10,15 @@ import { z } from "zod";
 // that is where a panel is if the client never left. The click payload always
 // sends it: a row in the overview names a run in another workspace more often
 // than not.
-export const openRunArgs = z.object({ runId: z.string(), workspaceId: z.string().optional() });
+//
+// `worktreeId` is where the destination view lands instead when the run exits
+// during the switch; without it the view opens on whichever worktree it last
+// showed.
+export const openRunArgs = z.object({
+  runId: z.string(),
+  workspaceId: z.string().optional(),
+  worktreeId: z.string().optional(),
+});
 
 export const setGroupArgs = z.object({
   projectId: z.string().min(1),
