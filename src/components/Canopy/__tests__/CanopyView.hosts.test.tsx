@@ -267,6 +267,15 @@ function installElectron() {
     setActive: vi.fn(async () => canopySnapshot()),
     setShown: vi.fn(async () => {}),
     setRead: vi.fn(async () => null),
+    markAllRead: vi.fn(async (targets: Array<{ runId: string; spawnedAt: number; turn: number }>) =>
+      targets.map((target) => ({
+        ...target,
+        readTurn: target.turn,
+        markedUnreadAt: null,
+        version: 2,
+      }))
+    ),
+    restoreReads: vi.fn(async (_restores: unknown[]) => {}),
     archive: vi.fn(async (): Promise<unknown> => null),
     unarchive: vi.fn(async () => {}),
     markSeen: vi.fn(async () => {}),
@@ -1138,6 +1147,83 @@ describe("All hosts", () => {
     }
     expect(where(lane!).querySelector("[data-canopy-project]")!.textContent).toBe("local-app");
     expect(where(global!).querySelector("[data-canopy-project]")!.textContent).toBe("Global");
+  });
+
+  it("says how many agents were marked read and which host couldn't, with Undo for the marked ones", async () => {
+    const unread = (runId: string) => ({
+      runId,
+      spawnedAt: NOW - 3_600_000,
+      turn: 2,
+      readTurn: 0,
+      markedUnreadAt: null,
+      version: 1,
+    });
+    const own = installElectron();
+    const localSnapshot = canopySnapshot({ reads: [unread("shared-run")] });
+    own.setActive.mockResolvedValue(localSnapshot);
+    useCanopyStore.setState({ snapshot: localSnapshot });
+    remoteCanopy = canopySnapshot({ reads: [unread("shared-run")] });
+    const base = state.invoke.getMockImplementation()!;
+    state.invoke.mockImplementation(async (hostId: string, channel: string, ...rest: unknown[]) => {
+      if (channel === "canopy:mark-all-read") throw new Error("studio-01 went away");
+      return base(hostId, channel, ...rest);
+    });
+    const { container } = render(<CanopyView frame={frame} />);
+    await settle();
+    vi.mocked(notify).mockClear();
+    const first = container.ownerDocument.querySelector<HTMLElement>("[data-canopy-card]")!;
+    await act(async () => {
+      fireEvent.keyDown(first, { key: "Dead", code: "KeyU", altKey: true });
+    });
+    await settle();
+    expect(own.markAllRead).toHaveBeenCalledWith([
+      { runId: "shared-run", spawnedAt: NOW - 3_600_000, turn: 2 },
+    ]);
+    const toast = vi.mocked(notify).mock.calls[0]![0];
+    expect(toast).toMatchObject({ type: "warning", title: "Marked as read" });
+    expect(toast.message).toContain("1 agent of 2");
+    expect(toast.message).toContain("studio-01");
+    await act(async () => {
+      toast.actions![0]!.onClick();
+    });
+    expect(own.restoreReads).toHaveBeenCalledWith([
+      { mark: unread("shared-run"), expectVersion: 2 },
+    ]);
+  });
+
+  it("names every host that couldn't mark its agents read, offering Retry and no Undo, when none could", async () => {
+    const unread = (runId: string) => ({
+      runId,
+      spawnedAt: NOW - 3_600_000,
+      turn: 2,
+      readTurn: 0,
+      markedUnreadAt: null,
+      version: 1,
+    });
+    const own = installElectron();
+    const localSnapshot = canopySnapshot({ reads: [unread("shared-run")] });
+    own.setActive.mockResolvedValue(localSnapshot);
+    useCanopyStore.setState({ snapshot: localSnapshot });
+    remoteCanopy = canopySnapshot({ reads: [unread("shared-run")] });
+    own.markAllRead.mockRejectedValue(new Error("this machine refused"));
+    const base = state.invoke.getMockImplementation()!;
+    state.invoke.mockImplementation(async (hostId: string, channel: string, ...rest: unknown[]) => {
+      if (channel === "canopy:mark-all-read") throw new Error("studio-01 went away");
+      return base(hostId, channel, ...rest);
+    });
+    const { container } = render(<CanopyView frame={frame} />);
+    await settle();
+    vi.mocked(notify).mockClear();
+    const first = container.ownerDocument.querySelector<HTMLElement>("[data-canopy-card]")!;
+    await act(async () => {
+      fireEvent.keyDown(first, { key: "Dead", code: "KeyU", altKey: true });
+    });
+    await settle();
+    const toast = vi.mocked(notify).mock.calls[0]![0];
+    expect(toast).toMatchObject({ type: "error", title: "Couldn't mark as read" });
+    expect(toast.actions!.map((action) => action.label)).toEqual(["Retry"]);
+    expect(toast.message).toContain("studio-01");
+    expect(own.restoreReads).not.toHaveBeenCalled();
   });
 
   it("asks each host about its own terminals, by the id it knows", async () => {

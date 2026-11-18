@@ -17,6 +17,16 @@ const ownCalls = vi.hoisted(() => ({
   setMode: vi.fn(() => Promise.resolve()),
   refresh: vi.fn(() => Promise.resolve()),
   setRead: vi.fn((): Promise<unknown> => Promise.resolve(null)),
+  markAllRead: vi.fn((targets: Array<{ runId: string; spawnedAt: number; turn: number }>) =>
+    Promise.resolve(
+      targets.map((target) => ({
+        ...target,
+        readTurn: target.turn,
+        markedUnreadAt: null,
+        version: 2,
+      }))
+    )
+  ),
   onTerminalData: vi.fn((_callback: (chunk: unknown) => void) => () => {}),
   restoreTrashed: vi.fn((runId: string, _target: unknown): Promise<CanopyRestoreOutcome> =>
     Promise.resolve({ runId })
@@ -620,6 +630,35 @@ describe("createAllHostsRoute", () => {
     const { api } = createAllHostsRoute("own", ["own", "remote"]);
     const after = await api.setRead(allHostsKey("remote", "t1"), { spawnedAt: 4 }, true, 2);
     expect(after).toEqual({ ...mark, runId: allHostsKey("remote", "t1") });
+  });
+
+  it("keeps the marks of the host that answered a bulk mark-read and names the host that didn't", async () => {
+    invoke.mockRejectedValue(new Error("offline"));
+    const { api, markAllReadReport } = createAllHostsRoute("own", ["own", "remote"]);
+    const targets = [
+      { runId: allHostsKey("own", "o1"), spawnedAt: 1, turn: 3 },
+      { runId: allHostsKey("remote", "r1"), spawnedAt: 2, turn: 4 },
+    ];
+    const report = await markAllReadReport(targets);
+    expect(report.refused).toEqual(["remote"]);
+    expect(report.marks.map((mark) => mark.runId)).toEqual([allHostsKey("own", "o1")]);
+    expect(ownCalls.markAllRead).toHaveBeenCalledWith([{ runId: "o1", spawnedAt: 1, turn: 3 }]);
+    await expect(api.markAllRead(targets)).resolves.toHaveLength(1);
+  });
+
+  it("names every host and carries the failure when no host answered a bulk mark-read", async () => {
+    invoke.mockRejectedValue(new Error("offline"));
+    ownCalls.markAllRead.mockRejectedValueOnce(new Error("own offline"));
+    const { api, markAllReadReport } = createAllHostsRoute("own", ["own", "remote"]);
+    const targets = [
+      { runId: allHostsKey("own", "o1"), spawnedAt: 1, turn: 3 },
+      { runId: allHostsKey("remote", "r1"), spawnedAt: 2, turn: 4 },
+    ];
+    const report = await markAllReadReport(targets);
+    expect(report).toMatchObject({ marks: [], refused: ["own", "remote"] });
+    expect(report.failure).toEqual(new Error("own offline"));
+    ownCalls.markAllRead.mockRejectedValueOnce(new Error("own offline"));
+    await expect(api.markAllRead(targets)).rejects.toThrow("own offline");
   });
 
   it("is refused by the hosts it writes to as a whole, not reported as done", async () => {
