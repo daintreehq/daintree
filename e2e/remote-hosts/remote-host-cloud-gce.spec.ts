@@ -248,7 +248,7 @@ test.describe.serial("Cloud hosts: a Google Compute Engine VM as a Remote Host",
     const body = insert.body as {
       metadata: { items: { key: string; value: string }[] };
       scheduling: unknown;
-      networkInterfaces: { subnetwork: string }[];
+      networkInterfaces: { subnetwork: string; accessConfigs?: unknown[] }[];
     };
     const metadata = Object.fromEntries(body.metadata.items.map((item) => [item.key, item.value]));
     expect(metadata["ssh-keys"]).toMatch(/^daintree:ssh-ed25519 /);
@@ -260,6 +260,7 @@ test.describe.serial("Cloud hosts: a Google Compute Engine VM as a Remote Host",
       instanceTerminationAction: "STOP",
     });
     expect(body.networkInterfaces[0]!.subnetwork).toBe("regions/us-central1/subnetworks/default");
+    expect(body.networkInterfaces[0]!.accessConfigs).toHaveLength(1);
     expect(gceCalls("GET", /\/getGuestAttributes$/).length).toBeGreaterThan(0);
 
     const hosts = await page.evaluate(() => window.electron.remoteHosts.list());

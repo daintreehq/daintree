@@ -164,6 +164,7 @@ export class GceTokenSource {
   private readonly now: () => number;
   private readonly cache = new Map<string, CachedToken>();
   private readonly inFlight = new Map<string, Promise<CachedToken>>();
+  private readonly shutdown = new AbortController();
 
   constructor(
     private readonly tokenUrl: string,
@@ -179,7 +180,9 @@ export class GceTokenSource {
    * found out.
    */
   async token(key: GceServiceAccountKey, signal?: AbortSignal, fresh = false): Promise<string> {
-    if (signal?.aborted) throw new GceApiError("cancelled", "Cancelled", null, null);
+    if (signal?.aborted || this.shutdown.signal.aborted) {
+      throw new GceApiError("cancelled", "Cancelled", null, null);
+    }
     const id = cacheKey(key);
     const cached = fresh ? undefined : this.cache.get(id);
     if (cached && cached.expiresAt - TOKEN_MARGIN_MS > this.now()) return cached.token;
@@ -193,6 +196,12 @@ export class GceTokenSource {
     const exchanged = await raceSignal(pending, signal);
     this.remember(id, exchanged);
     return exchanged.token;
+  }
+
+  /** Cancels any exchange under way and forgets every token; nothing is asked for afterwards. */
+  dispose(): void {
+    this.shutdown.abort();
+    this.cache.clear();
   }
 
   private remember(id: string, token: CachedToken): void {
@@ -224,12 +233,13 @@ export class GceTokenSource {
           Accept: "application/json",
         },
         body,
-        signal: timeout.signal,
+        signal: AbortSignal.any([timeout.signal, this.shutdown.signal]),
         redirect: "error",
       });
       text = await readBounded(response);
     } catch (error) {
       if (error instanceof GceApiError) throw error;
+      if (this.shutdown.signal.aborted) throw new GceApiError("cancelled", "Cancelled", null, null);
       if (timeout.signal.aborted) {
         throw new GceApiError("timeout", "Google's sign-in didn't answer in time", null, null);
       }

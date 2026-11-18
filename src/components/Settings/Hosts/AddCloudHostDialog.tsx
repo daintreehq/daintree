@@ -593,7 +593,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
           <AppDialog.Title>
             {added
               ? `${mode === "create" ? "Creating" : "Adding"} ${added.name}`
-              : `Add a cloud machine${provider ? ` on ${provider.name}` : ""}`}
+              : `Add a cloud machine${provider && (account || usable.length === 1) ? ` on ${provider.name}` : ""}`}
           </AppDialog.Title>
           <AppDialog.CloseButton />
         </AppDialog.Header>

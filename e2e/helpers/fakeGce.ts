@@ -37,6 +37,8 @@ interface Instance {
   labels: Record<string, string>;
   scheduling: Record<string, unknown>;
   machineType: string;
+  /** The create asked for an external address. */
+  external: boolean;
   hostKeysPublished: boolean;
   createdAt: string;
   lastStartAt: string | null;
@@ -157,11 +159,13 @@ export async function startFakeGce(params: {
       networkInterfaces: [
         {
           networkIP: "10.128.0.2",
-          accessConfigs: [
-            running
-              ? { type: "ONE_TO_ONE_NAT", name: "External NAT", natIP: "127.0.0.1" }
-              : { type: "ONE_TO_ONE_NAT", name: "External NAT" },
-          ],
+          accessConfigs: !instance.external
+            ? []
+            : [
+                running
+                  ? { type: "ONE_TO_ONE_NAT", name: "External NAT", natIP: "127.0.0.1" }
+                  : { type: "ONE_TO_ONE_NAT", name: "External NAT" },
+              ],
         },
       ],
     };
@@ -336,6 +340,10 @@ export async function startFakeGce(params: {
 
     const zoned = /^\/zones\/([a-z0-9-]+)(.*)$/.exec(rest!);
     if (!zoned) return refuse(404, "Not found", "notFound");
+    // The key's home project may be read, but the VMs live in the account's chosen project only.
+    if (project !== FAKE_GCE_PROJECT) {
+      return refuse(404, `The resource 'projects/${project}${rest}' was not found`, "notFound");
+    }
     const [, zone, zoneRest] = zoned;
     const waited = /^\/operations\/([^/]+)\/wait$/.exec(zoneRest!);
     if (waited) {
@@ -357,6 +365,7 @@ export async function startFakeGce(params: {
         scheduling?: Record<string, unknown>;
         machineType: string;
         metadata?: { items?: { key: string; value: string }[] };
+        networkInterfaces?: { accessConfigs?: unknown[] }[];
       };
       const sshKeys = sent.metadata?.items?.find((item) => item.key === "ssh-keys")?.value ?? "";
       const key = sshKeys.slice(sshKeys.indexOf(":") + 1);
@@ -370,6 +379,7 @@ export async function startFakeGce(params: {
         labels: sent.labels ?? {},
         scheduling: sent.scheduling ?? {},
         machineType: sent.machineType.split("/").pop() ?? "e2-standard-2",
+        external: (sent.networkInterfaces?.[0]?.accessConfigs?.length ?? 0) > 0,
         hostKeysPublished: false,
         createdAt: now(),
         lastStartAt: null,
@@ -393,7 +403,11 @@ export async function startFakeGce(params: {
       return reply(200, opView(operation(zone!, instance.id, () => instances.delete(instance.id))));
     }
     if (action === "getGuestAttributes") {
-      if (!instance.hostKeysPublished || instance.status !== "RUNNING") {
+      if (
+        !instance.hostKeysPublished ||
+        instance.status !== "RUNNING" ||
+        url.searchParams.get("queryPath") !== "hostkeys/"
+      ) {
         return refuse(404, "The resource was not found", "notFound");
       }
       return reply(200, {

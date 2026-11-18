@@ -65,7 +65,8 @@ export function resolveGceApiUrl(
 }
 
 /** Reasons Google gives for a zone that has no machine of the kind asked for right now. */
-const CAPACITY_REASON = /RESOURCE_POOL_EXHAUSTED|RESOURCE_NOT_AVAILABLE|STOCKOUT/;
+const CAPACITY_REASON =
+  /RESOURCE_POOL_EXHAUSTED|RESOURCE_NOT_AVAILABLE|STOCKOUT|POOL_CAPACITY_INSUFFICIENT/;
 
 function kindForStatus(status: number | null, reason: string | null): GceErrorKind {
   if (reason) {
@@ -173,6 +174,8 @@ interface RequestOptions {
   query?: Record<string, string | undefined>;
   body?: unknown;
   timeoutMs?: number;
+  /** A write: once one attempt may have reached Google, a later refusal no longer proves nothing happened. */
+  mutation?: boolean;
 }
 
 /**
@@ -314,6 +317,15 @@ export class GceClient {
         for (const raw of entry.instances ?? []) {
           const parsed = gceInstanceSchema.safeParse(raw);
           if (parsed.success) items.push(parsed.data);
+          // A lookup by label that skipped a row could read a machine that exists as never made.
+          else if (label) {
+            throw new GceApiError(
+              "bad-response",
+              "Compute Engine listed a machine in a shape Daintree doesn't recognise",
+              null,
+              null
+            );
+          }
         }
       }
       return { items, next: result.nextPageToken };
@@ -342,6 +354,7 @@ export class GceClient {
         path: `${this.zonePath(ctx, zone)}/instances`,
         query: { requestId },
         body,
+        mutation: true,
       },
       gceOperationSchema
     );
@@ -352,7 +365,7 @@ export class GceClient {
     zone: string,
     instance: string
   ): Promise<GceOperation> {
-    return this.mutate(ctx, "POST", `${this.instancePath(ctx, zone, instance)}/start`, {});
+    return this.mutate(ctx, "POST", `${this.instancePath(ctx, zone, instance)}/start`, undefined);
   }
 
   /** Brings a suspended instance back with its memory. */
@@ -361,7 +374,7 @@ export class GceClient {
     zone: string,
     instance: string
   ): Promise<GceOperation> {
-    return this.mutate(ctx, "POST", `${this.instancePath(ctx, zone, instance)}/resume`, {});
+    return this.mutate(ctx, "POST", `${this.instancePath(ctx, zone, instance)}/resume`, undefined);
   }
 
   /** A normal stop: the guest gets its shutdown, and the disks are kept. */
@@ -370,7 +383,7 @@ export class GceClient {
     zone: string,
     instance: string
   ): Promise<GceOperation> {
-    return this.mutate(ctx, "POST", `${this.instancePath(ctx, zone, instance)}/stop`, {});
+    return this.mutate(ctx, "POST", `${this.instancePath(ctx, zone, instance)}/stop`, undefined);
   }
 
   /** Replaces the scheduling policy; Compute Engine takes a runtime limit only while the instance is stopped. */
@@ -461,7 +474,7 @@ export class GceClient {
   ): Promise<GceOperation> {
     return this.call(
       ctx,
-      { method, path, query: { requestId: crypto.randomUUID() }, body },
+      { method, path, query: { requestId: crypto.randomUUID() }, body, mutation: true },
       gceOperationSchema
     );
   }
@@ -500,7 +513,9 @@ export class GceClient {
   ): Promise<z.infer<S>> {
     let lastError: GceApiError | null = null;
     let freshToken = false;
-    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    let authRetried = false;
+    let possiblyDelivered = false;
+    for (let attempt = 0; attempt < MAX_ATTEMPTS;) {
       if (attempt > 0 && !freshToken) {
         const backoff = Math.min(500 * 2 ** (attempt - 1), 4_000) + Math.random() * 250;
         await this.sleep(Math.max(backoff, lastError?.retryAfterMs ?? 0), ctx.signal);
@@ -509,24 +524,49 @@ export class GceClient {
         return await this.once(ctx, request, schema, freshToken);
       } catch (error) {
         if (!(error instanceof GceApiError)) throw error;
-        if (ctx.signal?.aborted) throw error;
-        // A kept token Google has stopped honouring gets one fresh try; a fresh one refused is final.
-        if (error.kind === "unauthorized" && error.status === 401 && !freshToken) {
+        // A kept token Google has stopped honouring gets one fresh try of its own; a fresh one refused is final.
+        if (error.kind === "unauthorized" && error.status === 401 && !authRetried) {
+          authRetried = true;
           freshToken = true;
           lastError = error;
+          if (ctx.signal?.aborted) throw this.settled(error, request, possiblyDelivered);
           continue;
         }
         freshToken = false;
         lastError = error;
-        const retriable =
-          error.kind === "network" ||
-          error.kind === "timeout" ||
-          error.kind === "server" ||
-          error.kind === "rate-limited";
-        if (!retriable) throw error;
+        attempt += 1;
+        const unanswered =
+          error.kind === "network" || error.kind === "timeout" || error.kind === "server";
+        if (unanswered) possiblyDelivered = true;
+        const retriable = unanswered || error.kind === "rate-limited";
+        if (!retriable || ctx.signal?.aborted) {
+          throw this.settled(error, request, possiblyDelivered);
+        }
       }
     }
-    throw lastError!;
+    throw this.settled(lastError!, request, possiblyDelivered);
+  }
+
+  /**
+   * The error a request ends with. A write whose earlier attempt may have
+   * reached Google ends unknown, whatever a later resend was told: the first
+   * may have done what was asked.
+   */
+  private settled(
+    error: GceApiError,
+    request: RequestOptions,
+    possiblyDelivered: boolean
+  ): GceApiError {
+    if (!request.mutation || !possiblyDelivered) return error;
+    if (error.kind === "network" || error.kind === "timeout" || error.kind === "server") {
+      return error;
+    }
+    return new GceApiError(
+      "outcome-unknown",
+      `An earlier attempt may have reached Compute Engine before it answered: ${error.message}`,
+      error.status,
+      error.reason
+    );
   }
 
   private async once<S extends z.ZodType>(
@@ -538,6 +578,8 @@ export class GceClient {
     // Already cancelled (while the key was read from the keychain, say): nothing is sent.
     if (ctx.signal?.aborted) throw new GceApiError("cancelled", "Cancelled", null, null);
     const token = await ctx.authorize(freshToken);
+    // Cancelled while the token was fetched: nothing is sent.
+    if (ctx.signal?.aborted) throw new GceApiError("cancelled", "Cancelled", null, null);
     const url = new URL(`${this.options.baseUrl}${request.path}`);
     for (const [key, value] of Object.entries(request.query ?? {})) {
       if (value !== undefined) url.searchParams.set(key, value);

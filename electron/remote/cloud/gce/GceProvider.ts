@@ -193,19 +193,30 @@ export function gceInstanceName(name: string, idempotencyKey: string): string {
   return `${base || "dt"}-${suffix}`;
 }
 
-/** The scheduling a create sends, or a start replaces Daintree's part of: a stop after the limit, or none. */
+/**
+ * The termination policy a start replaces: a stop after the limit, or none.
+ * Explicit nulls clear a field; a deadline set elsewhere (`terminationTime`)
+ * is cleared too, since it can't stand beside a run duration.
+ */
 function lifetimeScheduling(lifetimeSeconds: number | null): Record<string, unknown> {
   return lifetimeSeconds === null
-    ? { maxRunDuration: null, instanceTerminationAction: null }
-    : { maxRunDuration: { seconds: String(lifetimeSeconds) }, instanceTerminationAction: "STOP" };
+    ? { maxRunDuration: null, instanceTerminationAction: null, terminationTime: null }
+    : {
+        maxRunDuration: { seconds: String(lifetimeSeconds) },
+        instanceTerminationAction: "STOP",
+        terminationTime: null,
+      };
 }
 
-function currentLimit(instance: GceInstance): number | null {
+/** Whether the VM's whole termination policy is exactly the limit wanted, and nothing else could end a run. */
+function policyIs(instance: GceInstance, lifetimeSeconds: number | null): boolean {
   const scheduling = instance.scheduling;
+  if (scheduling?.terminationTime) return false;
   const seconds = scheduling?.maxRunDuration?.seconds;
-  if (seconds === undefined || scheduling?.instanceTerminationAction !== "STOP") return null;
-  const value = Number(seconds);
-  return value > 0 ? value : null;
+  const action = scheduling?.instanceTerminationAction;
+  if (lifetimeSeconds === null)
+    return seconds === undefined && (action === undefined || action === "STOP");
+  return action === "STOP" && seconds !== undefined && Number(seconds) === lifetimeSeconds;
 }
 
 function ipv4NatAddress(instance: GceInstance): string | null {
@@ -401,7 +412,9 @@ export class GceProvider implements CloudProvider {
     const subnets = subnetworks
       .filter(
         (subnet) =>
-          (subnet.purpose === undefined || subnet.purpose === "PRIVATE") &&
+          (subnet.purpose === undefined ||
+            subnet.purpose === "PRIVATE" ||
+            subnet.purpose === "PRIVATE_RFC_1918") &&
           (subnet.stackType === undefined || subnet.stackType.startsWith("IPV4")) &&
           GCE_NAME.test(subnet.name)
       )
@@ -576,17 +589,25 @@ export class GceProvider implements CloudProvider {
     // Google took the request: from here a failure to read the outcome says nothing about whether it made one.
     let done: GceOperation;
     try {
-      done = await client.waitOperation(
-        ctx,
-        zone,
-        operation.name,
-        Date.now() + OPERATION_DEADLINE_MS
-      );
+      done =
+        operation.status === "DONE"
+          ? operation
+          : await client.waitOperation(
+              ctx,
+              zone,
+              operation.name,
+              Date.now() + OPERATION_DEADLINE_MS
+            );
     } catch (error) {
       throw unconfirmed(error);
     }
     const refused = operationError(done);
-    if (refused) throw refused;
+    // Only a zone out of room or a quota spent proves the insert made nothing; any other failure may have left a VM.
+    if (refused) {
+      throw refused.kind === "no-capacity" || refused.kind === "quota"
+        ? refused
+        : unconfirmed(refused);
+    }
     if (done.status !== "DONE") {
       throw new GceApiError(
         "outcome-unknown",
@@ -622,7 +643,7 @@ export class GceProvider implements CloudProvider {
     const client = this.client(credentials);
     const before = await client.getInstance(ctx, zone, instance);
     const wanted = options.lifetimeSeconds;
-    const changes = wanted !== undefined && wanted !== currentLimit(before);
+    const changes = wanted !== undefined && !policyIs(before, wanted);
     if (before.status === "SUSPENDED") {
       if (changes) {
         throw invalid(
@@ -643,7 +664,7 @@ export class GceProvider implements CloudProvider {
           })
         );
         const after = await client.getInstance(ctx, zone, instance);
-        if (currentLimit(after) !== wanted) {
+        if (!policyIs(after, wanted)) {
           throw new GceApiError(
             "invalid-request",
             "Compute Engine didn't keep the new runtime limit, so the machine wasn't started",
@@ -665,10 +686,8 @@ export class GceProvider implements CloudProvider {
     const { zone, instance } = parseResourceId(resourceId, project);
     const ctx = this.ctx(credentials);
     const client = this.client(credentials);
-    const operation = await client.stopInstance(ctx, zone, instance);
-    const refused = operationError(operation);
-    if (refused) throw refused;
-    // The guest's shutdown can take a while; the machine's state says when it's done.
+    // Followed to its end, so a stop Google gives up on is said, not read as one still under way.
+    await this.finish(client, ctx, zone, await client.stopInstance(ctx, zone, instance));
     return gceResource(await client.getInstance(ctx, zone, instance), project);
   }
 
@@ -698,12 +717,23 @@ export class GceProvider implements CloudProvider {
     const ctx = this.ctx(credentials);
     const client = this.client(credentials);
     // Resolved only once the VM is gone: the host is forgotten as soon as this returns.
-    const done = await this.finish(
-      client,
-      ctx,
-      zone,
-      await client.deleteInstance(ctx, zone, instance)
-    );
+    const operation = await client.deleteInstance(ctx, zone, instance);
+    let done: GceOperation;
+    try {
+      done = await this.finish(client, ctx, zone, operation);
+    } catch (error) {
+      // An operation that can't be found says nothing about the VM: only the VM itself can.
+      if (!(error instanceof GceApiError) || error.kind !== "not-found") throw error;
+      const gone = await client.getInstance(ctx, zone, instance).then(
+        () => false,
+        (lookup: unknown) => {
+          if (lookup instanceof GceApiError && lookup.kind === "not-found") return true;
+          throw lookup;
+        }
+      );
+      if (gone) return;
+      throw new GceApiError("server", "Compute Engine lost track of the delete", null, null);
+    }
     if (done.status !== "DONE") {
       throw new GceApiError("server", "Compute Engine is still deleting the machine", null, null);
     }
@@ -717,6 +747,23 @@ export class GceProvider implements CloudProvider {
     const { zone, instance } = parseResourceId(resourceId, project);
     const ctx = this.ctx(credentials);
     const client = this.client(credentials);
+    try {
+      return await this.waitForHostKey(client, ctx, zone, instance);
+    } catch (error) {
+      // Throttled reads are a wait like any other: the link tries again later.
+      if (error instanceof GceApiError && error.kind === "rate-limited") {
+        throw new GceApiError("host-keys-pending", "Google Cloud asked to slow down", null, null);
+      }
+      throw error;
+    }
+  }
+
+  private async waitForHostKey(
+    client: GceClient,
+    ctx: GceRequestContext,
+    zone: string,
+    instance: string
+  ): Promise<ProviderSshAccess> {
     const deadline = this.now() + HOST_KEY_WAIT_MS;
     for (;;) {
       const current = await client.getInstance(ctx, zone, instance);

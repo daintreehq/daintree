@@ -53,6 +53,7 @@ interface FakeInstance {
   status: string;
   labels: Record<string, string>;
   scheduling: Record<string, unknown>;
+  machineType: string;
   natIP: string | null;
   hostKeysPublished: boolean;
   body: Record<string, unknown>;
@@ -63,6 +64,8 @@ interface FakeRequest {
   path: string;
   query: URLSearchParams;
   body: unknown;
+  /** Whether anything at all was sent as the body. */
+  sentBody: boolean;
 }
 
 /** A stand-in for Google's token endpoint and the Compute Engine calls the provider makes. */
@@ -83,7 +86,10 @@ function fakeGoogle() {
     guestReads: 0,
     failWaitWith: null as Error | null,
     nextId: 0n,
+    /** Answers taken in order by the next requests whose path matches, before the fake's own. */
+    script: [] as { path: RegExp; status: number; reason?: string; error?: Error }[],
   };
+  const onDone = new Map<string, () => void>();
   let opCounter = 0;
   const json = (status: number, body: unknown) =>
     new Response(JSON.stringify(body), {
@@ -99,7 +105,7 @@ function fakeGoogle() {
     name: instance.name,
     zone: `${API}/projects/${PROJECT}/zones/${instance.zone}`,
     status: instance.status,
-    machineType: `${API}/projects/${PROJECT}/zones/${instance.zone}/machineTypes/e2-standard-2`,
+    machineType: `${API}/projects/${PROJECT}/zones/${instance.zone}/machineTypes/${instance.machineType}`,
     labels: instance.labels,
     scheduling: instance.scheduling,
     creationTimestamp: "2026-11-18T01:00:00.000-07:00",
@@ -118,7 +124,12 @@ function fakeGoogle() {
       },
     ],
   });
-  const operation = (zone: string, target: string, extra: Record<string, unknown> = {}) => {
+  const operation = (
+    zone: string,
+    target: string,
+    extra: Record<string, unknown> = {},
+    done?: () => void
+  ) => {
     const op = {
       name: `operation-${++opCounter}`,
       status: "RUNNING",
@@ -128,6 +139,7 @@ function fakeGoogle() {
       ...extra,
     };
     operations.set(op.name, op);
+    if (done) onDone.set(op.name, done);
     return op;
   };
   const opView = (op: Record<string, unknown>) => {
@@ -149,7 +161,14 @@ function fakeGoogle() {
       path: url.pathname,
       query: url.searchParams,
       body: parsedBody,
+      sentBody: init?.body !== undefined && init?.body !== null,
     });
+    const scripted = state.script.findIndex((entry) => entry.path.test(url.pathname));
+    if (scripted >= 0) {
+      const [entry] = state.script.splice(scripted, 1);
+      if (entry!.error) throw entry!.error;
+      return apiError(entry!.status, `scripted ${entry!.status}`, entry!.reason);
+    }
     if (url.href === TOKEN_URL) {
       if (state.tokenError) {
         return json(state.tokenError.status, {
@@ -243,6 +262,13 @@ function fakeGoogle() {
                 region: `${API}/projects/p/regions/europe-west1`,
                 ipCidrRange: "10.132.0.0/20",
               },
+              {
+                name: "legacy",
+                network: `${API}/projects/p/global/networks/corp`,
+                region: `${API}/projects/p/regions/europe-west1`,
+                ipCidrRange: "10.9.0.0/20",
+                purpose: "PRIVATE_RFC_1918",
+              },
             ],
           },
           "regions/asia-east1": { warning: { code: "NO_RESULTS_ON_PAGE" } },
@@ -271,14 +297,17 @@ function fakeGoogle() {
       const op = operations.get(opMatch[1]!);
       if (!op) return apiError(404, "operation not found", "notFound");
       op.waits = Number(op.waits) + 1;
-      if (Number(op.waits) >= state.waitsBeforeDone) op.status = "DONE";
+      if (op.status !== "DONE" && Number(op.waits) >= state.waitsBeforeDone) {
+        op.status = "DONE";
+        onDone.get(String(op.name))?.();
+      }
       return json(200, opView(op));
     }
     if (zoneRest === "/instances" && init?.method === "POST") {
       const requestId = url.searchParams.get("requestId") ?? "";
       const replay = byRequestId.get(requestId);
       if (replay) return json(200, opView(replay));
-      const sent = parsedBody as Record<string, unknown>;
+      const sent = parsedBody as Record<string, any>;
       const failure = state.insertFailure;
       const id = (BigInt(BIG_ID) + state.nextId++).toString();
       if (!failure) {
@@ -289,7 +318,9 @@ function fakeGoogle() {
           status: "RUNNING",
           labels: (sent.labels as Record<string, string>) ?? {},
           scheduling: (sent.scheduling as Record<string, unknown>) ?? {},
-          natIP: "203.0.113.20",
+          machineType: String(sent.machineType).split("/").pop()!,
+          // An external address only when the create asked for one.
+          natIP: sent.networkInterfaces?.[0]?.accessConfigs?.length ? "203.0.113.20" : null,
           hostKeysPublished: false,
           body: sent,
         });
@@ -315,8 +346,11 @@ function fakeGoogle() {
     if (!instance) return apiError(404, "The resource was not found", "notFound");
     const action = instanceMatch[2];
     if (!action && init?.method === "DELETE") {
-      instances.delete(instance.id);
-      return json(200, opView(operation(zone!, instance.id)));
+      instance.status = "STOPPING";
+      return json(
+        200,
+        opView(operation(zone!, instance.id, {}, () => instances.delete(instance.id)))
+      );
     }
     if (!action) return json(200, view(instance));
     if (action === "/getGuestAttributes") {
@@ -325,28 +359,35 @@ function fakeGoogle() {
         instance.hostKeysPublished = true;
       }
       if (!instance.hostKeysPublished) return apiError(404, "The resource was not found");
+      // Only the namespace asked for; an unrelated one listed first must never be what's pinned.
+      if (url.searchParams.get("queryPath") !== "hostkeys/") {
+        return apiError(404, "The resource was not found");
+      }
       return json(200, {
         queryPath: "hostkeys/",
         queryValue: {
           items: [
+            {
+              namespace: "other",
+              key: "ssh-ed25519",
+              value: Buffer.alloc(51, 1).toString("base64"),
+            },
             {
               namespace: "hostkeys",
               key: "ssh-rsa",
               value: Buffer.alloc(260, 9).toString("base64"),
             },
             { namespace: "hostkeys", key: "ssh-ed25519", value: HOST_KEY_BLOB },
-            {
-              namespace: "other",
-              key: "ssh-ed25519",
-              value: Buffer.alloc(51, 1).toString("base64"),
-            },
           ],
         },
       });
     }
     if (action === "/stop") {
       instance.status = "STOPPING";
-      return json(200, opView(operation(zone!, instance.id)));
+      return json(
+        200,
+        opView(operation(zone!, instance.id, {}, () => (instance.status = "TERMINATED")))
+      );
     }
     if (action === "/start" || action === "/resume") {
       instance.status = "RUNNING";
@@ -495,18 +536,13 @@ describe("service-account keys", () => {
 });
 
 describe("GceProvider", () => {
-  it("registers as a built-in provider", () => {
+  it("passes the registry's checks of what it declares", () => {
     const google = fakeGoogle();
     const registry = new CloudProviderRegistry();
     expect(() =>
       registry.register(google.provider, { owner: { kind: "built-in" }, apiUrl: API })
     ).not.toThrow();
-    const info = google.provider.info("darwin");
-    expect(info.capabilities.provisioning.sshKey).toBe("at-create");
-    expect(info.capabilities.lifetime).toEqual({
-      kind: "fixed-at-create",
-      canChangeWhileStopped: true,
-    });
+    expect(google.provider.info("darwin").unsupportedReason).toBeNull();
     expect(google.provider.info("win32").unsupportedReason).not.toBeNull();
   });
 
@@ -574,25 +610,22 @@ describe("GceProvider", () => {
     ]);
     expect(zones.defaultId).toBe("us-central1-a");
     const subnets = catalog.provisioning!.network!.choices;
+    // Default network first, then by name; a proxy-only subnet is never offered, a legacy-purpose one is.
     expect(subnets.map((subnet) => [subnet.id, subnet.locations])).toEqual([
       ["regions/europe-west1/subnetworks/default", ["europe-west1-b"]],
       ["regions/us-central1/subnetworks/default", ["us-central1-a", "us-central1-b"]],
       ["regions/us-central1/subnetworks/build", ["us-central1-a", "us-central1-b"]],
+      ["regions/europe-west1/subnetworks/legacy", ["europe-west1-b"]],
     ]);
-    expect(catalog.provisioning!.image!.choices.every((image) => image.locations === null)).toBe(
-      true
-    );
-    expect(catalog.machineTypes.map((type) => [type.id, type.vcpu, type.memoryGB])).toEqual([
-      ["e2-standard-2", 2, 8],
-      ["e2-standard-4", 4, 16],
-      ["e2-standard-8", 8, 32],
-    ]);
+    const images = catalog.provisioning!.image!;
+    expect(images.choices.find((image) => image.id === images.defaultId)?.available).toBe(true);
+    expect(images.choices.every((image) => image.locations === null)).toBe(true);
+    // Every size offered is one the zones listed: the filter asks for exactly those.
     const typesRequest = google.requests.find((request) =>
       request.path.endsWith("/aggregated/machineTypes")
     );
-    expect(typesRequest!.query.get("filter")).toBe(
-      'name eq "(e2-standard-2|e2-standard-4|e2-standard-8)"'
-    );
+    const pattern = /^name eq "\((.+)\)"$/.exec(typesRequest!.query.get("filter") ?? "");
+    expect(pattern?.[1]?.split("|")).toEqual(catalog.machineTypes.map((type) => type.id));
   });
 
   it("creates a VM with Daintree's key, guest attributes and a runtime limit", async () => {
@@ -617,11 +650,17 @@ describe("GceProvider", () => {
       instanceTerminationAction: "STOP",
     });
     expect(body.networkInterfaces[0].subnetwork).toBe("regions/us-central1/subnetworks/default");
+    // Direct SSH needs an external address, asked for with the create.
+    expect(body.networkInterfaces[0].accessConfigs).toEqual([
+      expect.objectContaining({ type: "ONE_TO_ONE_NAT" }),
+    ]);
     expect(body.disks[0].initializeParams.sourceImage).toBe(CREATE.provisioning.image);
     expect(body.labels).toEqual(CREATE.labels);
     expect(JSON.stringify(body)).not.toContain("PRIVATE KEY");
     expect(resource.resourceId).toBe(`projects/${PROJECT}/zones/us-central1-a/instances/${BIG_ID}`);
     expect(resource.machine).toBe("running");
+    expect(resource.machineType).toBe("e2-standard-4");
+    expect(resource.vcpu).toBe(4);
     expect(resource.lifetimeSeconds).toBe(7200);
     expect(resource.autoStopAt).toBe("2026-11-18T03:00:10.000-07:00");
   });
@@ -676,6 +715,34 @@ describe("GceProvider", () => {
       .create(google.credentials(), CREATE)
       .catch((e: unknown) => e);
     expect(google.provider.describeError(error).code).toBe("capacity");
+  });
+
+  it("calls an unfamiliar failure of a create Google took an unknown outcome, whatever its status", async () => {
+    const google = fakeGoogle();
+    google.state.insertFailure = {
+      code: "SOMETHING_GOOGLE_ADDED_LATER",
+      message: "Something new went wrong",
+      status: 403,
+    };
+    const error = await google.provider
+      .create(google.credentials(), CREATE)
+      .catch((e: unknown) => e);
+    expect(google.provider.describeError(error).code).toBe("outcome-unknown");
+  });
+
+  it("calls a refused resend after a lost insert an unknown outcome, never a refusal", async () => {
+    const google = fakeGoogle();
+    google.state.script.push(
+      { path: /\/instances$/, status: 0, error: new TypeError("fetch failed") },
+      { path: /\/instances$/, status: 403, reason: "forbidden" }
+    );
+    const error = await google.provider
+      .create(google.credentials(), CREATE)
+      .catch((e: unknown) => e);
+    expect(google.provider.describeError(error).code).toBe("outcome-unknown");
+    const sent = google.requests.filter((request) => request.path.endsWith("/instances"));
+    expect(sent).toHaveLength(2);
+    expect(new Set(sent.map((request) => request.query.get("requestId"))).size).toBe(1);
   });
 
   it("calls a create Google took but couldn't be followed up an unknown outcome", async () => {
@@ -751,6 +818,27 @@ describe("GceProvider", () => {
     expect(started?.lifetimeSeconds).toBeNull();
   });
 
+  it("disarms a deadline set elsewhere before starting a machine meant to run until stopped", async () => {
+    const google = fakeGoogle();
+    const created = await google.provider.create(google.credentials(), {
+      ...CREATE,
+      lifetimeSeconds: null,
+    });
+    const vm = google.instances.get(BIG_ID)!;
+    vm.status = "TERMINATED";
+    vm.scheduling = {
+      terminationTime: "2026-11-19T00:00:00Z",
+      instanceTerminationAction: "DELETE",
+    };
+    await google.provider.start(google.credentials(), created.resourceId, {
+      lifetimeSeconds: null,
+    });
+    const set = google.requests.find((request) => request.path.endsWith("/setScheduling"))!;
+    expect(set.body).toMatchObject({ terminationTime: null, instanceTerminationAction: null });
+    expect(vm.scheduling).toEqual({});
+    expect(vm.status).toBe("RUNNING");
+  });
+
   it("starts without touching the limit when it is unchanged or not given", async () => {
     const google = fakeGoogle();
     const created = await google.provider.create(google.credentials(), CREATE);
@@ -761,21 +849,48 @@ describe("GceProvider", () => {
     google.instances.get(BIG_ID)!.status = "TERMINATED";
     await google.provider.start(google.credentials(), created.resourceId, {});
     expect(google.requests.some((request) => request.path.endsWith("/setScheduling"))).toBe(false);
+    // Start sends no body at all, as Compute Engine asks.
+    const starts = google.requests.filter((request) => request.path.endsWith("/start"));
+    expect(starts.length).toBeGreaterThan(0);
+    expect(starts.every((request) => !request.sentBody)).toBe(true);
   });
 
-  it("stops normally and reports the machine stopping", async () => {
+  it("follows a stop to its end", async () => {
     const google = fakeGoogle();
     const created = await google.provider.create(google.credentials(), CREATE);
     const stopped = await google.provider.stop(google.credentials(), created.resourceId);
-    expect(stopped?.machine).toBe("stopping");
+    expect(stopped?.machine).toBe("stopped");
+    expect(google.requests.find((request) => request.path.endsWith("/stop"))!.sentBody).toBe(false);
   });
 
   it("deletes only once Compute Engine has finished", async () => {
     const google = fakeGoogle();
     const created = await google.provider.create(google.credentials(), CREATE);
+    google.state.waitsBeforeDone = 3;
     await google.provider.delete(google.credentials(), created.resourceId);
     expect(google.instances.size).toBe(0);
-    expect(google.requests.at(-1)!.path).toMatch(/\/operations\/operation-\d+\/wait$/);
+    const deleteWaits = google.requests.filter(
+      (request) =>
+        /\/operations\/operation-\d+\/wait$/.test(request.path) &&
+        request.path.includes("operation-2/")
+    );
+    expect(deleteWaits).toHaveLength(3);
+  });
+
+  it("never reads a lost delete operation as the machine gone", async () => {
+    const google = fakeGoogle();
+    const created = await google.provider.create(google.credentials(), CREATE);
+    google.state.script.push({
+      path: /\/operations\/operation-2\/wait$/,
+      status: 404,
+      reason: "notFound",
+    });
+    const error = await google.provider
+      .delete(google.credentials(), created.resourceId)
+      .catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(GceApiError);
+    expect(google.provider.describeError(error).code).not.toBe("not-found");
+    expect(google.instances.size).toBe(1);
   });
 
   it("pins the strongest host key the guest publishes, once it has", async () => {
@@ -801,6 +916,41 @@ describe("GceProvider", () => {
     expect(google.provider.describeError(error).code).toBe("provider-unreachable");
   });
 
+  it("waits through throttled host-key reads instead of giving up on the machine", async () => {
+    const google = fakeGoogle();
+    const created = await google.provider.create(google.credentials(), CREATE);
+    for (let i = 0; i < 3; i++) {
+      google.state.script.push({
+        path: /\/getGuestAttributes$/,
+        status: 429,
+        reason: "rateLimitExceeded",
+      });
+    }
+    const error = await google.provider
+      .sshAccess(google.credentials(), created.resourceId)
+      .catch((err: unknown) => err);
+    expect(google.provider.describeError(error).code).toBe("provider-unreachable");
+  });
+
+  it("gives a kept token refused late in the retries its one fresh try", async () => {
+    const google = fakeGoogle();
+    const created = await google.provider.create(google.credentials(), CREATE);
+    const exchanges = () => google.requests.filter((request) => request.path === "/token").length;
+    const before = exchanges();
+    const instancePath = /\/instances\/\d+$/;
+    google.state.script.push(
+      { path: instancePath, status: 503 },
+      { path: instancePath, status: 503 },
+      { path: instancePath, status: 401 }
+    );
+    await expect(
+      google.provider.inspect(google.credentials(), created.resourceId)
+    ).resolves.toMatchObject({
+      machine: "running",
+    });
+    expect(exchanges()).toBe(before + 1);
+  });
+
   it("refuses a machine with no external address", async () => {
     const google = fakeGoogle();
     const created = await google.provider.create(google.credentials(), CREATE);
@@ -822,11 +972,15 @@ describe("gceMachineState", () => {
 });
 
 describe("gceInstanceName", () => {
-  it("makes a valid, stable name from any display name", () => {
+  it("makes a valid name from any display name, apart for each create", () => {
     const key = "3f2b8c1a-1111-4222-8333-444455556666";
+    const other = "9a8b7c6d-1111-4222-8333-444455556666";
+    const valid = /^[a-z](?:[-a-z0-9]{0,61}[a-z0-9])?$/;
     expect(gceInstanceName("Build host", key)).toBe("build-host-3f2b8c1a");
     expect(gceInstanceName("42 Ünïcode!", key)).toBe("dt-42-unicode-3f2b8c1a");
+    expect(gceInstanceName("x".repeat(100), key)).toMatch(valid);
     expect(gceInstanceName("x".repeat(100), key)).toHaveLength(63);
-    expect(gceInstanceName("Build host", key)).toBe(gceInstanceName("Build host", key));
+    expect(gceInstanceName("Build host", other)).toMatch(valid);
+    expect(gceInstanceName("Build host", other)).not.toBe(gceInstanceName("Build host", key));
   });
 });

@@ -348,6 +348,13 @@ export function ConnectCloudAccountDialog({
       ? "Kept in this device's keychain. Daintree never shows it again or copies it to a machine"
       : "Kept in this device's keychain. Daintree never shows them again or copies them to a machine";
 
+  // What main names the account when this is left blank: the sign-in for a personal scope, else the scope.
+  const chosenScope = checked?.scopes.find((choice) => choice.scope.id === scopeId)?.scope ?? null;
+  const defaultName =
+    chosenScope && chosenScope.kind !== "personal"
+      ? chosenScope.name
+      : (checked?.identity ?? provider.name);
+
   return (
     <AppDialog
       isOpen={isOpen}
@@ -468,7 +475,7 @@ export function ConnectCloudAccountDialog({
                 <Input
                   value={name}
                   disabled={busy !== null}
-                  placeholder={checked.identity ?? provider.name}
+                  placeholder={defaultName}
                   onChange={(e) => setName(e.target.value)}
                 />
                 <FieldDescription>

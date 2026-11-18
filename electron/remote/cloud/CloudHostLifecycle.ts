@@ -1147,6 +1147,14 @@ export class CloudHostLifecycle {
     binding.resourceId = resource.resourceId;
     binding.lifetimeSeconds = resource.lifetimeSeconds;
     binding.observation = observationOf(resource, this.now());
+    // A provider replaced or redeclared while the machine was inspected: nobody checked this one can be reached.
+    if (
+      !this.stillRegistered(account.providerId, provider) ||
+      provider !== owner ||
+      sshKeyTiming(provider) === "at-create"
+    ) {
+      throw invalid(`${nameOf(owner)} changed while the machine was being added. Try again.`);
+    }
     // Another import of the same machine may have finished while it was inspected.
     if (
       this.deps.store

@@ -112,6 +112,7 @@ export function initCloudHosts(params: {
       unregister();
       cloudHosts.dispose();
       gce.dispose();
+      for (const endpoints of gceEndpoints.values()) endpoints.tokens.dispose();
     },
   };
 }
