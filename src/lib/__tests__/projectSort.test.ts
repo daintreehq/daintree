@@ -161,7 +161,8 @@ describe("shared collator comparators", () => {
       expect(compareProjectNames("alpha", "ALPHA")).toBe(0);
       // Ids are assigned against the strict name order, so a caller that
       // compared names strictly would seat these the other way round.
-      const [strictFirst, strictSecond] = ["alpha", "ALPHA"].sort(compareProjectStrict);
+      const names: [string, string] = ["alpha", "ALPHA"];
+      const [strictFirst, strictSecond] = names.sort(compareProjectStrict);
       const projects: SortableProject[] = [
         { id: "a", name: strictSecond, lastOpened: 1, frecencyScore: 1 },
         { id: "b", name: strictFirst, lastOpened: 1, frecencyScore: 1 },
