@@ -183,5 +183,19 @@ describe("catalog splits for a window attached to a host (#17434)", () => {
     ]);
     await pluginInstallFromCatalog(update.input);
     expect(update.remote).toHaveBeenCalledWith();
+
+    // An update that names no catalog at all is refused rather than read as Daintree's.
+    const malformed = call([
+      {
+        pluginId: "acme.listed",
+        version: "1.0.1",
+        sourceUrl: "http://plugins.example.org/catalog.json",
+        intent: "update",
+      },
+    ]);
+    expect(await pluginInstallFromCatalog(malformed.input)).toMatchObject({
+      errors: [{ code: "catalog_not_listed" }],
+    });
+    expect(malformed.remote).not.toHaveBeenCalled();
   });
 });

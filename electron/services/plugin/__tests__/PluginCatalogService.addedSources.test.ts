@@ -30,7 +30,7 @@ import {
   PluginCatalogService,
   getPluginCatalogService,
   resetPluginCatalogSourceServicesForTest,
-  sweepPluginCatalogCaches,
+  settlePluginCatalogSources,
 } from "../PluginCatalogService.js";
 import { createManualRedirectFetch } from "../../../utils/netManualRedirectFetch.js";
 import {
@@ -171,7 +171,7 @@ describe("PluginCatalogService for a catalog the person added (#17434)", () => {
     expect(getPluginCatalogService(OTHER)).not.toBe(added);
   });
 
-  it("keeps the most recently used idle catalogs, and drops the oldest with its cache", async () => {
+  it("keeps the most recently used idle catalogs, and leaves a dropped one's cache for its next client", async () => {
     const urls = Array.from(
       { length: PLUGIN_CATALOG_SOURCES_KEPT + 1 },
       (_, i) => `https://c${i}.example.com/catalog.json`
@@ -188,11 +188,12 @@ describe("PluginCatalogService for a catalog the person added (#17434)", () => {
 
     getPluginCatalogService(urls[urls.length - 1]);
 
-    await vi.waitFor(async () =>
-      expect(await fs.readdir(dir)).toEqual([path.basename(cacheFile(tmpDir, urls[0]!))])
-    );
     expect(getPluginCatalogService(urls[0])).toBe(first);
     expect(getPluginCatalogService(urls[1])).not.toBe(second);
+    // Only the folder sweep removes files, so the client built again finds its own.
+    expect((await fs.readdir(dir)).sort()).toEqual(
+      [cacheFile(tmpDir, urls[0]!), cacheFile(tmpDir, urls[1]!)].map((f) => path.basename(f)).sort()
+    );
   });
 
   it("never drops a catalog that is still reading, so no two clients write one cache", async () => {
@@ -224,7 +225,7 @@ describe("PluginCatalogService for a catalog the person added (#17434)", () => {
     await fs.utimes(cacheFile(tmpDir, SOURCE), new Date(T0 - 10_000), new Date(T0 - 10_000));
     getPluginCatalogService(SOURCE);
 
-    await sweepPluginCatalogCaches();
+    await settlePluginCatalogSources();
 
     const left = new Set(await fs.readdir(dir));
     expect(left.size).toBe(PLUGIN_CATALOG_SOURCES_KEPT);
@@ -232,5 +233,35 @@ describe("PluginCatalogService for a catalog the person added (#17434)", () => {
     expect(left.has(path.basename(cacheFile(tmpDir, SOURCE)))).toBe(true);
     expect(left.has(path.basename(cacheFile(tmpDir, old[0]!)))).toBe(false);
     expect(left.has(path.basename(cacheFile(tmpDir, old[old.length - 1]!)))).toBe(true);
+  });
+
+  it("lets go of clients past the limit once reads that kept them busy have settled", async () => {
+    const urls = Array.from(
+      { length: PLUGIN_CATALOG_SOURCES_KEPT + 2 },
+      (_, i) => `https://busy${i}.example.com/catalog.json`
+    );
+    const clients = urls.map((url) => getPluginCatalogService(url));
+    const reads = clients.map((client) => client.getCatalog("browse"));
+    await Promise.all(reads);
+
+    await settlePluginCatalogSources(null);
+
+    // The two least recently used went; the rest are the same clients. The
+    // kept ones are checked first, since asking for a dropped one builds it again.
+    const kept = urls.slice(2).every((url, i) => getPluginCatalogService(url) === clients[i + 2]);
+    expect(kept).toBe(true);
+    expect(getPluginCatalogService(urls[0])).not.toBe(clients[0]);
+  });
+
+  it("holds a background pass's client from opening its batch until its read lands", async () => {
+    const held = getPluginCatalogService(SOURCE);
+    const batch = held.openUpdateBatch();
+    expect(held.isIdle()).toBe(false);
+    for (let i = 0; i < PLUGIN_CATALOG_SOURCES_KEPT; i++) {
+      getPluginCatalogService(`https://c${i}.example.com/catalog.json`);
+    }
+    expect(getPluginCatalogService(SOURCE)).toBe(held);
+    await batch.lookupUpdate("daintreehq.continue-session", "0.1.1");
+    expect(held.isIdle()).toBe(true);
   });
 });

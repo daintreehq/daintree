@@ -95,8 +95,19 @@ export const pluginPreviewFromCatalog: HybridSplit = async (call) => {
 
 export const pluginInstallFromCatalog: HybridSplit = async (call) => {
   // An update names the catalog its installed copy came from, which the host
-  // holds it to; that catalog needn't still be on this machine's list.
-  if ((call.args[0] as { intent?: unknown } | null | undefined)?.intent === "update") {
+  // holds it to; that catalog needn't still be on this machine's list. It is
+  // still refused here when it names no catalog at all, which an older host
+  // would read as Daintree's.
+  const request = call.args[0] as { intent?: unknown; sourceUrl?: unknown } | null | undefined;
+  if (request?.intent === "update") {
+    if (request.sourceUrl === undefined) return call.remote();
+    const { catalogSourceOf } = await loadSourceUrl();
+    if (catalogSourceOf(request.sourceUrl) === null) {
+      return refusal(
+        "catalog_not_listed",
+        "The update names a catalog address Daintree can't read, so nothing was installed."
+      );
+    }
     return call.remote();
   }
   const checked = await checkNamedCatalog(call.args[0]);

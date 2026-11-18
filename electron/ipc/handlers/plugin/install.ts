@@ -847,7 +847,7 @@ export async function handleBrowseCatalog(
   ctx: IpcContext,
   request?: PluginCatalogBrowseRequest
 ): Promise<PluginCatalogsBrowseResult> {
-  const [{ getPluginCatalogService, sweepPluginCatalogCaches }, sourceUrls] = await Promise.all([
+  const [{ getPluginCatalogService, settlePluginCatalogSources }, sourceUrls] = await Promise.all([
     import("../../../services/plugin/PluginCatalogService.js"),
     browseSourceUrls(catalogAuthority(ctx), request),
   ]);
@@ -861,7 +861,7 @@ export async function handleBrowseCatalog(
     return sourceUrl === undefined ? { result } : { sourceUrl, result };
   };
   const [own, added] = await Promise.all([read(undefined), Promise.all(sourceUrls.map(read))]);
-  if (sourceUrls.length > 0) await sweepPluginCatalogCaches();
+  if (sourceUrls.length > 0) await settlePluginCatalogSources();
   // Daintree's own catalog keeps the shape it always had, so an older
   // Daintree reading this answer still lists it; added ones ride beside it.
   return { ...own.result, added };

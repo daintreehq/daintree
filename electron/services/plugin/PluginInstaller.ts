@@ -714,10 +714,15 @@ export class PluginInstaller {
       // The same for a catalog update reviewed before another window installed
       // a newer release from that catalog (#17434): it never moves back.
       if (opts?.source === "catalog" && opts.catalogUpdate === true) {
-        const installedVersion = this.installedVersion(pluginId, installedManifest);
+        // The copy on disk first; an unreadable or invalid manifest falls back
+        // to the release the record names, then to the loaded copy's.
+        const installedVersion = [
+          installedManifest?.version,
+          this.records.getInstalledRecord(pluginId)?.catalog?.version,
+          this.deps.getInstalledVersion(pluginId),
+        ].find((v): v is string => typeof v === "string" && semver.valid(v) !== null);
         if (
-          installedVersion !== null &&
-          semver.valid(installedVersion) !== null &&
+          installedVersion !== undefined &&
           semver.valid(manifest.version) !== null &&
           !semver.gt(manifest.version, installedVersion)
         ) {

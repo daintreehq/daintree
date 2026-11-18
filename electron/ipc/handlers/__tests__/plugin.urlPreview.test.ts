@@ -1466,6 +1466,13 @@ describe("a catalog the person added (#17434)", () => {
       })
     ).toEqual({ status: "installed", pluginId: "acme.listed" });
 
+    // An installed manifest whose version can't be read still doesn't let it through.
+    const manifestPath = path.join(pluginsRoot, "acme.listed", "plugin.json");
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf-8")) as Record<
+      string,
+      unknown
+    >;
+    await fs.writeFile(manifestPath, JSON.stringify({ ...manifest, version: "not a version" }));
     const result = await handleInstallFromCatalog({
       pluginId: "acme.listed",
       version: "1.0.1",

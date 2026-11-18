@@ -108,7 +108,7 @@ export function installedCatalogOf(
   const raw: unknown = record.catalog.sourceUrl;
   if (raw === undefined) return {};
   const sourceUrl = catalogSourceOf(raw);
-  if (sourceUrl === null) return { sourceUrl: `invalid:${String(raw)}` };
+  if (sourceUrl === null) return { sourceUrl: "invalid:" };
   return sourceUrl === undefined ? {} : { sourceUrl };
 }
 

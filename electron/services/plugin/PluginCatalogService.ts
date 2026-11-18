@@ -156,6 +156,7 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
   private diskWrites: Promise<void> = Promise.resolve();
   private pendingWrites = 0;
   private activeReads = 0;
+  private batchHolds = 0;
   private cachePath: Promise<string | null> | null = null;
 
   constructor(private readonly deps: PluginCatalogDeps = {}) {}
@@ -166,12 +167,12 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
    * one whose write could still land over its newer copy.
    */
   isIdle(): boolean {
-    return this.activeReads === 0 && this.inFlight === null && this.pendingWrites === 0;
-  }
-
-  /** This client's cache file, for dropping it along with the client. */
-  cacheFile(): Promise<string | null> {
-    return this.resolveCachePath();
+    return (
+      this.activeReads === 0 &&
+      this.inFlight === null &&
+      this.pendingWrites === 0 &&
+      this.batchHolds === 0
+    );
   }
 
   async getCatalog(mode: PluginCatalogMode): Promise<PluginCatalogResult> {
@@ -268,13 +269,24 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
    */
   openUpdateBatch(): PluginCatalogUpdateSource {
     let read: Promise<IndexedCatalog | PluginCatalogBlocked> | null = null;
+    // Held from opening until its one read settles, so the client can't be
+    // let go in between and rebuilt beside the one this batch reads (#17434).
+    this.batchHolds += 1;
+    let held = true;
+    const release = () => {
+      if (!held) return;
+      held = false;
+      this.batchHolds -= 1;
+    };
     return {
       lookupUpdate: async (id, installedVersion) => {
-        read ??= this.getCatalog("install").then((result) =>
-          result.status === "available"
-            ? { byId: releasesById(result.catalog.entries), fetchedAt: result.fetchedAt }
-            : result
-        );
+        read ??= this.getCatalog("install")
+          .then((result): IndexedCatalog | PluginCatalogBlocked =>
+            result.status === "available"
+              ? { byId: releasesById(result.catalog.entries), fetchedAt: result.fetchedAt }
+              : result
+          )
+          .finally(release);
         const catalog = await read;
         if ("status" in catalog) return catalog;
         return updateFor(catalog.byId.get(id) ?? [], installedVersion, catalog.fetchedAt);
@@ -522,13 +534,23 @@ const addedSourceServices = new Map<string, PluginCatalogService>();
  */
 export const PLUGIN_CATALOG_SOURCES_KEPT = 16;
 
+/** Let go of the least recently used idle clients past the limit, never `keep`. */
+function trimAddedSourceServices(keep?: string): void {
+  for (const [url, candidate] of addedSourceServices) {
+    if (addedSourceServices.size <= PLUGIN_CATALOG_SOURCES_KEPT) break;
+    if (url !== keep && candidate.isIdle()) addedSourceServices.delete(url);
+  }
+}
+
 /**
  * The process-wide client for one catalog, built by its first caller rather
  * than at startup: Daintree's own when `sourceUrl` is omitted, otherwise the
  * added catalog at that canonical URL (#17434). Callers pass a URL already
  * through `pluginCatalogSourceUrl`, so one catalog never gets two clients.
  * Past {@link PLUGIN_CATALOG_SOURCES_KEPT} added catalogs, the least recently
- * used idle one is let go with its cache file; an install from it still checks
+ * used idle one is let go; its cache file stays until
+ * {@link settlePluginCatalogSources} sweeps the folder, so a client built
+ * again for it still finds it. An install from a dropped catalog still checks
  * it for updates, since those reads always fetch afresh.
  */
 export function getPluginCatalogService(sourceUrl?: string): PluginCatalogService {
@@ -543,25 +565,20 @@ export function getPluginCatalogService(sourceUrl?: string): PluginCatalogServic
     service = new PluginCatalogService({ sourceUrl });
   }
   addedSourceServices.set(sourceUrl, service);
-  for (const [url, candidate] of addedSourceServices) {
-    if (addedSourceServices.size <= PLUGIN_CATALOG_SOURCES_KEPT) break;
-    if (url === sourceUrl || !candidate.isIdle()) continue;
-    addedSourceServices.delete(url);
-    void candidate
-      .cacheFile()
-      .then((file) => (file ? fs.rm(file, { force: true }) : undefined))
-      .catch(() => {});
-  }
+  trimAddedSourceServices(sourceUrl);
   return service;
 }
 
 /**
- * Bound the added catalogs' cache folder to {@link PLUGIN_CATALOG_SOURCES_KEPT}
- * files, dropping the oldest that no live client holds. Files outlive the
- * process, so catalogs browsed in earlier runs and never since would otherwise
- * stay on disk for good. Costs one directory read until the folder is full.
+ * After a Browse has read its catalogs: let go of idle clients past the limit
+ * (ones busy while it read are idle now), then bound the cache folder to
+ * {@link PLUGIN_CATALOG_SOURCES_KEPT} files, dropping the oldest that no live
+ * client holds. Files outlive the process, so catalogs browsed in earlier runs
+ * and never since would otherwise stay on disk for good. Liveness is checked
+ * again right before each file goes, so a client built meanwhile keeps its own.
  */
-export async function sweepPluginCatalogCaches(cacheDir?: string | null): Promise<void> {
+export async function settlePluginCatalogSources(cacheDir?: string | null): Promise<void> {
+  trimAddedSourceServices();
   const dir =
     cacheDir === undefined
       ? await loadUserDataPath().then((userData) =>
@@ -576,7 +593,8 @@ export async function sweepPluginCatalogCaches(cacheDir?: string | null): Promis
     return;
   }
   if (names.length <= PLUGIN_CATALOG_SOURCES_KEPT) return;
-  const live = new Set([...addedSourceServices.keys()].map(sourceCacheFileName));
+  const liveNames = () => new Set([...addedSourceServices.keys()].map(sourceCacheFileName));
+  const live = liveNames();
   const dated = await Promise.all(
     names
       .filter((name) => !live.has(name))
@@ -587,9 +605,11 @@ export async function sweepPluginCatalogCaches(cacheDir?: string | null): Promis
   );
   dated.sort((a, b) => b.mtime - a.mtime);
   const room = Math.max(0, PLUGIN_CATALOG_SOURCES_KEPT - live.size);
+  const stillLive = liveNames();
   await Promise.all(
     dated
       .slice(room)
+      .filter(({ name }) => !stillLive.has(name))
       .map(({ name }) => fs.rm(path.join(dir, name), { force: true }).catch(() => {}))
   );
 }
