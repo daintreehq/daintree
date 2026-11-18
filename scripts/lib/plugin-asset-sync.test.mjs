@@ -403,7 +403,7 @@ describe("watchPluginAssets", () => {
     return { watch, emit, watchers };
   }
 
-  it("mirrors manifest edits, a script rename and an asset deletion through fs.watch", async () => {
+  it("mirrors a manifest edit, a script rename and an asset deletion through fs.watch", async () => {
     const wait = { timeout: 10_000, interval: 25 };
     const { pluginSrc, pluginDest } = seedPlugin();
     const onChange = vi.fn(async () => {});
@@ -414,15 +414,12 @@ describe("watchPluginAssets", () => {
       rescanMs: NO_RESCAN,
       onChange,
     });
-    const manifestName = () => JSON.parse(read(path.join(pluginDest, "plugin.json"))).name;
 
-    // An editor's atomic save, then an in-place edit of the replacement.
-    const tmp = path.join(pluginSrc, ".plugin.json.tmp");
-    writeFile(tmp, JSON.stringify({ name: "v2" }));
-    fs.renameSync(tmp, path.join(pluginSrc, "plugin.json"));
-    await vi.waitFor(() => expect(manifestName()).toBe("v2"), wait);
-    writeFile(path.join(pluginSrc, "plugin.json"), JSON.stringify({ name: "v3" }));
-    await vi.waitFor(() => expect(manifestName()).toBe("v3"), wait);
+    writeFile(path.join(pluginSrc, "plugin.json"), JSON.stringify({ name: "v2" }));
+    await vi.waitFor(
+      () => expect(JSON.parse(read(path.join(pluginDest, "plugin.json"))).name).toBe("v2"),
+      wait
+    );
 
     fs.renameSync(path.join(pluginSrc, "bin", "old.mjs"), path.join(pluginSrc, "bin", "new.mjs"));
     fs.rmSync(path.join(pluginSrc, "view", "panel.mjs"));
@@ -441,6 +438,24 @@ describe("watchPluginAssets", () => {
       name: "demo",
       copied: expect.arrayContaining(["plugin.json"]),
     });
+  });
+
+  it("reaches an in-place edit after an atomic save, through the rescan where fs.watch misses it", async () => {
+    // Linux's recursive fs.watch keeps watching the replaced inode after an
+    // atomic save, so the second edit raises no event there.
+    const wait = { timeout: 10_000, interval: 25 };
+    const { pluginSrc, pluginDest } = seedPlugin();
+    handle = watchPluginAssets({ srcRoot: src, destRoot: dest, debounceMs: 20, rescanMs: 200 });
+    const manifestName = () => JSON.parse(read(path.join(pluginDest, "plugin.json"))).name;
+
+    const tmp = path.join(pluginSrc, ".plugin.json.tmp");
+    writeFile(tmp, JSON.stringify({ name: "v2" }));
+    fs.renameSync(tmp, path.join(pluginSrc, "plugin.json"));
+    await vi.waitFor(() => expect(manifestName()).toBe("v2"), wait);
+    writeFile(path.join(pluginSrc, "plugin.json"), JSON.stringify({ name: "v3" }));
+
+    await vi.waitFor(() => expect(manifestName()).toBe("v3"), wait);
+    expect(exists(path.join(pluginDest, ".plugin.json.tmp"))).toBe(false);
   });
 
   it("syncs a marked plugin only once the debounce settles", async () => {
