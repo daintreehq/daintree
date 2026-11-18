@@ -423,8 +423,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     title: "Sleep all projects",
     description:
       "Stop the terminals of every open project, after the user confirms a preview naming each one. The user can choose to sleep at once, or to wait until every agent is observed idle or at its prompt, optionally asking working agents to pause first. Layout, scrollback and agent sessions come back on reopen. Only available to the user.",
-    paletteDescription:
-      "Sleep every open project now, or once its agents are observed idle",
+    paletteDescription: "Sleep every open project now, or once its agents are observed idle",
     category: "project",
     kind: "command",
     danger: "confirm",

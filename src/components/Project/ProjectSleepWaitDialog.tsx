@@ -59,9 +59,7 @@ function ProjectBlock({ project }: { project: SleepWaitProject }) {
   return (
     <li data-sleep-wait-project={project.id} data-status={project.status}>
       <div className="flex items-baseline justify-between gap-3">
-        <div className="min-w-0 truncate text-sm font-medium text-text-primary">
-          {project.name}
-        </div>
+        <div className="min-w-0 truncate text-sm font-medium text-text-primary">{project.name}</div>
         <div className="shrink-0 text-xs text-text-secondary">{STATUS_LABEL[project.status]}</div>
       </div>
       {project.agents.length > 0 ? (

@@ -193,11 +193,7 @@ function calledCallbacks(source: ProjectSwitcherConfirmSource): string[] {
     .map(([key]) => key);
 }
 
-const BUSY_KEYS = [
-  "isRemovingProject",
-  "isDeletingScratch",
-  "isDeletingAllScratches",
-] as const;
+const BUSY_KEYS = ["isRemovingProject", "isDeletingScratch", "isDeletingAllScratches"] as const;
 
 const scratchTarget = { id: "s1", name: "Spike", path: "/tmp/scratches/s1" };
 
@@ -454,11 +450,7 @@ describe("cold requests with no switcher mounted", () => {
     });
 
     expect(close).toHaveBeenCalledTimes(1);
-    expect(dispatch).toHaveBeenCalledWith(
-      "project.sleep",
-      { projectId: "p1" },
-      { source: "user" }
-    );
+    expect(dispatch).toHaveBeenCalledWith("project.sleep", { projectId: "p1" }, { source: "user" });
     expect(screen.queryAllByTestId("confirm-dialog")).toHaveLength(0);
     expect(destructiveCalls()).toEqual(NOTHING_DESTROYED);
   });

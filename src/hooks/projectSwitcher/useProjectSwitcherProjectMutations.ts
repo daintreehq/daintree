@@ -219,7 +219,6 @@ export function useProjectSwitcherProjectMutations({
     }
   }, [removeConfirmProject, searchableProjects]);
 
-
   // "Locate moved project" (missing) and "Move or rename project" (healthy) both
   // open the shared relocation dialog (#11282, phase 4), superseding the old
   // picker-then-mutate `project:locate` path. The palette closes first so its

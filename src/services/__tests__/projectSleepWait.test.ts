@@ -136,12 +136,12 @@ describe("observeAgent", () => {
   });
 
   it("holds a launch-seeded idle as no reading, however old", () => {
-    expect(
-      observeAgent(agent("t", "a", { agentState: "idle", lastStateChange: SPAWNED }))
-    ).toBe("starting");
-    expect(
-      observeAgent(agent("t", "a", { agentState: "idle", lastStateChange: undefined }))
-    ).toBe("starting");
+    expect(observeAgent(agent("t", "a", { agentState: "idle", lastStateChange: SPAWNED }))).toBe(
+      "starting"
+    );
+    expect(observeAgent(agent("t", "a", { agentState: "idle", lastStateChange: undefined }))).toBe(
+      "starting"
+    );
   });
 });
 
@@ -207,7 +207,9 @@ describe("startSleepWait", () => {
   });
 
   it("holds a project whose pushed counts show a working agent the read missed", async () => {
-    useProjectStatsStore.setState({ stats: { a: stats({ activeAgentCount: 1, processCount: 1 }) } });
+    useProjectStatsStore.setState({
+      stats: { a: stats({ activeAgentCount: 1, processCount: 1 }) },
+    });
     terminals = [agent("a1", "a")];
     await startSleepWait(["a"], { pauseNote: false });
     await advance(SLEEP_WAIT_DWELL_MS * 3);
@@ -345,7 +347,11 @@ describe("pause note", () => {
     terminals = [
       agent("a1", "a", { agentState: "working" }),
       agent("a2", "a"),
-      agent("a3", "a", { agentState: "working", detectedAgentId: undefined, launchAgentId: "codex" }),
+      agent("a3", "a", {
+        agentState: "working",
+        detectedAgentId: undefined,
+        launchAgentId: "codex",
+      }),
       agent("x1", "other", { agentState: "working" }),
     ];
     await startSleepWait(["a"], { pauseNote: true });

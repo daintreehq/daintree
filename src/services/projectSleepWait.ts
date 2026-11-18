@@ -170,8 +170,7 @@ function observeProject(
   });
   const signature = own
     .map(
-      (t) =>
-        `${t.id}:${t.agentState}:${t.waitingReason}:${t.lastStateChange}:${t.agentIncarnation}`
+      (t) => `${t.id}:${t.agentState}:${t.waitingReason}:${t.lastStateChange}:${t.agentIncarnation}`
     )
     .sort()
     .join("|");

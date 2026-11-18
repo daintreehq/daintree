@@ -31,14 +31,7 @@ export interface SleepWaitAgent {
  * was slept or closed elsewhere.
  */
 export type SleepWaitProjectStatus =
-  | "waiting"
-  | "ready"
-  | "unavailable"
-  | "left-open"
-  | "gone"
-  | "sleeping"
-  | "slept"
-  | "failed";
+  "waiting" | "ready" | "unavailable" | "left-open" | "gone" | "sleeping" | "slept" | "failed";
 
 export interface SleepWaitProject {
   id: string;
