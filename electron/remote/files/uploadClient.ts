@@ -561,7 +561,7 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
     source: string,
     name: string,
     destination: TransferDestination,
-    openSource: () => Promise<TransferSource>
+    openSource: (signal: AbortSignal) => Promise<TransferSource>
   ): Promise<UploadResult> => {
     // One id is one upload: the same view asking again for the same thing
     // shares it, and anything else claiming the id is refused.
@@ -584,7 +584,15 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
       if (controller.signal.aborted) throw cancelled();
       // A queued or resumed upload goes nowhere once its view has left the host.
       requireBoundHost(webContentsId, hostId);
-      const opened = await openSource();
+      let opened: TransferSource;
+      try {
+        opened = await openSource(controller.signal);
+      } catch (error) {
+        // Preparing a source stops when the upload is cancelled, and whatever
+        // that interrupted (a read, a stat) is the cancel, not a failure.
+        if (controller.signal.aborted) throw cancelled();
+        throw error;
+      }
       try {
         if (controller.signal.aborted) throw cancelled();
         return await deps.transport.upload(hostId, opened, {
@@ -688,7 +696,7 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
         source,
         name,
         destination,
-        async () => {
+        async (signal) => {
           const stat = await fs.stat(localPath).catch(() => null);
           if (!stat) throw couldNotRead();
           if (stat.isDirectory()) {
@@ -701,7 +709,7 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
           if (!stat.isFile()) throw couldNotRead();
           if (stat.size > maxBytes) throw tooLarge(name, payload.hostId);
           try {
-            return await fileTransferSource(localPath);
+            return await fileTransferSource(localPath, signal);
           } catch {
             throw couldNotRead();
           }

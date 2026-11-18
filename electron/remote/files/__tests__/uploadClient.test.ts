@@ -10,17 +10,21 @@ vi.mock("electron", () => ({
 }));
 
 import type { FileTransferEvent } from "../../../../shared/types/ipc/fileTransfer.js";
+import { BULK_CHUNK_BYTES } from "../../link/frames.js";
 import type { TransferSource } from "../../link/transfer.js";
 import type { UploadOptions } from "../ClientUploadTransport.js";
 import { createHostUploadClient } from "../uploadClient.js";
 
 let dir: string;
+/** Undone after each test, even one that timed out: held reads let go, spies restored. */
+const cleanups: Array<() => void> = [];
 
 beforeEach(async () => {
   dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "upc-")));
 });
 
 afterEach(async () => {
+  for (const undo of cleanups.splice(0).reverse()) undo();
   await fs.rm(dir, { recursive: true, force: true });
 });
 
@@ -561,6 +565,75 @@ describe("a busy or dropped host", () => {
     await ahead;
     await expect(queued).rejects.toMatchObject({ code: "VALIDATION" });
     expect(held.running()).not.toContain("op-queued");
+  });
+
+  it("stops reading a file cancelled while it hashes, and the next upload takes its slot", async () => {
+    const { upload } = setup();
+    const uploads = createHostUploadClient({
+      transport: { upload },
+      hostForView: () => "studio-01",
+      hostLabel: (hostId) => hostId,
+      sendToView: () => {},
+      localLabel: "This Mac",
+      packDir: path.join(os.tmpdir(), "unused-folder-packs"),
+      maxConcurrentPerHost: 1,
+    });
+    const file = path.join(dir, "slow-drive.bin");
+    await fs.writeFile(file, Buffer.alloc(BULK_CHUNK_BYTES * 3, 7));
+    uploads.grantLocalSources(7, [file]);
+    // A slow drive: the first read only returns once the test lets it.
+    let reads = 0;
+    let closes = 0;
+    const order: string[] = [];
+    let finishFirstRead = () => {};
+    const firstReadHeld = new Promise<void>((resolve) => (finishFirstRead = resolve));
+    cleanups.push(() => finishFirstRead());
+    const realOpen = fs.open.bind(fs);
+    const open = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...args);
+      if (args[0] !== file) return handle;
+      const read = handle.read.bind(handle) as (...readArgs: unknown[]) => Promise<unknown>;
+      const close = handle.close.bind(handle);
+      Object.assign(handle, {
+        read: async (...readArgs: unknown[]) => {
+          reads += 1;
+          const result = await read(...readArgs);
+          if (reads === 1) await firstReadHeld;
+          return result;
+        },
+        close: async () => {
+          closes += 1;
+          await close();
+          order.push("closed op-file");
+        },
+      });
+      return handle;
+    });
+    cleanups.push(() => open.mockRestore());
+    const send = upload.getMockImplementation()!;
+    upload.mockImplementation(async (...args) => {
+      order.push(`upload ${args[2].opId}`);
+      return send(...args);
+    });
+    const hashing = uploads.uploadLocalFile(7, {
+      hostId: "studio-01",
+      localPath: file,
+      destination: inbox,
+      opId: "op-file",
+    });
+    const queued = uploads.uploadBytes(7, bytesFor("op-next"));
+    await vi.waitFor(() => expect(reads).toBe(1));
+    expect(uploads.cancel("op-file", 7)).toBe(true);
+    finishFirstRead();
+
+    await expect(hashing).rejects.toMatchObject({ code: "CANCELLED" });
+    await expect(queued).resolves.toMatchObject({
+      hostPath: "/tmp/daintree-inbox/files/x/op-next.bin",
+    });
+    expect(reads).toBe(1);
+    expect(closes).toBe(1);
+    // The slot passes on only once the cancelled upload has let go of its file.
+    expect(order).toEqual(["closed op-file", "upload op-next"]);
   });
 
   it("asks a busy host again under the same id until it takes the file", async () => {
