@@ -274,7 +274,6 @@ test.describe.serial("Cloud hosts: an AWS EC2 instance as a Remote Host", () => 
     expect(snapshot).not.toContain(FAKE_AWS_SECRET);
     const config = await fs.readFile(path.join(run.shellUserData, "config.json"), "utf8");
     expect(config).not.toContain(FAKE_AWS_SECRET);
-    await closeSettings(page);
   });
 
   test("2. creates an instance in another region and connects over ssh, its key pinned from the console", async () => {

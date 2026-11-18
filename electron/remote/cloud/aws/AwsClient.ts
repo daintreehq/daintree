@@ -51,8 +51,17 @@ export function resolveAwsApiUrl(
   }
 }
 
+/** The partitions whose endpoints, owners and sign-ins differ from AWS's standard regions. */
+const OTHER_PARTITION = /^(?:cn|us-gov|[a-z]{2}-iso[a-z]*)-/;
+
+/** A standard (commercial) AWS region: China, GovCloud and isolated regions aren't supported. */
 export function isAwsRegion(value: unknown): value is string {
-  return typeof value === "string" && value.length <= 32 && REGION.test(value);
+  return (
+    typeof value === "string" &&
+    value.length <= 32 &&
+    REGION.test(value) &&
+    !OTHER_PARTITION.test(value)
+  );
 }
 
 export function isEc2InstanceId(value: unknown): value is string {
@@ -155,7 +164,7 @@ function kindFor(status: number, code: string | null): AwsErrorKind {
   }
   if (status === 401) return "unauthorized";
   if (status === 403) return "forbidden";
-  if (status === 429 || status === 503) return "rate-limited";
+  if (status === 429) return "rate-limited";
   if (status >= 500) return "server";
   return "invalid-request";
 }
@@ -229,6 +238,14 @@ export interface Ec2SecurityGroup {
   vpcId: string | null;
   /** Whether a rule already lets TCP 22 in from everywhere, over IPv4. */
   allowsSshFromAnywhere: boolean;
+  tags: Record<string, string>;
+}
+
+export interface Ec2Subnet {
+  subnetId: string;
+  availabilityZone: string | null;
+  /** Instances launched into it get a public IPv4 address unless the launch says otherwise. */
+  mapsPublicIp: boolean;
 }
 
 export interface AwsCallerIdentity {
@@ -321,6 +338,11 @@ function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
 interface CallOptions {
   /** Safe to send again after a lost response, a 5xx or throttling. */
   retry: boolean;
+  /**
+   * It changes something: once one send's outcome is unknown, a later
+   * attempt's definite refusal doesn't prove the first did nothing.
+   */
+  mutation?: boolean;
 }
 
 /**
@@ -475,6 +497,32 @@ export class AwsClient {
         groupName: xmlText(item, "groupName") ?? "",
         vpcId: xmlText(item, "vpcId"),
         allowsSshFromAnywhere,
+        tags: xmlTags(item),
+      });
+    }
+    return out;
+  }
+
+  /** The VPC's default subnets, one per Availability Zone. */
+  async defaultSubnets(ctx: AwsRequestContext, vpcId: string): Promise<Ec2Subnet[]> {
+    const root = await this.call(
+      ctx,
+      "ec2",
+      "DescribeSubnets",
+      filterParams([
+        { name: "vpc-id", values: [vpcId] },
+        { name: "default-for-az", values: ["true"] },
+      ]),
+      { retry: true }
+    );
+    const out: Ec2Subnet[] = [];
+    for (const item of xmlItems(root, "subnetSet")) {
+      const subnetId = xmlText(item, "subnetId");
+      if (!subnetId) continue;
+      out.push({
+        subnetId,
+        availabilityZone: xmlText(item, "availabilityZone"),
+        mapsPublicIp: xmlText(item, "mapPublicIpOnLaunch") === "true",
       });
     }
     return out;
@@ -540,6 +588,8 @@ export class AwsClient {
       instanceType: string;
       clientToken: string;
       securityGroupId: string;
+      /** Null lets EC2 choose among the default subnets. */
+      subnetId: string | null;
       userData: string;
       rootDeviceName: string;
       rootVolumeGiB: number;
@@ -557,6 +607,7 @@ export class AwsClient {
         ["MaxCount", "1"],
         ["ClientToken", request.clientToken],
         ["SecurityGroupId.1", request.securityGroupId],
+        ...(request.subnetId ? ([["SubnetId", request.subnetId]] as Params) : []),
         ["UserData", Buffer.from(request.userData, "utf8").toString("base64")],
         ["BlockDeviceMapping.1.DeviceName", request.rootDeviceName],
         ["BlockDeviceMapping.1.Ebs.VolumeSize", String(request.rootVolumeGiB)],
@@ -570,7 +621,7 @@ export class AwsClient {
         ...tagParams("TagSpecification.2.Tag", request.tags),
       ],
       // The client token makes a resend return the instance the first send made.
-      { retry: true }
+      { retry: true, mutation: true }
     );
     const instance = parseInstance(
       xmlItems(root, "instancesSet")[0] ?? { name: "", children: [], text: "" }
@@ -611,7 +662,7 @@ export class AwsClient {
       "ec2",
       "CreateTags",
       [["ResourceId.1", resourceId], ...tagParams("Tag", tags)],
-      { retry: true }
+      { retry: true, mutation: true }
     );
   }
 
@@ -634,8 +685,10 @@ export class AwsClient {
 
   /**
    * Asks AWS whether the credentials may make this call, without making it.
-   * "allowed" and "denied" are AWS's answer; "unknown" is any other refusal,
-   * which says nothing about the permission.
+   * "allowed" and "denied" are AWS's answer; "unknown" is a refusal that says
+   * nothing about the permission (an id that doesn't exist, say). An answer
+   * that never came (unreachable, throttled, a server error) or credentials
+   * AWS doesn't accept throw: they are no verdict at all.
    */
   async dryRun(
     ctx: AwsRequestContext,
@@ -644,15 +697,30 @@ export class AwsClient {
   ): Promise<"allowed" | "denied" | "unknown"> {
     try {
       await this.call(ctx, "ec2", action, [...params, ["DryRun", "true"]], { retry: true });
-      // A call that ran despite DryRun shouldn't happen; it does show it's allowed.
-      return "allowed";
     } catch (error) {
       if (!(error instanceof AwsApiError)) throw error;
       if (error.code === "DryRunOperation") return "allowed";
-      if (error.code === "UnauthorizedOperation") return "denied";
-      if (error.kind === "unauthorized" || error.kind === "cancelled") throw error;
-      return "unknown";
+      if (error.kind === "forbidden") return "denied";
+      if (
+        error.kind === "invalid-request" ||
+        error.kind === "not-found" ||
+        error.kind === "conflict" ||
+        // A type the probe's zone doesn't offer says nothing about permission either.
+        error.kind === "capacity"
+      ) {
+        return "unknown";
+      }
+      throw error;
     }
+    // Every DryRun answers with an error; a success means the flag was ignored and it ran.
+    throw new AwsApiError(
+      "bad-response",
+      `AWS ran ${action} instead of only checking it`,
+      null,
+      null,
+      null,
+      action
+    );
   }
 
   private async instanceAction(
@@ -663,8 +731,12 @@ export class AwsClient {
     if (!isEc2InstanceId(instanceId)) {
       throw new AwsApiError("invalid-request", "Not an EC2 instance id", null, null, null);
     }
-    // Each is idempotent on AWS's side: a repeat joins the transition already under way.
-    return this.call(ctx, "ec2", action, [["InstanceId.1", instanceId]], { retry: true });
+    // A repeat of a terminate joins the one under way; a start or stop resent after a lost answer
+    // may be refused as the instance's state already moved, which the provider reads as joining it.
+    return this.call(ctx, "ec2", action, [["InstanceId.1", instanceId]], {
+      retry: true,
+      mutation: true,
+    });
   }
 
   private async call(
@@ -675,6 +747,7 @@ export class AwsClient {
     options: CallOptions
   ): Promise<XmlNode> {
     let lastError: AwsApiError | null = null;
+    let ambiguous: AwsApiError | null = null;
     const attempts = options.retry ? MAX_ATTEMPTS : 1;
     for (let attempt = 0; attempt < attempts; attempt++) {
       if (attempt > 0) {
@@ -686,15 +759,19 @@ export class AwsClient {
       } catch (error) {
         if (!(error instanceof AwsApiError)) throw error;
         lastError = error;
+        if (error.outcomeUnknown) ambiguous = error;
         const retriable =
           error.kind === "network" ||
           error.kind === "timeout" ||
           error.kind === "server" ||
           error.kind === "rate-limited";
-        if (!retriable || ctx.signal?.aborted) throw error;
+        if (!retriable || ctx.signal?.aborted) {
+          // A send that may have landed outranks a later refusal of its repeat.
+          throw options.mutation && ambiguous && !error.outcomeUnknown ? ambiguous : error;
+        }
       }
     }
-    throw lastError!;
+    throw options.mutation && ambiguous ? ambiguous : lastError!;
   }
 
   private async once(
@@ -750,7 +827,7 @@ export class AwsClient {
       clearTimeout(timer);
       ctx.signal?.removeEventListener("abort", onAbort);
     }
-    let root: XmlNode | null = null;
+    let root: XmlNode | null;
     try {
       root = text.trim().length > 0 ? parseXml(text) : null;
     } catch (error) {
@@ -784,26 +861,29 @@ export class AwsClient {
   }
 }
 
+/** The body as text, read a chunk at a time and abandoned as soon as it outgrows the limit. */
 async function readBounded(response: Response): Promise<string> {
+  const tooLarge = () =>
+    new AwsApiError("bad-response", "AWS's answer was too large", response.status, null, null);
   const length = Number(response.headers.get("content-length"));
   if (Number.isFinite(length) && length > MAX_RESPONSE_BYTES) {
-    throw new AwsApiError(
-      "bad-response",
-      "AWS's answer was too large",
-      response.status,
-      null,
-      null
-    );
+    await response.body?.cancel().catch(() => {});
+    throw tooLarge();
   }
-  const body = await response.arrayBuffer();
-  if (body.byteLength > MAX_RESPONSE_BYTES) {
-    throw new AwsApiError(
-      "bad-response",
-      "AWS's answer was too large",
-      response.status,
-      null,
-      null
-    );
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    bytes += value.byteLength;
+    if (bytes > MAX_RESPONSE_BYTES) {
+      await reader.cancel().catch(() => {});
+      throw tooLarge();
+    }
+    text += decoder.decode(value, { stream: true });
   }
-  return new TextDecoder().decode(body);
+  return text + decoder.decode();
 }

@@ -2,6 +2,7 @@ import type {
   CloudAccountCheckResult,
   CloudCredentialValues,
   CloudHostError,
+  CloudMachineState,
   CloudMachineType,
   CloudProviderInfo,
 } from "../../../../shared/types/cloudHosts.js";
@@ -60,7 +61,7 @@ const LIVE_STATES = ["pending", "running", "stopping", "stopped"];
 /** The tag every machine Daintree creates carries (the lifecycle's marker label). */
 const DAINTREE_TAG = "daintree";
 /** Waits before asking again about an instance EC2 doesn't list yet. */
-const NOT_FOUND_RETRIES = [2_000, 4_000];
+const NOT_FOUND_RETRIES = [2_000, 4_000, 8_000];
 
 /**
  * The permissions creating and managing machines needs, each with the DryRun
@@ -72,6 +73,7 @@ export const AWS_REQUIRED_ACTIONS = [
   "DescribeInstances",
   "DescribeImages",
   "DescribeVpcs",
+  "DescribeSubnets",
   "DescribeSecurityGroups",
   "CreateSecurityGroup",
   "AuthorizeSecurityGroupIngress",
@@ -82,8 +84,24 @@ export const AWS_REQUIRED_ACTIONS = [
   "TerminateInstances",
 ] as const;
 
-/** A well-formed id no account has; AWS may answer it with not-found rather than its permission verdict. */
+/**
+ * Well-formed ids no account has, for a probe with nothing real to name; AWS
+ * may answer one with not-found rather than its permission verdict.
+ */
 const PROBE_INSTANCE_ID = "i-0000000000000000d";
+const PROBE_GROUP_ID = "sg-0000000000000000d";
+const PROBE_IMAGE_ID = "ami-0000000000000000d";
+
+type Params = Array<[string, string]>;
+
+function tagSpecification(n: number, resourceType: string, tags: Record<string, string>): Params {
+  const out: Params = [[`TagSpecification.${n}.ResourceType`, resourceType]];
+  Object.entries(tags).forEach(([key, value], i) => {
+    out.push([`TagSpecification.${n}.Tag.${i + 1}.Key`, key]);
+    out.push([`TagSpecification.${n}.Tag.${i + 1}.Value`, value]);
+  });
+  return out;
+}
 
 function invalid(message: string): AppError {
   return new AppError({ code: "VALIDATION", message, userMessage: message });
@@ -109,6 +127,11 @@ export function awsCredentials(values: Readonly<CloudCredentialValues>): {
   }
   if (sessionToken === null && accessKeyId.startsWith("ASIA")) {
     throw invalid("Temporary keys (those starting ASIA) need their session token too.");
+  }
+  if (typeof region === "string" && /^(?:cn|us-gov|[a-z]{2}-iso[a-z]*)-/.test(region)) {
+    throw invalid(
+      "Daintree supports AWS's standard regions; China, GovCloud and isolated regions aren't supported."
+    );
   }
   if (!isAwsRegion(region)) throw invalid("The region should look like us-east-1.");
   return { signing: { accessKeyId, secretAccessKey, sessionToken }, region };
@@ -345,12 +368,14 @@ export class AwsProvider implements CloudProvider {
 
   /**
    * The required actions AWS says these credentials may not take, asked with
-   * DryRun in the home region. An answer that isn't a verdict (a probe id that
-   * doesn't exist, no default VPC to name) isn't counted as missing.
+   * DryRun in the home region, each shaped like the request Daintree makes
+   * (the same tags, the group it manages when there is one). An answer that
+   * isn't a verdict (a placeholder id that doesn't exist) isn't counted as
+   * missing; one that never came fails the check.
    */
   private async missingPermissions(ctx: AwsRequestContext): Promise<string[]> {
     const verdicts = new Map<string, "allowed" | "denied" | "unknown">();
-    const probe = async (action: string, params: Array<[string, string]>) => {
+    const probe = async (action: string, params: Params) => {
       verdicts.set(action, await this.client.dryRun(ctx, action, params));
     };
     await Promise.all([
@@ -358,8 +383,10 @@ export class AwsProvider implements CloudProvider {
       probe("DescribeInstances", []),
       probe("DescribeImages", [["Owner.1", CANONICAL_OWNER_ID]]),
       probe("DescribeVpcs", []),
+      probe("DescribeSubnets", []),
       probe("DescribeSecurityGroups", []),
     ]);
+    // These reads only find real ids for the probes below to name; a placeholder stands in otherwise.
     const optional = async <T>(read: () => Promise<T>): Promise<T | null> => {
       try {
         return await read();
@@ -373,14 +400,13 @@ export class AwsProvider implements CloudProvider {
         return null;
       }
     };
+    const allowed = (action: string) => verdicts.get(action) === "allowed";
     const [vpcId, image, instance] = await Promise.all([
-      verdicts.get("DescribeVpcs") === "allowed"
-        ? optional(() => this.client.defaultVpcId(ctx))
-        : null,
-      verdicts.get("DescribeImages") === "allowed"
+      allowed("DescribeVpcs") ? optional(() => this.client.defaultVpcId(ctx)) : null,
+      allowed("DescribeImages")
         ? optional(() => this.resolveImage(ctx, DEFAULT_EC2_IMAGE, "x86_64"))
         : null,
-      verdicts.get("DescribeInstances") === "allowed"
+      allowed("DescribeInstances")
         ? optional(
             async () =>
               // A Daintree machine is what the start, stop and terminate verdicts are about.
@@ -397,43 +423,47 @@ export class AwsProvider implements CloudProvider {
         : null,
     ]);
     const groupId =
-      vpcId && verdicts.get("DescribeSecurityGroups") === "allowed"
+      vpcId && allowed("DescribeSecurityGroups")
         ? await optional(async () => {
             const groups = await this.client.describeSecurityGroups(ctx, [
               { name: "vpc-id", values: [vpcId] },
-              { name: "group-name", values: ["default"] },
+              { name: "group-name", values: [EC2_SECURITY_GROUP_NAME, "default"] },
             ]);
-            return groups[0]?.groupId ?? null;
+            const owned = groups.find(
+              (group) => group.groupName === EC2_SECURITY_GROUP_NAME && DAINTREE_TAG in group.tags
+            );
+            return (
+              (owned ?? groups.find((group) => group.groupName === "default"))?.groupId ?? null
+            );
           })
         : null;
     const instanceId = instance?.instanceId ?? PROBE_INSTANCE_ID;
+    const marker = { [DAINTREE_TAG]: "1" };
     await Promise.all([
       probe("CreateSecurityGroup", [
         ["GroupName", "daintree-permission-check"],
         ["GroupDescription", "Daintree permission check"],
-        ...(vpcId ? ([["VpcId", vpcId]] as Array<[string, string]>) : []),
+        ...(vpcId ? ([["VpcId", vpcId]] as Params) : []),
+        ...tagSpecification(1, "security-group", marker),
       ]),
-      groupId
-        ? probe("AuthorizeSecurityGroupIngress", [
-            ["GroupId", groupId],
-            ["IpPermissions.1.IpProtocol", "tcp"],
-            ["IpPermissions.1.FromPort", "22"],
-            ["IpPermissions.1.ToPort", "22"],
-            ["IpPermissions.1.IpRanges.1.CidrIp", "0.0.0.0/0"],
-          ])
-        : Promise.resolve(),
-      image
-        ? probe("RunInstances", [
-            ["ImageId", image.imageId],
-            ["InstanceType", "t3.medium"],
-            ["MinCount", "1"],
-            ["MaxCount", "1"],
-            // Tagging at launch is its own permission (CreateTags on the new instance).
-            ["TagSpecification.1.ResourceType", "instance"],
-            ["TagSpecification.1.Tag.1.Key", "daintree"],
-            ["TagSpecification.1.Tag.1.Value", "1"],
-          ])
-        : Promise.resolve(),
+      probe("AuthorizeSecurityGroupIngress", [
+        ["GroupId", groupId ?? PROBE_GROUP_ID],
+        ["IpPermissions.1.IpProtocol", "tcp"],
+        ["IpPermissions.1.FromPort", "22"],
+        ["IpPermissions.1.ToPort", "22"],
+        ["IpPermissions.1.IpRanges.1.CidrIp", "0.0.0.0/0"],
+      ]),
+      probe("RunInstances", [
+        ["ImageId", image?.imageId ?? PROBE_IMAGE_ID],
+        ["InstanceType", "t3.medium"],
+        ["MinCount", "1"],
+        ["MaxCount", "1"],
+        ...(groupId ? ([["SecurityGroupId.1", groupId]] as Params) : []),
+        ["MetadataOptions.HttpTokens", "required"],
+        // Tagging at launch is its own permission, for the instance and its volume alike.
+        ...tagSpecification(1, "instance", { ...marker, Name: "daintree-permission-check" }),
+        ...tagSpecification(2, "volume", marker),
+      ]),
       probe("CreateTags", [
         ["ResourceId.1", instanceId],
         ["Tag.1.Key", "Name"],
@@ -535,8 +565,15 @@ export class AwsProvider implements CloudProvider {
     const regions = await this.client.describeRegions(home);
     const found = await inBatches(regions, REGION_CONCURRENCY, async (region) => {
       const ctx = { ...home, region: region.name };
-      const instances = await this.client.describeInstances(ctx, { filters });
-      return instances.map((instance) => ec2Resource(region.name, instance));
+      try {
+        const instances = await this.client.describeInstances(ctx, { filters });
+        return instances.map((instance) => ec2Resource(region.name, instance));
+      } catch (error) {
+        // A region these keys may not even read (a policy limiting them to some regions)
+        // holds no machine they could have made or manage; any other failure fails the list.
+        if (error instanceof AwsApiError && error.kind === "forbidden") return [];
+        throw error;
+      }
     });
     return found.flat();
   }
@@ -591,13 +628,15 @@ export class AwsProvider implements CloudProvider {
     if (existing && ec2MachineState(existing.state) !== "deleted")
       return ec2Resource(region, existing);
     const image = await this.resolveImage(ctx, imageSpec.id, type.architecture);
-    const securityGroupId = await this.ensureSecurityGroup(ctx);
+    const { vpcId, subnetId } = await this.network(ctx);
+    const securityGroupId = await this.ensureSecurityGroup(ctx, vpcId);
     try {
       const instance = await this.client.runInstance(ctx, {
         imageId: image.imageId,
         instanceType: type.id,
         clientToken: request.idempotencyKey,
         securityGroupId,
+        subnetId,
         userData: ec2UserData(request.publicKey),
         rootDeviceName: image.rootDeviceName ?? "/dev/sda1",
         rootVolumeGiB: EC2_ROOT_VOLUME_GIB,
@@ -647,10 +686,10 @@ export class AwsProvider implements CloudProvider {
       .sort((a, b) => (b.creationDate ?? "").localeCompare(a.creationDate ?? ""))[0];
     if (!newest) {
       throw new AwsApiError(
-        "not-found",
-        `Canonical publishes no ${spec.label} image for ${architecture === "arm64" ? "Arm64" : "x86-64"} in ${ctx.region}`,
+        "invalid-request",
+        `Canonical publishes no ${spec.label} image for ${architecture === "arm64" ? "Arm64" : "x86-64"} in ${ctx.region}. Choose another region or image.`,
         null,
-        "InvalidAMIID.NotFound",
+        "NoImage",
         null
       );
     }
@@ -658,11 +697,13 @@ export class AwsProvider implements CloudProvider {
   }
 
   /**
-   * The group Daintree's machines join in the region's default VPC, letting
-   * SSH in. sshd on Ubuntu's images takes keys only, and this device's address
-   * changes as it moves between networks, so the rule doesn't pin one.
+   * Where a machine launches: the region's default VPC, in a default subnet
+   * that gives it a public IPv4 address to be reached at. Null for the subnet
+   * when every default subnet does, which leaves EC2 free to pick the zone.
    */
-  private async ensureSecurityGroup(ctx: AwsRequestContext): Promise<string> {
+  private async network(
+    ctx: AwsRequestContext
+  ): Promise<{ vpcId: string; subnetId: string | null }> {
     const vpcId = await this.client.defaultVpcId(ctx);
     if (!vpcId) {
       throw new AwsApiError(
@@ -673,13 +714,44 @@ export class AwsProvider implements CloudProvider {
         null
       );
     }
-    const find = async () =>
-      (
-        await this.client.describeSecurityGroups(ctx, [
-          { name: "vpc-id", values: [vpcId] },
-          { name: "group-name", values: [EC2_SECURITY_GROUP_NAME] },
-        ])
-      )[0] ?? null;
+    const subnets = await this.client.defaultSubnets(ctx, vpcId);
+    const public_ = subnets.filter((subnet) => subnet.mapsPublicIp);
+    if (public_.length === 0) {
+      throw new AwsApiError(
+        "invalid-request",
+        `The default subnets in ${ctx.region} don't give new instances a public IPv4 address, so Daintree couldn't reach one there. Turn on "Auto-assign public IPv4 address" for a default subnet, or choose another region.`,
+        null,
+        "NoPublicSubnet",
+        null
+      );
+    }
+    return { vpcId, subnetId: public_.length === subnets.length ? null : public_[0]!.subnetId };
+  }
+
+  /**
+   * The group Daintree's machines join in the VPC, letting SSH in. sshd on
+   * Ubuntu's images takes keys only, and this device's address changes as it
+   * moves between networks, so the rule doesn't pin one. A group of that name
+   * Daintree didn't make is never changed: opening it would open whatever
+   * else it guards.
+   */
+  private async ensureSecurityGroup(ctx: AwsRequestContext, vpcId: string): Promise<string> {
+    const find = async () => {
+      const [group] = await this.client.describeSecurityGroups(ctx, [
+        { name: "vpc-id", values: [vpcId] },
+        { name: "group-name", values: [EC2_SECURITY_GROUP_NAME] },
+      ]);
+      if (group && !(DAINTREE_TAG in group.tags)) {
+        throw new AwsApiError(
+          "invalid-request",
+          `${ctx.region}'s default VPC already has a security group named ${EC2_SECURITY_GROUP_NAME} that Daintree didn't create, so Daintree won't change its rules. Rename or delete that group, or choose another region.`,
+          null,
+          "ForeignSecurityGroup",
+          null
+        );
+      }
+      return group ?? null;
+    };
     let group = await find();
     if (!group) {
       try {
@@ -694,16 +766,42 @@ export class AwsProvider implements CloudProvider {
           groupName: EC2_SECURITY_GROUP_NAME,
           vpcId,
           allowsSshFromAnywhere: false,
+          tags: { [DAINTREE_TAG]: "1" },
         };
       } catch (error) {
-        // Another device made it first.
+        // Another device made it first; EC2 may take a moment to list it.
         if (!(error instanceof AwsApiError) || error.code !== "InvalidGroup.Duplicate") throw error;
-        group = await find();
+        group = await this.untilVisible(ctx, find);
         if (!group) throw error;
       }
     }
-    if (!group.allowsSshFromAnywhere) await this.client.allowSshFromAnywhere(ctx, group.groupId);
+    if (!group.allowsSshFromAnywhere) {
+      const groupId = group.groupId;
+      // A group just made may not be known to every part of EC2 yet.
+      await this.untilVisible(ctx, async () => {
+        try {
+          await this.client.allowSshFromAnywhere(ctx, groupId);
+          return true;
+        } catch (error) {
+          if (error instanceof AwsApiError && error.code === "InvalidGroup.NotFound") return null;
+          throw error;
+        }
+      });
+    }
     return group.groupId;
+  }
+
+  /** `read` until it answers something, waiting out EC2's propagation; null if it never does. */
+  private async untilVisible<T>(
+    ctx: AwsRequestContext,
+    read: () => Promise<T | null>
+  ): Promise<T | null> {
+    for (const wait of [0, ...NOT_FOUND_RETRIES]) {
+      if (wait > 0) await this.sleep(wait, ctx.signal);
+      const found = await read();
+      if (found !== null) return found;
+    }
+    return null;
   }
 
   async start(
@@ -712,7 +810,12 @@ export class AwsProvider implements CloudProvider {
     _options: { lifetimeSeconds?: number | null }
   ): Promise<ProviderResource | null> {
     const { region, instanceId } = requireResourceId(resourceId);
-    const state = await this.client.startInstance(this.ctx(credentials, region), instanceId);
+    let state: string | null;
+    try {
+      state = await this.client.startInstance(this.ctx(credentials, region), instanceId);
+    } catch (error) {
+      return this.joinTransition(credentials, resourceId, error, ["starting", "running"]);
+    }
     return this.afterTransition(credentials, resourceId, state);
   }
 
@@ -721,8 +824,30 @@ export class AwsProvider implements CloudProvider {
     resourceId: string
   ): Promise<ProviderResource | null> {
     const { region, instanceId } = requireResourceId(resourceId);
-    const state = await this.client.stopInstance(this.ctx(credentials, region), instanceId);
+    let state: string | null;
+    try {
+      state = await this.client.stopInstance(this.ctx(credentials, region), instanceId);
+    } catch (error) {
+      return this.joinTransition(credentials, resourceId, error, ["stopping", "stopped"]);
+    }
     return this.afterTransition(credentials, resourceId, state);
+  }
+
+  /**
+   * A start or stop EC2 refused because the instance's state already moved
+   * (a repeat of a send whose answer was lost, or another device's): when it
+   * is already on its way there, that is the transition asked for.
+   */
+  private async joinTransition(
+    credentials: ProviderCredentials,
+    resourceId: string,
+    error: unknown,
+    joining: CloudMachineState[]
+  ): Promise<ProviderResource> {
+    if (!(error instanceof AwsApiError) || error.code !== "IncorrectInstanceState") throw error;
+    const resource = await this.inspect(credentials, resourceId);
+    if (joining.includes(resource.machine)) return resource;
+    throw error;
   }
 
   /**
@@ -752,7 +877,24 @@ export class AwsProvider implements CloudProvider {
 
   async delete(credentials: ProviderCredentials, resourceId: string): Promise<void> {
     const { region, instanceId } = requireResourceId(resourceId);
-    await this.client.terminateInstance(this.ctx(credentials, region), instanceId);
+    const ctx = this.ctx(credentials, region);
+    // An instance just launched can be unknown to the terminate for a moment, while it runs and
+    // bills; only a refusal that outlasts EC2's propagation means it's gone.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await this.client.terminateInstance(ctx, instanceId);
+        return;
+      } catch (error) {
+        if (
+          !(error instanceof AwsApiError) ||
+          error.kind !== "not-found" ||
+          attempt >= NOT_FOUND_RETRIES.length
+        ) {
+          throw error;
+        }
+        await this.sleep(NOT_FOUND_RETRIES[attempt]!, ctx.signal);
+      }
+    }
   }
 
   async sshAccess(
@@ -790,15 +932,44 @@ export class AwsProvider implements CloudProvider {
    * failure to read the console leaves the person to confirm the key.
    */
   private async consoleHostKey(
-    ctx: AwsRequestContext,
+    outer: AwsRequestContext,
     instance: Ec2Instance
   ): Promise<string | null> {
     const startedAt = this.now();
     const createdAt = instance.createdAt ? Date.parse(instance.createdAt) : NaN;
     const fresh = Number.isFinite(createdAt) && startedAt - createdAt < CONSOLE_KEYS_WINDOW_MS;
+    // The whole look, requests and their retries included, ends at the deadline: every dial
+    // waiting on this machine's access waits on it.
+    const deadline = new AbortController();
+    const timer = setTimeout(
+      () => deadline.abort(),
+      fresh ? CONSOLE_KEYS_WAIT_MS : CONSOLE_POLL_MS * 6
+    );
+    const ctx: AwsRequestContext = {
+      ...outer,
+      signal: outer.signal ? AbortSignal.any([outer.signal, deadline.signal]) : deadline.signal,
+    };
+    try {
+      return await this.readConsoleKey(ctx, instance, startedAt, createdAt, fresh);
+    } catch (error) {
+      if (outer.signal?.aborted) throw error;
+      if (deadline.signal.aborted) return null;
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async readConsoleKey(
+    ctx: AwsRequestContext,
+    instance: Ec2Instance,
+    startedAt: number,
+    createdAt: number,
+    fresh: boolean
+  ): Promise<string | null> {
     let latest = true;
     for (;;) {
-      let output: string | null = null;
+      let output: string | null;
       try {
         output = await this.client.consoleOutput(ctx, instance.instanceId, latest);
       } catch (error) {
@@ -821,6 +992,10 @@ export class AwsProvider implements CloudProvider {
 
   describeError(error: unknown): CloudHostError {
     const at = Date.now();
+    if (error instanceof AppError && error.code === "VALIDATION") {
+      // Checked before anything was sent: nothing was made.
+      return { code: "unsupported", message: error.userMessage ?? error.message, at };
+    }
     if (!(error instanceof AwsApiError)) {
       return {
         code: "failed",
@@ -869,12 +1044,13 @@ export class AwsProvider implements CloudProvider {
       case "not-found":
         return {
           code: "not-found",
-          message:
-            error.code === "InvalidAMIID.NotFound"
-              ? `${said}.`
-              : "AWS doesn't know this machine in this account.",
+          message: "AWS doesn't know this machine in this account.",
           at,
         };
+      case "invalid-request":
+        // AWS refused the request as asked (no default VPC, an image or parameter it won't
+        // take): it was checked before anything ran, so nothing was made.
+        return { code: "unsupported", message: /[.!?]$/.test(said) ? said : `${said}.`, at };
       case "network":
       case "timeout":
         return { code: "provider-unreachable", message: "Couldn't reach AWS.", at };

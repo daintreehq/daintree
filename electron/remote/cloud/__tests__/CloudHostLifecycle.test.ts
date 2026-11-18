@@ -1048,6 +1048,8 @@ describe("CloudHostLifecycle host keys confirmed on first connect", () => {
 
   describe("when the provider's API vouches for a first key when it can", () => {
     const OTHER_KEY = `ssh-rsa ${Buffer.alloc(64, 7).toString("base64")}`;
+    const ECDSA_KEY =
+      "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=";
 
     async function vouching() {
       const env = await setup({ machine: "running" }, { sshTrust: "api-or-confirm" });
@@ -1105,10 +1107,58 @@ describe("CloudHostLifecycle host keys confirmed on first connect", () => {
 
     it("looks for the reported key on its own before calling it a mismatch", async () => {
       const env = await vouching();
-      reports(env, OTHER_KEY);
-      env.scan.byTypes = { rsa: `203.0.113.10 ${OTHER_KEY}\n` };
+      reports(env, ECDSA_KEY);
+      // The full scan lost the ECDSA connection; asked for ECDSA alone, it answers.
+      env.scan.byTypes = { ecdsa: `203.0.113.10 ${ECDSA_KEY}\n` };
       const route = await env.lifecycle.ensureAccess(env.bindingId);
-      expect(await pinnedKey(route)).toBe(`dtc-${env.bindingId} ${OTHER_KEY}\n`);
+      expect(await pinnedKey(route)).toBe(`dtc-${env.bindingId} ${ECDSA_KEY}\n`);
+      const typed = env.run.mock.calls
+        .filter((call) => path.basename(String(call[0])).startsWith("ssh-keyscan"))
+        .map((call) => (call[1] as string[])[(call[1] as string[]).indexOf("-t") + 1]);
+      expect(typed).toEqual(["ed25519,ecdsa,rsa", "ecdsa"]);
+    });
+
+    it("drops a key it offered earlier once the API reports a different one", async () => {
+      const env = await vouching();
+      reports(env, null);
+      await env.lifecycle.ensureAccess(env.bindingId).catch(() => {});
+      expect(env.lifecycle.statuses()[0]!.hostKeyReview?.fingerprint).toBe(
+        hostKeyFingerprint(HOST_KEY)
+      );
+      // The console now reports another key than the machine presents: nothing stays on offer.
+      reports(env, OTHER_KEY);
+      env.scan.byTypes = { rsa: "" };
+      await expect(env.lifecycle.ensureAccess(env.bindingId)).rejects.toThrow(
+        /isn't the one its provider reports/
+      );
+      expect(env.lifecycle.statuses()[0]!.hostKeyReview).toBeNull();
+      await expect(
+        env.lifecycle.trustHostKey("build", hostKeyFingerprint(HOST_KEY))
+      ).rejects.toThrow(/no new host key/);
+    });
+
+    it("lets the person confirm the key while the API still has none", async () => {
+      const env = await vouching();
+      reports(env, null);
+      await env.lifecycle.ensureAccess(env.bindingId).catch(() => {});
+      await env.lifecycle.trustHostKey("build", hostKeyFingerprint(HOST_KEY));
+      const route = await env.lifecycle.ensureAccess(env.bindingId);
+      expect(await pinnedKey(route)).toBe(`dtc-${env.bindingId} ${HOST_KEY}\n`);
+    });
+
+    it("looks again after ssh refuses the key, offering the change for review", async () => {
+      const env = await vouching();
+      await env.lifecycle.ensureAccess(env.bindingId);
+      reports(env, OTHER_KEY);
+      env.scan.output = `203.0.113.10 ${OTHER_KEY}\n`;
+      env.scan.byTypes = { ed25519: "" };
+      await expect(env.lifecycle.recheckHostKey(env.bindingId)).rejects.toThrow(
+        /identity changed/i
+      );
+      expect(env.lifecycle.statuses()[0]!.hostKeyReview).toMatchObject({
+        reason: "changed",
+        fingerprint: hostKeyFingerprint(OTHER_KEY),
+      });
     });
 
     it("never lets the API's key replace a key already trusted", async () => {
@@ -3205,6 +3255,67 @@ describe("CloudHostLifecycle SSH key at create", () => {
     expect(lifecycle.statuses()[0]?.lastError?.message).toContain("unknown SSH key timing");
     expect(provider.authorizeSsh).not.toHaveBeenCalled();
     expect(provider.sshAccess).not.toHaveBeenCalled();
+  });
+
+  it("labels a create with its key's fingerprint, and imports only a machine holding this device's key", async () => {
+    const { lifecycle, provider, files, account, state } = await setup({}, { sshKey: "at-create" });
+    await lifecycle.create(request(account.id));
+    await vi.waitFor(() => expect(provider.create).toHaveBeenCalledTimes(1));
+    const accountKey = await files.publicKey(account.id);
+    const sentLabels = vi.mocked(provider.create).mock.calls[0]![1].labels;
+    expect(sentLabels["daintree-ssh-key"]).toBe(hostKeyFingerprint(accountKey));
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+
+    const other = { resourceId: "bx_otherdev01", name: "Other" };
+    state.machine = resource({ ...other, labels: { "daintree-ssh-key": "SHA256:another-device" } });
+    await expect(
+      lifecycle.importMachine({
+        accountId: account.id,
+        resourceId: other.resourceId,
+        name: "other",
+      })
+    ).rejects.toThrow(/another device's SSH key/);
+    state.machine = resource({ ...other, labels: {} });
+    await expect(
+      lifecycle.importMachine({
+        accountId: account.id,
+        resourceId: other.resourceId,
+        name: "other",
+      })
+    ).rejects.toThrow(/another device's SSH key/);
+    state.machine = resource({
+      ...other,
+      labels: { "daintree-ssh-key": hostKeyFingerprint(accountKey) },
+    });
+    await expect(
+      lifecycle.importMachine({
+        accountId: account.id,
+        resourceId: other.resourceId,
+        name: "other",
+      })
+    ).resolves.toMatchObject({ hostId: expect.any(String) });
+  });
+
+  it("takes a create the provider couldn't make as asked for a refusal, keeping its words", async () => {
+    const { lifecycle, provider, account } = await setup({}, { sshKey: "at-create" });
+    const refusal = new Error("no network there");
+    vi.mocked(provider.create).mockRejectedValueOnce(refusal);
+    const describe = provider.describeError.bind(provider);
+    vi.spyOn(provider, "describeError").mockImplementation((error) =>
+      error === refusal
+        ? { code: "unsupported", message: "us-east-2 has no default VPC.", at: Date.now() }
+        : describe(error)
+    );
+    await lifecycle.create(request(account.id));
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    expect(lifecycle.statuses()[0]?.lastError).toMatchObject({
+      code: "unsupported",
+      message: "us-east-2 has no default VPC.",
+    });
+    await lifecycle.retryCreate("build");
+    const sent = vi.mocked(provider.create).mock.calls.map(([, sentRequest]) => sentRequest);
+    // Nothing was made, so its retry is a new create.
+    expect(sent[1]!.idempotencyKey).not.toBe(sent[0]!.idempotencyKey);
   });
 });
 

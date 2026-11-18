@@ -65,7 +65,13 @@ export async function startFakeEc2(params: { sshdRoot: string }): Promise<FakeEc
   const authorizedKeys = path.join(params.sshdRoot, "authorized_keys");
   const requests: FakeEc2Request[] = [];
   const instances = new Map<string, FakeEc2Instance>();
-  const groups: Array<{ id: string; name: string; vpcId: string; ssh: boolean }> = [];
+  const groups: Array<{
+    id: string;
+    name: string;
+    vpcId: string;
+    ssh: boolean;
+    tags: Record<string, string>;
+  }> = [];
   const timers = new Set<NodeJS.Timeout>();
   let counter = 0;
 
@@ -249,24 +255,60 @@ export async function startFakeEc2(params: { sshdRoot: string }): Promise<FakeEc
             return;
           case "DescribeSecurityGroups": {
             const filters = filtersOf(p);
-            const name = filters.find((f) => f.name === "group-name")?.values[0];
+            const names = filters.find((f) => f.name === "group-name")?.values ?? [];
             const vpc = filters.find((f) => f.name === "vpc-id")?.values[0];
             const all = [
               ...groups,
-              { id: `sg-default-${region}`, name: "default", vpcId: `vpc-${region}`, ssh: false },
+              {
+                id: `sg-default-${region}`,
+                name: "default",
+                vpcId: `vpc-${region}`,
+                ssh: false,
+                tags: {} as Record<string, string>,
+              },
             ];
             const found = all.filter(
-              (group) => (!name || group.name === name) && (!vpc || group.vpcId === vpc)
+              (group) =>
+                (names.length === 0 || names.includes(group.name)) && (!vpc || group.vpcId === vpc)
             );
             send(
               200,
-              `<DescribeSecurityGroupsResponse><securityGroupInfo>${found.map((group) => `<item><groupId>${group.id}</groupId><groupName>${group.name}</groupName><vpcId>${group.vpcId}</vpcId><ipPermissions>${group.ssh ? "<item><ipProtocol>tcp</ipProtocol><fromPort>22</fromPort><toPort>22</toPort><ipRanges><item><cidrIp>0.0.0.0/0</cidrIp></item></ipRanges></item>" : ""}</ipPermissions></item>`).join("")}</securityGroupInfo></DescribeSecurityGroupsResponse>`
+              `<DescribeSecurityGroupsResponse><securityGroupInfo>${found
+                .map(
+                  (group) =>
+                    `<item><groupId>${group.id}</groupId><groupName>${group.name}</groupName><vpcId>${group.vpcId}</vpcId><ipPermissions>${group.ssh ? "<item><ipProtocol>tcp</ipProtocol><fromPort>22</fromPort><toPort>22</toPort><ipRanges><item><cidrIp>0.0.0.0/0</cidrIp></item></ipRanges></item>" : ""}</ipPermissions><tagSet>${Object.entries(
+                      group.tags
+                    )
+                      .map(
+                        ([key, value]) =>
+                          `<item><key>${xmlEscape(key)}</key><value>${xmlEscape(value)}</value></item>`
+                      )
+                      .join("")}</tagSet></item>`
+                )
+                .join("")}</securityGroupInfo></DescribeSecurityGroupsResponse>`
             );
             return;
           }
+          case "DescribeSubnets":
+            send(
+              200,
+              `<DescribeSubnetsResponse><subnetSet>${["a", "b"]
+                .map(
+                  (zone) =>
+                    `<item><subnetId>subnet-${region}${zone}</subnetId><availabilityZone>${region}${zone}</availabilityZone><defaultForAz>true</defaultForAz><mapPublicIpOnLaunch>true</mapPublicIpOnLaunch></item>`
+                )
+                .join("")}</subnetSet></DescribeSubnetsResponse>`
+            );
+            return;
           case "CreateSecurityGroup": {
             const id = `sg-0e2e${++counter}`;
-            groups.push({ id, name: p.GroupName ?? "", vpcId: p.VpcId ?? "", ssh: false });
+            groups.push({
+              id,
+              name: p.GroupName ?? "",
+              vpcId: p.VpcId ?? "",
+              ssh: false,
+              tags: tagsOf(p, "TagSpecification.1.Tag"),
+            });
             send(
               200,
               `<CreateSecurityGroupResponse><return>true</return><groupId>${id}</groupId></CreateSecurityGroupResponse>`

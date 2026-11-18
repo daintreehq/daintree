@@ -412,7 +412,11 @@ describe("CloudHostStore accounts", () => {
       scope: { kind: "account" as const, id: "123456789012", name: "AWS account 123456789012" },
       apiUrl: "https://amazonaws.com",
     };
-    backend.write({ version: 1, accounts: [aws], bindings: [] });
+    new CloudHostStore(backend).putAccount({
+      ...aws,
+      credentialRevision: null,
+      lastProvisioning: null,
+    });
     expect(new CloudHostStore(backend).account(aws.id)?.scope).toEqual(aws.scope);
   });
 
