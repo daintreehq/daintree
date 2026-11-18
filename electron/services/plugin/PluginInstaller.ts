@@ -52,6 +52,7 @@ import {
   type PluginGrantKey,
 } from "../../../shared/types/pluginCapabilityConsent.js";
 import type { PluginInstalledRecordsStore } from "./PluginInstalledRecordsStore.js";
+import type { PluginCatalogUpdateSource } from "./PluginCatalogService.js";
 import { AGENT_LAUNCH_PRESET_CAPABILITY } from "../../../shared/utils/agentPresetLaunchConsent.js";
 import { displaySafeText } from "../../../shared/utils/displaySafeText.js";
 
@@ -172,6 +173,11 @@ async function readInstalledManifest(dir: string): Promise<InstalledManifestFiel
  * under its id right now (null when none is). Returns the refusal, or null.
  */
 export type ReplacementCheck = (installedVersion: string | null) => string | null;
+
+/** A background pass hands every catalog install the same catalog (#17805). */
+export interface PluginUpdateCheckOptions {
+  catalog?: PluginCatalogUpdateSource;
+}
 
 /**
  * Owns the atomic install/upgrade orchestration (lockfile, temp-dir staging,
@@ -1139,7 +1145,10 @@ export class PluginInstaller {
    * (#3769). The download is lock-free: it writes to a private temp dir and
    * reads the hash/manifest, so it doesn't contend with the install lock.
    */
-  async checkForUpdate(pluginId: string): Promise<PluginCheckUpdateResult> {
+  async checkForUpdate(
+    pluginId: string,
+    options: PluginUpdateCheckOptions = {}
+  ): Promise<PluginCheckUpdateResult> {
     if (typeof pluginId !== "string" || pluginId.trim().length === 0) {
       return { status: "invalid-id" };
     }
@@ -1147,7 +1156,9 @@ export class PluginInstaller {
     if (!record) return { status: "invalid-id" };
     // Before the URL guards: a catalog install is never checked against the
     // URL it came from, even when its provenance is unusable.
-    if (record.source === "catalog") return this._checkCatalogForUpdate(pluginId, record);
+    if (record.source === "catalog") {
+      return this._checkCatalogForUpdate(pluginId, record, options.catalog);
+    }
     // A sideload/builtin with no original URL — the UI gates the button on
     // `originalUrl !== null`, so this is unreachable in practice; treat it as
     // `invalid-id` defensively.
@@ -1193,13 +1204,15 @@ export class PluginInstaller {
 
   /**
    * The catalog half of {@link checkForUpdate} (#16781). Reads a catalog fetched
-   * for this call, never a cached copy, and offers the newest reviewed release
-   * above the installed one. Its archive must hash to the entry's digest before
-   * its manifest is read, and must name the entry's plugin and version.
+   * for this call, or for the background pass that handed one in, never a
+   * cached copy, and offers the newest reviewed release above the installed
+   * one. Its archive must hash to the entry's digest before its manifest is
+   * read, and must name the entry's plugin and version.
    */
   private async _checkCatalogForUpdate(
     pluginId: string,
-    record: InstalledPluginRecord
+    record: InstalledPluginRecord,
+    catalog: PluginCatalogUpdateSource | undefined
   ): Promise<PluginCheckUpdateResult> {
     const installed = record.catalog;
     const unusable: PluginCheckUpdateResult = {
@@ -1223,7 +1236,10 @@ export class PluginInstaller {
       await import("./PluginCatalogService.js");
     // The pattern admits numbers semver can't hold, and its comparisons throw.
     if (!isComparableVersion(installed.version)) return unusable;
-    const lookup = await getPluginCatalogService().lookupUpdate(pluginId, installed.version);
+    const lookup = await (catalog ?? getPluginCatalogService()).lookupUpdate(
+      pluginId,
+      installed.version
+    );
     switch (lookup.status) {
       case "stale":
       case "unavailable":

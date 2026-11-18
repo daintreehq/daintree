@@ -11,6 +11,7 @@ import { getSystemSleepService } from "./SystemSleepService.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { logInfo, logError } from "../utils/logger.js";
+import type { PluginCatalogUpdateSource } from "./plugin/PluginCatalogService.js";
 
 // Daily cadence. A URL re-fetch of every installed plugin is cheap but not free,
 // so once a day is the coarsest useful granularity for "an update landed."
@@ -389,13 +390,17 @@ export class PluginUpdateCheckService {
     // available" pass from an inconclusive one.
     const failedIds: string[] = [];
     let cursor = 0;
+    // Every catalog install in the pass reads one catalog rather than fetching
+    // its own (#17805). Opened by the first catalog lookup, whatever the list
+    // said, so a pass with no catalog install never loads the catalog client.
+    const options = { catalog: passCatalog() };
 
     const worker = async (): Promise<void> => {
       while (cursor < ids.length) {
         if (this.disposed || !this.getSettings().enabled) return;
         const id = ids[cursor++];
         try {
-          const result = await pluginService.checkForUpdate(id);
+          const result = await pluginService.checkForUpdate(id, options);
           if (result.status === "available") {
             found.push({
               pluginId: id,
@@ -432,6 +437,19 @@ interface PassOutcome {
   inconclusive: boolean;
   unchecked: ReadonlySet<string> | null;
   failedEntirely: boolean;
+}
+
+/** One pass's catalog, opened on its first lookup. */
+function passCatalog(): PluginCatalogUpdateSource {
+  let batch: Promise<PluginCatalogUpdateSource> | null = null;
+  return {
+    lookupUpdate: async (id, installedVersion) => {
+      batch ??= import("./plugin/PluginCatalogService.js").then((m) =>
+        m.getPluginCatalogService().openUpdateBatch()
+      );
+      return (await batch).lookupUpdate(id, installedVersion);
+    },
+  };
 }
 
 /** The cached result cut down to the plugins a pass couldn't check, or `null` when none is left. */

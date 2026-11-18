@@ -80,6 +80,15 @@ export type PluginCatalogUpdateLookup =
     }
   | PluginCatalogBlocked;
 
+/**
+ * Where an update check reads its releases: the shared service, which fetches
+ * a catalog for every lookup, or a batch opened for one background pass, which
+ * fetches once for all of them (#17805).
+ */
+export interface PluginCatalogUpdateSource {
+  lookupUpdate(id: string, installedVersion: string): Promise<PluginCatalogUpdateLookup>;
+}
+
 type CatalogFetch = (url: string, init: RequestInit) => Promise<Response>;
 
 export interface PluginCatalogDeps {
@@ -92,6 +101,11 @@ export interface PluginCatalogDeps {
 
 interface CatalogSnapshot {
   catalog: PluginCatalog;
+  fetchedAt: number;
+}
+
+interface IndexedCatalog {
+  byId: ReadonlyMap<string, readonly PluginCatalogEntry[]>;
   fetchedAt: number;
 }
 
@@ -110,7 +124,7 @@ interface DiskPayload {
  * Concurrent callers share one fetch, but each gets the answer its own mode
  * allows, so a browse caller never decides what an install caller may use.
  */
-export class PluginCatalogService {
+export class PluginCatalogService implements PluginCatalogUpdateSource {
   private snapshot: CatalogSnapshot | null = null;
   private diskLoad: Promise<void> | null = null;
   private inFlight: Promise<RemoteOutcome> | null = null;
@@ -163,14 +177,8 @@ export class PluginCatalogService {
   async browse(): Promise<PluginCatalogBrowseResult> {
     const result = await this.getCatalog("browse");
     if (result.status !== "available") return { status: "unavailable", failure: result.failure };
-    const byId = new Map<string, PluginCatalogEntry[]>();
-    for (const entry of result.catalog.entries) {
-      const releases = byId.get(entry.id);
-      if (releases) releases.push(entry);
-      else byId.set(entry.id, [entry]);
-    }
     const listings: PluginCatalogListing[] = [];
-    for (const releases of byId.values()) {
+    for (const releases of releasesById(result.catalog.entries).values()) {
       const newest = newestRelease(releases);
       if (!newest) continue;
       listings.push({
@@ -196,14 +204,31 @@ export class PluginCatalogService {
   async lookupUpdate(id: string, installedVersion: string): Promise<PluginCatalogUpdateLookup> {
     const result = await this.getCatalog("install");
     if (result.status !== "available") return result;
-    const { fetchedAt } = result;
     const releases = result.catalog.entries.filter((e) => e.id === id);
-    const entry = newestUpdate(releases, installedVersion);
-    if (entry) return { status: "update", entry, fetchedAt };
-    if (releases.length === 0) return { status: "delisted", scope: "plugin", fetchedAt };
-    return releases.some((e) => e.version === installedVersion)
-      ? { status: "current", fetchedAt }
-      : { status: "delisted", scope: "release", fetchedAt };
+    return updateFor(releases, installedVersion, result.fetchedAt);
+  }
+
+  /**
+   * Update lookups for one background pass (#17805). The first lookup fetches
+   * a catalog the way {@link lookupUpdate} does, and every lookup in the batch
+   * answers from that fetch, its releases indexed by plugin id. A catalog that
+   * couldn't be fetched answers the whole batch the same way, and the next
+   * batch fetches again. Installing still resolves its release afresh.
+   */
+  openUpdateBatch(): PluginCatalogUpdateSource {
+    let read: Promise<IndexedCatalog | PluginCatalogBlocked> | null = null;
+    return {
+      lookupUpdate: async (id, installedVersion) => {
+        read ??= this.getCatalog("install").then((result) =>
+          result.status === "available"
+            ? { byId: releasesById(result.catalog.entries), fetchedAt: result.fetchedAt }
+            : result
+        );
+        const catalog = await read;
+        if ("status" in catalog) return catalog;
+        return updateFor(catalog.byId.get(id) ?? [], installedVersion, catalog.fetchedAt);
+      },
+    };
   }
 
   /** A clock that went backwards must not make an old catalog look fresh. */
@@ -376,6 +401,30 @@ function newestUpdate(
   return newestRelease(
     allowPrerelease ? newer : newer.filter((e) => semver.prerelease(e.version) === null)
   );
+}
+
+/** What a catalog's releases of one plugin say about its installed release. */
+function updateFor(
+  releases: readonly PluginCatalogEntry[],
+  installedVersion: string,
+  fetchedAt: number
+): PluginCatalogUpdateLookup {
+  const entry = newestUpdate(releases, installedVersion);
+  if (entry) return { status: "update", entry, fetchedAt };
+  if (releases.length === 0) return { status: "delisted", scope: "plugin", fetchedAt };
+  return releases.some((e) => e.version === installedVersion)
+    ? { status: "current", fetchedAt }
+    : { status: "delisted", scope: "release", fetchedAt };
+}
+
+function releasesById(entries: readonly PluginCatalogEntry[]): Map<string, PluginCatalogEntry[]> {
+  const byId = new Map<string, PluginCatalogEntry[]>();
+  for (const entry of entries) {
+    const releases = byId.get(entry.id);
+    if (releases) releases.push(entry);
+    else byId.set(entry.id, [entry]);
+  }
+  return byId;
 }
 
 let sharedService: PluginCatalogService | null = null;

@@ -221,7 +221,7 @@ import {
   type ParsedPluginBlocklist,
   type PluginBlocklistMatch,
 } from "./plugin/PluginBlocklistService.js";
-import { PluginInstaller } from "./plugin/PluginInstaller.js";
+import { PluginInstaller, type PluginUpdateCheckOptions } from "./plugin/PluginInstaller.js";
 import { checkPluginEngineRange, type PluginEngineMismatch } from "./plugin/pluginEngineCompat.js";
 import { PluginDevWorkerHost } from "./plugin/PluginDevWorkerHost.js";
 import { PluginDevWorkerMainBridge } from "./plugin/PluginDevWorkerMainBridge.js";
@@ -5593,8 +5593,11 @@ export class PluginService {
    * compares digests, or reads the catalog for a catalog install (#16781).
    * Purely informational — it never installs. Delegates to {@link PluginInstaller}.
    */
-  async checkForUpdate(pluginId: string): Promise<PluginCheckUpdateResult> {
-    return this.installer.checkForUpdate(pluginId);
+  async checkForUpdate(
+    pluginId: string,
+    options?: PluginUpdateCheckOptions
+  ): Promise<PluginCheckUpdateResult> {
+    return this.installer.checkForUpdate(pluginId, options);
   }
 
   /**
