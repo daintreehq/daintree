@@ -268,6 +268,7 @@ export const CHANNEL_LEASE_POLICY = {
   "forge:enable-auto-merge": "free",
   "forge:get-checks": "free",
   "forge:get-ci-status": "free",
+  "forge:get-deployments": "free",
   "forge:get-credential-status": "free",
   "forge:get-current-user": "free",
   "forge:get-first-page-cache": "free",

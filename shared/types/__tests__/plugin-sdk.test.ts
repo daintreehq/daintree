@@ -88,6 +88,10 @@ import type {
   CheckRun,
   CheckRunStatus,
   CheckRunConclusion,
+  DeploymentsCapability,
+  Deployment,
+  DeploymentState,
+  DeploymentTarget,
   CredentialImportCapability,
   CredentialImportCandidate,
   CredentialImportExpected,
@@ -234,6 +238,31 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf<CheckRun>().toMatchTypeOf<object>();
       expectTypeOf<CheckRunStatus>().toMatchTypeOf<string>();
       expectTypeOf<CheckRunConclusion>().toMatchTypeOf<string>();
+    });
+
+    it("exports the optional deployments capability, its target and its state vocabulary", () => {
+      // A third-party forge provider must be able to implement `deployments`
+      // from the SDK alone, naming both target kinds and every state it reports.
+      expectTypeOf<DeploymentsCapability["getDeployments"]>().parameters.toEqualTypeOf<
+        [RepoRef, DeploymentTarget]
+      >();
+      expectTypeOf<ReturnType<DeploymentsCapability["getDeployments"]>>().toEqualTypeOf<
+        Promise<{ deployments: Deployment[] } | null>
+      >();
+      expectTypeOf<DeploymentTarget>().toEqualTypeOf<
+        { kind: "branch"; branch: string } | { kind: "pullRequest"; prNumber: number }
+      >();
+      expectTypeOf<DeploymentState>().toEqualTypeOf<
+        "pending" | "in_progress" | "success" | "failure" | "inactive" | "unknown"
+      >();
+      expectTypeOf<ForgeProviderImpl["deployments"]>().toEqualTypeOf<
+        DeploymentsCapability | undefined
+      >();
+      // Optional, not merely `| undefined`: an existing provider that never
+      // heard of deployments must still type-check.
+      expectTypeOf<Pick<ForgeProviderImpl, "deployments">>().toEqualTypeOf<{
+        deployments?: DeploymentsCapability;
+      }>();
     });
 
     it("exports the optional credential-import capability and its result shapes", () => {

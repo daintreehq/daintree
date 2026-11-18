@@ -2288,6 +2288,16 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       cwd: string;
       prNumber: number;
     }): Promise<{ checks: import("./forge.js").ForgeCheckRun[] } | null>;
+    /**
+     * Where a branch or pull request is deployed, from the deployments the
+     * forge recorded, newest first. Asks the forge only when called. Empty when
+     * nothing is deployed or the provider can't report deployments; `null`
+     * when the branch or PR doesn't exist on the forge.
+     */
+    getDeployments(payload: {
+      cwd: string;
+      target: import("../forge.js").DeploymentTarget;
+    }): Promise<{ deployments: import("./forge.js").ForgeDeployment[] } | null>;
     /** Resolve a commit-author email to an avatar URL. Best-effort — `null` on any failure. */
     resolveAuthorAvatar(payload: { cwd: string; email: string }): Promise<string | null>;
     /**

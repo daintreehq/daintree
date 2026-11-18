@@ -230,6 +230,72 @@ interface ChecksCapability {
         checks: CheckRun[];
     } | null>;
 }
+/**
+ * Normalized state of one deployment. `pending` has not started (queued, or
+ * waiting on an approval), `success` is deployed, and `inactive` no longer
+ * serves: superseded, torn down, or abandoned before it finished. `unknown` is
+ * a state this vocabulary doesn't model; the provider's own value stays in
+ * `rawData`.
+ */
+type DeploymentState = "pending" | "in_progress" | "success" | "failure" | "inactive" | "unknown";
+/**
+ * What {@link DeploymentsCapability.getDeployments} reports on: a branch by its
+ * short name (`feature/login`, not `refs/heads/feature/login`), or a pull
+ * request by number. Ask by pull request when there is one: a forge can tie
+ * deployments to a pull request, such as one made from its merge ref, that its
+ * branch alone doesn't reach.
+ */
+type DeploymentTarget = {
+    kind: "branch";
+    branch: string;
+} | {
+    kind: "pullRequest";
+    prNumber: number;
+};
+/**
+ * One deployment the forge recorded, as returned by
+ * {@link DeploymentsCapability.getDeployments}. Every field is the forge's own
+ * record: `url` is the address the deployment reported, never one built from a
+ * host's naming pattern, and it is absent when none was reported.
+ */
+interface Deployment {
+    /** Provider's id for the deployment, stable within the repository. */
+    id: string;
+    /** Environment name exactly as the forge records it (`Preview – web`, `production`). */
+    environment: string;
+    state: DeploymentState;
+    /** Address the deployment's latest status reported, when it reported one. */
+    url?: string;
+    /** When the deployment was created, epoch milliseconds. */
+    createdAt: number;
+    /** When the deployment or its latest status last changed, epoch milliseconds. */
+    updatedAt: number;
+    /** Commit that was deployed, when the forge reports it. */
+    commitSha?: string;
+    /** Qualified ref the deployment was made from (`refs/heads/main`), when the forge recorded one rather than a commit. */
+    ref?: string;
+    rawData: unknown;
+}
+/**
+ * Optional read of where a branch or pull request is deployed, from the
+ * deployments the forge itself recorded for it (#17248). Nothing is read until
+ * a caller asks, so a project that never looks pays nothing.
+ *
+ * Returns the deployments the forge associates with the target, newest first
+ * by creation time, failed and inactive ones included. A provider may read only
+ * part of a target's history, so the list can be incomplete. One environment
+ * can appear more than once, such as a rollout still in progress beside the
+ * deployment it is replacing, so pick per environment rather than per row.
+ *
+ * `null` means the branch or pull request doesn't exist on the forge; one with
+ * nothing deployed returns `{ deployments: [] }`. A provider that can't read
+ * deployments at all leaves this field absent, and the host reports nothing.
+ */
+interface DeploymentsCapability {
+    getDeployments(repo: RepoRef, target: DeploymentTarget): Promise<{
+        deployments: Deployment[];
+    } | null>;
+}
 /** Result of validating stored credentials against the provider. */
 interface AuthValidation {
     valid: boolean;
@@ -1596,6 +1662,7 @@ interface ForgeCodeProviderImpl extends ForgeProviderBaseImpl {
     classifyPushError?(stderr: string): PushErrorClassification | null;
     reviews?: ReviewCapability;
     checks?: ChecksCapability;
+    deployments?: DeploymentsCapability;
     approvals?: ApprovalCapability;
     autoMerge?: AutoMergeCapability;
     releases?: ReleaseCapability;

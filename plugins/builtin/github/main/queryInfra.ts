@@ -4,6 +4,7 @@ import { configure } from "safe-stable-stringify";
 import type {
   CheckRun,
   CIStatus,
+  Deployment,
   Issue,
   IssueComment,
   Page,
@@ -123,6 +124,10 @@ export const getIssueInflight = new Map<string, Promise<Issue | null>>();
 export const getPRInflight = new Map<string, Promise<PR | null>>();
 export const getCIStatusInflight = new Map<string, Promise<CIStatus | null>>();
 export const getChecksInflight = new Map<string, Promise<{ checks: CheckRun[] } | null>>();
+export const getDeploymentsInflight = new Map<
+  string,
+  Promise<{ deployments: Deployment[] } | null>
+>();
 export const findPRsByBranchesInflight = new Map<string, Promise<Map<string, PR | null>>>();
 export const findPRsByNumbersInflight = new Map<string, Promise<Map<number, PR | null>>>();
 export const getCIStatusesInflight = new Map<string, Promise<Map<number, CIStatus | null>>>();

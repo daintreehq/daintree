@@ -3,6 +3,7 @@ import type {
   AuthValidation,
   AvatarCapability,
   ChecksCapability,
+  DeploymentsCapability,
   Credentials,
   FirstPageSnapshot,
   ForgeProviderImpl,
@@ -56,6 +57,7 @@ import {
   findPRsByBranchesImpl,
   getCIStatusImpl,
   getChecksImpl,
+  getDeploymentsImpl,
   findPRsByNumbersImpl,
   findIssuesByNumbersImpl,
   findReferencesByNumbersImpl,
@@ -109,6 +111,10 @@ const issueCommentCapability: IssueCommentCapability = {
 
 const checksCapability: ChecksCapability = {
   getChecks: getChecksImpl,
+};
+
+const deploymentsCapability: DeploymentsCapability = {
+  getDeployments: getDeploymentsImpl,
 };
 
 // Thin pass-through over `GitHubAuth.getConfigAsync()` — reuses the same
@@ -483,6 +489,7 @@ export const githubForgeProvider: ForgeProviderImpl = {
   reviews: reviewCapability,
   issueComments: issueCommentCapability,
   checks: checksCapability,
+  deployments: deploymentsCapability,
   autoMerge: { enable: enableAutoMergeImpl, disable: disableAutoMergeImpl },
   identity: identityCapability,
   tooltips: tooltipCapability,

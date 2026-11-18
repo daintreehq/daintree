@@ -2162,6 +2162,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { cwd: string; prNumber: number }];
     result: import("./forge.js").ForgeCIStatusSummary | null;
   };
+  "forge:get-deployments": {
+    args: [payload: { cwd: string; target: import("../forge.js").DeploymentTarget }];
+    result: { deployments: import("./forge.js").ForgeDeployment[] } | null;
+  };
   "forge:get-first-page-cache": {
     args: [payload: { cwd: string }];
     result: import("./forge.js").ForgeFirstPageCachePayload | null;

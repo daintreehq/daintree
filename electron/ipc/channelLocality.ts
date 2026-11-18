@@ -482,6 +482,7 @@ export const CHANNEL_LOCALITY = {
   "forge:edit-pr": "host",
   "forge:get-checks": "host",
   "forge:get-ci-status": "host",
+  "forge:get-deployments": "host",
   "forge:get-credential-status": "host",
   "forge:get-current-user": "host",
   "forge:get-first-page-cache": "host",
