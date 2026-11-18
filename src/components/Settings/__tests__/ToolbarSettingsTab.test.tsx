@@ -1534,6 +1534,7 @@ describe("ToolbarSettingsTab — the Decisions inbox while Decisions is off", ()
       expect(switchNamesIn(leftColumn(container)).includes(row)).toBe(shown);
       expect(switchNamesIn(container).includes(row)).toBe(shown);
     }
+    expect(setLeftButtonsMock).not.toHaveBeenCalled();
     expect(setRightButtonsMock).not.toHaveBeenCalled();
   });
 });
