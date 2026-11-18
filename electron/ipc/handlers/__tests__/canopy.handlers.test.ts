@@ -256,7 +256,9 @@ const gitBranch = vi.hoisted(() =>
   vi.fn(
     async (
       _path: string
-    ): Promise<{ branch: string | null; unreadable: false } | { branch: null; unreadable: true }> => ({
+    ): Promise<
+      { branch: string | null; unreadable: false } | { branch: null; unreadable: true }
+    > => ({
       branch: "feature/login",
       unreadable: false,
     })

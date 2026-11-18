@@ -388,8 +388,7 @@ export function probeGitCommonDir(
  * fatal), which says nothing about the branch.
  */
 export type GitBranchReading =
-  | { branch: string | null; unreadable: false }
-  | { branch: null; unreadable: true };
+  { branch: string | null; unreadable: false } | { branch: null; unreadable: true };
 
 /**
  * Read the checked-out branch of a worktree, keeping a failed read apart from
