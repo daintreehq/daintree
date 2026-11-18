@@ -1774,10 +1774,9 @@ describe("ProjectViewManager — startup view crash hook (#12954)", () => {
       await flushImmediates();
 
       expect(recoveryPageBackupInfoMock).toHaveBeenCalledTimes(1);
-      const url = new URL(String(bWc.loadURL.mock.calls.at(-1)?.[0]));
-      expect(url.pathname).toBe("/recovery.html");
-      expect(url.searchParams.get("backupTimestamp")).toBe("1700000000000");
-      expect(url.searchParams.get("panelCount")).toBe("0");
+      expect(bWc.loadURL).toHaveBeenLastCalledWith(
+        expect.stringMatching(/\/recovery\.html\?.*\bbackupTimestamp=1700000000000&panelCount=0$/)
+      );
     });
   });
 });

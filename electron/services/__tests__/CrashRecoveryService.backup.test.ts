@@ -434,7 +434,7 @@ describe("CrashRecoveryService", () => {
       expect(storeMock.set).not.toHaveBeenCalled();
     });
 
-    it("readBackupInfo (via getLastBackupTimestamp) falls back to previous when current is missing", () => {
+    it("getLastBackupTimestamp falls back to previous when current is missing", () => {
       const backupDir = path.join(userData, "backups");
       fs.mkdirSync(backupDir, { recursive: true });
       const previousPath = path.join(backupDir, "session-state.previous.json");
@@ -451,7 +451,7 @@ describe("CrashRecoveryService", () => {
       expect(ts).toBe(stat.mtimeMs);
     });
 
-    it("readBackupInfo skips corrupt current and reports previous timestamp", () => {
+    it("getLastBackupTimestamp skips corrupt current and reports previous timestamp", () => {
       const backupDir = path.join(userData, "backups");
       fs.mkdirSync(backupDir, { recursive: true });
       // Corrupt current — exists on disk but unparseable.
@@ -1333,9 +1333,25 @@ describe("CrashRecoveryService", () => {
       };
     }
 
-    function spyBackupReads() {
-      const spy = vi.spyOn(fs, "readFileSync");
-      return (filePath: string) => spy.mock.calls.filter(([p]) => p === filePath).length;
+    /** Writes a fixture and returns its text, which is how a parse is matched to it. */
+    function write(filePath: string, content: unknown): string {
+      const text = typeof content === "string" ? content : JSON.stringify(content);
+      fs.writeFileSync(filePath, text);
+      return text;
+    }
+
+    function setMtime(filePath: string, ms: number): void {
+      const at = new Date(ms);
+      fs.utimesSync(filePath, at, at);
+    }
+
+    function spyBackupWork() {
+      const readSpy = vi.spyOn(fs, "readFileSync");
+      const parseSpy = vi.spyOn(JSON, "parse");
+      return {
+        reads: (filePath: string) => readSpy.mock.calls.filter(([p]) => p === filePath).length,
+        parses: (text: string) => parseSpy.mock.calls.filter(([t]) => t === text).length,
+      };
     }
 
     function terminals(count: number) {
@@ -1346,68 +1362,103 @@ describe("CrashRecoveryService", () => {
       const { current, previous } = backupPaths();
       const svc = makeService();
       svc.initialize();
-      fs.writeFileSync(
-        current,
-        JSON.stringify({ capturedAt: Date.now(), appState: { terminals: terminals(2) } })
-      );
-      fs.writeFileSync(
-        previous,
-        JSON.stringify({ capturedAt: Date.now(), appState: { terminals: terminals(5) } })
-      );
-      const reads = spyBackupReads();
+      const currentText = write(current, {
+        capturedAt: Date.now(),
+        appState: { terminals: terminals(2) },
+      });
+      write(previous, { capturedAt: Date.now(), appState: { terminals: terminals(5) } });
+      setMtime(previous, Date.now() - 60_000);
+      const work = spyBackupWork();
 
       const info = svc.getRecoveryPageBackupInfo();
 
       expect(info).toEqual({ backupTimestamp: fs.statSync(current).mtimeMs, panelCount: 2 });
-      expect(reads(current)).toBe(1);
-      expect(reads(previous)).toBe(0);
+      expect(work.reads(current)).toBe(1);
+      expect(work.parses(currentText)).toBe(1);
+      expect(work.reads(previous)).toBe(0);
     });
 
-    it("reads each candidate at most once when the current generation is corrupt", () => {
+    it("reads and parses each candidate at most once when the current generation is corrupt", () => {
       const { current, previous } = backupPaths();
       const svc = makeService();
       svc.initialize();
-      fs.writeFileSync(current, "{ corrupt");
-      fs.writeFileSync(
-        previous,
-        JSON.stringify({ capturedAt: Date.now(), appState: { terminals: terminals(1) } })
-      );
-      const reads = spyBackupReads();
+      const currentText = write(current, "{ corrupt");
+      setMtime(current, Date.now() - 60_000);
+      const previousText = write(previous, {
+        capturedAt: Date.now(),
+        appState: { terminals: terminals(1) },
+      });
+      const work = spyBackupWork();
 
       const info = svc.getRecoveryPageBackupInfo();
 
       expect(info).toEqual({ backupTimestamp: fs.statSync(previous).mtimeMs, panelCount: 1 });
-      expect(reads(current)).toBe(1);
-      expect(reads(previous)).toBe(1);
+      expect(work.reads(current)).toBe(1);
+      expect(work.parses(currentText)).toBe(1);
+      expect(work.reads(previous)).toBe(1);
+      expect(work.parses(previousText)).toBe(1);
     });
 
     it("keeps the main-crash snapshot's panel count over the disk generation", () => {
       const { current } = backupPaths();
-      fs.writeFileSync(
-        current,
-        JSON.stringify({ capturedAt: Date.now() - 60_000, appState: { terminals: terminals(3) } })
-      );
+      write(current, { capturedAt: Date.now() - 60_000, appState: { terminals: terminals(3) } });
       writeMarker(userData);
       const svc = makeService();
       svc.initialize();
-      fs.writeFileSync(
-        current,
-        JSON.stringify({ capturedAt: Date.now(), appState: { terminals: terminals(7) } })
-      );
+      write(current, { capturedAt: Date.now(), appState: { terminals: terminals(7) } });
 
       const info = svc.getRecoveryPageBackupInfo();
 
       expect(info).toEqual({ backupTimestamp: fs.statSync(current).mtimeMs, panelCount: 3 });
     });
 
+    it("keeps a main-crash snapshot with no panel list over the disk generation's count", () => {
+      const { current } = backupPaths();
+      write(current, {
+        capturedAt: Date.now() - 60_000,
+        windowStates: { "/repo": { width: 1200, height: 800, isMaximized: false } },
+      });
+      writeMarker(userData);
+      const svc = makeService();
+      svc.initialize();
+      write(current, { capturedAt: Date.now(), appState: { terminals: terminals(4) } });
+
+      const info = svc.getRecoveryPageBackupInfo();
+
+      expect(info).toEqual({ backupTimestamp: fs.statSync(current).mtimeMs, panelCount: null });
+    });
+
     it("reports a previous session's backup timestamp without its panel count", () => {
       const { current } = backupPaths();
       const svc = makeService();
-      fs.writeFileSync(
-        current,
-        JSON.stringify({ capturedAt: Date.now() - 5_000, appState: { terminals: terminals(2) } })
-      );
+      write(current, { capturedAt: Date.now() - 5_000, appState: { terminals: terminals(2) } });
       svc.initialize();
+
+      const info = svc.getRecoveryPageBackupInfo();
+
+      expect(info).toEqual({ backupTimestamp: fs.statSync(current).mtimeMs, panelCount: null });
+    });
+
+    it("counts a snapshot captured in the session's first millisecond", () => {
+      const { current } = backupPaths();
+      const sessionStart = Date.now();
+      vi.spyOn(Date, "now").mockReturnValue(sessionStart);
+      const svc = makeService();
+      svc.initialize();
+      write(current, { capturedAt: sessionStart, appState: { terminals: terminals(2) } });
+
+      expect(svc.getRecoveryPageBackupInfo().panelCount).toBe(2);
+    });
+
+    it.each([
+      ["missing", undefined],
+      ["a numeric string", String(Date.now() + 60_000)],
+      ["an object with no usable primitive", { toString: 0 }],
+    ])("withholds the panel count when capturedAt is %s", (_label, capturedAt) => {
+      const { current } = backupPaths();
+      const svc = makeService();
+      svc.initialize();
+      write(current, { capturedAt, appState: { terminals: terminals(2) } });
 
       const info = svc.getRecoveryPageBackupInfo();
 
@@ -1417,31 +1468,30 @@ describe("CrashRecoveryService", () => {
     it("gates a previous-generation fallback by its capture time, not its mtime", () => {
       const { current, previous } = backupPaths();
       const svc = makeService();
-      fs.writeFileSync(current, "{ corrupt");
-      fs.writeFileSync(
-        previous,
-        JSON.stringify({ capturedAt: Date.now() - 5_000, appState: { terminals: terminals(2) } })
-      );
+      write(current, "{ corrupt");
+      write(previous, { capturedAt: Date.now() - 5_000, appState: { terminals: terminals(2) } });
       svc.initialize();
-      const touched = new Date(Date.now() + 1_000);
-      fs.utimesSync(previous, touched, touched);
-      const reads = spyBackupReads();
+      setMtime(previous, Date.now() + 1_000);
+      const work = spyBackupWork();
 
       const info = svc.getRecoveryPageBackupInfo();
 
       expect(info).toEqual({ backupTimestamp: fs.statSync(previous).mtimeMs, panelCount: null });
-      expect(reads(current)).toBe(1);
-      expect(reads(previous)).toBe(1);
+      expect(work.reads(current)).toBe(1);
+      expect(work.reads(previous)).toBe(1);
     });
 
-    it("returns nulls when neither generation is parseable", () => {
+    it("returns nulls after one read of each generation when neither is parseable", () => {
       const { current, previous } = backupPaths();
       const svc = makeService();
       svc.initialize();
-      fs.writeFileSync(current, "{ corrupt");
-      fs.writeFileSync(previous, '{"appState":');
+      write(current, "{ corrupt");
+      write(previous, '{"appState":');
+      const work = spyBackupWork();
 
       expect(svc.getRecoveryPageBackupInfo()).toEqual({ backupTimestamp: null, panelCount: null });
+      expect(work.reads(current)).toBe(1);
+      expect(work.reads(previous)).toBe(1);
     });
   });
 });

@@ -298,9 +298,13 @@ export class CrashRecoveryService {
     if (!backup) return null;
     const { snapshot } = backup;
     // Freshness gate: a snapshot from a previous session must not surface a
-    // panel count on the current session's recovery page. Mirrors the
-    // watchdog freshness check at consumeWatchdogKillFlag (line 637).
-    if (snapshot.capturedAt < this.sessionStartMs) return null;
+    // panel count on the current session's recovery page, and one with no
+    // usable capture time can't show it isn't (comparing a parsed object
+    // could also throw here, on the main thread). Mirrors the watchdog
+    // freshness check at consumeWatchdogKillFlag (line 637).
+    if (!isFiniteTimestamp(snapshot.capturedAt) || snapshot.capturedAt < this.sessionStartMs) {
+      return null;
+    }
     return hasPanelSource(snapshot) ? collectSnapshotPanels(snapshot).length : null;
   }
 
