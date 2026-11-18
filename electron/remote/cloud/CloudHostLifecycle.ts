@@ -405,6 +405,14 @@ export class CloudHostLifecycle {
   /** Lookups a provider change overtook: a failure may be the old provider's, not the machine's. */
   private readonly reconcileOvertaken = new Set<string>();
   private renewingAll = false;
+  /**
+   * Every request whose answer becomes an observation takes a ticket when it
+   * is sent; an answer is written only if no request sent after it has been
+   * written already. A poll or refresh that a start or stop overtook arrives
+   * late, and its wall-clock arrival time says nothing about how old it is.
+   */
+  private lastTicket = 0;
+  private readonly observedTicket = new Map<string, number>();
   private stopWatchingHosts: (() => void) | null = null;
   private disposed = false;
 
@@ -1034,7 +1042,11 @@ export class CloudHostLifecycle {
     if (!binding?.resourceId) return;
     const { provider, credentials } = await this.context(binding, signal);
     this.stage(bindingId, "Checking the machine");
-    let resource = await this.inspectInto(bindingId, provider, credentials);
+    let resource: ProviderResource | null;
+    // A read overtaken by a newer one is asked again: a start acts on the newest word.
+    while (!(resource = await this.inspectInto(bindingId, provider, credentials))) {
+      if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+    }
     if (resource.dataExpired) {
       const error: CloudHostError = {
         code: "data-expired",
@@ -1044,24 +1056,27 @@ export class CloudHostLifecycle {
       this.recordError(bindingId, error);
       throw new AppError({ code: "NOT_FOUND", message: error.message, userMessage: error.message });
     }
+    let startable = resource.machine === "stopped" || resource.machine === "error";
     if (resource.machine === "stopping") {
-      resource = await this.waitFor(
+      await this.waitFor(
         bindingId,
         "stopped",
         STOP_DEADLINE_MS,
         signal,
         "Waiting for the last stop to finish"
       );
+      startable = true;
     }
-    if (resource.machine === "stopped" || resource.machine === "error") {
+    if (startable) {
       this.stage(bindingId, "Starting the machine");
       try {
+        const ticket = this.ticket();
         const started = await provider.start(
           credentials,
           binding.resourceId!,
           startOptions(lifetimeModelOf(provider), binding.lifetimeSeconds)
         );
-        if (started) this.observe(bindingId, started);
+        if (started) this.observe(bindingId, started, ticket);
       } catch (error) {
         this.recordError(bindingId, provider.describeError(error));
         throw this.deps.accounts.asAppError(provider, error);
@@ -1114,8 +1129,9 @@ export class CloudHostLifecycle {
     if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
     this.stage(bindingId, "Saving the disk and stopping");
     try {
+      const ticket = this.ticket();
       const stopping = await provider.stop(credentials, binding.resourceId);
-      if (stopping) this.observe(bindingId, stopping);
+      if (stopping) this.observe(bindingId, stopping, ticket);
     } catch (error) {
       this.recordError(bindingId, provider.describeError(error));
       throw this.deps.accounts.asAppError(provider, error);
@@ -1301,6 +1317,7 @@ export class CloudHostLifecycle {
       throw invalid(`${nameOf(provider)} doesn't take a lifetime for its machines.`);
     }
     let resource: ProviderResource;
+    const ticket = this.ticket();
     try {
       resource = await provider.renewLifetime(credentials, binding.resourceId, lifetimeSeconds);
     } catch (error) {
@@ -1314,7 +1331,7 @@ export class CloudHostLifecycle {
       throw invalid(`${nameOf(owner)} changed while this was being saved. Try again.`);
     }
     keep();
-    this.observe(binding.id, resource);
+    this.observe(binding.id, resource, ticket);
   }
 
   // --- SSH access ----------------------------------------------------------
@@ -1409,7 +1426,10 @@ export class CloudHostLifecycle {
         }
         throw new UnusableConnectionError(described.message, described.message);
       }
-      binding = this.deps.store.binding(bindingId)!;
+      binding = this.deps.store.binding(bindingId);
+      if (!binding) {
+        throw new UnusableConnectionError("This cloud host isn't set up on this device", null);
+      }
     }
     const machine = machineOf(binding);
     if (machine === "starting") {
@@ -1790,8 +1810,24 @@ export class CloudHostLifecycle {
     this.deps.store.updateBinding(bindingId, (current) => ({ ...current, lastError: error }));
   }
 
-  private observe(bindingId: string, resource: ProviderResource): void {
-    this.deps.store.updateBinding(bindingId, (current) => {
+  private ticket(): number {
+    return ++this.lastTicket;
+  }
+
+  /** Whether a newer request's answer was written while the one with this ticket was out. */
+  private overtaken(bindingId: string, ticket: number): boolean {
+    return ticket <= (this.observedTicket.get(bindingId) ?? 0);
+  }
+
+  /** Writes the answer to the request sent with this ticket, unless a newer one was written; false then. */
+  private observe(
+    bindingId: string,
+    resource: ProviderResource,
+    ticket: number,
+    extra?: (binding: StoredCloudBinding) => StoredCloudBinding
+  ): boolean {
+    if (this.overtaken(bindingId, ticket)) return false;
+    const written = this.deps.store.updateBinding(bindingId, (current) => {
       const before = current.observation;
       // Any stop, or a start seen from outside, may bring a new address or
       // host key: access is resolved again for the next dial.
@@ -1800,45 +1836,62 @@ export class CloudHostLifecycle {
         (before !== null && before.machine !== "running") ||
         (before?.stoppedAt ?? null) !== resource.stoppedAt;
       if (restarted) this.renewals.delete(bindingId);
-      return {
+      const next: StoredCloudBinding = {
         ...current,
         access: restarted ? null : current.access,
         observation: observationOf(resource, this.now()),
       };
+      return extra ? extra(next) : next;
     });
+    // A binding forgotten while the request was out keeps no mark behind.
+    if (!written) return false;
+    this.observedTicket.set(bindingId, ticket);
+    return true;
   }
 
+  /** Writes a not-found answer to the request sent with this ticket, unless a newer one was written. */
+  private observeMissing(bindingId: string, described: CloudHostError, ticket: number): void {
+    if (this.overtaken(bindingId, ticket)) return;
+    // Not proof of deletion (a scope or key change looks the same): say what was seen.
+    const written = this.deps.store.updateBinding(bindingId, (current) => ({
+      ...current,
+      observation: current.observation
+        ? { ...current.observation, machine: "unknown", observedAt: this.now() }
+        : null,
+      lastError: described,
+    }));
+    if (written) this.observedTicket.set(bindingId, ticket);
+  }
+
+  /**
+   * Reads the machine into its binding. Null when a request sent after this
+   * one was answered first: the binding already holds the newer word, and this
+   * answer, or failure to get one, is left out.
+   */
   private async inspectInto(
     bindingId: string,
     provider: CloudProvider,
     credentials: ProviderCredentials
-  ): Promise<ProviderResource> {
+  ): Promise<ProviderResource | null> {
     const binding = this.deps.store.binding(bindingId);
     if (!binding?.resourceId) throw new Error("No machine");
+    const ticket = this.ticket();
+    let resource: ProviderResource;
     try {
-      const resource = await provider.inspect(credentials, binding.resourceId);
-      this.observe(bindingId, resource);
-      // An answer supersedes an earlier failure to get one; a refused start or stop stays.
-      this.deps.store.updateBinding(bindingId, (current) =>
-        current.lastError && INSPECTION_ERRORS.has(current.lastError.code)
-          ? { ...current, lastError: null }
-          : current
-      );
-      return resource;
+      resource = await provider.inspect(credentials, binding.resourceId);
     } catch (error) {
+      if (this.overtaken(bindingId, ticket)) return null;
       const described = provider.describeError(error);
-      if (described.code === "not-found") {
-        // Not proof of deletion (a scope or key change looks the same): say what was seen.
-        this.deps.store.updateBinding(bindingId, (current) => ({
-          ...current,
-          observation: current.observation
-            ? { ...current.observation, machine: "unknown", observedAt: this.now() }
-            : null,
-          lastError: described,
-        }));
-      }
+      if (described.code === "not-found") this.observeMissing(bindingId, described, ticket);
       throw error;
     }
+    // An answer supersedes an earlier failure to get one; a refused start or stop stays.
+    const written = this.observe(bindingId, resource, ticket, (current) =>
+      current.lastError && INSPECTION_ERRORS.has(current.lastError.code)
+        ? { ...current, lastError: null }
+        : current
+    );
+    return written ? resource : null;
   }
 
   private async waitFor(
@@ -1847,7 +1900,7 @@ export class CloudHostLifecycle {
     deadlineMs: number,
     signal: AbortSignal,
     stage: string
-  ): Promise<ProviderResource> {
+  ): Promise<void> {
     const binding = this.deps.store.binding(bindingId);
     if (!binding?.resourceId) throw new Error("No machine");
     const { provider, credentials } = await this.context(binding, signal);
@@ -1856,19 +1909,26 @@ export class CloudHostLifecycle {
     for (;;) {
       if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
       let resource: ProviderResource | null = null;
+      const ticket = this.ticket();
       try {
-        resource = await provider.inspect({ ...credentials, signal }, binding.resourceId);
-        this.observe(bindingId, resource);
+        const answer = await provider.inspect({ ...credentials, signal }, binding.resourceId);
+        if (this.observe(bindingId, answer, ticket)) resource = answer;
       } catch (error) {
         if (signal.aborted) throw error;
         const described = provider.describeError(error);
-        if (described.code !== "provider-unreachable") {
-          this.recordError(bindingId, described);
+        if (described.code !== "provider-unreachable" && !this.overtaken(bindingId, ticket)) {
+          if (described.code === "not-found") this.observeMissing(bindingId, described, ticket);
+          else this.recordError(bindingId, described);
           throw this.deps.accounts.asAppError(provider, error);
         }
       }
+      // Overtaken by a newer read: its word stands for this round.
+      if (!resource && this.overtaken(bindingId, ticket)) {
+        const current = this.deps.store.binding(bindingId);
+        if (current && machineOf(current) === target) return;
+      }
       if (resource) {
-        if (resource.machine === target) return resource;
+        if (resource.machine === target) return;
         if (resource.machine === "error" || resource.machine === "deleted") {
           const message =
             resource.error ??
@@ -1963,6 +2023,7 @@ export class CloudHostLifecycle {
       if (!this.renewalDue(bindingId) || !this.stillRegistered(binding.providerId, provider)) {
         return;
       }
+      const ticket = this.ticket();
       const renewed = await provider.renewLifetime(
         credentials,
         binding.resourceId!,
@@ -1972,7 +2033,7 @@ export class CloudHostLifecycle {
       if (!this.stillRegistered(binding.providerId, provider)) return;
       const current = this.deps.store.binding(bindingId);
       if (!current || current.intent === "stop" || this.operations.has(bindingId)) return;
-      this.observe(bindingId, renewed);
+      this.observe(bindingId, renewed, ticket);
       this.renewals.set(bindingId, { at: this.now(), ok: true });
       // A renewal that failed earlier and now went through is no longer news.
       this.deps.store.updateBinding(bindingId, (latest) =>
@@ -2050,6 +2111,7 @@ export class CloudHostLifecycle {
       this.operations.get(binding.id)?.controller.abort();
       this.deps.store.removeBinding(binding.id);
       this.renewals.delete(binding.id);
+      this.observedTicket.delete(binding.id);
       await this.deps.files.forget(this.deps.clientDir, binding.id).catch(() => {});
     }
   }
