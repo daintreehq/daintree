@@ -337,6 +337,7 @@ describe("DevPreviewDestructiveConfirmDialog", () => {
       panelId: "panel-77",
       projectId: "project-99",
       skipNodeModules: true,
+      skipCacheDirs: false,
     });
   });
 
@@ -363,6 +364,7 @@ describe("DevPreviewDestructiveConfirmDialog", () => {
       panelId: "panel-1",
       projectId: "project-1",
       skipNodeModules: false,
+      skipCacheDirs: true,
     });
   });
 

@@ -89,9 +89,10 @@ export function DevPreviewDestructiveConfirmDialog({
     );
 
     const skipNodeModules = tier === "restartAndClearCache";
+    const skipCacheDirs = !skipNodeModules;
     safeFireAndForget(
       window.electron.devPreview
-        .getDestructivePreviewSizes({ panelId, projectId, skipNodeModules })
+        .getDestructivePreviewSizes({ panelId, projectId, skipNodeModules, skipCacheDirs })
         .then((result) => {
           if (requestIdRef.current !== requestId) return;
           setSizes(result);

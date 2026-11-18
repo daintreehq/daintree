@@ -116,6 +116,9 @@ export interface DevPreviewDestructivePreviewSizesRequest extends DevPreviewSess
   // cache-clear tier only needs cache-dir sizes, so the reinstall-only walk
   // is wasted wall-time otherwise.
   skipNodeModules?: boolean;
+  // When true, skip every cache-dir walk and return an empty cacheDirSizes.
+  // The reinstall tier shows only the node_modules size.
+  skipCacheDirs?: boolean;
 }
 
 export interface DevPreviewDestructivePreviewSizes {
