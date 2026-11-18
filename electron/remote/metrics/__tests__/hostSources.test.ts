@@ -54,9 +54,11 @@ const DEFAULT_PROJECTS = [
   { id: "p1", path: "/p1", status: "active" },
   { id: "p2", path: "/p2", status: "background" },
 ];
+const getProjectInventory = vi.hoisted(() => vi.fn(() => store.projects));
+// Its status repair writes: a sample that reached it would demote a remote activation (#17798).
 const getAllProjects = vi.hoisted(() => vi.fn(() => store.projects));
 vi.mock("../../../services/ProjectStore.js", () => ({
-  projectStore: { getAllProjects },
+  projectStore: { getProjectInventory, getAllProjects },
 }));
 const scratches = vi.hoisted(() => ({ list: [] as Array<{ id: string }> }));
 vi.mock("../../../services/ScratchStore.js", () => ({
@@ -104,7 +106,7 @@ vi.mock("../../../services/projectAgentCounts.js", async (importOriginal) => {
   return { ...real, computeProjectAgentCounts: vi.fn(real.computeProjectAgentCounts) };
 });
 
-import { createHostSampleSources, observeAgents } from "../hostSources.js";
+import { createHostSampleSources, observeAgents, openProjects } from "../hostSources.js";
 import { computeProjectAgentCounts } from "../../../services/projectAgentCounts.js";
 import { setCanopyRefinementSource } from "../../../services/canopy/canopyRefinementSource.js";
 import {
@@ -132,8 +134,9 @@ const NOTHING_ASKED = { waiting: 0, blocked: 0, idle: 0 };
 
 beforeEach(() => {
   store.projects = DEFAULT_PROJECTS;
-  getAllProjects.mockReset();
-  getAllProjects.mockImplementation(() => store.projects);
+  getProjectInventory.mockReset();
+  getProjectInventory.mockImplementation(() => store.projects);
+  getAllProjects.mockClear();
   lease.holders = null;
   lease.away.clear();
   scratches.list = [];
@@ -611,7 +614,7 @@ describe("one host-summary sample", () => {
       // A closed project's lease still counts, as it did when each reader listed its own.
       driver: holder(9),
     });
-    expect(getAllProjects).toHaveBeenCalledTimes(1);
+    expect(getProjectInventory).toHaveBeenCalledTimes(1);
     // Every registered project and scratch, not only the open ones.
     expect(vi.mocked(computeProjectAgentCounts).mock.calls[0]![0]).toEqual([
       "p1",
@@ -635,7 +638,32 @@ describe("one host-summary sample", () => {
       { projectId: "p1", projectName: "daintree", holder: holder(5), state: "away", awayUntil: 99 },
     ]);
     expect(readers.driver()).toEqual(holder(9));
-    expect(getAllProjects).toHaveBeenCalledTimes(1);
+    expect(getProjectInventory).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the projects only through the read-only inventory, never the status repair (#17798)", async () => {
+    // "site" was opened here from another machine: active beside the local pointer's project.
+    store.projects = [
+      { id: "p1", path: "/p1", status: "active", name: "daintree" },
+      { id: "p2", path: "/p2", status: "active", name: "site" },
+    ];
+    lease.holders = { p2: holder(9) };
+    const sources = createHostSampleSources();
+    const readers = sources.beginSample!();
+    await expect(readers.projects()).resolves.toEqual({ projectCount: 2, worktreeCount: null });
+    await expect(readers.agents()).resolves.toMatchObject({ working: 1 });
+    expect(readers.drivers!().map((driver) => driver.projectName)).toEqual(["site"]);
+    expect(readers.driver()).toEqual(holder(9));
+    expect(getProjectInventory).toHaveBeenCalledTimes(1);
+
+    // The readers outside a sample, and the worktree list and restart guard that share them.
+    await sources.projects();
+    await sources.agents();
+    sources.driver();
+    sources.drivers!();
+    expect(openProjects().map((project) => project.id)).toEqual(["p1", "p2"]);
+    await observeAgents();
+    expect(getAllProjects).not.toHaveBeenCalled();
   });
 
   it("passes over a holder the link couldn't carry, rather than losing the whole summary", async () => {
@@ -654,20 +682,21 @@ describe("one host-summary sample", () => {
     await expect(sampleOnce(sources)).resolves.toMatchObject({
       projects: { projectCount: 1 },
     });
-    expect(getAllProjects).toHaveBeenCalledTimes(2);
+    expect(getProjectInventory).toHaveBeenCalledTimes(2);
     expect(vi.mocked(computeProjectAgentCounts).mock.calls[1]![0]).toEqual(["p1"]);
   });
 
   it("is unknown everywhere the list was needed when the store fails, and asks once", async () => {
     lease.holders = { p1: holder(1) };
-    getAllProjects.mockImplementationOnce(() => {
+    getProjectInventory.mockImplementationOnce(() => {
       throw new Error("db locked");
     });
     const readers = createHostSampleSources().beginSample!();
     await expect(readers.agents()).rejects.toThrow("db locked");
     await expect(readers.projects()).rejects.toThrow("db locked");
     expect(() => readers.driver()).toThrow("db locked");
-    expect(getAllProjects).toHaveBeenCalledTimes(1);
+    expect(() => readers.drivers!()).toThrow("db locked");
+    expect(getProjectInventory).toHaveBeenCalledTimes(1);
   });
 
   it("shares the background pollers' terminal read", async () => {
