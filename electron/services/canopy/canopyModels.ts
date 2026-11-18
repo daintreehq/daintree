@@ -95,6 +95,12 @@ const REJECTED = ".rejected";
 const MAX_FAILED_RUNS = 3;
 /** Far past the reader's ~21 MB: a Hub answer naming more is not this model. */
 const MAX_MODEL_BYTES = 512 * 1024 * 1024;
+/**
+ * How soon a shipped folder still filling is looked at again, doubling to the
+ * most. A file still missing costs a stat; only one of its full size is hashed.
+ */
+const BUNDLED_RETRY_MIN_MS = 2_000;
+const BUNDLED_RETRY_MAX_MS = 30_000;
 
 const DAMAGED =
   "The model that comes with Daintree is missing or damaged. Reinstalling Daintree puts it back.";
@@ -362,6 +368,13 @@ export interface CanopyModelsOptions {
   trial?: (dir: string, signal: AbortSignal) => Promise<void>;
   /** Names this build: a revision that failed to run here may run on another. */
   build?: string;
+  /**
+   * The shipped folder may still be filling: a dev build fetches the model
+   * beside the running app (#17818). A copy that fails its check is then
+   * `missing`, not damaged, and is looked at again while Canopy is on until
+   * every file matches its pin.
+   */
+  awaitBundled?: boolean;
 }
 
 export class CanopyModels {
@@ -381,6 +394,12 @@ export class CanopyModels {
   private readonly shipped: CanopyModelRevision;
   private readonly trial: ((dir: string, signal: AbortSignal) => Promise<void>) | null;
   private readonly build: string | null;
+  private readonly awaitBundled: boolean;
+  /** The next look at a shipped folder still filling; see `awaitBundled`. */
+  private bundledTimer: ReturnType<typeof setTimeout> | null = null;
+  private bundledDelay = BUNDLED_RETRY_MIN_MS;
+  /** Moved on by `cancel`: a look begun before it puts nothing in use. */
+  private bundledEpoch = 0;
 
   constructor(
     /** The folder the app ships the model in. */
@@ -393,6 +412,7 @@ export class CanopyModels {
     this.shipped = options.shipped ?? SHIPPED;
     this.trial = options.trial ?? null;
     this.build = options.build ?? null;
+    this.awaitBundled = options.awaitBundled ?? false;
   }
 
   /**
@@ -403,6 +423,12 @@ export class CanopyModels {
    */
   ensure(): Promise<void> {
     const local = this.checkLocal();
+    if (this.awaitBundled) {
+      void local.then(
+        () => this.lookAtBundledSoon(),
+        () => {}
+      );
+    }
     if (this.updates === null || this.disposed) return local;
     const current = this.operation;
     if (current && !current.abort.signal.aborted) return current.done;
@@ -431,7 +457,9 @@ export class CanopyModels {
     let picked = this.updates === null ? null : await this.pickUpdate(this.updates);
     if (picked === null) {
       const bad = await mismatched(this.dir, this.shipped.files);
-      if (bad.length > 0) {
+      if (bad.length > 0 && this.awaitBundled) {
+        console.warn(`[Canopy] Model at ${this.dir} isn't ready yet: ${bad.join(", ")}`);
+      } else if (bad.length > 0) {
         console.error(`[Canopy] Model at ${this.dir} fails its check: ${bad.join(", ")}`);
       } else {
         picked = { revision: this.shipped, dir: this.dir, source: "bundled" };
@@ -733,6 +761,34 @@ export class CanopyModels {
     if (!this.disposed) this.onChange();
   }
 
+  /** Arms the next look at a shipped folder still filling, unless one is armed or a copy is in use. */
+  private lookAtBundledSoon(): void {
+    if (this.disposed || this.inUse !== null || this.bundledTimer !== null) return;
+    const epoch = this.bundledEpoch;
+    const delay = this.bundledDelay;
+    this.bundledDelay = Math.min(delay * 2, BUNDLED_RETRY_MAX_MS);
+    this.bundledTimer = setTimeout(() => void this.lookAtBundled(epoch), delay);
+    this.bundledTimer.unref?.();
+  }
+
+  /**
+   * The shipped folder in use once every file matches its pin. An update put
+   * in place meanwhile is newer, so it stays in use and nothing is armed again.
+   */
+  private async lookAtBundled(epoch: number): Promise<void> {
+    const bad = await mismatched(this.dir, this.shipped.files);
+    if (epoch !== this.bundledEpoch) return;
+    this.bundledTimer = null;
+    if (this.disposed || this.inUse !== null) return;
+    if (bad.length > 0) {
+      this.lookAtBundledSoon();
+      return;
+    }
+    this.inUse = { revision: this.shipped, dir: this.dir, source: "bundled" };
+    this.bundledDelay = BUNDLED_RETRY_MIN_MS;
+    this.tell();
+  }
+
   /** The folder to read the model from once it checks out; null while checking, or when nothing did. */
   async installedDir(): Promise<string | null> {
     await this.checkLocal();
@@ -759,6 +815,7 @@ export class CanopyModels {
   state(): CanopyModelState | undefined {
     const inUse = this.inUse;
     if (inUse === undefined) return undefined;
+    if (inUse === null && this.awaitBundled) return { id: CANOPY_MODEL, status: "missing" };
     if (inUse === null) return { id: CANOPY_MODEL, status: "failed", error: DAMAGED };
     const download = this.download;
     return {
@@ -778,9 +835,16 @@ export class CanopyModels {
     };
   }
 
-  /** Stops an update under way; what it fetched so far is kept for the next try. */
+  /**
+   * Stops an update under way, and the wait for a shipped folder still
+   * filling; what an update fetched so far is kept for the next try.
+   */
   cancel(): void {
     this.operation?.abort.abort();
+    if (this.bundledTimer !== null) clearTimeout(this.bundledTimer);
+    this.bundledTimer = null;
+    this.bundledEpoch++;
+    this.bundledDelay = BUNDLED_RETRY_MIN_MS;
   }
 
   /** A check or update finishing after this tells no one. */

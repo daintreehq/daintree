@@ -971,6 +971,8 @@ describe("canopy IPC", () => {
       updates: path.join("/tmp", "canopy", "reader-updates"),
       trial: expect.any(Function),
       build: "1.4.0",
+      // The dev build fetches it beside the running app (#17818): waited for, not damaged.
+      awaitBundled: true,
     });
 
     expect(models.cancel).not.toHaveBeenCalled();
@@ -1133,6 +1135,8 @@ describe("canopy IPC", () => {
       expect(vi.mocked(CanopyModels).mock.calls[0]?.[0]).toBe(
         path.join("/Applications/Daintree.app/Contents/Resources", "canopy-reader")
       );
+      // What a package ships is all there is: a bad copy is damaged, not on its way.
+      expect(vi.mocked(CanopyModels).mock.calls[0]?.[2]?.awaitBundled).toBe(false);
     } finally {
       if (resources) Object.defineProperty(process, "resourcesPath", resources);
       else delete (process as { resourcesPath?: string }).resourcesPath;

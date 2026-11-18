@@ -216,6 +216,9 @@ function getModels(): CanopyModels {
     // the reader in use lets go of the copy that works.
     trial: (dir, signal) => tryReaderModel(dir, signal),
     build: app.getVersion(),
+    // A dev build fetches the model beside the running app (#17818); a test
+    // run's build has already fetched it, or failed.
+    awaitBundled: !app.isPackaged && !isE2EMode && !isSmokeTest,
   });
   return models;
 }

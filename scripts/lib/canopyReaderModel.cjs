@@ -103,7 +103,12 @@ async function checkPublished(manifest, fetchImpl) {
   }
 }
 
-/** One pinned file into place: checked before it is written, staged beside it, then renamed over it. */
+/**
+ * One pinned file into place: checked before it is written, staged beside it,
+ * then renamed over it. Each writer stages under a name of its own, since a
+ * dev watch prepares the model while the app runs and `npm run
+ * fetch:canopy-model` may run beside it (#17818).
+ */
 async function fetchFile(dir, manifest, spec, fetchImpl, log) {
   const url = `${HF}/${manifest.id}/resolve/${manifest.revision}/${spec.name}`;
   log(
@@ -121,9 +126,9 @@ async function fetchFile(dir, manifest, spec, fetchImpl, log) {
     );
   }
   const target = path.join(dir, spec.name);
-  const part = `${target}.part`;
+  const part = `${target}.${process.pid}-${crypto.randomBytes(6).toString("hex")}.part`;
   try {
-    fs.writeFileSync(part, content);
+    fs.writeFileSync(part, content, { flag: "wx" });
     fs.renameSync(part, target);
   } finally {
     fs.rmSync(part, { force: true });

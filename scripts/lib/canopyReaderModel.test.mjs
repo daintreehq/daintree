@@ -176,7 +176,7 @@ describe("prepareModel", () => {
     const fetchImpl = serving();
 
     await expect(prepareModel({ dir, manifest, fetchImpl, log: () => {} })).rejects.toThrow();
-    expect(existsSync(path.join(dir, "model.int8.onnx.part"))).toBe(false);
+    expect(readdirSync(dir).some((name) => name.endsWith(".part"))).toBe(false);
     expect(existsSync(path.join(dir, "model.int8.onnx", "keep"))).toBe(true);
   });
 
