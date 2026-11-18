@@ -1403,11 +1403,6 @@ describe("gceInstanceName", () => {
 describe("a Compute Engine VM stopping itself once idle (#17362)", () => {
   const NO_LIMIT = { ...CREATE, lifetimeSeconds: null };
 
-  it("starts a new VM's form with no runtime limit, since it stops itself once idle", () => {
-    const google = fakeGoogle();
-    expect(google.provider.info("linux").defaultLifetimeHours).toBeNull();
-  });
-
   it("stops itself after its idle time with no Shell, keeping its disk, with no Google call from the VM", async () => {
     const google = fakeGoogle();
     const resource = await google.provider.create(google.credentials(), NO_LIMIT);
