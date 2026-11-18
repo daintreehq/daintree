@@ -2469,16 +2469,56 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     checkRateLimit(CHANNELS.GIT_CHECKOUT_OURS_THEIRS, 30, 10_000);
     validateCwd(payload?.cwd);
     validateFilePathUnderCwd(payload.cwd, payload?.filePath);
-    if (payload.side !== "ours" && payload.side !== "theirs") {
-      throw new Error("Invalid side: must be 'ours' or 'theirs'");
+    const { resolution, side } = payload;
+    if (resolution !== "checkout" && resolution !== "delete") {
+      throw new Error("Invalid resolution: must be 'checkout' or 'delete'");
+    }
+    const validSides: string[] =
+      resolution === "delete" ? ["ours", "theirs", "both"] : ["ours", "theirs"];
+    if (!validSides.includes(side)) {
+      throw new Error(`Invalid side: must be one of ${validSides.join(", ")}`);
     }
 
     const git = await createHardenedGit(payload.cwd);
-    const flag = payload.side === "ours" ? "--ours" : "--theirs";
+    // The renderer confirmed an overwrite or a deletion from a status read that
+    // may be stale. Check the stages it was based on, and refuse rather than run
+    // the other operation: stage 2 is ours, stage 3 is theirs.
+    const stages = new Set<string>();
+    let isSubmodule = false;
+    const unmerged = await git.raw(["ls-files", "--unmerged", "-z", "--", payload.filePath]);
+    for (const record of unmerged.split("\0")) {
+      const tab = record.indexOf("\t");
+      // A directory pathspec also matches its descendants.
+      if (tab === -1 || record.slice(tab + 1) !== payload.filePath) continue;
+      const [mode, , stage] = record.slice(0, tab).split(" ");
+      stages.add(stage ?? "");
+      if (mode === "160000") isSubmodule = true;
+    }
+    const sideStages = side === "both" ? ["2", "3"] : [side === "ours" ? "2" : "3"];
+    const expectPresent = resolution === "checkout";
+    if (stages.size === 0 || sideStages.some((stage) => stages.has(stage) !== expectPresent)) {
+      throw new Error(
+        `The conflict in ${payload.filePath} has changed since it was listed. Review it and choose again.`
+      );
+    }
+
+    if (resolution === "delete") {
+      // On a submodule `git rm` also removes its checkout and edits
+      // `.gitmodules`, more than a confirm that names one file covers.
+      if (isSubmodule) {
+        throw new Error(
+          `${payload.filePath} is a submodule. Resolve its deletion with git in a terminal.`
+        );
+      }
+      // `git rm` resolves the unmerged path as deleted and removes the file,
+      // whatever edits it carries.
+      await git.raw(["rm", "-q", "--", payload.filePath]);
+      return;
+    }
     // `checkout --ours/--theirs` leaves the file unstaged — the conflict markers
     // are still in the index. Follow with `git add` so the resolution lands in
     // the staged tree and the file falls off the conflicted list.
-    await git.raw(["checkout", flag, "--", payload.filePath]);
+    await git.raw(["checkout", side === "ours" ? "--ours" : "--theirs", "--", payload.filePath]);
     await git.add(["--", payload.filePath]);
   };
   handlers.push(typedHandle(CHANNELS.GIT_CHECKOUT_OURS_THEIRS, handleCheckoutOursTheirs));

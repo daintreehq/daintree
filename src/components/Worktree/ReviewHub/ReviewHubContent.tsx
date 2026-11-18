@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { StagingFileEntry, GitStatus } from "@shared/types";
+import type { ConflictSideChoice, StagingFileEntry, GitStatus } from "@shared/types";
 import type { GitDiffSide } from "@shared/types/git";
 import type { PanelLocation } from "@shared/types/panel";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
@@ -1410,19 +1410,26 @@ export function ReviewHubContent({
   );
 
   const handleCheckoutOursTheirs = useCallback(
-    async (filePath: string, side: "ours" | "theirs") => {
+    async (filePath: string, choice: ConflictSideChoice) => {
       setActionError(null);
       debouncedBgRefreshRef.current?.cancel();
       try {
-        await window.electron.git.checkoutOursTheirs(worktreePath, filePath, side);
+        await window.electron.git.checkoutOursTheirs(worktreePath, filePath, choice);
         await refresh();
       } catch (err) {
+        // Main refuses a choice the index no longer agrees with, and the read
+        // that would have shown the change was cancelled above: read again so
+        // the row offers what is there now.
+        debouncedBgRefreshRef.current?.();
+        const action =
+          choice.resolution === "delete"
+            ? "delete file"
+            : choice.side === "ours"
+              ? "take ours"
+              : "take theirs";
         setActionError({
-          title: side === "ours" ? "Couldn't take ours" : "Couldn't take theirs",
-          detail: formatErrorMessage(
-            err,
-            side === "ours" ? "Failed to take ours" : "Failed to take theirs"
-          ),
+          title: `Couldn't ${action}`,
+          detail: formatErrorMessage(err, `Failed to ${action}`),
         });
         throw err;
       }

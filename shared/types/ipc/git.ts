@@ -1,4 +1,4 @@
-import type { GitDiffSide, GitStatus } from "../git.js";
+import type { ConflictSideChoice, GitDiffSide, GitStatus } from "../git.js";
 
 /** Get file diff payload */
 export interface GitGetFileDiffPayload {
@@ -82,15 +82,13 @@ export interface GitScanConflictMarkersPayload {
   filePaths: string[];
 }
 
-/** Payload for whole-file conflict resolution via `git checkout --ours/--theirs` */
-export interface GitCheckoutOursTheirsPayload {
+/** Payload for whole-file conflict resolution: `git checkout --ours/--theirs`, or `git rm` for a side without the file */
+export type GitCheckoutOursTheirsPayload = {
   /** Worktree path */
   cwd: string;
   /** Path relative to the worktree root */
   filePath: string;
-  /** Which side of the conflict to take. */
-  side: "ours" | "theirs";
-}
+} & ConflictSideChoice;
 
 /** Payload to compare two branches */
 export interface GitCompareWorktreesPayload {

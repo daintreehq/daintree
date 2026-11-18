@@ -37,7 +37,11 @@ import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
 import type { ForgeNewPRLinkRequest } from "../shared/types/ipc/forge.js";
 import type { ProjectCloneJobSnapshot } from "../shared/types/ipc/projectClone.js";
 import type { KeybindingOverridesSnapshot } from "../shared/types/ipc/api.js";
-import type { GitPullRebaseReview, GitPushReview } from "../shared/types/git.js";
+import type {
+  ConflictSideChoice,
+  GitPullRebaseReview,
+  GitPushReview,
+} from "../shared/types/git.js";
 import type { PluginPerfSnapshot } from "../shared/types/pluginMetrics.js";
 import type { PluginRendererMetricsEnvelope } from "../shared/types/ipc/pluginMetrics.js";
 import { CHANNELS } from "./ipc/channels.js";
@@ -2288,8 +2292,8 @@ function buildElectronApi(): ElectronAPI {
       scanConflictMarkers: (cwd: string, filePaths: string[]) =>
         _unwrappingInvoke(CHANNELS.GIT_SCAN_CONFLICT_MARKERS, { cwd, filePaths }),
 
-      checkoutOursTheirs: (cwd: string, filePath: string, side: "ours" | "theirs") =>
-        _unwrappingInvoke(CHANNELS.GIT_CHECKOUT_OURS_THEIRS, { cwd, filePath, side }),
+      checkoutOursTheirs: (cwd: string, filePath: string, choice: ConflictSideChoice) =>
+        _unwrappingInvoke(CHANNELS.GIT_CHECKOUT_OURS_THEIRS, { ...choice, cwd, filePath }),
 
       compareWorktrees: (
         cwd: string,

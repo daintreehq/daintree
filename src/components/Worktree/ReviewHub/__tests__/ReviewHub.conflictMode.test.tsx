@@ -629,7 +629,10 @@ describe("ReviewHub", () => {
       await confirmCheckout("ours");
 
       await waitFor(() => {
-        expect(checkoutOursTheirsMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts", "ours");
+        expect(checkoutOursTheirsMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts", {
+          resolution: "checkout",
+          side: "ours",
+        });
       });
     });
 
@@ -644,7 +647,10 @@ describe("ReviewHub", () => {
       await confirmCheckout("theirs");
 
       await waitFor(() => {
-        expect(checkoutOursTheirsMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts", "theirs");
+        expect(checkoutOursTheirsMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts", {
+          resolution: "checkout",
+          side: "theirs",
+        });
       });
     });
 
@@ -659,6 +665,189 @@ describe("ReviewHub", () => {
       // Dialog is open but unconfirmed — the IPC must not have fired.
       await screen.findByRole("alertdialog");
       expect(checkoutOursTheirsMock).not.toHaveBeenCalled();
+    });
+
+    describe("a modify/delete conflict offers the deleted side as a deletion", () => {
+      it.each([
+        {
+          case: "merge, incoming deleted",
+          repoState: "MERGING" as const,
+          entry: { xy: "UD", label: "deleted by them" },
+          kind: "deleted by them",
+          deleted: { side: "theirs", source: "incoming changes" },
+          kept: { side: "ours", source: "current branch" },
+        },
+        {
+          case: "merge, current branch deleted",
+          repoState: "MERGING" as const,
+          entry: { xy: "DU", label: "deleted by us" },
+          kind: "deleted by us",
+          deleted: { side: "ours", source: "current branch" },
+          kept: { side: "theirs", source: "incoming changes" },
+        },
+        {
+          case: "rebase, incoming commit deleted",
+          repoState: "REBASING" as const,
+          entry: { xy: "UD", label: "deleted by them" },
+          kind: "deleted by incoming commit",
+          deleted: { side: "theirs", source: "incoming commit" },
+          kept: { side: "ours", source: "destination branch" },
+        },
+        {
+          case: "rebase, destination deleted",
+          repoState: "REBASING" as const,
+          entry: { xy: "DU", label: "deleted by us" },
+          kind: "deleted by destination",
+          deleted: { side: "ours", source: "destination branch" },
+          kept: { side: "theirs", source: "incoming commit" },
+        },
+        {
+          case: "merge, added on the current branch only",
+          repoState: "MERGING" as const,
+          entry: { xy: "AU", label: "added by us" },
+          kind: "added by us",
+          deleted: { side: "theirs", source: "incoming changes" },
+          kept: { side: "ours", source: "current branch" },
+        },
+        {
+          case: "merge, added by the incoming changes only",
+          repoState: "MERGING" as const,
+          entry: { xy: "UA", label: "added by them" },
+          kind: "added by them",
+          deleted: { side: "ours", source: "current branch" },
+          kept: { side: "theirs", source: "incoming changes" },
+        },
+      ])("$case", async ({ repoState, entry, kind, deleted, kept }) => {
+        getStagingStatusMock.mockResolvedValue(
+          makeMergingStatus({ repoState, conflictedFiles: [{ path: "src/app.ts", ...entry }] })
+        );
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        const list = await screen.findByRole("list", { name: "Conflicted files" });
+        expect(list.textContent).toContain(kind);
+
+        const keep = screen.getByRole("menuitem", {
+          name: `Use ${kept.source} for src/app.ts (${kept.side})`,
+        });
+        expect(keep.textContent).toBe(`Use ${kept.source}${kept.side}`);
+        const remove = screen.getByRole("menuitem", {
+          name: `Delete file to match ${deleted.source} for src/app.ts (${deleted.side})`,
+        });
+        expect(remove.textContent).toBe(`Delete file to match ${deleted.source}${deleted.side}`);
+
+        fireEvent.click(remove);
+        const dialog = await screen.findByRole("alertdialog", { name: "Delete 'app.ts'?" });
+        expect(dialog.textContent).toContain(
+          `Deletes src/app.ts from the worktree to match the ${deleted.source}. The ${kept.source} version and any manual conflict edits in this file are discarded.`
+        );
+        expect(checkoutOursTheirsMock).not.toHaveBeenCalled();
+        fireEvent.click(within(dialog).getByRole("button", { name: "Delete file" }));
+
+        await waitFor(() => {
+          expect(checkoutOursTheirsMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts", {
+            resolution: "delete",
+            side: deleted.side,
+          });
+        });
+      });
+
+      it("keeps the side that still has the file as a checkout", async () => {
+        getStagingStatusMock.mockResolvedValue(
+          makeMergingStatus({
+            conflictedFiles: [{ path: "src/app.ts", xy: "UD", label: "deleted by them" }],
+          })
+        );
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        await waitFor(() => screen.getByTestId("conflict-panel"));
+        fireEvent.click(screen.getByRole("menuitem", { name: /for src\/app\.ts \(ours\)/i }));
+        const dialog = await screen.findByRole("alertdialog", {
+          name: "Use current branch for 'app.ts'?",
+        });
+        expect(dialog.textContent).toContain(
+          "Overwrites src/app.ts with the current branch version"
+        );
+        await confirmCheckout("ours");
+
+        await waitFor(() => {
+          expect(checkoutOursTheirsMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts", {
+            resolution: "checkout",
+            side: "ours",
+          });
+        });
+      });
+
+      it("cancelling a deletion leaves the row and runs nothing", async () => {
+        getStagingStatusMock.mockResolvedValue(
+          makeMergingStatus({
+            conflictedFiles: [{ path: "src/app.ts", xy: "UD", label: "deleted by them" }],
+          })
+        );
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        await waitFor(() => screen.getByTestId("conflict-panel"));
+        fireEvent.click(screen.getByRole("menuitem", { name: /^Delete file to match/ }));
+        const dialog = await screen.findByRole("alertdialog", { name: "Delete 'app.ts'?" });
+        fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+        await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+        expect(screen.getByRole("menuitem", { name: /^Delete file to match/ })).toBeTruthy();
+        expect(checkoutOursTheirsMock).not.toHaveBeenCalled();
+      });
+
+      it("offers one deletion when neither side has the file", async () => {
+        getStagingStatusMock.mockResolvedValue(
+          makeMergingStatus({
+            conflictedFiles: [{ path: "src/app.ts", xy: "DD", label: "both deleted" }],
+          })
+        );
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        await waitFor(() => screen.getByTestId("conflict-panel"));
+        const items = within(screen.getByRole("list", { name: "Conflicted files" })).getAllByRole(
+          "menuitem"
+        );
+        expect(items.map((item) => item.textContent)).toEqual(["Delete file"]);
+        expect(items[0]!.getAttribute("aria-label")).toBe("Delete file src/app.ts");
+
+        fireEvent.click(items[0]!);
+        const dialog = await screen.findByRole("alertdialog", { name: "Delete 'app.ts'?" });
+        expect(dialog.textContent).toContain("since neither side has it");
+        fireEvent.click(within(dialog).getByRole("button", { name: "Delete file" }));
+
+        await waitFor(() => {
+          expect(checkoutOursTheirsMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts", {
+            resolution: "delete",
+            side: "both",
+          });
+        });
+      });
+
+      it("names the failed deletion and reads the conflict again", async () => {
+        getStagingStatusMock.mockResolvedValue(
+          makeMergingStatus({
+            conflictedFiles: [{ path: "src/app.ts", xy: "UD", label: "deleted by them" }],
+          })
+        );
+        checkoutOursTheirsMock.mockRejectedValueOnce(
+          new Error("The conflict in src/app.ts has changed since it was listed.")
+        );
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        await waitFor(() => screen.getByTestId("conflict-panel"));
+        fireEvent.click(screen.getByRole("menuitem", { name: /^Delete file to match/ }));
+        const dialog = await screen.findByRole("alertdialog");
+        // Meanwhile the conflict turned around: the current branch side is now
+        // the one without the file.
+        getStagingStatusMock.mockResolvedValue(
+          makeMergingStatus({
+            conflictedFiles: [{ path: "src/app.ts", xy: "DU", label: "deleted by us" }],
+          })
+        );
+        fireEvent.click(within(dialog).getByRole("button", { name: "Delete file" }));
+
+        expect(await screen.findByText("Couldn't delete file")).toBeTruthy();
+        expect(
+          await screen.findByRole("menuitem", {
+            name: "Delete file to match current branch for src/app.ts (ours)",
+          })
+        ).toBeTruthy();
+      });
     });
 
     it("keeps the Resolved section collapsed by default and expands on click", async () => {

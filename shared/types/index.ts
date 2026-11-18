@@ -17,6 +17,7 @@ export type {
   GitStatusUnansweredReason,
   ConflictXYCode,
   ConflictedFileEntry,
+  ConflictSideChoice,
   RebaseAction,
   RebaseEntryState,
   RebaseEntry,
