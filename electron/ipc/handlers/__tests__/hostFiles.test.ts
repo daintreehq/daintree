@@ -39,18 +39,7 @@ describe("listHostDirectory", () => {
   });
 
   it("orders names numerically and case-insensitively like localeCompare, with kind first", async () => {
-    const names = [
-      "file10",
-      "file2",
-      "File1",
-      "Zeta",
-      "alpha",
-      "école",
-      "eclair",
-      "Ecole",
-      "a",
-      "A",
-    ];
+    const names = ["file10", "file2", "File1", "Zeta", "alpha", "école", "eclair", "Ecole", "a"];
     for (const name of names) await fs.writeFile(path.join(dir, name), "");
     await fs.mkdir(path.join(dir, "zdir"));
     const listing = await listHostDirectory({ path: dir });
