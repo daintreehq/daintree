@@ -1186,6 +1186,16 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         console.warn("[MAIN] Plugin update check dispose failed:", error);
       }
 
+      // The usage readings' last change is written, and nothing after, before
+      // the database closes (#17610).
+      try {
+        const { sealClaudeUsageObservations } =
+          await import("../services/claude/ClaudeUsageObservations.js");
+        sealClaudeUsageObservations();
+      } catch (error) {
+        console.warn("[MAIN] Claude usage save at quit failed:", error);
+      }
+
       try {
         await getDatabaseMaintenanceService().dispose();
       } catch (error) {

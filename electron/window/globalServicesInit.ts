@@ -546,6 +546,19 @@ export async function initGlobalServices(
     }
   }
 
+  // The Claude usage readings an earlier launch saw (#17610), before a pty host
+  // can report a new one or Settings or MCP can ask. Here rather than deferred:
+  // the windowless Host starts its pty host and MCP before the deferred queue.
+  try {
+    const [{ restoreClaudeUsageObservations }, { appStateClaudeUsageStorage }] = await Promise.all([
+      import("../services/claude/ClaudeUsageObservations.js"),
+      import("../services/persistence/claudeUsageStore.js"),
+    ]);
+    restoreClaudeUsageObservations(appStateClaudeUsageStorage);
+  } catch (error) {
+    console.error("[MAIN] Claude usage readings restore failed:", error);
+  }
+
   // Adaptive-recovery + watchdog E2E seams (#9599), gated on
   // DAINTREE_E2E_FAULT_MODE — never present in production. Drive a synthetic
   // resource-profile transition and a synthetic watchdog cap-hit so the
