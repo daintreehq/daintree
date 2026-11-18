@@ -56,6 +56,9 @@ import { useProjectStore } from "@/store/projectStore";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { actionService } from "@/services/ActionService";
+import type { ActionRegistry } from "@/services/actions/actionTypes";
+import { registerDecisionsActions } from "@/services/actions/definitions/decisionsActions";
+import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { PREVIEW_PROJECT } from "../__preview__/toolbarShims";
 import { Toolbar } from "../Toolbar";
 import { useProjectSwitcherPalette } from "@/hooks/useProjectSwitcherPalette";
@@ -234,14 +237,22 @@ describe("Toolbar's Decisions inbox button", () => {
     );
   });
 
-  it("opens the inbox through its action", async () => {
-    const dispatch = vi
-      .spyOn(actionService, "dispatch")
-      .mockResolvedValue({ ok: true, result: undefined });
-    await mount();
-    await reportStatus("connected");
-    fireEvent.click(inboxButton()!);
-    expect(dispatch).toHaveBeenCalledWith("decisions.openInbox", undefined, { source: "user" });
+  it("opens the inbox through its action, which the switch the toolbar holds lets run", async () => {
+    const registry: ActionRegistry = new Map();
+    registerDecisionsActions(registry);
+    for (const factory of registry.values()) actionService.register(factory());
+    try {
+      const dispatch = vi.spyOn(actionService, "dispatch");
+      await mount();
+      await reportStatus("connected");
+      fireEvent.click(inboxButton()!);
+      await settle();
+      expect(dispatch).toHaveBeenCalledWith("decisions.openInbox", undefined, { source: "user" });
+      expect(useDecisionsInboxStore.getState().isOpen).toBe(true);
+    } finally {
+      for (const id of registry.keys()) actionService.unregister(id);
+      useDecisionsInboxStore.setState({ isOpen: false });
+    }
   });
 
   it("reads no questions while the person has hidden it, and keeps the hide through on and off", async () => {
@@ -251,8 +262,15 @@ describe("Toolbar's Decisions inbox button", () => {
     expect(slot()).toBeNull();
     expect(decisions.questionWatches).toBe(0);
 
+    // Off and back on while hidden: still nothing read.
+    await reportStatus("off");
+    await reportStatus("connected");
+    expect(slot()).toBeNull();
+    expect(decisions.questionWatches).toBe(0);
+
     await setPinned(true);
     expect(inboxButton()).not.toBeNull();
+    expect(decisions.questionWatches).toBe(1);
     expect(decisions.onList).not.toBeNull();
 
     await setPinned(false);

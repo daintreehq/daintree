@@ -84,10 +84,13 @@ describe("the Decisions inbox button in the overflow menu", () => {
     expect(row.textContent).toBe("Decisions inbox");
   });
 
-  it("stands down while the inbox is open, which shows them itself", () => {
+  it("stands down while the inbox is open, which shows them itself", async () => {
     useDecisionsInboxStore.setState({ isOpen: true });
     const utils = renderMenu(2);
     expect(utils.trigger.getAttribute("aria-label")).toBe("More toolbar items — 1 hidden");
+    const menu = await openMenu(utils);
+    const row = within(menu).getByRole("menuitem", { name: /^Decisions inbox/ });
+    expect(row.textContent).toBe("Decisions inbox");
   });
 
   it("opens the inbox from its row", async () => {

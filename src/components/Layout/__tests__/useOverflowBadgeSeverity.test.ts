@@ -12,7 +12,7 @@
  * appears in `overflowIds` — no branch in the hook handles it.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import type { AgentState, AgentAvailabilityState, CliAvailability } from "@shared/types";
 
 let mockPanelsById: Record<string, unknown> = {};
@@ -142,12 +142,18 @@ describe("useOverflowBadgeSeverity", () => {
     expect(severity(["decisions-inbox"], 2)).toBe("waiting");
     expect(severity(["decisions-inbox"], 0)).toBeNull();
     expect(severity(["copy-tree"], 2)).toBeNull();
-    useDecisionsInboxStore.setState({ isOpen: true });
+
+    const mounted = renderHook(() =>
+      useOverflowBadgeSeverity(["decisions-inbox"], 0, 0, false, false, 2)
+    );
+    expect(mounted.result.current).toBe("waiting");
     try {
-      expect(severity(["decisions-inbox"], 2)).toBeNull();
+      act(() => useDecisionsInboxStore.setState({ isOpen: true }));
+      expect(mounted.result.current).toBeNull();
     } finally {
-      useDecisionsInboxStore.setState({ isOpen: false });
+      act(() => useDecisionsInboxStore.setState({ isOpen: false }));
     }
+    expect(mounted.result.current).toBe("waiting");
   });
 
   it("returns critical when problems is overflowed and errorCount > 0", () => {

@@ -1516,16 +1516,21 @@ describe("ToolbarSettingsTab — the Decisions inbox while Decisions is off", ()
   });
 
   it("drops its row until Decisions is on, keeping its place for when it is", () => {
-    for (const known of ["unknown", "off"] as const) {
-      mockDecisionsSwitch = known;
-      const { container, unmount } = render(<ToolbarSettingsTab />);
-      expect(switchNamesIn(container)).not.toContain(switchName("Decisions inbox"));
-      unmount();
-    }
+    const row = switchName("Decisions inbox");
+    mockDecisionsSwitch = "unknown";
+    const { container, rerender } = render(<ToolbarSettingsTab />);
+    expect(switchNamesIn(container)).not.toContain(row);
 
-    mockDecisionsSwitch = "on";
-    const { container } = render(<ToolbarSettingsTab />);
-    expect(switchNamesIn(rightColumn(container))).toContain(switchName("Decisions inbox"));
+    for (const [known, shown] of [
+      ["on", true],
+      ["off", false],
+      ["on", true],
+    ] as const) {
+      mockDecisionsSwitch = known;
+      rerender(<ToolbarSettingsTab />);
+      expect(switchNamesIn(rightColumn(container)).includes(row)).toBe(shown);
+      expect(switchNamesIn(container).includes(row)).toBe(shown);
+    }
     expect(setRightButtonsMock).not.toHaveBeenCalled();
   });
 });

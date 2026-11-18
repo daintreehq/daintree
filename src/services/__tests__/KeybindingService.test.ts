@@ -706,10 +706,11 @@ describe("KeybindingService", () => {
       (actionId) => {
         setPlatform("MacIntel");
         const service = new KeybindingService();
-        const row = service
+        const rows = service
           .getAllBindingsWithEffectiveCombos()
-          .find((b) => b.actionId === actionId);
-        expect(row?.effectiveCombo).toBe("");
+          .filter((b) => b.actionId === actionId);
+        expect(rows.length).toBeGreaterThan(0);
+        expect(rows.map((b) => b.effectiveCombo).filter((combo) => combo !== "")).toEqual([]);
         expect(service.findConflicts("Cmd+Alt+Shift+J")).toEqual([]);
 
         seedOverride(service, actionId, ["Cmd+Alt+Shift+J"]);
