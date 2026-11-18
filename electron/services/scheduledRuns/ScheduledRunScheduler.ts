@@ -406,7 +406,6 @@ export class ScheduledRunScheduler {
           this.retryAfter.delete(schedule.id);
         }
         const unwatchedThrough = this.unwatched.get(schedule.id) ?? null;
-        this.unwatched.delete(schedule.id);
         const missedThrough = this.recoverAll ? Number.POSITIVE_INFINITY : unwatchedThrough;
         let decision: Decision;
         try {
@@ -419,16 +418,20 @@ export class ScheduledRunScheduler {
           );
         } catch (error) {
           this.logWarn(`[ScheduledRuns] Couldn't evaluate schedule ${schedule.id}:`, error);
+          // Nobody looked at it this time either, so what came due by now stays missed.
+          this.markUnwatched(schedule.id);
           continue;
         }
-        if (decision.kind === "launch") {
-          this.launch(projectId, schedule.id, decision.origin);
-          continue;
-        }
+        // Kept until the schedule is settled, so a skip that throws leaves it missed.
         if (
           decision.kind === "skip" &&
           !this.skip(recorder, projectId, schedule, decision.origin)
         ) {
+          continue;
+        }
+        this.unwatched.delete(schedule.id);
+        if (decision.kind === "launch") {
+          this.launch(projectId, schedule.id, decision.origin);
           continue;
         }
         const due = decision.kind === "wait" ? decision.nextDueAt : this.nextAfter(schedule, now);
