@@ -4,6 +4,8 @@ import type { RemoteHostsEvent } from "../../../shared/types/ipc/remoteHosts.js"
 import { registerRemoteService } from "../runtime.js";
 import { Agent37Client, resolveAgent37ApiUrl } from "./agent37/Agent37Client.js";
 import { Agent37Provider } from "./agent37/Agent37Provider.js";
+import { AwsClient, resolveAwsApiUrl } from "./aws/AwsClient.js";
+import { AwsProvider } from "./aws/AwsProvider.js";
 import { BoatClient, resolveBoatApiUrl } from "./boat/BoatClient.js";
 import { BoatProvider } from "./boat/BoatProvider.js";
 import { GceTokenSource, gceTokenUrlFor } from "./gce/gceAuth.js";
@@ -82,6 +84,10 @@ export function initCloudHosts(params: {
   providers.register(gce, {
     owner: { kind: "built-in" },
     apiUrl: resolveGceApiUrl(app.isPackaged),
+  });
+  providers.register(new AwsProvider({ client: new AwsClient() }), {
+    owner: { kind: "built-in" },
+    apiUrl: resolveAwsApiUrl(app.isPackaged),
   });
   const accounts = new CloudAccountService({
     store,

@@ -16,6 +16,7 @@ describe("sshDeclarationProblem", () => {
       { sshTrust: "pinned-from-api", transport: "direct", tunnel: null },
       { sshTrust: "provider-tunnel", transport: "provider-command", tunnel: TUNNEL },
       { sshTrust: "pinned-from-api", transport: "provider-command", tunnel: TUNNEL },
+      { sshTrust: "api-or-confirm", transport: "direct", tunnel: null },
     ];
     for (const declaration of accepted) expect(sshDeclarationProblem(declaration)).toBeNull();
     const longest = { ...TUNNEL, args: Array.from({ length: 16 }, () => "x") };
@@ -33,6 +34,8 @@ describe("sshDeclarationProblem", () => {
       { sshTrust: "provider-tunnel", transport: "direct", tunnel: null },
       { sshTrust: "pinned-from-api", transport: "direct", tunnel: TUNNEL },
       { sshTrust: "provider-tunnel", transport: "provider-command", tunnel: null },
+      // Its key check scans the machine's own address, which a tunnel hides.
+      { sshTrust: "api-or-confirm", transport: "provider-command", tunnel: TUNNEL },
     ];
     for (const declaration of refused) expect(sshDeclarationProblem(declaration)).not.toBeNull();
   });

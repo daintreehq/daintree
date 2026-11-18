@@ -69,6 +69,8 @@ export interface ProviderSshAccess {
    * The server's public key, `type base64`. Null when the provider doesn't
    * vouch for one: its tunnel does (`sshTrust: "provider-tunnel"`), or the
    * person confirms the key the machine presents (`"confirm-on-first-connect"`).
+   * Under `"api-or-confirm"` it is the key the API reports when it has one yet,
+   * and null when it doesn't, leaving the first key to the person.
    */
   hostKey: string | null;
 }
@@ -172,8 +174,15 @@ export interface CloudProvider {
   ): Promise<CloudAccountCheckResult>;
   validate(credentials: ProviderCredentials): Promise<{ identity: string | null }>;
   catalog(credentials: ProviderCredentials): Promise<ProviderCatalog>;
-  /** Every machine in the scope; with `label`, only those carrying that `key=value`. */
-  list(credentials: ProviderCredentials, options?: { label?: string }): Promise<ProviderResource[]>;
+  /**
+   * Every machine in the scope; with `label`, only those carrying that
+   * `key=value`; with `location`, only those in that location, for a provider
+   * whose create takes one (where a create was sent, when one is looked for).
+   */
+  list(
+    credentials: ProviderCredentials,
+    options?: { label?: string; location?: string }
+  ): Promise<ProviderResource[]>;
   inspect(credentials: ProviderCredentials, resourceId: string): Promise<ProviderResource>;
   create(
     credentials: ProviderCredentials,

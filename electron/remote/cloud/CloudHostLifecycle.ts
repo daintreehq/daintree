@@ -100,9 +100,13 @@ function nameOf(provider: CloudProvider): string {
   return provider.info(process.platform).name;
 }
 
-/** The provider can't vouch for a machine's host key, so the person confirms it. */
+/**
+ * A machine's host key may come to the person for confirmation: always, or
+ * whenever the provider's API didn't vouch for the first one.
+ */
 function confirmsHostKeys(provider: CloudProvider): boolean {
-  return provider.info(process.platform).capabilities.sshTrust === "confirm-on-first-connect";
+  const trust = provider.info(process.platform).capabilities.sshTrust;
+  return trust === "confirm-on-first-connect" || trust === "api-or-confirm";
 }
 
 /** A presented key nobody has confirmed, as the person reviews it. */
@@ -278,6 +282,14 @@ function checkedAccess(
   }
   // The person's confirmation supplies the key; the API's is never taken for it.
   if (trust === "confirm-on-first-connect") return { hostKey: null };
+  // The API's key, when it names one, can only stand in for a first confirmation.
+  if (trust === "api-or-confirm") {
+    if (resolved.hostKey === null || resolved.hostKey === undefined) return { hostKey: null };
+    const vouched = normalizeHostKey(resolved.hostKey);
+    return vouched === null
+      ? { problem: `${providerName} returned a host key Daintree can't read` }
+      : { hostKey: vouched };
+  }
   const hostKey = normalizeHostKey(resolved.hostKey);
   return hostKey === null
     ? { problem: `${providerName} didn't say which host key the machine has` }
@@ -991,7 +1003,13 @@ export class CloudHostLifecycle {
     provider: CloudProvider,
     credentials: ProviderCredentials
   ): Promise<ProviderResource | null> {
-    const found = await provider.list(credentials, { label: `${LABEL_BINDING}=${bindingId}` });
+    // Where the create was sent: a provider whose machines live per location looks there only.
+    const picks = this.deps.store.binding(bindingId)?.provisioning;
+    const location = picks && picks !== "unreadable" ? (picks.location?.id ?? null) : null;
+    const found = await provider.list(credentials, {
+      label: `${LABEL_BINDING}=${bindingId}`,
+      ...(location ? { location } : {}),
+    });
     const matches = found.filter(
       (candidate) =>
         candidate.labels[LABEL_BINDING] === bindingId && candidate.machine !== "deleted"
@@ -2164,9 +2182,9 @@ export class CloudHostLifecycle {
     const record: CloudSshAccessRecord = {
       user: resolved.user,
       endpoint: resolved.endpoint,
-      // Whatever the API said about the key, only the person's confirmation vouches for it.
+      // Whatever the API said about the key, it never replaces a key already trusted.
       hostKey: confirmed
-        ? await this.confirmedHostKey(bindingId, resolved.endpoint)
+        ? await this.confirmedHostKey(bindingId, resolved.endpoint, checked.hostKey)
         : checked.hostKey,
       tunnel: policy.tunnel,
     };
@@ -2196,12 +2214,18 @@ export class CloudHostLifecycle {
   }
 
   /**
-   * The key to pin for a provider that can't vouch for one: the person's
-   * trusted key, as long as the machine still presents it. A first key, or
-   * one unlike the trusted key, is kept for the person to review and the dial
-   * is refused; nothing here ever trusts a key by itself.
+   * The key to pin for a provider that can't always vouch for one: the
+   * trusted key, as long as the machine still presents it. With no key trusted
+   * yet, a key the provider's authenticated API vouched for (`vouched`, only
+   * under `api-or-confirm`) is trusted when the machine presents exactly it.
+   * Otherwise a first key, or one unlike the trusted key, is kept for the
+   * person to review and the dial is refused.
    */
-  private async confirmedHostKey(bindingId: string, endpoint: SshEndpoint): Promise<string> {
+  private async confirmedHostKey(
+    bindingId: string,
+    endpoint: SshEndpoint,
+    vouched: string | null
+  ): Promise<string> {
     const scan = async (types?: string): Promise<string[]> => {
       try {
         return await this.deps.files.scanHostKeys(endpoint, { types });
@@ -2210,6 +2234,20 @@ export class CloudHostLifecycle {
         throw new UnusableConnectionError(said, said);
       }
     };
+    // A first key on offer that the API now contradicts is withdrawn before anything is scanned.
+    const before = this.deps.store.binding(bindingId);
+    if (
+      vouched &&
+      !before?.trustedHostKey &&
+      before?.offeredHostKey &&
+      before.offeredHostKey.key !== vouched
+    ) {
+      this.deps.store.updateBinding(bindingId, (current) =>
+        current.offeredHostKey && current.offeredHostKey.key !== vouched
+          ? { ...current, offeredHostKey: null }
+          : current
+      );
+    }
     let scanned = await scan();
     const trustedBefore = this.deps.store.binding(bindingId)?.trustedHostKey?.key ?? null;
     if (trustedBefore && !scanned.includes(trustedBefore)) {
@@ -2217,6 +2255,10 @@ export class CloudHostLifecycle {
       // answer: the trusted key's absence is checked on its own before it counts.
       const again = await scan(keyscanTypeOf(trustedBefore));
       if (again.includes(trustedBefore)) scanned = [...scanned, trustedBefore];
+    } else if (!trustedBefore && vouched && scanned.length > 0 && !scanned.includes(vouched)) {
+      // The same for the vouched key: its algorithm's connection may be the one that dropped.
+      const again = await scan(keyscanTypeOf(vouched));
+      if (again.includes(vouched)) scanned = [...scanned, vouched];
     }
     // Read after the scan: the person may have trusted a key while it ran.
     const binding = this.deps.store.binding(bindingId);
@@ -2232,6 +2274,35 @@ export class CloudHostLifecycle {
         }));
       }
       return trusted;
+    }
+    if (!trusted && vouched && scanned.includes(vouched)) {
+      this.deps.store.updateBinding(bindingId, (current) =>
+        current.trustedHostKey
+          ? current
+          : {
+              ...current,
+              trustedHostKey: { key: vouched, at: this.now() },
+              offeredHostKey: null,
+            }
+      );
+      // The person may have trusted another key in the moment since it was read.
+      const settled = this.deps.store.binding(bindingId)?.trustedHostKey?.key ?? null;
+      if (settled === vouched) return vouched;
+      throw new TransportError("The trusted host key changed while it was pinned", null);
+    }
+    if (!trusted && vouched && scanned.length > 0) {
+      // Two authenticated answers disagree about the machine: neither is offered to trust,
+      // and nor is a key it presented before.
+      if (this.deps.store.binding(bindingId)?.offeredHostKey) {
+        this.deps.store.updateBinding(bindingId, (current) => ({
+          ...current,
+          offeredHostKey: null,
+        }));
+      }
+      const said =
+        "The machine presented a host key that isn't the one its provider reports for it, so Daintree won't connect to it. Delete the machine if you can't explain the difference.";
+      this.recordError(bindingId, { code: "ssh-authorization", message: said, at: this.now() });
+      throw new UnusableConnectionError(said, said);
     }
     const candidate = scanned[0];
     if (!candidate) {

@@ -42,7 +42,7 @@ export function HostKeyReviewDetails({
   return (
     <div className="flex flex-col gap-1.5" data-testid="cloud-host-key-review">
       <Callout severity="warning" title="This machine's identity changed">
-        It presents a different host key from the one you trusted
+        It presents a different host key from the one trusted
         {review.previousTrustedAt !== null
           ? ` on ${new Date(review.previousTrustedAt).toLocaleDateString()}`
           : ""}

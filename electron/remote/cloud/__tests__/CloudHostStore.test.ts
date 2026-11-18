@@ -403,6 +403,23 @@ describe("CloudHostStore accounts", () => {
     expect(new CloudHostStore(backend).account(account.id)?.scope).toEqual(project.scope);
   });
 
+  it("keeps an AWS account's scope across a restart", () => {
+    const backend = disk();
+    const aws = {
+      ...account,
+      id: "ca_aws0000001",
+      providerId: "aws",
+      scope: { kind: "account" as const, id: "123456789012", name: "AWS account 123456789012" },
+      apiUrl: "https://amazonaws.com",
+    };
+    new CloudHostStore(backend).putAccount({
+      ...aws,
+      credentialRevision: null,
+      lastProvisioning: null,
+    });
+    expect(new CloudHostStore(backend).account(aws.id)?.scope).toEqual(aws.scope);
+  });
+
   it("reads an account saved before revisions existed as having none", () => {
     const backend = disk();
     backend.write({ version: 1, accounts: [account], bindings: [] });
