@@ -39,9 +39,7 @@ export interface GitHunkStagingPayload {
  *   not UTF-8 text), so only the whole file can be.
  */
 export type GitHunkStagingResult =
-  | { status: "applied" }
-  | { status: "stale" }
-  | { status: "unsupported" };
+  { status: "applied" } | { status: "stale" } | { status: "unsupported" };
 
 /**
  * A byte-bounded window over a file's diff (#11531).
