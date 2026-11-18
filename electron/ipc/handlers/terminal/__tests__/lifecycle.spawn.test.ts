@@ -2377,7 +2377,9 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     );
 
     expect(ptyClient.spawn).toHaveBeenCalled();
-    expect(ptyClient.spawn.mock.calls[0][1].env?.DAINTREE_MCP_URL).toBeUndefined();
+    const env = ptyClient.spawn.mock.calls[0][1].env;
+    expect(env?.DAINTREE_MCP_TOKEN).toBe("inherited-from-profile");
+    expect(env?.DAINTREE_MCP_URL).toBeUndefined();
   });
 
   it("starts MCP on demand before injecting config for restored Claude agent spawns", async () => {
@@ -2425,6 +2427,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     });
     expect(spawnArgs.command).toContain("--mcp-config");
     expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBe("pane-token");
+    expect(spawnArgs.env?.DAINTREE_MCP_URL).toBe("http://127.0.0.1:45454/mcp");
   });
 
   it.each([
@@ -3101,7 +3104,10 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
         cwd: tmpDir,
         command: "claude",
         launchAgentId: "claude",
-        env: { DAINTREE_MCP_TOKEN: "help-token" },
+        env: {
+          DAINTREE_MCP_TOKEN: "help-token",
+          DAINTREE_MCP_URL: "http://127.0.0.1:45454/sse",
+        },
       } as unknown as Parameters<typeof handler>[1]
     );
 
@@ -3110,8 +3116,9 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     expect(spawnArgs.env?.DAINTREE_ASSISTANT_SCRATCH_DIR).toBe(
       "/var/user-data/assistant-scratch/abc/sess-1"
     );
-    // Original env keys (the help token) must be preserved.
+    // Original env keys (the help token and its provisioned URL) must be preserved.
     expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBe("help-token");
+    expect(spawnArgs.env?.DAINTREE_MCP_URL).toBe("http://127.0.0.1:45454/sse");
   });
 
   it("does not set DAINTREE_ASSISTANT_SCRATCH_DIR for a non-help launch", async () => {

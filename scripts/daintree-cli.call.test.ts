@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
-import type { AddressInfo } from "node:net";
+import net, { type AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +18,9 @@ import {
 
 const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), "daintree-cli.sh");
 const TOKEN = "pane-bearer-1234";
+// The fixture answers initialize with this older revision whatever was asked,
+// so a client that sent a constant instead of the negotiated one is refused.
+const NEGOTIATED_VERSION = "2025-06-18";
 
 // `daintree call` against the real SDK transport Daintree serves `/mcp` with,
 // so the handshake, headers, SSE framing and session teardown are checked
@@ -25,9 +28,20 @@ const TOKEN = "pane-bearer-1234";
 interface Seen {
   method: string;
   path: string;
+  host: string | undefined;
   sessionId: string | undefined;
   protocolVersion: string | undefined;
   rpc: { method?: string; params?: { name?: string; arguments?: unknown } } | undefined;
+  /** What the server wrote back, as sent. */
+  response: string;
+}
+
+interface FixtureOptions {
+  jsonResponse?: boolean;
+  /** Opens a session for initialize, then sends a reply body that never completes. */
+  brokenInitialize?: boolean;
+  /** Answers this JSON-RPC method with a 401, as for a bearer revoked mid-call. */
+  refuse?: string;
 }
 
 interface Fixture {
@@ -39,7 +53,7 @@ interface Fixture {
   close: () => Promise<void>;
 }
 
-async function startFixture(options: { jsonResponse?: boolean } = {}): Promise<Fixture> {
+async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
   const seen: Seen[] = [];
   const sessions = new Map<string, StreamableHTTPServerTransport>();
   let signalCall: () => void = () => {};
@@ -118,21 +132,52 @@ async function startFixture(options: { jsonResponse?: boolean } = {}): Promise<F
       const value = req.headers[name];
       return Array.isArray(value) ? value[0] : value;
     };
-    seen.push({
+    const entry: Seen = {
       method: req.method ?? "",
       path: req.url ?? "",
+      host: header("host"),
       sessionId: header("mcp-session-id"),
       protocolVersion: header("mcp-protocol-version"),
       rpc,
-    });
+      response: "",
+    };
+    seen.push(entry);
     if (rpc?.method === "tools/call") signalCall();
 
-    if (req.headers.authorization !== `Bearer ${TOKEN}`) {
+    const capture = (chunk: unknown) => {
+      if (chunk === undefined || typeof chunk === "function") return chunk;
+      let text = typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString();
+      if (rpc?.method === "initialize") {
+        text = text.replace(
+          /"protocolVersion":"[^"]*"/,
+          `"protocolVersion":"${NEGOTIATED_VERSION}"`
+        );
+      }
+      entry.response += text;
+      return text;
+    };
+    const write = res.write.bind(res) as (...args: unknown[]) => boolean;
+    const end = res.end.bind(res) as (...args: unknown[]) => http.ServerResponse;
+    res.write = ((chunk: unknown, ...rest: unknown[]) =>
+      write(capture(chunk), ...rest)) as typeof res.write;
+    res.end = ((chunk?: unknown, ...rest: unknown[]) =>
+      end(capture(chunk), ...rest)) as typeof res.end;
+
+    if (
+      req.headers.authorization !== `Bearer ${TOKEN}` ||
+      (options.refuse !== undefined && rpc?.method === options.refuse)
+    ) {
       res.writeHead(401, { "Content-Type": "text/plain" }).end("Unauthorized");
       return;
     }
     if (req.url !== "/mcp") {
       res.writeHead(404, { "Content-Type": "text/plain" }).end("Not found");
+      return;
+    }
+    if (options.brokenInitialize && rpc?.method === "initialize") {
+      res
+        .writeHead(200, { "Content-Type": "text/event-stream", "Mcp-Session-Id": "half-open" })
+        .end('event: message\ndata: {"jsonrpc":"2.0","id":1,"result":\n\n');
       return;
     }
     const sessionId = header("mcp-session-id");
@@ -193,7 +238,7 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
   let tmpDir: string;
   const children = new Set<ChildProcess>();
 
-  function start(args: string[], env: Record<string, string | undefined> = {}) {
+  function start(args: string[], env: Record<string, string | undefined> = {}, stdin?: string) {
     const child = spawn("bash", [SCRIPT, "call", ...args], {
       env: {
         PATH: process.env.PATH,
@@ -205,6 +250,7 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
       } as NodeJS.ProcessEnv,
     });
     children.add(child);
+    child.stdin.end(stdin ?? "");
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
@@ -218,7 +264,8 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
     return { child, done };
   }
 
-  const call = (args: string[], env?: Record<string, string | undefined>) => start(args, env).done;
+  const call = (args: string[], env?: Record<string, string | undefined>, stdin?: string) =>
+    start(args, env, stdin).done;
 
   beforeEach(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-call-tmp-"));
@@ -250,9 +297,10 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
     expect(sessionId).toBeTruthy();
     for (const request of rest) {
       expect(request.sessionId).toBe(sessionId);
-      expect(request.protocolVersion).toBeTruthy();
+      expect(request.protocolVersion).toBe(NEGOTIATED_VERSION);
     }
     expect(fixture.seen[2].rpc?.params?.name).toBe("fixture.echo");
+    expect(fixture.seen[2].response).toMatch(/^event: message\ndata: /);
     expect(fixture.sessions.size).toBe(0);
     expect(fs.readdirSync(tmpDir)).toEqual([]);
   });
@@ -297,6 +345,15 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
     expect(fixture.seen[2].rpc?.params?.arguments).toEqual(typed);
   });
 
+  it("reads --args - from stdin, keeping the prompt off the command line", async () => {
+    const typed = { prompt: "line one\nline two", wait: true };
+
+    const run = await call(["fixture.echo", "--args", "-"], {}, JSON.stringify(typed));
+
+    expect(run.status).toBe(0);
+    expect(fixture.seen[2].rpc?.params?.arguments).toEqual(typed);
+  });
+
   it("prints the whole result with --json", async () => {
     const run = await call(["fixture.echo", "--arg", "a=1", "--json"]);
 
@@ -318,6 +375,7 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
     const asJson = await call(["fixture.refuse", "--json"]);
     expect(asJson.status).toBe(1);
     expect(JSON.parse(asJson.stdout)).toMatchObject({ isError: true });
+    expect(asJson.stderr).toBe("RESOURCE_NOT_OWNED: not yours\n");
   });
 
   it("reads success from the result itself, not from text that looks like an error", async () => {
@@ -345,6 +403,9 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
     expect(run.stderr).toBe("");
     expect(run.status).toBe(0);
     expect(run.stdout).toBe("done\n");
+    const reply = fixture.seen[2].response;
+    expect(reply.indexOf("notifications/message")).toBeGreaterThan(-1);
+    expect(reply.indexOf("notifications/message")).toBeLessThan(reply.indexOf('"result"'));
   });
 
   it("exits 1 when Daintree has no such tool", async () => {
@@ -363,6 +424,16 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
     expect(new Set(fixture.seen.map((request) => request.path))).toEqual(new Set(["/mcp"]));
   });
 
+  it("sends a localhost URL to 127.0.0.1, the address Daintree binds", async () => {
+    const run = await call(["fixture.echo"], {
+      DAINTREE_MCP_URL: fixture.url.replace("127.0.0.1", "localhost"),
+    });
+
+    expect(run.status).toBe(0);
+    const host = new URL(fixture.url).host;
+    expect(new Set(fixture.seen.map((request) => request.host))).toEqual(new Set([host]));
+  });
+
   it.each([
     [[], "missing the tool"],
     [["fixture.echo", "--arg", "novalue"], "key=value"],
@@ -372,6 +443,8 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
     [["fixture.echo", "--args", "[1]"], "one JSON object"],
     [["fixture.echo", "--args", '{"a":'], "one JSON object"],
     [["fixture.echo", "--args", '{"a":1} {"b":2}'], "one JSON object"],
+    [["fixture.echo", "--args", '{"a":"\\q"}'], "bad escape"],
+    [["fixture.echo", "--args", '{"a":"tab\there"}'], "control character"],
     [["fixture.echo", "other"], "one tool name"],
     [["fixture.echo", "--bogus"], "unknown option"],
   ])("refuses %j before contacting Daintree", async (args, message) => {
@@ -380,6 +453,12 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
     expect(run.status).toBe(2);
     expect(run.stderr).toContain(message);
     expect(fixture.seen).toEqual([]);
+  });
+
+  it("reports a usage error before a missing credential", async () => {
+    const run = await call(["fixture.echo", "--args", "["], { DAINTREE_MCP_URL: undefined });
+
+    expect(run.status).toBe(2);
   });
 
   it.each([
@@ -408,21 +487,62 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
     expect(fixture.seen.map((request) => request.rpc?.method)).toEqual(["initialize"]);
   });
 
-  it("exits 3 when nothing is listening", async () => {
-    const url = fixture.url;
-    await fixture.close();
-    fixture = await startFixture();
+  it.each(["notifications/initialized", "tools/call"])(
+    "exits 4 when the bearer is refused at %s, and still closes the session",
+    async (method) => {
+      await fixture.close();
+      fixture = await startFixture({ refuse: method });
 
-    const run = await call(["fixture.echo"], { DAINTREE_MCP_URL: url });
+      const run = await call(["fixture.echo"]);
+
+      expect(run.status).toBe(4);
+      expect(run.stderr).toContain("401");
+      const last = fixture.seen.at(-1);
+      expect(last?.method).toBe("DELETE");
+      expect(last?.sessionId).toBe(fixture.seen[1].sessionId);
+    }
+  );
+
+  it("closes a session whose initialize reply never completed", async () => {
+    await fixture.close();
+    fixture = await startFixture({ brokenInitialize: true });
+
+    const run = await call(["fixture.echo"]);
 
     expect(run.status).toBe(3);
-    expect(run.stderr).toContain("could not reach Daintree");
+    expect(fixture.seen.map((request) => [request.method, request.sessionId])).toEqual([
+      ["POST", undefined],
+      ["DELETE", "half-open"],
+    ]);
     expect(fs.readdirSync(tmpDir)).toEqual([]);
+  });
+
+  it("exits 3 when the connection drops without an answer", async () => {
+    const dropping = net.createServer((socket) => socket.destroy());
+    await new Promise<void>((resolve) => dropping.listen(0, "127.0.0.1", resolve));
+    const { port } = dropping.address() as AddressInfo;
+    try {
+      const run = await call(["fixture.echo"], {
+        DAINTREE_MCP_URL: `http://127.0.0.1:${port}/mcp`,
+      });
+
+      expect(run.status).toBe(3);
+      expect(run.stderr).toContain("could not reach Daintree");
+      expect(fs.readdirSync(tmpDir)).toEqual([]);
+    } finally {
+      await new Promise<void>((resolve) => dropping.close(() => resolve()));
+    }
   });
 
   it("closes the session and its files when stopped mid-call", async () => {
     const { child, done } = start(["fixture.slow"]);
     await fixture.callArrived;
+    // The bearer sits in a private directory under the caller's TMPDIR while
+    // the call is out.
+    const [privateDir] = fs.readdirSync(tmpDir);
+    expect(privateDir).toMatch(/^daintree-call\./);
+    expect(fs.statSync(path.join(tmpDir, privateDir)).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(path.join(tmpDir, privateDir, "headers")).mode & 0o777).toBe(0o600);
 
     child.kill("SIGTERM");
     const run = await done;
@@ -441,6 +561,7 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
 
     expect(run.status).toBe(0);
     expect(JSON.parse(run.stdout)).toEqual({ a: "b" });
+    expect(fixture.seen[2].response.startsWith("{")).toBe(true);
     expect(fixture.sessions.size).toBe(0);
   });
 });

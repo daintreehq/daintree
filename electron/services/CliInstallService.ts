@@ -62,23 +62,26 @@ function getPackagedScriptPath(): string {
   return path.join(app.getAppPath(), "scripts", CLI_SCRIPT_FILE);
 }
 
+/** The `daintree call` client block in a script's text, markers included; null without one. */
+function extractCallClient(source: string): string | null {
+  const start = source.indexOf(`\n${CALL_CLIENT_START}\n`);
+  const end = start < 0 ? -1 : source.indexOf(`\n${CALL_CLIENT_END}\n`, start);
+  if (end < 0) return null;
+  return source.slice(start + 1, end + 1 + CALL_CLIENT_END.length);
+}
+
 /**
  * The `daintree call` client, copied out of the packaged script so an AppImage
  * wrapper can carry it: the image's resources are only there while it runs.
  * Null when the script can't be read or has no client block.
  */
 function readCallClient(): string | null {
-  let source: string | null;
   try {
-    source = readFileIfExists(getPackagedScriptPath());
+    const source = readFileIfExists(getPackagedScriptPath());
+    return source === null ? null : extractCallClient(source);
   } catch {
     return null;
   }
-  if (source === null) return null;
-  const start = source.indexOf(`\n${CALL_CLIENT_START}\n`);
-  const end = start < 0 ? -1 : source.indexOf(`\n${CALL_CLIENT_END}\n`, start);
-  if (end < 0) return null;
-  return source.slice(start + 1, end + 1 + CALL_CLIENT_END.length);
 }
 
 /**
@@ -169,7 +172,13 @@ export function repointAppImageWrapper(appImage: string, version?: string): bool
   if (current === null) return false;
   const named = appImageOfWrapper(current);
   if (named === null) return false;
-  const next = generateAppImageWrapper(appImage, version);
+  // A packaged script that can't be read leaves the installed client in place
+  // rather than writing a wrapper that has lost `call`.
+  const next = generateAppImageWrapper(
+    appImage,
+    version,
+    readCallClient() ?? extractCallClient(current)
+  );
   if (named === appImage && current === next) return false;
   if (named !== appImage && (!isAppImageUpdateRename(named, appImage) || fs.existsSync(named))) {
     return false;

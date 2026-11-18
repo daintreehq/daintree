@@ -503,15 +503,20 @@ export class SessionStore {
   }
 
   /**
-   * Drop a help session's figure counter. Resolve the public help-session id
-   * from {@link sessionHelpIdMap} BEFORE that entry is deleted, since the
-   * counter is keyed by the public id, not the transport sessionId.
+   * Drop a help session's figure counter once its last transport goes.
+   * Resolve the public help-session id from {@link sessionHelpIdMap} BEFORE
+   * that entry is deleted, since the counter is keyed by the public id, not the
+   * transport sessionId. A sibling transport on the same help session (a
+   * `daintree call` from the Assistant's own pane, a reconnect overlapping the
+   * old one) is still numbering figures, so its count stays.
    */
   clearFigureCounter(sessionId: string): void {
     const helpSessionId = this.sessionHelpIdMap.get(sessionId);
-    if (helpSessionId !== undefined) {
-      this.figureCounters.delete(helpSessionId);
+    if (helpSessionId === undefined) return;
+    for (const [otherSessionId, otherHelpSessionId] of this.sessionHelpIdMap) {
+      if (otherSessionId !== sessionId && otherHelpSessionId === helpSessionId) return;
     }
+    this.figureCounters.delete(helpSessionId);
   }
 
   /**
