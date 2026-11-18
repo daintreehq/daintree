@@ -191,6 +191,9 @@ describe("RemoveCloudHostDialog by what the provider declares (#17346)", () => {
     cleanup();
     open(status({ createdFor: null, machine: "unknown" }), atCreate);
     expect(dialogText()).toContain("Daintree can't add it back later");
+    cleanup();
+    open(status({ createdFor: null, machine: "deleted" }), atCreate);
+    expect(dialogText()).not.toContain("Daintree can't add it back later");
   });
 
   it("says a kept machine keeps billing until it's deleted when its provider bills it stopped", () => {

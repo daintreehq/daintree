@@ -587,8 +587,18 @@ export class GceClient {
     try {
       token = await ctx.authorize(freshToken);
     } catch (error) {
-      if (error instanceof GceApiError) UNSENT.add(error);
-      throw error;
+      // Whatever went wrong getting a token, nothing was sent; it settles like any other failure.
+      const failed =
+        error instanceof GceApiError
+          ? error
+          : new GceApiError(
+              "unauthorized",
+              "This account's service account key couldn't sign in to Google",
+              null,
+              null
+            );
+      UNSENT.add(failed);
+      throw failed;
     }
     // Cancelled while the token was fetched: nothing is sent.
     if (ctx.signal?.aborted) throw new GceApiError("cancelled", "Cancelled", null, null);

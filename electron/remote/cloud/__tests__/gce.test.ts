@@ -80,7 +80,9 @@ interface FakeRequest {
 }
 
 /** A stand-in for Google's token endpoint and the Compute Engine calls the provider makes. */
-function fakeGoogle() {
+function fakeGoogle(
+  options: { clientSleep?: (ms: number, signal?: AbortSignal) => Promise<void> } = {}
+) {
   const requests: FakeRequest[] = [];
   const tokens = new Set<string>();
   const instances = new Map<string, FakeInstance>();
@@ -99,6 +101,8 @@ function fakeGoogle() {
     nextId: 0n,
     /** Inserts answer with an operation that's already done. */
     insertDone: false,
+    /** What the next stop's operation ends in, once waited for. */
+    stopFailure: null as null | { code: string; message: string; status: number },
     /** Answers taken in order by the next requests whose path matches, before the fake's own. */
     script: [] as { path: RegExp; status: number; reason?: string; error?: Error }[],
   };
@@ -400,7 +404,27 @@ function fakeGoogle() {
       instance.status = "STOPPING";
       return json(
         200,
-        opView(operation(zone!, instance.id, {}, () => (instance.status = "TERMINATED")))
+        opView(
+          operation(
+            zone!,
+            instance.id,
+            state.stopFailure
+              ? {
+                  failure: {
+                    error: {
+                      errors: [
+                        { code: state.stopFailure.code, message: state.stopFailure.message },
+                      ],
+                    },
+                    httpErrorStatusCode: state.stopFailure.status,
+                  },
+                }
+              : {},
+            () => {
+              if (!state.stopFailure) instance.status = "TERMINATED";
+            }
+          )
+        )
       );
     }
     if (action === "/start" || action === "/resume") {
@@ -426,7 +450,7 @@ function fakeGoogle() {
   const client = new GceClient({
     baseUrl: API,
     fetch: fetch as unknown as typeof globalThis.fetch,
-    sleep: async () => {},
+    sleep: options.clientSleep ?? (async () => {}),
   });
   let clock = Date.parse("2026-11-18T08:00:00Z");
   const provider = new GceProvider(() => ({ client, tokens: tokensSource }), {
@@ -442,6 +466,14 @@ function fakeGoogle() {
     ...overrides,
   });
   return { fetch, requests, instances, state, provider, credentials, tokens };
+}
+
+/** Reads of the VM itself made after the first DELETE was sent. */
+function lookupsAfterDelete(requests: FakeRequest[]): number {
+  const sent = requests.findIndex((request) => request.method === "DELETE");
+  return requests
+    .slice(sent + 1)
+    .filter((request) => request.method === "GET" && /\/instances\/\d+$/.test(request.path)).length;
 }
 
 const CREATE = {
@@ -953,24 +985,25 @@ describe("GceProvider", () => {
     await expect(
       google.provider.delete(google.credentials(), created.resourceId)
     ).resolves.toBeUndefined();
+    expect(lookupsAfterDelete(google.requests)).toBe(1);
   });
 
-  it("keeps a host whose resent delete was refused while the VM's fate can't be read", async () => {
+  it("passes on a failed look at the VM after an unsettled delete, rather than guess", async () => {
     const google = fakeGoogle();
     const created = await google.provider.create(google.credentials(), CREATE);
     const instancePath = /\/instances\/\d+$/;
     google.state.script.push(
       { path: instancePath, status: 0, error: new TypeError("fetch failed") },
       { path: instancePath, status: 404, reason: "notFound" },
-      { path: instancePath, status: 503 },
-      { path: instancePath, status: 503 },
-      { path: instancePath, status: 503 }
+      { path: instancePath, status: 503, reason: "backendError" },
+      { path: instancePath, status: 503, reason: "backendError" },
+      { path: instancePath, status: 503, reason: "backendError" }
     );
     const error = await google.provider
       .delete(google.credentials(), created.resourceId)
       .catch((err: unknown) => err);
-    expect(error).toBeInstanceOf(GceApiError);
-    expect(google.provider.describeError(error).code).toBe("provider-unreachable");
+    expect(error).toMatchObject({ kind: "server", message: "scripted 503" });
+    expect(lookupsAfterDelete(google.requests)).toBe(3);
   });
 
   it("keeps a host whose resent delete was refused while the VM still exists", async () => {
@@ -984,8 +1017,67 @@ describe("GceProvider", () => {
     const error = await google.provider
       .delete(google.credentials(), created.resourceId)
       .catch((err: unknown) => err);
-    expect(google.provider.describeError(error).code).not.toBe("not-found");
+    expect(error).toMatchObject({ kind: "server", message: /hasn't finished deleting/ });
+    expect(lookupsAfterDelete(google.requests)).toBe(1);
     expect(google.instances.size).toBe(1);
+  });
+
+  it("confirms a delete whose every answer was lost by looking at the VM", async () => {
+    const google = fakeGoogle();
+    const created = await google.provider.create(google.credentials(), CREATE);
+    const deleting = /\/instances\/\d+$/;
+    google.state.script.push(
+      ...[0, 1, 2].map(() => ({
+        path: deleting,
+        status: 0,
+        error: new TypeError("fetch failed"),
+      }))
+    );
+    google.instances.delete(BIG_ID);
+    await expect(
+      google.provider.delete(google.credentials(), created.resourceId)
+    ).resolves.toBeUndefined();
+  });
+
+  it("says a stop Google gave up on", async () => {
+    const google = fakeGoogle();
+    const created = await google.provider.create(google.credentials(), CREATE);
+    google.state.stopFailure = { code: "SOMETHING_FAILED", message: "Stop failed", status: 400 };
+    await expect(
+      google.provider.stop(google.credentials(), created.resourceId)
+    ).rejects.toMatchObject({ message: "Stop failed" });
+  });
+
+  it("settles a write cancelled during its backoff as unknown once it may have been sent", async () => {
+    const controller = new AbortController();
+    const cancelled = async () => {
+      controller.abort();
+      throw new GceApiError("cancelled", "Cancelled", null, null);
+    };
+    const google = fakeGoogle({ clientSleep: cancelled });
+    google.state.script.push({ path: /\/instances$/, status: 503, reason: "backendError" });
+    const error = await google.provider
+      .create(google.credentials({ signal: controller.signal }), CREATE)
+      .catch((e: unknown) => e);
+    expect(error).toMatchObject({ kind: "outcome-unknown" });
+    expect(google.requests.filter((request) => request.path.endsWith("/instances"))).toHaveLength(
+      1
+    );
+  });
+
+  it("settles a write cancelled while its token was retried as cancelled: nothing was sent", async () => {
+    const controller = new AbortController();
+    const cancelled = async () => {
+      controller.abort();
+      throw new GceApiError("cancelled", "Cancelled", null, null);
+    };
+    const google = fakeGoogle({ clientSleep: cancelled });
+    google.state.script.push({ path: /^\/token$/, status: 503 });
+    const error = await google.provider
+      .create(google.credentials({ signal: controller.signal }), CREATE)
+      .catch((e: unknown) => e);
+    expect(error).toMatchObject({ kind: "cancelled" });
+    expect(google.requests.some((request) => request.path.endsWith("/instances"))).toBe(false);
   });
 
   it("deletes only once Compute Engine has finished", async () => {

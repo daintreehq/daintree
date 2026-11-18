@@ -60,6 +60,14 @@ const IMAGES: readonly { id: string; label: string; description: string }[] = [
 ];
 
 const BOOT_DISK_GB = 30;
+/** Delete failures that leave whether the VM still exists to a fresh look at it. */
+const DELETE_UNSETTLED: ReadonlySet<string> = new Set([
+  "not-found",
+  "outcome-unknown",
+  "network",
+  "timeout",
+  "server",
+]);
 const PREFERRED_ZONE = "us-central1-a";
 /** How long a create, start or delete waits for Compute Engine to finish it. */
 const OPERATION_DEADLINE_MS = 5 * 60_000;
@@ -743,13 +751,8 @@ export class GceProvider implements CloudProvider {
     try {
       done = await this.finish(client, ctx, zone, await client.deleteInstance(ctx, zone, instance));
     } catch (error) {
-      // A lost answer, or an operation that can't be found, says nothing about the VM: only the VM itself can.
-      if (
-        !(error instanceof GceApiError) ||
-        (error.kind !== "not-found" && error.kind !== "outcome-unknown")
-      ) {
-        throw error;
-      }
+      // A lost or unreadable answer, or an operation that can't be found, says nothing about the VM: only the VM itself can.
+      if (!(error instanceof GceApiError) || !DELETE_UNSETTLED.has(error.kind)) throw error;
       if (await this.isGone(client, ctx, zone, instance)) return;
       throw new GceApiError(
         "server",
