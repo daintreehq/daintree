@@ -77,7 +77,8 @@ const states = [
 ];
 
 const getAllStatesForProjectAsync = vi.fn(
-  async (_projectPath: string, _projectId: string): Promise<{ id: string; path: string }[]> => states
+  async (_projectPath: string, _projectId: string): Promise<{ id: string; path: string }[]> =>
+    states
 );
 
 let cleanup: (() => void) | null = null;

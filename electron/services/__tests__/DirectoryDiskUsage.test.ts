@@ -147,7 +147,10 @@ describe("indexNestedRoots", () => {
       const roots: string[] = [];
       for (let i = 0; i < 25; i++) {
         const depth = 1 + Math.floor(random() * 4);
-        const parts = Array.from({ length: depth }, () => names[Math.floor(random() * names.length)]);
+        const parts = Array.from(
+          { length: depth },
+          () => names[Math.floor(random() * names.length)]
+        );
         roots.push(`/${parts.join("/")}`);
       }
       const nestedIn = indexNestedRoots(roots, "linux");

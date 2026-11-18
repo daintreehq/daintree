@@ -153,7 +153,7 @@ export function indexNestedRoots(
   for (const { resolved, given } of known.values()) {
     // Upward, so the first known ancestor is the nearest; `dirname` returns
     // its argument at a filesystem, drive or UNC share root.
-    for (let child = resolved, dir = pathApi.dirname(resolved); dir !== child; ) {
+    for (let child = resolved, dir = pathApi.dirname(resolved); dir !== child;) {
       const key = keyOf(dir);
       if (known.has(key)) {
         const list = nested.get(key);
