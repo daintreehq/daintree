@@ -20,7 +20,8 @@ export interface ClaudeUsageProfile {
   shell: string | undefined;
 }
 
-function exportedConfigDir(
+/** {@link ClaudeUsageProfile.dir}, read from the probe alone, with no filesystem call. */
+export function exportedClaudeConfigDir(
   observation: ShellEnvironmentObservation | undefined
 ): string | null | undefined {
   const exported = observation?.env[CONFIG_DIR_VAR];
@@ -32,17 +33,8 @@ export async function readClaudeUsageProfile(
   observation: ShellEnvironmentObservation | undefined,
   canonicalKey: (dir: string) => Promise<string>
 ): Promise<ClaudeUsageProfile> {
-  const dir = exportedConfigDir(observation);
+  const dir = exportedClaudeConfigDir(observation);
   return { dir, identity: dir ? await canonicalKey(dir) : dir, shell: observation?.shell };
-}
-
-/** {@link readClaudeUsageProfile} with a key that needs no await, for quit. */
-export function readClaudeUsageProfileSync(
-  observation: ShellEnvironmentObservation | undefined,
-  canonicalKey: (dir: string) => string
-): ClaudeUsageProfile {
-  const dir = exportedConfigDir(observation);
-  return { dir, identity: dir ? canonicalKey(dir) : dir, shell: observation?.shell };
 }
 
 /**

@@ -18,9 +18,9 @@ import {
   type SavedClaudeUsageReading,
 } from "./claudeUsageDocument.js";
 import {
+  exportedClaudeConfigDir,
   placeClaudeUsageRecord,
   readClaudeUsageProfile,
-  readClaudeUsageProfileSync,
   type ClaudeUsageProfile,
 } from "./claudeUsagePlacement.js";
 
@@ -256,27 +256,25 @@ export function restoreClaudeUsageObservations(
   }
   const readShellObservation = options.readShellObservation ?? getShellEnvironmentObservation;
   const canonicalKey = options.canonicalKey ?? canonicalClaudeConfigDir;
-  let resolved: {
-    observation: ShellEnvironmentObservation | undefined;
-    profile: ClaudeUsageProfile;
-  } | null = null;
+  let resolved: ClaudeUsageProfile | null = null;
   persistence = {
     storage,
     now,
     readProfile: async () => {
-      const observation = readShellObservation();
-      const profile = await readClaudeUsageProfile(observation, canonicalKey);
-      resolved = { observation, profile };
-      return profile;
+      resolved = await readClaudeUsageProfile(readShellObservation(), canonicalKey);
+      return resolved;
     },
-    // The last resolved profile while the probe still says the same; else the
-    // exported folder as spelled, which can fail to match a pane's resolved
-    // folder and file it as unknown, but never under another account.
     readProfileNow: () => {
       const observation = readShellObservation();
-      return resolved !== null && resolved.observation === observation
-        ? resolved.profile
-        : readClaudeUsageProfileSync(observation, folderIdentity);
+      const dir = exportedClaudeConfigDir(observation);
+      const shell = observation?.shell;
+      // No export, or one that can't be resolved: nothing to look up.
+      if (!dir) return { dir, identity: dir, shell };
+      // The export the last save resolved, however often the probe repeats it.
+      if (resolved !== null && resolved.dir === dir && resolved.shell === shell) return resolved;
+      // An export not yet resolved: no pane in the probed shell is certain to
+      // be on its folder, as with one that can't be resolved at all.
+      return { dir, identity: null, shell };
     },
     // A probe answering late can move this launch's readings; the saved copy follows.
     unsubscribe: subscribeShellEnvironment(() => {

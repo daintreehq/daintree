@@ -580,8 +580,8 @@ describe("ClaudeUsageObservations across launches (#17610)", () => {
     );
     await vi.waitFor(() => expect(pending).toHaveLength(1));
 
-    // The profile now exports the pane's own folder, so the pane is on it.
-    recordShellEnvironment("/bin/zsh", { CLAUDE_CONFIG_DIR: WORK });
+    // The login shell is now bash, whose profile a zsh pane never ran.
+    recordShellEnvironment("/bin/bash", { CLAUDE_CONFIG_DIR: PROFILE });
     pending[0]!(PROFILE);
     await vi.waitFor(() => expect(pending).toHaveLength(2));
     expect(savedPlaces(storage.value)).toEqual([["t1", null]]);
@@ -591,9 +591,64 @@ describe("ClaudeUsageObservations across launches (#17610)", () => {
     expect(storage.writes).toBe(2);
     expect(savedPlaces(storage.value)).toEqual([["t1", WORK]]);
 
-    pending[1]!(WORK);
+    pending[1]!(PROFILE);
     await settle();
     expect(storage.writes).toBe(2);
+  });
+
+  it("keeps a saved account at quit when the probe repeats the export the last save resolved", async () => {
+    const storage = memoryStorage();
+    recordShellEnvironment("/bin/zsh", { CLAUDE_CONFIG_DIR: WORK });
+    restoreClaudeUsageObservations(storage, { canonicalKey: asIs });
+    recordClaudeUsageObservation(
+      reading({ configDir: WORK, observedAt: Date.now(), resetsAt: Date.now() + HOUR })
+    );
+    await settle();
+    expect(savedPlaces(storage.value)).toEqual([["t1", WORK]]);
+
+    recordShellEnvironment("/bin/zsh", { CLAUDE_CONFIG_DIR: WORK });
+    sealClaudeUsageObservations();
+
+    expect(storage.writes).toBe(2);
+    expect(savedPlaces(storage.value)).toEqual([["t1", WORK]]);
+  });
+
+  it("files a pane in the probed shell as unknown at quit while a new export is unresolved", async () => {
+    const storage = memoryStorage();
+    recordShellEnvironment("/bin/zsh", {});
+    restoreClaudeUsageObservations(storage, { canonicalKey: asIs });
+    recordClaudeUsageObservation(
+      reading({
+        terminalId: "zsh",
+        configDir: WORK,
+        observedAt: Date.now(),
+        resetsAt: Date.now() + HOUR,
+      })
+    );
+    recordClaudeUsageObservation(
+      reading({
+        terminalId: "bash",
+        window: "5-hour limit",
+        configDir: WORK,
+        shell: "/bin/bash",
+        observedAt: Date.now(),
+        resetsAt: Date.now() + HOUR,
+      })
+    );
+    await settle();
+    expect(savedPlaces(storage.value)).toEqual([
+      ["zsh", WORK],
+      ["bash", WORK],
+    ]);
+
+    // Quit before the new export's folder is looked up.
+    recordShellEnvironment("/bin/zsh", { CLAUDE_CONFIG_DIR: WORK });
+    sealClaudeUsageObservations();
+
+    expect(savedPlaces(storage.value)).toEqual([
+      ["zsh", null],
+      ["bash", WORK],
+    ]);
   });
 
   it("writes nothing at quit when the last save already has every change, and stops saving", async () => {
