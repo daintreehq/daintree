@@ -42,6 +42,6 @@ The direction is one person steering thousands of agents through the hierarchy, 
 
 - A host's agent directory names at most 256 agents (`AGENT_DIRECTORY_ENTRIES_MAX` in `shared/types/agentDirectory.ts`).
 - One `host.status` call reads at most 64 projects (`HOST_STATUS_TARGETS_MAX` in `shared/types/hostControl.ts`).
-- `host.list` fits every host's agent directory into a single 48 KiB answer, cutting entries and counting them as omitted when they don't fit (`AGENT_DIRECTORY_BYTES_MAX`, applied by `fitToResponse` in `electron/remote/assistant/HostCallRuntime.ts`).
+- `host.list` shares one 48 KiB budget across every host's agent directory, trimming entries to fit and counting the ones it omits (`AGENT_DIRECTORY_BYTES_MAX`, applied by `fitToResponse` in `electron/remote/assistant/HostCallRuntime.ts`).
 
 The goal is to be the best meta-harness for a developer running many agents every day, on machines they control and with no vendor they're locked into, and to keep raising those limits until thousands is an ordinary day.

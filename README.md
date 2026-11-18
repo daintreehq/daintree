@@ -6,7 +6,7 @@
 
 **Daintree: a meta-harness and IDE that runs your own agent CLIs as a hierarchy of agents, across multiple hosts. Always without vendor lock-in.**
 
-Claude Code, Codex, Antigravity, OpenCode and [13&nbsp;more](#agent-clis) run as they are, with your existing config and login. A global Assistant sits above your projects and hosts, each project has assistants of its own, and they hand tasks to agents working in their own git worktrees, on this machine or on another one you reach over ssh. The calls only you can make wait for you in Daintree, or reach your phone. macOS, Windows and Linux. Apache 2.0, no account, telemetry off by default.
+Claude Code, Codex, Antigravity, OpenCode and [13&nbsp;more](#agent-clis) run as they are, with your existing config and login. A global Assistant sits above your projects and hosts, each project has assistants of its own, and they hand tasks to agents working in their own git worktrees, on this machine or on another one you reach over ssh. The calls only you can make wait for you in Daintree, and questions an agent sends through Decisions can reach your phone. macOS, Windows and Linux. Apache 2.0, no account, telemetry off by default.
 
 [![Release](https://img.shields.io/github/v/release/daintreehq/daintree?label=release&color=0f7a4a)](https://daintree.org/changelog) [![Build](https://img.shields.io/github/actions/workflow/status/daintreehq/daintree/nightly-publish.yml?branch=develop&label=nightly%20build)](https://github.com/daintreehq/daintree/actions/workflows/nightly-publish.yml) [![License](https://img.shields.io/badge/license-Apache%202.0-0f7a4a)](LICENSE)
 
@@ -107,7 +107,7 @@ One machine drives a host's project at a time, and every attached window watches
 
 A project can build its own tools where its agents run. A project plugin, committed to the repository under `.daintree/plugins/`, can be a whole application, such as a CRM, a ledger or a board: its data can live in the repository, a panel renders it, and agents launched with access to it work on the same data through the plugin's own MCP tools.
 
-Plugins also add panels, actions, settings, recipes and tours, and a plugin you install for every project can add agents, forge providers and themes too. GitHub and GitLab support and the Markdown editor ship as built-in plugins. Installing one from a URL or from the reviewed community catalog shows every capability it asks for before it's installed. [Plugin&nbsp;docs&nbsp;→](docs/plugins/README.md)
+Plugins also add panels, actions, settings, recipes and tours, and a plugin you install for every project can add agents and themes too. GitHub and GitLab support and the Markdown editor ship as built-in plugins. Installing one from a URL or from the reviewed community catalog shows every capability it asks for before it's installed. [Plugin&nbsp;docs&nbsp;→](docs/plugins/README.md)
 
 ## Worktrees and review
 
@@ -214,7 +214,7 @@ One list of every agent across every open project, ranked by what it needs from 
   <br><sub>Canopy, in the <a href="#themes">Redwoods</a> theme</sub>
 </p>
 
-Canopy reads each agent's screen with a small open model that ships inside the app and runs on your computer. Nothing it reads leaves the machine. It's on by default, **Settings → Integrations → Canopy** turns its reading off or hides it, and it opens with <kbd>⌘</kbd>&nbsp;<kbd>E</kbd> (<kbd>Ctrl</kbd>&nbsp;<kbd>Shift</kbd>&nbsp;<kbd>O</kbd> on Windows and Linux).
+Canopy reads each agent's screen with a small open model that ships inside the app and runs on the agent's own machine. What it reads goes nowhere but your own Daintree windows, over your own connection when the agent is on a remote host. It's on by default, **Settings → Integrations → Canopy** turns its reading off or hides it, and it opens with <kbd>⌘</kbd>&nbsp;<kbd>E</kbd> (<kbd>Ctrl</kbd>&nbsp;<kbd>Shift</kbd>&nbsp;<kbd>O</kbd> on Windows and Linux).
 
 ## Also in Daintree
 
