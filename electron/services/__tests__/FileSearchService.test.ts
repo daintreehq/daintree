@@ -728,15 +728,25 @@ describe("FileSearchService", () => {
 
     it("keeps every word of a name longer than the index's first allocation", async () => {
       // One file sizes the word buffer at sixteen, so the seventeenth word is
-      // only found if the buffer grows.
+      // only found if the buffer grows, and the sixteenth only survives if the
+      // growth copies what was already written. Distinct words, so a lost copy
+      // cannot read back as the first word's id.
+      const words = Array.from({ length: 16 }, (_, i) => {
+        const letter = String.fromCharCode(97 + i);
+        return letter.toUpperCase() + letter + letter;
+      });
+      const file = `${words.join("")}Zebra.ts`;
       const dir = makeTempDir();
       tempDirs.push(dir);
-      gitRepo(dir, `${"Foo".repeat(16)}Zebra.ts\0`);
+      gitRepo(dir, `${file}\0`);
       const service = await createService();
 
       await expect(
         service.searchNaturalLanguage({ cwd: dir, description: "zebra" })
-      ).resolves.toEqual([`${"Foo".repeat(16)}Zebra.ts`]);
+      ).resolves.toEqual([file]);
+      await expect(
+        service.searchNaturalLanguage({ cwd: dir, description: "ppp" })
+      ).resolves.toEqual([file]);
     });
 
     describe("against the per-description scan it replaced", () => {
