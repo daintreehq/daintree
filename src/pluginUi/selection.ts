@@ -197,7 +197,10 @@ export function useSelection<K extends PluginSelectionKey = string>(
     const changed =
       next.selected.length !== before.selected.length ||
       next.selected.some((id) => !beforeSet.has(id));
-    if (changed) onChange?.(ids.filter((id) => next.selected.includes(id)));
+    if (changed && onChange) {
+      const nextSet = new Set(next.selected);
+      onChange(ids.filter((id) => nextSet.has(id)));
+    }
   };
 
   const handleSelect = (id: K, gesture?: PluginSelectionGesture) => {
