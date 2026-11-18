@@ -4,6 +4,8 @@ import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
+import { cn } from "@/lib/utils";
+import { Check, Clock } from "lucide-react";
 import type { DecisionQuestionContent, DecisionThreadEntry } from "@shared/types/decisionsQuestion";
 import { DecisionAnswerComposer, type AnswerComposerMode } from "./DecisionAnswerComposer";
 import { DecisionFollowUpComposer } from "./DecisionFollowUpComposer";
@@ -31,17 +33,35 @@ const UNAVAILABLE: Record<Exclude<QuestionRead["result"], "read">, string> = {
   failed: "The question couldn't be read.",
 };
 
+/** "Due", as the Decisions app on the phone says it, until it passes. */
 function ExpiryText({ expiresAt }: { expiresAt: string }) {
   const ms = Date.parse(expiresAt);
   if (Number.isNaN(ms)) return null;
   const relative = formatRelativeTime(ms);
   return (
-    <time dateTime={expiresAt} title={new Date(ms).toLocaleString()}>
-      {ms > Date.now() ? `Expires ${relative}` : `Expired ${relative}`}
+    <time
+      dateTime={expiresAt}
+      title={new Date(ms).toLocaleString()}
+      className="inline-flex items-center gap-1"
+    >
+      <Clock className="size-3 shrink-0" aria-hidden="true" />
+      {ms > Date.now() ? `Due ${relative}` : `Expired ${relative}`}
     </time>
   );
 }
 
+/** Whether the person said it: their answers, follow-ups and declines read as their own side of the thread. */
+function fromPerson(entry: DecisionThreadEntry): boolean {
+  if (entry.type === "declined") return true;
+  if (entry.type === "answer" || entry.type === "message") return entry.from === "person";
+  return false;
+}
+
+/**
+ * One turn of the thread, as the Decisions app draws it: the person's words
+ * in a bubble on the right with where and when beneath, the agent's and the
+ * relay's on the page at the left under who said them.
+ */
 function ThreadEntry({
   entry,
   options,
@@ -51,28 +71,163 @@ function ThreadEntry({
 }) {
   const empty = emptyEntryText(entry);
   const choices = entry.type === "answer" && !entry.unreadable ? choiceLabels(entry, options) : [];
-  return (
-    <li
-      className="flex flex-col gap-1 rounded-[var(--radius-md)] bg-overlay-subtle px-3 py-2"
-      data-testid="decision-thread-entry"
-      data-message-id={entry.type === "message" ? entry.messageId : undefined}
-    >
-      <p className="text-2xs text-text-secondary">
-        {threadEntryHeading(entry)} <FactSeparator /> <TimeAgo timestamp={entry.sentAt} />
-      </p>
+  const text =
+    (entry.type === "answer" || entry.type === "message") &&
+    entry.text !== null &&
+    !entry.unreadable
+      ? entry.text
+      : null;
+  const reason = entry.type === "answer" && !entry.unreadable ? entry.reason : null;
+  const body = (
+    <>
       {choices.length > 0 && (
-        <p className="text-xs font-semibold text-text-primary [text-wrap:pretty]">
+        <p className="flex items-center gap-1.5 text-sm font-medium text-text-primary [text-wrap:pretty]">
+          <Check className="size-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
           {choices.join(", ")}
         </p>
       )}
-      {(entry.type === "answer" || entry.type === "message") &&
-        entry.text !== null &&
-        !entry.unreadable && <DecisionMarkdown text={entry.text} className="text-xs" />}
-      {entry.type === "answer" && entry.reason !== null && !entry.unreadable && (
-        <p className="text-xs text-text-secondary [text-wrap:pretty]">Why: {entry.reason}</p>
+      {text !== null && <DecisionMarkdown text={text} size="sm" />}
+      {reason !== null && (
+        <p className="text-xs text-text-secondary [text-wrap:pretty]">Why: {reason}</p>
       )}
       {empty !== null && <p className="text-xs text-text-secondary">{empty}</p>}
+    </>
+  );
+  const hasBody = choices.length > 0 || text !== null || reason !== null || empty !== null;
+  const messageId = entry.type === "message" ? entry.messageId : undefined;
+
+  if (fromPerson(entry)) {
+    return (
+      <li
+        className="flex flex-col items-end gap-1"
+        data-testid="decision-thread-entry"
+        data-message-id={messageId}
+      >
+        {hasBody && (
+          <div className="flex max-w-[85%] flex-col gap-1 rounded-[var(--radius-xl)] rounded-br-[var(--radius-xs)] bg-overlay-soft px-3.5 py-2.5">
+            {body}
+          </div>
+        )}
+        <p className="text-xs text-text-secondary">
+          {threadEntryHeading(entry)} <FactSeparator /> <TimeAgo timestamp={entry.sentAt} />
+        </p>
+      </li>
+    );
+  }
+  return (
+    <li
+      className="flex flex-col items-start gap-1"
+      data-testid="decision-thread-entry"
+      data-message-id={messageId}
+    >
+      <p className="text-xs text-text-secondary">
+        <span className="font-medium text-text-primary">{threadEntryHeading(entry)}</span>{" "}
+        <FactSeparator /> <TimeAgo timestamp={entry.sentAt} />
+      </p>
+      {hasBody && <div className="flex w-full flex-col gap-1">{body}</div>}
     </li>
+  );
+}
+
+/**
+ * The options the latest answer chose, by id. None when that answer can't be
+ * read: an older one's choice may be the one it corrected.
+ */
+function chosenIds(thread: readonly DecisionThreadEntry[]): ReadonlySet<string> {
+  for (let index = thread.length - 1; index >= 0; index -= 1) {
+    const entry = thread[index]!;
+    if (entry.type === "answer") {
+      return entry.unreadable ? new Set() : new Set(entry.choices.map((choice) => choice.id));
+    }
+  }
+  return new Set();
+}
+
+/**
+ * The options a question offered, once it no longer takes an answer here: a
+ * quiet list, not cards, since nothing in it can be pressed, with the one the
+ * answer chose checked.
+ */
+function OfferedOptions({ question }: { question: DecisionQuestionContent }) {
+  const chosen = chosenIds(question.thread);
+  // Every option stays, the chosen one checked with its description: the answer above names only its label.
+  const answered = question.thread.some((entry) => entry.type === "answer");
+  // Words of one's own were never passed over, so they're only an option before an answer.
+  const ownWords = question.allowText && !answered;
+  return (
+    <section className="flex flex-col gap-2" aria-label="Options">
+      <h3 className="text-xs font-medium text-text-secondary">Options</h3>
+      <ul className="flex flex-col gap-1.5">
+        {question.options.map((option) => {
+          const picked = chosen.has(option.id);
+          return (
+            <li key={option.id} className="flex items-start gap-2">
+              <span className="flex h-5 w-4 shrink-0 items-center justify-center">
+                {picked ? (
+                  <Check className="size-3.5 text-text-primary" aria-label="Chosen" />
+                ) : (
+                  <span className="size-1 rounded-full bg-text-secondary" aria-hidden="true" />
+                )}
+              </span>
+              <span className="flex min-w-0 flex-col gap-0.5">
+                <span
+                  className={cn(
+                    "text-sm [text-wrap:pretty]",
+                    picked ? "font-medium text-text-primary" : "text-text-secondary"
+                  )}
+                >
+                  {option.label}
+                </span>
+                {option.description !== null && (
+                  <DecisionMarkdown text={option.description} size="xs" tone="secondary" />
+                )}
+              </span>
+            </li>
+          );
+        })}
+        {ownWords && (
+          <li className="flex items-start gap-2 text-sm text-text-secondary">
+            <span className="flex h-5 w-4 shrink-0 items-center justify-center" aria-hidden="true">
+              <span className="size-1 rounded-full bg-text-secondary" />
+            </span>
+            Or an answer in your own words
+          </li>
+        )}
+      </ul>
+    </section>
+  );
+}
+
+/** What the line under the question says: only what isn't already plain from the view. */
+function QuestionFacts({ question }: { question: DecisionQuestionContent }) {
+  // An open question shows its composer, which says it waits; a person's
+  // answer is what every question needs unless it says otherwise.
+  const status = question.status === "open" ? null : questionStatusText(question);
+  const requirement =
+    question.requirement === "human-required" ? null : requirementText(question.requirement);
+  return (
+    <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-text-secondary">
+      {status !== null && (
+        <>
+          <span data-testid="decision-question-status">{status}</span>
+          <FactSeparator />
+        </>
+      )}
+      {requirement !== null && (
+        <>
+          <span data-testid="decision-question-requirement">{requirement}</span>
+          <FactSeparator />
+        </>
+      )}
+      <TimeAgo timestamp={question.askedAt} prefix="Asked " />
+      {/* A declined question is over, whatever its deadline would have said. */}
+      {question.expiresAt !== null && question.closedReason !== "declined" && (
+        <>
+          <FactSeparator />
+          <ExpiryText expiresAt={question.expiresAt} />
+        </>
+      )}
+    </p>
   );
 }
 
@@ -83,6 +238,9 @@ function QuestionBody({
   answerMode,
   followUps,
   onMoved,
+  headingId,
+  sendNote,
+  eyebrow,
 }: {
   question: DecisionQuestionContent;
   target: DecisionQuestionTarget;
@@ -90,56 +248,36 @@ function QuestionBody({
   answerMode: AnswerComposerMode;
   followUps: boolean;
   onMoved: () => void;
+  headingId: string | undefined;
+  sendNote: string | null;
+  eyebrow: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-4" data-testid="decision-question-content">
-      <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-text-secondary">
-        <span data-testid="decision-question-status">{questionStatusText(question)}</span>
-        <FactSeparator />
-        <span data-testid="decision-question-requirement">
-          {requirementText(question.requirement)}
-        </span>
-        <FactSeparator />
-        <TimeAgo timestamp={question.askedAt} prefix="Asked " />
-        {/* A declined question is over, whatever its deadline would have said. */}
-        {question.expiresAt !== null && question.closedReason !== "declined" && (
-          <>
-            <FactSeparator />
-            <ExpiryText expiresAt={question.expiresAt} />
-          </>
-        )}
-      </p>
-      <DecisionMarkdown text={question.question} className="text-sm" />
+    <div className="flex flex-col gap-6" data-testid="decision-question-content">
+      <div className="flex flex-col gap-2">
+        {eyebrow}
+        {/* The ask, focusable from script alone so stepping to the next question lands on its
+            words. No heading role: an agent's markdown can carry headings of its own. */}
+        <div
+          id={headingId}
+          tabIndex={-1}
+          className="rounded-[var(--radius-sm)] outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent-primary"
+        >
+          <DecisionMarkdown
+            text={question.question}
+            size="lg"
+            className="font-medium leading-snug"
+          />
+        </div>
+        <QuestionFacts question={question} />
+      </div>
       {question.context !== null && (
-        <section className="flex flex-col gap-1" aria-label="Notes">
+        <section
+          className="flex flex-col gap-1.5 rounded-[var(--radius-md)] bg-overlay-subtle px-4 py-3"
+          aria-label="Notes"
+        >
           <h3 className="text-xs font-medium text-text-secondary">Notes</h3>
-          <DecisionMarkdown text={question.context} className="text-xs" />
-        </section>
-      )}
-      {/* While it takes an answer here, the composer offers the options instead. */}
-      {question.options.length > 0 && answerMode !== "form" && (
-        <section className="flex flex-col gap-1.5" aria-label="Options">
-          <h3 className="text-xs font-medium text-text-secondary">Options</h3>
-          <ul className="flex flex-col gap-1.5">
-            {question.options.map((option) => (
-              <li
-                key={option.id}
-                className="flex flex-col gap-0.5 rounded-[var(--radius-md)] border border-divider px-3 py-2"
-              >
-                <span className="text-xs font-medium text-text-primary [text-wrap:pretty]">
-                  {option.label}
-                </span>
-                {option.description !== null && (
-                  <DecisionMarkdown text={option.description} className="text-xs" />
-                )}
-              </li>
-            ))}
-          </ul>
-          {question.allowText && (
-            <p className="text-2xs text-text-secondary">
-              An answer may also be in their own words.
-            </p>
-          )}
+          <DecisionMarkdown text={question.context} size="sm" tone="secondary" />
         </section>
       )}
       {question.attachments.length > 0 && (
@@ -152,17 +290,20 @@ function QuestionBody({
         />
       )}
       {/* After the images: an approval waits until each has been opened. */}
-      <DecisionAnswerComposer question={question} target={target} onMoved={onMoved} />
-      <section
-        className="flex flex-col gap-1.5"
-        aria-label="Answers and follow-ups"
-        data-testid="decision-question-thread"
-      >
-        <h3 className="text-xs font-medium text-text-secondary">Answers and follow-ups</h3>
-        {question.thread.length === 0 ? (
-          <p className="text-xs text-text-secondary">Nothing yet.</p>
-        ) : (
-          <ul className="flex flex-col gap-1.5">
+      <DecisionAnswerComposer
+        question={question}
+        target={target}
+        onMoved={onMoved}
+        sendNote={sendNote}
+      />
+      {question.thread.length > 0 && (
+        <section
+          className="flex flex-col gap-3"
+          aria-label="Answers and follow-ups"
+          data-testid="decision-question-thread"
+        >
+          <h3 className="text-xs font-medium text-text-secondary">Answers and follow-ups</h3>
+          <ul className="flex flex-col gap-4">
             {question.thread.map((entry) => (
               <ThreadEntry
                 key={entry.type === "message" ? entry.messageId : entry.entryId}
@@ -171,8 +312,8 @@ function QuestionBody({
               />
             ))}
           </ul>
-        )}
-      </section>
+        </section>
+      )}
       {/* After the thread, which it adds to. */}
       {followUps && (
         <DecisionFollowUpComposer
@@ -181,6 +322,10 @@ function QuestionBody({
           primary={answerMode !== "form"}
           onMoved={onMoved}
         />
+      )}
+      {/* While it takes an answer here, the composer offers the options instead. */}
+      {question.options.length > 0 && answerMode !== "form" && (
+        <OfferedOptions question={question} />
       )}
     </div>
   );
@@ -209,6 +354,9 @@ export function DecisionQuestionReadView({
   target,
   active,
   followUps = false,
+  headingId,
+  sendNote = null,
+  eyebrow = null,
 }: {
   reader: DecisionQuestionReader;
   target: DecisionQuestionTarget | null;
@@ -216,6 +364,12 @@ export function DecisionQuestionReadView({
   active: boolean;
   /** Whether the person can add to the question's thread from here (#17238). */
   followUps?: boolean;
+  /** Given to the question's own words, so a surface can send the keyboard to them. */
+  headingId?: string;
+  /** What happens to an answer sent now, when that isn't simply "it goes": shown beside Send. */
+  sendNote?: string | null;
+  /** Who asked, over the question, when the surface knows it. */
+  eyebrow?: React.ReactNode;
 }) {
   const { current } = reader;
   return (
@@ -229,6 +383,9 @@ export function DecisionQuestionReadView({
           answerMode={reader.answerMode}
           followUps={followUps}
           onMoved={reader.reread}
+          headingId={headingId}
+          sendNote={sendNote}
+          eyebrow={eyebrow}
         />
       )}
       {current !== null && current.result !== "read" && (
