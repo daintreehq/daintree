@@ -10,7 +10,7 @@ import path from "node:path";
  */
 export const MAX_DU_OPERANDS = 2_000;
 
-/** Concurrent `lstat`s per directory in the walk. */
+/** Concurrent `lstat`s per directory in the walk, unless the caller sets its own. */
 const WALK_STAT_BATCH = 32;
 
 /**
@@ -27,6 +27,12 @@ export interface MeasureDirectoryOptions {
   exclude?: readonly string[];
   signal?: AbortSignal;
   platform?: Platform;
+  /**
+   * `lstat`s the walk keeps in flight at once. Each holds one of Main's four
+   * libuv workers until the kernel answers, which on a stalled share is never,
+   * so a caller that must leave the pool to the rest of Main sets this low.
+   */
+  statBatch?: number;
 }
 
 /**
@@ -45,11 +51,12 @@ export async function measureDirectorySize(
 ): Promise<number | null> {
   const { signal } = options;
   const platform = options.platform ?? process.platform;
+  const statBatch = Math.max(1, Math.floor(options.statBatch ?? WALK_STAT_BATCH));
   const resolvedRoot = path.resolve(root);
   const exclude = nearestNestedRoots(resolvedRoot, options.exclude ?? [], platform);
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
     if (signal?.aborted) return null;
-    const outcome = await measureOnce(resolvedRoot, exclude, platform, signal);
+    const outcome = await measureOnce(resolvedRoot, exclude, platform, signal, statBatch);
     if (outcome.kind === "measured") return outcome.bytes;
     if (outcome.kind === "final") return null;
   }
@@ -63,7 +70,8 @@ async function measureOnce(
   root: string,
   exclude: readonly string[],
   platform: Platform,
-  signal: AbortSignal | undefined
+  signal: AbortSignal | undefined,
+  statBatch: number
 ): Promise<Outcome> {
   try {
     const stat = await fsPromises.lstat(root);
@@ -73,7 +81,7 @@ async function measureOnce(
   }
 
   const walk = async (): Promise<Outcome> => {
-    const bytes = await walkDirectorySize(root, exclude, platform, signal);
+    const bytes = await walkDirectorySize(root, exclude, platform, signal, statBatch);
     return bytes === null ? { kind: "retry" } : { kind: "measured", bytes };
   };
   if (platform === "win32") return walk();
@@ -272,7 +280,8 @@ async function walkDirectorySize(
   root: string,
   exclude: readonly string[],
   platform: Platform,
-  signal: AbortSignal | undefined
+  signal: AbortSignal | undefined,
+  statBatch: number
 ): Promise<number | null> {
   const excluded = new Set(exclude.map((p) => comparablePath(p, platform)));
   const seenLinked = new Set<string>();
@@ -286,9 +295,9 @@ async function walkDirectorySize(
       const targets = entries
         .map((entry) => path.join(dir, entry.name))
         .filter((full) => !excluded.has(comparablePath(full, platform)));
-      for (let i = 0; i < targets.length; i += WALK_STAT_BATCH) {
+      for (let i = 0; i < targets.length; i += statBatch) {
         if (signal?.aborted) return null;
-        const batch = targets.slice(i, i + WALK_STAT_BATCH);
+        const batch = targets.slice(i, i + statBatch);
         // Settled, not raced: a failure must not leave sibling reads running
         // past the end of the measurement that started them.
         const settled = await Promise.allSettled(

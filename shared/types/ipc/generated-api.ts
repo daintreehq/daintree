@@ -677,6 +677,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["device-answer:set-enabled"]["result"]>;
   };
   devPreview: {
+    cancelDestructivePreviewSizes(
+      ...args: IpcInvokeMap["dev-preview:cancel-destructive-preview-sizes"]["args"]
+    ): Promise<IpcInvokeMap["dev-preview:cancel-destructive-preview-sizes"]["result"]>;
     ensure(
       ...args: IpcInvokeMap["dev-preview:ensure"]["args"]
     ): Promise<IpcInvokeMap["dev-preview:ensure"]["result"]>;

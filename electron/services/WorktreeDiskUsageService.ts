@@ -36,7 +36,8 @@ interface Session {
 
 /**
  * Sizes for the Worktrees overview, measured only while one asks: nothing here
- * runs on a timer or rides the status poll.
+ * runs on a timer or rides the status poll. The dev-preview restart
+ * confirmation runs its own instance, with its own slots and deadline.
  *
  * Each requesting view (`owner`) has at most one session — the overview's
  * current opening. Starting another, or cancelling, aborts the old one: its

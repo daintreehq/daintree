@@ -2,6 +2,7 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DevPreviewDestructiveConfirmDialog } from "../DevPreviewDestructiveConfirmDialog";
+import { formatBytes } from "@/lib/formatBytes";
 import type {
   DevPreviewDestructivePreviewMeta,
   DevPreviewDestructivePreviewSizes,
@@ -46,14 +47,38 @@ function deferred<T>(): {
 interface ElectronDevPreviewStub {
   getDestructivePreviewMeta: ReturnType<typeof vi.fn>;
   getDestructivePreviewSizes: ReturnType<typeof vi.fn>;
+  cancelDestructivePreviewSizes?: ReturnType<typeof vi.fn>;
 }
 
 function stubDevPreviewIpc(stub: ElectronDevPreviewStub) {
   vi.stubGlobal("window", window);
   Object.defineProperty(window, "electron", {
     configurable: true,
-    value: { devPreview: stub },
+    value: {
+      devPreview: {
+        cancelDestructivePreviewSizes: vi.fn().mockResolvedValue(undefined),
+        ...stub,
+      },
+    },
   });
+}
+
+function sizesSessionId(sizesFn: ReturnType<typeof vi.fn>, call: number): string {
+  const request: unknown = sizesFn.mock.calls[call]?.[0];
+  if (
+    typeof request === "object" &&
+    request !== null &&
+    "sessionId" in request &&
+    typeof request.sessionId === "string"
+  ) {
+    return request.sessionId;
+  }
+  throw new Error(`size request ${call} carried no session id`);
+}
+
+/** Lets an effect cleanup's queued cancel run before the call log is read. */
+async function flushCleanup() {
+  await act(async () => {});
 }
 
 const baseMeta: DevPreviewDestructivePreviewMeta = {
@@ -338,6 +363,7 @@ describe("DevPreviewDestructiveConfirmDialog", () => {
       projectId: "project-99",
       skipNodeModules: true,
       skipCacheDirs: false,
+      sessionId: expect.any(String),
     });
   });
 
@@ -365,6 +391,7 @@ describe("DevPreviewDestructiveConfirmDialog", () => {
       projectId: "project-1",
       skipNodeModules: false,
       skipCacheDirs: true,
+      sessionId: expect.any(String),
     });
   });
 
@@ -422,6 +449,195 @@ describe("DevPreviewDestructiveConfirmDialog", () => {
 
     expect(meta).not.toHaveBeenCalled();
     expect(sizes).not.toHaveBeenCalled();
+  });
+
+  describe("size scans live only as long as the opening that asked for them", () => {
+    function setup() {
+      const sizesFn = vi.fn().mockReturnValue(new Promise(() => {}));
+      const cancelFn = vi.fn().mockResolvedValue(undefined);
+      stubDevPreviewIpc({
+        getDestructivePreviewMeta: vi.fn().mockResolvedValue(baseMeta),
+        getDestructivePreviewSizes: sizesFn,
+        cancelDestructivePreviewSizes: cancelFn,
+      });
+      const props = {
+        panelId: "panel-1",
+        projectId: "project-1",
+        onClose: () => {},
+        onConfirm: () => {},
+      };
+      return { sizesFn, cancelFn, props };
+    }
+
+    it("cancels the opening's scans when the dialog closes", async () => {
+      const { sizesFn, cancelFn, props } = setup();
+      const view = render(
+        <DevPreviewDestructiveConfirmDialog {...props} tier="reinstallAndRestart" isOpen={true} />
+      );
+      await waitFor(() => expect(sizesFn).toHaveBeenCalledTimes(1));
+      const sessionId = sizesSessionId(sizesFn, 0);
+      expect(cancelFn).not.toHaveBeenCalled();
+
+      view.rerender(
+        <DevPreviewDestructiveConfirmDialog {...props} tier="reinstallAndRestart" isOpen={false} />
+      );
+      await flushCleanup();
+
+      expect(cancelFn.mock.calls).toEqual([[{ sessionId }]]);
+      expect(sizesFn).toHaveBeenCalledTimes(1);
+    });
+
+    it("a tier change cancels the old tier's scans and asks again under a new session", async () => {
+      const { sizesFn, cancelFn, props } = setup();
+      const view = render(
+        <DevPreviewDestructiveConfirmDialog {...props} tier="restartAndClearCache" isOpen={true} />
+      );
+      await waitFor(() => expect(sizesFn).toHaveBeenCalledTimes(1));
+      const first = sizesSessionId(sizesFn, 0);
+
+      view.rerender(
+        <DevPreviewDestructiveConfirmDialog {...props} tier="reinstallAndRestart" isOpen={true} />
+      );
+
+      await waitFor(() => expect(sizesFn).toHaveBeenCalledTimes(2));
+      expect(sizesSessionId(sizesFn, 1)).not.toBe(first);
+      await flushCleanup();
+      expect(cancelFn.mock.calls).toEqual([[{ sessionId: first }]]);
+    });
+
+    it("reopening asks under a new session, never the closed one's", async () => {
+      const { sizesFn, cancelFn, props } = setup();
+      const view = render(
+        <DevPreviewDestructiveConfirmDialog {...props} tier="reinstallAndRestart" isOpen={true} />
+      );
+      await waitFor(() => expect(sizesFn).toHaveBeenCalledTimes(1));
+      const first = sizesSessionId(sizesFn, 0);
+
+      view.rerender(
+        <DevPreviewDestructiveConfirmDialog {...props} tier="reinstallAndRestart" isOpen={false} />
+      );
+      view.rerender(
+        <DevPreviewDestructiveConfirmDialog {...props} tier="reinstallAndRestart" isOpen={true} />
+      );
+
+      await waitFor(() => expect(sizesFn).toHaveBeenCalledTimes(2));
+      expect(sizesSessionId(sizesFn, 1)).not.toBe(first);
+      await flushCleanup();
+      expect(cancelFn.mock.calls).toEqual([[{ sessionId: first }]]);
+    });
+
+    it("cancels the opening's scans when the dialog unmounts", async () => {
+      const { sizesFn, cancelFn, props } = setup();
+      const view = render(
+        <DevPreviewDestructiveConfirmDialog {...props} tier="reinstallAndRestart" isOpen={true} />
+      );
+      await waitFor(() => expect(sizesFn).toHaveBeenCalledTimes(1));
+      const sessionId = sizesSessionId(sizesFn, 0);
+
+      view.unmount();
+      await flushCleanup();
+
+      expect(cancelFn.mock.calls).toEqual([[{ sessionId }]]);
+    });
+
+    it("sends no cancel for an opening that never asked for sizes", async () => {
+      const { sizesFn, cancelFn, props } = setup();
+      const cases = [
+        { projectId: undefined, tier: "reinstallAndRestart" as const, isOpen: true },
+        { projectId: "project-1", tier: null, isOpen: true },
+        { projectId: "project-1", tier: "reinstallAndRestart" as const, isOpen: false },
+      ];
+      for (const { projectId, tier, isOpen } of cases) {
+        const view = render(
+          <DevPreviewDestructiveConfirmDialog
+            {...props}
+            projectId={projectId}
+            tier={tier}
+            isOpen={isOpen}
+          />
+        );
+        view.unmount();
+        await flushCleanup();
+      }
+      expect(sizesFn).not.toHaveBeenCalled();
+      expect(cancelFn).not.toHaveBeenCalled();
+    });
+
+    it("drops the old opening's late replies after a tier change", async () => {
+      const metaA = deferred<DevPreviewDestructivePreviewMeta>();
+      const sizesA = deferred<DevPreviewDestructivePreviewSizes>();
+      const metaFn = vi.fn().mockReturnValueOnce(metaA.promise).mockResolvedValueOnce(baseMeta);
+      const sizesFn = vi.fn().mockReturnValueOnce(sizesA.promise).mockResolvedValueOnce(baseSizes);
+      stubDevPreviewIpc({ getDestructivePreviewMeta: metaFn, getDestructivePreviewSizes: sizesFn });
+      const props = {
+        panelId: "panel-1",
+        projectId: "project-1",
+        onClose: () => {},
+        onConfirm: () => {},
+      };
+      const view = render(
+        <DevPreviewDestructiveConfirmDialog {...props} tier="restartAndClearCache" isOpen={true} />
+      );
+      view.rerender(
+        <DevPreviewDestructiveConfirmDialog {...props} tier="reinstallAndRestart" isOpen={true} />
+      );
+      const status = screen.getByTestId("dev-preview-destructive-status");
+      const current = `node_modules is ${formatBytes(baseSizes.nodeModulesSizeBytes!)}`;
+      await waitFor(() => expect(status.textContent).toContain(current));
+
+      await act(async () => {
+        metaA.reject(new Error("stale folder error"));
+        sizesA.resolve({ ...baseSizes, nodeModulesSizeBytes: 7 });
+      });
+
+      expect(screen.queryByTestId("dev-preview-destructive-meta-error")).toBeNull();
+      expect(status.textContent).toContain(current);
+      const confirmBtn = screen.getByRole<HTMLButtonElement>("button", { name: /reinstall/i });
+      expect(confirmBtn.hasAttribute("aria-disabled")).toBe(false);
+    });
+
+    it("drops the old panel's late folder after a panel change", async () => {
+      const metaA = deferred<DevPreviewDestructivePreviewMeta>();
+      const sizesA = deferred<DevPreviewDestructivePreviewSizes>();
+      stubDevPreviewIpc({
+        getDestructivePreviewMeta: vi
+          .fn()
+          .mockReturnValueOnce(metaA.promise)
+          .mockResolvedValueOnce(baseMeta),
+        getDestructivePreviewSizes: vi
+          .fn()
+          .mockReturnValueOnce(sizesA.promise)
+          .mockResolvedValueOnce(baseSizes),
+      });
+      const props = { projectId: "project-1", onClose: () => {}, onConfirm: () => {} };
+      const view = render(
+        <DevPreviewDestructiveConfirmDialog
+          {...props}
+          panelId="panel-old"
+          tier="reinstallAndRestart"
+          isOpen={true}
+        />
+      );
+      view.rerender(
+        <DevPreviewDestructiveConfirmDialog
+          {...props}
+          panelId="panel-new"
+          tier="reinstallAndRestart"
+          isOpen={true}
+        />
+      );
+      const path = await screen.findByTestId("dev-preview-destructive-node-modules-path");
+
+      await act(async () => {
+        metaA.resolve({ ...baseMeta, cwd: "/stale-panel" });
+        sizesA.reject(new Error("stale size error"));
+      });
+
+      expect(path.getAttribute("title")).toBe("/repo/node_modules");
+      expect(screen.getByTestId("dev-preview-destructive-status").textContent).toContain(
+        formatBytes(baseSizes.nodeModulesSizeBytes!)
+      );
+    });
   });
 
   describe("the copy follows what the preview found", () => {

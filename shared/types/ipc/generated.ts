@@ -1200,6 +1200,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./demo.js").DemoWaitForSelectorPayload];
     result: void;
   };
+  "dev-preview:cancel-destructive-preview-sizes": {
+    args: [request: import("./devPreview.js").DevPreviewDestructivePreviewSizesCancelRequest];
+    result: void;
+  };
   "dev-preview:ensure": {
     args: [request: import("./devPreview.js").DevPreviewEnsureRequest];
     result: import("./devPreview.js").DevPreviewSessionState;

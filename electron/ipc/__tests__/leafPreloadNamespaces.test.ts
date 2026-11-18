@@ -116,6 +116,20 @@ describe("leaf preload namespace bindings", () => {
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith("dev-preview:ensure", request);
     });
+
+    it("routes a confirmation opening's sizes and its cancel to their channels", async () => {
+      const invoke = vi.fn().mockResolvedValue(undefined);
+      const bindings = buildDevPreviewPreloadBindings(invoke);
+
+      const request = { panelId: "panel1", projectId: "p1", sessionId: "s1" };
+      await bindings.getDestructivePreviewSizes(request);
+      await bindings.cancelDestructivePreviewSizes({ sessionId: "s1" });
+
+      expect(invoke.mock.calls).toEqual([
+        ["dev-preview:get-destructive-preview-sizes", request],
+        ["dev-preview:cancel-destructive-preview-sizes", { sessionId: "s1" }],
+      ]);
+    });
   });
 
   describe("worktreeDiskUsage", () => {

@@ -373,6 +373,7 @@ export const CHANNEL_LOCALITY = {
   "demo:wait-for-idle": "shell",
   "demo:wait-for-selector": "shell",
   "dev-preview:all-sessions-changed": "host",
+  "dev-preview:cancel-destructive-preview-sizes": "host",
   "dev-preview:ensure": "host",
   "dev-preview:get-all-sessions": "host",
   "dev-preview:get-by-worktree": "host",
