@@ -58,8 +58,9 @@ export function CloudProvidersSection() {
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState<CloudAccountSummary | null>(null);
-  const [allowing, setAllowing] = useState(false);
-  const [allowError, setAllowError] = useState<string | null>(null);
+  /** The account an Allow is out for, and what the last one said, so a late answer never reaches another review. */
+  const [allowing, setAllowing] = useState<string | null>(null);
+  const [allowError, setAllowError] = useState<{ accountId: string; message: string } | null>(null);
 
   const providers = snapshot.providers;
   const usable = providers.filter((provider) => provider.unsupportedReason === null);
@@ -81,7 +82,7 @@ export function CloudProvidersSection() {
     reviewingProvider?.plugin && !reviewingProvider.plugin.granted
       ? reviewingProvider.plugin
       : null;
-  const reviewOver = reviewing !== null && reviewingPlugin === null && !allowing;
+  const reviewOver = reviewing !== null && reviewingPlugin === null && allowing !== reviewing.id;
 
   useEffect(() => {
     if (connectingGone) setConnecting(null);
@@ -121,17 +122,18 @@ export function CloudProvidersSection() {
 
   const allowReviewed = () => {
     if (!reviewingAccount || !reviewingPlugin) return;
-    setAllowing(true);
+    const accountId = reviewingAccount.id;
+    setAllowing(accountId);
     setAllowError(null);
-    cloudHostsClient.allowAccountProvider(reviewingAccount.id, reviewingPlugin.fingerprint).then(
+    cloudHostsClient.allowAccountProvider(accountId, reviewingPlugin.fingerprint).then(
       (account) => {
-        setAllowing(false);
-        setReviewing(null);
+        setAllowing((current) => (current === accountId ? null : current));
+        setReviewing((current) => (current?.id === accountId ? null : current));
         clearRowError(account.id);
       },
       (err: unknown) => {
-        setAllowing(false);
-        setAllowError(errorText(err, "Couldn't allow the plugin"));
+        setAllowing((current) => (current === accountId ? null : current));
+        setAllowError({ accountId, message: errorText(err, "Couldn't allow the plugin") });
       }
     );
   };
@@ -340,8 +342,8 @@ export function CloudProvidersSection() {
           plugin={reviewingPlugin}
           purpose="review"
           onAllow={allowReviewed}
-          busy={allowing}
-          error={allowError}
+          busy={allowing === reviewingAccount.id}
+          error={allowError?.accountId === reviewingAccount.id ? allowError.message : null}
         />
       )}
       <ConfirmDialog

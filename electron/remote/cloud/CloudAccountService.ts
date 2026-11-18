@@ -211,6 +211,8 @@ export class CloudAccountService {
   private readonly catalogs = new Map<string, CloudCatalog>();
   /** Per plugin, how many times it was uninstalled this run: an agreement from before one answers for nothing. */
   private readonly consentEpochs = new Map<string, number>();
+  /** Plugins uninstalled this run whose kept consent couldn't be removed: it answers for nothing either. */
+  private readonly unforgotten = new Set<string>();
   /** Per account, the replace or remove committing now; the next one waits for it. */
   private readonly commits = new Map<string, Promise<unknown>>();
 
@@ -246,7 +248,7 @@ export class CloudAccountService {
         providerNames: [],
       };
     }
-    const stored = this.deps.store.providerConsent(subject.pluginId);
+    const stored = this.storedConsent(subject.pluginId);
     return {
       pluginId: subject.pluginId,
       pluginName: subject.pluginName,
@@ -260,7 +262,7 @@ export class CloudAccountService {
   private consentReason(providerId: CloudProviderId): string | null {
     const consent = this.consentFor(providerId);
     if (!consent || consent.granted) return null;
-    const stored = this.deps.store.providerConsent(consent.pluginId);
+    const stored = this.storedConsent(consent.pluginId);
     return stored
       ? `Its cloud provider comes from the ${consent.pluginName} plugin, which changed what it asks for or does since you allowed it. Review its access to keep using this account.`
       : `Its cloud provider comes from the ${consent.pluginName} plugin, which isn't allowed to use your cloud accounts on this device. Review its access to keep using this account.`;
@@ -314,7 +316,7 @@ export class CloudAccountService {
     const current = this.consentFor(providerId);
     if (!current) return undefined;
     if (current.fingerprint !== "" && consent === current.fingerprint) {
-      const stored = this.deps.store.providerConsent(current.pluginId);
+      const stored = this.storedConsent(current.pluginId);
       return {
         record: {
           pluginId: current.pluginId,
@@ -358,6 +360,8 @@ export class CloudAccountService {
    * declarations it replaced are dropped, and whatever waited on it can go on.
    */
   private consentKept(agreed: Agreement | undefined, before: boolean): void {
+    // Written over whatever an uninstall couldn't remove.
+    if (agreed) this.unforgotten.delete(agreed.record.pluginId);
     if (!agreed || before) return;
     const { pluginId } = agreed.record;
     for (const account of this.deps.store.accounts()) {
@@ -375,7 +379,17 @@ export class CloudAccountService {
    */
   forgetPluginConsent(pluginId: string): void {
     this.consentEpochs.set(pluginId, (this.consentEpochs.get(pluginId) ?? 0) + 1);
-    this.deps.store.removeProviderConsent(pluginId);
+    try {
+      this.deps.store.removeProviderConsent(pluginId);
+    } catch (error) {
+      // Still on disk, but never an answer this run: a reinstall asks again.
+      this.unforgotten.add(pluginId);
+      throw error;
+    }
+  }
+
+  private storedConsent(pluginId: string): StoredProviderConsent | null {
+    return this.unforgotten.has(pluginId) ? null : this.deps.store.providerConsent(pluginId);
   }
 
   /** Refused before anything billable happens on a platform the provider can't serve. */

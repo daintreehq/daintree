@@ -127,6 +127,50 @@ describe("CloudProvidersSection", () => {
     expect(client.allowAccountProvider).toHaveBeenCalledTimes(2);
   });
 
+  it("leaves a later review alone when an earlier Allow answers", async () => {
+    let answer: (value: CloudAccountSummary) => void = () => {};
+    client.allowAccountProvider.mockImplementationOnce(
+      () => new Promise<CloudAccountSummary>((resolve) => (answer = resolve))
+    );
+    const other = {
+      ...pluginProvider(false, "fp-9"),
+      id: "acme.boxes.boxes",
+      name: "Boxes",
+      plugin: {
+        ...pluginProvider(false, "fp-9").plugin,
+        pluginId: "acme.boxes",
+        pluginName: "Acme Boxes",
+      },
+    };
+    const boxes = account({
+      id: "ca_boxes00001",
+      providerId: other.id,
+      displayName: "Boxes",
+      providerUnavailable: "Paused",
+    });
+    cloud.snapshot = {
+      providers: [pluginProvider(false, "fp-2"), other],
+      accounts: [account({ providerUnavailable: "Paused" }), boxes],
+      hosts: [],
+    };
+    const { rerender } = render(<CloudProvidersSection />);
+    fireEvent.click(screen.getByRole("button", { name: "Review access for Team droplets" }));
+    fireEvent.click(screen.getByRole("button", { name: "Allow access" }));
+    // Allowed, as another window sees it, before this one's answer arrives.
+    cloud.snapshot = {
+      providers: [pluginProvider(true, "fp-2"), other],
+      accounts: [account(), boxes],
+      hosts: [],
+    };
+    rerender(<CloudProvidersSection />);
+    fireEvent.click(screen.getByRole("button", { name: "Review access for Boxes" }));
+    expect(screen.getByTestId("cloud-provider-consent-dialog").textContent).toContain("Acme Boxes");
+    answer(account());
+    await waitFor(() => expect(client.allowAccountProvider).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.getByTestId("cloud-provider-consent-dialog").textContent).toContain("Acme Boxes");
+  });
+
   it("ends a review once its account is gone", () => {
     cloud.snapshot = {
       providers: [pluginProvider(false, "fp-2")],

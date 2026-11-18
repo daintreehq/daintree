@@ -829,6 +829,21 @@ describe("CloudAccountService and a plugin's provider", () => {
     expect(accounts.allowAccountProvider(summary.id, "fp-1").providerUnavailable).toBeNull();
   });
 
+  it("answers with no consent an uninstall couldn't remove, until it's given again", async () => {
+    const { accounts, store } = pluginService();
+    const summary = await accounts.addAccount({ ...PLUGIN_ACCOUNT, consent: "fp-1" });
+    vi.spyOn(store, "removeProviderConsent").mockImplementationOnce(() => {
+      throw new Error("disk full");
+    });
+    expect(() => accounts.forgetPluginConsent("acme.clouds")).toThrow("disk full");
+    // Still on disk, yet the plugin is asked again and its accounts pause.
+    expect(store.providerConsent("acme.clouds")).not.toBeNull();
+    expect(accounts.providerInfos()[0]!.plugin?.granted).toBe(false);
+    expect(accounts.summaries()[0]!.providerUnavailable).toContain("isn't allowed");
+    expect(accounts.allowAccountProvider(summary.id, "fp-1").providerUnavailable).toBeNull();
+    expect(accounts.providerInfos()[0]!.plugin?.granted).toBe(true);
+  });
+
   it("offers no scopes a check read while the plugin changed", async () => {
     let declared: { fingerprint: string } = { fingerprint: "" };
     const env = pluginService({
