@@ -15,6 +15,7 @@ vi.mock("@/hooks/useHostConnection", () => ({
 vi.mock("@/clients/operationsClient", () => ({ mintRemoteOperationId: () => undefined }));
 
 import { useReviewHubCommitAndPush } from "../useReviewHubCommitAndPush";
+import { useDiffViewedStore } from "@/store/diffViewedStore";
 import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
 import { useGitPushConfirmStore, type GitPushConfirmResult } from "@/store/gitPushConfirmStore";
 
@@ -26,7 +27,13 @@ const COMMITTED: GitCommitResult = {
   oid: "abc123".padEnd(40, "0"),
   parentOids: ["f".repeat(40)],
 };
-const OPTED_OUT = { branch: "feature/x", destination: DESTINATION, reviewedHeadOid: null };
+const OPTED_OUT = { branch: "feature/x", destination: DESTINATION, reviewed: null };
+const REVIEWED_STAGED = "e".repeat(64);
+const CONFIRMED = {
+  branch: "feature/x",
+  destination: DESTINATION,
+  reviewed: { headOid: "f".repeat(40), stagedIdentity: REVIEWED_STAGED },
+};
 
 const commit = vi.fn();
 const push = vi.fn();
@@ -52,14 +59,19 @@ beforeEach(() => {
   });
 });
 
-function renderPushHook() {
+function renderPushHook(
+  overrides: {
+    setActionError?: (failure: { title: string; detail?: string } | null) => void;
+    onCommitted?: (path: string, message: string) => void;
+  } = {}
+) {
   return renderHook(() =>
     useReviewHubCommitAndPush({
       worktreePath: PATH,
       refresh: () => Promise.resolve(),
-      setActionError: () => {},
+      setActionError: overrides.setActionError ?? (() => {}),
       debouncedBgRefreshRef: { current: null },
-      onCommitted: () => {},
+      onCommitted: overrides.onCommitted ?? (() => {}),
       onHeadMoved: headMoved,
     })
   );
@@ -291,7 +303,8 @@ describe("useReviewHubCommitAndPush — first commit (#17588)", () => {
       done = result.current.handleCommitThenReviewPush("Initial commit");
     });
     await act(async () => {});
-    expect(commit).toHaveBeenCalledWith(PATH, "Initial commit");
+    // No confirm listed its staged changes, so nothing holds it to them.
+    expect(commit).toHaveBeenCalledWith(PATH, "Initial commit", undefined);
     expect(requestConfirmation).not.toHaveBeenCalled();
 
     await act(async () => landed.resolve(ROOT));
@@ -449,5 +462,139 @@ describe("useReviewHubCommitAndPush — first commit (#17588)", () => {
     });
 
     expect(requestConfirmation).not.toHaveBeenCalled();
+  });
+});
+
+describe("useReviewHubCommitAndPush — held to the staged changes the confirm listed (#17563)", () => {
+  /** What main throws across the bridge for a refused reviewed commit. */
+  function commitReviewStale() {
+    return new Error(
+      "[GitError|commit-review-stale||feature%2Fx] This commit changed after it was reviewed: the staged changes are different. Nothing was committed or pushed. Commit and push again to review what is staged now."
+    );
+  }
+
+  it("hands the commit the tip and staged changes the confirm reviewed, and pushes when they hold", async () => {
+    commit.mockResolvedValueOnce({ ...COMMITTED, stagedIdentity: REVIEWED_STAGED });
+    const { result } = renderPushHook();
+
+    await act(() => result.current.handleCommitAndPush("feat: x", CONFIRMED));
+
+    expect(commit).toHaveBeenCalledWith(PATH, "feat: x", {
+      branch: "feature/x",
+      headOid: "f".repeat(40),
+      stagedIdentity: REVIEWED_STAGED,
+    });
+    expect(push).toHaveBeenCalledWith(PATH, undefined, undefined, {
+      branch: "feature/x",
+      headOid: COMMITTED.oid,
+      destination: DESTINATION,
+    });
+  });
+
+  it("holds an opted-out commit to nothing", async () => {
+    const { result } = renderPushHook();
+
+    await act(() => result.current.handleCommitAndPush("feat: x", OPTED_OUT));
+
+    expect(commit).toHaveBeenCalledWith(PATH, "feat: x", undefined);
+    expect(push).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the draft and says why when main refuses a restaged commit", async () => {
+    commit.mockRejectedValueOnce(commitReviewStale());
+    const clearViewed = vi.spyOn(useDiffViewedStore.getState(), "clearWorktree");
+    const setActionError = vi.fn();
+    const onCommitted = vi.fn();
+    const { result } = renderPushHook({ setActionError, onCommitted });
+
+    let rethrown: unknown;
+    await act(async () => {
+      await result.current.handleCommitAndPush("feat: x", CONFIRMED).catch((err: unknown) => {
+        rethrown = err;
+      });
+    });
+
+    // Rethrown with its reason readable, so the composer can tell a refused
+    // review from any other failed commit.
+    expect(rethrown).toHaveProperty("gitReason", "commit-review-stale");
+    expect(push).not.toHaveBeenCalled();
+    expect(onCommitted).not.toHaveBeenCalled();
+    expect(headMoved).not.toHaveBeenCalled();
+    expect(clearViewed).not.toHaveBeenCalled();
+    expect(setActionError).toHaveBeenLastCalledWith({
+      title: "Couldn't commit changes",
+      detail: expect.stringMatching(
+        /^This commit changed after it was reviewed: .*Nothing was committed or pushed/
+      ),
+    });
+  });
+
+  it("pushes nothing, then or on Retry, when the commit holds other staged changes than the confirm listed", async () => {
+    // An earlier Commit & push whose push failed leaves an approval Retry could use.
+    commit.mockResolvedValueOnce({ ...COMMITTED, stagedIdentity: REVIEWED_STAGED });
+    push.mockRejectedValueOnce(networkDown());
+    commit.mockResolvedValueOnce({ ...COMMITTED, stagedIdentity: "d".repeat(64) });
+    const onCommitted = vi.fn();
+    const { result } = renderPushHook({ onCommitted });
+    await act(() => result.current.handleCommitAndPush("feat: first", CONFIRMED));
+    expect(push).toHaveBeenCalledTimes(1);
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.handleCommitAndPush("feat: x", CONFIRMED);
+    });
+
+    // The commit landed, so the draft goes; only the push is withheld.
+    expect(outcome).toBe("withheld");
+    expect(onCommitted).toHaveBeenLastCalledWith(PATH, "feat: x");
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(result.current.pushError?.reason).toBe("push-review-stale");
+    expect(result.current.pushError?.summary).toMatch(
+      /staged changes changed.*Nothing was pushed\.$/
+    );
+    await act(() => result.current.handleRetryPush());
+    expect(push).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a push main refused as stale after a clean commit as withheld", async () => {
+    commit.mockResolvedValueOnce({ ...COMMITTED, stagedIdentity: REVIEWED_STAGED });
+    push.mockRejectedValueOnce(
+      new Error(
+        "[GitError|push-review-stale||feature%2Fx] The branch changed since this push was reviewed: 'feature/x' moved to a different commit. Nothing was pushed."
+      )
+    );
+    const { result } = renderPushHook();
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.handleCommitAndPush("feat: x", CONFIRMED);
+    });
+
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(outcome).toBe("withheld");
+    expect(result.current.pushError?.reason).toBe("push-review-stale");
+  });
+
+  it("reports an ordinary push failure after a clean commit as nothing special", async () => {
+    commit.mockResolvedValueOnce({ ...COMMITTED, stagedIdentity: REVIEWED_STAGED });
+    push.mockRejectedValueOnce(networkDown());
+    const { result } = renderPushHook();
+
+    let outcome: unknown = "unset";
+    await act(async () => {
+      outcome = await result.current.handleCommitAndPush("feat: x", CONFIRMED);
+    });
+
+    expect(outcome).toBeUndefined();
+    expect(result.current.pushError?.reason).toBe("network-unavailable");
+  });
+
+  it("pushes nothing when a host answers a reviewed commit without saying what it holds", async () => {
+    const { result } = renderPushHook();
+
+    await act(() => result.current.handleCommitAndPush("feat: x", CONFIRMED));
+
+    expect(push).not.toHaveBeenCalled();
+    expect(result.current.pushError?.rawMessage).toMatch(/couldn't be checked/);
   });
 });

@@ -396,6 +396,7 @@ describe("getGitRecoveryHint", () => {
       "conflict-unresolved",
       "push-rejected-outdated",
       "push-rejected-policy",
+      "commit-review-stale",
       "pull-rebase-review-stale",
       "repo-operation-changed",
       "pathspec-invalid",
@@ -615,6 +616,10 @@ describe("getGitRecoveryAction", () => {
     expect(["git.abortRepositoryOperation", "git.continueRepositoryOperation"]).not.toContain(
       changed
     );
+    // A refused commit leaves its changes staged and unpushed (#17563), so
+    // `git.push`'s fresh review would show none of them; the composer's own
+    // Commit & push is the fresh review.
+    expect(getGitRecoveryAction("commit-review-stale")).toBeUndefined();
   });
 
   it("returns undefined for reasons without a CTA", () => {

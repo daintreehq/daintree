@@ -286,6 +286,42 @@ export interface GitPushCommitPreview {
    * the preview is an approval of publishing exactly this commit (#15646).
    */
   headOid: string;
+  /**
+   * What is staged on top of `headOid`, read only when the caller asks for it
+   * with `includeStaged` (Commit & push's confirm, #17563). A host that
+   * predates the option never returns it, so its absence means "not read",
+   * never "nothing staged".
+   */
+  staged?: GitStagedSnapshot;
+}
+
+/**
+ * The staged changes a Commit & push confirm lists, and the identity a commit
+ * made under that confirm must match (#17563).
+ *
+ * Read in one pass against one tip, so the paths on screen and the identity
+ * the commit is held to can never describe two different states of the index.
+ */
+export interface GitStagedSnapshot {
+  /**
+   * Opaque. Covers the tip and every staged entry's path, mode and blob, so a
+   * change to a staged file's contents alone changes it.
+   */
+  identity: string;
+  /** The staged paths, in git's order. */
+  paths: string[];
+}
+
+/**
+ * What a Commit & push confirm showed about the commit itself: made on this
+ * branch, on top of this commit, from exactly these staged changes (#17563).
+ * Handed to the commit so it refuses rather than committing anything else when
+ * the index moved while the confirm was open.
+ */
+export interface GitCommitReview {
+  branch: string;
+  headOid: string;
+  stagedIdentity: string;
 }
 
 /**
@@ -317,6 +353,13 @@ export interface GitCommitResult {
    * is `null`.
    */
   parentOids: string[];
+  /**
+   * For a commit made under a {@link GitCommitReview}: the identity of what it
+   * actually contains over its parent, in {@link GitStagedSnapshot.identity}'s
+   * form, read back from the commit itself. `null` when that couldn't be read.
+   * Absent when no review was passed, or from a host that predates #17563.
+   */
+  stagedIdentity?: string | null;
 }
 
 /**

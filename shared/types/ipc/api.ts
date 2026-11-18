@@ -1299,7 +1299,20 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     unstageFiles(cwd: string, filePaths: string[]): Promise<void>;
     stageAll(cwd: string): Promise<void>;
     unstageAll(cwd: string): Promise<void>;
-    commit(cwd: string, message: string): Promise<import("../git.js").GitCommitResult>;
+    /**
+     * Commit what is staged.
+     *
+     * `review` is what a Commit & push confirm showed (#17563): with it the
+     * commit refuses (`commit-review-stale`) unless the worktree is still on
+     * that branch, at that commit, with exactly those changes staged, and the
+     * result carries the identity of what the commit actually contains. Omit
+     * it only where no confirm previewed the commit.
+     */
+    commit(
+      cwd: string,
+      message: string,
+      review?: import("../git.js").GitCommitReview
+    ): Promise<import("../git.js").GitCommitResult>;
     /**
      * Push the checked-out branch to its push destination.
      *
@@ -1328,10 +1341,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       branchName: string,
       limit?: number
     ): Promise<import("../git.js").GitRemoteCommitPreview>;
+    /** `includeStaged` also reads what is staged on the previewed tip (#17563). */
     listPushCommits(
       cwd: string,
       branchName: string,
-      limit?: number
+      limit?: number,
+      options?: { includeStaged?: boolean }
     ): Promise<import("../git.js").GitPushCommitPreview>;
     listRebaseCommits(
       cwd: string,

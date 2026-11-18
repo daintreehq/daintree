@@ -2355,7 +2355,14 @@ export interface GeneratedIpcInvokeMap {
     result: import("../git.js").GitBaseIntegrationCommitPreview;
   };
   "git:list-push-commits": {
-    args: [payload: { cwd: string; branchName: string; limit?: number | undefined }];
+    args: [
+      payload: {
+        cwd: string;
+        branchName: string;
+        limit?: number | undefined;
+        includeStaged?: boolean | undefined;
+      },
+    ];
     result: import("../git.js").GitPushCommitPreview;
   };
   "git:list-rebase-commits": {

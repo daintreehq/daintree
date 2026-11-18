@@ -27,6 +27,7 @@ import type {
   GitBaseIntegrationCommitPreview,
   GitBaseIntegrationKind,
   GitCommitResult,
+  GitCommitReview,
   GitPushCommitPreview,
   GitPullRebaseReview,
   GitPushReview,
@@ -81,6 +82,7 @@ import {
 } from "../../services/git/conflictMarkerScan.js";
 import { EMPTY_TREE } from "../../services/git/reviewPoint/captureReviewPoint.js";
 import { isProjectIoError, projectIo } from "../../services/projectIoGate.js";
+import { readCommitStagedIdentity, readStagedSnapshot } from "../../services/git/stagedSnapshot.js";
 import { shouldPlayUiFeedbackSound } from "../../utils/uiFeedbackSound.js";
 import { resolveExecutableForSpawn } from "../../utils/windowsExecutable.js";
 import { getSanitizedProcessEnv } from "../../utils/gitEnv.js";
@@ -396,7 +398,7 @@ async function readHeadBranch(
 }
 
 /** How the worktree's branch differs from the one previewed, or `null` when it doesn't. */
-function describeBranchSwitch(current: string | null, review: GitPullRebaseReview): string | null {
+function describeBranchSwitch(current: string | null, review: { branch: string }): string | null {
   if (current === review.branch) return null;
   return current === null
     ? `this worktree is on a detached HEAD, not '${review.branch}'`
@@ -540,6 +542,8 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
         cwd: string;
         branchName: string;
         limit?: number;
+        /** Also read what is staged on the previewed tip (Commit & push, #17563). */
+        includeStaged?: boolean;
       }): Promise<GitPushCommitPreview> => {
         checkRateLimit(CHANNELS.GIT_LIST_PUSH_COMMITS, 10, 10_000);
         validateCwd(payload?.cwd);
@@ -576,6 +580,22 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
               encodeGitOperationErrorMessage("pathspec-invalid", message, { branchName }),
               { cwd: payload.cwd, op: "list-push-commits", rawMessage: message, branchName }
             );
+          }
+          // Against the same tip the rows are, and before any network read, so
+          // the commit is held to the index as it stood when the confirm opened.
+          // The index is the worktree's, so it only describes a commit on this
+          // branch while the worktree has it checked out: diffed against
+          // another branch's tip it would list that branch's differences as
+          // staged.
+          let staged: GitPushCommitPreview["staged"];
+          if (payload.includeStaged === true) {
+            const switched = describeBranchSwitch(await readHeadBranch(git), {
+              branch: branchName,
+            });
+            if (switched) {
+              throw commitReviewStaleError(payload.cwd, branchName, switched, "list-push-commits");
+            }
+            staged = await readStagedSnapshot(payload.cwd, headOid);
           }
           const hasRemoteRef = await refExists(git, destination.remoteTrackingRef);
 
@@ -648,6 +668,7 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
               message: commit.message,
               author: commit.author_name,
             })),
+            ...(staged ? { staged } : {}),
           };
         } catch (error) {
           if (error instanceof GitOperationError) throw error;
@@ -1110,6 +1131,96 @@ function asBaseIntegrationError(error: unknown, cwd: string, op: string): unknow
 }
 
 /**
+ * The commit a Commit & push confirm reviewed, or `null` when the payload
+ * pins nothing (#17563).
+ *
+ * All three or none, for the reason push takes all four: a pin that kept the
+ * commit but lost the staged identity reads as "reviewed" while committing
+ * whatever the index holds by then.
+ */
+function readCommitReview(payload: {
+  expectedBranch?: unknown;
+  expectedHeadOid?: unknown;
+  expectedStagedIdentity?: unknown;
+}): GitCommitReview | null {
+  const {
+    expectedBranch: branch,
+    expectedHeadOid: headOid,
+    expectedStagedIdentity: stagedIdentity,
+  } = payload;
+  if (branch === undefined && headOid === undefined && stagedIdentity === undefined) return null;
+  if (
+    typeof branch !== "string" ||
+    !branch ||
+    typeof headOid !== "string" ||
+    !FULL_OID_PATTERN.test(headOid) ||
+    typeof stagedIdentity !== "string" ||
+    !/^[0-9a-f]{64}$/.test(stagedIdentity)
+  ) {
+    throw new AppError({ code: "VALIDATION", message: "Invalid commit review" });
+  }
+  return { branch, headOid: headOid.toLowerCase(), stagedIdentity };
+}
+
+/**
+ * Plain prose, not pre-encoded like its siblings: the composer shows this
+ * sentence as is, and the reason and branch already cross to the renderer as
+ * fields the preload encodes once. Encoding here too left a second prefix in
+ * front of the sentence on screen.
+ */
+function commitReviewStaleError(
+  cwd: string,
+  branchName: string,
+  detail: string,
+  op = "commit"
+): GitOperationError {
+  const message =
+    op === "commit"
+      ? `This commit changed after it was reviewed: ${detail}. Nothing was committed or pushed. Commit and push again to review what is staged now.`
+      : `${detail}, so what is staged there can't be reviewed for '${branchName}'.`;
+  return new GitOperationError("commit-review-stale", message, {
+    cwd,
+    op,
+    rawMessage: message,
+    branchName,
+  });
+}
+
+/**
+ * Refuse the commit unless the worktree is still on the reviewed branch, at
+ * the reviewed commit, with exactly the reviewed changes staged (#17563).
+ *
+ * The confirm listed these staged files, and an agent can restage any of them
+ * while it sits open without changing a single name in the list. Committing
+ * whatever the index holds now is the "if X changed, use Y" substitution the
+ * destructive-action rules forbid. Read last before `git commit`; nothing locks
+ * the index in between, so the caller also checks what the commit contains.
+ */
+async function requireReviewedStage(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">,
+  review: GitCommitReview,
+  cwd: string
+): Promise<void> {
+  const current = await readHeadBranch(git);
+  const switched = describeBranchSwitch(current, review);
+  if (switched) throw commitReviewStaleError(cwd, current ?? "HEAD", switched);
+  const tip = await readOid(git, "HEAD");
+  if (tip?.toLowerCase() !== review.headOid) {
+    throw commitReviewStaleError(
+      cwd,
+      review.branch,
+      tip
+        ? `'${review.branch}' moved to a different commit`
+        : `'${review.branch}' no longer resolves to a commit`
+    );
+  }
+  const staged = await readStagedSnapshot(cwd, review.headOid);
+  if (staged.identity !== review.stagedIdentity) {
+    throw commitReviewStaleError(cwd, review.branch, "the staged changes are different");
+  }
+}
+
+/**
  * Resolve a ref to its commit OID, or `null` when it does not resolve.
  *
  * Shared by the preview (which records the OIDs it measured against) and the
@@ -1156,6 +1267,24 @@ async function readCommitted(
     return { oid, parentOids };
   } catch {
     return unread;
+  }
+}
+
+/**
+ * What a reviewed commit contains over its one parent, or `null` when it has
+ * no single parent to compare with or couldn't be read. A reviewed commit is
+ * always made on the reviewed tip, so anything else matches no review.
+ */
+async function readCommittedStagedIdentity(
+  cwd: string,
+  committed: Pick<GitCommitResult, "oid" | "parentOids">
+): Promise<string | null> {
+  const [parent, ...rest] = committed.parentOids;
+  if (!committed.oid || !parent || rest.length > 0) return null;
+  try {
+    return await readCommitStagedIdentity(cwd, parent, committed.oid);
+  } catch {
+    return null;
   }
 }
 
@@ -1847,24 +1976,36 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
   const handleCommit = async (payload: {
     cwd: string;
     message: string;
+    expectedBranch?: string;
+    expectedHeadOid?: string;
+    expectedStagedIdentity?: string;
   }): Promise<GitCommitResult> => {
     checkRateLimit(CHANNELS.GIT_COMMIT, 5, 10_000);
     validateCwd(payload?.cwd);
     if (typeof payload.message !== "string" || !payload.message.trim()) {
       throw new Error("Commit message is required");
     }
+    const review = readCommitReview(payload);
 
     const git = await createHardenedGit(payload.cwd);
     await scanStagedFilesForConflictMarkers(git, payload.cwd);
+    if (review) await requireReviewedStage(git, review, payload.cwd);
     const result = await git.commit(payload.message.trim());
     if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
       playSoundFireAndForget("git-commit");
     }
     const hash = result.commit || "";
+    const committed = await readCommitted(git, hash);
     return {
       hash,
       summary: `${result.summary.changes} changed, ${result.summary.insertions} insertions(+), ${result.summary.deletions} deletions(-)`,
-      ...(await readCommitted(git, hash)),
+      ...committed,
+      // The index can still change between the check above and git reading it,
+      // so the caller is told what the commit really holds rather than trusting
+      // the check. The commit has landed either way; a failed read is `null`.
+      ...(review
+        ? { stagedIdentity: await readCommittedStagedIdentity(payload.cwd, committed) }
+        : {}),
     };
   };
   handlers.push(typedHandle(CHANNELS.GIT_COMMIT, handleCommit));

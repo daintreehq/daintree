@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
-import type { GitCommitResult, GitPullRebaseReview, GitPushReview } from "@shared/types/git";
+import type { GitOperationReason } from "@shared/types/ipc/errors";
+import type {
+  GitCommitResult,
+  GitCommitReview,
+  GitPullRebaseReview,
+  GitPushReview,
+} from "@shared/types/git";
 import { isClientAppError } from "@/utils/clientAppError";
 import type { debounce } from "@/utils/debounce";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
@@ -160,18 +166,21 @@ export function useReviewHubCommitAndPush({
    */
   const lastPushReviewRef = useRef<GitPushReview | null>(null);
 
-  // Nothing reaches the network: the banner reads like main's own refusal of a
-  // reviewed push that moved, and offers no Retry, because there is no approval
-  // left to retry under. The next step is a fresh review of the push.
+  // Nothing reaches the network: the banner carries main's refusal reason for a
+  // reviewed push that moved, says in its own words why this one was held
+  // back, and offers no Retry, because there is no approval left to retry
+  // under. The next step is a fresh review of the push.
   const withholdPush = useCallback((detail: string, branchName?: string) => {
     lastPushReviewRef.current = null;
-    const rawMessage = `${detail} Nothing was pushed. Review the push again to see what it would publish now.`;
-    setPushError({ reason: "push-review-stale", rawMessage, branchName });
+    const summary = `${detail} Nothing was pushed.`;
+    const rawMessage = `${summary} Review the push again to see what it would publish now.`;
+    setPushError({ reason: "push-review-stale", rawMessage, summary, branchName });
   }, []);
 
+  /** Resolves to the reason a push failed, or `undefined` when it landed or never started. */
   const runPush = useCallback(
-    async (review: GitPushReview) => {
-      if (isPushingRef.current) return;
+    async (review: GitPushReview): Promise<GitOperationReason | undefined> => {
+      if (isPushingRef.current) return undefined;
       isPushingRef.current = true;
       lastPushReviewRef.current = review;
       setIsPushing(true);
@@ -210,6 +219,7 @@ export function useReviewHubCommitAndPush({
         );
         setPushError(null);
         setPushAnnouncement(announcedTarget ? `Pushed to ${announcedTarget}` : "Push complete");
+        return undefined;
       } catch (err) {
         // GitOperationError carries `gitReason` (auth-failed, push-rejected-*, etc.).
         // AppError carries `code` from a different union (RATE_LIMITED, etc.) — fall
@@ -221,8 +231,9 @@ export function useReviewHubCommitAndPush({
         const rawMessage = isRateLimited
           ? "Too many push attempts in a short window — wait a moment and try again."
           : formatErrorMessage(err, "Failed to push");
+        const reason = errFields.gitReason ?? classifyGitError(rawMessage);
         setPushError({
-          reason: errFields.gitReason ?? classifyGitError(rawMessage),
+          reason,
           rawMessage,
           leaseSha: errFields.leaseSha,
           branchName: errFields.branchName,
@@ -237,6 +248,7 @@ export function useReviewHubCommitAndPush({
           branchName: errFields.branchName,
           leaseSha: errFields.leaseSha,
         });
+        return reason;
       } finally {
         cleanup();
         setIsPushing(false);
@@ -247,13 +259,19 @@ export function useReviewHubCommitAndPush({
   );
 
   // The commit half of both Commit & push paths. A failure lands in the action
-  // banner and rethrows, so nothing after it runs.
+  // banner and rethrows, so nothing after it runs. `review` is what a confirm
+  // listed (#17563): main then refuses with `commit-review-stale` and commits
+  // nothing when the branch, its tip or the staged changes moved while it was
+  // open.
   const commitForPush = useCallback(
-    async (message: string): Promise<GitCommitResult> => {
+    async (message: string, review?: GitCommitReview): Promise<GitCommitResult> => {
       let committed: GitCommitResult;
       try {
-        committed = await window.electron.git.commit(worktreePath, message);
+        committed = await window.electron.git.commit(worktreePath, message, review);
       } catch (err) {
+        // Decodes a typed git error's wire prefix off the message, so the
+        // detail reads as the sentence main wrote.
+        readGitErrorFields(err);
         setActionError({
           title: "Couldn't commit changes",
           detail: formatErrorMessage(err, "Failed to commit changes"),
@@ -271,24 +289,34 @@ export function useReviewHubCommitAndPush({
   );
 
   const handleCommitAndPush = useCallback(
-    async (message: string, target: CommitPushTarget) => {
+    /**
+     * Resolves to "withheld" when the commit landed but its push never ran as
+     * approved: held back here, or refused by main because the branch moved
+     * past the commit before the push.
+     */
+    async (message: string, target: CommitPushTarget): Promise<"withheld" | undefined> => {
       setActionError(null);
       setPushError(null);
       debouncedBgRefreshRef.current?.cancel();
       setIsCommitPushInFlight(true);
       try {
-        const committed = await commitForPush(message);
-        const review = reviewForCommittedPush(committed, target);
-        if (!review) {
-          withholdPush(
-            committed.oid
-              ? "The branch moved while the push was being reviewed, so the commit sits on history the review didn't show."
-              : "The commit was made, but couldn't be read back to pin the push to it.",
-            target.branch
-          );
-          return;
+        // Held to what the confirm listed (#17563).
+        const committed = await commitForPush(
+          message,
+          target.reviewed
+            ? {
+                branch: target.branch,
+                headOid: target.reviewed.headOid,
+                stagedIdentity: target.reviewed.stagedIdentity,
+              }
+            : undefined
+        );
+        const push = reviewForCommittedPush(committed, target);
+        if ("withheld" in push) {
+          withholdPush(push.withheld, target.branch);
+          return "withheld";
         }
-        await runPush(review);
+        return (await runPush(push.review)) === "push-review-stale" ? "withheld" : undefined;
       } finally {
         setIsCommitPushInFlight(false);
       }

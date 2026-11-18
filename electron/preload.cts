@@ -40,6 +40,7 @@ import type { ProjectCloneJobSnapshot } from "../shared/types/ipc/projectClone.j
 import type { KeybindingOverridesSnapshot } from "../shared/types/ipc/api.js";
 import type {
   ConflictSideChoice,
+  GitCommitReview,
   GitPullRebaseReview,
   GitPushReview,
   RepoOperationPin,
@@ -2208,8 +2209,18 @@ function buildElectronApi(): ElectronAPI {
 
       unstageAll: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_UNSTAGE_ALL, cwd),
 
-      commit: (cwd: string, message: string) =>
-        _unwrappingInvoke(CHANNELS.GIT_COMMIT, { cwd, message }),
+      commit: (cwd: string, message: string, review?: GitCommitReview) =>
+        _unwrappingInvoke(CHANNELS.GIT_COMMIT, {
+          cwd,
+          message,
+          ...(review
+            ? {
+                expectedBranch: review.branch,
+                expectedHeadOid: review.headOid,
+                expectedStagedIdentity: review.stagedIdentity,
+              }
+            : {}),
+        }),
 
       push: (cwd: string, setUpstream?: boolean, opId?: string, review?: GitPushReview) =>
         _unwrappingInvoke(CHANNELS.GIT_PUSH, {
@@ -2241,8 +2252,18 @@ function buildElectronApi(): ElectronAPI {
 
       listRemoteCommits: (cwd: string, branchName: string, limit?: number) =>
         _unwrappingInvoke(CHANNELS.GIT_LIST_REMOTE_COMMITS, { cwd, branchName, limit }),
-      listPushCommits: (cwd: string, branchName: string, limit?: number) =>
-        _unwrappingInvoke(CHANNELS.GIT_LIST_PUSH_COMMITS, { cwd, branchName, limit }),
+      listPushCommits: (
+        cwd: string,
+        branchName: string,
+        limit?: number,
+        options?: { includeStaged?: boolean }
+      ) =>
+        _unwrappingInvoke(CHANNELS.GIT_LIST_PUSH_COMMITS, {
+          cwd,
+          branchName,
+          limit,
+          ...(options?.includeStaged ? { includeStaged: true } : {}),
+        }),
       listRebaseCommits: (cwd: string, branchName: string, limit?: number) =>
         _unwrappingInvoke(CHANNELS.GIT_LIST_REBASE_COMMITS, { cwd, branchName, limit }),
       listBaseIntegrationCommits: (

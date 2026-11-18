@@ -141,6 +141,7 @@ export type GitOperationReason =
   | "push-rejected-policy"
   | "push-config-unsupported"
   | "push-review-stale"
+  | "commit-review-stale"
   | "pull-rebase-review-stale"
   | "repo-operation-changed"
   | "pathspec-invalid"
