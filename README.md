@@ -221,7 +221,7 @@ Canopy reads each agent's screen with a small open model that ships inside the a
 - **Fleet broadcast.** One prompt to many agents, with a live preview and per-agent edits before it sends.
 - **Context injection.** Pick files and send structured context into any agent's terminal, built on [CopyTree](https://github.com/gregpriday/copytree).
 - **Action palette.** More than 500 typed actions sit behind every menu item, shortcut and palette entry.
-- **Voice input.** Dictate prompts, with optional AI cleanup. Bring your own key.
+- **Voice input.** Dictate prompts, with optional AI cleanup. Bring your own key, or transcribe on your computer with a model downloaded once.
 
 ## Themes
 

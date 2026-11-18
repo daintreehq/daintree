@@ -5,8 +5,11 @@ import {
   cleanupKeyField,
   hasCleanupKey,
   hasTranscriptionKey,
+  transcribesOnDevice,
   transcriptionApiKey,
   transcriptionKeyField,
+  transcriptionKeyIssuer,
+  transcriptionProviderReady,
 } from "../voiceProviders.js";
 
 describe("voiceProviders", () => {
@@ -16,9 +19,41 @@ describe("voiceProviders", () => {
     expect(transcriptionKeyField("grok")).toBe("xaiApiKey");
   });
 
-  it("gives every provider a distinct key field", () => {
-    const fields = Object.values(VOICE_TRANSCRIPTION_PROVIDERS).map((p) => p.keyField);
+  it("gives every keyed provider a distinct key field", () => {
+    const fields = Object.values(VOICE_TRANSCRIPTION_PROVIDERS).flatMap((p) =>
+      p.kind === "key" ? [p.keyField] : []
+    );
+    expect(fields).toHaveLength(3);
     expect(new Set(fields).size).toBe(fields.length);
+  });
+
+  it("gives the on-device provider no key", () => {
+    const settings = { openaiApiKey: "sk-1", deepgramApiKey: "dg", xaiApiKey: "xai-1" };
+    expect(transcribesOnDevice("local")).toBe(true);
+    expect(transcribesOnDevice("openai")).toBe(false);
+    expect(transcriptionKeyField("local")).toBeNull();
+    expect(transcriptionKeyIssuer("local")).toBeNull();
+    expect(transcriptionApiKey({ ...settings, transcriptionProvider: "local" })).toBe("");
+    expect(hasTranscriptionKey({ ...settings, transcriptionProvider: "local" })).toBe(false);
+  });
+
+  it("counts the on-device provider ready once its model is, and a keyed one by its key", () => {
+    const keyless = { openaiApiKey: "", deepgramApiKey: "", xaiApiKey: "" };
+    expect(transcriptionProviderReady({ ...keyless, transcriptionProvider: "local" }, true)).toBe(
+      true
+    );
+    expect(transcriptionProviderReady({ ...keyless, transcriptionProvider: "local" }, false)).toBe(
+      false
+    );
+    expect(transcriptionProviderReady({ ...keyless, transcriptionProvider: "openai" }, true)).toBe(
+      false
+    );
+    expect(
+      transcriptionProviderReady(
+        { ...keyless, openaiApiKey: "sk-1", transcriptionProvider: "openai" },
+        false
+      )
+    ).toBe(true);
   });
 
   it("reads only the selected provider's key", () => {

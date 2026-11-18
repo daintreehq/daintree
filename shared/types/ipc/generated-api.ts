@@ -2322,6 +2322,12 @@ export interface GeneratedElectronAPI {
     cancel(
       ...args: IpcInvokeMap["voice-input:cancel"]["args"]
     ): Promise<IpcInvokeMap["voice-input:cancel"]["result"]>;
+    cancelLocalModel(
+      ...args: IpcInvokeMap["voice-input:cancel-local-model"]["args"]
+    ): Promise<IpcInvokeMap["voice-input:cancel-local-model"]["result"]>;
+    downloadLocalModel(
+      ...args: IpcInvokeMap["voice-input:download-local-model"]["args"]
+    ): Promise<IpcInvokeMap["voice-input:download-local-model"]["result"]>;
     flushParagraph(
       ...args: IpcInvokeMap["voice-input:flush-paragraph"]["args"]
     ): Promise<IpcInvokeMap["voice-input:flush-paragraph"]["result"]>;
@@ -2331,6 +2337,9 @@ export interface GeneratedElectronAPI {
     getLiveSession(
       ...args: IpcInvokeMap["voice-input:get-live-session"]["args"]
     ): Promise<IpcInvokeMap["voice-input:get-live-session"]["result"]>;
+    getLocalModel(
+      ...args: IpcInvokeMap["voice-input:get-local-model"]["args"]
+    ): Promise<IpcInvokeMap["voice-input:get-local-model"]["result"]>;
     isAppReplaced(
       ...args: IpcInvokeMap["voice-input:is-app-replaced"]["args"]
     ): Promise<IpcInvokeMap["voice-input:is-app-replaced"]["result"]>;
@@ -2340,6 +2349,9 @@ export interface GeneratedElectronAPI {
     publishDetails(
       ...args: IpcInvokeMap["voice-input:publish-details"]["args"]
     ): Promise<IpcInvokeMap["voice-input:publish-details"]["result"]>;
+    removeLocalModel(
+      ...args: IpcInvokeMap["voice-input:remove-local-model"]["args"]
+    ): Promise<IpcInvokeMap["voice-input:remove-local-model"]["result"]>;
     restartReplacedApp(
       ...args: IpcInvokeMap["voice-input:restart-replaced-app"]["args"]
     ): Promise<IpcInvokeMap["voice-input:restart-replaced-app"]["result"]>;

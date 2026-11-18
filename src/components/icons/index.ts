@@ -67,6 +67,7 @@ export {
   Hourglass, // an environment reporting it is still coming up (starting, provisioning) — a shape beside the neutral status word, so the word keeps its contrast
   Info, // a NOTE alert in rendered Markdown — GitHub's info glyph, the same shape the info severity wears through SEVERITY_GLYPH
   KeyRound, // forge credentials that stopped working — a key names what has to be fixed, and it shares a silhouette with nothing else here, so it survives forced colors
+  Laptop, // on-device transcription — the speech model runs on this computer, so the audio stays on it
   Layers, // worktree overview (multiple worktrees, stacked)
   LayoutPanelTop, // workspace plugin category (panels, notes)
   Lightbulb, // a TIP alert in rendered Markdown — GitHub's light bulb, kept apart from the success check mark, since a tip says nothing finished

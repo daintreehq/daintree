@@ -10,6 +10,7 @@ import type {
   VoiceInputStatus,
   VoiceLiveSessionUpdate,
   VoiceLiveLevel,
+  LocalSpeechModelStatus,
   VoicePauseRequest,
   VoiceRevealRequest,
   VoiceSessionEndReason,
@@ -2247,6 +2248,9 @@ export interface IpcEventMap {
   "voice-input:reveal-requested": VoiceRevealRequest;
   // The live session's input level, to the views on screen that don't own it.
   "voice-input:live-level": VoiceLiveLevel;
+  // To every view whenever the on-device model's status changes, a
+  // download's progress included.
+  "voice-input:local-model-status": LocalSpeechModelStatus;
   // To the owner: another view's control panel paused or resumed it.
   "voice-input:pause-requested": VoicePauseRequest;
   // To the owner: the project vocabulary its session runs with.

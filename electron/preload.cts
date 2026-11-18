@@ -224,6 +224,7 @@ import type {
   VoiceInputStatus,
   VoiceLiveSessionUpdate,
   VoiceLiveLevel,
+  LocalSpeechModelStatus,
   VoicePauseRequest,
   VoiceRevealRequest,
   VoiceSessionEndReason,
@@ -3262,7 +3263,7 @@ function buildElectronApi(): ElectronAPI {
           xaiApiKey: string;
           anthropicApiKey: string;
           language: string;
-          transcriptionProvider: "openai" | "deepgram" | "grok";
+          transcriptionProvider: "openai" | "deepgram" | "grok" | "local";
           transcriptionModel: "gpt-live-transcribe";
           correctionEnabled: boolean;
           correctionProvider: "openai" | "anthropic";
@@ -3335,6 +3336,8 @@ function buildElectronApi(): ElectronAPI {
         _typedOn(CHANNELS.VOICE_INPUT_REVEAL_REQUESTED, callback),
       onLiveLevel: (callback: (payload: VoiceLiveLevel) => void) =>
         _typedOn(CHANNELS.VOICE_INPUT_LIVE_LEVEL, callback),
+      onLocalModelStatus: (callback: (status: LocalSpeechModelStatus) => void) =>
+        _typedOn(CHANNELS.VOICE_INPUT_LOCAL_MODEL_STATUS, callback),
       onPauseRequested: (callback: (payload: VoicePauseRequest) => void) =>
         _typedOn(CHANNELS.VOICE_INPUT_PAUSE_REQUESTED, callback),
       onSessionVocabulary: (callback: (payload: VoiceSessionVocabulary) => void) =>

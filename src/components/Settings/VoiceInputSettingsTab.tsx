@@ -15,6 +15,8 @@ import { ClaudeIcon } from "@/components/icons/brands/ClaudeIcon";
 import { CodexIcon } from "@/components/icons/brands/CodexIcon";
 import { DeepgramIcon } from "@/components/icons/brands/DeepgramIcon";
 import { GrokIcon } from "@/components/icons/brands/GrokIcon";
+import { Laptop } from "@/components/icons";
+import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { MicTestRow } from "./MicTestRow";
 import { SettingsPresetGroup } from "./SettingsPresetGroup";
 import { SettingsChoicebox } from "./SettingsChoicebox";
@@ -39,7 +41,7 @@ import { useEffectiveCombo, useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { actionService } from "@/services/ActionService";
 import { KbdChord } from "@/components/ui/Kbd";
 import { voiceErrorLogFields } from "@shared/utils/voiceLogFields";
-import { VOICE_LANGUAGES } from "@shared/config/voiceLanguages";
+import { spokenCommandsAvailable, VOICE_LANGUAGES } from "@shared/config/voiceLanguages";
 import {
   correctionInstructionsFor,
   VOICE_CLEANUP_AI_MODEL,
@@ -52,12 +54,15 @@ import {
   cleanupKeyIssuer,
   hasCleanupKey,
   hasTranscriptionKey,
+  transcribesOnDevice,
   transcriptionKeyField,
   transcriptionKeyIssuer,
   type TranscriptionKeyField,
   type VoiceApiKeyField,
 } from "@shared/config/voiceProviders";
+import { LocalSpeechModelRow, useLocalSpeechModelStatus } from "./LocalSpeechModelRow";
 import type {
+  LocalSpeechModelStatus,
   VoiceInputSettings,
   VoiceInputSettingsPatch,
   VoiceCorrectionModel,
@@ -74,6 +79,7 @@ const PROVIDER_OPTIONS = [
   { value: "openai" as const, label: "OpenAI", icon: CodexIcon },
   { value: "deepgram" as const, label: "Deepgram", icon: DeepgramIcon },
   { value: "grok" as const, label: "Grok", icon: GrokIcon },
+  { value: "local" as const, label: "On device", icon: Laptop },
 ];
 
 const CLEANUP_PROVIDER_OPTIONS = [
@@ -88,6 +94,8 @@ const PROVIDER_PRIVACY: Record<VoiceTranscriptionProvider, string> = {
   openai: `OpenAI receives your audio over an encrypted connection, keeps it for up to 30 days for abuse monitoring, and doesn't train on it. ${RECOGNITION_HINTS_PRIVACY}`,
   deepgram: `Deepgram receives your audio over an encrypted connection and, by default, may keep audio and transcripts to improve its models. ${RECOGNITION_HINTS_PRIVACY}`,
   grok: `xAI receives your audio over an encrypted connection, keeps it for up to 30 days for abuse auditing unless your team turns on Zero Data Retention, and doesn't train on it without permission. ${RECOGNITION_HINTS_PRIVACY}`,
+  local:
+    "Your audio is transcribed on this computer and never leaves it. With AI cleanup off, what you dictate stays here too, except a spoken rewrite of selected text, which goes to your cleanup provider with the selection. With cleanup on, your cleanup provider receives each passage, the redacted screen and Claude's last reply, and with file references on, a passage that mentions a file goes to OpenAI to find it.",
 };
 
 // Completes "...are sent to", for the AI text correction section.
@@ -275,11 +283,20 @@ export function maskApiKey(key: string): string {
  */
 export function dictationBlockers(
   settings: Pick<VoiceInputSettings, "transcriptionProvider" | TranscriptionKeyField>,
-  micPermission: MicPermissionStatus
+  micPermission: MicPermissionStatus,
+  localModel: LocalSpeechModelStatus | null = null
 ): string[] {
   const blockers: string[] = [];
-  if (!hasTranscriptionKey(settings)) {
-    blockers.push(`add your ${transcriptionKeyIssuer(settings.transcriptionProvider)} API key`);
+  const issuer = transcriptionKeyIssuer(settings.transcriptionProvider);
+  if (issuer === null) {
+    // Only what's known: a model still being checked isn't missing.
+    const state = localModel?.state;
+    if (state === "unsupported") blockers.push("choose another provider");
+    else if (state === "absent" || state === "failed" || state === "downloading") {
+      blockers.push("download the on-device model");
+    }
+  } else if (!hasTranscriptionKey(settings)) {
+    blockers.push(`add your ${issuer} API key`);
   }
   if (micPermission === "denied" || micPermission === "restricted") {
     blockers.push("allow microphone access");
@@ -553,7 +570,14 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
   }, [linkPending]);
 
   const provider = settings.transcriptionProvider;
-  const blockers = dictationBlockers(settings, micPermission);
+  const onDevice = transcribesOnDevice(provider);
+  const localModelState = useLocalSpeechModelStatus(settings.enabled && onDevice);
+  const localModel = localModelState.status;
+  const dictating = useVoiceRecordingStore(
+    (s) => (s.status !== "idle" && s.status !== "error") || s.sessionElsewhere !== null
+  );
+  const providerKeyField = transcriptionKeyField(provider);
+  const blockers = dictationBlockers(settings, micPermission, localModel);
   const dictationSubtitle =
     settings.enabled && blockers.length > 0
       ? `Can't start yet: ${blockers.join(" and ")}`
@@ -561,9 +585,9 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
   const isLegacyKey = !!settings.openaiApiKey && !settings.openaiApiKey.startsWith("sk-proj-");
   const cleanupProvider = settings.correctionProvider;
   const hasCleanupProviderKey = hasCleanupKey(settings);
-  const spokenCommandsAvailable = settings.language === "en";
+  const commandsAvailable = spokenCommandsAvailable(settings.language);
   const paragraphing = settings.paragraphingStrategy ?? "spoken-command";
-  const effectiveParagraphing: VoiceParagraphingStrategy = spokenCommandsAvailable
+  const effectiveParagraphing: VoiceParagraphingStrategy = commandsAvailable
     ? paragraphing
     : "manual";
   const recordingMode = settings.recordingMode ?? "tap-or-hold";
@@ -684,7 +708,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
 
       <SettingsSection
         title="Speech-to-text"
-        description="Real-time transcription with your own provider API key."
+        description="Real-time transcription on this computer, or with your own provider API key."
         id="voice-speech-to-text"
       >
         {saveError("setup")}
@@ -718,7 +742,11 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
                 }
               />
 
-              {keyRow(transcriptionKeyField(provider))}
+              {providerKeyField ? (
+                keyRow(providerKeyField)
+              ) : (
+                <LocalSpeechModelRow model={localModelState} dictating={dictating} />
+              )}
 
               {provider === "openai" && isLegacyKey && (
                 <>
@@ -826,11 +854,11 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
               onReset={() => void update({ language: DEFAULT_SETTINGS.language })}
             />
 
-            {!spokenCommandsAvailable ? (
+            {!commandsAvailable ? (
               <SettingsRow
                 id="voice-paragraph-breaks"
                 label="Paragraph breaks"
-                description="Spoken commands need English. Press Shift+Enter to add a break yourself; Enter stops dictation and sends the prompt."
+                description="Spoken commands need English or Auto-detect. Press Shift+Enter to add a break yourself; Enter stops dictation and sends the prompt."
               />
             ) : (
               <SettingsPresetGroup
@@ -902,7 +930,11 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
       {settings.enabled && (
         <SettingsSection
           title="Custom dictionary"
-          description="Terms sent to the transcription service so it recognises your product names and jargon."
+          description={
+            onDevice
+              ? "Terms cleanup and spoken rewrites use to spell your product names and jargon. On-device transcription takes none."
+              : "Terms sent to the transcription service so it recognises your product names and jargon."
+          }
           id="voice-custom-dictionary"
         >
           {saveError("dictionary")}

@@ -67,6 +67,24 @@ export interface VoiceSentTerm {
 }
 
 /**
+ * Where the on-device speech model stands on this machine. `unsupported`: the
+ * platform has no ONNX Runtime build to run it. `absent`: not installed,
+ * with `receivedBytes` already fetched by a download that stopped part way.
+ * `checking`: its files are being checked against their pinned hashes.
+ * `failed`: the last download or check failed, `error` says why.
+ */
+export type LocalSpeechModelState =
+  "unsupported" | "absent" | "downloading" | "checking" | "ready" | "failed";
+
+export interface LocalSpeechModelStatus {
+  state: LocalSpeechModelState;
+  /** The model's size on disk, every file counted. */
+  totalBytes: number;
+  receivedBytes: number;
+  error?: string;
+}
+
+/**
  * What the most recent dictation handed its transcription provider, kept in
  * main's memory for that one session. `sent` is null until the provider has
  * reported its request, and empty when it went out with no terms.
@@ -78,7 +96,7 @@ export interface VoiceSentTerm {
  */
 export interface LastDictationTerms {
   sessionId: string;
-  provider: "openai" | "deepgram" | "grok";
+  provider: "openai" | "deepgram" | "grok" | "local";
   /**
    * How many terms assembly gathered, before the provider's own limits. Zero
    * until assembly lands, which for OpenAI can be after its provider starts.
@@ -178,7 +196,7 @@ export interface VoiceSessionSnapshot {
   /** The end of the words so far, at most VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH. */
   transcript: string;
   /** The provider the owner started on, as its panel names it; null with no clock. */
-  provider: "openai" | "deepgram" | "grok" | null;
+  provider: "openai" | "deepgram" | "grok" | "local" | null;
   /** Null once the session is stopping. */
   clock: VoiceSessionClockAnchor | null;
 }

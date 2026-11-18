@@ -598,6 +598,8 @@ export type {
   VoiceKeytermSource,
   VoiceSentTerm,
   LastDictationTerms,
+  LocalSpeechModelState,
+  LocalSpeechModelStatus,
   VoiceSessionEndReason,
   VoiceStartOutcome,
   VoiceTranscriptPhase,
