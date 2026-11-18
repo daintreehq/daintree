@@ -215,7 +215,9 @@ describe("ProjectPulseService history read failures", () => {
 
     await expect(svc.getPulse({ ...OPTS, includeRecentCommits: true })).rejects.toThrow();
     failing = "supplementary";
-    expect((await svc.getPulse(OPTS)).currentStreakDays).toBeUndefined();
+    // The first call's root and streak walks succeeded and are reused across ranges; a forced
+    // refresh walks them again so they fail here.
+    expect((await svc.getPulse({ ...OPTS, forceRefresh: true })).currentStreakDays).toBeUndefined();
     failing = "heatmap";
     await expect(svc.getPulse(OPTS)).rejects.toThrow();
 

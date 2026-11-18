@@ -38,7 +38,7 @@ describe("ProjectPulseService", () => {
   it("dedupes concurrent requests with same cache key", async () => {
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
-      if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return "deadbeef\n";
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
       if (cmd === "log") return "";
       return "";
@@ -79,7 +79,7 @@ describe("ProjectPulseService", () => {
   it("does not reuse cache across different include options", async () => {
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
-      if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return "deadbeef\n";
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
       if (cmd === "log") return "";
       return "";
@@ -148,7 +148,7 @@ describe("ProjectPulseService", () => {
 
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
-      if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return "deadbeef\n";
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
       if (cmd === "rev-list") return "firstcommit\n";
       if (cmd === "log" && args.some((a) => a.startsWith("--since="))) {
@@ -210,7 +210,8 @@ describe("ProjectPulseService", () => {
       const cutoffs: number[] = [];
       const raw = vi.fn(async (args: string[]) => {
         const cmd = args[0];
-        if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
+        if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD")
+          return "deadbeef\n";
         if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
         if (cmd !== "log") return "";
 
@@ -281,7 +282,7 @@ describe("ProjectPulseService", () => {
 
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
-      if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return "deadbeef\n";
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
       if (cmd === "rev-list") return "firstcommit\n";
       if (cmd === "log") return commitOutput;
@@ -323,7 +324,7 @@ describe("ProjectPulseService", () => {
 
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
-      if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return "deadbeef\n";
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
       if (cmd === "rev-list") return "firstcommit\n";
       if (cmd === "log") return commitOutput;
@@ -366,7 +367,7 @@ describe("ProjectPulseService", () => {
 
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
-      if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return "deadbeef\n";
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
       if (cmd === "rev-list") return "firstcommit\n";
       if (cmd === "log") return commitOutput;
@@ -404,7 +405,7 @@ describe("ProjectPulseService", () => {
 
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
-      if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return "deadbeef\n";
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
       if (cmd === "rev-list") return "firstcommit\n";
       if (cmd === "log") return commitOutput;
@@ -449,7 +450,7 @@ describe("ProjectPulseService", () => {
 
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
-      if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return "deadbeef\n";
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
       if (cmd === "rev-list") return "firstcommit\n";
       if (cmd === "log") return commitOutput;
@@ -595,7 +596,7 @@ describe("ProjectPulseService", () => {
 
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
-      if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return "deadbeef\n";
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
       if (cmd === "rev-parse" && args.includes("--is-shallow-repository")) return "true\n";
       if (cmd === "rev-list") return `${boundaryTimestamp} shallowboundary\n`;
@@ -647,7 +648,7 @@ describe("ProjectPulseService", () => {
 
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
-      if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return "deadbeef\n";
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
       if (cmd === "rev-parse" && args.includes("--is-shallow-repository")) return "true\n";
       if (cmd === "rev-list") return `${boundaryTimestamp} shallowboundary\n`;
@@ -691,7 +692,7 @@ describe("ProjectPulseService", () => {
 
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
-      if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return "deadbeef\n";
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
       if (cmd === "rev-parse" && args.includes("--is-shallow-repository")) return "false\n";
       if (cmd === "rev-list") return `${firstCommitTimestamp} rootsha\n`;
@@ -744,7 +745,8 @@ describe("ProjectPulseService", () => {
       vi.resetModules();
       const raw = vi.fn(async (args: string[]) => {
         const cmd = args[0];
-        if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
+        if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD")
+          return "deadbeef\n";
         if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
         if (cmd === "rev-parse" && args.includes("--is-shallow-repository")) return "false\n";
         if (cmd === "rev-list") return `${lines.join("\n")}\n`;
@@ -780,7 +782,7 @@ describe("ProjectPulseService", () => {
 
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
-      if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return "deadbeef\n";
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
       // Pre-2.15 git echoes back the unknown flag.
       if (cmd === "rev-parse" && args.includes("--is-shallow-repository"))
@@ -917,7 +919,7 @@ describe("ProjectPulseService", () => {
 
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
-      if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return "deadbeef\n";
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
       if (cmd === "log") return "";
       return "";
