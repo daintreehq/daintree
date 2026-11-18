@@ -138,7 +138,7 @@ import {
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import { onHostResync, type HostResync, type HydratedSettings } from "@/store/hostResyncSignal";
 import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
-import type { resolveUnknownOutcome } from "@/utils/resolveUnknownOutcome";
+import { resolveUnknownOutcome } from "@/utils/resolveUnknownOutcome";
 import {
   _resetTerminalInputGateForTesting,
   getLeaseInputBlock,
@@ -1584,6 +1584,51 @@ describe("runHostOperation", () => {
       })
     ).resolves.toBe(1);
     expect(waited).toBe(true);
+  });
+  it("follows an operation still running after a long offline gap to its recorded result", async () => {
+    vi.useFakeTimers();
+    try {
+      useHostConnectionStore.setState({
+        hostId: "studio-01",
+        connection: { status: "connecting", attempt: 1 },
+      });
+      const statuses: OperationOutcome[] = [
+        { status: "running", progress: null },
+        { status: "succeeded", result: "cloned", settledAt: 1 },
+      ];
+      const client = {
+        getStatus: vi.fn(async () => (statuses.length > 1 ? statuses.shift()! : statuses[0]!)),
+        onEvent: vi.fn(() => () => {}),
+      };
+      const run = vi.fn(() => Promise.reject(lost()));
+
+      let settled: { value?: unknown; error?: unknown } | undefined;
+      void runHostOperation("op-1", run, {
+        fromResult,
+        resolve: (opId, options) => resolveUnknownOutcome(opId, { ...options, client }),
+      }).then(
+        (value) => {
+          settled = { value };
+        },
+        (error: unknown) => {
+          settled = { error };
+        }
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.getStatus).not.toHaveBeenCalled();
+      vi.setSystemTime(Date.now() + 6 * 60_000);
+      useHostConnectionStore
+        .getState()
+        .applyConnection({ status: "connected", rttMs: 1, handshake: HANDSHAKE });
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(settled).toEqual({ value: "cloned" });
+      expect(run).toHaveBeenCalledOnce();
+      expect(client.getStatus).toHaveBeenCalledTimes(2);
+      expect(useHostConnectionStore.getState().checking).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
