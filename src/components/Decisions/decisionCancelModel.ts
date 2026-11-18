@@ -164,6 +164,12 @@ function failedVerdict(
       );
     case "off":
       return problem("info", `Decisions is off, so ${label} wasn't dismissed.`, false);
+    case "host-not-connected":
+      return problem(
+        "warning",
+        `The Remote Host that asked ${label} isn't connected, so it wasn't dismissed. Try again once it's back.`,
+        true
+      );
     case "unreadable":
       return problem(
         "info",

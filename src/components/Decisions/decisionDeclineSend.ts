@@ -302,7 +302,10 @@ export function dismissingQuestionIds(
  * - `submitted`, handed to main, with where it stands now.
  */
 export type DismissAttempt =
-  | { kind: "failed"; reason: "not-running" | "unreadable" | "failed" | "off" }
+  | {
+      kind: "failed";
+      reason: "not-running" | "unreadable" | "failed" | "off" | "host-not-connected";
+    }
   | { kind: "gone" }
   | { kind: "changed" }
   | { kind: "busy" }
@@ -360,6 +363,7 @@ export async function dismissQuestion(
     case "off":
     case "not-running":
     case "unreadable":
+    case "host-not-connected":
       return { kind: "failed", reason: read.result };
   }
   const question = read.question;

@@ -201,6 +201,15 @@ describe("decisionCancelModel", () => {
         kind: "problem",
         problem: { retry: false },
       });
+      expect(
+        dismissVerdict(TARGET, { kind: "failed", reason: "host-not-connected" })
+      ).toMatchObject({
+        kind: "problem",
+        problem: {
+          retry: true,
+          message: expect.stringMatching(/^The Remote Host that asked q-42 isn't connected/),
+        },
+      });
       expect(dismissVerdict(TARGET, { kind: "gone" })).toMatchObject({
         kind: "problem",
         problem: { message: expect.stringMatching(/nothing to dismiss/) },

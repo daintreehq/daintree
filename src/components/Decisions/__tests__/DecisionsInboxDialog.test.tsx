@@ -4,17 +4,21 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import type { DecisionsStatus } from "@shared/types/decisions";
 import type {
+  DecisionDeclineResultRead,
   DecisionQuestionCancelResult,
   DecisionQuestionContent,
   DecisionQuestionContentResult,
+  DecisionQuestionDeclineResult,
   DecisionQuestionList,
   DecisionQuestionListItem,
   DecisionQuestionReference,
   DecisionQuestionStanding,
   DecisionQuestionSummariesResult,
+  DeclineDecisionQuestionPayload,
 } from "@shared/types/decisionsQuestion";
 import type { BackendTerminalInfo } from "@shared/types/ipc/terminal";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 
 let decisionsOn = true;
@@ -75,6 +79,10 @@ const getQuestionSummariesByReference =
   >();
 const cancelQuestionByReference =
   vi.fn<(payload: ByReference) => Promise<DecisionQuestionCancelResult>>();
+const declineQuestion =
+  vi.fn<(payload: DeclineDecisionQuestionPayload) => Promise<DecisionQuestionDeclineResult>>();
+const getDeclineResult =
+  vi.fn<(payload: { declineId: string }) => Promise<DecisionDeclineResultRead>>();
 let listListeners: Array<(list: DecisionQuestionList) => void> = [];
 let statusListeners: Array<(status: DecisionsStatus) => void> = [];
 
@@ -236,6 +244,13 @@ beforeEach(() => {
     })),
   }));
   cancelQuestionByReference.mockReset().mockResolvedValue({ result: "cancelling" });
+  declineQuestion.mockReset().mockImplementation(async ({ declineId }) => ({
+    result: "submitted",
+    declineId,
+    outcome: { status: "declined" },
+  }));
+  getDeclineResult.mockReset().mockResolvedValue({ result: "not-found" });
+  useDecisionsAnswerStore.getState().clear();
   getAllTerminals.mockReset().mockResolvedValue([]);
   dispatch.mockReset().mockResolvedValue({ ok: true });
   Reflect.set(window, "electron", {
@@ -245,6 +260,8 @@ beforeEach(() => {
       getQuestionContentByReference,
       getQuestionSummariesByReference,
       cancelQuestionByReference,
+      declineQuestion,
+      getDeclineResult,
     },
     events: {
       on: (
@@ -554,26 +571,68 @@ describe("DecisionsInboxDialog", () => {
     expect(within(rowNamed("q-100")).getByTestId("decisions-inbox-row-line").textContent).toBe("");
   });
 
-  it("withdraws the question shown only after the confirmation naming it", async () => {
+  it("dismisses the question shown only after the confirmation naming it, at the revision read (#17239)", async () => {
     open();
-    const cancel = await screen.findByTestId("decisions-inbox-cancel");
-    fireEvent.click(cancel);
+    const dismiss = await screen.findByTestId("decisions-inbox-dismiss");
+    fireEvent.click(dismiss);
     const confirm = await screen.findByRole("alertdialog");
-    expect(confirm.textContent).toContain("q-2");
-    expect(cancelQuestionByReference).not.toHaveBeenCalled();
+    expect(confirm.textContent).toContain("Dismiss question q-2?");
+    expect(declineQuestion).not.toHaveBeenCalled();
     await act(async () => {
-      fireEvent.click(within(confirm).getByRole("button", { name: "Cancel question" }));
+      fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+    });
+    await waitFor(() => expect(declineQuestion).toHaveBeenCalledOnce());
+    expect(declineQuestion).toHaveBeenCalledWith({
+      reference: reference("question-2"),
+      declineId: expect.any(String),
+      expectedRevision: 1,
+    });
+    expect(cancelQuestionByReference).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() =>
+      expect(screen.getByTestId("decisions-inbox-dismiss-status").textContent).toMatch(/^Dismissed/)
+    );
+  });
+
+  it("withdraws the question shown only after a second confirmation, once the relay can't take a dismissal", async () => {
+    declineQuestion.mockImplementationOnce(async ({ declineId }) => ({
+      result: "submitted",
+      declineId,
+      outcome: { status: "unsupported", by: "relay" },
+    }));
+    open();
+    fireEvent.click(await screen.findByTestId("decisions-inbox-dismiss"));
+    const asked = await screen.findByRole("alertdialog");
+    await act(async () => {
+      fireEvent.click(within(asked).getByRole("button", { name: "Dismiss question" }));
+    });
+    expect(asked.textContent).toContain("Withdraw question q-2?");
+    fireEvent.click(within(asked).getByRole("button", { name: "Keep question" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(screen.getByTestId("decisions-inbox-dismiss-status").textContent).toContain(
+      "Your relay needs an update"
+    );
+    expect(cancelQuestionByReference).not.toHaveBeenCalled();
+
+    fireEvent.click(await screen.findByTestId("decisions-inbox-withdraw"));
+    const confirm = await screen.findByRole("alertdialog");
+    expect(confirm.textContent).toContain("Withdraw question q-2?");
+    const withdraw = within(confirm).getByRole("button", { name: "Withdraw question" });
+    await waitFor(() => expect(withdraw.hasAttribute("aria-disabled")).toBe(false));
+    await act(async () => {
+      fireEvent.click(withdraw);
     });
     await waitFor(() => expect(cancelQuestionByReference).toHaveBeenCalledOnce());
     expect(cancelQuestionByReference).toHaveBeenCalledWith({ reference: reference("question-2") });
+    expect(declineQuestion).toHaveBeenCalledOnce();
   });
 
-  it("offers no cancel for a question that has stopped waiting", async () => {
+  it("offers no dismissal for a question that has stopped waiting", async () => {
     open();
     await waitFor(() => expect(rows()).toHaveLength(3));
     fireEvent.click(rowNamed("q-1"));
     await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
-    expect(screen.queryByTestId("decisions-inbox-cancel")).toBeNull();
+    expect(screen.queryByTestId("decisions-inbox-dismiss")).toBeNull();
   });
 
   describe("going to the terminal that asked", () => {
