@@ -45,6 +45,27 @@ export function getWorktreeBranchLabel(worktree: Worktree | WorktreeState): stri
 }
 
 /**
+ * What a one-line row says beside a worktree's title when that adds anything:
+ * the commit a detached HEAD sits on, else the branch, else the worktree's own
+ * name, whichever the title is not. A custom title (#13409) displaces the name,
+ * so this is what still tells its row apart from the others. Detached is
+ * checked first because its snapshot keeps the pre-detach branch, a name the
+ * worktree no longer has checked out.
+ */
+export function getWorktreeQualifier(
+  worktree: Worktree | WorktreeState,
+  title: string
+): string | null {
+  if (worktree.isDetached) {
+    const head = worktree.head?.slice(0, 7);
+    const label = head ? `detached at ${head}` : "detached";
+    return label !== title ? label : null;
+  }
+  if (worktree.branch && worktree.branch !== title) return worktree.branch;
+  return worktree.name && worktree.name !== title ? worktree.name : null;
+}
+
+/**
  * A branch named without its type prefix: everything after the first slash,
  * not just the last segment, so feature/ui/login and feature/api/login do not
  * both read "login".

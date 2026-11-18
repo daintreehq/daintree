@@ -6,12 +6,13 @@ import { FolderGit2, Sprout } from "@/components/icons";
 import { PaletteCurrentLabel } from "@/components/ui/PaletteCurrentLabel";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { HighlightedText, substringMatchIndices } from "@/components/ui/HighlightedText";
+import { substringMatchIndices } from "@/components/ui/HighlightedText";
 import { remapPathRanges, shortenPath } from "@/lib/pathTail";
 import { TailKeepingText } from "@/components/ui/TailKeepingText";
 import { PathTail } from "@/components/ui/PathTail";
 import type { WorktreeState } from "@/types";
-import { getWorktreeBranchLabel } from "@/lib/worktreeHeadline";
+import { getWorktreeBranchLabel, getWorktreeQualifier } from "@/lib/worktreeHeadline";
+import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { splitBranchType } from "./BranchLabel";
 
 interface WorktreeListItemProps {
@@ -23,22 +24,6 @@ interface WorktreeListItemProps {
   onHover: () => void;
 }
 
-/**
- * What the row says beside the name, when that adds anything. A linked
- * worktree is named by its branch (`WorktreeListService.mapToWorktrees`), so
- * printing the branch again spent half the line repeating the name and
- * truncated both copies of a long one. The main worktree is named by its folder
- * and keeps its branch; a detached one says so, with the commit it sits on.
- */
-function worktreeQualifier(worktree: WorktreeState): string | null {
-  if (worktree.isDetached) {
-    const head = worktree.head?.slice(0, 7);
-    return head ? `detached at ${head}` : "detached";
-  }
-  if (worktree.branch && worktree.branch !== worktree.name) return worktree.branch;
-  return null;
-}
-
 function WorktreeListItem({
   worktree,
   query,
@@ -47,11 +32,17 @@ function WorktreeListItem({
   onClick,
   onHover,
 }: WorktreeListItemProps) {
-  const qualifier = worktreeQualifier(worktree);
-  // A linked worktree is named by its branch, so its name is an identifier and
+  const customTitle = useWorktreeFilterStore((state) => state.worktreeCustomTitles[worktree.id]);
+  const title = customTitle || worktree.name;
+  // Beside the title when that adds anything: a linked worktree is named by its
+  // branch, so printing the branch again spent half the line repeating the name.
+  // A custom title (#13409) displaces the name, and the branch is then what
+  // tells the row apart.
+  const qualifier = getWorktreeQualifier(worktree, title);
+  // A linked worktree is named by its branch, so its title is an identifier and
   // set in mono as the sidebar sets it; main's folder name stays a name.
   const isBranchTitled =
-    !worktree.isMainWorktree && !worktree.isDetached && worktree.name === worktree.branch;
+    !worktree.isMainWorktree && !worktree.isDetached && title === worktree.branch;
   // The tail, as in the quick switcher: the prefix every worktree shares is
   // what an end-truncated path used to spend its whole line on.
   const path = shortenPath(worktree.path);
@@ -88,19 +79,24 @@ function WorktreeListItem({
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-2 min-w-0">
           <TailKeepingText
-            text={worktree.name}
-            indices={substringMatchIndices(worktree.name, query)}
+            text={title}
+            indices={substringMatchIndices(title, query)}
             className={cn(
               // Only the family changes for a branch: the title keeps the
-              // row's title size so it stays above the text-xs path line.
-              "text-sm font-medium text-text-primary",
+              // row's title size so it stays above the text-xs path line. Clipped,
+              // not overflowing, when its kept tail is wider than what the
+              // qualifier leaves, so the two never overlap; from its start, since the
+              // end is what tells branch-like titles apart.
+              "text-sm font-medium text-text-primary justify-end overflow-hidden",
               isBranchTitled && "font-mono"
             )}
           />
           {qualifier && (
-            <span className="shrink-0 font-mono text-xs text-text-secondary">
+            // Its own width, as before, capped at half the line: a long branch beside
+            // a long custom title would otherwise take the whole row from the title.
+            <span className="flex min-w-0 max-w-[50%] shrink-0 font-mono text-xs text-text-secondary">
               <span className="sr-only">, </span>
-              <HighlightedText text={qualifier} indices={substringMatchIndices(qualifier, query)} />
+              <TailKeepingText text={qualifier} indices={substringMatchIndices(qualifier, query)} />
             </span>
           )}
           {isActive && <span className="sr-only">, current</span>}

@@ -8,6 +8,8 @@ type Ranges = readonly (readonly [number, number])[] | undefined;
 const TAIL_SPAN = 20;
 const TAIL_FALLBACK = 12;
 
+const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
+
 /**
  * Where the kept tail starts: at the first separator inside the final stretch
  * of the string, so the tail reads as whole words
@@ -21,9 +23,16 @@ export function tailStart(text: string): number {
   for (let i = from; i < text.length - 4; i++) {
     if ("/-_.".includes(text[i]!)) return i;
   }
-  let split = text.length - TAIL_FALLBACK;
-  while (split < text.length - 1 && /\s/.test(text[split - 1]! + text[split]!)) split++;
-  return split;
+  // A seam is bad beside whitespace, and between the halves of a surrogate pair:
+  // an emoji in a custom title would draw as two broken glyphs, one each side.
+  const badSeam = (at: number) =>
+    isLowSurrogate(text.charCodeAt(at)) || /\s/.test(text[at - 1]! + text[at]!);
+  const fallback = text.length - TAIL_FALLBACK;
+  for (let at = fallback; at < text.length; at++) if (!badSeam(at)) return at;
+  // Only as far back as the tail may be long: it never shrinks, so a seam further
+  // back would make it wider than the box it is kept in.
+  for (let at = fallback - 1; at >= from; at--) if (!badSeam(at)) return at;
+  return isLowSurrogate(text.charCodeAt(fallback)) ? fallback - 1 : fallback;
 }
 
 /** Match ranges on a whole string, moved onto its `[start, end)` slice. */

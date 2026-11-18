@@ -28,6 +28,7 @@ vi.mock("@/store", async () => {
 
 import { useQuickSwitcher, type QuickSwitcherItem } from "../useQuickSwitcher";
 import { usePaletteStore } from "@/store/paletteStore";
+import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { consumeDeferredPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 
 type MockWorktreeState = {
@@ -386,5 +387,209 @@ describe("useQuickSwitcher panel items (#13763)", () => {
     renderHook(() => useQuickSwitcher());
 
     expect(pruneMru).toHaveBeenCalledWith(new Set(["terminal:br-1"]));
+  });
+});
+
+describe("useQuickSwitcher custom worktree titles (#17503)", () => {
+  const { pruneMru } = usePanelStore.getState();
+  const red = {
+    id: "wt-red",
+    name: "feature/auth-refresh",
+    branch: "feature/auth-refresh",
+    path: "/repo/wt-red",
+  };
+  const blue = {
+    id: "wt-blue",
+    name: "feature/billing",
+    branch: "feature/billing",
+    path: "/repo/wt-blue",
+  };
+
+  const setTitles = (titles: Record<string, string>) =>
+    act(() => useWorktreeFilterStore.setState({ worktreeCustomTitles: titles }));
+
+  const seed = (...worktrees: { id: string }[]) =>
+    seedWorktreeState({
+      isInitialized: true,
+      worktrees: new Map(worktrees.map((w) => [w.id, w])),
+    });
+
+  beforeEach(() => {
+    usePanelStore.setState({ panelsById: {}, panelIds: [], mruList: [], pruneMru });
+    useWorktreeStoreMock.mockReset();
+    usePaletteStore.setState({ activePaletteId: "quick-switcher" });
+  });
+
+  afterEach(() => {
+    setTitles({});
+    usePaletteStore.setState({ activePaletteId: null });
+  });
+
+  it("finds a worktree by its custom title and shows that title, with its branch and path", () => {
+    setTitles({ "wt-red": "Release planning" });
+    seed(red, blue);
+
+    const { result } = renderHook(() => useQuickSwitcher());
+    act(() => result.current.setQuery("release planning"));
+
+    expect(result.current.results.map((item) => item.id)).toEqual(["worktree:wt-red"]);
+    const [first] = result.current.results;
+    expect(first?.title).toBe("Release planning");
+    expect(first?.displaced).toBe("feature/auth-refresh");
+    expect(first?.subtitle).toBe("/repo/wt-red");
+    expect(result.current.matchesById.get("worktree:wt-red")?.map((m) => m.key)).toEqual(["title"]);
+  });
+
+  it("still finds the titled worktree by the branch the title displaced, marking the branch", () => {
+    setTitles({ "wt-red": "Release planning" });
+    seed(red, blue);
+
+    const { result } = renderHook(() => useQuickSwitcher());
+    act(() => result.current.setQuery("authrefresh"));
+
+    expect(result.current.results.map((item) => item.id)).toEqual(["worktree:wt-red"]);
+    const keys = result.current.matchesById.get("worktree:wt-red")?.map((match) => match.key);
+    expect(keys).toEqual(["displaced"]);
+  });
+
+  it("keeps the title's ranges and the branch's apart when a query matches both", () => {
+    setTitles({ "wt-red": "Auth refresh notes" });
+    seed(red);
+
+    const { result } = renderHook(() => useQuickSwitcher());
+    act(() => result.current.setQuery("authrefresh"));
+
+    const matches = result.current.matchesById.get("worktree:wt-red") ?? [];
+    expect(matches.map((m) => m.key).sort()).toEqual(["displaced", "title"]);
+    const fragments = (key: string) => {
+      const match = matches.find((m) => m.key === key)!;
+      return match.indices.map(([start, end]) => match.value!.slice(start, end + 1));
+    };
+    // Each range indexes the text its key names, so the row can paint it there.
+    expect(fragments("title")).toEqual(["Auth", "refresh"]);
+    expect(fragments("displaced")).toEqual(["auth", "refresh"]);
+    expect(matches.find((m) => m.key === "title")?.value).toBe("Auth refresh notes");
+    expect(matches.find((m) => m.key === "displaced")?.value).toBe("feature/auth-refresh");
+  });
+
+  it("finds the titled worktree by its path as before", () => {
+    setTitles({ "wt-red": "Release planning" });
+    seed(red, blue);
+
+    const { result } = renderHook(() => useQuickSwitcher());
+    act(() => result.current.setQuery("wt-red"));
+
+    expect(result.current.results.map((item) => item.id)).toEqual(["worktree:wt-red"]);
+    expect(result.current.matchesById.get("worktree:wt-red")?.map((m) => m.key)).toEqual([
+      "subtitle",
+    ]);
+  });
+
+  it("names a worktree without a title by its name, nothing displaced", () => {
+    setTitles({ "wt-red": "Release planning" });
+    const folder = {
+      id: "wt-dir",
+      name: "billing-dir",
+      branch: "feature/billing",
+      path: "/repo/b",
+    };
+    seed(red, folder);
+
+    const { result } = renderHook(() => useQuickSwitcher());
+
+    const item = result.current.results.find((entry) => entry.id === "worktree:wt-dir");
+    expect(item?.title).toBe("billing-dir");
+    expect(item?.displaced).toBeUndefined();
+  });
+
+  it("says nothing displaced when a title is the worktree's own name and branch", () => {
+    const same = { id: "wt-same", name: "feature/same", branch: "feature/same", path: "/repo/s" };
+    setTitles({ "wt-same": "feature/same" });
+    seed(same);
+
+    const { result } = renderHook(() => useQuickSwitcher());
+
+    expect(result.current.results[0]?.displaced).toBeNull();
+  });
+
+  it("falls back to the branch for a nameless worktree without a title", () => {
+    seedWorktreeState({
+      isInitialized: true,
+      worktrees: new Map([["wt-n", { id: "wt-n", branch: "feature/nameless", path: "/repo/n" }]]),
+    });
+
+    const { result } = renderHook(() => useQuickSwitcher());
+
+    expect(result.current.results[0]?.title).toBe("feature/nameless");
+  });
+
+  it("says nothing displaced, not undefined, when a title is the only thing a detached worktree is called", () => {
+    const detachedMain = {
+      id: "wt-main",
+      name: "daintree",
+      path: "/repo/daintree",
+      isMainWorktree: true,
+      isDetached: true,
+      head: "0123456789abcdef",
+    };
+    setTitles({ "wt-main": "detached at 0123456" });
+    seed(detachedMain);
+
+    const { result } = renderHook(() => useQuickSwitcher());
+
+    expect(result.current.results[0]?.title).toBe("detached at 0123456");
+    expect(result.current.results[0]?.displaced).toBeNull();
+  });
+
+  it("leaves the order of untitled worktrees under the MRU boost where it was", () => {
+    // Fuse spreads key weights over every configured key, so a key of its own
+    // for the displaced text moved these scores by more than the boost.
+    const a = { id: "wt-a", name: "auth", branch: "auth", path: "/repo/auth" };
+    const b = { id: "wt-b", name: "xauth", branch: "xauth", path: "/repo/xauth" };
+    usePanelStore.setState({ mruList: ["worktree:wt-b"] });
+    seed(a, b);
+
+    const { result } = renderHook(() => useQuickSwitcher());
+    act(() => result.current.setQuery("auth"));
+
+    expect(result.current.results.map((item) => item.id)).toEqual([
+      "worktree:wt-b",
+      "worktree:wt-a",
+    ]);
+  });
+
+  it("follows a rename or a cleared title while open, falling back to the name", () => {
+    setTitles({ "wt-red": "Release planning" });
+    seed(red);
+
+    const { result } = renderHook(() => useQuickSwitcher());
+    act(() => result.current.setQuery("hotfix"));
+    expect(result.current.results).toHaveLength(0);
+
+    setTitles({ "wt-red": "Hotfix" });
+    expect(result.current.results[0]?.title).toBe("Hotfix");
+
+    setTitles({});
+    expect(result.current.results).toHaveLength(0);
+    act(() => result.current.setQuery("auth-refresh"));
+    expect(result.current.results[0]?.title).toBe("feature/auth-refresh");
+  });
+
+  it("reads the titles as they are when the switcher opens, and ignores them while closed", () => {
+    seed(red);
+    usePaletteStore.setState({ activePaletteId: null });
+    let renders = 0;
+    const { result } = renderHook(() => {
+      renders++;
+      return useQuickSwitcher();
+    });
+    const rendersBefore = renders;
+
+    setTitles({ "wt-red": "Release planning" });
+    expect(renders).toBe(rendersBefore);
+
+    act(() => usePaletteStore.setState({ activePaletteId: "quick-switcher" }));
+
+    expect(result.current.results[0]?.title).toBe("Release planning");
   });
 });
