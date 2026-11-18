@@ -9,6 +9,7 @@ import {
   clearGitDirCache,
   getGitCommonDir,
   getGitDir,
+  readGitBranch,
 } from "../gitUtils.js";
 
 // Real git: the unit suite mocks child_process, so it cannot show a probe
@@ -109,5 +110,55 @@ describe("git dir probes with another repository inherited through the environme
 
     expect(commonDir && fs.realpathSync(commonDir)).toBe(path.join(main, ".git"));
     expect(execFile).not.toHaveBeenCalled();
+  });
+});
+
+describe("branch reads", () => {
+  let repo: string;
+  let outside: string;
+
+  beforeAll(() => {
+    repo = path.join(root, "branchy");
+    outside = path.join(root, "outside");
+    makeRepo(repo);
+    fs.mkdirSync(outside);
+  });
+
+  beforeEach(() => {
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("XDG_CONFIG_HOME", path.join(home, ".config"));
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+    // Discovery stops at the fixture root, so `outside` can't find a repo above it.
+    vi.stubEnv("GIT_CEILING_DIRECTORIES", root);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("answers a branch, then a detached HEAD, as git's own word rather than a failure", async () => {
+    await expect(readGitBranch(repo, { timeout: 10_000 })).resolves.toEqual({
+      branch: "main",
+      unreadable: false,
+    });
+
+    git(repo, "checkout", "-q", "--detach");
+    await expect(readGitBranch(repo, { timeout: 10_000 })).resolves.toEqual({
+      branch: null,
+      unreadable: false,
+    });
+
+    git(repo, "checkout", "-q", "main");
+    await expect(readGitBranch(repo, { timeout: 10_000 })).resolves.toEqual({
+      branch: "main",
+      unreadable: false,
+    });
+  });
+
+  it("answers a folder outside git as branchless", async () => {
+    await expect(readGitBranch(outside, { timeout: 10_000 })).resolves.toEqual({
+      branch: null,
+      unreadable: false,
+    });
   });
 });

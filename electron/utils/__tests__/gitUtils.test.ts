@@ -24,6 +24,7 @@ vi.mock("../windowsExecutable.js", () => ({
 
 import {
   getGitBranch,
+  readGitBranch,
   getGitDir,
   getGitCommonDir,
   clearGitDirCache,
@@ -118,6 +119,45 @@ describe("getGitBranch", () => {
     expect(file).toBe("git");
     expect(args).toEqual(["rev-parse", "--abbrev-ref", "HEAD"]);
     expect(opts).toMatchObject({ cwd: "/repo/path", timeout: 1234 });
+  });
+});
+
+describe("readGitBranch", () => {
+  it("answers the branch git names", async () => {
+    mockGitOutput("feature/foo\n");
+    await expect(readGitBranch("/repo")).resolves.toEqual({
+      branch: "feature/foo",
+      unreadable: false,
+    });
+  });
+
+  it("answers a detached HEAD and a folder outside git as branchless", async () => {
+    mockGitOutput("HEAD\n");
+    await expect(readGitBranch("/repo")).resolves.toEqual({ branch: null, unreadable: false });
+
+    mockNotARepository();
+    await expect(readGitBranch("/not-a-repo")).resolves.toEqual({
+      branch: null,
+      unreadable: false,
+    });
+  });
+
+  it("calls a timed-out read unreadable, not branchless", async () => {
+    mockGitTimeout();
+    await expect(readGitBranch("/repo")).resolves.toEqual({ branch: null, unreadable: true });
+    // The best-effort read still says nothing rather than throw.
+    await expect(getGitBranch("/repo")).resolves.toBeNull();
+  });
+
+  it("calls every other failure to look unreadable", async () => {
+    mockSpawnFailure("ENOENT");
+    await expect(readGitBranch("/gone")).resolves.toEqual({ branch: null, unreadable: true });
+
+    mockGitFatal("fatal: detected dubious ownership in repository at '/repo'\n");
+    await expect(readGitBranch("/repo")).resolves.toEqual({ branch: null, unreadable: true });
+
+    mockGitOutput("\n");
+    await expect(readGitBranch("/repo")).resolves.toEqual({ branch: null, unreadable: true });
   });
 });
 

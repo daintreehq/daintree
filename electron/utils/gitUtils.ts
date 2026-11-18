@@ -382,26 +382,56 @@ export function probeGitCommonDir(
 }
 
 /**
- * Resolve the currently checked-out branch name for a worktree. Returns `null`
- * for a detached HEAD (git emits the literal "HEAD") or on any failure. Not
- * cached: unlike the git dir, the branch is mutable over a worktree's life.
- * Used best-effort at terminal-close time to stamp a resume sanity-check onto
- * the journal record, so it runs with a short default timeout and never throws.
+ * What a branch read found. `unreadable: false` is git's own answer: the branch,
+ * or `null` for a detached HEAD or a folder git says isn't a repository.
+ * `unreadable: true` is a failure to look (timeout, spawn error, any other
+ * fatal), which says nothing about the branch.
  */
-export async function getGitBranch(
+export type GitBranchReading =
+  | { branch: string | null; unreadable: false }
+  | { branch: null; unreadable: true };
+
+/**
+ * Read the checked-out branch of a worktree, keeping a failed read apart from
+ * a branchless answer, for a caller that must not take one for the other. Not
+ * cached: unlike the git dir, the branch is mutable over a worktree's life.
+ * Never throws.
+ */
+export async function readGitBranch(
   worktreePath: string,
   options: { timeout?: number } = {}
-): Promise<string | null> {
+): Promise<GitBranchReading> {
   const { timeout = 500 } = options;
   try {
     const result = (
       await execGit(["rev-parse", "--abbrev-ref", "HEAD"], worktreePath, timeout)
     ).trim();
-    if (!result || result === "HEAD") return null;
-    return result;
-  } catch {
-    return null;
+    if (result === "HEAD") return { branch: null, unreadable: false };
+    if (!result) return { branch: null, unreadable: true };
+    return { branch: result, unreadable: false };
+  } catch (error) {
+    const execError = error instanceof GitExecError ? error : null;
+    const failure = classifyGitFailure(
+      execError ? execError.originalError : error,
+      execError?.stderr ?? ""
+    );
+    return failure === "definitive"
+      ? { branch: null, unreadable: false }
+      : { branch: null, unreadable: true };
   }
+}
+
+/**
+ * The checked-out branch of a worktree, or `null` for a detached HEAD or on
+ * any failure. Used best-effort at terminal-close time to stamp a resume
+ * sanity-check onto the journal record, so it runs with a short default
+ * timeout and never throws.
+ */
+export async function getGitBranch(
+  worktreePath: string,
+  options: { timeout?: number } = {}
+): Promise<string | null> {
+  return (await readGitBranch(worktreePath, options)).branch;
 }
 
 export function clearGitDirCache(worktreePath?: string): void {
