@@ -11,6 +11,7 @@ export const CLOUD_HOSTS_METHOD_CHANNELS = {
   getCatalog: "cloud-hosts:get-catalog",
   listResources: "cloud-hosts:list-resources",
   createHost: "cloud-hosts:create-host",
+  createHostForWorktree: "cloud-hosts:create-host-for-worktree",
   importHost: "cloud-hosts:import-host",
   startHost: "cloud-hosts:start-host",
   stopHost: "cloud-hosts:stop-host",

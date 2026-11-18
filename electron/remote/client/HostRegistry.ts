@@ -270,6 +270,9 @@ export class HostRegistry {
         ? { ownerWorktreeId: payload.ownerWorktreeId }
         : {}),
     };
+    if (payload.pendingPlacement !== undefined) {
+      applyPendingPlacement(descriptor, payload.pendingPlacement);
+    }
     this.write([...hosts, descriptor]);
     return descriptor;
   }

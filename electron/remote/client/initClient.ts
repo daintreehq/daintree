@@ -1122,7 +1122,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     clientDir,
     machineKeys,
     hosts: {
-      add: (name, connection) => client.add({ name, connection }),
+      add: (name, connection, pendingPlacement) =>
+        client.add({ name, connection, ...(pendingPlacement ? { pendingPlacement } : {}) }),
       get: (hostId) => registry.get(hostId),
       list: () => registry.list(),
       forget: (hostId) => client.forget({ hostId }),

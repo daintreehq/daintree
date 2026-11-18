@@ -623,6 +623,25 @@ export interface CloudHostCreateRequest {
   provisioning?: CloudProvisioningSelection;
 }
 
+/**
+ * A machine created for a worktree on this device, from the New Worktree
+ * dialog. Main writes the mark from `worktree` and its own record of the
+ * project, and the worktree waits on the new host to open there once it is
+ * set up; the machine is created exactly as `machine` asks, as Settings →
+ * Hosts' create would.
+ */
+export interface CloudHostCreateForWorktreeRequest {
+  machine: CloudHostCreateRequest;
+  worktree: {
+    /** The local project's id: the asking window's own. */
+    projectId: string;
+    /** The worktree's root path on this device. */
+    worktreeId: string;
+    /** Its branch, or its name when it has none. */
+    worktreeName: string;
+  };
+}
+
 export interface CloudHostImportRequest {
   accountId: string;
   resourceId: string;

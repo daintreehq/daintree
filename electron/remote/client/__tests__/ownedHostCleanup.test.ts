@@ -108,6 +108,92 @@ describe("watchOwnedHostCleanup", () => {
     await vi.waitFor(() => expect(clearPlacement).toHaveBeenCalledWith("studio"));
   });
 
+  it("keeps a worktree waiting on its own machine through a resource teardown, until the worktree goes", async () => {
+    const clearPlacement = vi.fn(async () => {});
+    const onMachine = waiting("feature-login", "/wt/a");
+    onMachine.connection = { kind: "cloud", bindingId: "cb_0123456789ab" };
+    onMachine.pendingPlacement!.createdMachine = true;
+    stop = watchOwnedHostCleanup({
+      list: () => [onMachine, waiting("studio", "/wt/a")],
+      forget: vi.fn(async () => {}),
+      clearPlacement,
+      probe: enoent,
+    });
+
+    finishTeardown("/wt/a");
+    await vi.waitFor(() => expect(clearPlacement).toHaveBeenCalledWith("studio"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(clearPlacement).not.toHaveBeenCalledWith("feature-login");
+
+    removeWorktree("/wt/a");
+    await vi.waitFor(() => expect(clearPlacement).toHaveBeenCalledWith("feature-login"));
+  });
+
+  it("checks a removal heard while the worktree's teardown is still removing its box", async () => {
+    const onMachine = waiting("feature-login", "/wt/a");
+    onMachine.connection = { kind: "cloud", bindingId: "cb_0123456789ab" };
+    onMachine.pendingPlacement!.createdMachine = true;
+    let hosts: HostDescriptor[] = [host("box", "/wt/a"), onMachine];
+    const clearPlacement = vi.fn(async (id: string) => {
+      hosts = hosts.map((entry) => {
+        if (entry.id !== id) return entry;
+        const { pendingPlacement: _cleared, ...rest } = entry;
+        return rest;
+      });
+    });
+    let finishForget!: () => void;
+    const forget = vi.fn(
+      (id: string) =>
+        new Promise<void>((resolve) => {
+          finishForget = () => {
+            hosts = hosts.filter((entry) => entry.id !== id);
+            resolve();
+          };
+        })
+    );
+    stop = watchOwnedHostCleanup({ list: () => hosts, forget, clearPlacement, probe: enoent });
+
+    finishTeardown("/wt/a");
+    await vi.waitFor(() => expect(forget).toHaveBeenCalledWith("box"));
+    removeWorktree("/wt/a");
+    expect(clearPlacement).not.toHaveBeenCalled();
+    finishForget();
+    await vi.waitFor(() => expect(clearPlacement).toHaveBeenCalledWith("feature-login"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(forget).toHaveBeenCalledTimes(1);
+    expect(clearPlacement).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks a queued removal even when the pass before it found the folder still there", async () => {
+    const onMachine = waiting("feature-login", "/wt/a");
+    onMachine.pendingPlacement!.createdMachine = true;
+    const clearPlacement = vi.fn(async () => {});
+    let answerFirst!: (gone: boolean) => void;
+    const probe = vi
+      .fn<(path: string) => Promise<unknown>>()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve, reject) => {
+            answerFirst = (gone) =>
+              gone ? reject(Object.assign(new Error("gone"), { code: "ENOENT" })) : resolve({});
+          })
+      )
+      .mockImplementation(enoent);
+    stop = watchOwnedHostCleanup({
+      list: () => [onMachine],
+      forget: vi.fn(async () => {}),
+      clearPlacement,
+      probe,
+    });
+
+    removeWorktree("/wt/a");
+    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
+    removeWorktree("/wt/a");
+    answerFirst(false);
+    await vi.waitFor(() => expect(clearPlacement).toHaveBeenCalledWith("feature-login"));
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps the host while the worktree's folder is still there", async () => {
     const forget = vi.fn(async () => {});
     const probe = vi.fn(async () => ({}));

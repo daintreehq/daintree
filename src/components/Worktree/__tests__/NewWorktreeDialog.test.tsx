@@ -24,18 +24,23 @@ const dialogMock = vi.hoisted(() => ({ keepChildrenWhenClosed: false }));
 const placement = vi.hoisted(() => ({
   getDraft: null as null | (() => unknown),
   onCommitChange: null as null | ((commit: unknown) => void),
+  onCloudChange: null as null | ((commit: unknown) => void),
 }));
+const startCloudWorktreePlacement = vi.hoisted(() => vi.fn(async () => "feature-test"));
 
 vi.mock("@/components/Hosts/Overview/LazyHostOverviewParts", () => ({
   LazyWorktreePlacementRow: (props: {
     getDraft: () => unknown;
     onCommitChange?: (commit: unknown) => void;
+    onCloudChange?: (commit: unknown) => void;
   }) => {
     placement.getDraft = props.getDraft;
     placement.onCommitChange = props.onCommitChange ?? null;
+    placement.onCloudChange = props.onCloudChange ?? null;
     return null;
   },
 }));
+vi.mock("@/components/Hosts/cloudWorktreePlacement", () => ({ startCloudWorktreePlacement }));
 
 vi.mock("@/services/ActionService", () => ({
   actionService: {
@@ -4313,5 +4318,139 @@ describe("NewWorktreeDialog — the issue in the first prompt (#16380)", () => {
 
     await submit();
     expect(launchedPrompt()).toBe(PROMPT);
+  });
+});
+
+describe("NewWorktreeDialog — a new cloud machine (#17359)", () => {
+  const MACHINE = { accountId: "ca_0123456789", machineType: "small", lifetimeHours: 2 };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockListBranches.mockResolvedValue(TEST_BRANCHES);
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockDispatch.mockImplementation(async (actionId: string) =>
+      actionId === "worktree.create"
+        ? {
+            ok: true,
+            result: { worktreeId: "/test/root-worktrees/feature/test", branch: "feature/test" },
+          }
+        : { ok: true, result: undefined }
+    );
+    mockGetCurrentUser.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    placement.onCloudChange = null;
+    placement.onCommitChange = null;
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  async function nameBranch() {
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("branch-name-input"), {
+        target: { value: "feature/test" },
+      });
+    });
+    await advanceTimersGradually(500);
+  }
+
+  async function chooseNewMachine(overrides: Record<string, unknown> = {}) {
+    await act(async () => {
+      placement.onCloudChange?.({
+        accountId: MACHINE.accountId,
+        label: "New machine · Personal",
+        homeName: "This Mac",
+        blocked: null,
+        machine: () => MACHINE,
+        ...overrides,
+      });
+    });
+  }
+
+  async function submit() {
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+  }
+
+  const actionCalls = (actionId: string) =>
+    mockDispatch.mock.calls.filter(([id]) => id === actionId);
+
+  it("creates the worktree here, starting nothing for it, then asks for its machine", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("pick-agent-claude"));
+    });
+    await chooseNewMachine();
+
+    expect(screen.getByTestId("create-worktree-button").textContent).toContain(
+      "Create on new machine"
+    );
+    expect(screen.getByTestId("new-machine-setup-note").textContent).toContain(
+      "off for a new machine. Your"
+    );
+    // The path stays this machine's: the worktree is made here first.
+    expect(screen.getByTestId("worktree-path-input")).toBeTruthy();
+
+    await submit();
+    const created = actionCalls("worktree.create");
+    expect(created).toHaveLength(1);
+    expect((created[0]![1] as { options: Record<string, unknown> }).options).toMatchObject({
+      newBranch: "feature/test",
+      path: "/test/root-worktrees/feature/test",
+      worktreeMode: "local",
+    });
+    expect(
+      (created[0]![1] as { options: Record<string, unknown> }).options.provisionResource
+    ).toBeUndefined();
+    expect(actionCalls("agent.launch")).toHaveLength(0);
+    expect(startCloudWorktreePlacement).toHaveBeenCalledWith({
+      projectId: "test-project",
+      worktreeId: "/test/root-worktrees/feature/test",
+      branch: "feature/test",
+      machine: MACHINE,
+    });
+  });
+
+  it("holds Create while the machine can't be asked for, saying why", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await chooseNewMachine({ blocked: "Reading the machine sizes…", machine: () => null });
+
+    const primary = screen.getByTestId("create-worktree-button");
+    expect(primary.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getByText("Reading the machine sizes…")).toBeTruthy();
+    await submit();
+    expect(actionCalls("worktree.create")).toHaveLength(0);
+    expect(startCloudWorktreePlacement).not.toHaveBeenCalled();
+  });
+
+  it("asks for no machine when the worktree couldn't be created here", async () => {
+    mockDispatch.mockImplementation(async (actionId: string) =>
+      actionId === "worktree.create"
+        ? { ok: false, error: { message: "fatal: branch exists" } }
+        : { ok: true, result: undefined }
+    );
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await chooseNewMachine();
+    await submit();
+    expect(actionCalls("worktree.create")).toHaveLength(1);
+    expect(startCloudWorktreePlacement).not.toHaveBeenCalled();
   });
 });

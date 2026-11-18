@@ -45,7 +45,9 @@ import {
 import { SshSignInDialog } from "./SshSignInDialog";
 import { useSshSignIn } from "./useSshSignIn";
 import { describeHostForge } from "@/components/Hosts/hostForges";
-import { cancelPlacement } from "@/components/Hosts/pendingPlacement";
+import { cancelPlacement, isSwitchFailure, placeAgain } from "@/components/Hosts/pendingPlacement";
+import { CancelCloudPlacementDialog } from "@/components/Hosts/CancelCloudPlacementDialog";
+import { isMadeForPlacement } from "@/components/Hosts/cloudWorktreePlacement";
 import { clientErrorText } from "@/utils/clientAppError";
 import { isWindows } from "@/lib/platform";
 import { currentHostId } from "@/hooks/useHostPlatform";
@@ -153,11 +155,28 @@ export function HostDetail({
   // A worktree waiting for this host's setup to finish before it opens here.
   const placement = descriptor.pendingPlacement ?? null;
   const [placementError, setPlacementError] = useState<string | null>(null);
+  // A machine made for the worktree: cancelling asks what becomes of it.
+  const [cancellingPlacement, setCancellingPlacement] = useState(false);
   const cancelWaiting = () => {
     setPlacementError(null);
+    if (placement?.createdMachine) {
+      setCancellingPlacement(true);
+      return;
+    }
     cancelPlacement(descriptor.id).catch((err: unknown) =>
       setPlacementError(clientErrorText(err, "Couldn't cancel"))
     );
+  };
+  // A switch that already ran is asked for again; anything else goes through setup.
+  const retryWaiting = () => {
+    setPlacementError(null);
+    if (placement && isSwitchFailure(placement)) {
+      placeAgain(descriptor.id, placement).catch((err: unknown) =>
+        setPlacementError(clientErrorText(err, "Couldn't retry"))
+      );
+      return;
+    }
+    setUpdateOpen("setup");
   };
   const bringBacks = useHostBringBacks();
   const bringing = bringBacks.isPending(descriptor.id);
@@ -434,11 +453,15 @@ export function HostDetail({
               description={`${placement.label} opens here once setup finishes`}
               error={
                 placementError ??
-                (placement.failure ? `Setup failed: ${placement.failure.message}` : undefined)
+                (placement.failure
+                  ? isSwitchFailure(placement)
+                    ? placement.failure.message
+                    : `Setup failed: ${placement.failure.message}`
+                  : undefined)
               }
               control={
                 <div className="flex gap-2">
-                  <Button variant="outline" size="sm" onClick={() => setUpdateOpen("setup")}>
+                  <Button variant="outline" size="sm" onClick={retryWaiting}>
                     {placement.failure ? "Retry" : "Set up…"}
                   </Button>
                   <Button variant="outline" size="sm" onClick={cancelWaiting}>
@@ -633,6 +656,19 @@ export function HostDetail({
         </SettingsGroup>
       </SettingsSection>
 
+      {cancellingPlacement && placement && (
+        <CancelCloudPlacementDialog
+          hostId={descriptor.id}
+          hostName={hostName}
+          label={placement.label}
+          status={cloud}
+          provider={cloudProvider}
+          initialChoice="keep"
+          madeForIt={isMadeForPlacement(cloud, placement)}
+          onClose={() => setCancellingPlacement(false)}
+          onDeleted={() => onBack(false)}
+        />
+      )}
       {confirmRemove && isCloud && (
         <RemoveCloudHostDialog
           hostId={descriptor.id}

@@ -336,6 +336,12 @@ export interface PendingHostPlacement {
   requestedAt: number;
   /** Asked for by an agent or a plugin: the switch dialog asks before it moves the window. */
   askFirst?: true;
+  /**
+   * The host's machine was created for this worktree (#17359): the placement
+   * holds until the window has opened there, and cancelling it offers to
+   * delete that machine.
+   */
+  createdMachine?: true;
   /** The last setup step that failed, as it said; the placement stays pending through it. */
   failure?: { message: string; at: number };
 }
@@ -370,6 +376,7 @@ export function readPendingPlacement(value: unknown): PendingHostPlacement | nul
     requestedAt,
   };
   if (raw.askFirst === true) placement.askFirst = true;
+  if (raw.createdMachine === true) placement.createdMachine = true;
   const failure = raw.failure as Record<string, unknown> | null | undefined;
   const message = failure && typeof failure === "object" ? placementText(failure.message) : null;
   if (message && typeof failure?.at === "number" && Number.isFinite(failure.at)) {

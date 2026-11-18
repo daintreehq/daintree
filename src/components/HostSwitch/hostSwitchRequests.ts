@@ -25,7 +25,16 @@ export interface HostSwitchRequest {
    * fetched or given a worktree, and nothing is pushed.
    */
   navigateOnly?: boolean;
+  /**
+   * Told how the window move after a completed request ended: on the host,
+   * with or without the requested worktree open there, or still here. Not
+   * told when the dialog goes away without completing.
+   */
+  onLanding?: (landing: HostSwitchLanding) => void;
 }
+
+/** Where the window ended up after the dialog finished. */
+export type HostSwitchLanding = { landed: true; worktreeOpened: boolean } | { landed: false };
 
 /** How a request ended: the project opened on the host, or the dialog went away without it. */
 export type HostSwitchSettlement = "completed" | "dismissed";

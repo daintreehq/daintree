@@ -1103,6 +1103,7 @@ export const CHANNEL_LOCALITY = {
   "cloud-hosts:add-account": "shell",
   "cloud-hosts:check-account-key": "shell",
   "cloud-hosts:create-host": "shell",
+  "cloud-hosts:create-host-for-worktree": "shell",
   "cloud-hosts:delete-machine": "shell",
   "cloud-hosts:get-catalog": "shell",
   "cloud-hosts:get-snapshot": "shell",

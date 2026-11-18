@@ -1793,6 +1793,7 @@ export const CHANNELS = {
   CLOUD_HOSTS_GET_CATALOG: "cloud-hosts:get-catalog",
   CLOUD_HOSTS_LIST_RESOURCES: "cloud-hosts:list-resources",
   CLOUD_HOSTS_CREATE_HOST: "cloud-hosts:create-host",
+  CLOUD_HOSTS_CREATE_HOST_FOR_WORKTREE: "cloud-hosts:create-host-for-worktree",
   CLOUD_HOSTS_IMPORT_HOST: "cloud-hosts:import-host",
   CLOUD_HOSTS_START_HOST: "cloud-hosts:start-host",
   CLOUD_HOSTS_STOP_HOST: "cloud-hosts:stop-host",

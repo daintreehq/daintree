@@ -1,4 +1,5 @@
 import type {
+  CloudHostCreateForWorktreeRequest,
   CloudHostCreateRequest,
   CloudHostImportRequest,
   CloudAccountAddRequest,
@@ -40,6 +41,11 @@ export const cloudHostsClient = {
     window.electron.cloudHosts.listResources({ accountId }),
   createHost: (request: CloudHostCreateRequest): Promise<{ hostId: string }> =>
     window.electron.cloudHosts.createHost(request),
+  /** A machine marked as created for a worktree on this device. */
+  createHostForWorktree: (
+    request: CloudHostCreateForWorktreeRequest
+  ): Promise<{ hostId: string; requestedAt: number }> =>
+    window.electron.cloudHosts.createHostForWorktree(request),
   importHost: (request: CloudHostImportRequest): Promise<{ hostId: string }> =>
     window.electron.cloudHosts.importHost(request),
   /** A person's Start: the one call that resumes a stopped machine. */

@@ -1,4 +1,5 @@
 import type {
+  CloudHostCreatedFor,
   CloudHostCreateRequest,
   CloudHostImportRequest,
   CloudAccountAddRequest,
@@ -27,6 +28,7 @@ export interface CloudHostsDeps {
   store: CloudHostStore;
   /** Tells every view the cloud picture changed. */
   emit(snapshot: CloudHostsSnapshot): void;
+  now?: () => number;
 }
 
 /**
@@ -67,6 +69,46 @@ export class CloudHosts {
 
   createHost(request: CloudHostCreateRequest): Promise<{ hostId: HostId }> {
     return this.lifecycle.create(request);
+  }
+
+  /**
+   * Creates a machine for a worktree on this device, marked for it in the
+   * create's first write, with the worktree waiting to open on the new host
+   * from the host's own first write. The mark names this device: a window on
+   * another host has no worktree here to make a machine for. `projectName` is
+   * main's own record of the project, never the asker's.
+   */
+  async createHostForWorktree(
+    machine: unknown,
+    worktree: unknown,
+    projectName: string
+  ): Promise<{ hostId: HostId; requestedAt: number }> {
+    const target = (worktree && typeof worktree === "object" ? worktree : {}) as Record<
+      string,
+      unknown
+    >;
+    const text = (value: unknown) => (typeof value === "string" ? value : "");
+    const projectId = text(target.projectId);
+    const worktreeId = text(target.worktreeId);
+    const worktreeName = text(target.worktreeName).trim();
+    const createdFor: CloudHostCreatedFor = {
+      hostId: null,
+      projectId,
+      worktreeId,
+      projectName,
+      worktreeName,
+      hostName: null,
+    };
+    const requestedAt = (this.deps.now ?? Date.now)();
+    const { hostId } = await this.lifecycle.create(machine as CloudHostCreateRequest, createdFor, {
+      projectId,
+      worktreeId,
+      worktreePath: worktreeId,
+      label: worktreeName,
+      requestedAt,
+      createdMachine: true,
+    });
+    return { hostId, requestedAt };
   }
 
   importHost(request: CloudHostImportRequest): Promise<{ hostId: HostId }> {

@@ -337,6 +337,9 @@ export interface GeneratedElectronAPI {
     createHost(
       ...args: IpcInvokeMap["cloud-hosts:create-host"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:create-host"]["result"]>;
+    createHostForWorktree(
+      ...args: IpcInvokeMap["cloud-hosts:create-host-for-worktree"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:create-host-for-worktree"]["result"]>;
     deleteMachine(
       ...args: IpcInvokeMap["cloud-hosts:delete-machine"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:delete-machine"]["result"]>;

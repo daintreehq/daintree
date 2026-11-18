@@ -42,6 +42,7 @@ vi.mock("@/lib/viewCacheState", () => ({
 
 import {
   _resetHostSwitchRequestsForTesting,
+  completeHostSwitchRequest,
   currentHostSwitchRequest,
   dismissHostSwitchRequest,
   registerHostSwitchDialogHost,
@@ -55,6 +56,10 @@ import {
   cancelPlacement,
   holdHostSetup,
   holdPlacement,
+  NOT_ON_BRANCH,
+  NOT_OPENED,
+  noteAskedHere,
+  placeAgain,
   notePlacementFailure,
   placementForWorktree,
   resumePlacement,
@@ -304,6 +309,107 @@ describe("usePendingPlacementResume", () => {
       for (const listener of env.observers) listener(true);
     });
     expect(currentHostSwitchRequest()).toMatchObject({ toHostId: "box" });
+  });
+
+  describe("a placement whose machine was made for it (#17359)", () => {
+    const made = { ...request, createdMachine: true as const };
+
+    /** Hold it, let the view hand it to the switch dialog, and return that request. */
+    async function handOff(requestedAt = 1_000) {
+      const placement = await holdPlacement("box", made, requestedAt);
+      update.mockClear();
+      const view = await show([hostEntry("box", connected, placement)]);
+      const switchRequest = currentHostSwitchRequest()!;
+      expect(switchRequest).toMatchObject({ toHostId: "box", worktreePath: request.worktreePath });
+      return { placement, view, switchRequest };
+    }
+    const lastWrite = () =>
+      update.mock.calls.at(-1)?.[0] as
+        { hostId: string; pendingPlacement: PendingHostPlacement | null } | undefined;
+
+    it("is held until the window lands there with the worktree open, then goes", async () => {
+      const { switchRequest } = await handOff();
+      await act(async () => completeHostSwitchRequest(switchRequest.id));
+      // The dialog finishing isn't the window landing.
+      expect(update).not.toHaveBeenCalled();
+
+      await act(async () => switchRequest.onLanding!({ landed: true, worktreeOpened: true }));
+      expect(update).toHaveBeenCalledWith({ hostId: "box", pendingPlacement: null });
+    });
+
+    it("is left failed when the window lands there without the worktree's branch", async () => {
+      const { switchRequest } = await handOff();
+      await act(async () => completeHostSwitchRequest(switchRequest.id));
+      await act(async () => switchRequest.onLanding!({ landed: true, worktreeOpened: false }));
+      expect(lastWrite()).toEqual({
+        hostId: "box",
+        pendingPlacement: {
+          ...made,
+          requestedAt: 1_000,
+          failure: { message: NOT_ON_BRANCH, at: expect.any(Number) },
+        },
+      });
+    });
+
+    it("is left failed when the window stays here", async () => {
+      const { switchRequest } = await handOff();
+      await act(async () => completeHostSwitchRequest(switchRequest.id));
+      await act(async () => switchRequest.onLanding!({ landed: false }));
+      expect(lastWrite()?.pendingPlacement).toMatchObject({ failure: { message: NOT_OPENED } });
+    });
+
+    it("leaves a placement asked for since alone when an earlier one lands", async () => {
+      const { switchRequest, view } = await handOff();
+      await act(async () => completeHostSwitchRequest(switchRequest.id));
+      await show([hostEntry("box", disconnected, { ...made, requestedAt: 2_000 })], view);
+      update.mockClear();
+      await act(async () => switchRequest.onLanding!({ landed: true, worktreeOpened: true }));
+      expect(update).not.toHaveBeenCalled();
+    });
+
+    it("is left failed, and waits for Retry even after a restart, when the dialog closes", async () => {
+      const { switchRequest, view } = await handOff();
+      await act(async () => dismissHostSwitchRequest(switchRequest.id));
+      expect(update).toHaveBeenCalledTimes(1);
+      const failed = lastWrite()!.pendingPlacement!;
+      expect(failed).toEqual({
+        ...made,
+        requestedAt: 1_000,
+        failure: { message: NOT_OPENED, at: expect.any(Number) },
+      });
+
+      await show([hostEntry("box", connected, failed)], view);
+      expect(currentHostSwitchRequest()).toBeNull();
+      // A fresh run knows nothing of the earlier handoff: the failure itself holds it.
+      cleanup();
+      _resetPendingPlacementsForTesting();
+      await show([hostEntry("box", connected, failed)]);
+      expect(currentHostSwitchRequest()).toBeNull();
+    });
+
+    it("asks again as a fresh placement on Retry, which the view carries on at once", async () => {
+      const failed: PendingHostPlacement = {
+        ...made,
+        requestedAt: 1_000,
+        failure: { message: NOT_OPENED, at: 2 },
+      };
+      const again = await placeAgain("box", failed, 3_000);
+      expect(again).toEqual({ ...made, requestedAt: 3_000 });
+      await show([hostEntry("box", connected, again)]);
+      expect(currentHostSwitchRequest()).toMatchObject({ toHostId: "box", askFirst: false });
+    });
+
+    it("opens without asking first when main wrote it at this view's asking", async () => {
+      noteAskedHere("box", 2_000);
+      await show([hostEntry("box", connected, { ...made, requestedAt: 2_000 })]);
+      expect(currentHostSwitchRequest()).toMatchObject({ toHostId: "box", askFirst: false });
+    });
+
+    it("asks first for one of the same host's placements this view didn't ask for", async () => {
+      noteAskedHere("box", 2_000);
+      await show([hostEntry("box", connected, { ...made, requestedAt: 2_500 })]);
+      expect(currentHostSwitchRequest()).toMatchObject({ toHostId: "box", askFirst: true });
+    });
   });
 
   it("does nothing in a window on another host", async () => {
