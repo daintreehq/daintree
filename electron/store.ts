@@ -185,7 +185,12 @@ export interface StoreSchema {
   };
   pluginBackgroundUpdateCheck: {
     enabled: boolean;
-    /** Wall-clock ms of the last completed pass; null until the first runs. */
+    /**
+     * Wall-clock ms of the last conclusive pass (one with no targets, or where at
+     * least one check answered); null until the first runs. A pass where every
+     * check failed leaves it alone so a later idle tick retries after a backoff
+     * instead of waiting a day.
+     */
     lastCheckedAt: number | null;
   };
   appState: {
