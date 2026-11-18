@@ -1611,7 +1611,10 @@ describe("ReviewHub", () => {
         );
         await confirmCheckout("ours");
         await waitFor(() =>
-          expect(checkoutOursTheirsMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts", "ours")
+          expect(checkoutOursTheirsMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts", {
+            resolution: "checkout",
+            side: "ours",
+          })
         );
 
         moveToOther();
