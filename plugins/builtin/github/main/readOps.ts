@@ -1326,6 +1326,7 @@ async function readBranchDeployments(
   const incomplete = (why: string): Error =>
     new Error(`Could not read the branch's deployments: ${why}`);
   const response = await runQuery(
+    repo.host,
     BRANCH_DEPLOYMENTS_QUERY,
     { owner: repo.owner, repo: repo.repo, qualifiedName: `refs/heads/${branch}` },
     "BRANCH_DEPLOYMENTS_QUERY",
@@ -1351,6 +1352,7 @@ async function readPRDeployments(
   let response: GraphQlQueryResponseData;
   try {
     response = await runQuery(
+      repo.host,
       PR_DEPLOYMENTS_QUERY,
       { owner: repo.owner, repo: repo.repo, number: prNumber },
       "PR_DEPLOYMENTS_QUERY",
@@ -1419,7 +1421,7 @@ export async function getDeploymentsImpl(
   target: DeploymentTarget
 ): Promise<{ deployments: Deployment[] } | null> {
   const key = JSON.stringify([
-    GitHubAuth.getTokenVersion(),
+    GitHubAuth.getTokenVersion(repo.host),
     repo.host,
     repo.owner,
     repo.repo,
