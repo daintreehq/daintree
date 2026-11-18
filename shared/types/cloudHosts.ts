@@ -57,6 +57,15 @@ export function pluginCloudProviderId(
   return namespace?.kind === "plugin" && namespace.pluginId === pluginId ? id : null;
 }
 
+/**
+ * Whether a new account may be connected for this provider. Only Daintree's
+ * own providers for now: a plugin's provider gets an account only once the
+ * person has agreed to hand that plugin credentials (#17352).
+ */
+export function canConnectCloudAccount(providerId: CloudProviderId): boolean {
+  return cloudProviderNamespace(providerId)?.kind === "built-in";
+}
+
 export { isValidCloudBindingId } from "./remoteHosts.js";
 
 /**
@@ -454,6 +463,30 @@ export type CloudHostErrorCode =
   /** The provider turned the request down as it was made (a size its region lacks, a limit reached); nothing changed. */
   | "refused"
   | "failed";
+
+/** Every code, so a code that arrives as data (from a plugin) can be checked. */
+const CLOUD_HOST_ERROR_CODES = {
+  "credential-invalid": true,
+  permission: true,
+  billing: true,
+  "rate-limited": true,
+  capacity: true,
+  "not-found": true,
+  "data-expired": true,
+  "stop-failing": true,
+  "ssh-authorization": true,
+  "ssh-tunnel-command-missing": true,
+  "provider-unreachable": true,
+  "outcome-unknown": true,
+  unsupported: true,
+  "lifetime-renewal": true,
+  refused: true,
+  failed: true,
+} as const satisfies Record<CloudHostErrorCode, true>;
+
+export function isCloudHostErrorCode(value: unknown): value is CloudHostErrorCode {
+  return typeof value === "string" && Object.hasOwn(CLOUD_HOST_ERROR_CODES, value);
+}
 
 /**
  * The worktree a machine was created for, written down with its create so it

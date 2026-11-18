@@ -1,5 +1,6 @@
 import { app } from "electron";
 import path from "node:path";
+import { cloudProviderNamespace, type CloudProviderId } from "../../../shared/types/cloudHosts.js";
 import type { RemoteHostsEvent } from "../../../shared/types/ipc/remoteHosts.js";
 import { registerRemoteService } from "../runtime.js";
 import { Agent37Client, resolveAgent37ApiUrl } from "./agent37/Agent37Client.js";
@@ -21,6 +22,7 @@ import { KeychainCloudCredentialVault } from "./CloudCredentialVault.js";
 import { CloudHostStore, type CloudHostsStoreBackend } from "./CloudHostStore.js";
 import { CloudHosts } from "./CloudHosts.js";
 import { CloudProviderRegistry } from "./CloudProviderRegistry.js";
+import { watchPluginCloudProviders } from "./pluginCloudProviderRegistrations.js";
 
 export interface CloudHostsRuntime {
   cloudHosts: CloudHosts;
@@ -89,6 +91,12 @@ export function initCloudHosts(params: {
     owner: { kind: "built-in" },
     apiUrl: resolveAwsApiUrl(app.isPackaged),
   });
+  // Bound below, once the accounts and hosts it reports on exist.
+  let pluginStatusChanged = () => {};
+  const pluginProviders = watchPluginCloudProviders({
+    providers,
+    statusChanged: () => pluginStatusChanged(),
+  });
   const accounts = new CloudAccountService({
     store,
     vault: new KeychainCloudCredentialVault(
@@ -98,6 +106,7 @@ export function initCloudHosts(params: {
     apiUrlFor: (providerId) => providers.apiUrlFor(providerId),
     onAccountRemoved: params.onAccountRemoved,
     beforeAccountRemoved: params.beforeAccountRemoved,
+    unavailableReason: (providerId) => pluginProviders.unavailableReason(providerId),
   });
   const cloudHosts = new CloudHosts({
     accounts,
@@ -105,6 +114,13 @@ export function initCloudHosts(params: {
     emit: (snapshot) => params.emit({ type: "cloud-changed", snapshot }),
   });
   const stopWatchingProviders = providers.onChange(() => cloudHosts.providersChanged());
+  // A plugin that failed to load, or finished loading, rewords its accounts' reasons;
+  // with no plugin account there is nothing to reword.
+  pluginStatusChanged = () => {
+    if (store.accounts().some((account) => isPluginCloudProviderId(account.providerId))) {
+      cloudHosts.changed();
+    }
+  };
   const unregister = registerRemoteService("cloudHosts", cloudHosts);
   // Views that read before this started got the empty answer; tell them what there is.
   cloudHosts.changed();
@@ -115,10 +131,15 @@ export function initCloudHosts(params: {
     providers,
     dispose() {
       stopWatchingProviders();
+      pluginProviders.dispose();
       unregister();
       cloudHosts.dispose();
       gce.dispose();
       for (const endpoints of gceEndpoints.values()) endpoints.tokens.dispose();
     },
   };
+}
+
+function isPluginCloudProviderId(providerId: CloudProviderId): boolean {
+  return cloudProviderNamespace(providerId)?.kind === "plugin";
 }

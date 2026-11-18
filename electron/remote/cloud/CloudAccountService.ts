@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import {
   CLOUD_PROVISIONING_DIMENSIONS,
+  canConnectCloudAccount,
   cloudProviderNamespace,
   isCloudProviderId,
   type CloudAccountAddRequest,
@@ -145,6 +146,8 @@ export interface CloudAccountServiceDeps {
   onAccountRemoved?(accountId: string): Promise<void>;
   /** Before the account's key leaves this device: the last chance to use it. A rejection keeps the account. */
   beforeAccountRemoved?(accountId: string): Promise<void>;
+  /** Why an unregistered provider can't be used, when its owner knows better than "missing"; null to fall back. */
+  unavailableReason?(providerId: CloudProviderId): string | null;
 }
 
 /** The provider's check result, carried on as exactly the declared shape and nothing else. */
@@ -196,7 +199,11 @@ export class CloudAccountService {
 
   /** Null while the provider is registered; otherwise why its accounts and hosts can't be used. */
   providerUnavailable(providerId: CloudProviderId): string | null {
-    return this.deps.providers.get(providerId) ? null : cloudProviderUnavailableReason(providerId);
+    return this.deps.providers.get(providerId) ? null : this.unavailableReason(providerId);
+  }
+
+  private unavailableReason(providerId: CloudProviderId): string {
+    return this.deps.unavailableReason?.(providerId) ?? cloudProviderUnavailableReason(providerId);
   }
 
   provider(providerId: CloudProviderId): CloudProvider {
@@ -205,10 +212,20 @@ export class CloudAccountService {
       throw new AppError({
         code: "UNSUPPORTED",
         message: `Unknown cloud provider ${providerId}`,
-        userMessage: cloudProviderUnavailableReason(providerId),
+        userMessage: this.unavailableReason(providerId),
       });
     }
     return provider;
+  }
+
+  /**
+   * Refused before anything entered is read or kept: a plugin's provider
+   * would be handed the credentials, which needs the person's say-so first.
+   */
+  private requireConnectable(providerId: CloudProviderId): void {
+    if (canConnectCloudAccount(providerId)) return;
+    const message = "Accounts can't be connected for a plugin's cloud provider yet.";
+    throw new AppError({ code: "UNSUPPORTED", message, userMessage: message });
   }
 
   /** Refused before anything billable happens on a platform the provider can't serve. */
@@ -320,6 +337,7 @@ export class CloudAccountService {
   /** Checks entered credentials without keeping them, and lists the scopes they may bill. */
   async checkCredentials(providerId: unknown, values: unknown): Promise<CloudAccountCheckResult> {
     if (!isCloudProviderId(providerId)) throw invalid("Choose a cloud provider.");
+    this.requireConnectable(providerId);
     const provider = this.requireSupported(providerId);
     const credentials = this.normalize(provider, values);
     this.requireVault();
@@ -329,6 +347,7 @@ export class CloudAccountService {
   async addAccount(request: CloudAccountAddRequest): Promise<CloudAccountSummary> {
     if (!request || typeof request !== "object") throw invalid("Missing account details.");
     if (!isCloudProviderId(request.providerId)) throw invalid("Choose a cloud provider.");
+    this.requireConnectable(request.providerId);
     const provider = this.requireSupported(request.providerId);
     const credentials = this.normalize(provider, request.credentials);
     if (typeof request.scopeId !== "string" || request.scopeId.length === 0) {

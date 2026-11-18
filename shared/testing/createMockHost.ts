@@ -35,6 +35,7 @@ export type {
   RegisteredContextProviderRecord,
   RegisteredWorktreeSetupStepRecord,
   RegisteredWorktreeDeleteNotesProviderRecord,
+  RegisteredCloudProviderRecord,
   RegisteredMcpToolsRecord,
   InvalidationRecord,
   SetToolbarButtonBadgeRecord,

@@ -48,6 +48,7 @@ const { openExternal } = vi.hoisted(() => ({ openExternal: vi.fn(async () => {})
 vi.mock("@/clients/systemClient", () => ({ systemClient: { openExternal } }));
 
 import { CloudMachineSection } from "../CloudMachineSection";
+import { cloudHostsClient } from "@/clients/cloudHostsClient";
 import { BOAT_PROVIDER, provider } from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
 import { clockTime } from "@/components/Hosts/cloud/cloudHostLabels";
 import { ClientAppError } from "@/utils/clientAppError";
@@ -702,5 +703,56 @@ describe("CloudMachineSection with its worktree's delete (#17360)", () => {
     cleanup();
     show(status({ ...base, createdFor: MARK }), [BOAT_PROVIDER]);
     expect(notice()).toBeNull();
+  });
+});
+
+describe("CloudMachineSection while its provider is missing", () => {
+  it("says why beside an unconfirmed create, and offers no Retry that couldn't work", () => {
+    const interrupted = status({
+      operation: null,
+      lastError: {
+        code: "outcome-unknown",
+        message: "Boat didn't confirm the machine. Retry looks for it before creating another.",
+        at: 1,
+      },
+    });
+    show({ ...interrupted, providerUnavailable: "Its plugin is turned off." });
+    const alert = screen.getByRole("alert").textContent ?? "";
+    expect(alert).toContain("Its plugin is turned off.");
+    expect(alert).toContain("didn't confirm the machine");
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    cleanup();
+
+    show(interrupted);
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("keeps why, and the unconfirmed create, in view after an action of its own failed", async () => {
+    const interrupted = status({
+      operation: null,
+      lastError: {
+        code: "outcome-unknown",
+        message: "Boat didn't confirm the machine. Retry looks for it before creating another.",
+        at: 1,
+      },
+    });
+    vi.mocked(cloudHostsClient.retryCreate).mockRejectedValueOnce(
+      new Error("Couldn't reach the plugin")
+    );
+    const view = show(interrupted);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByText(/Couldn't reach the plugin/);
+    cloud.snapshot = {
+      providers: [],
+      accounts: [],
+      hosts: [{ ...interrupted, providerUnavailable: "Its plugin is turned off." }],
+    };
+    view.rerender(
+      <CloudMachineSection hostId="build" hostName="build" connected={false} liveSummary={null} />
+    );
+    const alert = screen.getByRole("alert").textContent ?? "";
+    expect(alert).toContain("Couldn't reach the plugin");
+    expect(alert).toContain("Its plugin is turned off.");
+    expect(alert).toContain("didn't confirm the machine");
   });
 });

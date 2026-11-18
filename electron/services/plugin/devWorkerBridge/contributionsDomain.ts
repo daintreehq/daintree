@@ -32,12 +32,14 @@ import type {
   RegisterFileDecorationProviderParams,
   RegisterHandlerParams,
   RegisterMcpToolsParams,
+  RegisterCloudProviderParams,
   RegisterServiceParams,
   RegisterWorktreeDeleteNotesProviderParams,
   SearchProviderRegistrationParams,
   SetPanelBadgeParams,
   SetPanelMenuItemsParams,
   SetToolbarButtonBadgeParams,
+  UnregisterCloudProviderParams,
   UnregisterContextProviderParams,
   UnregisterFileDecorationProviderParams,
   UnregisterMcpToolsParams,
@@ -47,7 +49,18 @@ import type {
 } from "../../../../shared/types/pluginDevWorker.js";
 import type { PluginIpcContext } from "../../../../shared/types/plugin.js";
 import type { PluginServiceCallContext } from "../../../../shared/types/pluginServices.js";
+import {
+  CLOUD_PROVIDER_METHODS,
+  type CloudProviderImpl,
+  type CloudProviderMethod,
+} from "../../../../shared/types/pluginCloudProvider.js";
+import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { createLogger } from "../../../utils/logger.js";
+import {
+  PluginCloudProviderTransportError,
+  cloudProviderWireArgs,
+  decodeCloudProviderAnswer,
+} from "../pluginCloudProviderCalls.js";
 import { invokeSignalFor } from "../pluginInvokeDeadline.js";
 import { observePluginPushListeners } from "../pluginInternalApprovers.js";
 import { PluginServiceUnavailableError } from "../pluginServiceInvocation.js";
@@ -102,6 +115,8 @@ export class ContributionsDomain {
   /** The same for worktree delete notes providers (#13805). Kept apart from
    * decoration providers so the two kinds can share an id. */
   private readonly worktreeDeleteNotesDisposers = new Map<string, () => void>();
+  /** The same for cloud providers (#17351), keyed by manifest id. */
+  private readonly cloudProviderDisposers = new Map<string, () => void>();
   /** Disposers for the `agentMcp` rosters the worker bound, keyed by endpoint id.
    * Retired with the generation like providers: the roster's `execute`s live in
    * the outgoing worker, and the replacement re-registers its own on activate. */
@@ -279,6 +294,81 @@ export class ContributionsDomain {
       const dispose = this.worktreeDeleteNotesDisposers.get(providerId);
       if (dispose) {
         this.worktreeDeleteNotesDisposers.delete(providerId);
+        dispose();
+      }
+      return;
+    },
+    registerCloudProvider: async (params) => {
+      const { descriptor } = params as RegisterCloudProviderParams;
+      const providerId = descriptor?.id;
+      if (typeof providerId !== "string" || !Array.isArray(descriptor.methods)) {
+        throw new Error("registerCloudProvider: descriptor must name an id and its methods");
+      }
+      // Before any await: the generation proposing this, which alone may answer for it.
+      const generation = this.ctx.generation();
+      const prior = this.cloudProviderDisposers.get(providerId);
+      if (prior) {
+        this.cloudProviderDisposers.delete(providerId);
+        try {
+          prior();
+        } catch {
+          // best-effort
+        }
+      }
+      // The impl lives in the worker: each method the worker says it has
+      // becomes one invoke, cancelled when the call's signal aborts. The
+      // provider's own failure comes back inside the answer, with its code; a
+      // rejection here means no answer came back at all.
+      const proxyImpl: Partial<Record<CloudProviderMethod, (...args: unknown[]) => unknown>> = {};
+      for (const method of CLOUD_PROVIDER_METHODS) {
+        if (!descriptor.methods.includes(method)) continue;
+        proxyImpl[method] = async (...args: unknown[]) => {
+          const wire = cloudProviderWireArgs(method, args);
+          // A crash-respawned worker binds again from inside its own activate(),
+          // while the plugin still reads as activated; a create must not reach it
+          // before its activation has committed, nor reach a later generation.
+          if (
+            this.ctx.isDisposed() ||
+            this.ctx.generation() !== generation ||
+            this.ctx.activationPhase() !== "succeeded"
+          ) {
+            throw new PluginCloudProviderTransportError("The plugin is starting again");
+          }
+          let raw: unknown;
+          try {
+            raw = await this.ctx.invoke(
+              { kind: "cloud-provider-method", providerId, method, args: wire.args },
+              wire.signal
+            );
+          } catch (error) {
+            if (wire.signal?.aborted) throw error;
+            throw new PluginCloudProviderTransportError(
+              formatErrorMessage(error, "The plugin didn't answer")
+            );
+          }
+          return decodeCloudProviderAnswer(raw);
+        };
+      }
+      const dispose = await this.ctx.host.registerCloudProvider(
+        { id: providerId },
+        proxyImpl as unknown as CloudProviderImpl
+      );
+      if (this.ctx.isDisposed() || generation !== this.ctx.generation()) {
+        try {
+          dispose();
+        } catch {
+          // best-effort
+        }
+        return;
+      }
+      this.cloudProviderDisposers.set(providerId, dispose);
+      return;
+    },
+    unregisterCloudProvider: async (params) => {
+      const { providerId } = params as UnregisterCloudProviderParams;
+      const dispose = this.cloudProviderDisposers.get(providerId);
+      if (dispose) {
+        this.cloudProviderDisposers.delete(providerId);
         dispose();
       }
       return;
@@ -633,6 +723,7 @@ export class ContributionsDomain {
     for (const dispose of [
       ...this.providerDisposers.values(),
       ...this.worktreeDeleteNotesDisposers.values(),
+      ...this.cloudProviderDisposers.values(),
       ...this.mcpRosterDisposers.values(),
       ...this.setupStepDisposers.values(),
       ...this.searchProviderDisposers.values(),
@@ -645,6 +736,7 @@ export class ContributionsDomain {
     }
     this.providerDisposers.clear();
     this.worktreeDeleteNotesDisposers.clear();
+    this.cloudProviderDisposers.clear();
     this.mcpRosterDisposers.clear();
     this.setupStepDisposers.clear();
     this.searchProviderDisposers.clear();

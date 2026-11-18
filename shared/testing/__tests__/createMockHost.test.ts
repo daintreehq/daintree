@@ -1289,6 +1289,28 @@ describe("createMockHost", () => {
     });
   });
 
+  describe("registerCloudProvider (#17351)", () => {
+    it("records the binding so a test can call it, replacing by id with an inert prior disposer", async () => {
+      const host = createMockHost();
+      const impl = () => ({ validate: vi.fn(async () => ({ identity: null })) }) as never;
+      const first = impl();
+      const second = impl();
+      const disposeFirst = await host.registerCloudProvider({ id: "ec2" }, first);
+      const disposeSecond = await host.registerCloudProvider({ id: "ec2" }, second);
+      expect(host.registeredCloudProviders).toHaveLength(1);
+      disposeFirst();
+      expect(host.registeredCloudProviders[0]?.impl).toBe(second);
+      disposeSecond();
+      expect(host.registeredCloudProviders).toHaveLength(0);
+    });
+
+    it("refuses what the real host refuses structurally", () => {
+      const host = createMockHost();
+      expect(() => host.registerCloudProvider({ id: "" }, {} as never)).toThrow(/descriptor.id/);
+      expect(() => host.registerCloudProvider({ id: "ec2" }, null as never)).toThrow(/impl/);
+    });
+  });
+
   describe("registerWorktreeDeleteNotesProvider (#13805)", () => {
     it("records the binding so a test can ask it, replacing by id with an inert prior disposer", async () => {
       const host = createMockHost();

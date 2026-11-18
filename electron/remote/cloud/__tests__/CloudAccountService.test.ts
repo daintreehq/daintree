@@ -568,9 +568,101 @@ function expectNoSecret(carriers: unknown[], secrets: string[]): void {
   for (const secret of secrets) expect(text).not.toContain(secret);
 }
 
+describe("CloudAccountService and a plugin's provider", () => {
+  it("connects no account for it, before anything entered is read, checked or kept", async () => {
+    const provider = fieldsProvider("acme.clouds.ec2", TWO_SECRETS);
+    const { accounts, vault } = service({ provider });
+    // Malformed on purpose: refused for whose provider it is, before the values are even read.
+    const values = { accessKeyId: 42, unknownField: "x" } as unknown as Record<string, string>;
+    await expect(accounts.checkCredentials("acme.clouds.ec2", values)).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+    await expect(
+      accounts.addAccount({
+        providerId: "acme.clouds.ec2",
+        credentials: values,
+        scopeId: "personal",
+      })
+    ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    expect(provider.checkCredentials).not.toHaveBeenCalled();
+    expect(vault.sets.size).toBe(0);
+  });
+
+  it("still replaces the credentials of an account it already has", async () => {
+    const provider = fieldsProvider("acme.clouds.ec2", TWO_SECRETS);
+    const { accounts, store, vault } = service({ provider });
+    store.putAccount({
+      id: "ca_acmeplugin",
+      providerId: "acme.clouds.ec2",
+      displayName: "EC2",
+      identity: "octocat",
+      scope: { kind: "personal", id: "personal", name: "Personal" },
+      apiUrl: "https://boat.dev/api/v1",
+      keyHint: null,
+      credentialRevision: "rev-1",
+      addedAt: 1,
+      validation: { status: "valid", checkedAt: 1 },
+      lastProvisioning: null,
+    });
+    await vault.put("ca_acmeplugin", {
+      accessKeyId: "AKIAOLD",
+      secretAccessKey: "old",
+      region: "eu",
+    });
+    const fresh = { accessKeyId: "AKIANEW", secretAccessKey: "new-secret", region: "eu" };
+    await expect(accounts.replaceCredentials("ca_acmeplugin", fresh)).resolves.toMatchObject({
+      id: "ca_acmeplugin",
+    });
+    expect(provider.checkCredentials).toHaveBeenCalledTimes(1);
+    expect(vault.sets.get("ca_acmeplugin")).toEqual(fresh);
+  });
+
+  it("words an unregistered provider's accounts with its owner's reason, falling back to the generic one", () => {
+    const backend = memoryBackend({
+      version: 1,
+      accounts: [
+        {
+          id: "ca_abcdefgh",
+          providerId: "acme.clouds.ec2",
+          displayName: "EC2",
+          identity: null,
+          scope: { kind: "personal", id: "personal", name: "Personal" },
+          apiUrl: "https://api.acme.test",
+          keyHint: null,
+          addedAt: 1,
+          validation: { status: "valid", checkedAt: 1 },
+        },
+        {
+          id: "ca_ijklmnop",
+          providerId: "agent37",
+          displayName: "Agent 37",
+          identity: null,
+          scope: { kind: "personal", id: "personal", name: "Personal" },
+          apiUrl: "https://api.agent37.test",
+          keyHint: null,
+          addedAt: 1,
+          validation: { status: "valid", checkedAt: 1 },
+        },
+      ],
+    });
+    const accounts = new CloudAccountService({
+      store: new CloudHostStore(backend),
+      vault: new MemoryCloudCredentialVault(),
+      providers: new Map(),
+      apiUrlFor: () => null,
+      unavailableReason: (id) =>
+        id === "acme.clouds.ec2" ? "The acme.clouds plugin is turned off." : null,
+    });
+    expect(accounts.summaries().map((summary) => summary.providerUnavailable)).toEqual([
+      "The acme.clouds plugin is turned off.",
+      "This build of Daintree doesn't include the agent37 cloud provider.",
+    ]);
+  });
+});
+
 describe("CloudAccountService with declared credential sets", () => {
   it("checks, connects, replaces and removes a set with two secrets", async () => {
-    const provider = fieldsProvider("acme.clouds.ec2", TWO_SECRETS);
+    const provider = fieldsProvider("ec2", TWO_SECRETS);
     const { accounts, vault, backend } = service({ provider });
     const first = {
       accessKeyId: " AKIAEXAMPLE0001 ",
@@ -579,7 +671,7 @@ describe("CloudAccountService with declared credential sets", () => {
       region: "us-east-1",
     };
 
-    const checked = await accounts.checkCredentials("acme.clouds.ec2", first);
+    const checked = await accounts.checkCredentials("ec2", first);
     expect(checked.identity).toBe("octocat");
     expect(provider.checkCredentials).toHaveBeenLastCalledWith(
       { ...first, accessKeyId: "AKIAEXAMPLE0001" },
@@ -588,7 +680,7 @@ describe("CloudAccountService with declared credential sets", () => {
     expect(vault.sets.size).toBe(0);
 
     const added = await accounts.addAccount({
-      providerId: "acme.clouds.ec2",
+      providerId: "ec2",
       credentials: first,
       scopeId: "personal",
     });
@@ -622,15 +714,15 @@ describe("CloudAccountService with declared credential sets", () => {
   });
 
   it("checks, connects, replaces and removes a key file exactly as it was read", async () => {
-    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE);
+    const provider = fieldsProvider("gce", KEY_FILE);
     const { accounts, vault, backend } = service({ provider });
     const first = { keyFile: serviceAccountKey("key-one"), project: "acme-build" };
 
-    await accounts.checkCredentials("acme.clouds.gce", first);
+    await accounts.checkCredentials("gce", first);
     expect(provider.checkCredentials).toHaveBeenLastCalledWith(first, "https://boat.dev/api/v1");
 
     const added = await accounts.addAccount({
-      providerId: "acme.clouds.gce",
+      providerId: "gce",
       credentials: first,
       scopeId: "team_1",
     });
@@ -653,55 +745,51 @@ describe("CloudAccountService with declared credential sets", () => {
   });
 
   it("refuses what the provider didn't declare, or a required value left out, before any check", async () => {
-    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE);
+    const provider = fieldsProvider("gce", KEY_FILE);
     const { accounts } = service({ provider });
     const key = serviceAccountKey("key-one");
     await expect(
-      accounts.checkCredentials("acme.clouds.gce", { keyFile: key, project: "p", extra: "x" })
+      accounts.checkCredentials("gce", { keyFile: key, project: "p", extra: "x" })
     ).rejects.toThrow(/doesn't ask for/);
-    await expect(accounts.checkCredentials("acme.clouds.gce", { keyFile: key })).rejects.toThrow(
+    await expect(accounts.checkCredentials("gce", { keyFile: key })).rejects.toThrow(
       /project is required/
     );
     await expect(
-      accounts.checkCredentials("acme.clouds.gce", { keyFile: "  \n", project: "p" })
+      accounts.checkCredentials("gce", { keyFile: "  \n", project: "p" })
     ).rejects.toThrow(/keyFile is required/);
+    await expect(accounts.checkCredentials("gce", { keyFile: 42, project: "p" })).rejects.toThrow(
+      /must be text/
+    );
     await expect(
-      accounts.checkCredentials("acme.clouds.gce", { keyFile: 42, project: "p" })
-    ).rejects.toThrow(/must be text/);
-    await expect(
-      accounts.checkCredentials("acme.clouds.gce", { keyFile: `${key}\u0000`, project: "p" })
+      accounts.checkCredentials("gce", { keyFile: `${key}\u0000`, project: "p" })
     ).rejects.toThrow(/doesn't look like text/);
     await expect(
-      accounts.checkCredentials("acme.clouds.gce", { keyFile: "x".repeat(65 * 1024), project: "p" })
+      accounts.checkCredentials("gce", { keyFile: "x".repeat(65 * 1024), project: "p" })
     ).rejects.toThrow(/larger than a key file/);
     await expect(
-      accounts.checkCredentials("acme.clouds.gce", {
+      accounts.checkCredentials("gce", {
         keyFile: key,
         project: "-----BEGIN PRIVATE KEY----- MIIE",
       })
     ).rejects.toThrow(/can't be a private key/);
-    await expect(accounts.checkCredentials("acme.clouds.gce", "key")).rejects.toThrow(
-      /credentials/
-    );
+    await expect(accounts.checkCredentials("gce", "key")).rejects.toThrow(/credentials/);
     expect(provider.checkCredentials).not.toHaveBeenCalled();
 
     // A provider whose every field is optional still gets a set with something in it.
-    const optional = fieldsProvider("acme.clouds.do", [
-      field("token", "single-line", { required: false }),
-    ]);
+    const optional = fieldsProvider("do", [field("token", "single-line", { required: false })]);
     const { accounts: others } = service({ provider: optional });
-    await expect(others.checkCredentials("acme.clouds.do", { token: "  " })).rejects.toThrow(
+    await expect(others.checkCredentials("do", { token: "  " })).rejects.toThrow(
       /Fill in the account's credentials/
     );
     expect(optional.checkCredentials).not.toHaveBeenCalled();
   });
 
   it("leaves the set and the account as they were when the provider refuses a replacement", async () => {
-    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE);
+    const provider = fieldsProvider("gce", KEY_FILE);
     const { accounts, vault, store } = service({ provider });
     const first = { keyFile: serviceAccountKey("key-one"), project: "acme-build" };
     const added = await accounts.addAccount({
-      providerId: "acme.clouds.gce",
+      providerId: "gce",
       credentials: first,
       scopeId: "personal",
     });
@@ -720,11 +808,11 @@ describe("CloudAccountService with declared credential sets", () => {
   });
 
   it("puts the old set back when the account can't be written after the new one was sealed", async () => {
-    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE);
+    const provider = fieldsProvider("gce", KEY_FILE);
     const { accounts, vault, store } = service({ provider });
     const first = { keyFile: serviceAccountKey("key-one"), project: "acme-build" };
     const added = await accounts.addAccount({
-      providerId: "acme.clouds.gce",
+      providerId: "gce",
       credentials: first,
       scopeId: "personal",
     });
@@ -743,10 +831,10 @@ describe("CloudAccountService with declared credential sets", () => {
   });
 
   it("removes the new set when the account had none and can't be written", async () => {
-    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE);
+    const provider = fieldsProvider("gce", KEY_FILE);
     const { accounts, vault, store } = service({ provider });
     const added = await accounts.addAccount({
-      providerId: "acme.clouds.gce",
+      providerId: "gce",
       credentials: { keyFile: serviceAccountKey("key-one"), project: "acme-build" },
       scopeId: "personal",
     });
@@ -765,7 +853,7 @@ describe("CloudAccountService with declared credential sets", () => {
   });
 
   it("refuses a replacement for someone else when the old set turns out to be another's while it seals", async () => {
-    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE, {
+    const provider = fieldsProvider("gce", KEY_FILE, {
       validate: vi.fn(async () => ({ identity: "alice@acme.iam" })),
     });
     vi.mocked(provider.checkCredentials)
@@ -773,7 +861,7 @@ describe("CloudAccountService with declared credential sets", () => {
       .mockResolvedValueOnce({ identity: "bob@acme.iam", scopes: [personalChoice()] });
     const { accounts, vault, store } = service({ provider });
     const added = await accounts.addAccount({
-      providerId: "acme.clouds.gce",
+      providerId: "gce",
       credentials: { keyFile: serviceAccountKey("key-one"), project: "acme-build" },
       scopeId: "personal",
     });
@@ -797,7 +885,7 @@ describe("CloudAccountService with declared credential sets", () => {
   });
 
   it("keeps the sign-in known at commit when the new set's check names none", async () => {
-    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE, {
+    const provider = fieldsProvider("gce", KEY_FILE, {
       validate: vi.fn(async () => ({ identity: "carol@acme.iam" })),
     });
     vi.mocked(provider.checkCredentials)
@@ -806,7 +894,7 @@ describe("CloudAccountService with declared credential sets", () => {
       .mockResolvedValueOnce({ identity: " ", scopes: [personalChoice()] });
     const { accounts, vault, store } = service({ provider });
     const added = await accounts.addAccount({
-      providerId: "acme.clouds.gce",
+      providerId: "gce",
       credentials: { keyFile: serviceAccountKey("key-one"), project: "acme-build" },
       scopeId: "personal",
     });
@@ -830,12 +918,12 @@ describe("CloudAccountService with declared credential sets", () => {
   });
 
   it("keeps a known sign-in when a check of the account answers with a blank one", async () => {
-    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE, {
+    const provider = fieldsProvider("gce", KEY_FILE, {
       validate: vi.fn(async () => ({ identity: "" })),
     });
     const { accounts, store } = service({ provider });
     const added = await accounts.addAccount({
-      providerId: "acme.clouds.gce",
+      providerId: "gce",
       credentials: { keyFile: serviceAccountKey("key-one"), project: "acme-build" },
       scopeId: "personal",
     });
@@ -844,7 +932,7 @@ describe("CloudAccountService with declared credential sets", () => {
   });
 
   it("won't make an account a second copy of one already connected for that sign-in and wallet", async () => {
-    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE);
+    const provider = fieldsProvider("gce", KEY_FILE);
     vi.mocked(provider.checkCredentials)
       .mockResolvedValueOnce({ identity: null, scopes: [personalChoice()] })
       .mockResolvedValueOnce({ identity: "bob@acme.iam", scopes: [personalChoice()] })
@@ -852,12 +940,12 @@ describe("CloudAccountService with declared credential sets", () => {
     const { accounts, vault } = service({ provider });
     const first = { keyFile: serviceAccountKey("key-one"), project: "acme-build" };
     const unknown = await accounts.addAccount({
-      providerId: "acme.clouds.gce",
+      providerId: "gce",
       credentials: first,
       scopeId: "personal",
     });
     await accounts.addAccount({
-      providerId: "acme.clouds.gce",
+      providerId: "gce",
       credentials: { keyFile: serviceAccountKey("key-bob"), project: "acme-build" },
       scopeId: "personal",
       displayName: "Bob's",
@@ -873,7 +961,7 @@ describe("CloudAccountService with declared credential sets", () => {
 
   it("refuses a replacement that signs in as someone a check of the old set has since learned", async () => {
     let pass: () => void = () => {};
-    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE, {
+    const provider = fieldsProvider("gce", KEY_FILE, {
       validate: vi.fn(async () => ({ identity: "alice@acme.iam" })),
     });
     vi.mocked(provider.checkCredentials)
@@ -887,7 +975,7 @@ describe("CloudAccountService with declared credential sets", () => {
     const { accounts, vault } = service({ provider });
     const first = { keyFile: serviceAccountKey("key-one"), project: "acme-build" };
     const added = await accounts.addAccount({
-      providerId: "acme.clouds.gce",
+      providerId: "gce",
       credentials: first,
       scopeId: "personal",
     });
@@ -907,14 +995,14 @@ describe("CloudAccountService with declared credential sets", () => {
   });
 
   it("leaves nothing sealed when a new account can't be written", async () => {
-    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE);
+    const provider = fieldsProvider("gce", KEY_FILE);
     const { accounts, vault, store } = service({ provider });
     vi.spyOn(store, "putAccount").mockImplementationOnce(() => {
       throw new Error("ENOSPC");
     });
     await expect(
       accounts.addAccount({
-        providerId: "acme.clouds.gce",
+        providerId: "gce",
         credentials: { keyFile: serviceAccountKey("key-one"), project: "acme-build" },
         scopeId: "personal",
       })
@@ -924,7 +1012,7 @@ describe("CloudAccountService with declared credential sets", () => {
   });
 
   it("hands on only the declared shape of a check, whatever else the provider returned", async () => {
-    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE, {
+    const provider = fieldsProvider("gce", KEY_FILE, {
       checkCredentials: vi.fn(async () => ({
         identity: "build@acme.iam",
         token: "ya29.secret-token",
@@ -937,7 +1025,7 @@ describe("CloudAccountService with declared credential sets", () => {
       })),
     });
     const { accounts } = service({ provider });
-    const checked = await accounts.checkCredentials("acme.clouds.gce", {
+    const checked = await accounts.checkCredentials("gce", {
       keyFile: serviceAccountKey("key-one"),
       project: "acme-build",
     });
@@ -949,7 +1037,7 @@ describe("CloudAccountService with declared credential sets", () => {
 
   it("doesn't mark replaced credentials refused for an answer about the set before them", async () => {
     let refuse: (error: Error) => void = () => {};
-    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE, {
+    const provider = fieldsProvider("gce", KEY_FILE, {
       validate: vi.fn(
         () => new Promise<{ identity: string }>((_resolve, reject) => (refuse = reject))
       ),
@@ -957,7 +1045,7 @@ describe("CloudAccountService with declared credential sets", () => {
     const { accounts } = service({ provider });
     // A key file has no hint, so only the revision can tell the two sets apart.
     const added = await accounts.addAccount({
-      providerId: "acme.clouds.gce",
+      providerId: "gce",
       credentials: { keyFile: serviceAccountKey("key-one"), project: "acme-build" },
       scopeId: "personal",
     });
@@ -974,12 +1062,12 @@ describe("CloudAccountService with declared credential sets", () => {
 
   it("doesn't take a successful answer about the set before a replacement for the new one", async () => {
     let answer: (value: { identity: string }) => void = () => {};
-    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE, {
+    const provider = fieldsProvider("gce", KEY_FILE, {
       validate: vi.fn(() => new Promise<{ identity: string }>((resolve) => (answer = resolve))),
     });
     const { accounts, store } = service({ provider });
     const added = await accounts.addAccount({
-      providerId: "acme.clouds.gce",
+      providerId: "gce",
       credentials: { keyFile: serviceAccountKey("key-one"), project: "acme-build" },
       scopeId: "personal",
     });
@@ -998,10 +1086,10 @@ describe("CloudAccountService with declared credential sets", () => {
   it("doesn't mark replaced credentials refused when a listing with the old set is refused", async () => {
     let refuse: (error: Error) => void = () => {};
     const list = vi.fn(() => new Promise<never>((_resolve, reject) => (refuse = reject)));
-    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE, { list });
+    const provider = fieldsProvider("gce", KEY_FILE, { list });
     const { accounts } = service({ provider });
     const added = await accounts.addAccount({
-      providerId: "acme.clouds.gce",
+      providerId: "gce",
       credentials: { keyFile: serviceAccountKey("key-one"), project: "acme-build" },
       scopeId: "personal",
     });
@@ -1022,11 +1110,11 @@ describe("CloudAccountService with declared credential sets", () => {
   });
 
   it("stops a replacement that can't read the set it would replace, before overwriting it", async () => {
-    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE);
+    const provider = fieldsProvider("gce", KEY_FILE);
     const { accounts, vault, store } = service({ provider });
     const first = { keyFile: serviceAccountKey("key-one"), project: "acme-build" };
     const added = await accounts.addAccount({
-      providerId: "acme.clouds.gce",
+      providerId: "gce",
       credentials: first,
       scopeId: "personal",
     });
@@ -1059,10 +1147,10 @@ describe("CloudAccountService with declared credential sets", () => {
         startsRemaining: null,
         savedSnapshotDayDollars: null,
       });
-    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE, { catalog });
+    const provider = fieldsProvider("gce", KEY_FILE, { catalog });
     const { accounts } = service({ provider });
     const added = await accounts.addAccount({
-      providerId: "acme.clouds.gce",
+      providerId: "gce",
       credentials: { keyFile: serviceAccountKey("key-one"), project: "acme-build" },
       scopeId: "personal",
     });
@@ -1086,10 +1174,10 @@ describe("CloudAccountService with declared credential sets", () => {
 
   it("seals nothing for an account removed while its replacement was being checked", async () => {
     let pass: () => void = () => {};
-    const provider = fieldsProvider("acme.clouds.ec2", TWO_SECRETS);
+    const provider = fieldsProvider("ec2", TWO_SECRETS);
     const { accounts, vault } = service({ provider });
     const added = await accounts.addAccount({
-      providerId: "acme.clouds.ec2",
+      providerId: "ec2",
       credentials: {
         accessKeyId: "AKIAEXAMPLE0001",
         secretAccessKey: "secret-access-key-one",
@@ -1125,10 +1213,10 @@ describe("CloudAccountService with declared credential sets", () => {
   });
 
   it("holds a remove until a replacement already sealing has finished, so no set outlives its account", async () => {
-    const provider = fieldsProvider("acme.clouds.ec2", TWO_SECRETS);
+    const provider = fieldsProvider("ec2", TWO_SECRETS);
     const { accounts, vault } = service({ provider });
     const added = await accounts.addAccount({
-      providerId: "acme.clouds.ec2",
+      providerId: "ec2",
       credentials: {
         accessKeyId: "AKIAEXAMPLE0001",
         secretAccessKey: "secret-access-key-one",
@@ -1161,10 +1249,10 @@ describe("CloudAccountService with declared credential sets", () => {
   });
 
   it("lets the next commit run after one that failed, and gives each caller its own answer", async () => {
-    const provider = fieldsProvider("acme.clouds.ec2", TWO_SECRETS);
+    const provider = fieldsProvider("ec2", TWO_SECRETS);
     const { accounts, vault } = service({ provider });
     const added = await accounts.addAccount({
-      providerId: "acme.clouds.ec2",
+      providerId: "ec2",
       credentials: {
         accessKeyId: "AKIAEXAMPLE0001",
         secretAccessKey: "secret-access-key-one",

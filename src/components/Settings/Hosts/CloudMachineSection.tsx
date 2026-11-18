@@ -100,13 +100,22 @@ export function CloudMachineSection({
       ? stoppedBillingSentence(provider)
       : null;
   const actionError = machines.errorFor(hostId) ?? error;
+  // While its provider is missing nothing here can reach the machine, so why comes first,
+  // beside what was last known: an unconfirmed create may still be a billable machine.
+  const lastError = status.operation === null ? (status.lastError?.message ?? null) : null;
+  // Unavailable, nothing in flight can settle, so what was last known shows whatever is running.
   const shownError =
-    actionError ?? (status.operation === null ? (status.lastError?.message ?? null) : null);
+    status.providerUnavailable !== null
+      ? [...new Set([actionError, status.providerUnavailable, status.lastError?.message ?? null])]
+          .filter(Boolean)
+          .join(" ")
+      : (actionError ?? lastError);
   const tunnel = provider?.capabilities.tunnel ?? null;
   // Offered only beside the error that names the command, never beside another one.
   const tunnelMissing =
     tunnel !== null &&
     actionError === null &&
+    status.providerUnavailable === null &&
     status.operation === null &&
     status.lastError?.code === "ssh-tunnel-command-missing";
   const presetValue =
@@ -453,22 +462,25 @@ export function CloudMachineSection({
           }
           control={
             <div className="flex items-center gap-1.5">
-              {status.resourceId === null && status.operation === null && status.lastError && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  loading={busy === "retry"}
-                  onClick={() =>
-                    act(
-                      "retry",
-                      () => cloudHostsClient.retryCreate(hostId),
-                      "Couldn't create the machine"
-                    )
-                  }
-                >
-                  Retry
-                </Button>
-              )}
+              {status.resourceId === null &&
+                status.operation === null &&
+                status.lastError &&
+                status.providerUnavailable === null && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    loading={busy === "retry"}
+                    onClick={() =>
+                      act(
+                        "retry",
+                        () => cloudHostsClient.retryCreate(hostId),
+                        "Couldn't create the machine"
+                      )
+                    }
+                  >
+                    Retry
+                  </Button>
+                )}
               {canStartMachine(status) && (
                 <Button
                   variant="outline"

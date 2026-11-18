@@ -108,6 +108,10 @@ import {
 } from "../fileDecorationRegistry.js";
 import { unregisterWorktreeDeleteNotesBinding } from "./worktreeDeleteNotesRegistry.js";
 import {
+  publishPluginCloudProviders,
+  withdrawPluginCloudProviders,
+} from "./pluginCloudProviders.js";
+import {
   registerWorktreeSetupSteps,
   unregisterWorktreeSetupStepHandlers,
   unregisterWorktreeSetupSteps,
@@ -843,6 +847,13 @@ export class PluginContributionRegistrar {
       }
       this.deps.themesChanged(pluginId, "registered");
     }
+    // After the commit: the cloud runtime registers each provider as soon as
+    // it's published, and its first call must find the plugin to activate. A
+    // project instance never declares one (the manifest refuses it).
+    const cloudProviders = manifest.contributes.cloudProviders ?? [];
+    if (cloudProviders.length > 0 && !isProject) {
+      publishPluginCloudProviders(pluginId, cloudProviders);
+    }
     // An installed plugin activates in the worker, whose
     // `host.registerForgeProvider` resolves without binding anything, so its
     // providers are listed as unavailable. Logged after the commit because the
@@ -1447,6 +1458,9 @@ export class PluginContributionRegistrar {
     );
     runUnloadStep(pluginId, "unregisterWorktreeDeleteNotesBinding", () =>
       unregisterWorktreeDeleteNotesBinding(pluginId)
+    );
+    runUnloadStep(pluginId, "withdrawPluginCloudProviders", () =>
+      withdrawPluginCloudProviders(pluginId)
     );
     runUnloadStep(pluginId, "unregisterPluginSkills", () => unregisterPluginSkills(pluginId));
     runUnloadStep(pluginId, "unregisterPluginThemes", () => {

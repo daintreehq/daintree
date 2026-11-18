@@ -331,3 +331,23 @@ describe("AddCloudHostDialog provisioning", () => {
     expect(client.createHost).not.toHaveBeenCalled();
   });
 });
+
+describe("AddCloudHostDialog connecting an account", () => {
+  it("offers Connect for Daintree's own providers only, until a plugin's can ask consent", () => {
+    cloud.snapshot = {
+      providers: [provider("boat", "Boat", NONE), ACME()],
+      accounts: [],
+      hosts: [],
+    };
+    render(<AddCloudHostDialog isOpen onClose={() => {}} onReady={() => {}} />);
+    expect(screen.getByRole("button", { name: "Connect Boat account" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Connect Acme account" })).toBeNull();
+  });
+
+  it("offers no Connect when only a plugin's provider is there", () => {
+    cloud.snapshot = { providers: [ACME()], accounts: [], hosts: [] };
+    render(<AddCloudHostDialog isOpen onClose={() => {}} onReady={() => {}} />);
+    expect(screen.queryByRole("button", { name: /^Connect / })).toBeNull();
+    expect(screen.getByText("No cloud provider is available on this machine.")).toBeTruthy();
+  });
+});

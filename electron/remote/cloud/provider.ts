@@ -2,16 +2,20 @@ import type {
   CloudAccountCheckResult,
   CloudCredentialValues,
   CloudHostError,
-  CloudMachineState,
-  CloudMachineType,
   CloudProviderId,
   CloudProviderInfo,
   CloudProvisioning,
-  CloudProvisioningDimension,
-  CloudProvisioningOptions,
-  CloudProvisioningSelection,
 } from "../../../shared/types/cloudHosts.js";
-import type { SshEndpoint } from "./sshEndpoint.js";
+import type {
+  CloudProviderCatalog,
+  CloudProviderCreateRequest,
+  CloudProviderResource,
+  CloudProviderSshAccess,
+} from "../../../shared/types/pluginCloudProvider.js";
+
+/** Why a cloud host can't run here: the Shell reaches hosts on Windows through WSL only. */
+export const CLOUD_HOSTS_UNSUPPORTED_ON_WINDOWS =
+  "Cloud hosts need Daintree for macOS or Linux. Daintree for Windows reaches hosts through WSL only.";
 
 /** What a provider call needs to act for one account. Lives in main only. */
 export interface ProviderCredentials {
@@ -24,88 +28,10 @@ export interface ProviderCredentials {
   signal?: AbortSignal;
 }
 
-/** A machine as a provider reports it, normalised. */
-export interface ProviderResource {
-  resourceId: string;
-  name: string;
-  machine: CloudMachineState;
-  rawState: string;
-  machineType: string | null;
-  vcpu: number | null;
-  memoryGB: number | null;
-  autoStopAt: string | null;
-  lifetimeSeconds: number | null;
-  stoppedAt: string | null;
-  createdAt: string | null;
-  stop: {
-    id: string;
-    status: "pending" | "failing" | "completed" | "superseded" | "unknown";
-    error: string | null;
-  } | null;
-  lastSnapshotAt: string | null;
-  dataExpired: boolean;
-  /** Snapshots were turned off at create: a stop erases the disk. */
-  snapshotsDisabled: boolean;
-  labels: Record<string, string>;
-  /** This account may see the machine but not start or reach it. */
-  restricted: boolean;
-  /** The provider's word on why it is stopped or failed. */
-  error: string | null;
-  /** Stopped because the provider slept it on idle; a request to it would wake it. Absent: not asleep. */
-  asleep?: boolean;
-  /**
-   * Whether this machine sleeps by itself when idle, and after how long, as
-   * the provider reports it for this machine; absent when it doesn't say per
-   * machine, and the provider's declared lifetime holds.
-   */
-  idleSleep?: { enabled: boolean; idleSeconds: number | null };
-}
-
-/** How to reach the machine's sshd right now, as the provider's authenticated API said. */
-export interface ProviderSshAccess {
-  user: string;
-  endpoint: SshEndpoint;
-  /**
-   * The server's public key, `type base64`. Null when the provider doesn't
-   * vouch for one: its tunnel does (`sshTrust: "provider-tunnel"`), or the
-   * person confirms the key the machine presents (`"confirm-on-first-connect"`).
-   * Under `"api-or-confirm"` it is the key the API reports when it has one yet,
-   * and null when it doesn't, leaving the first key to the person.
-   */
-  hostKey: string | null;
-}
-
-export interface ProviderCatalog {
-  machineTypes: CloudMachineType[];
-  canStart: boolean;
-  includedHoursRemaining: number | null;
-  startsRemaining: number | null;
-  savedSnapshotDayDollars: number | null;
-  /**
-   * The regions, images and networks this account may create with, for each
-   * dimension the provider's capabilities say a create takes. One left out
-   * reads as offering nothing; one the provider doesn't take is ignored.
-   */
-  provisioning?: Partial<Record<CloudProvisioningDimension, CloudProvisioningOptions>>;
-}
-
-export interface ProviderCreateRequest {
-  name: string;
-  machineType: string;
-  /** The runtime limit, for a provider whose create takes one; always null for the rest. */
-  lifetimeSeconds: number | null;
-  /** What the person chose, checked against the catalog; the same on every retry of this create. */
-  provisioning: CloudProvisioningSelection;
-  /** Non-secret identifiers that let a lost create be found again. */
-  labels: Record<string, string>;
-  idempotencyKey: string;
-  /**
-   * The account's SSH public key, `type base64 comment`, for a provider whose
-   * `provisioning.sshKey` is "at-create"; null for one that authorizes it after.
-   * A retried create carries the same key.
-   */
-  publicKey: string | null;
-}
+export type ProviderResource = CloudProviderResource;
+export type ProviderSshAccess = CloudProviderSshAccess;
+export type ProviderCatalog = CloudProviderCatalog;
+export type ProviderCreateRequest = CloudProviderCreateRequest;
 
 /** A key that lets one machine act on itself, as the provider issued it. */
 export interface IssuedMachineKey {

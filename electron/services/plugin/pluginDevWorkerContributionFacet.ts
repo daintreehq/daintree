@@ -56,6 +56,19 @@ import type {
   RegisterMcpToolsParams,
 } from "../../../shared/types/pluginDevWorker.js";
 import type { HostProxyFacetDeps, PluginDevWorkerRpc } from "./pluginDevWorkerRpcClient.js";
+import {
+  CLOUD_PROVIDER_METHODS,
+  type CloudProviderDescriptor,
+  type CloudProviderImpl,
+  type CloudProviderMethod,
+} from "../../../shared/types/pluginCloudProvider.js";
+import {
+  cloudProviderImplArgs,
+  encodeCloudProviderAnswer,
+  unsendableCloudProviderAnswer,
+} from "./pluginCloudProviderCalls.js";
+
+const CLOUD_PROVIDER_METHOD_NAMES: ReadonlySet<string> = new Set(CLOUD_PROVIDER_METHODS);
 interface RegisteredHandler {
   handler: PluginIpcHandler | PluginTypedIpcHandler<unknown, unknown>;
   schema?: PluginChannelSchema<unknown, unknown>;
@@ -83,6 +96,7 @@ export type ContributionHostApi = Pick<
   | "registerForgeProvider"
   | "registerFileDecorationProvider"
   | "registerWorktreeDeleteNotesProvider"
+  | "registerCloudProvider"
   | "registerWorktreeSetupStep"
   | "registerSearchProvider"
   | "registerContextProvider"
@@ -104,6 +118,9 @@ export class PluginDevWorkerContributionFacet {
     string,
     { impl: WorktreeDeleteNotesProviderImpl }
   >();
+  /** Cloud providers bound with `host.registerCloudProvider` (#17351), by manifest id. The
+   * entry object is the registration's identity, as for delete notes. */
+  private readonly cloudProviders = new Map<string, { impl: CloudProviderImpl }>();
   /** Quick switcher search providers bound with `host.registerSearchProvider`, by provider id.
    * The record object per registration is its identity, so a disposer only ever
    * unbinds the registration it came from, even when a later one reused the function. */
@@ -163,6 +180,7 @@ export class PluginDevWorkerContributionFacet {
     this.ipcHandlers.clear();
     this.fileDecorationProviders.clear();
     this.worktreeDeleteNotesProviders.clear();
+    this.cloudProviders.clear();
     this.searchProviders.clear();
     this.contextProviders.clear();
     for (const controller of this.contextProviderAborts.values()) controller.abort();
@@ -192,6 +210,7 @@ export class PluginDevWorkerContributionFacet {
     if (msg.kind === "mcp-tool") void this.handleMcpToolInvoke(msg);
     else if (msg.kind === "worktree-setup-step") void this.handleSetupStepInvoke(msg);
     else if (msg.kind === "search-provider") void this.handleSearchProviderInvoke(msg);
+    else if (msg.kind === "cloud-provider-method") void this.handleCloudProviderInvoke(msg);
     else void this.rpc.runInInvocation(msg.requestId, () => this.runInvoke(msg));
   }
 
@@ -360,10 +379,70 @@ export class PluginDevWorkerContributionFacet {
       }
     }
   }
+  /**
+   * One call of a bound cloud provider (#17351). Cancellable like a
+   * `search-provider`: the impl's signal aborts on a matching `invoke-cancel`,
+   * and nothing is posted back after that. The provider's own failure is an
+   * answer, not a transport error, so it goes back inside the envelope with
+   * its code; only a call that couldn't be made fails the invoke.
+   */
+  private async handleCloudProviderInvoke(
+    msg: Extract<PluginHostToWorkerMessage, { type: "invoke"; kind: "cloud-provider-method" }>
+  ): Promise<void> {
+    const controller = new AbortController();
+    this.mcpInvokeAborts.set(msg.requestId, controller);
+    const settle = (outcome: { ok: true; result: string } | { ok: false; error: string }): void => {
+      if (controller.signal.aborted || this.rpc.disposed) return;
+      this.rpc.post({ type: "invoke-result", requestId: msg.requestId, ...outcome });
+    };
+    try {
+      const impl = this.cloudProviders.get(msg.providerId)?.impl;
+      if (!impl || !CLOUD_PROVIDER_METHOD_NAMES.has(msg.method)) {
+        settle({ ok: false, error: `No cloud provider "${msg.providerId}" to call` });
+        return;
+      }
+      const method = msg.method as CloudProviderMethod;
+      const args = Array.isArray(msg.args) ? msg.args : [];
+      let outcome: { ok: true; value: unknown } | { ok: false; error: unknown };
+      try {
+        // Looked up per call, inside the guard: a getter on the impl runs plugin code too.
+        const run = impl[method] as ((...callArgs: unknown[]) => unknown) | undefined;
+        if (typeof run !== "function") {
+          throw Object.assign(new Error(`It has no ${method}`), { code: "unsupported" });
+        }
+        outcome = {
+          ok: true,
+          value: await run.apply(impl, cloudProviderImplArgs(method, args, controller.signal)),
+        };
+      } catch (error) {
+        outcome = { ok: false, error };
+      }
+      let answer: string;
+      try {
+        answer = encodeCloudProviderAnswer(outcome);
+      } catch {
+        // The provider answered, but not with anything that can cross. Never a refusal:
+        // a create that got this far may have made the machine.
+        answer = unsendableCloudProviderAnswer();
+      }
+      settle({ ok: true, result: answer });
+    } catch {
+      // Nothing of the plugin's is read here: its error already failed to be read once.
+      settle({ ok: false, error: "The cloud provider call failed" });
+    } finally {
+      if (this.mcpInvokeAborts.get(msg.requestId) === controller) {
+        this.mcpInvokeAborts.delete(msg.requestId);
+      }
+    }
+  }
+
   private async runInvoke(
     msg: Exclude<
       Extract<PluginHostToWorkerMessage, { type: "invoke" }>,
-      { kind: "mcp-tool" } | { kind: "worktree-setup-step" } | { kind: "search-provider" }
+      | { kind: "mcp-tool" }
+      | { kind: "worktree-setup-step" }
+      | { kind: "search-provider" }
+      | { kind: "cloud-provider-method" }
     >
   ): Promise<void> {
     const running = { cancelled: false };
@@ -828,6 +907,46 @@ export class PluginDevWorkerContributionFacet {
           if (this.worktreeDeleteNotesProviders.get(providerId) !== registration) return;
           this.worktreeDeleteNotesProviders.delete(providerId);
           this.rpc.notify("unregisterWorktreeDeleteNotesProvider", { providerId });
+        };
+        return Promise.resolve(dispose);
+      },
+      registerCloudProvider: (descriptor: CloudProviderDescriptor, impl: CloudProviderImpl) => {
+        this.assertActivationOpen("registerCloudProvider");
+        if (
+          !descriptor ||
+          typeof descriptor !== "object" ||
+          typeof descriptor.id !== "string" ||
+          descriptor.id.length === 0
+        ) {
+          throw new Error(
+            `Plugin "${this.pluginId}" registerCloudProvider: descriptor.id must be a non-empty string`
+          );
+        }
+        if (!impl || typeof impl !== "object") {
+          throw new Error(
+            `Plugin "${this.pluginId}" registerCloudProvider: impl must be an object`
+          );
+        }
+        const providerId = descriptor.id;
+        // Main checks these names against what the manifest declares, so a missing
+        // method fails activation rather than the first call that needs it.
+        const methods = CLOUD_PROVIDER_METHODS.filter(
+          (method) => typeof impl[method] === "function"
+        );
+        const registration = { impl };
+        this.cloudProviders.set(providerId, registration);
+        this.rpc.notify(
+          "registerCloudProvider",
+          { descriptor: { id: providerId, methods } },
+          `cloudProvider:${providerId}`
+        );
+        let disposed = false;
+        const dispose = (): void => {
+          if (disposed) return;
+          disposed = true;
+          if (this.cloudProviders.get(providerId) !== registration) return;
+          this.cloudProviders.delete(providerId);
+          this.rpc.notify("unregisterCloudProvider", { providerId });
         };
         return Promise.resolve(dispose);
       },

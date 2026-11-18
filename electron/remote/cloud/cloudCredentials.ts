@@ -6,10 +6,9 @@ import {
 } from "../../../shared/types/cloudHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
 
+export { credentialFieldsProblem } from "../../../shared/utils/cloudProviderDeclaration.js";
+
 const MAX_SET_BYTES = 256 * 1024;
-const MAX_FIELDS = 16;
-const FIELD_ID = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
-const FIELD_INPUTS: ReadonlySet<string> = new Set(["single-line", "multi-line", "key-file"]);
 /** A hint shows at most half of a secret. */
 const MIN_HINTED_LENGTH = 8;
 
@@ -23,40 +22,6 @@ function hasControl(value: string, allowed: string): boolean {
     if ((ch < " " || ch === "\x7f") && !allowed.includes(ch)) return true;
   }
   return false;
-}
-
-/**
- * Why a provider's declared fields can't be used, or null when they can.
- * Checked when it registers, so a malformed declaration never reaches a form.
- */
-export function credentialFieldsProblem(fields: unknown): string | null {
-  if (!Array.isArray(fields) || fields.length === 0) return "declares no credential fields";
-  if (fields.length > MAX_FIELDS) return `declares more than ${MAX_FIELDS} credential fields`;
-  const ids = new Set<string>();
-  for (const raw of fields) {
-    const field = raw as Partial<CloudCredentialField> | null;
-    // A name every object already has would read through to Object.prototype wherever it's looked up.
-    if (
-      !field ||
-      typeof field.id !== "string" ||
-      !FIELD_ID.test(field.id) ||
-      field.id in Object.prototype
-    ) {
-      return `declares a credential field with an invalid id ${JSON.stringify(field?.id)}`;
-    }
-    if (ids.has(field.id)) return `declares the credential field ${field.id} twice`;
-    ids.add(field.id);
-    if (typeof field.label !== "string" || field.label.trim().length === 0) {
-      return `declares the credential field ${field.id} without a label`;
-    }
-    if (typeof field.input !== "string" || !FIELD_INPUTS.has(field.input)) {
-      return `declares the credential field ${field.id} with an unknown input`;
-    }
-    if (typeof field.secret !== "boolean" || typeof field.required !== "boolean") {
-      return `declares the credential field ${field.id} without saying whether it's secret and required`;
-    }
-  }
-  return null;
 }
 
 /** One field's value as entered, or null when it was left blank. */

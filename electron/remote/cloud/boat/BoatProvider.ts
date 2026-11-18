@@ -6,6 +6,7 @@ import type {
   CloudProviderInfo,
 } from "../../../../shared/types/cloudHosts.js";
 import {
+  CLOUD_HOSTS_UNSUPPORTED_ON_WINDOWS,
   UnusableMachineKeyError,
   type CloudProvider,
   type IssuedMachineKey,
@@ -251,10 +252,7 @@ export class BoatProvider implements CloudProvider {
         },
         deletion: true,
       },
-      unsupportedReason:
-        platform === "win32"
-          ? "Cloud hosts need Daintree for macOS or Linux. Daintree for Windows reaches hosts through WSL only."
-          : null,
+      unsupportedReason: platform === "win32" ? CLOUD_HOSTS_UNSUPPORTED_ON_WINDOWS : null,
     };
   }
 

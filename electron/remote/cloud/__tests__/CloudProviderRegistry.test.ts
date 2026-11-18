@@ -417,11 +417,23 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
       owner: pluginOwner,
       apiUrl: "https://api.acme.test",
     });
-    const account = await env.accounts.addAccount({
+    // Connect refuses a plugin's provider until it can ask consent (#17352), so its account is
+    // seeded as one connected then would be kept.
+    const account = { id: "ca_acmeplugin" };
+    env.store.putAccount({
+      id: account.id,
       providerId: PLUGIN_PROVIDER,
-      credentials: { apiKey: "acme_live_x" },
-      scopeId: "personal",
+      displayName: "octocat",
+      identity: "octocat",
+      scope: { kind: "personal", id: "personal", name: "Personal" },
+      apiUrl: "https://api.acme.test",
+      keyHint: null,
+      credentialRevision: "rev-1",
+      addedAt: NOW,
+      validation: { status: "valid", checkedAt: NOW },
+      lastProvisioning: null,
     });
+    await env.vault.put(account.id, { apiKey: "acme_live_x" });
     const { hostId } = await env.lifecycle.importMachine({
       accountId: account.id,
       resourceId: "i-0123456789",

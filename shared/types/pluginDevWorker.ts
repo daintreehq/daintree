@@ -62,6 +62,7 @@ import type {
   PluginWorktreeSetupStepContext,
 } from "./plugin.js";
 import type { PluginServiceCaller } from "./pluginServices.js";
+import type { CloudProviderMethod } from "./pluginCloudProvider.js";
 
 /** Async host methods the worker proxy relays to main and awaits a reply for. */
 export type PluginHostCallMethod =
@@ -177,6 +178,8 @@ export type PluginHostNotifyMethod =
   | "unregisterService"
   | "registerWorktreeDeleteNotesProvider"
   | "unregisterWorktreeDeleteNotesProvider"
+  | "registerCloudProvider"
+  | "unregisterCloudProvider"
   | "mcp.registerTools"
   | "mcp.unregisterTools"
   | "logger.info"
@@ -241,10 +244,11 @@ export type PluginWorkerSubscriptionKind =
  * `host.registerWorktreeSetupStep`, `search-provider` asks a quick switcher
  * provider bound through `host.registerSearchProvider`, and
  * `context-provider-method` asks a `host.registerContextProvider` impl to
- * search or resolve (#13795), and `service-method` runs one method of a
+ * search or resolve (#13795), `service-method` runs one method of a
  * service bound through `host.registerService` for another plugin's call
- * (#14105); they are the kinds main can cancel (`invoke-cancel`), each handing
- * the plugin a signal.
+ * (#14105), and `cloud-provider-method` one call of a cloud provider bound
+ * through `host.registerCloudProvider` (#17351); they are the kinds main can
+ * cancel (`invoke-cancel`), each handing the plugin a signal.
  * `command` is the odd one out: nothing is registered ahead of it. The handler
  * module for a manifest-declared command is imported by the worker on first
  * dispatch, from the absolute path main resolved (#12274), so there is no
@@ -263,7 +267,8 @@ export type PluginWorkerInvokeKind =
   | "search-provider"
   | "context-provider-method"
   | "service-method"
-  | "worktree-delete-notes";
+  | "worktree-delete-notes"
+  | "cloud-provider-method";
 
 /** Messages sent main → worker. */
 export type PluginHostToWorkerMessage =
@@ -382,6 +387,22 @@ export type PluginHostToWorkerMessage =
       method: string;
       args: unknown;
       caller: PluginServiceCaller;
+    }
+  /**
+   * One call of a cloud provider the worker bound (#17351). `args` are the
+   * method's arguments without its signal (the credentials' `signal`, or
+   * `checkCredentials`' last argument); the worker builds that signal itself,
+   * and `invoke-cancel` aborts it. The result is the answer envelope as one
+   * JSON string (`encodeCloudProviderAnswer`), so the provider's own failure
+   * keeps its code across the port.
+   */
+  | {
+      type: "invoke";
+      requestId: string;
+      kind: "cloud-provider-method";
+      providerId: string;
+      method: CloudProviderMethod;
+      args: unknown[];
     }
   /**
    * Run one tool of an `agentMcp` roster the worker registered. `caller` is the
@@ -732,6 +753,20 @@ export interface RegisterWorktreeDeleteNotesProviderParams {
 
 /** Params for `unregisterWorktreeDeleteNotesProvider` (`host-notify`). */
 export interface UnregisterWorktreeDeleteNotesProviderParams {
+  providerId: string;
+}
+
+/**
+ * Params for `registerCloudProvider` (`host-notify`, #17351). Only the
+ * manifest id and the names of the methods the impl has travel; the impl stays
+ * in the worker and main calls it through a `cloud-provider-method` invoke.
+ */
+export interface RegisterCloudProviderParams {
+  descriptor: { id: string; methods: string[] };
+}
+
+/** Params for `unregisterCloudProvider` (`host-notify`). */
+export interface UnregisterCloudProviderParams {
   providerId: string;
 }
 
