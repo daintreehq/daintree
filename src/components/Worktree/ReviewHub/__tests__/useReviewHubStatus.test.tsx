@@ -349,10 +349,12 @@ describe("useReviewHubStatus failed reads", () => {
     await advance(0);
     expect(result.current.loadError).toBeNull();
 
+    getStagingStatus.mockClear();
     getStagingStatus.mockRejectedValueOnce(new Error("not a git repository"));
     await act(async () => heldRefresh());
 
-    expect(getStagingStatus).toHaveBeenLastCalledWith(WT);
+    // It never reads a worktree the hub has left, so it has no failure to show.
+    expect(getStagingStatus).not.toHaveBeenCalled();
     expect(result.current.loadError).toBeNull();
     expect(result.current.loading).toBe(false);
   });
