@@ -235,7 +235,10 @@ describe("startWatchBuild with real esbuild contexts", () => {
     const markerAtFirstReady = [];
     const onFirstReady = vi.fn(() => markerAtFirstReady.push(fs.existsSync(readyFile)));
     watch = await startWatchBuild({
-      configs: { main: config("main", [hold.plugin]), preload: config("preload", [preloadEnds.plugin]) },
+      configs: {
+        main: config("main", [hold.plugin]),
+        preload: config("preload", [preloadEnds.plugin]),
+      },
       readyFile,
       onFirstReady,
       createContext: context,
@@ -263,7 +266,10 @@ describe("startWatchBuild with real esbuild contexts", () => {
     const mainEnds = endCounter();
     const preloadEnds = endCounter();
     watch = await startWatchBuild({
-      configs: { main: config("main", [mainEnds.plugin]), preload: config("preload", [preloadEnds.plugin]) },
+      configs: {
+        main: config("main", [mainEnds.plugin]),
+        preload: config("preload", [preloadEnds.plugin]),
+      },
       readyFile,
       createContext: context,
       delayMs: 10,

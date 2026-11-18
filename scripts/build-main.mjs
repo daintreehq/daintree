@@ -626,7 +626,10 @@ async function run() {
           preload: cjsConfig,
           sdk: sdkConfig,
           ...Object.fromEntries(
-            CORE_PICKER_GUEST_ASSETS.map((asset, index) => [`guest:${asset.id}`, guestConfigs[index]])
+            CORE_PICKER_GUEST_ASSETS.map((asset, index) => [
+              `guest:${asset.id}`,
+              guestConfigs[index],
+            ])
           ),
         },
         readyFile: buildReadyFile,
