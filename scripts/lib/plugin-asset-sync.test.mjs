@@ -253,7 +253,7 @@ describe("syncPluginAssets", () => {
     });
     const changes = { copied: [], removed: [] };
 
-    expect(() => syncPluginAssets(src, dest, changes)).toThrow("vanished mid-save");
+    expect(() => syncPluginAssets(src, dest, { changes })).toThrow("vanished mid-save");
 
     expect(changes.copied).toEqual(["plugin.json"]);
     expect(fs.readdirSync(path.join(dest, "bin"))).toEqual([]);
@@ -305,37 +305,91 @@ describe("syncPluginAssets", () => {
     expect(read(path.join(dest, "view", "panel.mjs"))).toBe("panel\n");
   });
 
-  posixOnly(
-    "syncs into an output plugin directory that links elsewhere, as esbuild writes there",
-    () => {
-      writeManifest(src);
-      const elsewhere = path.join(workDir, "elsewhere");
-      writeFile(path.join(elsewhere, "main", "index.js"), "compiled\n");
-      fs.symlinkSync(elsewhere, dest);
-
-      syncPluginAssets(src, dest);
-
-      expect(fs.lstatSync(dest).isSymbolicLink()).toBe(true);
-      expect(exists(path.join(elsewhere, "plugin.json"))).toBe(true);
-      expect(read(path.join(elsewhere, "main", "index.js"))).toBe("compiled\n");
-    }
-  );
-
   posixOnly.each([
-    ["is the source", (pluginSrc) => pluginSrc],
-    ["sits inside the source", (pluginSrc) => path.join(pluginSrc, "bin")],
-    ["contains the source", (pluginSrc) => path.dirname(pluginSrc)],
-  ])("refuses to sync onto an output directory that %s", (_label, target) => {
+    ["the plugin directory", (target) => fs.symlinkSync(target, dest) ?? dest],
+    [
+      "its tier",
+      (target) => {
+        fs.symlinkSync(path.dirname(target), path.join(workDir, "tier"));
+        return path.join(workDir, "tier", path.basename(target));
+      },
+    ],
+  ])("refuses an output path whose %s is a link, touching nothing there", (_label, link) => {
+    writeManifest(src);
+    const elsewhere = path.join(workDir, "elsewhere", "plugin");
+    writeFile(path.join(elsewhere, "README.md"), "keep\n");
+    const output = link(elsewhere);
+
+    expect(() => syncPluginAssets(src, output)).toThrow("is a link");
+
+    expect(fs.readdirSync(elsewhere)).toEqual(["README.md"]);
+  });
+
+  function seedSource() {
     writeManifest(src);
     writeFile(path.join(src, "README.md"), "keep\n");
     writeFile(path.join(src, "bin", "agent.mjs"), "agent\n");
-    fs.symlinkSync(target(src), dest);
+  }
 
-    expect(() => syncPluginAssets(src, dest)).toThrow("refusing to sync");
-
+  function expectSourceIntact() {
     expect(read(path.join(src, "README.md"))).toBe("keep\n");
     expect(read(path.join(src, "bin", "agent.mjs"))).toBe("agent\n");
     expect(exists(path.join(src, "plugin.json"))).toBe(true);
+  }
+
+  it("refuses an output directory inside the source, even one that doesn't exist yet", () => {
+    seedSource();
+    const output = path.join(src, "bin", "out");
+
+    expect(() => syncPluginAssets(src, output)).toThrow("refusing to sync");
+
+    expect(exists(output)).toBe(false);
+    expectSourceIntact();
+  });
+
+  it("refuses an output directory that contains the source", () => {
+    seedSource();
+
+    expect(() => syncPluginAssets(src, workDir)).toThrow("refusing to sync");
+
+    expectSourceIntact();
+  });
+
+  it("refuses a sibling plugin's source when given the tier as the source root", () => {
+    const tier = path.join(workDir, "tier");
+    writeManifest(path.join(tier, "a"));
+    writeManifest(path.join(tier, "b"));
+    writeFile(path.join(tier, "b", "README.md"), "keep\n");
+
+    expect(() =>
+      syncPluginAssets(path.join(tier, "a"), path.join(tier, "b"), { sourceRoot: tier })
+    ).toThrow("refusing to sync");
+
+    expect(read(path.join(tier, "b", "README.md"))).toBe("keep\n");
+  });
+
+  posixOnly(
+    "refuses an output reached through a linked ancestor that resolves into the source",
+    () => {
+      seedSource();
+      fs.symlinkSync(workDir, path.join(workDir, "alias"));
+
+      expect(() => syncPluginAssets(src, path.join(workDir, "alias", "src", "bin"))).toThrow(
+        "refusing to sync"
+      );
+
+      expectSourceIntact();
+    }
+  );
+
+  it("refuses the source spelled in another case on a case-insensitive filesystem", (context) => {
+    seedSource();
+    const alias = path.join(workDir, "SRC");
+    if (!exists(alias)) context.skip();
+
+    expect(() => syncPluginAssets(src, alias)).toThrow("refusing to sync");
+
+    expectSourceIntact();
   });
 
   it("replaces a file standing where the output plugin directory belongs", () => {
@@ -720,6 +774,54 @@ describe("watchPluginAssets", () => {
     expect(fake.watchers).toHaveLength(1);
     expect(fake.watchers[0].close).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("throws from a first sync that can't read a tier", () => {
+    writeManifest(path.join(src, "builtin", "demo"));
+    const tierDir = path.join(src, "builtin");
+    const realReaddir = fs.readdirSync;
+    vi.spyOn(fs, "readdirSync").mockImplementation((dir, options) => {
+      if (dir === tierDir) throw Object.assign(new Error("denied"), { code: "EACCES" });
+      return realReaddir.call(fs, dir, options);
+    });
+
+    expect(() =>
+      watchPluginAssets({
+        srcRoot: src,
+        destRoot: dest,
+        initialSync: true,
+        watch: fakeWatch().watch,
+      })
+    ).toThrow("denied");
+    expect(exists(path.join(dest, "builtin", "demo"))).toBe(false);
+  });
+
+  posixOnly("reports a refusal the rescan keeps meeting once, until it clears", async () => {
+    vi.useFakeTimers();
+    const { pluginDest } = seedPlugin();
+    const parked = path.join(workDir, "parked");
+    fs.renameSync(pluginDest, parked);
+    fs.symlinkSync(parked, pluginDest);
+    const onError = vi.fn();
+    handle = watchPluginAssets({
+      srcRoot: src,
+      destRoot: dest,
+      rescanMs: 100,
+      onError,
+      watch: fakeWatch().watch,
+    });
+
+    await vi.advanceTimersByTimeAsync(350);
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError.mock.calls[0][0].message).toContain("is a link");
+
+    fs.rmSync(pluginDest);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(exists(path.join(pluginDest, "plugin.json"))).toBe(true);
+    fs.rmSync(pluginDest, { recursive: true });
+    fs.symlinkSync(parked, pluginDest);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(onError).toHaveBeenCalledTimes(2);
   });
 
   it("picks up a tier created after it started through the periodic rescan", async () => {

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -44,7 +45,7 @@ export function isReservedAssetDir(name) {
  */
 export function isInsideDir(child, parent) {
   const rel = path.relative(parent, child);
-  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+  return rel !== "" && rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
 }
 
 /**
@@ -142,14 +143,12 @@ function manifestSiblingFiles(srcPluginDir, manifestText) {
  * never leaves a truncated asset and a read-only copy can still be replaced. A
  * staged file a crash leaves behind is pruned by the next sync.
  */
-let stagedCount = 0;
-
 function replaceFile(src, dest, mode) {
-  // Short, so a long asset name never overflows, and no name a plugin ships.
-  stagedCount += 1;
-  const staged = path.join(path.dirname(dest), `.asset-sync-${process.pid}-${stagedCount}`);
+  // Short, so a long asset name never overflows, and created exclusively, so
+  // it never overwrites an entry, or a file another link shares, already there.
+  const staged = path.join(path.dirname(dest), `.asset-sync-${randomUUID()}`);
   try {
-    fs.copyFileSync(src, staged);
+    fs.copyFileSync(src, staged, fs.constants.COPYFILE_EXCL);
     fs.chmodSync(staged, mode);
     try {
       fs.renameSync(staged, dest);
@@ -218,14 +217,52 @@ function mirrorDir(srcDir, destDir, rel, pluginRealDir, changes) {
  * nothing. Reserved names are never touched, which leaves esbuild's `main/`
  * output in place. Records the paths it copied and removed, relative to the
  * plugin directory, in `changes`, which keeps what was done before a failure.
+ * Throws, touching nothing, when the output directory is a link or shares a
+ * tree with `sourceRoot` (by default the plugin itself; a tier or the whole
+ * plugin root covers sibling plugins too).
  */
+function statOf(file) {
+  return fs.statSync(file, { bigint: true, throwIfNoEntry: false });
+}
+
+/** Whether `file`, or an ancestor of it, resolves to the directory `target` names. */
+function isAtOrBelow(file, target) {
+  for (let current = file; ; current = path.dirname(current)) {
+    const stat = statOf(current);
+    if (stat && stat.dev === target.dev && stat.ino === target.ino) return true;
+    if (path.dirname(current) === current) return false;
+  }
+}
+
+/**
+ * The sync deletes inside the output plugin directory, so that directory must
+ * be its own: never a link (or junction) itself or in its tier, and sharing no
+ * tree with the sources. Compared by inode, which holds through links, case
+ * aliases and directories that don't exist yet.
+ */
+function assertSeparateOutput(dest, sourceRoot) {
+  for (const dir of [dest, path.dirname(dest)]) {
+    if (fs.lstatSync(dir, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      throw new Error(`${dir} is a link: refusing to sync plugin assets through it`);
+    }
+  }
+  const source = statOf(sourceRoot);
+  const output = statOf(dest);
+  if (source && (isAtOrBelow(dest, source) || (output && isAtOrBelow(sourceRoot, output)))) {
+    throw new Error(
+      `${dest} shares a tree with ${sourceRoot}: refusing to sync plugin assets there`
+    );
+  }
+}
+
 export function syncPluginAssets(
   srcPluginDir,
   destPluginDir,
-  changes = { copied: [], removed: [] }
+  { changes = { copied: [], removed: [] }, sourceRoot = srcPluginDir } = {}
 ) {
   const src = path.resolve(srcPluginDir);
   const dest = path.resolve(destPluginDir);
+  assertSeparateOutput(dest, path.resolve(sourceRoot));
   // A linked plugin directory counts as absent, as it does to the tier
   // listing and the manifest validator.
   const srcRealDir = fs.lstatSync(src, { throwIfNoEntry: false })?.isDirectory()
@@ -251,19 +288,7 @@ export function syncPluginAssets(
     }
   }
 
-  // Followed through links, as esbuild follows them writing `main/` there.
-  if (fs.statSync(dest, { throwIfNoEntry: false })?.isDirectory()) {
-    const destRealDir = fs.realpathSync(dest);
-    if (
-      srcRealDir &&
-      (destRealDir === srcRealDir ||
-        isInsideDir(destRealDir, srcRealDir) ||
-        isInsideDir(srcRealDir, destRealDir))
-    ) {
-      throw new Error(
-        `${dest} resolves into ${src}: refusing to sync plugin assets onto their source`
-      );
-    }
+  if (fs.lstatSync(dest, { throwIfNoEntry: false })?.isDirectory()) {
     for (const entry of fs.readdirSync(dest, { withFileTypes: true })) {
       if (isReservedAssetDir(entry.name)) continue;
       const kind = outputKind(entry);
@@ -273,7 +298,7 @@ export function syncPluginAssets(
       changes.removed.push(entry.name);
     }
   } else if (fs.lstatSync(dest, { throwIfNoEntry: false })) {
-    // A file, or a dangling link, where the directory belongs.
+    // A file where the directory belongs.
     fs.rmSync(dest, { force: true });
     changes.removed.push(".");
   }
@@ -300,7 +325,8 @@ export function syncPluginTier(srcTierDir, destTierDir) {
   for (const name of [...names].sort()) {
     const { copied, removed } = syncPluginAssets(
       path.join(srcTierDir, name),
-      path.join(destTierDir, name)
+      path.join(destTierDir, name),
+      { sourceRoot: srcTierDir }
     );
     if (copied.length > 0 || removed.length > 0) changed.push({ name, copied, removed });
   }
@@ -342,10 +368,18 @@ export function watchPluginAssets({
   const dirtyTiers = new Set();
   const dirtyPlugins = new Map();
   const watchers = [];
+  const reported = new Map();
   let pending = [];
   let debounceTimer = null;
   let draining = null;
   let closed = false;
+
+  // A failure the rescan meets every two seconds is reported once, until it clears.
+  function report(key, error) {
+    if (reported.get(key) === String(error)) return;
+    reported.set(key, String(error));
+    onError(error);
+  }
 
   function onEvent(tier, filename) {
     if (closed) return;
@@ -361,7 +395,7 @@ export function watchPluginAssets({
     }, debounceMs);
   }
 
-  function takeBatch() {
+  function takeBatch({ rethrow }) {
     const plugins = [...dirtyPlugins.values()];
     const scanTiers = new Set(dirtyTiers);
     dirtyTiers.clear();
@@ -375,9 +409,11 @@ export function watchPluginAssets({
             ...listDirNames(path.join(srcRoot, tier)),
             ...listDirNames(path.join(destRoot, tier)),
           ]);
+          reported.delete(tier);
         } catch (error) {
+          if (rethrow) throw error;
           // The rescan tries the tier again.
-          onError(error);
+          report(tier, error);
         }
         tierNames.set(tier, names);
       }
@@ -396,14 +432,19 @@ export function watchPluginAssets({
 
   function syncDirty({ rethrow = false } = {}) {
     let failure = null;
-    for (const { tier, name } of takeBatch()) {
+    for (const { tier, name } of takeBatch({ rethrow })) {
+      const key = `${tier}/${name}`;
       const changes = { copied: [], removed: [] };
       try {
-        syncPluginAssets(path.join(srcRoot, tier, name), path.join(destRoot, tier, name), changes);
+        syncPluginAssets(path.join(srcRoot, tier, name), path.join(destRoot, tier, name), {
+          changes,
+          sourceRoot: srcRoot,
+        });
+        reported.delete(key);
       } catch (error) {
         // A file can vanish mid-save; the event that follows, or the rescan, syncs it again.
         if (rethrow) failure ??= error;
-        else onError(error);
+        else report(key, error);
       }
       // Kept from a pass that failed partway, so a manifest it copied is still rechecked.
       if (changes.copied.length > 0 || changes.removed.length > 0) {

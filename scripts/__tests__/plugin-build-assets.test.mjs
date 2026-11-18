@@ -165,13 +165,24 @@ describe("findMissingPluginAssets", () => {
     expect(missing[1]).toContain("./bin/absent.mjs");
   });
 
+  it("accepts a path whose first segment only starts with two dots", () => {
+    writeManifest(
+      "sample",
+      "dotted",
+      { contributes: { agents: [{ command: "./..tool/run.mjs" }] } },
+      { "..tool/run.mjs": "run\n" }
+    );
+
+    expect(findMissingPluginAssets(workDir)).toEqual([]);
+  });
+
   it("says why a path under a reserved directory is missing", () => {
     writeManifest("builtin", "reserved", {
       contributes: {
         mcpServers: [
           {
             command: "node",
-            args: ["./main/helper.mjs", "./shared/main", "./bin/x.mjs", "./main"],
+            args: ["./main/helper.mjs", "./shared/main", "./main/main", "./bin/x.mjs", "./main"],
           },
         ],
       },
@@ -180,9 +191,10 @@ describe("findMissingPluginAssets", () => {
     const missing = findMissingPluginAssets(workDir);
     const forPath = (relPath) => missing.find((m) => m.includes(`"${relPath}"`));
 
-    expect(missing).toHaveLength(4);
+    expect(missing).toHaveLength(5);
     expect(forPath("./main/helper.mjs")).toContain("never copies main/");
     expect(forPath("./shared/main")).toContain("never copies shared/");
+    expect(forPath("./main/main")).toContain("never copies main/");
     expect(forPath("./bin/x.mjs")).not.toContain("never copies");
     expect(forPath("./main")).not.toContain("never copies");
   });
