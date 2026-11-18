@@ -317,6 +317,9 @@ describe("invokeForEndpoint", () => {
     // Nor their decline (#17239).
     "decisions:decline-question",
     "decisions:get-decline-result",
+    // Nor their involvement preference (#17237).
+    "decisions:get-involvement",
+    "decisions:set-involvement",
   ])("refuses %s over a link even with a context handler", async (channel) => {
     const handler = vi.fn(() => "ran");
     getIpcDispatcher().registerInvoke(channel, handler);
@@ -461,7 +464,8 @@ describe("remote router", () => {
   // (#16398), while the plugin templates beside them come from that host. The
   // person's Decisions answer, decline and follow-up are signed by this
   // computer's owner key, even for a question a Host asked, whose own key never
-  // signs one (#17101, #17239, #17238).
+  // signs one (#17101, #17239, #17238), and so is their involvement preference
+  // (#17237).
   it.each([
     "user-prompt-templates:list",
     "user-prompt-templates:open-folder",
@@ -471,6 +475,8 @@ describe("remote router", () => {
     "decisions:get-decline-result",
     "decisions:send-follow-up",
     "decisions:get-follow-up-result",
+    "decisions:get-involvement",
+    "decisions:set-involvement",
   ])("answers %s from this machine for a window driving a host", async (channel) => {
     const router = installRouter();
     const handler = vi.fn(() => "from-this-machine");

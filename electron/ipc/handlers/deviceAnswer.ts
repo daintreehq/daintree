@@ -108,6 +108,11 @@ import type {
   GetDecisionFollowUpResultPayload,
   SendDecisionFollowUpPayload,
 } from "../../../shared/types/decisionsQuestion.js";
+import type {
+  DecisionsInvolvementRead,
+  DecisionsInvolvementSaveResult,
+  SetDecisionsInvolvementPayload,
+} from "../../../shared/types/decisionsInvolvement.js";
 import { AppError } from "../../utils/errorTypes.js";
 
 /**
@@ -402,6 +407,25 @@ const sendFollowUpSchema = z
 
 const getFollowUpResultSchema = z.object({ messageId: answerIdSchema }).strict();
 
+const involvementModeSchema = z.enum(["involve-early", "recommend"]);
+
+// The library's own input bounds (`SetInvolvementInput`), which it checks again before signing.
+const setInvolvementSchema = z
+  .object({
+    expectedRevision: z
+      .number()
+      .int()
+      .min(0)
+      .max(Number.MAX_SAFE_INTEGER - 1),
+    normalMode: involvementModeSchema,
+    consultCount: z.number().int().min(1).max(8),
+    override: z
+      .object({ mode: involvementModeSchema, until: z.iso.datetime({ precision: 3 }) })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+
 // A pane holds at most ten open questions; the cap leaves room for the settled ones a list names.
 const getQuestionSummariesSchema = z
   .object({
@@ -682,6 +706,38 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) return { result: "not-running" };
         return decisions.getDecisionFollowUpResult(payload);
+      }
+    ),
+
+    // The person's involvement preference (#17237), from Daintree's own view:
+    // `shell`, so this computer reads its own copy and signs a change with its
+    // owner key whichever machine a window is attached to. There is no
+    // action, MCP tool or plugin surface for it: agents read the preference
+    // in force through `get_involvement` and never change it. Never starts
+    // Decisions.
+    getInvolvement: op(
+      CHANNELS.DECISIONS_GET_INVOLVEMENT,
+      async (): Promise<DecisionsInvolvementRead> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.getDecisionsInvolvement();
+      }
+    ),
+    setInvolvement: opValidated(
+      CHANNELS.DECISIONS_SET_INVOLVEMENT,
+      setInvolvementSchema,
+      async (payload: SetDecisionsInvolvementPayload): Promise<DecisionsInvolvementSaveResult> => {
+        // An enrolled Remote Host serves its panes with the owner's switch off
+        // here, and its key never signs the person's preference.
+        if (!decisionsOn()) {
+          return decisionsHostServes(store.get("decisionsHost"))
+            ? { result: "refused", reason: "not-owner" }
+            : { result: "off" };
+        }
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.setDecisionsInvolvement(payload);
       }
     ),
     // Which terminals this view's hybrid input holds a draft for (#16282): an

@@ -17,6 +17,11 @@ import type {
   DecisionQuestionFollowUpResult,
   SendDecisionFollowUpPayload,
 } from "../../../shared/types/decisionsQuestion.js";
+import type {
+  DecisionsInvolvementRead,
+  DecisionsInvolvementSaveResult,
+  SetDecisionsInvolvementPayload,
+} from "../../../shared/types/decisionsInvolvement.js";
 import type { ListenerRoute } from "../mcp-server/listenerHold.js";
 import { createPaneAccess, type PaneAccessSources } from "./paneAccess.js";
 import { QuestionBridge } from "./questionBridge.js";
@@ -169,6 +174,16 @@ export interface DecisionsQuestions {
   ): Promise<DecisionQuestionFollowUpResult>;
   /** Where a person's follow-up stands, by its id. */
   followUpResultForPerson(messageId: string): Promise<DecisionFollowUpResultRead>;
+
+  /**
+   * The person's involvement preference for Daintree's own view (#17237),
+   * read and changed on the bridge agents ask on, which refuses both to an
+   * agent.
+   */
+  involvementForPerson(): Promise<DecisionsInvolvementRead>;
+  setInvolvementForPerson(
+    payload: SetDecisionsInvolvementPayload
+  ): Promise<DecisionsInvolvementSaveResult>;
   close(): Promise<void>;
 }
 
@@ -198,6 +213,8 @@ export function openDecisionsMcpRoute(
     declineResultForPerson: (declineId) => bridge.declineResultForPerson(declineId),
     followUpForPerson: (payload, hostId) => bridge.followUpForPerson(payload, hostId),
     followUpResultForPerson: (messageId) => bridge.followUpResultForPerson(messageId),
+    involvementForPerson: () => bridge.involvementForPerson(),
+    setInvolvementForPerson: (payload) => bridge.setInvolvementForPerson(payload),
     close: () => route.close(),
   };
 }

@@ -1617,6 +1617,9 @@ export const CHANNELS = {
   DECISIONS_GET_DECLINE_RESULT: "decisions:get-decline-result",
   DECISIONS_SEND_FOLLOW_UP: "decisions:send-follow-up",
   DECISIONS_GET_FOLLOW_UP_RESULT: "decisions:get-follow-up-result",
+  // The person's involvement preference, read and changed from Daintree's own view (#17237).
+  DECISIONS_GET_INVOLVEMENT: "decisions:get-involvement",
+  DECISIONS_SET_INVOLVEMENT: "decisions:set-involvement",
   DECISIONS_SET_ENABLED: "decisions:set-enabled",
   // A relay URL's unsigned health and protocol check (#16005), from main.
   DECISIONS_CHECK_RELAY: "decisions:check-relay",

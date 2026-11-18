@@ -23,6 +23,11 @@ import type {
   DecisionQuestionSummariesResult,
   SendDecisionFollowUpPayload,
 } from "@shared/types/decisionsQuestion";
+import type {
+  DecisionsInvolvementRead,
+  DecisionsInvolvementSaveResult,
+  SetDecisionsInvolvementPayload,
+} from "@shared/types/decisionsInvolvement";
 
 /** The protocol's largest image: a part claiming more is refused before anything is allocated. */
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -334,6 +339,22 @@ export const decisionsClient = {
   /** Where a follow-up stands, by the id it was submitted with: a queued one settles later. */
   getFollowUpResult: (messageId: string): Promise<DecisionFollowUpResultRead> =>
     window.electron.decisions.getFollowUpResult({ messageId }),
+
+  /**
+   * The person's involvement preference (#17237), from the copy agents'
+   * `get_involvement` reads on this computer. Touches no network.
+   */
+  getInvolvement: (): Promise<DecisionsInvolvementRead> =>
+    window.electron.decisions.getInvolvement(),
+
+  /**
+   * The person's change to it, signed by this computer, replacing the
+   * revision they reviewed: a newer change from a phone comes back as a
+   * conflict, never overwritten.
+   */
+  setInvolvement: (
+    payload: SetDecisionsInvolvementPayload
+  ): Promise<DecisionsInvolvementSaveResult> => window.electron.decisions.setInvolvement(payload),
 
   /** Every pane's state changes for this project. Callers filter by `terminalId`. */
   onPaneState: (callback: (state: PaneDecisionState) => void): (() => void) =>

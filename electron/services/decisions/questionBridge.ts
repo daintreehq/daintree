@@ -5,6 +5,7 @@ import {
   type DecisionView,
   type AnswerQuestionInput,
   type DeclineQuestionInput,
+  type InvolvementPreference,
   type InvolvementView,
   type OwnerAnswerResult,
   type OwnerDeclineResult,
@@ -15,7 +16,15 @@ import {
   type QuestionRow,
   type RegisterResult,
   type SendFollowUpInput,
+  type SetInvolvementInput,
+  type SetInvolvementResult,
 } from "@daintreehq/decisions-client";
+import type {
+  DecisionsInvolvementPreference,
+  DecisionsInvolvementRead,
+  DecisionsInvolvementSaveResult,
+  SetDecisionsInvolvementPayload,
+} from "../../../shared/types/decisionsInvolvement.js";
 import type {
   AnswerDecisionQuestionPayload,
   DeclineDecisionQuestionPayload,
@@ -36,6 +45,7 @@ import type {
 import { inScope, type QuestionReadScope } from "./questionContent.js";
 import type { QuestionSource } from "./relayConnection.js";
 import { RetiredAttemptError, holdingTerminalSink } from "./relayTransport.js";
+import { logWarn } from "../../utils/logger.js";
 
 /** The question a follow-up names, if it names one; the library refuses the rest. */
 function questionIdOf(input: unknown): string | null {
@@ -104,6 +114,47 @@ function followUpOutcome(result: OwnerFollowUpResult): DecisionFollowUpOutcome {
       return { status: "rejected", code: result.code };
     default:
       return { status: result.status };
+  }
+}
+
+/** The library's preference as Daintree's view reads it, with nothing else carried across. */
+function involvementPreference(p: InvolvementPreference): DecisionsInvolvementPreference {
+  if (p.status === "unavailable") {
+    return {
+      status: "unavailable",
+      reason: p.reason,
+      revision: p.revision,
+      lastSyncedAt: p.lastSyncedAt,
+      stale: p.stale,
+    };
+  }
+  return {
+    status: "available",
+    normalMode: p.normalMode,
+    consultCount: p.consultCount,
+    override: p.override === null ? null : { mode: p.override.mode, until: p.override.until },
+    mode: p.mode,
+    overrideActive: p.overrideActive,
+    revision: p.revision,
+    setOn: p.setOn,
+    setAt: p.setAt,
+    lastSyncedAt: p.lastSyncedAt,
+    stale: p.stale,
+  };
+}
+
+function involvementSaved(result: SetInvolvementResult): DecisionsInvolvementSaveResult {
+  switch (result.status) {
+    case "saved":
+      return { result: "saved", revision: result.revision };
+    case "conflict":
+      return { result: "conflict", latestRevision: result.latestRevision };
+    case "unsupported":
+      return { result: "unsupported" };
+    case "unconfirmed":
+      return { result: "unconfirmed" };
+    case "refused":
+      return { result: "refused", reason: "relay", code: result.code };
   }
 }
 
@@ -603,6 +654,136 @@ export class QuestionBridge extends DecisionsBridge {
     } catch (error) {
       if (!(error instanceof RetiredAttemptError)) throw error;
       return this.getInvolvement();
+    }
+  }
+
+  /**
+   * Never for an agent: agents read the preference in force through
+   * `get_involvement`, and only Daintree's own view reads the whole of it or
+   * changes it, through `involvementForPerson` and `setInvolvementForPerson`
+   * (#17237).
+   */
+  override getInvolvementPreference(): Promise<InvolvementPreference> {
+    return Promise.reject(
+      new BridgeError("forbidden", "an agent can't read the person's involvement preference")
+    );
+  }
+
+  override setInvolvementPreference(_input: SetInvolvementInput): Promise<SetInvolvementResult> {
+    return Promise.reject(
+      new BridgeError("forbidden", "an agent can't set the person's involvement preference")
+    );
+  }
+
+  /**
+   * The person's involvement preference for Daintree's own view (#17237),
+   * from the copy agents read: the live attempt's, kept fresh by its reads,
+   * or between attempts this bridge's, which reads as stale. Only the owner
+   * computer can change it, and only while an attempt is live to send it.
+   */
+  async involvementForPerson(): Promise<DecisionsInvolvementRead> {
+    const identity = this.question.source.identity();
+    if (identity === null) return { result: "not-running" };
+    const owner = identity.role === "owner-desktop";
+    const shown = (preference: InvolvementPreference, settable: boolean) => {
+      const closed =
+        preference.status === "unavailable" &&
+        (preference.reason === "unsupported" || preference.reason === "device-revoked");
+      return {
+        result: "read" as const,
+        preference: involvementPreference(preference),
+        role: owner ? ("owner" as const) : ("host" as const),
+        settable: settable && owner && !closed,
+      };
+    };
+    // A read the attempt had in hand as it retired still finishes, so it is
+    // taken only with the attempt it came from: the copy's freshness and
+    // whether it can be changed must describe the same attempt. Attempts
+    // churning through every try leave this bridge's own copy, as stale.
+    for (let tries = 0; tries < 3; tries++) {
+      let live: DecisionsBridge | null;
+      let preference: InvolvementPreference;
+      try {
+        live = this.connected();
+        preference =
+          live === null
+            ? await super.getInvolvementPreference()
+            : await live.getInvolvementPreference();
+      } catch (error) {
+        if (error instanceof RetiredAttemptError) continue;
+        if (error instanceof BridgeError && error.code === "forbidden") {
+          return { result: "not-running" };
+        }
+        throw error;
+      }
+      if (this.question.source.live() === live) {
+        if (this.question.source.identity() === null) return { result: "not-running" };
+        return shown(preference, live !== null);
+      }
+    }
+    if (this.question.source.identity() === null) return { result: "not-running" };
+    let fallback: InvolvementPreference;
+    try {
+      fallback = await super.getInvolvementPreference();
+    } catch (error) {
+      const ended =
+        this.question.source.identity() === null ||
+        (error instanceof BridgeError && error.code === "forbidden");
+      if (ended) return { result: "not-running" };
+      throw error;
+    }
+    if (this.question.source.identity() === null) return { result: "not-running" };
+    return shown({ ...fallback, stale: true }, false);
+  }
+
+  /**
+   * The person's change from Daintree's own view on the owner computer
+   * (#17237), signed with this computer's key on the live attempt. The relay
+   * compares it with the revision the person reviewed, so a phone's change
+   * made meanwhile comes back as a conflict, never overwritten. An attempt
+   * retired partway through may have sent it already, so it isn't sent
+   * again: it reads as unconfirmed, and the next read says what was kept.
+   * So does a failure here after it was sent: the relay may hold it while
+   * this computer couldn't record it.
+   */
+  async setInvolvementForPerson(
+    payload: SetDecisionsInvolvementPayload
+  ): Promise<DecisionsInvolvementSaveResult> {
+    const identity = this.question.source.identity();
+    if (identity === null) return { result: "not-running" };
+    if (identity.role !== "owner-desktop") return { result: "refused", reason: "not-owner" };
+    const live = this.connected();
+    if (live === null) return { result: "not-running" };
+    const input: SetInvolvementInput = {
+      expectedRevision: payload.expectedRevision,
+      normalMode: payload.normalMode,
+      consultCount: payload.consultCount,
+      override:
+        payload.override === null
+          ? null
+          : { mode: payload.override.mode, until: payload.override.until },
+    };
+    try {
+      return involvementSaved(await live.setInvolvementPreference(input));
+    } catch (error) {
+      if (error instanceof RetiredAttemptError) return { result: "unconfirmed" };
+      if (!(error instanceof BridgeError)) {
+        logWarn("[Decisions] A change to the involvement preference ended without a result", {
+          error: error instanceof Error ? error.name : typeof error,
+        });
+        return { result: "unconfirmed" };
+      }
+      switch (error.code) {
+        case "validation_error":
+          return { result: "refused", reason: "invalid", detail: error.message };
+        // The library checks the role and the bridge's state before signing anything.
+        case "forbidden":
+          return { result: "refused", reason: "revoked" };
+        case "invalid_state":
+          return { result: "not-running" };
+        default:
+          throw error;
+      }
     }
   }
 

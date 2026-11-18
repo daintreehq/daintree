@@ -22,6 +22,11 @@ import type {
   DecisionQuestionReference,
   SendDecisionFollowUpPayload,
 } from "../../../shared/types/decisionsQuestion.js";
+import type {
+  DecisionsInvolvementRead,
+  DecisionsInvolvementSaveResult,
+  SetDecisionsInvolvementPayload,
+} from "../../../shared/types/decisionsInvolvement.js";
 import type { AnswerDelivery, AnswerDeliveryDeps } from "./answerDelivery.js";
 import { createWorktreeAttachmentResolver } from "./attachmentResolver.js";
 import { DecisionsAttachments } from "./attachmentSpool.js";
@@ -727,6 +732,28 @@ export class DecisionsService {
     }
     if (this.role !== "owner") return Promise.resolve({ result: "not-found" });
     return questions.followUpResultForPerson(messageId);
+  }
+
+  /**
+   * The person's involvement preference for Daintree's own view (#17237),
+   * from the copy agents read; not running while no route serves questions.
+   */
+  getInvolvement(): Promise<DecisionsInvolvementRead> {
+    const questions = this.questions;
+    if (this.disposed || this.state === "off" || questions === null) {
+      return Promise.resolve({ result: "not-running" });
+    }
+    return questions.involvementForPerson();
+  }
+
+  /** The person's change to it, signed with this computer's key when it is the owner's. */
+  setInvolvement(payload: SetDecisionsInvolvementPayload): Promise<DecisionsInvolvementSaveResult> {
+    const questions = this.questions;
+    if (this.disposed || this.state === "off" || questions === null) {
+      return Promise.resolve({ result: "not-running" });
+    }
+    if (this.role !== "owner") return Promise.resolve({ result: "refused", reason: "not-owner" });
+    return questions.setInvolvementForPerson(payload);
   }
 
   /**
