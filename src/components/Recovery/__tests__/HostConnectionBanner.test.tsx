@@ -462,6 +462,7 @@ function machine(overrides: Partial<CloudHostStatus> = {}): CloudHostsSnapshot {
         hostKeyFingerprint: null,
         hostKeyReview: null,
         keptRunningAt: null,
+        asleep: false,
         ...overrides,
       },
     ],

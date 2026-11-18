@@ -400,7 +400,9 @@ describe("CloudHostLifecycle access", () => {
       machine: "stopped",
       rawState: "archived",
     });
-    await expect(lifecycle.ensureAccess(bindingId)).rejects.toBeInstanceOf(UnusableConnectionError);
+    const error = await lifecycle.ensureAccess(bindingId).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(UnusableConnectionError);
+    expect((error as Error).message).toBe("The cloud machine is stopped. Start it to connect.");
     expect(provider.start).not.toHaveBeenCalled();
     expect(provider.authorizeSsh).not.toHaveBeenCalled();
   });
@@ -2793,6 +2795,43 @@ describe("CloudHostLifecycle SSH key at create", () => {
     expect(sent[2]!.idempotencyKey).not.toBe(sent[1]!.idempotencyKey);
   });
 
+  it("puts the key on an imported machine through a create-time-key provider that can (#17347)", async () => {
+    const { lifecycle, provider, store, files, account } = await setup(
+      { machine: "running" },
+      { sshKey: "at-create" }
+    );
+    await lifecycle.importMachine({
+      accountId: account.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    const readKey = vi.spyOn(files, "publicKey");
+    await lifecycle.ensureAccess(store.bindings()[0]!.id);
+    // It never took the key with a create: the key is read and authorized, not assumed.
+    expect(readKey).toHaveBeenCalledWith(account.id);
+    expect(provider.authorizeSsh).toHaveBeenCalledWith(
+      expect.anything(),
+      "bx_23456789",
+      await readKey.mock.results[0]!.value
+    );
+    expect(provider.sshAccess).not.toHaveBeenCalled();
+  });
+
+  it("assumes an imported machine holds the key when the provider can't put it there", async () => {
+    const { lifecycle, provider, store, account } = await setup(
+      { machine: "running" },
+      { sshKey: "at-create" }
+    );
+    delete (provider as { authorizeSsh?: unknown }).authorizeSsh;
+    await lifecycle.importMachine({
+      accountId: account.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    await lifecycle.ensureAccess(store.bindings()[0]!.id);
+    expect(provider.sshAccess).toHaveBeenCalledWith(expect.anything(), "bx_23456789");
+  });
+
   it("reaches a machine that took its key at create without authorizing a key", async () => {
     const { lifecycle, provider, store, files, account } = await setup({}, { sshKey: "at-create" });
     await lifecycle.create(request(account.id));
@@ -3297,5 +3336,207 @@ describe("CloudHostLifecycle stale inspections (#17548)", () => {
       machine: "stopped",
       observedAt: 1_001_000,
     });
+  });
+});
+
+describe("CloudHostLifecycle with a provider that takes the key at create and sleeps idle machines (#17347)", () => {
+  const IDLE: CloudLifetimeModel = { kind: "idle-sleep", idleSeconds: 900 };
+
+  /** The fake provider as Agent 37 declares itself: an idle sleep, and the key with the create. */
+  function atCreate(provider: CloudProvider) {
+    const info = provider.info;
+    provider.info = (platform) => {
+      const described = info(platform);
+      return {
+        ...described,
+        capabilities: {
+          ...described.capabilities,
+          provisioning: { ...described.capabilities.provisioning, sshKey: "at-create" },
+        },
+      };
+    };
+  }
+
+  async function create(env: Awaited<ReturnType<typeof setup>>) {
+    await env.lifecycle.create({
+      accountId: env.store.accounts()[0]!.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: null,
+    });
+  }
+
+  it("never sends a lost create again for a provider with no idempotency key, only looks again", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    (env.provider as { createReplay?: string }).createReplay = "lookup-only";
+    vi.mocked(env.provider.create).mockRejectedValueOnce(
+      new BoatApiError("timeout", "slow", null, null, null)
+    );
+    vi.mocked(env.provider.list).mockResolvedValue([]);
+    await create(env);
+    await vi.waitFor(() =>
+      expect(env.lifecycle.statuses()[0]?.lastError?.message).toContain("never asks for another")
+    );
+    await vi.waitFor(() => expect(env.lifecycle.statuses()[0]?.operation).toBeNull());
+    await expect(env.lifecycle.retryCreate("build")).rejects.toThrow(/remove the host/);
+    expect(env.provider.list).toHaveBeenCalledTimes(1);
+    expect(env.provider.create).toHaveBeenCalledTimes(1);
+    expect(env.lifecycle.statuses()[0]?.lastError?.code).toBe("outcome-unknown");
+    expect(env.store.bindings()[0]!.creation!.sentAt).toEqual(expect.any(Number));
+
+    // Once the machine shows up, the next look binds it.
+    const bindingId = env.store.bindings()[0]!.id;
+    vi.mocked(env.provider.list).mockResolvedValue([
+      resource({ resourceId: "bx_found0001", labels: { "daintree-binding": bindingId } }),
+    ]);
+    await env.lifecycle.retryCreate("build");
+    expect(env.store.bindings()[0]!.resourceId).toBe("bx_found0001");
+    expect(env.provider.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells a restart's miss to look again, not to create, for a provider that only looks", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    (env.provider as { createReplay?: string }).createReplay = "lookup-only";
+    vi.mocked(env.provider.create).mockRejectedValueOnce(
+      new BoatApiError("timeout", "slow", null, null, null)
+    );
+    vi.mocked(env.provider.list).mockResolvedValue([]);
+    await create(env);
+    await vi.waitFor(() => expect(env.lifecycle.statuses()[0]?.operation).toBeNull());
+    const next = env.restart(env.lifecycle);
+    await vi.waitFor(() =>
+      expect(next.lifecycle.statuses()[0]?.lastError?.message).toContain("hasn't shown a machine")
+    );
+    expect(next.lifecycle.statuses()[0]?.lastError?.message).not.toContain("Retry to create it");
+    expect(env.provider.create).toHaveBeenCalledTimes(1);
+    next.lifecycle.dispose();
+  });
+
+  it("binds the earliest machine carrying a lost create's labels, never a later copy of it", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    vi.mocked(env.provider.create).mockRejectedValueOnce(
+      new BoatApiError("network", "lost", null, null, null)
+    );
+    await create(env);
+    await vi.waitFor(() =>
+      expect(env.lifecycle.statuses()[0]?.lastError?.code).toBe("outcome-unknown")
+    );
+    await vi.waitFor(() => expect(env.lifecycle.statuses()[0]?.operation).toBeNull());
+    const labels = { "daintree-binding": env.store.bindings()[0]!.id };
+    vi.mocked(env.provider.list).mockResolvedValue([
+      resource({ resourceId: "bx_fork00001", labels, createdAt: "2026-11-17T10:05:00.000Z" }),
+      resource({ resourceId: "bx_orig00001", labels, createdAt: "2026-11-17T10:00:00.000Z" }),
+    ]);
+    await env.lifecycle.retryCreate("build");
+    expect(env.store.bindings()[0]!.resourceId).toBe("bx_orig00001");
+  });
+
+  it("looks again before dialling a machine that sleeps by itself, so a dial never wakes one", async () => {
+    let now = 1_000_000;
+    const env = await setup({ machine: "running" }, { lifetime: IDLE, now: () => now });
+    await env.lifecycle.importMachine({
+      accountId: env.account.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    const bindingId = env.store.bindings()[0]!.id;
+    await env.lifecycle.refresh("build");
+    // It fell asleep moments after a look that found it running.
+    env.state.machine = resource({ machine: "stopped", rawState: "sleeping", asleep: true });
+    now += 5_000;
+    const inspections = vi.mocked(env.provider.inspect).mock.calls.length;
+    const error = await env.lifecycle.ensureAccess(bindingId).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(UnusableConnectionError);
+    expect(vi.mocked(env.provider.inspect).mock.calls.length).toBeGreaterThan(inspections);
+    expect(env.provider.authorizeSsh).not.toHaveBeenCalled();
+  });
+
+  it("treats a key the provider refused ahead of the machine as nothing made: Retry sends afresh", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    const refusal = new Error("key refused");
+    const described = env.provider.describeError;
+    env.provider.describeError = (error) =>
+      error === refusal
+        ? { code: "ssh-authorization", message: "Didn't take the key", at: 0 }
+        : described(error);
+    vi.mocked(env.provider.create).mockRejectedValueOnce(refusal);
+    await create(env);
+    await vi.waitFor(() =>
+      expect(env.lifecycle.statuses()[0]?.lastError?.code).toBe("ssh-authorization")
+    );
+    await vi.waitFor(() => expect(env.lifecycle.statuses()[0]?.operation).toBeNull());
+    expect(env.store.bindings()[0]!.creation!.sentAt).toBeNull();
+    // A request the provider rejected as invalid made nothing either, and keeps its reason.
+    const invalidRequest = new Error("invalid");
+    const before = env.provider.describeError;
+    env.provider.describeError = (error) =>
+      error === invalidRequest
+        ? { code: "unsupported", message: "Refused: bad shape", at: 0 }
+        : before(error);
+    vi.mocked(env.provider.create).mockRejectedValueOnce(invalidRequest);
+    await env.lifecycle.retryCreate("build").catch(() => {});
+    expect(env.lifecycle.statuses()[0]?.lastError).toMatchObject({
+      code: "unsupported",
+      message: "Refused: bad shape",
+    });
+    expect(env.store.bindings()[0]!.creation!.sentAt).toBeNull();
+    await env.lifecycle.retryCreate("build");
+    // Nothing was sent before either refusal, so nothing is looked for: the create goes again.
+    expect(env.provider.list).not.toHaveBeenCalled();
+    expect(env.provider.create).toHaveBeenCalledTimes(3);
+  });
+
+  it("reads an asleep machine as asleep, and refuses a dial to it in those words", async () => {
+    const env = await setup(
+      {
+        machine: "stopped",
+        rawState: "sleeping",
+        asleep: true,
+        idleSleep: { enabled: true, idleSeconds: 600 },
+      },
+      { lifetime: IDLE }
+    );
+    await env.lifecycle.importMachine({
+      accountId: env.store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    const status = env.lifecycle.statuses()[0]!;
+    expect(status).toMatchObject({ machine: "stopped", asleep: true });
+    // Its own idle time, not the provider's default.
+    expect(status.lifetime).toEqual({ kind: "idle-sleep", idleSeconds: 600 });
+    const bindingId = env.store.bindings()[0]!.id;
+    const error = await env.lifecycle.ensureAccess(bindingId).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(UnusableConnectionError);
+    expect(String((error as Error).message)).toContain("asleep");
+    expect(env.provider.start).not.toHaveBeenCalled();
+    expect(env.provider.authorizeSsh).not.toHaveBeenCalled();
+  });
+
+  it("says a machine with sleeping turned off runs until it's stopped, and survives a restart", async () => {
+    const env = await setup(
+      { machine: "running", idleSleep: { enabled: false, idleSeconds: 900 } },
+      { lifetime: IDLE }
+    );
+    await env.lifecycle.importMachine({
+      accountId: env.store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    expect(env.lifecycle.statuses()[0]!.lifetime).toEqual({ kind: "none" });
+    expect(env.lifecycle.statuses()[0]!.asleep).toBe(false);
+    const next = env.restart(env.lifecycle);
+    expect(next.lifecycle.statuses()[0]!.lifetime).toEqual({ kind: "none" });
+    next.lifecycle.dispose();
+  });
+
+  it("keeps the provider's own words for a provider that doesn't report sleep per machine", async () => {
+    const env = await setup({ machine: "running" }, { lifetime: IDLE });
+    await env.lifecycle.importMachine({
+      accountId: env.store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    expect(env.lifecycle.statuses()[0]!.lifetime).toEqual(IDLE);
   });
 });

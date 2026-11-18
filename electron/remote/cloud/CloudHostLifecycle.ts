@@ -80,6 +80,8 @@ const START_DEADLINE_MS = 10 * 60_000;
 const STOP_DEADLINE_MS = 15 * 60_000;
 /** An observation this fresh is good enough to decide whether a dial can go ahead. */
 const DIAL_OBSERVATION_MS = 15_000;
+/** The same for a provider that sleeps idle machines, where a stale "running" can be a sleeper. */
+const SLEEPER_DIAL_OBSERVATION_MS = 2_000;
 /** SSH access is resolved again after this long, or after any start. */
 const ACCESS_TTL_MS = 10 * 60_000;
 const MAX_NAME_LENGTH = 64;
@@ -138,13 +140,20 @@ const INSPECTION_ERRORS: ReadonlySet<CloudHostErrorCode> = new Set(["not-found"]
 const RENEW_RETRY_MS = 2 * 60_000;
 
 const LABEL_MARKER = "daintree";
-/** Failures that are the provider refusing the request: nothing was created. */
+/**
+ * Failures that are the provider refusing the request: nothing was created.
+ * From a create, `ssh-authorization` is a provider that couldn't take
+ * Daintree's key ahead of the machine, so it never asked for one, and
+ * `unsupported` is a request the provider rejected as invalid.
+ */
 const DEFINITE_REFUSALS = new Set<CloudHostError["code"]>([
   "credential-invalid",
   "permission",
   "billing",
   "rate-limited",
   "capacity",
+  "ssh-authorization",
+  "unsupported",
 ]);
 const LABEL_BINDING = "daintree-binding";
 
@@ -364,8 +373,27 @@ function observationOf(resource: ProviderResource, at: number): StoredCloudObser
     stop: resource.stop ? { status: resource.stop.status, error: resource.stop.error } : null,
     lastSnapshotAt: resource.lastSnapshotAt,
     dataExpired: resource.dataExpired,
+    asleep: resource.machine === "stopped" && resource.asleep === true,
+    idleSleep: resource.idleSleep
+      ? { enabled: resource.idleSleep.enabled, idleSeconds: resource.idleSleep.idleSeconds }
+      : null,
     observedAt: at,
   };
+}
+
+/**
+ * The lifetime this machine has: its provider's model, narrowed by what the
+ * provider reported for this machine where it sleeps machines on idle. An
+ * imported machine may have sleeping turned off, or another idle time.
+ */
+function machineLifetime(
+  model: CloudLifetimeModel | null,
+  observation: StoredCloudObservation | null
+): CloudLifetimeModel | null {
+  const reported = observation?.idleSleep;
+  if (model?.kind !== "idle-sleep" || !reported) return model;
+  if (!reported.enabled) return { kind: "none" };
+  return { kind: "idle-sleep", idleSeconds: reported.idleSeconds ?? model.idleSeconds };
 }
 
 /** A mark given by main code, checked as strictly as one read back from disk. */
@@ -533,7 +561,7 @@ export class CloudHostLifecycle {
           vcpu: observation?.vcpu ?? null,
           memoryGB: observation?.memoryGB ?? null,
           hourlyDollars: this.deps.accounts.cachedHourly(binding.accountId, machineType),
-          lifetime: lifetimeFor(binding.providerId),
+          lifetime: machineLifetime(lifetimeFor(binding.providerId), observation),
           autoStopAt: observation?.autoStopAt ?? null,
           lifetimeSeconds: binding.lifetimeSeconds,
           stoppedAt: observation?.stoppedAt ?? null,
@@ -570,6 +598,7 @@ export class CloudHostLifecycle {
             ? this.renewals.get(binding.id)!.at
             : null,
           selfStopProblem: this.deps.machineKeys?.problemFor(binding.id) ?? null,
+          asleep: machineOf(binding) === "stopped" && observation?.asleep === true,
         };
       });
   }
@@ -707,6 +736,12 @@ export class CloudHostLifecycle {
         await this.waitFor(bindingId, "running", START_DEADLINE_MS, signal, "Starting the machine");
         return;
       }
+      // Without an idempotency key a second send could be a second machine: only ever look again.
+      if (provider.createReplay === "lookup-only") {
+        const message = `${nameOf(provider)} didn't confirm the machine, and it isn't in the account. Retry looks for it again; if it doesn't show up in your ${nameOf(provider)} account either, remove the host and add it again.`;
+        this.recordError(bindingId, { code: "outcome-unknown", message, at: this.now() });
+        throw invalid(message);
+      }
     }
     // Asked only of the provider registered now, and only for what it still takes: a limit
     // asked for under a model it has since dropped is refused, never sent as none.
@@ -764,6 +799,8 @@ export class CloudHostLifecycle {
         throw new AppError({ code: "UNSUPPORTED", message: reason, userMessage: reason });
       }
     }
+    // Cancelled while the credentials or the key were read: nothing is marked as sent.
+    if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
     this.stage(bindingId, `Asking ${nameOf(provider)} for a machine`);
     // Written before the request: a lost answer is then found again, never sent blind.
     binding = this.deps.store.updateBinding(bindingId, (current) => ({
@@ -797,7 +834,9 @@ export class CloudHostLifecycle {
         code: refused ? described.code : "outcome-unknown",
         message: refused
           ? described.message
-          : `${nameOf(provider)} didn't confirm the machine. Retry looks for it before creating another.`,
+          : provider.createReplay === "lookup-only"
+            ? `${nameOf(provider)} didn't confirm the machine. Retry looks for it, and never asks for another.`
+            : `${nameOf(provider)} didn't confirm the machine. Retry looks for it before creating another.`,
       });
       if (refused) {
         // Nothing was made: a retry needs a fresh key, or the provider replays this refusal.
@@ -871,11 +910,19 @@ export class CloudHostLifecycle {
     credentials: ProviderCredentials
   ): Promise<ProviderResource | null> {
     const found = await provider.list(credentials, { label: `${LABEL_BINDING}=${bindingId}` });
-    return (
-      found.find(
-        (candidate) =>
-          candidate.labels[LABEL_BINDING] === bindingId && candidate.machine !== "deleted"
-      ) ?? null
+    const matches = found.filter(
+      (candidate) =>
+        candidate.labels[LABEL_BINDING] === bindingId && candidate.machine !== "deleted"
+    );
+    // A copy made from the machine (a fork) can carry its labels; the create came first.
+    const createdAt = (candidate: ProviderResource) => {
+      const at = candidate.createdAt ? Date.parse(candidate.createdAt) : Number.NaN;
+      return Number.isFinite(at) ? at : Number.POSITIVE_INFINITY;
+    };
+    return matches.reduce<ProviderResource | null>(
+      (earliest, candidate) =>
+        earliest === null || createdAt(candidate) < createdAt(earliest) ? candidate : earliest,
+      null
     );
   }
 
@@ -926,7 +973,10 @@ export class CloudHostLifecycle {
         } else {
           this.recordError(binding.id, {
             code: "outcome-unknown",
-            message: `Setup didn't finish: ${nameOf(provider)} has no machine for this host yet. Retry to create it.`,
+            message:
+              provider.createReplay === "lookup-only"
+                ? `Setup didn't finish: ${nameOf(provider)} hasn't shown a machine for this host yet. Retry looks for it again; if it doesn't show up in your ${nameOf(provider)} account either, remove the host and add it again.`
+                : `Setup didn't finish: ${nameOf(provider)} has no machine for this host yet. Retry to create it.`,
             at: this.now(),
           });
         }
@@ -1432,8 +1482,12 @@ export class CloudHostLifecycle {
     // across it must not be refused on the stop it read first (#17546).
     binding = current();
     const { provider, credentials } = context;
-    const fresh =
-      binding.observation && this.now() - binding.observation.observedAt < DIAL_OBSERVATION_MS;
+    // A machine that sleeps by itself may have since a recent look, and a dial would wake it.
+    const freshFor =
+      lifetimeModelOf(provider).kind === "idle-sleep"
+        ? SLEEPER_DIAL_OBSERVATION_MS
+        : DIAL_OBSERVATION_MS;
+    const fresh = binding.observation && this.now() - binding.observation.observedAt < freshFor;
     if (!fresh) {
       try {
         await this.inspectInto(bindingId, provider, credentials);
@@ -1455,11 +1509,13 @@ export class CloudHostLifecycle {
     }
     if (machine !== "running") {
       const said =
-        machine === "stopped" || machine === "stopping"
-          ? "The cloud machine is stopped. Start it to connect."
-          : machine === "deleted"
-            ? "The cloud machine was deleted."
-            : "The cloud machine isn't running.";
+        machine === "stopped" && binding.observation?.asleep
+          ? "The cloud machine is asleep. Start it to wake it and connect."
+          : machine === "stopped" || machine === "stopping"
+            ? "The cloud machine is stopped. Start it to connect."
+            : machine === "deleted"
+              ? "The cloud machine was deleted."
+              : "The cloud machine isn't running.";
       throw new UnusableConnectionError(said, said);
     }
     const confirmed = confirmsHostKeys(provider);
@@ -1744,7 +1800,11 @@ export class CloudHostLifecycle {
     const timing = sshKeyTiming(provider);
     const problem = sshKeyContractProblem(provider, timing);
     if (problem) throw new Error(`${nameOf(provider)} ${problem}`);
-    if (timing === "at-create") return provider.sshAccess!(credentials, binding.resourceId!);
+    // A machine Daintree didn't create never took the key; a provider that can put it there does.
+    const keyedAtCreate =
+      timing === "at-create" &&
+      (binding.ownership !== "imported" || typeof provider.authorizeSsh !== "function");
+    if (keyedAtCreate) return provider.sshAccess!(credentials, binding.resourceId!);
     const publicKey = await this.deps.files.publicKey(binding.accountId);
     return provider.authorizeSsh!(credentials, binding.resourceId!, publicKey);
   }

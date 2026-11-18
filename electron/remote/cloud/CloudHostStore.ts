@@ -85,6 +85,10 @@ export interface StoredCloudObservation {
   stop: { status: string; error: string | null } | null;
   lastSnapshotAt: string | null;
   dataExpired: boolean;
+  /** Stopped because the provider slept it on idle. */
+  asleep: boolean;
+  /** Whether it sleeps when idle, as the provider reported for this machine; null when it didn't say. */
+  idleSleep: { enabled: boolean; idleSeconds: number | null } | null;
   observedAt: number;
 }
 
@@ -187,7 +191,12 @@ function readValidation(raw: unknown): CloudAccountValidation {
 
 function readScope(raw: unknown): CloudBillingScope | null {
   const value = raw as { kind?: unknown; id?: unknown; name?: unknown } | null;
-  if (!value || (value.kind !== "personal" && value.kind !== "organization")) return null;
+  if (
+    !value ||
+    (value.kind !== "personal" && value.kind !== "organization" && value.kind !== "workspace")
+  ) {
+    return null;
+  }
   if (typeof value.id !== "string" || value.id.length === 0) return null;
   return { kind: value.kind, id: value.id, name: str(value.name) ?? value.id };
 }
@@ -300,8 +309,17 @@ function readObservation(raw: unknown): StoredCloudObservation | null {
         : null,
     lastSnapshotAt: str(value.lastSnapshotAt),
     dataExpired: value.dataExpired === true,
+    asleep: value.asleep === true,
+    idleSleep: readIdleSleep(value.idleSleep),
     observedAt: num(value.observedAt) ?? 0,
   };
+}
+
+function readIdleSleep(raw: unknown): StoredCloudObservation["idleSleep"] {
+  const value = raw as { enabled?: unknown; idleSeconds?: unknown } | null;
+  if (!value || typeof value.enabled !== "boolean") return null;
+  const seconds = num(value.idleSeconds);
+  return { enabled: value.enabled, idleSeconds: seconds !== null && seconds > 0 ? seconds : null };
 }
 
 function readCreation(raw: unknown): StoredCreationIntent | null {

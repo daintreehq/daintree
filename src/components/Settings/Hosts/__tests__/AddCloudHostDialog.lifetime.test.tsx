@@ -46,6 +46,7 @@ function provider(lifetime: CloudLifetimeModel): CloudProviderInfo {
         retentionDays: null,
         saveRetryBilled: false,
         stoppedComputeBilled: false,
+        stoppedStorageBilled: false,
       },
       typicalStartSeconds: null,
       lifetime,
@@ -216,15 +217,25 @@ describe("AddCloudHostDialog lifetime", () => {
     expect(await createAndSend()).toBeNull();
   });
 
-  it("says a provider sleeps idle machines when an existing one is added too", async () => {
-    const old = { resourceId: "vm_1", name: "old", machine: "stopped", boundHostId: null };
+  // An existing machine's own setting decides whether it sleeps (#17347): the provider's
+  // default for new ones is no promise about it.
+  it("promises nothing about sleep for an existing machine, and calls an asleep one asleep", async () => {
+    const old = {
+      resourceId: "vm_1",
+      name: "old",
+      machine: "stopped",
+      boundHostId: null,
+      asleep: true,
+    };
     client.listResources.mockResolvedValue([{ ...old, vcpu: 4, memoryGB: 8 }]);
     await open({ kind: "idle-sleep", idleSeconds: 1800 });
     fireEvent.click(screen.getByRole("radio", { name: "Existing machine" }));
-    fireEvent.click(await screen.findByRole("radio", { name: /^old/ }));
-    expect(screen.getByTestId("add-cloud-host-import-note").textContent).toContain(
-      "sleep by itself after 30 minutes without activity"
-    );
+    const row = await screen.findByRole("radio", { name: /^old/ });
+    expect(row.closest("label")?.textContent ?? document.body.textContent).toContain("Asleep");
+    fireEvent.click(row);
+    const note = screen.getByTestId("add-cloud-host-import-note").textContent ?? "";
+    expect(note).toContain("doesn't start it or change whether Acme puts it to sleep when idle");
+    expect(note).not.toContain("30 minutes");
   });
 
   it("says a provider sleeps idle machines even when it doesn't say after how long", async () => {
