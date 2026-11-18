@@ -24,7 +24,7 @@ function host(ids: string[], records: ReturnType<typeof record>[]) {
   const byId = new Map(records.map((r) => [r.id, r]));
   const sendEvent = vi.fn();
   const ptyManager = {
-    getTerminalsForProject: vi.fn(() => ids),
+    getTerminalsForProject: vi.fn((projectId: string) => (projectId === "proj-1" ? ids : [])),
     getTerminal: vi.fn((id: string) => byId.get(id)),
     isInTrash: vi.fn(() => false),
     isClosing: vi.fn(() => false),
@@ -42,7 +42,7 @@ function host(ids: string[], records: ReturnType<typeof record>[]) {
     handlers["get-project-terminals"]?.({
       type: "get-project-terminals",
       projectId,
-      requestId: "r1",
+      requestId: `req-${projectId}`,
     });
     expect(sendEvent).toHaveBeenCalledTimes(1);
     return sendEvent.mock.calls[0]![0] as {
@@ -64,7 +64,7 @@ describe("get-project-terminals (#17776)", () => {
     const h = host(["t3", "t1", "t2"], [record("t1"), record("t2"), record("t3")]);
     const event = h.projectTerminals();
     expect(event.type).toBe("project-terminals");
-    expect(event.requestId).toBe("r1");
+    expect(event.requestId).toBe("req-proj-1");
     expect(event.terminals.map((t) => t.id)).toEqual(["t3", "t1", "t2"]);
     expect(h.ptyManager.getTerminalsForProject).toHaveBeenCalledWith("proj-1");
   });
@@ -74,11 +74,12 @@ describe("get-project-terminals (#17776)", () => {
       ["live", "exited"],
       [
         record("live", { ptyProcess: { cols: 203, rows: 51 }, agentSessionId: "s1" }),
-        record("exited", { isExited: true }),
+        record("exited", { isExited: true, isAssistantTerminal: true }),
       ]
     );
     const { terminals } = h.projectTerminals();
     expect(terminals).toEqual([h.terminal("live"), h.terminal("exited")]);
+    expect(terminals[1]?.isAssistantTerminal).toBe(true);
   });
 
   it("carries the live grid, and keeps an exited terminal with no grid", () => {
@@ -106,7 +107,8 @@ describe("get-project-terminals (#17776)", () => {
   });
 
   it("answers an empty list for a project with no terminals", () => {
-    const h = host([], []);
+    const h = host(["t1"], [record("t1")]);
     expect(h.projectTerminals("other").terminals).toEqual([]);
+    expect(h.ptyManager.getTerminalsForProject).toHaveBeenCalledWith("other");
   });
 });

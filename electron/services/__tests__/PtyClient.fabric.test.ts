@@ -98,6 +98,7 @@ describe("PtyClient fabric", () => {
   let PtyClientClass: typeof import("../PtyClient.js").PtyClient;
   let pluginProcessTools: typeof import("../../../shared/config/pluginProcessToolRegistry.js");
   let fabricConfig: typeof import("../pty/fabricConfig.js");
+  let inventoryPrefetch: typeof import("../terminalInventoryPrefetch.js");
 
   beforeEach(async () => {
     forks = [];
@@ -157,12 +158,15 @@ describe("PtyClient fabric", () => {
     // would be a different module instance than the one PtyClient reads, so
     // registrations here would be invisible to the code under test.
     pluginProcessTools = await import("../../../shared/config/pluginProcessToolRegistry.js");
+    inventoryPrefetch = await import("../terminalInventoryPrefetch.js");
 
     // Install after imports: fake timers can stall module re-execution (#11661).
     vi.useFakeTimers();
   });
 
   afterEach(() => {
+    // Clears the prefetch sweep's fake timer while fake timers are still installed.
+    inventoryPrefetch._resetTerminalInventoryPrefetchForTests();
     vi.useRealTimers();
     vi.clearAllMocks();
   });
@@ -442,8 +446,7 @@ describe("PtyClient fabric", () => {
     ])(
       "restores %i panes with one inventory request and reply (prefetch hit: %s)",
       async (count, prefetchHit) => {
-        const prefetch = await import("../terminalInventoryPrefetch.js");
-        prefetch._resetTerminalInventoryPrefetchForTests();
+        const prefetch = inventoryPrefetch;
         const client = createFabricClient();
         const ids = Array.from({ length: count }, (_, i) => `t${count - i}`);
         for (const id of ids) {
@@ -451,6 +454,8 @@ describe("PtyClient fabric", () => {
         }
         const shardA = projectShard("project-a");
         shardA.child.emit("message", { type: "ready" });
+        client.spawn("b1", { cwd: "/b", cols: 80, rows: 24, projectId: "project-b" });
+        projectShard("project-b").child.emit("message", { type: "ready" });
 
         let inventory: Promise<{ id: string }[]>;
         if (prefetchHit) {
@@ -472,35 +477,150 @@ describe("PtyClient fabric", () => {
 
         const sent = (type: string) =>
           forks.reduce((n, fork) => n + messagesOfType(fork.child, type).length, 0);
+        expect(forks).toHaveLength(3);
         expect(sent("get-project-terminals")).toBe(1);
         expect(sent("get-terminals-for-project")).toBe(0);
         expect(sent("get-terminal")).toBe(0);
-        prefetch._resetTerminalInventoryPrefetchForTests();
         client.dispose();
       }
     );
 
-    it("leaves out a preserved record whose id has respawned on another shard (#16811)", async () => {
+    it("restores a mixed host reply: live grid kept, exited kept without one, dev-preview and assistant left out", async () => {
       const client = createFabricClient();
-      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
-      client.spawn("t2", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      for (const id of ["live", "dp", "exited", "assistant"]) {
+        client.spawn(id, { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      }
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+
+      const inventory = inventoryPrefetch.buildTerminalInventory(client, "project-a");
+      const [request] = messagesOfType(shardA.child, "get-project-terminals");
+      const base = { projectId: "project-a", kind: "terminal" };
+      shardA.child.emit("message", {
+        type: "project-terminals",
+        requestId: request.requestId,
+        terminals: [
+          { ...base, id: "live", hasPty: true, ptyCols: 203, ptyRows: 51 },
+          { ...base, id: "dp", kind: "dev-preview", hasPty: true },
+          { ...base, id: "exited", hasPty: false, isExited: true },
+          { ...base, id: "assistant", hasPty: true, isAssistantTerminal: true },
+        ],
+      });
+
+      const [live, exited, ...rest] = await inventory;
+      expect(rest).toEqual([]);
+      expect(live).toMatchObject({ id: "live", projectId: "project-a", ptyCols: 203, ptyRows: 51 });
+      expect(exited).toMatchObject({ id: "exited", projectId: "project-a", hasPty: false });
+      expect(exited?.ptyCols).toBeUndefined();
+      expect(exited?.ptyRows).toBeUndefined();
+      client.dispose();
+    });
+
+    it("drops a preserved record whose id respawned in another project, and keeps one its shard still owns (#16811)", async () => {
+      const client = createFabricClient();
+      for (const id of ["t1", "t2", "t4"]) {
+        client.spawn(id, { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      }
       const shardA = projectShard("project-a");
       shardA.child.emit("message", { type: "ready" });
       client.spawn("t3", { cwd: "/b", cols: 80, rows: 24, projectId: "project-b" });
-      projectShard("project-b").child.emit("message", { type: "ready" });
+      const shardB = projectShard("project-b");
+      shardB.child.emit("message", { type: "ready" });
       shardA.child.emit("message", { type: "exit", id: "t1", exitCode: 0, preserved: true });
+      shardA.child.emit("message", { type: "exit", id: "t4", exitCode: 0, preserved: true });
       client.spawn("t1", { cwd: "/b", cols: 80, rows: 24, projectId: "project-b" });
 
       const promise = client.getProjectTerminalsAsync("project-a");
       const [request] = messagesOfType(shardA.child, "get-project-terminals");
       const live = { id: "t2", projectId: "project-a", kind: "terminal", hasPty: true };
+      const preserved = { id: "t4", projectId: "project-a", kind: "terminal", hasPty: false };
       shardA.child.emit("message", {
         type: "project-terminals",
         requestId: request.requestId,
-        terminals: [{ id: "t1", projectId: "project-a", kind: "terminal", hasPty: false }, live],
+        terminals: [
+          { id: "t1", projectId: "project-a", kind: "terminal", hasPty: false },
+          live,
+          preserved,
+        ],
+      });
+      // The moved id is read where it lives now, as a per-id read would.
+      await vi.waitFor(() => expect(messagesOfType(shardB.child, "get-terminal")).toHaveLength(1));
+      const [read] = messagesOfType(shardB.child, "get-terminal");
+      expect(read.id).toBe("t1");
+      shardB.child.emit("message", {
+        type: "terminal-info",
+        requestId: read.requestId,
+        terminal: { id: "t1", projectId: "project-b", kind: "terminal", hasPty: true },
       });
 
-      await expect(promise).resolves.toEqual([live]);
+      await expect(promise).resolves.toEqual([live, preserved]);
+      client.dispose();
+    });
+
+    it("reads a record whose id moved to the project's own shard mid-read from its new owner", async () => {
+      // The default shard infers the project for a projectless record; before
+      // its reply lands, the id respawns on the project's newly created shard.
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24 });
+      defaultShard().child.emit("message", { type: "ready" });
+      defaultShard().child.emit("message", {
+        type: "exit",
+        id: "t1",
+        exitCode: 0,
+        preserved: true,
+      });
+
+      const promise = client.getProjectTerminalsAsync("project-a");
+      const [request] = messagesOfType(defaultShard().child, "get-project-terminals");
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+      defaultShard().child.emit("message", {
+        type: "project-terminals",
+        requestId: request.requestId,
+        terminals: [{ id: "t1", projectId: undefined, kind: "terminal", hasPty: false }],
+      });
+      await vi.waitFor(() => expect(messagesOfType(shardA.child, "get-terminal")).toHaveLength(1));
+      const [read] = messagesOfType(shardA.child, "get-terminal");
+      const current = { id: "t1", projectId: "project-a", kind: "terminal", hasPty: true };
+      shardA.child.emit("message", {
+        type: "terminal-info",
+        requestId: read.requestId,
+        terminal: current,
+      });
+
+      await expect(promise).resolves.toEqual([current]);
+      client.dispose();
+    });
+
+    it("resolves an empty project inventory when a live shard never answers", async () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+
+      const promise = client.getProjectTerminalsAsync("project-a");
+      await vi.advanceTimersByTimeAsync(5_001);
+
+      await expect(promise).resolves.toEqual([]);
+      client.dispose();
+    });
+
+    it("keeps the id-only project read on the owning shard", async () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+
+      const promise = client.getTerminalsForProjectAsync("project-a");
+      const [request] = messagesOfType(shardA.child, "get-terminals-for-project");
+      expect(request.projectId).toBe("project-a");
+      shardA.child.emit("message", {
+        type: "terminals-for-project",
+        requestId: request.requestId,
+        terminalIds: ["t2", "t1"],
+      });
+      await expect(promise).resolves.toEqual(["t2", "t1"]);
       client.dispose();
     });
 

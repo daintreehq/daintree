@@ -2750,10 +2750,11 @@ export class PtyClient extends EventEmitter {
    * `getTerminalAsync` per id costs a request per terminal (#17776). Resolves
    * `[]` when the host doesn't answer, as the id read does.
    *
-   * A record counts only when this shard still owns its id, where every
-   * id-based call for it goes. A preserved exit lingers on its old shard after
-   * the id respawns on another (#16811), and restore must not rebuild that dead
-   * record in place of the live one.
+   * Each record is read from the shard that owns its id, where every id-based
+   * call for it goes, as the per-id read did. An id that moved to another
+   * shard while the host answered is read again from its owner, and left out
+   * when it now belongs to another project: a preserved exit lingers on its
+   * old shard after the id respawns elsewhere (#16811).
    */
   async getProjectTerminalsAsync(projectId: string): Promise<TerminalInfoResponse[]> {
     const shard = this.shardForProjectQuery(projectId);
@@ -2762,7 +2763,18 @@ export class PtyClient extends EventEmitter {
       `project-terminals-${projectId}`,
       (requestId) => ({ type: "get-project-terminals", projectId, requestId })
     ).catch(() => []);
-    return terminals.filter((terminal) => this.shardForTerminal(terminal.id) === shard);
+    if (terminals.every((terminal) => this.shardForTerminal(terminal.id) === shard)) {
+      return terminals;
+    }
+    const owned = await Promise.all(
+      terminals.map(async (terminal) => {
+        if (this.shardForTerminal(terminal.id) === shard) return terminal;
+        const moved = await this.getTerminalAsync(terminal.id);
+        if (moved?.projectId !== undefined && moved.projectId !== projectId) return null;
+        return moved;
+      })
+    );
+    return owned.filter((terminal) => terminal !== null);
   }
 
   /**

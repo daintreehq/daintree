@@ -60,6 +60,11 @@ vi.mock("../../../../services/AgentAvailabilityStore.js", () => ({
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../../channels.js";
 import { registerTerminalSnapshotHandlers } from "../snapshots.js";
+import {
+  _resetTerminalInventoryPrefetchForTests,
+  buildTerminalInventory,
+  prefetchTerminalInventory,
+} from "../../../../services/terminalInventoryPrefetch.js";
 import { _resetIpcGuardForTesting, markIpcSecurityReady } from "../../../ipcGuard.js";
 import type { HandlerDependencies } from "../../../types.js";
 import { getIpcDispatcher } from "../../../dispatcher.js";
@@ -512,6 +517,39 @@ describe("terminal:reconnect-bulk handler", () => {
 describe("terminal:get-for-project handler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetTerminalInventoryPrefetchForTests();
+  });
+  afterEach(() => _resetTerminalInventoryPrefetchForTests());
+
+  function getForProjectHandler() {
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    return calls.find((c) => c[0] === CHANNELS.TERMINAL_GET_FOR_PROJECT)?.[1] as unknown as (
+      event: unknown,
+      projectId: string
+    ) => Promise<{ id: string }[]>;
+  }
+
+  // #17776: a cold switch's prefetch is the restore's only inventory read.
+  it("serves a cold switch's prefetched inventory without reading the host again", async () => {
+    const ptyClient = {
+      getProjectTerminalsAsync: vi.fn(async () => [
+        { id: "t2", kind: "terminal", cwd: "/tmp", spawnedAt: 1 },
+        { id: "t1", kind: "terminal", cwd: "/tmp", spawnedAt: 1 },
+      ]),
+    };
+    registerTerminalSnapshotHandlers({ ptyClient } as unknown as HandlerDependencies);
+    void prefetchTerminalInventory("project-1", (id) =>
+      buildTerminalInventory(ptyClient as never, id)
+    );
+
+    const result = await getForProjectHandler()(
+      { senderFrame: { url: "http://localhost:5173" } },
+      "project-1"
+    );
+
+    expect(result.map((t) => t.id)).toEqual(["t2", "t1"]);
+    expect(ptyClient.getProjectTerminalsAsync).toHaveBeenCalledTimes(1);
   });
 
   it("excludes dev-preview PTYs from getForProject results", async () => {
