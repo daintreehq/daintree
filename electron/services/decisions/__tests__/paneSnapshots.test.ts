@@ -972,4 +972,16 @@ describe("PaneSnapshots", () => {
 
     expect(published(bridge).map((p) => p.questionId)).toEqual(["q-open", "q-queued"]);
   });
+
+  it("watches no pane while the only open questions are another machine's or history", async () => {
+    const env = await attached({
+      rows: [
+        row("q-elsewhere", { origin: origin({ host_id: "host_other" }) }),
+        row("q-history", { history_only: true }),
+      ],
+    });
+
+    expect(env.watchPanes).not.toHaveBeenCalled();
+    expect(env.bridge.publishSnapshot).not.toHaveBeenCalled();
+  });
 });

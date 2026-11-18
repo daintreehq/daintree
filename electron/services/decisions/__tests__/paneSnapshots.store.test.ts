@@ -123,7 +123,7 @@ function fakeBridge() {
 }
 
 let dir: string;
-let sqlite: Database.Database;
+let sqlite: Database.Database | undefined;
 let snapshots: PaneSnapshots | null = null;
 
 beforeEach(() => {
@@ -135,65 +135,119 @@ afterEach(() => {
   snapshots?.stop();
   snapshots = null;
   vi.restoreAllMocks();
-  if (sqlite.open) sqlite.close();
-  fs.rmSync(dir, { recursive: true, force: true });
+  try {
+    if (sqlite?.open) sqlite.close();
+  } finally {
+    sqlite = undefined;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
+const SETTLED = [
+  "human-answered",
+  "proxy-answered",
+  "expired",
+  "cancelled",
+  "publish-failed",
+] as const;
+const HISTORY = 250;
+
+/**
+ * A long settled history, aliases 1 to `HISTORY`, none of which decodes any
+ * more: a read that mapped one of its rows would fail.
+ */
+async function seedHistory(store: DaintreeLocalStore): Promise<number> {
+  await Promise.all(
+    Array.from({ length: HISTORY }, (_, i) =>
+      store.commitNewQuestion(
+        row(`settled-${i}`, i + 1, { local_status: SETTLED[i % SETTLED.length] }),
+        item(`settled-${i}`)
+      )
+    )
+  );
+  sqlite!
+    .prepare(
+      "UPDATE decisions_questions SET attachment_digests = 'not json' WHERE question_id LIKE 'settled-%'"
+    )
+    .run();
+  return HISTORY;
+}
+
+function snapshotsOver(store: DaintreeLocalStore): PaneSnapshots {
+  snapshots = new PaneSnapshots({
+    allowed: () => true,
+    hostId: () => HOST,
+    principalFor: () => PRINCIPAL,
+    getPtyClient: () => client,
+    watchPanes: () => () => {},
+    store,
+    settleMs: 0,
+  });
+  return snapshots;
+}
+
+const publishedIds = (bridge: ReturnType<typeof fakeBridge>) =>
+  bridge.publishSnapshot.mock.calls.map(([id]) => id);
+const clearedIds = (bridge: ReturnType<typeof fakeBridge>) =>
+  bridge.snapshots.clear.mock.calls.map(([cleared]) => cleared!.question_id);
+
 describe("PaneSnapshots over the Decisions store", () => {
-  it("reads only open questions when a bridge attaches, and still takes back one that closed while none was up", async () => {
-    const store = new DaintreeLocalStore(sqlite);
-    const settled = [
-      "human-answered",
-      "proxy-answered",
-      "expired",
-      "cancelled",
-      "publish-failed",
-    ] as const;
-    let alias = 0;
-    for (let i = 0; i < 250; i++) {
-      const id = `settled-${i}`;
-      await store.commitNewQuestion(
-        row(id, ++alias, { local_status: settled[i % settled.length] }),
-        item(id)
-      );
-    }
-    // Shared by an earlier bridge, then answered on the phone while the relay was away.
+  it("reads only open questions when a bridge attaches, and takes back what an earlier run shared", async () => {
+    const store = new DaintreeLocalStore(sqlite!);
+    let alias = await seedHistory(store);
+    // Shared by the run before a restart, then answered on the phone while no relay was up.
     await store.commitNewQuestion(
       row("q-shared", ++alias, { local_status: "human-answered" }),
       item("q-shared")
     );
     await store.commitNewQuestion(row("q-open", ++alias), item("q-open"));
     await store.setMeta(SNAPSHOTS_SHARED_META_KEY, JSON.stringify({ "q-shared": Date.now() }));
-    // History that no longer decodes: a read that mapped any of it would fail the attachment.
-    sqlite
-      .prepare(
-        "UPDATE decisions_questions SET attachment_digests = 'not json' WHERE question_id LIKE 'settled-%'"
-      )
-      .run();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const listQuestions = vi.spyOn(store, "listQuestions");
 
-    snapshots = new PaneSnapshots({
-      allowed: () => true,
-      hostId: () => HOST,
-      principalFor: () => PRINCIPAL,
-      getPtyClient: () => client,
-      watchPanes: () => () => {},
-      store,
-      settleMs: 0,
-    });
     const bridge = fakeBridge();
-    snapshots.attach(bridge);
+    snapshotsOver(store).attach(bridge);
 
     await vi.waitFor(() => {
       expect(bridge.publishSnapshot).toHaveBeenCalled();
       expect(bridge.snapshots.clear).toHaveBeenCalled();
     });
     expect(listQuestions.mock.calls).toEqual([[{ status: ["queued", "open"] }]]);
-    expect(bridge.publishSnapshot.mock.calls.map(([id]) => id)).toEqual(["q-open"]);
-    expect(bridge.snapshots.clear.mock.calls.map(([cleared]) => cleared!.question_id)).toEqual([
-      "q-shared",
-    ]);
+    expect(publishedIds(bridge)).toEqual(["q-open"]);
+    expect(bridge.publishSnapshot.mock.calls[0]![1]).toMatchObject({
+      agentState: "waiting",
+      terminal: ["Which option?", "1. Keep", "2. Drop"],
+    });
+    expect(clearedIds(bridge)).toEqual(["q-shared"]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("takes back, through the next bridge, a question it shared that closed while the relay was away", async () => {
+    const store = new DaintreeLocalStore(sqlite!);
+    let alias = await seedHistory(store);
+    await store.commitNewQuestion(row("q-shared", ++alias), item("q-shared"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const paneSnapshots = snapshotsOver(store);
+    const first = fakeBridge();
+    paneSnapshots.attach(first);
+    await vi.waitFor(() => expect(first.publishSnapshot).toHaveBeenCalled());
+    paneSnapshots.detach(first);
+
+    await store.updateQuestion("q-shared", { local_status: "human-answered" });
+    await store.commitNewQuestion(row("q-open", ++alias), item("q-open"));
+    const listQuestions = vi.spyOn(store, "listQuestions");
+    const next = fakeBridge();
+    paneSnapshots.attach(next);
+
+    await vi.waitFor(() => {
+      expect(next.publishSnapshot).toHaveBeenCalled();
+      expect(next.snapshots.clear).toHaveBeenCalled();
+    });
+    expect(listQuestions.mock.calls).toEqual([[{ status: ["queued", "open"] }]]);
+    expect(publishedIds(first)).toEqual(["q-shared"]);
+    expect(clearedIds(first)).toEqual([]);
+    expect(publishedIds(next)).toEqual(["q-open"]);
+    expect(clearedIds(next)).toEqual(["q-shared"]);
     expect(warn).not.toHaveBeenCalled();
   });
 });
