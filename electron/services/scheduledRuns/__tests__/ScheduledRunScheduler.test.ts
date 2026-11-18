@@ -17,9 +17,11 @@ import { openDb } from "../../persistence/db.js";
 import { ScheduledRunRecorder } from "../ScheduledRunRecorder.js";
 import { ScheduledRunStore } from "../ScheduledRunStore.js";
 import {
+  INVENTORY_RETRY_MS,
   ON_TIME_GRACE_MS,
   READ_TIMEOUT_MS,
   SCHEDULER_TICK_MS,
+  UNRECORDED_RETRY_MS,
   ScheduledRunScheduler,
   type ScheduledRunSchedulerDeps,
   type ScheduledRunSchedulerLaunch,
@@ -895,44 +897,66 @@ describe("ScheduledRunScheduler", () => {
   });
 
   describe("when the project list couldn't be read (#17801)", () => {
-    function listing(failures: number): { calls: () => number } {
+    function listing(
+      failures: number,
+      overrides: Partial<ScheduledRunSchedulerDeps> = {}
+    ): { calls: () => number; at: number[] } {
       const base = deps();
       let calls = 0;
+      const at: number[] = [];
       scheduler = new ScheduledRunScheduler({
         ...base,
+        ...overrides,
         listProjectIds: () => {
           calls += 1;
+          at.push(base.monotonicNow!());
           if (calls <= failures) throw new Error("SQLITE_BUSY");
           return base.listProjectIds();
         },
       });
-      return { calls: () => calls };
+      return { calls: () => calls, at };
     }
 
-    it("lists the projects again, calls what came due before then missed, and launches it once", async () => {
-      setClock(at(9, 0, 10));
-      commit("project-1", [schedule({ updatedAt: at(8) })]);
-      const list = listing(1);
-      await scheduler!.start();
-      await scheduler!.idle();
-      expect(launches).toEqual([]);
-      expect(vi.getTimerCount()).toBe(1);
+    function skipping(): Schedule {
+      const held = schedule({ updatedAt: at(8) });
+      return { ...held, policies: { ...held.policies, missedRuns: "skip" } };
+    }
 
-      await elapse(MINUTE);
-      expect(list.calls()).toBe(2);
-      expect(origins()).toEqual([
-        expect.objectContaining({
-          trigger: "catch-up",
-          dueAt: at(9),
-          coalesced: expect.objectContaining({ after: at(8) }),
-        }),
-      ]);
-
+    /** Resume and an OS job's check, each with its pass settled. */
+    async function wakeAndCheck(): Promise<void> {
       scheduler!.resume();
       await settle();
       scheduler!.check();
       await settle();
+    }
+
+    it("lists the projects again, calls what came due before then missed, and launches it once", async () => {
+      setClock(at(9) - 500);
+      commit("project-1", [schedule({ updatedAt: at(8) })]);
+      const list = listing(1);
+      await scheduler!.start();
+      await scheduler!.idle();
+
+      await elapse(INVENTORY_RETRY_MS - 1);
+      await wakeAndCheck();
+      expect(list.calls()).toBe(1);
+      expect(launches).toEqual([]);
+
+      await elapse(1);
+      expect(list.calls()).toBe(2);
+      expect(origins()).toEqual([
+        {
+          trigger: "catch-up",
+          dueAt: at(9),
+          occurrenceKey: occurrenceKeyFor(at(9)),
+          coalesced: { after: at(8), through: at(9) + INVENTORY_RETRY_MS - 500 },
+        },
+      ]);
+
+      await settle();
+      await wakeAndCheck();
       expect(launches).toHaveLength(1);
+      expect(recorder.listBySchedule("schedule-1")).toHaveLength(1);
       expect(list.calls()).toBe(2);
 
       await elapse(HOUR);
@@ -943,16 +967,16 @@ describe("ScheduledRunScheduler", () => {
     });
 
     it("records one skip for what came due before the list was read when missed runs are skipped", async () => {
-      setClock(at(9, 0, 10));
-      const skipping = schedule({ updatedAt: at(8) });
-      commit("project-1", [
-        { ...skipping, policies: { ...skipping.policies, missedRuns: "skip" } },
-      ]);
-      listing(1);
+      setClock(at(9) - 500);
+      commit("project-1", [skipping()]);
+      const list = listing(1);
       await scheduler!.start();
       await scheduler!.idle();
 
-      await elapse(MINUTE);
+      await elapse(INVENTORY_RETRY_MS);
+      await settle();
+      await wakeAndCheck();
+      expect(list.calls()).toBe(2);
       expect(launches).toEqual([]);
       expect(recorder.listBySchedule("schedule-1")).toEqual([
         expect.objectContaining({
@@ -962,18 +986,19 @@ describe("ScheduledRunScheduler", () => {
       ]);
     });
 
-    it("keeps listing while the list fails, backing off to once a minute", async () => {
+    it("keeps listing while the list fails, doubling the wait up to a minute", async () => {
       const list = listing(Number.POSITIVE_INFINITY);
       await scheduler!.start();
       await scheduler!.idle();
 
-      await elapse(MINUTE);
-      const firstMinute = list.calls();
-      expect(firstMinute).toBeGreaterThan(2);
       await elapse(10 * MINUTE);
-      const settled = list.calls();
-      await elapse(10 * MINUTE);
-      expect(list.calls() - settled).toBe(10);
+      const waits = list.at.slice(1).map((time, i) => time - list.at[i]!);
+      let expected = INVENTORY_RETRY_MS;
+      for (const wait of waits) {
+        expect(wait).toBe(expected);
+        expected = Math.min(expected * 2, UNRECORDED_RETRY_MS);
+      }
+      expect(waits.at(-1)).toBe(UNRECORDED_RETRY_MS);
     });
 
     it("lists once and keeps no timer when the list is read and holds no project", async () => {
@@ -984,6 +1009,32 @@ describe("ScheduledRunScheduler", () => {
 
       expect(vi.getTimerCount()).toBe(0);
       await elapse(2 * HOUR);
+      expect(list.calls()).toBe(1);
+    });
+
+    it("opens no history and keeps no timer once a list that failed reads empty", async () => {
+      projects.clear();
+      const list = listing(1);
+      await scheduler!.start();
+      await scheduler!.idle();
+      expect(vi.getTimerCount()).toBe(1);
+
+      await elapse(INVENTORY_RETRY_MS);
+      expect(list.calls()).toBe(2);
+      expect(vi.getTimerCount()).toBe(0);
+      await elapse(2 * HOUR);
+      expect(list.calls()).toBe(2);
+      expect(getRecorder).not.toHaveBeenCalled();
+    });
+
+    it("lists nothing more once disposed", async () => {
+      const list = listing(Number.POSITIVE_INFINITY);
+      await scheduler!.start();
+      await scheduler!.idle();
+
+      await scheduler!.dispose();
+      expect(vi.getTimerCount()).toBe(0);
+      await elapse(HOUR);
       expect(list.calls()).toBe(1);
     });
 
@@ -1001,6 +1052,34 @@ describe("ScheduledRunScheduler", () => {
       ]);
       await scheduler!.idle();
       expect(origins()).toEqual([expect.objectContaining({ trigger: "catch-up", dueAt: at(9) })]);
+    });
+
+    it("watches a project from the change that delivered it, over the slower read the list asked for", async () => {
+      setClock(at(9) - 2_000);
+      commit("project-1", [skipping()]);
+      const older = snapshots.get("project-1")!;
+      let reads = 0;
+      let release: () => void = () => {};
+      listing(1, {
+        listSchedules: () => {
+          reads += 1;
+          return new Promise((resolve) => (release = () => resolve(older)));
+        },
+      });
+      await scheduler!.start();
+      await scheduler!.idle();
+
+      // Not `elapse`: the pass waits on the read it starts.
+      await vi.advanceTimersByTimeAsync(INVENTORY_RETRY_MS);
+      expect(reads).toBe(1);
+      await vi.advanceTimersByTimeAsync(500);
+      commit("project-1", [skipping()]);
+      await vi.advanceTimersByTimeAsync(1_500);
+      release();
+      await settle();
+
+      expect(origins()).toEqual([expect.objectContaining({ trigger: "scheduled", dueAt: at(9) })]);
+      expect(recorder.listBySchedule("schedule-1")).toHaveLength(1);
     });
   });
 
