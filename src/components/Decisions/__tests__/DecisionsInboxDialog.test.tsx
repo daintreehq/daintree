@@ -104,6 +104,8 @@ function item(
     expiresAt: null,
     settledAt: null,
     standing,
+    replyRequest: null,
+    stall: null,
     ...over,
   };
 }
@@ -151,6 +153,7 @@ function content(questionId: string, alias: number, over: Partial<DecisionQuesti
     askedAt: "2026-11-02T10:00:00.000Z",
     expiresAt: null,
     status: "expired",
+    closedReason: null,
     deliveryStatus: "terminal-delivered",
     attachments: [],
     thread: [],

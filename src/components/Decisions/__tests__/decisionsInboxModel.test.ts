@@ -36,6 +36,8 @@ function item(
     expiresAt: null,
     settledAt: null,
     standing,
+    replyRequest: null,
+    stall: null,
     ...over,
   };
 }
