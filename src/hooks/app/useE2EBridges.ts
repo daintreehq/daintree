@@ -10,6 +10,10 @@ import { usePluginMcpConfirmStore } from "@/store/pluginMcpConfirmStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { installE2EActionDispatchBridge } from "@/services/ActionService";
 import { loadE2ENotificationBackdoor } from "@/lazyPanels";
+import { isPtyPanel } from "@shared/types/panel";
+import { usePanelStore } from "@/store/panelStore";
+import { useProjectStore } from "@/store/projectStore";
+import { useWakeContinueStore } from "@/store/wakeContinueStore";
 
 /**
  * Installs the E2E renderer backdoors: the ActionService dispatch bridge
@@ -95,6 +99,33 @@ export function useE2EBridges(): void {
         usePluginMcpConfirmStore.getState().reset();
       };
 
+      // Parks a continue-note offer over panes the harness already opened, so
+      // the design-review harness can capture the dialog in every phase without
+      // rebooting a fleet of real resumed agents. Each entry's `disposition`
+      // stamps the pane's restore provenance the way a restore pass would.
+      window.__DAINTREE_E2E_SET_WAKE_OFFER__ = ({ phase, entries, open }) => {
+        usePanelStore.setState((state) => {
+          const panelsById = { ...state.panelsById };
+          for (const entry of entries) {
+            const panel = panelsById[entry.terminalId];
+            if (!panel || !isPtyPanel(panel) || !entry.disposition) continue;
+            panelsById[entry.terminalId] = {
+              ...panel,
+              restoreProvenance: { at: entry.restoredAt, disposition: entry.disposition },
+            };
+          }
+          return { panelsById };
+        });
+        const store = useWakeContinueStore.getState();
+        store.setOffer({
+          id: `e2e-${Date.now()}`,
+          projectId: useProjectStore.getState().currentProject?.id ?? "",
+          phase,
+          entries: entries.map(({ disposition: _disposition, ...entry }) => entry),
+        });
+        if (open) store.setDialogOpen(true);
+      };
+
       // Lazy-load the notification backdoor only under E2E so its module closure
       // stays out of the production first-paint chunk. Fire-and-forget: the helper
       // side in e2e/helpers/notifications.ts waits for __daintreeNotificationsE2E
@@ -117,6 +148,7 @@ export function useE2EBridges(): void {
       delete window.__DAINTREE_E2E_RESET_MCP_CONFIRM__;
       delete window.__DAINTREE_E2E_ENQUEUE_PLUGIN_MCP_CONFIRM__;
       delete window.__DAINTREE_E2E_RESET_PLUGIN_MCP_CONFIRM__;
+      delete window.__DAINTREE_E2E_SET_WAKE_OFFER__;
       delete window.__daintreeNotificationsE2E;
     };
   }, []);

@@ -21,7 +21,7 @@ export function WakeContinueNotice() {
   const outcomes = useLiveWakeOutcomes(offer);
   if (!offer || offer.projectId !== projectId) return null;
 
-  const { resumed, held, sent, unconfirmed, failed } = wakeOfferCounts(offer, outcomes);
+  const { resumed, held, sent, unconfirmed, failed, needsYou } = wakeOfferCounts(offer, outcomes);
   // One id across phases, so focus returns to the same button after sending.
   const openDetails = { id: "details", onClick: () => setDialogOpen(true) };
 
@@ -29,10 +29,14 @@ export function WakeContinueNotice() {
     const title =
       resumed > 0
         ? `${pluralize(resumed, "agent")} resumed`
-        : `${pluralize(held, "agent")} waiting to resume`;
+        : held > 0
+          ? `${pluralize(held, "agent")} waiting to resume`
+          : "No agent can take a note right now";
     const description =
       resumed === 0
-        ? "Start them on their sessions, then send a note to pick up where they left off."
+        ? held > 0
+          ? "Start them on their sessions, then send a note to pick up where they left off."
+          : "Review the note to see why each agent was left out."
         : resumed === 1
           ? "Send it a note to pick up where it left off?"
           : "Send them a note to pick up where they left off?";
@@ -55,6 +59,7 @@ export function WakeContinueNotice() {
 
   const notes = [
     `${sent} of ${pluralize(resumed, "agent")} sent`,
+    needsYou > 0 ? `${needsYou} ${needsYou === 1 ? "needs" : "need"} you` : null,
     unconfirmed > 0 ? `${unconfirmed} unconfirmed` : null,
     failed > 0 ? `${failed} not sent` : null,
   ].filter((part): part is string => part !== null);

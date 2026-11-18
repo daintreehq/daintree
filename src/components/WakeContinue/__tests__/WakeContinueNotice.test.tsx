@@ -139,7 +139,7 @@ describe("WakeContinueNotice", () => {
 
     await screen.findByTestId("wake-continue-entries");
     expect(row("c")).toContain("Started a new session — no note");
-    expect(row("a")).toContain("Resumed");
+    expect(row("a")).toContain("Included");
 
     const note = screen.getByTestId("wake-continue-note") as HTMLTextAreaElement;
     expect(note.value).toBe(DEFAULT_CONTINUE_NOTE);
