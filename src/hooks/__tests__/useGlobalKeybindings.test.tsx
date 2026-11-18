@@ -2864,3 +2864,62 @@ describe("useGlobalKeybindings — Cmd+Z between text undo and reopening a panel
     expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
   });
 });
+
+// A scoped binding on a bare key (the diff viewer's `n`) is a letter anywhere
+// text goes: the scope says where the key is live, never that it outranks typing.
+describe("useGlobalKeybindings — bare scoped keys", () => {
+  function press(target: HTMLElement, key: string): boolean {
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    return event.defaultPrevented;
+  }
+
+  beforeEach(() => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "diff.nextChange" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+  });
+
+  it.each([
+    ["an input", "<input />"],
+    ["a textarea", "<textarea></textarea>"],
+    ["an editable region", '<div contenteditable="true"></div>'],
+    ["a terminal", '<div class="xterm"><textarea></textarea></div>'],
+  ])("leaves the key to %s", (_where, html) => {
+    render(<Host />);
+    const host = document.createElement("div");
+    host.innerHTML = html;
+    document.body.appendChild(host);
+    try {
+      const target = host.querySelector<HTMLElement>("input, textarea, [contenteditable]")!;
+      // jsdom leaves `isContentEditable` unimplemented.
+      if (target.hasAttribute("contenteditable")) {
+        Object.defineProperty(target, "isContentEditable", { value: true });
+      }
+      expect(press(target, "n")).toBe(false);
+      expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+    } finally {
+      host.remove();
+    }
+  });
+
+  it("runs the action from anything else and consumes the key", () => {
+    render(<Host />);
+    const button = document.createElement("button");
+    document.body.appendChild(button);
+    try {
+      expect(press(button, "n")).toBe(true);
+      expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
+        "diff.nextChange",
+        undefined,
+        expect.anything()
+      );
+    } finally {
+      button.remove();
+    }
+  });
+});

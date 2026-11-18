@@ -215,6 +215,11 @@ An argument shown as `name?` is optional. Argument names come from each action's
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
+| `diff.nextChange` | Next hunk | safe | `panelId?` |
+| `diff.nextFile` | Next file in diff | safe | `panelId?` |
+| `diff.previousChange` | Previous hunk | safe | `panelId?` |
+| `diff.previousFile` | Previous file in diff | safe | `panelId?` |
+| `diff.toggleViewed` | Toggle viewed | safe | `panelId?` |
 | `git.abortRepositoryOperation` | Abort Git operation | confirm | `cwd?`, `operation?`, `worktreeId?`, `worktreePath?` |
 | `git.commit` | Commit | safe | `message`, `cwd?`, `worktreeId?`, `worktreePath?` |
 | `git.continueRepositoryOperation` | Continue Git operation | safe | `cwd?`, `worktreeId?`, `worktreePath?` |
