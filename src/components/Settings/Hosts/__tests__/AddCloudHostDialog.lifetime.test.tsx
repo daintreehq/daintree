@@ -30,8 +30,12 @@ vi.mock("../ConnectCloudAccountDialog", () => ({ ConnectCloudAccountDialog: () =
 
 import { AddCloudHostDialog } from "../AddCloudHostDialog";
 
-function provider(lifetime: CloudLifetimeModel): CloudProviderInfo {
+function provider(
+  lifetime: CloudLifetimeModel,
+  extra: Partial<CloudProviderInfo> = {}
+): CloudProviderInfo {
   return {
+    ...extra,
     id: "acme.clouds.vm",
     name: "Acme",
     description: "Machines on Acme",
@@ -95,8 +99,8 @@ const CATALOG: CloudCatalog = {
   fetchedAt: 0,
 };
 
-async function open(lifetime: CloudLifetimeModel) {
-  cloud.snapshot = { providers: [provider(lifetime)], accounts: [ACCOUNT], hosts: [] };
+async function open(lifetime: CloudLifetimeModel, extra: Partial<CloudProviderInfo> = {}) {
+  cloud.snapshot = { providers: [provider(lifetime, extra)], accounts: [ACCOUNT], hosts: [] };
   return show();
 }
 
@@ -166,12 +170,34 @@ describe("AddCloudHostDialog lifetime", () => {
     expect(await createAndSend()).toBe(8);
   });
 
+  it("starts with no limit for a provider whose new machines take none by default (#17362)", async () => {
+    const initial = await open(
+      { kind: "fixed-at-create", canChangeWhileStopped: true },
+      { defaultLifetimeHours: null }
+    );
+    // No limit on the provider's side, and no promise that it runs until stopped: its host may stop it.
+    expect(initial).toContain("It has no runtime limit.");
+    expect(initial).not.toContain("runs until you stop it");
+    expect(initial).not.toContain("can't be extended while it runs");
+    await choose(lifetimeChoice()!, "4 hours");
+    expect(review()).toContain("4 hours after starting, and that can't be extended");
+    expect(await createAndSend()).toBe(4);
+  });
+
+  it("sends no limit for a provider whose new machines take none, if left alone (#17362)", async () => {
+    await open(
+      { kind: "fixed-at-create", canChangeWhileStopped: true },
+      { defaultLifetimeHours: null }
+    );
+    expect(await createAndSend()).toBeNull();
+  });
+
   it("drops the fixed limit's warning once Never is chosen, and sends none", async () => {
     await open({ kind: "fixed-at-create", canChangeWhileStopped: true });
     await choose(lifetimeChoice()!, "Never");
-    expect(review()).toContain("It runs until you stop it.");
+    expect(review()).toContain("It has no runtime limit.");
     expect(screen.queryByText(/it stops then even if/)).toBeNull();
-    expect(screen.getByText(/with none, it runs until you stop it/)).toBeTruthy();
+    expect(screen.getByText(/with none, nothing on Acme's side stops it/)).toBeTruthy();
     expect(await createAndSend()).toBeNull();
   });
 

@@ -151,6 +151,13 @@ describe("cloud host labels", () => {
     expect(fixed).toContain("2 hours after starting");
     expect(fixed).toContain("can't be extended");
     expect(fixed).not.toContain("pushed back");
+    // No limit on the provider's side is not a promise it runs until stopped: its host may stop it (#17362).
+    const unlimited = lifetimeSentence(
+      { kind: "fixed-at-create", canChangeWhileStopped: true },
+      null
+    );
+    expect(unlimited).not.toContain("until you stop it");
+    expect(unlimited).not.toContain("can't be extended");
     // A stored lifetime means nothing to a provider that doesn't take one.
     expect(lifetimeSentence({ kind: "none" }, 7200)).toBe("It runs until you stop it.");
     expect(lifetimeSentence({ kind: "idle-sleep", idleSeconds: 1800 }, 7200)).toBe(

@@ -21,6 +21,8 @@ import {
 import { CloudProviderRegistry } from "../CloudProviderRegistry.js";
 import { normalizeHostKey } from "../sshEndpoint.js";
 import type { ProviderCredentials } from "../provider.js";
+import type { MetadataFetch } from "../../host/guestPowerOffSystem.js";
+import { cloudMachineHost, IDLE_MINUTES, MINUTE } from "./guestPowerOffHarness.js";
 
 const API = "http://aws.test";
 const ACCOUNT = "123456789012";
@@ -58,6 +60,11 @@ interface FakeInstance {
   userData: string;
   createdAt: string;
   publicIp: string | null;
+  /** What its own OS shutting down does: `stop` (EC2's default) or `terminate`. */
+  shutdownBehavior?: string;
+  rootDeviceType?: string;
+  lifecycle?: string;
+  stateReason?: { code: string; message: string };
 }
 
 interface FakeOptions {
@@ -110,6 +117,9 @@ function fakeAws(options: FakeOptions = {}) {
     ${instance.publicIp ? `<ipAddress>${instance.publicIp}</ipAddress>` : ""}
     <architecture>${instance.type.startsWith("t4g") ? "arm64" : "x86_64"}</architecture>
     <rootDeviceName>/dev/sda1</rootDeviceName>
+    <rootDeviceType>${instance.rootDeviceType ?? "ebs"}</rootDeviceType>
+    ${instance.lifecycle ? `<instanceLifecycle>${instance.lifecycle}</instanceLifecycle>` : ""}
+    ${instance.stateReason ? `<stateReason><code>${instance.stateReason.code}</code><message>${instance.stateReason.message}</message></stateReason>` : ""}
     <blockDeviceMapping><item><deviceName>/dev/sda1</deviceName><ebs><volumeId>vol-1</volumeId><status>attached</status><attachTime>${instance.createdAt}</attachTime></ebs></item></blockDeviceMapping>
     <tagSet>${Object.entries(instance.tags)
       .map(([key, value]) => `<item><key>${key}</key><value>${value}</value></item>`)
@@ -358,6 +368,7 @@ function fakeAws(options: FakeOptions = {}) {
             userData: Buffer.from(params.get("UserData") ?? "", "base64").toString("utf8"),
             createdAt: new Date(Date.now()).toISOString(),
             publicIp: "203.0.113.20",
+            shutdownBehavior: params.get("InstanceInitiatedShutdownBehavior") ?? "stop",
           };
           instances.push(instance);
         }
@@ -388,6 +399,16 @@ function fakeAws(options: FakeOptions = {}) {
           `<${tag}><instancesSet><item><instanceId>${instance.id}</instanceId><currentState><code>0</code><name>${next}</name></currentState></item></instancesSet></${tag}>`
         );
       }
+      case "DescribeInstanceAttribute": {
+        const instance = here.find((entry) => entry.id === params.get("InstanceId"));
+        if (!instance) return ec2Error("InvalidInstanceID.NotFound", "does not exist");
+        if (params.get("Attribute") !== "instanceInitiatedShutdownBehavior") {
+          return ec2Error("InvalidParameterValue", "attribute");
+        }
+        return xml(
+          `<DescribeInstanceAttributeResponse><requestId>req-1</requestId><instanceId>${instance.id}</instanceId><instanceInitiatedShutdownBehavior><value>${instance.shutdownBehavior ?? "stop"}</value></instanceInitiatedShutdownBehavior></DescribeInstanceAttributeResponse>`
+        );
+      }
       case "CreateTags": {
         const instance = here.find((entry) => entry.id === params.get("ResourceId.1"));
         if (instance) Object.assign(instance.tags, tagsOf(params, "Tag"));
@@ -412,7 +433,53 @@ function fakeAws(options: FakeOptions = {}) {
         return ec2Error("InvalidAction", `Unknown action ${action}`);
     }
   };
-  return { fetch, calls, instances, groups, generation };
+  /** The instance's own OS powering off, as EC2 then handles it: no API call is involved. */
+  const guestPowerOff = (id: string) => {
+    const instance = instances.find((entry) => entry.id === id)!;
+    if (instance.shutdownBehavior === "terminate") {
+      instance.state = "terminated";
+      instance.stateReason = {
+        code: "Client.InstanceInitiatedShutdown",
+        message: "Client.InstanceInitiatedShutdown: Instance initiated shutdown",
+      };
+    } else {
+      instance.state = "stopped";
+      instance.stateReason = {
+        code: "Client.InstanceInitiatedShutdown",
+        message: "Client.InstanceInitiatedShutdown: Instance initiated shutdown",
+      };
+    }
+  };
+  /** The instance's metadata server (IMDSv2), answering only from the instance itself. */
+  const metadataFor =
+    (id: string): MetadataFetch =>
+    async (request) => {
+      const instance = instances.find((entry) => entry.id === id)!;
+      if (
+        request.method === "PUT" &&
+        request.path === "/latest/api/token" &&
+        request.headers["X-aws-ec2-metadata-token-ttl-seconds"]
+      ) {
+        return { status: 200, headers: {}, body: "imds-token" };
+      }
+      if (
+        request.path === "/latest/dynamic/instance-identity/document" &&
+        request.headers["X-aws-ec2-metadata-token"] === "imds-token"
+      ) {
+        return {
+          status: 200,
+          headers: {},
+          body: JSON.stringify({
+            accountId: ACCOUNT,
+            region: instance.region,
+            instanceId: instance.id,
+            architecture: "x86_64",
+          }),
+        };
+      }
+      return { status: 401, headers: {}, body: "" };
+    };
+  return { fetch, calls, instances, groups, generation, guestPowerOff, metadataFor };
 }
 
 function setup(options: FakeOptions = {}) {
@@ -1415,5 +1482,219 @@ describe("AwsProvider", () => {
     expect(of("billing", "OptInRequired").code).toBe("billing");
     expect(of("rate-limited", "RequestLimitExceeded").code).toBe("rate-limited");
     expect(of("network", null).code).toBe("provider-unreachable");
+  });
+});
+
+describe("an EC2 machine stopping itself once idle (#17362)", () => {
+  async function runningMachine(options: FakeOptions = {}) {
+    const harness = setup(options);
+    const machine = await harness.provider.create(harness.credentials, CREATE);
+    harness.fake.instances[0]!.state = "running";
+    return { ...harness, resourceId: machine.resourceId, instance: harness.fake.instances[0]! };
+  }
+
+  it("launches instances that stop, rather than terminate, when their own OS powers off", async () => {
+    const { fake } = await runningMachine();
+    const launch = fake.calls.find((call) => call.action === "RunInstances" && !call.dryRun)!;
+    expect(launch.params.get("InstanceInitiatedShutdownBehavior")).toBe("stop");
+  });
+
+  it("stops itself after its idle time with no Shell, keeping its disk, with no AWS call from the machine", async () => {
+    const { provider, credentials, fake, resourceId, instance } = await runningMachine();
+    const check = await provider.checkGuestPowerOff(credentials, resourceId);
+    expect(check).toEqual({
+      eligible: true,
+      target: { provider: "aws", accountId: ACCOUNT, region: "eu-west-1", instanceId: instance.id },
+    });
+    if (!check.eligible) return;
+    const host = cloudMachineHost({
+      metadata: fake.metadataFor(instance.id),
+      powerOff: () => fake.guestPowerOff(instance.id),
+    });
+    // All the Shell hands over: which machine it is. No key, no secret.
+    await expect(host.keeper.set({ target: check.target, enabled: true })).resolves.toEqual({
+      armed: true,
+      problem: null,
+    });
+    // The Shell goes away; from here only the machine acts.
+    const callsBefore = fake.calls.length;
+    await host.pass(0);
+    await host.pass((IDLE_MINUTES - 1) * MINUTE);
+    expect(host.powerOffs).toEqual([]);
+    expect(instance.state).toBe("running");
+    await host.pass(2 * MINUTE);
+    expect(host.powerOffs).toEqual([["/usr/bin/sudo", "-n", "/usr/bin/systemctl", "poweroff"]]);
+    await host.pass(MINUTE);
+    expect(host.powerOffs).toHaveLength(1);
+    expect(fake.calls.slice(callsBefore)).toEqual([]);
+
+    await expect(provider.inspect(credentials, resourceId)).resolves.toMatchObject({
+      resourceId,
+      machine: "stopped",
+      error: null,
+    });
+    expect(fake.instances).toHaveLength(1);
+    expect(fake.calls.filter((call) => call.action === "StopInstances")).toEqual([]);
+    expect(fake.calls.filter((call) => call.action === "TerminateInstances")).toEqual([]);
+    host.dispose();
+  });
+
+  it("still stops itself after its host restarts in the same boot with no Shell", async () => {
+    const { provider, credentials, fake, resourceId, instance } = await runningMachine();
+    const check = await provider.checkGuestPowerOff(credentials, resourceId);
+    if (!check.eligible) throw new Error("not eligible");
+    const host = cloudMachineHost({
+      metadata: fake.metadataFor(instance.id),
+      powerOff: () => fake.guestPowerOff(instance.id),
+    });
+    await host.keeper.set({ target: check.target, enabled: true });
+    await host.restart();
+    expect(host.keeper.status()).toEqual({ armed: true, problem: null });
+    await host.pass(0);
+    await host.pass((IDLE_MINUTES + 1) * MINUTE);
+    expect(host.powerOffs).toHaveLength(1);
+    expect(instance.state).toBe("stopped");
+    host.dispose();
+  });
+
+  it("holds while the host sees work, and counts a full idle time from when the work ends", async () => {
+    const { provider, credentials, fake, resourceId, instance } = await runningMachine();
+    const check = await provider.checkGuestPowerOff(credentials, resourceId);
+    if (!check.eligible) throw new Error("not eligible");
+    const host = cloudMachineHost({
+      metadata: fake.metadataFor(instance.id),
+      powerOff: () => fake.guestPowerOff(instance.id),
+    });
+    await host.keeper.set({ target: check.target, enabled: true });
+    host.setBusy(true);
+    for (let elapsed = 0; elapsed < 4 * IDLE_MINUTES; elapsed += 10) {
+      await host.pass(10 * MINUTE);
+    }
+    expect(host.powerOffs).toEqual([]);
+    expect(instance.state).toBe("running");
+    host.setBusy(false);
+    await host.pass(MINUTE);
+    await host.pass((IDLE_MINUTES - 2) * MINUTE);
+    expect(host.powerOffs).toEqual([]);
+    await host.pass(2 * MINUTE);
+    expect(host.powerOffs).toHaveLength(1);
+    expect(instance.state).toBe("stopped");
+    host.dispose();
+  });
+
+  it("never lets a machine whose own shutdown would delete or end it power itself off", async () => {
+    const { provider, credentials, resourceId, instance } = await runningMachine();
+    const target = {
+      provider: "aws",
+      accountId: ACCOUNT,
+      region: "eu-west-1",
+      instanceId: instance.id,
+    };
+
+    instance.shutdownBehavior = "terminate";
+    await expect(provider.checkGuestPowerOff(credentials, resourceId)).resolves.toEqual({
+      eligible: false,
+      target,
+      problem: expect.stringContaining("terminate"),
+    });
+    instance.shutdownBehavior = "stop";
+    instance.rootDeviceType = "instance-store";
+    await expect(provider.checkGuestPowerOff(credentials, resourceId)).resolves.toEqual({
+      eligible: false,
+      target,
+      problem: expect.stringContaining("EBS"),
+    });
+    instance.rootDeviceType = "ebs";
+    instance.lifecycle = "spot";
+    await expect(provider.checkGuestPowerOff(credentials, resourceId)).resolves.toEqual({
+      eligible: false,
+      target,
+      problem: expect.stringContaining("spot"),
+    });
+    instance.lifecycle = undefined;
+    instance.tags["aws:autoscaling:groupName"] = "builders";
+    await expect(provider.checkGuestPowerOff(credentials, resourceId)).resolves.toEqual({
+      eligible: false,
+      target,
+      problem: expect.stringContaining("Auto Scaling"),
+    });
+    delete instance.tags["aws:autoscaling:groupName"];
+    // A type with local instance-store disks, whose data no stop keeps.
+    instance.type = "m5d.large";
+    await expect(provider.checkGuestPowerOff(credentials, resourceId)).resolves.toEqual({
+      eligible: false,
+      target,
+      problem: expect.stringContaining("local disks"),
+    });
+    instance.type = "t3.large";
+    await expect(provider.checkGuestPowerOff(credentials, resourceId)).resolves.toEqual({
+      eligible: true,
+      target,
+    });
+  });
+
+  it("says which permission it lacks when the keys can't read the shutdown setting", async () => {
+    const { provider, credentials, resourceId } = await runningMachine({
+      denied: new Set(["DescribeInstanceAttribute"]),
+    });
+    await expect(provider.checkGuestPowerOff(credentials, resourceId)).resolves.toEqual({
+      eligible: false,
+      target: expect.objectContaining({ provider: "aws", region: "eu-west-1" }),
+      problem: expect.stringContaining("ec2:DescribeInstanceAttribute"),
+    });
+  });
+
+  it("refuses to power off a machine whose metadata names another instance", async () => {
+    const { provider, credentials, fake, resourceId, instance } = await runningMachine();
+    const other = await provider.create(credentials, {
+      ...CREATE,
+      idempotencyKey: "0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9",
+    });
+    const check = await provider.checkGuestPowerOff(credentials, other.resourceId);
+    if (!check.eligible) throw new Error("not eligible");
+    // This host runs on the first instance; the Shell names the second.
+    const host = cloudMachineHost({
+      metadata: fake.metadataFor(instance.id),
+      powerOff: () => fake.guestPowerOff(instance.id),
+    });
+    await expect(host.keeper.set({ target: check.target, enabled: true })).resolves.toEqual({
+      armed: false,
+      problem: expect.stringContaining("another machine"),
+    });
+    await host.pass(0);
+    await host.pass(2 * IDLE_MINUTES * MINUTE);
+    expect(host.powerOffs).toEqual([]);
+    await expect(provider.inspect(credentials, resourceId)).resolves.toMatchObject({
+      machine: "running",
+    });
+    host.dispose();
+  });
+
+  it("reports an instance that stopped itself as stopped, not failed, by AWS's reason code", async () => {
+    const { provider, credentials, fake, resourceId, instance } = await runningMachine();
+    fake.guestPowerOff(instance.id);
+    await expect(provider.inspect(credentials, resourceId)).resolves.toMatchObject({
+      machine: "stopped",
+      error: null,
+    });
+    // The code alone decides it, whatever the message says.
+    instance.stateReason = { code: "Client.InstanceInitiatedShutdown", message: "Shut down" };
+    await expect(provider.inspect(credentials, resourceId)).resolves.toMatchObject({
+      machine: "stopped",
+      error: null,
+    });
+    instance.stateReason = { code: "Server.InternalError", message: "Server.InternalError: boom" };
+    await expect(provider.inspect(credentials, resourceId)).resolves.toMatchObject({
+      machine: "stopped",
+      error: "Server.InternalError: boom",
+    });
+    // One that terminated on its own shutdown keeps AWS's word on why it went.
+    instance.state = "running";
+    instance.shutdownBehavior = "terminate";
+    fake.guestPowerOff(instance.id);
+    await expect(provider.inspect(credentials, resourceId)).resolves.toMatchObject({
+      machine: "deleted",
+      error: "Client.InstanceInitiatedShutdown: Instance initiated shutdown",
+    });
   });
 });

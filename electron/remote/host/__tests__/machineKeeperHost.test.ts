@@ -6,7 +6,9 @@ const driver = vi.hoisted(() => ({
   inspect: null as null | (() => Promise<unknown>),
 }));
 
-vi.mock("electron", () => ({ app: { isPackaged: true } }));
+vi.mock("electron", () => ({
+  app: { isPackaged: true, getPath: () => "/nonexistent/daintree-test-user-data" },
+}));
 vi.mock("../../cloud/boat/boatMachineDriver.js", () => ({
   boatMachineDriver: () => ({
     inspect: () => driver.inspect!(),
@@ -17,14 +19,15 @@ vi.mock("../../cloud/boat/boatMachineDriver.js", () => ({
 }));
 
 import { BOAT_PRODUCTION_API_URL } from "../../cloud/boat/BoatClient.js";
-import { MachineKeeperLinkMethod } from "../../cloud/machineKeeperLink.js";
+import { GUEST_POWER_OFF_METHOD, MachineKeeperLinkMethod } from "../../cloud/machineKeeperLink.js";
+import type { GuestPowerOffSystem, StoredGuestPowerOff } from "../guestPowerOffSystem.js";
 import type { LinkSession } from "../../link/session.js";
 import { _resetRemoteServicesForTest, registerRemoteService } from "../../runtime.js";
 import { installMachineKeeperHost } from "../machineKeeperHost.js";
 
 type Handler = (payload: unknown) => unknown;
 
-function linkedHost() {
+function linkedHost(guestSystem?: GuestPowerOffSystem) {
   const handlers = new Map<
     string,
     { schema: { safeParse(v: unknown): { success: boolean; data?: unknown } }; handler: Handler }
@@ -37,12 +40,15 @@ function linkedHost() {
     onClose: () => () => {},
   } as unknown as LinkSession;
   let listener: ((ctx: { session: LinkSession }) => void) | null = null;
-  const dispose = installMachineKeeperHost({
-    onSession: (next) => {
-      listener = next;
-      return () => (listener = null);
+  const dispose = installMachineKeeperHost(
+    {
+      onSession: (next) => {
+        listener = next;
+        return () => (listener = null);
+      },
     },
-  });
+    guestSystem ? { guestSystem } : {}
+  );
   listener!({ session });
   /** As the link would: the payload checked against the method's schema, then handled. */
   const call = async (method: string, payload: unknown) => {
@@ -112,4 +118,75 @@ describe("installMachineKeeperHost (#17361)", () => {
     await expect(status).resolves.toMatchObject({ grantId: "mk_1" });
     host.dispose();
   });
+
+  it("takes the power-off permission for an EC2 or Compute Engine machine, and nothing else, over the link", async () => {
+    const system = guestSystem();
+    const host = linkedHost(system);
+    const aws = {
+      provider: "aws",
+      accountId: "123456789012",
+      region: "eu-west-1",
+      instanceId: "i-0abc0000000000001",
+    };
+    const gce = {
+      provider: "gce",
+      project: "daintree-build",
+      zone: "us-central1-a",
+      instanceId: "9007199254740993123",
+    };
+    for (const target of [aws, gce]) {
+      await expect(host.call(GUEST_POWER_OFF_METHOD, { target, enabled: true })).resolves.toEqual({
+        armed: true,
+        problem: null,
+      });
+      await expect(host.call(GUEST_POWER_OFF_METHOD, { target, enabled: false })).resolves.toEqual({
+        armed: false,
+        problem: null,
+      });
+    }
+    // Anything that could carry a credential, or a machine named loosely, is turned away by the schema.
+    for (const bad of [
+      { target: aws, enabled: true, secret: "x" },
+      { target: { ...aws, accessKeyId: "AKIA" }, enabled: true },
+      { target: { ...aws, instanceId: "i-../../etc" }, enabled: true },
+      { target: { ...gce, instanceId: "12ab" }, enabled: true },
+      { target: { ...gce, serviceAccountKey: "{}" }, enabled: true },
+      { target: { ...aws, provider: "boat" }, enabled: true },
+    ]) {
+      await expect(host.call(GUEST_POWER_OFF_METHOD, bad)).rejects.toThrow("VALIDATION");
+    }
+    expect(system.verifyIdentity).toHaveBeenCalledTimes(2);
+    host.dispose();
+  });
+
+  it("takes back up, with no Shell, a permission saved earlier in this boot", async () => {
+    const target = {
+      provider: "aws" as const,
+      accountId: "123456789012",
+      region: "eu-west-1",
+      instanceId: "i-0abc0000000000001",
+    };
+    const system = guestSystem({ bootId: "boot-a", target });
+    const host = linkedHost(system);
+    await vi.waitFor(() =>
+      expect(system.verifyIdentity).toHaveBeenCalledWith(target, expect.anything())
+    );
+    await expect(host.call(GUEST_POWER_OFF_METHOD, { target, enabled: false })).resolves.toEqual({
+      armed: false,
+      problem: null,
+    });
+    host.dispose();
+  });
 });
+
+function guestSystem(saved: StoredGuestPowerOff | null = null) {
+  return {
+    unsupported: () => null,
+    verifyIdentity: vi.fn(async () => ({ ok: true as const })),
+    probePowerOff: async () => null,
+    preparePowerOff: vi.fn(async () => async () => ({ kind: "accepted" as const })),
+    bootId: async () => saved?.bootId ?? "boot-a",
+    loadArm: async () => saved,
+    saveArm: async () => {},
+  } satisfies GuestPowerOffSystem;
+}

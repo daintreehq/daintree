@@ -462,7 +462,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
                   {lifetimeModel.kind === "renewable"
                     ? "Counted from each start, and pushed back while a window here shows it or its agents are working. A guard against a machine left running, not a spending limit."
                     : lifetimeHours === null
-                      ? `${provider.name} can't extend a limit while the machine runs; with none, it runs until you stop it.`
+                      ? `${provider.name} can't extend a limit while the machine runs; with none, nothing on ${provider.name}'s side stops it.`
                       : `Counted from each start. ${provider.name} can't extend it while the machine runs, so it stops then even if its agents are still working.`}
                 </FieldDescription>
               </Field>

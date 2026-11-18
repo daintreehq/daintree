@@ -12,6 +12,7 @@ import type {
   CloudProviderResource,
   CloudProviderSshAccess,
 } from "../../../shared/types/pluginCloudProvider.js";
+import type { GuestPowerOffTarget } from "./machineKeeperLink.js";
 
 /** Why a cloud host can't run here: the Shell reaches hosts on Windows through WSL only. */
 export const CLOUD_HOSTS_UNSUPPORTED_ON_WINDOWS =
@@ -71,6 +72,21 @@ export interface MachineKeyIssuer {
   /** The ids of the account's keys with this exact name, to find one whose create lost its answer. */
   findByName(credentials: ProviderCredentials, name: string): Promise<string[]>;
 }
+
+/**
+ * Whether the machine powering its own OS off would be a normal stop that
+ * keeps its disk, as the provider reports the machine now, and how its host
+ * names itself (its cloud metadata server's identity for it).
+ */
+export type GuestPowerOffCheck =
+  | { eligible: true; target: GuestPowerOffTarget }
+  | {
+      eligible: false;
+      /** Null when the machine can't be named at all. */
+      target: GuestPowerOffTarget | null;
+      /** Why not, in a sentence for the host's details. */
+      problem: string;
+    };
 
 /**
  * One cloud provider: authentication, catalog, machine lifecycle and SSH
@@ -159,6 +175,16 @@ export interface CloudProvider {
   describeError(error: unknown): CloudHostError;
   /** Present only for a provider whose machines can renew and stop themselves (#17361). */
   readonly machineKeys?: MachineKeyIssuer;
+  /**
+   * Present only for a provider where a machine powering its own OS off is a
+   * normal stop that keeps its disk, so its host can stop it once idle with
+   * no credential on the machine (#17362). Throws when the provider couldn't
+   * be asked; answers why not when it was, and the machine isn't one.
+   */
+  checkGuestPowerOff?(
+    credentials: ProviderCredentials,
+    resourceId: string
+  ): Promise<GuestPowerOffCheck>;
 }
 
 /** A provider that can move a running machine's automatic stop. */

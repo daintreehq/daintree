@@ -302,6 +302,37 @@ describe("createHostSampleSources", () => {
     }
   });
 
+  it("says the host stops its machine once idle while it may power the machine off (#17362)", async () => {
+    const { registerRemoteService } = await import("../../runtime.js");
+    const observation = {
+      idleAfterMinutes: 30,
+      lastWorkAt: 10,
+      busy: false,
+      idleEndsAt: 1_800_010,
+    };
+    const offIdle = registerRemoteService("hostIdle", {
+      observation: () => observation,
+    } as never);
+    let armed = false;
+    // Both keepers run on every host; Boat's holds no key here.
+    const offKeeper = registerRemoteService("machineKeeper", {
+      stopsWhenIdle: () => false,
+    } as never);
+    const offGuest = registerRemoteService("guestPowerOff", {
+      stopsWhenIdle: () => armed,
+    } as never);
+    try {
+      const sources = createHostSampleSources();
+      expect(sources.idle?.()).toEqual(observation);
+      armed = true;
+      expect(sources.idle?.()).toEqual({ ...observation, stopsWhenIdle: true });
+    } finally {
+      offGuest();
+      offKeeper();
+      offIdle();
+    }
+  });
+
   it("asks for agent CLIs itself when nothing has, so a windowless host lists them next sample", async () => {
     cli.service = {
       getAvailability: vi.fn(() => null),

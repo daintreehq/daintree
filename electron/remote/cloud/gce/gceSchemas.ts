@@ -120,6 +120,13 @@ export const gceInstanceSchema = z
           .loose()
       )
       .optional(),
+    /** `PERSISTENT` or `SCRATCH` (a local SSD, whose data a stop doesn't keep). */
+    disks: z.array(z.object({ type: z.string().optional() }).loose()).optional(),
+    /** Only the keys are read: `created-by` names the managed instance group a VM belongs to. */
+    metadata: z
+      .object({ items: z.array(z.object({ key: z.string() }).loose()).optional() })
+      .loose()
+      .optional(),
   })
   .loose();
 

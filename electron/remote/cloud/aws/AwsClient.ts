@@ -204,6 +204,8 @@ export interface Ec2Instance {
   /** pending, running, shutting-down, terminated, stopping or stopped. */
   state: string;
   stateReason: string | null;
+  /** The reason's code alone, such as `Client.InstanceInitiatedShutdown`. */
+  stateReasonCode?: string | null;
   stateTransitionReason: string | null;
   instanceType: string | null;
   architecture: string | null;
@@ -217,6 +219,10 @@ export interface Ec2Instance {
    */
   createdAt: string | null;
   tags: Record<string, string>;
+  /** `ebs` or `instance-store`; null when AWS didn't say. */
+  rootDeviceType?: string | null;
+  /** `spot`, `scheduled` or `capacity-block`; null for an on-demand instance. */
+  instanceLifecycle?: string | null;
 }
 
 export interface Ec2Image {
@@ -285,6 +291,7 @@ function parseInstance(item: XmlNode): Ec2Instance | null {
     instanceId,
     state,
     stateReason: xmlText(xmlChild(item, "stateReason"), "message"),
+    stateReasonCode: xmlText(xmlChild(item, "stateReason"), "code"),
     stateTransitionReason: xmlText(item, "reason"),
     instanceType: xmlText(item, "instanceType"),
     architecture: xmlText(item, "architecture"),
@@ -294,6 +301,8 @@ function parseInstance(item: XmlNode): Ec2Instance | null {
     publicDnsName: xmlText(item, "dnsName"),
     createdAt: rootAttachTime(item),
     tags: xmlTags(item),
+    rootDeviceType: xmlText(item, "rootDeviceType"),
+    instanceLifecycle: xmlText(item, "instanceLifecycle"),
   };
 }
 
@@ -613,6 +622,8 @@ export class AwsClient {
         ["BlockDeviceMapping.1.Ebs.VolumeSize", String(request.rootVolumeGiB)],
         ["BlockDeviceMapping.1.Ebs.VolumeType", "gp3"],
         ["BlockDeviceMapping.1.Ebs.DeleteOnTermination", "true"],
+        // The default, said outright: the machine powering itself off when idle must stop it, never terminate it.
+        ["InstanceInitiatedShutdownBehavior", "stop"],
         ["MetadataOptions.HttpTokens", "required"],
         ["MetadataOptions.HttpEndpoint", "enabled"],
         ["TagSpecification.1.ResourceType", "instance"],
@@ -664,6 +675,36 @@ export class AwsClient {
       [["ResourceId.1", resourceId], ...tagParams("Tag", tags)],
       { retry: true, mutation: true }
     );
+  }
+
+  /**
+   * What the instance does when its own OS shuts down: `stop` or `terminate`;
+   * null when AWS didn't say.
+   */
+  async shutdownBehavior(ctx: AwsRequestContext, instanceId: string): Promise<string | null> {
+    if (!isEc2InstanceId(instanceId)) {
+      throw new AwsApiError("invalid-request", "Not an EC2 instance id", null, null, null);
+    }
+    const root = await this.call(
+      ctx,
+      "ec2",
+      "DescribeInstanceAttribute",
+      [
+        ["InstanceId", instanceId],
+        ["Attribute", "instanceInitiatedShutdownBehavior"],
+      ],
+      { retry: true }
+    );
+    if (xmlText(root, "instanceId") !== instanceId) {
+      throw new AwsApiError(
+        "bad-response",
+        "AWS described another instance's attribute",
+        null,
+        null,
+        null
+      );
+    }
+    return xmlText(xmlChild(root, "instanceInitiatedShutdownBehavior"), "value");
   }
 
   /** The instance's console output, decoded; null when nothing has been posted yet. */

@@ -333,8 +333,9 @@ export function lifetimeSentence(
     case "none":
       return "It runs until you stop it.";
     case "fixed-at-create":
+      // Nothing on the provider's side, though its host may still stop it once idle (#17362).
       return lifetimeSeconds === null
-        ? "It runs until you stop it."
+        ? "It has no runtime limit."
         : `It stops by itself ${durationLabel(lifetimeSeconds)} after starting, and that can't be extended while it runs.`;
     case "renewable":
       return lifetimeSeconds === null
