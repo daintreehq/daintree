@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -66,15 +66,29 @@ export function CloudProvidersSection() {
   const accounts = snapshot.accounts;
   const providerFor = (account: CloudAccountSummary) =>
     providers.find((provider) => provider.id === account.providerId) ?? null;
-  // As it is now: a plugin update while the dialog is open asks its consent again.
+  // As it is now: a plugin update while the dialog is open asks its consent again, and a
+  // provider that's gone (its plugin turned off or uninstalled) takes its dialog with it.
   const connectingProvider = connecting
-    ? (providers.find((provider) => provider.id === connecting.provider.id) ?? connecting.provider)
+    ? (providers.find((provider) => provider.id === connecting.provider.id) ?? null)
     : null;
-  const reviewingProvider = reviewing ? providerFor(reviewing) : null;
+  const connectingGone = connecting !== null && connectingProvider === null;
+  // The account and its plugin as they are now: a review ends once there's nothing left to allow.
+  const reviewingAccount = reviewing
+    ? (accounts.find((entry) => entry.id === reviewing.id) ?? null)
+    : null;
+  const reviewingProvider = reviewingAccount ? providerFor(reviewingAccount) : null;
   const reviewingPlugin =
     reviewingProvider?.plugin && !reviewingProvider.plugin.granted
       ? reviewingProvider.plugin
       : null;
+  const reviewOver = reviewing !== null && reviewingPlugin === null && !allowing;
+
+  useEffect(() => {
+    if (connectingGone) setConnecting(null);
+  }, [connectingGone]);
+  useEffect(() => {
+    if (reviewOver) setReviewing(null);
+  }, [reviewOver]);
 
   const clearRowError = (accountId: string) =>
     setRowErrors((errors) => {
@@ -106,10 +120,10 @@ export function CloudProvidersSection() {
   };
 
   const allowReviewed = () => {
-    if (!reviewing || !reviewingPlugin) return;
+    if (!reviewingAccount || !reviewingPlugin) return;
     setAllowing(true);
     setAllowError(null);
-    cloudHostsClient.allowAccountProvider(reviewing.id, reviewingPlugin.fingerprint).then(
+    cloudHostsClient.allowAccountProvider(reviewingAccount.id, reviewingPlugin.fingerprint).then(
       (account) => {
         setAllowing(false);
         setReviewing(null);
@@ -318,7 +332,7 @@ export function CloudProvidersSection() {
           onConnected={(account) => clearRowError(account.id)}
         />
       )}
-      {reviewingProvider && reviewingPlugin && (
+      {reviewingAccount && reviewingProvider && reviewingPlugin && (
         <CloudProviderConsentDialog
           isOpen
           onClose={() => setReviewing(null)}

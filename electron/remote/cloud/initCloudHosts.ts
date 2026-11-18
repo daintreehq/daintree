@@ -126,7 +126,7 @@ export function initCloudHosts(params: {
     }
   };
   // An uninstalled plugin's consent goes; its accounts stay until it's allowed again.
-  setPluginCloudConsentForgetter((pluginId) => store.removeProviderConsent(pluginId));
+  setPluginCloudConsentForgetter((pluginId) => accounts.forgetPluginConsent(pluginId));
   const unregister = registerRemoteService("cloudHosts", cloudHosts);
   // Views that read before this started got the empty answer; tell them what there is.
   cloudHosts.changed();

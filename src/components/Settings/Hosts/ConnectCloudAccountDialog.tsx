@@ -151,7 +151,18 @@ function KeyFileControl({
  * against the same account and wallet before it takes the old one's place,
  * whole.
  */
-export function ConnectCloudAccountDialog({
+export function ConnectCloudAccountDialog(props: ConnectCloudAccountDialogProps) {
+  // A plugin whose declarations change starts the form over: what was entered, read,
+  // checked or agreed to under the old ones never carries into the new ones.
+  return (
+    <ConnectCloudAccountForm
+      key={`${props.provider.id}:${props.provider.plugin?.fingerprint ?? ""}`}
+      {...props}
+    />
+  );
+}
+
+function ConnectCloudAccountForm({
   isOpen,
   onClose,
   provider,

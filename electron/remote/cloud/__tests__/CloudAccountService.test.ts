@@ -684,9 +684,12 @@ describe("CloudAccountService and a plugin's provider", () => {
       }),
     });
     declared = env.declared;
+    const put = vi.spyOn(vault, "put");
     await expect(accounts.addAccount({ ...PLUGIN_ACCOUNT, consent: "fp-1" })).rejects.toMatchObject(
       { code: "PERMISSION", userMessage: expect.stringContaining("changed") }
     );
+    // Refused before anything was sealed, not cleaned up after.
+    expect(put).not.toHaveBeenCalled();
     expect(vault.sets.size).toBe(0);
     expect(store.accounts()).toEqual([]);
     expect(store.providerConsent("acme.clouds")).toBeNull();
@@ -795,6 +798,78 @@ describe("CloudAccountService and a plugin's provider", () => {
     expect(vault.sets.get("ca_acmeplugin")).toEqual(old);
     expect(store.providerConsent("acme.clouds")).toBeNull();
     expect(store.account("ca_acmeplugin")!.credentialRevision).toBe("rev-1");
+  });
+
+  it("keeps nothing from a connect agreed to before the plugin was uninstalled, same declarations or not", async () => {
+    const { accounts, vault, store } = pluginService();
+    const put = vault.put.bind(vault);
+    vi.spyOn(vault, "put").mockImplementationOnce(async (id, values) => {
+      await put(id, values);
+      // Uninstalled and installed again with exactly the same declarations meanwhile.
+      accounts.forgetPluginConsent("acme.clouds");
+    });
+    await expect(accounts.addAccount({ ...PLUGIN_ACCOUNT, consent: "fp-1" })).rejects.toMatchObject(
+      { code: "PERMISSION", userMessage: expect.stringContaining("uninstalled") }
+    );
+    expect(vault.sets.size).toBe(0);
+    expect(store.accounts()).toEqual([]);
+    expect(store.providerConsent("acme.clouds")).toBeNull();
+    // A fresh agreement afterwards is a fresh decision, and connects.
+    await expect(
+      accounts.addAccount({ ...PLUGIN_ACCOUNT, consent: "fp-1" })
+    ).resolves.toMatchObject({ providerUnavailable: null });
+  });
+
+  it("forgets the consent on uninstall, pausing the plugin's accounts until it's allowed again", async () => {
+    const { accounts, store } = pluginService();
+    const summary = await accounts.addAccount({ ...PLUGIN_ACCOUNT, consent: "fp-1" });
+    accounts.forgetPluginConsent("acme.clouds");
+    expect(store.providerConsent("acme.clouds")).toBeNull();
+    expect(accounts.summaries()[0]!.providerUnavailable).toContain("isn't allowed");
+    expect(accounts.allowAccountProvider(summary.id, "fp-1").providerUnavailable).toBeNull();
+  });
+
+  it("offers no scopes a check read while the plugin changed", async () => {
+    let declared: { fingerprint: string } = { fingerprint: "" };
+    const env = pluginService({
+      checkCredentials: vi.fn(async () => {
+        declared.fingerprint = "fp-2";
+        return { identity: "octocat", scopes: [personalChoice()] };
+      }),
+    });
+    declared = env.declared;
+    await expect(
+      env.accounts.checkCredentials("acme.clouds.ec2", PLUGIN_ACCOUNT.credentials, "fp-1")
+    ).rejects.toMatchObject({ code: "PERMISSION" });
+  });
+
+  it("hands a plugin's provider only the saved values it declares now", async () => {
+    const { accounts, store, vault } = pluginService();
+    const summary = await accounts.addAccount({ ...PLUGIN_ACCOUNT, consent: "fp-1" });
+    // Saved under an earlier declaration that also asked for a field this one dropped.
+    await vault.put(summary.id, { ...PLUGIN_ACCOUNT.credentials, legacyToken: "old-secret" });
+    const handed = await accounts.credentials(store.account(summary.id)!);
+    expect(handed.values).toEqual(PLUGIN_ACCOUNT.credentials);
+    expect(vault.sets.get(summary.id)).toMatchObject({ legacyToken: "old-secret" });
+  });
+
+  it("reads the catalog again once the plugin is allowed under new declarations", async () => {
+    const catalog = vi.fn(async () => ({
+      machineTypes: [],
+      canStart: true,
+      includedHoursRemaining: null,
+      startsRemaining: null,
+      savedSnapshotDayDollars: null,
+    }));
+    const { accounts, declared } = pluginService({ catalog });
+    const summary = await accounts.addAccount({ ...PLUGIN_ACCOUNT, consent: "fp-1" });
+    await accounts.catalog(summary.id);
+    await accounts.catalog(summary.id);
+    expect(catalog).toHaveBeenCalledTimes(1);
+    declared.fingerprint = "fp-2";
+    accounts.allowAccountProvider(summary.id, "fp-2");
+    await accounts.catalog(summary.id);
+    expect(catalog).toHaveBeenCalledTimes(2);
   });
 
   it("allows a plugin's provider only through an account it already has", () => {

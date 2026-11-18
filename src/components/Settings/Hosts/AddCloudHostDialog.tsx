@@ -105,6 +105,15 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState<CloudProviderInfo | null>(null);
+  // As it is now: a plugin update while the dialog is open asks its consent again, and a
+  // provider that's gone takes its dialog with it, showing this one again.
+  const connectingProvider = connecting
+    ? (snapshot.providers.find((entry) => entry.id === connecting.id) ?? null)
+    : null;
+  const connectingGone = connecting !== null && connectingProvider === null;
+  useEffect(() => {
+    if (connectingGone) setConnecting(null);
+  }, [connectingGone]);
   /** The host this dialog added; its machine's progress is followed from the cloud snapshot. */
   const [added, setAdded] = useState<{ hostId: HostId; name: string } | null>(null);
   const [startRequested, setStartRequested] = useState(false);
@@ -601,12 +610,11 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
         </AppDialog.Body>
         <AppDialog.Footer primaryAction={primary} secondaryAction={secondary} />
       </AppDialog>
-      {connecting && (
+      {connectingProvider && (
         <ConnectCloudAccountDialog
           isOpen
           onClose={() => setConnecting(null)}
-          // As it is now: a plugin update while the dialog is open asks its consent again.
-          provider={snapshot.providers.find((entry) => entry.id === connecting.id) ?? connecting}
+          provider={connectingProvider}
           onConnected={(connected) => setAccountId(connected.id)}
         />
       )}

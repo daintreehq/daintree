@@ -248,8 +248,16 @@ export function setPluginCloudConsentForgetter(next: ((pluginId: string) => void
   consentForgetter = next;
   if (!next) return;
   for (const pluginId of [...PENDING_FORGETS]) {
-    PENDING_FORGETS.delete(pluginId);
-    next(pluginId);
+    try {
+      next(pluginId);
+      // Dropped only once forgotten: a failed write is tried again by the next forgetter.
+      PENDING_FORGETS.delete(pluginId);
+    } catch (error) {
+      console.error(
+        `[PluginCloudProviders] forgetting the consent of "${pluginId}" failed:`,
+        error
+      );
+    }
   }
 }
 

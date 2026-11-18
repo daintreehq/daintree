@@ -210,6 +210,42 @@ describe("ConnectCloudAccountDialog for a plugin's provider", () => {
     expect(screen.queryByTestId("cloud-account-credential-accessKeyId")).toBeNull();
   });
 
+  it("starts over when what the plugin declares changes after it was allowed here", async () => {
+    const { rerender } = render(
+      <ConnectCloudAccountDialog isOpen onClose={() => {}} provider={fromPlugin(EC2)} />
+    );
+    fireEvent.click(button("Allow and continue"));
+    type("cloud-account-credential-accessKeyId", "AKIAEXAMPLE0001");
+    type("cloud-account-credential-secretAccessKey", "secret-access-key");
+    fireEvent.click(button("Check credentials"));
+    await screen.findByRole("radio", { name: /Personal/ });
+
+    rerender(
+      <ConnectCloudAccountDialog
+        isOpen
+        onClose={() => {}}
+        provider={fromPlugin(EC2, { fingerprint: "fp-2" })}
+      />
+    );
+    // Agreement to the old declarations answers for nothing: asked again.
+    expect(screen.getByTestId("cloud-provider-consent-dialog")).toBeTruthy();
+    fireEvent.click(button("Allow and continue"));
+    // Nothing entered or checked under the old ones carries over.
+    expect(
+      (screen.getByTestId("cloud-account-credential-accessKeyId") as HTMLInputElement).value
+    ).toBe("");
+    expect(screen.queryByRole("radio", { name: /Personal/ })).toBeNull();
+    type("cloud-account-credential-accessKeyId", "AKIAEXAMPLE0002");
+    type("cloud-account-credential-secretAccessKey", "another-secret");
+    fireEvent.click(button("Check credentials"));
+    await screen.findByRole("radio", { name: /Personal/ });
+    expect(cloudClient.checkAccountCredentials).toHaveBeenLastCalledWith(
+      "acme.clouds.ec2",
+      { accessKeyId: "AKIAEXAMPLE0002", secretAccessKey: "another-secret" },
+      "fp-2"
+    );
+  });
+
   it("asks before replacing the credentials of an account whose plugin isn't allowed now", async () => {
     render(
       <ConnectCloudAccountDialog

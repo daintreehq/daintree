@@ -109,8 +109,12 @@ export function watchPluginCloudProviders(params: {
       refused.get(providerId)?.reason ??
       failing.get(providerId) ??
       pluginCloudProviderUnavailableReason(providerId),
+    // From the published declarations, never `registered`: registering wakes the lifecycle
+    // before `registered` holds the entry, and that wake must already see the consent.
     consentSubject: (providerId) => {
-      const declaration = registered.get(providerId)?.declaration;
+      const declaration = listPluginCloudProviders().find(
+        (entry) => entry.providerId === providerId
+      );
       if (!declaration) return null;
       return {
         pluginId: declaration.pluginId,

@@ -191,6 +191,12 @@ function sameCredentials(a: StoredCloudAccount, b: StoredCloudAccount): boolean 
   return a.credentialRevision === b.credentialRevision && a.keyHint === b.keyHint;
 }
 
+/** Consent to a plugin's providers as a request found it: the record it keeps, and the uninstalls it had seen. */
+interface Agreement {
+  record: StoredProviderConsent;
+  epoch: number;
+}
+
 function newCredentialRevision(): string {
   return crypto.randomBytes(8).toString("hex");
 }
@@ -203,6 +209,8 @@ function newCredentialRevision(): string {
  */
 export class CloudAccountService {
   private readonly catalogs = new Map<string, CloudCatalog>();
+  /** Per plugin, how many times it was uninstalled this run: an agreement from before one answers for nothing. */
+  private readonly consentEpochs = new Map<string, number>();
   /** Per account, the replace or remove committing now; the next one waits for it. */
   private readonly commits = new Map<string, Promise<unknown>>();
 
@@ -302,19 +310,19 @@ export class CloudAccountService {
    * or had already agreed to. Returns the consent to keep with the account;
    * undefined for a built-in.
    */
-  private requireConsent(
-    providerId: CloudProviderId,
-    consent: unknown
-  ): StoredProviderConsent | undefined {
+  private requireConsent(providerId: CloudProviderId, consent: unknown): Agreement | undefined {
     const current = this.consentFor(providerId);
     if (!current) return undefined;
     if (current.fingerprint !== "" && consent === current.fingerprint) {
       const stored = this.deps.store.providerConsent(current.pluginId);
       return {
-        pluginId: current.pluginId,
-        fingerprint: current.fingerprint,
-        // A consent given before keeps when it was given.
-        approvedAt: current.granted && stored ? stored.approvedAt : this.now(),
+        record: {
+          pluginId: current.pluginId,
+          fingerprint: current.fingerprint,
+          // A consent given before keeps when it was given.
+          approvedAt: current.granted && stored ? stored.approvedAt : this.now(),
+        },
+        epoch: this.consentEpochs.get(current.pluginId) ?? 0,
       };
     }
     const message =
@@ -328,17 +336,46 @@ export class CloudAccountService {
     });
   }
 
-  /** The agreed consent still names the plugin's declarations as they are now. */
-  private requireSameConsent(
-    providerId: CloudProviderId,
-    agreed: StoredProviderConsent | undefined
-  ): void {
-    if (agreed) this.requireConsent(providerId, agreed.fingerprint);
+  /**
+   * The agreement still names the plugin's declarations as they are now, and
+   * the plugin it was given to: one uninstalled since, even if installed again
+   * with the same declarations, has to be asked again.
+   */
+  private requireSameConsent(providerId: CloudProviderId, agreed: Agreement | undefined): void {
+    if (!agreed) return;
+    const current = this.requireConsent(providerId, agreed.record.fingerprint);
+    if (current && current.epoch === agreed.epoch) return;
+    const message = `The ${agreed.record.pluginId} plugin was uninstalled while this was in progress. Connect again to review it.`;
+    throw new AppError({
+      code: "PERMISSION",
+      message: `Cloud provider ${providerId} isn't allowed`,
+      userMessage: message,
+    });
   }
 
-  /** A consent that wasn't kept before, now kept: whatever waited on it can go on. */
-  private consentKept(agreed: StoredProviderConsent | undefined, before: boolean): void {
-    if (agreed && !before) this.deps.onConsentGranted?.();
+  /**
+   * A consent that wasn't kept before, now kept: catalogs read under the
+   * declarations it replaced are dropped, and whatever waited on it can go on.
+   */
+  private consentKept(agreed: Agreement | undefined, before: boolean): void {
+    if (!agreed || before) return;
+    const { pluginId } = agreed.record;
+    for (const account of this.deps.store.accounts()) {
+      const namespace = cloudProviderNamespace(account.providerId);
+      if (namespace?.kind === "plugin" && namespace.pluginId === pluginId) {
+        this.catalogs.delete(account.id);
+      }
+    }
+    this.deps.onConsentGranted?.();
+  }
+
+  /**
+   * The plugin was uninstalled: the person's consent to it goes, and any
+   * connect or replace that agreed before now is refused before it keeps anything.
+   */
+  forgetPluginConsent(pluginId: string): void {
+    this.consentEpochs.set(pluginId, (this.consentEpochs.get(pluginId) ?? 0) + 1);
+    this.deps.store.removeProviderConsent(pluginId);
   }
 
   /** Refused before anything billable happens on a platform the provider can't serve. */
@@ -461,10 +498,13 @@ export class CloudAccountService {
   ): Promise<CloudAccountCheckResult> {
     if (!isCloudProviderId(providerId)) throw invalid("Choose a cloud provider.");
     const provider = this.supported(this.registered(providerId));
-    this.requireConsent(providerId, consent);
+    const agreed = this.requireConsent(providerId, consent);
     const credentials = this.normalize(provider, values);
     this.requireVault();
-    return this.check(provider, credentials, this.apiUrl(providerId));
+    const checked = await this.check(provider, credentials, this.apiUrl(providerId));
+    // Scopes read under declarations nobody agreed to are never offered.
+    this.requireSameConsent(providerId, agreed);
+    return checked;
   }
 
   async addAccount(request: CloudAccountAddRequest): Promise<CloudAccountSummary> {
@@ -525,14 +565,14 @@ export class CloudAccountService {
       lastProvisioning: null,
     };
     await this.deps.vault.put(id, credentials);
-    let wasGranted = false;
+    let wasGranted: boolean;
     try {
       // Another connect may have finished while the credentials were being sealed.
       refuseDuplicate();
       this.requireSameConsent(request.providerId, agreed);
       wasGranted = this.consentFor(request.providerId)?.granted ?? false;
       // The consent is kept with the account it was given for, in one write: declining keeps neither.
-      this.deps.store.putAccount(account, agreed);
+      this.deps.store.putAccount(account, agreed?.record);
     } catch (error) {
       // No account will ever name this set: it isn't left sealed with nothing able to remove it.
       await this.deps.vault.delete(id).catch(() => {});
@@ -619,7 +659,7 @@ export class CloudAccountService {
             credentialRevision: newCredentialRevision(),
             validation: { status: "valid", checkedAt: this.now() },
           },
-          agreed
+          agreed?.record
         );
       } catch (error) {
         // The account still names the set it had (a remove waits its turn), so the vault goes back to it.
@@ -647,7 +687,7 @@ export class CloudAccountService {
     const agreed = this.requireConsent(account.providerId, consent);
     if (!agreed) throw invalid("That account's cloud provider is part of Daintree.");
     const wasGranted = this.consentFor(account.providerId)?.granted ?? false;
-    if (!wasGranted) this.deps.store.putProviderConsent(agreed);
+    if (!wasGranted) this.deps.store.putProviderConsent(agreed.record);
     this.consentKept(agreed, wasGranted);
     return this.requireSummary(account.id);
   }
@@ -875,7 +915,29 @@ export class CloudAccountService {
         userMessage: `${account.displayName}'s credentials aren't on this device any more. Replace them in Settings → Hosts.`,
       });
     }
-    return { values, scopeId: account.scope.id, apiUrl: account.apiUrl, signal };
+    return {
+      values: this.declaredValues(account.providerId, values),
+      scopeId: account.scope.id,
+      apiUrl: account.apiUrl,
+      signal,
+    };
+  }
+
+  /**
+   * A plugin's provider gets only the saved values its declaration asks for
+   * now: a field an update dropped stays in the keychain, never handed over.
+   */
+  private declaredValues(
+    providerId: CloudProviderId,
+    values: CloudCredentialValues
+  ): CloudCredentialValues {
+    if (cloudProviderNamespace(providerId)?.kind !== "plugin") return values;
+    const provider = this.deps.providers.get(providerId);
+    if (!provider) return values;
+    const declared = new Set(
+      provider.info(this.deps.platform ?? process.platform).credentialFields.map((f) => f.id)
+    );
+    return Object.fromEntries(Object.entries(values).filter(([id]) => declared.has(id)));
   }
 
   /** A provider failure as an AppError the renderer can show, with no secret in it. */

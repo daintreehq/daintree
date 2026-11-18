@@ -571,7 +571,9 @@ describe("CloudHostStore plugin provider consents", () => {
     const store = new CloudHostStore(backend);
     store.putProviderConsent(consent);
     store.putBinding(binding());
+    expect(new CloudHostStore(backend).providerConsent("acme.clouds")).toEqual(consent);
     store.removeBinding("cb_abcdefgh12");
+    expect(new CloudHostStore(backend).providerConsent("acme.clouds")).toEqual(consent);
     store.putProviderConsent({ ...consent, fingerprint: "fp-2" });
     const reopened = new CloudHostStore(backend);
     expect(reopened.providerConsent("acme.clouds")).toEqual({ ...consent, fingerprint: "fp-2" });

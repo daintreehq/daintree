@@ -388,6 +388,8 @@ describe("consent to a plugin's cloud providers", () => {
       [contribution({ apiUrl: "https://ec2.elsewhere.example.com" })],
       [contribution({ createReplay: "lookup-only" })],
       [base, contribution({ id: "gce" })],
+      // The same provider under another id: the count and every other field unchanged.
+      [contribution({ id: "ec2-classic" })],
     ];
     const prints = changed.map((contributions) => fingerprintAfter(contributions));
     expect(prints).not.toContain(before);
@@ -406,5 +408,18 @@ describe("consent to a plugin's cloud providers", () => {
     const later: string[] = [];
     setPluginCloudConsentForgetter((pluginId) => later.push(pluginId));
     expect(later).toEqual([]);
+  });
+
+  it("keeps a held forget whose write failed for the next forgetter", () => {
+    setPluginCloudConsentForgetter(null);
+    forgetPluginCloudProviderConsent("acme.clouds");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    setPluginCloudConsentForgetter(() => {
+      throw new Error("disk full");
+    });
+    const forgotten: string[] = [];
+    setPluginCloudConsentForgetter((pluginId) => forgotten.push(pluginId));
+    expect(forgotten).toEqual(["acme.clouds"]);
+    error.mockRestore();
   });
 });

@@ -52,11 +52,12 @@ export function CloudProviderConsentDialog({
             it, the plugin:
           </p>
           <ul className="list-disc space-y-1.5 pl-5" data-testid="cloud-provider-consent-terms">
-            <li>Receives the credentials you enter, including when you check them</li>
             <li>
-              Chooses the machines Daintree connects to, and vouches for their identity with the
-              host keys and tunnels it supplies
+              {purpose === "review"
+                ? "Receives the credentials saved for its accounts on this device"
+                : "Receives the credentials you enter, including when you check them"}
             </li>
+            <li>Chooses the machines Daintree connects to, and vouches for their identity</li>
             <li>Creates machines that bill your own account</li>
           </ul>
           <p>

@@ -99,6 +99,57 @@ describe("CloudProvidersSection", () => {
     expect(client.allowAccountProvider).toHaveBeenCalledWith("ca_0123456789", "fp-2");
   });
 
+  it("keeps the review open with what went wrong, and lets it be tried again", async () => {
+    client.allowAccountProvider
+      .mockRejectedValueOnce(
+        Object.assign(new Error("changed"), {
+          name: "AppError",
+          code: "PERMISSION",
+          userMessage: "The Acme Droplets plugin changed what its cloud providers ask for or do.",
+        })
+      )
+      .mockResolvedValueOnce(account());
+    cloud.snapshot = {
+      providers: [pluginProvider(false, "fp-2")],
+      accounts: [account({ providerUnavailable: "Paused" })],
+      hosts: [],
+    };
+    render(<CloudProvidersSection />);
+    fireEvent.click(screen.getByRole("button", { name: "Review access for Team droplets" }));
+    fireEvent.click(screen.getByRole("button", { name: "Allow access" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("cloud-provider-consent-dialog").textContent).toContain(
+        "changed what its cloud providers ask for"
+      )
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Allow access" }));
+    await waitFor(() => expect(screen.queryByTestId("cloud-provider-consent-dialog")).toBeNull());
+    expect(client.allowAccountProvider).toHaveBeenCalledTimes(2);
+  });
+
+  it("ends a review once its account is gone", () => {
+    cloud.snapshot = {
+      providers: [pluginProvider(false, "fp-2")],
+      accounts: [account({ providerUnavailable: "Paused" })],
+      hosts: [],
+    };
+    const { rerender } = render(<CloudProvidersSection />);
+    fireEvent.click(screen.getByRole("button", { name: "Review access for Team droplets" }));
+    expect(screen.getByTestId("cloud-provider-consent-dialog")).toBeTruthy();
+    // Removed in another window.
+    cloud.snapshot = { providers: [pluginProvider(false, "fp-2")], accounts: [], hosts: [] };
+    rerender(<CloudProvidersSection />);
+    expect(screen.queryByTestId("cloud-provider-consent-dialog")).toBeNull();
+    // Back again, the review doesn't reopen unasked.
+    cloud.snapshot = {
+      providers: [pluginProvider(false, "fp-2")],
+      accounts: [account({ providerUnavailable: "Paused" })],
+      hosts: [],
+    };
+    rerender(<CloudProvidersSection />);
+    expect(screen.queryByTestId("cloud-provider-consent-dialog")).toBeNull();
+  });
+
   it("offers no review for an account whose plugin is allowed", () => {
     cloud.snapshot = { providers: [PLUGIN], accounts: [account()], hosts: [] };
     render(<CloudProvidersSection />);
