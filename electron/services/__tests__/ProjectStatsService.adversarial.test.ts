@@ -24,7 +24,7 @@ const projectStoreMock = vi.hoisted(() => ({
   getCompletionWatermarks: vi.fn<() => Array<{ id: string; lastCompletionSeenAt?: number | null }>>(
     () => []
   ),
-  getProjectSummaries: vi.fn<() => Array<{ id: string }>>(() => []),
+  getRankedProjectIds: vi.fn<() => string[]>(() => []),
 }));
 const scratchStoreMock = vi.hoisted(() => ({
   getCompletionWatermarks: vi.fn<() => Array<{ id: string; lastCompletionSeenAt?: number | null }>>(
@@ -131,7 +131,7 @@ beforeEach(() => {
   vi.setSystemTime(1_830_001);
   eventEmitter._reset();
   projectStoreMock.getCompletionWatermarks.mockReturnValue([]);
-  projectStoreMock.getProjectSummaries.mockReturnValue([]);
+  projectStoreMock.getRankedProjectIds.mockReturnValue([]);
   scratchStoreMock.getCompletionWatermarks.mockReturnValue([]);
   availabilityMock.isHelpTerminal.mockReset();
   availabilityMock.isHelpTerminal.mockReturnValue(false);
@@ -1295,23 +1295,70 @@ describe("ProjectStatsService scratch workspaces", () => {
   // leaving the field out, as a hydrated row did (#17806).
   it("reads a null watermark as none, for a project and a scratch alike", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getCompletionWatermarks.mockReturnValue([
-      { id: "p1", lastCompletionSeenAt: null },
-    ]);
-    scratchStoreMock.getCompletionWatermarks.mockReturnValue([
-      { id: SCRATCH_ID, lastCompletionSeenAt: null },
-    ]);
+    const stamp = (seen: number | null) => {
+      projectStoreMock.getCompletionWatermarks.mockReturnValue([
+        { id: "p1", lastCompletionSeenAt: seen },
+      ]);
+      scratchStoreMock.getCompletionWatermarks.mockReturnValue([
+        { id: SCRATCH_ID, lastCompletionSeenAt: seen },
+      ]);
+    };
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
       agentTerminal("p1", "completed", { lastStateChange: 2_000 }),
       agentTerminal(SCRATCH_ID, "completed", { lastStateChange: 3_000 }),
     ]);
+    const svc = new ProjectStatsService(ptyClient as never);
 
+    stamp(5_000);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    expect(svc.getAcknowledgeableCompletionAt("p1")).toBeUndefined();
+    expect(svc.getAcknowledgeableCompletionAt(SCRATCH_ID)).toBeUndefined();
+
+    stamp(null);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    expect(svc.getAcknowledgeableCompletionAt("p1")).toBe(2_000);
+    expect(svc.getAcknowledgeableCompletionAt(SCRATCH_ID)).toBe(3_000);
+    svc.stop();
+  });
+
+  // The issue's empty transition, reached through the last workspace being a
+  // scratch: tombstoned, it leaves the projection, and the catalog is empty.
+  it("publishes an empty map when the last scratch goes, and a fresh one when it returns", async () => {
+    const ptyClient = makePtyClient();
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      agentTerminal(SCRATCH_ID, "completed", { lastStateChange: 3_000 }),
+    ]);
+    scratchStoreMock.getCompletionWatermarks.mockReturnValue([
+      { id: SCRATCH_ID, lastCompletionSeenAt: null },
+    ]);
     const svc = new ProjectStatsService(ptyClient as never);
     svc.refresh();
     await vi.runAllTimersAsync();
-
-    expect(svc.getAcknowledgeableCompletionAt("p1")).toBe(2_000);
+    const first = broadcastMock.mock.calls.at(-1)![1];
+    expect(first).toHaveProperty(SCRATCH_ID);
     expect(svc.getAcknowledgeableCompletionAt(SCRATCH_ID)).toBe(3_000);
+
+    scratchStoreMock.getCompletionWatermarks.mockReturnValue([]);
+    const reads = ptyClient.getAllTerminalsWithCompletenessAsync.mock.calls.length;
+    const sent = broadcastMock.mock.calls.length;
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    expect(broadcastMock.mock.calls.length).toBe(sent + 1);
+    expect(broadcastMock.mock.calls.at(-1)![1]).toEqual({});
+    expect(svc.getAcknowledgeableCompletionAt(SCRATCH_ID)).toBeUndefined();
+    expect(svc.getLastBroadcast()).toEqual({});
+    expect(ptyClient.getAllTerminalsWithCompletenessAsync.mock.calls.length).toBe(reads);
+
+    scratchStoreMock.getCompletionWatermarks.mockReturnValue([
+      { id: SCRATCH_ID, lastCompletionSeenAt: null },
+    ]);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    expect(broadcastMock.mock.calls.length).toBe(sent + 2);
+    expect(broadcastMock.mock.calls.at(-1)![1]).toEqual(first);
+    svc.stop();
   });
 
   it("drops a deleted scratch's entry on the next compute", async () => {
@@ -1607,10 +1654,7 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
       { id: "main-checkout" },
     ]);
     scratchStoreMock.getCompletionWatermarks.mockReturnValue([{ id: SCRATCH_ID }]);
-    projectStoreMock.getProjectSummaries.mockReturnValue([
-      { id: "main-checkout" },
-      { id: "legacy-worktree" },
-    ]);
+    projectStoreMock.getRankedProjectIds.mockReturnValue(["main-checkout", "legacy-worktree"]);
     ptyClient.getAllTerminalsAsync.mockResolvedValue([{ id: "owned", projectId: "main-checkout" }]);
 
     const svc = new ProjectStatsService(ptyClient as never);
@@ -1618,7 +1662,7 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
     await vi.runAllTimersAsync();
 
     // With every terminal owned, nothing asks the host and nothing is ranked.
-    expect(projectStoreMock.getProjectSummaries).not.toHaveBeenCalled();
+    expect(projectStoreMock.getRankedProjectIds).not.toHaveBeenCalled();
     expect(ptyClient.getProjectStats).not.toHaveBeenCalled();
 
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
@@ -1630,6 +1674,18 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
     expect(ptyClient.getProjectStats.mock.calls.map(([id]) => id)).toEqual([
       "main-checkout",
       "legacy-worktree",
+      SCRATCH_ID,
+    ]);
+
+    // The rank, not the catalog, sets the order: reversing it reverses the asks.
+    projectStoreMock.getRankedProjectIds.mockReturnValue(["legacy-worktree", "main-checkout"]);
+    ptyClient.getProjectStats.mockClear();
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    expect(ptyClient.getProjectStats.mock.calls.map(([id]) => id)).toEqual([
+      "legacy-worktree",
+      "main-checkout",
       SCRATCH_ID,
     ]);
     svc.stop();

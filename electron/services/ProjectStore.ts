@@ -162,6 +162,27 @@ function rowToRepoStats(row: ProjectRow): ProjectRepoStats | null {
   };
 }
 
+/**
+ * Most used first. Raw scores are snapshots frozen at different lastAccessedAt
+ * dates and must never be compared directly, so both decay to one shared `now`.
+ * Ties keep the input order, which callers presort on the raw score.
+ */
+function byDecayedFrecency(now: number) {
+  return (
+    a: {
+      frecencyScore?: number | null;
+      lastAccessedAt?: number | null;
+      lastOpened?: number | null;
+    },
+    b: { frecencyScore?: number | null; lastAccessedAt?: number | null; lastOpened?: number | null }
+  ): number => {
+    const scoreA = decayFrecencyScore(a.frecencyScore ?? 0, a.lastAccessedAt ?? 0, now);
+    const scoreB = decayFrecencyScore(b.frecencyScore ?? 0, b.lastAccessedAt ?? 0, now);
+    if (scoreA !== scoreB) return scoreB - scoreA;
+    return (b.lastOpened ?? 0) - (a.lastOpened ?? 0);
+  };
+}
+
 function rowToProject(row: ProjectRow): Project {
   const project: Project = {
     id: row.id,
@@ -1568,19 +1589,28 @@ export class ProjectStore {
       );
     }
 
-    // The SQL orderBy pre-sorts on the raw persisted score, but raw scores are
-    // snapshots frozen at different lastAccessedAt dates and must never be
-    // compared directly — decay both to one shared `now` first. One `now` for
-    // the whole list keeps the comparison internally consistent.
     const projects = rows.map(rowToProject);
-    const now = Date.now();
-    projects.sort((a, b) => {
-      const scoreA = decayFrecencyScore(a.frecencyScore ?? 0, a.lastAccessedAt ?? 0, now);
-      const scoreB = decayFrecencyScore(b.frecencyScore ?? 0, b.lastAccessedAt ?? 0, now);
-      if (scoreA !== scoreB) return scoreB - scoreA;
-      return (b.lastOpened ?? 0) - (a.lastOpened ?? 0);
-    });
+    projects.sort(byDecayedFrecency(Date.now()));
     return projects;
+  }
+
+  /**
+   * Every project id in `getAllProjects()` order, read without its status
+   * repair or full rows. The stats poll asks the host about an unowned terminal
+   * in this order, since the first project its cwd matches claims it (#17806).
+   */
+  getRankedProjectIds(): string[] {
+    const rows = getSharedDb()
+      .select({
+        id: projectsTable.id,
+        frecencyScore: projectsTable.frecencyScore,
+        lastAccessedAt: projectsTable.lastAccessedAt,
+        lastOpened: projectsTable.lastOpened,
+      })
+      .from(projectsTable)
+      .orderBy(desc(projectsTable.frecencyScore), desc(projectsTable.lastOpened))
+      .all();
+    return rows.sort(byDecayedFrecency(Date.now())).map((row) => row.id);
   }
 
   async getProjectByPath(projectPath: string): Promise<Project | null> {

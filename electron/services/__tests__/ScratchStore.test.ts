@@ -314,9 +314,14 @@ describe("ScratchStore.markCompletionSeen", () => {
         .run();
     }
     store.markCompletionSeen(scratchId, 5_000);
+    const prepareSpy = vi.spyOn(sqlite, "prepare");
 
     const rows = store.getCompletionWatermarks();
 
+    expect(prepareSpy).toHaveBeenCalledTimes(1);
+    expect(String(prepareSpy.mock.calls[0]![0]).toLowerCase()).not.toContain("order by");
+    prepareSpy.mockRestore();
+    expect(rows).toHaveLength(2);
     expect(Object.fromEntries(rows.map((row) => [row.id, row.lastCompletionSeenAt]))).toEqual({
       [scratchId]: 5_000,
       [unstamped]: null,

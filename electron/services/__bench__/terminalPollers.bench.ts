@@ -27,7 +27,10 @@ const PROJECTS = vi.hoisted(() => Array.from({ length: 10 }, (_, i) => ({ id: `p
 vi.mock("../../ipc/utils.js", () => ({ typedBroadcast: broadcastMock }));
 vi.mock("../events.js", () => ({ events: eventEmitter }));
 vi.mock("../ProjectStore.js", () => ({
-  projectStore: { getCompletionWatermarks: () => PROJECTS, getProjectSummaries: () => PROJECTS },
+  projectStore: {
+    getCompletionWatermarks: () => PROJECTS,
+    getRankedProjectIds: () => PROJECTS.map((p) => p.id),
+  },
 }));
 vi.mock("../ScratchStore.js", () => ({ scratchStore: { getCompletionWatermarks: () => [] } }));
 vi.mock("../AgentAvailabilityStore.js", () => ({

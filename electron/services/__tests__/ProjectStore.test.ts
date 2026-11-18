@@ -678,6 +678,70 @@ describe("ProjectStore.getCompletionWatermarks", () => {
   });
 });
 
+describe("ProjectStore.getRankedProjectIds", () => {
+  const NOW = 1_900_000_000_000;
+  const HALF_LIFE = 4 * 24 * 60 * 60 * 1000;
+  let store: ProjectStore;
+
+  function insert(id: string, frecencyScore: number, lastAccessedAt: number, lastOpened: number) {
+    db.insert(schema.projects)
+      .values({
+        id,
+        path: `/projects/${id.slice(0, 4)}`,
+        name: id.slice(0, 4),
+        emoji: "🌲",
+        lastOpened,
+        status: "background",
+        frecencyScore,
+        lastAccessedAt,
+      })
+      .run();
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    sqlite = new Database(":memory:");
+    sqlite.exec(CREATE_TABLES_SQL);
+    db = drizzle(sqlite, { schema });
+    store = new ProjectStore();
+  });
+
+  afterEach(() => {
+    sqlite.close();
+    vi.useRealTimers();
+  });
+
+  it("ranks exactly as getAllProjects, down to a decayed tie broken by the raw score", () => {
+    const main = "a".repeat(64);
+    const legacy = "b".repeat(64);
+    const busiest = "e".repeat(64);
+    const stale = "f".repeat(64);
+    // Inserted before the legacy row, so row order alone would put it first.
+    // Both decay to exactly 1 with the same lastOpened, which only the raw
+    // score's presort can break, and it puts the legacy row first.
+    insert(main, 1, NOW, NOW - 10);
+    insert(legacy, 2, NOW - HALF_LIFE, NOW - 10);
+    insert(stale, 50, NOW - 40 * HALF_LIFE, NOW);
+    insert(busiest, 4, NOW, NOW - 20);
+
+    const ranked = store.getRankedProjectIds();
+
+    expect(ranked).toEqual([busiest, legacy, main, stale]);
+    expect(ranked).toEqual(store.getAllProjects().map((project) => project.id));
+  });
+
+  it("repairs no status on the way", () => {
+    insert("c".repeat(64), 1, NOW, NOW);
+    const updateSpy = vi.spyOn(db, "update");
+
+    store.getRankedProjectIds();
+
+    expect(updateSpy).not.toHaveBeenCalled();
+    updateSpy.mockRestore();
+  });
+});
+
 describe("ProjectStore disk pressure suppression", () => {
   let store: ProjectStore;
   let alphaDir: string;

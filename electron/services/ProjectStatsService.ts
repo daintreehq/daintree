@@ -320,7 +320,7 @@ export class ProjectStatsService {
     // linked worktree matches both its main checkout's project and a legacy one
     // registered at the worktree. Asking the most used first leaves the claim
     // where it went when this poll read the ranked list (#17806).
-    const rank = new Map(projectStore.getProjectSummaries().map((p, i) => [p.id, i]));
+    const rank = new Map(projectStore.getRankedProjectIds().map((id, i) => [id, i]));
     const ordered = [...projectIds].sort(
       (a, b) => (rank.get(a) ?? rank.size) - (rank.get(b) ?? rank.size)
     );
