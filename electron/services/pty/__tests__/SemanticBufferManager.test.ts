@@ -19,6 +19,79 @@ function createTerminalInfo(overrides: Partial<TerminalInfo> = {}): TerminalInfo
   } as TerminalInfo;
 }
 
+const MARKER = "... [truncated]";
+const CAPPED_LENGTH = 1000;
+
+// The full-split implementation this manager replaced, kept as the behavioural oracle.
+class SplitReference {
+  buffer: string[];
+  private pending = "";
+  private lastChunkEndedWithNewline = false;
+
+  constructor(seed: string[]) {
+    this.buffer = [...seed];
+  }
+
+  onData(data: string): void {
+    this.pending += data;
+    if (this.pending.length > 64 * 1024) this.pending = this.pending.slice(-64 * 1024);
+  }
+
+  flush(): void {
+    if (!this.pending) return;
+    const chunk = this.pending;
+    this.pending = "";
+    const capLine = (line: string) =>
+      line.length > CAPPED_LENGTH ? line.substring(0, CAPPED_LENGTH) + MARKER : line;
+    const normalized = chunk.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    const lines = normalized.split("\n");
+    const lastIndex = this.buffer.length - 1;
+    const last = this.buffer[lastIndex];
+    const continuesLastLine =
+      lastIndex >= 0 &&
+      !normalized.startsWith("\n") &&
+      !(this.lastChunkEndedWithNewline && last !== "");
+    this.lastChunkEndedWithNewline = normalized.endsWith("\n");
+    if (continuesLastLine) {
+      const truncated = last.length === CAPPED_LENGTH + MARKER.length && last.endsWith(MARKER);
+      if (!truncated) this.buffer[lastIndex] = capLine(last + lines[0]);
+      lines.shift();
+    }
+    const processed = lines
+      .filter((line) => line.length > 0 || this.buffer.length > 0)
+      .map(capLine);
+    this.buffer.push(...processed.slice(-50));
+    if (this.buffer.length > 50) this.buffer = this.buffer.slice(-50);
+  }
+}
+
+function mulberry32(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function assertMatchesReference(seed: string[], batches: string[][]): void {
+  const info = createTerminalInfo({ semanticBuffer: [...seed] });
+  const manager = new SemanticBufferManager(info);
+  const reference = new SplitReference(seed);
+  batches.forEach((batch, index) => {
+    for (const data of batch) {
+      manager.onData(data);
+      reference.onData(data);
+    }
+    manager.flush();
+    reference.flush();
+    expect(info.semanticBuffer, `after batch ${index}`).toEqual(reference.buffer);
+  });
+  manager.dispose();
+}
+
 describe("SemanticBufferManager", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -225,6 +298,112 @@ describe("SemanticBufferManager", () => {
     expect(info.semanticBuffer.length).toBeLessThanOrEqual(50);
 
     manager.dispose();
+  });
+
+  it("keeps the last lines of a newline-heavy 64-KiB burst into an existing buffer", () => {
+    const info = createTerminalInfo({ semanticBuffer: ["earlier"] });
+    const manager = new SemanticBufferManager(info);
+
+    manager.onData("\n" + "x\n".repeat(32 * 1024 - 1));
+    manager.flush();
+
+    expect(info.semanticBuffer).toEqual([...Array<string>(49).fill("x"), ""]);
+
+    manager.dispose();
+  });
+
+  it("finds the start of a long line that follows a newline-dense run", () => {
+    const info = createTerminalInfo({ semanticBuffer: ["earlier"] });
+    const manager = new SemanticBufferManager(info);
+
+    manager.onData("\n" + "a\r\n".repeat(9000) + "b".repeat(20_000) + "\r\nlast");
+    manager.flush();
+
+    expect(info.semanticBuffer.slice(-3)).toEqual(["a", "b".repeat(1000) + MARKER, "last"]);
+    expect(info.semanticBuffer).toHaveLength(50);
+
+    manager.dispose();
+  });
+
+  it("keeps CRLF pairs within a flush but not across flushes", () => {
+    const flushed = createTerminalInfo();
+    const separate = new SemanticBufferManager(flushed);
+    for (const data of ["p", "q\r\n"]) {
+      separate.onData(data);
+      separate.flush();
+    }
+    expect(flushed.semanticBuffer).toEqual(["pq", ""]);
+    for (const data of ["r\r", "\ns"]) {
+      separate.onData(data);
+      separate.flush();
+    }
+    expect(flushed.semanticBuffer).toEqual(["pq", "r", "", "", "s"]);
+
+    const coalesced = createTerminalInfo();
+    const together = new SemanticBufferManager(coalesced);
+    together.onData("p");
+    together.flush();
+    together.onData("q\r\n");
+    together.flush();
+    together.onData("r\r");
+    together.onData("\ns");
+    together.flush();
+    expect(coalesced.semanticBuffer).toEqual(["pq", "r", "s"]);
+
+    separate.dispose();
+    together.dispose();
+  });
+
+  it("matches the full-split algorithm across randomized flush sequences", () => {
+    const random = mulberry32(17792);
+    const pick = <T>(items: T[]): T => items[Math.floor(random() * items.length)];
+    const between = (min: number, max: number) => min + Math.floor(random() * (max - min + 1));
+    const pieces: Array<() => string> = [
+      () => "a",
+      () => "cmd",
+      () => "\r",
+      () => "\n",
+      () => "\r\n",
+      () => "\n\n",
+      () => "\r\r\n",
+      () => "$ ls",
+      () => MARKER,
+      () => "x".repeat(between(240, 270)),
+      () => "y".repeat(between(990, 1010)),
+      () => "z".repeat(between(1, 6000)),
+      () => "\n".repeat(between(1, 120)),
+      () => "w\r\n".repeat(between(1, 80)),
+      () => "v\n".repeat(between(40, 60)),
+    ];
+    const seeds: Array<() => string[]> = [
+      () => [],
+      () => ["prompt$ "],
+      () => ["done", ""],
+      () => ["q".repeat(CAPPED_LENGTH) + MARKER],
+      () => ["short" + MARKER],
+      () => Array.from({ length: 60 }, (_, i) => `seed${i}`),
+    ];
+
+    for (let sequence = 0; sequence < 300; sequence++) {
+      const batches = Array.from({ length: between(1, 8) }, () =>
+        Array.from({ length: between(1, 3) }, () =>
+          Array.from({ length: between(1, 10) }, () => pick(pieces)()).join("")
+        )
+      );
+      assertMatchesReference(pick(seeds)(), batches);
+    }
+  });
+
+  it("matches the full-split algorithm on oversized and long-line batches", () => {
+    assertMatchesReference(
+      ["earlier"],
+      [["x\n".repeat(40_000)], ["z".repeat(70_000)], ["\r\n" + "y".repeat(65_000) + "\r\n"]]
+    );
+    assertMatchesReference([], [["\n".repeat(30_000) + "only\n" + "\n".repeat(30_000)]]);
+    assertMatchesReference(
+      [],
+      [["a".repeat(300) + "\r\n" + "b".repeat(1500) + "\r" + "c".repeat(513) + "\n"]]
+    );
   });
 
   it("getLastCommand() strips shell prompt prefixes", () => {
