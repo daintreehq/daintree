@@ -1,12 +1,25 @@
-import { afterEach, describe, expect, it } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  __resetShellEnvironmentObservationForTests,
+  recordShellEnvironment,
+} from "../../../setup/shellEnvironmentObservation.js";
 import {
   clearClaudeUsageObservations,
   observeClaudeUsage,
   readClaudeUsageObservations,
   readClaudeUsageRecords,
   recordClaudeUsageObservation,
+  restoreClaudeUsageObservations,
   type ClaudeUsageRecord,
 } from "../ClaudeUsageObservations.js";
+import {
+  UNDATED_CLAUDE_USAGE_TTL_MS,
+  parseClaudeUsageDocument,
+  serializeClaudeUsageDocument,
+  type SavedClaudeUsageReading,
+} from "../claudeUsageDocument.js";
 
 const reading = (overrides: Partial<ClaudeUsageRecord>): ClaudeUsageRecord => ({
   terminalId: "t1",
@@ -208,5 +221,267 @@ describe("ClaudeUsageObservations", () => {
     readClaudeUsageObservations()[0]!.usedPercent = 1;
     expect(readClaudeUsageRecords()[0]!.usedPercent).toBe(80);
     expect(readClaudeUsageObservations()[0]!.usedPercent).toBe(80);
+  });
+});
+
+describe("ClaudeUsageObservations across launches (#17610)", () => {
+  const HOUR = 60 * 60 * 1000;
+  const WORK = path.resolve(os.tmpdir(), "daintree-17610", "work");
+  const PROFILE = path.resolve(os.tmpdir(), "daintree-17610", "profile");
+  const asIs = async (dir: string) => dir;
+
+  function memoryStorage(initial: string | null = null) {
+    const storage = {
+      value: initial,
+      writes: 0,
+      read: (): string | null => storage.value,
+      write: (value: string) => {
+        storage.value = value;
+        storage.writes++;
+      },
+    };
+    return storage;
+  }
+
+  const savedReading = (overrides: Partial<SavedClaudeUsageReading>): SavedClaudeUsageReading => ({
+    window: "weekly limit",
+    statement: "reached",
+    usedPercent: null,
+    resetsAt: Date.now() + HOUR,
+    terminalId: "earlier",
+    observedAt: Date.now() - HOUR,
+    identity: WORK,
+    ...overrides,
+  });
+
+  const savedPlaces = (value: string | null) =>
+    parseClaudeUsageDocument(value, Date.now()).map((saved) => [saved.terminalId, saved.identity]);
+
+  // Long enough for a queued save to read the probe and write.
+  const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+  afterEach(() => {
+    clearClaudeUsageObservations();
+    __resetShellEnvironmentObservationForTests();
+  });
+
+  it("saves each new reading under the folder this launch places it, in one write per burst", async () => {
+    const storage = memoryStorage();
+    restoreClaudeUsageObservations(storage, {
+      readShellObservation: () => ({ shell: "/bin/zsh", env: { CLAUDE_CONFIG_DIR: PROFILE } }),
+      canonicalKey: asIs,
+    });
+    const now = Date.now();
+    const at = { resetsAt: now + HOUR, observedAt: now - 1_000 };
+
+    recordClaudeUsageObservation(
+      reading({ ...at, terminalId: "zsh-work", configDir: WORK, shell: "/bin/zsh" })
+    );
+    recordClaudeUsageObservation(
+      reading({ ...at, terminalId: "zsh-profile", configDir: PROFILE, window: "5-hour limit" })
+    );
+    recordClaudeUsageObservation(
+      reading({
+        ...at,
+        terminalId: "bash-work",
+        configDir: WORK,
+        shell: "/bin/bash",
+        window: "5-hour limit",
+      })
+    );
+    await settle();
+
+    expect(storage.writes).toBe(1);
+    // The zsh pane may have been moved by the profile; the bash one never ran it.
+    expect(savedPlaces(storage.value)).toEqual([
+      ["zsh-work", null],
+      ["zsh-profile", PROFILE],
+      ["bash-work", WORK],
+    ]);
+  });
+
+  it("brings back an earlier launch's readings under the folder it settled on, minus the reset ones", () => {
+    const storage = memoryStorage(
+      serializeClaudeUsageDocument([
+        savedReading({ terminalId: "work" }),
+        savedReading({ terminalId: "unknown", window: "5-hour limit", identity: null }),
+        savedReading({ terminalId: "reset", window: "Opus limit", resetsAt: Date.now() - 1 }),
+      ])
+    );
+
+    restoreClaudeUsageObservations(storage, { canonicalKey: asIs });
+
+    expect(
+      readClaudeUsageRecords().map((record) => [
+        record.terminalId,
+        record.savedIdentity,
+        record.configDir,
+        record.shell,
+      ])
+    ).toEqual([
+      ["work", WORK, WORK, null],
+      ["unknown", null, null, null],
+    ]);
+    // Nothing of this launch's own to save yet.
+    expect(storage.writes).toBe(0);
+  });
+
+  it("keeps each launch's verdict: a later probe moves only this launch's readings", async () => {
+    const now = Date.now();
+    const storage = memoryStorage(
+      serializeClaudeUsageDocument([
+        savedReading({ terminalId: "earlier", observedAt: now - HOUR }),
+      ])
+    );
+    restoreClaudeUsageObservations(storage, { canonicalKey: asIs });
+
+    // Before the probe answers, a pane's launch folder stands.
+    recordClaudeUsageObservation(
+      reading({
+        terminalId: "newer",
+        configDir: WORK,
+        shell: "/bin/zsh",
+        observedAt: now - 1_000,
+        resetsAt: now + HOUR,
+      })
+    );
+    await settle();
+    expect(savedPlaces(storage.value)).toEqual([["newer", WORK]]);
+
+    // The profile exports another folder, so the zsh pane may not have been on WORK.
+    recordShellEnvironment("/bin/zsh", { CLAUDE_CONFIG_DIR: PROFILE });
+    await settle();
+    expect(storage.writes).toBe(2);
+    expect(savedPlaces(storage.value)).toEqual([
+      ["earlier", WORK],
+      ["newer", null],
+    ]);
+
+    // The next launch's profile exports nothing: neither reading moves.
+    clearClaudeUsageObservations();
+    __resetShellEnvironmentObservationForTests();
+    restoreClaudeUsageObservations(storage, { canonicalKey: asIs });
+
+    expect(
+      readClaudeUsageRecords().map((record) => [record.terminalId, record.savedIdentity])
+    ).toEqual([
+      ["earlier", WORK],
+      ["newer", null],
+    ]);
+    expect(readClaudeUsageObservations()).toEqual([
+      {
+        window: "weekly limit",
+        statement: "used",
+        usedPercent: 80,
+        resetsAt: now + HOUR,
+        terminalId: "newer",
+        observedAt: now - 1_000,
+      },
+    ]);
+  });
+
+  it("never lets a sighting it can't place replace a saved one it could", () => {
+    const now = Date.now();
+    restoreClaudeUsageObservations(
+      memoryStorage(serializeClaudeUsageDocument([savedReading({ observedAt: now - HOUR })])),
+      { canonicalKey: asIs }
+    );
+
+    recordClaudeUsageObservation(
+      reading({ terminalId: "unplaced", configDir: null, observedAt: now, resetsAt: now + HOUR })
+    );
+
+    expect(readClaudeUsageRecords().map((record) => record.terminalId)).toEqual([
+      "earlier",
+      "unplaced",
+    ]);
+  });
+
+  it("saves readings that showed before the store opened", async () => {
+    const now = Date.now();
+    recordClaudeUsageObservation(
+      reading({ terminalId: "early", configDir: WORK, observedAt: now, resetsAt: now + HOUR })
+    );
+    const storage = memoryStorage();
+
+    restoreClaudeUsageObservations(storage, { canonicalKey: asIs });
+    await settle();
+
+    expect(savedPlaces(storage.value)).toEqual([["early", WORK]]);
+  });
+
+  it("leaves out of the save a reading whose reset has passed, and keeps answering with it", async () => {
+    const now = Date.now();
+    const storage = memoryStorage();
+    restoreClaudeUsageObservations(storage, { canonicalKey: asIs });
+
+    recordClaudeUsageObservation(
+      reading({ terminalId: "spent", configDir: WORK, observedAt: now - HOUR, resetsAt: now - 1 })
+    );
+    await settle();
+
+    expect(storage.writes).toBe(1);
+    expect(savedPlaces(storage.value)).toEqual([]);
+    expect(readClaudeUsageRecords().map((record) => record.terminalId)).toEqual(["spent"]);
+  });
+
+  it("never writes over saved readings it couldn't read", async () => {
+    const storage = memoryStorage();
+    storage.read = () => {
+      throw new Error("database locked");
+    };
+    restoreClaudeUsageObservations(storage, { canonicalKey: asIs });
+
+    recordClaudeUsageObservation(reading({ observedAt: Date.now(), resetsAt: Date.now() + HOUR }));
+    await settle();
+
+    expect(storage.writes).toBe(0);
+    expect(readClaudeUsageRecords()).toHaveLength(1);
+  });
+
+  it("stops saving once cleared, even with a save under way", async () => {
+    let finish: ((dir: string) => void) | undefined;
+    const storage = memoryStorage();
+    restoreClaudeUsageObservations(storage, {
+      readShellObservation: () => ({ shell: "/bin/zsh", env: { CLAUDE_CONFIG_DIR: PROFILE } }),
+      canonicalKey: () => new Promise<string>((resolve) => (finish = resolve)),
+    });
+    recordClaudeUsageObservation(reading({ observedAt: Date.now(), resetsAt: Date.now() + HOUR }));
+    await vi.waitFor(() => expect(finish).toBeDefined());
+
+    clearClaudeUsageObservations();
+    finish!(PROFILE);
+    await settle();
+
+    expect(storage.writes).toBe(0);
+  });
+
+  it("stops answering with a reading that named no reset a week after it showed", () => {
+    const now = Date.now();
+    recordClaudeUsageObservation(
+      reading({
+        terminalId: "dated",
+        configDir: WORK,
+        resetsAt: now - HOUR,
+        observedAt: now - UNDATED_CLAUDE_USAGE_TTL_MS - 2 * HOUR,
+      })
+    );
+    recordClaudeUsageObservation(
+      reading({
+        terminalId: "stale",
+        resetsAt: null,
+        observedAt: now - UNDATED_CLAUDE_USAGE_TTL_MS - HOUR,
+      })
+    );
+    recordClaudeUsageObservation(
+      reading({ terminalId: "fresh", window: "5-hour limit", resetsAt: null, observedAt: now })
+    );
+
+    expect(readClaudeUsageRecords().map((record) => record.terminalId)).toEqual(["dated", "fresh"]);
+    // A stale one no longer hides an older reading that named its reset.
+    expect(readClaudeUsageObservations().map((observation) => observation.terminalId)).toEqual([
+      "fresh",
+      "dated",
+    ]);
   });
 });

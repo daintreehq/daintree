@@ -22,6 +22,10 @@ const legacyAuditImport = vi.hoisted(() => ({
   shouldThrow: false,
   calls: [] as { migrationRuns: number; tasksRegistered: number }[],
 }));
+const claudeUsageRestore = vi.hoisted(() => ({
+  storage: { read: () => null, write: () => {} },
+  calls: [] as { storage: unknown; migrationRuns: number; tasksRegistered: number }[],
+}));
 let mockLogRetentionDays: number | undefined = 30;
 const { pruneOldLogs, pruneOldLogsAsync, pruneHeapSnapshots, pruneHeapSnapshotsAsync } = vi.hoisted(
   () => ({
@@ -111,6 +115,21 @@ vi.mock("../../services/persistence/legacyAuditRingImport.js", () => ({
     });
     if (legacyAuditImport.shouldThrow) throw new Error("test-import-failure");
   }),
+}));
+
+vi.mock("../../services/claude/ClaudeUsageObservations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../services/claude/ClaudeUsageObservations.js")>()),
+  restoreClaudeUsageObservations: vi.fn((storage: unknown) => {
+    claudeUsageRestore.calls.push({
+      storage,
+      migrationRuns: migrationRunCalls.count,
+      tasksRegistered: registeredTaskNames.length,
+    });
+  }),
+}));
+
+vi.mock("../../services/persistence/claudeUsageStore.js", () => ({
+  appStateClaudeUsageStorage: claudeUsageRestore.storage,
 }));
 
 vi.mock("../../utils/logger.js", () => ({
@@ -900,6 +919,7 @@ describe("initGlobalServices task ordering", () => {
     legacyAuditImport.hasSources = false;
     legacyAuditImport.shouldThrow = false;
     legacyAuditImport.calls.length = 0;
+    claudeUsageRestore.calls.length = 0;
     mockLogRetentionDays = 30;
     setGlobalServicesInitialized(false);
     _resetGlobalServiceStartsForTest();
@@ -2003,6 +2023,28 @@ describe("initGlobalServices task ordering", () => {
     expect(result).toBe("ok");
     expect(legacyAuditImport.calls).toHaveLength(1);
     expect(registeredTaskNames.length).toBeGreaterThan(0);
+  });
+
+  it("restores the saved Claude usage readings after the migrations and before any deferred task (#17610)", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    migrationCurrentVersion = 0;
+
+    const result = await initGlobalServices(fakeRegistry);
+
+    expect(result).toBe("ok");
+    expect(claudeUsageRestore.calls).toEqual([
+      { storage: claudeUsageRestore.storage, migrationRuns: 1, tasksRegistered: 0 },
+    ]);
+    expect(registeredTaskNames.length).toBeGreaterThan(0);
+  });
+
+  it("restores no Claude usage readings when the migrations fail", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    migrationCurrentVersion = 0;
+    migrationShouldThrow = true;
+
+    expect(await initGlobalServices(fakeRegistry)).toBe("exit-requested");
+    expect(claudeUsageRestore.calls).toEqual([]);
   });
 
   it("does not import legacy audit rings when the migrations fail", async () => {
