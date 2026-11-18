@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
+  compareProjectNames,
+  compareProjectStrict,
   compareProjectsByMode,
   isOtherProjectsSortMode,
   OTHER_PROJECTS_SORT_MODES,
@@ -122,5 +124,50 @@ describe("isOtherProjectsSortMode", () => {
     ]) {
       expect(isOtherProjectsSortMode(value)).toBe(false);
     }
+  });
+});
+
+describe("shared collator comparators", () => {
+  const sign = (n: number) => (n > 0 ? 1 : n < 0 ? -1 : 0);
+  const samples = [
+    "Alpha",
+    "alpha",
+    "Álpha",
+    "alpha-2",
+    "module-10.ts",
+    "module-2.ts",
+    "Zulu",
+    "",
+    "ß",
+    "ss",
+  ];
+
+  it("orders names exactly like localeCompare with base sensitivity", () => {
+    for (const a of samples) {
+      for (const b of samples) {
+        expect(sign(compareProjectNames(a, b))).toBe(
+          sign(a.localeCompare(b, undefined, { sensitivity: "base" }))
+        );
+      }
+    }
+  });
+
+  it("treats names differing only in case or accents as equal, so the id decides", () => {
+    expect(compareProjectNames("alpha", "ALPHA")).toBe(0);
+    expect(compareProjectNames("Álpha", "alpha")).toBe(0);
+    const projects: SortableProject[] = [
+      { id: "b", name: "alpha", lastOpened: 1, frecencyScore: 1 },
+      { id: "a", name: "ALPHA", lastOpened: 1, frecencyScore: 1 },
+    ];
+    expect(order(projects, "alphabetical")).toEqual(["ALPHA", "alpha"]);
+  });
+
+  it("orders strictly like default localeCompare, still separating case and accents", () => {
+    for (const a of samples) {
+      for (const b of samples) {
+        expect(sign(compareProjectStrict(a, b))).toBe(sign(a.localeCompare(b)));
+      }
+    }
+    expect(compareProjectStrict("alpha", "ALPHA")).not.toBe(0);
   });
 });
