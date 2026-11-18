@@ -1537,6 +1537,165 @@ describe("ScheduledRunScheduler", () => {
     expect(origins()).toEqual([expect.objectContaining({ trigger: "catch-up", dueAt: at(9) })]);
   });
 
+  describe("a project whose schedule read stalls (#17802)", () => {
+    let calls: number;
+    let outstanding: number;
+    let mostOutstanding: number;
+    let release: (snapshot?: SchedulesSnapshot) => void;
+
+    /** project-2's reads hang until released, with what the store holds then unless told otherwise. */
+    function stallingDeps(): ScheduledRunSchedulerDeps {
+      const base = deps();
+      calls = 0;
+      outstanding = 0;
+      mostOutstanding = 0;
+      const waiting: Array<() => void> = [];
+      let releasedWith: SchedulesSnapshot | undefined;
+      let released = false;
+      release = (snapshot) => {
+        released = true;
+        releasedWith = snapshot;
+        for (const resolve of waiting.splice(0)) resolve();
+      };
+      return {
+        ...base,
+        listSchedules: async (projectId) => {
+          if (projectId !== "project-2") return base.listSchedules(projectId);
+          calls += 1;
+          outstanding += 1;
+          mostOutstanding = Math.max(mostOutstanding, outstanding);
+          try {
+            if (!released) await new Promise<void>((resolve) => waiting.push(resolve));
+            return releasedWith ?? (await base.listSchedules(projectId));
+          } finally {
+            outstanding -= 1;
+          }
+        },
+      };
+    }
+
+    /** Time passing without waiting for a pass to finish, which a stalled read could hold up. */
+    async function advance(ms: number): Promise<void> {
+      await vi.advanceTimersByTimeAsync(ms);
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+    }
+
+    /** The minutes from `first` through `last` past 09:00, as launch times. */
+    function minutes(first: number, last: number): number[] {
+      return Array.from({ length: last - first + 1 }, (_, i) => at(9, first + i));
+    }
+
+    it("keeps one read outstanding across retry windows, fires a healthy project on time, and refreshes once on recovery", async () => {
+      setClock(at(9, 54, 40));
+      projects.add("project-2");
+      commit("project-1", [schedule({ cron: "* * * * *", updatedAt: at(9, 54) })]);
+      commit("project-2", [
+        schedule({ id: "schedule-2", projectId: "project-2", updatedAt: at(9, 50) }),
+      ]);
+      scheduler = new ScheduledRunScheduler(stallingDeps());
+      void scheduler.start();
+      await advance(READ_TIMEOUT_MS);
+      expect(launches).toEqual([]);
+
+      // Every minute from 09:56 is a retry pass for project-2; project-1 waits on none of them.
+      await advance(5 * MINUTE + 10_000);
+      expect(launchedAt).toEqual(minutes(55, 60));
+      expect(calls).toBe(1);
+      expect(mostOutstanding).toBe(1);
+
+      // Within a minute of schedule-2's 10:00, which came while its project was unread.
+      await advance(20_000);
+      release();
+      await settle();
+      expect(
+        launches
+          .filter((launch) => launch.scheduleId === "schedule-2")
+          .map((launch) => launch.origin)
+      ).toEqual([
+        expect.objectContaining({
+          trigger: "catch-up",
+          dueAt: at(10),
+          coalesced: { after: at(9, 50), through: at(10, 0, 20) },
+        }),
+      ]);
+      await elapse(5 * MINUTE);
+      expect(calls).toBe(1);
+      expect(outstanding).toBe(0);
+    });
+
+    it("never waits on a retry that stalls after a read that failed", async () => {
+      setClock(at(9, 54, 40));
+      projects.add("project-2");
+      commit("project-1", [schedule({ cron: "* * * * *", updatedAt: at(9, 54) })]);
+      const stalling = stallingDeps();
+      let refusals = 1;
+      scheduler = new ScheduledRunScheduler({
+        ...stalling,
+        listSchedules: (projectId) =>
+          projectId === "project-2" && refusals-- > 0
+            ? Promise.reject(new Error("EMFILE"))
+            : stalling.listSchedules(projectId),
+      });
+      await scheduler.start();
+      await scheduler.idle();
+
+      await advance(3 * MINUTE + 20_000);
+      expect(launchedAt).toEqual(minutes(55, 58));
+      expect(calls).toBe(1);
+    });
+
+    it("ends the first read's wait at dispose, leaving no timer while the read stalls", async () => {
+      projects.add("project-2");
+      scheduler = new ScheduledRunScheduler(stallingDeps());
+      const starting = scheduler.start();
+      await settle();
+
+      await scheduler.dispose();
+      await starting;
+      expect(vi.getTimerCount()).toBe(0);
+      expect(outstanding).toBe(1);
+    });
+
+    it("keeps a change over a stalled read that lands after it", async () => {
+      setClock(at(8, 59));
+      projects.add("project-2");
+      const original = schedule({ id: "schedule-2", projectId: "project-2", updatedAt: at(8) });
+      commit("project-2", [original]);
+      const stale = snapshots.get("project-2")!;
+      scheduler = new ScheduledRunScheduler(stallingDeps());
+      void scheduler.start();
+      await advance(READ_TIMEOUT_MS);
+
+      commit("project-2", [{ ...original, enabled: false, updatedAt: at(8, 59, 10) }]);
+      release(stale);
+      await settle();
+      await elapse(2 * MINUTE);
+
+      expect(launches).toEqual([]);
+      expect(calls).toBe(1);
+    });
+
+    it("changes nothing when a stalled read lands after dispose", async () => {
+      setClock(at(8, 59));
+      projects.add("project-2");
+      const original = schedule({ id: "schedule-2", projectId: "project-2", updatedAt: at(8) });
+      scheduler = new ScheduledRunScheduler(stallingDeps());
+      void scheduler.start();
+      await advance(READ_TIMEOUT_MS);
+      commit("project-2", [original]);
+      await scheduler.idle();
+
+      await scheduler.dispose();
+      commit("project-2", [{ ...original, enabled: false, updatedAt: at(8, 59, 20) }]);
+      release();
+      await settle();
+      await vi.advanceTimersByTimeAsync(2 * MINUTE);
+
+      expect(cancelled).toEqual([]);
+      expect(launches).toEqual([]);
+    });
+  });
+
   it("looks again at once when an OS job reaches a running Daintree", async () => {
     commit("project-1", [schedule({ updatedAt: at(8) })]);
     await start();
