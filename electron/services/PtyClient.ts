@@ -2990,8 +2990,7 @@ export class PtyClient extends EventEmitter {
     // a host that hasn't announced ready can answer before its terminals are
     // replayed, so its answer can't vouch for a complete search.
     const allLive = targets.every(
-      ([shard]) =>
-        !shard.retired && shard.lifecycle.isInitialized && shard.lifecycle.child !== null
+      ([shard]) => !shard.retired && shard.lifecycle.isInitialized && shard.lifecycle.child !== null
     );
     const results = await Promise.all(
       targets.map(([shard, ids]) =>

@@ -384,35 +384,32 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
   // One output search for `trimmed` over `terminalIds`, applied only while
   // `issueId` is still the latest request. The debounced effect and Retry
   // share it so both obey the same stale-response guard.
-  const runOutputSearch = useCallback(
-    (trimmed: string, terminalIds: string[], issueId: number) => {
-      window.electron.terminal
-        .searchSemanticBuffers(
-          trimmed,
-          false,
-          // Past the cap the host scans everything; rows still read only their own ids.
-          terminalIds.length > SEMANTIC_SEARCH_TERMINAL_IDS_MAX ? undefined : terminalIds
-        )
-        .then((raw) => {
-          if (currentRequestRef.current !== issueId) return;
-          const result = readOutputSearchResult(raw);
-          // An unscoped reply (past the cap) also carries panes outside the picker.
-          const inScope = new Set(terminalIds);
-          const next = new Map<string, SemanticSearchMatch>();
-          for (const m of result.matches) if (inScope.has(m.terminalId)) next.set(m.terminalId, m);
-          setSnippetMap(next);
-          setSnippetQuery(trimmed);
-          setSettledOutputSearch({ query: trimmed, complete: result.complete });
-        })
-        .catch(() => {
-          if (currentRequestRef.current !== issueId) return;
-          // Keep what an earlier answer for this query already found; a previous
-          // query's hits are hidden by the `snippetQuery` freshness check anyway.
-          setSettledOutputSearch({ query: trimmed, complete: false });
-        });
-    },
-    []
-  );
+  const runOutputSearch = useCallback((trimmed: string, terminalIds: string[], issueId: number) => {
+    window.electron.terminal
+      .searchSemanticBuffers(
+        trimmed,
+        false,
+        // Past the cap the host scans everything; rows still read only their own ids.
+        terminalIds.length > SEMANTIC_SEARCH_TERMINAL_IDS_MAX ? undefined : terminalIds
+      )
+      .then((raw) => {
+        if (currentRequestRef.current !== issueId) return;
+        const result = readOutputSearchResult(raw);
+        // An unscoped reply (past the cap) also carries panes outside the picker.
+        const inScope = new Set(terminalIds);
+        const next = new Map<string, SemanticSearchMatch>();
+        for (const m of result.matches) if (inScope.has(m.terminalId)) next.set(m.terminalId, m);
+        setSnippetMap(next);
+        setSnippetQuery(trimmed);
+        setSettledOutputSearch({ query: trimmed, complete: result.complete });
+      })
+      .catch(() => {
+        if (currentRequestRef.current !== issueId) return;
+        // Keep what an earlier answer for this query already found; a previous
+        // query's hits are hidden by the `snippetQuery` freshness check anyway.
+        setSettledOutputSearch({ query: trimmed, complete: false });
+      });
+  }, []);
 
   // Debounced semantic-buffer search with stale-response guarding via the
   // module-scope monotonic counter. Each request bumps `nextSearchRequestId`
