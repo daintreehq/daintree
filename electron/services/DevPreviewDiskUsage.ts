@@ -83,15 +83,33 @@ export async function statDirMeta(cwd: string, relPath: string): Promise<DevPrev
   }
 }
 
-export async function computeDirSize(dirPath: string): Promise<number | null> {
+// A Windows scan that couldn't finish gets one more pass: a dev server replacing
+// its output mid-scan usually leaves the second pass clean. Never sleeps.
+const WALK_ATTEMPTS = 2;
+
+/**
+ * The bytes under `dirPath`, or null when the figure couldn't be completed
+ * (not a directory, an unreadable or vanished entry, a failed `du`). A partial
+ * sum is never returned: the confirmation preview presents every number as a
+ * measured size, so an undercount, or a zero for an unreadable directory,
+ * would be taken as fact. `platform` exists so tests reach the Windows walk.
+ */
+export async function computeDirSize(
+  dirPath: string,
+  platform: NodeJS.Platform = process.platform
+): Promise<number | null> {
   try {
     const stat = await fsPromises.stat(dirPath);
     if (!stat.isDirectory()) return null;
   } catch {
     return null;
   }
-  if (process.platform === "win32") {
-    return computeDirSizeWalk(dirPath);
+  if (platform === "win32") {
+    for (let attempt = 0; attempt < WALK_ATTEMPTS; attempt++) {
+      const bytes = await computeDirSizeWalk(dirPath);
+      if (bytes !== null) return bytes;
+    }
+    return null;
   }
   return computeDirSizeDu(dirPath);
 }
@@ -117,7 +135,9 @@ async function computeDirSizeDu(dirPath: string): Promise<number | null> {
 // accumulating file sizes via lstat. Tracks an inode set to dedupe
 // hardlinks where the FS reports a stable inode (NTFS returns 0/unstable
 // values in some cases — those entries simply count each time, accepting a
-// small over-report on edge filesystems).
+// small over-report on edge filesystems). Any directory that can't be opened
+// or entry that can't be read — vanished mid-walk included, as with `du` —
+// abandons the scan with null rather than skipping it.
 async function computeDirSizeWalk(dirPath: string): Promise<number | null> {
   try {
     let total = 0;
@@ -125,26 +145,17 @@ async function computeDirSizeWalk(dirPath: string): Promise<number | null> {
     const stack: string[] = [dirPath];
     while (stack.length > 0) {
       const cur = stack.pop()!;
-      let handle: Awaited<ReturnType<typeof fsPromises.opendir>>;
-      try {
-        handle = await fsPromises.opendir(cur);
-      } catch {
-        continue;
-      }
+      const handle = await fsPromises.opendir(cur);
       for await (const ent of handle) {
         const full = path.join(cur, ent.name);
         if (ent.isDirectory()) {
           stack.push(full);
         } else if (ent.isFile() || ent.isSymbolicLink()) {
-          try {
-            const st = await fsPromises.lstat(full);
-            const inoKey = st.ino ? `${st.dev}:${st.ino}` : null;
-            if (inoKey && seenInos.has(inoKey)) continue;
-            if (inoKey) seenInos.add(inoKey);
-            total += st.size;
-          } catch {
-            // skip unreadable
-          }
+          const st = await fsPromises.lstat(full);
+          const inoKey = st.ino ? `${st.dev}:${st.ino}` : null;
+          if (inoKey && seenInos.has(inoKey)) continue;
+          if (inoKey) seenInos.add(inoKey);
+          total += st.size;
         }
       }
     }
