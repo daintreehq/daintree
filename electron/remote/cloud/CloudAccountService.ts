@@ -360,8 +360,9 @@ export class CloudAccountService {
     };
     refuseDuplicate();
     const id = `ca_${crypto.randomBytes(8).toString("hex")}`;
+    // An organization or a project is named for itself; a personal or workspace key, for who holds it.
     const fallbackName =
-      choice.scope.kind === "organization"
+      choice.scope.kind === "organization" || choice.scope.kind === "project"
         ? choice.scope.name
         : (checked.identity ?? provider.info(process.platform).name);
     const account: StoredCloudAccount = {

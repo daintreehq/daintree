@@ -92,10 +92,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
   const provider = account
     ? (usable.find((entry) => entry.id === account.providerId) ?? null)
     : (usable[0] ?? null);
-  const [chosenMode, setMode] = useState<Mode>("create");
-  // A provider that takes Daintree's key only with its own create can't reach a machine made elsewhere.
-  const importable = provider?.capabilities.provisioning.sshKey !== "at-create";
-  const mode: Mode = importable ? chosenMode : "create";
+  const [mode, setMode] = useState<Mode>("create");
   const [name, setName] = useState("");
   const [resources, setResources] = useState<CloudResourceSummary[] | null>(null);
   const [resourcesError, setResourcesError] = useState<string | null>(null);
@@ -351,19 +348,17 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
             </Select>
           </Field>
         )}
-        {importable && (
-          <SegmentedRadioGroup<Mode>
-            aria-label="New or existing machine"
-            value={mode}
-            onChange={setMode}
-            disabled={busy}
-            testId="add-cloud-host-mode"
-            options={[
-              { value: "create", label: "New machine" },
-              { value: "import", label: "Existing machine" },
-            ]}
-          />
-        )}
+        <SegmentedRadioGroup<Mode>
+          aria-label="New or existing machine"
+          value={mode}
+          onChange={setMode}
+          disabled={busy}
+          testId="add-cloud-host-mode"
+          options={[
+            { value: "create", label: "New machine" },
+            { value: "import", label: "Existing machine" },
+          ]}
+        />
         {mode === "create" ? (
           <>
             <Field>

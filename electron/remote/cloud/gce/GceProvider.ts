@@ -310,6 +310,7 @@ export class GceProvider implements CloudProvider {
           retentionDays: null,
           saveRetryBilled: false,
           stoppedComputeBilled: false,
+          stoppedStorageBilled: true,
         },
         typicalStartSeconds: null,
         lifetime: { kind: "fixed-at-create", canChangeWhileStopped: true },

@@ -2939,28 +2939,6 @@ describe("CloudHostLifecycle SSH key at create", () => {
     expect(provider.sshAccess).toHaveBeenCalledWith(expect.anything(), "bx_23456789");
   });
 
-  it("refuses an import whose provider starts taking the key only at create while it's inspected", async () => {
-    const { lifecycle, provider, store, account, state } = await setup();
-    vi.mocked(provider.inspect).mockImplementationOnce(async () => {
-      const declared = provider.info.bind(provider);
-      provider.info = (platform) => {
-        const info = declared(platform);
-        return {
-          ...info,
-          capabilities: {
-            ...info.capabilities,
-            provisioning: { ...info.capabilities.provisioning, sshKey: "at-create" },
-          },
-        };
-      };
-      return state.machine;
-    });
-    await expect(
-      lifecycle.importMachine({ accountId: account.id, resourceId: "bx_23456789", name: "build" })
-    ).rejects.toThrow(/changed while the machine was being added/);
-    expect(store.bindings()).toEqual([]);
-  });
-
   it("reaches a machine that took its key at create without authorizing a key", async () => {
     const { lifecycle, provider, store, files, account } = await setup({}, { sshKey: "at-create" });
     await lifecycle.create(request(account.id));

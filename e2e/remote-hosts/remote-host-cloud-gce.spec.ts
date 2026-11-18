@@ -227,8 +227,6 @@ test.describe.serial("Cloud hosts: a Google Compute Engine VM as a Remote Host",
     await addHost.getByRole("button", { name: "Create a cloud machine instead" }).click();
     const dialog = page.getByTestId("add-cloud-host-dialog");
     await expect(dialog).toBeVisible();
-    // A VM made elsewhere never got Daintree's key, so only a new one is offered.
-    await expect(dialog.getByRole("radio", { name: "Existing machine" })).toHaveCount(0);
     await dialog.getByTestId("add-cloud-host-name").fill(HOST_NAME);
     await expect(dialog.getByTestId("add-cloud-host-review")).toContainText(
       "can't be extended while it runs"

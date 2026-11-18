@@ -174,28 +174,6 @@ describe("RemoveCloudHostDialog by what the provider declares (#17346)", () => {
     expect(screen.queryByTestId("remove-cloud-host-console")).toBeNull();
   });
 
-  it("doesn't promise a kept machine can be added back when its provider takes the key only at create", () => {
-    const atCreate: CloudProviderInfo = {
-      ...BOAT_PROVIDER,
-      name: "Acme Compute",
-      capabilities: {
-        ...BOAT_PROVIDER.capabilities,
-        provisioning: { ...BOAT_PROVIDER.capabilities.provisioning, sshKey: "at-create" },
-      },
-    };
-    open(status({ createdFor: null }), atCreate);
-    expect(dialogText()).toContain(
-      "Daintree can't add it back later, so manage it on Acme Compute."
-    );
-    expect(dialogText()).not.toContain("add it back from Add host");
-    cleanup();
-    open(status({ createdFor: null, machine: "unknown" }), atCreate);
-    expect(dialogText()).toContain("Daintree can't add it back later");
-    cleanup();
-    open(status({ createdFor: null, machine: "deleted" }), atCreate);
-    expect(dialogText()).not.toContain("Daintree can't add it back later");
-  });
-
   it("says a kept machine keeps billing until it's deleted when its provider bills it stopped", () => {
     const billed = providerWith({ stoppedComputeBilled: true, deletion: true });
     open(status({ createdFor: null }), billed);

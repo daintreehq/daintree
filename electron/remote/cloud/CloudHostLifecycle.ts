@@ -1083,13 +1083,7 @@ export class CloudHostLifecycle {
   async importMachine(request: CloudHostImportRequest): Promise<{ hostId: HostId }> {
     if (!request || typeof request !== "object") throw invalid("Missing machine details.");
     const account = this.deps.accounts.requireAccount(request.accountId);
-    const owner = this.deps.accounts.requireSupported(account.providerId);
-    // Its key reaches a machine only with Daintree's own create, so one made elsewhere can't be reached.
-    if (sshKeyTiming(owner) === "at-create") {
-      throw invalid(
-        `${nameOf(owner)} takes Daintree's SSH key only when Daintree creates the machine, so an existing one can't be added. Create a new machine instead.`
-      );
-    }
+    this.deps.accounts.requireSupported(account.providerId);
     const name = typeof request.name === "string" ? request.name.trim() : "";
     if (!name || name.length > MAX_NAME_LENGTH) throw invalid("Give the host a name.");
     if (typeof request.resourceId !== "string") throw invalid("Choose a machine.");
@@ -1147,14 +1141,6 @@ export class CloudHostLifecycle {
     binding.resourceId = resource.resourceId;
     binding.lifetimeSeconds = resource.lifetimeSeconds;
     binding.observation = observationOf(resource, this.now());
-    // A provider replaced or redeclared while the machine was inspected: nobody checked this one can be reached.
-    if (
-      !this.stillRegistered(account.providerId, provider) ||
-      provider !== owner ||
-      sshKeyTiming(provider) === "at-create"
-    ) {
-      throw invalid(`${nameOf(owner)} changed while the machine was being added. Try again.`);
-    }
     // Another import of the same machine may have finished while it was inspected.
     if (
       this.deps.store

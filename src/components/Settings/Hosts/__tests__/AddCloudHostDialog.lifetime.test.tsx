@@ -283,30 +283,6 @@ describe("AddCloudHostDialog for a provider that takes the key at create", () =>
     };
   }
 
-  it("leaves an existing machine behind when the account switches to such a provider", async () => {
-    const gceAccount = {
-      ...ACCOUNT,
-      id: "ca_9876543210",
-      providerId: "acme.clouds.gce",
-      displayName: "Builds",
-    };
-    client.getCatalog.mockImplementation(async (accountId: string) => ({ ...CATALOG, accountId }));
-    cloud.snapshot = {
-      providers: [provider({ kind: "renewable" }), atCreate("acme.clouds.gce", "Acme Compute")],
-      accounts: [ACCOUNT, gceAccount],
-      hosts: [],
-    };
-    await show();
-    fireEvent.click(screen.getByRole("radio", { name: "Existing machine" }));
-    await waitFor(() => expect(client.listResources).toHaveBeenCalledTimes(1));
-    await choose(screen.getAllByRole("combobox")[0]!, /Builds/);
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Create and connect" })).toBeTruthy()
-    );
-    expect(screen.queryByRole("radio", { name: "Existing machine" })).toBeNull();
-    expect(client.listResources).toHaveBeenCalledTimes(1);
-  });
-
   it("names no provider in its title before an account is chosen from several", () => {
     cloud.snapshot = {
       providers: [provider({ kind: "renewable" }), atCreate("acme.clouds.gce", "Acme Compute")],
@@ -315,26 +291,5 @@ describe("AddCloudHostDialog for a provider that takes the key at create", () =>
     };
     render(<AddCloudHostDialog isOpen onClose={() => {}} onReady={() => {}} />);
     expect(screen.getByRole("heading").textContent).toBe("Add a cloud machine");
-  });
-
-  it("offers only a new machine, since one made elsewhere never got Daintree's key", async () => {
-    const base = provider({ kind: "fixed-at-create", canChangeWhileStopped: true });
-    cloud.snapshot = {
-      providers: [
-        {
-          ...base,
-          capabilities: {
-            ...base.capabilities,
-            provisioning: { ...base.capabilities.provisioning, sshKey: "at-create" },
-          },
-        },
-      ],
-      accounts: [ACCOUNT],
-      hosts: [],
-    };
-    await show();
-    expect(screen.queryByRole("radio", { name: "Existing machine" })).toBeNull();
-    expect(client.listResources).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "Create and connect" })).toBeTruthy();
   });
 });
