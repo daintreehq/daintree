@@ -27,10 +27,9 @@ export const LIFETIME_VALUES = CLOUD_LIFETIME_CHOICES.map((hours) =>
 
 /** Where a new machine's lifetime selector starts for this provider. */
 function defaultLifetime(provider: CloudProviderInfo | null): string {
-  const model = provider?.capabilities.lifetime;
   const hours =
-    model?.kind === "fixed-at-create" && model.defaultHours !== undefined
-      ? model.defaultHours
+    provider?.defaultLifetimeHours !== undefined
+      ? provider.defaultLifetimeHours
       : DEFAULT_CLOUD_LIFETIME_HOURS;
   return hours === null ? "never" : String(hours);
 }

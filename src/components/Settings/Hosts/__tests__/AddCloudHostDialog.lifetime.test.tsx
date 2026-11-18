@@ -30,8 +30,12 @@ vi.mock("../ConnectCloudAccountDialog", () => ({ ConnectCloudAccountDialog: () =
 
 import { AddCloudHostDialog } from "../AddCloudHostDialog";
 
-function provider(lifetime: CloudLifetimeModel): CloudProviderInfo {
+function provider(
+  lifetime: CloudLifetimeModel,
+  extra: Partial<CloudProviderInfo> = {}
+): CloudProviderInfo {
   return {
+    ...extra,
     id: "acme.clouds.vm",
     name: "Acme",
     description: "Machines on Acme",
@@ -95,8 +99,8 @@ const CATALOG: CloudCatalog = {
   fetchedAt: 0,
 };
 
-async function open(lifetime: CloudLifetimeModel) {
-  cloud.snapshot = { providers: [provider(lifetime)], accounts: [ACCOUNT], hosts: [] };
+async function open(lifetime: CloudLifetimeModel, extra: Partial<CloudProviderInfo> = {}) {
+  cloud.snapshot = { providers: [provider(lifetime, extra)], accounts: [ACCOUNT], hosts: [] };
   return show();
 }
 
@@ -167,11 +171,10 @@ describe("AddCloudHostDialog lifetime", () => {
   });
 
   it("starts with no limit for a provider whose new machines take none by default (#17362)", async () => {
-    const initial = await open({
-      kind: "fixed-at-create",
-      canChangeWhileStopped: true,
-      defaultHours: null,
-    });
+    const initial = await open(
+      { kind: "fixed-at-create", canChangeWhileStopped: true },
+      { defaultLifetimeHours: null }
+    );
     expect(initial).toContain("It runs until you stop it.");
     expect(initial).not.toContain("can't be extended while it runs");
     await choose(lifetimeChoice()!, "4 hours");
@@ -180,7 +183,10 @@ describe("AddCloudHostDialog lifetime", () => {
   });
 
   it("sends no limit for a provider whose new machines take none, if left alone (#17362)", async () => {
-    await open({ kind: "fixed-at-create", canChangeWhileStopped: true, defaultHours: null });
+    await open(
+      { kind: "fixed-at-create", canChangeWhileStopped: true },
+      { defaultLifetimeHours: null }
+    );
     expect(await createAndSend()).toBeNull();
   });
 

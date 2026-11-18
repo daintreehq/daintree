@@ -1405,8 +1405,7 @@ describe("a Compute Engine VM stopping itself once idle (#17362)", () => {
 
   it("starts a new VM's form with no runtime limit, since it stops itself once idle", () => {
     const google = fakeGoogle();
-    const lifetime = google.provider.info("linux").capabilities.lifetime;
-    expect(lifetime.kind === "fixed-at-create" ? lifetime.defaultHours : undefined).toBeNull();
+    expect(google.provider.info("linux").defaultLifetimeHours).toBeNull();
   });
 
   it("stops itself after its idle time with no Shell, keeping its disk, with no Google call from the VM", async () => {

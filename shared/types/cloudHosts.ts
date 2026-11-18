@@ -106,15 +106,7 @@ export interface CloudProviderPersistence {
  */
 export type CloudLifetimeModel =
   | { kind: "none" }
-  | {
-      kind: "fixed-at-create";
-      canChangeWhileStopped: boolean;
-      /**
-       * The limit a new machine's form starts at, in hours; null for none.
-       * Absent: {@link DEFAULT_CLOUD_LIFETIME_HOURS}.
-       */
-      defaultHours?: number | null;
-    }
+  | { kind: "fixed-at-create"; canChangeWhileStopped: boolean }
   | { kind: "renewable" }
   | {
       kind: "idle-sleep";
@@ -227,6 +219,12 @@ export interface CloudProviderInfo {
   id: CloudProviderId;
   name: string;
   description: string;
+  /**
+   * The runtime limit a new machine's form starts at, in hours, for a
+   * provider whose create chooses one; null for none. Absent:
+   * {@link DEFAULT_CLOUD_LIFETIME_HOURS}.
+   */
+  defaultLifetimeHours?: number | null;
   /** Where to create an account or an API key; opened in the system browser. */
   apiKeyUrl: string;
   dashboardUrl: string;

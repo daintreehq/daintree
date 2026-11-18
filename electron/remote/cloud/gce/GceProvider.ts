@@ -286,6 +286,9 @@ export class GceProvider implements CloudProvider {
       apiKeyUrl: "https://console.cloud.google.com/iam-admin/serviceaccounts",
       dashboardUrl: "https://console.cloud.google.com/compute/instances",
       docsUrl: "https://cloud.google.com/compute/docs",
+      // Its machines power themselves off once idle (#17362): a limit by default would only cut
+      // off agents still working.
+      defaultLifetimeHours: null,
       credentialFields: [
         {
           id: "serviceAccountKey",
@@ -314,9 +317,7 @@ export class GceProvider implements CloudProvider {
           stoppedStorageBilled: true,
         },
         typicalStartSeconds: null,
-        // Its machines power themselves off once idle (#17362): a limit by default would only cut
-        // off agents still working.
-        lifetime: { kind: "fixed-at-create", canChangeWhileStopped: true, defaultHours: null },
+        lifetime: { kind: "fixed-at-create", canChangeWhileStopped: true },
         sshTrust: "pinned-from-api",
         transport: "direct",
         tunnel: null,
