@@ -148,7 +148,6 @@ export function DecisionsInvolvementSection({
   const headingId = useId();
   const sectionRef = useRef<HTMLElement>(null);
   const changeRef = useRef<HTMLButtonElement>(null);
-  const noticeRef = useRef<HTMLDivElement>(null);
   const { load, at, reload } = useInvolvement(active, opening, statusRevision);
   const read = load.state === "read" ? load.read : null;
   const preference = read?.preference ?? null;
@@ -221,13 +220,14 @@ export function DecisionsInvolvementSection({
     return scheduleFlip(end - Date.now(), () => setFlippedAt(Date.now()));
   }, [draftEnd, now]);
 
-  // Once a save settles or the form is put away, the keyboard goes to Change, or to what was said.
+  // Once a save settles or the form is put away, the keyboard goes to Change, else the dialog's surface.
   useEffect(() => {
     if (handoff === 0 || !activeRef.current) return;
     const focused = document.activeElement;
-    if (focused !== document.body && !sectionRef.current?.contains(focused)) return;
-    // While a save is still in flight neither is there: the section holds the keyboard until it settles.
-    (changeRef.current ?? noticeRef.current ?? sectionRef.current)?.focus();
+    const surface = sectionRef.current?.closest<HTMLElement>('[role="dialog"]') ?? null;
+    if (focused !== document.body && focused !== surface && !sectionRef.current?.contains(focused))
+      return;
+    (changeRef.current ?? surface)?.focus();
   }, [handoff]);
 
   const startEditing = () => {
@@ -275,7 +275,7 @@ export function DecisionsInvolvementSection({
       openingRef.current === sent.opening &&
       (editingRef.current === sent || editingRef.current === null) &&
       (focused === document.body ||
-        focused === sectionRef.current ||
+        focused === sectionRef.current?.closest('[role="dialog"]') ||
         formRef.current?.contains(focused) === true);
     setNotice(said === null ? null : { opening: sent.opening, notice: said });
     setEditing((current) => (current === sent ? null : current));
@@ -287,7 +287,6 @@ export function DecisionsInvolvementSection({
   return (
     <section
       ref={sectionRef}
-      tabIndex={-1}
       aria-labelledby={headingId}
       // Bounded, so an open form on a short window scrolls here rather than pushing Save out of the dialog.
       className="flex max-h-[50%] min-h-0 shrink-0 flex-col gap-2 overflow-y-auto overscroll-contain border-t border-divider px-4 py-3"
@@ -321,8 +320,6 @@ export function DecisionsInvolvementSection({
       <div role="status">
         {shownNotice !== null && (
           <Callout
-            ref={noticeRef}
-            tabIndex={-1}
             severity={shownNotice.severity}
             size="compact"
             data-testid="decisions-involvement-notice"

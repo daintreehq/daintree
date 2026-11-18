@@ -60,7 +60,13 @@ function show(props: { active?: boolean; opening?: number; statusRevision?: numb
       />
     </TooltipProvider>
   );
-  const view = render(element(props));
+  const view = render(element(props), {
+    wrapper: ({ children }) => (
+      <div role="dialog" tabIndex={-1}>
+        {children}
+      </div>
+    ),
+  });
   return { rerender: (next: typeof props) => view.rerender(element(next)) };
 }
 
@@ -353,7 +359,7 @@ describe("DecisionsInvolvementSection", () => {
     // A change from the revision the pending one replaces would only be refused: none is offered.
     expect(screen.queryByTestId("decisions-involvement-change")).toBeNull();
     await settle();
-    expect(document.activeElement).toBe(byId("decisions-involvement"));
+    expect(document.activeElement).toBe(screen.getByRole("dialog"));
     expect(setInvolvement).toHaveBeenCalledTimes(1);
 
     pending.resolve({ result: "conflict", latestRevision: null });
@@ -498,8 +504,8 @@ describe("DecisionsInvolvementSection", () => {
     expect(text("decisions-involvement-read-only")).toContain("0.8.0");
     expect(text("decisions-involvement-notice")).toContain("wasn't saved");
     expect(screen.queryByTestId("decisions-involvement-change")).toBeNull();
-    // Nothing to press is left, so the keyboard goes to what was said.
-    expect(document.activeElement).toBe(byId("decisions-involvement-notice"));
+    // Nothing to press is left, so the keyboard waits on the dialog, inside its focus trap.
+    expect(document.activeElement).toBe(screen.getByRole("dialog"));
 
     view.rerender({ opening: 2 });
     await settle();
