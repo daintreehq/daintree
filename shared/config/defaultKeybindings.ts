@@ -427,6 +427,24 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Agents",
   },
   {
+    // Unbound by default; here so it can be bound (#17236).
+    actionId: "decisions.openInbox",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Open Decisions inbox",
+    category: "Agents",
+  },
+  {
+    // Unbound by default; here so it can be bound (#17236).
+    actionId: "decisions.openNextQuestion",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Open next Decisions question",
+    category: "Agents",
+  },
+  {
     actionId: "agent.focusNextWorking",
     combo: "Cmd+Alt+.",
     scope: "global",

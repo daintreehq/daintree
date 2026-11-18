@@ -25,6 +25,8 @@ export interface ToolbarOverflowStatusInput {
   hasProject?: boolean;
   errorCount: number;
   canopyUrgentCount: number;
+  /** Questions waiting on the person, for the Decisions inbox button folded into a menu. */
+  decisionsWaitingCount?: number;
   /** Problems' watcher warning in its own words, or null while watching is sound. */
   watcherStatus?: string | null;
   /** What the Forge capsule's warning says, while it shows one; null otherwise. */
@@ -42,6 +44,7 @@ export function useToolbarOverflowStatus({
   hasProject = true,
   errorCount,
   canopyUrgentCount,
+  decisionsWaitingCount = 0,
   watcherStatus = null,
   forgeUnavailableObservation = null,
   pluginConfigs,
@@ -76,14 +79,16 @@ export function useToolbarOverflowStatus({
     errorCount,
     canopyUrgentCount,
     watcherUnreliable,
-    forgeUnavailableObservation !== null
+    forgeUnavailableObservation !== null,
+    decisionsWaitingCount
   );
   const rightOverflowSeverity = useOverflowBadgeSeverity(
     visibleRightOverflow,
     errorCount,
     canopyUrgentCount,
     watcherUnreliable,
-    forgeUnavailableObservation !== null
+    forgeUnavailableObservation !== null,
+    decisionsWaitingCount
   );
   const leftAgentObservations = useOverflowAgentObservations(visibleLeftOverflow);
   const rightAgentObservations = useOverflowAgentObservations(visibleRightOverflow);
