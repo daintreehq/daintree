@@ -63,6 +63,7 @@ import type {
 import { sanitizeFirstPrompt } from "@shared/utils/firstPrompt";
 import { isUsableTerminalGeometry } from "@shared/types/terminal";
 import type { TerminalGeometry } from "@shared/types/terminal";
+import type { WakeCandidate } from "@/services/wakeContinue/wakeCandidate";
 
 type AddPanelFn = HydrationOptions["addPanel"];
 
@@ -843,6 +844,12 @@ export interface PanelRestorePhaseResult {
    * ran there. Empty when nothing was stranded, which is the common case.
    */
   ghostedWorktreeIds: Set<string>;
+  /**
+   * Every agent pane this pass started again from its snapshot (#17883), in
+   * saved order, with what its launch did with its conversation. Panes that
+   * reattached to a surviving PTY are not here: nothing stopped them.
+   */
+  wakeCandidates: WakeCandidate[];
 }
 
 /**
@@ -992,6 +999,7 @@ export async function restorePanelsPhase(
   // Worktrees proven gone that still hold a surviving PTY (#11911). Reported
   // out of the phase so hydration can give each one a deleted-worktree row.
   const ghostedWorktreeIds = new Set<string>();
+  const wakeCandidates: Array<{ index: number; candidate: WakeCandidate }> = [];
 
   /**
    * Where a panel goes when its PTY outlived the worktree it was launched in.
@@ -1504,6 +1512,29 @@ export async function restorePanelsPhase(
                 if (!respawnArgs.restoreRecovery) parkIfSavedInBackground(respawnArgs, saved);
                 const restoredTerminalId = await addPanel(respawnArgs);
                 restoredIdsByIndex.set(capturedIndex, restoredTerminalId);
+                if (respawnArgs.launchAgentId && kind !== "assistant") {
+                  wakeCandidates.push({
+                    index: capturedIndex,
+                    candidate: {
+                      terminalId: restoredTerminalId,
+                      title: respawnArgs.title || saved.title || respawnArgs.launchAgentId,
+                      agentId: respawnArgs.launchAgentId,
+                      worktreeId: respawnArgs.worktreeId ?? null,
+                      outcome: respawnArgs.restoreRecovery
+                        ? "held"
+                        : respawnArgs.restoreProvenance?.disposition === "resume"
+                          ? "resumed"
+                          : "fresh",
+                      ...(respawnArgs.restoreRecovery && {
+                        holdReason: respawnArgs.restoreRecovery.reason,
+                        ...(respawnArgs.restoreRecovery.sessionId !== undefined && {
+                          heldSessionId: respawnArgs.restoreRecovery.sessionId,
+                        }),
+                      }),
+                      restoredAt,
+                    },
+                  });
+                }
 
                 // The host replays the saved id's session file into a plain
                 // shell's mirror as it spawns (agents relaunch instead), but the
@@ -1773,5 +1804,11 @@ export async function restorePanelsPhase(
     }
   }
 
-  return { restoreTasks, savedIdToRestoredId, ghostedWorktreeIds };
+  wakeCandidates.sort((a, b) => a.index - b.index);
+  return {
+    restoreTasks,
+    savedIdToRestoredId,
+    ghostedWorktreeIds,
+    wakeCandidates: wakeCandidates.map(({ candidate }) => candidate),
+  };
 }
