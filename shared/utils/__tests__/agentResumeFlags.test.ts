@@ -94,7 +94,8 @@ describe("reconcileResumeLaunchFlagsWith", () => {
     ]);
   });
 
-  it("keeps the captured permission args when the session's preset can't be read", () => {
+  it("resumes a session whose preset can't be read at the lesser of its captured level and the agent's", () => {
+    // A lost Auto preset doesn't take the agent's Skip all…
     expect(
       reconcileResumeLaunchFlagsWith(
         { agentId: "codex", agentLaunchFlags: ["--no-alt-screen", "--approve-for-me"] },
@@ -102,6 +103,17 @@ describe("reconcileResumeLaunchFlagsWith", () => {
         null
       )
     ).toEqual(["--no-alt-screen", "--approve-for-me", "-c", "tui.whimsy=false"]);
+    // …and a captured bypass the agent no longer allows doesn't come back.
+    expect(
+      reconcileResumeLaunchFlagsWith(
+        {
+          agentId: "codex",
+          agentLaunchFlags: ["--no-alt-screen", "--dangerously-bypass-approvals-and-sandbox"],
+        },
+        settings({ agents: { codex: { dangerousMode: "off" } } }),
+        null
+      )
+    ).toEqual(["--no-alt-screen", "-c", "tui.whimsy=false"]);
   });
 
   it("adds no Auto copy beside one the caller's tail carries", () => {

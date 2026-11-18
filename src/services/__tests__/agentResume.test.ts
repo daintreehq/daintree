@@ -43,6 +43,11 @@ vi.mock("@shared/types/agentSettings", () => ({
   getPluginBypassArgHistory: () => [],
   resolveEffectivePermissionLevel: resolveEffectiveBypassMock,
   userPermissionArgs: () => [],
+  capturedPermissionLevel: () => "auto",
+  lesserPermissionLevel: (a: string, b: string) => {
+    const order = ["cli-default", "auto", "skip"];
+    return order.indexOf(a) <= order.indexOf(b) ? a : b;
+  },
   reconcileInlineModeFlag: reconcileInlineModeFlagMock,
   reconcileDecorationFlags: reconcileDecorationFlagsMock,
   resolveKeepDecorations: resolveKeepDecorationsMock,
@@ -216,10 +221,14 @@ describe("reconcileResumeLaunchFlags", () => {
     expect(reconcileBypassFlagsMock).toHaveBeenCalled();
   });
 
-  it("keeps the captured permission args when the named preset can't be read", () => {
-    const result = reconcileResumeLaunchFlags({ ...baseSession, agentPresetId: "gone" });
-    expect(reconcileBypassFlagsMock).not.toHaveBeenCalled();
-    expect(result).toEqual(["--dangerously-skip-permissions"]);
+  it("resumes an unreadable preset at the lesser of its captured level and the agent's", () => {
+    reconcileResumeLaunchFlags({ ...baseSession, agentPresetId: "gone" });
+    expect(reconcileBypassFlagsMock).toHaveBeenCalledWith(
+      ["--dangerously-skip-permissions"],
+      "claude",
+      "auto",
+      expect.anything()
+    );
   });
 
   it("reads project presets only when the store holds the record's own project", () => {

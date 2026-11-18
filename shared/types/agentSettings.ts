@@ -694,6 +694,35 @@ export interface ReconcilePermissionFlagsOptions {
 }
 
 /**
+ * The permission level a launch-flag snapshot was captured at, read from the
+ * args it carries: the agent's bypass args (any declaration
+ * {@link reconcilePermissionFlags} strips) make it Skip all, its Auto args
+ * Auto, neither the CLI default.
+ */
+export function capturedPermissionLevel(
+  flags: readonly string[],
+  agentId: string,
+  options: Pick<ReconcilePermissionFlagsOptions, "bypassArgs" | "pluginBypassArgHistory"> = {}
+): PermissionLevel {
+  const resolved = resolveDangerousArgs(options.bypassArgs, agentId);
+  const groups = bypassArgGroups(
+    bypassArgSources(agentId, resolved, options.pluginBypassArgHistory ?? [])
+  );
+  const autoArgs = getPermissionAutoArgs(agentId);
+  const instruction = systemPromptArgPositions(flags, agentId);
+  const at = (group: readonly string[]) =>
+    group.length > 0 && flags.some((_, index) => bypassGroupAt(flags, index, group, instruction));
+  if (autoArgs.length > 0 && at(autoArgs)) return "auto";
+  return groups.some(at) ? "skip" : "cli-default";
+}
+
+/** The less permissive of two levels: the CLI default, then Auto, then Skip all. */
+export function lesserPermissionLevel(a: PermissionLevel, b: PermissionLevel): PermissionLevel {
+  const order: readonly PermissionLevel[] = ["cli-default", "auto", "skip"];
+  return order.indexOf(a) <= order.indexOf(b) ? a : b;
+}
+
+/**
  * Reconciles a persisted `agentLaunchFlags` snapshot against the current
  * permission level (#10432 the "resume trap", #17435).
  *
@@ -737,14 +766,21 @@ export function reconcilePermissionFlags(
   const instruction = systemPromptArgPositions(flags, agentId);
   const bypassLengthAt = (index: number): number =>
     groups.find((group) => bypassGroupAt(flags, index, group, instruction))?.length ?? 0;
+  // After a `--` every token is positional, the caller's tail included.
+  const terminator = flags.indexOf("--");
+  const optionEnd = terminator === -1 ? flags.length : terminator;
   const autoAt = (index: number): boolean =>
-    autoArgs.length > 0 && bypassGroupAt(flags, index, autoArgs, instruction);
+    autoArgs.length > 0 &&
+    index + autoArgs.length <= optionEnd &&
+    bypassGroupAt(flags, index, autoArgs, instruction);
   const keepAuto =
     level === "auto" ||
     (autoArgs.length > 0 && findTokenSequence(optionArgs(options.userArgs), autoArgs) !== -1);
   // A copy in the caller's tail is the launch's one copy, so the snapshot keeps none.
   const carried =
-    autoArgs.length > 0 && findTokenSequence(optionArgs(options.carriedArgs), autoArgs) !== -1;
+    autoArgs.length > 0 &&
+    terminator === -1 &&
+    findTokenSequence(optionArgs(options.carriedArgs), autoArgs) !== -1;
   const autoPresent = level === "auto" && (carried || flags.some((_, index) => autoAt(index)));
 
   // The level's args replace the first stripped group in place, preserving flag
@@ -823,11 +859,13 @@ export interface GenerateAgentFlagsOptions {
    */
   globalSkipPermissions?: boolean;
   /**
-   * Args the command carries beside these flags (a preset's, a recipe's, the
-   * caller's). An Auto group among them, or among the custom flags, is left as
-   * the only copy: Codex rejects `--approve-for-me` given twice.
+   * Args the command carries ahead of these flags (a preset's, a recipe's) and
+   * after them (the caller's). An Auto group among their options, or among the
+   * custom flags, is left as the only copy: Codex rejects `--approve-for-me`
+   * given twice. Read in launch order, so a `--` makes what follows positional.
    */
-  carriedArgs?: readonly string[];
+  precedingArgs?: readonly string[];
+  followingArgs?: readonly string[];
 }
 
 export function generateAgentFlags(
@@ -839,10 +877,13 @@ export function generateAgentFlags(
   const customFlags = entry.customFlags ? parseLaunchArgs(entry.customFlags) : [];
   const level = resolveEffectivePermissionLevel(entry, agentId, options?.globalSkipPermissions);
   const permissionArgs = permissionArgsForLevel(level, entry, agentId);
+  const launchOrder = [
+    ...(options?.precedingArgs ?? []),
+    ...customFlags,
+    ...(options?.followingArgs ?? []),
+  ];
   const alreadyCarried =
-    level === "auto" &&
-    (findTokenSequence(optionArgs(customFlags), permissionArgs) !== -1 ||
-      findTokenSequence(optionArgs(options?.carriedArgs), permissionArgs) !== -1);
+    level === "auto" && findTokenSequence(optionArgs(launchOrder), permissionArgs) !== -1;
   if (!alreadyCarried) flags.push(...permissionArgs);
   flags.push(...customFlags);
 
@@ -952,11 +993,8 @@ export function generateAgentCommand(
   const flags = generateAgentFlags(entry, agentId, {
     clipboardDirectory: options?.clipboardDirectory,
     globalSkipPermissions: options?.globalSkipPermissions,
-    carriedArgs: [
-      ...(options?.presetArgs ?? []),
-      ...parseLaunchArgs(options?.recipeArgs),
-      ...(options?.callerArgs ?? []),
-    ],
+    precedingArgs: [...(options?.presetArgs ?? []), ...parseLaunchArgs(options?.recipeArgs)],
+    followingArgs: options?.callerArgs,
   });
   const parts: string[] = [baseCommand];
   let registryArgsEnd = parts.length;
@@ -1138,7 +1176,8 @@ export function buildAgentLaunchFlags(
   // Dangerous args and custom flags (from generateAgentFlags, excluding clipboard dir)
   const settingsFlags = generateAgentFlags(entry, agentId, {
     globalSkipPermissions: options?.globalSkipPermissions,
-    carriedArgs: [...(options?.presetArgs ?? []), ...recipeArgs, ...(options?.callerArgs ?? [])],
+    precedingArgs: [...(options?.presetArgs ?? []), ...recipeArgs],
+    followingArgs: options?.callerArgs,
   });
   flags.push(...settingsFlags);
 

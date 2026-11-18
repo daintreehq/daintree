@@ -38,7 +38,8 @@ export function reconcileResumeLaunchFlags(session: {
  * The preset a record says its session launched on (#17435): `undefined` when
  * it names none, so the agent's own settings apply as they always did, and
  * `null` when it names one this view can't read (deleted, not loaded, or held
- * for another project), so its captured permission args stay as they are.
+ * for another project), so the launch takes the lesser of the level its flags
+ * were captured at and the agent's own.
  */
 function resumePreset(
   session: { agentId: string; agentPresetId?: string; projectId?: string | null },

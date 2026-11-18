@@ -2920,6 +2920,25 @@ describe("Auto permission mode (#17435)", () => {
       ).toEqual([]);
     });
 
+    it("reads everything after a terminator as positional, in launch order", () => {
+      // A `--` in the custom flags makes the caller's token positional.
+      expect(
+        generateAgentFlags({ dangerousMode: "auto", customFlags: "--" }, "codex", {
+          followingArgs: ["--approve-for-me"],
+        })
+      ).toContain("--approve-for-me");
+      // The snapshot's own terminator: a copy after it isn't the launch's Auto,
+      // and neither is the caller's tail that follows it.
+      expect(
+        reconcilePermissionFlags(["--search", "--", "--approve-for-me"], "codex", "cli-default")
+      ).toEqual(["--search", "--", "--approve-for-me"]);
+      expect(
+        reconcilePermissionFlags(["--", "x"], "codex", "auto", {
+          carriedArgs: ["--approve-for-me"],
+        })
+      ).toEqual(["--", "x", "--approve-for-me"]);
+    });
+
     it("keeps one copy of the Auto args, and none when the caller's tail carries it", () => {
       const doubled = ["--approve-for-me", "--search", "--approve-for-me"];
       expect(reconcilePermissionFlags(doubled, "codex", "auto")).toEqual([
