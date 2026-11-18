@@ -496,6 +496,7 @@ describe("toPluginWorktreeSnapshot — HEAD, git operation and setup (#13804)", 
     expect(op("REBASING")).toBe("rebase");
     expect(op("CHERRY_PICKING")).toBe("cherry-pick");
     expect(op("REVERTING")).toBe("revert");
+    expect(op("APPLYING_MAILBOX")).toBe("am");
     expect(op("CLEAN")).toBeNull();
     expect(op("DIRTY")).toBeNull();
     expect(op(undefined)).toBeNull();

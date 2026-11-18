@@ -461,6 +461,26 @@ describe("git.abortRepositoryOperation", () => {
   });
 });
 
+describe("git.abortRepositoryOperation schema", () => {
+  // The card passes the halted operation as the confirm's loading label, so a
+  // value the enum rejects would refuse the Abort row before it ran.
+  it("accepts a halted git am as the operation hint", () => {
+    const { schemaOf } = setupActions();
+    const schema = schemaOf("git.abortRepositoryOperation")!;
+    for (const operation of [
+      "MERGING",
+      "REBASING",
+      "CHERRY_PICKING",
+      "REVERTING",
+      "APPLYING_MAILBOX",
+      undefined,
+    ]) {
+      expect(schema.safeParse({ worktreeId: WT_ID, operation }).success).toBe(true);
+    }
+    expect(schema.safeParse({ worktreeId: WT_ID, operation: "AM" }).success).toBe(false);
+  });
+});
+
 describe("git.continueRepositoryOperation", () => {
   it("continues without a confirm — the user already started this operation", async () => {
     const { run, git, defOf } = setupActions();
@@ -503,10 +523,10 @@ describe("git.continueRepositoryOperation", () => {
   it("rethrows a continue failure that is not a conflict", async () => {
     const { run, git } = setupActions();
     git.continueRepositoryOperation.mockRejectedValue(
-      new Error("No merge, rebase, cherry-pick, or revert operation is in progress")
+      new Error("No repository operation is in progress")
     );
     await expect(run("git.continueRepositoryOperation", { worktreeId: WT_ID })).rejects.toThrow(
-      /no merge, rebase/i
+      /no repository operation/i
     );
     expect(refresh).toHaveBeenCalledWith(WT_ID);
     expect(dispatch).not.toHaveBeenCalled();

@@ -1208,6 +1208,16 @@ describe("git:continue-repository-operation handler", () => {
     expect(git.raw).toHaveBeenCalledWith(["revert", "--continue", "--no-edit"]);
   });
 
+  it("continues a git am session with git am, never git rebase", async () => {
+    const { git, handler } = setup("APPLYING_MAILBOX");
+
+    await handler(null, "/tmp/repo");
+
+    // `git rebase --continue` refuses an am session outright (exit 128).
+    expect(git.raw).toHaveBeenCalledWith(["am", "--continue"]);
+    expect(git.rebase).not.toHaveBeenCalled();
+  });
+
   it("propagates a rebase failure instead of swallowing it", async () => {
     const { git, handler } = setup("REBASING");
     git.rebase.mockRejectedValueOnce(new Error("could not apply abc123"));
@@ -1226,7 +1236,7 @@ describe("git:continue-repository-operation handler", () => {
     const { git, handler } = setup("CLEAN");
 
     await expect(handler(null, "/tmp/repo")).rejects.toThrow(
-      /No merge, rebase, cherry-pick, or revert operation is in progress/
+      /No repository operation is in progress/
     );
     expect(git.rebase).not.toHaveBeenCalled();
     expect(git.merge).not.toHaveBeenCalled();

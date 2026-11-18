@@ -5973,9 +5973,11 @@ interface PluginWorktreeStatus {
 /**
  * A git operation the host saw in progress in a worktree, read from the
  * operation's marker files under the git directory. Only operations that block
- * normal work appear here; a worktree with none reads as `null`.
+ * normal work appear here; a worktree with none reads as `null`. `am` is a
+ * halted `git am`, kept apart from `rebase` because the two finish with
+ * different commands.
  */
-type PluginWorktreeGitOperation = "merge" | "rebase" | "cherry-pick" | "revert";
+type PluginWorktreeGitOperation = "merge" | "rebase" | "cherry-pick" | "revert" | "am";
 /**
  * How far a worktree's post-create setup has got.
  *

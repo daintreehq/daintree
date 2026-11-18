@@ -418,6 +418,24 @@ describe("useWorktreeStatus — gitStateIndicator", () => {
     ).toEqual({ kind: "conflicted", label: "conflicted", tone: "error" });
   });
 
+  it("names a halted git am as applying patches rather than rebasing", () => {
+    expect(getIndicator({ repoState: "APPLYING_MAILBOX" })).toEqual({
+      kind: "applying-patches",
+      label: "applying patches",
+      tone: "warning",
+    });
+    expect(getIndicator({ repoState: "REBASING" })).toEqual({
+      kind: "rebasing",
+      label: "rebasing",
+      tone: "warning",
+    });
+  });
+
+  it("shows no operation for CLEAN or DIRTY repo states", () => {
+    expect(getIndicator({ repoState: "CLEAN" })).toBeNull();
+    expect(getIndicator({ repoState: "DIRTY" })).toBeNull();
+  });
+
   it("returns detached with warning tone when isDetached and no blocker", () => {
     expect(getIndicator({ isDetached: true })).toEqual({
       kind: "detached",

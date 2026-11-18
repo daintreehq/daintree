@@ -128,6 +128,7 @@ import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { BranchBadge } from "@/components/ui/BranchBadge";
 import { Badge } from "@/components/ui/badge";
 import { pluralize } from "@/lib/pluralize";
+import { toRepoOperationState } from "@/components/Git/repoOperationCopy";
 
 /**
  * Floor for the dialog-hosted body, so the pane stops resizing itself around
@@ -1248,11 +1249,7 @@ export function ReviewHubContent({
   ]);
 
   const repoState = status?.repoState ?? "CLEAN";
-  const isOperationState =
-    repoState === "MERGING" ||
-    repoState === "REBASING" ||
-    repoState === "CHERRY_PICKING" ||
-    repoState === "REVERTING";
+  const isOperationState = toRepoOperationState(repoState) !== null;
 
   useEffect(() => {
     if (!isOpen || !autoStageOnOpen) return;

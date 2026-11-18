@@ -1195,6 +1195,7 @@ describe("Git submenu — recovery rows", () => {
     ["MERGING", "merge"],
     ["CHERRY_PICKING", "cherry-pick"],
     ["REVERTING", "revert"],
+    ["APPLYING_MAILBOX", "patch apply"],
   ] as const)("replaces the start rows for %s", (repoState, label) => {
     // A worktree mid-operation has exactly one useful next move, and it is not
     // "start another rebase" — the handler refuses that anyway.

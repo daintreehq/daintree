@@ -67,8 +67,10 @@ function subcommand(args: readonly string[]): string | undefined {
   return args[i];
 }
 
+// Inherited GIT_* (a hook's GIT_DIR or GIT_INDEX_FILE) would point fixture git
+// at another repository, while the hardened handlers strip them.
 const GIT_ENV = {
-  ...process.env,
+  ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
   GIT_AUTHOR_NAME: "Test",
   GIT_AUTHOR_EMAIL: "test@example.test",
   GIT_COMMITTER_NAME: "Test",
@@ -792,5 +794,101 @@ describe("git-write staging handlers (real git)", () => {
       expect("resolveUndoPaths" in status).toBe(false);
       expect(resolveUndoReads(mark)).toEqual([]);
     });
+  });
+});
+
+describe("git-write repository operation handlers on a halted git am (real git)", () => {
+  const continueOperation = () =>
+    handler(CHANNELS.GIT_CONTINUE_REPOSITORY_OPERATION)(null, repo) as Promise<void>;
+  const abortOperation = () =>
+    handler(CHANNELS.GIT_ABORT_REPOSITORY_OPERATION)(null, repo) as Promise<void>;
+  const amMarker = () => path.join(repo, ".git", "rebase-apply", "applying");
+
+  /**
+   * A `git am -3` of `topic`'s two commits onto a `main` that rewrote the line
+   * the second one touches: the first patch lands, the second stops.
+   */
+  function haltGitAm(): { tip: string; firstApplied: string } {
+    commitFiles({ "f.txt": "base\n", "g.txt": "base\n" });
+    // The handlers' git commits under the test's empty home, so the identity
+    // has to live in the repository itself.
+    git(repo, "config", "user.name", "Repo Owner");
+    git(repo, "config", "user.email", "repo@example.test");
+    git(repo, "config", "commit.gpgsign", "false");
+    git(repo, "checkout", "-q", "-b", "topic");
+    fs.writeFileSync(path.join(repo, "g.txt"), "topic\n");
+    git(repo, "commit", "-q", "-a", "-m", "clean change");
+    fs.writeFileSync(path.join(repo, "f.txt"), "topic\n");
+    git(repo, "commit", "-q", "-a", "-m", "topic change");
+    const patches = path.join(tmp, "patches");
+    git(repo, "format-patch", "-q", "-2", "-o", patches);
+    git(repo, "checkout", "-q", "main");
+    fs.writeFileSync(path.join(repo, "f.txt"), "main\n");
+    git(repo, "commit", "-q", "-a", "-m", "main change");
+    const tip = git(repo, "rev-parse", "HEAD").trim();
+    const series = fs
+      .readdirSync(patches)
+      .sort()
+      .map((name) => path.join(patches, name));
+    expect(() =>
+      execFileSync("git", ["am", "-3", ...series], { cwd: repo, env: GIT_ENV, stdio: "ignore" })
+    ).toThrow();
+    expect(fs.existsSync(amMarker())).toBe(true);
+    const firstApplied = git(repo, "rev-parse", "HEAD").trim();
+    expect(git(repo, "log", "-1", "--format=%s").trim()).toBe("clean change");
+    expect(firstApplied).not.toBe(tip);
+    return { tip, firstApplied };
+  }
+
+  it("reports the halted session as a mailbox apply in the staging status", async () => {
+    haltGitAm();
+
+    const status = await stagingStatus();
+
+    expect(status.repoState).toBe("APPLYING_MAILBOX");
+    expect(status.conflicted).toEqual(["f.txt"]);
+    expect(status.rebaseStep).toBeNull();
+    expect(status.rebaseTotalSteps).toBeNull();
+  });
+
+  it("continues with git am once the conflict is staged, committing the patch", async () => {
+    haltGitAm();
+    fs.writeFileSync(path.join(repo, "f.txt"), "resolved\n");
+    git(repo, "add", "f.txt");
+
+    const mark = spawned.length;
+    await continueOperation();
+
+    const subcommands = spawnedSince(mark).map(subcommand);
+    expect(subcommands).toContain("am");
+    expect(subcommands).not.toContain("rebase");
+    expect(fs.existsSync(path.join(repo, ".git", "rebase-apply"))).toBe(false);
+    expect(git(repo, "log", "-1", "--format=%s").trim()).toBe("topic change");
+    expect(git(repo, "show", "HEAD:f.txt")).toBe("resolved\n");
+  });
+
+  // `git am` explains an unmerged index on stdout and leaves stderr to advice
+  // hints, so with the hints off the refusal reaches simple-git with no stderr.
+  it("rejects a continue on unresolved paths even with git's conflict advice off", async () => {
+    haltGitAm();
+    git(repo, "config", "advice.mergeConflict", "false");
+
+    await expect(continueOperation()).rejects.toThrow(/unmerged paths/);
+    expect(fs.existsSync(amMarker())).toBe(true);
+  });
+
+  // Two patches so a skip, which would keep the first, can't pass for an abort.
+  it("aborts with git am, returning the branch to its tip from before the session", async () => {
+    const { tip } = haltGitAm();
+
+    const mark = spawned.length;
+    await abortOperation();
+
+    const subcommands = spawnedSince(mark).map(subcommand);
+    expect(subcommands).toContain("am");
+    expect(subcommands).not.toContain("rebase");
+    expect(fs.existsSync(path.join(repo, ".git", "rebase-apply"))).toBe(false);
+    expect(git(repo, "rev-parse", "HEAD").trim()).toBe(tip);
+    expect(git(repo, "status", "--porcelain")).toBe("");
   });
 });

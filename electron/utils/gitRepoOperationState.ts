@@ -1,6 +1,7 @@
 // eager-import-allow: reads/writes the git-operation lock via sync fs
-import { readdirSync } from "fs";
-import { readdir } from "fs/promises";
+import { existsSync, readdirSync } from "fs";
+import { access, readdir } from "fs/promises";
+import { join as pathJoin } from "path";
 import type { RepoState } from "../../shared/types/git.js";
 
 /**
@@ -19,6 +20,14 @@ export const OPERATION_SENTINEL_NAMES = [
   "CHERRY_PICK_HEAD",
   "REVERT_HEAD",
 ] as const;
+
+/**
+ * `git am` and the apply-backend rebase both halt in `rebase-apply`; git marks
+ * its own am session with this file inside it (`rebasing` marks the rebase), and
+ * `git status` reads it the same way. Probed only when `rebase-apply` exists, so
+ * the per-poll fast path stays one directory listing.
+ */
+export const MAILBOX_APPLY_MARKER = pathJoin("rebase-apply", "applying");
 
 /**
  * List `gitDir`'s entries once so sentinel checks cost a single syscall
@@ -53,15 +62,19 @@ export function isRepoOperationInProgress(gitDir: string): boolean {
 
 /**
  * Synchronously classify the in-progress git operation by checking sentinel
- * files in `gitDir`. Returns the blocking operation type (REBASING, MERGING,
- * CHERRY_PICKING, REVERTING), or `undefined` when no operation is in progress.
+ * files in `gitDir`. Returns the blocking operation type (APPLYING_MAILBOX,
+ * REBASING, MERGING, CHERRY_PICKING, REVERTING), or `undefined` when no
+ * operation is in progress.
  *
- * Order of checks matches the async `detectRepoOperationState`: rebase first
- * (both merge and apply backends), then cherry-pick, revert, merge.
+ * Order of checks matches the async `detectRepoOperationState`: a `git am`
+ * session, then rebase (both merge and apply backends), then cherry-pick,
+ * revert, merge.
  */
 export function getRepoOperationStateSync(gitDir: string): RepoState | undefined {
   const entries = readGitDirEntries(gitDir);
-  return entries ? classifyRepoOperationState(entries) : undefined;
+  if (!entries) return undefined;
+  const mailbox = entries.has("rebase-apply") && existsSync(pathJoin(gitDir, MAILBOX_APPLY_MARKER));
+  return classifyRepoOperationState(entries, mailbox);
 }
 
 /**
@@ -80,10 +93,17 @@ export function getRepoOperationState(gitDir: string): Promise<RepoState | undef
     // Started inside the chain so even a synchronous throw fails open.
     pending = Promise.resolve()
       .then(() => readdir(gitDir))
-      .then(
-        (names) => classifyRepoOperationState(new Set(names)),
-        () => undefined
-      )
+      .then(async (names) => {
+        const entries = new Set(names);
+        const mailbox =
+          entries.has("rebase-apply") &&
+          (await access(pathJoin(gitDir, MAILBOX_APPLY_MARKER)).then(
+            () => true,
+            () => false
+          ));
+        return classifyRepoOperationState(entries, mailbox);
+      })
+      .catch(() => undefined)
       .finally(() => inFlightOperationStateReads.delete(gitDir));
     inFlightOperationStateReads.set(gitDir, pending);
   }
@@ -92,7 +112,10 @@ export function getRepoOperationState(gitDir: string): Promise<RepoState | undef
 
 const inFlightOperationStateReads = new Map<string, Promise<RepoState | undefined>>();
 
-function classifyRepoOperationState(entries: Set<string>): RepoState | undefined {
+function classifyRepoOperationState(entries: Set<string>, mailbox: boolean): RepoState | undefined {
+  if (mailbox) {
+    return "APPLYING_MAILBOX";
+  }
   if (entries.has("rebase-merge") || entries.has("rebase-apply")) {
     return "REBASING";
   }

@@ -1958,6 +1958,85 @@ describe("ReviewHub", () => {
       screen.getByRole("button", { name: /^Continue revert/i });
     });
 
+    it("renders a halted git am as a patch apply, with no rebase progress or replay count", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeMergingStatus({
+          repoState: "APPLYING_MAILBOX",
+          staged: [{ path: "a.ts", status: "modified", insertions: 1, deletions: 0 }],
+          // Counters a rebase would render, so the panel's own rebase guard is
+          // what keeps them off a mailbox apply.
+          rebaseStep: 2,
+          rebaseTotalSteps: 3,
+        })
+      );
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => screen.getByTestId("conflict-panel"));
+      screen.getByText(/Resolve patch apply conflicts/i);
+      screen.getByRole("button", { name: /^Continue patch apply/i });
+      expect(screen.queryByTestId("conflict-rebase-progress")).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: /^Abort patch apply/i }));
+      const dialog = await screen.findByRole("alertdialog");
+      expect(dialog.textContent).toMatch(/Discards 1 staged change and/);
+      expect(dialog.textContent).toMatch(/git am/);
+      expect(dialog.textContent).not.toMatch(/replayed commit/);
+    });
+
+    it("tells a resolved git am that Continue applies the rest of the series", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeMergingStatus({
+          repoState: "APPLYING_MAILBOX",
+          conflicted: [],
+          conflictedFiles: [],
+          staged: [{ path: "a.ts", status: "modified", insertions: 1, deletions: 0 }],
+        })
+      );
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => screen.getByTestId("conflict-panel"));
+      screen.getByText(/Ready to continue patch apply/i);
+      screen.getByText("Continue to commit this patch and apply any that remain");
+      expect(
+        screen.getByRole("button", { name: /^Continue patch apply/i }).getAttribute("aria-disabled")
+      ).toBeNull();
+    });
+
+    // The status read that shows the staged resolution lands after the row
+    // leaves the list; until then the row's own staging is what counts.
+    it("does not call a just-resolved git am conflict empty before the status catches up", async () => {
+      getStagingStatusMock.mockResolvedValue(makeMergingStatus({ repoState: "APPLYING_MAILBOX" }));
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      fireEvent.click(await screen.findByLabelText("Mark src/app.ts as resolved"));
+      await waitFor(() =>
+        expect(screen.queryByLabelText("Mark src/app.ts as resolved")).toBeNull()
+      );
+
+      screen.getByText(/Ready to continue patch apply/i);
+      expect(screen.queryByText("Nothing staged for this patch")).toBeNull();
+    });
+
+    // A patch that wouldn't apply at all stops with no conflicts and nothing
+    // staged, and `git am --continue` refuses that index.
+    it("holds Continue on a git am stop with nothing staged and names the terminal way out", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeMergingStatus({ repoState: "APPLYING_MAILBOX", conflicted: [], conflictedFiles: [] })
+      );
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => screen.getByTestId("conflict-panel"));
+      screen.getByText("Nothing staged for this patch");
+      screen.getByText(/run git am --skip in a terminal/);
+      const continueButton = screen.getByRole("button", { name: /^Continue patch apply/i });
+      expect(continueButton.getAttribute("aria-disabled")).toBe("true");
+      fireEvent.click(continueButton);
+      expect(continueRepositoryOperationMock).not.toHaveBeenCalled();
+    });
+
     it("renders normal staging UI when repoState is DIRTY with conflicts", async () => {
       getStagingStatusMock.mockResolvedValue(
         makeStatus({

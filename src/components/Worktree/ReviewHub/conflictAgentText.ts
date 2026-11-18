@@ -39,6 +39,7 @@ const OPERATION_NOUN: Record<RepoOperationState, string> = {
   REBASING: "rebase",
   CHERRY_PICKING: "cherry-pick",
   REVERTING: "revert",
+  APPLYING_MAILBOX: "git am session",
 };
 
 /**
