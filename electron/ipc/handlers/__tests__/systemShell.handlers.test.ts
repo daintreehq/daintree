@@ -793,7 +793,10 @@ describe("system path-allowlist: tracked worktree roots", () => {
     const otherRoot = path.join(TEST_ROOT, "Users", "me", "other-project");
     const failing = vi.fn(() => Promise.reject(new Error("not a git repository")));
     const healthy = vi.fn(() => Promise.resolve([worktreeRecord(UNPREDICTED_WORKTREE)]));
-    projectStoreMock.getAllProjectIdentities.mockReturnValue([{ path: PROJECT_ROOT }, { path: otherRoot }]);
+    projectStoreMock.getAllProjectIdentities.mockReturnValue([
+      { path: PROJECT_ROOT },
+      { path: otherRoot },
+    ]);
     gitServiceCacheMock.getGitService.mockImplementation((root: string) => {
       if (root === PROJECT_ROOT) return { listWorktrees: failing };
       if (root === otherRoot) return { listWorktrees: healthy };
