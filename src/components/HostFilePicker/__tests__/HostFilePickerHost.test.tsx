@@ -884,3 +884,294 @@ describe("HostFilePickerHost start folder", () => {
     expect(done).toBe(false);
   });
 });
+
+describe("HostFilePickerHost large listings", () => {
+  const BIG = "/home/greg/big";
+  const OTHER = "/home/greg/other";
+  const LAST = 1_999;
+  const bigName = (index: number) => `file-${String(index).padStart(4, "0")}.txt`;
+  const otherName = (index: number) => `other-${String(index).padStart(4, "0")}.txt`;
+  const longListing = (
+    path: string,
+    name: (index: number) => string,
+    count: number,
+    truncated: boolean
+  ): HostDirectoryListing => ({
+    path,
+    parent: "/home/greg",
+    truncated,
+    entries: Array.from({ length: count }, (_, index) => ({
+      name: name(index),
+      kind: "file" as const,
+      size: 10,
+      mtimeMs: 0,
+    })),
+  });
+  const bigListing = (count: number, truncated: boolean) =>
+    longListing(BIG, bigName, count, truncated);
+
+  beforeEach(() => {
+    // The host's cap.
+    listings[BIG] = bigListing(LAST + 1, true);
+    listings[OTHER] = longListing(OTHER, otherName, 500, false);
+  });
+  afterEach(() => {
+    delete listings[BIG];
+    delete listings[OTHER];
+  });
+
+  async function openBig(request: Partial<Parameters<typeof pickHostPaths>[0]> = {}) {
+    render(<HostFilePickerHost />);
+    const picked = openPick({
+      mode: "file",
+      title: "Choose file",
+      multiple: true,
+      defaultPath: BIG,
+      ...request,
+    });
+    await findRow(bigName(0));
+    const field = screen.getByLabelText("Folder path");
+    await waitFor(() => expect(document.activeElement).toBe(field));
+    return { picked, listbox: screen.getByRole("listbox") };
+  }
+
+  const mounted = (listbox: HTMLElement) =>
+    Array.from(listbox.querySelectorAll<HTMLElement>('[role="option"]'));
+
+  // The option the list names as active, which must be in the list's DOM.
+  function activeName(listbox: HTMLElement): string | null {
+    const id = listbox.getAttribute("aria-activedescendant");
+    if (id === null) return null;
+    const option = document.getElementById(id);
+    expect(option !== null && listbox.contains(option)).toBe(true);
+    return option!.getAttribute("aria-label");
+  }
+
+  function scrollList(listbox: HTMLElement, top: number) {
+    listbox.scrollTop = top;
+    fireEvent.scroll(listbox);
+  }
+
+  // Each mounted row is where its position says, and the spacers stand in for
+  // exactly the rows left out, so the list scrolls as far as a full one would.
+  function expectWindowConsistent(listbox: HTMLElement, count: number) {
+    const rows = mounted(listbox);
+    const positions = rows.map((row) => Number(row.getAttribute("aria-posinset")));
+    rows.forEach((row, offset) => {
+      expect(row.getAttribute("aria-label")).toBe(bigName(positions[offset]! - 1));
+      expect(row.getAttribute("aria-setsize")).toBe(String(count));
+    });
+    expect(positions).toEqual(positions.map((_, offset) => positions[0]! + offset));
+    const rowPx = Number.parseFloat(rows[0]!.style.height);
+    const spacers = Array.from(
+      listbox.querySelectorAll<HTMLElement>(':scope > [aria-hidden="true"]')
+    );
+    const spacerPx = (spacer: HTMLElement | undefined) =>
+      spacer ? Number.parseFloat(spacer.style.height) : 0;
+    const before = positions[0]! - 1;
+    const after = count - positions[positions.length - 1]!;
+    const top = before > 0 ? spacers[0] : undefined;
+    const bottom = after > 0 ? spacers[spacers.length - 1] : undefined;
+    expect(rowPx).toBeGreaterThan(0);
+    expect(spacerPx(top)).toBe(before * rowPx);
+    expect(spacerPx(bottom)).toBe(after * rowPx);
+  }
+
+  it("mounts a viewport's worth of rows at the host's cap, and says the listing was cut", async () => {
+    const { listbox } = await openBig();
+    const first = mounted(listbox);
+    expect(first.length).toBeGreaterThan(0);
+    expect(first.length).toBeLessThanOrEqual(20);
+    expect(queryRow(bigName(LAST))).toBeNull();
+    expectWindowConsistent(listbox, LAST + 1);
+    expect(
+      screen.getByText(`Showing the first ${(LAST + 1).toLocaleString()} items.`, { exact: false })
+    ).toBeTruthy();
+
+    scrollList(listbox, 30_000);
+    const scrolled = mounted(listbox);
+    expect(scrolled.length).toBeLessThanOrEqual(20);
+    expect(Number(scrolled[0]!.getAttribute("aria-posinset"))).toBeGreaterThan(first.length);
+    expect(queryRow(bigName(0))).toBeNull();
+    expectWindowConsistent(listbox, LAST + 1);
+  });
+
+  it("mounts more rows when the list grows taller", async () => {
+    const watched: Array<{ target: Element; fire: () => void }> = [];
+    const Original = globalThis.ResizeObserver;
+    class RecordingResizeObserver implements ResizeObserver {
+      readonly callback: ResizeObserverCallback;
+      constructor(callback: ResizeObserverCallback) {
+        this.callback = callback;
+      }
+      observe(target: Element) {
+        watched.push({ target, fire: () => this.callback([], this) });
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+    globalThis.ResizeObserver = RecordingResizeObserver;
+    try {
+      const { listbox } = await openBig();
+      const before = mounted(listbox).length;
+      Object.defineProperty(listbox, "clientHeight", { configurable: true, get: () => 900 });
+      act(() => watched.filter((entry) => entry.target === listbox).forEach((e) => e.fire()));
+      expect(mounted(listbox).length).toBeGreaterThan(before + 10);
+      expectWindowConsistent(listbox, LAST + 1);
+    } finally {
+      globalThis.ResizeObserver = Original;
+    }
+  });
+
+  it("reaches both ends from the keyboard, naming a mounted option each time", async () => {
+    const { listbox } = await openBig();
+    const windowSize = mounted(listbox).length;
+    act(() => listbox.focus());
+    expect(activeName(listbox)).toBe(bigName(0));
+
+    // The list scrolls once the cursor leaves the view, not once it leaves the DOM.
+    let presses = 0;
+    while (listbox.scrollTop === 0 && presses < LAST) {
+      fireEvent.keyDown(listbox, { key: "ArrowDown" });
+      presses++;
+    }
+    expect(presses).toBeLessThan(windowSize);
+    expect(activeName(listbox)).toBe(bigName(presses));
+
+    fireEvent.keyDown(listbox, { key: "End" });
+    expect(activeName(listbox)).toBe(bigName(LAST));
+    expect(listbox.scrollTop).toBeGreaterThan(0);
+    expect(queryRow(bigName(0))).toBeNull();
+    fireEvent.keyDown(listbox, { key: "ArrowDown" });
+    expect(activeName(listbox)).toBe(bigName(LAST));
+    fireEvent.keyDown(listbox, { key: "ArrowUp" });
+    expect(activeName(listbox)).toBe(bigName(LAST - 1));
+
+    fireEvent.keyDown(listbox, { key: "Home" });
+    expect(activeName(listbox)).toBe(bigName(0));
+    expect(listbox.scrollTop).toBe(0);
+    expect(queryRow(bigName(LAST))).toBeNull();
+  });
+
+  it("names the active row only while it is mounted, and keeps the cursor through a scroll", async () => {
+    const { listbox } = await openBig();
+    act(() => listbox.focus());
+    fireEvent.keyDown(listbox, { key: "End" });
+    const bottom = listbox.scrollTop;
+
+    scrollList(listbox, bottom - 40);
+    expect(activeName(listbox)).toBe(bigName(LAST));
+    scrollList(listbox, 0);
+    expect(queryRow(bigName(LAST))).toBeNull();
+    expect(listbox.getAttribute("aria-activedescendant")).toBeNull();
+    // Wheeling back finds the cursor where it was.
+    scrollList(listbox, bottom);
+    expect(activeName(listbox)).toBe(bigName(LAST));
+
+    scrollList(listbox, 0);
+    // The same index again: the key still scrolls back to it.
+    fireEvent.keyDown(listbox, { key: "End" });
+    expect(activeName(listbox)).toBe(bigName(LAST));
+    scrollList(listbox, 0);
+    fireEvent.keyDown(listbox, { key: "ArrowUp" });
+    expect(activeName(listbox)).toBe(bigName(LAST - 1));
+  });
+
+  it("keeps a multi-selection across rows scrolled out of view", async () => {
+    const { picked, listbox } = await openBig({ buttonLabel: "Attach" });
+    act(() => listbox.focus());
+    fireEvent.keyDown(listbox, { key: "End" });
+    fireEvent.keyDown(listbox, { key: " " });
+    fireEvent.keyDown(listbox, { key: "Home" });
+    expect(queryRow(bigName(LAST))).toBeNull();
+    fireEvent.click(getRow(bigName(0)), { metaKey: true });
+    expect(getRow(bigName(1)).getAttribute("aria-selected")).toBe("false");
+    expect(confirmButton("Attach 2 files").getAttribute("aria-disabled")).toBeNull();
+
+    fireEvent.keyDown(listbox, { key: "End" });
+    expect(getRow(bigName(LAST)).getAttribute("aria-selected")).toBe("true");
+    expect(getRow(bigName(LAST - 1)).getAttribute("aria-selected")).toBe("false");
+    fireEvent.click(confirmButton("Attach 2 files"));
+    await expect(picked).resolves.toEqual([`${BIG}/${bigName(0)}`, `${BIG}/${bigName(LAST)}`]);
+  });
+
+  it("scrolls a row clicked at the edge of the window, and one Space toggles while offscreen", async () => {
+    const { listbox } = await openBig();
+    const edge = mounted(listbox).at(-1)!;
+    fireEvent.click(edge);
+    expect(listbox.scrollTop).toBeGreaterThan(0);
+
+    act(() => listbox.focus());
+    fireEvent.keyDown(listbox, { key: "End" });
+    scrollList(listbox, 0);
+    fireEvent.keyDown(listbox, { key: " " });
+    expect(activeName(listbox)).toBe(bigName(LAST));
+    expect(getRow(bigName(LAST)).getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("brings the active row back when focus returns to a list scrolled away from it", async () => {
+    const { listbox } = await openBig();
+    act(() => listbox.focus());
+    fireEvent.keyDown(listbox, { key: "End" });
+
+    fireEvent.keyDown(listbox, { key: "l", metaKey: true });
+    const field = screen.getByLabelText("Folder path");
+    await waitFor(() => expect(document.activeElement).toBe(field));
+    scrollList(listbox, 0);
+    fireEvent.keyDown(field, { key: "Escape" });
+    await waitFor(() => expect(document.activeElement).toBe(listbox));
+    expect(activeName(listbox)).toBe(bigName(LAST));
+    expect(listbox.scrollTop).toBeGreaterThan(0);
+
+    act(() => listbox.blur());
+    scrollList(listbox, 0);
+    act(() => listbox.focus());
+    expect(activeName(listbox)).toBe(bigName(LAST));
+    expect(listbox.scrollTop).toBeGreaterThan(0);
+  });
+
+  it("keeps the cursor in view through a shortened refresh, drops what left, and opens another folder at the top", async () => {
+    const { listbox } = await openBig();
+    act(() => listbox.focus());
+    fireEvent.keyDown(listbox, { key: "ArrowDown" });
+    fireEvent.keyDown(listbox, { key: " " });
+    fireEvent.keyDown(listbox, { key: "End" });
+    fireEvent.keyDown(listbox, { key: " " });
+    expect(confirmButton("Select 2 files").getAttribute("aria-disabled")).toBeNull();
+    expect(listbox.scrollTop).toBeGreaterThan(0);
+
+    const hidden = () => screen.getByRole("checkbox", { name: "Show hidden files" });
+
+    // Still longer than the view, so the old offset has to be clamped, not dropped.
+    listDirectory.mockImplementationOnce(async () => bigListing(300, false));
+    fireEvent.click(hidden());
+    await findRow(bigName(299));
+    expect(activeName(listbox)).toBe(bigName(299));
+    expectWindowConsistent(listbox, 300);
+    expect(confirmButton("Select 1 file").getAttribute("aria-disabled")).toBeNull();
+    expect(screen.queryByText(/Showing the first/)).toBeNull();
+
+    // Scrolled away from the cursor, a refresh that moves it brings it back.
+    scrollList(listbox, 0);
+    listDirectory.mockImplementationOnce(async () => bigListing(30, false));
+    fireEvent.click(hidden());
+    await waitFor(() => expect(activeName(listbox)).toBe(bigName(29)));
+    expectWindowConsistent(listbox, 30);
+    expect(confirmButton("Select 1 file").getAttribute("aria-disabled")).toBeNull();
+
+    fireEvent.click(hidden());
+    await waitFor(() => expect(screen.getByText(/Showing the first/)).toBeTruthy());
+    fireEvent.keyDown(listbox, { key: "End" });
+    expect(getRow(bigName(LAST)).getAttribute("aria-selected")).toBe("false");
+    expect(confirmButton("Select 1 file").getAttribute("aria-disabled")).toBeNull();
+
+    fireEvent.keyDown(listbox, { key: "l", metaKey: true });
+    const field = screen.getByLabelText("Folder path");
+    await waitFor(() => expect(document.activeElement).toBe(field));
+    fireEvent.change(field, { target: { value: OTHER } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    await findRow(otherName(0));
+    expect(listbox.scrollTop).toBe(0);
+    expect(mounted(listbox)[0]!.getAttribute("aria-label")).toBe(otherName(0));
+  });
+});

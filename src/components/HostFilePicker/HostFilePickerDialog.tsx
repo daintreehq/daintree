@@ -1,4 +1,12 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ArrowUp,
   Check,
@@ -54,7 +62,11 @@ import {
   isSelectable,
   joinHostPath,
   resolveChoice,
+  revealScrollTop,
+  rowInView,
   splitFileName,
+  visibleRowRange,
+  type ListGeometry,
 } from "./hostFilePickerModel";
 import { usePickerHost, type PickerHost } from "./usePickerHost";
 import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
@@ -77,6 +89,15 @@ function pickerSource(hostId: string | undefined) {
       window.electron.hostSwitch.listDirectory({ toHostId: hostId, path, showHidden }),
   };
 }
+
+// A row is one line at this height, set on the row itself, so the list can
+// place a 2,000-entry listing by arithmetic and mount only what is in view.
+const ROW_HEIGHT = 34;
+// The list's `p-1`.
+const LIST_PADDING = 4;
+// The list's `h-72` less its border: what it shows before layout reports it.
+const LIST_VIEWPORT_SEED = 286;
+const LIST_OVERSCAN = 3;
 
 interface HostFilePickerDialogProps {
   request: HostPickRequest;
@@ -326,6 +347,8 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
   // keyboard's, so the active descendant holds until the pointer takes over.
   const [nameDismissed, setNameDismissed] = useState(false);
   const [stillWorking, setStillWorking] = useState(false);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewport, setViewport] = useState(LIST_VIEWPORT_SEED);
   const [pathInput, setPathInput] = useState<HTMLInputElement | null>(null);
   const pathInputRef = useRef<HTMLInputElement | null>(null);
   const focusOwedRef = useRef(true);
@@ -336,6 +359,18 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
   const hiddenId = useId();
   const host = usePickerHost(request.hostId);
   const showProgress = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
+
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const measure = () => {
+      if (list.clientHeight > 0) setViewport(list.clientHeight);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, []);
 
   // Each listing request gets its own five seconds.
   useEffect(() => {
@@ -419,18 +454,22 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
         setListing(result);
         setListedDirectory(directory);
         setDraft((current) => (current.edited ? current : { text: result.path, edited: false }));
-        setSelectedNames((current) =>
-          sameFolder
-            ? current.filter((name) =>
-                result.entries.some(
-                  (entry) => entry.name === name && isSelectable(entry, requestRef.current)
-                )
-              )
-            : []
-        );
+        setSelectedNames((current) => {
+          if (!sameFolder || current.length === 0) return [];
+          const kept = new Set(
+            result.entries
+              .filter((entry) => isSelectable(entry, requestRef.current))
+              .map((entry) => entry.name)
+          );
+          return current.filter((name) => kept.has(name));
+        });
         setActiveIndex((index) =>
           sameFolder ? Math.min(index, Math.max(0, result.entries.length - 1)) : 0
         );
+        if (!sameFolder) {
+          if (listRef.current) listRef.current.scrollTop = 0;
+          setScrollTop(0);
+        }
         setLoadError(null);
         if (confirmOwedRef.current === directory) {
           confirmOwedRef.current = null;
@@ -479,14 +518,26 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
     () => (listing && loadError === null ? listing.entries : []),
     [listing, loadError]
   );
+  // Indexed once per change: rows and the choice both ask about membership.
+  const selectedSet = useMemo(() => new Set(selectedNames), [selectedNames]);
   const selectedEntries = ready
-    ? entries.filter((entry) => selectedNames.includes(entry.name) && isSelectable(entry, request))
+    ? entries.filter((entry) => selectedSet.has(entry.name) && isSelectable(entry, request))
     : [];
   const choice = ready ? resolveChoice(request, listing.path, selectedEntries) : null;
   const confirmLabel = confirmButtonLabel(request, choice?.length ?? 0);
   const optionId = (index: number) => `${listId}-option-${index}`;
   const activeEntry = ready ? entries[activeIndex] : undefined;
   const multiple = request.mode === "file" && request.multiple === true;
+  const geometry: ListGeometry = { rowHeight: ROW_HEIGHT, padding: LIST_PADDING, viewport };
+  const { start: windowStart, end: windowEnd } = visibleRowRange(
+    entries.length,
+    scrollTop,
+    geometry,
+    LIST_OVERSCAN
+  );
+  // The active descendant only ever names an option that is in the DOM.
+  const activeMounted = activeIndex >= windowStart && activeIndex < windowEnd;
+  const activeInView = rowInView(activeIndex, entries.length, scrollTop, geometry);
   // The home token stands for a folder only the host can name, so it reads as
   // its last listing, through a refresh or a failed one too.
   const homeListing =
@@ -580,6 +631,32 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
     else confirm();
   };
 
+  // Scrolls a row into view; the window follows the offset written here, so a
+  // row that isn't mounted yet still gets there.
+  const revealRow = (index: number) => {
+    const list = listRef.current;
+    if (!list) return;
+    const target = revealScrollTop(index, entries.length, list.scrollTop, geometry);
+    if (target !== null) list.scrollTop = target;
+    // Synced either way: a scroll whose event hasn't arrived yet still counts.
+    setScrollTop(target ?? list.scrollTop);
+  };
+
+  // Keyboard focus arriving, or a listing landing under it, brings the active
+  // row into view: focus can return to a list scrolled away from that row, or
+  // during a refresh that moves it. A wheel scroll alone never pulls it back.
+  const revealActive = useEffectEvent(() => revealRow(activeIndex));
+  useLayoutEffect(() => {
+    if (ready && keyboardCursor) revealActive();
+  }, [ready, keyboardCursor, entries]);
+
+  const moveTo = (index: number) => {
+    setKeyboardCursor(true);
+    setNameDismissed(false);
+    setActiveIndex(index);
+    revealRow(index);
+  };
+
   const onListKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "l") {
       event.preventDefault();
@@ -603,19 +680,16 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       const step = event.key === "ArrowDown" ? 1 : -1;
-      setKeyboardCursor(true);
-      setNameDismissed(false);
-      setActiveIndex((index) => Math.min(entries.length - 1, Math.max(0, index + step)));
+      moveTo(Math.min(entries.length - 1, Math.max(0, activeIndex + step)));
       return;
     }
     if (event.key === "Home" || event.key === "End") {
       event.preventDefault();
-      setKeyboardCursor(true);
-      setNameDismissed(false);
-      setActiveIndex(event.key === "Home" ? 0 : entries.length - 1);
+      moveTo(event.key === "Home" ? 0 : entries.length - 1);
       return;
     }
     if (!activeEntry) return;
+    if (event.key === "Enter" || event.key === " ") revealRow(activeIndex);
     if (event.key === "Enter") {
       event.preventDefault();
       // In a multi-select, Enter on a file confirms what is selected, as the
@@ -632,11 +706,6 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
       toggle(activeEntry, multiple || event.metaKey || event.ctrlKey);
     }
   };
-
-  useEffect(() => {
-    const row = listRef.current?.querySelector<HTMLElement>(`[data-index="${activeIndex}"]`);
-    row?.scrollIntoView?.({ block: "nearest" });
-  }, [activeIndex]);
 
   const pendingLeaf = shownPath ? hostPathLeaf(shownPath) : "home folder";
   const openingText = stillWorking ? `Still opening ${pendingLeaf}…` : `Opening ${pendingLeaf}…`;
@@ -793,8 +862,10 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
         </div>
 
         {/* A fixed height: the dialog keeps its size from folder to folder,
-            so it never re-centres while browsing. */}
-        <div className="relative flex h-72 shrink-0 flex-col">
+            so it never re-centres while browsing. It gives way only to a
+            window too short for the whole dialog, and never below what the
+            empty and error states need. */}
+        <div className="relative flex h-72 min-h-40 flex-col">
           <div
             ref={listRef}
             id={listId}
@@ -803,10 +874,11 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
             aria-busy={loading || undefined}
             aria-multiselectable={multiple || undefined}
             aria-activedescendant={
-              activeEntry && keyboardCursor ? optionId(activeIndex) : undefined
+              activeEntry && keyboardCursor && activeMounted ? optionId(activeIndex) : undefined
             }
             tabIndex={0}
             onKeyDown={onListKeyDown}
+            onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
             onPointerDown={() => {
               listPointerRef.current = true;
               setKeyboardCursor(false);
@@ -825,12 +897,14 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
               setKeyboardCursor(false);
             }}
             className={cn(
-              "group/list min-h-0 flex-1 overflow-auto rounded-[var(--radius-md)] border border-border-default bg-surface-canvas p-1 transition-opacity duration-150 ease-out",
+              // Spacers above the window resize as it moves; anchoring would
+              // fight the offset the window is computed from.
+              "group/list min-h-0 flex-1 overflow-auto rounded-[var(--radius-md)] border border-border-default bg-surface-canvas p-1 transition-opacity duration-150 ease-out [overflow-anchor:none]",
               // The rows still on screen belong to the folder being left.
               showProgress && "opacity-60",
-              // With rows, the active row carries the focus ring; an empty
+              // An active row in view carries the focus ring; otherwise the
               // list rings itself.
-              ready && entries.length > 0
+              ready && entries.length > 0 && activeInView
                 ? "focus-visible:outline-hidden"
                 : "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
             )}
@@ -845,10 +919,14 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
                 ))}
               </Skeleton>
             )}
-            {entries.map((entry, index) => {
+            {windowStart > 0 && (
+              <div aria-hidden="true" style={{ height: windowStart * ROW_HEIGHT }} />
+            )}
+            {entries.slice(windowStart, windowEnd).map((entry, offset) => {
+              const index = windowStart + offset;
               const selectable = isSelectable(entry, request);
               const navigable = isNavigable(entry);
-              const selected = ready && selectedNames.includes(entry.name);
+              const selected = ready && selectedSet.has(entry.name);
               const inert = !ready || (!selectable && !navigable);
               return (
                 <div
@@ -857,18 +935,23 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
                   role="option"
                   // The name split in two flex parts would be read with a gap in it.
                   aria-label={entry.name}
-                  data-index={index}
+                  // Only a window of the listing is in the DOM.
+                  aria-posinset={index + 1}
+                  aria-setsize={entries.length}
                   aria-selected={selected}
                   aria-disabled={inert ? true : undefined}
+                  style={{ height: ROW_HEIGHT }}
                   onClick={(event) => {
                     if (!ready) return;
                     setActiveIndex(index);
+                    revealRow(index);
                     toggle(entry, event.metaKey || event.ctrlKey);
                   }}
                   onDoubleClick={() => open(entry)}
                   className={cn(
                     LIST_DETAIL_ROW_CLASS,
-                    "flex cursor-default select-none items-center gap-2 rounded-[var(--radius-md)] px-3 py-1.5 text-sm",
+                    // Clipped: a name with line breaks in it stays in its row.
+                    "flex cursor-default select-none items-center gap-2 overflow-hidden rounded-[var(--radius-md)] px-3 py-1.5 text-sm",
                     ready &&
                       index === activeIndex &&
                       "group-focus-visible/list:outline-2 group-focus-visible/list:-outline-offset-2 group-focus-visible/list:outline-selection-outline group-focus-visible/list:outline-solid",
@@ -913,6 +996,12 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
                 </div>
               );
             })}
+            {windowEnd < entries.length && (
+              <div
+                aria-hidden="true"
+                style={{ height: (entries.length - windowEnd) * ROW_HEIGHT }}
+              />
+            )}
           </div>
           {ready && entries.length === 0 && (
             <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-1 px-6 text-center">
