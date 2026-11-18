@@ -44,6 +44,30 @@ describe("KeybindingContributionSchema scope", () => {
     }
   });
 
+  it("parses a manifest naming a retired built-in action, alongside a live contribution (#17256)", () => {
+    const result = getPluginManifestSchema("user").safeParse({
+      name: "acme.plugin",
+      version: "1.0.0",
+      contributes: {
+        keybindings: [
+          { actionId: "portal.closeTab", combo: "Cmd+W", scope: "portal" },
+          { actionId: "nav.quickSwitcher", combo: "Cmd+Shift+9" },
+        ],
+        toolbarButtons: [{ id: "chat", label: "Chat", iconId: "globe", actionId: "portal.toggle" }],
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("still rejects a built-in-looking id that never existed", () => {
+    const result = getPluginManifestSchema("user").safeParse({
+      name: "acme.plugin",
+      version: "1.0.0",
+      contributes: { keybindings: [{ actionId: "portal.nonsense", combo: "Cmd+Shift+9" }] },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("rejects the removed scopes with migration hints", () => {
     expect(scopeError("terminal")).toContain('when: "terminalFocused"');
     expect(scopeError("modal")).toContain('when: "modalOpen"');

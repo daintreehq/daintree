@@ -4,10 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RecipeTerminal, TerminalRecipe } from "@/types";
 import type { RecipeSpawnResults } from "@/store/recipeStore";
 
-vi.mock("@/store/portalStore", () => ({
-  usePortalStore: () => ({ isOpen: false, width: 0 }),
-}));
-
 vi.mock("@/hooks/useOverlayState", () => ({
   useOverlayState: () => {},
 }));

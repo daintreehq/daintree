@@ -8,12 +8,10 @@ import {
   useId,
   createContext,
   useContext,
-  useSyncExternalStore,
   type CSSProperties,
 } from "react";
 import { InsetSurface } from "@/components/ui/insetSurface";
 import { createPortal } from "react-dom";
-import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { getVisibleTabbableElements } from "@/lib/accessibility";
 import { resolveFocusOpener } from "@/lib/focusOpener";
@@ -38,7 +36,6 @@ import {
 import { APP_DIALOG_SURFACE_ATTR } from "@/lib/appDialogSurface";
 import { publishScrollbarGutter } from "@/lib/scrollbarGutter";
 import { useDockPopoverOpen } from "@/lib/dockPopoverLayer";
-import { usePortalStore } from "@/store/portalStore";
 import { clearDialogOverlays } from "@/lib/dialogOverlayDismissal";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
@@ -284,30 +281,6 @@ const PLACEMENT_MOTION: Record<
   window: { starting: "", shown: "", hidden: "" },
 };
 
-// Window dialogs up right now. A dialog opened over one covers the whole window
-// too: the strip it would leave for the Portal holds the window dialog by then,
-// and left unscrimmed there, a click would reach it from behind a modal.
-let windowDialogsUp = 0;
-const windowDialogListeners = new Set<() => void>();
-
-function subscribeWindowDialogs(listener: () => void): () => void {
-  windowDialogListeners.add(listener);
-  return () => {
-    windowDialogListeners.delete(listener);
-  };
-}
-
-function isWindowDialogUp(): boolean {
-  return windowDialogsUp > 0;
-}
-
-function noteWindowDialog(delta: 1 | -1): void {
-  windowDialogsUp += delta;
-  for (const listener of windowDialogListeners) listener();
-}
-
-const PORTAL_UNREAD = { isOpen: false, width: 0 };
-
 export function AppDialog({
   isOpen,
   onClose,
@@ -365,14 +338,6 @@ export function AppDialog({
       prev && edges && prev.up === edges.up && prev.down === edges.down ? prev : edges
     );
   }, []);
-
-  // A window covers the Portal's strip with the rest: the Portal is hidden
-  // while any overlay is up, so there is nothing there to keep in reach.
-  const overWindowDialog = useSyncExternalStore(
-    subscribeWindowDialogs,
-    isWindowDialogUp,
-    isWindowDialogUp
-  );
 
   // Hold the latest `restoreFocusTo` in a ref so `restoreFocus` stays
   // identity-stable. It feeds the unmount-cleanup effect's dep array; if it
@@ -457,21 +422,6 @@ export function AppDialog({
   });
 
   useOverlayState(isOpen || shouldRender);
-
-  // Read only while the dialog is on screen. A host keeps its dialog mounted
-  // and closed once it has opened, and the Portal writes its width on every
-  // frame of a dock resize, which woke every such dialog (#17072).
-  const { isOpen: portalOpen, width: portalWidth } = usePortalStore(
-    useShallow((s) => (shouldRender ? { isOpen: s.isOpen, width: s.width } : PORTAL_UNREAD))
-  );
-  const portalOffset = portalOpen && placement !== "window" && !overWindowDialog ? portalWidth : 0;
-
-  const coversWindow = placement === "window" && shouldRender;
-  useEffect(() => {
-    if (!coversWindow) return;
-    noteWindowDialog(1);
-    return () => noteWindowDialog(-1);
-  }, [coversWindow]);
 
   // Re-measure the platform's reserved scrollbar gutter as the dialog opens.
   // It is a UA/OS property, not a stylesheet value — and one the user can
@@ -791,7 +741,6 @@ export function AppDialog({
           isVisible ? "opacity-100" : "opacity-0"
         )}
         style={{
-          right: portalOffset,
           transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
           // A window's layer is the view itself, so it fades on the view's
           // curves (as the plugin manager does) rather than a scrim's linear

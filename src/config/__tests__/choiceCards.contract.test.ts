@@ -21,7 +21,6 @@ const CHOICE_CARD_SITES = [
   "components/Terminal/RecipeRunner/RecipeRunnerItem.tsx",
   "components/Terminal/LauncherQuickActions.tsx",
   "components/Setup/AgentSetupWizard.tsx",
-  "components/Portal/PortalLaunchpad.tsx",
   "components/Plugin/PluginCatalog.tsx",
 ];
 

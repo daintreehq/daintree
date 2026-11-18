@@ -138,8 +138,6 @@ const { useCliAvailabilityStore, cleanupCliAvailabilityStore } =
   await import("../cliAvailabilityStore");
 const { useAgentSettingsStore, cleanupAgentSettingsStore } = await import("../agentSettingsStore");
 const { agentSettingsClient } = await import("@/clients");
-const { useHelpPanelStore } = await import("../helpPanelStore");
-const { usePortalStore } = await import("../portalStore");
 const { useProjectHomeStore, selectProjectMainAreaRoute } = await import("../projectHomeStore");
 const { useProjectPluginStore } = await import("../projectPluginStore");
 const { useDictationRangeStore } = await import("../dictationRangeStore");
@@ -2597,41 +2595,6 @@ describe("rendererStoreOrchestrator", () => {
       stores.useFleetArmingStore.getState().clear();
       expect(stores.useFleetFailureStore.getState().failedIds.size).toBe(0);
       expect(stores.useFleetFailureStore.getState().payload).toBeNull();
-    });
-  });
-
-  describe("assistant / web chat exclusivity", () => {
-    beforeEach(() => {
-      useHelpPanelStore.setState({ isOpen: false });
-      usePortalStore.setState({ isOpen: false });
-    });
-
-    it("closes web chat when the assistant opens", () => {
-      usePortalStore.getState().toggle();
-      expect(usePortalStore.getState().isOpen).toBe(true);
-
-      useHelpPanelStore.getState().toggle();
-
-      expect(useHelpPanelStore.getState().isOpen).toBe(true);
-      expect(usePortalStore.getState().isOpen).toBe(false);
-    });
-
-    it("closes the assistant when web chat opens", () => {
-      useHelpPanelStore.getState().setOpen(true);
-
-      usePortalStore.getState().toggle();
-
-      expect(usePortalStore.getState().isOpen).toBe(true);
-      expect(useHelpPanelStore.getState().isOpen).toBe(false);
-    });
-
-    it("stops enforcing after the orchestrator is destroyed", () => {
-      destroyStoreOrchestrator();
-      useHelpPanelStore.getState().setOpen(true);
-      usePortalStore.getState().setOpen(true);
-
-      expect(useHelpPanelStore.getState().isOpen).toBe(true);
-      expect(usePortalStore.getState().isOpen).toBe(true);
     });
   });
 

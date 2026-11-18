@@ -20,7 +20,6 @@ const panelStore = vi.hoisted(() => {
 });
 vi.mock("../panelStore", () => ({ usePanelStore: panelStore }));
 
-import { useMacroFocusStore } from "../macroFocusStore";
 import { readFocusedPanel, subscribeFocusedPanelReporter } from "../focusedPanelReporter";
 
 const setPanels = panelStore.setPanels;
@@ -68,7 +67,6 @@ beforeEach(() => {
 afterEach(() => {
   document.body.innerHTML = "";
   hasFocus.mockRestore();
-  useMacroFocusStore.getState().setRegionRef("portal", null);
   Reflect.deleteProperty(window, "electron");
 });
 
@@ -96,17 +94,6 @@ describe("readFocusedPanel", () => {
     mountPanel("t1").focus();
     hasFocus.mockReturnValue(false);
     expect(readFocusedPanel().kind).toBeNull();
-  });
-
-  it("reports the Portal dock's own chrome as portal", () => {
-    const dock = document.createElement("aside");
-    const tab = document.createElement("button");
-    dock.appendChild(tab);
-    document.body.appendChild(dock);
-    useMacroFocusStore.getState().setRegionRef("portal", dock);
-    tab.focus();
-
-    expect(readFocusedPanel()).toEqual({ kind: "portal", agent: false, worktreeId: null });
   });
 });
 
@@ -143,9 +130,6 @@ describe("subscribeFocusedPanelReporter", () => {
   });
 
   it("walks the DOM only when focus may have moved, while the focused terminal streams", async () => {
-    const dock = document.createElement("aside");
-    document.body.appendChild(dock);
-    useMacroFocusStore.getState().setRegionRef("portal", dock);
     mountPanel("t1").focus();
     const dispose = subscribeFocusedPanelReporter();
     await flushMicrotasks();
@@ -205,25 +189,6 @@ describe("subscribeFocusedPanelReporter", () => {
     await nextFrame();
 
     expect(reads).toBe(0);
-    dispose();
-  });
-
-  it("reads again once the Portal dock registers around the focused element", async () => {
-    const dock = document.createElement("aside");
-    const tab = document.createElement("button");
-    dock.appendChild(tab);
-    document.body.appendChild(dock);
-    tab.focus();
-    const dispose = subscribeFocusedPanelReporter();
-    await flushMicrotasks();
-    expect(report).toHaveBeenLastCalledWith({ kind: null, agent: false, worktreeId: null });
-
-    // Registered in an effect, with no store notification of its own.
-    useMacroFocusStore.getState().setRegionRef("portal", dock);
-    setPanels({ ...panelStore.getState().panelsById });
-    await flushMicrotasks();
-
-    expect(report).toHaveBeenLastCalledWith({ kind: "portal", agent: false, worktreeId: null });
     dispose();
   });
 

@@ -8,7 +8,7 @@ import { UI_ANIMATION_DURATION, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
 
 /**
  * The document tab family: the grid pane's tab group, the dock popover's tab
- * group, the portal's browser tabs and the assistant's session lanes. One look,
+ * group and the assistant's session lanes. One look,
  * one close control, one keyboard contract (APG tabs, manual activation, Delete
  * closes, the tab stop sits on the selected tab).
  *

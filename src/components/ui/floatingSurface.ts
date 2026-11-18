@@ -22,7 +22,7 @@ export const FLOATING_CARD_SURFACE_CLASS =
 export const FLOATING_CARD_CLASS = `${FLOATING_CARD_RADIUS_CLASS} ${FLOATING_CARD_SURFACE_CLASS}`;
 
 /**
- * A full-height sheet that overlays the workspace (Portal, Theme Browser). It
+ * A full-height sheet that overlays the workspace (the Theme Browser). It
  * sits at dialog depth. A docked panel that pushes content aside, like the
  * assistant, takes only its border: it does not float, so it casts nothing.
  */

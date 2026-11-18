@@ -329,10 +329,4 @@ export const LazyCrashRecoveryDialog = lazyWithPreload(
 );
 export const preloadCrashRecoveryDialog = LazyCrashRecoveryDialog.preload;
 
-export const LazyPortalDock = lazyWithPreload(
-  () => import("./components/Portal/PortalDock"),
-  (m) => m.PortalDock
-);
-export const preloadPortalDock = LazyPortalDock.preload;
-
 export const loadMotionFeatures = () => import("./lib/motionFeatures").then((mod) => mod.default);

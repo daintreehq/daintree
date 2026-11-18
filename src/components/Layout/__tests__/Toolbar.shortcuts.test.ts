@@ -7,7 +7,6 @@ import { readIndexCss } from "@/__tests__/support/hostCss";
 import { readToolbarSource } from "./toolbarSource";
 
 const PROBLEMS_BUTTON_PATH = path.resolve(__dirname, "../ToolbarProblemsButton.tsx");
-const PORTAL_BUTTON_PATH = path.resolve(__dirname, "../ToolbarPortalButton.tsx");
 const SETTINGS_BUTTON_PATH = path.resolve(__dirname, "../ToolbarSettingsButton.tsx");
 const LAUNCHER_BUTTON_PATH = path.resolve(__dirname, "../ToolbarLauncherButton.tsx");
 const AGENT_BUTTON_PATH = path.resolve(__dirname, "../AgentButton.tsx");
@@ -21,7 +20,6 @@ const COPY_TREE_ACTION_PATH = path.resolve(
 describe("Toolbar shortcut tooltips — issue #3443", () => {
   let source: string;
   let problemsSource: string;
-  let portalSource: string;
   let settingsSource: string;
   let launcherSource: string;
   let agentSource: string;
@@ -32,7 +30,6 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
     [
       source,
       problemsSource,
-      portalSource,
       settingsSource,
       launcherSource,
       agentSource,
@@ -41,7 +38,6 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
     ] = await Promise.all([
       readToolbarSource(),
       fs.readFile(PROBLEMS_BUTTON_PATH, "utf-8"),
-      fs.readFile(PORTAL_BUTTON_PATH, "utf-8"),
       fs.readFile(SETTINGS_BUTTON_PATH, "utf-8"),
       fs.readFile(LAUNCHER_BUTTON_PATH, "utf-8"),
       fs.readFile(AGENT_BUTTON_PATH, "utf-8"),
@@ -57,10 +53,6 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
 
     it("uses dynamic hook for panel.toggleDiagnostics", () => {
       expect(problemsSource).toContain('useEffectiveCombo("panel.toggleDiagnostics")');
-    });
-
-    it("uses dynamic hook for panel.togglePortal", () => {
-      expect(portalSource).toContain('useEffectiveCombo("panel.togglePortal")');
     });
 
     it("uses dynamic hook for worktree.copyTree", () => {
@@ -126,11 +118,6 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       expect(problemsSource).toMatch(/createTooltipContent\([\s\S]*?diagnosticsShortcut\s*\)/);
     });
 
-    it("uses createTooltipContent for portal tooltip", () => {
-      expect(portalSource).toContain("createTooltipContent");
-      expect(portalSource).toContain("portalShortcut");
-    });
-
     it("uses createTooltipContent for copy-tree tooltip", () => {
       expect(source).toContain('createTooltipContent("Copy context", copyTreeCombo)');
     });
@@ -167,11 +154,6 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
     it("ToolbarProblemsButton renders aria-keyshortcuts", () => {
       expect(problemsSource).toContain('useAriaKeyshortcuts("panel.toggleDiagnostics")');
       expect(problemsSource).toContain("aria-keyshortcuts={diagnosticsAriaShortcut}");
-    });
-
-    it("ToolbarPortalButton renders aria-keyshortcuts", () => {
-      expect(portalSource).toContain('useAriaKeyshortcuts("panel.togglePortal")');
-      expect(portalSource).toContain("aria-keyshortcuts={portalAriaShortcut}");
     });
 
     it("ToolbarSettingsButton renders aria-keyshortcuts", () => {

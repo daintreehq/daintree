@@ -147,6 +147,43 @@ describe("summarizeReports", () => {
   });
 });
 
+describe("summarizeReports over an earlier summary", () => {
+  const summary = summarizeReports([{ report: fixture, platform: "linux" }]);
+
+  it("reproduces a summary it is given back", () => {
+    expect(summarizeReports([{ report: summary }])).toEqual(summary);
+  });
+
+  it("drops a spec file and recomputes the totals from the rows left", () => {
+    const pruned = summarizeReports([{ report: summary }], { drop: ["core/a.spec.ts"] });
+    expect(pruned.specs.map((s) => s.file)).toEqual(["full/terminal/b.spec.ts"]);
+    expect(pruned.projects).toEqual([
+      expect.objectContaining({ project: "full-terminal", specs: 1, tests: 2, retries: 2 }),
+    ]);
+  });
+
+  it("merges a summary and a report into one row for a file-less suite, in either order", () => {
+    const shard = {
+      suites: [{ specs: [{ tests: [{ projectName: "core", results: [{ duration: 5 }] }] }] }],
+    };
+    const earlier = summarizeReports([{ report: shard }]);
+    const forward = summarizeReports([{ report: earlier }, { report: shard }]);
+    const backward = summarizeReports([{ report: shard }, { report: earlier }]);
+    expect(forward).toEqual(backward);
+    expect(forward.specs).toEqual([
+      expect.objectContaining({ file: "", tests: 2, durationMs: 10 }),
+    ]);
+    expect(forward.projects).toEqual([expect.objectContaining({ specs: 1, tests: 2 })]);
+  });
+
+  it("drops a spec file from a Playwright report too", () => {
+    const pruned = summarizeReports([{ report: fixture, platform: "linux" }], {
+      drop: ["full/terminal/b.spec.ts"],
+    });
+    expect(pruned.specs.map((s) => s.file)).toEqual(["core/a.spec.ts"]);
+  });
+});
+
 describe("reportPlatform", () => {
   it("prefers report metadata over the fallback", () => {
     expect(reportPlatform({ config: { metadata: { platform: "darwin" } } }, "linux")).toBe(
@@ -162,8 +199,17 @@ describe("parseArgs", () => {
     expect(parseArgs(["a.json", "--out", "o.json", "--platform", "linux", "b.json"])).toEqual({
       platform: "linux",
       out: "o.json",
+      drop: [],
       inputs: ["a.json", "b.json"],
     });
+  });
+
+  it("collects every --drop", () => {
+    expect(parseArgs(["--drop", "a.spec.ts", "s.json", "--drop", "b.spec.ts"]).drop).toEqual([
+      "a.spec.ts",
+      "b.spec.ts",
+    ]);
+    expect(() => parseArgs(["--drop"])).toThrow(/needs a value/);
   });
 
   it("rejects unknown options and missing values", () => {

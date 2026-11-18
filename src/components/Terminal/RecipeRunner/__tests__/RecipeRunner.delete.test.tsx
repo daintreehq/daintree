@@ -6,10 +6,6 @@ import type { TerminalRecipe } from "@/types";
 import { _resetForTests } from "@/lib/escapeStack";
 import { _resetForTests as _resetBackstopForTests } from "@/lib/dialogEscapeBackstop";
 
-vi.mock("@/store/portalStore", () => ({
-  usePortalStore: () => ({ isOpen: false, width: 0 }),
-}));
-
 vi.mock("@/hooks/useOverlayState", () => ({
   useOverlayState: () => {},
 }));

@@ -867,7 +867,7 @@ class KeybindingService {
     }> = [];
 
     // Only bindings live in the current scope: an action's second binding in
-    // another scope (a portal-only chord) would otherwise be offered where it
+    // another scope (a dev-preview-only chord) would otherwise be offered where it
     // can't fire.
     const allBindings = this.getAllBindingsWithEffectiveCombos().filter((binding) =>
       this.scopeAllows(binding.scope)

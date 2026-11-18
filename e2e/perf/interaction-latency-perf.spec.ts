@@ -1194,16 +1194,6 @@ function scenarios(): Scenario[] {
         await escapeUntilGone('[role="grid"][aria-label="Commits"]');
       },
     },
-    {
-      id: "portal-toggle",
-      label: "Open web-chat portal (Cmd+\\)",
-      trigger: () => page.keyboard.press(`${MOD}+Backslash`),
-      cond: () => ({ kind: "visible", selector: 'aside[aria-label="Portal"]' }),
-      after: async () => {
-        await page.keyboard.press(`${MOD}+Backslash`);
-        await waitGone('aside[aria-label="Portal"]');
-      },
-    },
 
     // ── Panels ─────────────────────────────────────────────────────────
     {

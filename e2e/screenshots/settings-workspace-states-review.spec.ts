@@ -2,10 +2,10 @@
  * Settings workspace pages — the states a top-to-bottom sweep never reaches.
  *
  * `settings-pages-review.spec.ts` captures every page as a fresh profile renders it.
- * That hides most of what the Panel grid, Worktree and Portal pages are for: the
+ * That hides most of what the Panel grid, Worktree and Links pages are for: the
  * dependents under a switch that is on, the grid strategy that brings its own row,
- * the path pattern while it is invalid, unsaved and just saved, and a portal with
- * custom links, one being edited, and the custom new-tab URL open. This spec drives
+ * the path pattern while it is invalid, unsaved and just saved, and custom links,
+ * one being edited and one refused. This spec drives
  * each one through the real controls — no store seeding — and captures it.
  *
  *   DAINTREE_SHOT_SETTINGS_STATES=1 DAINTREE_SHOT_DIR=/tmp/out \
@@ -258,13 +258,6 @@ test("settings workspace states — dependents, strategies, pattern and link edi
     await capture(page, "links.add-error", custom);
     await newName.fill("");
     await newUrl.fill("");
-
-    // Portal — custom new-tab URL.
-    await openAt(page, "portal");
-    await page.locator(`${DIALOG} #portal-default-agent [role="combobox"]`).click();
-    await page.getByRole("option", { name: /Custom URL/ }).click();
-    await expect(page.getByRole("textbox", { name: "Custom URL" })).toBeVisible();
-    await capture(page, "portal.custom-url");
   } finally {
     if (ctx) await closeApp(ctx.app).catch(() => {});
     repo.cleanup();
@@ -276,5 +269,5 @@ test("settings workspace states — dependents, strategies, pattern and link edi
   const missing = written.filter((f) => !onDisk.has(f));
   console.log(`[settings-states-shots] ${written.length - missing.length}/${written.length} PNGs`);
   expect(missing).toEqual([]);
-  expect(written.length).toBe(14);
+  expect(written.length).toBe(13);
 });

@@ -31,7 +31,6 @@ const ACTION_CATEGORY_LABEL_ENTRIES: Readonly<Record<string, string>> = {
   terminal: "Terminals",
   files: "Files",
   browser: "Browser",
-  portal: "Portal",
   recipes: "Recipes",
   devServer: "Dev server",
   copyTree: "CopyTree",

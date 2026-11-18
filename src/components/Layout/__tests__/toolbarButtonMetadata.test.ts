@@ -11,14 +11,10 @@ import {
 import { TOOLBAR_BUTTON_PRIORITIES, type AnyToolbarButtonId } from "@shared/types/toolbar";
 
 // IDs that intentionally have no entry in TOOLBAR_BUTTON_METADATA. The fixed
-// titlebar buttons (sidebar-toggle, assistant-toggle, portal-toggle) are
+// titlebar buttons (sidebar-toggle, assistant-toggle) are
 // rendered directly, never appear in the Settings list, and never enter the
 // overflow dropdown — so omitting metadata for them is deliberate.
-const FIXED_TITLEBAR_IDS = new Set<AnyToolbarButtonId>([
-  "sidebar-toggle",
-  "assistant-toggle",
-  "portal-toggle",
-]);
+const FIXED_TITLEBAR_IDS = new Set<AnyToolbarButtonId>(["sidebar-toggle", "assistant-toggle"]);
 
 // Derived from the exhaustive `TOOLBAR_BUTTON_PRIORITIES` record rather than
 // hand-listed: a hand-listed set silently stops guarding whatever it forgets

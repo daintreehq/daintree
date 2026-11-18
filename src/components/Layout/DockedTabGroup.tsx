@@ -223,7 +223,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   // Mirrors DockedTerminalItem: only the worktree-sidebar-hidden state
   // changes left-side popover collision padding. Right padding is handled by
   // PopoverContent's collisionBoundary (width: 100vw − --right-obstruction-offset),
-  // so the assistant/portal exclusion is not re-counted here.
+  // so the assistant's width is not re-counted here.
   const sidebarHidden = useFocusStore((s) => s.gestureSidebarHidden);
 
   const collisionPadding = useMemo(() => {

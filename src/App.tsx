@@ -296,7 +296,7 @@ function AppInner() {
     if (!wasOpen && isPluginManagerOpen) setIsSettingsOpen(false);
   }, [isPluginManagerOpen, setIsSettingsOpen]);
   // PluginManagerView claims the viewport only once its lazy chunk mounts, and
-  // Settings' claim can drop first, letting the Portal flash in the gap. Same
+  // Settings' claim can drop first, letting a native view flash in the gap. Same
   // handoff as the theme browser's presence claim in AppLayout.
   useOverlayClaim("plugin-manager-presence", isPluginManagerOpen);
 

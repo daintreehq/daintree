@@ -1,8 +1,8 @@
 /**
  * Bounds and steps for the file-browser tree column's draggable width (#11331).
  *
- * Fixed constants rather than container-relative bounds, matching the two
- * existing resize handles (worktree `Sidebar` 200/600, `PortalDock` 320/1200):
+ * Fixed constants rather than container-relative bounds, matching the worktree
+ * `Sidebar`'s resize handle (200/600):
  * the viewer half is already `min-w-0 flex-1`, so it shrinks/scrolls when the
  * panel is narrow, and a persisted width that never depends on transient
  * layout stays stable across restores and window sizes.

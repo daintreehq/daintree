@@ -9,7 +9,6 @@ import {
   Link,
   Mic,
   Package,
-  PanelRight,
   PanelTop,
   Keyboard,
   ScrollText,
@@ -152,7 +151,6 @@ const importTerminalAppearanceTab = () => import("./TerminalAppearanceTab");
 const importTroubleshootingTab = () => import("./TroubleshootingTab");
 const importCodeForgeSettingsTab = () => import("./CodeForgeSettingsTab");
 const importNotificationSettingsTab = () => import("./NotificationSettingsTab");
-const importPortalSettingsTab = () => import("./PortalSettingsTab");
 const importLinksSettingsTab = () => import("./LinksSettingsTab");
 const importKeyboardShortcutsTab = () => import("./KeyboardShortcutsTab");
 const importWorktreeSettingsTab = () => import("./WorktreeSettingsTab");
@@ -199,7 +197,6 @@ const LazyNotificationSettingsTab = lazyWithPreload(
   importNotificationSettingsTab,
   (m) => m.NotificationSettingsTab
 );
-const LazyPortalSettingsTab = lazyWithPreload(importPortalSettingsTab, (m) => m.PortalSettingsTab);
 const LazyLinksSettingsTab = lazyWithPreload(importLinksSettingsTab, (m) => m.LinksSettingsTab);
 const LazyKeyboardShortcutsTab = lazyWithPreload(
   importKeyboardShortcutsTab,
@@ -1490,7 +1487,7 @@ export const SETTINGS_REGISTRY = [
         section: "All agents",
         title: "Default agent",
         description:
-          'Agent used for the Daintree Assistant and automated workflows ("What\'s next?", onboarding, project explanations). Distinct from the Portal "Default new tab agent".',
+          'Agent used for the Daintree Assistant and automated workflows ("What\'s next?", onboarding, project explanations).',
         keywords: [
           "default",
           "agent",
@@ -1950,37 +1947,6 @@ export const SETTINGS_REGISTRY = [
   } satisfies LazySettingsTabEntry,
 
   ...(isRemoteShellSupported() ? [HOSTS_TAB] : []),
-
-  {
-    id: "portal",
-    scope: "global",
-    group: "Integrations",
-    settings: ["storage:portal-storage"],
-    label: "Portal",
-    headerTitle: "Portal links",
-    icon: <PanelRight className="w-4 h-4" />,
-    importKind: "lazy",
-    importer: LazyPortalSettingsTab.preload,
-    LazyComponent: LazyPortalSettingsTab,
-    searchNavDescription: "New tab page and built-in chat links for the portal browser panel",
-    searchNavKeywords: ["integrations", "portal", "browser", "chat"],
-    sections: [
-      {
-        id: "portal-default-agent",
-        section: "Default new tab agent",
-        title: "Default new tab agent",
-        description: "Choose which agent opens when you click the + button in the portal",
-        keywords: ["portal", "agent", "default", "new tab", "browser"],
-      },
-      {
-        id: "portal-default-links",
-        section: "Default links",
-        title: "Default links",
-        description: "System-provided links shown in the portal panel",
-        keywords: ["portal", "links", "default", "browser", "chat"],
-      },
-    ],
-  } satisfies LazySettingsTabEntry,
 
   {
     id: "mcp",
@@ -2745,8 +2711,8 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
         id: "project-links",
         section: "Project links",
         title: "Project links",
-        description: "Addresses offered in this project's Portal launchpad, such as staging",
-        keywords: ["portal", "links", "launchpad", "staging", "production", "dashboard", "url"],
+        description: "Addresses offered in this project's links launcher, such as staging",
+        keywords: ["links", "launcher", "staging", "production", "dashboard", "url"],
       },
       {
         id: "project-agent-integrations",
@@ -3000,7 +2966,6 @@ export const globalTabIcons: Record<GlobalSettingsTab, ReactNode> = {
   assistant: <DaintreeIcon className="w-5 h-5 text-text-secondary" size={20} />,
   "code-forge": <GitPullRequest className="w-5 h-5 text-text-secondary" />,
   links: <Link className="w-5 h-5 text-text-secondary" />,
-  portal: <PanelRight className="w-5 h-5 text-text-secondary" />,
   toolbar: <PanelTop className="w-5 h-5 text-text-secondary" />,
   notifications: <Bell className="w-5 h-5 text-text-secondary" />,
   "import-export": <ArrowDownUp className="w-5 h-5 text-text-secondary" />,

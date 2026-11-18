@@ -5,10 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import { _resetForTests } from "@/lib/escapeStack";
 
-vi.mock("@/store/portalStore", () => ({
-  usePortalStore: () => ({ isOpen: false, width: 0 }),
-}));
-
 vi.mock("@/hooks/useOverlayState", () => ({
   useOverlayState: () => {},
 }));

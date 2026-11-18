@@ -264,7 +264,7 @@ describe("SettingsShortcutCapture", () => {
         onCapture={mockOnCapture}
         onCancel={mockOnCancel}
         excludeActionId="test.action"
-        scope="portal"
+        scope="dev-preview"
       />
     );
 
@@ -285,7 +285,7 @@ describe("SettingsShortcutCapture", () => {
     expect(keybindingService.findConflicts).toHaveBeenCalledWith(
       expect.any(String),
       "test.action",
-      "portal"
+      "dev-preview"
     );
   });
 

@@ -6,7 +6,6 @@ import { getAppThemeCssVariables } from "@shared/theme";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { useThemeBrowserStore } from "@/store/themeBrowserStore";
 import { useUIStore } from "@/store/uiStore";
-import { usePortalStore } from "@/store/portalStore";
 import { _resetForTests } from "@/lib/escapeStack";
 import { useGlobalEscapeDispatcher } from "@/hooks/useGlobalEscapeDispatcher";
 
@@ -61,7 +60,6 @@ describe("ThemeBrowser", () => {
     });
     useThemeBrowserStore.setState({ isOpen: true });
     useUIStore.setState({ overlayStack: [] });
-    usePortalStore.setState({ isOpen: false });
   });
 
   afterEach(() => {
@@ -269,15 +267,6 @@ describe("ThemeBrowser", () => {
     unmount();
 
     expect(useUIStore.getState().overlayStack.includes("theme-browser")).toBe(false);
-  });
-
-  it("portal toggle is a no-op while the browser is mounted", () => {
-    render(<Harness />);
-    expect(usePortalStore.getState().isOpen).toBe(false);
-
-    usePortalStore.getState().toggle();
-
-    expect(usePortalStore.getState().isOpen).toBe(false);
   });
 
   it("PaletteStrip color swatches are hidden from screen readers", () => {
@@ -671,7 +660,6 @@ describe("ThemeBrowser navigation contract", () => {
     });
     useThemeBrowserStore.setState({ isOpen: true });
     useUIStore.setState({ overlayStack: [] });
-    usePortalStore.setState({ isOpen: false });
   });
 
   afterEach(() => {

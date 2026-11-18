@@ -4,7 +4,6 @@ import { combosFieldsEqual, type RegisteredKeybindingConfig } from "@/services/k
 export const SCOPE_NOTES: Record<KeyScope, string> = {
   global: "Across the app",
   worktreeGrid: "In an expanded worktree card",
-  portal: "In the portal",
   "dev-preview": "In dev preview",
 };
 

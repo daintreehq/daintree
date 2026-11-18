@@ -7,17 +7,6 @@ import { useGlobalEscapeDispatcher } from "@/hooks/useGlobalEscapeDispatcher";
 import { UI_ENTER_EASING, UI_EXIT_EASING } from "@/lib/animationUtils";
 import { WINDOWS_CAPTION_WIDTH_PX } from "@shared/config/windowChrome";
 
-const PORTAL_WIDTH = 320;
-
-vi.mock("zustand/react/shallow", () => ({
-  useShallow: (fn: unknown) => fn,
-}));
-
-// Open, so a dialog that leaves the Portal's strip uncovered says so.
-vi.mock("@/store/portalStore", () => ({
-  usePortalStore: () => ({ isOpen: true, width: PORTAL_WIDTH }),
-}));
-
 vi.mock("@/hooks/useOverlayState", () => ({
   useOverlayState: () => {},
 }));
@@ -157,42 +146,6 @@ afterEach(() => {
 });
 
 describe("AppDialog window placement", () => {
-  it("covers the whole window, the Portal's strip too, where a card leaves it", () => {
-    const { unmount } = render(<Dialog placement="center" />);
-    expect(layer().style.right).toBe(`${PORTAL_WIDTH}px`);
-    unmount();
-
-    render(<Dialog placement="window" />);
-    expect(layer().style.right).toBe("0px");
-  });
-
-  it("has a dialog opened over it cover the Portal's strip too, until it goes", () => {
-    function Stack({ windowOpen }: { windowOpen: boolean }) {
-      return (
-        <>
-          <Dialog placement="window" isOpen={windowOpen} />
-          <AppDialog isOpen onClose={() => {}} zIndex="nested" data-testid="nested-dialog">
-            <AppDialog.Body>
-              <button type="button">Nested</button>
-            </AppDialog.Body>
-          </AppDialog>
-        </>
-      );
-    }
-    const { rerender } = render(<Stack windowOpen />);
-    expect(screen.getByTestId("nested-dialog").style.right).toBe("0px");
-
-    // Still painted while it fades out, so still covering what it covered.
-    mockExitPending = true;
-    rerender(<Stack windowOpen={false} />);
-    expect(screen.getByTestId("nested-dialog").style.right).toBe("0px");
-
-    mockExitPending = false;
-    rerender(<Stack windowOpen={false} />);
-    expect(screen.queryByTestId("test-dialog")).toBeNull();
-    expect(screen.getByTestId("nested-dialog").style.right).toBe(`${PORTAL_WIDTH}px`);
-  });
-
   it("lets nothing of the app show through: no scrim tint or blur over it", () => {
     const { unmount } = render(<Dialog placement="center" />);
     const scrimmed = layer().className;

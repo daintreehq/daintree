@@ -122,27 +122,27 @@ describe("SettingsValidationRegistry", () => {
 
     expect(result.current!.tabsWithErrors.has("code-forge")).toBe(true);
 
-    rerender({ tab: "portal" });
+    rerender({ tab: "links" });
     expect(result.current!.tabsWithErrors.has("code-forge")).toBe(false);
-    expect(result.current!.tabsWithErrors.has("portal")).toBe(true);
+    expect(result.current!.tabsWithErrors.has("links")).toBe(true);
   });
 
   it("clearing one tab's publishers leaves other tabs untouched", () => {
     const { result, rerender } = renderHook(
       ({ codeForgeHasError }: { codeForgeHasError: boolean }) => {
         useSettingsTabValidation("code-forge", codeForgeHasError);
-        useSettingsTabValidation("portal", true);
+        useSettingsTabValidation("links", true);
         return useContext(SettingsValidationContext);
       },
       { wrapper: wrap, initialProps: { codeForgeHasError: true } }
     );
 
     expect(result.current!.tabsWithErrors.has("code-forge")).toBe(true);
-    expect(result.current!.tabsWithErrors.has("portal")).toBe(true);
+    expect(result.current!.tabsWithErrors.has("links")).toBe(true);
 
     rerender({ codeForgeHasError: false });
     expect(result.current!.tabsWithErrors.has("code-forge")).toBe(false);
-    expect(result.current!.tabsWithErrors.has("portal")).toBe(true);
+    expect(result.current!.tabsWithErrors.has("links")).toBe(true);
   });
 
   it("clears the tab once every publisher unmounts", () => {

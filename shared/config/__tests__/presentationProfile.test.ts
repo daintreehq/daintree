@@ -114,7 +114,6 @@ describe("toolbar features (#13783)", () => {
   const NEVER_DEMOTABLE: ToolbarButtonId[] = [
     "sidebar-toggle",
     "assistant-toggle",
-    "portal-toggle",
     "voice-recording",
     "problems",
     "notification-center",

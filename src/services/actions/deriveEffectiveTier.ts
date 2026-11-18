@@ -3,11 +3,10 @@
  *
  * The static `danger` metadata on an action classifies its worst-case tier;
  * this pure function derives the *effective* tier for a concrete invocation
- * from runtime context (the `force` flag, branch protection, how many tabs
- * would actually close). The UI that gates the action (e.g.
- * `WorktreeDeleteDialog`'s typed-name input) consults this rule, and so do the
- * portal close actions' `run()` bodies, so those surfaces cannot disagree with
- * their dispatch path about whether a call is high-tier.
+ * from runtime context (the `force` flag, branch protection). The UI that
+ * gates the action (e.g. `WorktreeDeleteDialog`'s typed-name input) consults
+ * this rule, so it cannot disagree with the dispatch path about whether a call
+ * is high-tier.
  *
  * `worktree.delete` consults it from its confirm surfaces rather than from
  * `run()`, and that is now a design rather than the gap it was (#12115). Both
@@ -51,32 +50,12 @@ export interface WorktreeDeleteTierCtx {
   submoduleFilesAtRisk: boolean;
 }
 
-export interface PortalCloseTierCtx {
-  /** Number of tabs the invocation would actually close. */
-  tabCount: number;
-}
-
-/**
- * Bulk portal closes escalate to a D1 confirm once this many tabs (or more)
- * would be closed in one action. Below it the close is routine (D0, no gate).
- */
-export const PORTAL_BULK_CLOSE_TIER_THRESHOLD = 3;
-
 export function deriveEffectiveTier(
   actionId: "worktree.delete",
   ctx: WorktreeDeleteTierCtx
 ): DestructiveTier;
-export function deriveEffectiveTier(
-  actionId: "portal.closeAllTabs" | "portal.closeOthers" | "portal.closeToRight",
-  ctx: PortalCloseTierCtx
-): DestructiveTier;
-export function deriveEffectiveTier(
-  actionId: string,
-  ctx: WorktreeDeleteTierCtx | PortalCloseTierCtx
-): DestructiveTier {
-  // `in`-operator narrowing keeps each branch type-safe without a cast — the
-  // two ctx shapes have disjoint fields, so the discriminant is structural.
-  if (actionId === "worktree.delete" && "force" in ctx) {
+export function deriveEffectiveTier(actionId: string, ctx: WorktreeDeleteTierCtx): DestructiveTier {
+  if (actionId === "worktree.delete") {
     // Every input is conditioned on `force`, and that is sound because a
     // backend invariant stands behind each: `git worktree remove` refuses a
     // dirty tree and `WorkspaceService.guardSubmoduleDelete` refuses nested
@@ -100,14 +79,6 @@ export function deriveEffectiveTier(
         ctx.submoduleFilesAtRisk)
       ? "D3"
       : "D2";
-  }
-  if (
-    (actionId === "portal.closeAllTabs" ||
-      actionId === "portal.closeOthers" ||
-      actionId === "portal.closeToRight") &&
-    "tabCount" in ctx
-  ) {
-    return ctx.tabCount >= PORTAL_BULK_CLOSE_TIER_THRESHOLD ? "D1" : "D0";
   }
   return "D0";
 }

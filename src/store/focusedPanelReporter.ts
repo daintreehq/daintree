@@ -6,12 +6,11 @@ import {
 } from "@shared/utils/pluginFocusedPanel";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { usePanelStore } from "./panelStore";
-import { useMacroFocusStore } from "./macroFocusStore";
 
 /**
  * The panel holding real DOM focus in this view, as a plugin may see it.
- * `focusedId` is not used: it keeps naming the last panel while the Portal,
- * the assistant or the sidebar has focus. A panel's DOM root carries
+ * `focusedId` is not used: it keeps naming the last panel while the assistant
+ * or the sidebar has focus. A panel's DOM root carries
  * `data-panel-id`, and a `<webview>` guest's focus leaves the element itself
  * as the embedder's `activeElement`, so browser panels resolve the same way.
  */
@@ -29,8 +28,6 @@ type PanelRecord = ReturnType<typeof usePanelStore.getState>["panelsById"][strin
 interface FocusTarget {
   readonly hasFocus: boolean;
   readonly active: Element | null;
-  readonly portalDock: HTMLElement | null | undefined;
-  readonly inPortal: boolean;
   readonly root: Element | null;
   readonly panelId: string | null;
 }
@@ -38,8 +35,6 @@ interface FocusTarget {
 const NO_FOCUS_TARGET: FocusTarget = {
   hasFocus: false,
   active: null,
-  portalDock: undefined,
-  inPortal: false,
   root: null,
   panelId: null,
 };
@@ -48,15 +43,9 @@ function resolveFocusTarget(): FocusTarget {
   if (typeof document === "undefined") return NO_FOCUS_TARGET;
   const hasFocus = document.hasFocus();
   const active = document.activeElement;
-  // The Portal dock's own chrome (tab strip, launchpad). Focus inside a Portal
-  // page is a separate webContents, which main observes directly.
-  const portalDock = useMacroFocusStore.getState().refs.get("portal");
-  if (!hasFocus) return { ...NO_FOCUS_TARGET, active, portalDock };
-  if (portalDock && active && portalDock.contains(active)) {
-    return { ...NO_FOCUS_TARGET, hasFocus, active, portalDock, inPortal: true };
-  }
+  if (!hasFocus) return { ...NO_FOCUS_TARGET, active };
   const root = active instanceof Element ? active.closest("[data-panel-id]") : null;
-  return { ...NO_FOCUS_TARGET, hasFocus, active, portalDock, root, panelId: panelIdOf(root) };
+  return { ...NO_FOCUS_TARGET, hasFocus, active, root, panelId: panelIdOf(root) };
 }
 
 function panelIdOf(root: Element | null): string | null {
@@ -68,8 +57,6 @@ function focusTargetHolds(target: FocusTarget): boolean {
   return (
     document.hasFocus() === target.hasFocus &&
     document.activeElement === target.active &&
-    // Registered in an effect, and the refs map changes without a notification.
-    useMacroFocusStore.getState().refs.get("portal") === target.portalDock &&
     (target.root === null || panelIdOf(target.root) === target.panelId)
   );
 }
@@ -82,7 +69,6 @@ function projectFocusTarget(
   target: FocusTarget,
   panel: PanelRecord | undefined = focusedRecord(target)
 ): PluginFocusedPanel {
-  if (target.inPortal) return toPluginFocusedPanel({ kind: "portal" });
   if (!panel) return NO_FOCUSED_PANEL;
   // A PTY-backed plugin panel is stored as a terminal; it is still a plugin's.
   return toPluginFocusedPanel({

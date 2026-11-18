@@ -108,9 +108,9 @@ const choiceCardVariants = cva(
        * up and the wash eases in — and the fill it already has is not what
        * hover has to replace.
        *
-       * `row` is a card in a navigation list of equivalent destinations (the
-       * portal launchpad): borderless at rest, since seven outlines in a column
-       * repeat what the logos already say, and the full card frame on hover.
+       * `row` is a card in a navigation list of equivalent destinations:
+       * borderless at rest, since a column of outlines repeats what the logos
+       * already say, and the full card frame on hover.
        */
       tone: {
         default: "",

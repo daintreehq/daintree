@@ -201,7 +201,7 @@ export function ProjectLinksSection({ projectId }: { projectId: string }) {
     <SettingsSection
       id="project-links"
       title="Project links"
-      description="Addresses offered in this project's Portal launchpad, above the chat services, such as its staging site or CI dashboard. Kept in your local project settings, never in the repo."
+      description="Addresses offered in the toolbar's links launcher for this project, such as its staging site or CI dashboard. Kept in your local project settings, never in the repo."
     >
       {loadError && (
         <SettingsLoadErrorBanner

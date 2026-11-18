@@ -126,10 +126,6 @@ describe("filterSettings", () => {
     }
   );
 
-  it("no longer offers the person's own links on the Portal page", () => {
-    expect(SETTINGS_SEARCH_INDEX.some((entry) => entry.id === "portal-custom-links")).toBe(false);
-  });
-
   it.each(["group", "folder", "project group"])(
     "finds the project's group row by %s while a project is open",
     (query) => {
@@ -421,7 +417,6 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       worktree: "Worktree paths",
       agents: "CLI agents",
       "code-forge": "Code forge",
-      portal: "Portal links",
       toolbar: "Toolbar customization",
       notifications: "Notifications",
       links: "Links",

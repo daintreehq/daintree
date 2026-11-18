@@ -10,6 +10,11 @@ import {
   isRetiredPluginKeybindingScope,
   retiredKeybindingScopeMessage,
 } from "../../shared/config/pluginKeybindingScopes.js";
+import {
+  ACTION_ID_CONTRIBUTIONS,
+  isRetiredBuiltInActionId,
+  retiredActionIdMessage,
+} from "../../shared/config/retiredActionIds.js";
 
 /**
  * Advisory checks that run *after* a manifest has parsed. Everything here is
@@ -100,6 +105,17 @@ export async function collectManifestAdvisories({
   for (const [index, keybinding] of manifest.contributes.keybindings.entries()) {
     if (isRetiredPluginKeybindingScope(keybinding.scope)) {
       warnings.push(retiredKeybindingScopeMessage(index, keybinding.combo, keybinding.scope));
+    }
+  }
+
+  // Likewise a retired built-in action: the host never runs it.
+  const ownPrefix = `${manifest.name}.`;
+  for (const contribution of ACTION_ID_CONTRIBUTIONS) {
+    const entries: readonly { actionId?: string }[] = manifest.contributes[contribution];
+    for (const [index, entry] of entries.entries()) {
+      if (entry.actionId !== undefined && isRetiredBuiltInActionId(entry.actionId, ownPrefix)) {
+        warnings.push(retiredActionIdMessage(contribution, index, entry.actionId));
+      }
     }
   }
 

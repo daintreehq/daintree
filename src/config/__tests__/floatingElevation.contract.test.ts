@@ -35,10 +35,7 @@ const FLOATING_CARD_HOSTS: Record<string, string> = {
   "src/components/Fleet/FleetRawInputNotice.tsx": "FLOATING_CARD_CLASS",
 };
 
-const OVERLAY_SHEET_HOSTS = [
-  "src/components/Layout/AppLayout.tsx",
-  "src/components/ThemeBrowser/ThemeBrowser.tsx",
-];
+const OVERLAY_SHEET_HOSTS = ["src/components/ThemeBrowser/ThemeBrowser.tsx"];
 
 function radiusStep(classes: string): string | null {
   const match = classes.match(/rounded-(?:\[var\(--radius-([a-z0-9]+)\)\]|([a-z0-9]+))/);
@@ -171,7 +168,7 @@ describe("app-level stacking", () => {
 
   it("puts the toolbar strictly between the sheets it covers and the modals that cover it", () => {
     const toolbar = zToken(css, "toolbar");
-    for (const below of ["panel", "portal", "maximized", "visual-bell"]) {
+    for (const below of ["panel", "maximized", "visual-bell"]) {
       expect(toolbar).toBeGreaterThan(zToken(css, below));
     }
     for (const above of ["modal", "popover", "nested-dialog", "toast"]) {
@@ -208,7 +205,6 @@ describe("app-level stacking", () => {
   it("stacks the body-portaled sheets on tokens, not raw numbers", () => {
     const source = read("src/components/Layout/AppLayout.tsx");
     expect(source).toContain("z-[var(--z-panel)]");
-    expect(source).toContain("z-[var(--z-portal)]");
     expect(source).toContain("z-[var(--z-panel-scrim)]");
     expect(zToken(css, "panel-scrim")).toBeLessThan(zToken(css, "panel"));
     expect(source).not.toMatch(/"fixed (?:right-0 )?bottom-0 z-(?:40|50)\b/);
