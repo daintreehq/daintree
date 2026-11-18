@@ -89,10 +89,12 @@ const WALK_ATTEMPTS = 2;
 
 /**
  * The bytes under `dirPath`, or null when the figure couldn't be completed
- * (not a directory, an unreadable or vanished entry, a failed `du`). A partial
- * sum is never returned: the confirmation preview presents every number as a
- * measured size, so an undercount, or a zero for an unreadable directory,
- * would be taken as fact. `platform` exists so tests reach the Windows walk.
+ * (not a directory, an unreadable or vanished entry, a failed `du`). A scan
+ * that fails is never reported as a total: the confirmation preview presents
+ * every number as a measured size, so a zero for an unreadable directory would
+ * be taken as fact. The tree can still change under a scan that succeeds, so
+ * the figure is an estimate of a live directory. `platform` exists so tests
+ * reach the Windows walk.
  */
 export async function computeDirSize(
   dirPath: string,
@@ -152,6 +154,9 @@ async function computeDirSizeWalk(dirPath: string): Promise<number | null> {
           stack.push(full);
         } else if (ent.isFile() || ent.isSymbolicLink()) {
           const st = await fsPromises.lstat(full);
+          // Listed as a file, now a directory: swapped mid-scan, and its
+          // contents were never walked.
+          if (st.isDirectory()) return null;
           const inoKey = st.ino ? `${st.dev}:${st.ino}` : null;
           if (inoKey && seenInos.has(inoKey)) continue;
           if (inoKey) seenInos.add(inoKey);

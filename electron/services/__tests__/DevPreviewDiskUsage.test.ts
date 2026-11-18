@@ -104,17 +104,31 @@ describe("computeDirSize on the Windows walk", () => {
 
   it("measures the whole tree when a transient failure clears on the second pass", async () => {
     const spies = injectFailures({
-      lstat: (target, n) => (target === nestedFile && n === 1 ? vanished() : null),
+      lstat: (target, n) => {
+        if (target !== nestedFile || n !== 1) return null;
+        // The first pass has already counted the 7-byte file; a second pass
+        // that kept its subtotal or inode set would still report 7 for it.
+        fs.writeFileSync(rootFile, Buffer.alloc(9));
+        return vanished();
+      },
     });
-    // 18, not 11 or 25: the second pass starts from zero and a fresh inode set.
-    expect(await computeDirSize(root, "win32")).toBe(18);
+    expect(await computeDirSize(root, "win32")).toBe(9 + 11);
     expect(spies.opened(root)).toBe(2);
   });
 
-  it("tries a failing scan twice at most", async () => {
-    const spies = injectFailures({ opendir: (target) => (target === root ? denied() : null) });
-    await computeDirSize(root, "win32");
-    expect(spies.opened(root)).toBe(2);
+  it("doesn't take a file replaced by a directory mid-scan as the figure", async () => {
+    injectFailures({
+      lstat: (target, n) => {
+        if (target !== nestedFile || n !== 1) return null;
+        fs.rmSync(nestedFile);
+        fs.mkdirSync(nestedFile);
+        fs.writeFileSync(path.join(nestedFile, "c.bin"), Buffer.alloc(1000));
+        return null;
+      },
+    });
+    // The first pass saw the directory where it had listed a file and
+    // discarded itself; the second walks the replacement's contents.
+    expect(await computeDirSize(root, "win32")).toBe(7 + 1000);
   });
 
   it("counts a hard-linked file once", async () => {
@@ -138,7 +152,7 @@ describe("computeDirSize on the Windows walk", () => {
     vi.spyOn(fsPromises, "lstat").mockImplementation((async (target: string) => {
       const stat = await realLstat(target);
       return path.basename(String(target)) === "shared.bin"
-        ? { dev: stat.dev, ino: 0, size: stat.size }
+        ? { dev: stat.dev, ino: 0, size: stat.size, isDirectory: () => false }
         : stat;
     }) as never);
     expect(await computeDirSize(root, "win32")).toBe(18 + 200);
