@@ -1,11 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CloudProviderContribution } from "../../../../shared/types/pluginCloudProvider.js";
+import type {
+  CloudProviderContribution,
+  CloudProviderImpl,
+} from "../../../../shared/types/pluginCloudProvider.js";
 import {
   PluginCloudProviderAnswerError,
   PluginCloudProviderTransportError,
 } from "../../../services/plugin/pluginCloudProviderCalls.js";
 import {
+  bindPluginCloudProvider,
   clearPluginCloudProviders,
+  listPluginCloudProviders,
+  pluginCloudProviderBinding,
   publishPluginCloudProviders,
   pluginCloudProviderStatusChanged,
   setPluginCloudProviderRuntime,
@@ -335,6 +341,13 @@ describe("PluginCloudProvider", () => {
         "the machine"
       );
     }
+    // A failing save's long diagnostic is still its word, kept and cut short.
+    call.mockResolvedValueOnce(
+      machine({ stop: { id: "s1", status: "failing", error: "x".repeat(2000) } })
+    );
+    const failing = await provider.inspect(CREDENTIALS, "i-1");
+    expect(failing.stop).toMatchObject({ status: "failing" });
+    expect(failing.stop!.error).toHaveLength(512);
     // An identity left out, or one too long to keep, is never read as "nobody".
     call.mockResolvedValueOnce({});
     await expect(provider.validate(CREDENTIALS)).rejects.toThrow("its account check");
@@ -370,23 +383,46 @@ describe("PluginCloudProvider", () => {
     await expect(provider.stop(CREDENTIALS, "i-1")).resolves.toBeNull();
   });
 
-  it("calls only the impl bound under its own declaration", async () => {
-    const stale = declaration();
-    const current = declaration();
-    const call = vi.fn(async () => machine());
-    const provider = new PluginCloudProvider(stale, {
-      runtime: () => ({
-        activate: async () => {},
-        isActivated: () => true,
-        unavailableReason: () => "unused",
-        startFailure: () => null,
-      }),
-      binding: (asked) =>
-        asked === current ? { methods: new Set(["inspect"] as const), call } : undefined,
-    });
-    const error = await provider.inspect(CREDENTIALS, "i-1").catch((e: unknown) => e);
-    expect(provider.describeError(error).code).toBe("provider-unreachable");
-    expect(call).not.toHaveBeenCalled();
+  it("never hands one load's credentials to the impl a later load bound", async () => {
+    const runtime = {
+      activate: async () => {},
+      isActivated: () => true,
+      unavailableReason: () => "unused",
+      startFailure: () => null,
+    };
+    const host = { runtime: () => runtime, binding: pluginCloudProviderBinding };
+    const impl = (inspect: () => unknown) =>
+      ({
+        checkCredentials: vi.fn(),
+        validate: vi.fn(),
+        catalog: vi.fn(),
+        list: vi.fn(),
+        inspect: vi.fn(inspect),
+        create: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn(),
+        rename: vi.fn(),
+        delete: vi.fn(),
+        sshAccess: vi.fn(),
+      }) as unknown as CloudProviderImpl;
+
+    publishPluginCloudProviders("acme.clouds", [contribution()]);
+    const [first] = listPluginCloudProviders();
+    const old = new PluginCloudProvider(first!, host);
+    // A reload moves the provider to another origin, and its new worker binds again.
+    publishPluginCloudProviders("acme.clouds", [
+      contribution({ apiUrl: "https://elsewhere.example.com" }),
+    ]);
+    const [second] = listPluginCloudProviders();
+    const replacement = impl(() => machine());
+    bindPluginCloudProvider("acme.clouds", "ec2", replacement);
+
+    const error = await old.inspect(CREDENTIALS, "i-1").catch((e: unknown) => e);
+    expect(old.describeError(error).code).toBe("provider-unreachable");
+    expect(replacement.inspect).not.toHaveBeenCalled();
+    const current = new PluginCloudProvider(second!, host);
+    await expect(current.inspect(CREDENTIALS, "i-1")).resolves.toMatchObject({ resourceId: "i-1" });
+    expect(replacement.inspect).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -426,9 +462,9 @@ describe("watchPluginCloudProviders", () => {
     expect(providers.has("acme.clouds.ec2")).toBe(false);
   });
 
-  it("leaves out a provider whose plugin failed to start, with why, until it starts", () => {
+  it("takes away a provider whose plugin fails to start, with why, and brings it back once it starts", () => {
     const providers = new CloudProviderRegistry();
-    let failure: string | null = "activate() threw: no region";
+    let failure: string | null = null;
     setPluginCloudProviderRuntime({
       activate: async () => {},
       isActivated: () => false,
@@ -437,10 +473,19 @@ describe("watchPluginCloudProviders", () => {
     });
     publishPluginCloudProviders("acme.clouds", [contribution()]);
     const watch = watchPluginCloudProviders({ providers, statusChanged: () => {} });
+    expect(providers.has("acme.clouds.ec2")).toBe(true);
+
+    failure = "activate() threw: no region";
+    pluginCloudProviderStatusChanged();
     expect(providers.has("acme.clouds.ec2")).toBe(false);
     expect(watch.unavailableReason("acme.clouds.ec2")).toBe(
       "Its cloud provider comes from the acme.clouds plugin, which failed to start: activate() threw: no region"
     );
+
+    failure = "crash loop";
+    pluginCloudProviderStatusChanged();
+    expect(watch.unavailableReason("acme.clouds.ec2")).toContain("failed to start: crash loop");
+
     failure = null;
     pluginCloudProviderStatusChanged();
     expect(providers.has("acme.clouds.ec2")).toBe(true);

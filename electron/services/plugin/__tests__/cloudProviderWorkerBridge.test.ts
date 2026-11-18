@@ -429,6 +429,76 @@ describe("a plugin's cloud provider over the worker port", () => {
     await expect(kept).resolves.toBeUndefined();
   });
 
+  it("never reads an answer that couldn't cross as the provider's refusal", async () => {
+    const { plugin, provider } = await connected();
+    const request = {
+      name: "build",
+      machineType: "small",
+      lifetimeSeconds: null,
+      provisioning: { location: null, image: null, network: null },
+      labels: {},
+      idempotencyKey: "key-2",
+      publicKey: null,
+    };
+    // A create that may have made the machine, then failed to serialize with a refusal's code.
+    plugin.impl.create = () =>
+      ({
+        toJSON() {
+          throw Object.assign(new Error("over budget"), { code: "billing" });
+        },
+      }) as never;
+    const unsent = await provider.create(credentials(), request).catch((e: unknown) => e);
+    expect(provider.describeError(unsent)).toMatchObject({
+      code: "failed",
+      message: "Its answer was too large or couldn't be sent.",
+    });
+
+    // JSON would have written NaN as null, and null reads as "no limit".
+    plugin.machines.set("dbx-9", {
+      resourceId: "dbx-9",
+      name: "build",
+      machine: "running",
+      rawState: "running",
+      machineType: "small",
+      vcpu: 2,
+      memoryGB: 4,
+      autoStopAt: null,
+      lifetimeSeconds: NaN,
+      stoppedAt: null,
+      createdAt: null,
+      stop: null,
+      lastSnapshotAt: null,
+      dataExpired: false,
+      snapshotsDisabled: false,
+      labels: {},
+      restricted: false,
+      error: null,
+    });
+    const nan = await provider.inspect(credentials(), "dbx-9").catch((e: unknown) => e);
+    expect(provider.describeError(nan)).toMatchObject({
+      code: "failed",
+      message: "Its answer was too large or couldn't be sent.",
+    });
+  });
+
+  it("keeps answering after an impl's getter throws", async () => {
+    const { plugin, provider } = await connected();
+    Object.defineProperty(plugin.impl, "validate", {
+      configurable: true,
+      get() {
+        throw new Error("getter broke");
+      },
+    });
+    const error = await provider.validate(credentials()).catch((e: unknown) => e);
+    expect(provider.describeError(error)).toMatchObject({
+      code: "failed",
+      message: "getter broke",
+    });
+    await expect(provider.catalog(credentials())).resolves.toMatchObject({
+      machineTypes: [{ id: "small" }],
+    });
+  });
+
   it("refuses a provider whose impl lacks what its declaration needs, failing the registration", async () => {
     publishPluginCloudProviders(PLUGIN_ID, [DEVBOX]);
     const host = {

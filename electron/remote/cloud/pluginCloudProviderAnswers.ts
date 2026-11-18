@@ -109,11 +109,12 @@ function stop(value: unknown): ProviderResource["stop"] | typeof MALFORMED {
   if (!raw || !stopId || typeof raw.status !== "string" || !STOP_STATUSES.has(raw.status)) {
     return MALFORMED;
   }
-  if (!absent(raw.error) && text(raw.error) === null) return MALFORMED;
+  if (!absent(raw.error) && typeof raw.error !== "string") return MALFORMED;
   return {
     id: stopId,
     status: raw.status as NonNullable<ProviderResource["stop"]>["status"],
-    error: text(raw.error),
+    // A long diagnostic is still the provider's word on a failing save: kept, cut short.
+    error: typeof raw.error === "string" ? raw.error.slice(0, MAX_TEXT) : null,
   };
 }
 

@@ -104,10 +104,9 @@ export function CloudMachineSection({
   // beside what was last known: an unconfirmed create may still be a billable machine.
   const lastError = status.operation === null ? (status.lastError?.message ?? null) : null;
   const shownError =
-    actionError ??
-    (status.providerUnavailable !== null
-      ? [status.providerUnavailable, lastError].filter(Boolean).join(" ")
-      : lastError);
+    status.providerUnavailable !== null
+      ? [...new Set([actionError, status.providerUnavailable, lastError])].filter(Boolean).join(" ")
+      : (actionError ?? lastError);
   const tunnel = provider?.capabilities.tunnel ?? null;
   // Offered only beside the error that names the command, never beside another one.
   const tunnelMissing =

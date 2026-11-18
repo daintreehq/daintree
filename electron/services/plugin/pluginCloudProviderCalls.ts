@@ -115,7 +115,13 @@ export function encodeCloudProviderAnswer(
     const failure = PluginCloudProviderAnswerError.from(outcome.error);
     answer = { ok: false, code: failure.code, message: failure.message };
   }
-  const json = JSON.stringify(answer);
+  // JSON writes NaN and the infinities as null, which a reader would take for "unknown".
+  const json = JSON.stringify(answer, (_key, value: unknown) => {
+    if (typeof value === "number" && !Number.isFinite(value)) {
+      throw new Error("the provider's answer holds a number that isn't finite");
+    }
+    return value;
+  });
   if (json === undefined) throw new Error("the provider's answer can't be serialized to JSON");
   if (Buffer.byteLength(json, "utf8") > CLOUD_PROVIDER_ANSWER_MAX_BYTES) {
     throw new Error(

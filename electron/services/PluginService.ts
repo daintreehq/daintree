@@ -5827,8 +5827,9 @@ export class PluginService {
       detail,
     });
     this.emitRuntimeStatus(pluginId);
-    // A worker that failed to start leaves its cloud providers unavailable, until it starts again.
-    if ((state === "failed") !== (prior?.state === "failed")) pluginCloudProviderStatusChanged();
+    // A worker that failed to start leaves its cloud providers unavailable, until it starts
+    // again; a failure reworded (activation failed, then crash loop) rewords them too.
+    if (state === "failed" || prior?.state === "failed") pluginCloudProviderStatusChanged();
 
     // A crash reports as `starting` + `crashed` while the supervisor decides
     // whether to respawn, so it warns alongside an outright failure.
