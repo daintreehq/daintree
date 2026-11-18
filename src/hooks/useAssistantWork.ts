@@ -104,7 +104,7 @@ export function useAssistantWork(
       void readOne(hostId).then((fresh) => {
         if (!live) return;
         setReadings((held) => withReading(held, hostId, fresh, asked));
-        shown.set(hostId, Date.now());
+        shown.set(hostId, performance.now());
         timers.set(
           hostId,
           setTimeout(() => read(hostId), AGENT_DIRECTORY_POLL_MS)
@@ -113,11 +113,8 @@ export function useAssistantWork(
     };
     for (const id of ids) {
       const last = shown.get(id);
-      // Capped, so a clock set back never stalls a host.
-      const wait =
-        last === undefined || out.has(id)
-          ? 0
-          : Math.min(last + AGENT_DIRECTORY_POLL_MS - Date.now(), AGENT_DIRECTORY_POLL_MS);
+      // A read still out was sent when due, so it is joined at once.
+      const wait = last === undefined ? 0 : last + AGENT_DIRECTORY_POLL_MS - performance.now();
       if (wait > 0) {
         timers.set(
           id,
