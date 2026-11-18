@@ -6,7 +6,14 @@ import {
   cleanupKeyIssuer,
   hasCleanupKey,
   hasTranscriptionKey,
+  transcribesOnDevice,
 } from "@shared/config/voiceProviders";
+import {
+  getLocalModelStatus,
+  isLocalModelReady,
+  readLocalModelStatus,
+  subscribeLocalModelStatus,
+} from "@/clients/localSpeechModelClient";
 import {
   carrySpansThroughEdits,
   shiftSpans,
@@ -1756,6 +1763,19 @@ class VoiceRecordingService {
     window.addEventListener("blur", handlePttBlur);
     this.unsubscribers.push(() => window.removeEventListener("blur", handlePttBlur));
 
+    // On-device transcription is configured once its model is ready, which a
+    // download in any view can change.
+    let localModelReady = isLocalModelReady();
+    this.unsubscribers.push(
+      subscribeLocalModelStatus((status) => {
+        const ready = status.state === "ready";
+        if (ready === localModelReady) return;
+        localModelReady = ready;
+        const provider = this.transcriptionProvider;
+        if (provider && transcribesOnDevice(provider)) void this.refreshConfiguration();
+      })
+    );
+
     if (settings) this.applySettings(settings);
     else void this.refreshConfiguration();
   }
@@ -1769,6 +1789,10 @@ class VoiceRecordingService {
     // provider's key is a separate matter: it only gates cleanup and rewrite.
     const hasProviderKey = hasTranscriptionKey(settings);
     const isConfigured = isVoiceInputConfigured(settings);
+    // Not heard yet in this view: the answer arrives through the subscription.
+    if (transcribesOnDevice(settings.transcriptionProvider) && getLocalModelStatus() === null) {
+      void readLocalModelStatus();
+    }
     this.configured = isConfigured;
     this.selectedDeviceId = settings.deviceId ?? "";
     this.selectedDeviceLabel = settings.deviceLabel ?? "";
@@ -1785,6 +1809,7 @@ class VoiceRecordingService {
       enabled: settings.enabled,
       provider: settings.transcriptionProvider,
       hasProviderKey,
+      localModelReady: isLocalModelReady(),
       isConfigured,
       correctionEnabled: settings.correctionEnabled,
       recordingMode: this.recordingMode,

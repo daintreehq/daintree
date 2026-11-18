@@ -5,7 +5,7 @@ import { pluralize } from "@/lib/pluralize";
 import { Button } from "@/components/ui/button";
 import { logWarn } from "@/utils/logger";
 import { voiceErrorLogFields } from "@shared/utils/voiceLogFields";
-import { transcriptionProviderName } from "@shared/config/voiceProviders";
+import { transcribesOnDevice, transcriptionProviderName } from "@shared/config/voiceProviders";
 import type { LastDictationTerms, VoiceKeytermSource } from "@shared/types";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "./SettingsGroup";
@@ -27,6 +27,7 @@ const ATTEMPT_NOTE = {
 } as const;
 
 function summarize(last: LastDictationTerms): string {
+  if (transcribesOnDevice(last.provider)) return "On-device transcription takes no terms";
   if (last.sent === null) return "Waiting for the connection to open";
   if (last.endedBeforeSending) return "The connection closed before any terms were sent";
   const dropped = last.assembledCount - last.sent.length;
@@ -103,7 +104,11 @@ export function LastDictationTermsSection() {
         ) : (
           <>
             <SettingsRow
-              label={`${last.rewrite ? "Rewrite instruction sent" : "Sent"} to ${transcriptionProviderName(last.provider)}`}
+              label={
+                transcribesOnDevice(last.provider)
+                  ? "Transcribed on this computer"
+                  : `${last.rewrite ? "Rewrite instruction sent" : "Sent"} to ${transcriptionProviderName(last.provider)}`
+              }
               description={summarize(last)}
             />
             {SOURCES.map(({ source, label }) => (

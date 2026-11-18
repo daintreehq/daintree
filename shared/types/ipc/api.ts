@@ -25,6 +25,7 @@ import type {
   VoiceInputStatus,
   VoiceLiveSessionUpdate,
   VoiceLiveLevel,
+  LocalSpeechModelStatus,
   VoicePauseRequest,
   VoiceRevealRequest,
   VoiceSessionEndReason,
@@ -2494,6 +2495,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * owns the session: one per audio chunk main hears, never to a cached view.
      */
     onLiveLevel(callback: (payload: VoiceLiveLevel) => void): () => void;
+    /** Every change to the on-device model's status, a download's progress included. */
+    onLocalModelStatus(callback: (status: LocalSpeechModelStatus) => void): () => void;
     /** To the owner, when another view's control panel paused or resumed it. */
     onPauseRequested(callback: (payload: VoicePauseRequest) => void): () => void;
     /**
