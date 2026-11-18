@@ -157,6 +157,14 @@ describe("branch reads", () => {
     });
   });
 
+  it("answers a detached HEAD while git warns about the repository's config", async () => {
+    const warned = path.join(root, "warned");
+    makeRepo(warned);
+    git(warned, "checkout", "-q", "--detach");
+    git(warned, "config", "core.fsync", "not-a-component");
+    await expect(read(warned)).resolves.toEqual({ branch: null, unreadable: false });
+  });
+
   it("names a branch before its first commit, fresh or orphaned", async () => {
     const fresh = path.join(root, "fresh");
     fs.mkdirSync(fresh);

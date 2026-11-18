@@ -123,16 +123,31 @@ describe("getGitBranch", () => {
 });
 
 describe("readGitBranch", () => {
-  /** `symbolic-ref --quiet HEAD` on a detached HEAD: exit 1 and nothing said. */
-  function mockDetachedHead(): void {
-    execFileMock.mockImplementation((_file, _args, _opts, cb: ExecCallback) => {
-      const error = Object.assign(new Error("Command failed: git symbolic-ref"), { code: 1 });
-      cb(error, "", "");
+  type GitAnswer = { stdout?: string; stderr?: string; error?: Record<string, unknown> };
+
+  /** Answer `rev-parse` and `symbolic-ref` each their own way. */
+  function mockByCommand(answers: { revParse: GitAnswer; symbolicRef?: GitAnswer }): void {
+    execFileMock.mockImplementation((_file, args: string[], _opts, cb: ExecCallback) => {
+      const answer = args[0] === "symbolic-ref" ? answers.symbolicRef : answers.revParse;
+      if (!answer) throw new Error(`unexpected git ${args.join(" ")}`);
+      const error = answer.error
+        ? Object.assign(new Error(`Command failed: git ${args.join(" ")}`), answer.error)
+        : null;
+      cb(error, answer.stdout ?? "", answer.stderr ?? "");
     });
   }
 
-  it("names the branch HEAD is on, from its ref", async () => {
-    mockGitOutput("refs/heads/feature/foo\n");
+  const commands = () => execFileMock.mock.calls.map(([, args]) => (args as string[])[0]);
+
+  /** `rev-parse --abbrev-ref HEAD` on a branch with no commits yet. */
+  const unbornRevParse: GitAnswer = {
+    stdout: "HEAD\n",
+    stderr: "fatal: ambiguous argument 'HEAD': unknown revision or path not in the working tree.\n",
+    error: { code: 128 },
+  };
+
+  it("answers the branch git names", async () => {
+    mockGitOutput("feature/foo\n");
     await expect(readGitBranch("/repo")).resolves.toEqual({
       branch: "feature/foo",
       unreadable: false,
@@ -140,7 +155,7 @@ describe("readGitBranch", () => {
   });
 
   it("keeps a branch name that ends in whitespace git allows", async () => {
-    mockGitOutput("refs/heads/\u00a0wide\u00a0\n");
+    mockGitOutput("\u00a0wide\u00a0\n");
     await expect(readGitBranch("/repo")).resolves.toEqual({
       branch: "\u00a0wide\u00a0",
       unreadable: false,
@@ -148,7 +163,13 @@ describe("readGitBranch", () => {
   });
 
   it("answers a detached HEAD and a folder outside git as branchless", async () => {
-    mockDetachedHead();
+    mockGitOutput("HEAD\n");
+    await expect(readGitBranch("/repo")).resolves.toEqual({ branch: null, unreadable: false });
+
+    // A warning from the user's config doesn't hide the answer.
+    mockByCommand({
+      revParse: { stdout: "HEAD\n", stderr: "warning: core.fsync: unknown component 'x'\n" },
+    });
     await expect(readGitBranch("/repo")).resolves.toEqual({ branch: null, unreadable: false });
 
     mockNotARepository();
@@ -158,9 +179,25 @@ describe("readGitBranch", () => {
     });
   });
 
-  it("calls a timed-out read unreadable, not branchless", async () => {
+  it("names a branch with no commits yet from the ref HEAD points at", async () => {
+    mockByCommand({ revParse: unbornRevParse, symbolicRef: { stdout: "refs/heads/main\n" } });
+    await expect(readGitBranch("/fresh")).resolves.toEqual({ branch: "main", unreadable: false });
+    expect(commands()).toEqual(["rev-parse", "symbolic-ref"]);
+  });
+
+  it("takes only a branch ref for an answer when the first read gave up", async () => {
+    // Silence is what a broken ref store and a detached HEAD share.
+    mockByCommand({ revParse: unbornRevParse, symbolicRef: { error: { code: 1 } } });
+    await expect(readGitBranch("/repo")).resolves.toEqual({ branch: null, unreadable: true });
+
+    mockByCommand({ revParse: unbornRevParse, symbolicRef: { stdout: "refs/tags/v1\n" } });
+    await expect(readGitBranch("/repo")).resolves.toEqual({ branch: null, unreadable: true });
+  });
+
+  it("calls a timed-out read unreadable without asking again", async () => {
     mockGitTimeout();
     await expect(readGitBranch("/repo")).resolves.toEqual({ branch: null, unreadable: true });
+    expect(commands()).toEqual(["rev-parse"]);
   });
 
   it("calls every other failure to look unreadable", async () => {
@@ -177,11 +214,8 @@ describe("readGitBranch", () => {
       unreadable: true,
     });
 
-    // Exit 1 with something said is not the quiet detached answer.
-    execFileMock.mockImplementation((_file, _args, _opts, cb: ExecCallback) => {
-      const error = Object.assign(new Error("Command failed: git symbolic-ref"), { code: 1 });
-      cb(error, "", "git: 'symbolic-ref' is not a git command. See 'git --help'.\n");
-    });
+    // A git that exits 1 without a word isn't saying HEAD is detached.
+    mockByCommand({ revParse: { error: { code: 1 } } });
     await expect(readGitBranch("/repo")).resolves.toEqual({ branch: null, unreadable: true });
 
     mockGitOutput("\n");
@@ -189,10 +223,10 @@ describe("readGitBranch", () => {
   });
 
   it("asks git in the given folder and bounds the wait without being told to", async () => {
-    mockGitOutput("refs/heads/main\n");
+    mockGitOutput("main\n");
     await readGitBranch("/repo/path");
     const [, args, opts] = execFileMock.mock.calls[0];
-    expect(args).toEqual(["symbolic-ref", "--quiet", "HEAD"]);
+    expect(args).toEqual(["rev-parse", "--abbrev-ref", "HEAD"]);
     expect(opts.cwd).toBe("/repo/path");
     expect(opts.timeout).toBeGreaterThan(0);
     expect(Number.isFinite(opts.timeout)).toBe(true);

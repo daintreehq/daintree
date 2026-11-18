@@ -390,8 +390,6 @@ export function probeGitCommonDir(
 export type GitBranchReading =
   { branch: string | null; unreadable: false } | { branch: null; unreadable: true };
 
-/** `symbolic-ref --quiet`'s silent exit when HEAD names no branch: a detached HEAD. */
-const SYMBOLIC_REF_DETACHED_EXIT_CODE = 1;
 /**
  * Older git says "not a git repository: <target>" for a `.git` file whose
  * target is gone or unreachable: a worktree it couldn't open, not a folder
@@ -399,12 +397,36 @@ const SYMBOLIC_REF_DETACHED_EXIT_CODE = 1;
  */
 const UNREACHABLE_GITFILE_PATTERN = /not a git repository: /i;
 
+const BRANCH_REF_PREFIX = "refs/heads/";
+
+/** Git's output without its line ending: a branch name may hold other whitespace. */
+function withoutLineEnding(output: string): string {
+  return output.replace(/\r?\n$/, "");
+}
+
+/**
+ * The branch HEAD names, from the ref it points at, or `null` for anything
+ * else: a detached HEAD, a broken ref store and a failed read are all silent
+ * here, so only the positive answer means anything. Never throws.
+ */
+async function readBranchRef(worktreePath: string, timeout: number): Promise<string | null> {
+  try {
+    const ref = withoutLineEnding(
+      await execGit(["symbolic-ref", "--quiet", "HEAD"], worktreePath, timeout)
+    );
+    return ref.startsWith(BRANCH_REF_PREFIX) && ref.length > BRANCH_REF_PREFIX.length
+      ? ref.slice(BRANCH_REF_PREFIX.length)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Read the checked-out branch of a worktree, keeping a failed read apart from
- * a branchless answer, for a caller that must not take one for the other.
- * `symbolic-ref` rather than `rev-parse --abbrev-ref HEAD`, which fails on a
- * branch with no commits yet. Not cached: unlike the git dir, the branch is
- * mutable over a worktree's life. Never throws.
+ * a branchless answer, for a caller that must not take one for the other. Not
+ * cached: unlike the git dir, the branch is mutable over a worktree's life.
+ * Never throws.
  */
 export async function readGitBranch(
   worktreePath: string,
@@ -412,30 +434,27 @@ export async function readGitBranch(
 ): Promise<GitBranchReading> {
   const { timeout = 500 } = options;
   try {
-    const ref = (await execGit(["symbolic-ref", "--quiet", "HEAD"], worktreePath, timeout)).replace(
-      /\r?\n$/,
-      ""
+    const name = withoutLineEnding(
+      await execGit(["rev-parse", "--abbrev-ref", "HEAD"], worktreePath, timeout)
     );
-    const branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
-    return branch ? { branch, unreadable: false } : { branch: null, unreadable: true };
+    if (name === "HEAD") return { branch: null, unreadable: false };
+    return name ? { branch: name, unreadable: false } : { branch: null, unreadable: true };
   } catch (error) {
     const execError = error instanceof GitExecError ? error : null;
-    const rootCause = execError ? execError.originalError : error;
+    const failure = execError ? execError.originalError : error;
     const stderr = execError?.stderr ?? "";
-    const exit = rootCause as { code?: unknown; killed?: boolean; signal?: string | null };
     if (
-      exit?.code === SYMBOLIC_REF_DETACHED_EXIT_CODE &&
-      exit.killed !== true &&
-      !exit.signal &&
-      stderr.trim() === ""
-    ) {
-      return { branch: null, unreadable: false };
-    }
-    if (
-      classifyGitFailure(rootCause, stderr) === "definitive" &&
+      classifyGitFailure(failure, stderr) === "definitive" &&
       !UNREACHABLE_GITFILE_PATTERN.test(stderr)
     ) {
       return { branch: null, unreadable: false };
+    }
+    // Git ran and gave up, as `rev-parse` does on a branch with no commits yet
+    // (fresh or orphaned), where `symbolic-ref` still names the branch. A
+    // timeout or a failed spawn isn't asked twice.
+    if ((failure as { code?: unknown } | null)?.code === GIT_FATAL_EXIT_CODE) {
+      const branch = await readBranchRef(worktreePath, timeout);
+      if (branch) return { branch, unreadable: false };
     }
     return { branch: null, unreadable: true };
   }
