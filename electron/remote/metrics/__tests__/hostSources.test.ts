@@ -641,7 +641,7 @@ describe("one host-summary sample", () => {
     expect(getProjectInventory).toHaveBeenCalledTimes(1);
   });
 
-  it("never reaches the status repair, so sampling a remote activation leaves it active (#17798)", async () => {
+  it("reads the projects only through the read-only inventory, never the status repair (#17798)", async () => {
     // "site" was opened here from another machine: active beside the local pointer's project.
     store.projects = [
       { id: "p1", path: "/p1", status: "active", name: "daintree" },
@@ -660,7 +660,7 @@ describe("one host-summary sample", () => {
     await sources.projects();
     await sources.agents();
     sources.driver();
-    sources.drivers();
+    sources.drivers!();
     expect(openProjects().map((project) => project.id)).toEqual(["p1", "p2"]);
     await observeAgents();
     expect(getAllProjects).not.toHaveBeenCalled();
@@ -695,6 +695,7 @@ describe("one host-summary sample", () => {
     await expect(readers.agents()).rejects.toThrow("db locked");
     await expect(readers.projects()).rejects.toThrow("db locked");
     expect(() => readers.driver()).toThrow("db locked");
+    expect(() => readers.drivers!()).toThrow("db locked");
     expect(getProjectInventory).toHaveBeenCalledTimes(1);
   });
 

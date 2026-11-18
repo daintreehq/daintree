@@ -266,6 +266,7 @@ import {
 } from "../scheduledRuns/scheduledRunAdmission.js";
 import { setWritesSuppressed, resetWritesSuppressedForTesting } from "../diskPressureState.js";
 import { getMruProjects } from "../../../shared/utils/projectMru.js";
+import { FRECENCY_HALF_LIFE_MS } from "../../../shared/utils/frecency.js";
 import { events } from "../events.js";
 
 describe("ProjectStore.getAllProjects reconciliation", () => {
@@ -1230,7 +1231,7 @@ describe("ProjectStore.setCurrentProject MRU lastOpened bump", () => {
     // Both live projects count as open, the remote one included.
     const open = inventory.filter((p) => p.status === "active" || p.status === "background");
     expect(open.map((p) => p.id).sort()).toEqual([alphaId, betaId, gammaId].sort());
-    expect(inventory.find((p) => p.id === betaId)).toEqual({
+    expect(inventory.find((p) => p.id === betaId)).toStrictEqual({
       id: betaId,
       name: "Beta",
       path: row.path,
@@ -1238,9 +1239,34 @@ describe("ProjectStore.setCurrentProject MRU lastOpened bump", () => {
     });
     txSpy.mockRestore();
     updateSpy.mockRestore();
+  });
 
-    // The worktree list stops at a cap in this order, so it is the app's own.
-    expect(inventory.map((p) => p.id)).toEqual(store.getAllProjects().map((p) => p.id));
+  it("orders the host inventory by decayed frecency, ties in the stored score's order (#17798)", () => {
+    const now = 1_800_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const seed = (id: string, frecencyScore: number, halfLivesAgo: number) =>
+      db
+        .update(schema.projects)
+        .set({
+          frecencyScore,
+          lastAccessedAt: now - halfLivesAgo * FRECENCY_HALF_LIFE_MS,
+          lastOpened: tAlpha,
+        })
+        .where(eq(schema.projects.id, id))
+        .run();
+    // Alpha and Beta both decay to 2 and share lastOpened, so the stored score
+    // (Beta's 8 over Alpha's 2) breaks the tie; Gamma's raw 16 decays to 1.
+    seed(alphaId, 2, 0);
+    seed(betaId, 8, 2);
+    seed(gammaId, 16, 4);
+    try {
+      const order = store.getProjectInventory().map((p) => p.id);
+      expect(order).toEqual([betaId, alphaId, gammaId]);
+      // The worktree list stops at a cap in this order, so it is the app's own.
+      expect(order).toEqual(store.getAllProjects().map((p) => p.id));
+    } finally {
+      vi.mocked(Date.now).mockRestore();
+    }
   });
 });
 

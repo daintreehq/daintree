@@ -1507,7 +1507,12 @@ export class ProjectStore {
     return rows
       .map((row) => ({
         row,
-        score: decayFrecencyScore(row.frecencyScore ?? 0, row.lastAccessedAt ?? 0, now),
+        // `rowToProject()`'s fallbacks, so a malformed row sorts where `getAllProjects()` puts it.
+        score: decayFrecencyScore(
+          typeof row.frecencyScore === "number" ? row.frecencyScore : FRECENCY_COLD_START,
+          typeof row.lastAccessedAt === "number" ? row.lastAccessedAt : 0,
+          now
+        ),
       }))
       .sort((a, b) => b.score - a.score || (b.row.lastOpened ?? 0) - (a.row.lastOpened ?? 0))
       .map(({ row }) => ({
