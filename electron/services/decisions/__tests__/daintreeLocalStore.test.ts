@@ -1458,6 +1458,49 @@ describe("DaintreeLocalStore relay deletions (#16233)", () => {
     expect(heard).toEqual([]);
     expect(await store.deletedQuestionIds()).toEqual(new Set());
   });
+
+  it("reads applied deletions through an index of them alone, however long the event history (#17791)", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const created = sqlite.prepare(
+      `INSERT INTO decisions_inbound_events
+         (seq, event_id, event_type, json, received_at, processed_at)
+       VALUES (?, ?, 'decision.created', '{}', 1, 2)`
+    );
+    sqlite.transaction(() => {
+      for (let seq = 1; seq <= 500; seq++) created.run(seq, `c${seq}`);
+    })();
+    const prepare = vi.spyOn(sqlite, "prepare");
+
+    expect(await store.deletedQuestionIds()).toEqual(new Set());
+    const read = prepare.mock.calls
+      .map(([sql]) => sql)
+      .find((sql) => sql.includes("'decision.deleted'"));
+    expect(read).toBeDefined();
+    prepare.mockRestore();
+    const plan = () =>
+      (sqlite.prepare(`EXPLAIN QUERY PLAN ${read}`).all() as { detail: string }[])
+        .map((step) => step.detail)
+        .join("\n");
+    expect(plan()).toContain("USING INDEX decisions_inbound_events_deleted_idx");
+
+    // A few deletions, one applied and one refused, still read through it and
+    // still name only the question actually withdrawn.
+    await store.commitNewQuestion(row("q1", 1, { local_status: "open" }), item("o1", "q1"));
+    await store.commitNewQuestion(
+      row("q2", 2, { local_status: "cancelled", history_only: true }),
+      item("o2", "q2")
+    );
+    await store.insertEvent(deletion(501, "q1"));
+    await store.insertEvent(deletion(502, "q2"));
+    await store.updateQuestion("q1", { local_status: "cancelled", remote_event_seq: 501 });
+    await store.markEventProcessed(501, 5);
+    await store.markEventProcessed(502, 5);
+    expect(await store.deletedQuestionIds()).toEqual(new Set(["q1"]));
+    expect(plan()).toContain("USING INDEX decisions_inbound_events_deleted_idx");
+    // The same once `PRAGMA optimize` has gathered statistics.
+    sqlite.exec("ANALYZE");
+    expect(plan()).toContain("USING INDEX decisions_inbound_events_deleted_idx");
+  });
 });
 
 /**
