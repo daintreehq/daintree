@@ -185,13 +185,13 @@ describe("declaredLinksFromPyproject (#17254)", () => {
             Chat: "irc://irc.libera.chat/widget",
             Funding: 42,
             Changelog: ["https://acme.dev/changes"],
-            "  ": "https://www.acme.dev/blank",
+            "  ": "https://www.other.dev/blank",
             Homepage: "https://jo:s3cret@acme.dev",
           },
         },
       })
     ).toEqual([
-      { source: "pyproject.toml", title: "acme.dev", url: "https://www.acme.dev/blank" },
+      { source: "pyproject.toml", title: "other.dev", url: "https://www.other.dev/blank" },
       { source: "pyproject.toml", title: "Homepage", url: "https://acme.dev/" },
     ]);
   });
@@ -424,9 +424,12 @@ describe("declaredLinksFromBackstageCatalog (#17254)", () => {
     expect(
       declaredLinksFromBackstageCatalog([
         { metadata: { links: [shared, repeat] } },
-        { metadata: { links: [repeat, shared] } },
+        { metadata: { links: [repeat, shared, { url: "https://acme.dev/slo" }] } },
       ])
-    ).toEqual([{ source: "catalog-info.yaml", title: "Runbook", url: "https://acme.dev/runbook" }]);
+    ).toEqual([
+      { source: "catalog-info.yaml", title: "Runbook", url: "https://acme.dev/runbook" },
+      { source: "catalog-info.yaml", title: "acme.dev", url: "https://acme.dev/slo" },
+    ]);
     expect(later).not.toHaveBeenCalled();
   });
 

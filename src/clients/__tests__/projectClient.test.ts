@@ -591,5 +591,6 @@ describe("projectClient.getDeclaredLinks (#17254)", () => {
     await expect(client.getDeclaredLinks("p1")).resolves.toEqual([
       { source: "package.json", title: "Homepage", url: "https://widget.example.dev/" },
     ]);
+    expect(getDeclaredMock.mock.calls).toEqual([[{ projectId: "p1" }]]);
   });
 });
