@@ -68,7 +68,9 @@ function writeFile(filePath: string): void {
   fs.writeFileSync(filePath, "x", "utf8");
 }
 
-type FakeEntry = { name: string; kind: "file" | "dir" };
+// `broken` is an entry whose type probe throws a non-errno error: a bug in the
+// walker's own loop rather than a failing disk.
+type FakeEntry = { name: string; kind: "file" | "dir" | "broken" };
 
 interface FakeDirTally {
   /** Entries handed to the walker, which is all a lazy handle ever produces. */
@@ -94,8 +96,14 @@ function createFakeDir(
           tally.pulled++;
           yield {
             name: entry.name,
-            isFile: () => entry.kind === "file",
-            isDirectory: () => entry.kind === "dir",
+            isFile: () => {
+              if (entry.kind === "broken") throw new TypeError("entry type unreadable");
+              return entry.kind === "file";
+            },
+            isDirectory: () => {
+              if (entry.kind === "broken") throw new TypeError("entry type unreadable");
+              return entry.kind === "dir";
+            },
           };
         }
       } finally {
@@ -106,12 +114,18 @@ function createFakeDir(
   return { dir, tally };
 }
 
-function stubOpendir(byPath: Map<string, unknown>): void {
+// A map value that is an Error is thrown when that path is opened. Every path
+// the walker asks for is recorded, found or not.
+function stubOpendir(byPath: Map<string, unknown>): { opened: string[] } {
+  const opened: string[] = [];
   opendirOverride.current = async (target) => {
+    opened.push(target);
     const dir = byPath.get(target);
+    if (dir instanceof Error) throw dir;
     if (dir === undefined) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
     return dir;
   };
+  return { opened };
 }
 
 type RealDir = Awaited<ReturnType<(typeof import("fs/promises"))["opendir"]>>;
@@ -186,41 +200,40 @@ describe("FileSearchService adversarial", () => {
     expect(gitClient.raw).toHaveBeenCalledTimes(1);
   });
 
-  it("skips unreadable subtrees and still returns matches from readable siblings", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "file-search-adv-"));
-    tempDirs.push(dir);
-    const secretDir = path.join(dir, "secret");
-    const visibleDir = path.join(dir, "visible");
-    fs.mkdirSync(secretDir, { recursive: true });
-    fs.mkdirSync(visibleDir, { recursive: true });
-    writeFile(path.join(secretDir, "hidden.txt"));
-    writeFile(path.join(visibleDir, "match.txt"));
-
-    const gitClient = createGitClient();
-    createStrictExitGitMock.mockReturnValue(gitClient);
-    let deniedOpens = 0;
-    await recordOpenedHandles((target) => {
-      if (target !== secretDir) return;
-      deniedOpens++;
-      throw Object.assign(new Error("denied"), { code: "EACCES" });
-    });
-
-    const service = await createService();
-    const result = await service.search({ cwd: dir, query: "match", limit: 10 });
-
-    expect(deniedOpens).toBe(1);
-    expect(result).toContain("visible/match.txt");
-    expect(result).not.toContain("secret/hidden.txt");
-  });
-
-  it("stops reading a wide directory once the fallback budget is spent", async () => {
+  it("skips an unreadable subtree and still lists its readable siblings", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "file-search-adv-"));
     tempDirs.push(dir);
     createStrictExitGitMock.mockReturnValue(createGitClient());
 
-    // The root leaves exactly one slot of the 20,000-path budget, then a child
-    // with far more entries than that: a skipped name (spends no budget), the
-    // file that fills the last slot, and 100,000 more that must never be read.
+    // The walk is LIFO, so listing `visible` first means the denied directory is
+    // the one opened first: a walker that gave up on the open failure instead of
+    // moving on would never reach `visible`.
+    const root = createFakeDir([
+      { name: "visible", kind: "dir" },
+      { name: "secret", kind: "dir" },
+    ]);
+    const visible = createFakeDir([{ name: "match.txt", kind: "file" }]);
+    const { opened } = stubOpendir(
+      new Map<string, unknown>([
+        [dir, root.dir],
+        [path.join(dir, "secret"), Object.assign(new Error("denied"), { code: "EACCES" })],
+        [path.join(dir, "visible"), visible.dir],
+      ])
+    );
+
+    const service = await createService();
+    const result = await service.search({ cwd: dir, query: "", limit: 10 });
+
+    expect([...result].sort()).toEqual(["secret/", "visible/", "visible/match.txt"]);
+    expect(opened[1]).toBe(path.join(dir, "secret"));
+    expect(root.tally.closed).toBe(1);
+    expect(visible.tally.closed).toBe(1);
+  });
+
+  function createWideFixture(cwd: string, lastSlot: "file" | "dir") {
+    // The root leaves exactly one slot of the fallback budget, then a child with
+    // far more entries than that: a skipped name (spends no budget), the entry
+    // that fills the last slot, and 100,000 more that must never be read.
     const root = createFakeDir(
       (function* () {
         for (let index = 0; index < 19_998; index++) {
@@ -232,32 +245,73 @@ describe("FileSearchService adversarial", () => {
     const wide = createFakeDir(
       (function* () {
         yield { name: ".DS_Store", kind: "file" as const };
-        yield { name: "first.txt", kind: "file" as const };
+        yield lastSlot === "file"
+          ? { name: "last.txt", kind: "file" as const }
+          : { name: "last", kind: "dir" as const };
         for (let index = 0; index < 100_000; index++) {
           yield { name: `late-${index}.txt`, kind: "file" as const };
         }
       })()
     );
-    stubOpendir(
+    const stub = stubOpendir(
       new Map<string, unknown>([
-        [dir, root.dir],
-        [path.join(dir, "wide"), wide.dir],
+        [cwd, root.dir],
+        [path.join(cwd, "wide"), wide.dir],
       ])
     );
+    return { root, wide, opened: stub.opened };
+  }
 
-    const service = await createService();
-    const result = await service.search({ cwd: dir, query: "wide", limit: 10 });
+  it.each([
+    ["file", ["wide/", "wide/last.txt"]],
+    ["dir", ["wide/", "wide/last/"]],
+  ] as const)(
+    "stops reading a wide directory once a %s spends the last of the fallback budget",
+    async (lastSlot, expected) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "file-search-adv-"));
+      tempDirs.push(dir);
+      createStrictExitGitMock.mockReturnValue(createGitClient());
+      const { root, wide, opened } = createWideFixture(dir, lastSlot);
 
-    expect([...result].sort()).toEqual(["wide/", "wide/first.txt"]);
-    expect(root.tally).toEqual({ pulled: 19_999, closed: 1 });
-    expect(wide.tally).toEqual({ pulled: 2, closed: 1 });
-    expect(logWarnMock).toHaveBeenCalledTimes(1);
-    expect(logWarnMock).toHaveBeenCalledWith(
-      "[FileSearchService] loadFilesFromDisk: hit fallback cap",
-      {
+      const service = await createService();
+      const result = await service.search({ cwd: dir, query: "wide", limit: 10 });
+
+      expect([...result].sort()).toEqual(expected);
+      expect(root.tally).toEqual({ pulled: 19_999, closed: 1 });
+      expect(wide.tally).toEqual({ pulled: 2, closed: 1 });
+      // The directory that took the last slot is queued but never entered.
+      expect(opened).toEqual([dir, path.join(dir, "wide")]);
+      expect(logWarnMock).toHaveBeenCalledTimes(1);
+      expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("fallback cap"), {
         cwd: dir,
-        cap: 20_000,
-      }
+        cap: expect.any(Number),
+      });
+    }
+  );
+
+  it("warns about a capped walk once per cwd, not once per walk", async () => {
+    const first = fs.mkdtempSync(path.join(os.tmpdir(), "file-search-adv-"));
+    const second = fs.mkdtempSync(path.join(os.tmpdir(), "file-search-adv-"));
+    tempDirs.push(first, second);
+    createStrictExitGitMock.mockReturnValue(createGitClient());
+    const service = await createService();
+
+    createWideFixture(first, "file");
+    await service.search({ cwd: first, query: "wide", limit: 10 });
+    expect(logWarnMock).toHaveBeenCalledTimes(1);
+
+    // Same cwd, rebuilt from fresh handles: still capped, already reported.
+    service.invalidate(first);
+    createWideFixture(first, "file");
+    await service.search({ cwd: first, query: "wide", limit: 10 });
+    expect(logWarnMock).toHaveBeenCalledTimes(1);
+
+    createWideFixture(second, "file");
+    await service.search({ cwd: second, query: "wide", limit: 10 });
+    expect(logWarnMock).toHaveBeenCalledTimes(2);
+    expect(logWarnMock).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.objectContaining({ cwd: second })
     );
   });
 
@@ -289,6 +343,60 @@ describe("FileSearchService adversarial", () => {
     expect(root.tally).toEqual({ pulled: 2, closed: 1 });
     expect(sub.tally).toEqual({ pulled: 1, closed: 1 });
     expect(logWarnMock).not.toHaveBeenCalled();
+  });
+
+  it("serves and caches no partial index when the walk's own loop throws", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "file-search-adv-"));
+    tempDirs.push(dir);
+    createStrictExitGitMock.mockReturnValue(createGitClient());
+
+    const broken = createFakeDir([
+      { name: "before.txt", kind: "file" },
+      { name: "broken", kind: "broken" },
+      { name: "after.txt", kind: "file" },
+    ]);
+    stubOpendir(new Map<string, unknown>([[dir, broken.dir]]));
+
+    const service = await createService();
+
+    // A disk error keeps the entries already read; a bug in the loop must not
+    // look like one, or the half-built listing would be cached for minutes.
+    expect(await service.search({ cwd: dir, query: "", limit: 10 })).toEqual([]);
+    expect(broken.tally).toEqual({ pulled: 2, closed: 1 });
+
+    const healthy = createFakeDir([
+      { name: "before.txt", kind: "file" },
+      { name: "after.txt", kind: "file" },
+    ]);
+    stubOpendir(new Map<string, unknown>([[dir, healthy.dir]]));
+    expect([...(await service.search({ cwd: dir, query: "", limit: 10 }))].sort()).toEqual([
+      "after.txt",
+      "before.txt",
+    ]);
+  });
+
+  it("orders paths the collator cannot tell apart by raw string, whatever order the disk lists them", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "file-search-adv-"));
+    tempDirs.push(dir);
+    createStrictExitGitMock.mockReturnValue(createGitClient());
+
+    // Zero-width non-joiner and joiner survive NFC as distinct names yet collate
+    // equal. `readdir` used to list siblings byte-sorted, so this was the order
+    // they came back in; an opened handle lists them in whatever order the disk
+    // keeps, here the reverse.
+    const nonJoiner = "a\u200Cb.ts";
+    const joiner = "a\u200Db.ts";
+    expect(new Intl.Collator().compare(nonJoiner, joiner)).toBe(0);
+    expect(nonJoiner < joiner).toBe(true);
+    const root = createFakeDir([
+      { name: joiner, kind: "file" },
+      { name: nonJoiner, kind: "file" },
+    ]);
+    stubOpendir(new Map<string, unknown>([[dir, root.dir]]));
+
+    const service = await createService();
+
+    expect(await service.listFiles(dir)).toEqual([nonJoiner, joiner]);
   });
 
   it("closes every directory handle it opens", async () => {

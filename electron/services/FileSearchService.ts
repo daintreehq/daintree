@@ -126,9 +126,9 @@ const MAX_FALLBACK_FILES = 20_000;
 // Raw entries a directory handle reads per call. The walker pulls them one at a
 // time and stops at the cap, so a directory far wider than the remaining budget
 // costs at most one batch of surplus reads rather than every entry it holds.
-// Larger than Node's default of 32 because every batch is a threadpool round
-// trip, and a capped walk of one wide directory is hundreds of them.
-const FALLBACK_READ_BATCH = 128;
+// Kept small because a filesystem that reports no entry type has each batch
+// resolved with synchronous lstat calls on this thread.
+const FALLBACK_READ_BATCH = 32;
 
 // Names hard-skipped by the fallback walker only. Git mode honours .gitignore via
 // --exclude-standard, so these are unnecessary there. Includes a few well-known
@@ -424,8 +424,11 @@ async function loadFilesFromDisk(cwd: string): Promise<string[]> {
         results.push(relativePosix);
         if (results.length >= MAX_FALLBACK_FILES) break;
       }
-    } catch {
+    } catch (error) {
       // A read that fails part-way keeps the entries already taken from it.
+      // Only errno errors are the disk's: anything else is a bug in this loop
+      // and must reject rather than cache a silently partial index.
+      if (typeof (error as NodeJS.ErrnoException)?.code !== "string") throw error;
     }
   }
 
@@ -437,8 +440,11 @@ async function loadFilesFromDisk(cwd: string): Promise<string[]> {
     });
   }
 
+  // Disk order is not name order, so paths the collator calls equal (zero-width
+  // joiners, soft hyphens) are ordered by raw string rather than by where the
+  // filesystem happened to list them.
   const collator = getPathCollator();
-  return results.sort((a, b) => collator.compare(a, b));
+  return results.sort((a, b) => collator.compare(a, b) || (a < b ? -1 : a > b ? 1 : 0));
 }
 
 async function loadGitFiles(cwd: string): Promise<string[]> {
