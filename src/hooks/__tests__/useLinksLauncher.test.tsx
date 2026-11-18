@@ -98,6 +98,7 @@ vi.mock("@/hooks/useProjectViewRevealed", () => ({
 }));
 
 const {
+  useLinksLauncherDeploymentTarget,
   useLinksLauncherLinks,
   useLinksLauncherPullRequest,
   useLinksLauncherRefresh,
@@ -593,5 +594,95 @@ describe("useLinksLauncherPullRequest", () => {
     h.worktrees = new Map([["wt-1", worktree("wt-1", { hasRemote: true })]]);
     rerender();
     expect(result.current?.number).toBe(42);
+  });
+});
+
+describe("useLinksLauncherDeploymentTarget", () => {
+  function useTarget() {
+    return useLinksLauncherDeploymentTarget(useLinksLauncherPullRequest());
+  }
+
+  it("asks by the pull request when the launcher shows one", () => {
+    h.worktrees = new Map([["wt-1", worktree("wt-1")]]);
+    h.activeWorktreeId = "wt-1";
+    const { result } = renderHook(() => useTarget());
+    expect(result.current).toEqual({
+      worktreeId: "wt-1",
+      worktreePath: "/repo/wt-1",
+      worktreeLabel: "feature/wt-1",
+      providerId: "github.github",
+      kind: "pullRequest",
+      prNumber: 42,
+      prUrl: "https://github.com/acme/app/pull/42",
+    });
+  });
+
+  it("asks by the checked-out branch, the default one included, when there is none", () => {
+    h.worktrees = new Map([
+      ["wt-1", worktree("wt-1", {}, null)],
+      ["main", worktree("main", { branch: "main", isMainWorktree: true }, null)],
+    ]);
+    h.activeWorktreeId = "wt-1";
+    const { result, rerender } = renderHook(() => useTarget());
+    expect(result.current).toEqual({
+      worktreeId: "wt-1",
+      worktreePath: "/repo/wt-1",
+      worktreeLabel: "feature/wt-1",
+      providerId: "github.github",
+      kind: "branch",
+      branch: "feature/wt-1",
+    });
+
+    h.activeWorktreeId = "main";
+    rerender();
+    expect(result.current).toMatchObject({ kind: "branch", branch: "main" });
+  });
+
+  it("asks by branch under the project's forge when the pull request belongs to another", () => {
+    const carried = worktree("wt-1", {}, { providerId: "gitlab.gitlab" });
+    h.worktrees = new Map([["wt-1", carried]]);
+    h.activeWorktreeId = "wt-1";
+    const { result } = renderHook(() => useTarget());
+    expect(result.current).toMatchObject({
+      providerId: "github.github",
+      kind: "branch",
+      branch: "feature/wt-1",
+    });
+  });
+
+  it("has nowhere to ask without a forge, a remote, a branch, or a worktree this view holds", () => {
+    h.activeWorktreeId = "wt-1";
+    const cases: Array<[string, () => void]> = [
+      ["no forge", () => (h.codeProviderId = null)],
+      [
+        "no remote",
+        () => (h.worktrees = new Map([["wt-1", worktree("wt-1", { hasRemote: false })]])),
+      ],
+      [
+        "detached, keeping its old branch",
+        () => (h.worktrees = new Map([["wt-1", worktree("wt-1", { isDetached: true }, null)]])),
+      ],
+      [
+        "no branch",
+        () => (h.worktrees = new Map([["wt-1", worktree("wt-1", { branch: " " }, null)]])),
+      ],
+      ["another project's", () => (h.activeWorktreeId = "other-project-wt")],
+    ];
+    for (const [name, arrange] of cases) {
+      h.codeProviderId = "github.github";
+      h.activeWorktreeId = "wt-1";
+      h.worktrees = new Map([["wt-1", worktree("wt-1", {}, null)]]);
+      arrange();
+      const { result, unmount } = renderHook(() => useTarget());
+      expect(result.current, name).toBeNull();
+      unmount();
+    }
+  });
+
+  it("asks while the host has yet to read the remotes", () => {
+    h.worktrees = new Map([["wt-1", worktree("wt-1", { hasRemote: undefined }, null)]]);
+    h.activeWorktreeId = "wt-1";
+    const { result } = renderHook(() => useTarget());
+    expect(result.current?.kind).toBe("branch");
   });
 });
