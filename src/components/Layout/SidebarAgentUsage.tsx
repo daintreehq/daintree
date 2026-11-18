@@ -11,10 +11,8 @@ import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { describeAgentUsage } from "@/utils/agentUsageFormat";
 
-const ROW_CLASS = "flex min-h-7 w-full min-w-0 items-center gap-2 py-1 pl-4 pr-3 text-left";
-
 const BUTTON_CLASS = cn(
-  ROW_CLASS,
+  "flex min-h-7 w-full min-w-0 items-center gap-2 py-1 pl-4 pr-3 text-left",
   "transition-colors hover:bg-overlay-soft",
   "focus-visible:bg-overlay-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
 );
@@ -25,7 +23,8 @@ const BUTTON_CLASS = cn(
  * that has a reading, nothing when none does. It turns to the warning tone
  * past the fixed threshold, or when Claude Code itself said the limit is near
  * or reached, and opens the account quota section on the machine the window
- * shows. A reading from another machine has no section here to open.
+ * shows. A reading from another machine has no section here, so it opens that
+ * host in a new window, where its own line opens the section.
  */
 export function SidebarAgentUsage() {
   const readouts = useAgentUsageReadouts();
@@ -50,62 +49,66 @@ function AgentUsageRow({ readout, now }: { readout: AgentUsageReadout; now: numb
   const agentName = getAgentConfig(agentId)?.name ?? agentId;
   const line = describeAgentUsage(readout, agentName, now);
   const opensHere = readout.hostId === currentHostId();
-  const content = (
-    <>
-      <SidebarFooterGlyph>
-        <Gauge
-          className={cn("h-3 w-3", line.attention ? "text-status-warning" : "text-text-secondary")}
-          aria-hidden="true"
-        />
-      </SidebarFooterGlyph>
-      <span
-        className={cn(
-          "min-w-0 truncate text-2xs font-medium",
-          line.attention ? "text-text-primary" : "text-text-secondary"
-        )}
-      >
-        {line.text}
-      </span>
-    </>
-  );
-  const detail = (
-    <span className="flex flex-col gap-0.5">
-      {line.detail.map((text) => (
-        <span key={text}>{text}</span>
-      ))}
-    </span>
-  );
+  const opens = opensHere
+    ? "Open account quota"
+    : `Open ${readout.hostName ?? "this host"} in a new window`;
+  const open = () => {
+    if (opensHere) {
+      void actionService.dispatch(
+        "app.settings.openTab",
+        { tab: "agents", subtab: agentId, sectionId: "agents-account-quota" },
+        { source: "user" }
+      );
+      return;
+    }
+    void actionService.dispatch(
+      "host.switch",
+      { hostId: readout.hostId, newWindow: true },
+      { source: "user" }
+    );
+  };
 
   return (
     // Forced on: the detail carries the login, machine and age, which a
     // keyboard user needs as much as a pointer does.
-    <TruncatedTooltip content={detail} isTruncated side="top" contentClassName="max-w-xs">
-      {opensHere ? (
-        <button
-          type="button"
-          data-sidebar-agent-usage-row={agentId}
-          data-attention={line.attention ? "" : undefined}
-          aria-label={`${line.text}. ${line.detail.join(". ")}. Open account quota`}
-          className={BUTTON_CLASS}
-          onClick={() =>
-            void actionService.dispatch(
-              "app.settings.openTab",
-              { tab: "agents", subtab: agentId, sectionId: "agents-account-quota" },
-              { source: "user" }
-            )
-          }
+    <TruncatedTooltip
+      content={
+        <span className="flex flex-col gap-0.5">
+          {[...line.detail, opens].map((text) => (
+            <span key={text}>{text}</span>
+          ))}
+        </span>
+      }
+      isTruncated
+      side="top"
+      contentClassName="max-w-xs"
+    >
+      <button
+        type="button"
+        data-sidebar-agent-usage-row={agentId}
+        data-attention={line.attention ? "" : undefined}
+        aria-label={`${line.text}. ${line.detail.join(". ")}. ${opens}`}
+        className={BUTTON_CLASS}
+        onClick={open}
+      >
+        <SidebarFooterGlyph>
+          <Gauge
+            className={cn(
+              "h-3 w-3",
+              line.attention ? "text-status-warning" : "text-text-secondary"
+            )}
+            aria-hidden="true"
+          />
+        </SidebarFooterGlyph>
+        <span
+          className={cn(
+            "min-w-0 truncate text-2xs font-medium",
+            line.attention ? "text-text-primary" : "text-text-secondary"
+          )}
         >
-          {content}
-        </button>
-      ) : (
-        <div
-          data-sidebar-agent-usage-row={agentId}
-          data-attention={line.attention ? "" : undefined}
-          className={ROW_CLASS}
-        >
-          {content}
-        </div>
-      )}
+          {line.text}
+        </span>
+      </button>
     </TruncatedTooltip>
   );
 }

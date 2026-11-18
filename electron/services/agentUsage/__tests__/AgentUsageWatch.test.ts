@@ -63,12 +63,12 @@ interface Harness {
 
 function harness(): Harness {
   const live: Harness["live"] = {
-    current: { complete: true, codexHomes: [], claudeConfigDirs: [] },
+    current: { codexHomes: [], claudeConfigDirs: [] },
   };
   const codexAnswers = new Map<string, () => CodexHomeQuota>();
   const claudeAccounts: Harness["claudeAccounts"] = { current: [] };
   const readCodexHomes = vi.fn<AgentUsageWatchDeps["readCodexHomes"]>(async (homes) =>
-    [...homes].flatMap((home) => {
+    [...homes.keys()].flatMap((home) => {
       const answer = codexAnswers.get(home);
       return answer ? [answer()] : [];
     })
@@ -114,7 +114,7 @@ describe("AgentUsageWatch", () => {
 
   it("reads only the Codex homes an agent runs in, at most once per cadence however many want it", async () => {
     const h = harness();
-    h.live.current = { complete: true, codexHomes: ["/accts/work"], claudeConfigDirs: [] };
+    h.live.current = { codexHomes: ["/accts/work"], claudeConfigDirs: [] };
     h.codexAnswers.set("/accts/work", () => codexQuota("/accts/work", 82));
     h.codexAnswers.set("/accts/idle", () => codexQuota("/accts/idle", 99));
 
@@ -122,7 +122,7 @@ describe("AgentUsageWatch", () => {
     const releaseB = h.watch.acquire();
     await settle();
     expect(h.readCodexHomes).toHaveBeenCalledTimes(1);
-    expect([...h.readCodexHomes.mock.calls[0]![0]]).toEqual(["/accts/work"]);
+    expect([...h.readCodexHomes.mock.calls[0]![0].keys()]).toEqual(["/accts/work"]);
     expect(h.watch.latest()).toMatchObject([
       { agentId: "codex", usedPercent: 82, accountNames: ["acct:/accts/work"] },
     ]);
@@ -144,20 +144,20 @@ describe("AgentUsageWatch", () => {
 
   it("reads a home an agent newly starts in without waiting out another home's cadence", async () => {
     const h = harness();
-    h.live.current = { complete: true, codexHomes: ["/accts/a"], claudeConfigDirs: [] };
+    h.live.current = { codexHomes: ["/accts/a"], claudeConfigDirs: [] };
     h.codexAnswers.set("/accts/a", () => codexQuota("/accts/a", 20));
     h.codexAnswers.set("/accts/b", () => codexQuota("/accts/b", 90));
     h.watch.acquire();
     await settle();
 
-    h.live.current = { complete: true, codexHomes: ["/accts/a", "/accts/b"], claudeConfigDirs: [] };
+    h.live.current = { codexHomes: ["/accts/a", "/accts/b"], claudeConfigDirs: [] };
     await vi.advanceTimersByTimeAsync(TICK);
     expect(h.readCodexHomes).toHaveBeenCalledTimes(2);
-    expect([...h.readCodexHomes.mock.calls[1]![0]]).toEqual(["/accts/b"]);
+    expect([...h.readCodexHomes.mock.calls[1]![0].keys()]).toEqual(["/accts/b"]);
     expect(h.watch.latest()).toMatchObject([{ agentId: "codex", usedPercent: 90 }]);
 
     // Once the agent on b exits, b's reading drops off at the next look.
-    h.live.current = { complete: true, codexHomes: ["/accts/a"], claudeConfigDirs: [] };
+    h.live.current = { codexHomes: ["/accts/a"], claudeConfigDirs: [] };
     await vi.advanceTimersByTimeAsync(TICK);
     expect(h.watch.latest()).toMatchObject([{ agentId: "codex", usedPercent: 20 }]);
     h.watch.dispose();
@@ -165,7 +165,7 @@ describe("AgentUsageWatch", () => {
 
   it("keeps the last good Codex reading when a read fails", async () => {
     const h = harness();
-    h.live.current = { complete: true, codexHomes: ["/accts/work"], claudeConfigDirs: [] };
+    h.live.current = { codexHomes: ["/accts/work"], claudeConfigDirs: [] };
     h.codexAnswers.set("/accts/work", () => codexQuota("/accts/work", 70, START));
     h.watch.acquire();
     await settle();
@@ -182,7 +182,7 @@ describe("AgentUsageWatch", () => {
 
   it("shows only what panes printed for folders a Claude Code agent runs in now", async () => {
     const h = harness();
-    h.live.current = { complete: true, codexHomes: [], claudeConfigDirs: ["/accts/work"] };
+    h.live.current = { codexHomes: [], claudeConfigDirs: ["/accts/work"] };
     h.claudeAccounts.current = [
       claudeAccount("key:/accts/work", [claudeReading({ usedPercent: 12 })]),
       claudeAccount("key:/accts/other", [
@@ -205,7 +205,7 @@ describe("AgentUsageWatch", () => {
 
   it("drops a Claude Code reading once its reset passes, showing the runner-up", async () => {
     const h = harness();
-    h.live.current = { complete: true, codexHomes: [], claudeConfigDirs: ["/accts/work"] };
+    h.live.current = { codexHomes: [], claudeConfigDirs: ["/accts/work"] };
     h.claudeAccounts.current = [
       claudeAccount("key:/accts/work", [
         claudeReading({ window: "5-hour limit", statement: "reached", resetsAt: START + TICK / 2 }),
@@ -220,21 +220,56 @@ describe("AgentUsageWatch", () => {
     h.watch.dispose();
   });
 
-  it("keeps what it shows while the inventory is missing a pty host", async () => {
+  it("shows only the agents it can see while a pty host doesn't answer, and theirs again once it does", async () => {
     const h = harness();
-    h.live.current = { complete: true, codexHomes: ["/accts/work"], claudeConfigDirs: [] };
-    h.codexAnswers.set("/accts/work", () => codexQuota("/accts/work", 60));
+    h.live.current = { codexHomes: ["/accts/work"], claudeConfigDirs: [] };
+    h.codexAnswers.set("/accts/work", () => codexQuota("/accts/work", 95));
     h.watch.acquire();
     await settle();
-    h.live.current = { complete: false, codexHomes: [], claudeConfigDirs: [] };
+    expect(h.watch.latest()).toMatchObject([{ usedPercent: 95 }]);
+    // Work's agent is on the shard that didn't answer, or gone: either way it isn't shown as running.
+    h.live.current = { codexHomes: [], claudeConfigDirs: [] };
     await vi.advanceTimersByTimeAsync(TICK);
-    expect(h.watch.latest()).toMatchObject([{ usedPercent: 60 }]);
+    expect(h.watch.latest()).toEqual([]);
+    h.live.current = { codexHomes: ["/accts/work"], claudeConfigDirs: [] };
+    await vi.advanceTimersByTimeAsync(TICK);
+    expect(h.watch.latest()).toMatchObject([{ usedPercent: 95 }]);
+    expect(h.readCodexHomes).toHaveBeenCalledTimes(1);
+    h.watch.dispose();
+  });
+
+  it("doesn't ask about a home whose agent left while an earlier home was being read", async () => {
+    const h = harness();
+    h.live.current = { codexHomes: ["/accts/a", "/accts/b"], claudeConfigDirs: [] };
+    h.codexAnswers.set("/accts/a", () => codexQuota("/accts/a", 20));
+    h.codexAnswers.set("/accts/b", () => codexQuota("/accts/b", 90));
+    let answerA!: () => void;
+    h.readCodexHomes.mockImplementationOnce(
+      (homes) =>
+        new Promise<CodexHomeQuota[]>((resolve) => {
+          answerA = () => resolve([...homes.keys()].map((home) => h.codexAnswers.get(home)!()));
+        })
+    );
+    h.watch.acquire();
+    await settle();
+    h.live.current = { codexHomes: ["/accts/a"], claudeConfigDirs: [] };
+    answerA();
+    await settle();
+    expect(h.readCodexHomes).toHaveBeenCalledTimes(1);
+    expect([...h.readCodexHomes.mock.calls[0]![0].keys()]).toEqual(["/accts/a"]);
+    expect(h.watch.latest()).toMatchObject([{ usedPercent: 20 }]);
+
+    // b stays due, so an agent back in it is read at the next look.
+    h.live.current = { codexHomes: ["/accts/a", "/accts/b"], claudeConfigDirs: [] };
+    await vi.advanceTimersByTimeAsync(TICK);
+    expect([...h.readCodexHomes.mock.calls[1]![0].keys()]).toEqual(["/accts/b"]);
+    expect(h.watch.latest()).toMatchObject([{ usedPercent: 90 }]);
     h.watch.dispose();
   });
 
   it("publishes nothing from a read that outlived the last release", async () => {
     const h = harness();
-    h.live.current = { complete: true, codexHomes: ["/accts/work"], claudeConfigDirs: [] };
+    h.live.current = { codexHomes: ["/accts/work"], claudeConfigDirs: [] };
     let answer!: (value: CodexHomeQuota[]) => void;
     h.readCodexHomes.mockImplementationOnce(
       () => new Promise<CodexHomeQuota[]>((resolve) => (answer = resolve))
@@ -256,18 +291,15 @@ describe("AgentUsageWatch", () => {
 describe("liveAgentFolders", () => {
   it("takes the folders of running Codex and Claude Code agents only", () => {
     expect(
-      liveAgentFolders(
-        [
-          { detectedAgentId: "codex", codexHome: "/a", claudeConfigDir: "/x" },
-          { launchAgentId: "claude", claudeConfigDir: "/b", codexHome: "/y" },
-          { detectedAgentId: "gemini", codexHome: "/c", claudeConfigDir: "/c" },
-          { detectedAgentId: "codex", codexHome: "/d", hasPty: false },
-          { detectedAgentId: "claude", claudeConfigDir: "/e", isTrashed: true },
-          { detectedAgentId: "codex" },
-        ],
-        true
-      )
-    ).toEqual({ complete: true, codexHomes: ["/a"], claudeConfigDirs: ["/b"] });
+      liveAgentFolders([
+        { detectedAgentId: "codex", codexHome: "/a", claudeConfigDir: "/x" },
+        { launchAgentId: "claude", claudeConfigDir: "/b", codexHome: "/y" },
+        { detectedAgentId: "gemini", codexHome: "/c", claudeConfigDir: "/c" },
+        { detectedAgentId: "codex", codexHome: "/d", hasPty: false },
+        { detectedAgentId: "claude", claudeConfigDir: "/e", isTrashed: true },
+        { detectedAgentId: "codex" },
+      ])
+    ).toEqual({ codexHomes: ["/a"], claudeConfigDirs: ["/b"] });
   });
 
   it("counts a launched agent until detection first speaks, and not after it saw it exit", () => {

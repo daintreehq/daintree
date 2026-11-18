@@ -25,10 +25,12 @@ const logger = createLogger("main:agentUsage");
 /** How often membership and Claude readings are looked at again while wanted. */
 export const AGENT_USAGE_TICK_MS = 60_000;
 
-/** The folders the live Codex and Claude Code agents launched on, as their panes recorded them. */
+/**
+ * The folders the live Codex and Claude Code agents launched on, as their
+ * panes recorded them. From the pty hosts that answered: an agent on one that
+ * didn't is unseen until it does, never assumed still running.
+ */
 export interface LiveAgentFolders {
-  /** False when a pty host didn't answer: the list may be missing an account. */
-  complete: boolean;
   codexHomes: string[];
   claudeConfigDirs: string[];
 }
@@ -38,7 +40,8 @@ export interface AgentUsageWatchDeps {
   canonicalCodexHome(home: string): Promise<string>;
   /** The key `readClaudeAccounts` groups a folder's readings under. */
   claudeAccountKey(configDir: string): Promise<string>;
-  readCodexHomes(homeKeys: ReadonlySet<string>): Promise<CodexHomeQuota[]>;
+  /** Canonical home key to the home as a pane's env named it. */
+  readCodexHomes(homes: ReadonlyMap<string, string>): Promise<CodexHomeQuota[]>;
   readClaudeAccounts(): Promise<ClaudeUsageAccount[]>;
   now(): number;
   tickMs?: number;
@@ -74,10 +77,7 @@ export function liveAgentOf(terminal: LiveAgentTerminal): "codex" | "claude" | n
 }
 
 /** The folders of every live Codex and Claude Code agent in an inventory. */
-export function liveAgentFolders(
-  terminals: readonly LiveAgentTerminal[],
-  complete: boolean
-): LiveAgentFolders {
+export function liveAgentFolders(terminals: readonly LiveAgentTerminal[]): LiveAgentFolders {
   const codexHomes = new Set<string>();
   const claudeConfigDirs = new Set<string>();
   for (const terminal of terminals) {
@@ -88,7 +88,7 @@ export function liveAgentFolders(
       claudeConfigDirs.add(terminal.claudeConfigDir);
     }
   }
-  return { complete, codexHomes: [...codexHomes], claudeConfigDirs: [...claudeConfigDirs] };
+  return { codexHomes: [...codexHomes], claudeConfigDirs: [...claudeConfigDirs] };
 }
 
 function codexReadings(quota: CodexHomeQuota): AgentUsageReading[] {
@@ -199,29 +199,47 @@ export class AgentUsageWatch {
     }
   }
 
-  private async refresh(generation: number): Promise<void> {
+  /** Live agents' folders, Codex homes by canonical key; null when nothing can be seen. */
+  private async readLive(): Promise<{
+    codexHomes: Map<string, string>;
+    claudeDirs: string[];
+  } | null> {
     const live = await this.deps.listLiveAgents();
-    if (generation !== this.generation) return;
-    // A partial inventory can't say an account stopped: what's shown stays.
-    if (!live?.complete) return;
-
-    const codexHomes = new Set(
-      await Promise.all(live.codexHomes.map((home) => this.deps.canonicalCodexHome(home)))
+    if (!live) return null;
+    const keys = await Promise.all(
+      live.codexHomes.map((home) => this.deps.canonicalCodexHome(home))
     );
-    if (generation !== this.generation) return;
+    const codexHomes = new Map<string, string>();
+    keys.forEach((key, index) => {
+      if (!codexHomes.has(key)) codexHomes.set(key, live.codexHomes[index]!);
+    });
+    return { codexHomes, claudeDirs: live.claudeConfigDirs };
+  }
+
+  private async refresh(generation: number): Promise<void> {
+    let live = await this.readLive();
+    if (generation !== this.generation || !live) return;
+
     const interval = this.deps.codexIntervalMs ?? AGENT_USAGE_CODEX_READ_INTERVAL_MS;
     const askedBefore = this.deps.now() - interval;
     for (const [home, at] of this.codexAskedAt) {
       if (at > askedBefore) continue;
       this.codexAskedAt.delete(home);
       // An agent back in a home within the cadence finds its reading still here.
-      if (!codexHomes.has(home)) this.codexByHome.delete(home);
+      if (!live.codexHomes.has(home)) this.codexByHome.delete(home);
     }
-    const due = new Set([...codexHomes].filter((home) => !this.codexAskedAt.has(home)));
-    if (due.size > 0) {
-      const askedAt = this.deps.now();
-      for (const home of due) this.codexAskedAt.set(home, askedAt);
-      const answers = await this.deps.readCodexHomes(due);
+    const due = [...live.codexHomes.keys()].filter((home) => !this.codexAskedAt.has(home));
+    for (const [index, home] of due.entries()) {
+      if (index > 0) {
+        // Each read waits its turn behind the last: a home whose agent left
+        // meanwhile isn't asked about, and stays due for when one returns.
+        const now = await this.readLive();
+        if (generation !== this.generation) return;
+        if (now) live = now;
+        if (!live.codexHomes.has(home)) continue;
+      }
+      this.codexAskedAt.set(home, this.deps.now());
+      const answers = await this.deps.readCodexHomes(new Map([[home, live.codexHomes.get(home)!]]));
       // Kept even when the watch stopped meanwhile: the read was made and counted.
       for (const answer of answers) {
         const kept = this.codexByHome.get(answer.homeKey);
@@ -231,9 +249,10 @@ export class AgentUsageWatch {
       }
       if (generation !== this.generation) return;
     }
+    const codexHomes = live.codexHomes;
 
     const claudeKeys = new Set(
-      await Promise.all(live.claudeConfigDirs.map((dir) => this.deps.claudeAccountKey(dir)))
+      await Promise.all(live.claudeDirs.map((dir) => this.deps.claudeAccountKey(dir)))
     );
     const claudeAccounts = claudeKeys.size > 0 ? await this.deps.readClaudeAccounts() : [];
     if (generation !== this.generation) return;
@@ -291,8 +310,9 @@ function defaultDeps(): AgentUsageWatchDeps {
       ]);
       const pty = getPtyClient();
       if (!pty) return null;
-      const { terminals, degraded } = await getSharedTerminalSnapshot(pty);
-      return liveAgentFolders(terminals, !degraded);
+      // A shard that didn't answer leaves its agents unseen, never assumed running.
+      const { terminals } = await getSharedTerminalSnapshot(pty);
+      return liveAgentFolders(terminals);
     },
     async canonicalCodexHome(home) {
       const { canonicalCodexHomeKey } = await import("../codex/CodexQuotaProfiles.js");
@@ -305,9 +325,9 @@ function defaultDeps(): AgentUsageWatchDeps {
       ]);
       return claudeUsageAccountKey(await canonicalClaudeConfigDir(configDir));
     },
-    async readCodexHomes(homeKeys) {
+    async readCodexHomes(homes) {
       const { readCodexQuotaForHomes } = await import("../codex/CodexQuotaService.js");
-      return readCodexQuotaForHomes(homeKeys);
+      return readCodexQuotaForHomes(homes);
     },
     async readClaudeAccounts() {
       const { readClaudeUsageAccountsWithoutPanes } =

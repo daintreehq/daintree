@@ -109,9 +109,19 @@ describe("SidebarAgentUsage", () => {
       "Claude approaching weekly limit",
     ]);
     expect(shown.every((row) => row.hasAttribute("data-attention"))).toBe(true);
-    // A reading from another machine has no section here to open.
-    expect(shown[0]!.tagName).toBe("DIV");
-    expect(shown[1]!.tagName).toBe("BUTTON");
+  });
+
+  it("opens a linked host's reading on that host, in a new window", async () => {
+    installBridge([codex(91, { hostId: "vps", hostName: "Build VPS" })]);
+    const { container } = await renderUsage();
+    const [row] = rows(container);
+    expect(row!.getAttribute("aria-label")).toMatch(/Open Build VPS in a new window$/);
+    fireEvent.click(row!);
+    expect(dispatch).toHaveBeenCalledWith(
+      "host.switch",
+      { hostId: "vps", newWindow: true },
+      { source: "user" }
+    );
   });
 
   it("opens this machine's account quota section for its agent", async () => {

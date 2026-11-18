@@ -18,9 +18,11 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync 
 import os from "node:os";
 import path from "node:path";
 import { CodexAppServerError } from "../CodexAppServerClient.js";
+import { canonicalCodexHomeKey } from "../CodexQuotaProfiles.js";
 import {
   normalizeCodexRateLimits,
   readCodexQuota,
+  readCodexQuotaForHomes,
   readCodexQuotaProfiles,
   refreshCodexQuota,
   refreshCodexQuotaProfiles,
@@ -234,6 +236,51 @@ describe("readCodexQuotaProfiles (#13686)", () => {
     if (originalHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = originalHome;
     rmSync(root, { recursive: true, force: true });
+  });
+
+  describe("readCodexQuotaForHomes (#17318)", () => {
+    async function homes(...dirs: string[]): Promise<Map<string, string>> {
+      return new Map(
+        await Promise.all(dirs.map(async (dir) => [await canonicalCodexHomeKey(dir), dir] as const))
+      );
+    }
+
+    it("asks only about the homes an agent runs in, labelled as Settings labels them", async () => {
+      const idle = path.join(root, "idle");
+      mkdirSync(idle);
+      presets(
+        { id: "second", name: "Second account", env: { CODEX_HOME: second } },
+        { id: "idle", name: "Idle", env: { CODEX_HOME: idle } }
+      );
+      respondPerHome((home) => (home === second ? 80 : 10));
+      const readings = await readCodexQuotaForHomes(await homes(second));
+      expect(readings).toHaveLength(1);
+      expect(readings[0]).toMatchObject({
+        homeKey: await canonicalCodexHomeKey(second),
+        isDefault: false,
+        presetNames: ["Second account"],
+      });
+      expect(used(readings[0]!.result)).toBe(80);
+      expect(runSession.mock.calls.map((call) => call[1])).toEqual([{ codexHome: second }]);
+    });
+
+    it("reads a home no profile names the way the pane runs it, unlabelled", async () => {
+      const projectHome = path.join(root, "project-home");
+      mkdirSync(projectHome);
+      respondPerHome((home) => (home === projectHome ? 64 : 10));
+      const readings = await readCodexQuotaForHomes(await homes(projectHome));
+      expect(readings).toHaveLength(1);
+      expect(readings[0]).toMatchObject({ isDefault: false, accountNames: [], presetNames: [] });
+      expect(used(readings[0]!.result)).toBe(64);
+      expect(runSession.mock.calls.map((call) => call[1])).toEqual([{ codexHome: projectHome }]);
+    });
+
+    it("never starts Codex for a home that isn't there, or for no home at all", async () => {
+      respondPerHome(() => 10);
+      expect(await readCodexQuotaForHomes(new Map())).toEqual([]);
+      expect(await readCodexQuotaForHomes(await homes(path.join(root, "gone")))).toEqual([]);
+      expect(runSession).not.toHaveBeenCalled();
+    });
   });
 
   it("reads only the default profile when no preset sets a home", async () => {
