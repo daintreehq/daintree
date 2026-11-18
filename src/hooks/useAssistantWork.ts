@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { unreadAssistantWork, type AssistantWorkReading } from "@shared/types/assistantWork";
 import type { HostId } from "@shared/types/remoteHosts";
 import { canopyHostClient } from "@/clients/canopyHostClient";
@@ -37,6 +37,13 @@ function withReading(
   for (const [id, reading] of held) if (asked.has(id)) next.set(id, reading);
   if (!same) next.set(hostId, kept);
   return next;
+}
+
+/** The readings of the asked hosts only; all of them asked, the map itself. */
+function onlyAsked(readings: Readings, key: string): Readings {
+  const asked = new Set(key.split("\u0000"));
+  if ([...readings.keys()].every((id) => asked.has(id))) return readings;
+  return new Map([...readings].filter(([id]) => asked.has(id)));
 }
 
 /**
@@ -107,5 +114,7 @@ export function useAssistantWork(
       for (const timer of timers.values()) clearTimeout(timer);
     };
   }, [reading, key, ownHostId]);
-  return active ? readings : NO_READINGS;
+  // A host taken out of the list leaves at once, not when the next host answers.
+  const shown = useMemo(() => onlyAsked(readings, key), [readings, key]);
+  return active ? shown : NO_READINGS;
 }

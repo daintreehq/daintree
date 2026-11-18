@@ -169,6 +169,22 @@ describe("useAssistantWork", () => {
     expect([...result.current.keys()].sort()).toEqual(["local", "studio"]);
   });
 
+  it("shows only the hosts it is asked about from the moment the list changes, while the one left is still out", async () => {
+    own.mockImplementation(async () => reading(++clock));
+    remote.mockImplementation(async () => reading(++clock));
+    const { result, rerender } = renderHook(
+      ({ hosts }: { hosts: string[] }) => useAssistantWork(hosts, "local", true),
+      { initialProps: { hosts: HOSTS } }
+    );
+    await act(async () => {});
+    const both = result.current;
+
+    remote.mockImplementation(() => new Promise<AssistantWorkReading>(() => {}));
+    rerender({ hosts: ["studio"] });
+    expect([...result.current.keys()]).toEqual(["studio"]);
+    expect(result.current.get("studio")).toBe(both.get("studio"));
+  });
+
   it("publishes nothing a host answers after the view is hidden", async () => {
     let answerStudio: (value: AssistantWorkReading) => void = () => {};
     own.mockImplementation(async () => reading(++clock));
