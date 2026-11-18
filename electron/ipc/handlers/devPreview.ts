@@ -6,7 +6,8 @@ import { CHANNELS } from "../channels.js";
 import { broadcastToRenderer } from "../utils.js";
 import { defineIpcNamespace, op, opValidated } from "../define.js";
 import { DEV_PREVIEW_METHOD_CHANNELS } from "./devPreview.preload.js";
-import type { HandlerDependencies } from "../types.js";
+import { createOwnerWatcher } from "../ownerLifecycle.js";
+import type { HandlerDependencies, IpcContext } from "../types.js";
 // Type-only import: the manifest service does sync fs work, so its runtime
 // module is loaded lazily alongside DevPreviewSessionService (below) to keep it
 // off the eager main-process boot path.
@@ -19,6 +20,8 @@ import type {
   DevPreviewStateChangedPayload,
   DevPreviewAllSessionsPayload,
   DevPreviewGetByWorktreeRequest,
+  DevPreviewDestructivePreviewSizes,
+  DevPreviewDestructivePreviewSizesCancelRequest,
   DevPreviewDestructivePreviewSizesRequest,
   DevPreviewStopByWorktreeRequest,
   DevPreviewRestartByWorktreeRequest,
@@ -35,9 +38,36 @@ import type {
   ResolveRemoteUpstream,
 } from "../../services/DevPreviewProxyService.js";
 import { events } from "../../services/events.js";
+import { WorktreeDiskUsageService } from "../../services/WorktreeDiskUsageService.js";
 import { withTimeout } from "../../utils/withTimeout.js";
 
 const WORKTREE_GONE_PROBE_TIMEOUT_MS = 5000;
+
+/**
+ * Size scans for the destructive-restart confirmation run in a pool of their
+ * own, so a Worktrees overview queueing whole-worktree scans can't hold the
+ * dialog's figures for minutes, and vice versa. The deadline covers both of a
+ * measurement's attempts, matching the old per-`du` timeout.
+ */
+const SIZE_SCAN_CONCURRENCY = 2;
+const SIZE_SCAN_TIMEOUT_MS = 30_000;
+const SIZE_SCAN_QUEUE_TIMEOUT_MS = 120_000;
+
+function readSizeSessionId(request: unknown): string {
+  const sessionId =
+    request && typeof request === "object" && !Array.isArray(request)
+      ? (request as { sessionId?: unknown }).sessionId
+      : undefined;
+  if (typeof sessionId !== "string" || sessionId.length === 0 || sessionId.length > 512) {
+    throw new Error("Invalid sessionId");
+  }
+  return sessionId;
+}
+
+/** Namespaced so a view's dialog session never collides with its other disk-usage owners. */
+function sizeScanOwner(ctx: IpcContext): string {
+  return `dev-preview:${ctx.webContentsId}`;
+}
 
 // `sys:worktree:remove` means a monitor went away, not that the directory did:
 // a `git worktree list` that transiently omits a live worktree prunes its
@@ -92,6 +122,14 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
   let sessionServicePromise: Promise<DevPreviewSessionServiceType> | null = null;
   let proxyService: DevPreviewProxyServiceType | null = null;
   let proxyServicePromise: Promise<DevPreviewProxyServiceType> | null = null;
+  let sizeScans: WorktreeDiskUsageService | null = null;
+  const getSizeScans = () =>
+    (sizeScans ??= new WorktreeDiskUsageService({
+      concurrency: SIZE_SCAN_CONCURRENCY,
+      timeoutMs: SIZE_SCAN_TIMEOUT_MS,
+      queueTimeoutMs: SIZE_SCAN_QUEUE_TIMEOUT_MS,
+    }));
+  const sizeScanOwners = createOwnerWatcher((owner) => sizeScans?.cancel(owner));
 
   // The reverse proxy (#9100) gives each dev-preview panel a stable `*.localhost` origin.
   // It starts lazily on the first getProxyPort call (renderer mount) and resolves each
@@ -260,12 +298,48 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
           return svc.getDestructivePreviewMeta(request);
         }
       ),
+      /**
+       * The opening's sizes, measured in the dialog's own bounded pool. A newer
+       * opening from the same view, a cancel naming this one, or the view going
+       * away stops its scans (a running `du` is killed) and answers null.
+       */
       getDestructivePreviewSizes: op(
         DEV_PREVIEW_METHOD_CHANNELS.getDestructivePreviewSizes,
-        async (request: DevPreviewDestructivePreviewSizesRequest) => {
-          const svc = await getSessionService();
-          return svc.getDestructivePreviewSizes(request);
-        }
+        async (
+          ctx: IpcContext,
+          request: DevPreviewDestructivePreviewSizesRequest
+        ): Promise<DevPreviewDestructivePreviewSizes> => {
+          const sessionId = readSizeSessionId(request);
+          const owner = sizeScanOwner(ctx);
+          const scans = getSizeScans();
+          sizeScanOwners.watch(ctx, owner);
+          // Before the first await, so a cancel sent right behind this request
+          // (or a newer opening) finds the session it belongs to.
+          const signal = scans.begin(owner, sessionId);
+          try {
+            const svc = await getSessionService();
+            return await svc.getDestructivePreviewSizes(request, {
+              signal,
+              measure: async (dirPath) => {
+                const result = await scans.measure(signal, dirPath, []);
+                return result.status === "measured" ? result.bytes : null;
+              },
+            });
+          } finally {
+            scans.cancel(owner, sessionId);
+          }
+        },
+        { withContext: true }
+      ),
+      cancelDestructivePreviewSizes: op(
+        DEV_PREVIEW_METHOD_CHANNELS.cancelDestructivePreviewSizes,
+        async (
+          ctx: IpcContext,
+          request: DevPreviewDestructivePreviewSizesCancelRequest
+        ): Promise<void> => {
+          sizeScans?.cancel(sizeScanOwner(ctx), readSizeSessionId(request));
+        },
+        { withContext: true }
       ),
       stopByWorktree: op(
         DEV_PREVIEW_METHOD_CHANNELS.stopByWorktree,
@@ -363,6 +437,9 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
       if (liveProxyPort === proxyService.port) liveProxyPort = 0;
       proxyService.dispose();
     }
+    sizeScanOwners.dispose();
+    sizeScans?.dispose();
+    sizeScans = null;
     cleanups.forEach((dispose) => dispose());
   };
 }

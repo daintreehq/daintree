@@ -46,14 +46,26 @@ function deferred<T>(): {
 interface ElectronDevPreviewStub {
   getDestructivePreviewMeta: ReturnType<typeof vi.fn>;
   getDestructivePreviewSizes: ReturnType<typeof vi.fn>;
+  cancelDestructivePreviewSizes?: ReturnType<typeof vi.fn>;
 }
 
 function stubDevPreviewIpc(stub: ElectronDevPreviewStub) {
   vi.stubGlobal("window", window);
   Object.defineProperty(window, "electron", {
     configurable: true,
-    value: { devPreview: stub },
+    value: {
+      devPreview: {
+        cancelDestructivePreviewSizes: vi.fn().mockResolvedValue(undefined),
+        ...stub,
+      },
+    },
   });
+}
+
+function sizesSessionId(sizesFn: ReturnType<typeof vi.fn>, call: number): string {
+  const request = sizesFn.mock.calls[call]?.[0] as { sessionId?: unknown } | undefined;
+  expect(typeof request?.sessionId).toBe("string");
+  return request!.sessionId as string;
 }
 
 const baseMeta: DevPreviewDestructivePreviewMeta = {
@@ -338,6 +350,7 @@ describe("DevPreviewDestructiveConfirmDialog", () => {
       projectId: "project-99",
       skipNodeModules: true,
       skipCacheDirs: false,
+      sessionId: expect.any(String),
     });
   });
 
@@ -365,6 +378,7 @@ describe("DevPreviewDestructiveConfirmDialog", () => {
       projectId: "project-1",
       skipNodeModules: false,
       skipCacheDirs: true,
+      sessionId: expect.any(String),
     });
   });
 
@@ -422,6 +436,109 @@ describe("DevPreviewDestructiveConfirmDialog", () => {
 
     expect(meta).not.toHaveBeenCalled();
     expect(sizes).not.toHaveBeenCalled();
+  });
+
+  describe("size scans live only as long as the opening that asked for them", () => {
+    function setup() {
+      const sizesFn = vi.fn().mockReturnValue(new Promise(() => {}));
+      const cancelFn = vi.fn().mockResolvedValue(undefined);
+      stubDevPreviewIpc({
+        getDestructivePreviewMeta: vi.fn().mockResolvedValue(baseMeta),
+        getDestructivePreviewSizes: sizesFn,
+        cancelDestructivePreviewSizes: cancelFn,
+      });
+      const props = {
+        panelId: "panel-1",
+        projectId: "project-1",
+        onClose: () => {},
+        onConfirm: () => {},
+      };
+      return { sizesFn, cancelFn, props };
+    }
+
+    it("cancels the opening's scans when the dialog closes", async () => {
+      const { sizesFn, cancelFn, props } = setup();
+      const view = render(
+        <DevPreviewDestructiveConfirmDialog {...props} tier="reinstallAndRestart" isOpen={true} />
+      );
+      await waitFor(() => expect(sizesFn).toHaveBeenCalledTimes(1));
+      const sessionId = sizesSessionId(sizesFn, 0);
+      expect(cancelFn).not.toHaveBeenCalled();
+
+      view.rerender(
+        <DevPreviewDestructiveConfirmDialog {...props} tier="reinstallAndRestart" isOpen={false} />
+      );
+
+      await waitFor(() => expect(cancelFn).toHaveBeenCalledWith({ sessionId }));
+      expect(sizesFn).toHaveBeenCalledTimes(1);
+    });
+
+    it("a tier change cancels the old tier's scans and asks again under a new session", async () => {
+      const { sizesFn, cancelFn, props } = setup();
+      const view = render(
+        <DevPreviewDestructiveConfirmDialog {...props} tier="restartAndClearCache" isOpen={true} />
+      );
+      await waitFor(() => expect(sizesFn).toHaveBeenCalledTimes(1));
+      const first = sizesSessionId(sizesFn, 0);
+
+      view.rerender(
+        <DevPreviewDestructiveConfirmDialog {...props} tier="reinstallAndRestart" isOpen={true} />
+      );
+
+      await waitFor(() => expect(sizesFn).toHaveBeenCalledTimes(2));
+      const second = sizesSessionId(sizesFn, 1);
+      expect(second).not.toBe(first);
+      await waitFor(() => expect(cancelFn).toHaveBeenCalledWith({ sessionId: first }));
+      expect(cancelFn).not.toHaveBeenCalledWith({ sessionId: second });
+    });
+
+    it("reopening asks under a new session, never the closed one's", async () => {
+      const { sizesFn, cancelFn, props } = setup();
+      const view = render(
+        <DevPreviewDestructiveConfirmDialog {...props} tier="reinstallAndRestart" isOpen={true} />
+      );
+      await waitFor(() => expect(sizesFn).toHaveBeenCalledTimes(1));
+      const first = sizesSessionId(sizesFn, 0);
+
+      view.rerender(
+        <DevPreviewDestructiveConfirmDialog {...props} tier="reinstallAndRestart" isOpen={false} />
+      );
+      view.rerender(
+        <DevPreviewDestructiveConfirmDialog {...props} tier="reinstallAndRestart" isOpen={true} />
+      );
+
+      await waitFor(() => expect(sizesFn).toHaveBeenCalledTimes(2));
+      expect(sizesSessionId(sizesFn, 1)).not.toBe(first);
+      await waitFor(() => expect(cancelFn).toHaveBeenCalledWith({ sessionId: first }));
+    });
+
+    it("cancels the opening's scans when the dialog unmounts", async () => {
+      const { sizesFn, cancelFn, props } = setup();
+      const view = render(
+        <DevPreviewDestructiveConfirmDialog {...props} tier="reinstallAndRestart" isOpen={true} />
+      );
+      await waitFor(() => expect(sizesFn).toHaveBeenCalledTimes(1));
+      const sessionId = sizesSessionId(sizesFn, 0);
+
+      view.unmount();
+
+      await waitFor(() => expect(cancelFn).toHaveBeenCalledWith({ sessionId }));
+    });
+
+    it("sends no cancel for an opening that never asked for sizes", () => {
+      const { sizesFn, cancelFn, props } = setup();
+      const view = render(
+        <DevPreviewDestructiveConfirmDialog
+          {...props}
+          projectId={undefined}
+          tier="reinstallAndRestart"
+          isOpen={true}
+        />
+      );
+      view.unmount();
+      expect(sizesFn).not.toHaveBeenCalled();
+      expect(cancelFn).not.toHaveBeenCalled();
+    });
   });
 
   describe("the copy follows what the preview found", () => {

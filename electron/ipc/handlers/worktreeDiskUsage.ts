@@ -3,8 +3,8 @@ import {
   disposeWorktreeDiskUsageService,
   getWorktreeDiskUsageService,
 } from "../../services/WorktreeDiskUsageService.js";
-import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import { defineIpcNamespace, op } from "../define.js";
+import { createOwnerWatcher } from "../ownerLifecycle.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import type {
   WorktreeDiskUsageCancelRequest,
@@ -28,43 +28,8 @@ function readRequest(request: unknown): Record<string, unknown> {
   return request as Record<string, unknown>;
 }
 
-/** Views whose measurements are stopped when they go away, by owner key. */
-const watchedOwners = new Map<string, () => void>();
-
-/**
- * A view that navigates, crashes, closes or (remotely) drops its endpoint never
- * runs the overview's cleanup, so its queued and running scans are stopped
- * here instead.
- */
-function watchOwner(ctx: IpcContext, owner: string): void {
-  if (watchedOwners.has(owner)) return;
-  const stop = () => getWorktreeDiskUsageService().cancel(owner);
-  const sender = ctx.event?.sender;
-  if (!sender) {
-    const closed = ctx.endpoint.onClose(() => {
-      watchedOwners.delete(owner);
-      stop();
-    });
-    watchedOwners.set(owner, () => closed.dispose());
-    return;
-  }
-  const onNavigate = (details: { isMainFrame: boolean; isSameDocument: boolean }) => {
-    if (details.isMainFrame && !details.isSameDocument) stop();
-  };
-  sender.on("did-start-navigation", onNavigate);
-  sender.on("render-process-gone", stop);
-  const unwatchDestroyed = onWebContentsDestroyed(sender, () => {
-    watchedOwners.delete(owner);
-    sender.removeListener("did-start-navigation", onNavigate);
-    sender.removeListener("render-process-gone", stop);
-    stop();
-  });
-  watchedOwners.set(owner, () => {
-    sender.removeListener("did-start-navigation", onNavigate);
-    sender.removeListener("render-process-gone", stop);
-    unwatchDestroyed();
-  });
-}
+/** Stops a view's measurements when it goes away, by owner key. */
+const owners = createOwnerWatcher((owner) => getWorktreeDiskUsageService().cancel(owner));
 
 /**
  * The worktree's root and every other worktree's root, from the requesting
@@ -116,7 +81,7 @@ export function buildWorktreeDiskUsageNamespace(deps: HandlerDependencies) {
           assertId(worktreeId, "worktreeId");
           const owner = String(ctx.webContentsId);
           const service = getWorktreeDiskUsageService();
-          watchOwner(ctx, owner);
+          owners.watch(ctx, owner);
           // Before the first await, so a cancel sent right behind this request
           // finds the session it belongs to.
           const signal = service.begin(owner, sessionId);
@@ -143,8 +108,7 @@ export function registerWorktreeDiskUsageHandlers(deps: HandlerDependencies): ()
   const unregister = buildWorktreeDiskUsageNamespace(deps).register();
   return () => {
     unregister();
-    for (const unwatch of watchedOwners.values()) unwatch();
-    watchedOwners.clear();
+    owners.dispose();
     disposeWorktreeDiskUsageService();
   };
 }

@@ -180,6 +180,7 @@ export const CHANNEL_LEASE_POLICY = {
   "decisions:get-question-image": "free",
   "decisions:report-composer-drafts": "free",
   "dev-preview:all-sessions-changed": "free",
+  "dev-preview:cancel-destructive-preview-sizes": "free",
   "dev-preview:ensure": "driver",
   "dev-preview:get-all-sessions": "free",
   "dev-preview:get-by-worktree": "free",
