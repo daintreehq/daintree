@@ -302,6 +302,22 @@ describe("applyReadHunks (real git)", () => {
     expect(git(repo, "--no-replace-objects", "show", ":f.txt")).toBe(text(BASE));
   });
 
+  it("refuses an unstage whose hunk moved in the index after it was read", async () => {
+    commit(BASE);
+    write(BOTH);
+    git(repo, "add", "f.txt");
+    const [, second] = readHunks("staged");
+    // Three lines added above the hunk move its new start; HEAD, and so its old start, stay put.
+    write(["agent 1", "agent 2", "agent 3", ...BOTH]);
+    git(repo, "add", "f.txt");
+    const index = indexBlob();
+
+    const result = await applyReadHunks(repo, "f.txt", parseReadHunks([second!]), "unstage");
+
+    expect(result).toEqual({ status: "stale" });
+    expect(indexBlob()).toBe(index);
+  });
+
   it("refuses a hunk read with a replacement character, which could stand for other bytes", async () => {
     commit(BASE);
     write(["line 1 \ufffd", ...BASE.slice(1)]);
