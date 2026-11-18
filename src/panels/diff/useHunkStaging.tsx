@@ -224,7 +224,6 @@ export function HunkStagingBanner({
     return (
       <InlineStatusBanner
         severity="warning"
-        icon={XCircle}
         title={title}
         description={
           side === "unstaged"

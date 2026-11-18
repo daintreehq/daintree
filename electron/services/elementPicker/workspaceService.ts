@@ -17,7 +17,7 @@ import { AppError } from "../../utils/errorTypes.js";
 import { logWarn } from "../../utils/logger.js";
 import { AdmissionGate } from "./admissionGate.js";
 import { hasControlCharacter, isStrictlyInside } from "./containment.js";
-import type { PortListener } from "../../remote/ports/listenerScan.js";
+import type { PortListener } from "../../utils/localPortListeners.js";
 import { findServerWorktree, localServerPort, type ServerWorktreeDeps } from "./serverWorktree.js";
 import type { ElementPickerHost } from "./ElementPickerHost.js";
 import { ElementPickerHostError } from "./errors.js";

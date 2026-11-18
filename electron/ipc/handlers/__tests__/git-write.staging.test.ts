@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import childProcess, { execFileSync } from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import fs from "node:fs";
@@ -33,7 +33,7 @@ vi.mock("../../../services/getSoundService.js", () => ({
 }));
 
 // A git dir read that never settles, as on a stalled network mount.
-const stallGitDirRead = vi.hoisted(() => ({ on: false }));
+const stallGitDirRead = vi.hoisted(() => ({ onProbe: null as (() => void) | null }));
 // A git dir read that fails outright, which proves nothing about HEAD either.
 const failGitDirRead = vi.hoisted(() => ({ on: false }));
 // A `rev-parse` that exits non-zero with nothing on stderr, as a killed one can.
@@ -43,12 +43,12 @@ vi.mock("../../../utils/gitUtils.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../utils/gitUtils.js")>();
   return {
     ...actual,
-    resolveGitDirFromFs: (cwd: string) =>
-      failGitDirRead.on
-        ? Promise.reject(new Error("git dir unreadable"))
-        : stallGitDirRead.on
-          ? new Promise<never>(() => {})
-          : actual.resolveGitDirFromFs(cwd),
+    resolveGitDirFromFs: (cwd: string) => {
+      if (failGitDirRead.on) return Promise.reject(new Error("git dir unreadable"));
+      if (!stallGitDirRead.onProbe) return actual.resolveGitDirFromFs(cwd);
+      stallGitDirRead.onProbe();
+      return new Promise<never>(() => {});
+    },
   };
 });
 
@@ -156,6 +156,11 @@ afterAll(() => {
   fs.rmSync(home, { recursive: true, force: true });
 });
 
+afterEach(() => {
+  stallGitDirRead.onProbe = null;
+  vi.useRealTimers();
+});
+
 beforeEach(() => {
   resetRateLimits();
   tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "git-write-staging-")));
@@ -223,20 +228,21 @@ describe("git-write staging handlers (real git)", () => {
     fs.writeFileSync(path.join(repo, "a.txt"), "two\n");
     git(repo, "add", "a.txt");
 
-    stallGitDirRead.on = true;
+    const probeStarted = new Promise<void>((resolve) => {
+      stallGitDirRead.onProbe = resolve;
+    });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      const mark = spawned.length;
-      const run = unstage("a.txt");
-      await vi.advanceTimersByTimeAsync(5_000);
-      vi.useRealTimers();
-      await run;
-      expect(git(repo, "diff", "--cached", "--name-only")).toBe("");
-      expect(spawnedSince(mark).map(subcommand)).toEqual(["rev-parse", "status", "reset"]);
-    } finally {
-      vi.useRealTimers();
-      stallGitDirRead.on = false;
-    }
+    const mark = spawned.length;
+    const run = unstage("a.txt");
+
+    // The handler does asynchronous work before it arms the HEAD deadline.
+    await Promise.race([probeStarted, run]);
+    await vi.advanceTimersByTimeAsync(5_000);
+    vi.useRealTimers();
+    await run;
+
+    expect(git(repo, "diff", "--cached", "--name-only")).toBe("");
+    expect(spawnedSince(mark).map(subcommand)).toEqual(["rev-parse", "status", "reset"]);
   });
 
   it("reads a probe that fails silently as a commit, so several files unstage without a deletion", async () => {

@@ -205,7 +205,7 @@ describe("check-node-version-drift", () => {
       });
       expect(result.ok).toBe(false);
       expect(result.failures).toHaveLength(1);
-      expect(result.failures[0].file).toMatch(/\.spotexec\/Dockerfile$/);
+      expect(result.failures[0].file).toMatch(/[\\/]\.spotexec[\\/]Dockerfile$/);
     });
   });
 });

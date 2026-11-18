@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { PortListener } from "../../../remote/ports/listenerScan.js";
+import type { PortListener } from "../../../utils/localPortListeners.js";
 import { findServerWorktree, localServerPort, type ServerWorktreeDeps } from "../serverWorktree.js";
 
 // The main checkout holds a linked worktree inside it, as `.worktrees/` layouts do.

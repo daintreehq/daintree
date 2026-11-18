@@ -20,8 +20,8 @@ function git(cwd: string, args: string[]): void {
     timeout: 10_000,
     env: {
       ...process.env,
-      GIT_CONFIG_GLOBAL: os.devNull,
-      GIT_CONFIG_SYSTEM: os.devNull,
+      GIT_CONFIG_GLOBAL: path.resolve(cwd, "..", "empty.gitconfig"),
+      GIT_CONFIG_NOSYSTEM: "1",
       GIT_TERMINAL_PROMPT: "0",
     },
   });
@@ -33,10 +33,15 @@ function asList(result: CrossWorktreeDiffResult | string): CrossWorktreeDiffResu
 }
 
 describe("GitService.compareWorktrees renames (real git)", () => {
+  let fixtureRoot: string;
   let repoDir: string;
 
   beforeEach(() => {
-    repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-git-compare-renames-"));
+    fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-git-compare-renames-"));
+    // Git for Windows rejects the device path reported by os.devNull.
+    fs.writeFileSync(path.join(fixtureRoot, "empty.gitconfig"), "");
+    repoDir = path.join(fixtureRoot, "repo");
+    fs.mkdirSync(repoDir);
     git(repoDir, ["init", "-q", "-b", "main"]);
     git(repoDir, ["config", "user.email", "test@example.com"]);
     git(repoDir, ["config", "user.name", "Test"]);
@@ -50,7 +55,7 @@ describe("GitService.compareWorktrees renames (real git)", () => {
   });
 
   afterEach(() => {
-    fs.rmSync(repoDir, { recursive: true, force: true });
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
   });
 
   it("reports no churn for a pure rename and diffs it as a move", async () => {

@@ -1009,10 +1009,14 @@ describe("Droplet first-boot script", () => {
         // Nor this key named in another key's comment.
         `ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQC0 ssh-ed25519 ${KEY_BLOB}`,
       ];
-      const ran = spawnSync("awk", ["-v", `t=${key.type}`, "-v", `b=${key.blob}`, program!], {
-        input: `${lines.join("\n")}\n`,
-        encoding: "utf8",
-      });
+      const ran = spawnSync(
+        "/usr/bin/awk",
+        ["-v", `t=${key.type}`, "-v", `b=${key.blob}`, program!],
+        {
+          input: `${lines.join("\n")}\n`,
+          encoding: "utf8",
+        }
+      );
       expect(ran.status).toBe(0);
       expect(ran.stdout.trim().split("\n")).toEqual([lines[0], lines[3], lines[4], lines[5]]);
     }

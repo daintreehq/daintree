@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
 import type { PR } from "../../../../shared/types/forge.js";
 import type { ProjectSettings } from "../../../../shared/types/project.js";
 import type { MergedWorktreeRemovalReceipt } from "../../../../shared/types/mergedWorktreeCleanup.js";
@@ -19,10 +20,11 @@ const DAY = 24 * 60 * 60 * 1000;
 const HEAD = "c".repeat(40);
 const MERGED_AT = 1_700_000_000_000;
 const NOW = MERGED_AT + DAY + 60_000;
-const project = { id: "p1", path: "/repo", name: "Repo" };
+const project = { id: "p1", path: path.resolve("/repo"), name: "Repo" };
+const worktreePath = path.resolve("/wt/feature-x");
 const listed: ListedWorktree[] = [
-  { path: "/repo", branch: "develop", bare: false, isMainWorktree: true },
-  { path: "/wt/feature-x", branch: "feature/x", bare: false, isMainWorktree: false },
+  { path: project.path, branch: "develop", bare: false, isMainWorktree: true },
+  { path: worktreePath, branch: "feature/x", bare: false, isMainWorktree: false },
 ];
 
 function mergedPR(overrides: Partial<PR> = {}): PR {
@@ -138,7 +140,7 @@ describe("MergedWorktreeCleanupService", () => {
     expect(deps.removeWorktree).toHaveBeenCalledTimes(1);
     expect(deps.removeWorktree).toHaveBeenCalledWith(
       project,
-      "/wt/feature-x",
+      worktreePath,
       {
         expectedBranch: "feature/x",
         expectedHead: HEAD,
@@ -154,7 +156,7 @@ describe("MergedWorktreeCleanupService", () => {
         branch: "feature/x",
         prNumber: 7,
         prUrl: "https://forge.test/o/r/pull/7",
-        worktreePath: "/wt/feature-x",
+        worktreePath,
         removedAt: NOW,
       },
     ]);

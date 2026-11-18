@@ -1,3 +1,4 @@
+import { FactRun } from "@/components/ui/FactSeparator";
 import { useEffect, useCallback, useId, useRef, useState, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { ProjectPulse, PulseRangeDays } from "@shared/types";
@@ -419,16 +420,18 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
             // Each name contains its visible label, for speech input.
             aria-label={
               refreshFailed
-                ? `Retry — couldn't refresh · updated ${updatedLabel}`
+                ? `Retry — couldn't refresh, updated ${updatedLabel}`
                 : `Refresh — last updated ${updatedLabel}`
             }
             data-testid="pulse-last-updated"
           >
             {refreshFailed && <AlertTriangle className="text-status-warning" aria-hidden="true" />}
             <span>
-              {refreshFailed
-                ? `Couldn't refresh · updated ${updatedLabel}`
-                : `Updated ${updatedLabel}`}
+              {refreshFailed ? (
+                <FactRun facts={["Couldn't refresh", `updated ${updatedLabel}`]} />
+              ) : (
+                `Updated ${updatedLabel}`
+              )}
             </span>
           </Button>
         </div>

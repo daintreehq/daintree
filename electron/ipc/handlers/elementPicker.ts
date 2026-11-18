@@ -200,7 +200,7 @@ function workspaceService(): Promise<ElementPickerWorkspaceService> {
         // Behind a dynamic import like the service itself: the scan runs only
         // for a browser panel's page, and only once the picker opens its source.
         findListeners: (port) =>
-          import("../../remote/ports/listenerScan.js").then(({ findPortListeners }) =>
+          import("../../utils/localPortListeners.js").then(({ findPortListeners }) =>
             findPortListeners(port)
           ),
       }),

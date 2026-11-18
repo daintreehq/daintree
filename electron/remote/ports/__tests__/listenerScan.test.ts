@@ -1,13 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
-  finalizeListeners,
   findPortListeners,
   parseLsofCwds,
   parseLsofListeners,
   parseProcNetTcp,
-  scanHostListeners,
   type ProcFs,
-} from "../listenerScan.js";
+} from "../../../utils/localPortListeners.js";
+import { finalizeListeners, scanHostListeners } from "../listenerScan.js";
 
 // `lsof -nP -iTCP -sTCP:LISTEN -F pcn` on macOS.
 const LSOF_SAMPLE = [

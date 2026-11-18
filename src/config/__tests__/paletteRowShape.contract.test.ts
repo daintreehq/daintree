@@ -184,6 +184,7 @@ const PALETTE_FILES = [
   "src/components/Worktree/QuickCreatePalette.tsx",
   "src/components/ActionPalette/ActionPaletteItem.tsx",
   "src/components/QuickSwitcher/QuickSwitcherItem.tsx",
+  "src/components/QuickSwitcher/QuickSwitcherFileRow.tsx",
   "src/components/ThemePalette/ThemePalette.tsx",
   "src/components/LogLevelPalette/LogLevelPalette.tsx",
   "src/components/PanelPalette/PanelPalette.tsx",
@@ -211,7 +212,10 @@ const SOMETIMES_TWO_LINE_FILES = [
 ];
 
 /** Palettes whose rows never carry a second line. */
-const ONE_LINE_FILES = ["src/components/Terminal/PromptHistoryPalette.tsx"];
+const ONE_LINE_FILES = [
+  "src/components/QuickSwitcher/QuickSwitcherFileRow.tsx",
+  "src/components/Terminal/PromptHistoryPalette.tsx",
+];
 
 const files = ROOTS.flatMap(sourceFiles).map((file) => ({
   rel: path.relative(REPO_ROOT, file).split(path.sep).join("/"),

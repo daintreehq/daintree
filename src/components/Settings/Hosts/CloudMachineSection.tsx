@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react";
 import { ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
-import { FactSeparator } from "@/components/ui/FactSeparator";
+import { FactRun, FactSeparator } from "@/components/ui/FactSeparator";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { useNow } from "@/hooks/useNow";
 import { cloudHostsClient } from "@/clients/cloudHostsClient";
@@ -590,9 +590,11 @@ export function CloudMachineSection({
               label={pick.label}
               description={
                 <span data-testid={`cloud-machine-${dimension}`}>
-                  {pick.id !== null && pick.id !== pick.value
-                    ? `${pick.value} · ${pick.id}`
-                    : pick.value}
+                  {pick.id !== null && pick.id !== pick.value ? (
+                    <FactRun facts={[pick.value, pick.id]} />
+                  ) : (
+                    pick.value
+                  )}
                 </span>
               }
             />

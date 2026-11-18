@@ -1604,6 +1604,7 @@ describe("PluginMcpSupervisor state eviction on uninstall (issue #17212)", () =>
     expect(supervisor.list().map((info) => info.pluginId)).toEqual(["acme.other"]);
     expect(supervisor.getStderr(openKey, "linear").totalLines).toBe(0);
     // The open project's instance was never shut down: eviction must not strand it.
+    await openProject.handle.exit;
     expect(openProject.killed).toBe(true);
     expect(global.killed).toBe(false);
   });

@@ -86,39 +86,47 @@ function WaitingNotice({
     );
   };
 
+  const calloutProps = {
+    size: "compact" as const,
+    ref: focusHandoffRef,
+    "data-testid": "worktree-pending-placement",
+    title: failure ? `Couldn't set up ${hostName}` : `Opens on ${hostName} after setup`,
+    // Above the sidebar's full-card select overlay, like the card's other notices (#12087).
+    className: "relative z-10 mt-2",
+  };
+  const content = (
+    <div className="flex min-w-0 flex-1 flex-col gap-2">
+      <span className="break-words text-text-secondary select-text">
+        {failure ?? "It opens there once Daintree is set up and connected."}
+      </span>
+      {cancelError && <span className="text-text-primary">{cancelError}</span>}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          variant="outline"
+          size="xs"
+          onClick={handleSetUp}
+          className="shadow-none inset-shadow-none"
+        >
+          {failure ? "Retry" : "Set up…"}
+        </Button>
+        <Button variant="ghost" size="xs" onClick={handleCancel}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+
   return (
     <div data-card-control="" className={cn(inGutter && "px-3 pb-2.5")}>
-      <Callout
-        severity={failure ? "error" : "neutral"}
-        icon={failure ? undefined : Server}
-        size="compact"
-        ref={focusHandoffRef}
-        role={failure ? "alert" : "status"}
-        data-testid="worktree-pending-placement"
-        title={failure ? `Couldn't set up ${hostName}` : `Opens on ${hostName} after setup`}
-        // Above the sidebar's full-card select overlay, like the card's other notices (#12087).
-        className="relative z-10 mt-2"
-      >
-        <div className="flex min-w-0 flex-1 flex-col gap-2">
-          <span className="break-words text-text-secondary select-text">
-            {failure ?? "It opens there once Daintree is set up and connected."}
-          </span>
-          {cancelError && <span className="text-text-primary">{cancelError}</span>}
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant="outline"
-              size="xs"
-              onClick={handleSetUp}
-              className="shadow-none inset-shadow-none"
-            >
-              {failure ? "Retry" : "Set up…"}
-            </Button>
-            <Button variant="ghost" size="xs" onClick={handleCancel}>
-              Cancel
-            </Button>
-          </div>
-        </div>
-      </Callout>
+      {failure ? (
+        <Callout {...calloutProps} severity="error" role="alert">
+          {content}
+        </Callout>
+      ) : (
+        <Callout {...calloutProps} severity="neutral" icon={Server} role="status">
+          {content}
+        </Callout>
+      )}
     </div>
   );
 }

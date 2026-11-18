@@ -1,3 +1,4 @@
+import { formatBytes } from "@/lib/formatBytes";
 import type {
   AnswerDecisionQuestionPayload,
   DecisionQuestionContent,
@@ -124,7 +125,7 @@ export function composeVerdict(input: ComposeInput): ComposeVerdict {
       : shape.hasOptions
         ? "Choose an option"
         : "Write an answer";
-  else if (textOver > 0) hint = `Shorten your answer by ${formatBytes(textOver)}`;
+  else if (textOver > 0) hint = `Shorten your answer by ${formatTextExcess(textOver)}`;
 
   const canSend =
     !input.closed && !input.stale && remainingImages === 0 && hasAnswer && textOver === 0;
@@ -142,9 +143,8 @@ export function isAnswerable(
   return Number.isNaN(expires) || expires > nowMs;
 }
 
-export function formatBytes(n: number): string {
-  if (n < 1024) return `${n.toLocaleString()} ${n === 1 ? "byte" : "bytes"}`;
-  return `${(n / 1024).toFixed(1)} KB`;
+export function formatTextExcess(bytes: number): string {
+  return bytes < 1024 ? pluralize(bytes, "byte") : formatBytes(bytes);
 }
 
 /** What goes to main for this computer to sign: what the person chose and wrote, as the phone sends it. */

@@ -255,7 +255,6 @@ export function DecisionQuestionDialog() {
                 <Button
                   ref={cancelRef}
                   variant="outline"
-                  size="sm"
                   onClick={dismissal.retry}
                   data-testid="decision-question-dismiss-retry"
                 >

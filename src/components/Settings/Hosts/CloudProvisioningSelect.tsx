@@ -1,3 +1,4 @@
+import { FactRun } from "@/components/ui/FactSeparator";
 import type { ComponentProps, KeyboardEvent } from "react";
 import { useFieldControl } from "@/components/ui/field";
 import {
@@ -87,9 +88,11 @@ export function CloudProvisioningSelect({
         {optional && <SelectItem value={PROVIDER_DECIDES}>Chosen by {provider.name}</SelectItem>}
         {choices.map((choice) => (
           <SelectItem key={choice.id} value={choiceValue(choice.id)} disabled={!choice.available}>
-            {choice.available || !choice.reason
-              ? choice.label
-              : `${choice.label} · ${sentenceCase(choice.reason)}`}
+            {choice.available || !choice.reason ? (
+              choice.label
+            ) : (
+              <FactRun facts={[choice.label, sentenceCase(choice.reason)]} />
+            )}
           </SelectItem>
         ))}
       </SelectContent>

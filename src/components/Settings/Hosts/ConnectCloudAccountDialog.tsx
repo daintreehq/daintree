@@ -13,6 +13,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { Textarea } from "@/components/ui/textarea";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { credentialsNoun } from "@/components/Hosts/cloud/cloudHostLabels";
 import { CloudProviderConsentDialog } from "./CloudProviderConsentDialog";
 import { cloudHostsClient } from "@/clients/cloudHostsClient";
@@ -123,9 +124,9 @@ function KeyFileControl({
       {(fileName || failed) && (
         <>
           {fileName && (
-            <span className="min-w-0 truncate text-sm text-text-primary" title={fileName}>
-              {fileName}
-            </span>
+            <TruncatedTooltip content={fileName}>
+              <span className="min-w-0 truncate text-sm text-text-primary">{fileName}</span>
+            </TruncatedTooltip>
           )}
           <Button
             type="button"
