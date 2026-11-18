@@ -581,6 +581,7 @@ describe("a busy or dropped host", () => {
     // A slow drive: the first read only returns once the test lets it.
     let reads = 0;
     let closes = 0;
+    const order: string[] = [];
     let finishFirstRead = () => {};
     const firstReadHeld = new Promise<void>((resolve) => (finishFirstRead = resolve));
     const realOpen = fs.open.bind(fs);
@@ -596,12 +597,18 @@ describe("a busy or dropped host", () => {
           if (reads === 1) await firstReadHeld;
           return result;
         },
-        close: () => {
+        close: async () => {
           closes += 1;
-          return close();
+          await close();
+          order.push("closed op-file");
         },
       });
       return handle;
+    });
+    const send = upload.getMockImplementation()!;
+    upload.mockImplementation(async (...args) => {
+      order.push(`upload ${args[2].opId}`);
+      return send(...args);
     });
     try {
       const hashing = uploads.uploadLocalFile(7, {
@@ -621,8 +628,10 @@ describe("a busy or dropped host", () => {
       });
       expect(reads).toBe(1);
       expect(closes).toBe(1);
-      expect(upload.mock.calls.map(([, , opts]) => opts.opId)).toEqual(["op-next"]);
+      // The slot passes on only once the cancelled upload has let go of its file.
+      expect(order).toEqual(["closed op-file", "upload op-next"]);
     } finally {
+      finishFirstRead();
       open.mockRestore();
     }
   });

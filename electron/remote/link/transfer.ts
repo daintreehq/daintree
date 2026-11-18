@@ -139,6 +139,7 @@ export async function fileTransferSource(
   signal?.throwIfAborted();
   const handle = await fs.open(filePath, "r");
   try {
+    signal?.throwIfAborted();
     const { size } = await handle.stat();
     const hash = crypto.createHash("sha256");
     const buf = Buffer.allocUnsafe(BULK_CHUNK_BYTES);
