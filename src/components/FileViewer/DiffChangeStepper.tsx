@@ -14,7 +14,10 @@ import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "./FileViewerToolbar";
  *
  * The arrows run on past either end into the neighbouring file of the change
  * set, so their availability is the host's to say: an arrow is live while a
- * step that way lands somewhere, here or in another file.
+ * step that way lands somewhere, here or in another file. The count isn't a
+ * live region — hand scrolling moves it too, and narrating every hunk a wheel
+ * passes would make the toolbar chatter — so the host announces each
+ * deliberate step itself.
  *
  * Its own component rather than JSX inside `DiffPane` so the screenshot harness
  * renders the real thing. A stepper copied into a preview drifts from the one
@@ -27,6 +30,13 @@ export interface DiffChangeStepperProps {
   index: number;
   /** What one stop is: a source hunk or a rendered block. */
   unit: "hunk" | "change";
+  /**
+   * There is somewhere to step at all: more than one stop, or a neighbouring
+   * file. The arrows stay mounted while it holds, unavailable in a direction
+   * that leads nowhere for now (the stops still being counted, say), so a
+   * focused arrow keeps focus through a step into a file that is loading.
+   */
+  steppable: boolean;
   /** A step back lands somewhere: an earlier stop, or the previous file. */
   canStepBack: boolean;
   /** A step forward lands somewhere: a later stop, or the next file. */
@@ -45,6 +55,7 @@ export function DiffChangeStepper({
   count,
   index,
   unit,
+  steppable,
   canStepBack,
   canStepForward,
   onStep,
@@ -53,14 +64,12 @@ export function DiffChangeStepper({
 }: DiffChangeStepperProps) {
   const known = count ?? 0;
   const position = known > 1 ? `${index + 1} of ${known}` : known === 1 ? pluralize(1, unit) : null;
-  // Arrows that both lead nowhere are a control that does nothing, which is
-  // worse than an absent one — but a lone count still answers "is there more
+  // Arrows with nowhere to go are a control that does nothing, which is worse
+  // than an absent one — but a lone count still answers "is there more
   // below?", so it stays.
-  if (!canStepBack && !canStepForward) {
+  if (!steppable) {
     return position ? (
-      <span className="px-1 text-xs text-text-secondary select-none" aria-live="polite">
-        {position}
-      </span>
+      <span className="px-1 text-xs text-text-secondary select-none">{position}</span>
     ) : null;
   }
   const previousLabel = unit === "hunk" ? "Previous hunk" : "Previous change";
@@ -72,23 +81,17 @@ export function DiffChangeStepper({
       className="flex items-center gap-0.5"
     >
       {/*
-        `aria-live="polite"` rather than moving focus: stepping is a scroll, and
-        a screen-reader user who has just pressed Next needs to hear where they
-        landed without losing the button they are about to press again.
-
         The arrows must hold still under a pointer that clicks Next again and
         again. Tabular figures keep every digit the same width, but "10 of 20"
         is still a digit longer than "9 of 20", so the slot is sized by the
         widest value it can show and the text sits against its end edge: only
         the new leading digit appears, and " of 20" never moves. The sizer is
-        drawn from an attribute, so it adds no text to the live region. A file
+        drawn from an attribute, so it adds no text for a screen reader. A file
         with nothing to count (an image, a binary) keeps the arrows alone.
       */}
       {position && (
         <span className="grid px-1 text-xs tabular-nums text-text-secondary select-none">
-          <span className="col-start-1 row-start-1 text-end" aria-live="polite">
-            {position}
-          </span>
+          <span className="col-start-1 row-start-1 text-end">{position}</span>
           <span
             aria-hidden="true"
             data-label={known > 1 ? `${known} of ${known}` : position}

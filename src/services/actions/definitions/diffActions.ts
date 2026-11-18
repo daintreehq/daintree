@@ -1,13 +1,9 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
-import type { ActionId } from "@shared/types/actions";
+import type { ActionContext, ActionId } from "@shared/types/actions";
 import { z } from "zod";
 import { usePanelStore } from "@/store/panelStore";
 import { usePanelDialogStore, selectTopDialogPanelId } from "@/store/panelDialogStore";
-import {
-  DIFF_COMMAND_EVENT,
-  type DiffCommand,
-  type DiffCommandDetail,
-} from "@/panels/diff/diffCommands";
+import { sendDiffCommand, type DiffCommand } from "@/panels/diff/diffCommands";
 
 const argsSchema = z
   .object({
@@ -34,6 +30,8 @@ interface DiffActionSpec {
   command: DiffCommand;
   title: string;
   description: string;
+  /** The palette's subtitle, where the agent-facing description runs past one sentence. */
+  paletteDescription?: string;
   keywords?: string[];
 }
 
@@ -44,6 +42,7 @@ const DIFF_ACTIONS: readonly DiffActionSpec[] = [
     title: "Next hunk",
     description:
       "Scroll the diff viewer to the next hunk, or the next change in rendered Markdown. Past the file's last one it opens the next file in the list on its first hunk.",
+    paletteDescription: "Scroll to the next hunk, on into the next file",
     keywords: ["next change"],
   },
   {
@@ -52,6 +51,7 @@ const DIFF_ACTIONS: readonly DiffActionSpec[] = [
     title: "Previous hunk",
     description:
       "Scroll the diff viewer to the previous hunk, or the previous change in rendered Markdown. Before the file's first one it opens the previous file in the list on its last hunk.",
+    paletteDescription: "Scroll to the previous hunk, back into the previous file",
     keywords: ["previous change"],
   },
   {
@@ -74,6 +74,7 @@ const DIFF_ACTIONS: readonly DiffActionSpec[] = [
     title: "Toggle viewed",
     description:
       "Mark the diff viewer's open file viewed, or clear the mark. With a row of its file list focused, the row's file is marked instead.",
+    paletteDescription: "Mark the open file viewed, or clear the mark",
     keywords: ["mark viewed", "reviewed"],
   },
 ];
@@ -84,6 +85,7 @@ export function registerDiffActions(actions: ActionRegistry, _callbacks: ActionC
       id: spec.id,
       title: spec.title,
       description: spec.description,
+      ...(spec.paletteDescription ? { paletteDescription: spec.paletteDescription } : {}),
       category: "git",
       kind: "command",
       danger: "safe",
@@ -95,14 +97,15 @@ export function registerDiffActions(actions: ActionRegistry, _callbacks: ActionC
         reason: "Focus a diff viewer first",
       },
       argsSchema,
-      run: async (args: unknown) => {
+      run: async (args: unknown, ctx: ActionContext) => {
         const id = resolveDiffPanelId(argsSchema.parse(args)?.panelId);
-        if (!id) return;
-        window.dispatchEvent(
-          new CustomEvent<DiffCommandDetail>(DIFF_COMMAND_EVENT, {
-            detail: { id, command: spec.command },
-          })
-        );
+        if (!id) throw new Error("No diff viewer is focused");
+        const delivered = sendDiffCommand({
+          id,
+          command: spec.command,
+          fromKeyboard: ctx.dispatchSource === "keybinding",
+        });
+        if (!delivered) throw new Error("That diff viewer isn't showing");
       },
     }));
   }

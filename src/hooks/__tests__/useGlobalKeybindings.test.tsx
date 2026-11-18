@@ -2888,14 +2888,17 @@ describe("useGlobalKeybindings — bare scoped keys", () => {
     ["an input", "<input />"],
     ["a textarea", "<textarea></textarea>"],
     ["an editable region", '<div contenteditable="true"></div>'],
-    ["a terminal", '<div class="xterm"><textarea></textarea></div>'],
+    // Not a text field itself, so only the terminal guard keeps it out.
+    ["a terminal", '<div class="xterm"><div tabindex="0" data-target></div></div>'],
   ])("leaves the key to %s", (_where, html) => {
     render(<Host />);
     const host = document.createElement("div");
     host.innerHTML = html;
     document.body.appendChild(host);
     try {
-      const target = host.querySelector<HTMLElement>("input, textarea, [contenteditable]")!;
+      const target = host.querySelector<HTMLElement>(
+        "input, textarea, [contenteditable], [data-target]"
+      )!;
       // jsdom leaves `isContentEditable` unimplemented.
       if (target.hasAttribute("contenteditable")) {
         Object.defineProperty(target, "isContentEditable", { value: true });
@@ -2910,9 +2913,12 @@ describe("useGlobalKeybindings — bare scoped keys", () => {
   it("runs the action from anything else and consumes the key", () => {
     render(<Host />);
     const button = document.createElement("button");
+    const downstream = vi.fn();
+    button.addEventListener("keydown", downstream);
     document.body.appendChild(button);
     try {
       expect(press(button, "n")).toBe(true);
+      expect(downstream).not.toHaveBeenCalled();
       expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
         "diff.nextChange",
         undefined,

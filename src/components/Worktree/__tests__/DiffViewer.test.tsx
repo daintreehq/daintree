@@ -428,6 +428,15 @@ describe("DiffViewer moved-line styling", () => {
     const ins = hunks[0]!.changes.find((c) => c.type === "insert")!;
 
     expect(movedClasses(generate, ins)).toEqual([]);
+    // Still the hunk's first change, so still where a step lands, in either
+    // column of a split row.
+    expect(classesOf(generate, ins)).toContain("diff-hunk-anchor");
+    expect(
+      generate({
+        changes: [undefined as unknown as ChangeData, ins],
+        defaultGenerate: () => "diff-line",
+      }).split(" ")
+    ).toContain("diff-hunk-anchor");
   });
 
   // The hunk stepper's landing rows (#17326): each hunk's first change only.

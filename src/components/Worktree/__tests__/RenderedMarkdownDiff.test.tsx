@@ -190,8 +190,12 @@ describe("RenderedMarkdownDiff", () => {
     // The number the stepper shows is a count of things the reader accepts or
     // rejects. A substitution is one of those; reporting its two halves
     // separately claims twice as many changes as the document has.
-    const counts: number[] = [];
-    renderDiff(EDITED_DIFF, EDITED_SOURCE, { onChangeCount: (n: number) => counts.push(n) });
+    const counts: (number | null)[] = [];
+    renderDiff(EDITED_DIFF, EDITED_SOURCE, {
+      onChangeCount: (n: number | null) => {
+        counts.push(n);
+      },
+    });
 
     expect(counts.at(-1)).toBe(1);
   });

@@ -108,7 +108,8 @@ import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
 import { useDiffContent } from "./useDiffContent";
 import { useDiffCommands, type DiffCommand } from "./diffCommands";
-import { useKeybindingDisplay, useKeybindingScope } from "@/hooks/useKeybinding";
+import { useKeybindingDisplay } from "@/hooks/useKeybinding";
+import { keybindingService } from "@/services/KeybindingService";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { HunkStagingBanner, useHunkStaging } from "./useHunkStaging";
 import { useDiffFileSource } from "./useDiffFileSource";
@@ -495,13 +496,17 @@ export function DiffPane({
   // file and lands on its first hunk going forward, its last going back. The
   // landing waits for that file's hunks to be counted, and is dropped if the
   // pane ends up anywhere else first: a pick from the shelf, a file step, an
-  // opener re-aiming the pane. Files are told apart by side and Viewed key, so
-  // a partially staged file's two entries are two destinations.
+  // opener re-aiming the pane, or a return to the file it left once the
+  // destination has been reached. Files are told apart by side and Viewed key,
+  // so a partially staged file's two entries are two destinations.
   const [landing, setLanding] = useState<{
     from: string;
     to: string;
     place: "first" | "last";
+    /** The pane has shown the destination, so `from` is no longer a step in flight. */
+    arrived: boolean;
   } | null>(null);
+  const paneRootRef = useRef<HTMLDivElement | null>(null);
   const currentFileIdentity =
     currentIndex === -1 || !changeSet?.[currentIndex]
       ? `missing\0${filePath ?? ""}`
@@ -524,15 +529,33 @@ export function DiffPane({
     [changeSet, visibleOrder]
   );
 
+  // A step swaps the body for the next file's, through a skeleton while it
+  // loads. Focus inside the body would fall to <body> with the row it sat on,
+  // and the diff keys' scope with it, so it waits on the panel root instead.
+  // The toolbar, the footer and the shelf survive the swap and keep theirs.
+  const moveToFile = useCallback(
+    (index: number) => {
+      const root = paneRootRef.current;
+      const active = document.activeElement;
+      if (root && active instanceof Element && root.contains(active)) {
+        if (active.closest(".diff-scroll-root")) {
+          root.focus({ preventScroll: true, focusVisible: false });
+        }
+      }
+      announceFileAt(index);
+      selectFileAt(index);
+    },
+    [announceFileAt, selectFileAt]
+  );
+
   const navigateFile = useCallback(
     (delta: -1 | 1) => {
       const target = delta === -1 ? navigation.previousIndex : navigation.nextIndex;
       if (target === null) return;
       setLanding(null);
-      announceFileAt(target);
-      selectFileAt(target);
+      moveToFile(target);
     },
-    [navigation, selectFileAt, announceFileAt]
+    [navigation, moveToFile]
   );
 
   // Warms the next file's diff so forward stepping renders from cache.
@@ -741,7 +764,6 @@ export function DiffPane({
   // a menu or popover it opened is portalled outside, so its typeahead keeps
   // the letters, and a background panel stays inert. Native listeners rather
   // than React's, whose focus events bubble out of portals.
-  const paneRootRef = useRef<HTMLDivElement | null>(null);
   const [focusWithin, setFocusWithin] = useState(false);
   useEffect(() => {
     const root = paneRootRef.current;
@@ -757,7 +779,28 @@ export function DiffPane({
       root.removeEventListener("focusout", onFocusOut);
     };
   }, []);
-  useKeybindingScope("diff", isFocused && focusWithin);
+  const keysLive = isFocused && focusWithin;
+  // The service matches only the top scope, and another component can push its
+  // own over this one while focus stays here: an expanded worktree card that
+  // mounts as the sidebar scrolls pushes the grid's. With focus inside the
+  // diff, its keys take the top back. One effect owns the push, the reclaim and
+  // the release, so the release can't read as something to reclaim from.
+  useEffect(() => {
+    if (!keysLive) return;
+    keybindingService.setScope("diff");
+    let held = true;
+    const reclaim = () => {
+      if (!held || keybindingService.getScope() === "diff") return;
+      keybindingService.restoreScope("diff");
+      keybindingService.setScope("diff");
+    };
+    const unsubscribe = keybindingService.subscribe(reclaim);
+    return () => {
+      held = false;
+      unsubscribe();
+      keybindingService.restoreScope("diff");
+    };
+  }, [keysLive]);
   const previousFileKey = useKeybindingDisplay("diff.previousFile");
   const nextFileKey = useKeybindingDisplay("diff.nextFile");
   const previousChangeKey = useKeybindingDisplay("diff.previousChange");
@@ -1108,13 +1151,20 @@ export function DiffPane({
    * layout, changed blocks in the rendered one. Null while they are still being
    * counted, so a keypress can't treat a loading file as empty and cross
    * straight through it. A file with nothing to step through (an image, a
-   * PDF, a binary, an empty or failed diff) is zero: one stop of its own.
+   * PDF, a binary, an empty or failed diff, a comparison that can't be asked
+   * for) is zero: one stop of its own. A preview waits for the patch too,
+   * which is what says a submodule named like an image isn't one.
    */
+  const fullFileSourcePending = wantsFullFile && source === undefined && !sourceErrorCode;
   let stopCount: number | null;
-  if (isImageMode || isMediaMode || isPdfMode) stopCount = 0;
+  if (!subject) stopCount = 0;
   else if (content === undefined) stopCount = null;
+  else if (isImageMode || isMediaMode || isPdfMode) stopCount = 0;
   else if (!hasDiff || sinceReviewNotice?.replacesBody) stopCount = 0;
   else if (showRendered) stopCount = renderedSourcePending ? null : renderedChangeCount;
+  // The whole-file read reflows everything above a hunk when it lands, so a
+  // step taken before it would land on a row that then moves away.
+  else if (fullFileSourcePending) stopCount = null;
   else stopCount = hunkInventory?.diff === content ? hunkInventory.count : null;
   const stopUnit = showRendered ? "change" : "hunk";
   // Which file and layout family the cursor's index is into. A refresh of the
@@ -1126,22 +1176,33 @@ export function DiffPane({
 
   // A source step asks the viewer to bring hunk `index` to the top; the viewer
   // opens a collapsed file and lifts its progressive cap to get there. Stamped
-  // with the patch, so a refresh never replays an old step onto new content.
+  // with the patch, so a refresh never replays an old step onto new content,
+  // and dropped when the pane leaves the file, so coming back to the same
+  // patch doesn't either.
   const [revealRequest, setRevealRequest] = useState<{
     diff: string;
     index: number;
     seq: number;
   } | null>(null);
+  useEffect(() => {
+    setRevealRequest(null);
+  }, [currentFileIdentity]);
 
   // After a deliberate step the counter holds its landing until the reader
   // scrolls by hand: the last hunk can't scroll to the top, and several short
   // hunks share a screen, so where the step put the viewport says nothing
-  // about which of them it was for. Tagged with the stops it was taken in.
-  const holdRef = useRef<string | null>(null);
+  // about which of them it was for. Tagged with the stops and the patch it was
+  // taken in: a refresh can put the viewport anywhere, so it ends the hold.
+  const holdRef = useRef<{ key: string; content: string | undefined } | null>(null);
 
-  const goToStop = (index: number) => {
+  const goToStop = (index: number, count: number) => {
     setCursor({ key: stopsKey, index });
-    holdRef.current = stopsKey;
+    holdRef.current = { key: stopsKey, content };
+    // The counter's own text isn't a live region, or hand scrolling would
+    // narrate every hunk it passes; a deliberate step says where it landed.
+    useAnnouncerStore
+      .getState()
+      .announce(`${stopUnit === "hunk" ? "Hunk" : "Change"} ${index + 1} of ${count}`);
     if (showRendered) {
       // Found by data attribute rather than through a ref: the rendered view is
       // a lazy chunk behind `Suspense`. Centred, because a rendered block has
@@ -1166,7 +1227,7 @@ export function DiffPane({
     if (stopCount === null) return;
     const next = changeIndex + delta;
     if (next >= 0 && next < stopCount) {
-      goToStop(next);
+      goToStop(next, stopCount);
       return;
     }
     const target =
@@ -1183,25 +1244,29 @@ export function DiffPane({
       from: currentFileIdentity,
       to: diffEntryIdentity(entry),
       place: delta === -1 ? "last" : "first",
+      arrived: false,
     });
-    announceFileAt(target);
-    selectFileAt(target);
+    moveToFile(target);
   };
 
   const landOnStop = useEffectEvent((count: number, place: "first" | "last") => {
-    if (count > 0) goToStop(place === "first" ? 0 : count - 1);
+    if (count > 0) goToStop(place === "first" ? 0 : count - 1, count);
   });
   useEffect(() => {
     if (landing === null) return;
-    // The step's own file switch hasn't reached this render yet.
-    if (currentFileIdentity === landing.from) return;
-    if (currentFileIdentity !== landing.to) {
-      setLanding(null);
+    if (currentFileIdentity === landing.to) {
+      if (stopCount !== null) {
+        setLanding(null);
+        landOnStop(stopCount, landing.place);
+      } else if (!landing.arrived) {
+        setLanding({ ...landing, arrived: true });
+      }
       return;
     }
-    if (stopCount === null) return;
+    // The step's own file switch hasn't reached this render yet. Back on the
+    // file it left after reaching the destination is somewhere else, though.
+    if (currentFileIdentity === landing.from && !landing.arrived) return;
     setLanding(null);
-    landOnStop(stopCount, landing.place);
   }, [landing, currentFileIdentity, stopCount]);
 
   /**
@@ -1222,7 +1287,8 @@ export function DiffPane({
   const syncStopFromScroll = useEffectEvent((root: HTMLElement) => {
     // A panel that isn't laid out (a hidden tab, an evicted view) has every box
     // at zero, which would read as the reader having scrolled past them all.
-    if (holdRef.current === stopsKey || root.clientHeight === 0) return;
+    const hold = holdRef.current;
+    if ((hold?.key === stopsKey && hold.content === content) || root.clientHeight === 0) return;
     const rootTop = root.getBoundingClientRect().top;
     let best: number | null = null;
     if (showRendered) {
@@ -1237,13 +1303,19 @@ export function DiffPane({
         }
       }
     } else {
+      // Anchors are numbered within their file: a collapsed file before them
+      // (a type change's deleted half, say) draws none, so DOM order alone
+      // would number the next file's from zero.
       const readingLine = root.clientHeight / 3;
-      let position = 0;
+      const seen = new Map<Element, number>();
       best = 0;
       for (const row of root.querySelectorAll("tr.diff-hunk-anchor")) {
         if (row.getBoundingClientRect().top - rootTop > readingLine) break;
-        best = position;
-        position++;
+        const file = row.closest<HTMLElement>("[data-hunk-offset]");
+        const scope = file ?? root;
+        const position = seen.get(scope) ?? 0;
+        seen.set(scope, position + 1);
+        best = Number(file?.dataset.hunkOffset ?? 0) + position;
       }
     }
     if (best !== null && Number.isFinite(best)) setCursor({ key: stopsKey, index: best });
@@ -1285,9 +1357,9 @@ export function DiffPane({
       paneRoot?.removeEventListener("keydown", release, { capture: true });
       if (frame) cancelAnimationFrame(frame);
     };
-  }, [hasStops, showRendered, stopsKey]);
+  }, [hasStops, showRendered, stopsKey, content]);
 
-  const runDiffCommand = (command: DiffCommand) => {
+  const runDiffCommand = (command: DiffCommand, fromKeyboard: boolean) => {
     switch (command) {
       case "nextChange":
         stepChange(1);
@@ -1303,12 +1375,13 @@ export function DiffPane({
         return;
       case "toggleViewed": {
         if (!worktreePath) return;
-        // With a row of the shelf focused, the key marks that row's file — the
+        // A key pressed on a row of the shelf marks that row's file — the
         // shelf's own checkboxes are out of the tab order, so this is how the
-        // keyboard reaches them. Anywhere else it marks the open file.
+        // keyboard reaches them. Anything else (the key elsewhere, the palette,
+        // an agent) marks the open file, whatever happens to hold focus.
         const active = document.activeElement;
         const row =
-          active instanceof Element && paneRootRef.current?.contains(active)
+          fromKeyboard && active instanceof Element && paneRootRef.current?.contains(active)
             ? active.closest<HTMLElement>("[data-file-index]")
             : null;
         const entry = row ? changeSet?.[Number(row.dataset.fileIndex)] : currentEntry;
@@ -1413,8 +1486,9 @@ export function DiffPane({
           count={stopCount}
           index={changeIndex}
           unit={stopUnit}
-          canStepBack={changeIndex > 0 || hasPrevFile}
-          canStepForward={(stopCount !== null && changeIndex < stopCount - 1) || hasNextFile}
+          steppable={hasPrevFile || hasNextFile || (stopCount ?? 0) > 1}
+          canStepBack={stopCount !== null && (changeIndex > 0 || hasPrevFile)}
+          canStepForward={stopCount !== null && (changeIndex < stopCount - 1 || hasNextFile)}
           onStep={stepChange}
           backShortcut={previousChangeKey}
           forwardShortcut={nextChangeKey}

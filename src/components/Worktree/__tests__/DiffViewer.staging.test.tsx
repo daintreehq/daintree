@@ -543,12 +543,16 @@ describe("DiffViewer hunk stepping (#17326)", () => {
     return [...container.querySelectorAll("tr.diff-hunk-anchor")];
   }
 
+  const scrollOptions: unknown[] = [];
   function spyScrolls(): Element[] {
     const scrolled: Element[] = [];
+    scrollOptions.length = 0;
     const spy = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(function (
-      this: Element
+      this: Element,
+      options?: boolean | ScrollIntoViewOptions
     ) {
       scrolled.push(this);
+      scrollOptions.push(options);
     });
     spies.push(spy);
     return scrolled;
@@ -560,6 +564,14 @@ describe("DiffViewer hunk stepping (#17326)", () => {
     renderViewer(<DiffViewer diff={diff} onHunkCount={onHunkCount} />);
 
     expect(onHunkCount).toHaveBeenLastCalledWith(100, diff);
+  });
+
+  it("counts across every file of a patch", () => {
+    const onHunkCount = vi.fn();
+    const diff = gappedModify().diff + addedDiff(3, { path: "src/new.txt" });
+    renderViewer(<DiffViewer diff={diff} onHunkCount={onHunkCount} />);
+
+    expect(onHunkCount).toHaveBeenLastCalledWith(4, diff);
   });
 
   it("marks each hunk's first changed row as its anchor, one per hunk however they are drawn", async () => {
@@ -602,8 +614,8 @@ describe("DiffViewer hunk stepping (#17326)", () => {
     expect(scrolled).toEqual([]);
     await runUntil(() => scrolled.length > 0);
 
-    expect(scrolled).toHaveLength(1);
     expect(scrolled[0]!.classList.contains("diff-hunk-anchor")).toBe(true);
+    expect(scrollOptions[0]).toEqual({ block: "start", behavior: "instant" });
     // Split view: the inserted line sits in the right-hand cell.
     expect(scrolled[0]!.textContent).toMatch(/x59-0$/);
     // Sixty hunks drawn: the cap lifted to the one asked for, not past it.
@@ -631,5 +643,32 @@ describe("DiffViewer hunk stepping (#17326)", () => {
     ask(2);
     await runUntil(() => scrolled.length === 2);
     expect(codeText(scrolled[1])).toBe("old line 503");
+  });
+
+  it("doesn't replay a request it mounts with: an earlier view carried it out", async () => {
+    const scrolled = spyScrolls();
+    const { diff } = gappedModify();
+    renderViewer(<DiffViewer diff={diff} revealHunk={{ index: 2, seq: 5 }} />);
+    await runUntil(() => frames.size === 0);
+
+    expect(scrolled).toEqual([]);
+  });
+
+  it("drops a reveal the host withdraws before it lands", async () => {
+    const scrolled = spyScrolls();
+    const diff = largeManyHunks();
+    const { rerender } = renderViewer(<DiffViewer diff={diff} />);
+    const view = (revealHunk: { index: number; seq: number } | null) => (
+      <TooltipProvider>
+        <DiffViewer diff={diff} revealHunk={revealHunk} />
+      </TooltipProvider>
+    );
+
+    rerender(view({ index: 59, seq: 1 }));
+    // The reader takes the scroll back while hunk 59 is still staging.
+    rerender(view(null));
+    await runUntil(() => frames.size === 0);
+
+    expect(scrolled).toEqual([]);
   });
 });

@@ -108,14 +108,21 @@ vi.mock("@/components/Worktree/DiffViewer", async () => {
           data-reveal-index={props.revealHunk?.index}
           data-reveal-seq={props.revealHunk?.seq}
         >
+          <div tabIndex={0} data-testid="diff-viewer-region" />
           {viewerHunkCount.current !== null && (
-            <table>
-              <tbody>
-                {Array.from({ length: viewerHunkCount.current }, (_, index) => (
-                  <tr key={index} className="diff-hunk-anchor" data-anchor={index} />
-                ))}
-              </tbody>
-            </table>
+            // Hunks before `viewerDrawnFrom` belong to a file drawn collapsed.
+            <div data-hunk-offset={viewerDrawnFrom.current}>
+              <table>
+                <tbody>
+                  {Array.from(
+                    { length: viewerHunkCount.current - viewerDrawnFrom.current },
+                    (_, index) => (
+                      <tr key={index} className="diff-hunk-anchor" />
+                    )
+                  )}
+                </tbody>
+              </table>
+            </div>
           )}
           {hunks.map((hunk, index) => (
             <div key={index} data-testid="hunk-actions">
@@ -227,8 +234,9 @@ vi.mock("@/components/FileViewer/DiffFileSidebar", () => ({
 
 // How many hunks the viewer stub reports (and draws an anchor row for), null
 // for the count of git's own hunks in the patch.
-const { viewerHunkCount } = vi.hoisted(() => ({
+const { viewerHunkCount, viewerDrawnFrom } = vi.hoisted(() => ({
   viewerHunkCount: { current: null as number | null },
+  viewerDrawnFrom: { current: 0 },
 }));
 
 // Hunk ranges the viewer stub renders in place of git's own, null for git's.
@@ -337,7 +345,7 @@ import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
-import { DIFF_COMMAND_EVENT, type DiffCommand } from "../diffCommands";
+import { sendDiffCommand, type DiffCommand } from "../diffCommands";
 import { _resetDiffCacheForTests, peekCachedDiff, requestDiff } from "../diffContentCache";
 
 const PANEL_ID = "diff-1";
@@ -396,14 +404,17 @@ function pressKey(
   );
   const command = match ? DIFF_ACTION_COMMANDS[match.actionId] : undefined;
   if (!command) return false;
-  sendCommand(command);
+  sendCommand(command, PANEL_ID, true);
   return true;
 }
 
-function sendCommand(command: DiffCommand, id = PANEL_ID): void {
+/** A command as an action sends it; whether some diff viewer claimed it. */
+function sendCommand(command: DiffCommand, id = PANEL_ID, fromKeyboard = false): boolean {
+  let delivered = false;
   act(() => {
-    window.dispatchEvent(new CustomEvent(DIFF_COMMAND_EVENT, { detail: { id, command } }));
+    delivered = sendDiffCommand({ id, command, fromKeyboard });
   });
+  return delivered;
 }
 
 /** The stepping shortcuts, pressed with focus on the pane root. */
@@ -429,6 +440,7 @@ beforeEach(() => {
   viewedKeys.clear();
   viewerOverlay.open = false;
   viewerHunkCount.current = null;
+  viewerDrawnFrom.current = 0;
   viewerDraftSessions.clear();
   isImageDiffCandidateMock.mockReset();
   isImageDiffCandidateMock.mockReturnValue(false);
@@ -942,6 +954,8 @@ describe("DiffPane — stepping in the sidebar's order (#16898)", () => {
 
     fireEvent.click(screen.getByLabelText("Next file"));
     expectSelected(lib);
+    // Announced by its place on the shelf; it is last in the raw set.
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("lib.ts, file 2 of 3");
 
     seedPanel({ filePath: "src/zed.ts", fileStatus: "modified", changeSet: unordered });
     rerender(paneElement());
@@ -1266,9 +1280,13 @@ describe("DiffPane — file keys across the whole pane (#16643)", () => {
     renderPane();
     const item = screen.getByRole("menuitem", { name: "Overlay item" });
     expect(screen.getByTestId("panel-root").contains(item)).toBe(false);
+    act(() => screen.getByTestId("panel-root").focus());
+    expect(keybindingService.getScope()).toBe("diff");
 
-    // Portalled outside the pane, so focus there gives the scope back and a
-    // menu's typeahead keeps its letters.
+    // Portalled outside the pane, so focus moving there gives the scope back
+    // and a menu's typeahead keeps its letters.
+    act(() => item.focus());
+    expect(keybindingService.getScope()).toBe("global");
     for (const key of ["[", "]", "v", "n", "p"]) expect(pressKey(key, item)).toBe(false);
 
     expect(setDiffPanelFileMock).not.toHaveBeenCalled();
@@ -1315,15 +1333,46 @@ describe("DiffPane — file keys across the whole pane (#16643)", () => {
     expect(toggleViewedMock).not.toHaveBeenCalled();
   });
 
-  it("acts only on commands addressed to this panel", () => {
+  it("acts only on commands addressed to this panel, and claims the ones it takes", () => {
     seedAt(1);
     renderPane();
 
-    sendCommand("nextFile", "another-diff");
-    sendCommand("toggleViewed", "another-diff");
-
+    expect(sendCommand("nextFile", "another-diff")).toBe(false);
+    expect(sendCommand("toggleViewed", "another-diff")).toBe(false);
     expect(setDiffPanelFileMock).not.toHaveBeenCalled();
     expect(toggleViewedMock).not.toHaveBeenCalled();
+
+    expect(sendCommand("nextFile")).toBe(true);
+    expectStepTo(2);
+  });
+
+  it("marks the open file, not a focused shelf row, for a Viewed that wasn't a key", () => {
+    seedAt(0);
+    renderPane();
+    act(() => screen.getByTestId("diff-sidebar-row").focus());
+
+    // The palette or an agent: whatever happens to hold focus says nothing.
+    sendCommand("toggleViewed");
+
+    expect(toggleViewedMock).toHaveBeenCalledTimes(1);
+    expect(toggleViewedMock).toHaveBeenCalledWith(WORKTREE_PATH, changeSet[0]!.viewedKey);
+  });
+
+  it("takes the diff scope back when another scope is pushed over it", () => {
+    seedAt(1);
+    renderPane();
+    act(() => screen.getByTestId("panel-root").focus());
+    expect(keybindingService.getScope()).toBe("diff");
+
+    // An expanded worktree card mounting as the sidebar scrolls.
+    act(() => keybindingService.setScope("worktreeGrid"));
+    try {
+      expect(keybindingService.getScope()).toBe("diff");
+      expect(pressKey("]")).toBe(true);
+      expectStepTo(2);
+    } finally {
+      act(() => keybindingService.restoreScope("worktreeGrid"));
+    }
   });
 
   it("names the file a step lands on for a screen reader", () => {
@@ -1356,8 +1405,7 @@ describe("DiffPane — hunk stepping (#17326)", () => {
   }
 
   function stepperText(): string | null {
-    const group = screen.queryByRole("group", { name: "Hunks" });
-    return group?.querySelector("[aria-live]")?.textContent ?? null;
+    return screen.queryByRole("group", { name: "Hunks" })?.textContent || null;
   }
 
   function revealed(): number | null {
@@ -1618,9 +1666,144 @@ describe("DiffPane — hunk stepping (#17326)", () => {
       act(() => {
         document.querySelector(".diff-scroll-root")!.dispatchEvent(new Event("wheel"));
       });
+      // Taking the scroll back withdraws the step, so nothing lands later.
+      expect(revealed()).toBe(null);
       scroll();
       expect(stepperText()).toBe("2 of 3");
     });
+
+    it("numbers anchors within their file, past a collapsed one before them", () => {
+      // A type change's patch: the first file, holding hunk 0, is drawn collapsed.
+      viewerHunkCount.current = 3;
+      viewerDrawnFrom.current = 1;
+      seedSingle();
+      renderPane();
+
+      layOut([-100, 400]);
+      scroll();
+      expect(stepperText()).toBe("2 of 3");
+    });
+
+    it("lets a refreshed patch end a step's hold", () => {
+      viewerHunkCount.current = 3;
+      seedSingle();
+      withContent("diff --git a/a.ts b/a.ts\n@@ one @@");
+      const { rerender } = renderPane();
+      pressInPane("n");
+      pressInPane("n");
+      expect(stepperText()).toBe("3 of 3");
+
+      // The refresh put the viewport back near the top.
+      withContent("diff --git a/a.ts b/a.ts\n@@ two @@");
+      rerender(paneElement());
+      layOut([50, 400, 800]);
+      scroll();
+      expect(stepperText()).toBe("1 of 3");
+    });
+  });
+
+  it("says where each deliberate step landed", () => {
+    viewerHunkCount.current = 3;
+    seedSingle();
+    renderPane();
+
+    pressInPane("n");
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Hunk 2 of 3");
+    // The count itself stays quiet, or hand scrolling would narrate it.
+    expect(screen.getByRole("group", { name: "Hunks" }).querySelector("[aria-live]")).toBe(null);
+  });
+
+  it("keeps the arrows, unavailable, while the destination of a crossing loads", () => {
+    viewerHunkCount.current = 1;
+    seedAt(0);
+    withContent("diff --git a/a.ts b/a.ts\n@@ a @@");
+    const { rerender } = renderPane();
+    const next = screen.getByRole("button", { name: "Next hunk" });
+    fireEvent.click(next);
+    expectSelected(1);
+
+    seedAt(1);
+    withContent(undefined);
+    rerender(paneElement());
+    const arrow = screen.getByRole("button", { name: "Next hunk" });
+    expect(arrow).toBe(next);
+    expect(arrow.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("drops the landing once the pane returns to the file it left", () => {
+    viewerHunkCount.current = 1;
+    seedAt(1);
+    withContent("diff --git a/b.ts b/b.ts\n@@ b @@");
+    const { rerender } = renderPane();
+    pressInPane("p");
+    expectSelected(0);
+
+    // a.ts starts loading, then an opener re-aims the pane at b.ts…
+    seedAt(0);
+    withContent(undefined);
+    rerender(paneElement());
+    seedAt(1);
+    withContent("diff --git a/b.ts b/b.ts\n@@ b @@");
+    rerender(paneElement());
+
+    // …and a later, unrelated open of a.ts lands at its top, not its last hunk.
+    viewerHunkCount.current = 4;
+    seedAt(0);
+    withContent("diff --git a/a.ts b/a.ts\n@@ a @@");
+    rerender(paneElement());
+    expect(revealed()).toBe(null);
+    expect(stepperText()).toBe("1 of 4");
+  });
+
+  it("waits out a pending whole-file read before landing in Full file", () => {
+    preferences.diffFullFile = true;
+    viewerHunkCount.current = 1;
+    seedAt(1);
+    withContent("diff --git a/b.ts b/b.ts\n@@ b @@");
+    const { rerender } = renderPane();
+    pressInPane("p");
+    expectSelected(0);
+
+    // a.ts's patch is in, but the read that reflows it isn't.
+    viewerHunkCount.current = 3;
+    useDiffFileSourceMock.mockReturnValue({ source: undefined, errorCode: null });
+    seedAt(0);
+    withContent("diff --git a/a.ts b/a.ts\n@@ a @@");
+    rerender(paneElement());
+    expect(revealed()).toBe(null);
+
+    useDiffFileSourceMock.mockReturnValue({ source: "a\n", errorCode: null });
+    rerender(paneElement());
+    expect(revealed()).toBe(2);
+  });
+
+  it("treats a comparison that can't be asked for as one stop", () => {
+    viewerHunkCount.current = 1;
+    seedAt(0);
+    withContent("diff --git a/a.ts b/a.ts\n@@ a @@");
+    const { rerender } = renderPane();
+    pressInPane("n");
+    expectSelected(1);
+
+    // The worktree went away: no request will ever be made for b.ts.
+    worktrees.clear();
+    seedAt(1);
+    withContent(undefined);
+    rerender(paneElement());
+    pressInPane("n");
+    expectSelected(2);
+  });
+
+  it("keeps focus in the pane when a step swaps the body it sat in", () => {
+    viewerHunkCount.current = 1;
+    seedAt(0);
+    withContent("diff --git a/a.ts b/a.ts\n@@ a @@");
+    renderPane();
+
+    pressKey("n", screen.getByTestId("diff-viewer-region"));
+    expectSelected(1);
+    expect(document.activeElement).toBe(screen.getByTestId("panel-root"));
+    expect(keybindingService.getScope()).toBe("diff");
   });
 
   it("walks rendered changes without wrapping at the ends", async () => {
@@ -1631,8 +1814,7 @@ describe("DiffPane — hunk stepping (#17326)", () => {
     renderPane();
     const view = await screen.findByTestId("rendered-markdown-mock");
     act(() => renderedProps.current?.onChangeCount?.(2, view.getAttribute("data-attempt-key")!));
-    const text = () =>
-      screen.getByRole("group", { name: "Changes" }).querySelector("[aria-live]")?.textContent;
+    const text = () => screen.getByRole("group", { name: "Changes" }).textContent;
     expect(text()).toBe("1 of 2");
 
     pressInPane("n");
