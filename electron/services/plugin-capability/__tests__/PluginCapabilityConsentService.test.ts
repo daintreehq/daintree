@@ -590,7 +590,7 @@ describe("PluginCapabilityConsentService", () => {
       source: "custom" as const,
       args: [],
       dangerousMode: "inherit" as const,
-      skipsPermissions: false,
+      permissionLevel: "cli-default",
       envNames: ["TOKEN"],
       fallbacks: [],
       fallbackOnRateLimit: false,

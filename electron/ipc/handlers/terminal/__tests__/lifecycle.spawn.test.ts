@@ -2092,6 +2092,40 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     expect(spawnArgs.command).not.toContain("--dangerously-skip-permissions");
   });
 
+  it("strips the terminal setting's Auto args from help launches, keeping the assistant's own bypass choice (#17435)", async () => {
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "full" : false));
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+    const handler = getSpawnHandler();
+    const spawnWith = async (command: string, bypass: boolean) => {
+      mockGetBypassPermissions.mockImplementation(() => bypass);
+      ptyClient.spawn.mockClear();
+      await handler(
+        {} as Electron.IpcMainInvokeEvent,
+        {
+          cols: 80,
+          rows: 24,
+          cwd: tmpDir,
+          command,
+          launchAgentId: "claude",
+          env: { DAINTREE_MCP_TOKEN: "help-token" },
+        } as unknown as Parameters<typeof handler>[1]
+      );
+      return ptyClient.spawn.mock.calls[0][1].command as string;
+    };
+
+    expect(await spawnWith("claude --permission-mode 'auto' --model opus", false)).toBe(
+      "claude --model opus"
+    );
+    expect(await spawnWith("claude --permission-mode=auto", true)).toBe(
+      "claude --dangerously-skip-permissions"
+    );
+    // Another mode the user picked for the assistant isn't the Auto setting's.
+    expect(await spawnWith("claude --permission-mode plan", false)).toBe(
+      "claude --permission-mode plan"
+    );
+  });
+
   it("strips a lookalike --dangerously-skip-permissions=false from help launches with bypass off", async () => {
     // Defense-in-depth: a customArgs lookalike like
     // `--dangerously-skip-permissions=false` could survive a substring-only

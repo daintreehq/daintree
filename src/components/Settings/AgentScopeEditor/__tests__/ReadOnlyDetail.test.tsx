@@ -4,7 +4,10 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { ReadOnlyDetail } from "../ReadOnlyDetail";
 import type { AgentPreset } from "@/config/agents";
 
-function renderDetail(env: Record<string, string>) {
+function renderDetail(
+  env: Record<string, string>,
+  effectiveLevel: "cli-default" | "auto" | "skip" = "cli-default"
+) {
   const preset: AgentPreset = { id: "ccr-router", name: "ccr:router", env };
   render(
     <ReadOnlyDetail
@@ -12,11 +15,19 @@ function renderDetail(env: Record<string, string>) {
       selectedPreset={preset}
       agentName="Claude"
       agentCustomFlags=""
-      effectiveSkipPerms={false}
+      effectiveLevel={effectiveLevel}
       onDuplicate={vi.fn()}
     />
   );
 }
+
+describe("ReadOnlyDetail permission prompts", () => {
+  it("shows the level a launch on the preset resolves to, Auto included (#17435)", () => {
+    renderDetail({}, "auto");
+    expect(screen.getByText("Permission prompts")).toBeTruthy();
+    expect(screen.getByText("Auto")).toBeTruthy();
+  });
+});
 
 describe("ReadOnlyDetail environment", () => {
   /**

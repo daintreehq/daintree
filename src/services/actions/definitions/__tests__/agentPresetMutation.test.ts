@@ -114,6 +114,25 @@ describe("agent.createPreset", () => {
     expect(inherit.preset).toEqual({ id: NEW_ID, name: "Plain" });
   });
 
+  it("stores Auto for an agent that declares it, without the legacy bypass mirror (#17435)", () => {
+    const auto = plan(
+      "agent.createPreset",
+      { agentId: "codex", name: "Reviewed", dangerousMode: "auto" },
+      sources(undefined)
+    );
+    expect(auto.preset).toMatchObject({ dangerousMode: "auto", dangerousEnabled: false });
+  });
+
+  it("refuses Auto for an agent with no Auto mode rather than storing a choice it can't honour", () => {
+    expect(
+      refusal(
+        "agent.createPreset",
+        { agentId: "gemini", name: "Reviewed", dangerousMode: "auto" },
+        sources(undefined)
+      )
+    ).toContain("has no Auto permission mode");
+  });
+
   it("refuses every value the launch-time sanitiser would drop or change, naming each", () => {
     const message = refusal(
       "agent.createPreset",

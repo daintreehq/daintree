@@ -941,14 +941,16 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // The terminal setting's Auto mode (#17435) reaches this command through
       // the agent's launch flags, but the assistant's permission level is its
       // own, so the declared Auto args (and their `--option=value` form) never
-      // survive here, as the bypass flag above never survives on its own.
+      // survive here, as the bypass flag above never survives on its own. A
+      // value is matched bare or quoted, as the launch command quotes it.
       const autoArgs = getPermissionAutoArgs(launchAgentId).map((arg) =>
         arg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
       );
       if (autoArgs.length > 0) {
         const [option, ...values] = autoArgs;
+        const quoted = values.map((value) => `(?:${value}|'${value}'|"${value}")`);
         const body =
-          values.length > 0 ? `${option}(?:\\s+|=)${values.join("\\s+")}` : `${option}(?:=\\S*)?`;
+          quoted.length > 0 ? `${option}(?:\\s+|=)${quoted.join("\\s+")}` : `${option}(?:=\\S*)?`;
         const autoPattern = new RegExp(`(^|\\s+)${body}(?=\\s|$)`, "g");
         safeCommand = safeCommand.replace(autoPattern, "").trim();
       }

@@ -69,7 +69,7 @@ describe("formatAgentPresetPreviewLines", () => {
       `  NOTE = ${MASKED_TOKEN}`,
       'Arguments: "-c" "model_reasoning_effort=high"',
       'Custom arguments: "--search"',
-      "Skip permissions: On",
+      "Permission prompts: Skip all",
       'Display title: "Work tab"',
       'Colour: "#3b82f6"',
       'Fallback presets: "Fast" (user-fast)',
@@ -111,9 +111,25 @@ describe("formatAgentPresetPreviewLines", () => {
     expect(text).not.toContain(TOKEN);
     expect(text).toContain(`Custom arguments: "--search" → the agent's own`);
     expect(text).not.toMatch(/alt.screen|inline/i);
-    expect(text).toContain("Skip permissions: the agent's setting → On");
+    expect(text).toContain("Permission prompts: the agent's setting → Skip all");
     expect(text).not.toContain("KEEP");
     expect(text).not.toContain("Colour");
+  });
+
+  it("shows a preset moving between Skip all, Auto and the CLI default (#17435)", () => {
+    const preset = (dangerousMode?: "on" | "off" | "auto"): AgentPreset => ({
+      id: "user-work",
+      name: "Work",
+      ...(dangerousMode && { dangerousMode }),
+    });
+    const toAuto = formatAgentPresetPreviewLines(update(preset("on"), preset("auto"))).join("\n");
+    expect(toAuto).toContain("Permission prompts: Skip all → Auto");
+    const toDefault = formatAgentPresetPreviewLines(update(preset("auto"), preset("off"))).join(
+      "\n"
+    );
+    expect(toDefault).toContain("Permission prompts: Auto → CLI default");
+    const cleared = formatAgentPresetPreviewLines(update(preset("auto"), preset())).join("\n");
+    expect(cleared).toContain("Permission prompts: Auto → the agent's setting");
   });
 
   it("shows the usage-limit settings changing apart from each other", () => {

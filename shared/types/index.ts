@@ -422,6 +422,8 @@ export {
   resolveDangerousMode,
   combineDangerousModes,
   reconcileBypassFlags,
+  reconcilePermissionFlags,
+  userPermissionArgs,
   reconcileInlineModeFlag,
   resolveKeepDecorations,
   reconcileDecorationFlags,

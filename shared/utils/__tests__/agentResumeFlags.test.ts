@@ -43,6 +43,33 @@ describe("reconcileResumeLaunchFlagsWith", () => {
     ).toEqual([BYPASS]);
   });
 
+  it("swaps a captured bypass flag for the Auto args an agent's Auto setting asks for (#17435)", () => {
+    expect(
+      reconcileResumeLaunchFlagsWith(
+        { agentId: "codex", agentLaunchFlags: ["--dangerously-bypass-approvals-and-sandbox"] },
+        settings({
+          globalSkipPermissions: true,
+          agents: { codex: { dangerousMode: "auto" } },
+        })
+      )
+    ).toEqual(expect.arrayContaining(["--approve-for-me"]));
+    expect(
+      reconcileResumeLaunchFlagsWith(
+        { agentId: "claude", agentLaunchFlags: ["--permission-mode", "auto", "--model", "opus"] },
+        settings({ agents: { claude: { dangerousMode: "off" } } })
+      )
+    ).toEqual(["--model", "opus"]);
+  });
+
+  it("keeps Auto args the agent's own custom flags carry when the setting is off", () => {
+    expect(
+      reconcileResumeLaunchFlagsWith(
+        { agentId: "codex", agentLaunchFlags: ["--approve-for-me"] },
+        settings({ agents: { codex: { dangerousMode: "off", customFlags: "--approve-for-me" } } })
+      )
+    ).toEqual(expect.arrayContaining(["--approve-for-me"]));
+  });
+
   it("keeps the caller's verbatim tail, even a flag reconcile would drop, once and last", () => {
     expect(
       reconcileResumeLaunchFlagsWith(

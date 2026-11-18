@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PluginCapabilityConfirmDialog,
+  presetBypassLabel,
   presetLaunchTitleFor,
 } from "../PluginCapabilityConfirmDialog";
 import type { PluginPresetLaunchSummary } from "@shared/utils/agentPresetLaunchConsent";
@@ -53,14 +54,14 @@ const summary: PluginPresetLaunchSummary = {
   source: "project",
   args: ["--model", "glm"],
   dangerousMode: "inherit",
-  skipsPermissions: true,
+  permissionLevel: "skip",
   envNames: ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"],
   fallbacks: [
     {
       presetName: "Backup",
       args: ["--fast"],
       dangerousMode: "on",
-      skipsPermissions: true,
+      permissionLevel: "skip",
       envNames: ["BACKUP_KEY"],
     },
   ],
@@ -163,5 +164,22 @@ describe("PluginCapabilityConfirmDialog — launching on a preset (#16324)", () 
     });
     await expect(second).resolves.toBe("rejected");
     expect(usePluginCapabilityConfirmStore.getState().current).toBeNull();
+  });
+});
+
+describe("presetBypassLabel — Auto (#17435)", () => {
+  it("names Auto whether the preset sets it or inherits it, and never calls it skipped", () => {
+    expect(presetBypassLabel({ dangerousMode: "auto", permissionLevel: "auto" }, "Codex")).toBe(
+      "Auto: the preset turns on Codex's Auto mode"
+    );
+    expect(presetBypassLabel({ dangerousMode: "inherit", permissionLevel: "auto" }, "Codex")).toBe(
+      "Auto: from Codex's settings"
+    );
+  });
+
+  it("says an Auto the agent can't honour leaves it asking", () => {
+    expect(
+      presetBypassLabel({ dangerousMode: "auto", permissionLevel: "cli-default" }, "Gemini")
+    ).toBe("Asked: the preset asks for an Auto mode Gemini doesn't have");
   });
 });

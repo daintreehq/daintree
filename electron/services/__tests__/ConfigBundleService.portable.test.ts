@@ -323,6 +323,19 @@ describe("permission bypass", () => {
     ]);
   });
 
+  it("carries an Auto mode across, previewed by name and stored without the legacy mirror (#17435)", async () => {
+    const service = makeService();
+    const [preview] = await service.preview({
+      permissionBypass: { agents: { claude: { presets: { fast: { dangerousMode: "auto" } } } } },
+    });
+    expect(preview.changes).toEqual([
+      expect.objectContaining({ key: "agents.claude", from: "Fast: Always skip", to: "Fast: Auto" }),
+    ]);
+    await service.apply({ permissionBypass: { agents: { claude: { dangerousMode: "auto" } } } });
+    expect(agents().claude.dangerousMode).toBe("auto");
+    expect(agents().claude.dangerousEnabled).toBe(false);
+  });
+
   it("reads a legacy enabled flag as the mode it means, so it can't sit under a host veto", async () => {
     await makeService().apply({
       permissionBypass: { agents: { claude: { dangerousEnabled: true } } },
