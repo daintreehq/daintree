@@ -67,6 +67,9 @@ export const LINKS_LAUNCHER_BUTTON_ID = "links-launcher" as const;
 const LINKS_ACTION_ID = "links.open" as const;
 const LINKS_LABEL = "Links";
 export const PROJECT_LINKS_HEADING = "Project links";
+export const DECLARED_LINKS_HEADING = "From package.json";
+/** Read after a declared row's host, so the row says where it came from. */
+const DECLARED_NOTE = ", declared in the project's package.json";
 export const GLOBAL_LINKS_HEADING = "Your links";
 
 /** Marks the launcher's content, so a close can tell whether focus was inside it. */
@@ -103,10 +106,12 @@ interface LinkRowProps {
   title: string;
   url: string;
   addedByAssistant: boolean;
+  /** Declared by the project's package.json rather than saved by anyone. */
+  declared?: boolean;
   onOpen: (url: string) => void;
 }
 
-function LinkRow({ rowId, title, url, addedByAssistant, onOpen }: LinkRowProps) {
+function LinkRow({ rowId, title, url, addedByAssistant, declared = false, onOpen }: LinkRowProps) {
   return (
     <LinksLauncherRow
       rowId={rowId}
@@ -116,6 +121,7 @@ function LinkRow({ rowId, title, url, addedByAssistant, onOpen }: LinkRowProps) 
         <>
           {linkHost(url)}
           {addedByAssistant && <span className="sr-only">, added by the Assistant</span>}
+          {declared && <span className="sr-only">{DECLARED_NOTE}</span>}
         </>
       }
       trailing={
@@ -160,8 +166,9 @@ function openProjectLinkSettings(): void {
 }
 
 /**
- * The launcher's list: this project's links, then the person's own, then the
- * active worktree's pull request, then the dev servers across every worktree.
+ * The launcher's list: this project's saved links, then the ones its
+ * package.json declares, then the person's own, then the active worktree's
+ * pull request, then the dev servers across every worktree.
  */
 export function LinksLauncherList({
   links,
@@ -179,14 +186,14 @@ export function LinksLauncherList({
   onManage: () => void;
 }) {
   const baseId = useId();
-  const { projectLinks, globalLinks } = links;
+  const { projectLinks, declaredLinks, globalLinks } = links;
   const shownPullRequest = showsPullRequest(pullRequest, checks) ? pullRequest : null;
   if (!hasLauncherLinks(links) && shownPullRequest === null && !hasDevServersSection(devSessions)) {
     return (
       <div className="flex flex-col items-start gap-2 p-3">
         <p className="text-xs text-text-secondary">
-          Links you or the Assistant save for this project, and dev servers running in any worktree,
-          show here.
+          Links you or the Assistant save for this project, links in its package.json, and dev
+          servers running in any worktree show here.
         </p>
         <Button type="button" variant="outline" size="sm" onClick={onManage}>
           Add a project link
@@ -205,6 +212,21 @@ export function LinksLauncherList({
               title={link.title}
               url={link.url}
               addedByAssistant={link.addedByAssistant === true}
+              onOpen={onOpen}
+            />
+          ))}
+        </LinkSection>
+      )}
+      {declaredLinks.length > 0 && (
+        <LinkSection heading={DECLARED_LINKS_HEADING} sectionId={`${baseId}-declared`}>
+          {declaredLinks.map((link) => (
+            <LinkRow
+              key={link.field}
+              rowId={`${baseId}-declared-${link.field}`}
+              title={link.title}
+              url={link.url}
+              addedByAssistant={false}
+              declared
               onOpen={onOpen}
             />
           ))}
@@ -462,7 +484,7 @@ export function LinksLauncherOverflowItems({ side }: { side: "left" | "right" })
     if (opensInPanel(url)) focusRestore?.expectHandoff();
     openLink(url);
   };
-  const { projectLinks, globalLinks } = links;
+  const { projectLinks, declaredLinks, globalLinks } = links;
   return (
     <>
       {projectLinks.length > 0 && (
@@ -483,6 +505,21 @@ export function LinksLauncherOverflowItems({ side }: { side: "left" | "right" })
                   Assistant
                 </Badge>
               )}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuGroup>
+      )}
+      {declaredLinks.length > 0 && (
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>{DECLARED_LINKS_HEADING}</DropdownMenuLabel>
+          {declaredLinks.map((link) => (
+            <DropdownMenuItem key={`declared-${link.field}`} onClick={() => select(link.url)}>
+              <Globe className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+              <span className="min-w-0 flex-1 truncate">{link.title}</span>
+              <DropdownMenuMeta aria-hidden={false}>
+                {linkHost(link.url)}
+                <span className="sr-only">{DECLARED_NOTE}</span>
+              </DropdownMenuMeta>
             </DropdownMenuItem>
           ))}
         </DropdownMenuGroup>

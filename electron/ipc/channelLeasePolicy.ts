@@ -641,6 +641,7 @@ export const CHANNEL_LEASE_POLICY = {
   "project-match:scan": "free",
   "project-match:take-pending-setup": "driver",
   "project-links:change": "driver",
+  "project-links:get-declared": "free",
   "merged-worktree-cleanup:preview": "free",
   "merged-worktree-cleanup:set-enabled": "driver",
   "project-presence:changed": "free",

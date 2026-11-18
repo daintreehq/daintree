@@ -1,8 +1,10 @@
 import { z } from "zod";
 import { defineIpcNamespace, opValidated } from "../define.js";
 import { projectStore } from "../../services/ProjectStore.js";
+import { readDeclaredProjectLinks } from "../../services/projectDeclaredLinks.js";
 import { PROJECT_LINKS_METHOD_CHANNELS } from "./projectLinks.preload.js";
 import type {
+  DeclaredProjectLink,
   ProjectLinksChangePayload,
   ProjectLinksChangeResult,
 } from "../../../shared/types/projectLinks.js";
@@ -29,6 +31,8 @@ const PayloadSchema = z
   })
   .strict();
 
+const DeclaredPayloadSchema = z.object({ projectId: z.string().min(1).max(200) }).strict();
+
 /**
  * The project's links have this one write, so a change lands on the
  * list as it is on disk and the Assistant's ownership is checked there, where
@@ -42,6 +46,19 @@ export const projectLinksNamespace = defineIpcNamespace({
       PayloadSchema,
       async (payload: ProjectLinksChangePayload): Promise<ProjectLinksChangeResult> =>
         projectStore.changeLinks(payload.projectId, payload.actor, payload.change)
+    ),
+    /**
+     * The links the project's own package.json declares, read on the machine
+     * that holds the project: always its registered folder, never a path the
+     * caller names. An unknown project declares nothing.
+     */
+    getDeclared: opValidated(
+      PROJECT_LINKS_METHOD_CHANNELS.getDeclared,
+      DeclaredPayloadSchema,
+      async (payload: { projectId: string }): Promise<DeclaredProjectLink[]> => {
+        const project = projectStore.getProjectById(payload.projectId);
+        return project ? readDeclaredProjectLinks(project.path) : [];
+      }
     ),
   },
 });

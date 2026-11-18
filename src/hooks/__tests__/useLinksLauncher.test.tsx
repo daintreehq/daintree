@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import type { ProjectLink } from "@shared/types";
+import type { DeclaredProjectLink, ProjectLink } from "@shared/types";
 import type {
   DevPreviewAllSessionsPayload,
   DevPreviewSessionState,
@@ -9,9 +9,22 @@ import type {
 } from "@shared/types/ipc/devPreview";
 import type { GlobalLink } from "@/store/globalLinksStore";
 import type { WorktreeSnapshot } from "@shared/types";
+import type { WorktreeChangedDirs } from "@/store/createWorktreeStore";
+
+interface WorktreeFixture {
+  worktrees: Map<string, { id: string; path: string; worktreeChanges?: { lastUpdated: number } }>;
+  workingTreeChangedAtById: Map<string, number>;
+  workingTreeChangedDirsById: Map<string, WorktreeChangedDirs>;
+}
 
 const h = vi.hoisted(() => ({
   viewProjectId: "p1" as string | null,
+  viewProjectPath: "/repo" as string | null,
+  getDeclared: vi.fn((_projectId: string) => Promise.resolve([] as DeclaredProjectLink[])),
+  polls: [] as Array<{ callback: () => void; intervalMs: number; enabled: boolean }>,
+  worktreeState: null as WorktreeFixture | null,
+  worktreeListeners: new Set<() => void>(),
+  observable: true,
   settings: {
     projectId: "p1" as string | null,
     settings: { links: [] as ProjectLink[] } as { links?: ProjectLink[] } | null,
@@ -29,8 +42,36 @@ vi.mock("@/store/projectStore", () => ({
   useProjectStore: (selector: (s: unknown) => unknown) => selector({}),
 }));
 vi.mock("@/store/viewWorkspace", () => ({
-  selectViewProject: () => (h.viewProjectId === null ? null : { id: h.viewProjectId }),
+  selectViewProject: () =>
+    h.viewProjectId === null ? null : { id: h.viewProjectId, path: h.viewProjectPath },
 }));
+vi.mock("@/lib/viewCacheState", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/viewCacheState")>()),
+  isProjectViewObservable: () => h.observable,
+}));
+vi.mock("@/clients/projectClient", () => ({
+  projectClient: { getDeclaredLinks: (projectId: string) => h.getDeclared(projectId) },
+}));
+vi.mock("@/hooks/useSharedPollTick", () => ({
+  useSharedPollTick: (callback: () => void, intervalMs: number, enabled = true) => {
+    h.polls.push({ callback, intervalMs, enabled });
+  },
+}));
+vi.mock("@/hooks/useWorktreeStore", async () => {
+  const { useSyncExternalStore } = await import("react");
+  const subscribe = (listener: () => void) => {
+    h.worktreeListeners.add(listener);
+    return () => h.worktreeListeners.delete(listener);
+  };
+  return {
+    useWorktreeStore: (selector: (s: { worktrees: Map<string, WorktreeSnapshot> }) => unknown) =>
+      selector({ worktrees: h.worktrees }),
+    useWorktreeStoreOptional: <T,>(selector: (s: WorktreeFixture) => T, fallback: T): T =>
+      useSyncExternalStore(subscribe, () =>
+        h.worktreeState === null ? fallback : selector(h.worktreeState)
+      ),
+  };
+});
 vi.mock("@/store/viewWorkspaceId", () => ({ getViewWorkspaceId: () => "ws-1" }));
 vi.mock("@/store/projectSettingsStore", () => ({
   useProjectSettingsStore: (selector: (s: typeof h.settings) => unknown) => selector(h.settings),
@@ -43,10 +84,6 @@ vi.mock("@/store/globalLinksStore", () => ({
 vi.mock("@/store/worktreeStore", () => ({
   useWorktreeSelectionStore: (selector: (s: { activeWorktreeId: string | null }) => unknown) =>
     selector({ activeWorktreeId: h.activeWorktreeId }),
-}));
-vi.mock("@/hooks/useWorktreeStore", () => ({
-  useWorktreeStore: (selector: (s: { worktrees: Map<string, WorktreeSnapshot> }) => unknown) =>
-    selector({ worktrees: h.worktrees }),
 }));
 vi.mock("@/hooks/useResolvedForgeProvider", () => ({
   useResolvedForgeProvider: (projectId: string | null | undefined) => {
@@ -70,6 +107,51 @@ const {
 const { _resetAllDevSessionsForTests, acquireAllDevSessions, useAllDevSessionsStore } =
   await import("@/store/allDevSessionsStore");
 const { useLinksLauncherStore } = await import("@/store/linksLauncherStore");
+const { useDeclaredProjectLinksStore, _resetDeclaredProjectLinksForTests } =
+  await import("@/store/declaredProjectLinksStore");
+
+const HOMEPAGE: DeclaredProjectLink = {
+  field: "homepage",
+  title: "Homepage",
+  url: "https://widget.example.dev/",
+};
+
+async function flush() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/** Move the root worktree's watcher on, as a host event landing would. */
+function setWorktreeState(next: WorktreeFixture): void {
+  h.worktreeState = next;
+  for (const listener of h.worktreeListeners) listener();
+}
+
+function dirsAt(at: number, previousAt: number | null, dirs: string[]): WorktreeChangedDirs {
+  return { at, previousAt, dirs, run: "run-1" };
+}
+
+function rootWorktree(
+  fsTick: number,
+  dirs: WorktreeChangedDirs,
+  { gitTick = 1, otherTick = 1 }: { gitTick?: number; otherTick?: number } = {}
+): WorktreeFixture {
+  return {
+    worktrees: new Map([
+      ["wt-root", { id: "wt-root", path: "/repo", worktreeChanges: { lastUpdated: gitTick } }],
+      ["wt-other", { id: "wt-other", path: "/repo-worktrees/feature" }],
+    ]),
+    workingTreeChangedAtById: new Map([
+      ["wt-root", fsTick],
+      ["wt-other", otherTick],
+    ]),
+    workingTreeChangedDirsById: new Map([
+      ["wt-root", dirs],
+      ["wt-other", dirsAt(otherTick, null, [""])],
+    ]),
+  };
+}
 
 function globalLink(id: string, enabled: boolean): GlobalLink {
   return { id, title: id, url: `https://${id}.example.com`, icon: "globe", enabled, order: 0 };
@@ -77,6 +159,13 @@ function globalLink(id: string, enabled: boolean): GlobalLink {
 
 beforeEach(() => {
   h.viewProjectId = "p1";
+  h.viewProjectPath = "/repo";
+  h.getDeclared.mockReset();
+  h.getDeclared.mockImplementation(() => Promise.resolve([]));
+  h.polls.length = 0;
+  h.worktreeState = null;
+  h.observable = true;
+  _resetDeclaredProjectLinksForTests();
   h.settings = { projectId: "p1", settings: { links: [] } };
   h.globalLinks = [];
   h.refresh.mockClear();
@@ -108,6 +197,20 @@ describe("useLinksLauncherLinks", () => {
     expect(result.current.projectLinks).toEqual([]);
     expect(hasLauncherLinks(result.current)).toBe(false);
   });
+
+  it("lists the view's project's declared links, which alone bring the button up", () => {
+    useDeclaredProjectLinksStore.setState({ projectId: "p1", links: [HOMEPAGE] });
+    const { result } = renderHook(() => useLinksLauncherLinks());
+    expect(result.current.declaredLinks).toEqual([HOMEPAGE]);
+    expect(hasLauncherLinks(result.current)).toBe(true);
+  });
+
+  it("never shows the links another project declared", () => {
+    useDeclaredProjectLinksStore.setState({ projectId: "other", links: [HOMEPAGE] });
+    const { result } = renderHook(() => useLinksLauncherLinks());
+    expect(result.current.declaredLinks).toEqual([]);
+    expect(hasLauncherLinks(result.current)).toBe(false);
+  });
 });
 
 describe("useLinksLauncherRefresh", () => {
@@ -137,6 +240,99 @@ describe("useLinksLauncherRefresh", () => {
     act(() => useLinksLauncherStore.getState().open("detached"));
     expect(h.refresh).not.toHaveBeenCalled();
     expect(h.revealed.at(-1)!.enabled).toBe(false);
+  });
+});
+
+describe("useLinksLauncherRefresh: declared links (#17252)", () => {
+  it("reads them from mount and on every opening, without waiting for the settings", async () => {
+    h.settings = { projectId: "p1", settings: null };
+    h.getDeclared.mockImplementation(() => Promise.resolve([HOMEPAGE]));
+    renderHook(() => useLinksLauncherRefresh());
+    await flush();
+    expect(h.getDeclared.mock.calls).toEqual([["p1"]]);
+    expect(useDeclaredProjectLinksStore.getState()).toMatchObject({
+      projectId: "p1",
+      links: [HOMEPAGE],
+    });
+
+    act(() => useLinksLauncherStore.getState().open("button"));
+    await flush();
+    expect(h.getDeclared.mock.calls).toEqual([["p1"], ["p1"]]);
+    expect(h.refresh).not.toHaveBeenCalled();
+  });
+
+  it("polls slowly while the view has a project, and not without one", async () => {
+    const { rerender } = renderHook(() => useLinksLauncherRefresh());
+    await flush();
+    const poll = h.polls.at(-1)!;
+    expect(poll).toMatchObject({ intervalMs: 20_000, enabled: true });
+
+    h.getDeclared.mockClear();
+    poll.callback();
+    await flush();
+    expect(h.getDeclared.mock.calls).toEqual([["p1"]]);
+
+    h.viewProjectId = null;
+    rerender();
+    expect(h.polls.at(-1)!.enabled).toBe(false);
+  });
+
+  it("re-reads when the root worktree's watcher reports the root folder, not another folder", async () => {
+    h.worktreeState = rootWorktree(10, dirsAt(10, null, ["src"]));
+    renderHook(() => useLinksLauncherRefresh());
+    await flush();
+    expect(h.getDeclared).toHaveBeenCalledTimes(1);
+
+    act(() => setWorktreeState(rootWorktree(11, dirsAt(11, 10, ["src/lib"]))));
+    await flush();
+    expect(h.getDeclared).toHaveBeenCalledTimes(1);
+
+    act(() => setWorktreeState(rootWorktree(12, dirsAt(12, 11, ["", "src"]))));
+    await flush();
+    expect(h.getDeclared).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores a burst in another worktree", async () => {
+    h.worktreeState = rootWorktree(10, dirsAt(10, null, ["src"]));
+    renderHook(() => useLinksLauncherRefresh());
+    await flush();
+    act(() => setWorktreeState(rootWorktree(10, dirsAt(10, null, ["src"]), { otherTick: 50 })));
+    await flush();
+    expect(h.getDeclared).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-reads when only the root worktree's git status moved", async () => {
+    h.worktreeState = rootWorktree(10, dirsAt(10, null, ["src"]));
+    renderHook(() => useLinksLauncherRefresh());
+    await flush();
+    act(() => setWorktreeState(rootWorktree(10, dirsAt(10, null, ["src"]), { gitTick: 20 })));
+    await flush();
+    expect(h.getDeclared).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads nothing while the view can't be seen, leaving the catch-up to the poll", async () => {
+    h.observable = false;
+    h.worktreeState = rootWorktree(10, dirsAt(10, null, ["src"]));
+    renderHook(() => useLinksLauncherRefresh());
+    await flush();
+    act(() => setWorktreeState(rootWorktree(11, dirsAt(11, 10, [""]))));
+    await flush();
+    expect(h.getDeclared).not.toHaveBeenCalled();
+
+    h.observable = true;
+    h.polls.at(-1)!.callback();
+    await flush();
+    expect(h.getDeclared.mock.calls).toEqual([["p1"]]);
+  });
+
+  it("leaves the read to the poll when no worktree sits at the project's root", async () => {
+    h.viewProjectPath = "/elsewhere";
+    h.worktreeState = rootWorktree(10, dirsAt(10, null, [""]));
+    renderHook(() => useLinksLauncherRefresh());
+    await flush();
+    act(() => setWorktreeState(rootWorktree(11, dirsAt(11, 10, [""]))));
+    await flush();
+    expect(h.getDeclared).toHaveBeenCalledTimes(1);
   });
 });
 

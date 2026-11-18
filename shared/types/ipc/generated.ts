@@ -3763,6 +3763,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../projectLinks.js").ProjectLinksChangePayload];
     result: import("../projectLinks.js").ProjectLinksChangeResult;
   };
+  "project-links:get-declared": {
+    args: [payload: { projectId: string }];
+    result: import("../projectLinks.js").DeclaredProjectLink[];
+  };
   "project-match:find": {
     args: [payload: import("./projectMatch.js").FindProjectMatchPayload];
     result: import("./projectMatch.js").ProjectMatchCandidate[];

@@ -573,6 +573,8 @@ export type {
 
 // A project's own links (#17091)
 export type {
+  DeclaredProjectLink,
+  DeclaredProjectLinkField,
   ProjectLink,
   ProjectLinkActor,
   ProjectLinkChange,

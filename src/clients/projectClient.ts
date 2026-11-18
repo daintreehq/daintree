@@ -13,6 +13,7 @@ import type {
   TabGroup,
   ProjectLinksChangePayload,
   ProjectLinksChangeResult,
+  DeclaredProjectLink,
 } from "@shared/types";
 import type { NotificationSettings } from "@shared/types/ipc/api";
 import type {
@@ -299,6 +300,9 @@ export const projectClient = {
       invalidateProjectSettingsCache(payload.projectId);
     }
   },
+
+  getDeclaredLinks: (projectId: string): Promise<DeclaredProjectLink[]> =>
+    window.electron.projectLinks.getDeclared({ projectId }),
 
   addBrowserAllowedHost: async (projectId: string, hostname: string): Promise<string[]> => {
     invalidateProjectSettingsCache(projectId);

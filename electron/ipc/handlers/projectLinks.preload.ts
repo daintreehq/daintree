@@ -2,6 +2,7 @@ import type { IpcInvokeMap } from "../../types/index.js";
 
 export const PROJECT_LINKS_METHOD_CHANNELS = {
   change: "project-links:change",
+  getDeclared: "project-links:get-declared",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof PROJECT_LINKS_METHOD_CHANNELS;
