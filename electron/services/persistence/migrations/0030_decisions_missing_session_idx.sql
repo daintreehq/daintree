@@ -1,0 +1,2 @@
+-- Decisions questions still missing their agent's session (#17783): delivery looks for these after every pane signal, so a lookup seeks this host's resumable kinds here instead of reading every question. A row leaves it once its session is recorded.
+CREATE INDEX IF NOT EXISTS `decisions_questions_missing_session_idx` ON `decisions_questions` (`origin_host_id`,`agent_kind`) WHERE (`agent_session_id` IS NULL OR `agent_session_id` = '');

@@ -152,8 +152,14 @@ export interface AttentionLabelDeps {
   listTerminals(): Promise<AttentionTerminal[]>;
 }
 
-/** The store as delivery uses it: the library's, and its indexed read of whether anything waits. */
-export type AnswerDeliveryStore = LocalStore & { hasPendingDelivery?(): Promise<boolean> };
+/**
+ * The store as delivery uses it: the library's, and its indexed reads of
+ * whether anything waits and of the questions still missing a session.
+ */
+export type AnswerDeliveryStore = LocalStore & {
+  hasPendingDelivery?(): Promise<boolean>;
+  listSessionlessQuestions?(hostId: string, agentKinds: readonly string[]): Promise<QuestionRow[]>;
+};
 
 export interface AnswerDeliveryOptions {
   deps: AnswerDeliveryDeps;
@@ -1130,12 +1136,15 @@ export class AnswerDelivery {
    */
   private async learnSessions(): Promise<void> {
     const hostId = this.o.deps.hostId();
-    const rows = (await this.store.listQuestions()).filter(
-      (row) =>
-        !row.origin.agent_session_id &&
-        row.origin.host_id === hostId &&
-        RESUMABLE_AGENTS.has(row.origin.agent_kind)
-    );
+    if (hostId === null) return;
+    const rows = this.store.listSessionlessQuestions
+      ? await this.store.listSessionlessQuestions(hostId, [...RESUMABLE_AGENTS])
+      : (await this.store.listQuestions()).filter(
+          (row) =>
+            !row.origin.agent_session_id &&
+            row.origin.host_id === hostId &&
+            RESUMABLE_AGENTS.has(row.origin.agent_kind)
+        );
     if (rows.length === 0) return;
     const terminals = await this.terminals();
     for (const row of rows) {

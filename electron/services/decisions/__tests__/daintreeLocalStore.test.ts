@@ -291,6 +291,83 @@ describe("DaintreeLocalStore", () => {
     expect(plan.map((step) => step.detail).join("\n")).toContain("decisions_questions_status_idx");
   });
 
+  it("reads only the questions still missing a session on this host, never the linked history (#17783)", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const unlinked = (over: Partial<QuestionOrigin>) =>
+      origin({ agent_kind: "codex", agent_session_id: null, ...over });
+    await store.commitNewQuestion(row("linked", 1), item("o1", "linked"));
+    await store.commitNewQuestion(row("open", 2, { origin: unlinked({}) }), item("o2", "open"));
+    // A delivered question still counts: a correction can reopen it after its pane is gone.
+    await store.commitNewQuestion(
+      row("delivered", 3, {
+        origin: unlinked({ agent_kind: "claude" }),
+        local_status: "answered",
+        delivery_status: "terminal-delivered",
+      }),
+      item("o3", "delivered")
+    );
+    await store.commitNewQuestion(
+      row("empty", 4, { origin: unlinked({ agent_session_id: "" }) }),
+      item("o4", "empty")
+    );
+    await store.commitNewQuestion(
+      row("remote", 5, { origin: unlinked({ host_id: "host-remote" }) }),
+      item("o5", "remote")
+    );
+    await store.commitNewQuestion(
+      row("gemini", 6, { origin: unlinked({ agent_kind: "gemini" }) }),
+      item("o6", "gemini")
+    );
+    const columns = (
+      sqlite.prepare("SELECT name FROM pragma_table_info('decisions_questions')").all() as {
+        name: string;
+      }[]
+    )
+      .map((c) => c.name)
+      .filter((name) => name !== "question_id" && name !== "alias");
+    // Ten thousand linked questions that wouldn't even decode: reading one would throw.
+    sqlite
+      .prepare(
+        `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10000)
+         INSERT INTO decisions_questions (question_id, alias, ${columns.join(", ")})
+         SELECT 'history-' || i, 100 + i, ${columns.join(", ")} FROM n, decisions_questions
+         WHERE question_id = 'linked'`
+      )
+      .run();
+    sqlite
+      .prepare("UPDATE decisions_questions SET attachment_digests = 'not json' WHERE question_id LIKE 'history-%'")
+      .run();
+
+    let materialized = 0;
+    const prepare = sqlite.prepare.bind(sqlite);
+    const prepared: string[] = [];
+    vi.spyOn(sqlite, "prepare").mockImplementation(((source: string) => {
+      const statement = prepare(source);
+      if (!/FROM decisions_questions/.test(source)) return statement;
+      prepared.push(source);
+      const all = statement.all.bind(statement);
+      statement.all = ((...args: unknown[]) => {
+        const rows = all(...args) as unknown[];
+        materialized += rows.length;
+        return rows;
+      }) as typeof statement.all;
+      return statement;
+    }) as typeof sqlite.prepare);
+
+    const found = await store.listSessionlessQuestions("host-local", ["claude", "codex"]);
+    expect(found.map((q) => q.question_id)).toEqual(["open", "delivered", "empty"]);
+    expect(materialized).toBe(3);
+    expect(await store.listSessionlessQuestions("host-local", [])).toEqual([]);
+
+    expect(prepared).toHaveLength(1);
+    const plan = (prepare(`EXPLAIN QUERY PLAN ${prepared[0]}`).all("host-local", "claude", "codex") as {
+      detail: string;
+    }[])
+      .map((step) => step.detail)
+      .join("\n");
+    expect(plan).not.toMatch(/^SCAN decisions_questions$/m);
+  });
+
   it("has a question on disk, visible to another connection, by the time its commit resolves", async () => {
     const store = new DaintreeLocalStore(sqlite);
     const other = reader();

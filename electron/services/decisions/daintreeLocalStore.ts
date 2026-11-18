@@ -642,6 +642,30 @@ export class DaintreeLocalStore implements LocalStore {
   }
 
   /**
+   * The questions asked on `hostId` by one of `agentKinds` whose origin names
+   * no session yet, whatever their status, in alias order. Reads
+   * decisions_questions_missing_session_idx, so linked history is never read.
+   */
+  listSessionlessQuestions(
+    hostId: string,
+    agentKinds: readonly string[]
+  ): Promise<QuestionRow[]> {
+    const kinds = [...agentKinds];
+    return this.enqueue("read", () => {
+      if (kinds.length === 0) return [];
+      // Spelled as the index's predicate, which SQLite matches by its form.
+      return (
+        this.st(
+          `SELECT * FROM decisions_questions
+           WHERE origin_host_id = ? AND agent_kind IN (${kinds.map(() => "?").join(", ")})
+             AND (agent_session_id IS NULL OR agent_session_id = '')
+           ORDER BY alias ASC`
+        ).all(hostId, ...kinds) as QuestionRecord[]
+      ).map(fromRecord);
+    });
+  }
+
+  /**
    * Whether any answer or follow-up waits to be typed, or a typed one to be
    * reported to the relay. Reads three partial indexes, so it costs next to
    * nothing when nothing waits. A person's decline (#17234) keeps its row
