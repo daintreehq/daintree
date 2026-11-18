@@ -5127,6 +5127,14 @@ export interface GeneratedIpcInvokeMap {
     args: [sessionId: string];
     result: void;
   };
+  "voice-input:cancel-local-model": {
+    args: [];
+    result: import("../voice.js").LocalSpeechModelStatus;
+  };
+  "voice-input:download-local-model": {
+    args: [];
+    result: import("../voice.js").LocalSpeechModelStatus;
+  };
   "voice-input:flush-paragraph": {
     args: [sessionId: string];
     result: { rawText: string | null };
@@ -5138,6 +5146,10 @@ export interface GeneratedIpcInvokeMap {
   "voice-input:get-live-session": {
     args: [];
     result: import("../voice.js").VoiceLiveSessionUpdate;
+  };
+  "voice-input:get-local-model": {
+    args: [];
+    result: import("../voice.js").LocalSpeechModelStatus;
   };
   "voice-input:is-app-replaced": {
     args: [];
@@ -5167,6 +5179,10 @@ export interface GeneratedIpcInvokeMap {
   "voice-input:publish-details": {
     args: [request: import("../voice.js").VoicePublishDetailsRequest];
     result: boolean;
+  };
+  "voice-input:remove-local-model": {
+    args: [];
+    result: import("../voice.js").LocalSpeechModelStatus;
   };
   "voice-input:restart-replaced-app": {
     args: [];

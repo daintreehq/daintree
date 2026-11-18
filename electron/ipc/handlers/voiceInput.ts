@@ -31,6 +31,7 @@ import {
   type VoiceSessionSnapshot,
   type VoiceRewriteOutcome,
   type LastDictationTerms,
+  type LocalSpeechModelStatus,
   type VoiceKeytermSource,
   type VoiceSentTerm,
   type VoiceSessionEndReason,
@@ -58,8 +59,15 @@ import {
   VOICE_CLEANUP_MODELS_BY_PROVIDER,
 } from "../../../shared/config/voiceCorrectionPolicy.js";
 import type { CorrectionWorktreeContext } from "../../../shared/config/voiceCorrection.js";
-import { cleanupApiKey, hasCleanupKey } from "../../../shared/config/voiceProviders.js";
-import { normalizeVoiceLanguage } from "../../../shared/config/voiceLanguages.js";
+import {
+  cleanupApiKey,
+  hasCleanupKey,
+  transcribesOnDevice,
+} from "../../../shared/config/voiceProviders.js";
+import {
+  normalizeVoiceLanguage,
+  spokenCommandsAvailable,
+} from "../../../shared/config/voiceLanguages.js";
 import {
   assembleTaggedKeyterms,
   NO_PANE_KEYTERM_READS,
@@ -678,7 +686,12 @@ function normalizeSpoken(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-const VALID_TRANSCRIPTION_PROVIDERS: VoiceTranscriptionProvider[] = ["openai", "deepgram", "grok"];
+const VALID_TRANSCRIPTION_PROVIDERS: VoiceTranscriptionProvider[] = [
+  "openai",
+  "deepgram",
+  "grok",
+  "local",
+];
 
 // The only fields setSettings writes. Everything else is refused: `keyterms` is
 // assembled per session, the dictionary and its suggestion queue change only
@@ -1847,8 +1860,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     const commandTerms = commandTargetPromise.then((target) =>
       target ? voiceCommandKeyterms(target.vocabulary, COMMAND_KEYTERM_LIMIT) : []
     );
+    // The on-device model takes no bias terms, so none are gathered for it.
     const keytermsPromise = (
-      hostContext
+      transcribesOnDevice(settings.transcriptionProvider)
+        ? Promise.resolve([])
+        : hostContext
         ? hostContext.then((read) =>
             assembleTaggedKeyterms({
               customDictionary,
@@ -1878,12 +1894,13 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       session.stats.biasTermCount = terms.length;
     });
 
-    // OpenAI Realtime emits spoken dictation commands ("new paragraph",
+    // Every provider writes spoken dictation commands ("new paragraph",
     // "new line", "send it") as literal text; they are rewritten post-hoc,
-    // gated on the session-snapshotted paragraphing strategy.
+    // gated on the session-snapshotted paragraphing strategy. They are
+    // English, so Auto-detect reads them too, whatever the passage's language.
     const spokenCommands =
       settings.paragraphingStrategy === "spoken-command" &&
-      normalizeVoiceLanguage(settings.language) === "en";
+      spokenCommandsAvailable(settings.language);
     // OpenAI's VAD already waits out a long silence, and checks it again,
     // before it ends an utterance; only the short endpoints need more.
     const sendSettleMs =
@@ -3098,6 +3115,50 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
   const handleGetLastTerms = async (): Promise<LastDictationTerms | null> => lastDictationTerms;
 
+  // The on-device model's files. Loaded on first use, so a user who never
+  // picks it pays nothing; every view hears its status from then on.
+  let stopLocalModelBroadcast: (() => void) | null = null;
+  const localSpeech = async () => {
+    const mod = await import("../../services/voice/localSpeech.js");
+    if (!disposed) {
+      stopLocalModelBroadcast ??= mod.onLocalSpeechModelStatus((status) => {
+        for (const wc of getAllAppWebContents()) {
+          if (wc.isDestroyed()) continue;
+          try {
+            wc.send(CHANNELS.VOICE_INPUT_LOCAL_MODEL_STATUS, status);
+          } catch {
+            // A view being torn down misses it; a new one pulls the current status.
+          }
+        }
+      });
+    }
+    return mod;
+  };
+  const handleGetLocalModel = async (): Promise<LocalSpeechModelStatus> =>
+    (await localSpeech()).getLocalSpeechModels().check();
+  const handleDownloadLocalModel = async (): Promise<LocalSpeechModelStatus> => {
+    const models = (await localSpeech()).getLocalSpeechModels();
+    // Minutes long: progress and the outcome arrive on the status push.
+    void models.download();
+    return models.status();
+  };
+  const handleCancelLocalModel = async (): Promise<LocalSpeechModelStatus> => {
+    const models = (await localSpeech()).getLocalSpeechModels();
+    await models.cancel();
+    return models.status();
+  };
+  const handleRemoveLocalModel = async (): Promise<LocalSpeechModelStatus> => {
+    if (liveSession || drainingSession) {
+      throw new AppError({
+        code: "VALIDATION",
+        message: "Stop dictating before removing the on-device model.",
+      });
+    }
+    const mod = await localSpeech();
+    await mod.removeLocalSpeechModel();
+    return mod.getLocalSpeechModels().status();
+  };
+
   const sessionNamespace = defineIpcNamespace({
     name: "voiceInput",
     ops: {
@@ -3150,6 +3211,13 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         VOICE_INPUT_METHOD_CHANNELS.restartReplacedApp,
         handleRestartReplacedApp
       ),
+      getLocalModel: op(VOICE_INPUT_METHOD_CHANNELS.getLocalModel, handleGetLocalModel),
+      downloadLocalModel: op(
+        VOICE_INPUT_METHOD_CHANNELS.downloadLocalModel,
+        handleDownloadLocalModel
+      ),
+      cancelLocalModel: op(VOICE_INPUT_METHOD_CHANNELS.cancelLocalModel, handleCancelLocalModel),
+      removeLocalModel: op(VOICE_INPUT_METHOD_CHANNELS.removeLocalModel, handleRemoveLocalModel),
       prefetchCorrections: opValidated(
         VOICE_INPUT_METHOD_CHANNELS.prefetchCorrections,
         VoiceInputPrefetchCorrectionsSchema,
@@ -3184,6 +3252,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     if (liveSession) endSession(liveSession, "cancelled");
     if (drainingSession) endSession(drainingSession, "cancelled");
     disposed = true;
+    stopLocalModelBroadcast?.();
+    stopLocalModelBroadcast = null;
     for (const release of [...requestHolds]) release();
     requestHolds.clear();
     for (const end of [...cleanupHandoffs]) end();

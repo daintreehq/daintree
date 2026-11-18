@@ -260,6 +260,12 @@ const readerDrainMock = vi.hoisted(() => ({
 
 vi.mock("../../services/canopy/canopyReaderProcess.js", () => readerDrainMock);
 
+const localSpeechDrainMock = vi.hoisted(() => ({
+  shutdownLocalSpeech: vi.fn((_budgetMs: number) => Promise.resolve()),
+}));
+
+vi.mock("../../services/voice/localSpeech.js", () => localSpeechDrainMock);
+
 const closeTelemetryMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
 vi.mock("../../services/TelemetryService.js", () => ({

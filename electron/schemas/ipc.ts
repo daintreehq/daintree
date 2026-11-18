@@ -873,7 +873,7 @@ export const VoicePublishDetailsRequestSchema = z.object({
     locked: z.boolean(),
     wordCount: z.number().int().min(0).max(1_000_000),
     transcript: z.string().max(VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH),
-    provider: z.enum(["openai", "deepgram", "grok"]).nullable(),
+    provider: z.enum(["openai", "deepgram", "grok", "local"]).nullable(),
     clock: z
       .object({
         at: z.number().finite().min(0),

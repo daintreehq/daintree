@@ -83,6 +83,7 @@ import {
   CAPTURE_PERSISTENCE_DRAIN_BUDGET_MS,
   CANOPY_READER_DRAIN_BUDGET_MS,
   CLEANUP_TIMEOUT_MS,
+  LOCAL_SPEECH_DRAIN_BUDGET_MS,
   POST_PTY_TEARDOWN_RESERVE_MS,
   PROJECT_GRACEFUL_KILL_TIMEOUT_MS,
   SHUTDOWN_TAIL_TIMEOUT_MS,
@@ -1122,6 +1123,13 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         .catch((error) => {
           console.warn("[MAIN] Canopy reader drain at quit failed:", error);
         });
+      // The on-device speech process, when one ever started, stops the same
+      // way; a download under way is stopped and resumes next launch.
+      const localSpeechDrain = import("../services/voice/localSpeech.js")
+        .then(({ shutdownLocalSpeech }) => shutdownLocalSpeech(LOCAL_SPEECH_DRAIN_BUDGET_MS))
+        .catch((error) => {
+          console.warn("[MAIN] On-device speech drain at quit failed:", error);
+        });
       const cleanupErr = deps.getCleanupErrorHandlers();
       if (cleanupErr) {
         cleanupErr();
@@ -1212,6 +1220,8 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
       await vadDrain;
       currentPhase = "canopy-reader-drain";
       await readerDrain;
+      currentPhase = "local-speech-drain";
+      await localSpeechDrain;
     });
 
   const timeoutPromise = new Promise<never>((_, reject) => {
