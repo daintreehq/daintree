@@ -1740,10 +1740,12 @@ export function ReviewHubContent({
 
   if (!isOpen) return null;
 
-  const totalChanges =
-    (status?.staged.length ?? 0) +
-    (status?.unstaged.length ?? 0) +
-    (status?.conflicted.length ?? 0);
+  // A partially staged path appears in both sections but is one changed file.
+  const totalChanges = new Set([
+    ...(status?.staged ?? []).map((f) => f.path),
+    ...(status?.unstaged ?? []).map((f) => f.path),
+    ...(status?.conflicted ?? []),
+  ]).size;
   const hasConflicts = (status?.conflicted.length ?? 0) > 0;
   const hasStagedSelection = selectionSection === "staged" && selectedPaths.size > 0;
   const hasUnstagedSelection = selectionSection === "unstaged" && selectedPaths.size > 0;
