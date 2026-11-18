@@ -556,22 +556,26 @@ describe("repoStats", () => {
     });
 
     it("counts each team on its own", async () => {
-      fetchMock().mockImplementation(async () => idPage(3, false));
-      await Promise.all([
+      fetchMock().mockImplementation(async (_url: string, init: RequestInit) => {
+        const { variables } = JSON.parse(String(init.body));
+        return idPage(variables.filter.team.key.eq === "DES" ? 8 : 3, false);
+      });
+      const [eng, des] = await Promise.all([
         linearForgeProvider.repoStats!.getRepoStats(REPO),
         linearForgeProvider.repoStats!.getRepoStats({ ...REPO, repo: "DES" }),
       ]);
+      expect(eng.counts.issueCount).toBe(3);
+      expect(des.counts.issueCount).toBe(8);
       expect(fetchMock()).toHaveBeenCalledTimes(2);
-      const teamOf = (i: number) =>
-        (body(i).variables.filter as { team: { key: { eq: string } } }).team.key.eq;
-      expect([teamOf(0), teamOf(1)].sort()).toEqual(["DES", "ENG"]);
     });
 
     it("doesn't hand a new key's read the old key's count", async () => {
       const pages = heldPages(2);
       const oldRead = linearForgeProvider.repoStats!.getRepoStats(REPO);
       await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
-      linearForgeProvider.setCredentials!({ kind: "bearer", value: "lin_api_other" });
+      // The token alone, without the cache clear `setCredentials` adds: the
+      // key version by itself keeps the counts apart.
+      setMemoryToken("lin_api_other");
       const newRead = linearForgeProvider.repoStats!.getRepoStats(REPO);
 
       await pages.answer(1, idPage(9, false));
@@ -602,16 +606,17 @@ describe("repoStats", () => {
       expect(fetchMock()).toHaveBeenCalledTimes(2);
     });
 
-    it("starts a fresh count for a bypassing read even while one is under way", async () => {
+    it("starts a fresh count for a bypassing read, which an older count never rolls back", async () => {
       const pages = heldPages(2);
       const first = linearForgeProvider.repoStats!.getRepoStats(REPO);
       await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
       const refreshed = linearForgeProvider.repoStats!.getRepoStats(REPO, { bypassCache: true });
 
       await pages.answer(1, idPage(5, false));
-      expect((await refreshed).counts.issueCount).toBe(5);
+      const refreshedSnapshot = await refreshed;
+      expect(refreshedSnapshot.counts.issueCount).toBe(5);
       await pages.answer(0, idPage(3, false));
-      expect((await first).counts.issueCount).toBe(3);
+      expect((await first).counts).toEqual(refreshedSnapshot.counts);
 
       const cached = await linearForgeProvider.repoStats!.getRepoStats(REPO);
       expect(cached).toMatchObject({ source: "memory-cache", counts: { issueCount: 5 } });
@@ -625,6 +630,22 @@ describe("repoStats", () => {
       const refreshed = linearForgeProvider.repoStats!.getRepoStats(REPO, { bypassCache: true });
       await pages.answer(0, idPage(3, false));
       expect((await first).counts.issueCount).toBe(3);
+
+      const joined = linearForgeProvider.repoStats!.getRepoStats(REPO);
+      await pages.answer(1, idPage(5, false));
+
+      expect((await refreshed).counts.issueCount).toBe(5);
+      expect((await joined).counts.issueCount).toBe(5);
+      expect(fetchMock()).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps the refresh under way when the older count fails", async () => {
+      const pages = heldPages(2);
+      const first = linearForgeProvider.repoStats!.getRepoStats(REPO);
+      await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+      const refreshed = linearForgeProvider.repoStats!.getRepoStats(REPO, { bypassCache: true });
+      await pages.answer(0, gql(null, { errors: [{ message: "Linear is down" }] }));
+      await expect(first).rejects.toThrow("Linear is down");
 
       const joined = linearForgeProvider.repoStats!.getRepoStats(REPO);
       await pages.answer(1, idPage(5, false));

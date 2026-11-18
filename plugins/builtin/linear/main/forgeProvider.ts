@@ -382,14 +382,22 @@ async function countOpenIssues(repo: RepoRef, op: Op): Promise<number | null> {
 
 function startIssueCount(repo: RepoRef, op: Op, key: string): Promise<IssueCountRead> {
   const at = Date.now();
+  // Only the count in the slot writes the cache, so while this one is under way
+  // any other entry comes from a count started after it.
+  const cachedAtStart = statsCache.get(key);
   const count: Promise<IssueCountRead> = countOpenIssues(repo, op).then(
     (issueCount) => {
       const read = { at, issueCount };
       if (statsCounts.get(key) === count) {
         statsCounts.delete(key);
         if (isCurrent(op)) statsCache.set(key, read);
+        return read;
       }
-      return read;
+      // The host persists and shows what it's handed, so a superseded count
+      // whose successor already landed hands back that newer answer instead of
+      // rolling its callers back to an older one.
+      const latest = statsCache.get(key);
+      return latest && latest !== cachedAtStart ? latest : read;
     },
     (err: unknown) => {
       if (statsCounts.get(key) === count) statsCounts.delete(key);
@@ -423,7 +431,7 @@ const repoStatsCapability: RepoStatsCapability = {
       };
     }
     // A bypassing read asks for pages read after it, so it never joins a count
-    // already under way; the reads after it join its count instead.
+    // already under way; later reads that miss the cache join its count instead.
     const underWay = opts?.bypassCache ? undefined : statsCounts.get(key);
     const { at, issueCount } = await (underWay ?? startIssueCount(repo, op, key));
     return {
