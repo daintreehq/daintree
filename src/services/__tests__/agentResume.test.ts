@@ -60,7 +60,9 @@ vi.mock("@/store/ccrPresetsStore", () => ({
   useCcrPresetsStore: { getState: () => ({ ccrPresetsByAgent: {} }) },
 }));
 vi.mock("@/store/projectPresetsStore", () => ({
-  useProjectPresetsStore: { getState: () => ({ presetsByAgent: {} }) },
+  useProjectPresetsStore: {
+    getState: () => ({ presetsByAgent: { claude: [{ id: "team" }] }, hydratedProjectId: "a" }),
+  },
 }));
 vi.mock("@shared/config/agentRegistry", () => ({
   getEffectiveAgentConfig: getEffectiveAgentConfigMock,
@@ -211,6 +213,24 @@ describe("reconcileResumeLaunchFlags", () => {
   it("resumes on the agent's own settings when the record names no preset", () => {
     reconcileResumeLaunchFlags(baseSession);
     expect(resolveAgentRuntimeSettingsMock).not.toHaveBeenCalled();
+    expect(reconcileBypassFlagsMock).toHaveBeenCalled();
+  });
+
+  it("keeps the captured permission args when the named preset can't be read", () => {
+    const result = reconcileResumeLaunchFlags({ ...baseSession, agentPresetId: "gone" });
+    expect(reconcileBypassFlagsMock).not.toHaveBeenCalled();
+    expect(result).toEqual(["--dangerously-skip-permissions"]);
+  });
+
+  it("reads project presets only when the store holds the record's own project", () => {
+    reconcileResumeLaunchFlags({ ...baseSession, agentPresetId: "team", projectId: "a" });
+    expect(resolveAgentRuntimeSettingsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ projectPresets: [{ id: "team" }] })
+    );
+    reconcileResumeLaunchFlags({ ...baseSession, agentPresetId: "team", projectId: "b" });
+    expect(resolveAgentRuntimeSettingsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ projectPresets: undefined })
+    );
   });
 });
 

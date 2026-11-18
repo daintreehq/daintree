@@ -94,6 +94,16 @@ describe("reconcileResumeLaunchFlagsWith", () => {
     ]);
   });
 
+  it("keeps the captured permission args when the session's preset can't be read", () => {
+    expect(
+      reconcileResumeLaunchFlagsWith(
+        { agentId: "codex", agentLaunchFlags: ["--no-alt-screen", "--approve-for-me"] },
+        settings({ agents: { codex: { dangerousMode: "on" } } }),
+        null
+      )
+    ).toEqual(["--no-alt-screen", "--approve-for-me", "-c", "tui.whimsy=false"]);
+  });
+
   it("adds no Auto copy beside one the caller's tail carries", () => {
     expect(
       reconcileResumeLaunchFlagsWith(

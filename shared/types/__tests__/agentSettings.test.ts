@@ -2905,6 +2905,21 @@ describe("Auto permission mode (#17435)", () => {
       ]);
     });
 
+    it("reads a flag after a -- terminator as a positional, not as the launch's Auto copy", () => {
+      const positional = ["--", "--approve-for-me"];
+      expect(
+        buildAgentLaunchFlags({ dangerousMode: "auto" }, "codex", { callerArgs: positional })
+      ).toContain("--approve-for-me");
+      expect(
+        reconcilePermissionFlags(["--search"], "codex", "auto", { carriedArgs: positional })
+      ).toEqual(["--search", "--approve-for-me"]);
+      expect(
+        reconcilePermissionFlags(["--approve-for-me"], "codex", "cli-default", {
+          userArgs: positional,
+        })
+      ).toEqual([]);
+    });
+
     it("keeps one copy of the Auto args, and none when the caller's tail carries it", () => {
       const doubled = ["--approve-for-me", "--search", "--approve-for-me"];
       expect(reconcilePermissionFlags(doubled, "codex", "auto")).toEqual([
@@ -2945,6 +2960,7 @@ describe("stripPermissionAutoArgs (#17435)", () => {
     for (const command of [
       "claude --permission-mode auto --model opus",
       "claude --permission-mode 'auto' --model opus",
+      'claude --permission-mode "auto" --model opus',
       "claude --permission-mode=auto --model opus",
     ]) {
       expect(stripPermissionAutoArgs(command, "claude"), command).toBe("claude --model opus");

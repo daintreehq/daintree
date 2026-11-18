@@ -1,7 +1,7 @@
 import {
   buildResumeCommand,
   buildResumeLatestCommand,
-  type AgentSettingsEntry,
+  type AgentSettings,
 } from "@shared/types/agentSettings";
 import { getEffectiveAgentConfig, type AgentPreset } from "@shared/config/agentRegistry";
 import type { AddPanelOptions } from "@shared/types/addPanelOptions";
@@ -28,33 +28,35 @@ export function reconcileResumeLaunchFlags(session: {
   /** The caller's verbatim tail (#13046), re-appended untouched after reconcile. */
   callerLaunchFlags?: string[];
   agentPresetId?: string;
+  projectId?: string | null;
 }): string[] | undefined {
   const settings = useAgentSettingsStore.getState().settings;
-  return reconcileResumeLaunchFlagsWith(
-    session,
-    settings,
-    resumePreset(session.agentId, session.agentPresetId, settings?.agents?.[session.agentId])
-  );
+  return reconcileResumeLaunchFlagsWith(session, settings, resumePreset(session, settings));
 }
 
 /**
- * The preset a record says its session launched on, if this view still has
- * it. A record that names none, or one since deleted, resumes on the agent's
- * own settings, as every record did before (#17435).
+ * The preset a record says its session launched on (#17435): `undefined` when
+ * it names none, so the agent's own settings apply as they always did, and
+ * `null` when it names one this view can't read (deleted, not loaded, or held
+ * for another project), so its captured permission args stay as they are.
  */
 function resumePreset(
-  agentId: string,
-  presetId: string | undefined,
-  entry: AgentSettingsEntry | undefined
-): AgentPreset | undefined {
+  session: { agentId: string; agentPresetId?: string; projectId?: string | null },
+  settings: AgentSettings | null | undefined
+): AgentPreset | null | undefined {
+  const { agentId, agentPresetId: presetId, projectId } = session;
   if (!presetId) return undefined;
-  return resolveAgentRuntimeSettings({
-    agentId,
-    presetId,
-    entry,
-    ccrPresets: useCcrPresetsStore.getState().ccrPresetsByAgent[agentId],
-    projectPresets: useProjectPresetsStore.getState().presetsByAgent[agentId],
-  }).preset;
+  const projectPresets = useProjectPresetsStore.getState();
+  const ownProject = !projectId || projectPresets.hydratedProjectId === projectId;
+  return (
+    resolveAgentRuntimeSettings({
+      agentId,
+      presetId,
+      entry: settings?.agents?.[agentId],
+      ccrPresets: useCcrPresetsStore.getState().ccrPresetsByAgent[agentId],
+      projectPresets: ownProject ? projectPresets.presetsByAgent[agentId] : undefined,
+    }).preset ?? null
+  );
 }
 
 /**
@@ -84,11 +86,7 @@ export function buildResumePanelOptions(
   const agentConfig = getEffectiveAgentConfig(session.agentId);
   if (!agentConfig) return null;
   const resumeFlags = reconcileResumeLaunchFlags(session);
-  const preset = resumePreset(
-    session.agentId,
-    session.agentPresetId,
-    useAgentSettingsStore.getState().settings?.agents?.[session.agentId]
-  );
+  const preset = resumePreset(session, useAgentSettingsStore.getState().settings);
   const command =
     buildResumeCommand(session.agentId, session.sessionId, resumeFlags, baseCommand) ??
     buildResumeLatestCommand(session.agentId, resumeFlags, baseCommand);

@@ -31,10 +31,17 @@ export function reconcileResumeLaunchFlagsWith(
     callerLaunchFlags?: string[];
   },
   settings: AgentSettings | null | undefined,
-  /** The preset the session launched on, when it is known and still exists. */
-  preset?: AgentPreset
+  /**
+   * The preset the session launched on. `null` when the session names one
+   * that can't be read now (deleted, not loaded): its permission args then
+   * stay as captured, rather than taking the agent's own mode in its place.
+   */
+  preset?: AgentPreset | null
 ): string[] {
-  const entry = applyPresetBehaviorOverrides(settings?.agents?.[session.agentId] ?? {}, preset);
+  const entry = applyPresetBehaviorOverrides(
+    settings?.agents?.[session.agentId] ?? {},
+    preset ?? undefined
+  );
   const permissionLevel = resolveEffectivePermissionLevel(
     entry,
     session.agentId,
@@ -48,12 +55,14 @@ export function reconcileResumeLaunchFlagsWith(
   // for a supported agent (each reconcile no-ops for agents without one).
   const reconciled = reconcileDecorationFlags(
     reconcileInlineModeFlag(
-      reconcilePermissionFlags(base, session.agentId, permissionLevel, {
-        bypassArgs: entry.dangerousArgs,
-        pluginBypassArgHistory: getPluginBypassArgHistory(settings, session.agentId),
-        userArgs: userPermissionArgs(entry, preset?.args),
-        carriedArgs: caller,
-      }),
+      preset === null
+        ? base
+        : reconcilePermissionFlags(base, session.agentId, permissionLevel, {
+            bypassArgs: entry.dangerousArgs,
+            pluginBypassArgHistory: getPluginBypassArgHistory(settings, session.agentId),
+            userArgs: userPermissionArgs(entry, preset?.args),
+            carriedArgs: caller,
+          }),
       session.agentId
     ),
     session.agentId,

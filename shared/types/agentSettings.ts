@@ -661,6 +661,16 @@ export function userPermissionArgs(
   return [...(presetArgs ?? []), ...parseLaunchArgs(entry.customFlags)];
 }
 
+/**
+ * The options of an argv list: what comes before a `--` terminator, after
+ * which a token that looks like a flag is a positional argument.
+ */
+function optionArgs(args: readonly string[] | undefined): readonly string[] {
+  if (!args) return [];
+  const end = args.indexOf("--");
+  return end === -1 ? args : args.slice(0, end);
+}
+
 export interface ReconcilePermissionFlagsOptions {
   /** The agent's currently-resolved dangerous args; falls back to {@link getDefaultDangerousArgs}. */
   bypassArgs?: string;
@@ -731,10 +741,10 @@ export function reconcilePermissionFlags(
     autoArgs.length > 0 && bypassGroupAt(flags, index, autoArgs, instruction);
   const keepAuto =
     level === "auto" ||
-    (autoArgs.length > 0 && findTokenSequence(options.userArgs ?? [], autoArgs) !== -1);
+    (autoArgs.length > 0 && findTokenSequence(optionArgs(options.userArgs), autoArgs) !== -1);
   // A copy in the caller's tail is the launch's one copy, so the snapshot keeps none.
   const carried =
-    autoArgs.length > 0 && findTokenSequence(options.carriedArgs ?? [], autoArgs) !== -1;
+    autoArgs.length > 0 && findTokenSequence(optionArgs(options.carriedArgs), autoArgs) !== -1;
   const autoPresent = level === "auto" && (carried || flags.some((_, index) => autoAt(index)));
 
   // The level's args replace the first stripped group in place, preserving flag
@@ -831,8 +841,8 @@ export function generateAgentFlags(
   const permissionArgs = permissionArgsForLevel(level, entry, agentId);
   const alreadyCarried =
     level === "auto" &&
-    (findTokenSequence(customFlags, permissionArgs) !== -1 ||
-      findTokenSequence(options?.carriedArgs ?? [], permissionArgs) !== -1);
+    (findTokenSequence(optionArgs(customFlags), permissionArgs) !== -1 ||
+      findTokenSequence(optionArgs(options?.carriedArgs), permissionArgs) !== -1);
   if (!alreadyCarried) flags.push(...permissionArgs);
   flags.push(...customFlags);
 
