@@ -166,6 +166,24 @@ describe("AddCloudHostDialog lifetime", () => {
     expect(await createAndSend()).toBe(8);
   });
 
+  it("starts with no limit for a provider whose new machines take none by default (#17362)", async () => {
+    const initial = await open({
+      kind: "fixed-at-create",
+      canChangeWhileStopped: true,
+      defaultHours: null,
+    });
+    expect(initial).toContain("It runs until you stop it.");
+    expect(initial).not.toContain("can't be extended while it runs");
+    await choose(lifetimeChoice()!, "4 hours");
+    expect(review()).toContain("4 hours after starting, and that can't be extended");
+    expect(await createAndSend()).toBe(4);
+  });
+
+  it("sends no limit for a provider whose new machines take none, if left alone (#17362)", async () => {
+    await open({ kind: "fixed-at-create", canChangeWhileStopped: true, defaultHours: null });
+    expect(await createAndSend()).toBeNull();
+  });
+
   it("drops the fixed limit's warning once Never is chosen, and sends none", async () => {
     await open({ kind: "fixed-at-create", canChangeWhileStopped: true });
     await choose(lifetimeChoice()!, "Never");

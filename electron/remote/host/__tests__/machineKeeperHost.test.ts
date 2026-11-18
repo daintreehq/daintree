@@ -6,7 +6,9 @@ const driver = vi.hoisted(() => ({
   inspect: null as null | (() => Promise<unknown>),
 }));
 
-vi.mock("electron", () => ({ app: { isPackaged: true } }));
+vi.mock("electron", () => ({
+  app: { isPackaged: true, getPath: () => "/nonexistent/daintree-test-user-data" },
+}));
 vi.mock("../../cloud/boat/boatMachineDriver.js", () => ({
   boatMachineDriver: () => ({
     inspect: () => driver.inspect!(),
@@ -17,14 +19,15 @@ vi.mock("../../cloud/boat/boatMachineDriver.js", () => ({
 }));
 
 import { BOAT_PRODUCTION_API_URL } from "../../cloud/boat/BoatClient.js";
-import { MachineKeeperLinkMethod } from "../../cloud/machineKeeperLink.js";
+import { GUEST_POWER_OFF_METHOD, MachineKeeperLinkMethod } from "../../cloud/machineKeeperLink.js";
+import type { GuestPowerOffSystem } from "../guestPowerOffSystem.js";
 import type { LinkSession } from "../../link/session.js";
 import { _resetRemoteServicesForTest, registerRemoteService } from "../../runtime.js";
 import { installMachineKeeperHost } from "../machineKeeperHost.js";
 
 type Handler = (payload: unknown) => unknown;
 
-function linkedHost() {
+function linkedHost(guestSystem?: GuestPowerOffSystem) {
   const handlers = new Map<
     string,
     { schema: { safeParse(v: unknown): { success: boolean; data?: unknown } }; handler: Handler }
@@ -37,12 +40,15 @@ function linkedHost() {
     onClose: () => () => {},
   } as unknown as LinkSession;
   let listener: ((ctx: { session: LinkSession }) => void) | null = null;
-  const dispose = installMachineKeeperHost({
-    onSession: (next) => {
-      listener = next;
-      return () => (listener = null);
+  const dispose = installMachineKeeperHost(
+    {
+      onSession: (next) => {
+        listener = next;
+        return () => (listener = null);
+      },
     },
-  });
+    guestSystem ? { guestSystem } : {}
+  );
   listener!({ session });
   /** As the link would: the payload checked against the method's schema, then handled. */
   const call = async (method: string, payload: unknown) => {
@@ -110,6 +116,39 @@ describe("installMachineKeeperHost (#17361)", () => {
     release!();
     await armed;
     await expect(status).resolves.toMatchObject({ grantId: "mk_1" });
+    host.dispose();
+  });
+
+  it("takes the power-off permission for an EC2 or Compute Engine machine, and nothing else, over the link", async () => {
+    const system = {
+      unsupported: () => null,
+      verifyIdentity: vi.fn(async () => ({ ok: true as const })),
+      probePowerOff: async () => null,
+      powerOff: vi.fn(async () => ({ kind: "accepted" as const })),
+      bootId: async () => "boot-1",
+      loadArm: async () => null,
+      saveArm: async () => {},
+    } satisfies GuestPowerOffSystem;
+    const host = linkedHost(system);
+    const target = {
+      provider: "aws",
+      accountId: "123456789012",
+      region: "eu-west-1",
+      instanceId: "i-0abc0000000000001",
+    };
+    await expect(
+      host.call(GUEST_POWER_OFF_METHOD, { target, enabled: true })
+    ).resolves.toEqual({ armed: true, problem: null });
+    // Anything that could carry a credential, or a machine named loosely, is turned away by the schema.
+    for (const bad of [
+      { target, enabled: true, secret: "x" },
+      { target: { ...target, accessKeyId: "AKIA" }, enabled: true },
+      { target: { ...target, instanceId: "i-../../etc" }, enabled: true },
+      { target: { ...target, provider: "boat" }, enabled: true },
+    ]) {
+      await expect(host.call(GUEST_POWER_OFF_METHOD, bad)).rejects.toThrow("VALIDATION");
+    }
+    expect(system.verifyIdentity).toHaveBeenCalledTimes(1);
     host.dispose();
   });
 });

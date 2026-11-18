@@ -195,6 +195,7 @@ async function setup(
     sshKey?: "at-create" | "after-create";
     onMachineStarted?: (hostId: string) => void;
     machineKeys?: ConstructorParameters<typeof CloudHostLifecycle>[0]["machineKeys"];
+    guestPowerOff?: ConstructorParameters<typeof CloudHostLifecycle>[0]["guestPowerOff"];
     worktreeGone?: (worktreePath: string) => Promise<boolean | null>;
     onWorktreeRemoved?: (listener: (worktreeId: string) => void) => () => void;
   } = {}
@@ -298,6 +299,7 @@ async function setup(
       now: options.now,
       findCommand: options.findCommand,
       machineKeys: options.machineKeys,
+      guestPowerOff: options.guestPowerOff,
       worktreeGone: options.worktreeGone,
       onWorktreeRemoved: options.onWorktreeRemoved,
     });
@@ -2467,6 +2469,33 @@ describe("CloudHostLifecycle lifetime keeper", () => {
     await expect(deleting).rejects.toThrow();
     expect(store.bindings()[0]!.intent).toBe("run");
     expect(provider.stop).not.toHaveBeenCalled();
+  });
+});
+
+describe("CloudHostLifecycle guest power-off (#17362)", () => {
+  it("shows why a machine can't power itself off once idle, and checks linked machines on its keeper pass", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const guestPowerOff = {
+        problemFor: vi.fn((): string | null => "Needs a password to power off."),
+        tick: vi.fn(async () => {}),
+      };
+      const env = await setup({ machine: "running" }, { guestPowerOff });
+      env.lifecycle.start();
+      await env.lifecycle.importMachine({
+        accountId: env.store.accounts()[0]!.id,
+        resourceId: "bx_23456789",
+        name: "build",
+      });
+      expect(env.lifecycle.statuses()[0]!.selfStopProblem).toBe("Needs a password to power off.");
+      guestPowerOff.problemFor.mockReturnValue(null);
+      expect(env.lifecycle.statuses()[0]!.selfStopProblem).toBeNull();
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(guestPowerOff.tick).toHaveBeenCalled();
+      env.lifecycle.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
