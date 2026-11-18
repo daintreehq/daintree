@@ -77,7 +77,7 @@ function writeConflictSet(dir: string, count: number): string[] {
 
 function expectedEntry(name: string): ConflictMarkerScanEntry {
   const i = Number(/file-(\d+)\.ts$/.exec(name)![1]);
-  return { path: name, hunkCount: (i % 3) + 1, firstMarkerLine: i + 1 };
+  return { path: name, hunkCount: (i % 3) + 1, hasMarkers: true, firstMarkerLine: i + 1 };
 }
 
 /**
@@ -156,7 +156,9 @@ describe("git-write conflict marker scan", () => {
 
     const [largeResults, single] = await Promise.all([scan(large), scan(["one.ts"])]);
 
-    expect(single).toEqual([{ path: "one.ts", hunkCount: 1, firstMarkerLine: 3 }]);
+    expect(single).toEqual([
+      { path: "one.ts", hunkCount: 1, hasMarkers: true, firstMarkerLine: 3 },
+    ]);
     expect(largeResults).toEqual(large.map(expectedEntry));
     // It queued behind the large scan's current file, not its whole list.
     expect(files.statted.indexOf("one.ts")).toBe(1);
@@ -195,7 +197,7 @@ describe("git-write conflict marker scan", () => {
       );
 
       expect(await scanIn(other, ["one.ts"])).toEqual([
-        { path: "one.ts", hunkCount: 1, firstMarkerLine: 3 },
+        { path: "one.ts", hunkCount: 1, hasMarkers: true, firstMarkerLine: 3 },
       ]);
       expect(stalledSettled).toBe(false);
       await stuckEntered;
@@ -210,7 +212,7 @@ describe("git-write conflict marker scan", () => {
       // Once the mount answers, the worktree's reads resume.
       await releaseStuck();
       expect(await scan(["after.ts"])).toEqual([
-        { path: "after.ts", hunkCount: 1, firstMarkerLine: 2 },
+        { path: "after.ts", hunkCount: 1, hasMarkers: true, firstMarkerLine: 2 },
       ]);
     }
   );
@@ -252,16 +254,16 @@ describe("git-write conflict marker scan", () => {
         "h/at-cap.ts",
       ])
     ).toEqual([
-      { path: "a/early.ts", hunkCount: 2, firstMarkerLine: 5 },
-      { path: "missing.ts", hunkCount: null, firstMarkerLine: null },
-      { path: "b/bom.ts", hunkCount: 1, firstMarkerLine: 1 },
-      { path: "../outside.ts", hunkCount: null, firstMarkerLine: null },
-      { path: "c/clean.ts", hunkCount: 0, firstMarkerLine: null },
-      { path: "d/big.ts", hunkCount: null, firstMarkerLine: null },
-      { path: "e/dir", hunkCount: null, firstMarkerLine: null },
-      { path: "f/crlf.ts", hunkCount: 3, firstMarkerLine: 3 },
-      { path: "g/late.ts", hunkCount: 1, firstMarkerLine: 10 },
-      { path: "h/at-cap.ts", hunkCount: 0, firstMarkerLine: null },
+      { path: "a/early.ts", hunkCount: 2, hasMarkers: true, firstMarkerLine: 5 },
+      { path: "missing.ts", hunkCount: null, hasMarkers: null, firstMarkerLine: null },
+      { path: "b/bom.ts", hunkCount: 1, hasMarkers: true, firstMarkerLine: 1 },
+      { path: "../outside.ts", hunkCount: null, hasMarkers: null, firstMarkerLine: null },
+      { path: "c/clean.ts", hunkCount: 0, hasMarkers: false, firstMarkerLine: null },
+      { path: "d/big.ts", hunkCount: null, hasMarkers: null, firstMarkerLine: null },
+      { path: "e/dir", hunkCount: null, hasMarkers: null, firstMarkerLine: null },
+      { path: "f/crlf.ts", hunkCount: 3, hasMarkers: true, firstMarkerLine: 3 },
+      { path: "g/late.ts", hunkCount: 1, hasMarkers: true, firstMarkerLine: 10 },
+      { path: "h/at-cap.ts", hunkCount: 0, hasMarkers: false, firstMarkerLine: null },
     ]);
     expect(read.sort()).toEqual([
       "a/early.ts",
