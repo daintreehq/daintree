@@ -52,10 +52,13 @@ export interface PluginCloudProviderRuntime {
   isActivated(pluginId: string): boolean;
   /** Why `providerId`, which no loaded plugin declares now, can't be used. */
   unavailableReason(pluginId: string, providerId: CloudProviderId): string;
+  /** Why the plugin's worker failed to start this session, or null when it hasn't. */
+  startFailure(pluginId: string): string | null;
 }
 
 interface Bound {
-  pluginId: string;
+  /** The declaration it was bound under: a reload's fresh one never reaches it. */
+  declaration: PluginCloudProviderDeclaration;
   binding: PluginCloudProviderBinding;
 }
 
@@ -92,11 +95,8 @@ export function publishPluginCloudProviders(
   if (declarations.length === 0 && !DECLARATIONS.has(pluginId)) return;
   if (declarations.length === 0) DECLARATIONS.delete(pluginId);
   else DECLARATIONS.set(pluginId, declarations);
-  for (const [providerId, bound] of [...BINDINGS]) {
-    if (bound.pluginId === pluginId && !declarations.some((d) => d.providerId === providerId)) {
-      BINDINGS.delete(providerId);
-    }
-  }
+  // Every declaration is new, so nothing bound under the old ones answers for them.
+  unbindPluginCloudProviders(pluginId);
   notify();
 }
 
@@ -125,7 +125,7 @@ export function bindPluginCloudProvider(
   id: string,
   impl: CloudProviderImpl
 ): () => void {
-  const declaration = declarationFor(pluginId, id);
+  const declaration = typeof id === "string" ? declarationFor(pluginId, id) : undefined;
   if (!declaration) {
     throw new Error(`"${id}" is not declared in contributes.cloudProviders`);
   }
@@ -160,7 +160,7 @@ export function bindPluginCloudProvider(
       }
     },
   };
-  const bound: Bound = { pluginId, binding };
+  const bound: Bound = { declaration, binding };
   BINDINGS.set(declaration.providerId, bound);
   return () => {
     if (BINDINGS.get(declaration.providerId) === bound) BINDINGS.delete(declaration.providerId);
@@ -170,14 +170,19 @@ export function bindPluginCloudProvider(
 /** Drop every binding `pluginId` made: its worker stopped, or the plugin unloaded. */
 export function unbindPluginCloudProviders(pluginId: string): void {
   for (const [providerId, bound] of [...BINDINGS]) {
-    if (bound.pluginId === pluginId) BINDINGS.delete(providerId);
+    if (bound.declaration.pluginId === pluginId) BINDINGS.delete(providerId);
   }
 }
 
+/**
+ * The impl bound for `declaration`, and only for that declaration: credentials
+ * checked against one load's manifest never reach an impl bound under a later one.
+ */
 export function pluginCloudProviderBinding(
-  providerId: CloudProviderId
+  declaration: PluginCloudProviderDeclaration
 ): PluginCloudProviderBinding | undefined {
-  return BINDINGS.get(providerId)?.binding;
+  const bound = BINDINGS.get(declaration.providerId);
+  return bound?.declaration === declaration ? bound.binding : undefined;
 }
 
 export function setPluginCloudProviderRuntime(next: PluginCloudProviderRuntime | null): void {

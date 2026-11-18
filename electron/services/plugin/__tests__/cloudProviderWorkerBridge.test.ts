@@ -11,6 +11,7 @@ import { PluginDevWorkerHostProxy } from "../pluginDevWorkerHostProxy.js";
 import {
   bindPluginCloudProvider,
   clearPluginCloudProviders,
+  listPluginCloudProviders,
   pluginCloudProviderBinding,
   publishPluginCloudProviders,
   type PluginCloudProviderRuntime,
@@ -26,7 +27,6 @@ import type { PluginHostApi } from "../../../../shared/types/plugin.js";
 const flush = () => new Promise((r) => setImmediate(r));
 
 const PLUGIN_ID = "acme.devboxes";
-const PROVIDER_ID = "acme.devboxes.devbox";
 
 const IDENTITY = {
   instanceId: PLUGIN_ID,
@@ -212,16 +212,16 @@ async function connected() {
     ),
   };
   const workerHost = new FakeWorkerHost();
-  new PluginDevWorkerMainBridge({
+  const bridge = new PluginDevWorkerMainBridge({
     pluginId: PLUGIN_ID,
     host: host as any,
     workerHost: workerHost as any,
     getCapabilities: () => [],
     clearPriorRegistrations: vi.fn(),
     onActivationResult: vi.fn(),
-  })
-    .waitForActivation()
-    .catch(() => {});
+  });
+  const activation = bridge.waitForActivation();
+  activation.catch(() => {});
   const proxy = new PluginDevWorkerHostProxy(
     PLUGIN_ID,
     (msg) => workerHost.emit("worker-message", msg),
@@ -232,17 +232,25 @@ async function connected() {
   const plugin = sampleDevboxPlugin();
   await plugin.activate(proxy.host);
   await flush();
+  /** What the worker posts once its activate() has returned. */
+  const activated = () =>
+    workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
+  activated();
+  await activation;
 
   const runtime: PluginCloudProviderRuntime = {
     activate: vi.fn(async () => {}),
     isActivated: () => true,
     unavailableReason: () => "unused",
+    startFailure: () => null,
   };
-  const provider = new PluginCloudProvider(
-    { pluginId: PLUGIN_ID, providerId: PROVIDER_ID, contribution: DEVBOX },
-    { runtime: () => runtime, binding: pluginCloudProviderBinding }
-  );
-  return { plugin, provider, workerHost, host };
+  // The declaration the cloud runtime registers from, which bindings answer for.
+  const [declaration] = listPluginCloudProviders();
+  const provider = new PluginCloudProvider(declaration!, {
+    runtime: () => runtime,
+    binding: pluginCloudProviderBinding,
+  });
+  return { plugin, provider, workerHost, host, proxy, declaration: declaration!, activated };
 }
 
 const credentials = (signal?: AbortSignal) => ({
@@ -256,7 +264,7 @@ afterEach(() => clearPluginCloudProviders());
 
 describe("a plugin's cloud provider over the worker port", () => {
   it("checks, creates, starts, stops and deletes a machine on the plugin's backend", async () => {
-    const { plugin, provider, host } = await connected();
+    const { plugin, provider, host, workerHost } = await connected();
     expect(host.registerCloudProvider).toHaveBeenCalledTimes(1);
 
     await expect(
@@ -275,7 +283,7 @@ describe("a plugin's cloud provider over the worker port", () => {
       name: "build",
       machineType: "small",
       lifetimeSeconds: null,
-      provisioning: {},
+      provisioning: { location: null, image: null, network: null },
       labels: { "daintree-binding": "cb_1" },
       idempotencyKey: "key-1",
       publicKey: "ssh-ed25519 AAAAC3Nza test",
@@ -287,8 +295,12 @@ describe("a plugin's cloud provider over the worker port", () => {
       resourceId: "dbx-1",
     });
     expect(plugin.machines.size).toBe(1);
-    // Only the account's own set and scope crossed, without the caller's signal.
-    expect(plugin.seen.at(-1)!.credentials).toMatchObject({
+    // Only the account's own set and scope crossed; the signal the impl got is its own.
+    const createInvokes = workerHost.sent.filter(
+      (msg) =>
+        msg.type === "invoke" && msg.kind === "cloud-provider-method" && msg.method === "create"
+    );
+    expect(createInvokes.at(-1).args[0]).toEqual({
       values: { token: "good-token" },
       scopeId: "me",
       apiUrl: "https://api.devbox.example",
@@ -331,7 +343,7 @@ describe("a plugin's cloud provider over the worker port", () => {
   });
 
   it("surfaces a crashed worker as an unreachable provider on the call, and drops its binding", async () => {
-    const { plugin, provider, workerHost } = await connected();
+    const { plugin, provider, workerHost, declaration } = await connected();
     plugin.impl.stop = () => new Promise(() => {});
     const pending = provider.stop(credentials(), "dbx-1").catch((e: unknown) => e);
     await flush();
@@ -341,7 +353,7 @@ describe("a plugin's cloud provider over the worker port", () => {
       code: "provider-unreachable",
       message: "Couldn't reach Devbox: the acme.devboxes plugin stopped before it answered.",
     });
-    expect(pluginCloudProviderBinding(PROVIDER_ID)).toBeUndefined();
+    expect(pluginCloudProviderBinding(declaration)).toBeUndefined();
 
     // Until a replacement registers it again, a call says so rather than hanging.
     const next = await provider.validate(credentials()).catch((e: unknown) => e);
@@ -373,6 +385,50 @@ describe("a plugin's cloud provider over the worker port", () => {
     expect(posted.filter((msg) => msg.type === "invoke-result")).toEqual([]);
   });
 
+  it("sends nothing to a respawned worker until its activation commits", async () => {
+    const { plugin, provider, workerHost, proxy, activated } = await connected();
+    workerHost.emit("exit", 1, false);
+    workerHost.emit("ready");
+    // The replacement binds again from inside its activate(), which hasn't returned yet.
+    const stop = vi.spyOn(plugin.impl, "stop");
+    await plugin.activate(proxy.host);
+    await flush();
+    const early = await provider.stop(credentials(), "dbx-1").catch((e: unknown) => e);
+    expect(provider.describeError(early).code).toBe("provider-unreachable");
+    expect(stop).not.toHaveBeenCalled();
+    expect(workerHost.sent.filter((msg) => msg.type === "invoke" && msg.method === "stop")).toEqual(
+      []
+    );
+
+    activated();
+    await flush();
+    const late = await provider.stop(credentials(), "dbx-1").catch((e: unknown) => e);
+    // It reached the backend now, which has no such machine.
+    expect(provider.describeError(late).code).toBe("not-found");
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels only the call whose caller gave up", async () => {
+    const { plugin, provider } = await connected();
+    const signals: AbortSignal[] = [];
+    const answers: (() => void)[] = [];
+    plugin.impl.rename = (callCredentials) => {
+      signals.push(callCredentials.signal);
+      return new Promise<void>((resolve) => answers.push(resolve));
+    };
+    const first = new AbortController();
+    const cancelled = provider.rename(credentials(first.signal), "dbx-1", "a");
+    const kept = provider.rename(credentials(), "dbx-1", "b");
+    await flush();
+    expect(signals).toHaveLength(2);
+    first.abort(new Error("closed"));
+    await expect(cancelled).rejects.toThrow("closed");
+    expect(signals[0]!.aborted).toBe(true);
+    expect(signals[1]!.aborted).toBe(false);
+    answers[1]!();
+    await expect(kept).resolves.toBeUndefined();
+  });
+
   it("refuses a provider whose impl lacks what its declaration needs, failing the registration", async () => {
     publishPluginCloudProviders(PLUGIN_ID, [DEVBOX]);
     const host = {
@@ -402,7 +458,7 @@ describe("a plugin's cloud provider over the worker port", () => {
     const { sshAccess: _dropped, ...withoutSshAccess } = impl;
     await proxy.host.registerCloudProvider({ id: "devbox" }, withoutSshAccess as CloudProviderImpl);
     await flush();
-    expect(pluginCloudProviderBinding(PROVIDER_ID)).toBeUndefined();
+    expect(pluginCloudProviderBinding(listPluginCloudProviders()[0]!)).toBeUndefined();
     expect(workerHost.sent).toContainEqual(
       expect.objectContaining({
         type: "register-error",

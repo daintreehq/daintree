@@ -486,7 +486,12 @@ export function buildContributionsHostApi(
           `Plugin "${pluginId}" host revoked: registerCloudProvider called after activate() returned or timed out`
         );
       }
-      if (!descriptor || typeof descriptor !== "object" || typeof descriptor.id !== "string") {
+      if (
+        !descriptor ||
+        typeof descriptor !== "object" ||
+        typeof descriptor.id !== "string" ||
+        descriptor.id.length === 0
+      ) {
         throw new Error(
           `Plugin "${pluginId}" registerCloudProvider: descriptor.id must be a non-empty string`
         );
@@ -505,7 +510,8 @@ export function buildContributionsHostApi(
         dispose = bindPluginCloudProvider(pluginId, descriptor.id, impl);
       } catch (err) {
         throw new Error(
-          `Plugin "${pluginId}" registerCloudProvider: ${formatErrorMessage(err, "refused")}`
+          `Plugin "${pluginId}" registerCloudProvider: ${formatErrorMessage(err, "refused")}`,
+          { cause: err }
         );
       }
       // Like the delete notes check, not tracked with event subscriptions: those

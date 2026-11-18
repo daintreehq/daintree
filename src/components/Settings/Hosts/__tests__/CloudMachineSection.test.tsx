@@ -704,3 +704,25 @@ describe("CloudMachineSection with its worktree's delete (#17360)", () => {
     expect(notice()).toBeNull();
   });
 });
+
+describe("CloudMachineSection while its provider is missing", () => {
+  it("says why beside an unconfirmed create, and offers no Retry that couldn't work", () => {
+    const interrupted = status({
+      operation: null,
+      lastError: {
+        code: "outcome-unknown",
+        message: "Boat didn't confirm the machine. Retry looks for it before creating another.",
+        at: 1,
+      },
+    });
+    show({ ...interrupted, providerUnavailable: "Its plugin is turned off." });
+    const alert = screen.getByRole("alert").textContent ?? "";
+    expect(alert).toContain("Its plugin is turned off.");
+    expect(alert).toContain("didn't confirm the machine");
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    cleanup();
+
+    show(interrupted);
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+});

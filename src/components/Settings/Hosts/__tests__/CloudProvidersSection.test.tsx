@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { CloudAccountSummary, CloudHostsSnapshot } from "@shared/types/cloudHosts";
 import { BOAT_PROVIDER, provider } from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
 
@@ -48,11 +48,14 @@ afterEach(() => {
 
 describe("CloudProvidersSection", () => {
   it("connects straight to Daintree's own provider, never offering a plugin's", () => {
-    cloud.snapshot = { providers: [BOAT_PROVIDER, PLUGIN], accounts: [account()], hosts: [] };
+    cloud.snapshot = { providers: [PLUGIN, BOAT_PROVIDER], accounts: [account()], hosts: [] };
     render(<CloudProvidersSection />);
     // One provider to connect is a button, not a menu naming the plugin's too.
     const connect = screen.getByTestId("cloud-connect-account");
     expect(connect.getAttribute("aria-haspopup")).toBeNull();
+    fireEvent.click(connect);
+    expect(screen.getByText("Connect Boat account")).toBeTruthy();
+    expect(screen.queryByText("Connect Droplets account")).toBeNull();
   });
 
   it("offers no Connect when only a plugin's provider is there", () => {

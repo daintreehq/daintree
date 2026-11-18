@@ -22,13 +22,22 @@ const LIVE_HOST: PluginCloudProviderHost = {
   binding: pluginCloudProviderBinding,
 };
 
+/** The origin an account is tied to: a manifest that adds or drops a trailing slash names the same one. */
+function canonicalOrigin(apiUrl: string): string {
+  try {
+    return new URL(apiUrl).origin;
+  } catch {
+    return apiUrl;
+  }
+}
+
 /**
  * Keeps `providers` holding one provider per cloud provider a loaded plugin
- * declares (#17351): registered when the plugin loads, gone when it unloads,
- * and replaced when a reload changes the declaration. Accounts and hosts of a
- * provider that isn't registered stay, read as unavailable with the plugin
- * service's reason. `statusChanged` hears a change that registered nothing
- * but may have changed a reason.
+ * declares (#17351): registered when the plugin loads, gone when it unloads
+ * or its worker fails to start, and replaced when a reload changes the
+ * declaration. Accounts and hosts of a provider that isn't registered stay,
+ * read as unavailable with the reason. `statusChanged` hears a change that
+ * registered nothing but may have changed a reason.
  */
 export function watchPluginCloudProviders(params: {
   providers: CloudProviderRegistry;
@@ -45,6 +54,8 @@ export function watchPluginCloudProviders(params: {
     CloudProviderId,
     { declaration: PluginCloudProviderDeclaration; reason: string }
   >();
+  /** Declarations whose plugin failed to start this session, with why; gone when it starts. */
+  const failing = new Map<CloudProviderId, string>();
   let disposed = false;
 
   const sync = () => {
@@ -52,9 +63,20 @@ export function watchPluginCloudProviders(params: {
     const current = new Map(
       listPluginCloudProviders().map((declaration) => [declaration.providerId, declaration])
     );
+    const runtime = host.runtime();
+    failing.clear();
+    for (const declaration of current.values()) {
+      const failure = runtime?.startFailure(declaration.pluginId) ?? null;
+      if (failure !== null) {
+        failing.set(
+          declaration.providerId,
+          `Its cloud provider comes from the ${declaration.pluginId} plugin, which failed to start: ${failure}`
+        );
+      }
+    }
     let changed = false;
     for (const [providerId, entry] of [...registered]) {
-      if (current.get(providerId) === entry.declaration) continue;
+      if (current.get(providerId) === entry.declaration && !failing.has(providerId)) continue;
       registered.delete(providerId);
       entry.dispose();
       changed = true;
@@ -64,11 +86,12 @@ export function watchPluginCloudProviders(params: {
     }
     for (const declaration of current.values()) {
       const { providerId } = declaration;
-      if (registered.has(providerId) || refused.has(providerId)) continue;
+      if (registered.has(providerId) || refused.has(providerId) || failing.has(providerId))
+        continue;
       try {
         const dispose = params.providers.register(new PluginCloudProvider(declaration, host), {
           owner: { kind: "plugin", pluginId: declaration.pluginId },
-          apiUrl: declaration.contribution.apiUrl,
+          apiUrl: canonicalOrigin(declaration.contribution.apiUrl),
         });
         registered.set(providerId, { declaration, dispose });
         changed = true;
@@ -88,7 +111,9 @@ export function watchPluginCloudProviders(params: {
   sync();
   return {
     unavailableReason: (providerId) =>
-      refused.get(providerId)?.reason ?? pluginCloudProviderUnavailableReason(providerId),
+      refused.get(providerId)?.reason ??
+      failing.get(providerId) ??
+      pluginCloudProviderUnavailableReason(providerId),
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -96,6 +121,7 @@ export function watchPluginCloudProviders(params: {
       for (const entry of registered.values()) entry.dispose();
       registered.clear();
       refused.clear();
+      failing.clear();
     },
   };
 }

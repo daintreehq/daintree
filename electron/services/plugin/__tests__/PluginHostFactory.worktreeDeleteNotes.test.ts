@@ -47,6 +47,7 @@ import {
 import type { LoadedPlugin } from "../PluginServiceTypes.js";
 import {
   clearPluginCloudProviders,
+  listPluginCloudProviders,
   pluginCloudProviderBinding,
   publishPluginCloudProviders,
 } from "../pluginCloudProviders.js";
@@ -270,9 +271,9 @@ describe("host.registerCloudProvider (#17351)", () => {
       /has no sshAccess/
     );
     const dispose = await host.registerCloudProvider({ id: "ec2" }, providerImpl());
-    expect(pluginCloudProviderBinding("acme.clouds.ec2")).toBeDefined();
+    expect(pluginCloudProviderBinding(listPluginCloudProviders()[0]!)).toBeDefined();
     dispose();
-    expect(pluginCloudProviderBinding("acme.clouds.ec2")).toBeUndefined();
+    expect(pluginCloudProviderBinding(listPluginCloudProviders()[0]!)).toBeUndefined();
   });
 
   it("refuses a project's plugin, and a host past activation", () => {
@@ -285,6 +286,6 @@ describe("host.registerCloudProvider (#17351)", () => {
     const { host, revoke } = createHost(deps, "acme.clouds", UNBOUND_PLUGIN_HOST_BINDING);
     revoke();
     expect(() => host.registerCloudProvider({ id: "ec2" }, providerImpl())).toThrow(/host revoked/);
-    expect(pluginCloudProviderBinding("acme.clouds.ec2")).toBeUndefined();
+    expect(pluginCloudProviderBinding(listPluginCloudProviders()[0]!)).toBeUndefined();
   });
 });

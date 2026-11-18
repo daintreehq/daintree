@@ -100,7 +100,7 @@ A plugin declares at most 8 providers. The manifest is checked when the plugin l
 "tunnel": { "command": "aws", "args": ["ssm", "start-session", "--target", "%h"], "installUrl": "https://aws.amazon.com/cli/" }
 ```
 
-`command` is a bare executable name Daintree finds on the person's `PATH`; `args` are plain words, or one of ssh's tokens `%h`, `%p`, `%r` and `%n`, each a whole argument. Nothing else reaches the `ProxyCommand` line. When the command isn't installed, Daintree says so beside the machine and links `installUrl`.
+With a tunnel, trust comes from it (`"provider-tunnel"`) or from your API (`"pinned-from-api"`); a key confirmed on first connect needs a direct transport, and the manifest refuses the combination. `command` is a bare executable name Daintree finds on the person's `PATH`; `args` are plain words, or one of ssh's tokens `%h`, `%p`, `%r` and `%n`, each a whole argument. Nothing else reaches the `ProxyCommand` line. When the command isn't installed, Daintree says so beside the machine and links `installUrl`.
 
 ## Implementing it
 
@@ -171,7 +171,7 @@ Every method except `checkCredentials` takes the account's `credentials` first: 
 | `authorizeSsh(credentials, resourceId, publicKey)` | Required for `sshKey: "after-create"`: put the key on the machine | `{ user, endpoint, hostKey }` |
 | `sshAccess` | Required for `sshKey: "at-create"`: the key went with `create` (`request.publicKey`) | `{ user, endpoint, hostKey }` |
 
-`registerCloudProvider` throws when the id isn't declared, or the impl lacks a method its declaration needs, and the plugin's activation fails with that message. It is revoke-guarded: call it during `activate()`. Re-registering the same id replaces the binding.
+Main checks the registration against the manifest: an id that isn't declared, or an impl missing a method its declaration needs, is refused, and the plugin's activation fails with that message (in the worker the `await` itself still resolves; the failure is the activation's). It is revoke-guarded: call it during `activate()`. Re-registering the same id replaces the binding. Calls reach the impl only once the activation that bound it has finished: a worker that crashed and is starting again answers nothing until its own `activate()` returns.
 
 ### Each call
 
@@ -194,14 +194,14 @@ A crash of the worker, a call that misses its deadline, a plugin that didn't sta
 
 ### What Daintree checks
 
-Your answers cross a process boundary, and Daintree reads only what it can use. A machine without a `resourceId` or with a `machine` state it doesn't know, a catalog without a list of machine types, or billing scopes without ids are refused as an answer Daintree can't read (`failed`). A field that is merely odd (a timestamp that doesn't parse, a non-string label) reads as unknown. An answer about a machine other than the one asked about is refused. An SSH address is checked before it's written into any ssh configuration, and a host key is pinned only for `"pinned-from-api"`. One answer is at most 1 MB.
+Your answers cross a process boundary, and Daintree reads only what it can use. A machine without a `resourceId`, with a `machine` state it doesn't know, or without real booleans for `dataExpired`, `snapshotsDisabled` and `restricted`, a catalog without a list of machine types, or billing scopes without ids are refused as an answer Daintree can't read (`failed`). A field the contract lets be null may be left out and reads as unknown, but one that is there with the wrong shape (a timestamp that doesn't parse, a lifetime that isn't a number, an identity that isn't a string or `null`) fails the whole answer: null means something, such as no deadline, that a malformed value doesn't. Labels beyond the first 64 are dropped, except Daintree's own (`daintree-*`). An answer about a machine other than the one asked about is refused. If an answer can't be serialized, the call fails with no code, so a create that got that far is looked for rather than retried as refused. An SSH address is checked before it's written into any ssh configuration, and a host key is pinned only for `"pinned-from-api"`. One answer is at most 1 MB.
 
 ## When the provider isn't there
 
 Accounts and machines are kept whatever happens to the plugin. While its provider isn't registered, they're listed as unavailable with the reason, and nothing is asked of the provider:
 
 - the plugin is turned off, or Daintree blocked it;
-- it failed to load (the message is its load error);
+- it failed to load (the message is its load error), or its worker failed to start this session (the message is why; it comes back once the plugin starts again, from Settings → Plugins or anything else that starts it);
 - it isn't installed, or a newer version no longer declares the provider.
 
 A plugin that is installed and turned on but not running isn't unavailable: its next call starts it. When the plugin is back, its provider registers again and the accounts and machines pick up where they were, with no new connect.

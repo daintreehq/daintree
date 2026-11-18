@@ -98,7 +98,8 @@ function tunnelProblem(tunnel: CloudSshTunnelCommand): string | null {
 /**
  * Why a provider's SSH declaration can't be used, or null when it can. Only
  * a provider's own tunnel can stand in for a pinned host key, so trust in the
- * tunnel needs one, and a direct dial never declares one.
+ * tunnel needs one, a direct dial never declares one, and a key confirmed on
+ * first connect is confirmed on a direct dial.
  */
 export function sshDeclarationProblem(
   capabilities: Pick<CloudProviderCapabilities, "sshTrust" | "transport" | "tunnel">
@@ -115,5 +116,9 @@ export function sshDeclarationProblem(
     return "Trusting the API's key or a confirmation needs a direct transport";
   }
   if (!tunnel) return "A provider-command transport needs a tunnel";
+  // The lifecycle can't put a key in front of the person through a tunnel yet, so every dial would fail.
+  if (sshTrust === "confirm-on-first-connect") {
+    return "Confirming a host key on first connect needs a direct transport";
+  }
   return tunnelProblem(tunnel);
 }

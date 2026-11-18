@@ -572,7 +572,8 @@ describe("CloudAccountService and a plugin's provider", () => {
   it("connects no account for it, before anything entered is read, checked or kept", async () => {
     const provider = fieldsProvider("acme.clouds.ec2", TWO_SECRETS);
     const { accounts, vault } = service({ provider });
-    const values = { accessKeyId: "AKIAEXAMPLE0001", secretAccessKey: "s3cret", region: "eu" };
+    // Malformed on purpose: refused for whose provider it is, before the values are even read.
+    const values = { accessKeyId: 42, unknownField: "x" } as unknown as Record<string, string>;
     await expect(accounts.checkCredentials("acme.clouds.ec2", values)).rejects.toMatchObject({
       code: "UNSUPPORTED",
     });
@@ -585,6 +586,35 @@ describe("CloudAccountService and a plugin's provider", () => {
     ).rejects.toMatchObject({ code: "UNSUPPORTED" });
     expect(provider.checkCredentials).not.toHaveBeenCalled();
     expect(vault.sets.size).toBe(0);
+  });
+
+  it("still replaces the credentials of an account it already has", async () => {
+    const provider = fieldsProvider("acme.clouds.ec2", TWO_SECRETS);
+    const { accounts, store, vault } = service({ provider });
+    store.putAccount({
+      id: "ca_acmeplugin",
+      providerId: "acme.clouds.ec2",
+      displayName: "EC2",
+      identity: "octocat",
+      scope: { kind: "personal", id: "personal", name: "Personal" },
+      apiUrl: "https://boat.dev/api/v1",
+      keyHint: null,
+      credentialRevision: "rev-1",
+      addedAt: 1,
+      validation: { status: "valid", checkedAt: 1 },
+      lastProvisioning: null,
+    });
+    await vault.put("ca_acmeplugin", {
+      accessKeyId: "AKIAOLD",
+      secretAccessKey: "old",
+      region: "eu",
+    });
+    const fresh = { accessKeyId: "AKIANEW", secretAccessKey: "new-secret", region: "eu" };
+    await expect(accounts.replaceCredentials("ca_acmeplugin", fresh)).resolves.toMatchObject({
+      id: "ca_acmeplugin",
+    });
+    expect(provider.checkCredentials).toHaveBeenCalledTimes(1);
+    expect(vault.sets.get("ca_acmeplugin")).toEqual(fresh);
   });
 
   it("words an unregistered provider's accounts with its owner's reason, falling back to the generic one", () => {

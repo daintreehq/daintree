@@ -62,7 +62,11 @@ import {
   type CloudProviderImpl,
   type CloudProviderMethod,
 } from "../../../shared/types/pluginCloudProvider.js";
-import { cloudProviderImplArgs, encodeCloudProviderAnswer } from "./pluginCloudProviderCalls.js";
+import {
+  cloudProviderImplArgs,
+  encodeCloudProviderAnswer,
+  unsendableCloudProviderAnswer,
+} from "./pluginCloudProviderCalls.js";
 
 const CLOUD_PROVIDER_METHOD_NAMES: ReadonlySet<string> = new Set(CLOUD_PROVIDER_METHODS);
 interface RegisteredHandler {
@@ -393,39 +397,38 @@ export class PluginDevWorkerContributionFacet {
     };
     try {
       const impl = this.cloudProviders.get(msg.providerId)?.impl;
-      if (!impl) throw new Error(`No cloud provider "${msg.providerId}" registered`);
-      if (!CLOUD_PROVIDER_METHOD_NAMES.has(msg.method)) {
-        throw new Error(`Unknown cloud provider method "${String(msg.method)}"`);
+      if (!impl || !CLOUD_PROVIDER_METHOD_NAMES.has(msg.method)) {
+        settle({ ok: false, error: `No cloud provider "${msg.providerId}" to call` });
+        return;
       }
       const method = msg.method as CloudProviderMethod;
-      const run = impl[method] as ((...args: unknown[]) => unknown) | undefined;
+      const args = Array.isArray(msg.args) ? msg.args : [];
+      let outcome: { ok: true; value: unknown } | { ok: false; error: unknown };
+      try {
+        // Looked up per call, inside the guard: a getter on the impl runs plugin code too.
+        const run = impl[method] as ((...callArgs: unknown[]) => unknown) | undefined;
+        if (typeof run !== "function") {
+          throw Object.assign(new Error(`It has no ${method}`), { code: "unsupported" });
+        }
+        outcome = {
+          ok: true,
+          value: await run.apply(impl, cloudProviderImplArgs(method, args, controller.signal)),
+        };
+      } catch (error) {
+        outcome = { ok: false, error };
+      }
       let answer: string;
-      if (typeof run !== "function") {
-        answer = encodeCloudProviderAnswer({
-          ok: false,
-          error: Object.assign(new Error(`It has no ${method}`), { code: "unsupported" }),
-        });
-      } else {
-        let outcome: { ok: true; value: unknown } | { ok: false; error: unknown };
-        try {
-          const args = Array.isArray(msg.args) ? msg.args : [];
-          outcome = {
-            ok: true,
-            value: await run.apply(impl, cloudProviderImplArgs(method, args, controller.signal)),
-          };
-        } catch (error) {
-          outcome = { ok: false, error };
-        }
-        try {
-          answer = encodeCloudProviderAnswer(outcome);
-        } catch (error) {
-          // Too large, or not JSON: the provider answered, but not with anything that can cross.
-          answer = encodeCloudProviderAnswer({ ok: false, error });
-        }
+      try {
+        answer = encodeCloudProviderAnswer(outcome);
+      } catch {
+        // The provider answered, but not with anything that can cross. Never a refusal:
+        // a create that got this far may have made the machine.
+        answer = unsendableCloudProviderAnswer();
       }
       settle({ ok: true, result: answer });
-    } catch (err) {
-      settle({ ok: false, error: formatErrorMessage(err, "cloud provider call failed") });
+    } catch {
+      // Nothing of the plugin's is read here: its error already failed to be read once.
+      settle({ ok: false, error: "The cloud provider call failed" });
     } finally {
       if (this.mcpInvokeAborts.get(msg.requestId) === controller) {
         this.mcpInvokeAborts.delete(msg.requestId);
@@ -909,7 +912,12 @@ export class PluginDevWorkerContributionFacet {
       },
       registerCloudProvider: (descriptor: CloudProviderDescriptor, impl: CloudProviderImpl) => {
         this.assertActivationOpen("registerCloudProvider");
-        if (!descriptor || typeof descriptor !== "object" || typeof descriptor.id !== "string") {
+        if (
+          !descriptor ||
+          typeof descriptor !== "object" ||
+          typeof descriptor.id !== "string" ||
+          descriptor.id.length === 0
+        ) {
           throw new Error(
             `Plugin "${this.pluginId}" registerCloudProvider: descriptor.id must be a non-empty string`
           );

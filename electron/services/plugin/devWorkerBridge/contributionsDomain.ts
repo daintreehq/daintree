@@ -304,6 +304,8 @@ export class ContributionsDomain {
       if (typeof providerId !== "string" || !Array.isArray(descriptor.methods)) {
         throw new Error("registerCloudProvider: descriptor must name an id and its methods");
       }
+      // Before any await: the generation proposing this, which alone may answer for it.
+      const generation = this.ctx.generation();
       const prior = this.cloudProviderDisposers.get(providerId);
       if (prior) {
         this.cloudProviderDisposers.delete(providerId);
@@ -322,6 +324,16 @@ export class ContributionsDomain {
         if (!descriptor.methods.includes(method)) continue;
         proxyImpl[method] = async (...args: unknown[]) => {
           const wire = cloudProviderWireArgs(method, args);
+          // A crash-respawned worker binds again from inside its own activate(),
+          // while the plugin still reads as activated; a create must not reach it
+          // before its activation has committed, nor reach a later generation.
+          if (
+            this.ctx.isDisposed() ||
+            this.ctx.generation() !== generation ||
+            this.ctx.activationPhase() !== "succeeded"
+          ) {
+            throw new PluginCloudProviderTransportError("The plugin is starting again");
+          }
           let raw: unknown;
           try {
             raw = await this.ctx.invoke(
@@ -337,7 +349,6 @@ export class ContributionsDomain {
           return decodeCloudProviderAnswer(raw);
         };
       }
-      const generation = this.ctx.generation();
       const dispose = await this.ctx.host.registerCloudProvider(
         { id: providerId },
         proxyImpl as unknown as CloudProviderImpl

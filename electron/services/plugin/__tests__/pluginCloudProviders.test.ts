@@ -9,6 +9,7 @@ import {
   cloudProviderWireArgs,
   decodeCloudProviderAnswer,
   encodeCloudProviderAnswer,
+  unsendableCloudProviderAnswer,
 } from "../pluginCloudProviderCalls.js";
 import {
   bindPluginCloudProvider,
@@ -84,6 +85,12 @@ function impl(overrides: Partial<CloudProviderImpl> = {}): CloudProviderImpl {
   };
 }
 
+/** The binding for `providerId` as the provider registered from the current load sees it. */
+function bindingOf(providerId: string) {
+  const declaration = listPluginCloudProviders().find((d) => d.providerId === providerId);
+  return declaration ? pluginCloudProviderBinding(declaration) : undefined;
+}
+
 afterEach(() => clearPluginCloudProviders());
 
 describe("plugin cloud provider declarations", () => {
@@ -105,15 +112,29 @@ describe("plugin cloud provider declarations", () => {
     expect(listener).toHaveBeenCalledTimes(2);
   });
 
-  it("gives a reload fresh declarations, and drops a binding the reload no longer declares", () => {
+  it("gives a reload fresh declarations that no binding of the last load answers for", () => {
     publishPluginCloudProviders("acme.clouds", [contribution(), contribution({ id: "gce" })]);
-    const before = listPluginCloudProviders();
-    bindPluginCloudProvider("acme.clouds", "gce", impl());
+    const [before] = listPluginCloudProviders();
+    bindPluginCloudProvider("acme.clouds", "ec2", impl());
+    expect(pluginCloudProviderBinding(before!)).toBeDefined();
     publishPluginCloudProviders("acme.clouds", [contribution()]);
-    const after = listPluginCloudProviders();
-    expect(after).toHaveLength(1);
-    expect(after[0]).not.toBe(before[0]);
-    expect(pluginCloudProviderBinding("acme.clouds.gce")).toBeUndefined();
+    const [after] = listPluginCloudProviders();
+    expect(after).not.toBe(before);
+    expect(pluginCloudProviderBinding(after!)).toBeUndefined();
+    // An adapter still holding the old declaration finds nothing either.
+    expect(pluginCloudProviderBinding(before!)).toBeUndefined();
+  });
+
+  it("withdraws one plugin's providers and bindings, leaving another plugin's", () => {
+    publishPluginCloudProviders("acme.clouds", [contribution()]);
+    publishPluginCloudProviders("other.clouds", [contribution()]);
+    bindPluginCloudProvider("acme.clouds", "ec2", impl());
+    bindPluginCloudProvider("other.clouds", "ec2", impl());
+    const [acme, other] = listPluginCloudProviders();
+    withdrawPluginCloudProviders("acme.clouds");
+    expect(pluginCloudProviderBinding(acme!)).toBeUndefined();
+    expect(pluginCloudProviderBinding(other!)).toBeDefined();
+    expect(listPluginCloudProviders().map((d) => d.providerId)).toEqual(["other.clouds.ec2"]);
   });
 });
 
@@ -138,7 +159,14 @@ describe("binding a plugin's cloud provider", () => {
     expect(() => bindPluginCloudProvider("acme.clouds", "ec2", impl())).toThrow(
       /has no renewLifetime, authorizeSsh/
     );
-    expect(pluginCloudProviderBinding("acme.clouds.ec2")).toBeUndefined();
+    const { stop: _stop, ...noStop } = impl({
+      renewLifetime: () => ({}) as never,
+      authorizeSsh: () => ({}) as never,
+    });
+    expect(() =>
+      bindPluginCloudProvider("acme.clouds", "ec2", noStop as CloudProviderImpl)
+    ).toThrow(/has no stop$/);
+    expect(bindingOf("acme.clouds.ec2")).toBeUndefined();
   });
 
   it("calls the impl with the signal where the contract puts it, and keeps a named failure's code", async () => {
@@ -151,7 +179,7 @@ describe("binding a plugin's cloud provider", () => {
       throw new Error("boom");
     });
     bindPluginCloudProvider("acme.clouds", "ec2", impl({ checkCredentials, inspect, rename }));
-    const binding = pluginCloudProviderBinding("acme.clouds.ec2")!;
+    const binding = bindingOf("acme.clouds.ec2")!;
     const signal = new AbortController().signal;
 
     await binding.call(
@@ -189,11 +217,7 @@ describe("binding a plugin's cloud provider", () => {
       })
     );
     await expect(
-      pluginCloudProviderBinding("acme.clouds.ec2")!.call(
-        "validate",
-        [{}],
-        new AbortController().signal
-      )
+      bindingOf("acme.clouds.ec2")!.call("validate", [{}], new AbortController().signal)
     ).rejects.toBeInstanceOf(PluginCloudProviderTransportError);
   });
 
@@ -201,11 +225,11 @@ describe("binding a plugin's cloud provider", () => {
     publishPluginCloudProviders("acme.clouds", [contribution()]);
     const first = bindPluginCloudProvider("acme.clouds", "ec2", impl());
     bindPluginCloudProvider("acme.clouds", "ec2", impl());
-    const current = pluginCloudProviderBinding("acme.clouds.ec2");
+    const current = bindingOf("acme.clouds.ec2");
     first();
-    expect(pluginCloudProviderBinding("acme.clouds.ec2")).toBe(current);
+    expect(bindingOf("acme.clouds.ec2")).toBe(current);
     unbindPluginCloudProviders("acme.clouds");
-    expect(pluginCloudProviderBinding("acme.clouds.ec2")).toBeUndefined();
+    expect(bindingOf("acme.clouds.ec2")).toBeUndefined();
   });
 });
 
@@ -217,6 +241,7 @@ describe("why a plugin's provider isn't there", () => {
       activate: async () => {},
       isActivated: () => false,
       unavailableReason: (pluginId, providerId) => `${pluginId} is off (${providerId})`,
+      startFailure: () => null,
     });
     expect(pluginCloudProviderUnavailableReason("acme.clouds.ec2")).toBe(
       "acme.clouds is off (acme.clouds.ec2)"
@@ -243,6 +268,50 @@ describe("cloud provider answers across the port", () => {
     expect(() => decodeCloudProviderAnswer("{not json")).toThrow(PluginCloudProviderTransportError);
     expect(() => decodeCloudProviderAnswer({ ok: true })).toThrow(
       PluginCloudProviderTransportError
+    );
+  });
+
+  it("reads an envelope only as the worker writes one", () => {
+    // A success with no value (a function answer JSON dropped) was never a whole answer.
+    expect(() => decodeCloudProviderAnswer('{"ok":true}')).toThrow(
+      PluginCloudProviderTransportError
+    );
+    expect(decodeCloudProviderAnswer('{"ok":true,"value":null}')).toBeNull();
+    expect(() => decodeCloudProviderAnswer('{"ok":false,"code":"capacity"}')).toThrow(
+      expect.objectContaining({ code: "capacity" })
+    );
+    expect(() => decodeCloudProviderAnswer('{"ok":false,"code":"teapot"}')).toThrow(
+      expect.objectContaining({ code: null })
+    );
+    // Counted in bytes, as the worker counts them: under the limit in characters isn't enough.
+    const wide = JSON.stringify({ ok: true, value: "€".repeat(400_000) });
+    expect(wide.length).toBeLessThan(1024 * 1024);
+    expect(() => decodeCloudProviderAnswer(wide)).toThrow(PluginCloudProviderTransportError);
+  });
+
+  it("keeps a named failure's code when its message can't be read, and the reverse", () => {
+    const codeOnly = { code: "billing" };
+    Object.defineProperty(codeOnly, "message", {
+      get() {
+        throw new Error("no");
+      },
+    });
+    expect(PluginCloudProviderAnswerError.from(codeOnly)).toMatchObject({ code: "billing" });
+    const messageOnly = { message: "over quota" };
+    Object.defineProperty(messageOnly, "code", {
+      get() {
+        throw new Error("no");
+      },
+    });
+    expect(PluginCloudProviderAnswerError.from(messageOnly)).toMatchObject({
+      code: null,
+      message: "over quota",
+    });
+  });
+
+  it("answers an unsendable result with a failure no one can read as a refusal", () => {
+    expect(() => decodeCloudProviderAnswer(unsendableCloudProviderAnswer())).toThrow(
+      expect.objectContaining({ code: null })
     );
   });
 

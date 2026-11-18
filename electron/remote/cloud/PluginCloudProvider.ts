@@ -39,7 +39,8 @@ import {
 /** Where the adapter finds the plugin service and the impls its plugins bound. */
 export interface PluginCloudProviderHost {
   runtime(): PluginCloudProviderRuntime | null;
-  binding(providerId: CloudProviderId): PluginCloudProviderBinding | undefined;
+  /** The impl bound under exactly this declaration, never one a later load bound. */
+  binding(declaration: PluginCloudProviderDeclaration): PluginCloudProviderBinding | undefined;
   timeoutMs?: number;
   now?: () => number;
 }
@@ -310,7 +311,7 @@ export class PluginCloudProvider implements CloudProvider {
         `the ${this.pluginId} plugin didn't start. Settings → Plugins shows why.`
       );
     }
-    const binding = this.host.binding(this.id);
+    const binding = this.host.binding(this.declaration);
     if (!binding) {
       throw this.unreachable(`the ${this.pluginId} plugin started without setting it up.`);
     }

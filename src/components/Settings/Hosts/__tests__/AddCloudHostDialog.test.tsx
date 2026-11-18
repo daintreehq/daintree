@@ -348,5 +348,6 @@ describe("AddCloudHostDialog connecting an account", () => {
     cloud.snapshot = { providers: [ACME()], accounts: [], hosts: [] };
     render(<AddCloudHostDialog isOpen onClose={() => {}} onReady={() => {}} />);
     expect(screen.queryByRole("button", { name: /^Connect / })).toBeNull();
+    expect(screen.getByText("No cloud provider is available on this machine.")).toBeTruthy();
   });
 });

@@ -3029,6 +3029,9 @@ export class PluginService {
           this.removeHandlers(pluginId);
           this.unregisterImperativePluginActions(pluginId);
           this.flushPluginEventCleanups(pluginId);
+          // Not an event subscription (those hold a worker against idle disposal),
+          // so a provider bound before the throw goes here instead.
+          unbindPluginCloudProviders(pluginId);
         };
         this.cleanupMap.set(pluginId, rollback);
 
@@ -3798,8 +3801,18 @@ export class PluginService {
     }
     const loadError = this.getPluginLoadError(pluginId)?.message.split("\n")[0]?.trim();
     if (loadError) return `${from}, which failed to load: ${loadError}`;
-    if (this.records.getInstalledRecord(pluginId)) return `${from}, which isn't running.`;
+    if (this.records.getInstalledRecord(pluginId)) {
+      return this.initialized ? `${from}, which didn't load.` : `${from}, which hasn't loaded yet.`;
+    }
     return `${from}, which isn't installed.`;
+  }
+
+  /** Why `pluginId`'s worker failed to start this session (#17351), or null when it hasn't. */
+  cloudProviderStartFailure(pluginId: string): string | null {
+    const status = this.workerStatuses.get(pluginId);
+    if (status?.state !== "failed") return null;
+    const detail = status.detail?.split("\n")[0]?.trim();
+    return detail || (status.reason ?? "it stopped");
   }
 
   private worktreeDeleteNotesHost(): WorktreeDeleteNotesHost {
@@ -5814,6 +5827,8 @@ export class PluginService {
       detail,
     });
     this.emitRuntimeStatus(pluginId);
+    // A worker that failed to start leaves its cloud providers unavailable, until it starts again.
+    if ((state === "failed") !== (prior?.state === "failed")) pluginCloudProviderStatusChanged();
 
     // A crash reports as `starting` + `crashed` while the supervisor decides
     // whether to respawn, so it warns alongside an outright failure.
@@ -8933,7 +8948,6 @@ export class PluginService {
     this.fileLogLoadError(pluginId, plugin, loadError);
     if (!isProjectPluginInstanceKey(pluginId)) {
       this.records.upsertInstalledRecord(pluginId, { loadError });
-      pluginCloudProviderStatusChanged();
       return true;
     }
 
@@ -9754,6 +9768,7 @@ setPluginCloudProviderRuntime({
   isActivated: (pluginId) => pluginService.isPluginActivated(pluginId),
   unavailableReason: (pluginId, providerId) =>
     pluginService.cloudProviderUnavailableReason(pluginId, providerId),
+  startFailure: (pluginId) => pluginService.cloudProviderStartFailure(pluginId),
 });
 
 // E2E backdoor: activate a loaded plugin by id without adding a production IPC

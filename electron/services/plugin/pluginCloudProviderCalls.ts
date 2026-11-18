@@ -28,18 +28,22 @@ export class PluginCloudProviderAnswerError extends Error {
 
   static from(error: unknown): PluginCloudProviderAnswerError {
     if (error instanceof PluginCloudProviderAnswerError) return error;
-    let code: unknown;
-    let message: unknown;
-    try {
-      code = (error as { code?: unknown } | null)?.code;
-      message = error instanceof Error ? error.message : typeof error === "string" ? error : null;
-    } catch {
-      // A throwing getter on a plugin's error is still a failure, just an unnamed one.
-    }
+    // Read apart, so a throwing getter on one of a plugin's fields costs only that field.
+    const code = readField(error, "code");
+    const message = typeof error === "string" ? error : readField(error, "message");
     return new PluginCloudProviderAnswerError(
       isCloudHostErrorCode(code) ? code : null,
       typeof message === "string" ? message : null
     );
+  }
+}
+
+function readField(value: unknown, key: "code" | "message"): unknown {
+  if (value === null || typeof value !== "object") return undefined;
+  try {
+    return (value as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
   }
 }
 
@@ -121,9 +125,26 @@ export function encodeCloudProviderAnswer(
   return json;
 }
 
+/**
+ * The answer for a call whose result couldn't cross: too large, or not JSON.
+ * A failure with no code, so nothing reads it as a refusal: a create that
+ * returned it may well have made the machine.
+ */
+export function unsendableCloudProviderAnswer(): string {
+  return JSON.stringify({
+    ok: false,
+    code: null,
+    message: "Its answer was too large or couldn't be sent.",
+  } satisfies CloudProviderAnswer);
+}
+
 /** The value of an answer from the worker; throws the provider's failure, or a transport one. */
 export function decodeCloudProviderAnswer(raw: unknown): unknown {
-  if (typeof raw !== "string" || raw.length > CLOUD_PROVIDER_ANSWER_MAX_BYTES) {
+  if (
+    typeof raw !== "string" ||
+    raw.length > CLOUD_PROVIDER_ANSWER_MAX_BYTES ||
+    Buffer.byteLength(raw, "utf8") > CLOUD_PROVIDER_ANSWER_MAX_BYTES
+  ) {
     throw new PluginCloudProviderTransportError("The plugin's answer couldn't be read");
   }
   let answer: unknown;
@@ -133,7 +154,8 @@ export function decodeCloudProviderAnswer(raw: unknown): unknown {
     throw new PluginCloudProviderTransportError("The plugin's answer couldn't be read");
   }
   const envelope = (answer ?? {}) as Partial<Record<"ok" | "value" | "code" | "message", unknown>>;
-  if (envelope.ok === true) return envelope.value;
+  // A void answer crosses as null; one with no value at all was never a whole answer.
+  if (envelope.ok === true && Object.hasOwn(envelope, "value")) return envelope.value;
   if (envelope.ok === false) {
     throw new PluginCloudProviderAnswerError(
       isCloudHostErrorCode(envelope.code) ? envelope.code : null,

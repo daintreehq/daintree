@@ -19,6 +19,16 @@ import { PluginCloudProvider, type PluginCloudProviderHost } from "../PluginClou
 import { watchPluginCloudProviders } from "../pluginCloudProviderRegistrations.js";
 import { canRenewLifetime } from "../provider.js";
 
+const CREATE = {
+  name: "build",
+  machineType: "t3.large",
+  lifetimeSeconds: null,
+  provisioning: { location: "us-east-1", image: null, network: null },
+  labels: {},
+  idempotencyKey: "k1",
+  publicKey: "ssh-ed25519 AAAA test",
+};
+
 const CREDENTIALS = {
   values: { accessKeyId: "AKIA" },
   scopeId: "personal",
@@ -125,6 +135,7 @@ function harness(options: { activates?: boolean; bound?: boolean; timeoutMs?: nu
     }),
     isActivated: () => activated,
     unavailableReason: () => "unused",
+    startFailure: () => null,
   };
   const host: PluginCloudProviderHost = {
     runtime: () => runtime,
@@ -229,26 +240,37 @@ describe("PluginCloudProvider", () => {
     expect(seen?.aborted).toBe(true);
   });
 
-  it("stops with the caller, and sends nothing once the caller gave up during activation", async () => {
+  it("sends nothing once the caller gave up while the plugin was still starting", async () => {
     const { provider, call, runtime } = harness();
+    let finishActivation!: () => void;
+    vi.mocked(runtime.activate).mockImplementation(
+      () => new Promise<void>((resolve) => (finishActivation = resolve))
+    );
     const controller = new AbortController();
-    vi.mocked(runtime.activate).mockImplementation(async () => {
-      controller.abort(new Error("cancelled by the person"));
-    });
-    await expect(
-      provider.create(
-        { ...CREDENTIALS, signal: controller.signal },
-        {
-          name: "build",
-          machineType: "t3.large",
-          lifetimeSeconds: null,
-          provisioning: { location: "us-east-1" },
-          labels: {},
-          idempotencyKey: "k1",
-          publicKey: "ssh-ed25519 AAAA test",
-        }
-      )
-    ).rejects.toThrow("cancelled by the person");
+    const pending = provider
+      .create({ ...CREDENTIALS, signal: controller.signal }, CREATE)
+      .catch((e: unknown) => e);
+    await Promise.resolve();
+    controller.abort(new Error("cancelled by the person"));
+    expect(await pending).toEqual(new Error("cancelled by the person"));
+    // The plugin finishes starting, with the provider bound, after the caller left.
+    finishActivation();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it("counts activation against the call's deadline", async () => {
+    vi.useFakeTimers();
+    const { provider, call, runtime } = harness({ timeoutMs: 30_000 });
+    let finishActivation!: () => void;
+    vi.mocked(runtime.activate).mockImplementation(
+      () => new Promise<void>((resolve) => (finishActivation = resolve))
+    );
+    const pending = provider.create(CREDENTIALS, CREATE).catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(provider.describeError(await pending).code).toBe("provider-unreachable");
+    finishActivation();
+    await vi.advanceTimersByTimeAsync(0);
     expect(call).not.toHaveBeenCalled();
   });
 
@@ -278,31 +300,65 @@ describe("PluginCloudProvider", () => {
       message: "EC2 sent back its catalog in a form Daintree can't read.",
     });
 
-    call.mockResolvedValueOnce(machine({ resourceId: "i-2" }));
-    const other = await provider.inspect(CREDENTIALS, "i-1").catch((e: unknown) => e);
-    expect(provider.describeError(other).code).toBe("failed");
+    for (const ask of [
+      () => provider.inspect(CREDENTIALS, "i-1"),
+      () => provider.start(CREDENTIALS, "i-1", {}),
+      () => provider.stop(CREDENTIALS, "i-1"),
+    ]) {
+      call.mockResolvedValueOnce(machine({ resourceId: "i-2" }));
+      await expect(ask()).rejects.toThrow("the machine");
+    }
 
     call.mockResolvedValueOnce(machine({ machine: "exploded" }));
-    await expect(provider.inspect(CREDENTIALS, "i-1")).rejects.toBeDefined();
+    await expect(provider.inspect(CREDENTIALS, "i-1")).rejects.toThrow("the machine");
 
-    call.mockResolvedValueOnce({ scopes: [{ scope: { kind: "team", id: "t" }, active: true }] });
+    call.mockResolvedValueOnce({
+      identity: null,
+      scopes: [{ scope: { kind: "team", id: "t" }, active: true }],
+    });
     await expect(
       provider.checkCredentials({ accessKeyId: "x" }, CREDENTIALS.apiUrl)
-    ).rejects.toBeDefined();
+    ).rejects.toThrow("its credential check");
   });
 
-  it("keeps only the declared fields of an answer it can use", async () => {
+  it("fails an answer whose field is there but malformed, rather than reading it as none", async () => {
     const { provider, call } = harness();
+    for (const malformed of [
+      { autoStopAt: "soon" },
+      { lifetimeSeconds: "2h" },
+      { snapshotsDisabled: "true" },
+      { restricted: undefined },
+      { stop: { id: "s1", status: "halfway" } },
+    ]) {
+      call.mockResolvedValueOnce(machine(malformed));
+      await expect(provider.inspect(CREDENTIALS, "i-1"), JSON.stringify(malformed)).rejects.toThrow(
+        "the machine"
+      );
+    }
+    // An identity left out, or one too long to keep, is never read as "nobody".
+    call.mockResolvedValueOnce({});
+    await expect(provider.validate(CREDENTIALS)).rejects.toThrow("its account check");
+    call.mockResolvedValueOnce({ identity: "x".repeat(2000) });
+    await expect(provider.validate(CREDENTIALS)).rejects.toThrow("its account check");
+    call.mockResolvedValueOnce({ identity: null });
+    await expect(provider.validate(CREDENTIALS)).resolves.toEqual({ identity: null });
+  });
+
+  it("keeps only the declared fields of an answer it can use, and always Daintree's own labels", async () => {
+    const { provider, call } = harness();
+    const many = Object.fromEntries(Array.from({ length: 80 }, (_, i) => [`k${i}`, "v"]));
     call.mockResolvedValueOnce([
       machine({
-        labels: { a: "1", bad: 2, constructor: "x" },
+        labels: { ...many, bad: 2, constructor: "x", "daintree-binding": "cb_1" },
         extra: "dropped",
-        autoStopAt: "soon",
+        autoStopAt: null,
       }),
     ]);
     const [listed] = await provider.list(CREDENTIALS, { label: "daintree-binding=cb_1" });
     expect(listed).not.toHaveProperty("extra");
-    expect(listed!.labels).toEqual({ a: "1" });
+    expect(Object.keys(listed!.labels)).toHaveLength(65);
+    expect(listed!.labels["daintree-binding"]).toBe("cb_1");
+    expect(listed!.labels).not.toHaveProperty("bad");
     expect(listed!.autoStopAt).toBeNull();
     expect(call).toHaveBeenLastCalledWith(
       "list",
@@ -312,6 +368,25 @@ describe("PluginCloudProvider", () => {
 
     call.mockResolvedValueOnce(null);
     await expect(provider.stop(CREDENTIALS, "i-1")).resolves.toBeNull();
+  });
+
+  it("calls only the impl bound under its own declaration", async () => {
+    const stale = declaration();
+    const current = declaration();
+    const call = vi.fn(async () => machine());
+    const provider = new PluginCloudProvider(stale, {
+      runtime: () => ({
+        activate: async () => {},
+        isActivated: () => true,
+        unavailableReason: () => "unused",
+        startFailure: () => null,
+      }),
+      binding: (asked) =>
+        asked === current ? { methods: new Set(["inspect"] as const), call } : undefined,
+    });
+    const error = await provider.inspect(CREDENTIALS, "i-1").catch((e: unknown) => e);
+    expect(provider.describeError(error).code).toBe("provider-unreachable");
+    expect(call).not.toHaveBeenCalled();
   });
 });
 
@@ -325,22 +400,51 @@ describe("watchPluginCloudProviders", () => {
     expect(first).toBeInstanceOf(PluginCloudProvider);
     expect(providers.apiUrlFor("acme.clouds.ec2")).toBe("https://ec2.example.com");
 
-    publishPluginCloudProviders("acme.clouds", [contribution({ name: "EC2 v2" })]);
+    // A reload that only adds a trailing slash names the same origin.
+    publishPluginCloudProviders("acme.clouds", [
+      contribution({ name: "EC2 v2", apiUrl: "https://ec2.example.com/" }),
+    ]);
     const second = providers.get("acme.clouds.ec2");
     expect(second).not.toBe(first);
     expect(second?.info("darwin").name).toBe("EC2 v2");
+    expect(providers.apiUrlFor("acme.clouds.ec2")).toBe("https://ec2.example.com");
 
     withdrawPluginCloudProviders("acme.clouds");
     expect(providers.has("acme.clouds.ec2")).toBe(false);
+    // Each of those changed what is registered: none of them was only a reason.
+    expect(statusChanged).not.toHaveBeenCalled();
 
-    // Nothing to register or remove: only a reason may have changed.
-    statusChanged.mockClear();
     pluginCloudProviderStatusChanged();
     expect(statusChanged).toHaveBeenCalledTimes(1);
 
-    watch.dispose();
     publishPluginCloudProviders("acme.clouds", [contribution()]);
+    expect(providers.has("acme.clouds.ec2")).toBe(true);
+    watch.dispose();
+    // Disposing takes what it registered with it, and it hears nothing after.
     expect(providers.has("acme.clouds.ec2")).toBe(false);
+    publishPluginCloudProviders("acme.clouds", [contribution({ name: "EC2 v3" })]);
+    expect(providers.has("acme.clouds.ec2")).toBe(false);
+  });
+
+  it("leaves out a provider whose plugin failed to start, with why, until it starts", () => {
+    const providers = new CloudProviderRegistry();
+    let failure: string | null = "activate() threw: no region";
+    setPluginCloudProviderRuntime({
+      activate: async () => {},
+      isActivated: () => false,
+      unavailableReason: () => "unused",
+      startFailure: () => failure,
+    });
+    publishPluginCloudProviders("acme.clouds", [contribution()]);
+    const watch = watchPluginCloudProviders({ providers, statusChanged: () => {} });
+    expect(providers.has("acme.clouds.ec2")).toBe(false);
+    expect(watch.unavailableReason("acme.clouds.ec2")).toBe(
+      "Its cloud provider comes from the acme.clouds plugin, which failed to start: activate() threw: no region"
+    );
+    failure = null;
+    pluginCloudProviderStatusChanged();
+    expect(providers.has("acme.clouds.ec2")).toBe(true);
+    watch.dispose();
   });
 
   it("words a declaration the registry refuses, and otherwise defers to the plugin service", () => {
@@ -349,6 +453,7 @@ describe("watchPluginCloudProviders", () => {
       activate: async () => {},
       isActivated: () => false,
       unavailableReason: (pluginId) => `The ${pluginId} plugin is turned off.`,
+      startFailure: () => null,
     });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     publishPluginCloudProviders("acme.clouds", [

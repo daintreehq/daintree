@@ -1251,7 +1251,7 @@ await host.registerCloudProvider(
 
 - **30 seconds a call, activation included.** A plugin that isn't running is activated for the call. `credentials.signal` (the third argument of `checkCredentials`) aborts when Daintree stops waiting.
 - **Throw with a `code`** (a `CloudHostErrorCode` such as `credential-invalid` or `capacity`) to say what went wrong; any other throw reads as `failed`. A crash or a missed deadline is reported on the account as `provider-unreachable`.
-- **The impl must have what the declaration needs**: `renewLifetime` for a renewable lifetime, `authorizeSsh` for `sshKey: "after-create"`, `sshAccess` for `"at-create"`. A missing one fails the registration, and with it the plugin's activation.
+- **The impl must have what the declaration needs**: `renewLifetime` for a renewable lifetime, `authorizeSsh` for `sshKey: "after-create"`, `sshAccess` for `"at-create"`. A missing one fails the registration, and with it the plugin's activation (in a worker the `await` still resolves; the failure is the activation's). Calls reach the impl only once the activation that bound it has finished.
 - Revoke-guarded — call it during `activate()`. `descriptor.id` must match a manifest entry, or the call throws. Returns a disposer; re-registering the same id replaces the binding and makes the older disposer inert. The binding goes when the worker stops or the plugin unloads, and comes back on the next activation.
 - `createMockHost` records bindings in `registeredCloudProviders`, so a test can call the impl itself. It skips the manifest checks.
 

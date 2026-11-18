@@ -36,6 +36,8 @@ describe("sshDeclarationProblem", () => {
       { sshTrust: "provider-tunnel", transport: "provider-command", tunnel: null },
       // Its key check scans the machine's own address, which a tunnel hides.
       { sshTrust: "api-or-confirm", transport: "provider-command", tunnel: TUNNEL },
+      // No one to confirm a key to through a tunnel: every dial would fail.
+      { sshTrust: "confirm-on-first-connect", transport: "provider-command", tunnel: TUNNEL },
     ];
     for (const declaration of refused) expect(sshDeclarationProblem(declaration)).not.toBeNull();
   });

@@ -97,6 +97,15 @@ describe("contributes.cloudProviders", () => {
     );
   });
 
+  it("refuses one from an installed package that runs one instance per project", () => {
+    const result = parse([provider()], "user", { instanceMode: "project" });
+    expect(result.success).toBe(false);
+    expect(
+      !result.success &&
+        result.error.issues.some((i) => i.path.join(".") === "contributes.cloudProviders")
+    ).toBe(true);
+  });
+
   it("refuses an id that couldn't be a provider's name, and the same id twice", () => {
     expect(parse([provider({ id: "EC2" })]).success).toBe(false);
     expect(parse([provider({ id: "a.b" })]).success).toBe(false);
@@ -153,13 +162,14 @@ describe("contributes.cloudProviders", () => {
     );
     expect(withTunnel({ command: "aws", args: [], installUrl: "http://a.com" })).toBe(false);
     expect(withTunnel(null)).toBe(false);
-    expect(
-      parse([
-        provider({
-          capabilities: { ...capabilities, transport: "direct", sshTrust: "provider-tunnel" },
-        }),
-      ]).success
-    ).toBe(false);
+    const ssh = (overrides: Record<string, unknown>) =>
+      parse([provider({ capabilities: { ...capabilities, ...overrides } })]).success;
+    // Each refused for one reason alone, beside a case that differs only in it.
+    expect(ssh({ transport: "direct", tunnel: null, sshTrust: "pinned-from-api" })).toBe(true);
+    expect(ssh({ transport: "direct", tunnel: null, sshTrust: "provider-tunnel" })).toBe(false);
+    expect(ssh({ sshTrust: "pinned-from-api" })).toBe(true);
+    // A key confirmed on first connect can't be confirmed through the provider's tunnel.
+    expect(ssh({ sshTrust: "confirm-on-first-connect" })).toBe(false);
   });
 
   it("refuses a capability it doesn't know", () => {

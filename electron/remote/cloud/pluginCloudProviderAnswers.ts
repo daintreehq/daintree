@@ -9,17 +9,19 @@ import type { ProviderCatalog, ProviderResource, ProviderSshAccess } from "./pro
 /**
  * What a plugin's provider answered, projected onto exactly the shapes the
  * cloud runtime reads (#17351). A plugin can send back anything, so each
- * reader returns null for an answer it can't use, and copies only the
- * declared fields of one it can; a field that is merely odd (a timestamp
- * that doesn't parse) reads as unknown rather than failing the answer.
+ * reader copies only the declared fields of an answer it can use, and returns
+ * null for one it can't. A field left out reads as unknown where the contract
+ * allows null; a field present with the wrong shape fails the whole answer,
+ * because null means something (no deadline, not stopped) that a malformed
+ * value doesn't. The answer's size is bounded where it crosses the port.
  */
 
 const MAX_TEXT = 512;
 const MAX_ID = 256;
-const MAX_LIST = 1000;
+const MAX_IDENTITY = 1024;
 const MAX_LABELS = 64;
-const MAX_SCOPES = 64;
-const MAX_MACHINE_TYPES = 200;
+/** Labels Daintree sets and finds machines by; kept whatever else the machine carries. */
+const DAINTREE_LABEL_PREFIX = "daintree-";
 
 const MACHINE_STATES: ReadonlySet<string> = new Set<CloudMachineState>([
   "not-created",
@@ -41,6 +43,9 @@ const STOP_STATUSES: ReadonlySet<string> = new Set([
 
 type Fields = Record<string, unknown>;
 
+/** A field that is there but isn't what the contract says. */
+const MALFORMED = Symbol("malformed");
+
 function record(value: unknown): Fields | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Fields)
@@ -55,14 +60,29 @@ function text(value: unknown, max = MAX_TEXT): string | null {
   return typeof value === "string" && value.length <= max ? value : null;
 }
 
-function count(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+function absent(value: unknown): boolean {
+  return value === undefined || value === null;
 }
 
-function timestamp(value: unknown): string | null {
-  if (typeof value !== "string" || value.length > 64) return null;
+function count(value: unknown): number | null | typeof MALFORMED {
+  if (absent(value)) return null;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : MALFORMED;
+}
+
+function timestamp(value: unknown): string | null | typeof MALFORMED {
+  if (absent(value)) return null;
+  if (typeof value !== "string" || value.length > 64) return MALFORMED;
   const ms = Date.parse(value);
-  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : MALFORMED;
+}
+
+/** Who the credentials sign in as: a string, or null for nobody in particular. Left out is malformed. */
+function identity(raw: Fields): string | null | typeof MALFORMED {
+  if (!Object.hasOwn(raw, "identity")) return MALFORMED;
+  if (raw.identity === null) return null;
+  return typeof raw.identity === "string" && raw.identity.length <= MAX_IDENTITY
+    ? raw.identity
+    : MALFORMED;
 }
 
 function labels(value: unknown): Record<string, string> {
@@ -71,14 +91,30 @@ function labels(value: unknown): Record<string, string> {
   if (!raw) return result;
   let kept = 0;
   for (const [key, entry] of Object.entries(raw)) {
-    if (kept >= MAX_LABELS) break;
     if (key.length === 0 || key.length > MAX_ID || key in Object.prototype) continue;
+    const ours = key.startsWith(DAINTREE_LABEL_PREFIX);
+    if (!ours && kept >= MAX_LABELS) continue;
     const label = text(entry, MAX_ID);
     if (label === null) continue;
     result[key] = label;
-    kept++;
+    if (!ours) kept++;
   }
   return result;
+}
+
+function stop(value: unknown): ProviderResource["stop"] | typeof MALFORMED {
+  if (absent(value)) return null;
+  const raw = record(value);
+  const stopId = raw ? text(raw.id) : null;
+  if (!raw || !stopId || typeof raw.status !== "string" || !STOP_STATUSES.has(raw.status)) {
+    return MALFORMED;
+  }
+  if (!absent(raw.error) && text(raw.error) === null) return MALFORMED;
+  return {
+    id: stopId,
+    status: raw.status as NonNullable<ProviderResource["stop"]>["status"],
+    error: text(raw.error),
+  };
 }
 
 export function readResource(value: unknown): ProviderResource | null {
@@ -88,42 +124,58 @@ export function readResource(value: unknown): ProviderResource | null {
   if (resourceId === null || typeof raw.machine !== "string" || !MACHINE_STATES.has(raw.machine)) {
     return null;
   }
-  const stopRaw = record(raw.stop);
-  const stopId = stopRaw ? id(stopRaw.id) : null;
+  // What decides whether a stop is safe, or the machine usable, is never guessed.
+  if (
+    typeof raw.dataExpired !== "boolean" ||
+    typeof raw.snapshotsDisabled !== "boolean" ||
+    typeof raw.restricted !== "boolean"
+  ) {
+    return null;
+  }
+  const vcpu = count(raw.vcpu);
+  const memoryGB = count(raw.memoryGB);
+  const lifetimeSeconds = count(raw.lifetimeSeconds);
+  const autoStopAt = timestamp(raw.autoStopAt);
+  const stoppedAt = timestamp(raw.stoppedAt);
+  const createdAt = timestamp(raw.createdAt);
+  const lastSnapshotAt = timestamp(raw.lastSnapshotAt);
+  const stopped = stop(raw.stop);
+  if (
+    vcpu === MALFORMED ||
+    memoryGB === MALFORMED ||
+    lifetimeSeconds === MALFORMED ||
+    autoStopAt === MALFORMED ||
+    stoppedAt === MALFORMED ||
+    createdAt === MALFORMED ||
+    lastSnapshotAt === MALFORMED ||
+    stopped === MALFORMED
+  ) {
+    return null;
+  }
   return {
     resourceId,
     name: text(raw.name, MAX_ID) ?? resourceId,
     machine: raw.machine as CloudMachineState,
     rawState: text(raw.rawState, MAX_ID) ?? raw.machine,
     machineType: id(raw.machineType),
-    vcpu: count(raw.vcpu),
-    memoryGB: count(raw.memoryGB),
-    autoStopAt: timestamp(raw.autoStopAt),
-    lifetimeSeconds: count(raw.lifetimeSeconds),
-    stoppedAt: timestamp(raw.stoppedAt),
-    createdAt: timestamp(raw.createdAt),
-    stop:
-      stopRaw && stopId !== null
-        ? {
-            id: stopId,
-            status:
-              typeof stopRaw.status === "string" && STOP_STATUSES.has(stopRaw.status)
-                ? (stopRaw.status as NonNullable<ProviderResource["stop"]>["status"])
-                : "unknown",
-            error: text(stopRaw.error),
-          }
-        : null,
-    lastSnapshotAt: timestamp(raw.lastSnapshotAt),
-    dataExpired: raw.dataExpired === true,
-    snapshotsDisabled: raw.snapshotsDisabled === true,
+    vcpu,
+    memoryGB,
+    autoStopAt,
+    lifetimeSeconds,
+    stoppedAt,
+    createdAt,
+    stop: stopped,
+    lastSnapshotAt,
+    dataExpired: raw.dataExpired,
+    snapshotsDisabled: raw.snapshotsDisabled,
     labels: labels(raw.labels),
-    restricted: raw.restricted === true,
+    restricted: raw.restricted,
     error: text(raw.error),
   };
 }
 
 export function readResources(value: unknown): ProviderResource[] | null {
-  if (!Array.isArray(value) || value.length > MAX_LIST) return null;
+  if (!Array.isArray(value)) return null;
   const resources: ProviderResource[] = [];
   for (const entry of value) {
     const resource = readResource(entry);
@@ -135,7 +187,9 @@ export function readResources(value: unknown): ProviderResource[] | null {
 
 export function readCheckResult(value: unknown): CloudAccountCheckResult | null {
   const raw = record(value);
-  if (!raw || !Array.isArray(raw.scopes) || raw.scopes.length > MAX_SCOPES) return null;
+  if (!raw || !Array.isArray(raw.scopes)) return null;
+  const who = identity(raw);
+  if (who === MALFORMED) return null;
   const scopes: CloudAccountScopeChoice[] = [];
   const seen = new Set<string>();
   for (const entry of raw.scopes) {
@@ -150,24 +204,29 @@ export function readCheckResult(value: unknown): CloudAccountCheckResult | null 
       active: choice!.active === true,
     });
   }
-  return { identity: text(raw.identity, MAX_ID), scopes };
+  return { identity: who, scopes };
 }
 
 export function readIdentity(value: unknown): { identity: string | null } | null {
   const raw = record(value);
-  return raw ? { identity: text(raw.identity, MAX_ID) } : null;
+  const who = raw ? identity(raw) : MALFORMED;
+  return who === MALFORMED ? null : { identity: who };
 }
 
 function readMachineType(value: unknown): CloudMachineType | null {
   const raw = record(value);
   const typeId = raw ? id(raw.id) : null;
   if (!raw || typeId === null) return null;
+  const vcpu = count(raw.vcpu);
+  const memoryGB = count(raw.memoryGB);
+  const hourlyDollars = count(raw.hourlyDollars);
+  if (vcpu === MALFORMED || memoryGB === MALFORMED || hourlyDollars === MALFORMED) return null;
   return {
     id: typeId,
     label: text(raw.label, MAX_ID) ?? typeId,
-    vcpu: count(raw.vcpu),
-    memoryGB: count(raw.memoryGB),
-    hourlyDollars: count(raw.hourlyDollars),
+    vcpu,
+    memoryGB,
+    hourlyDollars,
     available: raw.available === true,
     reason: text(raw.reason),
   };
@@ -175,9 +234,7 @@ function readMachineType(value: unknown): CloudMachineType | null {
 
 export function readCatalog(value: unknown): ProviderCatalog | null {
   const raw = record(value);
-  if (!raw || !Array.isArray(raw.machineTypes) || raw.machineTypes.length > MAX_MACHINE_TYPES) {
-    return null;
-  }
+  if (!raw || !Array.isArray(raw.machineTypes)) return null;
   const machineTypes: CloudMachineType[] = [];
   const seen = new Set<string>();
   for (const entry of raw.machineTypes) {
@@ -187,13 +244,17 @@ export function readCatalog(value: unknown): ProviderCatalog | null {
     seen.add(type.id);
     machineTypes.push(type);
   }
+  const included = count(raw.includedHoursRemaining);
+  const starts = count(raw.startsRemaining);
+  const saved = count(raw.savedSnapshotDayDollars);
+  if (included === MALFORMED || starts === MALFORMED || saved === MALFORMED) return null;
   const provisioning = record(raw.provisioning);
   return {
     machineTypes,
     canStart: raw.canStart === true,
-    includedHoursRemaining: count(raw.includedHoursRemaining),
-    startsRemaining: count(raw.startsRemaining),
-    savedSnapshotDayDollars: count(raw.savedSnapshotDayDollars),
+    includedHoursRemaining: included,
+    startsRemaining: starts,
+    savedSnapshotDayDollars: saved,
     // Its choices are distrusted where they're read (`normalizeProvisioning`).
     ...(provisioning ? { provisioning: provisioning as ProviderCatalog["provisioning"] } : {}),
   };
