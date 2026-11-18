@@ -365,7 +365,7 @@ describe("DaintreeLocalStore", () => {
     }[])
       .map((step) => step.detail)
       .join("\n");
-    expect(plan).not.toMatch(/^SCAN decisions_questions$/m);
+    expect(plan).toContain("USING INDEX decisions_questions_missing_session_idx");
   });
 
   it("has a question on disk, visible to another connection, by the time its commit resolves", async () => {
