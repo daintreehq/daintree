@@ -348,9 +348,9 @@ export function findMissingPluginAssets(distPluginsRoot) {
           continue;
         }
         if (!fs.existsSync(resolved)) {
-          const [topDir] = path.relative(pluginDir, resolved).split(path.sep);
+          const [topDir, ...rest] = path.relative(pluginDir, resolved).split(path.sep);
           const hint =
-            topDir !== path.basename(resolved) && isReservedAssetDir(topDir)
+            rest.length > 0 && isReservedAssetDir(topDir)
               ? ` (the build never copies ${topDir}/: move it into a directory such as bin/, or beside plugin.json)`
               : "";
           missing.push(`${tier}/${entry.name}: "${relPath}" not found in built output${hint}`);

@@ -305,18 +305,61 @@ describe("syncPluginAssets", () => {
     expect(read(path.join(dest, "view", "panel.mjs"))).toBe("panel\n");
   });
 
-  posixOnly("never syncs through an output plugin directory that is a link", () => {
+  posixOnly(
+    "syncs into an output plugin directory that links elsewhere, as esbuild writes there",
+    () => {
+      writeManifest(src);
+      const elsewhere = path.join(workDir, "elsewhere");
+      writeFile(path.join(elsewhere, "main", "index.js"), "compiled\n");
+      fs.symlinkSync(elsewhere, dest);
+
+      syncPluginAssets(src, dest);
+
+      expect(fs.lstatSync(dest).isSymbolicLink()).toBe(true);
+      expect(exists(path.join(elsewhere, "plugin.json"))).toBe(true);
+      expect(read(path.join(elsewhere, "main", "index.js"))).toBe("compiled\n");
+    }
+  );
+
+  posixOnly.each([
+    ["is the source", (pluginSrc) => pluginSrc],
+    ["sits inside the source", (pluginSrc) => path.join(pluginSrc, "bin")],
+    ["contains the source", (pluginSrc) => path.dirname(pluginSrc)],
+  ])("refuses to sync onto an output directory that %s", (_label, target) => {
     writeManifest(src);
-    const elsewhere = path.join(workDir, "elsewhere");
-    writeFile(path.join(elsewhere, "README.md"), "keep\n");
-    fs.symlinkSync(elsewhere, dest);
+    writeFile(path.join(src, "README.md"), "keep\n");
+    writeFile(path.join(src, "bin", "agent.mjs"), "agent\n");
+    fs.symlinkSync(target(src), dest);
+
+    expect(() => syncPluginAssets(src, dest)).toThrow("refusing to sync");
+
+    expect(read(path.join(src, "README.md"))).toBe("keep\n");
+    expect(read(path.join(src, "bin", "agent.mjs"))).toBe("agent\n");
+    expect(exists(path.join(src, "plugin.json"))).toBe(true);
+  });
+
+  it("replaces a file standing where the output plugin directory belongs", () => {
+    writeManifest(src);
+    writeFile(dest, "not a directory\n");
+
+    const { removed, copied } = syncPluginAssets(src, dest);
+
+    expect(removed).toEqual(["."]);
+    expect(copied).toEqual(["plugin.json"]);
+    expect(fs.statSync(dest).isDirectory()).toBe(true);
+  });
+
+  posixOnly("treats a linked source plugin directory as absent", () => {
+    const external = path.join(workDir, "external");
+    writeManifest(external);
+    fs.symlinkSync(external, src);
+    writeManifest(dest);
+    writeFile(path.join(dest, "main", "index.js"), "compiled\n");
 
     const { removed } = syncPluginAssets(src, dest);
 
-    expect(removed).toEqual(["."]);
-    expect(read(path.join(elsewhere, "README.md"))).toBe("keep\n");
-    expect(fs.lstatSync(dest).isDirectory()).toBe(true);
-    expect(exists(path.join(dest, "plugin.json"))).toBe(true);
+    expect(removed).toEqual(["plugin.json"]);
+    expect(read(path.join(dest, "main", "index.js"))).toBe("compiled\n");
   });
 
   posixOnly("ships a source link to a file inside the plugin as a copy, and nothing else", () => {
@@ -522,11 +565,13 @@ describe("watchPluginAssets", () => {
     vi.useFakeTimers();
     const { pluginSrc, pluginDest } = seedPlugin();
     const fake = fakeWatch();
+    const onChange = vi.fn(async () => {});
     handle = watchPluginAssets({
       srcRoot: src,
       destRoot: dest,
       debounceMs: 20,
       rescanMs: NO_RESCAN,
+      onChange,
       watch: fake.watch,
     });
     // Changed on disk with no event of its own, so only a scheduled sync can copy it.
@@ -536,6 +581,7 @@ describe("watchPluginAssets", () => {
     fake.emit("builtin", path.join("demo", "Renderer", "panel.tsx"));
     await vi.advanceTimersByTimeAsync(1000);
     expect(read(path.join(pluginDest, "bin", "old.mjs"))).toBe("script\n");
+    expect(onChange).not.toHaveBeenCalled();
 
     fake.emit("builtin", path.join("demo", "view", "panel.mjs"));
     await vi.advanceTimersByTimeAsync(50);
@@ -650,6 +696,30 @@ describe("watchPluginAssets", () => {
         { tier: "sample", name: "first", copied: ["plugin.json"], removed: [] },
       ])
     );
+  });
+
+  it("throws from a first sync that fails, leaving nothing running", async () => {
+    vi.useFakeTimers();
+    writeManifest(path.join(src, "sample", "first"));
+    const fake = fakeWatch();
+    const realCopy = fs.copyFileSync;
+    vi.spyOn(fs, "copyFileSync").mockImplementation((from, to, mode) => {
+      if (from.endsWith("plugin.json")) throw new Error("disk full");
+      return realCopy.call(fs, from, to, mode);
+    });
+
+    expect(() =>
+      watchPluginAssets({
+        srcRoot: src,
+        destRoot: dest,
+        initialSync: true,
+        watch: fake.watch,
+      })
+    ).toThrow("disk full");
+
+    expect(fake.watchers).toHaveLength(1);
+    expect(fake.watchers[0].close).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("picks up a tier created after it started through the periodic rescan", async () => {

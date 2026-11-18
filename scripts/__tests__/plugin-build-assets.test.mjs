@@ -144,7 +144,13 @@ describe("findMissingPluginAssets", () => {
 
   it("reads a manifest whose contributions have the wrong shape without throwing", () => {
     writeManifest("sample", "half-edited", {
-      contributes: { agents: {}, mcpServers: [{ command: "./mcp/absent.mjs", args: { 0: "x" } }] },
+      contributes: {
+        agents: {},
+        mcpServers: [
+          { command: "./mcp/absent.mjs", args: { 0: "x" } },
+          { command: "node", args: "./mcp/string-args.mjs" },
+        ],
+      },
     });
     writeManifest("sample", "servers-object", {
       contributes: { agents: [{ command: "./bin/absent.mjs" }], mcpServers: {} },
@@ -162,15 +168,23 @@ describe("findMissingPluginAssets", () => {
   it("says why a path under a reserved directory is missing", () => {
     writeManifest("builtin", "reserved", {
       contributes: {
-        mcpServers: [{ command: "node", args: ["./main/helper.mjs", "./bin/x.mjs"] }],
+        mcpServers: [
+          {
+            command: "node",
+            args: ["./main/helper.mjs", "./shared/main", "./bin/x.mjs", "./main"],
+          },
+        ],
       },
     });
 
     const missing = findMissingPluginAssets(workDir);
+    const forPath = (relPath) => missing.find((m) => m.includes(`"${relPath}"`));
 
-    expect(missing).toHaveLength(2);
-    expect(missing.find((m) => m.includes("./main/helper.mjs"))).toContain("never copies main/");
-    expect(missing.find((m) => m.includes("./bin/x.mjs"))).not.toContain("never copies");
+    expect(missing).toHaveLength(4);
+    expect(forPath("./main/helper.mjs")).toContain("never copies main/");
+    expect(forPath("./shared/main")).toContain("never copies shared/");
+    expect(forPath("./bin/x.mjs")).not.toContain("never copies");
+    expect(forPath("./main")).not.toContain("never copies");
   });
 });
 

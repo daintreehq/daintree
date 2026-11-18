@@ -142,8 +142,12 @@ function manifestSiblingFiles(srcPluginDir, manifestText) {
  * never leaves a truncated asset and a read-only copy can still be replaced. A
  * staged file a crash leaves behind is pruned by the next sync.
  */
+let stagedCount = 0;
+
 function replaceFile(src, dest, mode) {
-  const staged = `${dest}.sync-${process.pid}`;
+  // Short, so a long asset name never overflows, and no name a plugin ships.
+  stagedCount += 1;
+  const staged = path.join(path.dirname(dest), `.asset-sync-${process.pid}-${stagedCount}`);
   try {
     fs.copyFileSync(src, staged);
     fs.chmodSync(staged, mode);
@@ -222,13 +226,17 @@ export function syncPluginAssets(
 ) {
   const src = path.resolve(srcPluginDir);
   const dest = path.resolve(destPluginDir);
-  const manifestText = readIfPresent(path.join(src, "plugin.json"));
+  // A linked plugin directory counts as absent, as it does to the tier
+  // listing and the manifest validator.
+  const srcRealDir = fs.lstatSync(src, { throwIfNoEntry: false })?.isDirectory()
+    ? fs.realpathSync(src)
+    : null;
+  const manifestText = srcRealDir ? readIfPresent(path.join(src, "plugin.json")) : null;
 
   const wanted = new Map();
   let keepUnlistedFiles = false;
-  let pluginRealDir = src;
+  const pluginRealDir = srcRealDir ?? src;
   if (manifestText !== null) {
-    pluginRealDir = fs.realpathSync(src);
     wanted.set("plugin.json", "file");
     for (const name of listDirNames(src)) {
       if (!isReservedAssetDir(name)) wanted.set(name, "dir");
@@ -243,12 +251,19 @@ export function syncPluginAssets(
     }
   }
 
-  const destStat = fs.lstatSync(dest, { throwIfNoEntry: false });
-  if (destStat && !destStat.isDirectory()) {
-    // Never sync through a link: replace whatever stands in for the directory.
-    fs.rmSync(dest, { force: true });
-    changes.removed.push(".");
-  } else if (destStat) {
+  // Followed through links, as esbuild follows them writing `main/` there.
+  if (fs.statSync(dest, { throwIfNoEntry: false })?.isDirectory()) {
+    const destRealDir = fs.realpathSync(dest);
+    if (
+      srcRealDir &&
+      (destRealDir === srcRealDir ||
+        isInsideDir(destRealDir, srcRealDir) ||
+        isInsideDir(srcRealDir, destRealDir))
+    ) {
+      throw new Error(
+        `${dest} resolves into ${src}: refusing to sync plugin assets onto their source`
+      );
+    }
     for (const entry of fs.readdirSync(dest, { withFileTypes: true })) {
       if (isReservedAssetDir(entry.name)) continue;
       const kind = outputKind(entry);
@@ -257,6 +272,10 @@ export function syncPluginAssets(
       fs.rmSync(path.join(dest, entry.name), { recursive: true, force: true });
       changes.removed.push(entry.name);
     }
+  } else if (fs.lstatSync(dest, { throwIfNoEntry: false })) {
+    // A file, or a dangling link, where the directory belongs.
+    fs.rmSync(dest, { force: true });
+    changes.removed.push(".");
   }
   if (wanted.size === 0) return changes;
 
@@ -302,9 +321,10 @@ const PATH_SEPARATOR = process.platform === "win32" ? /[\\/]/ : /\//;
  * (Linux's recursive watch keeps the old inode after an atomic save) or fail
  * outright, and covers a tier that did not exist when it started.
  *
- * `initialSync` mirrors every tier before this returns and reports what it
- * changed through `onChange` like any later pass, so an edit made between the
- * caller's own checks and this sync is still rechecked. `onChange` receives
+ * `initialSync` mirrors every tier before this returns, throwing if that
+ * fails, and reports what it changed through `onChange` like any later pass,
+ * so an edit made between the caller's own checks and this sync is still
+ * rechecked. `onChange` receives
  * `{ tier, name, copied, removed }` for each plugin a pass changed. `close()`
  * stops the watcher and resolves once any pass in flight has finished.
  */
@@ -374,20 +394,23 @@ export function watchPluginAssets({
     return [...targets.values()];
   }
 
-  function syncDirty() {
+  function syncDirty({ rethrow = false } = {}) {
+    let failure = null;
     for (const { tier, name } of takeBatch()) {
       const changes = { copied: [], removed: [] };
       try {
         syncPluginAssets(path.join(srcRoot, tier, name), path.join(destRoot, tier, name), changes);
       } catch (error) {
         // A file can vanish mid-save; the event that follows, or the rescan, syncs it again.
-        onError(error);
+        if (rethrow) failure ??= error;
+        else onError(error);
       }
       // Kept from a pass that failed partway, so a manifest it copied is still rechecked.
       if (changes.copied.length > 0 || changes.removed.length > 0) {
         pending.push({ tier, name, ...changes });
       }
     }
+    if (failure) throw failure;
   }
 
   async function runPasses() {
@@ -426,25 +449,32 @@ export function watchPluginAssets({
     }
   }
 
+  let rescanTimer = null;
+  function close() {
+    closed = true;
+    if (debounceTimer) clearTimeout(debounceTimer);
+    clearInterval(rescanTimer);
+    for (const watcher of watchers) watcher.close();
+    return draining ?? Promise.resolve();
+  }
+
   if (initialSync) {
     for (const tier of tiers) dirtyTiers.add(tier);
-    syncDirty();
+    try {
+      // A first sync that fails fails startup, as the one-shot copy did.
+      syncDirty({ rethrow: true });
+    } catch (error) {
+      close();
+      throw error;
+    }
     drain();
   }
 
-  const rescanTimer = setInterval(() => {
+  rescanTimer = setInterval(() => {
     for (const tier of tiers) dirtyTiers.add(tier);
     drain();
   }, rescanMs);
   rescanTimer.unref();
 
-  return {
-    close() {
-      closed = true;
-      if (debounceTimer) clearTimeout(debounceTimer);
-      clearInterval(rescanTimer);
-      for (const watcher of watchers) watcher.close();
-      return draining ?? Promise.resolve();
-    },
-  };
+  return { close };
 }
