@@ -190,7 +190,11 @@ export function DecisionCancelDialog({
       // A withdrawal offered in place of a dismissal starts again from Keep question.
       focusResetKey={mode}
       cooldownKey={mode}
-      confirmCooldownMs={!dismissing && current?.reason != null ? WITHDRAW_COOLDOWN_MS : undefined}
+      confirmCooldownMs={
+        !dismissing && current !== null && current.reason !== null
+          ? WITHDRAW_COOLDOWN_MS
+          : undefined
+      }
       hint={showReading ? "Reading the question…" : undefined}
       onConfirm={confirm}
       isConfirmLoading={showSpinner}

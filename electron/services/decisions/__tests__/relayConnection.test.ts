@@ -1955,7 +1955,7 @@ describe("get_involvement over a connection (#17228)", () => {
     expect(asked.status).toBe("queued");
   });
 
-  it("serves a 0.7.0 phone's preference through a 0.7.0 relay as agents read it before 0.8.0, and sends that relay nothing 0.8.0 added (#17433)", async () => {
+  it("serves a 0.7.0 phone's preference through a 0.7.0 relay as agents read it before 0.8.0, and asks that relay for nothing 0.8.0 added (#17433, #17239)", async () => {
     const relay = await relayWithPreference();
     // Every feature a 0.7.0 relay can advertise; none of 0.8.0's.
     const releasedBy070 = [
@@ -2017,9 +2017,12 @@ describe("get_involvement over a connection (#17228)", () => {
     await vi.waitFor(() => expect(h.relay.questions).toHaveLength(1));
     expect(h.statuses.at(-1)?.state).toBe("connected");
     expect(relay.declared.length).toBeGreaterThan(0);
+    // Only the owner desktop's decline is declared beyond 0.7.0's (#17239): a relay ignores a
+    // token it doesn't know, and nothing is declined unless the person dismisses a question here.
+    const declarable = [...releasedBy070, "owner-desktop-declines-v1"];
     for (const features of relay.declared) {
       for (const feature of (features as string[] | undefined) ?? []) {
-        expect(releasedBy070).toContain(feature);
+        expect(declarable).toContain(feature);
       }
     }
     for (const api of hostApis) expect(api).not.toHaveBeenCalled();
