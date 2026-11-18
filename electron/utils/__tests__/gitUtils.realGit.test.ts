@@ -124,6 +124,8 @@ describe("branch reads", () => {
     fs.mkdirSync(outside);
   });
 
+  const read = (cwd: string) => readGitBranch(cwd, { timeout: 10_000 });
+
   beforeEach(() => {
     vi.stubEnv("HOME", home);
     vi.stubEnv("XDG_CONFIG_HOME", path.join(home, ".config"));
@@ -137,26 +139,49 @@ describe("branch reads", () => {
   });
 
   it("answers a branch, then a detached HEAD, as git's own word rather than a failure", async () => {
-    await expect(readGitBranch(repo, { timeout: 10_000 })).resolves.toEqual({
+    await expect(read(repo)).resolves.toEqual({
       branch: "main",
       unreadable: false,
     });
 
     git(repo, "checkout", "-q", "--detach");
-    await expect(readGitBranch(repo, { timeout: 10_000 })).resolves.toEqual({
+    await expect(read(repo)).resolves.toEqual({
       branch: null,
       unreadable: false,
     });
 
     git(repo, "checkout", "-q", "main");
-    await expect(readGitBranch(repo, { timeout: 10_000 })).resolves.toEqual({
+    await expect(read(repo)).resolves.toEqual({
       branch: "main",
       unreadable: false,
     });
   });
 
+  it("names a branch before its first commit, fresh or orphaned", async () => {
+    const fresh = path.join(root, "fresh");
+    fs.mkdirSync(fresh);
+    git(fresh, "init", "-q", "-b", "trunk");
+    await expect(read(fresh)).resolves.toEqual({ branch: "trunk", unreadable: false });
+
+    const orphaned = path.join(root, "orphaned");
+    makeRepo(orphaned);
+    git(orphaned, "checkout", "-q", "--orphan", "rewrite");
+    await expect(read(orphaned)).resolves.toEqual({ branch: "rewrite", unreadable: false });
+  });
+
+  it("calls a worktree whose metadata is gone unreadable, not branchless", async () => {
+    const base = path.join(root, "pointed");
+    const stranded = path.join(root, "stranded");
+    makeRepo(base);
+    git(base, "worktree", "add", "-q", "-b", "side", stranded);
+    await expect(read(stranded)).resolves.toEqual({ branch: "side", unreadable: false });
+
+    fs.rmSync(path.join(base, ".git", "worktrees", "stranded"), { recursive: true, force: true });
+    await expect(read(stranded)).resolves.toEqual({ branch: null, unreadable: true });
+  });
+
   it("answers a folder outside git as branchless", async () => {
-    await expect(readGitBranch(outside, { timeout: 10_000 })).resolves.toEqual({
+    await expect(read(outside)).resolves.toEqual({
       branch: null,
       unreadable: false,
     });

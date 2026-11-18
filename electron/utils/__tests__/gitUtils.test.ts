@@ -123,16 +123,32 @@ describe("getGitBranch", () => {
 });
 
 describe("readGitBranch", () => {
-  it("answers the branch git names", async () => {
-    mockGitOutput("feature/foo\n");
+  /** `symbolic-ref --quiet HEAD` on a detached HEAD: exit 1 and nothing said. */
+  function mockDetachedHead(): void {
+    execFileMock.mockImplementation((_file, _args, _opts, cb: ExecCallback) => {
+      const error = Object.assign(new Error("Command failed: git symbolic-ref"), { code: 1 });
+      cb(error, "", "");
+    });
+  }
+
+  it("names the branch HEAD is on, from its ref", async () => {
+    mockGitOutput("refs/heads/feature/foo\n");
     await expect(readGitBranch("/repo")).resolves.toEqual({
       branch: "feature/foo",
       unreadable: false,
     });
   });
 
+  it("keeps a branch name that ends in whitespace git allows", async () => {
+    mockGitOutput("refs/heads/\u00a0wide\u00a0\n");
+    await expect(readGitBranch("/repo")).resolves.toEqual({
+      branch: "\u00a0wide\u00a0",
+      unreadable: false,
+    });
+  });
+
   it("answers a detached HEAD and a folder outside git as branchless", async () => {
-    mockGitOutput("HEAD\n");
+    mockDetachedHead();
     await expect(readGitBranch("/repo")).resolves.toEqual({ branch: null, unreadable: false });
 
     mockNotARepository();
@@ -145,8 +161,6 @@ describe("readGitBranch", () => {
   it("calls a timed-out read unreadable, not branchless", async () => {
     mockGitTimeout();
     await expect(readGitBranch("/repo")).resolves.toEqual({ branch: null, unreadable: true });
-    // The best-effort read still says nothing rather than throw.
-    await expect(getGitBranch("/repo")).resolves.toBeNull();
   });
 
   it("calls every other failure to look unreadable", async () => {
@@ -156,8 +170,32 @@ describe("readGitBranch", () => {
     mockGitFatal("fatal: detected dubious ownership in repository at '/repo'\n");
     await expect(readGitBranch("/repo")).resolves.toEqual({ branch: null, unreadable: true });
 
+    // A worktree whose `.git` file points at metadata git can't reach.
+    mockGitFatal("fatal: not a git repository: /repo/.git/worktrees/login\n");
+    await expect(readGitBranch("/repo/worktrees/login")).resolves.toEqual({
+      branch: null,
+      unreadable: true,
+    });
+
+    // Exit 1 with something said is not the quiet detached answer.
+    execFileMock.mockImplementation((_file, _args, _opts, cb: ExecCallback) => {
+      const error = Object.assign(new Error("Command failed: git symbolic-ref"), { code: 1 });
+      cb(error, "", "git: 'symbolic-ref' is not a git command. See 'git --help'.\n");
+    });
+    await expect(readGitBranch("/repo")).resolves.toEqual({ branch: null, unreadable: true });
+
     mockGitOutput("\n");
     await expect(readGitBranch("/repo")).resolves.toEqual({ branch: null, unreadable: true });
+  });
+
+  it("asks git in the given folder and bounds the wait without being told to", async () => {
+    mockGitOutput("refs/heads/main\n");
+    await readGitBranch("/repo/path");
+    const [, args, opts] = execFileMock.mock.calls[0];
+    expect(args).toEqual(["symbolic-ref", "--quiet", "HEAD"]);
+    expect(opts.cwd).toBe("/repo/path");
+    expect(opts.timeout).toBeGreaterThan(0);
+    expect(Number.isFinite(opts.timeout)).toBe(true);
   });
 });
 

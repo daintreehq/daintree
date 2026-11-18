@@ -155,17 +155,30 @@ describe("CanopyPlace branch reads", () => {
     act(() => {
       vi.advanceTimersByTime(REREAD_MS);
     });
-    await settle(() => reads[1]!.reject(new Error("Couldn't read the branch")));
+    await settle(() => reads[1]!.reject(new Error("Couldn't read the run's branch")));
     expect(shownPlace()).toEqual({ kind: "on branch", text: "feature/login" });
 
-    // Coming back to the run starts from the branch, not from the failure.
+    act(() => {
+      vi.advanceTimersByTime(REREAD_MS);
+    });
+    expect(reads).toHaveLength(3);
+    await settle(() => reads[2]!.resolve("feature/after-checkout"));
+    expect(shownPlace()).toEqual({ kind: "on branch", text: "feature/after-checkout" });
+  });
+
+  it("keeps a remembered branch when the first read on coming back fails", async () => {
+    const item = itemFor();
+    const first = heldReads();
+    render(<CanopyPlace item={item} id="place" hostId="remote" runBranch={first.runBranch} />);
+    await settle(() => first.reads[0]!.resolve("feature/login"));
+
     cleanup();
     const next = heldReads();
     render(<CanopyPlace item={item} id="place" hostId="remote" runBranch={next.runBranch} />);
     expect(shownPlace()).toEqual({ kind: "on branch", text: "feature/login" });
 
-    await settle(() => next.reads[0]!.resolve("feature/after-checkout"));
-    expect(shownPlace()).toEqual({ kind: "on branch", text: "feature/after-checkout" });
+    await settle(() => next.reads[0]!.reject(new Error("Couldn't read the run's branch")));
+    expect(shownPlace()).toEqual({ kind: "on branch", text: "feature/login" });
   });
 
   it("names the folder once a read says the branch is gone", async () => {

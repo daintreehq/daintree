@@ -382,19 +382,29 @@ export function probeGitCommonDir(
 }
 
 /**
- * What a branch read found. `unreadable: false` is git's own answer: the branch,
- * or `null` for a detached HEAD or a folder git says isn't a repository.
- * `unreadable: true` is a failure to look (timeout, spawn error, any other
- * fatal), which says nothing about the branch.
+ * What a branch read found. `unreadable: false` is git's own answer: the branch
+ * HEAD is on (even one with no commits yet), or `null` for a detached HEAD or a
+ * folder git says isn't a repository. `unreadable: true` is a failure to look
+ * (timeout, spawn error, any other fatal), which says nothing about the branch.
  */
 export type GitBranchReading =
   { branch: string | null; unreadable: false } | { branch: null; unreadable: true };
 
+/** `symbolic-ref --quiet`'s silent exit when HEAD names no branch: a detached HEAD. */
+const SYMBOLIC_REF_DETACHED_EXIT_CODE = 1;
+/**
+ * Older git says "not a git repository: <target>" for a `.git` file whose
+ * target is gone or unreachable: a worktree it couldn't open, not a folder
+ * outside git.
+ */
+const UNREACHABLE_GITFILE_PATTERN = /not a git repository: /i;
+
 /**
  * Read the checked-out branch of a worktree, keeping a failed read apart from
- * a branchless answer, for a caller that must not take one for the other. Not
- * cached: unlike the git dir, the branch is mutable over a worktree's life.
- * Never throws.
+ * a branchless answer, for a caller that must not take one for the other.
+ * `symbolic-ref` rather than `rev-parse --abbrev-ref HEAD`, which fails on a
+ * branch with no commits yet. Not cached: unlike the git dir, the branch is
+ * mutable over a worktree's life. Never throws.
  */
 export async function readGitBranch(
   worktreePath: string,
@@ -402,35 +412,56 @@ export async function readGitBranch(
 ): Promise<GitBranchReading> {
   const { timeout = 500 } = options;
   try {
-    const result = (
-      await execGit(["rev-parse", "--abbrev-ref", "HEAD"], worktreePath, timeout)
-    ).trim();
-    if (result === "HEAD") return { branch: null, unreadable: false };
-    if (!result) return { branch: null, unreadable: true };
-    return { branch: result, unreadable: false };
+    const ref = (await execGit(["symbolic-ref", "--quiet", "HEAD"], worktreePath, timeout)).replace(
+      /\r?\n$/,
+      ""
+    );
+    const branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
+    return branch ? { branch, unreadable: false } : { branch: null, unreadable: true };
   } catch (error) {
     const execError = error instanceof GitExecError ? error : null;
-    const failure = classifyGitFailure(
-      execError ? execError.originalError : error,
-      execError?.stderr ?? ""
-    );
-    return failure === "definitive"
-      ? { branch: null, unreadable: false }
-      : { branch: null, unreadable: true };
+    const rootCause = execError ? execError.originalError : error;
+    const stderr = execError?.stderr ?? "";
+    const exit = rootCause as { code?: unknown; killed?: boolean; signal?: string | null };
+    if (
+      exit?.code === SYMBOLIC_REF_DETACHED_EXIT_CODE &&
+      exit.killed !== true &&
+      !exit.signal &&
+      stderr.trim() === ""
+    ) {
+      return { branch: null, unreadable: false };
+    }
+    if (
+      classifyGitFailure(rootCause, stderr) === "definitive" &&
+      !UNREACHABLE_GITFILE_PATTERN.test(stderr)
+    ) {
+      return { branch: null, unreadable: false };
+    }
+    return { branch: null, unreadable: true };
   }
 }
 
 /**
- * The checked-out branch of a worktree, or `null` for a detached HEAD or on
- * any failure. Used best-effort at terminal-close time to stamp a resume
- * sanity-check onto the journal record, so it runs with a short default
- * timeout and never throws.
+ * Resolve the currently checked-out branch name for a worktree. Returns `null`
+ * for a detached HEAD (git emits the literal "HEAD") or on any failure. Not
+ * cached: unlike the git dir, the branch is mutable over a worktree's life.
+ * Used best-effort at terminal-close time to stamp a resume sanity-check onto
+ * the journal record, so it runs with a short default timeout and never throws.
  */
 export async function getGitBranch(
   worktreePath: string,
   options: { timeout?: number } = {}
 ): Promise<string | null> {
-  return (await readGitBranch(worktreePath, options)).branch;
+  const { timeout = 500 } = options;
+  try {
+    const result = (
+      await execGit(["rev-parse", "--abbrev-ref", "HEAD"], worktreePath, timeout)
+    ).trim();
+    if (!result || result === "HEAD") return null;
+    return result;
+  } catch {
+    return null;
+  }
 }
 
 export function clearGitDirCache(worktreePath?: string): void {
