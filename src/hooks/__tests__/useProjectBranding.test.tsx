@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const getSettingsMock = vi.hoisted(() => vi.fn());
 
@@ -35,6 +35,7 @@ import {
 describe("useProjectBranding", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getSettingsMock.mockReset();
     invalidateBrandingCache();
     projectState.currentProject = { id: "project-1" };
   });
@@ -106,7 +107,7 @@ describe("useProjectBranding", () => {
   it("caches undefined projectIconSvg correctly (no icon configured)", async () => {
     getSettingsMock.mockResolvedValueOnce({ projectIconSvg: undefined });
 
-    const { result } = renderHook(() => useProjectBranding("project-1"));
+    const { result, unmount } = renderHook(() => useProjectBranding("project-1"));
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -116,6 +117,7 @@ describe("useProjectBranding", () => {
     expect(getSettingsMock).toHaveBeenCalledTimes(1);
 
     // Mount again — should not re-fetch
+    unmount();
     getSettingsMock.mockClear();
     const { result: second } = renderHook(() => useProjectBranding("project-1"));
     expect(second.current.isLoading).toBe(false);
@@ -192,30 +194,6 @@ describe("useProjectBranding", () => {
     expect(r2.current.projectIconSvg).toBe("<svg>p2</svg>");
   });
 
-  it("cleans up pendingFetches on error so retry is possible", async () => {
-    getSettingsMock.mockRejectedValueOnce(new Error("network error"));
-
-    const { result } = renderHook(() => useProjectBranding("project-1"));
-
-    await waitFor(() => {
-      expect(result.current.isLoading).toBe(false);
-    });
-
-    // Should have cached undefined on error
-    expect(result.current.projectIconSvg).toBeUndefined();
-
-    // After invalidation, should retry
-    getSettingsMock.mockResolvedValueOnce({ projectIconSvg: "<svg>recovered</svg>" });
-
-    act(() => {
-      invalidateBrandingCache("project-1");
-    });
-
-    await waitFor(() => {
-      expect(result.current.projectIconSvg).toBe("<svg>recovered</svg>");
-    });
-  });
-
   it("returns undefined with isLoading false when no targetId", () => {
     projectState.currentProject = null;
 
@@ -282,5 +260,291 @@ describe("useProjectBranding", () => {
     });
 
     expect(result.current.projectIconSvg).toBe("<svg>fresh</svg>");
+  });
+
+  describe("transient read failures", () => {
+    const revealListeners = new Set<() => void>();
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      revealListeners.clear();
+      Object.defineProperty(window, "electron", {
+        configurable: true,
+        value: {
+          app: {
+            onViewRevealed: (cb: () => void) => {
+              revealListeners.add(cb);
+              return () => revealListeners.delete(cb);
+            },
+          },
+        },
+      });
+    });
+
+    afterEach(() => {
+      cleanup();
+      invalidateBrandingCache();
+      vi.useRealTimers();
+      delete (window as { electron?: unknown }).electron;
+    });
+
+    const advance = (ms: number) =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+
+    // Steps through each retry delay, checking no read lands a tick early.
+    const stepThroughRetries = async (firstCall: number) => {
+      let calls = firstCall;
+      for (const delay of [250, 1000, 3000]) {
+        await advance(delay - 1);
+        expect(getSettingsMock).toHaveBeenCalledTimes(calls);
+        await advance(1);
+        expect(getSettingsMock).toHaveBeenCalledTimes(++calls);
+      }
+    };
+
+    const exhaustRetries = async () => {
+      getSettingsMock.mockRejectedValue(new Error("unreadable"));
+      const hook = renderHook(() => useProjectBranding("project-1"));
+      await advance(0);
+      expect(getSettingsMock).toHaveBeenCalledTimes(1);
+      await stepThroughRetries(1);
+      return hook;
+    };
+
+    // Three more failures then a success: a rearm that granted less than a full
+    // budget would give up before the fourth read.
+    const queueFullBudgetRecovery = (svg: string) => {
+      getSettingsMock.mockReset();
+      getSettingsMock
+        .mockRejectedValueOnce(new Error("still down"))
+        .mockRejectedValueOnce(new Error("still down"))
+        .mockRejectedValueOnce(new Error("still down"))
+        .mockResolvedValueOnce({ projectIconSvg: svg });
+    };
+
+    it("retries a failed read and shows the saved icon without a settings edit", async () => {
+      getSettingsMock
+        .mockRejectedValueOnce(new Error("transient"))
+        .mockResolvedValueOnce({ projectIconSvg: "<svg>saved</svg>" });
+
+      const { result } = renderHook(() => useProjectBranding("project-1"));
+      await advance(0);
+
+      expect(getSettingsMock).toHaveBeenCalledTimes(1);
+      expect(result.current.projectIconSvg).toBeUndefined();
+      expect(result.current.isLoading).toBe(false);
+
+      await advance(249);
+      expect(getSettingsMock).toHaveBeenCalledTimes(1);
+
+      await advance(1);
+      expect(getSettingsMock).toHaveBeenCalledTimes(2);
+      expect(result.current.projectIconSvg).toBe("<svg>saved</svg>");
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("stops after the bounded retries, even across rerenders and cache notifications", async () => {
+      const { result, rerender } = await exhaustRetries();
+
+      expect(result.current.projectIconSvg).toBeUndefined();
+      expect(result.current.isLoading).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+
+      await advance(60_000);
+      rerender();
+      act(() => {
+        updateBrandingCache("project-2", "<svg>other</svg>");
+      });
+      await advance(0);
+
+      expect(getSettingsMock).toHaveBeenCalledTimes(4);
+    });
+
+    it("gives a fresh budget on remount once retries ran out", async () => {
+      const { unmount } = await exhaustRetries();
+      unmount();
+      queueFullBudgetRecovery("<svg>recovered</svg>");
+
+      const { result } = renderHook(() => useProjectBranding("project-1"));
+      await advance(0);
+      expect(getSettingsMock).toHaveBeenCalledTimes(1);
+
+      await stepThroughRetries(1);
+      expect(result.current.projectIconSvg).toBe("<svg>recovered</svg>");
+    });
+
+    it("gives a fresh budget when the project view is revealed again", async () => {
+      const { result } = await exhaustRetries();
+      queueFullBudgetRecovery("<svg>revealed</svg>");
+
+      act(() => {
+        revealListeners.forEach((cb) => cb());
+      });
+      await advance(0);
+      expect(getSettingsMock).toHaveBeenCalledTimes(1);
+
+      await stepThroughRetries(1);
+      expect(result.current.projectIconSvg).toBe("<svg>revealed</svg>");
+    });
+
+    it("keeps the scheduled retry's deadline when the view is revealed mid-wait", async () => {
+      getSettingsMock
+        .mockRejectedValueOnce(new Error("transient"))
+        .mockResolvedValueOnce({ projectIconSvg: "<svg>on-time</svg>" });
+
+      const { result } = renderHook(() => useProjectBranding("project-1"));
+      await advance(100);
+      expect(getSettingsMock).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        revealListeners.forEach((cb) => cb());
+      });
+      await advance(149);
+      expect(getSettingsMock).toHaveBeenCalledTimes(1);
+
+      await advance(1);
+      expect(getSettingsMock).toHaveBeenCalledTimes(2);
+      expect(result.current.projectIconSvg).toBe("<svg>on-time</svg>");
+    });
+
+    it("does not read while unmounted, and reads once a consumer mounts again", async () => {
+      getSettingsMock.mockRejectedValueOnce(new Error("transient"));
+
+      const { unmount } = renderHook(() => useProjectBranding("project-1"));
+      await advance(0);
+      unmount();
+
+      await advance(10_000);
+      expect(getSettingsMock).toHaveBeenCalledTimes(1);
+      expect(revealListeners.size).toBe(0);
+
+      getSettingsMock.mockResolvedValueOnce({ projectIconSvg: "<svg>back</svg>" });
+      const { result } = renderHook(() => useProjectBranding("project-1"));
+      await advance(0);
+
+      expect(getSettingsMock).toHaveBeenCalledTimes(2);
+      expect(result.current.projectIconSvg).toBe("<svg>back</svg>");
+    });
+
+    it("keeps a successful no-icon read cached with no retry scheduled", async () => {
+      getSettingsMock.mockResolvedValueOnce({ projectIconSvg: undefined });
+
+      const { unmount } = renderHook(() => useProjectBranding("project-1"));
+      await advance(0);
+      unmount();
+
+      expect(vi.getTimerCount()).toBe(0);
+
+      const { result } = renderHook(() => useProjectBranding("project-1"));
+      await advance(10_000);
+
+      expect(result.current.projectIconSvg).toBeUndefined();
+      expect(result.current.isLoading).toBe(false);
+      expect(getSettingsMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("cancels a scheduled retry when settings write the icon through", async () => {
+      getSettingsMock.mockRejectedValueOnce(new Error("transient"));
+
+      const { result } = renderHook(() => useProjectBranding("project-1"));
+      await advance(0);
+      expect(vi.getTimerCount()).toBe(1);
+
+      act(() => {
+        updateBrandingCache("project-1", undefined);
+      });
+      expect(vi.getTimerCount()).toBe(0);
+      await advance(10_000);
+
+      expect(getSettingsMock).toHaveBeenCalledTimes(1);
+      expect(result.current.projectIconSvg).toBeUndefined();
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("reads immediately after invalidation instead of waiting out the retry delay", async () => {
+      getSettingsMock
+        .mockRejectedValueOnce(new Error("transient"))
+        .mockResolvedValueOnce({ projectIconSvg: "<svg>fresh</svg>" });
+
+      const { result } = renderHook(() => useProjectBranding("project-1"));
+      await advance(0);
+      expect(vi.getTimerCount()).toBe(1);
+
+      act(() => {
+        invalidateBrandingCache("project-1");
+      });
+      expect(vi.getTimerCount()).toBe(0);
+      await advance(0);
+
+      expect(getSettingsMock).toHaveBeenCalledTimes(2);
+      expect(result.current.projectIconSvg).toBe("<svg>fresh</svg>");
+
+      await advance(10_000);
+      expect(getSettingsMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("cancels every project's scheduled retry on a global invalidation", async () => {
+      getSettingsMock
+        .mockRejectedValueOnce(new Error("transient"))
+        .mockRejectedValueOnce(new Error("transient"))
+        .mockResolvedValueOnce({ projectIconSvg: "<svg>p1</svg>" })
+        .mockResolvedValueOnce({ projectIconSvg: "<svg>p2</svg>" });
+
+      const { result: r1 } = renderHook(() => useProjectBranding("project-1"));
+      const { result: r2 } = renderHook(() => useProjectBranding("project-2"));
+      await advance(0);
+      expect(getSettingsMock).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(2);
+
+      act(() => {
+        invalidateBrandingCache();
+      });
+      expect(vi.getTimerCount()).toBe(0);
+      await advance(0);
+
+      expect(getSettingsMock).toHaveBeenCalledTimes(4);
+      expect(r1.current.projectIconSvg).toBe("<svg>p1</svg>");
+      expect(r2.current.projectIconSvg).toBe("<svg>p2</svg>");
+
+      await advance(10_000);
+      expect(getSettingsMock).toHaveBeenCalledTimes(4);
+    });
+
+    it("ignores a stale rejection that lands after a newer read started", async () => {
+      let rejectFirst: (err: Error) => void;
+      getSettingsMock.mockReturnValueOnce(
+        new Promise((_, reject) => {
+          rejectFirst = reject;
+        })
+      );
+      let resolveSecond: (v: { projectIconSvg?: string }) => void;
+      getSettingsMock.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveSecond = resolve;
+        })
+      );
+
+      const { result } = renderHook(() => useProjectBranding("project-1"));
+      act(() => {
+        invalidateBrandingCache("project-1");
+      });
+      expect(getSettingsMock).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        rejectFirst!(new Error("stale"));
+      });
+
+      expect(result.current.isLoading).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+
+      await act(async () => {
+        resolveSecond!({ projectIconSvg: "<svg>second</svg>" });
+      });
+
+      expect(result.current.projectIconSvg).toBe("<svg>second</svg>");
+      expect(getSettingsMock).toHaveBeenCalledTimes(2);
+    });
   });
 });
