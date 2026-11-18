@@ -651,13 +651,22 @@ function KitTreeView(props: PluginTreeViewProps) {
   // a mark. A release lands only there, resolved again against the rows as
   // they are then, since a lazy load or a new row model can land while the
   // pointer holds still.
-  const lastHit = useRef<{ path: string; position: DropPosition; allowed: boolean } | null>(null);
+  const lastHit = useRef<{
+    drag: string;
+    path: string;
+    position: DropPosition;
+    allowed: boolean;
+  } | null>(null);
   // Where the pointer really is: dnd-kit's delta folds in the scroll of the
-  // ancestors, which would aim the hit test above or below it.
+  // ancestors, which would aim the hit test above or below it. Only the kind
+  // of pointer that lifted the node counts, so a mouse moving during a touch
+  // drag doesn't aim it either.
   const pointer = useRef<{ x: number; y: number } | null>(null);
+  const dragByTouch = useRef(false);
   useLayoutEffect(() => {
     if (dragPath === null || !dragSurface) return;
     const track = (event: PointerEvent) => {
+      if ((event.pointerType === "touch") !== dragByTouch.current) return;
       pointer.current = { x: event.clientX, y: event.clientY };
     };
     // Capture on the window, ahead of dnd-kit's own mouse and touch moves.
@@ -714,7 +723,7 @@ function KitTreeView(props: PluginTreeViewProps) {
     }
     const { path, position } = hit;
     const allowed = allowMove(resolveHit(dragRow, hit.target, position)) !== null;
-    lastHit.current = { path, position, allowed };
+    lastHit.current = { drag: dragRow.path, path, position, allowed };
     if (drop?.path === path && drop.position === position && drop.allowed === allowed) return;
     setDrop({ path, position, allowed });
   };
@@ -723,7 +732,10 @@ function KitTreeView(props: PluginTreeViewProps) {
     lastHit.current = null;
     setDragPath(null);
     setDrop(null);
-    if (!event || !last?.allowed || dragRow?.kind !== "node") return;
+    // A retired sensor's release (onMove went away mid-drag and came back)
+    // must not take a later drag's hit.
+    if (!event || !last?.allowed || last.drag !== String(event.active.id)) return;
+    if (dragRow?.kind !== "node") return;
     // Only onto the row and band that drew the mark, and only while the
     // pointer is still over them: rows that moved under a still pointer
     // would otherwise drop somewhere it isn't.
@@ -867,6 +879,8 @@ function KitTreeView(props: PluginTreeViewProps) {
       accessibility={DRAG_ACCESSIBILITY}
       onDragStart={(event: DragStartEvent) => {
         lastHit.current = null;
+        dragByTouch.current =
+          typeof TouchEvent !== "undefined" && event.activatorEvent instanceof TouchEvent;
         setDragPath(String(event.active.id));
         setDrop(null);
       }}
