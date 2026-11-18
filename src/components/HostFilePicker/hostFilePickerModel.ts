@@ -154,3 +154,56 @@ export function formatEntrySize(size: number | null): string {
   }
   return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
 }
+
+/** The list's scroll geometry: one-line rows of a fixed height inside the list's own padding. */
+export interface ListGeometry {
+  rowHeight: number;
+  padding: number;
+  viewport: number;
+}
+
+function clampedScrollTop(count: number, scrollTop: number, geometry: ListGeometry): number {
+  const content = count * geometry.rowHeight + 2 * geometry.padding;
+  return Math.min(Math.max(0, content - geometry.viewport), Math.max(0, scrollTop));
+}
+
+/**
+ * The rows to mount at a scroll offset, as `[start, end)`: those in view and
+ * `overscan` more on each side. The offset is clamped first, so a listing that
+ * shrank under an old offset still shows its end rather than nothing.
+ */
+export function visibleRowRange(
+  count: number,
+  scrollTop: number,
+  geometry: ListGeometry,
+  overscan: number
+): { start: number; end: number } {
+  if (count === 0) return { start: 0, end: 0 };
+  const { rowHeight, padding, viewport } = geometry;
+  const top = clampedScrollTop(count, scrollTop, geometry);
+  const first = Math.max(0, Math.floor((top - padding) / rowHeight));
+  const last = Math.min(count, Math.ceil((top + viewport - padding) / rowHeight));
+  return { start: Math.max(0, first - overscan), end: Math.min(count, last + overscan) };
+}
+
+/**
+ * The scroll offset that brings a row fully into view by the nearer edge, with
+ * the list's padding showing beyond it; null when it is in view already.
+ */
+export function revealScrollTop(
+  index: number,
+  count: number,
+  scrollTop: number,
+  geometry: ListGeometry
+): number | null {
+  const { rowHeight, padding, viewport } = geometry;
+  const top = clampedScrollTop(count, scrollTop, geometry);
+  const rowTop = padding + index * rowHeight;
+  let target = top;
+  if (rowTop - padding < top) target = rowTop - padding;
+  else if (rowTop + rowHeight + padding > top + viewport) {
+    target = rowTop + rowHeight + padding - viewport;
+  }
+  target = clampedScrollTop(count, target, geometry);
+  return target === scrollTop ? null : target;
+}
