@@ -37,6 +37,31 @@ async function getAgentNotificationService(): Promise<AgentNotificationSingleton
   return cachedAgentNotificationService;
 }
 
+/**
+ * Entries read from one report, far past any view's panes: what a renderer
+ * gone wrong can make main scan is bounded, valid or not.
+ */
+const MAX_WAITING_PANEL_ENTRIES = 10_000;
+/** Longer than any panel id; one past it is dropped rather than kept in memory. */
+const MAX_PANEL_ID_LENGTH = 1024;
+
+/** A view's report of its waiting panes, each id once; null when it isn't one. */
+function readNotificationState(raw: unknown): NotificationState | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const ids: unknown = (raw as { waitingPanelIds?: unknown }).waitingPanelIds;
+  if (!Array.isArray(ids)) return null;
+  const waitingPanelIds = new Set<string>();
+  for (const id of ids.slice(0, MAX_WAITING_PANEL_ENTRIES)) {
+    if (typeof id === "string" && id.length > 0 && id.length <= MAX_PANEL_ID_LENGTH) {
+      waitingPanelIds.add(id);
+    }
+  }
+  const membershipOnly = (raw as { membershipOnly?: unknown }).membershipOnly === true;
+  return membershipOnly
+    ? { waitingPanelIds: [...waitingPanelIds], membershipOnly }
+    : { waitingPanelIds: [...waitingPanelIds] };
+}
+
 let cachedAllowedSoundFiles: AllowedSoundFilesSet | null = null;
 async function allowedSoundFiles(): Promise<AllowedSoundFilesSet> {
   if (!cachedAllowedSoundFiles) {
@@ -135,10 +160,9 @@ export function registerNotificationHandlers(deps: HandlerDependencies): () => v
     return ownerId;
   };
 
-  const handleNotificationUpdate = (
-    event: Electron.IpcMainEvent,
-    state: NotificationState
-  ): void => {
+  const handleNotificationUpdate = (event: Electron.IpcMainEvent, raw: unknown): void => {
+    const state = readNotificationState(raw);
+    if (state === null) return;
     notificationService.updateNotifications(trackOwner(event.sender), state);
   };
 

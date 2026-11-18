@@ -19,6 +19,7 @@ import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import {
   useTerminalNotificationCounts,
+  useTerminalNotificationPanelIds,
   useConflictedWorktrees,
   useWaitingTerminals,
   useUnreadTerminals,
@@ -329,6 +330,53 @@ describe("useTerminalSelectors", () => {
 
       const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
       expect(result.current.waitingCount).toBe(0);
+    });
+
+    it("names the panes it counts after blurTime, so main can count each once (#17233)", () => {
+      setupEmptyWorktrees();
+      const blurTime = Date.now() - 60_000;
+      setupTerminals([
+        { id: "before", agentState: "waiting", location: "grid", lastStateChange: blurTime - 1 },
+        { id: "after", agentState: "waiting", location: "grid", lastStateChange: blurTime + 1 },
+        { id: "working", agentState: "working", location: "grid", lastStateChange: blurTime + 1 },
+        { id: "later", agentState: "waiting", location: "grid", lastStateChange: blurTime + 2 },
+      ]);
+      deliverAsks(["before", "after", "later"]);
+
+      const { result } = renderHook(() => useTerminalNotificationPanelIds(blurTime));
+      expect(result.current).toEqual(["after", "later"]);
+    });
+
+    it("names the pane that took over when one stops waiting and another starts", () => {
+      setupEmptyWorktrees();
+      const blurTime = Date.now() - 60_000;
+      setupTerminals([
+        { id: "a", agentState: "waiting", location: "grid", lastStateChange: blurTime + 1 },
+        { id: "b", agentState: "working", location: "grid", lastStateChange: blurTime + 1 },
+      ]);
+      deliverAsks(["a"]);
+      const { result, rerender } = renderHook(() => useTerminalNotificationPanelIds(blurTime));
+      expect(result.current).toEqual(["a"]);
+
+      setupTerminals([
+        { id: "a", agentState: "working", location: "grid", lastStateChange: blurTime + 2 },
+        { id: "b", agentState: "waiting", location: "grid", lastStateChange: blurTime + 2 },
+      ]);
+      deliverAsks(["b"]);
+      rerender();
+
+      expect(result.current).toEqual(["b"]);
+    });
+
+    it("names no panes while the window is focused", () => {
+      setupEmptyWorktrees();
+      setupTerminals([
+        { id: "t1", agentState: "waiting", location: "grid", lastStateChange: Date.now() },
+      ]);
+      deliverAsks(["t1"]);
+
+      const { result } = renderHook(() => useTerminalNotificationPanelIds(null));
+      expect(result.current).toEqual([]);
     });
   });
 });
