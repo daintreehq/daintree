@@ -5968,6 +5968,17 @@ export class WorkspaceService {
     return envs !== null && Object.keys(envs).length > 0;
   }
 
+  /**
+   * The environment keys a worktree's mode is resolved against, from the
+   * first settings file that has any: what a picker can offer that this host
+   * will find the commands for.
+   */
+  async resourceEnvironmentKeys(): Promise<string[]> {
+    if (!this.projectRootPath) return [];
+    const envs = await this.lifecycleService.loadProjectResourceEnvironments(this.projectRootPath);
+    return Object.keys(envs ?? {});
+  }
+
   /** The settings file Project settings writes for `projectId`, or null without a userData root. */
   private projectSettingsFilePath(projectId: string): string | null {
     const userDataDir = process.env.DAINTREE_USER_DATA ?? "";

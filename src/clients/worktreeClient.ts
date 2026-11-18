@@ -253,6 +253,13 @@ export const worktreeClient = {
     return window.electron.worktree.onActivated(callback);
   },
 
+  /** Whether this view's worktree port is attached: main retires a cached view's until it's shown again. */
+  isPortReady: (): boolean => window.electron.worktreePort.isReady(),
+
+  /** Called on every attach of this view's worktree port, and at once when it's attached now. */
+  onPortReady: (callback: () => void): (() => void) =>
+    window.electron.worktreePort.onReady(callback),
+
   resourceAction: async (
     worktreeId: string,
     action: "provision" | "teardown" | "resume" | "pause" | "status"
@@ -300,7 +307,9 @@ export const worktreeClient = {
     });
   },
 
-  hasResourceConfig: (rootPath: string): Promise<{ hasConfig: boolean }> => {
+  hasResourceConfig: (
+    rootPath: string
+  ): Promise<{ hasConfig: boolean; environmentKeys?: string[] }> => {
     return window.electron.worktreePort.request("has-resource-config", { rootPath });
   },
 } as const;

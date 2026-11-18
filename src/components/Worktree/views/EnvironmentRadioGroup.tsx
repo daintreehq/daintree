@@ -1,4 +1,5 @@
-import { useMemo } from "react";
+import { useId, useMemo } from "react";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   SegmentedRadioGroup,
   type SegmentedRadioOption,
@@ -57,5 +58,49 @@ export function EnvironmentHint({ worktreeMode }: { worktreeMode: string }) {
     <p id="environment-hint" className="text-xs text-text-secondary">
       Provisions the {worktreeMode} environment after setup
     </p>
+  );
+}
+
+interface OpenOnMachineToggleProps {
+  worktreeMode: string;
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+}
+
+/**
+ * The Environment row's option to carry the new worktree onto the machine its
+ * environment provisions. A checkbox, not a switch: like the rest of the form
+ * it takes effect at Create. Checked, it names every step the Create bundles.
+ */
+export function OpenOnMachineToggle({
+  worktreeMode,
+  checked,
+  onCheckedChange,
+}: OpenOnMachineToggleProps) {
+  const detailId = useId();
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-text-secondary hover:text-text-primary">
+        <Checkbox
+          checked={checked}
+          onCheckedChange={(value) => onCheckedChange(value === true)}
+          aria-describedby={checked ? detailId : undefined}
+          data-testid="open-on-machine"
+        />
+        <span>Open on its machine</span>
+      </label>
+      {checked && (
+        <p
+          id={detailId}
+          className="text-xs text-balance text-text-secondary"
+          data-testid="open-on-machine-detail"
+        >
+          Once {worktreeMode}&apos;s status names its ssh machine, this branch opens there. If the
+          machine isn&apos;t in your host list, it&apos;s added for this worktree and removed with
+          it. If Daintree isn&apos;t running there, Host setup opens to install and start it first.
+          The recipe and agent don&apos;t start on this machine.
+        </p>
+      )}
+    </div>
   );
 }
