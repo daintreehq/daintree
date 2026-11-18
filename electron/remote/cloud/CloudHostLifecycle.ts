@@ -75,6 +75,7 @@ import {
   type ProviderSshAccess,
 } from "./provider.js";
 import { lifetimeRenewalDue, stopUnderWay } from "./lifetimeRenewal.js";
+import type { CloudGuestPowerOff } from "./CloudGuestPowerOff.js";
 import type { CloudMachineKeys } from "./CloudMachineKeys.js";
 
 /** How often a machine is asked about while Daintree changes it. */
@@ -209,6 +210,8 @@ export interface CloudHostLifecycleDeps {
   findCommand?: (command: string) => Promise<string | null>;
   /** The keys machines renew and stop themselves with (#17361); absent where nothing issues them. */
   machineKeys?: Pick<CloudMachineKeys, "problemFor" | "tick" | "revokePending">;
+  /** EC2 and Compute Engine machines powering themselves off once idle (#17362). */
+  guestPowerOff?: Pick<CloudGuestPowerOff, "problemFor" | "tick">;
   /**
    * Whether a worktree on this device is gone: true once its root reads as
    * missing, false while it is there, null when that couldn't be told (a hung
@@ -550,6 +553,7 @@ export class CloudHostLifecycle {
     this.keeperTimer = setInterval(() => {
       void this.renewDue();
       void this.deps.machineKeys?.tick();
+      void this.deps.guestPowerOff?.tick();
     }, KEEPER_INTERVAL_MS);
     this.keeperTimer.unref?.();
     this.markInterruptedCreates();
@@ -683,7 +687,10 @@ export class CloudHostLifecycle {
           keptRunningAt: this.renewals.get(binding.id)?.ok
             ? this.renewals.get(binding.id)!.at
             : null,
-          selfStopProblem: this.deps.machineKeys?.problemFor(binding.id) ?? null,
+          selfStopProblem:
+            this.deps.machineKeys?.problemFor(binding.id) ??
+            this.deps.guestPowerOff?.problemFor(binding.id) ??
+            null,
           asleep: machineOf(binding) === "stopped" && observation?.asleep === true,
         };
       });

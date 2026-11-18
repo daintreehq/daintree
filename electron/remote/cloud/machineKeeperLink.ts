@@ -47,3 +47,68 @@ export const MachineKeeperStatusSchema = z.object({
   problem: z.string().max(500).nullable(),
 });
 export type MachineKeeperStatus = z.infer<typeof MachineKeeperStatusSchema>;
+
+/**
+ * Session CALL a Shell uses to let a cloud machine's host power itself off
+ * once idle, for a provider where a guest power-off is a normal stop that
+ * keeps the disk (EC2, Compute Engine; #17362). Nothing in it is a secret:
+ * the host acts with no cloud API at all. A host too old to know it answers
+ * `UNSUPPORTED`.
+ */
+export const GUEST_POWER_OFF_METHOD = "machine-keeper.guest-power-off";
+
+/** The machine, as the host's own cloud metadata server must name it before it powers off. */
+export const GuestPowerOffTargetSchema = z.discriminatedUnion("provider", [
+  z
+    .object({
+      provider: z.literal("aws"),
+      accountId: z.string().regex(/^\d{12}$/),
+      region: z
+        .string()
+        .max(32)
+        .regex(/^[a-z]{2}(?:-[a-z]+)+-\d{1,2}$/),
+      instanceId: z.string().regex(/^i-[0-9a-f]{8,17}$/),
+    })
+    .strict(),
+  z
+    .object({
+      provider: z.literal("gce"),
+      project: z
+        .string()
+        .max(128)
+        .regex(/^(?:[a-z][a-z0-9.-]{0,62}:)?[a-z][a-z0-9-]{4,28}[a-z0-9]$/),
+      zone: z.string().regex(/^[a-z](?:[-a-z0-9]{0,61}[a-z0-9])?$/),
+      instanceId: z.string().regex(/^\d{1,20}$/),
+    })
+    .strict(),
+]);
+export type GuestPowerOffTarget = z.infer<typeof GuestPowerOffTargetSchema>;
+
+export const GuestPowerOffRequestSchema = z
+  .object({
+    target: GuestPowerOffTargetSchema,
+    /** False takes the permission back: the Shell found a stop would no longer keep the disk. */
+    enabled: z.boolean(),
+  })
+  .strict();
+export type GuestPowerOffRequest = z.infer<typeof GuestPowerOffRequestSchema>;
+
+/** What the host's power-off keeper holds, as it says. */
+export const GuestPowerOffStatusSchema = z.object({
+  /** It will power its machine off once its idle time ends. */
+  armed: z.boolean(),
+  /** Why it won't, in a sentence; null while armed or never asked. */
+  problem: z.string().max(500).nullable(),
+});
+export type GuestPowerOffStatus = z.infer<typeof GuestPowerOffStatusSchema>;
+
+/** Two targets name the same machine. */
+export function sameGuestPowerOffTarget(a: GuestPowerOffTarget, b: GuestPowerOffTarget): boolean {
+  if (a.provider === "aws" && b.provider === "aws") {
+    return a.accountId === b.accountId && a.region === b.region && a.instanceId === b.instanceId;
+  }
+  if (a.provider === "gce" && b.provider === "gce") {
+    return a.project === b.project && a.zone === b.zone && a.instanceId === b.instanceId;
+  }
+  return false;
+}

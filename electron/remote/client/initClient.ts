@@ -45,6 +45,7 @@ import {
   type ProjectOwner,
 } from "../../window/projectOwnership.js";
 import { CloudHostLifecycle } from "../cloud/CloudHostLifecycle.js";
+import { CloudGuestPowerOff } from "../cloud/CloudGuestPowerOff.js";
 import { CloudMachineKeys } from "../cloud/CloudMachineKeys.js";
 import { CloudSshFiles } from "../cloud/CloudSshFiles.js";
 import { initCloudHosts } from "../cloud/initCloudHosts.js";
@@ -1115,12 +1116,23 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   const stopArmingMachines = manager.onSessionOpened((hostId, session) =>
     keysForMachines.sessionOpened(hostId, session)
   );
+  const guestPowerOff = new CloudGuestPowerOff({
+    store: cloud.store,
+    accounts: cloud.accounts,
+    hosts: { get: (hostId) => registry.get(hostId) },
+    sessionFor: (hostId) => manager.get(hostId)?.currentSession ?? null,
+    changed: () => cloud.cloudHosts.changed(),
+  });
+  const stopGuestPowerOff = manager.onSessionOpened((hostId, session) =>
+    guestPowerOff.sessionOpened(hostId, session)
+  );
   cloudLifecycle = new CloudHostLifecycle({
     store: cloud.store,
     accounts: cloud.accounts,
     files: cloudFiles,
     clientDir,
     machineKeys,
+    guestPowerOff,
     hosts: {
       add: (name, connection, pendingPlacement) =>
         client.add({ name, connection, ...(pendingPlacement ? { pendingPlacement } : {}) }),
@@ -1191,6 +1203,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       await signIn.dispose();
       stopArmingMachines();
       machineKeys?.dispose();
+      stopGuestPowerOff();
+      guestPowerOff.dispose();
       cloudLifecycle?.dispose();
       cloud.dispose();
       // Before the links close: an attempt would read their closing as its host going.

@@ -120,6 +120,8 @@ export const gceInstanceSchema = z
           .loose()
       )
       .optional(),
+    /** `PERSISTENT` or `SCRATCH` (a local SSD, whose data a stop doesn't keep). */
+    disks: z.array(z.object({ type: z.string().optional() }).loose()).optional(),
   })
   .loose();
 

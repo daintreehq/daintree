@@ -106,7 +106,15 @@ export interface CloudProviderPersistence {
  */
 export type CloudLifetimeModel =
   | { kind: "none" }
-  | { kind: "fixed-at-create"; canChangeWhileStopped: boolean }
+  | {
+      kind: "fixed-at-create";
+      canChangeWhileStopped: boolean;
+      /**
+       * The limit a new machine's form starts at, in hours; null for none.
+       * Absent: {@link DEFAULT_CLOUD_LIFETIME_HOURS}.
+       */
+      defaultHours?: number | null;
+    }
   | { kind: "renewable" }
   | {
       kind: "idle-sleep";
