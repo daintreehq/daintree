@@ -26,6 +26,13 @@ describe("paletteStore", () => {
     openPalette("quick-switcher");
     expect(usePaletteStore.getState().quickSwitcherScope).toBeNull();
 
+    // ⌘P and agent.palette reach the store through the callback with no scope.
+    openQuickSwitcher({ kind: "files" });
+    const before = usePaletteStore.getState().openRequestId;
+    openQuickSwitcher();
+    expect(usePaletteStore.getState().quickSwitcherScope).toBeNull();
+    expect(usePaletteStore.getState().openRequestId).toBe(before + 1);
+
     openQuickSwitcher({ kind: "plugin", key: "acme.notes.notes" });
     openPalette("action");
     expect(usePaletteStore.getState().quickSwitcherScope).toBeNull();

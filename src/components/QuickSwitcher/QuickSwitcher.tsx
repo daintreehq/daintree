@@ -229,6 +229,11 @@ export function QuickSwitcher({
       : scopedProvider && scopedStatus === "error"
         ? `${scopedProvider.title} couldn't search right now`
         : null;
+  // With no worktree shown there is nothing to search, typed or not.
+  const noWorktree =
+    fileScope !== null && fileScope.worktreeName === null
+      ? "Select a worktree to search its files"
+      : null;
   // The empty field's way out of the scope is Backspace; with a query in the
   // field Backspace edits it, so that state's next step is Escape.
   const backToEverything = (
@@ -305,15 +310,12 @@ export function QuickSwitcher({
       itemIdPrefix="qs-option"
       emptyMessage={
         fileScope
-          ? (scopedFailure ??
-            (fileScope.worktreeName === null
-              ? "Select a worktree to search its files"
-              : "No files in this worktree yet"))
+          ? (noWorktree ?? scopedFailure ?? "No files in this worktree yet")
           : scopedProvider
             ? (scopedFailure ?? `Type to search ${scopedProvider.title}`)
             : "No panels open"
       }
-      noMatchMessage={isScoped ? (scopedFailure ?? undefined) : undefined}
+      noMatchMessage={isScoped ? (noWorktree ?? scopedFailure ?? undefined) : undefined}
       noMatchContent={isScoped ? scopedNoMatch : <PaletteNoMatchHint what="everything open" />}
       totalResults={totalResults}
       emptyContent={

@@ -16,7 +16,7 @@ interface SearchCacheEntry {
 const searchCache = new Map<string, SearchCacheEntry>();
 
 function makeSearchCacheKey(payload: FileSearchPayload): string {
-  return `${payload.cwd}\0${payload.query}\0${payload.limit ?? ""}`;
+  return `${payload.cwd}\0${payload.query}\0${payload.limit ?? ""}\0${payload.filesOnly === true}`;
 }
 
 export const filesClient = {

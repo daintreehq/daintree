@@ -195,6 +195,36 @@ describe("FileSearchService", () => {
     expect(result).toEqual(["a.ts", "src/", "README.md"]);
   });
 
+  describe("files only", () => {
+    it("fills the limit with files when short folder names would crowd them out", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, "a/x/deep-file.ts\0b/y/deep-file.ts\0top-level-file.ts\0");
+      const service = await createService();
+
+      expect(await service.search({ cwd: dir, query: "", limit: 3 })).toEqual(["a/", "b/", "a/x/"]);
+      expect(await service.search({ cwd: dir, query: "", limit: 3, filesOnly: true })).toEqual([
+        "a/x/deep-file.ts",
+        "b/y/deep-file.ts",
+        "top-level-file.ts",
+      ]);
+    });
+
+    it("leaves folders out of a typed search, and the next search still finds them", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, "docs/docs-index.md\0docs/guide/docs-guide.md\0");
+      const service = await createService();
+
+      const files = await service.search({ cwd: dir, query: "doc", limit: 10, filesOnly: true });
+      expect(files.length).toBeGreaterThan(0);
+      expect(files.filter((file) => file.endsWith("/"))).toEqual([]);
+      // "docs" narrows from the files-only search's candidates.
+      const all = await service.search({ cwd: dir, query: "docs", limit: 10 });
+      expect(all).toContain("docs/");
+    });
+  });
+
   describe("empty-query ranking", () => {
     const collator = new Intl.Collator();
 

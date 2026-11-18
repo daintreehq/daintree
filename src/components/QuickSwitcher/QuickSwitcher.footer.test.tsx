@@ -442,6 +442,8 @@ describe("QuickSwitcher file scope", () => {
     // jsdom is not a Mac, so the modifier is Ctrl.
     fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter", ctrlKey: true });
     expect(confirmSelection).toHaveBeenLastCalledWith(true);
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
+    expect(confirmSelection).toHaveBeenLastCalledWith(false);
     fireEvent.click(screen.getByRole("option", { name: "src/bar.ts" }), { ctrlKey: true });
     expect(selectItem).toHaveBeenLastCalledWith(row, true);
     fireEvent.click(screen.getByRole("option", { name: "src/bar.ts" }));
@@ -450,11 +452,44 @@ describe("QuickSwitcher file scope", () => {
 
   it("keeps Backspace for editing while the field has text, even at its start", () => {
     const exitScope = vi.fn();
-    renderScoped({ query: "bar", fileScope: { worktreeName: "main", failed: false }, exitScope });
+    const { rerender } = renderScoped({
+      query: "bar",
+      fileScope: { worktreeName: "main", failed: false },
+      exitScope,
+    });
     const input = screen.getByRole("combobox") as HTMLInputElement;
     input.setSelectionRange(0, 0);
     fireEvent.keyDown(input, { key: "Backspace" });
     expect(exitScope).not.toHaveBeenCalled();
+
+    rerender(
+      <QuickSwitcher
+        isOpen
+        query=""
+        results={[]}
+        totalResults={0}
+        selectedIndex={0}
+        isLoading={false}
+        matchesById={new Map()}
+        close={() => {}}
+        setQuery={() => {}}
+        setSelectedIndex={() => {}}
+        selectPrevious={() => {}}
+        selectNext={() => {}}
+        selectItem={() => {}}
+        confirmSelection={() => {}}
+        {...NO_SCOPE}
+        fileScope={{ worktreeName: "main", failed: false }}
+        exitScope={exitScope}
+      />
+    );
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Backspace" });
+    expect(exitScope).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks for a worktree, typed or not, when none is shown", () => {
+    renderScoped({ query: "readme", fileScope: { worktreeName: null, failed: false } });
+    expect(screen.getByText("Select a worktree to search its files")).toBeTruthy();
   });
 
   it("says the search failed rather than that nothing matched", () => {

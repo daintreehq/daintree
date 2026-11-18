@@ -58,7 +58,7 @@ function change(path: string, mtimeMs: number, status: FileChangeDetail["status"
   return { path, status, insertions: 1, deletions: 0, mtimeMs };
 }
 
-function worktree(id: string, path: string, changes: FileChangeDetail[]) {
+function worktree(id: string, path: string, changes: FileChangeDetail[], changesRoot = path) {
   return {
     id,
     path,
@@ -67,15 +67,19 @@ function worktree(id: string, path: string, changes: FileChangeDetail[]) {
     isMainWorktree: id === "wt-1",
     worktreeChanges: {
       worktreeId: id,
-      rootPath: path,
+      rootPath: changesRoot,
       changes,
       changedFileCount: changes.length,
     },
   };
 }
 
-function seedWorktrees(changes: FileChangeDetail[], extra: ReturnType<typeof worktree>[] = []) {
-  const worktrees = new Map<string, unknown>([["wt-1", worktree("wt-1", "/repo", changes)]]);
+function seedWorktrees(
+  changes: FileChangeDetail[],
+  extra: ReturnType<typeof worktree>[] = [],
+  main = worktree("wt-1", "/repo", changes)
+) {
+  const worktrees = new Map<string, unknown>([["wt-1", main]]);
   for (const w of extra) worktrees.set(w.id, w);
   const state = {
     worktrees,
@@ -154,7 +158,10 @@ describe("useQuickSwitcher file scope", () => {
 
   it("lists the worktree's shortest paths when nothing has changed", async () => {
     const { result } = await openFiles();
-    expect(searches.map((s) => s.payload)).toEqual([{ cwd: "/repo", query: "", limit: 100 }]);
+    // Files only: the host leaves folders out before it ranks and caps.
+    expect(searches.map((s) => s.payload)).toEqual([
+      expect.objectContaining({ cwd: "/repo", query: "", filesOnly: true }),
+    ]);
     expect(result.current.isLoading).toBe(true);
 
     await act(async () => searches[0]!.resolve({ files: ["a.ts", "src/", "src/b.ts"] }));
@@ -206,7 +213,7 @@ describe("useQuickSwitcher file scope", () => {
     expect(paths(result.current.results)).toEqual(["xy.ts"]);
   });
 
-  it("says the search failed rather than that nothing matched", async () => {
+  it("says the search failed when the host rejects it, rather than that nothing matched", async () => {
     const { result } = await openFiles();
     await act(async () => searches[0]!.resolve({ files: ["a.ts"] }));
     act(() => result.current.setQuery("a"));
@@ -295,5 +302,151 @@ describe("useQuickSwitcher file scope", () => {
 
     act(() => usePaletteStore.getState().openPalette("quick-switcher"));
     expect(result.current.fileScope).toBeNull();
+  });
+
+  it("relates changes to the root git resolved them against, and opens them on the worktree's", async () => {
+    // macOS: the worktree is shown as /tmp/repo, git reports /private/tmp/repo.
+    seedWorktrees(
+      [],
+      [],
+      worktree(
+        "wt-1",
+        "/tmp/repo",
+        [change("/private/tmp/repo/src/a.ts", 100)],
+        "/private/tmp/repo"
+      )
+    );
+    const { result } = await openFiles();
+    expect(result.current.results.map((item) => item.file?.absolutePath)).toEqual([
+      "/tmp/repo/src/a.ts",
+    ]);
+    expect(searchMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves a file deleted in the working tree out of what the index still lists", async () => {
+    seedWorktrees([change("/repo/src/gone.ts", 900, "deleted"), change("/repo/src/kept.ts", 100)]);
+    const { result } = await openFiles();
+    act(() => result.current.setQuery("src"));
+    await settle(150);
+    await act(async () => searches[0]!.resolve({ files: ["src/gone.ts", "src/kept.ts"] }));
+    expect(paths(result.current.results)).toEqual(["src/kept.ts"]);
+  });
+
+  it("keeps the changed files on screen, closed to picks, until the first search answers", async () => {
+    seedWorktrees([change("/repo/src/changed.ts", 100)]);
+    const { result } = await openFiles();
+    const changedRow = result.current.results[0]!;
+
+    act(() => result.current.setQuery("x"));
+    expect(paths(result.current.results)).toEqual(["src/changed.ts"]);
+    expect(result.current.isFiltering).toBe(true);
+    act(() => result.current.selectItem(changedRow));
+    expect(openFileMock).not.toHaveBeenCalled();
+
+    await settle(150);
+    await act(async () => searches[0]!.resolve({ files: ["src/x.ts"] }));
+    expect(paths(result.current.results)).toEqual(["src/x.ts"]);
+  });
+
+  it("opens only rows the current answer lists, and changed files only while git still reports them", async () => {
+    seedWorktrees([change("/repo/src/changed.ts", 100)]);
+    const { result, rerender } = await openFiles();
+    const changedRow = result.current.results[0]!;
+
+    act(() => result.current.setQuery("a"));
+    await settle(150);
+    await act(async () => searches[0]!.resolve({ files: ["src/a.ts"] }));
+    const oldRow = result.current.results[0]!;
+    act(() => result.current.setQuery("ab"));
+    await settle(150);
+    await act(async () => searches[1]!.resolve({ files: ["src/ab.ts"] }));
+    act(() => result.current.selectItem(oldRow));
+    expect(openFileMock).not.toHaveBeenCalled();
+
+    act(() => result.current.setQuery(""));
+    seedWorktrees([change("/repo/src/other.ts", 200)]);
+    rerender();
+    expect(paths(result.current.results)).toEqual(["src/other.ts"]);
+    act(() => result.current.selectItem(changedRow));
+    expect(openFileMock).not.toHaveBeenCalled();
+    expect(usePaletteStore.getState().activePaletteId).toBe("quick-switcher");
+  });
+
+  it("opens the top hit with the modifier a waiting Enter was pressed with", async () => {
+    const { result } = await openFiles();
+    await act(async () => searches[0]!.resolve({ files: ["a.ts"] }));
+
+    act(() => result.current.setQuery("bar"));
+    act(() => result.current.confirmSelection(true));
+    await settle(150);
+    await act(async () => searches[1]!.resolve({ files: ["src/bar.ts", "lib/bar.ts"] }));
+    expect(openFileMock.mock.calls).toEqual([["/repo/src/bar.ts", true]]);
+  });
+
+  it("drops a waiting Enter once the field asks something else, even back to the same query", async () => {
+    const { result } = await openFiles();
+    await act(async () => searches[0]!.resolve({ files: ["a.ts"] }));
+
+    act(() => result.current.setQuery("b"));
+    act(() => result.current.confirmSelection(false));
+    act(() => result.current.setQuery("bc"));
+    act(() => result.current.setQuery("b"));
+    await settle(150);
+    await act(async () => searches.at(-1)!.resolve({ files: ["b.ts"] }));
+    expect(openFileMock).not.toHaveBeenCalled();
+  });
+
+  it("drops a waiting Enter when the switcher is opened again or the worktree changes", async () => {
+    seedWorktrees([], [worktree("wt-2", "/repo-feature", [])], worktree("wt-1", "/repo", []));
+    const { result, rerender } = await openFiles();
+    act(() => result.current.confirmSelection(false));
+    act(() => usePaletteStore.getState().openQuickSwitcher({ kind: "files" }));
+    await settle();
+    // The new opening asks again rather than taking the old opening's answer.
+    expect(searches).toHaveLength(2);
+    await act(async () => searches[0]!.resolve({ files: ["a.ts"] }));
+    await act(async () => searches[1]!.resolve({ files: ["a.ts"] }));
+    expect(openFileMock).not.toHaveBeenCalled();
+
+    act(() => result.current.setQuery("q"));
+    act(() => result.current.confirmSelection(false));
+    selection.activeWorktreeId = "wt-2";
+    rerender();
+    await settle(150);
+    for (const pending of searches.slice(2)) {
+      await act(async () => pending.resolve({ files: ["q.ts"] }));
+    }
+    expect(openFileMock).not.toHaveBeenCalled();
+  });
+
+  it("opens nothing from a handler that outlived the switcher's close", async () => {
+    seedWorktrees([change("/repo/src/changed.ts", 100)]);
+    const { result } = await openFiles();
+    const select = result.current.selectItem;
+    const row = result.current.results[0]!;
+    act(() => usePaletteStore.getState().closePalette("quick-switcher"));
+    act(() => select(row));
+    expect(openFileMock).not.toHaveBeenCalled();
+  });
+
+  it("sends nothing to plugin providers when another palette takes over mid-query", async () => {
+    catalog = [
+      {
+        key: "acme.notes.notes",
+        pluginId: "acme.notes",
+        pluginName: "Acme Notes",
+        title: "Notes",
+        keyword: "notes",
+        iconId: "notebook",
+        blend: true,
+        kind: "declarative",
+        shown: true,
+      },
+    ];
+    const { result } = await openFiles();
+    act(() => result.current.setQuery("secret-plan"));
+    act(() => usePaletteStore.getState().openPalette("action"));
+    await settle(300);
+    expect(bridge.querySearchProvider).not.toHaveBeenCalled();
   });
 });

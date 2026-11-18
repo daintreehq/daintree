@@ -552,6 +552,7 @@ export const FileSearchPayloadSchema = z.object({
   cwd: z.string().min(1),
   query: z.string(),
   limit: z.number().int().positive().max(100).optional(),
+  filesOnly: z.boolean().optional(),
 });
 
 export const SlashCommandListRequestSchema = z.object({

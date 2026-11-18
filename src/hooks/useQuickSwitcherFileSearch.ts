@@ -85,15 +85,20 @@ export function useQuickSwitcherFileSearch(): UseQuickSwitcherFileSearchReturn {
       timerRef.current = setTimeout(
         () => {
           timerRef.current = null;
-          filesClient.search({ cwd: rootPath, query, limit: FILE_SEARCH_LIMIT }).then(
-            ({ files }) =>
-              settle(files.filter((file) => !file.endsWith("/")).slice(0, FILE_RESULT_CAP), false),
-            (error: unknown) => {
-              if (seq !== seqRef.current) return;
-              logWarn("[QuickSwitcher] File search failed", { error });
-              settle([], true);
-            }
-          );
+          filesClient
+            .search({ cwd: rootPath, query, limit: FILE_SEARCH_LIMIT, filesOnly: true })
+            .then(
+              ({ files }) =>
+                settle(
+                  files.filter((file) => !file.endsWith("/")).slice(0, FILE_RESULT_CAP),
+                  false
+                ),
+              (error: unknown) => {
+                if (seq !== seqRef.current) return;
+                logWarn("[QuickSwitcher] File search failed", { error });
+                settle([], true);
+              }
+            );
         },
         query === "" ? 0 : FILE_SEARCH_DEBOUNCE_MS
       );

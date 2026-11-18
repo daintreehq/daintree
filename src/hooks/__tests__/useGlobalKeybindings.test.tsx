@@ -139,7 +139,10 @@ function makePaletteState(activePaletteId: PaletteId | null) {
     activePaletteId,
     openRequestId: 0,
     promptHistoryHosts: 0,
+    quickSwitcherScope: null,
     openPalette: vi.fn(),
+    openQuickSwitcher: vi.fn(),
+    setQuickSwitcherScope: vi.fn(),
     closePalette: vi.fn(),
     registerPromptHistoryHost: vi.fn(() => () => {}),
   };

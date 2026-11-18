@@ -206,33 +206,53 @@ function fileItem(rootPath: string, relativePath: string, changed: boolean): Qui
   };
 }
 
+interface ChangedFiles {
+  /** The changed files that can still be opened, most recently modified first. */
+  items: QuickSwitcherItem[];
+  /** Root-relative paths git reports deleted: the index can still list them. */
+  deleted: ReadonlySet<string>;
+}
+
+const NO_CHANGES: ChangedFiles = { items: EMPTY_ITEMS, deleted: new Set() };
+
 /**
- * The worktree's changed files that can still be opened, most recently
- * modified first: what agents just touched, so the likeliest next pick.
- * Deleted and ignored entries, folders and anything outside the root are left
- * out; git reports absolute paths, older snapshots relative ones.
+ * The worktree's changes, read for the file scope: what agents just touched,
+ * so the likeliest next pick. Ignored entries, folders and anything outside
+ * the root are left out. Git reports absolute paths against the realpath of
+ * the root (`changesRoot`), which differs from the worktree's own path under a
+ * symlinked ancestor (/tmp -> /private/tmp), so paths are made relative to it
+ * and rows are rebuilt on the worktree's path; older snapshots report relative
+ * paths.
  */
-function changedFileItems(
+function readChangedFiles(
   rootPath: string,
+  changesRoot: string | undefined,
   changes: readonly FileChangeDetail[] | undefined
-): QuickSwitcherItem[] {
-  if (!changes || changes.length === 0) return EMPTY_ITEMS;
+): ChangedFiles {
+  if (!changes || changes.length === 0) return NO_CHANGES;
+  const base = changesRoot || rootPath;
   const byPath = new Map<string, number>();
+  const deleted = new Set<string>();
   for (const change of changes) {
-    if (change.status === "deleted" || change.status === "ignored") continue;
+    if (change.status === "ignored") continue;
     if (change.path.endsWith("/") || change.path.endsWith("\\")) continue;
-    const absolute = isAbsolute(change.path) ? change.path : join(rootPath, change.path);
-    if (!isPathInside(absolute, rootPath)) continue;
-    const relative = toWorktreeRelative(absolute, rootPath);
+    const absolute = isAbsolute(change.path) ? change.path : join(base, change.path);
+    if (!isPathInside(absolute, base)) continue;
+    const relative = toWorktreeRelative(absolute, base);
     if (relative === "" || relative === absolute) continue;
+    if (change.status === "deleted") {
+      deleted.add(relative);
+      continue;
+    }
     const mtime = change.mtimeMs ?? change.mtime ?? 0;
     byPath.set(relative, Math.max(mtime, byPath.get(relative) ?? 0));
   }
-  if (byPath.size === 0) return EMPTY_ITEMS;
-  return [...byPath]
+  if (byPath.size === 0 && deleted.size === 0) return NO_CHANGES;
+  const items = [...byPath]
     .sort(([a, aTime], [b, bTime]) => bTime - aTime || (a < b ? -1 : a > b ? 1 : 0))
     .slice(0, FILE_RESULT_CAP)
     .map(([relative]) => fileItem(rootPath, relative, true));
+  return { items: items.length > 0 ? items : EMPTY_ITEMS, deleted };
 }
 
 export function useQuickSwitcher(): UseQuickSwitcherReturn {
@@ -270,6 +290,9 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
   // switcher in the update that opens it; every opening and close resets it.
   const scope = usePaletteStore((state) => (paletteIsOpen ? state.quickSwitcherScope : null));
   const setScope = usePaletteStore((state) => state.setQuickSwitcherScope);
+  // Which opening this is: a repeat open asks the file search again, and an
+  // Enter waiting on the previous opening's answer is dropped.
+  const opening = usePaletteStore((state) => (paletteIsOpen ? state.openRequestId : 0));
 
   // Plugin search providers (#13792). The scope is the provider the user
   // picked by keyword + Tab; it only counts while that provider is still in
@@ -287,19 +310,25 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     inFileScope && activeWorktreeId ? worktreeMap.get(activeWorktreeId) : undefined;
   const fileRoot = fileWorktree?.path || null;
   const fileChanges = fileWorktree?.worktreeChanges?.changes;
-  const changedItems = useMemo(
-    () => (fileRoot ? changedFileItems(fileRoot, fileChanges) : EMPTY_ITEMS),
-    [fileRoot, fileChanges]
+  const fileChangesRoot = fileWorktree?.worktreeChanges?.rootPath;
+  const changedFiles = useMemo(
+    () => (fileRoot ? readChangedFiles(fileRoot, fileChangesRoot, fileChanges) : NO_CHANGES),
+    [fileRoot, fileChangesRoot, fileChanges]
   );
+  const changedItems = changedFiles.items;
   const fileSearch = useQuickSwitcherFileSearch();
   const { answer: fileAnswer, request: fileRequest } = fileSearch.state;
-  const searchedItems = useMemo(
-    () =>
-      fileAnswer && fileAnswer.rootPath === fileRoot
-        ? fileAnswer.paths.map((path) => fileItem(fileAnswer.rootPath, path, false))
-        : EMPTY_ITEMS,
-    [fileAnswer, fileRoot]
-  );
+  // A file deleted in the working tree stays in the index until the deletion
+  // is staged; it has nothing left to open.
+  const searchedItems = useMemo(() => {
+    if (!fileAnswer || fileAnswer.rootPath !== fileRoot) return EMPTY_ITEMS;
+    const { deleted } = changedFiles;
+    const items = fileAnswer.paths
+      .filter((path) => !deleted.has(path))
+      .map((path) => fileItem(fileAnswer.rootPath, path, false));
+    return items.length > 0 ? items : EMPTY_ITEMS;
+  }, [fileAnswer, fileRoot, changedFiles]);
+  const fileRootAnswered = fileAnswer !== null && fileAnswer.rootPath === fileRoot;
 
   const builtinItems = useMemo<QuickSwitcherItem[]>(() => {
     const result: QuickSwitcherItem[] = [];
@@ -407,10 +436,14 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
   const searchFn = useCallback(
     (_allItems: QuickSwitcherItem[], query: string): PaletteSearchResult<QuickSwitcherItem> => {
       // The host already ranked the files; an empty field lists the changed
-      // ones when there are any. A search answering an earlier query stays on
-      // screen until the current one lands, but only a live row opens.
+      // ones when there are any. What was on screen stays there, dimmed, until
+      // the current query is answered (the changed files too, until the first
+      // search lands), but only a row that answers the field opens.
       if (inFileScope) {
-        const items = query.trim() === "" && changedItems.length > 0 ? changedItems : searchedItems;
+        const items =
+          (query.trim() === "" || !fileRootAnswered) && changedItems.length > 0
+            ? changedItems
+            : searchedItems;
         return { items, matchesById: emptyMatches() };
       }
 
@@ -467,6 +500,7 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
       inFileScope,
       changedItems,
       searchedItems,
+      fileRootAnswered,
       paletteIsOpen,
       mruList,
       builtinItems,
@@ -516,7 +550,7 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
   const requestFileSearch = fileSearch.request;
   useEffect(() => {
     requestFileSearch(fileRequestQuery === null ? null : fileRoot, fileRequestQuery);
-  }, [requestFileSearch, fileRoot, fileRequestQuery]);
+  }, [requestFileSearch, fileRoot, fileRequestQuery, opening]);
 
   // The answer on screen is to the query in the field, not an earlier one.
   const fileAnswerIsLive =
@@ -579,9 +613,32 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     [inFileScope, fileRoot, fileQuery, changedItems, fileAnswerIsLive, fileAnswer]
   );
 
+  // Enter before the file search has answered what the field says waits for
+  // that answer and opens its top hit, so a pasted path and Enter in one breath
+  // opens that file rather than a row from the previous query.
+  const queuedFileEnterRef = useRef<{
+    opening: number;
+    root: string;
+    query: string;
+    modified: boolean;
+  } | null>(null);
+
   const selectItem = useCallback(
     (item: QuickSwitcherItem, modified = false) => {
-      if (item.file && !isLiveFile(item.file)) return;
+      if (item.file) {
+        // A pick of its own replaces a waiting Enter, and the store is read
+        // live: a handler from the render before a close must not open a
+        // second file after the waiting Enter already opened one.
+        queuedFileEnterRef.current = null;
+        const live = usePaletteStore.getState();
+        if (
+          live.activePaletteId !== "quick-switcher" ||
+          live.quickSwitcherScope?.kind !== "files" ||
+          !isLiveFile(item.file)
+        ) {
+          return;
+        }
+      }
       // A plugin row opens only while it still answers what the field says:
       // with deferred filtering the list can trail the input by a render, and
       // Enter in that gap would open the previous query's result.
@@ -638,32 +695,37 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     ]
   );
 
-  // Enter before the file search has answered what the field says waits for
-  // that answer and opens its top hit, so a pasted path and Enter in one breath
-  // opens that file rather than a row from the previous query.
-  const queuedFileEnterRef = useRef<{ root: string; query: string; modified: boolean } | null>(
-    null
-  );
+  // The waiting Enter belongs to one opening, root and query: the moment the
+  // field asks anything else it is dropped, even if it comes back to the same
+  // query before either answer lands.
   useEffect(() => {
     const queued = queuedFileEnterRef.current;
-    if (queued === null || fileSearchPending) return;
+    if (queued === null) return;
+    if (
+      queued.opening !== opening ||
+      queued.root !== fileRoot ||
+      queued.query !== fileRequestQuery
+    ) {
+      queuedFileEnterRef.current = null;
+      return;
+    }
+    if (fileSearchPending) return;
     queuedFileEnterRef.current = null;
-    if (queued.root !== fileRoot || queued.query !== fileRequestQuery) return;
     const top = searchedItems[0];
     if (top) selectItem(top, queued.modified);
-  }, [fileSearchPending, fileRoot, fileRequestQuery, searchedItems, selectItem]);
+  }, [opening, fileSearchPending, fileRoot, fileRequestQuery, searchedItems, selectItem]);
 
   const confirmSelection = useCallback(
     (modified = false) => {
       if (fileSearchPending && fileRoot !== null && fileRequestQuery !== null) {
-        queuedFileEnterRef.current = { root: fileRoot, query: fileRequestQuery, modified };
+        queuedFileEnterRef.current = { opening, root: fileRoot, query: fileRequestQuery, modified };
         return;
       }
       if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
         selectItem(results[selectedIndex]!, modified);
       }
     },
-    [fileSearchPending, fileRoot, fileRequestQuery, results, selectedIndex, selectItem]
+    [opening, fileSearchPending, fileRoot, fileRequestQuery, results, selectedIndex, selectItem]
   );
 
   return {

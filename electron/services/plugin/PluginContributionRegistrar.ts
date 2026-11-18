@@ -988,6 +988,9 @@ export class PluginContributionRegistrar {
       // Reported to the refused provider's own plugin, which may be another one
       // whose keyword this plugin's reload just took back.
       for (const { provider, takenBy } of registerSearchProviders(pluginId, registered)) {
+        // Daintree holds this keyword whichever plugin came first, and each
+        // claimant was told so above.
+        if (provider.keyword === FILE_SEARCH_KEYWORD) continue;
         const refused = this.deps.getLoadedPlugin(provider.pluginId);
         if (!refused) continue;
         this.deps.recordPluginLog(

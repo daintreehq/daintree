@@ -238,19 +238,34 @@ describe("search provider registry", () => {
 describe("the built-in file search keyword", () => {
   it("is held by Daintree: a provider claiming it is listed as refused and never asked", async () => {
     registerSearchProviders("acme.files", [
-      provider({ pluginId: "acme.files", keyword: FILE_SEARCH_KEYWORD, blend: false }),
+      provider({ pluginId: "acme.files", keyword: FILE_SEARCH_KEYWORD, blend: true }),
     ]);
-    bindSearchProviderImpl("acme.files.notes", () => [{ id: "f1", label: "x" }]);
+    const impl = vi.fn(() => [{ id: "f1", label: "x" }]);
+    bindSearchProviderImpl("acme.files.notes", impl);
 
     const listed = listSearchProviders("p1", new Set());
     expect(listed.map((p) => p.keywordTakenBy)).toEqual([FILE_SEARCH_KEYWORD_HOLDER]);
 
-    const result = await coordinator().query(endpoint(), "p1", {
+    for (const mode of ["scoped", "blended"] as const) {
+      const result = await coordinator().query(endpoint(), "p1", {
+        providerKey: "acme.files.notes",
+        query: "x",
+        mode,
+      });
+      expect(result).toEqual({ status: "unavailable" });
+    }
+    expect(impl).not.toHaveBeenCalled();
+  });
+
+  it("never starts an unbound plugin for it", async () => {
+    registerSearchProviders("acme.files", [
+      provider({ pluginId: "acme.files", keyword: FILE_SEARCH_KEYWORD }),
+    ]);
+    await coordinator().query(endpoint(), "p1", {
       providerKey: "acme.files.notes",
       query: "x",
       mode: "scoped",
     });
-    expect(result).toEqual({ status: "unavailable" });
     expect(activatePlugin).not.toHaveBeenCalled();
   });
 });

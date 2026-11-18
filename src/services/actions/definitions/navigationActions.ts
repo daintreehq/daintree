@@ -78,7 +78,7 @@ export function registerNavigationActions(
     id: "nav.quickOpenFile",
     title: "Open file by name",
     description:
-      "Open the quick switcher scoped to the active worktree's files, to find one by name and show it in the read-only viewer",
+      "Open the quick switcher on the active worktree's files, to find one by name and open it",
     category: "navigation",
     kind: "command",
     danger: "safe",
