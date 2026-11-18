@@ -321,7 +321,11 @@ describe("createWindowDepsAdopter", () => {
     let destroyed = false;
     const mainWindow = { isDestroyed: () => destroyed };
     return {
-      deps: { mainWindow, projectSwitchService: {}, eventBuffer: {} } as unknown as HandlerDependencies,
+      deps: {
+        mainWindow,
+        projectSwitchService: {},
+        eventBuffer: {},
+      } as unknown as HandlerDependencies,
       close: () => {
         destroyed = true;
       },

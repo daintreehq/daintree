@@ -214,7 +214,6 @@ describe("findTerminalCycleAction", () => {
     expect(findTerminalCycleAction(input({ key: "v", control: true }))).toBeUndefined();
     expect(findTerminalCycleAction(input({ key: "Tab", control: true }))).toBeUndefined();
   });
-
 });
 
 describe("isDictationKey", () => {

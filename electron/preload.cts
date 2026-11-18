@@ -1513,9 +1513,8 @@ function buildElectronApi(): ElectronAPI {
 
       notifyWarmViewPainted: () => _unwrappingInvoke(CHANNELS.APP_VIEW_WARM_PAINTED),
 
-      onMenuAction: (
-        callback: (payload: { actionId: string; args?: unknown }) => void
-      ) => _typedOn(CHANNELS.MENU_ACTION, callback),
+      onMenuAction: (callback: (payload: { actionId: string; args?: unknown }) => void) =>
+        _typedOn(CHANNELS.MENU_ACTION, callback),
 
       reloadConfig: () => _unwrappingInvoke(CHANNELS.APP_RELOAD_CONFIG),
 

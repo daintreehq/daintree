@@ -25,15 +25,11 @@ describe("useMenuActions", () => {
   });
 
   const setup = () => {
-    let handler:
-      | ((payload: { actionId: string; args?: unknown }) => void)
-      | undefined;
+    let handler: ((payload: { actionId: string; args?: unknown }) => void) | undefined;
     Object.defineProperty(window, "electron", {
       value: {
         app: {
-          onMenuAction: (
-            cb: (payload: { actionId: string; args?: unknown }) => void
-          ) => {
+          onMenuAction: (cb: (payload: { actionId: string; args?: unknown }) => void) => {
             handler = cb;
             return () => {};
           },
