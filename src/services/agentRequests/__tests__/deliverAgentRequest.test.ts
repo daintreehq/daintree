@@ -974,4 +974,32 @@ describe("deliverAgentRequest", () => {
     expect(last(other.states)?.state.status).toBe("sent");
     expect(agent.sent).toEqual(["Make it pop"]);
   });
+
+  it("waits on an owner's own readiness, through the last look", async () => {
+    // A pane whose agent hasn't drawn yet reads idle, which the default takes;
+    // an owner typing into a session it didn't start asks for its prompt.
+    const agent = terminal("idle");
+    const { states, onState } = sink();
+    const run = deliverAgentRequest({
+      ownerKey: "owner-1\nwt-1",
+      destination: { kind: "terminal", terminalId: "t1", title: "Claude" },
+      worktreeId: "wt-1",
+      stillOwned: () => true,
+      onState,
+      buildPrompt: async () => "Carry on",
+      readiness: (entry) =>
+        entry.agentState === "waiting" && entry.waitingReason === "prompt" ? "ready" : "not-yet",
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(agent.sent).toEqual([]);
+    expect(last(states)?.state.status).toBe("queued");
+
+    agent.setState("waiting");
+    agent.setWaitingReason("prompt");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+
+    expect(agent.sent).toEqual(["Carry on"]);
+    expect(last(states)?.state.status).toBe("sent");
+  });
 });

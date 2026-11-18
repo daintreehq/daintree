@@ -152,6 +152,10 @@ vi.mock("../statePatcher", async () => {
       savedRestoreRecovery: s.restoreRecovery,
       // The real builder brings a plain terminal back showing its saved exit.
       ...(s.exitCode !== undefined && { restoredExitCode: s.exitCode }),
+      // Stands in for the builder's own verdict on the launch; a fixture sets it
+      // on the saved panel to say what the builder decided (#17883).
+      ...(s.restoreProvenance !== undefined && { restoreProvenance: s.restoreProvenance }),
+      ...(s.title !== undefined && { title: s.title }),
     }),
     // Mirrors the real resolver's title recovery (same agent order) so the
     // election's identity resolution can't silently diverge from production.
@@ -373,6 +377,51 @@ describe("restorePanelsPhase — saved panels", () => {
     expect(ctx.addPanel).not.toHaveBeenCalled();
     expect(restoreTasks).toEqual([]);
     expect(ctx.backendTerminalMap.has("dead")).toBe(false);
+  });
+
+  it("reports each agent it relaunched, and what the launch did with its conversation", async () => {
+    reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
+    const ctx = makeContext();
+    ctx.backendTerminalMap.set("live", backend("live", { launchAgentId: "claude" }));
+    const { wakeCandidates } = await restorePanelsPhase(
+      [
+        panel("resumed", {
+          kind: "agent",
+          launchAgentId: "claude",
+          worktreeId: "w1",
+          restoreProvenance: { at: 1, disposition: "resume" },
+        }),
+        panel("shell"),
+        panel("fresh", {
+          kind: "agent",
+          launchAgentId: "codex",
+          restoreProvenance: { at: 1, disposition: "fresh" },
+        }),
+        // Its PTY survived, so nothing stopped it and there is nothing to wake.
+        panel("live", { kind: "agent", launchAgentId: "claude" }),
+      ],
+      ctx
+    );
+    expect(
+      wakeCandidates.map(({ terminalId, title, agentId, worktreeId, outcome }) => ({
+        terminalId,
+        title,
+        agentId,
+        worktreeId,
+        outcome,
+      }))
+    ).toEqual([
+      {
+        terminalId: "resumed",
+        title: "resumed",
+        agentId: "claude",
+        worktreeId: "w1",
+        outcome: "resumed",
+      },
+      { terminalId: "fresh", title: "fresh", agentId: "codex", worktreeId: null, outcome: "fresh" },
+    ]);
+    // One restore pass, one time: what a pane typed afterwards is measured from it.
+    expect(new Set(wakeCandidates.map((c) => c.restoredAt)).size).toBe(1);
   });
 
   it("respawns a PTY agent panel when reconnect returns not_found on cold restart", async () => {

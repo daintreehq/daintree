@@ -30,8 +30,12 @@ export function WakeContinueNotice() {
         layout="strip"
         severity="info"
         role="status"
-        title={`${resumed === 1 ? "1 agent" : agents} resumed ${resumed === 1 ? "its" : "their"} session`}
-        description="Send a note telling them to pick up where they left off?"
+        title={`${agents} resumed`}
+        description={
+          resumed === 1
+            ? "Send it a note to pick up where it left off?"
+            : "Send them a note to pick up where they left off?"
+        }
         actions={[{ id: "review", label: "Review note", variant: "primary", onClick: openDetails }]}
         className={BANNER_CLASS}
         onClose={dismissWakeContinue}
