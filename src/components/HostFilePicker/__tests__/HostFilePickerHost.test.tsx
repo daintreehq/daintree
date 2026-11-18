@@ -164,7 +164,12 @@ describe("HostFilePickerHost", () => {
     });
     await screen.findByText("srv-repo");
     expect(pickerRoots).toHaveBeenCalledWith({ toHostId: "studio-01" });
-    expect(otherList).toHaveBeenCalledWith({ toHostId: "studio-01", path: "~", showHidden: false });
+    expect(otherList).toHaveBeenCalledWith({
+      toHostId: "studio-01",
+      path: "~",
+      showHidden: false,
+      metadata: "picker",
+    });
     expect(listDirectory).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText("srv-repo"));
     fireEvent.click(confirmButton("Use this folder"));
@@ -198,7 +203,11 @@ describe("HostFilePickerHost", () => {
       });
     });
     await screen.findByText("work");
-    expect(listDirectory).toHaveBeenCalledWith({ path: "~", showHidden: false });
+    expect(listDirectory).toHaveBeenCalledWith({
+      path: "~",
+      showHidden: false,
+      metadata: "picker",
+    });
 
     fireEvent.doubleClick(screen.getByText("work"));
     await screen.findByText("app");
@@ -271,7 +280,11 @@ describe("HostFilePickerHost", () => {
     });
     fireEvent.keyDown(screen.getByLabelText("Folder path"), { key: "Enter" });
     await waitFor(() =>
-      expect(listDirectory).toHaveBeenLastCalledWith({ path: "/home/greg/work", showHidden: false })
+      expect(listDirectory).toHaveBeenLastCalledWith({
+        path: "/home/greg/work",
+        showHidden: false,
+        metadata: "picker",
+      })
     );
     expect(confirmButton("Open").getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(confirmButton("Open"));
@@ -378,7 +391,11 @@ describe("HostFilePickerHost typed path", () => {
     const finish = holdListing();
     press(confirmButton("Open"));
     expect(document.activeElement).toBe(field);
-    expect(listDirectory).toHaveBeenLastCalledWith({ path: "/home/greg/work", showHidden: false });
+    expect(listDirectory).toHaveBeenLastCalledWith({
+      path: "/home/greg/work",
+      showHidden: false,
+      metadata: "picker",
+    });
     await act(async () => {});
     expect(settled()).toBe(false);
     await finish();
@@ -393,7 +410,11 @@ describe("HostFilePickerHost typed path", () => {
     press(confirmButton("Open"));
     await expect(picked).resolves.toEqual(["/home/greg"]);
     expect(listDirectory).toHaveBeenCalledTimes(2);
-    expect(listDirectory).toHaveBeenLastCalledWith({ path: "/home/greg/", showHidden: false });
+    expect(listDirectory).toHaveBeenLastCalledWith({
+      path: "/home/greg/",
+      showHidden: false,
+      metadata: "picker",
+    });
   });
 
   it("forgets the press when another folder is opened while the typed one loads", async () => {
@@ -608,7 +629,11 @@ describe("HostFilePickerHost keyboard", () => {
       act(() => listbox.focus());
       fireEvent.keyDown(listbox, keys);
       await findRow("greg");
-      expect(listDirectory).toHaveBeenLastCalledWith({ path: "/home", showHidden: false });
+      expect(listDirectory).toHaveBeenLastCalledWith({
+        path: "/home",
+        showHidden: false,
+        metadata: "picker",
+      });
     } finally {
       delete listings["/home"];
     }
@@ -663,7 +688,11 @@ describe("HostFilePickerHost start folder", () => {
     render(<HostFilePickerHost />);
     const picked = openPick({ mode: "file", title: "Choose file" });
     await findRow("notes.md");
-    expect(listDirectory).toHaveBeenCalledWith({ path: "~", showHidden: false });
+    expect(listDirectory).toHaveBeenCalledWith({
+      path: "~",
+      showHidden: false,
+      metadata: "picker",
+    });
     expect(roots.getPickerRoots).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: "Projects" })).toBeNull();
     expect(screen.getByRole("button", { name: "Parent folder" }).hasAttribute("disabled")).toBe(
@@ -704,7 +733,11 @@ describe("HostFilePickerHost start folder", () => {
     );
     fireEvent.click(screen.getByLabelText("Show hidden files"));
     await waitFor(() =>
-      expect(listDirectory).toHaveBeenLastCalledWith({ path: "~", showHidden: true })
+      expect(listDirectory).toHaveBeenLastCalledWith({
+        path: "~",
+        showHidden: true,
+        metadata: "picker",
+      })
     );
     // The folder is still known while it refreshes: its parent stays a step away.
     expect(screen.getByRole("button", { name: "Parent folder" }).hasAttribute("disabled")).toBe(
@@ -724,7 +757,11 @@ describe("HostFilePickerHost start folder", () => {
     void openPick({ mode: "directory", title: "Open folder", defaultPath: "/home/greg/work" });
     await findRow("app");
     expect(listDirectory).toHaveBeenCalledTimes(1);
-    expect(listDirectory).toHaveBeenCalledWith({ path: "/home/greg/work", showHidden: false });
+    expect(listDirectory).toHaveBeenCalledWith({
+      path: "/home/greg/work",
+      showHidden: false,
+      metadata: "picker",
+    });
     await roots.finish(places);
     await screen.findByRole("button", { name: "Projects" });
     expect(listDirectory).toHaveBeenCalledTimes(1);
@@ -741,7 +778,11 @@ describe("HostFilePickerHost start folder", () => {
     expect((screen.getByLabelText("Folder path") as HTMLInputElement).value).toBe("");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await findRow("notes.md");
-    expect(listDirectory).toHaveBeenLastCalledWith({ path: "~", showHidden: false });
+    expect(listDirectory).toHaveBeenLastCalledWith({
+      path: "~",
+      showHidden: false,
+      metadata: "picker",
+    });
   });
 
   it("lists an older host's home from its places when they arrive after the refusal", async () => {
@@ -758,7 +799,11 @@ describe("HostFilePickerHost start folder", () => {
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     await roots.finish(places);
     await findRow("notes.md");
-    expect(listDirectory).toHaveBeenLastCalledWith({ path: "/home/greg", showHidden: false });
+    expect(listDirectory).toHaveBeenLastCalledWith({
+      path: "/home/greg",
+      showHidden: false,
+      metadata: "picker",
+    });
     expect(screen.queryByText(/must be absolute/)).toBeNull();
   });
 
@@ -772,7 +817,11 @@ describe("HostFilePickerHost start folder", () => {
     await screen.findByRole("button", { name: "Projects" });
     await refuse();
     await findRow("notes.md");
-    expect(listDirectory).toHaveBeenLastCalledWith({ path: "/home/greg", showHidden: false });
+    expect(listDirectory).toHaveBeenLastCalledWith({
+      path: "/home/greg",
+      showHidden: false,
+      metadata: "picker",
+    });
     expect(screen.queryByText(/must be absolute/)).toBeNull();
   });
 
@@ -793,7 +842,11 @@ describe("HostFilePickerHost start folder", () => {
     await waitFor(() => expect(listDirectory).toHaveBeenCalledTimes(1));
     await roots.finish(answer);
     await findRow("home");
-    expect(listDirectory).toHaveBeenLastCalledWith({ path: "/", showHidden: false });
+    expect(listDirectory).toHaveBeenLastCalledWith({
+      path: "/",
+      showHidden: false,
+      metadata: "picker",
+    });
   });
 
   it("keeps a folder opened while an older host's places are still coming", async () => {
@@ -811,7 +864,11 @@ describe("HostFilePickerHost start folder", () => {
     await screen.findByRole("button", { name: "Projects" });
     expect(getRow("app")).toBeTruthy();
     expect(listDirectory).toHaveBeenCalledTimes(2);
-    expect(listDirectory).toHaveBeenLastCalledWith({ path: "/home/greg/work", showHidden: false });
+    expect(listDirectory).toHaveBeenLastCalledWith({
+      path: "/home/greg/work",
+      showHidden: false,
+      metadata: "picker",
+    });
   });
 
   it("leaves the next pick alone when one is dismissed while an older host's places come", async () => {
@@ -837,7 +894,12 @@ describe("HostFilePickerHost start folder", () => {
     await roots.finish(places);
     expect(listDirectory).toHaveBeenCalledTimes(1);
     expect(otherList).toHaveBeenCalledTimes(1);
-    expect(otherList).toHaveBeenCalledWith({ toHostId: "studio-01", path: "~", showHidden: false });
+    expect(otherList).toHaveBeenCalledWith({
+      toHostId: "studio-01",
+      path: "~",
+      showHidden: false,
+      metadata: "picker",
+    });
     expect(getRow("srv-repo")).toBeTruthy();
   });
 

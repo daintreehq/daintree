@@ -13,6 +13,11 @@ import { getHostPickerRoots, listHostDirectory } from "../hostFiles.js";
 
 let dir: string;
 
+function kindOfStats(stats: { isSymbolicLink(): boolean; isDirectory(): boolean }): string {
+  if (stats.isSymbolicLink()) return "symlink";
+  return stats.isDirectory() ? "directory" : "file";
+}
+
 beforeEach(async () => {
   dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "host-files-")));
   projects.list = [];
@@ -125,6 +130,133 @@ describe("listHostDirectory", () => {
   it("has no parent at the filesystem root", async () => {
     const listing = await listHostDirectory({ path: path.parse(dir).root });
     expect(listing.parent).toBeNull();
+  });
+
+  it("reads modification times for every entry when no metadata mode is given", async () => {
+    await fs.mkdir(path.join(dir, "src"));
+    await fs.writeFile(path.join(dir, "a.txt"), "1");
+    await fs.utimes(path.join(dir, "src"), 1_000, 1_000);
+    await fs.utimes(path.join(dir, "a.txt"), 2_000, 2_000);
+    const lstat = vi.spyOn(fs, "lstat");
+    const listing = await listHostDirectory({ path: dir });
+    expect(lstat).toHaveBeenCalledTimes(2);
+    expect(listing.entries.map((e) => [e.name, e.mtimeMs])).toEqual([
+      ["src", 1_000_000],
+      ["a.txt", 2_000_000],
+    ]);
+  });
+});
+
+describe("listHostDirectory in picker mode", () => {
+  it("reads no per-entry metadata for a listing of folders", async () => {
+    await Promise.all(Array.from({ length: 130 }, (_, i) => fs.mkdir(path.join(dir, `d${i}`))));
+    const lstat = vi.spyOn(fs, "lstat");
+    const stat = vi.spyOn(fs, "stat");
+    const listing = await listHostDirectory({ path: dir, metadata: "picker" });
+    expect(listing.entries).toHaveLength(130);
+    expect(listing.entries.every((e) => e.kind === "directory" && e.size === null)).toBe(true);
+    expect(listing.entries.every((e) => e.mtimeMs === null)).toBe(true);
+    expect(lstat).not.toHaveBeenCalled();
+    expect(stat).not.toHaveBeenCalled();
+  });
+
+  it("reads sizes for regular files only, and no modification times", async () => {
+    await fs.mkdir(path.join(dir, "src"));
+    await fs.writeFile(path.join(dir, "b.txt"), "12345");
+    await fs.writeFile(path.join(dir, "a.txt"), "1");
+    await fs.symlink(path.join(dir, "b.txt"), path.join(dir, "alias"));
+    await fs.symlink(path.join(dir, "missing"), path.join(dir, "broken"));
+    const lstat = vi.spyOn(fs, "lstat");
+    const stat = vi.spyOn(fs, "stat");
+    const listing = await listHostDirectory({ path: dir, metadata: "picker" });
+    expect(listing.entries.map((e) => [e.name, e.kind, e.size, e.mtimeMs])).toEqual([
+      ["src", "directory", null, null],
+      ["alias", "symlink", null, null],
+      ["broken", "symlink", null, null],
+      ["a.txt", "file", 1, null],
+      ["b.txt", "file", 5, null],
+    ]);
+    expect(lstat.mock.calls.map(([target]) => path.basename(String(target))).sort()).toEqual([
+      "a.txt",
+      "b.txt",
+    ]);
+    expect(stat).not.toHaveBeenCalled();
+  });
+
+  it("reads every file's size when there are more files than one batch", async () => {
+    await Promise.all(
+      Array.from({ length: 70 }, (_, i) => fs.writeFile(path.join(dir, `f${i}`), "x".repeat(i + 1)))
+    );
+    const lstat = vi.spyOn(fs, "lstat");
+    const listing = await listHostDirectory({ path: dir, metadata: "picker" });
+    expect(listing.entries).toHaveLength(70);
+    for (const entry of listing.entries) expect(entry.size).toBe(Number(entry.name.slice(1)) + 1);
+    expect(lstat).toHaveBeenCalledTimes(70);
+  });
+
+  it("keeps a file that disappears before its size is read, without a size", async () => {
+    await fs.writeFile(path.join(dir, "gone.txt"), "12345");
+    await fs.writeFile(path.join(dir, "kept.txt"), "1");
+    const realLstat = fs.lstat.bind(fs);
+    vi.spyOn(fs, "lstat").mockImplementation(async (target, ...rest) => {
+      if (path.basename(String(target)) === "gone.txt") await fs.rm(String(target));
+      return realLstat(target, ...rest);
+    });
+    const listing = await listHostDirectory({ path: dir, metadata: "picker" });
+    expect(listing.entries.map((e) => [e.name, e.kind, e.size])).toEqual([
+      ["gone.txt", "file", null],
+      ["kept.txt", "file", 1],
+    ]);
+  });
+
+  it("shows no size for a file replaced by a link or a folder before its size is read", async () => {
+    await fs.writeFile(path.join(dir, "to-dir.txt"), "12345");
+    await fs.writeFile(path.join(dir, "to-link.txt"), "12345");
+    await fs.writeFile(path.join(dir, "target.txt"), "1234567");
+    const realLstat = fs.lstat.bind(fs);
+    const seen: Record<string, string> = {};
+    vi.spyOn(fs, "lstat").mockImplementation(async (target, ...rest) => {
+      const name = path.basename(String(target));
+      if (name !== "target.txt") await fs.rm(String(target));
+      if (name === "to-dir.txt") await fs.mkdir(String(target));
+      if (name === "to-link.txt") await fs.symlink(path.join(dir, "target.txt"), String(target));
+      const result = await realLstat(target, ...rest);
+      seen[name] = kindOfStats(result);
+      return result;
+    });
+    const listing = await listHostDirectory({ path: dir, metadata: "picker" });
+    expect(seen).toEqual({
+      "target.txt": "file",
+      "to-dir.txt": "directory",
+      "to-link.txt": "symlink",
+    });
+    expect(listing.entries.map((e) => [e.name, e.kind, e.size])).toEqual([
+      ["target.txt", "file", 7],
+      ["to-dir.txt", "file", null],
+      ["to-link.txt", "file", null],
+    ]);
+  });
+
+  it("hides dotfiles unless asked, and stops at the entry cap", async () => {
+    await fs.writeFile(path.join(dir, ".env"), "xx");
+    await Promise.all(
+      Array.from({ length: 6 }, (_, i) => fs.writeFile(path.join(dir, `f${i}`), "x"))
+    );
+    const hidden = await listHostDirectory({ path: dir, metadata: "picker" });
+    expect(hidden.entries.map((e) => e.name)).not.toContain(".env");
+    const shown = await listHostDirectory({ path: dir, showHidden: true, metadata: "picker" });
+    expect(shown.entries.find((e) => e.name === ".env")?.size).toBe(2);
+
+    const exact = await listHostDirectory({ path: dir, metadata: "picker" }, 6);
+    expect(exact.truncated).toBe(false);
+    expect(exact.entries).toHaveLength(6);
+
+    const lstat = vi.spyOn(fs, "lstat");
+    const capped = await listHostDirectory({ path: dir, metadata: "picker" }, 3);
+    expect(capped.truncated).toBe(true);
+    expect(capped.entries).toHaveLength(3);
+    expect(capped.entries.every((e) => e.size === 1)).toBe(true);
+    expect(lstat).toHaveBeenCalledTimes(3);
   });
 });
 

@@ -1,4 +1,5 @@
 import type { HostId } from "../remoteHosts.js";
+import type { HostDirectoryMetadata } from "./hostFiles.js";
 
 /** The fresh remote check of a branch, run on the machine the branch is on. */
 export type BranchRemoteState =
@@ -234,6 +235,7 @@ export interface HostSwitchListDirectoryPayload {
   toHostId: HostId;
   path: string;
   showHidden?: boolean;
+  metadata?: HostDirectoryMetadata;
 }
 
 export interface HostSwitchPickerRootsPayload {

@@ -80,13 +80,18 @@ function pickerSource(hostId: string | undefined) {
     return {
       roots: () => window.electron.hostFiles.getPickerRoots(),
       list: (path: string, showHidden: boolean) =>
-        window.electron.hostFiles.listDirectory({ path, showHidden }),
+        window.electron.hostFiles.listDirectory({ path, showHidden, metadata: "picker" }),
     };
   }
   return {
     roots: () => window.electron.hostSwitch.pickerRoots({ toHostId: hostId }),
     list: (path: string, showHidden: boolean) =>
-      window.electron.hostSwitch.listDirectory({ toHostId: hostId, path, showHidden }),
+      window.electron.hostSwitch.listDirectory({
+        toHostId: hostId,
+        path,
+        showHidden,
+        metadata: "picker",
+      }),
   };
 }
 

@@ -246,6 +246,20 @@ describe("projects across hosts (integration harness)", () => {
         })
       );
       expect(listing.entries.map((entry) => entry.name).sort()).toEqual(["deep", "web"]);
+      expect(listing.entries.every((entry) => typeof entry.mtimeMs === "number")).toBe(true);
+
+      // The picker's mode crosses the link, so the host skips the reads it would only discard.
+      const forPicker = data<HostDirectoryListing>(
+        await harness.invoke(CHANNELS.HOST_SWITCH_LIST_DIRECTORY, localView, {
+          toHostId: HOST_ID,
+          path: path.join(root, "hs-far"),
+          metadata: "picker",
+        })
+      );
+      expect(forPicker.entries.map((entry) => [entry.name, entry.mtimeMs]).sort()).toEqual([
+        ["deep", null],
+        ["web", null],
+      ]);
 
       // The home token crosses the link as it is, and the host names its own home.
       const home = vi.spyOn(os, "homedir").mockReturnValue(path.join(root, "hs-far"));
