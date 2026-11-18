@@ -44,6 +44,10 @@ const APPIMAGE_WRAPPER_LAUNCH_SUFFIXES = [
   ' --cli-path "$ABSOLUTE_PATH" &',
 ];
 
+// The `daintree call` client in the packaged script, between these lines.
+const CALL_CLIENT_START = "# >>> daintree call >>>";
+const CALL_CLIENT_END = "# <<< daintree call <<<";
+
 function appVersion(): string {
   try {
     return app.getVersion();
@@ -52,23 +56,59 @@ function appVersion(): string {
   }
 }
 
+function getPackagedScriptPath(): string {
+  if (app.isPackaged) return path.join(process.resourcesPath, CLI_SCRIPT_FILE);
+  // Dev: app path points at project root when running `electron .`
+  return path.join(app.getAppPath(), "scripts", CLI_SCRIPT_FILE);
+}
+
 /**
- * The `daintree` command for an AppImage install. It answers the same flags as
- * the packaged CLI script (resources/daintree-cli.sh); the version is written
- * in because the image's app.asar can't be read without mounting it, and the
- * wrapper is rewritten whenever its content no longer matches.
+ * The `daintree call` client, copied out of the packaged script so an AppImage
+ * wrapper can carry it: the image's resources are only there while it runs.
+ * Null when the script can't be read or has no client block.
  */
-export function generateAppImageWrapper(appImagePath: string, version = appVersion()): string {
+function readCallClient(): string | null {
+  let source: string | null;
+  try {
+    source = readFileIfExists(getPackagedScriptPath());
+  } catch {
+    return null;
+  }
+  if (source === null) return null;
+  const start = source.indexOf(`\n${CALL_CLIENT_START}\n`);
+  const end = start < 0 ? -1 : source.indexOf(`\n${CALL_CLIENT_END}\n`, start);
+  if (end < 0) return null;
+  return source.slice(start + 1, end + 1 + CALL_CLIENT_END.length);
+}
+
+/**
+ * The `daintree` command for an AppImage install. It answers the same flags and
+ * commands as the packaged CLI script (resources/daintree-cli.sh); the version
+ * and the `call` client are written in because the image's files can't be read
+ * without mounting it, and the wrapper is rewritten whenever its content no
+ * longer matches.
+ */
+export function generateAppImageWrapper(
+  appImagePath: string,
+  version = appVersion(),
+  callClient = readCallClient()
+): string {
   const escaped = appImagePath.replace(/'/g, "'\\''");
   const quotedVersion = version.replace(/[^0-9A-Za-z.+-]/g, "");
+  const callUsage =
+    callClient === null
+      ? ""
+      : ` "       ${CLI_COMMAND_NAME} call <tool> [options]  (see ${CLI_COMMAND_NAME} call --help)"`;
   return [
     "#!/usr/bin/env bash",
     APPIMAGE_WRAPPER_HEADER,
     "set -euo pipefail",
+    ...(callClient === null ? [] : [callClient]),
     'case "${1:-}" in',
     "  --help|-h)",
-    `    printf '%s\\n' "Usage: ${CLI_COMMAND_NAME} [directory]" "" "Open a directory as a project in Daintree." "" "Arguments:" "  directory    Path to open (defaults to current directory)" "" "Options:" "  -h, --help       Show this help message" "  -v, --version    Show the Daintree CLI version" "  -s, --status     Check if Daintree is running"`,
+    `    printf '%s\\n' "Usage: ${CLI_COMMAND_NAME} [directory]"${callUsage} "" "Open a directory as a project in Daintree." "" "Arguments:" "  directory    Path to open (defaults to current directory)" "" "Options:" "  -h, --help       Show this help message" "  -v, --version    Show the Daintree CLI version" "  -s, --status     Check if Daintree is running"`,
     "    exit 0 ;;",
+    ...(callClient === null ? [] : ["  call)", "    shift", '    daintree_call "$@" ;;']),
     "  --version|-v)",
     `    echo "${CLI_COMMAND_NAME} ${quotedVersion}"`,
     "    exit 0 ;;",
@@ -170,11 +210,7 @@ function getScriptSourcePath(): string {
   if (isAppImage()) {
     return getAppImageWrapperPath();
   }
-  if (app.isPackaged) {
-    return path.join(process.resourcesPath, CLI_SCRIPT_FILE);
-  }
-  // Dev: app path points at project root when running `electron .`
-  return path.join(app.getAppPath(), "scripts", CLI_SCRIPT_FILE);
+  return getPackagedScriptPath();
 }
 
 function readFileIfExists(filePath: string): string | null {

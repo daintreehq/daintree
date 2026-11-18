@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const home = vi.hoisted(() => ({ dir: "" }));
@@ -173,6 +174,62 @@ describe("CliInstallService — following a moved AppImage", () => {
       const notDir = run(path.join(root, "missing"));
       expect(notDir.status).toBe(1);
       expect(notDir.stderr).toContain("is not a directory");
+    }
+  );
+
+  // The image's resources are unmounted whenever the app isn't running, so the
+  // wrapper has to carry the packaged script's client rather than point at it.
+  it.skipIf(process.platform === "win32")(
+    "carries the packaged script's call client, which runs without the image",
+    async () => {
+      const resources = path.join(root, "resources");
+      fs.mkdirSync(resources);
+      fs.copyFileSync(
+        fileURLToPath(new URL("../../../scripts/daintree-cli.sh", import.meta.url)),
+        path.join(resources, "daintree-cli.sh")
+      );
+      const descriptor = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+      Object.defineProperty(process, "resourcesPath", { value: resources, configurable: true });
+      let content: string;
+      let service: Awaited<ReturnType<typeof load>>;
+      try {
+        service = await load();
+        content = service.generateAppImageWrapper("/nonexistent/Daintree.AppImage", "1.2.3");
+      } finally {
+        if (descriptor) Object.defineProperty(process, "resourcesPath", descriptor);
+        else delete (process as { resourcesPath?: string }).resourcesPath;
+      }
+      fs.rmSync(resources, { recursive: true });
+      const wrapper = path.join(root, "daintree-cli.sh");
+      fs.writeFileSync(wrapper, content, { mode: 0o755 });
+      const run = (args: string[], env: Record<string, string> = {}) => {
+        const base = { ...process.env };
+        delete base.DAINTREE_MCP_URL;
+        delete base.DAINTREE_MCP_TOKEN;
+        return spawnSync("bash", [wrapper, ...args], {
+          encoding: "utf8",
+          env: { ...base, ...env },
+          timeout: 10_000,
+        });
+      };
+
+      expect(run(["--help"]).stdout).toContain("daintree call <tool>");
+      const help = run(["call", "--help"]);
+      expect(help.status).toBe(0);
+      expect(help.stdout).toContain("Usage: daintree call <tool>");
+      const outsidePane = run(["call", "terminal.list"]);
+      expect(outsidePane.status).toBe(4);
+      expect(outsidePane.stderr).toContain("DAINTREE_MCP_URL");
+      // Port 1 is never Daintree's: the client got as far as connecting.
+      const unreachable = run(["call", "terminal.list"], {
+        DAINTREE_MCP_URL: "http://127.0.0.1:1/mcp",
+        DAINTREE_MCP_TOKEN: "pane-token",
+      });
+      expect(unreachable.status).toBe(3);
+      expect(unreachable.stderr).toContain("could not reach Daintree");
+      // The launch line and the version stamp still read back as before.
+      expect(service.appImageOfWrapper(content)).toBe("/nonexistent/Daintree.AppImage");
+      expect(run(["--version"]).stdout.trim()).toBe("daintree 1.2.3");
     }
   );
 
