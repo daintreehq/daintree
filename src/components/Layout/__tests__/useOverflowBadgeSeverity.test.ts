@@ -12,7 +12,7 @@
  * appears in `overflowIds` — no branch in the hook handles it.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import type { AgentState, AgentAvailabilityState, CliAvailability } from "@shared/types";
 
 let mockPanelsById: Record<string, unknown> = {};
@@ -78,6 +78,7 @@ import {
   useOverflowAgentObservations,
   useOverflowBadgeSeverity,
 } from "../useOverflowBadgeSeverity";
+import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 
 function makePanel(overrides: {
   id: string;
@@ -133,6 +134,26 @@ describe("useOverflowBadgeSeverity", () => {
     expect(
       renderHook(() => useOverflowBadgeSeverity(["copy-tree"], 0, 2)).result.current
     ).toBeNull();
+  });
+
+  it("marks questions waiting on the person only while the inbox button is folded in and the inbox is closed", () => {
+    const severity = (ids: Parameters<typeof useOverflowBadgeSeverity>[0], waiting: number) =>
+      renderHook(() => useOverflowBadgeSeverity(ids, 0, 0, false, false, waiting)).result.current;
+    expect(severity(["decisions-inbox"], 2)).toBe("waiting");
+    expect(severity(["decisions-inbox"], 0)).toBeNull();
+    expect(severity(["copy-tree"], 2)).toBeNull();
+
+    // One array across renders, as the toolbar holds it, so only the store's change can move the result.
+    const folded: Parameters<typeof useOverflowBadgeSeverity>[0] = ["decisions-inbox"];
+    const mounted = renderHook(() => useOverflowBadgeSeverity(folded, 0, 0, false, false, 2));
+    expect(mounted.result.current).toBe("waiting");
+    try {
+      act(() => useDecisionsInboxStore.setState({ isOpen: true }));
+      expect(mounted.result.current).toBeNull();
+    } finally {
+      act(() => useDecisionsInboxStore.setState({ isOpen: false }));
+    }
+    expect(mounted.result.current).toBe("waiting");
   });
 
   it("returns critical when problems is overflowed and errorCount > 0", () => {

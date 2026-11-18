@@ -45,6 +45,8 @@ import { useToolbarPreferencesStore } from "@/store";
 import { useAgentToolbarPinsStore } from "@/store/agentToolbarPinsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useCanopyStore } from "@/store/canopyStore";
+import { useDecisionsSwitch } from "@/hooks/useDecisionsOn";
+import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import type { AnyToolbarButtonId, LauncherItemToolbarButtonId } from "@/../../shared/types/toolbar";
 // `@shared/...` because these are value imports — the type-only spelling above
 // is erased at compile time and never has to resolve at runtime.
@@ -483,6 +485,8 @@ export function ToolbarSettingsTab() {
   const rowOwnerNote = useSettingsRowOwnerNote();
   const layout = useToolbarPreferencesStore((s) => s.layout);
   const canopyHidden = useCanopyStore((s) => s.mode === "hidden");
+  const localWindow = !isRemoteWindow();
+  const decisionsOn = useDecisionsSwitch(localWindow) === "on";
   const launcher = useToolbarPreferencesStore((s) => s.launcher);
   const setLeftButtons = useToolbarPreferencesStore((s) => s.setLeftButtons);
   const setRightButtons = useToolbarPreferencesStore((s) => s.setRightButtons);
@@ -694,8 +698,10 @@ export function ToolbarSettingsTab() {
     // Hidden, Canopy has no button to place: its row goes, and its place in
     // the layout stays for when it is shown again.
     if (canopyHidden) delete metadata.canopy;
+    // So has the Decisions inbox while Decisions is off, as on the toolbar.
+    if (!decisionsOn) delete metadata["decisions-inbox"];
     return metadata;
-  }, [pluginButtonIds, pluginConfigs, launcherItemMetadata, canopyHidden]);
+  }, [pluginButtonIds, pluginConfigs, launcherItemMetadata, canopyHidden, decisionsOn]);
 
   const getToolbarButtonLabel = useCallback(
     (id: UniqueIdentifier) => allMetadata[toButtonId(id)]?.label,

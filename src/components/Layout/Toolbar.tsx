@@ -121,6 +121,9 @@ import { ForgeStatsToolbarButton, type ForgeStatsHandle } from "./ForgeStatsTool
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { NotificationCenterToolbarButton } from "./NotificationCenterToolbarButton";
 import { CanopyToolbarButton, useCanopyUrgentCount } from "./CanopyToolbarButton";
+import { DecisionsToolbarButton } from "./DecisionsToolbarButton";
+import { useDecisionsSwitch } from "@/hooks/useDecisionsOn";
+import { useDecisionsWaitingCount } from "@/hooks/useDecisionsWaitingCount";
 import { AppMenuButton } from "./AppMenuButton";
 import { ToolbarLauncherButton } from "./ToolbarLauncherButton";
 import { ToolbarCommandPaletteButton } from "./ToolbarCommandPaletteButton";
@@ -353,6 +356,11 @@ export function Toolbar({
   const showDeveloperTools = usePreferencesStore((state) => state.showDeveloperTools);
   const notificationsEnabled = useNotificationSettingsStore((s) => s.enabled);
   const canopyHidden = useCanopyStore((s) => s.mode === "hidden");
+  // The inbox lists this computer's questions, which a Remote Host window's
+  // panes never asked. The toolbar holds the switch for the view, so the
+  // Decisions actions can read it whether or not the button is placed.
+  const localWindow = !isRemoteWindow();
+  const decisionsOn = useDecisionsSwitch(localWindow) === "on";
   const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
   const positionAgentButton = useToolbarPreferencesStore((state) => state.positionAgentButton);
   // This machine's pins (#14702), live, so a pin from the launcher or another
@@ -1081,6 +1089,11 @@ export function Toolbar({
         // the button back where it was.
         isAvailable: !canopyHidden,
       },
+      "decisions-inbox": {
+        render: () => <DecisionsToolbarButton key="decisions-inbox" data-toolbar-item="" />,
+        // Off, the slot goes and its place in the layout stays for when it is back on.
+        isAvailable: decisionsOn,
+      },
       "notification-center": {
         render: () => (
           <NotificationCenterToolbarButton key="notification-center" data-toolbar-item="" />
@@ -1340,6 +1353,7 @@ export function Toolbar({
       showDeveloperTools,
       notificationsEnabled,
       canopyHidden,
+      decisionsOn,
       pluginButtonIds,
       pluginConfigs,
       devServerCombo,
@@ -1391,6 +1405,11 @@ export function Toolbar({
   // 32px plus the 4px margin and 2px row gap that put it 6px clear, as the
   // right side's trigger sits. A demoted button or the branch row keeps it up
   // whatever the width.
+  // Watched only while the button has a place, on the strip or folded into a `…` menu.
+  const decisionsWaitingCount = useDecisionsWaitingCount(
+    availableLeftIds.includes("decisions-inbox") || availableRightIds.includes("decisions-inbox")
+  );
+
   const leftTriggerPinned =
     branchOverflowRow !== null || availableLeftIds.some((id) => demotedIds.has(id));
   const leftOverflowTrigger = useMemo(
@@ -1415,11 +1434,19 @@ export function Toolbar({
       withLitSignalPriorities({
         problems: errorCount > 0 || watcherDegraded || topologyWatcherDark,
         canopy: canopyUrgentCount > 0,
+        "decisions-inbox": decisionsWaitingCount > 0,
         ...Object.fromEntries(
           [...agentAttentionStates].map(([agentId, state]) => [agentId, state === "waiting"])
         ),
       }),
-    [errorCount, watcherDegraded, topologyWatcherDark, canopyUrgentCount, agentAttentionStates]
+    [
+      errorCount,
+      watcherDegraded,
+      topologyWatcherDark,
+      canopyUrgentCount,
+      decisionsWaitingCount,
+      agentAttentionStates,
+    ]
   );
 
   const {
@@ -1460,6 +1487,7 @@ export function Toolbar({
     hasProject: currentProject !== null,
     errorCount,
     canopyUrgentCount,
+    decisionsWaitingCount,
     watcherStatus,
     forgeUnavailableObservation:
       forgeDataUnavailable && forgeStatsLevel !== "hidden"
@@ -1583,6 +1611,9 @@ export function Toolbar({
       canopy: () => {
         void actionService.dispatch("canopy.toggle", undefined, { source: "user" });
       },
+      "decisions-inbox": () => {
+        void actionService.dispatch("decisions.openInbox", undefined, { source: "user" });
+      },
       "copy-tree": () => {
         void handleCopyTreeClick();
       },
@@ -1689,6 +1720,7 @@ export function Toolbar({
       errorCount={errorCount}
       notificationUnreadCount={notificationUnreadCount}
       canopyUrgentCount={canopyUrgentCount}
+      decisionsWaitingCount={decisionsWaitingCount}
       watcherStatus={watcherStatus}
       agentObservations={agentObservations}
       agentAttentionStates={agentAttentionStates}

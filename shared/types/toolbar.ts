@@ -71,6 +71,7 @@ export type ToolbarButtonId =
   | "problems"
   | "notification-center"
   | "canopy"
+  | "decisions-inbox"
   | "links-launcher"
   | "assistant-toggle";
 
@@ -358,6 +359,7 @@ export const TOOLBAR_BUTTON_PRIORITIES: Record<ToolbarButtonId, ToolbarButtonPri
   // and hold the agents' tier while they are lit (`withLitSignalPriorities`).
   "notification-center": 3,
   canopy: 3,
+  "decisions-inbox": 3,
   problems: 3,
   // Wide and informational: the stats capsule costs as much room as six icon
   // buttons, and its counts stay one click away in the `…` menu.

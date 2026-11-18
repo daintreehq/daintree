@@ -98,6 +98,12 @@ vi.mock("@/components/Settings/ProjectToolbarProfileNotice", () => ({
 }));
 vi.mock("@/lib/notify", () => ({ notify: (...args: unknown[]) => mockNotify(...args) }));
 
+// Decisions as main last reported it; off unless a case turns it on.
+let mockDecisionsSwitch: "on" | "off" | "unknown" = "off";
+vi.mock("@/hooks/useDecisionsOn", () => ({
+  useDecisionsSwitch: (active = true) => (active ? mockDecisionsSwitch : "unknown"),
+}));
+
 // The toolbar's agent pins are this machine's (#14702).
 vi.mock("@/store/agentToolbarPinsStore", () => ({
   useAgentToolbarPinsStore: (
@@ -1490,6 +1496,45 @@ describe("ToolbarSettingsTab — a hidden Canopy", () => {
     useCanopyStore.setState({ mode: "hidden" });
     const { container } = render(<ToolbarSettingsTab />);
     expect(switchNamesIn(container)).not.toContain(switchName("Canopy"));
+    expect(setRightButtonsMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("ToolbarSettingsTab — the Decisions inbox while Decisions is off", () => {
+  beforeEach(() => {
+    clearStoreMocks();
+    vi.mocked(useSortable).mockImplementation(defaultSortable);
+    mockAgentPins = null;
+    // Moved to the left, away from its default side.
+    mockToolbarState = makeToolbarState({
+      leftButtons: ["launcher", "decisions-inbox", "terminal"],
+      rightButtons: ["settings"],
+      pinnedButtons: {},
+    });
+  });
+
+  afterEach(() => {
+    mockDecisionsSwitch = "off";
+    mockToolbarState = makeToolbarState();
+  });
+
+  it("drops its row until Decisions is on, keeping its place for when it is", () => {
+    const row = switchName("Decisions inbox");
+    mockDecisionsSwitch = "unknown";
+    const { container, rerender } = render(<ToolbarSettingsTab />);
+    expect(switchNamesIn(container)).not.toContain(row);
+
+    for (const [known, shown] of [
+      ["on", true],
+      ["off", false],
+      ["on", true],
+    ] as const) {
+      mockDecisionsSwitch = known;
+      rerender(<ToolbarSettingsTab />);
+      expect(switchNamesIn(leftColumn(container)).includes(row)).toBe(shown);
+      expect(switchNamesIn(container).includes(row)).toBe(shown);
+    }
+    expect(setLeftButtonsMock).not.toHaveBeenCalled();
     expect(setRightButtonsMock).not.toHaveBeenCalled();
   });
 });
