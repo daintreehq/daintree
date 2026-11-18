@@ -44,8 +44,8 @@ interface FixtureOptions {
   droppedInitialize?: boolean;
   /** Refuses initialize with a 401 whose body is cut short. */
   truncatedRefusal?: boolean;
-  /** Refuses initialize the way Daintree refuses a handshake: HTTP 400 and a JSON-RPC error. */
-  refusedHandshake?: boolean;
+  /** Answers initialize with this instead of opening a session. */
+  initialize?: { status: number; body: string; sessionId?: string };
   /** Answers tools/call with this body as an SSE stream instead of running a tool. */
   callReply?: string;
   /** Answers this JSON-RPC method with a 401, as for a bearer revoked mid-call. */
@@ -200,14 +200,14 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
       cutShort(401, {});
       return;
     }
-    if (options.refusedHandshake && rpc?.method === "initialize") {
-      res.writeHead(400, { "Content-Type": "application/json" }).end(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          error: { code: -32010, message: "Start the Assistant again." },
-          id: null,
+    if (options.initialize && rpc?.method === "initialize") {
+      const { status, body, sessionId: id } = options.initialize;
+      res
+        .writeHead(status, {
+          "Content-Type": body.startsWith("{") ? "application/json" : "text/event-stream",
+          ...(id ? { "Mcp-Session-Id": id } : {}),
         })
-      );
+        .end(body);
       return;
     }
     if (options.callReply !== undefined && rpc?.method === "tools/call") {
@@ -295,6 +295,7 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
     });
     children.add(child);
     // null leaves stdin open, as a terminal would.
+    child.stdin.on("error", () => {});
     if (stdin !== null) child.stdin.end(stdin ?? "");
     let stdout = "";
     let stderr = "";
@@ -507,10 +508,8 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
   });
 
   it("reports a usage error without waiting on stdin for --args -", async () => {
-    const { child, done } = start(["fixture.echo", "--args", "-", "--bogus"], {}, null);
     // stdin stays open: a client that read it first would never get to the error.
-    child.stdin.write("{");
-    const run = await done;
+    const run = await start(["fixture.echo", "--args", "-", "--bogus"], {}, null).done;
 
     expect(run.status).toBe(2);
     expect(run.stderr).toContain("unknown option");
@@ -595,15 +594,62 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
     ]);
   });
 
-  it("exits 1 with Daintree's reason when it refuses the handshake", async () => {
+  const handshakeRefusal = JSON.stringify({
+    jsonrpc: "2.0",
+    error: { code: -32010, message: "Start the Assistant again." },
+    id: null,
+  });
+
+  // How Daintree's own refusals read, against replies that only look like them.
+  it.each([
+    ["a refused handshake", { status: 400, body: handshakeRefusal }, 1],
+    ["another server's error body", { status: 404, body: '{"error":{"message":"Not found"}}' }, 3],
+    [
+      "a JSON-RPC error answering initialize, with no session",
+      {
+        status: 200,
+        body: 'data: {"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Start the Assistant again."}}\n\n',
+      },
+      1,
+    ],
+    [
+      "an escaped protocol version",
+      {
+        status: 200,
+        sessionId: "escaped",
+        body: 'data: {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25\\u0000"}}\n\n',
+      },
+      3,
+    ],
+  ])("reads initialize answered with %s", async (_name, initialize, status) => {
     await fixture.close();
-    fixture = await startFixture({ refusedHandshake: true });
+    fixture = await startFixture({ initialize });
 
     const run = await call(["fixture.echo"]);
 
-    expect(run.status).toBe(1);
-    expect(run.stderr).toContain("Start the Assistant again.");
-    expect(fixture.seen.map((request) => request.rpc?.method)).toEqual(["initialize"]);
+    expect(run.status).toBe(status);
+    expect(fixture.seen.some((request) => request.rpc?.method === "tools/call")).toBe(false);
+    if (status === 1) expect(run.stderr).toContain("Start the Assistant again.");
+  });
+
+  it.each([
+    [["fixture.refuse"], 1],
+    [[], 2],
+  ])("exits with its own status for %j when stderr is closed", async (args, status) => {
+    const child = spawn("bash", ["-c", 'exec 2>&-; exec bash "$0" call "$@"', SCRIPT, ...args], {
+      env: {
+        PATH: process.env.PATH,
+        TMPDIR: tmpDir,
+        DAINTREE_MCP_URL: fixture.url,
+        DAINTREE_MCP_TOKEN: TOKEN,
+      },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    children.add(child);
+    const code = await new Promise<number | null>((resolve) => child.on("close", resolve));
+    children.delete(child);
+
+    expect(code).toBe(status);
   });
 
   const sse = (...events: unknown[]) =>

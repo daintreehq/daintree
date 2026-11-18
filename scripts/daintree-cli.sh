@@ -217,6 +217,9 @@ daintree_call() {
   local tool="" args_json="" args_given=0 args_stdin=0 pairs="" keys=" " as_json=0 arg key value
   LC_ALL=C
   export LC_ALL
+  # A closed stderr would make every diagnostic, awk's included, fail and turn
+  # a tool's refusal into a broken reply.
+  : >&2 || exec 2> /dev/null
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
