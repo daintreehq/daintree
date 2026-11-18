@@ -12,6 +12,23 @@ import {
   linkTargetAt,
 } from "../markdownEditorExtensions";
 
+// Counts whole-document passes of the fragment resolver's pipeline: its heading
+// ids step runs once per parse, whatever the caller kept from an earlier one.
+const pipeline = vi.hoisted(() => ({ runs: 0 }));
+vi.mock("@/components/Markdown/headingIds", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/Markdown/headingIds")>();
+  return {
+    ...actual,
+    rehypeHeadingIds: () => {
+      const transform = actual.rehypeHeadingIds();
+      return (tree: Parameters<typeof transform>[0]) => {
+        pipeline.runs++;
+        transform(tree);
+      };
+    },
+  };
+});
+
 const language = markdown({ base: markdownLanguage });
 
 function mount(doc: string) {
@@ -199,6 +216,66 @@ describe("markdownEditorExtensions (#12323)", () => {
     expect(dispatch).not.toHaveBeenCalled();
     expect(view.state.selection.main.head).toBe(3);
     expect(callbacks.onFollowLink).not.toHaveBeenCalled();
+  });
+
+  it("parses each version of the buffer once, however many links are followed in it (#17788)", async () => {
+    mounted = mount(TWO_RISKS);
+    const { view } = mounted;
+    view.focus();
+    pipeline.runs = 0;
+    const flatten = vi.spyOn(view.state.doc, "toString");
+
+    await followHeadingLink(view, "#risks");
+    expect(view.state.selection.main.head).toBe(view.state.doc.line(3).from);
+    await followHeadingLink(view, "#risks-1");
+    expect(view.state.selection.main.head).toBe(view.state.doc.line(7).from);
+    // Moving the caret is not an edit: the index stands.
+    view.dispatch({ selection: { anchor: 3 } });
+    await followHeadingLink(view, "#risks");
+    expect(view.state.selection.main.head).toBe(view.state.doc.line(3).from);
+    expect(flatten).toHaveBeenCalledTimes(1);
+    expect(pipeline.runs).toBe(1);
+
+    // An edit below the caret while the next jump is pending leaves the caret
+    // where it was, so the jump goes ahead, against the new text: the second
+    // "Risks" is now on line 5, where the old index would say 7.
+    view.dispatch({ selection: { anchor: 3 } });
+    const pending = followHeadingLink(view, "#risks-1");
+    view.dispatch({ changes: { from: view.state.doc.line(3).from, insert: "## Risks\n\n" } });
+    const reflatten = vi.spyOn(view.state.doc, "toString");
+    await pending;
+    expect(view.state.selection.main.head).toBe(view.state.doc.line(5).from);
+    await followHeadingLink(view, "#risks-2");
+    expect(view.state.selection.main.head).toBe(view.state.doc.line(9).from);
+
+    expect(reflatten).toHaveBeenCalledTimes(1);
+    expect(flatten).toHaveBeenCalledTimes(1);
+    expect(pipeline.runs).toBe(2);
+  });
+
+  it("keeps an index per editor, so moving between two never reparses either (#17788)", async () => {
+    const a = mount(TWO_RISKS);
+    const b = mount("## Risks\n\nOnly.\n\n## Risks\n");
+    try {
+      pipeline.runs = 0;
+      const follow = async (m: ReturnType<typeof mount>, href: string, line: number) => {
+        m.view.focus();
+        await followHeadingLink(m.view, href);
+        expect(m.view.state.selection.main.head).toBe(m.view.state.doc.line(line).from);
+      };
+
+      await follow(a, "#risks-1", 7);
+      await follow(b, "#risks-1", 5);
+      await follow(a, "#risks", 3);
+      await follow(b, "#risks", 1);
+
+      expect(pipeline.runs).toBe(2);
+    } finally {
+      for (const m of [a, b]) {
+        m.view.destroy();
+        m.host.remove();
+      }
+    }
   });
 
   it("a jump that resolves late yields to a closed editor or a reader who moved on", async () => {
