@@ -440,6 +440,8 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
 
       const { command, env } = ptyClient.spawn.mock.calls[0][1];
       expect(env?.DAINTREE_MCP_TOKEN).toBeUndefined();
+      // The listener is up for Decisions, but nothing here could use the control surface.
+      expect(env?.DAINTREE_MCP_URL).toBeUndefined();
       const servers = await readServers(configPathFromCommand(command));
       expect(Object.keys(servers)).toEqual(["daintree-decisions"]);
       expect(servers["daintree-decisions"].url).toBe(
@@ -485,6 +487,8 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
       expect(servers["daintree-decisions"].url).toBe("http://127.0.0.1:45454/mcp/decisions");
       const control = claude.env?.DAINTREE_MCP_TOKEN as string;
       expect(servers.daintree.headers.Authorization).toBe(`Bearer ${control}`);
+      // Claude itself reads SSE; a script in the pane gets the Streamable HTTP endpoint.
+      expect(claude.env?.DAINTREE_MCP_URL).toBe("http://127.0.0.1:45454/mcp");
       expect(mcpPaneConfigService.getDecisionsPrincipal("term-dec-core")).toBe(
         mcpPaneConfigService.getOwnershipPrincipalForToken(control)
       );
@@ -495,6 +499,7 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
         'mcp_servers.daintree-decisions.url="http://127.0.0.1:45454/mcp/decisions"'
       );
       const codexControl = codex.env?.DAINTREE_MCP_TOKEN as string;
+      expect(codex.env?.DAINTREE_MCP_URL).toBe("http://127.0.0.1:45454/mcp");
       const codexDecisions = codex.env?.DAINTREE_DECISIONS_MCP_TOKEN as string;
       expect(mcpPaneConfigService.getTierForToken(codexControl)).toBe("core");
       expect(mcpPaneConfigService.getDecisionsBearerForToken(codexDecisions)).toEqual({
@@ -512,6 +517,7 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
 
       const { command, env } = ptyClient.spawn.mock.calls[0][1];
       expect(env?.DAINTREE_MCP_TOKEN).toBeUndefined();
+      expect(env?.DAINTREE_MCP_URL).toBeUndefined();
       const servers = await readServers(configPathFromCommand(command));
       expect(Object.keys(servers)).toEqual(["daintree-ledger", "daintree-decisions"]);
       expect(servers["daintree-decisions"].url).toBe("http://127.0.0.1:45454/mcp/decisions");

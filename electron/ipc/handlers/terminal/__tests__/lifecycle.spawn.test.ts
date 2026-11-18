@@ -2377,6 +2377,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     );
 
     expect(ptyClient.spawn).toHaveBeenCalled();
+    expect(ptyClient.spawn.mock.calls[0][1].env?.DAINTREE_MCP_URL).toBeUndefined();
   });
 
   it("starts MCP on demand before injecting config for restored Claude agent spawns", async () => {
@@ -2544,6 +2545,44 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     expect(mockPreparePaneConfig).not.toHaveBeenCalled();
     expect(spawnArgs.command).toBe("claude");
     expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBeUndefined();
+    expect(spawnArgs.env?.DAINTREE_MCP_URL).toBeUndefined();
+  });
+
+  it("hands the pane the control endpoint beside its bearer, on the port the server bound", async () => {
+    // A script the agent runs (`daintree call`, a git hook) inherits the pair.
+    // The listener moves off its default port when that one is taken, and a
+    // URL already in the env (a preset, a project) must not split the pair.
+    mockValidateToken.mockReturnValue(false);
+    mockIsRunning.mockReturnValue(true);
+    mockCurrentPort.mockReturnValue(45461);
+    mockPreparePaneConfig.mockResolvedValue({
+      configPath: "/tmp/pane-config.json",
+      args: ["--mcp-config", "/tmp/pane-config.json"],
+      env: {},
+      token: "pane-token",
+    });
+    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "core" });
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        id: "url-pane",
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "claude",
+        launchAgentId: "claude",
+        env: { DAINTREE_MCP_URL: "http://127.0.0.1:1/stale" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    const env = ptyClient.spawn.mock.calls[0][1].env;
+    expect(env?.DAINTREE_MCP_TOKEN).toBe("pane-token");
+    expect(env?.DAINTREE_MCP_URL).toBe("http://127.0.0.1:45461/mcp");
   });
 
   it("appends Codex MCP -c flags to a Codex help-session spawn", async () => {

@@ -15,6 +15,7 @@ import { pluginMcpRoutePath, type AgentMcpToolScope } from "./pluginAgentMcp/typ
 import { RESERVED_PLUGIN_SERVER_KEYS } from "./pluginAgentMcp/serverKeys.js";
 import type { LaunchMcpInjection } from "../../shared/config/launchMcp.js";
 import { MCP_CONFIRMABLE_CALL_MAX_MS } from "../../shared/config/mcpConfirmWindow.js";
+import { buildMcpServerUrl } from "../../shared/config/mcpClientConfigs.js";
 import {
   LAUNCH_MCP_FILE_PLACEHOLDER,
   renderLaunchMcp,
@@ -303,7 +304,7 @@ export class McpPaneConfigService {
         ? [
             {
               key: MCP_SERVER_KEY,
-              url: `http://127.0.0.1:${port}/mcp`,
+              url: buildMcpServerUrl(port),
               claudeSseUrl: `http://127.0.0.1:${port}/sse`,
               bearer: token,
               bearerEnvVar: DAINTREE_MCP_TOKEN_ENV,
