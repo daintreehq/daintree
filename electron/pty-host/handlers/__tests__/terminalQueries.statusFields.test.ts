@@ -39,14 +39,23 @@ function setup(records: FakeRecord[], submissions: Record<string, Record<string,
   );
   const getSubmission = vi.fn((id: string, token: string) => submissions[id]?.[token]);
   const sendEvent = vi.fn();
+  // Everything the full record mapper also reads, so a regression to it fails
+  // on the geometry count rather than on a missing stub.
   const ctx = {
     sendEvent,
+    getPauseCoordinator: () => undefined,
     ptyManager: {
       getTerminal: (id: string) => {
         lookups.push(id);
         return byId.get(id);
       },
       getSubmission,
+      isInTrash: () => false,
+      getTrashExpiresAt: () => undefined,
+      isClosing: () => false,
+      getActivityTier: () => "active",
+      hasPendingSubmission: () => false,
+      analysisObservedSince: () => undefined,
     },
   } as unknown as HostContext;
   const handler = createTerminalQueryHandlers(ctx)["get-terminal-status-fields"];
@@ -113,7 +122,7 @@ describe("get-terminal-status-fields (#17809)", () => {
 
   it("resolves the named token per terminal, telling a held record from none", () => {
     const record = { token: "tok-1", phase: "pty_written", at: 7 };
-    const { query, getSubmission } = setup(
+    const { query, getSubmission, geometryReads } = setup(
       [
         { id: "t1", projectId: "project-a" },
         { id: "t2", projectId: "project-a" },
@@ -123,6 +132,7 @@ describe("get-terminal-status-fields (#17809)", () => {
 
     const terminals = query(["t1", "t2"], "tok-1");
 
+    expect(geometryReads.count).toBe(0);
     expect(terminals).toEqual([
       expect.objectContaining({ id: "t1", submission: record }),
       expect.objectContaining({ id: "t2", submission: undefined }),

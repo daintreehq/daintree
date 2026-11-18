@@ -1727,10 +1727,16 @@ describe("PtyClient fabric", () => {
       });
     };
     const settled = <T>(promise: Promise<T>) => {
-      const state = { done: false };
-      void promise.then(() => {
-        state.done = true;
-      });
+      const state: { done: boolean; error?: unknown } = { done: false };
+      promise.then(
+        () => {
+          state.done = true;
+        },
+        (error: unknown) => {
+          state.done = true;
+          state.error = error ?? new Error("rejected");
+        }
+      );
       return state;
     };
 
@@ -1789,20 +1795,27 @@ describe("PtyClient fabric", () => {
       expect(requestB).toMatchObject({ ids: ["b1"], submissionToken: "tok-1" });
       expect(requestDefault).toMatchObject({ ids: ["t-unknown"], submissionToken: "tok-1" });
 
-      const record = { token: "tok-1", phase: "pty_written", at: 7 };
+      // No shard is also asked for full records.
+      for (const child of [shardA.child, shardB.child, defaultShard().child]) {
+        expect(messagesOfType(child, "get-terminal")).toHaveLength(0);
+      }
+
+      const recordA = { token: "tok-1", phase: "pty_written", at: 7 };
+      const recordB = { token: "tok-1", phase: "accepted", at: 11 };
       answer(shardA.child, requestA, [
-        { id: "a1", projectId: "project-a", submission: record },
+        { id: "a1", projectId: "project-a", submission: recordA },
         // The shard's answer for an id with no record for the token.
         { id: "a2", projectId: "project-a" },
       ]);
-      answer(shardB.child, requestB, [{ id: "b1", projectId: "project-b", submission: record }]);
+      answer(shardB.child, requestB, [{ id: "b1", projectId: "project-b", submission: recordB }]);
       // The default shard holds no such terminal and leaves it out.
       answer(defaultShard().child, requestDefault, []);
 
       const fields = await promise;
       expect([...fields.keys()].sort()).toEqual(["a1", "a2", "b1"]);
-      expect(fields.get("a1")?.submission).toEqual(record);
+      expect(fields.get("a1")?.submission).toEqual(recordA);
       expect(fields.get("a2")?.submission).toBeUndefined();
+      expect(fields.get("b1")?.submission).toEqual(recordB);
       client.dispose();
     });
 
@@ -1845,7 +1858,9 @@ describe("PtyClient fabric", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(state.done).toBe(false);
 
+      // The shard broker's own deadline; the silent shard costs only its ids.
       await vi.advanceTimersByTimeAsync(5_000);
+      expect(state).toEqual({ done: true });
       expect([...(await promise).keys()]).toEqual(["a1"]);
       client.dispose();
     });
@@ -1905,6 +1920,37 @@ describe("PtyClient fabric", () => {
       expect(fields.get("b1")?.lastOutputChangeAt).toBe(100);
       expect([...fields.keys()].sort()).toEqual(["a1", "b1"]);
       client.dispose();
+    });
+
+    it("leaves a terminal unread when only the wrong shard reports it", async () => {
+      const { client, shardA, shardB } = twoProjects();
+
+      const promise = client.getTerminalStatusFieldsAsync(["a1", "b1"]);
+
+      const [requestA] = messagesOfType(shardA.child, REQUEST);
+      const [requestB] = messagesOfType(shardB.child, REQUEST);
+      answer(shardA.child, requestA, [
+        { id: "a1", projectId: "project-a" },
+        { id: "b1", projectId: "project-b", lastOutputChangeAt: 999 },
+      ]);
+      answer(shardB.child, requestB, []);
+
+      expect([...(await promise).keys()]).toEqual(["a1"]);
+      client.dispose();
+    });
+
+    it("asks nothing of a retired shard whose host has yet to exit", async () => {
+      const { client } = twoProjects();
+      client.dispose();
+      const before = messagesOfType(defaultShard().child, REQUEST).length;
+
+      const promise = client.getTerminalStatusFieldsAsync(["t-unknown"]);
+      const state = settled(promise);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(state).toEqual({ done: true });
+      expect(messagesOfType(defaultShard().child, REQUEST)).toHaveLength(before);
+      await expect(promise).resolves.toEqual(new Map());
     });
 
     it("sends nothing for an empty selection", async () => {
