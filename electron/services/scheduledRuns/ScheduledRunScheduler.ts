@@ -50,7 +50,10 @@ export interface ScheduledRunSchedulerLaunch {
 }
 
 export interface ScheduledRunSchedulerDeps {
-  /** Every local project; schedules of projects added later arrive through the store's changes. */
+  /**
+   * Every local project, read again until it answers; schedules of projects
+   * added later arrive through the store's changes.
+   */
   readonly listProjectIds: () => readonly string[];
   readonly projectExists: (projectId: string) => boolean;
   readonly listSchedules: (projectId: string) => Promise<SchedulesSnapshot>;
