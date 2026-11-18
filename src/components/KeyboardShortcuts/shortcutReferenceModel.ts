@@ -223,6 +223,7 @@ export function groupByCategory(entries: readonly ShortcutEntry[]): ShortcutGrou
 const SCOPE_LABELS: Record<string, string> = {
   worktreeGrid: "In the worktree grid",
   "dev-preview": "In dev preview",
+  diff: "In a diff viewer",
 };
 
 /** The context a non-global key works in, or null for a key that works everywhere. */

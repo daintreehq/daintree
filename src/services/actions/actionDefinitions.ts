@@ -6,6 +6,7 @@ import { registerFileActions } from "./definitions/fileActions";
 import { registerAppActions } from "./definitions/appActions";
 import { registerBrowserActions } from "./definitions/browserActions";
 import { registerDevPreviewActions } from "./definitions/devPreviewActions";
+import { registerDiffActions } from "./definitions/diffActions";
 import { registerDevServerActions } from "./definitions/devServerActions";
 import { registerDiagnosticsActions } from "./definitions/diagnosticsActions";
 import { registerEnvActions } from "./definitions/envActions";
@@ -104,6 +105,7 @@ export function createActionDefinitions(
   registerIntrospectionActions(actions, callbacks);
   registerDevServerActions(actions, callbacks);
   registerDevPreviewActions(actions, callbacks);
+  registerDiffActions(actions, callbacks);
   registerDiagnosticsActions(actions, callbacks);
   registerWorkflowActions(actions, callbacks);
   registerFileActions(actions, callbacks);

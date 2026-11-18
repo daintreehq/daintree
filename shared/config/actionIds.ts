@@ -606,6 +606,13 @@ export const BUILT_IN_ACTION_IDS = [
   "devPreview.toggleTool",
   "devPreview.toggleElementPicker",
 
+  // -- diffActions --
+  "diff.nextChange",
+  "diff.previousChange",
+  "diff.nextFile",
+  "diff.previousFile",
+  "diff.toggleViewed",
+
   // -- devPreviewActions --
   "devPreview.reloadPreview",
   "devPreview.restart",

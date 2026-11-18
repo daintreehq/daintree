@@ -753,6 +753,48 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     description: "Reload dev preview",
     category: "Dev preview",
   },
+  // Bare keys, live only while focus is inside a diff viewer (DiffPane pushes
+  // the scope), so they never reach a terminal, an editor, or another panel.
+  {
+    actionId: "diff.nextChange",
+    combo: "N",
+    scope: "diff",
+    priority: 5,
+    description: "Next hunk in the diff, on into the next file",
+    category: "Git",
+  },
+  {
+    actionId: "diff.previousChange",
+    combo: "P",
+    scope: "diff",
+    priority: 5,
+    description: "Previous hunk in the diff, back into the previous file",
+    category: "Git",
+  },
+  {
+    actionId: "diff.nextFile",
+    combo: "]",
+    scope: "diff",
+    priority: 5,
+    description: "Next file in the diff",
+    category: "Git",
+  },
+  {
+    actionId: "diff.previousFile",
+    combo: "[",
+    scope: "diff",
+    priority: 5,
+    description: "Previous file in the diff",
+    category: "Git",
+  },
+  {
+    actionId: "diff.toggleViewed",
+    combo: "V",
+    scope: "diff",
+    priority: 5,
+    description: "Mark the diff's file viewed, or the focused file in its list",
+    category: "Git",
+  },
   {
     actionId: "nav.toggleSidebar",
     combo: "Cmd+B",

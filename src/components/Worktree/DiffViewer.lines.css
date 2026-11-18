@@ -475,10 +475,11 @@
   margin-block: -4px;
 }
 
-/* Keyboard hunk nav target: keep the hunk header clear of the sticky dialog
-   header when scrollIntoView lands a hunk at block: "start". */
-.diff-viewer tbody.diff-hunk {
-  scroll-margin-top: 56px;
+/* Hunk stepping lands a hunk's first changed row at block: "start". Clear the
+   sticky file header (56px, as the note gutter above) and keep the three lines
+   of context git leads a hunk with in sight above it. */
+.diff-viewer tr.diff-hunk-anchor {
+  scroll-margin-top: calc(56px + 3lh);
 }
 
 /* Selection styling */

@@ -891,7 +891,7 @@ describe("RenderedMarkdownDiff off the main thread", () => {
     // Its count is withdrawn, and nothing is reported for the attempt in flight.
     expect(onChangeCount.mock.calls).toEqual([
       [1, "attempt-1"],
-      [0, "attempt-1"],
+      [null, "attempt-1"],
     ]);
 
     await act(async () => builds[1]!.resolve(engineResult(builds[1])));
@@ -911,7 +911,7 @@ describe("RenderedMarkdownDiff off the main thread", () => {
 
     expect(onChangeCount.mock.calls).toEqual([
       [1, "attempt-3"],
-      [0, "attempt-3"],
+      [null, "attempt-3"],
     ]);
   });
 

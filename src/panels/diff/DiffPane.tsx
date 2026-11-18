@@ -3,11 +3,11 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useEffectEvent,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import {
   ChevronLeft,
@@ -25,7 +25,7 @@ import { Pilcrow } from "@/components/icons";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import type { GitStatus } from "@shared/types/git";
 import type { DiffPanelData } from "@shared/types/panel";
-import { isAbsolute, join, resolveWorktreePathScope } from "@shared/utils/path";
+import { basename, isAbsolute, join, resolveWorktreePathScope } from "@shared/utils/path";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -59,6 +59,7 @@ import {
   diffDisplayOrder,
   groupDiffChangeSet,
   resolveDiffFileNavigation,
+  type DiffChangeSetEntry,
   type DiffFileAnchor,
 } from "@/components/FileViewer/diffChangeSet";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
@@ -106,6 +107,9 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
 import { useDiffContent } from "./useDiffContent";
+import { useDiffCommands, type DiffCommand } from "./diffCommands";
+import { useKeybindingDisplay, useKeybindingScope } from "@/hooks/useKeybinding";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { HunkStagingBanner, useHunkStaging } from "./useHunkStaging";
 import { useDiffFileSource } from "./useDiffFileSource";
 import { getFullFileAvailability } from "./fullFileAvailability";
@@ -248,6 +252,15 @@ function buildSubject(
     filePath,
     status: status ?? "modified",
   };
+}
+
+/** How the pane tells change-set entries apart: a partially staged file's two sides share a Viewed key. */
+function diffEntryIdentity(entry: DiffChangeSetEntry): string {
+  return `${entry.side ?? ""}\0${entry.viewedKey}`;
+}
+
+function withShortcut(label: string, shortcut: string): string {
+  return shortcut ? `${label} (${shortcut})` : label;
 }
 
 export function DiffPane({
@@ -478,12 +491,48 @@ export function DiffPane({
     [changeSet, id, setDiffPanelFile]
   );
 
+  // A hunk step past either end of the file carries on into the neighbouring
+  // file and lands on its first hunk going forward, its last going back. The
+  // landing waits for that file's hunks to be counted, and is dropped if the
+  // pane ends up anywhere else first: a pick from the shelf, a file step, an
+  // opener re-aiming the pane. Files are told apart by side and Viewed key, so
+  // a partially staged file's two entries are two destinations.
+  const [landing, setLanding] = useState<{
+    from: string;
+    to: string;
+    place: "first" | "last";
+  } | null>(null);
+  const currentFileIdentity =
+    currentIndex === -1 || !changeSet?.[currentIndex]
+      ? `missing\0${filePath ?? ""}`
+      : diffEntryIdentity(changeSet[currentIndex]!);
+
+  // A deliberate move to another file is announced by name: the swap changes
+  // the whole body, and nothing on screen says so to a screen reader.
+  const announceFileAt = useCallback(
+    (index: number) => {
+      const entry = changeSet?.[index];
+      if (!entry) return;
+      const position = visibleOrder.indexOf(index);
+      const name = basename(entry.path);
+      useAnnouncerStore
+        .getState()
+        .announce(
+          position === -1 ? name : `${name}, file ${position + 1} of ${visibleOrder.length}`
+        );
+    },
+    [changeSet, visibleOrder]
+  );
+
   const navigateFile = useCallback(
     (delta: -1 | 1) => {
       const target = delta === -1 ? navigation.previousIndex : navigation.nextIndex;
-      if (target !== null) selectFileAt(target);
+      if (target === null) return;
+      setLanding(null);
+      announceFileAt(target);
+      selectFileAt(target);
     },
-    [navigation, selectFileAt]
+    [navigation, selectFileAt, announceFileAt]
   );
 
   // Warms the next file's diff so forward stepping renders from cache.
@@ -687,36 +736,32 @@ export function DiffPane({
   const footerRef = useRef<HTMLDivElement | null>(null);
   const onFooterKeyDown = useToolbarRoving(footerRef);
 
-  // `[` / `]` step files and `v` marks the current file viewed — the same keys
-  // the modal bound, scoped to this panel so a background one stays inert. Held
-  // by the panel root, so they work from the footer and toolbar that advertise
-  // them and from the root itself, where focus lands when the pane is focused.
-  // React bubbling hands the focused control first refusal: a key it already
-  // claimed (a sidebar row's own `v`) stays claimed.
-  const handleFileKeyDown = (event: ReactKeyboardEvent) => {
-    if (!isFocused || event.defaultPrevented) return;
-    if (event.metaKey || event.ctrlKey || event.altKey) return;
-    // React also bubbles keys from a menu or popover the pane opened, portalled
-    // outside its DOM; those keys belong to the overlay.
-    const target = event.target as Node;
-    if (!event.currentTarget.contains(target)) return;
-    if (
-      target instanceof HTMLElement &&
-      (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))
-    ) {
-      return;
-    }
-    if (event.key === "[") {
-      event.preventDefault();
-      navigateFile(-1);
-    } else if (event.key === "]") {
-      event.preventDefault();
-      navigateFile(1);
-    } else if (event.key === "v" && currentEntry && worktreePath) {
-      event.preventDefault();
-      toggleViewed(worktreePath, currentEntry.viewedKey);
-    }
-  };
+  // The keys (`n`/`p`, `[`/`]`, `v` by default) are the diff scope's bindings,
+  // pushed only while this panel is focused and focus is inside its own DOM:
+  // a menu or popover it opened is portalled outside, so its typeahead keeps
+  // the letters, and a background panel stays inert. Native listeners rather
+  // than React's, whose focus events bubble out of portals.
+  const paneRootRef = useRef<HTMLDivElement | null>(null);
+  const [focusWithin, setFocusWithin] = useState(false);
+  useEffect(() => {
+    const root = paneRootRef.current;
+    if (!root) return;
+    const onFocusIn = () => setFocusWithin(true);
+    const onFocusOut = (event: FocusEvent) =>
+      setFocusWithin(event.relatedTarget instanceof Node && root.contains(event.relatedTarget));
+    setFocusWithin(root.contains(document.activeElement));
+    root.addEventListener("focusin", onFocusIn);
+    root.addEventListener("focusout", onFocusOut);
+    return () => {
+      root.removeEventListener("focusin", onFocusIn);
+      root.removeEventListener("focusout", onFocusOut);
+    };
+  }, []);
+  useKeybindingScope("diff", isFocused && focusWithin);
+  const previousFileKey = useKeybindingDisplay("diff.previousFile");
+  const nextFileKey = useKeybindingDisplay("diff.nextFile");
+  const previousChangeKey = useKeybindingDisplay("diff.previousChange");
+  const nextChangeKey = useKeybindingDisplay("diff.nextChange");
 
   // Sentinels the viewer turns into empty states rather than a rendered diff.
   // `NO_CHANGES`/`ERROR` gate the pane's own branches below; the binary and
@@ -883,13 +928,13 @@ export function DiffPane({
   // Stamped with the attempt it counts, like the verdict below: a count from the
   // previous file must not drive the stepper while this one is still being read
   // or compared, and the view reports nothing until its comparison is done.
+  // `null` is a withdrawn count: no verdict yet, which is not the same as zero.
   const [renderedInventory, setRenderedInventory] = useState<{
     attempt: string;
-    count: number;
+    count: number | null;
   } | null>(null);
   const renderedChangeCount =
-    renderedInventory?.attempt === renderedAttemptKey ? renderedInventory.count : 0;
-  const [renderedChangeIndex, setRenderedChangeIndex] = useState(0);
+    renderedInventory?.attempt === renderedAttemptKey ? renderedInventory.count : null;
   const scrollRootRef = useRef<HTMLDivElement>(null);
 
   const [renderedVerdict, setRenderedVerdict] = useState<{
@@ -1044,81 +1089,237 @@ export function DiffPane({
     </div>
   );
 
-  const handleRenderedChangeCount = useCallback((count: number, forAttempt: string) => {
+  const handleRenderedChangeCount = useCallback((count: number | null, forAttempt: string) => {
     setRenderedInventory({ attempt: forAttempt, count });
-    setRenderedChangeIndex(0);
   }, []);
+
+  // The source layouts' inventory: hunks as git wrote them, counted by the
+  // viewer from the patch it parsed and stamped with that patch, so a count
+  // from the previous file or revision never drives this one's stepper.
+  const [hunkInventory, setHunkInventory] = useState<{ diff: string; count: number } | null>(
+    null
+  );
+  const handleHunkCount = useCallback((count: number, forDiff: string) => {
+    setHunkInventory((current) =>
+      current?.diff === forDiff && current.count === count ? current : { diff: forDiff, count }
+    );
+  }, []);
+
+  /**
+   * How many stops a step walks in the file on screen: hunks in a source
+   * layout, changed blocks in the rendered one. Null while they are still being
+   * counted, so a keypress can't treat a loading file as empty and cross
+   * straight through it. A file with nothing to step through (an image, a
+   * PDF, a binary, an empty or failed diff) is zero: one stop of its own.
+   */
+  let stopCount: number | null;
+  if (isImageMode || isMediaMode || isPdfMode) stopCount = 0;
+  else if (content === undefined) stopCount = null;
+  else if (!hasDiff || sinceReviewNotice?.replacesBody) stopCount = 0;
+  else if (showRendered) stopCount = renderedSourcePending ? null : renderedChangeCount;
+  else stopCount = hunkInventory?.diff === content ? hunkInventory.count : null;
+  const stopUnit = showRendered ? "change" : "hunk";
+  // Which file and layout family the cursor's index is into. A refresh of the
+  // same file keeps it (clamped), and Unified and Split share it.
+  const stopsKey = `${stopUnit}\0${currentFileIdentity}\0${effectiveSource ?? ""}`;
+  const [cursor, setCursor] = useState<{ key: string; index: number } | null>(null);
+  const changeIndex =
+    cursor?.key === stopsKey ? Math.max(0, Math.min(cursor.index, (stopCount ?? 1) - 1)) : 0;
+
+  // A source step asks the viewer to bring hunk `index` to the top; the viewer
+  // opens a collapsed file and lifts its progressive cap to get there. Stamped
+  // with the patch, so a refresh never replays an old step onto new content.
+  const [revealRequest, setRevealRequest] = useState<{
+    diff: string;
+    index: number;
+    seq: number;
+  } | null>(null);
+
+  // After a deliberate step the counter holds its landing until the reader
+  // scrolls by hand: the last hunk can't scroll to the top, and several short
+  // hunks share a screen, so where the step put the viewport says nothing
+  // about which of them it was for. Tagged with the stops it was taken in.
+  const holdRef = useRef<string | null>(null);
+
+  const goToStop = (index: number) => {
+    setCursor({ key: stopsKey, index });
+    holdRef.current = stopsKey;
+    if (showRendered) {
+      // Found by data attribute rather than through a ref: the rendered view is
+      // a lazy chunk behind `Suspense`. Centred, because a rendered block has
+      // no hunk header to clear. `instant`, like every programmatic scroll in
+      // the app, which also spares it a reduced-motion branch.
+      scrollRootRef.current
+        ?.querySelector(`[data-change-index="${index}"]`)
+        ?.scrollIntoView({ block: "center", behavior: "instant" });
+    } else if (content) {
+      setRevealRequest((current) => ({ diff: content, index, seq: (current?.seq ?? 0) + 1 }));
+    }
+  };
+
+  /**
+   * One step, from a key or a stepper arrow alike. Inside the file it moves to
+   * the neighbouring stop; past either end it runs on into the file `[` or `]`
+   * would open, landing on that file's first stop going forward and its last
+   * going back, and stops only where they run out of files. A single-file diff
+   * is a list of one, so it ends at its last hunk.
+   */
+  const stepChange = (delta: -1 | 1) => {
+    if (stopCount === null) return;
+    const next = changeIndex + delta;
+    if (next >= 0 && next < stopCount) {
+      goToStop(next);
+      return;
+    }
+    const target =
+      delta === -1
+        ? hasPrevFile
+          ? navigation.previousIndex
+          : null
+        : hasNextFile
+          ? navigation.nextIndex
+          : null;
+    const entry = target === null ? undefined : changeSet?.[target];
+    if (target === null || !entry) return;
+    setLanding({
+      from: currentFileIdentity,
+      to: diffEntryIdentity(entry),
+      place: delta === -1 ? "last" : "first",
+    });
+    announceFileAt(target);
+    selectFileAt(target);
+  };
+
+  const landOnStop = useEffectEvent((count: number, place: "first" | "last") => {
+    if (count > 0) goToStop(place === "first" ? 0 : count - 1);
+  });
+  useEffect(() => {
+    if (landing === null) return;
+    // The step's own file switch hasn't reached this render yet.
+    if (currentFileIdentity === landing.from) return;
+    if (currentFileIdentity !== landing.to) {
+      setLanding(null);
+      return;
+    }
+    if (stopCount === null) return;
+    setLanding(null);
+    landOnStop(stopCount, landing.place);
+  }, [landing, currentFileIdentity, stopCount]);
 
   /**
    * Keep the counter honest while the reader scrolls by hand.
    *
-   * Without this the index only moves when a stepper button is pressed, so
-   * `1 of 4` sits in the toolbar while the reader is looking at the fourth
-   * change — a counter that lies is worse than no counter. The nearest change to
-   * the middle of the viewport wins, which is also where a step lands one.
+   * Without this the index only moves when a step is taken, so `1 of 4` sits
+   * in the toolbar while the reader is looking at the fourth hunk — a counter
+   * that lies is worse than no counter. In a source layout the hunk being read
+   * is the last whose first changed row has passed the top third of the
+   * viewport (a tall hunk's middle can be screens away from either end); in
+   * the rendered one, the block nearest the middle, which is where a step
+   * lands one.
    *
-   * Deliberately not announced: `aria-live` fires on the value, and narrating
-   * every change a mouse wheel passes over would make the toolbar chatter. The
-   * announcement belongs to the deliberate act of stepping.
+   * Deliberately not announced: narrating every hunk a mouse wheel passes over
+   * would make the toolbar chatter. The announcement belongs to the deliberate
+   * act of stepping.
    */
-  useEffect(() => {
-    const root = scrollRootRef.current;
-    if (!showRendered || renderedChangeCount === 0 || !root) return;
-    let frame = 0;
-    const sync = () => {
-      frame = 0;
+  const syncStopFromScroll = useEffectEvent((root: HTMLElement) => {
+    // A panel that isn't laid out (a hidden tab, an evicted view) has every box
+    // at zero, which would read as the reader having scrolled past them all.
+    if (holdRef.current === stopsKey || root.clientHeight === 0) return;
+    const rootTop = root.getBoundingClientRect().top;
+    let best: number | null = null;
+    if (showRendered) {
       const middle = root.clientHeight / 2;
-      let bestIndex: number | null = null;
       let bestDistance = Infinity;
       for (const element of root.querySelectorAll("[data-change-index]")) {
         const box = element.getBoundingClientRect();
-        const rootBox = root.getBoundingClientRect();
-        const centre = box.top - rootBox.top + box.height / 2;
-        const distance = Math.abs(centre - middle);
+        const distance = Math.abs(box.top - rootTop + box.height / 2 - middle);
         if (distance < bestDistance) {
           bestDistance = distance;
-          bestIndex = Number(element.getAttribute("data-change-index"));
+          best = Number(element.getAttribute("data-change-index"));
         }
       }
-      if (bestIndex !== null && Number.isFinite(bestIndex)) setRenderedChangeIndex(bestIndex);
-    };
+    } else {
+      const readingLine = root.clientHeight / 3;
+      let position = 0;
+      best = 0;
+      for (const row of root.querySelectorAll("tr.diff-hunk-anchor")) {
+        if (row.getBoundingClientRect().top - rootTop > readingLine) break;
+        best = position;
+        position++;
+      }
+    }
+    if (best !== null && Number.isFinite(best)) setCursor({ key: stopsKey, index: best });
+  });
+  // The reader taking the scroll back, by wheel, touch, pointer or key, ends a
+  // step's hold, and with it the step itself: a remounted viewer shouldn't
+  // jump back to a hunk the reader has since scrolled away from.
+  const releaseStepHold = useEffectEvent(() => {
+    holdRef.current = null;
+    setRevealRequest(null);
+  });
+  const hasStops = (stopCount ?? 0) > 0;
+  useEffect(() => {
+    const root = scrollRootRef.current;
+    const paneRoot = paneRootRef.current;
+    if (!hasStops || !root) return;
+    let frame = 0;
     const onScroll = () => {
       if (frame) return;
-      frame = requestAnimationFrame(sync);
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        syncStopFromScroll(root);
+      });
     };
+    const release = () => releaseStepHold();
     root.addEventListener("scroll", onScroll, { passive: true });
-    sync();
+    root.addEventListener("wheel", release, { passive: true });
+    root.addEventListener("touchstart", release, { passive: true });
+    root.addEventListener("pointerdown", release);
+    // The step keys are consumed before they reach the panel, so any key that
+    // does is the reader's own (PageDown, Space, an arrow).
+    paneRoot?.addEventListener("keydown", release, { capture: true });
+    syncStopFromScroll(root);
     return () => {
       root.removeEventListener("scroll", onScroll);
+      root.removeEventListener("wheel", release);
+      root.removeEventListener("touchstart", release);
+      root.removeEventListener("pointerdown", release);
+      paneRoot?.removeEventListener("keydown", release, { capture: true });
       if (frame) cancelAnimationFrame(frame);
     };
-  }, [showRendered, renderedChangeCount]);
+  }, [hasStops, showRendered, stopsKey]);
 
-  /**
-   * Move to the next or previous change and bring it into view.
-   *
-   * Found by data attribute rather than through a ref: the rendered view is a
-   * lazy chunk behind `Suspense`, and threading an imperative handle across that
-   * boundary buys nothing a query on the scroll root does not already give.
-   * Wraps at both ends — a reviewer stepping through a document expects the
-   * fourth Next to return to the first change, not to stop dead.
-   *
-   * `instant` rather than `smooth`, matching every other programmatic scroll in
-   * the app (`SettingsDialog`'s scroll-to-section, `SearchablePalette`,
-   * `FileTreeView`). A smooth scroll here would also need its own
-   * reduced-motion branch, which is a second reason the app does not use one.
-   */
-  const stepRenderedChange = useCallback(
-    (delta: number) => {
-      if (renderedChangeCount === 0) return;
-      const next = (renderedChangeIndex + delta + renderedChangeCount) % renderedChangeCount;
-      setRenderedChangeIndex(next);
-      scrollRootRef.current
-        ?.querySelector(`[data-change-index="${next}"]`)
-        ?.scrollIntoView({ block: "center", behavior: "instant" });
-    },
-    [renderedChangeCount, renderedChangeIndex]
-  );
+  const runDiffCommand = (command: DiffCommand) => {
+    switch (command) {
+      case "nextChange":
+        stepChange(1);
+        return;
+      case "previousChange":
+        stepChange(-1);
+        return;
+      case "nextFile":
+        navigateFile(1);
+        return;
+      case "previousFile":
+        navigateFile(-1);
+        return;
+      case "toggleViewed": {
+        if (!worktreePath) return;
+        // With a row of the shelf focused, the key marks that row's file — the
+        // shelf's own checkboxes are out of the tab order, so this is how the
+        // keyboard reaches them. Anywhere else it marks the open file.
+        const active = document.activeElement;
+        const row =
+          active instanceof Element && paneRootRef.current?.contains(active)
+            ? active.closest<HTMLElement>("[data-file-index]")
+            : null;
+        const entry = row ? changeSet?.[Number(row.dataset.fileIndex)] : currentEntry;
+        if (entry) toggleViewed(worktreePath, entry.viewedKey);
+        return;
+      }
+    }
+  };
+  useDiffCommands(id, runDiffCommand);
 
   const renderedDisabledReason =
     renderedAvailability.visible && !renderedAvailability.enabled
@@ -1210,13 +1411,16 @@ export function DiffPane({
           ) : (
             layoutToggle
           ))}
-        {showRendered && (
-          <DiffChangeStepper
-            count={renderedChangeCount}
-            index={renderedChangeIndex}
-            onStep={stepRenderedChange}
-          />
-        )}
+        <DiffChangeStepper
+          count={stopCount}
+          index={changeIndex}
+          unit={stopUnit}
+          canStepBack={changeIndex > 0 || hasPrevFile}
+          canStepForward={(stopCount !== null && changeIndex < stopCount - 1) || hasNextFile}
+          onStep={stepChange}
+          backShortcut={previousChangeKey}
+          forwardShortcut={nextChangeKey}
+        />
         {/* Content scope is meaningless in the rendered layout, which always
             shows the whole document — and a control that does nothing is worse
             than an absent one. The preference is left untouched, so returning to
@@ -1454,7 +1658,7 @@ export function DiffPane({
       onTabClose={onTabClose}
       onTabRename={onTabRename}
       onAddTab={onAddTab}
-      onKeyDown={handleFileKeyDown}
+      ref={paneRootRef}
     >
       <div className="flex flex-1 min-h-0">
         {sidebarVisible && changeSet && (
@@ -1470,6 +1674,7 @@ export function DiffPane({
             statusIsLocal={diffSource !== "base-branch" && diffSource !== "since-review"}
             onSelect={(index) => {
               if (index === currentIndex) return;
+              setLanding(null);
               selectFileAt(index);
             }}
           />
@@ -1655,6 +1860,8 @@ export function DiffPane({
                   wrapLines={effectiveWrapLines}
                   renderHunkActions={hunkStaging.renderHunkActions}
                   onRetry={retry}
+                  onHunkCount={handleHunkCount}
+                  revealHunk={revealRequest?.diff === content ? revealRequest : null}
                   onShowWhitespaceChanges={
                     showWhitespaceToggle && diffIgnoreWhitespace
                       ? () => setDiffIgnoreWhitespace(false)
@@ -1729,7 +1936,7 @@ export function DiffPane({
               <>
                 <FileViewerToolbar.IconButton
                   label="Previous file"
-                  tooltip="Previous file ([)"
+                  tooltip={withShortcut("Previous file", previousFileKey)}
                   disabled={!hasPrevFile}
                   onClick={() => navigateFile(-1)}
                   tooltipSide="top"
@@ -1746,7 +1953,7 @@ export function DiffPane({
                 </span>
                 <FileViewerToolbar.IconButton
                   label="Next file"
-                  tooltip="Next file (])"
+                  tooltip={withShortcut("Next file", nextFileKey)}
                   disabled={!hasNextFile}
                   onClick={() => navigateFile(1)}
                   tooltipSide="top"
