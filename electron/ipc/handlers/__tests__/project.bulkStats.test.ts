@@ -85,6 +85,7 @@ vi.mock("../../../services/ProjectStore.js", () => ({
     getCurrentProject: vi.fn(() => null),
     updateProjectStatus: vi.fn(),
     updateProject: vi.fn(),
+    getCompletionWatermarks: vi.fn(() => []),
     getLastCompletionSeenMap: vi.fn(() => new Map<string, number>()),
   },
 }));
@@ -115,6 +116,7 @@ vi.mock("../../../services/CompletionAcknowledgementService.js", () => ({
 vi.mock("../../../services/ScratchStore.js", () => ({
   scratchStore: {
     getAllScratches: vi.fn(() => []),
+    getCompletionWatermarks: vi.fn(() => []),
     getLastCompletionSeenMap: vi.fn(() => new Map<string, number>()),
     markCompletionSeen: vi.fn(),
   },
@@ -829,7 +831,9 @@ describe("registerProjectStatsHandlers — deferred initial compute", () => {
   });
 
   it("defers the initial compute via registerDeferredTask instead of firing it eagerly", async () => {
-    (projectStore.getAllProjects as ReturnType<typeof vi.fn>).mockReturnValue([{ id: "p1" }]);
+    (projectStore.getCompletionWatermarks as ReturnType<typeof vi.fn>).mockReturnValue([
+      { id: "p1", lastCompletionSeenAt: null },
+    ]);
     const ptyClient = makePtyClient();
     const cleanup = registerProjectCrudHandlers(makeDeps(ptyClient));
 
@@ -853,7 +857,9 @@ describe("registerProjectStatsHandlers — deferred initial compute", () => {
   });
 
   it("deferred initial compute is a no-op once the service has stopped", async () => {
-    (projectStore.getAllProjects as ReturnType<typeof vi.fn>).mockReturnValue([{ id: "p1" }]);
+    (projectStore.getCompletionWatermarks as ReturnType<typeof vi.fn>).mockReturnValue([
+      { id: "p1", lastCompletionSeenAt: null },
+    ]);
     const ptyClient = makePtyClient();
     const cleanup = registerProjectCrudHandlers(makeDeps(ptyClient));
 
