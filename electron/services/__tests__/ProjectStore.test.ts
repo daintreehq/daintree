@@ -732,13 +732,26 @@ describe("ProjectStore.getRankedProjectIds", () => {
   });
 
   it("repairs no status on the way", () => {
-    insert("c".repeat(64), 1, NOW, NOW);
+    // Active without being current: the row getAllProjects() would demote.
+    const remoteActive = "c".repeat(64);
+    insert(remoteActive, 1, NOW, NOW);
+    db.update(schema.projects)
+      .set({ status: "active" })
+      .where(eq(schema.projects.id, remoteActive))
+      .run();
     const updateSpy = vi.spyOn(db, "update");
 
-    store.getRankedProjectIds();
+    expect(store.getRankedProjectIds()).toEqual([remoteActive]);
 
     expect(updateSpy).not.toHaveBeenCalled();
     updateSpy.mockRestore();
+    expect(
+      db
+        .select({ status: schema.projects.status })
+        .from(schema.projects)
+        .where(eq(schema.projects.id, remoteActive))
+        .get()?.status
+    ).toBe("active");
   });
 });
 
