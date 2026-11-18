@@ -251,7 +251,7 @@ export class ThreadNotifier implements QuestionNotifications {
     }
     if (this.ownedBy(event).length === 0) return;
     const { reference } = event.question;
-    let line: string | null = null;
+    let line: string | null;
     try {
       [line] = await Promise.all([
         event.kind === "reply" ? this.o.readOpeningLine(reference).catch(() => null) : null,

@@ -1160,6 +1160,8 @@ describe("NotificationService", () => {
         expiresAt: null,
         settledAt: null,
         standing,
+        replyRequest: null,
+        stall: null,
       };
     }
 
