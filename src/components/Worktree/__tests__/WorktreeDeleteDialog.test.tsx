@@ -2393,6 +2393,7 @@ describe("WorktreeDeleteDialog — its cloud machine (#17360)", () => {
         retentionDays: 14,
         saveRetryBilled: false,
         stoppedComputeBilled: false,
+        stoppedStorageBilled: false,
       },
       typicalStartSeconds: 60,
       lifetime: { kind: "renewable" as const },
@@ -2444,6 +2445,7 @@ describe("WorktreeDeleteDialog — its cloud machine (#17360)", () => {
       hostKeyFingerprint: null,
       hostKeyReview: null,
       keptRunningAt: null,
+      asleep: false,
       ...overrides,
     };
   }

@@ -1822,9 +1822,12 @@ export class CloudHostLifecycle {
     await this.operate(binding.id, "stopping", async (signal) => {
       const { provider, credentials } = await this.context(binding, signal);
       this.stage(binding.id, "Checking the machine");
-      let resource: ProviderResource;
+      let resource: ProviderResource | null;
       try {
-        resource = await this.inspectInto(binding.id, provider, credentials);
+        // A read overtaken by a newer one is asked again: the stop acts on the newest word.
+        while (!(resource = await this.inspectInto(binding.id, provider, credentials))) {
+          if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+        }
       } catch (error) {
         throw this.deps.accounts.asAppError(provider, error);
       }

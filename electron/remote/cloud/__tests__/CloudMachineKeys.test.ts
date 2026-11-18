@@ -55,6 +55,7 @@ function setup() {
     resourceId: SANDBOX,
     ownership: "imported",
     createdFor: null,
+    worktreeCleanup: null,
     provisioning: null,
     creation: null,
     lifetimeSeconds: 7200,

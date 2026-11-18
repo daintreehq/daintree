@@ -158,6 +158,7 @@ describe("CloudAccountService", () => {
       resourceId,
       ownership: "imported" as const,
       createdFor: null,
+      worktreeCleanup: null,
       provisioning: null,
       creation: null,
       lifetimeSeconds: null,
