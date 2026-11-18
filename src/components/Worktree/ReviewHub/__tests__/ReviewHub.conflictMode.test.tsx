@@ -379,7 +379,7 @@ describe("ReviewHub", () => {
     scanConflictMarkersMock
       .mockReset()
       .mockImplementation(async (_cwd: string, paths: string[]) =>
-        paths.map((path) => ({ path, hunkCount: 0, firstMarkerLine: null }))
+        paths.map((path) => ({ path, hunkCount: 0, hasMarkers: false, firstMarkerLine: null }))
       );
     checkoutOursTheirsMock.mockReset().mockResolvedValue(undefined);
     openInEditorMock.mockReset().mockResolvedValue(undefined);
@@ -595,7 +595,7 @@ describe("ReviewHub", () => {
     it("forwards the first-marker line to the external editor when the scan finds one", async () => {
       getStagingStatusMock.mockResolvedValue(makeMergingStatus());
       scanConflictMarkersMock.mockResolvedValue([
-        { path: "src/app.ts", hunkCount: 2, firstMarkerLine: 17 },
+        { path: "src/app.ts", hunkCount: 2, hasMarkers: true, firstMarkerLine: 17 },
       ]);
 
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
@@ -1170,7 +1170,7 @@ describe("ReviewHub", () => {
     it("renders a hunk-count badge once the scan resolves", async () => {
       getStagingStatusMock.mockResolvedValue(makeMergingStatus());
       scanConflictMarkersMock.mockResolvedValue([
-        { path: "src/app.ts", hunkCount: 3, firstMarkerLine: 12 },
+        { path: "src/app.ts", hunkCount: 3, hasMarkers: true, firstMarkerLine: 12 },
       ]);
 
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
@@ -1207,8 +1207,8 @@ describe("ReviewHub", () => {
           })
         );
         scanConflictMarkersMock.mockResolvedValue([
-          { path: "src/app.ts", hunkCount: 3, firstMarkerLine: 12 },
-          { path: "src/gone.ts", hunkCount: null, firstMarkerLine: null },
+          { path: "src/app.ts", hunkCount: 3, hasMarkers: true, firstMarkerLine: 12 },
+          { path: "src/gone.ts", hunkCount: null, hasMarkers: null, firstMarkerLine: null },
         ]);
 
         render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
@@ -1234,8 +1234,8 @@ describe("ReviewHub", () => {
           })
         );
         scanConflictMarkersMock.mockResolvedValue([
-          { path: "src/app.ts", hunkCount: 0, firstMarkerLine: null },
-          { path: "src/other.ts", hunkCount: 1, firstMarkerLine: 4 },
+          { path: "src/app.ts", hunkCount: 0, hasMarkers: false, firstMarkerLine: null },
+          { path: "src/other.ts", hunkCount: 1, hasMarkers: true, firstMarkerLine: 4 },
         ]);
 
         render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
@@ -1285,7 +1285,7 @@ describe("ReviewHub", () => {
       // Each read is a fresh object, as it is over IPC; the path set never moves.
       getStagingStatusMock.mockImplementation(async () => makeMergingStatus());
       scanConflictMarkersMock.mockResolvedValue([
-        { path: "src/app.ts", hunkCount: 3, firstMarkerLine: 12 },
+        { path: "src/app.ts", hunkCount: 3, hasMarkers: true, firstMarkerLine: 12 },
       ]);
 
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
@@ -1296,7 +1296,7 @@ describe("ReviewHub", () => {
       // An agent in a terminal fixes two of the three regions: the watcher's
       // flush reaches the hub as a tick, and the file stays conflicted.
       scanConflictMarkersMock.mockResolvedValue([
-        { path: "src/app.ts", hunkCount: 1, firstMarkerLine: 40 },
+        { path: "src/app.ts", hunkCount: 1, hasMarkers: true, firstMarkerLine: 40 },
       ]);
       act(() => fireTick?.());
 
@@ -1340,7 +1340,7 @@ describe("ReviewHub", () => {
         await waitFor(() => expect(scanConflictMarkersMock).toHaveBeenCalledTimes(1));
 
         scanConflictMarkersMock.mockResolvedValue([
-          { path: "src/app.ts", hunkCount: 1, firstMarkerLine: 40 },
+          { path: "src/app.ts", hunkCount: 1, hasMarkers: true, firstMarkerLine: 40 },
         ]);
         act(() => fireTick?.());
         await waitFor(() => expect(scanConflictMarkersMock).toHaveBeenCalledTimes(2));
@@ -1351,7 +1351,9 @@ describe("ReviewHub", () => {
         // The overtaken scan read the file before the newer one did.
         await act(async () => {
           if (outcome === "answers") {
-            settleFirst?.resolve([{ path: "src/app.ts", hunkCount: 3, firstMarkerLine: 12 }]);
+            settleFirst?.resolve([
+              { path: "src/app.ts", hunkCount: 3, hasMarkers: true, firstMarkerLine: 12 },
+            ]);
           } else {
             settleFirst?.reject(new Error("EACCES"));
           }
@@ -1373,7 +1375,7 @@ describe("ReviewHub", () => {
     it("rescans each time the app regains focus", async () => {
       getStagingStatusMock.mockResolvedValue(makeMergingStatus());
       scanConflictMarkersMock.mockResolvedValue([
-        { path: "src/app.ts", hunkCount: 3, firstMarkerLine: 12 },
+        { path: "src/app.ts", hunkCount: 3, hasMarkers: true, firstMarkerLine: 12 },
       ]);
 
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
@@ -1386,7 +1388,7 @@ describe("ReviewHub", () => {
         [1, "1 region"],
       ] as const) {
         scanConflictMarkersMock.mockResolvedValue([
-          { path: "src/app.ts", hunkCount, firstMarkerLine: 30 },
+          { path: "src/app.ts", hunkCount, hasMarkers: true, firstMarkerLine: 30 },
         ]);
         act(() => {
           window.dispatchEvent(new Event("focus"));
@@ -1403,7 +1405,7 @@ describe("ReviewHub", () => {
       // A warm cache keeps the panel mounted across the switch.
       rememberStagingStatus(OTHER_PATH, makeMergingStatus(), beginStagingStatusRead());
       scanConflictMarkersMock.mockResolvedValue([
-        { path: "src/app.ts", hunkCount: 3, firstMarkerLine: 12 },
+        { path: "src/app.ts", hunkCount: 3, hasMarkers: true, firstMarkerLine: 12 },
       ]);
 
       const { rerender } = render(
@@ -1439,7 +1441,9 @@ describe("ReviewHub", () => {
       });
 
       await act(async () => {
-        resolveOther?.([{ path: "src/app.ts", hunkCount: 1, firstMarkerLine: 5 }]);
+        resolveOther?.([
+          { path: "src/app.ts", hunkCount: 1, hasMarkers: true, firstMarkerLine: 5 },
+        ]);
       });
       expect(screen.getByTestId("conflict-hunk-count-src/app.ts").textContent).toBe("1 region");
       fireEvent.click(openButton());
@@ -1517,7 +1521,7 @@ describe("ReviewHub", () => {
 
       it("closes a leftover-markers confirm opened for the previous worktree", async () => {
         scanConflictMarkersMock.mockResolvedValue([
-          { path: "src/app.ts", hunkCount: 2, firstMarkerLine: 4 },
+          { path: "src/app.ts", hunkCount: 2, hasMarkers: true, firstMarkerLine: 4 },
         ]);
         const moveToOther = renderMergingHub();
         fireEvent.click(
@@ -1540,7 +1544,9 @@ describe("ReviewHub", () => {
           expect(scanConflictMarkersMock).toHaveBeenCalledWith(OTHER_PATH, ["src/app.ts"])
         );
         await act(async () => {
-          reread.resolve([{ path: "src/app.ts", hunkCount: 2, firstMarkerLine: 4 }]);
+          reread.resolve([
+            { path: "src/app.ts", hunkCount: 2, hasMarkers: true, firstMarkerLine: 4 },
+          ]);
         });
 
         expect(screen.queryByRole("alertdialog")).toBeNull();
@@ -1557,7 +1563,9 @@ describe("ReviewHub", () => {
         moveToOther();
         moveToOther.moveBack();
         await act(async () => {
-          reread.resolve([{ path: "src/app.ts", hunkCount: 0, firstMarkerLine: null }]);
+          reread.resolve([
+            { path: "src/app.ts", hunkCount: 0, hasMarkers: false, firstMarkerLine: null },
+          ]);
         });
 
         expect(screen.queryByRole("alertdialog")).toBeNull();
@@ -1746,7 +1754,7 @@ describe("ReviewHub", () => {
     it("asks before staging a file that still contains conflict markers", async () => {
       getStagingStatusMock.mockResolvedValue(makeMergingStatus());
       scanConflictMarkersMock.mockResolvedValue([
-        { path: "src/app.ts", hunkCount: 2, firstMarkerLine: 4 },
+        { path: "src/app.ts", hunkCount: 2, hasMarkers: true, firstMarkerLine: 4 },
       ]);
 
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
@@ -1755,12 +1763,70 @@ describe("ReviewHub", () => {
         await screen.findByRole("button", { name: /Mark src\/app\.ts as resolved/i })
       );
       const dialog = await screen.findByRole("alertdialog");
+      expect(dialog.textContent).toContain("still has 2 conflict regions");
+      expect(dialog.textContent).not.toContain("without checking");
       expect(stageFileMock).not.toHaveBeenCalled();
 
       fireEvent.click(within(dialog).getByRole("button", { name: "Mark resolved" }));
       await waitFor(() => {
         expect(stageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts");
       });
+    });
+
+    it("asks before staging a file whose opener was deleted but whose closer remains", async () => {
+      getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      // The background scan reads the file clean; only the click's own re-read
+      // sees the closer the edit since left behind.
+      const leftover = [{ path: "src/app.ts", hunkCount: 0, hasMarkers: true, firstMarkerLine: 4 }];
+      const markButton = await screen.findByRole("button", {
+        name: /Mark src\/app\.ts as resolved/i,
+      });
+      await waitFor(() => expect(scanConflictMarkersMock).toHaveBeenCalled());
+      const scansBefore = scanConflictMarkersMock.mock.calls.length;
+      scanConflictMarkersMock.mockResolvedValueOnce(leftover);
+      fireEvent.click(markButton);
+      expect(scanConflictMarkersMock).toHaveBeenCalledTimes(scansBefore + 1);
+      expect(scanConflictMarkersMock).toHaveBeenLastCalledWith(WORKTREE_PATH, ["src/app.ts"]);
+      const dialog = await screen.findByRole("alertdialog");
+      expect(dialog.textContent).toContain("leftover conflict markers, starting on line 4");
+      expect(dialog.textContent).not.toContain("without checking");
+      expect(stageFileMock).not.toHaveBeenCalled();
+
+      fireEvent.click(within(dialog).getByRole("button", { name: "Keep editing" }));
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      expect(stageFileMock).not.toHaveBeenCalled();
+
+      const markAgain = await screen.findByRole("button", {
+        name: /Mark src\/app\.ts as resolved/i,
+      });
+      scanConflictMarkersMock.mockResolvedValueOnce([{ ...leftover[0], firstMarkerLine: 9 }]);
+      fireEvent.click(markAgain);
+      const retryDialog = await screen.findByRole("alertdialog");
+      expect(retryDialog.textContent).toContain("starting on line 9");
+      fireEvent.click(within(retryDialog).getByRole("button", { name: "Mark resolved" }));
+      await waitFor(() => {
+        expect(stageFileMock).toHaveBeenCalledTimes(1);
+      });
+      expect(stageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts");
+    });
+
+    it("asks before staging when the re-read counts no regions but gives no marker verdict", async () => {
+      getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+      scanConflictMarkersMock.mockResolvedValue([
+        { path: "src/app.ts", hunkCount: 0, firstMarkerLine: null },
+      ]);
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Mark src\/app\.ts as resolved/i })
+      );
+      const dialog = await screen.findByRole("alertdialog");
+      expect(dialog.textContent).toContain("without checking");
+      expect(stageFileMock).not.toHaveBeenCalled();
     });
 
     it("asks before staging when the marker re-read fails", async () => {
@@ -1796,7 +1862,7 @@ describe("ReviewHub", () => {
         })
       );
       scanConflictMarkersMock.mockResolvedValue([
-        { path: "src/app.ts", hunkCount: null, firstMarkerLine: null },
+        { path: "src/app.ts", hunkCount: null, hasMarkers: null, firstMarkerLine: null },
       ]);
 
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
@@ -1809,10 +1875,52 @@ describe("ReviewHub", () => {
       });
     });
 
+    it("asks before staging a deleted-side conflict whose file still holds markers", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeMergingStatus({
+          conflictedFiles: [{ path: "src/app.ts", xy: "UD", label: "deleted by them" }],
+        })
+      );
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      const markButton = await screen.findByRole("button", {
+        name: /Mark src\/app\.ts as resolved/i,
+      });
+      await waitFor(() => expect(scanConflictMarkersMock).toHaveBeenCalled());
+      scanConflictMarkersMock.mockResolvedValueOnce([
+        { path: "src/app.ts", hunkCount: 0, hasMarkers: true, firstMarkerLine: 3 },
+      ]);
+      fireEvent.click(markButton);
+      expect(scanConflictMarkersMock).toHaveBeenLastCalledWith(WORKTREE_PATH, ["src/app.ts"]);
+      const dialog = await screen.findByRole("alertdialog");
+      expect(dialog.textContent).toContain("starting on line 3");
+      expect(stageFileMock).not.toHaveBeenCalled();
+    });
+
+    it("stages a deleted-side conflict the re-read returned nothing for, without asking", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeMergingStatus({
+          conflictedFiles: [{ path: "src/app.ts", xy: "DU", label: "deleted by us" }],
+        })
+      );
+      scanConflictMarkersMock.mockResolvedValue([]);
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Mark src\/app\.ts as resolved/i })
+      );
+      await waitFor(() => {
+        expect(stageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts");
+      });
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    });
+
     it("asks before staging a text conflict the scanner skipped (oversized, unreadable)", async () => {
       getStagingStatusMock.mockResolvedValue(makeMergingStatus());
       scanConflictMarkersMock.mockResolvedValue([
-        { path: "src/app.ts", hunkCount: null, firstMarkerLine: null },
+        { path: "src/app.ts", hunkCount: null, hasMarkers: null, firstMarkerLine: null },
       ]);
 
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
@@ -1851,7 +1959,7 @@ describe("ReviewHub", () => {
     it("stages without asking once the file has no markers left", async () => {
       getStagingStatusMock.mockResolvedValue(makeMergingStatus());
       scanConflictMarkersMock.mockResolvedValue([
-        { path: "src/app.ts", hunkCount: 0, firstMarkerLine: null },
+        { path: "src/app.ts", hunkCount: 0, hasMarkers: false, firstMarkerLine: null },
       ]);
 
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);

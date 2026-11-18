@@ -795,6 +795,32 @@ describe("git-write staging handlers (real git)", () => {
       expect(resolveUndoReads(mark)).toEqual([]);
     });
   });
+
+  it("reports markers left behind with no opener apart from the region count", async () => {
+    fs.writeFileSync(path.join(repo, "orphan.ts"), "kept\n=======\nright\n>>>>>>> theirs\n");
+    fs.writeFileSync(path.join(repo, "clean.ts"), "resolved\n");
+    fs.writeFileSync(
+      path.join(repo, "region.ts"),
+      "a\n>>>>>>> stray\n<<<<<<< ours\nl\n=======\nr\n>>>>>>> theirs\n"
+    );
+    fs.mkdirSync(path.join(repo, "dir"));
+    // Past the scan cap, with a marker on its first line.
+    fs.writeFileSync(path.join(repo, "huge.ts"), `>>>>>>> theirs\n${"x".repeat(1_000_000)}`);
+
+    const entries = await handler(CHANNELS.GIT_SCAN_CONFLICT_MARKERS)(null, {
+      cwd: repo,
+      filePaths: ["orphan.ts", "clean.ts", "region.ts", "missing.ts", "dir", "huge.ts"],
+    });
+
+    expect(entries).toEqual([
+      { path: "orphan.ts", hunkCount: 0, hasMarkers: true, firstMarkerLine: 4 },
+      { path: "clean.ts", hunkCount: 0, hasMarkers: false, firstMarkerLine: null },
+      { path: "region.ts", hunkCount: 1, hasMarkers: true, firstMarkerLine: 2 },
+      { path: "missing.ts", hunkCount: null, hasMarkers: null, firstMarkerLine: null },
+      { path: "dir", hunkCount: null, hasMarkers: null, firstMarkerLine: null },
+      { path: "huge.ts", hunkCount: null, hasMarkers: null, firstMarkerLine: null },
+    ]);
+  });
 });
 
 describe("git-write repository operation handlers on a halted git am (real git)", () => {

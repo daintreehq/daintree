@@ -16,8 +16,9 @@ const MIN_MARKER_LENGTH = 7;
 // and the closer. The `=======` divider is left out on purpose: alone it is a
 // Setext heading underline or a text separator in ordinary Markdown and plain
 // text, and a real region always carries an opener the scan reports first.
+const OPENER = 0x3c; // <
 const MARKER_BYTES = new Set([
-  0x3c, // <
+  OPENER,
   0x7c, // |
   0x3e, // >
 ]);
@@ -97,6 +98,46 @@ function findFirstConflictMarkerLine(blob: Buffer): number | null {
     line++;
   }
   return null;
+}
+
+export interface ConflictMarkerTextScan {
+  /** Opening `<<<<<<<` lines: one per conflict region. */
+  hunkCount: number;
+  /** Any marker line at all, so a region whose opener was edited away still counts. */
+  hasMarkers: boolean;
+  /** 1-based line of the first marker of any kind, `null` when there is none. */
+  firstMarkerLine: number | null;
+}
+
+/**
+ * Reads conflict markers the way the commit scan does. The region count and
+ * whether the file is safe to stage are separate answers: deleting a region's
+ * opener leaves its closer behind with no region left to count.
+ */
+export function scanConflictMarkerText(content: Buffer | string): ConflictMarkerTextScan {
+  const blob = typeof content === "string" ? Buffer.from(content, "utf8") : content;
+  const bodyStart = UTF8_BOM.every((byte, i) => blob[i] === byte) ? UTF8_BOM.length : 0;
+  let start = bodyStart;
+  let hunkCount = 0;
+  let firstStart = -1;
+  while (start < blob.length) {
+    if (isMarkerLineAt(blob, start)) {
+      if (firstStart === -1) firstStart = start;
+      if (blob[start] === OPENER) hunkCount++;
+    }
+    const lineEnd = blob.indexOf(LF, start);
+    if (lineEnd === -1) break;
+    start = lineEnd + 1;
+  }
+  if (firstStart === -1) return { hunkCount: 0, hasMarkers: false, firstMarkerLine: null };
+  // Markers only follow an LF, as git splits lines, but editors also end a line
+  // at a bare CR; CRLF is one break.
+  let firstMarkerLine = 1;
+  for (let i = bodyStart; i < firstStart; i++) {
+    const byte = blob[i];
+    if (byte === LF || (byte === CR && blob[i + 1] !== LF)) firstMarkerLine++;
+  }
+  return { hunkCount, hasMarkers: true, firstMarkerLine };
 }
 
 function assertNoConflictMarkers(filePath: string, blob: Buffer): void {

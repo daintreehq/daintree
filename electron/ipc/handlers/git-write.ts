@@ -70,6 +70,7 @@ import {
 } from "../../services/git/porcelainConflicts.js";
 import {
   STAGED_FILE_SIZE_CAP,
+  scanConflictMarkerText,
   scanStagedFilesForConflictMarkers,
 } from "../../services/git/conflictMarkerScan.js";
 import { EMPTY_TREE } from "../../services/git/reviewPoint/captureReviewPoint.js";
@@ -2532,41 +2533,25 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     }
     if (payload.filePaths.length === 0) return [];
 
-    // `g` flag is required for `exec` iteration. Counts only opening `<<<<<<<`
-    // markers — one per hunk.
-    const HUNK_OPEN_RE = /^<{7}/gm;
+    const skipped = (filePath: string): ConflictMarkerScanEntry => ({
+      path: filePath,
+      hunkCount: null,
+      hasMarkers: null,
+      firstMarkerLine: null,
+    });
 
     const scanOne = async (filePath: string): Promise<ConflictMarkerScanEntry> => {
       try {
         validateFilePathUnderCwd(payload.cwd, filePath);
         const absolute = path.resolve(payload.cwd, filePath);
         const stat = await fs.promises.stat(absolute);
-        if (!stat.isFile() || stat.size > STAGED_FILE_SIZE_CAP) {
-          return { path: filePath, hunkCount: null, firstMarkerLine: null };
-        }
-        const content = await fs.promises.readFile(absolute, "utf8");
-        // BOM-strip so a marker on line 1 isn't shifted past the `^` anchor.
-        const probe = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
-        let hunkCount = 0;
-        let firstMarkerLine: number | null = null;
-        let match: RegExpExecArray | null;
-        HUNK_OPEN_RE.lastIndex = 0;
-        while ((match = HUNK_OPEN_RE.exec(probe)) !== null) {
-          hunkCount++;
-          if (firstMarkerLine === null) {
-            // Compute 1-based line number from byte offset within the probed string.
-            let line = 1;
-            for (let i = 0; i < match.index; i++) {
-              if (probe.charCodeAt(i) === 0x0a) line++;
-            }
-            firstMarkerLine = line;
-          }
-        }
-        return { path: filePath, hunkCount, firstMarkerLine };
+        if (!stat.isFile() || stat.size > STAGED_FILE_SIZE_CAP) return skipped(filePath);
+        const content = await fs.promises.readFile(absolute);
+        return { path: filePath, ...scanConflictMarkerText(content) };
       } catch {
         // Treat any per-file error as a degraded scan result — the UI hides
         // the badge rather than blocking the worklist on a single bad path.
-        return { path: filePath, hunkCount: null, firstMarkerLine: null };
+        return skipped(filePath);
       }
     };
 
