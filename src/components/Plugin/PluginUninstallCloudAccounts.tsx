@@ -68,8 +68,8 @@ export function PluginUninstallCloudAccounts({
       </RadioChoiceGroup>
       <p className="text-xs text-text-secondary">
         Either way, nothing is stopped or deleted at the provider: every machine stays in its
-        provider account, and one that's running keeps running and can keep billing there until you
-        stop or delete it in the provider's console.
+        provider account, and one that's running keeps running, and can keep billing, as that
+        provider's own rules allow.
       </p>
     </div>
   );

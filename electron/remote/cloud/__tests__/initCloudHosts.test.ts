@@ -128,4 +128,32 @@ describe("initCloudHosts", () => {
       runtime.dispose();
     }
   });
+
+  it("starts with a plugin's provider already loaded even when its label can't be written", () => {
+    const stored = { version: 1, accounts: [pluginAccount()], bindings: [] };
+    publishPluginCloudProviders("acme.clouds", [ec2()], "Acme Clouds");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const runtime = initCloudHosts({
+      backend: {
+        get: () => JSON.parse(JSON.stringify(stored)),
+        set: () => {
+          throw new Error("disk full");
+        },
+      },
+      emit: vi.fn(),
+    });
+    try {
+      expect(runtime.providers.has("acme.clouds.ec2")).toBe(true);
+      expect(runtime.cloudHosts.snapshot().accounts).toEqual([
+        expect.objectContaining({ id: "ca_acmeplugin1", providerUnavailable: null }),
+      ]);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("Couldn't keep what acme.clouds.ec2 is called"),
+        expect.any(Error)
+      );
+    } finally {
+      warn.mockRestore();
+      runtime.dispose();
+    }
+  });
 });

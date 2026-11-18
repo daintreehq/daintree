@@ -758,6 +758,8 @@ describe("CloudMachineSection while its provider is missing", () => {
 });
 
 describe("CloudMachineSection while its plugin's provider is gone (#17353)", () => {
+  const DEADLINE = new Date(Date.now() + 90 * 60_000).toISOString();
+  const lifetimeText = () => screen.getByTestId("cloud-machine-lifetime").textContent ?? "";
   const gone = (overrides: Partial<CloudHostStatus> = {}) =>
     status({
       providerId: "acme.droplets.droplets",
@@ -803,5 +805,16 @@ describe("CloudMachineSection while its plugin's provider is gone (#17353)", () 
     );
     expect(screen.getAllByRole("button", { name: "Open Droplets console" })).toHaveLength(1);
     expect(screen.getByTestId("cloud-machine-state").textContent).not.toMatch(/checked|1970/);
+  });
+
+  it("never dates a deadline by a reading whose time was cleared", () => {
+    show(gone({ observedAt: 0, autoStopAt: DEADLINE, lifetime: null }));
+    expect(lifetimeText()).not.toContain("As last reported");
+    expect(lifetimeText()).toContain("as last reported");
+  });
+
+  it("shows a stop under way as what it is, not as the provider's last word", () => {
+    show(gone({ operation: { id: "op", kind: "stopping", startedAt: 1, stage: "Stopping" } }));
+    expect(screen.getByTestId("cloud-machine-state").textContent).toMatch(/^Stopping/);
   });
 });

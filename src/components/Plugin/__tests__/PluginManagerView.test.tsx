@@ -1192,9 +1192,9 @@ describe("PluginManagerView", () => {
 
       await armUninstall();
       fireEvent.click(screen.getByRole("radio", { name: "Remove cloud accounts" }));
-      expect(screen.getByTestId("plugin-uninstall-cloud-accounts").textContent).toContain(
-        "removes 2 hosts from the list"
-      );
+      const removing = screen.getByTestId("plugin-uninstall-cloud-accounts").textContent;
+      expect(removing).toContain("removes 2 hosts from the list");
+      expect(removing).toContain("Windows on those hosts return to this machine");
       fireEvent.click(screen.getByRole("button", { name: "Keep plugin" }));
 
       await armUninstall();

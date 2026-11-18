@@ -463,14 +463,14 @@ describe("CloudHostStore accounts", () => {
       credentialRevision: null,
       lastProvisioning: null,
       pluginProvider: {
-        pluginName: "A".repeat(200),
+        // Outside the BMP: cut by code point, never through a surrogate pair.
+        pluginName: "😀".repeat(200),
         providerName: "EC2",
         dashboardUrl: "https://console.example.com/ec2",
       },
     });
     const label = new CloudHostStore(backend).account(account.id)?.pluginProvider;
-    expect([...label!.pluginName]).toHaveLength(128);
-    expect(label!.pluginName.endsWith("…")).toBe(true);
+    expect(label!.pluginName).toBe(`${"😀".repeat(127)}…`);
     expect(label!.dashboardUrl).toBe("https://console.example.com/ec2");
   });
 
