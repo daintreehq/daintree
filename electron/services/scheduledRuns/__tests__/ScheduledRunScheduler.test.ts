@@ -1731,6 +1731,22 @@ describe("ScheduledRunScheduler", () => {
       expect(calls).toBe(1);
     });
 
+    it("warns at each retry while a read is still running", async () => {
+      projects.add("project-2");
+      const warnings: string[] = [];
+      scheduler = new ScheduledRunScheduler({
+        ...stallingDeps(),
+        logWarn: (message) => warnings.push(message),
+      });
+      void scheduler.start();
+      await advance(READ_TIMEOUT_MS);
+      // Retries a minute apart from 70 s after startup: three by 3 min 20 s.
+      await advance(3 * MINUTE + 10_000);
+
+      expect(calls).toBe(1);
+      expect(warnings.filter((message) => message.includes("Still waiting"))).toHaveLength(3);
+    });
+
     it("changes nothing when a stalled read lands after dispose", async () => {
       setClock(at(8, 59));
       projects.add("project-2");

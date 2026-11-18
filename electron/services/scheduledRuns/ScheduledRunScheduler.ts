@@ -412,7 +412,13 @@ export class ScheduledRunScheduler {
       this.nextReadAt = this.monotonicNow() + UNRECORDED_RETRY_MS;
       // Not waited for: a read that lands asks for its own pass, so a stalled
       // one holds up no other project's schedules.
-      for (const projectId of [...this.unread]) void this.readProject(projectId);
+      for (const projectId of [...this.unread]) {
+        if (this.reading.has(projectId)) {
+          this.logWarn(`[ScheduledRuns] Still waiting on project ${projectId}'s schedules`);
+        } else {
+          void this.readProject(projectId);
+        }
+      }
     }
     if (!this.hasEnabledSchedule()) {
       // No history opened, and no timer unless a project or the list is
