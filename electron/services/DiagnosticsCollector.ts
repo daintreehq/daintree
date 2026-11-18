@@ -17,6 +17,7 @@ import type { HandlerDependencies } from "../ipc/types.js";
 import { cliSpawnTarget } from "../utils/windowsCliSpawn.js";
 import { findWindowsCommand } from "../utils/windowsExecutable.js";
 import { getSanitizedProcessEnv } from "../utils/gitEnv.js";
+import type { FlowControlSnapshot } from "../../shared/types/pty-host.js";
 import type {
   WhySlowFocusThrottleSnapshot,
   WhySlowMemorySnapshot,
@@ -459,10 +460,36 @@ async function collectStoreConfig() {
   }
 }
 
-async function collectTerminals(ptyClient?: PtyClient) {
+type TerminalInventory = Awaited<ReturnType<PtyClient["getAllTerminalsAsync"]>>;
+
+interface PtySnapshots {
+  terminals: () => Promise<TerminalInventory>;
+  flowControl: () => Promise<FlowControlSnapshot>;
+}
+
+// The read starts on first use, synchronously, so the shard RPC deadlines are
+// still armed before the first consumer's section deadline. A synchronous
+// throw becomes the shared rejection each consumer catches on its own.
+function once<T>(read: () => Promise<T>): () => Promise<T> {
+  let reading: Promise<T> | undefined;
+  return () => (reading ??= (async () => read())());
+}
+
+// One reading per snapshot type for a whole export: every section derives from
+// the same shard fan-out, so counts agree with the exported rows and each
+// shard is asked once rather than once per section.
+function createPtySnapshots(ptyClient: PtyClient | undefined): PtySnapshots | null {
+  if (!ptyClient) return null;
+  return {
+    terminals: once(() => ptyClient.getAllTerminalsAsync()),
+    flowControl: once(() => ptyClient.getFlowControlSnapshotAsync()),
+  };
+}
+
+async function collectTerminals(snapshots: PtySnapshots | null) {
   try {
-    if (!ptyClient) return [];
-    const terminals = await ptyClient.getAllTerminalsAsync();
+    if (!snapshots) return [];
+    const terminals = await snapshots.terminals();
     return terminals.map((t) => ({
       id: t.id,
       kind: t.kind,
@@ -475,10 +502,10 @@ async function collectTerminals(ptyClient?: PtyClient) {
   }
 }
 
-async function collectFlowControl(ptyClient?: PtyClient) {
+async function collectFlowControl(snapshots: PtySnapshots | null) {
   try {
-    if (!ptyClient) return { error: "PtyClient not available" };
-    return await ptyClient.getFlowControlSnapshotAsync();
+    if (!snapshots) return { error: "PtyClient not available" };
+    return await snapshots.flowControl();
   } catch {
     return { error: "Failed to get flow-control snapshot" };
   }
@@ -713,8 +740,8 @@ async function collectResourceState() {
 
 // Top-level summary counts: open projects and views (by lifecycle state) across
 // all windows, plus terminals grouped by agentState. Derived from the same PVM
-// inventory and PtyClient the other sections use.
-async function collectCounts(deps: HandlerDependencies) {
+// inventory and terminal reading the other sections use.
+async function collectCounts(deps: HandlerDependencies, snapshots: PtySnapshots | null) {
   const result: Record<string, unknown> = {};
   try {
     const contexts = deps.windowRegistry?.all() ?? [];
@@ -747,8 +774,8 @@ async function collectCounts(deps: HandlerDependencies) {
   }
 
   try {
-    if (deps.ptyClient) {
-      const terminals = await deps.ptyClient.getAllTerminalsAsync();
+    if (snapshots) {
+      const terminals = await snapshots.terminals();
       const byAgentState: Record<string, number> = {};
       for (const t of terminals) {
         const key = t.agentState ?? "none";
@@ -801,10 +828,12 @@ function collectWhySlowRendererTerminals() {
   }
 }
 
-async function collectWhySlowPty(ptyClient?: PtyClient): Promise<WhySlowPtySummary | null> {
+async function collectWhySlowPty(
+  readFlowControl: (() => Promise<FlowControlSnapshot>) | undefined
+): Promise<WhySlowPtySummary | null> {
   try {
-    if (!ptyClient) return null;
-    const snapshot = await ptyClient.getFlowControlSnapshotAsync();
+    if (!readFlowControl) return null;
+    const snapshot = await readFlowControl();
     let pausedCount = 0;
     let memoryPausedCount = 0;
     let suspendedCount = 0;
@@ -933,15 +962,20 @@ async function collectWhySlowWorktrees(): Promise<WhySlowWorktreeSummary | null>
  * event-loop-lag latch, focus throttle, terminal WebGL/tier state (from the
  * renderer push cache), PTY flow-control summary, and worktree monitor load.
  * Backing both the diagnostics `whySlow` section and the live dock IPC pull.
+ * A full export passes its shared flow-control reading; the live pull reads fresh.
  */
-export async function collectWhySlowSnapshot(deps: HandlerDependencies): Promise<WhySlowSnapshot> {
+export async function collectWhySlowSnapshot(
+  deps: HandlerDependencies,
+  sharedFlowControl?: () => Promise<FlowControlSnapshot>
+): Promise<WhySlowSnapshot> {
+  const readFlowControl = sharedFlowControl ?? createPtySnapshots(deps.ptyClient)?.flowControl;
   // Bound the cross-process awaits: the full diagnostics export wraps each
   // section in withTimeout, but the live dock pull calls this directly. A hung
   // pty-host or workspace-host must not wedge the very snapshot meant to explain
   // a slowdown — degrade the stuck section to null instead.
   const [resource, pty, worktrees, workers, memory] = await Promise.all([
     withTimeout(collectWhySlowResource(), WHY_SLOW_ASYNC_TIMEOUT_MS, null),
-    withTimeout(collectWhySlowPty(deps.ptyClient), WHY_SLOW_ASYNC_TIMEOUT_MS, null),
+    withTimeout(collectWhySlowPty(readFlowControl), WHY_SLOW_ASYNC_TIMEOUT_MS, null),
     withTimeout(collectWhySlowWorktrees(), WHY_SLOW_ASYNC_TIMEOUT_MS, null),
     withTimeout(collectWhySlowWorkers(), WHY_SLOW_ASYNC_TIMEOUT_MS, null),
     withTimeout(collectWhySlowMemory(deps.ptyClient), WHY_SLOW_ASYNC_TIMEOUT_MS, null),
@@ -966,6 +1000,7 @@ export async function collectDiagnostics(deps: HandlerDependencies): Promise<unk
 export async function collectDiagnosticsWithKeys(
   deps: HandlerDependencies
 ): Promise<{ payload: Record<string, unknown>; sectionKeys: string[] }> {
+  const snapshots = createPtySnapshots(deps.ptyClient);
   const sections = [
     { key: "metadata", fn: collectMetadata },
     { key: "runtime", fn: collectRuntime },
@@ -976,8 +1011,8 @@ export async function collectDiagnosticsWithKeys(
     { key: "tools", fn: collectTools },
     { key: "git", fn: collectGit },
     { key: "config", fn: collectStoreConfig },
-    { key: "terminals", fn: () => collectTerminals(deps.ptyClient) },
-    { key: "flowControl", fn: () => collectFlowControl(deps.ptyClient) },
+    { key: "terminals", fn: () => collectTerminals(snapshots) },
+    { key: "flowControl", fn: () => collectFlowControl(snapshots) },
     { key: "lifecycleLedger", fn: collectLifecycleLedger },
     { key: "mcpAudit", fn: collectMcpAudit },
     { key: "projectViews", fn: () => collectProjectViews(deps) },
@@ -987,8 +1022,8 @@ export async function collectDiagnosticsWithKeys(
     { key: "resourceState", fn: collectResourceState },
     { key: "keepAwake", fn: collectKeepAwake },
     { key: "workerGovernance", fn: collectWorkerGovernance },
-    { key: "whySlow", fn: () => collectWhySlowSnapshot(deps) },
-    { key: "counts", fn: () => collectCounts(deps) },
+    { key: "whySlow", fn: () => collectWhySlowSnapshot(deps, snapshots?.flowControl) },
+    { key: "counts", fn: () => collectCounts(deps, snapshots) },
     { key: "logs", fn: collectLogs },
     { key: "events", fn: () => collectEvents(deps) },
   ];

@@ -1142,6 +1142,228 @@ describe("DiagnosticsCollector adversarial", () => {
     expect(payload.counts.terminals.total).toBe(0);
   });
 
+  describe("shared PTY snapshots (#17782)", () => {
+    type TerminalRow = { id: string; kind: string; agentState?: string; hasPty?: boolean };
+    type FlowReading = { terminals: Array<Record<string, unknown>>; totalPendingBytes: number };
+    interface FakeShard {
+      key: string;
+      terminals: (call: number) => Promise<TerminalRow[]>;
+      flowControl: (call: number) => Promise<FlowReading>;
+    }
+
+    const flowRow = (terminalId: string, pausedDurationMs: number | null = null) => ({
+      terminalId,
+      flowStatus: null,
+      heldTokens: pausedDurationMs === null ? [] : ["ipc-queue"],
+      isSuspended: false,
+      activityTier: "VISIBLE",
+      pausedDurationMs,
+      droppedBytes: 0,
+      dropCount: 0,
+      lastDropAt: null,
+    });
+
+    const after = <T>(ms: number, value: T) =>
+      new Promise<T>((resolve) => setTimeout(() => resolve(value), ms));
+
+    // Mirrors PtyClient's fan-out: each read sends one request to every shard,
+    // a failed shard answers nothing ([] in the inventory, absent from the
+    // flow-control merge), and every request a shard receives is counted.
+    function createShardedPtyClient(shards: FakeShard[]) {
+      const requests = Object.fromEntries(
+        shards.map((shard) => [shard.key, { terminals: 0, flowControl: 0 }])
+      );
+      const client = {
+        getAllTerminalsAsync: async () => {
+          const readings = await Promise.all(
+            shards.map((shard) => {
+              const call = ++requests[shard.key].terminals;
+              return shard.terminals(call).catch(() => [] as TerminalRow[]);
+            })
+          );
+          return readings.flat();
+        },
+        getFlowControlSnapshotAsync: async () => {
+          const readings = await Promise.all(
+            shards.map((shard) => {
+              const call = ++requests[shard.key].flowControl;
+              return shard.flowControl(call).catch(() => null);
+            })
+          );
+          const answered = readings.filter((r): r is FlowReading => r !== null);
+          return {
+            timestamp: Date.now(),
+            terminals: answered.flatMap((r) => r.terminals),
+            queueDepth: [],
+            totalPendingBytes: answered.reduce((sum, r) => sum + r.totalPendingBytes, 0),
+            stats: { pauseCount: 0, resumeCount: 0, suspendCount: 0, forceResumeCount: 0 },
+            resourceGovernor: {
+              isThrottling: false,
+              isWarning: false,
+              activeProfile: "balanced",
+              smoothedUtilizationPercent: null,
+              throttleDurationMs: 0,
+            },
+            eventLoop: null,
+          };
+        },
+      };
+      return { client, requests };
+    }
+
+    const depsFor = (ptyClient: unknown) =>
+      ({ ptyClient }) as unknown as import("../../ipc/types.js").HandlerDependencies;
+
+    type SharedPayload = {
+      terminals: Array<{ id: string }> | { error: string };
+      counts: {
+        terminals: { total: number; byAgentState: Record<string, number> } | { error: string };
+      };
+      flowControl: { terminals: unknown[]; totalPendingBytes: number } | { error: string };
+      whySlow: {
+        focusThrottle: unknown;
+        pty: { terminalCount: number; totalPendingBytes: number; pausedCount: number } | null;
+      };
+    };
+
+    it("ONE_INVENTORY_AND_ONE_FLOW_SNAPSHOT_PER_SHARD_PER_EXPORT", async () => {
+      // Terminal a2 exits after the first reading: a second read would leave
+      // counts disagreeing with the exported rows.
+      const { client, requests } = createShardedPtyClient([
+        {
+          key: "a",
+          terminals: async (call) =>
+            call === 1
+              ? [
+                  { id: "a1", kind: "agent", agentState: "working", hasPty: true },
+                  { id: "a2", kind: "terminal", hasPty: true },
+                ]
+              : [{ id: "a1", kind: "agent", agentState: "working", hasPty: true }],
+          flowControl: async (call) =>
+            call === 1
+              ? { terminals: [flowRow("a1"), flowRow("a2", 500)], totalPendingBytes: 10 }
+              : { terminals: [flowRow("a1")], totalPendingBytes: 0 },
+        },
+        {
+          key: "b",
+          terminals: async () => [{ id: "b1", kind: "agent", agentState: "waiting" }],
+          flowControl: async () => ({ terminals: [flowRow("b1")], totalPendingBytes: 5 }),
+        },
+      ]);
+
+      const payload = (await diagnostics.collectDiagnostics(depsFor(client))) as SharedPayload;
+
+      expect(requests).toEqual({
+        a: { terminals: 1, flowControl: 1 },
+        b: { terminals: 1, flowControl: 1 },
+      });
+      expect((payload.terminals as Array<{ id: string }>).map((t) => t.id)).toEqual([
+        "a1",
+        "a2",
+        "b1",
+      ]);
+      expect(payload.counts.terminals).toEqual({
+        total: 3,
+        byAgentState: { working: 1, none: 1, waiting: 1 },
+      });
+      expect(payload.flowControl).toMatchObject({ totalPendingBytes: 15 });
+      expect((payload.flowControl as { terminals: unknown[] }).terminals).toHaveLength(3);
+      expect(payload.whySlow.pty).toMatchObject({
+        terminalCount: 3,
+        totalPendingBytes: 15,
+        pausedCount: 1,
+      });
+    });
+
+    it("SLOW_AND_FAILING_SHARDS_READ_ONCE_AND_KEEP_EACH_SECTION_DEADLINE", async () => {
+      // The slow shard answers after the 4 s why-slow deadline but inside the
+      // 5 s section deadline: the flowControl section still gets the reading
+      // while whySlow.pty degrades on its own clock.
+      const { client, requests } = createShardedPtyClient([
+        {
+          key: "ok",
+          terminals: async () => [{ id: "ok1", kind: "agent", agentState: "idle" }],
+          flowControl: async () => ({ terminals: [flowRow("ok1")], totalPendingBytes: 1 }),
+        },
+        {
+          key: "failing",
+          terminals: () => Promise.reject(new Error("shard down")),
+          flowControl: () => Promise.reject(new Error("shard down")),
+        },
+        {
+          key: "slow",
+          terminals: () => after(4_500, [{ id: "slow1", kind: "terminal" }]),
+          flowControl: () => after(4_500, { terminals: [flowRow("slow1")], totalPendingBytes: 2 }),
+        },
+      ]);
+
+      const pending = diagnostics.collectDiagnostics(depsFor(client));
+      await vi.advanceTimersByTimeAsync(5_000);
+      const payload = (await pending) as SharedPayload;
+
+      expect(requests).toEqual({
+        ok: { terminals: 1, flowControl: 1 },
+        failing: { terminals: 1, flowControl: 1 },
+        slow: { terminals: 1, flowControl: 1 },
+      });
+      expect((payload.terminals as Array<{ id: string }>).map((t) => t.id)).toEqual([
+        "ok1",
+        "slow1",
+      ]);
+      expect(payload.counts.terminals).toEqual({
+        total: 2,
+        byAgentState: { idle: 1, none: 1 },
+      });
+      expect(payload.flowControl).toMatchObject({ totalPendingBytes: 3 });
+      expect(payload.whySlow.pty).toBeNull();
+      expect(payload.whySlow.focusThrottle).toBeDefined();
+    });
+
+    it("SHARED_READ_FAILURE_FALLS_BACK_PER_SECTION", async () => {
+      const client = {
+        getAllTerminalsAsync: vi.fn(() => {
+          throw new Error("fan-out threw synchronously");
+        }),
+        getFlowControlSnapshotAsync: vi.fn(async () => {
+          throw new Error("fan-out rejected");
+        }),
+      };
+
+      const payload = (await diagnostics.collectDiagnostics(depsFor(client))) as SharedPayload;
+
+      expect(client.getAllTerminalsAsync).toHaveBeenCalledTimes(1);
+      expect(client.getFlowControlSnapshotAsync).toHaveBeenCalledTimes(1);
+      expect(payload.terminals).toEqual({ error: "Failed to get terminal info" });
+      expect(payload.counts.terminals).toEqual({ error: "Failed to count terminals" });
+      expect(payload.flowControl).toEqual({ error: "Failed to get flow-control snapshot" });
+      expect(payload.whySlow.pty).toBeNull();
+    });
+
+    it("EACH_EXPORT_AND_EACH_LIVE_WHY_SLOW_PULL_READS_FRESH", async () => {
+      const client = {
+        getAllTerminalsAsync: vi.fn(async () => [{ id: "t1", kind: "agent" }]),
+        getFlowControlSnapshotAsync: vi.fn(async () => ({
+          terminals: [flowRow("t1")],
+          totalPendingBytes: 0,
+        })),
+      };
+      const deps = depsFor(client);
+
+      await diagnostics.collectDiagnostics(deps);
+      await diagnostics.collectDiagnostics(deps);
+      expect(client.getAllTerminalsAsync).toHaveBeenCalledTimes(2);
+      expect(client.getFlowControlSnapshotAsync).toHaveBeenCalledTimes(2);
+
+      for (let i = 0; i < 2; i++) {
+        const pending = diagnostics.collectWhySlowSnapshot(deps);
+        await vi.advanceTimersByTimeAsync(4_000);
+        expect((await pending).pty).toMatchObject({ terminalCount: 1 });
+      }
+      expect(client.getFlowControlSnapshotAsync).toHaveBeenCalledTimes(4);
+      expect(client.getAllTerminalsAsync).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe("mcpAudit section (#12508)", () => {
     type AuditServiceInstance = InstanceType<
       (typeof import("../mcp-server/auditLog.js"))["AuditService"]
