@@ -69,7 +69,9 @@ describe("useRenderedFind", () => {
   it("indexes a stable document once while a query is typed", () => {
     stubFindHighlights();
     const root = documentWith(
-      Array.from({ length: 200 }, (_, i) => `<p>Block ${i} keeps a <em>store</em> here</p>`).join("")
+      Array.from({ length: 200 }, (_, i) => `<p>Block ${i} keeps a <em>store</em> here</p>`).join(
+        ""
+      )
     );
     const textWalks = countTextWalks();
     const { result } = renderHook(() => useRenderedFind(root));
