@@ -208,6 +208,8 @@ Accounts and machines are kept whatever happens to the plugin. While its provide
 
 A plugin that is installed and turned on but not running isn't unavailable: its next call starts it. When the plugin is back with the same declarations, its provider registers again and the accounts and machines pick up where they were, with no new connect. When its declarations changed, or it was uninstalled and installed again, they stay unavailable until the person allows the plugin again with **Review access** in Settings → Hosts.
 
+Each account keeps your provider's `name`, your plugin's display name and its `dashboardUrl` from the last time the provider registered, so while the plugin is gone Settings → Hosts still names them, lists the account's machines with their last known state and when it was seen, and links the console. Uninstalling the plugin from the plugin manager asks whether to keep its cloud accounts, credentials sealed for a reinstall, or remove them with their hosts. Either way, nothing is asked of the provider, so every machine keeps running in its account. `daintree-plugin uninstall` always keeps them.
+
 ## Testing
 
 `createMockHost()` records `registerCloudProvider` bindings in `registeredCloudProviders`, so a test can call your impl directly with credentials and a signal of its own. It skips the manifest checks. `electron/services/plugin/__tests__/cloudProviderWorkerBridge.test.ts` drives a sample provider with an in-memory backend through the real worker bridge: check, create, start, stop and delete, a refusal that keeps its code, a crash, and a cancel.
