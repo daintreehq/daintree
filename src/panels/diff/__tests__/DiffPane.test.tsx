@@ -72,6 +72,7 @@ vi.mock("@/components/Worktree/DiffViewer", async () => {
   const { createPortal } = await import("react-dom");
   const { use } = await import("react");
   const { DiffNoteDraftContext } = await import("@/components/Worktree/diffNoteDrafts");
+  const { parseFilePatch } = await import("@shared/utils/patchHunks");
   return {
     // Surfaces `wrapLines` so the auto/override resolution is observable from the
     // prop the viewer actually receives, not just from the toolbar's pressed state.
@@ -81,14 +82,23 @@ vi.mock("@/components/Worktree/DiffViewer", async () => {
       wrapLines?: boolean;
       diff?: string;
       onShowWhitespaceChanges?: () => void;
+      renderHunkActions?: (hunk: never, index: number, file: never) => ReactNode;
     }) => {
       viewerDraftSessions.add(use(DiffNoteDraftContext));
+      // Each of git's hunks, unmerged, through the host's slot as the real
+      // viewer draws them in its hunk headers.
+      const hunks = props.renderHunkActions ? (parseFilePatch(props.diff ?? "")?.hunks ?? []) : [];
       return (
         <div
           data-testid="diff-viewer-mock"
           data-wrap-lines={String(props.wrapLines)}
           data-diff={props.diff}
         >
+          {hunks.map((hunk, index) => (
+            <div key={index} data-testid="hunk-actions">
+              {props.renderHunkActions!(hunk as never, index, {} as never)}
+            </div>
+          ))}
           {props.onShowWhitespaceChanges && (
             <button type="button" onClick={props.onShowWhitespaceChanges}>
               Show whitespace changes
@@ -2664,5 +2674,169 @@ index ada605e..029ae62 160000
 
     expect(screen.queryByTestId("image-diff-mock")).toBeNull();
     expect(screen.getByTestId("diff-viewer-mock")).toBeTruthy();
+  });
+});
+
+describe("DiffPane — hunk staging (#17331)", () => {
+  const TWO_HUNKS = [
+    "diff --git a/a.ts b/a.ts",
+    "index 1111111..2222222 100644",
+    "--- a/a.ts",
+    "+++ b/a.ts",
+    "@@ -1,3 +1,3 @@",
+    "-one",
+    "+ONE",
+    " two",
+    " three",
+    "@@ -20,3 +20,3 @@ function f() {",
+    " x",
+    "-y",
+    "+Y",
+    " z",
+    "",
+  ].join("\n");
+
+  let dispatchSpy: { mockRestore: () => void } | null = null;
+  afterEach(() => {
+    dispatchSpy?.mockRestore();
+    dispatchSpy = null;
+  });
+
+  function seedTwin(fileSide: "staged" | "unstaged", content = TWO_HUNKS) {
+    const changeSet: DiffChangeSetEntry[] = [
+      { path: "a.ts", status: "modified", viewedKey: "working-tree:a.ts", side: "staged" },
+      { path: "a.ts", status: "modified", viewedKey: "working-tree:a.ts", side: "unstaged" },
+    ];
+    seedPanel({
+      filePath: "a.ts",
+      fileStatus: "modified",
+      viewedKey: "working-tree:a.ts",
+      fileSide,
+      changeSet,
+    });
+    const retry = vi.fn();
+    useDiffContentMock.mockReturnValue({ content, stale: false, ignoreWhitespace: false, retry });
+    return retry;
+  }
+
+  function stubDispatch(result: unknown) {
+    const dispatch = vi
+      .spyOn(actionService, "dispatch")
+      .mockResolvedValue(result as Awaited<ReturnType<typeof actionService.dispatch>>);
+    dispatchSpy = dispatch;
+    return dispatch;
+  }
+
+  it("offers Stage hunk on each of git's hunks of an unstaged diff, and Unstage hunk on a staged one", () => {
+    seedTwin("unstaged");
+    renderPane();
+    expect(screen.getAllByRole("button", { name: "Stage hunk" })).toHaveLength(2);
+    cleanup();
+
+    seedTwin("staged");
+    renderPane();
+    expect(screen.getAllByRole("button", { name: "Unstage hunk" })).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "Stage hunk" })).toBeNull();
+  });
+
+  it("offers nothing on a diff with no side, one read ignoring whitespace, or a new file", () => {
+    seedPanel({ filePath: "a.ts", fileStatus: "modified", changeSet: [entry("a.ts")] });
+    useDiffContentMock.mockReturnValue({ content: TWO_HUNKS, stale: false, retry: vi.fn() });
+    renderPane();
+    expect(screen.queryAllByTestId("hunk-actions")).toHaveLength(0);
+    cleanup();
+
+    seedTwin("unstaged");
+    useDiffContentMock.mockReturnValue({
+      content: TWO_HUNKS,
+      stale: false,
+      ignoreWhitespace: true,
+      retry: vi.fn(),
+    });
+    renderPane();
+    expect(screen.queryAllByTestId("hunk-actions")).toHaveLength(0);
+    cleanup();
+
+    seedTwin(
+      "staged",
+      "diff --git a/a.ts b/a.ts\nnew file mode 100644\nindex 0000000..2222222\n--- /dev/null\n+++ b/a.ts\n@@ -0,0 +1 @@\n+one\n"
+    );
+    renderPane();
+    expect(screen.queryAllByRole("button", { name: /stage hunk/i })).toHaveLength(0);
+  });
+
+  it("stages the git hunk under the button, as read, then reads the diff again", async () => {
+    const retry = seedTwin("unstaged");
+    const dispatch = stubDispatch({ ok: true, result: { status: "applied" } });
+    renderPane();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Stage hunk" })[1]!);
+
+    await waitFor(() => expect(retry).toHaveBeenCalled());
+    expect(dispatch).toHaveBeenCalledWith(
+      "git.stageHunk",
+      {
+        worktreeId: WORKTREE_ID,
+        filePath: "a.ts",
+        hunks: ["@@ -20,3 +20,3 @@ function f() {\n x\n-y\n+Y\n z"],
+      },
+      { source: "user" }
+    );
+    expect(screen.queryByText("Hunk changed since this diff loaded")).toBeNull();
+  });
+
+  it("reloads and says so when the hunk changed before it could be staged, even under the stale banner", async () => {
+    const retry = seedTwin("unstaged");
+    useDiffContentMock.mockReturnValue({
+      content: TWO_HUNKS,
+      stale: true,
+      ignoreWhitespace: false,
+      retry,
+    });
+    const dispatch = stubDispatch({ ok: true, result: { status: "stale" } });
+    renderPane();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Stage hunk" })[0]!);
+
+    expect(await screen.findByText("Hunk changed since this diff loaded")).toBeTruthy();
+    expect(dispatch.mock.calls[0]![0]).toBe("git.stageHunk");
+    expect(retry).toHaveBeenCalled();
+  });
+
+  it("unstages from the staged side and offers Retry when git fails", async () => {
+    seedTwin("staged");
+    const dispatch = stubDispatch({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "Another process holds the index" },
+    });
+    renderPane();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Unstage hunk" })[0]!);
+
+    expect(await screen.findByText("Couldn't unstage hunk")).toBeTruthy();
+    expect(dispatch.mock.calls[0]![0]).toBe("git.unstageHunk");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(dispatch).toHaveBeenCalledTimes(2));
+  });
+
+  it("neither reloads nor reports once the pane has moved to another file", async () => {
+    const retry = seedTwin("unstaged");
+    let answer!: (value: unknown) => void;
+    dispatchSpy = vi.spyOn(actionService, "dispatch").mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve;
+      }) as ReturnType<typeof actionService.dispatch>
+    );
+    const { rerender } = renderPane();
+    fireEvent.click(screen.getAllByRole("button", { name: "Stage hunk" })[0]!);
+
+    seedPanel({ filePath: "b.ts", fileStatus: "modified", changeSet: [entry("b.ts")] });
+    rerender(paneElement());
+    await act(async () => {
+      answer({ ok: true, result: { status: "stale" } });
+    });
+
+    expect(retry).not.toHaveBeenCalled();
+    expect(screen.queryByText("Hunk changed since this diff loaded")).toBeNull();
   });
 });

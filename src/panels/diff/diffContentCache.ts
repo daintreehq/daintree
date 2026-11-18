@@ -34,6 +34,13 @@ export interface CachedDiff {
 const diffCache = new Map<string, CachedDiff>();
 const inflightDiffRequests = new Map<string, Promise<CachedDiff | null>>();
 let diffCacheGeneration = 0;
+// Per file, bumped when its diffs are evicted, so a read that started before
+// the eviction can't put the old patch back when it lands.
+const fileEpochs = new Map<string, number>();
+
+function fileEpochKey(worktreePath: string, filePath: string): string {
+  return `${worktreePath}\u0000${filePath}`;
+}
 
 /** Identifies what to diff — the two fetch paths differ past this point. */
 export type DiffSubject =
@@ -64,7 +71,27 @@ export type DiffSubject =
 export function _resetDiffCacheForTests(): void {
   diffCache.clear();
   inflightDiffRequests.clear();
+  fileEpochs.clear();
   diffCacheGeneration++;
+}
+
+/**
+ * Drop every working-tree, staged and unstaged diff of one file, and any read
+ * of one still in flight. Staging a hunk moves the index under both sides
+ * without touching the file, so the freshness key, which reads the file's
+ * status, time and line counts, never notices.
+ */
+export function evictCachedDiffsForFile(worktreePath: string, filePath: string): void {
+  const epochKey = fileEpochKey(worktreePath, filePath);
+  fileEpochs.set(epochKey, (fileEpochs.get(epochKey) ?? 0) + 1);
+  const prefixes = (["working-tree", "staged", "unstaged"] as const).map((source) =>
+    [source, worktreePath, filePath, ""].join("\u0000")
+  );
+  for (const map of [diffCache, inflightDiffRequests]) {
+    for (const key of [...map.keys()]) {
+      if (prefixes.some((prefix) => key.startsWith(prefix))) map.delete(key);
+    }
+  }
 }
 
 export function diffCacheKey(subject: DiffSubject, ignoreWhitespace: boolean): string {
@@ -209,12 +236,16 @@ export function requestDiff(
     if (inflight) return inflight;
   }
   const generation = diffCacheGeneration;
+  const epochKey = fileEpochKey(subject.worktreePath, subject.filePath);
+  const epoch = fileEpochs.get(epochKey);
   const request = fetchDiffContent(subject, ignoreWhitespace)
     .then((fetched) => {
       if (fetched === null) return null;
       const entry: CachedDiff = { content: fetched.content, freshnessKey };
       if (fetched.sinceReview) entry.sinceReview = fetched.sinceReview;
-      if (cacheable && generation === diffCacheGeneration) cacheDiff(key, entry);
+      if (cacheable && generation === diffCacheGeneration && epoch === fileEpochs.get(epochKey)) {
+        cacheDiff(key, entry);
+      }
       return entry;
     })
     .finally(() => {

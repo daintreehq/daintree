@@ -7,7 +7,12 @@ const dispatchMock = vi.hoisted(() =>
 );
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: dispatchMock } }));
 
-import { _resetDiffCacheForTests, peekCachedDiff, requestDiff } from "../diffContentCache";
+import {
+  _resetDiffCacheForTests,
+  evictCachedDiffsForFile,
+  peekCachedDiff,
+  requestDiff,
+} from "../diffContentCache";
 import { GIT_FILE_DIFF_MAX_BYTES } from "@shared/config/gitReadLimits";
 
 const compareWorktreesMock = vi.fn<(...args: unknown[]) => Promise<string>>();
@@ -203,5 +208,48 @@ describe("diffContentCache — since-review subjects", () => {
 
     expect(fileSince).toHaveBeenCalledWith("/repo", { path: "src/a.ts" });
     expect(entry?.content).toBe("NO_CHANGES");
+  });
+});
+
+describe("diffContentCache — evicting one file's diffs (#17331)", () => {
+  const side = (source: "staged" | "unstaged", filePath = "src/a.ts"): DiffSubject => ({
+    source,
+    worktreePath: "/repo",
+    filePath,
+    status: "modified",
+  });
+
+  it("drops both sides and the working-tree diff of that file, and no other file's", async () => {
+    await requestDiff(side("staged"), false);
+    await requestDiff(side("unstaged"), true);
+    await requestDiff(workingTree("src/a.ts"), false);
+    await requestDiff(side("staged", "src/b.ts"), false);
+
+    evictCachedDiffsForFile("/repo", "src/a.ts");
+
+    expect(peekCachedDiff(side("staged"), false)).toBeUndefined();
+    expect(peekCachedDiff(side("unstaged"), true)).toBeUndefined();
+    expect(peekCachedDiff(workingTree("src/a.ts"), false)).toBeUndefined();
+    expect(peekCachedDiff(side("staged", "src/b.ts"), false)).toBeDefined();
+  });
+
+  it("keeps a read that started before the eviction from putting the old diff back", async () => {
+    let answer!: (value: { ok: true; result: unknown }) => void;
+    dispatchMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answer = resolve;
+      })
+    );
+    const before = requestDiff(side("unstaged"), false);
+
+    evictCachedDiffsForFile("/repo", "src/a.ts");
+    // A read after the eviction is a new request, not the one still in flight.
+    const after = requestDiff(side("unstaged"), false);
+    expect(after).not.toBe(before);
+    await after;
+    answer({ ok: true, result: { content: "old diff body", truncated: false } });
+    await before;
+
+    expect(peekCachedDiff(side("unstaged"), false)?.content).toBe("diff body");
   });
 });

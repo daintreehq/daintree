@@ -106,6 +106,7 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
 import { useDiffContent } from "./useDiffContent";
+import { HunkStagingBanner, useHunkStaging } from "./useHunkStaging";
 import { useDiffFileSource } from "./useDiffFileSource";
 import { getFullFileAvailability } from "./fullFileAvailability";
 import { isGitlinkPatch } from "./gitlinkPatch";
@@ -520,11 +521,13 @@ export function DiffPane({
     [renderedRequested]
   );
 
-  const { content, sinceReview, stale, retry } = useDiffContent(
-    subject,
-    nextSubject,
-    renderedContentOptions
-  );
+  const {
+    content,
+    sinceReview,
+    stale,
+    ignoreWhitespace: contentIgnoresWhitespace,
+    retry,
+  } = useDiffContent(subject, nextSubject, renderedContentOptions);
   const isSinceReview = effectiveSource === "since-review";
   const sinceReviewNotice = useMemo(
     () => (isSinceReview && sinceReview ? describeSinceReviewNotice(sinceReview) : null),
@@ -974,6 +977,18 @@ export function DiffPane({
     setPreviewReloadNonce((nonce) => nonce + 1);
   }, [retry]);
 
+  // Review Hub opens each row on its own side; every other diff has none.
+  const hunkStaging = useHunkStaging({
+    content: hasDiff ? content : undefined,
+    side:
+      effectiveSource === "staged" || effectiveSource === "unstaged" ? effectiveSource : undefined,
+    ignoreWhitespace: contentIgnoresWhitespace,
+    worktreeId,
+    worktreePath,
+    filePath,
+    onReload: refreshAll,
+  });
+
   // One line explaining why a requested whole-file view isn't on screen. The
   // read failure wins over the viewer's verdict: without content the viewer
   // never got far enough to have one. `recoverable` marks the notices a refresh
@@ -1373,6 +1388,9 @@ export function DiffPane({
         />
       ) : (
         <>
+          {hunkStaging.notice && (
+            <HunkStagingBanner notice={hunkStaging.notice} onDismiss={hunkStaging.dismissNotice} />
+          )}
           {stale && hasDiff && (
             <InlineStatusBanner
               severity="info"
@@ -1636,6 +1654,7 @@ export function DiffPane({
                   fullFile={wantsFullFile}
                   onFullFileVerdict={handleFullFileVerdict}
                   wrapLines={effectiveWrapLines}
+                  renderHunkActions={hunkStaging.renderHunkActions}
                   onRetry={retry}
                   onShowWhitespaceChanges={
                     showWhitespaceToggle && diffIgnoreWhitespace

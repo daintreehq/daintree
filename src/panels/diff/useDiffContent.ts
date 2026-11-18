@@ -32,6 +32,8 @@ export interface UseDiffContentResult {
   sinceReview: ReviewMarkFileSinceOutcome | undefined;
   /** The store saw the file change after the shown diff was fetched. */
   stale: boolean;
+  /** Whether `content` was read with whitespace changes left out. */
+  ignoreWhitespace: boolean;
   retry: () => void;
 }
 
@@ -199,5 +201,7 @@ export function useDiffContent(
       ? contentEntry.sinceReview
       : undefined;
 
-  return { content, sinceReview, stale, retry };
+  // `content` is read through a tag that includes the flag, so it was always
+  // fetched under the one in force now.
+  return { content, sinceReview, stale, ignoreWhitespace, retry };
 }

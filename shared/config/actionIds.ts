@@ -206,6 +206,8 @@ export const BUILT_IN_ACTION_IDS = [
   "git.listCommits",
   "git.stageFile",
   "git.unstageFile",
+  "git.stageHunk",
+  "git.unstageHunk",
   "git.discardFileChanges",
   "git.stageAll",
   "git.unstageAll",
