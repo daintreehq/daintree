@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // --- Mocks (hoisted so vi.mock factories can reference them) ---------------
 
@@ -704,6 +704,76 @@ describe("ProjectRelocationCoordinator — case-only rename", () => {
       coordinator.relocate({ projectId: PROJECT_ID, mode: "move", newPath: CASE_ROOT })
     ).rejects.toMatchObject({ reason: "destination-exists" });
     expect(fsState.renameCalls).toEqual([]);
+  });
+
+  describe("destination folder-name length", () => {
+    const platform = process.platform;
+    const setPlatform = (value: string) =>
+      Object.defineProperty(process, "platform", { value, configurable: true });
+
+    afterEach(() => {
+      setPlatform(platform);
+    });
+
+    const expectRefusedBeforeQuiesce = async (newPath: string) => {
+      const deps = makeDeps(makePvm(PROJECT_ID));
+      const coordinator = new ProjectRelocationCoordinator();
+      configure(coordinator, deps);
+
+      await expect(
+        coordinator.relocate({ projectId: PROJECT_ID, mode: "move", newPath })
+      ).rejects.toMatchObject({ reason: "invalid-destination" });
+
+      const preview = await coordinator.previewRelocate({
+        projectId: PROJECT_ID,
+        mode: "move",
+        newPath,
+      });
+      expect(preview.blockers.map((blocker) => blocker.reason)).toEqual(["invalid-destination"]);
+      // Neither the apply nor the preview may have touched the running project.
+      expect(deps.ptyClient.gracefulKillByProject).not.toHaveBeenCalled();
+      expect(deps.worktreeService.evictProjectForRelocation).not.toHaveBeenCalled();
+      expect(fsState.renameCalls).toEqual([]);
+    };
+
+    it("rejects a name over 255 characters before anything is stopped", async () => {
+      await expectRefusedBeforeQuiesce(`/vol/projects/${"a".repeat(256)}`);
+    });
+
+    it("rejects a 300-byte multibyte name on Linux before anything is stopped", async () => {
+      setPlatform("linux");
+      await expectRefusedBeforeQuiesce(`/vol/projects/${"あ".repeat(100)}`);
+    });
+
+    it("moves to a multibyte name that fits in 255 bytes on Linux", async () => {
+      setPlatform("linux");
+      const newPath = `/vol/projects/${"あ".repeat(85)}`;
+      const coordinator = new ProjectRelocationCoordinator();
+      configure(coordinator, makeDeps(makePvm(PROJECT_ID)));
+
+      await coordinator.relocate({ projectId: PROJECT_ID, mode: "move", newPath });
+      expect(fsState.renameCalls).toEqual([{ from: OLD_ROOT, to: newPath }]);
+    });
+
+    it("moves to the same 300-byte name where names are counted in characters", async () => {
+      setPlatform("darwin");
+      const newPath = `/vol/projects/${"あ".repeat(100)}`;
+      const coordinator = new ProjectRelocationCoordinator();
+      configure(coordinator, makeDeps(makePvm(PROJECT_ID)));
+
+      await coordinator.relocate({ projectId: PROJECT_ID, mode: "move", newPath });
+      expect(fsState.renameCalls).toEqual([{ from: OLD_ROOT, to: newPath }]);
+    });
+
+    it("leaves the rest of the naming policy alone: only length is checked", async () => {
+      setPlatform("linux");
+      const newPath = "/vol/projects/report:2026";
+      const coordinator = new ProjectRelocationCoordinator();
+      configure(coordinator, makeDeps(makePvm(PROJECT_ID)));
+
+      await coordinator.relocate({ projectId: PROJECT_ID, mode: "move", newPath });
+      expect(fsState.renameCalls).toEqual([{ from: OLD_ROOT, to: newPath }]);
+    });
   });
 
   it("blocks an existing non-case-variant destination (unchanged behavior)", async () => {

@@ -671,6 +671,23 @@ describe("source side", () => {
   });
 });
 
+describe("cloneAndOpen staging", () => {
+  it("clones into a folder name at the directory-entry limit", async () => {
+    const host = createTestHost(root, "long-name");
+    const destination = path.join(root, "long-name-home", "n".repeat(255));
+    const outcome = await host.service.cloneAndOpen({
+      opId: nextOpId(),
+      source: { kind: "remote", url: URL },
+      destination,
+      branch: null,
+      options: { submodules: false, depth: "full" },
+      setupRecipeId: null,
+    });
+    expect(outcome).toMatchObject({ ok: true, projectPath: destination });
+    expect(fs.existsSync(path.join(destination, ".git"))).toBe(true);
+  });
+});
+
 describe("clones racing for one folder", () => {
   const stagingLeft = (parent: string) =>
     fs.readdirSync(parent).filter((name) => name.includes(".daintree-clone-"));

@@ -2,10 +2,24 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DestinationCheck } from "../../../shared/types/ipc/projectMatch.js";
 import { normalizeGitRemoteUrls } from "../../../shared/utils/gitRemoteUrl.js";
-import { validateFolderName } from "../../../shared/utils/folderName.js";
+import { folderNameLengthError, validateFolderName } from "../../../shared/utils/folderName.js";
 import { parseConfigRemotes } from "./gitOps.js";
 
 const MAX_SUFFIX = 50;
+
+/**
+ * The first folder in `resolved`, root aside, too long for a directory entry
+ * here. Measured as written: the name validator trims, and a path another
+ * machine chose can carry a parent folder this one can't hold, which `lstat`
+ * and `realpath` answer with ENAMETOOLONG.
+ */
+function pathLengthError(resolved: string): string | null {
+  for (const segment of resolved.slice(path.parse(resolved).root.length).split(path.sep)) {
+    const error = folderNameLengthError(segment);
+    if (error) return error;
+  }
+  return null;
+}
 
 async function readRemotesAt(dir: string): Promise<Array<{ url: string }> | null> {
   const config = await fs.readFile(path.join(dir, ".git", "config"), "utf8").catch(() => null);
@@ -16,7 +30,9 @@ async function nextFreeSibling(target: string): Promise<string | null> {
   const parent = path.dirname(target);
   const base = path.basename(target);
   for (let n = 2; n <= MAX_SUFFIX; n++) {
-    const candidate = path.join(parent, `${base}-${n}`);
+    const name = `${base}-${n}`;
+    if (folderNameLengthError(name)) continue;
+    const candidate = path.join(parent, name);
     const stat = await fs.lstat(candidate).catch(() => null);
     if (!stat) return candidate;
   }
@@ -44,7 +60,7 @@ export async function checkDestination(
   if (!path.isAbsolute(target)) return invalid("Use a full path, starting from /.");
   const resolved = path.resolve(target);
   if (path.parse(resolved).root === resolved) return invalid("Pick a folder, not the disk root.");
-  const nameError = validateFolderName(path.basename(resolved));
+  const nameError = validateFolderName(path.basename(resolved)) ?? pathLengthError(resolved);
   if (nameError) return invalid(nameError);
 
   const stat = await fs.lstat(resolved).catch(() => null);
@@ -200,8 +216,12 @@ export async function suggestDestination(input: {
       : null;
   if (rel && isMirrorableHomePath(rel, projectsUnderHome)) {
     const mirrored = path.join(input.homeDir, ...rel.split(/[\\/]/).filter(Boolean));
-    const real = path.relative(realHome, await canonicalPath(mirrored));
+    // A folder this machine can't hold would fail realpath, not just the clone.
+    const real = pathLengthError(mirrored)
+      ? null
+      : path.relative(realHome, await canonicalPath(mirrored));
     if (
+      real !== null &&
       !real.startsWith("..") &&
       isMirrorableHomePath(real.split(path.sep).join("/"), projectsUnderHome)
     ) {
