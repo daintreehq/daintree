@@ -66,37 +66,6 @@ describe("buildTerminalInventory", () => {
   });
 });
 
-// #17776: restore used to send one request for the ids and one per terminal.
-describe("restore inventory request count", () => {
-  beforeEach(() => _resetTerminalInventoryPrefetchForTests());
-  afterEach(() => _resetTerminalInventoryPrefetchForTests());
-
-  function client(count: number) {
-    const ids = Array.from({ length: count }, (_, i) => `t${count - i}`);
-    return {
-      ids,
-      ptyClient: { getProjectTerminalsAsync: vi.fn(async () => ids.map((id) => terminal(id))) },
-    };
-  }
-
-  it.each([1, 32, 64])("reads %i panes in one request without a prefetch", async (count) => {
-    const { ids, ptyClient } = client(count);
-    expect(consumeTerminalInventoryPrefetch("p1")).toBeNull();
-    const inventory = await buildTerminalInventory(ptyClient, "p1");
-    expect(inventory.map((t) => t.id)).toEqual(ids);
-    expect(ptyClient.getProjectTerminalsAsync).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([1, 32, 64])("reads %i panes in one request on a prefetch hit", async (count) => {
-    const { ids, ptyClient } = client(count);
-    void prefetchTerminalInventory("p1", (id) => buildTerminalInventory(ptyClient, id));
-    const prefetched = consumeTerminalInventoryPrefetch("p1");
-    expect(prefetched).not.toBeNull();
-    expect((await prefetched!).map((t) => t.id)).toEqual(ids);
-    expect(ptyClient.getProjectTerminalsAsync).toHaveBeenCalledTimes(1);
-  });
-});
-
 describe("prefetchTerminalInventory", () => {
   beforeEach(() => {
     _resetTerminalInventoryPrefetchForTests();

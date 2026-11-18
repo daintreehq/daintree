@@ -516,28 +516,16 @@ describe("terminal:get-for-project handler", () => {
 
   it("excludes dev-preview PTYs from getForProject results", async () => {
     const ptyClient = {
-      getTerminalsForProjectAsync: vi.fn(async () => ["t-visible", "t-dev-preview"]),
-      getTerminalAsync: vi.fn(async (id: string) => {
-        if (id === "t-visible") {
-          return {
-            id,
-            kind: "terminal",
-            type: "terminal",
-            cwd: "/tmp",
-            spawnedAt: Date.now(),
-          };
-        }
-        if (id === "t-dev-preview") {
-          return {
-            id,
-            kind: "dev-preview",
-            type: "terminal",
-            cwd: "/tmp",
-            spawnedAt: Date.now(),
-          };
-        }
-        return null;
-      }),
+      getProjectTerminalsAsync: vi.fn(async () => [
+        { id: "t-visible", kind: "terminal", type: "terminal", cwd: "/tmp", spawnedAt: Date.now() },
+        {
+          id: "t-dev-preview",
+          kind: "dev-preview",
+          type: "terminal",
+          cwd: "/tmp",
+          spawnedAt: Date.now(),
+        },
+      ]),
     };
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -558,8 +546,8 @@ describe("terminal:get-for-project handler", () => {
     expect(Array.isArray(result)).toBe(true);
     expect(result).toHaveLength(1);
     expect((result[0] as { id: string }).id).toBe("t-visible");
-    expect(ptyClient.getTerminalsForProjectAsync).toHaveBeenCalledWith("project-1");
-    expect(ptyClient.getTerminalAsync).toHaveBeenCalledTimes(2);
+    expect(ptyClient.getProjectTerminalsAsync).toHaveBeenCalledWith("project-1");
+    expect(ptyClient.getProjectTerminalsAsync).toHaveBeenCalledTimes(1);
   });
 
   it("passes through trash metadata when present", async () => {
@@ -567,31 +555,25 @@ describe("terminal:get-for-project handler", () => {
     const expiresAt = now + 120000;
 
     const ptyClient = {
-      getTerminalsForProjectAsync: vi.fn(async () => ["t-active", "t-will-expire"]),
-      getTerminalAsync: vi.fn(async (id: string) => {
-        if (id === "t-active") {
-          return {
-            id,
-            kind: "terminal",
-            type: "terminal",
-            cwd: "/tmp",
-            spawnedAt: now,
-            isTrashed: false,
-          };
-        }
-        if (id === "t-will-expire") {
-          return {
-            id,
-            kind: "terminal",
-            type: "terminal",
-            cwd: "/tmp",
-            spawnedAt: now,
-            isTrashed: false,
-            trashExpiresAt: expiresAt,
-          };
-        }
-        return null;
-      }),
+      getProjectTerminalsAsync: vi.fn(async () => [
+        {
+          id: "t-active",
+          kind: "terminal",
+          type: "terminal",
+          cwd: "/tmp",
+          spawnedAt: now,
+          isTrashed: false,
+        },
+        {
+          id: "t-will-expire",
+          kind: "terminal",
+          type: "terminal",
+          cwd: "/tmp",
+          spawnedAt: now,
+          isTrashed: false,
+          trashExpiresAt: expiresAt,
+        },
+      ]),
     };
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -637,14 +619,15 @@ describe("terminal:get-for-project handler", () => {
     mockIsHelpTerminal.mockImplementation((id: string) => id === "t-help");
 
     const ptyClient = {
-      getTerminalsForProjectAsync: vi.fn(async () => ["t-visible", "t-help", "t-dev-preview"]),
-      getTerminalAsync: vi.fn(async (id: string) => ({
-        id,
-        kind: id === "t-dev-preview" ? "dev-preview" : "agent",
-        type: "terminal",
-        cwd: "/tmp",
-        spawnedAt: Date.now(),
-      })),
+      getProjectTerminalsAsync: vi.fn(async () =>
+        ["t-visible", "t-help", "t-dev-preview"].map((id) => ({
+          id,
+          kind: id === "t-dev-preview" ? "dev-preview" : "agent",
+          type: "terminal",
+          cwd: "/tmp",
+          spawnedAt: Date.now(),
+        }))
+      ),
     };
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -674,15 +657,16 @@ describe("terminal:get-for-project handler", () => {
     // so every other suite stays green while the fix goes inert and restored
     // panes silently fall back to 80×24.
     const ptyClient = {
-      getTerminalsForProjectAsync: vi.fn(async () => ["t-sized", "t-unknown"]),
-      getTerminalAsync: vi.fn(async (id: string) => ({
-        id,
-        kind: "terminal",
-        type: "terminal",
-        cwd: "/tmp",
-        spawnedAt: Date.now(),
-        ...(id === "t-sized" ? { ptyCols: 203, ptyRows: 51 } : {}),
-      })),
+      getProjectTerminalsAsync: vi.fn(async () =>
+        ["t-sized", "t-unknown"].map((id) => ({
+          id,
+          kind: "terminal",
+          type: "terminal",
+          cwd: "/tmp",
+          spawnedAt: Date.now(),
+          ...(id === "t-sized" ? { ptyCols: 203, ptyRows: 51 } : {}),
+        }))
+      ),
     };
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -713,15 +697,16 @@ describe("terminal:get-for-project handler", () => {
     // value — a refactor to a spread would now let the backend win a placement
     // decision that belongs to the renderer's saved layout state alone.
     const ptyClient = {
-      getTerminalsForProjectAsync: vi.fn(async () => ["t-worktreed"]),
-      getTerminalAsync: vi.fn(async (id: string) => ({
-        id,
-        kind: "terminal",
-        type: "terminal",
-        cwd: "/repo/.worktrees/backend",
-        spawnedAt: Date.now(),
-        worktreeId: "/repo/.worktrees/backend",
-      })),
+      getProjectTerminalsAsync: vi.fn(async () => [
+        {
+          id: "t-worktreed",
+          kind: "terminal",
+          type: "terminal",
+          cwd: "/repo/.worktrees/backend",
+          spawnedAt: Date.now(),
+          worktreeId: "/repo/.worktrees/backend",
+        },
+      ]),
     };
 
     const deps = { ptyClient } as unknown as HandlerDependencies;

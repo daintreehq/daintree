@@ -2749,14 +2749,20 @@ export class PtyClient extends EventEmitter {
    * owns the project, where `getTerminalsForProjectAsync` plus a
    * `getTerminalAsync` per id costs a request per terminal (#17776). Resolves
    * `[]` when the host doesn't answer, as the id read does.
+   *
+   * A record counts only when this shard still owns its id, where every
+   * id-based call for it goes. A preserved exit lingers on its old shard after
+   * the id respawns on another (#16811), and restore must not rebuild that dead
+   * record in place of the live one.
    */
   async getProjectTerminalsAsync(projectId: string): Promise<TerminalInfoResponse[]> {
     const shard = this.shardForProjectQuery(projectId);
-    return sendPtyHostRpc<TerminalInfoResponse[]>(
+    const terminals = await sendPtyHostRpc<TerminalInfoResponse[]>(
       shard,
       `project-terminals-${projectId}`,
       (requestId) => ({ type: "get-project-terminals", projectId, requestId })
     ).catch(() => []);
+    return terminals.filter((terminal) => this.shardForTerminal(terminal.id) === shard);
   }
 
   /**
