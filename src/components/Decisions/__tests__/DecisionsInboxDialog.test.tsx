@@ -16,6 +16,7 @@ import type {
   DecisionQuestionSummariesResult,
   DeclineDecisionQuestionPayload,
 } from "@shared/types/decisionsQuestion";
+import type { DecisionsInvolvementRead } from "@shared/types/decisionsInvolvement";
 import type { BackendTerminalInfo } from "@shared/types/ipc/terminal";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
@@ -83,6 +84,7 @@ const declineQuestion =
   vi.fn<(payload: DeclineDecisionQuestionPayload) => Promise<DecisionQuestionDeclineResult>>();
 const getDeclineResult =
   vi.fn<(payload: { declineId: string }) => Promise<DecisionDeclineResultRead>>();
+const getInvolvement = vi.fn<() => Promise<DecisionsInvolvementRead>>();
 let listListeners: Array<(list: DecisionQuestionList) => void> = [];
 let statusListeners: Array<(status: DecisionsStatus) => void> = [];
 
@@ -251,6 +253,24 @@ beforeEach(() => {
   }));
   getDeclineResult.mockReset().mockResolvedValue({ result: "not-found" });
   useDecisionsAnswerStore.getState().clear();
+  getInvolvement.mockReset().mockResolvedValue({
+    result: "read",
+    role: "owner",
+    settable: true,
+    preference: {
+      status: "available",
+      normalMode: "recommend",
+      consultCount: 2,
+      override: null,
+      mode: "recommend",
+      overrideActive: false,
+      revision: 3,
+      setOn: "phone",
+      setAt: "2026-11-18T09:00:00.000Z",
+      lastSyncedAt: "2026-11-18T09:59:00.000Z",
+      stale: false,
+    },
+  });
   getAllTerminals.mockReset().mockResolvedValue([]);
   dispatch.mockReset().mockResolvedValue({ ok: true });
   Reflect.set(window, "electron", {
@@ -262,6 +282,7 @@ beforeEach(() => {
       cancelQuestionByReference,
       declineQuestion,
       getDeclineResult,
+      getInvolvement,
     },
     events: {
       on: (
@@ -364,6 +385,25 @@ describe("DecisionsInboxDialog", () => {
     expect(document.activeElement?.tagName).not.toBe("BUTTON");
     await act(async () => resolveList(LIST));
     await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
+  });
+
+  it("shows what agents are told beneath the questions, keeping the first focus on the list", async () => {
+    open();
+    await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
+    await waitFor(() =>
+      expect(screen.getByTestId("decisions-involvement-mode").textContent).toBe(
+        "Bring a recommendation"
+      )
+    );
+    expect(screen.getByTestId("decisions-involvement-change")).not.toBeNull();
+    expect(document.activeElement).toBe(rowNamed("q-2"));
+  });
+
+  it("reads the preference only while open and on", async () => {
+    decisionsOn = false;
+    open();
+    await screen.findByRole("dialog");
+    expect(getInvolvement).not.toHaveBeenCalled();
   });
 
   it("starts at the question of the pane that opened it", async () => {

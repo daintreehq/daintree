@@ -532,6 +532,9 @@ export interface GeneratedElectronAPI {
     getFollowUpResult(
       ...args: IpcInvokeMap["decisions:get-follow-up-result"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-follow-up-result"]["result"]>;
+    getInvolvement(
+      ...args: IpcInvokeMap["decisions:get-involvement"]["args"]
+    ): Promise<IpcInvokeMap["decisions:get-involvement"]["result"]>;
     getModel(
       ...args: IpcInvokeMap["decisions:get-model"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-model"]["result"]>;
@@ -625,6 +628,9 @@ export interface GeneratedElectronAPI {
     setHoldPhonePushes(
       ...args: IpcInvokeMap["decisions:set-hold-phone-pushes"]["args"]
     ): Promise<IpcInvokeMap["decisions:set-hold-phone-pushes"]["result"]>;
+    setInvolvement(
+      ...args: IpcInvokeMap["decisions:set-involvement"]["args"]
+    ): Promise<IpcInvokeMap["decisions:set-involvement"]["result"]>;
     setModel(
       ...args: IpcInvokeMap["decisions:set-model"]["args"]
     ): Promise<IpcInvokeMap["decisions:set-model"]["result"]>;

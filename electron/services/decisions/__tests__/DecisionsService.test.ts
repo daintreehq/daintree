@@ -35,6 +35,10 @@ import type {
   DecisionQuestionListItem,
   SendDecisionFollowUpPayload,
 } from "../../../../shared/types/decisionsQuestion.js";
+import type {
+  DecisionsInvolvementRead,
+  SetDecisionsInvolvementPayload,
+} from "../../../../shared/types/decisionsInvolvement.js";
 import { HANDLED_ANSWERS_META_KEY } from "../attentionList.js";
 import type { LearnedDecision, QuestionRow } from "@daintreehq/decisions-client";
 import {
@@ -1275,6 +1279,7 @@ describe("DecisionsService relay connection", () => {
     const declineReads: Array<{ route: number; declineId: string }> = [];
     const followUps: Array<{ route: number; payload: unknown; hostId: string | null }> = [];
     const followUpReads: Array<{ route: number; messageId: string }> = [];
+    const involvement: Array<{ route: number; change: SetDecisionsInvolvementPayload | null }> = [];
     const openQuestions = (source: QuestionSource, previous: Promise<void>) => {
       let release!: () => void;
       const released = new Promise<void>((resolve) => {
@@ -1334,6 +1339,27 @@ describe("DecisionsService relay connection", () => {
           followUpReads.push({ route: opened.indexOf(record) + 1, messageId });
           return { result: "not-found" as const };
         },
+        involvementForPerson: async (): Promise<DecisionsInvolvementRead> => {
+          const route = opened.indexOf(record) + 1;
+          involvement.push({ route, change: null });
+          // Each route's revision is its own, so a read can be traced to the route that gave it.
+          return {
+            result: "read",
+            role: "owner",
+            settable: true,
+            preference: {
+              status: "unavailable",
+              reason: "not-set",
+              revision: route,
+              lastSyncedAt: null,
+              stale: false,
+            },
+          };
+        },
+        setInvolvementForPerson: async (change: SetDecisionsInvolvementPayload) => {
+          involvement.push({ route: opened.indexOf(record) + 1, change });
+          return { result: "saved" as const, revision: change.expectedRevision + 1 };
+        },
         close: () => {
           record.closed += 1;
           events.push(`questions closed ${opened.indexOf(record) + 1}`);
@@ -1353,6 +1379,7 @@ describe("DecisionsService relay connection", () => {
       declineReads,
       followUps,
       followUpReads,
+      involvement,
     };
   }
 
@@ -1581,6 +1608,40 @@ describe("DecisionsService relay connection", () => {
     await service.stop();
     await expect(service.sendFollowUp(payload)).resolves.toEqual({ result: "not-running" });
     expect(routes.followUps).toHaveLength(1);
+  });
+
+  it("reads and changes the person's involvement preference on the current route only (#17237)", async () => {
+    const routes = questionRoutes();
+    const { service, made } = connected(undefined, routes.openQuestions);
+    const change: SetDecisionsInvolvementPayload = {
+      expectedRevision: 2,
+      normalMode: "involve-early",
+      consultCount: 1,
+      override: null,
+    };
+    await service.start(on(RELAY));
+    await expect(service.getInvolvement()).resolves.toEqual({ result: "not-running" });
+    await expect(service.setInvolvement(change)).resolves.toEqual({ result: "not-running" });
+    expect(routes.involvement).toEqual([]);
+
+    made[0]!.options.onQuestionsReady!(SOURCE);
+    await expect(service.getInvolvement()).resolves.toMatchObject({
+      result: "read",
+      preference: { revision: 1 },
+    });
+    await expect(service.setInvolvement(change)).resolves.toEqual({
+      result: "saved",
+      revision: 3,
+    });
+    expect(routes.involvement).toEqual([
+      { route: 1, change: null },
+      { route: 1, change },
+    ]);
+
+    for (const route of routes.opened) route.release();
+    await service.stop();
+    await expect(service.setInvolvement(change)).resolves.toEqual({ result: "not-running" });
+    expect(routes.involvement).toHaveLength(2);
   });
 
   it("hands a launch the route's port once the connection opens it, waiting while its identity loads", async () => {

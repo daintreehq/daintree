@@ -490,6 +490,14 @@ export function AppDialog({
     }
   }, [isOpen, effectiveInitialFocus, restoreFocus]);
 
+  // What the last commit asked for, read by a frame queued before it: React flushes passive effects
+  // in a later task than the commit, so a frame can run in between, and must leave a newer request to
+  // the frame its own effect queues rather than pay it with the focus it was queued for.
+  const committedInitialFocusRef = useRef(effectiveInitialFocus);
+  useLayoutEffect(() => {
+    committedInitialFocusRef.current = effectiveInitialFocus;
+  }, [effectiveInitialFocus]);
+
   const focusResetKeyRef = useRef(focusResetKey);
   useLayoutEffect(() => {
     if (focusResetKeyRef.current === focusResetKey) return;
@@ -506,6 +514,12 @@ export function AppDialog({
     const frame = requestAnimationFrame(() => {
       const root = dialogRef.current;
       if (!root || !initialFocusOwedRef.current) return;
+      if (
+        focusResetKeyRef.current !== focusResetKey ||
+        committedInitialFocusRef.current !== effectiveInitialFocus
+      ) {
+        return;
+      }
       initialFocusOwedRef.current = false;
       // A consumer that focuses its own field on open (UpdateCwdDialog,
       // CreateProjectFolderDialog) has already placed focus inside by the time

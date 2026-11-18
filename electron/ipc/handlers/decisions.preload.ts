@@ -18,6 +18,8 @@ export const DECISIONS_METHOD_CHANNELS = {
   getDeclineResult: "decisions:get-decline-result",
   sendFollowUp: "decisions:send-follow-up",
   getFollowUpResult: "decisions:get-follow-up-result",
+  getInvolvement: "decisions:get-involvement",
+  setInvolvement: "decisions:set-involvement",
   setEnabled: "decisions:set-enabled",
   checkRelay: "decisions:check-relay",
   claimRelay: "decisions:claim-relay",

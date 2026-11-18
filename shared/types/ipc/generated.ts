@@ -942,6 +942,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisionsQuestion.js").GetDecisionFollowUpResultPayload];
     result: import("../decisionsQuestion.js").DecisionFollowUpResultRead;
   };
+  "decisions:get-involvement": {
+    args: [];
+    result: import("../decisionsInvolvement.js").DecisionsInvolvementRead;
+  };
   "decisions:get-model": {
     args: [];
     result: import("../decisionsModel.js").DecisionsModelState;
@@ -1067,6 +1071,10 @@ export interface GeneratedIpcInvokeMap {
   "decisions:set-hold-phone-pushes": {
     args: [enabled: boolean];
     result: import("../decisions.js").DecisionsStatus;
+  };
+  "decisions:set-involvement": {
+    args: [payload: import("../decisionsInvolvement.js").SetDecisionsInvolvementPayload];
+    result: import("../decisionsInvolvement.js").DecisionsInvolvementSaveResult;
   };
   "decisions:set-model": {
     args: [payload: import("../decisionsModel.js").SetDecisionsModelPayload];

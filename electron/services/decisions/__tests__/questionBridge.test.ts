@@ -9,8 +9,10 @@ import {
   paneIdentityOf,
   type DecisionsBridge,
   type Identity,
+  type InvolvementPreference,
   type InvolvementView,
   type QuestionOrigin,
+  type SetInvolvementResult,
   type StoredIdentity,
 } from "@daintreehq/decisions-client";
 import {
@@ -135,6 +137,25 @@ function liveBridge() {
       lastSyncedAt: "2026-11-17T09:00:05.000Z",
       stale: false,
     })),
+    getInvolvementPreference: vi.fn(async (): Promise<InvolvementPreference> => ({
+      status: "available",
+      normalMode: "recommend",
+      consultCount: 2,
+      override: { mode: "involve-early", until: "2026-11-17T12:00:00.000Z" },
+      mode: "involve-early",
+      overrideActive: true,
+      revision: 3,
+      setOn: "phone",
+      setAt: "2026-11-17T09:00:00.000Z",
+      lastSyncedAt: "2026-11-17T09:00:05.000Z",
+      stale: false,
+    })),
+    setInvolvementPreference: vi.fn(
+      async (input: { expectedRevision: number }): Promise<SetInvolvementResult> => ({
+        status: "saved",
+        revision: input.expectedRevision + 1,
+      })
+    ),
   };
 }
 
@@ -764,6 +785,448 @@ describe("QuestionBridge", () => {
 
       await expect(b.getInvolvement()).rejects.toMatchObject({ code: "forbidden" });
       expect(live.getInvolvement).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("the person's involvement preference (#17237)", () => {
+    const HOUR = 60 * 60 * 1000;
+
+    /** The copy an attempt keeps once it has verified a phone's preference with the relay. */
+    async function verifiedCopy(
+      override: { mode: "involve-early" | "recommend"; until: string } | null,
+      extra: Record<string, unknown> = {}
+    ): Promise<void> {
+      const phone = await generateDeviceKeys(false);
+      const record = await buildSignedInvolvement({
+        installationId: identity!.config.installationId,
+        signerDeviceId: "dev_phone_1234",
+        signingKey: phone.signing.privateKey,
+        revision: 4,
+        normalMode: "involve-early",
+        consultCount: 1,
+        override,
+        createdAt: "2026-11-17T08:00:00.000Z",
+      });
+      await store.setMeta(
+        INVOLVEMENT_META,
+        JSON.stringify({
+          record,
+          high_water: 4,
+          synced_at: Date.parse("2026-11-17T08:30:00.000Z"),
+          set_on: "phone",
+          ...extra,
+        })
+      );
+    }
+
+    function change(over: Record<string, unknown> = {}) {
+      return {
+        expectedRevision: 3,
+        normalMode: "recommend" as const,
+        consultCount: 2,
+        override: null,
+        ...over,
+      };
+    }
+
+    it("refuses an agent both the whole preference and a change to it", async () => {
+      const b = bridge();
+      live = liveBridge();
+
+      await expect(b.getInvolvementPreference()).rejects.toMatchObject({ code: "forbidden" });
+      await expect(b.setInvolvementPreference(change())).rejects.toMatchObject({
+        code: "forbidden",
+      });
+
+      expect(live.getInvolvementPreference).not.toHaveBeenCalled();
+      expect(live.setInvolvementPreference).not.toHaveBeenCalled();
+    });
+
+    it("reads it from the live attempt, changeable on the owner computer", async () => {
+      const b = bridge();
+      live = liveBridge();
+
+      await expect(b.involvementForPerson()).resolves.toEqual({
+        result: "read",
+        role: "owner",
+        settable: true,
+        preference: {
+          status: "available",
+          normalMode: "recommend",
+          consultCount: 2,
+          override: { mode: "involve-early", until: "2026-11-17T12:00:00.000Z" },
+          mode: "involve-early",
+          overrideActive: true,
+          revision: 3,
+          setOn: "phone",
+          setAt: "2026-11-17T09:00:00.000Z",
+          lastSyncedAt: "2026-11-17T09:00:05.000Z",
+          stale: false,
+        },
+      });
+    });
+
+    it("reads the last verified copy between attempts, as possibly out of date and not changeable", async () => {
+      const b = bridge();
+      const until = new Date(Date.now() + HOUR).toISOString();
+      await verifiedCopy({ mode: "recommend", until });
+
+      await expect(b.involvementForPerson()).resolves.toEqual({
+        result: "read",
+        role: "owner",
+        settable: false,
+        preference: {
+          status: "available",
+          normalMode: "involve-early",
+          consultCount: 1,
+          override: { mode: "recommend", until },
+          mode: "recommend",
+          overrideActive: true,
+          revision: 4,
+          setOn: "phone",
+          setAt: "2026-11-17T08:00:00.000Z",
+          lastSyncedAt: "2026-11-17T08:30:00.000Z",
+          stale: true,
+        },
+      });
+      expect(fetches).toBe(0);
+    });
+
+    it("shows the normal mode once a temporary one has ended, keeping the ended one", async () => {
+      const b = bridge();
+      const until = new Date(Date.now() - HOUR).toISOString();
+      await verifiedCopy({ mode: "recommend", until });
+
+      const read = await b.involvementForPerson();
+
+      expect(read).toMatchObject({
+        result: "read",
+        preference: {
+          status: "available",
+          mode: "involve-early",
+          overrideActive: false,
+          override: { mode: "recommend", until },
+          revision: 4,
+        },
+      });
+    });
+
+    it("is read only when the relay doesn't serve involvement preferences", async () => {
+      const b = bridge();
+      await verifiedCopy(null, { record: null, status: "unsupported" });
+      const reading = liveBridge();
+      reading.getInvolvementPreference.mockResolvedValue({
+        status: "unavailable",
+        reason: "unsupported",
+        revision: 0,
+        lastSyncedAt: "2026-11-17T09:00:05.000Z",
+        stale: false,
+      });
+      live = reading;
+
+      await expect(b.involvementForPerson()).resolves.toEqual({
+        result: "read",
+        role: "owner",
+        settable: false,
+        preference: {
+          status: "unavailable",
+          reason: "unsupported",
+          revision: 0,
+          lastSyncedAt: "2026-11-17T09:00:05.000Z",
+          stale: false,
+        },
+      });
+    });
+
+    it.each([
+      ["not-set", true],
+      ["signer-revoked", true],
+      ["not-synced", true],
+      ["device-revoked", false],
+      ["unsupported", false],
+    ] as const)("on the live owner, a copy %s can be changed: %s", async (reason, settable) => {
+      const b = bridge();
+      const reading = liveBridge();
+      reading.getInvolvementPreference.mockResolvedValue({
+        status: "unavailable",
+        reason,
+        revision: 6,
+        lastSyncedAt: "2026-11-17T09:00:05.000Z",
+        stale: false,
+      });
+      live = reading;
+
+      await expect(b.involvementForPerson()).resolves.toMatchObject({
+        result: "read",
+        settable,
+        preference: { status: "unavailable", reason, revision: 6 },
+      });
+    });
+
+    it("says a preference set on the owner computer was set there, with no temporary mode", async () => {
+      const b = bridge();
+      const reading = liveBridge();
+      reading.getInvolvementPreference.mockResolvedValue({
+        status: "available",
+        normalMode: "involve-early",
+        consultCount: 5,
+        override: null,
+        mode: "involve-early",
+        overrideActive: false,
+        revision: 9,
+        setOn: "computer",
+        setAt: "2026-11-17T10:00:00.000Z",
+        lastSyncedAt: "2026-11-17T10:00:00.000Z",
+        stale: true,
+      });
+      live = reading;
+
+      await expect(b.involvementForPerson()).resolves.toMatchObject({
+        settable: true,
+        preference: {
+          setOn: "computer",
+          override: null,
+          consultCount: 5,
+          revision: 9,
+          stale: true,
+        },
+      });
+    });
+
+    it("takes a read only with the attempt it came from: one retiring under it is read again on the next", async () => {
+      const b = bridge();
+      const retiring = liveBridge();
+      const next = liveBridge();
+      next.getInvolvementPreference.mockResolvedValue({
+        status: "unavailable",
+        reason: "not-set",
+        revision: 11,
+        lastSyncedAt: "2026-11-17T10:00:00.000Z",
+        stale: false,
+      });
+      // The retiring attempt's read was already in hand, so it finishes rather than refusing.
+      retiring.getInvolvementPreference.mockImplementation(async () => {
+        live = next;
+        return {
+          status: "unavailable",
+          reason: "not-set",
+          revision: 10,
+          lastSyncedAt: "2026-11-17T09:00:00.000Z",
+          stale: false,
+        };
+      });
+      live = retiring;
+
+      await expect(b.involvementForPerson()).resolves.toMatchObject({
+        settable: true,
+        preference: { revision: 11 },
+      });
+      expect(next.getInvolvementPreference).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves attempts that keep retiring under its reads for its own copy, stale and not changeable", async () => {
+      const b = bridge();
+      await verifiedCopy(null);
+      const churning = () => {
+        const attempt = liveBridge();
+        attempt.getInvolvementPreference.mockImplementation(async () => {
+          live = churning();
+          throw new RetiredAttemptError();
+        });
+        return attempt;
+      };
+      live = churning();
+
+      await expect(b.involvementForPerson()).resolves.toMatchObject({
+        result: "read",
+        settable: false,
+        preference: { status: "available", revision: 4, stale: true },
+      });
+    });
+
+    it("reads as not running when the connection ends during its last try", async () => {
+      const b = bridge();
+      await verifiedCopy(null);
+      let tries = 0;
+      const churning = () => {
+        const attempt = liveBridge();
+        attempt.getInvolvementPreference.mockImplementation(async () => {
+          tries += 1;
+          if (tries === 3) identity = null;
+          live = tries === 3 ? null : churning();
+          throw new RetiredAttemptError();
+        });
+        return attempt;
+      };
+      live = churning();
+
+      await expect(b.involvementForPerson()).resolves.toEqual({ result: "not-running" });
+    });
+
+    it("shows a Remote Host its copy but never signs a change there", async () => {
+      identity = { ...identity!, role: "desktop-host" } as Identity;
+      const b = bridge();
+      live = liveBridge();
+
+      await expect(b.involvementForPerson()).resolves.toMatchObject({
+        result: "read",
+        role: "host",
+        settable: false,
+      });
+      await expect(b.setInvolvementForPerson(change())).resolves.toEqual({
+        result: "refused",
+        reason: "not-owner",
+      });
+      expect(live.setInvolvementPreference).not.toHaveBeenCalled();
+    });
+
+    it("sends a change on the live attempt, as the person made it", async () => {
+      const b = bridge();
+      live = liveBridge();
+      const until = "2026-11-18T17:00:00.000Z";
+
+      await expect(
+        b.setInvolvementForPerson(change({ override: { mode: "involve-early", until } }))
+      ).resolves.toEqual({ result: "saved", revision: 4 });
+
+      expect(live.setInvolvementPreference).toHaveBeenCalledExactlyOnceWith({
+        expectedRevision: 3,
+        normalMode: "recommend",
+        consultCount: 2,
+        override: { mode: "involve-early", until },
+      });
+    });
+
+    it("tells the person when a phone changed it first, and what the relay holds", async () => {
+      const b = bridge();
+      const sending = liveBridge();
+      sending.setInvolvementPreference.mockResolvedValue({
+        status: "conflict",
+        latestRevision: 5,
+      });
+      live = sending;
+
+      await expect(b.setInvolvementForPerson(change())).resolves.toEqual({
+        result: "conflict",
+        latestRevision: 5,
+      });
+    });
+
+    it.each<[SetInvolvementResult, unknown]>([
+      [
+        { status: "conflict", latestRevision: null },
+        { result: "conflict", latestRevision: null },
+      ],
+      [
+        { status: "refused", code: "forbidden", message: "role not allowed" },
+        { result: "refused", reason: "relay", code: "forbidden" },
+      ],
+      [{ status: "unsupported" }, { result: "unsupported" }],
+      [{ status: "unconfirmed", message: "relay unreachable" }, { result: "unconfirmed" }],
+      [
+        { status: "refused", code: "rate_limited", message: "slow down" },
+        { result: "refused", reason: "relay", code: "rate_limited" },
+      ],
+    ])("reports the library's %o as %o", async (outcome, expected) => {
+      const b = bridge();
+      const sending = liveBridge();
+      sending.setInvolvementPreference.mockResolvedValue(outcome);
+      live = sending;
+
+      await expect(b.setInvolvementForPerson(change())).resolves.toEqual(expected);
+    });
+
+    it("refuses a change the relay would refuse, saying why", async () => {
+      const b = bridge();
+      const sending = liveBridge();
+      sending.setInvolvementPreference.mockRejectedValue(
+        new BridgeError(
+          "validation_error",
+          "override.until: the temporary mode must end in the future"
+        )
+      );
+      live = sending;
+      const ended = { mode: "involve-early" as const, until: "2020-01-01T00:00:00.000Z" };
+
+      await expect(b.setInvolvementForPerson(change({ override: ended }))).resolves.toEqual({
+        result: "refused",
+        reason: "invalid",
+        detail: "override.until: the temporary mode must end in the future",
+      });
+    });
+
+    it("never sends a change between attempts, or once the connection has ended", async () => {
+      const b = bridge();
+      await expect(b.setInvolvementForPerson(change())).resolves.toEqual({
+        result: "not-running",
+      });
+
+      live = liveBridge();
+      identity = null;
+      await expect(b.setInvolvementForPerson(change())).resolves.toEqual({
+        result: "not-running",
+      });
+      await expect(b.involvementForPerson()).resolves.toEqual({ result: "not-running" });
+      expect(live.setInvolvementPreference).not.toHaveBeenCalled();
+    });
+
+    it("never sends a change again when its attempt retires partway through: it may have reached the relay", async () => {
+      const b = bridge();
+      const retiring = liveBridge();
+      const next = liveBridge();
+      retiring.setInvolvementPreference.mockImplementation(async () => {
+        live = next;
+        throw new RetiredAttemptError();
+      });
+      live = retiring;
+
+      await expect(b.setInvolvementForPerson(change())).resolves.toEqual({
+        result: "unconfirmed",
+      });
+      expect(retiring.setInvolvementPreference).toHaveBeenCalledTimes(1);
+      expect(next.setInvolvementPreference).not.toHaveBeenCalled();
+    });
+
+    it("never says nothing was saved when this computer fails after the relay may have taken it", async () => {
+      const b = bridge();
+      const sending = liveBridge();
+      sending.setInvolvementPreference.mockRejectedValue(new Error("database or disk is full"));
+      live = sending;
+
+      await expect(b.setInvolvementForPerson(change())).resolves.toEqual({
+        result: "unconfirmed",
+      });
+      expect(sending.setInvolvementPreference).toHaveBeenCalledTimes(1);
+    });
+
+    it("says the relay removed this computer when the live attempt refuses to sign for it", async () => {
+      const b = bridge();
+      const sending = liveBridge();
+      sending.setInvolvementPreference.mockRejectedValue(
+        new BridgeError("forbidden", "this device was revoked from the relay")
+      );
+      live = sending;
+
+      await expect(b.setInvolvementForPerson(change())).resolves.toEqual({
+        result: "refused",
+        reason: "revoked",
+      });
+    });
+
+    it("reads as not running when the live attempt was stopped under the change", async () => {
+      const b = bridge();
+      const sending = liveBridge();
+      sending.setInvolvementPreference.mockRejectedValue(
+        new BridgeError(
+          "invalid_state",
+          "start the bridge before setting the involvement preference"
+        )
+      );
+      live = sending;
+
+      await expect(b.setInvolvementForPerson(change())).resolves.toEqual({
+        result: "not-running",
+      });
     });
   });
 

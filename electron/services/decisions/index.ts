@@ -134,6 +134,11 @@ import type {
   GetDecisionFollowUpResultPayload,
   SendDecisionFollowUpPayload,
 } from "../../../shared/types/decisionsQuestion.js";
+import type {
+  DecisionsInvolvementRead,
+  DecisionsInvolvementSaveResult,
+  SetDecisionsInvolvementPayload,
+} from "../../../shared/types/decisionsInvolvement.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { isQuestionExpiryChoice } from "../../../shared/config/decisionsQuestionExpiry.js";
@@ -1456,6 +1461,24 @@ export function getDecisionFollowUpResult(
   payload: GetDecisionFollowUpResultPayload
 ): Promise<DecisionFollowUpResultRead> {
   return whileRunning((running) => running.getFollowUpResult(payload.messageId));
+}
+
+/**
+ * The person's involvement preference for Daintree's own view (#17237).
+ * Never makes or starts the service.
+ */
+export function getDecisionsInvolvement(): Promise<DecisionsInvolvementRead> {
+  return whileRunning((running) => running.getInvolvement());
+}
+
+/**
+ * The person's change to it from Daintree's own view, signed by this
+ * computer when it is the owner's. Never makes or starts the service.
+ */
+export function setDecisionsInvolvement(
+  payload: SetDecisionsInvolvementPayload
+): Promise<DecisionsInvolvementSaveResult> {
+  return whileRunning((running) => running.setInvolvement(payload));
 }
 
 async function whileRunning<T>(

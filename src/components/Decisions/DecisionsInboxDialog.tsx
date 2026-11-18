@@ -32,6 +32,7 @@ import type {
   DecisionQuestionListItem,
 } from "@shared/types/decisionsQuestion";
 import { DecisionCancelDialog } from "./DecisionCancelDialog";
+import { DecisionsInvolvementSection } from "./DecisionsInvolvementSection";
 import { DecisionQuestionReadView } from "./DecisionQuestionReader";
 import { aliasLabel } from "./decisionQuestionModel";
 import { referencedQuestion, type DecisionQuestionTarget } from "./decisionQuestionTarget";
@@ -786,6 +787,14 @@ export function DecisionsInboxDialog() {
             )}
           </section>
         </div>
+        {/* After the columns, so the dialog's first focus still lands on the question list. Each
+            opening has its own, so nothing a save in an earlier one settles reaches this one. */}
+        <DecisionsInvolvementSection
+          key={request.seq}
+          active={active}
+          opening={request.seq}
+          statusRevision={status?.revision ?? null}
+        />
       </AppDialog>
       <DecisionCancelDialog
         {...cancel.dialog}

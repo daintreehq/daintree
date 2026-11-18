@@ -294,6 +294,10 @@ export const CHANNEL_LOCALITY = {
   "decisions:get-decline-result": "shell",
   "decisions:send-follow-up": "shell",
   "decisions:get-follow-up-result": "shell",
+  // The person's involvement preference, signed by this computer's owner key (#17237): a
+  // Remote Host window reads and sets this computer's, and a Host's key never signs one.
+  "decisions:get-involvement": "shell",
+  "decisions:set-involvement": "shell",
   "decisions:get-policy": "shell",
   "decisions:report-composer-drafts": "host",
   "decisions:get-setup-check": "shell",
