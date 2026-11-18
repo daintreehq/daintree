@@ -124,6 +124,152 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+function fromPlugin(
+  base: CloudProviderInfo,
+  plugin: Partial<NonNullable<CloudProviderInfo["plugin"]>> = {}
+): CloudProviderInfo {
+  return {
+    ...base,
+    plugin: {
+      pluginId: "acme.clouds",
+      pluginName: "Acme Clouds",
+      fingerprint: "fp-1",
+      granted: false,
+      providerNames: ["Acme", "Acme GCE"],
+      ...plugin,
+    },
+  };
+}
+
+describe("ConnectCloudAccountDialog for a plugin's provider", () => {
+  it("names the plugin and what it gets before any field, and sends nothing when declined", () => {
+    const onClose = vi.fn();
+    render(<ConnectCloudAccountDialog isOpen onClose={onClose} provider={fromPlugin(EC2)} />);
+    const consent = screen.getByTestId("cloud-provider-consent-dialog");
+    expect(consent.textContent).toContain("Acme Clouds");
+    expect(consent.textContent).toContain("acme.clouds");
+    const terms = [
+      ...screen.getByTestId("cloud-provider-consent-terms").querySelectorAll("li"),
+    ].map((item) => item.textContent);
+    expect(terms).toHaveLength(3);
+    expect(terms[0]).toMatch(/credentials you enter/);
+    // Connecting also resumes any of its accounts already saved here.
+    expect(terms[0]).toMatch(/once you connect, those saved for any of its accounts/);
+    expect(terms[1]).toMatch(/machines Daintree connects to.*vouches for their identity/);
+    expect(terms[2]).toMatch(/bill your own account/);
+    // The plugin's other providers are named as covered too.
+    expect(consent.textContent).toContain("Acme GCE");
+    expect(screen.queryByTestId("cloud-account-credential-accessKeyId")).toBeNull();
+
+    fireEvent.click(button("Cancel"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(cloudClient.checkAccountCredentials).not.toHaveBeenCalled();
+    expect(cloudClient.addAccount).not.toHaveBeenCalled();
+    expect(cloudClient.replaceAccountCredentials).not.toHaveBeenCalled();
+  });
+
+  it("sends what was agreed to with the check and the connect once allowed", async () => {
+    render(<ConnectCloudAccountDialog isOpen onClose={() => {}} provider={fromPlugin(EC2)} />);
+    fireEvent.click(button("Allow and continue"));
+    type("cloud-account-credential-accessKeyId", "AKIAEXAMPLE0001");
+    type("cloud-account-credential-secretAccessKey", "secret-access-key");
+    fireEvent.click(button("Check credentials"));
+    await screen.findByRole("radio", { name: /Personal/ });
+    const entered = { accessKeyId: "AKIAEXAMPLE0001", secretAccessKey: "secret-access-key" };
+    expect(cloudClient.checkAccountCredentials).toHaveBeenLastCalledWith(
+      "acme.clouds.ec2",
+      entered,
+      "fp-1"
+    );
+    fireEvent.click(button("Connect account"));
+    await waitFor(() => expect(cloudClient.addAccount).toHaveBeenCalled());
+    expect(cloudClient.addAccount.mock.calls[0]![0]).toMatchObject({
+      providerId: "acme.clouds.ec2",
+      credentials: entered,
+      consent: "fp-1",
+    });
+  });
+
+  it("asks nothing of a plugin already allowed, and asks again once what it declares changes", () => {
+    const { rerender } = render(
+      <ConnectCloudAccountDialog
+        isOpen
+        onClose={() => {}}
+        provider={fromPlugin(EC2, { granted: true })}
+      />
+    );
+    expect(screen.queryByTestId("cloud-provider-consent-dialog")).toBeNull();
+    type("cloud-account-credential-accessKeyId", "AKIAEXAMPLE0001");
+
+    rerender(
+      <ConnectCloudAccountDialog
+        isOpen
+        onClose={() => {}}
+        provider={fromPlugin(EC2, { fingerprint: "fp-2", granted: false })}
+      />
+    );
+    expect(screen.getByTestId("cloud-provider-consent-dialog")).toBeTruthy();
+    expect(screen.queryByTestId("cloud-account-credential-accessKeyId")).toBeNull();
+  });
+
+  it("starts over when what the plugin declares changes after it was allowed here", async () => {
+    const { rerender } = render(
+      <ConnectCloudAccountDialog isOpen onClose={() => {}} provider={fromPlugin(EC2)} />
+    );
+    fireEvent.click(button("Allow and continue"));
+    type("cloud-account-credential-accessKeyId", "AKIAEXAMPLE0001");
+    type("cloud-account-credential-secretAccessKey", "secret-access-key");
+    fireEvent.click(button("Check credentials"));
+    await screen.findByRole("radio", { name: /Personal/ });
+
+    rerender(
+      <ConnectCloudAccountDialog
+        isOpen
+        onClose={() => {}}
+        provider={fromPlugin(EC2, { fingerprint: "fp-2" })}
+      />
+    );
+    // Agreement to the old declarations answers for nothing: asked again.
+    expect(screen.getByTestId("cloud-provider-consent-dialog")).toBeTruthy();
+    fireEvent.click(button("Allow and continue"));
+    // Nothing entered or checked under the old ones carries over.
+    expect(
+      (screen.getByTestId("cloud-account-credential-accessKeyId") as HTMLInputElement).value
+    ).toBe("");
+    expect(screen.queryByRole("radio", { name: /Personal/ })).toBeNull();
+    type("cloud-account-credential-accessKeyId", "AKIAEXAMPLE0002");
+    type("cloud-account-credential-secretAccessKey", "another-secret");
+    fireEvent.click(button("Check credentials"));
+    await screen.findByRole("radio", { name: /Personal/ });
+    expect(cloudClient.checkAccountCredentials).toHaveBeenLastCalledWith(
+      "acme.clouds.ec2",
+      { accessKeyId: "AKIAEXAMPLE0002", secretAccessKey: "another-secret" },
+      "fp-2"
+    );
+  });
+
+  it("asks before replacing the credentials of an account whose plugin isn't allowed now", async () => {
+    render(
+      <ConnectCloudAccountDialog
+        isOpen
+        onClose={() => {}}
+        provider={fromPlugin(GCE, { fingerprint: "fp-2" })}
+        replacing={summary()}
+      />
+    );
+    expect(screen.getByTestId("cloud-provider-consent-terms").textContent).toMatch(
+      /once they replace the old ones/
+    );
+    fireEvent.click(button("Allow and continue"));
+    chooseFile("cloud-account-credential-keyFile", new File([KEY_FILE_TEXT], "new-key.json"));
+    await screen.findByText("new-key.json");
+    type("cloud-account-credential-project", "acme-build");
+    fireEvent.click(button("Replace credentials"));
+    await waitFor(() => expect(cloudClient.replaceAccountCredentials).toHaveBeenCalled());
+    expect(cloudClient.replaceAccountCredentials.mock.calls[0]![2]).toBe("fp-2");
+  });
+});
+
 describe("ConnectCloudAccountDialog", () => {
   it("asks for each declared field in order, masking secrets and naming what's optional", () => {
     render(<ConnectCloudAccountDialog isOpen onClose={() => {}} provider={EC2} />);

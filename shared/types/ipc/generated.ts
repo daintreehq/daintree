@@ -656,11 +656,16 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../cloudHosts.js").CloudAccountAddRequest];
     result: import("../cloudHosts.js").CloudAccountSummary;
   };
+  "cloud-hosts:allow-account-provider": {
+    args: [payload: { accountId: string; consent: string }];
+    result: import("../cloudHosts.js").CloudAccountSummary;
+  };
   "cloud-hosts:check-account-key": {
     args: [
       payload: {
         providerId: string;
         credentials: import("../cloudHosts.js").CloudCredentialValues;
+        consent?: string | undefined;
       },
     ];
     result: import("../cloudHosts.js").CloudAccountCheckResult;
@@ -721,7 +726,11 @@ export interface GeneratedIpcInvokeMap {
   };
   "cloud-hosts:replace-account-key": {
     args: [
-      payload: { accountId: string; credentials: import("../cloudHosts.js").CloudCredentialValues },
+      payload: {
+        accountId: string;
+        credentials: import("../cloudHosts.js").CloudCredentialValues;
+        consent?: string | undefined;
+      },
     ];
     result: import("../cloudHosts.js").CloudAccountSummary;
   };

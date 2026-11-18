@@ -253,6 +253,22 @@ describe("naming and choosing a new machine", () => {
     expect(accounts.map((entry) => entry.account.id)).toEqual([ACCOUNT.id]);
   });
 
+  it("offers no account its provider may not be handed the credentials of now", () => {
+    const accounts = cloudMachineAccounts({
+      providers: [BOAT_PROVIDER],
+      accounts: [
+        ACCOUNT,
+        {
+          ...ACCOUNT,
+          id: "ca_paused",
+          providerUnavailable: "Its cloud provider comes from a plugin that isn't allowed.",
+        },
+      ],
+      hosts: [],
+    });
+    expect(accounts.map((entry) => entry.account.id)).toEqual([ACCOUNT.id]);
+  });
+
   it("reads where a waiting worktree stands from its machine and its placement", () => {
     expect(cloudPlacementStage(null, PLACEMENT).kind).toBe("waiting");
     expect(cloudPlacementStage(creating("Starting the machine"), PLACEMENT)).toEqual({

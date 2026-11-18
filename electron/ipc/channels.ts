@@ -1781,6 +1781,7 @@ export const CHANNELS = {
   CLOUD_HOSTS_CHECK_ACCOUNT_KEY: "cloud-hosts:check-account-key",
   CLOUD_HOSTS_ADD_ACCOUNT: "cloud-hosts:add-account",
   CLOUD_HOSTS_REPLACE_ACCOUNT_KEY: "cloud-hosts:replace-account-key",
+  CLOUD_HOSTS_ALLOW_ACCOUNT_PROVIDER: "cloud-hosts:allow-account-provider",
   CLOUD_HOSTS_RENAME_ACCOUNT: "cloud-hosts:rename-account",
   CLOUD_HOSTS_REMOVE_ACCOUNT: "cloud-hosts:remove-account",
   CLOUD_HOSTS_VALIDATE_ACCOUNT: "cloud-hosts:validate-account",

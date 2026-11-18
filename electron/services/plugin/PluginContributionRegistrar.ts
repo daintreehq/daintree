@@ -852,7 +852,7 @@ export class PluginContributionRegistrar {
     // project instance never declares one (the manifest refuses it).
     const cloudProviders = manifest.contributes.cloudProviders ?? [];
     if (cloudProviders.length > 0 && !isProject) {
-      publishPluginCloudProviders(pluginId, cloudProviders);
+      publishPluginCloudProviders(pluginId, cloudProviders, manifest.displayName ?? pluginId);
     }
     // An installed plugin activates in the worker, whose
     // `host.registerForgeProvider` resolves without binding anything, so its

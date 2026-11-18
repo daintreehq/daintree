@@ -87,10 +87,13 @@ export const cloudHostsNamespace = defineIpcNamespace({
       async (payload: {
         providerId: string;
         credentials: CloudCredentialValues;
+        /** For a plugin's provider: the consent fingerprint shown to the person. */
+        consent?: string;
       }): Promise<CloudAccountCheckResult> =>
         requireRemoteService("cloudHosts").checkAccountCredentials(
           field(payload, "providerId"),
-          field(payload, "credentials")
+          field(payload, "credentials"),
+          field(payload, "consent")
         )
     ),
     addAccount: op(
@@ -103,10 +106,20 @@ export const cloudHostsNamespace = defineIpcNamespace({
       async (payload: {
         accountId: string;
         credentials: CloudCredentialValues;
+        consent?: string;
       }): Promise<CloudAccountSummary> =>
         requireRemoteService("cloudHosts").replaceAccountCredentials(
           field(payload, "accountId"),
-          field(payload, "credentials")
+          field(payload, "credentials"),
+          field(payload, "consent")
+        )
+    ),
+    allowAccountProvider: op(
+      CLOUD_HOSTS_METHOD_CHANNELS.allowAccountProvider,
+      async (payload: { accountId: string; consent: string }): Promise<CloudAccountSummary> =>
+        requireRemoteService("cloudHosts").allowAccountProvider(
+          field(payload, "accountId"),
+          field(payload, "consent")
         )
     ),
     renameAccount: op(

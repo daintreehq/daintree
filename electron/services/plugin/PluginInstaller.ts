@@ -29,6 +29,7 @@ import { getPluginMcpSupervisor } from "../PluginMcpSupervisor.js";
 import { getPluginMcpConsentService, getPluginMcpRateLimiter } from "../plugin-mcp/instances.js";
 import { getPluginCapabilityConsentService } from "../plugin-capability/instances.js";
 import { clearProjectPluginVisibilityForPlugin } from "./projectPluginVisibility.js";
+import { forgetPluginCloudProviderConsent } from "./pluginCloudProviders.js";
 import { findUnusablePluginAssets } from "./pluginManifestAssetFiles.js";
 import { parseInstallExpectation } from "./installExpectation.js";
 import {
@@ -1514,6 +1515,16 @@ export class PluginInstaller {
       // kept. Shared with the upgrade path so both close the same gap (#10518 MCP,
       // #10524 capabilities).
       this._purgeConsentPins(pluginId, "uninstall");
+      // Unlike the grants above, kept across an update that leaves the declarations as
+      // they were (#17352), and so purged here, on uninstall only.
+      try {
+        forgetPluginCloudProviderConsent(pluginId);
+      } catch (err) {
+        console.error(
+          `[PluginService] forgetting the cloud provider consent of "${pluginId}" threw:`,
+          err
+        );
+      }
 
       // Drop every per-project visibility decision recorded about this id. A
       // pluginId is author-controlled, so an overlay left behind would silently
