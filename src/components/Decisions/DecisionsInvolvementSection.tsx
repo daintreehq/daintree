@@ -289,15 +289,25 @@ export function DecisionsInvolvementSection({
       ref={sectionRef}
       aria-labelledby={headingId}
       // Bounded, so an open form on a short window scrolls here rather than pushing Save out of the dialog.
-      className="flex max-h-[50%] min-h-0 shrink-0 flex-col gap-2 overflow-y-auto overscroll-contain border-t border-divider px-4 py-3"
+      // One quiet line under the queue: a preference set now and then, never a rival to the questions.
+      className="flex max-h-[50%] min-h-0 shrink-0 flex-col gap-2 overflow-y-auto overscroll-contain border-t border-divider px-4 py-2.5"
       data-testid="decisions-involvement"
     >
-      <div className="flex flex-wrap items-start gap-x-4 gap-y-2">
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <h3 id={headingId} className="text-xs font-medium text-text-secondary">
-            How involved you want to be
-          </h3>
+      <div className="flex min-h-6 flex-wrap items-center gap-x-3 gap-y-1">
+        <h3 id={headingId} className="shrink-0 text-xs font-medium text-text-secondary">
+          How involved you want to be
+        </h3>
+        {/* Why it can't be changed here runs on from what it is, as one thought. */}
+        <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-0.5">
           <Summary load={load} now={now} retry={reload} />
+          {(readOnly !== null || waiting) && (
+            <p
+              className="text-xs text-text-secondary"
+              data-testid="decisions-involvement-read-only"
+            >
+              {readOnly ?? "Reading the newer preference before it can be changed again…"}
+            </p>
+          )}
         </div>
         {canEdit && edit === null && !busy && (
           <Button
@@ -311,13 +321,9 @@ export function DecisionsInvolvementSection({
           </Button>
         )}
       </div>
-      {(readOnly !== null || waiting) && (
-        <p className="text-xs text-text-secondary" data-testid="decisions-involvement-read-only">
-          {readOnly ?? "Reading the newer preference before it can be changed again…"}
-        </p>
-      )}
       {/* Announced once when a save settles, and where the keyboard lands when nothing else can take it. */}
-      <div role="status">
+      {/* Kept mounted to announce; out of the footer's rhythm while it says nothing. */}
+      <div role="status" className="empty:-mt-2">
         {shownNotice !== null && (
           <Callout
             severity={shownNotice.severity}
@@ -402,9 +408,13 @@ function Summary({ load, now, retry }: { load: Load; now: number; retry: () => v
 
   if (preference.status === "unavailable") {
     return (
-      <div className="flex flex-col gap-0.5" data-testid="decisions-involvement-summary">
-        <p className="text-sm text-text-primary">{unavailableText(preference.reason)}</p>
-        <p className="text-xs text-text-secondary" data-testid="decisions-involvement-facts">
+      <div
+        className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs"
+        data-testid="decisions-involvement-summary"
+      >
+        {/* Nothing to act on here, so nothing here for the eye to land on first. */}
+        <p className="text-text-secondary">{unavailableText(preference.reason)}</p>
+        <p className="text-text-secondary" data-testid="decisions-involvement-facts">
           <FactRun facts={facts} />
         </p>
         {stale}
@@ -414,8 +424,11 @@ function Summary({ load, now, retry }: { load: Load; now: number; retry: () => v
 
   const force = inForce(preference, now);
   return (
-    <div className="flex flex-col gap-0.5" data-testid="decisions-involvement-summary">
-      <p className="text-sm text-text-primary" data-testid="decisions-involvement-mode">
+    <div
+      className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs"
+      data-testid="decisions-involvement-summary"
+    >
+      <p className="font-medium text-text-primary" data-testid="decisions-involvement-mode">
         {MODE_LABEL[force.mode]}
         {force.until !== null && (
           <span className="text-text-secondary">
@@ -425,10 +438,10 @@ function Summary({ load, now, retry }: { load: Load; now: number; retry: () => v
           </span>
         )}
       </p>
-      <p className="text-xs text-text-secondary" data-testid="decisions-involvement-detail">
+      <p className="text-text-secondary" data-testid="decisions-involvement-detail">
         {modeDetail(force.mode, preference.consultCount)}
       </p>
-      <p className="text-xs text-text-secondary" data-testid="decisions-involvement-facts">
+      <p className="text-text-secondary" data-testid="decisions-involvement-facts">
         <FactRun facts={facts} />
       </p>
       {stale}

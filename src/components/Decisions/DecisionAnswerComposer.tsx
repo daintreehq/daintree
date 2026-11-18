@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
+import { KbdChord } from "@/components/ui/Kbd";
 import { Textarea } from "@/components/ui/textarea";
 import { isMac } from "@/lib/platform";
 import { cn } from "@/lib/utils";
@@ -103,6 +104,8 @@ export interface DecisionAnswerComposerProps {
   target: DecisionQuestionTarget;
   /** The question may have moved: read it again now rather than at the next change. */
   onMoved: () => void;
+  /** Said beside Send once it would go, when an answer sent now won't go at once. */
+  sendNote?: string | null;
 }
 
 /** An answer from here whose fate isn't known yet: the question isn't offered for withdrawal meanwhile. */
@@ -125,7 +128,12 @@ export function useAnswerComposerMode(
  * offers for the question's kind, held in memory per question until it is
  * sent, then where it stands until it is typed into the terminal that asked.
  */
-export function DecisionAnswerComposer({ question, target, onMoved }: DecisionAnswerComposerProps) {
+export function DecisionAnswerComposer({
+  question,
+  target,
+  onMoved,
+  sendNote = null,
+}: DecisionAnswerComposerProps) {
   const key = answerKey(question.reference);
   const record = useAnswerRecord(key);
   const update = useDecisionsAnswerStore((state) => state.update);
@@ -302,6 +310,8 @@ export function DecisionAnswerComposer({ question, target, onMoved }: DecisionAn
   }
 
   const imagesFirst = verdict.remainingImages > 0;
+  // Why Send won't go yet, else what happens when it does, if that isn't simply "it goes".
+  const hint = verdict.hint ?? sendNote;
   const shortcut = isMac() ? "Meta+Enter" : "Control+Enter";
 
   return (
@@ -309,10 +319,26 @@ export function DecisionAnswerComposer({ question, target, onMoved }: DecisionAn
       className="flex flex-col gap-3"
       aria-label="Your answer"
       data-testid="decision-answer-composer"
+      // From anywhere in the answer, a choice as much as the words: the chips on Send say so.
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" || event.repeat || event.nativeEvent.isComposing) return;
+        // A button's own Enter is its own action (Clear choice, Review update, Send itself).
+        if (event.defaultPrevented || event.target instanceof HTMLButtonElement) return;
+        const mod = isMac() ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+        if (!mod || event.altKey || event.shiftKey) return;
+        event.preventDefault();
+        send();
+      }}
       {...trackFocus}
     >
       <h3 className="text-xs font-medium text-text-secondary">Your answer</h3>
-      <div ref={statusRef} tabIndex={-1} className={cn("flex flex-col gap-2", FOCUS_TARGET)}>
+      {/* Out of the section's rhythm while it says nothing, so the heading sits on the choices;
+          still rendered and focusable, since focus falls back to it when a control goes. */}
+      <div
+        ref={statusRef}
+        tabIndex={-1}
+        className={cn("flex flex-col gap-2 empty:-mt-3", FOCUS_TARGET)}
+      >
         {stale && (
           <Callout
             severity="warning"
@@ -346,7 +372,7 @@ export function DecisionAnswerComposer({ question, target, onMoved }: DecisionAn
                 label={option.label}
                 description={
                   option.description !== null ? (
-                    <DecisionMarkdown text={option.description} className="text-xs" />
+                    <DecisionMarkdown text={option.description} size="xs" tone="secondary" />
                   ) : undefined
                 }
                 // An approval decides on its images, so its choices wait until each is opened.
@@ -371,52 +397,60 @@ export function DecisionAnswerComposer({ question, target, onMoved }: DecisionAn
           </Button>
         )}
         {shape.textAllowed && (
-          <Field>
+          // A hidden label still takes a track in the field's grid: no gap after it.
+          <Field className={shape.textIsAnswer ? "gap-0" : undefined}>
             {/* The section's heading already names a text question's answer. */}
-            <FieldLabel className={shape.textIsAnswer ? "sr-only" : undefined}>
+            <FieldLabel
+              className={shape.textIsAnswer ? "sr-only" : "text-xs font-medium text-text-secondary"}
+            >
+              {/* Once a choice is made, the words go with it rather than instead of it. */}
               {shape.textIsAnswer
                 ? "Your answer"
-                : shape.mixed
+                : shape.mixed && chosen === null
                   ? "Or answer in your own words"
                   : "Note (optional)"}
             </FieldLabel>
             <Textarea
               ref={textRef}
-              rows={3}
+              rows={shape.textIsAnswer ? 4 : 2}
+              // Grows with what is written: a note is usually a line, an answer a paragraph.
+              className={cn(
+                "max-h-72 [field-sizing:content]",
+                shape.textIsAnswer ? "min-h-28" : "min-h-16"
+              )}
               value={draft.text}
               readOnly={stale}
               aria-keyshortcuts={shortcut}
               onChange={(event) => edit({ text: event.target.value })}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter" || event.repeat || event.nativeEvent.isComposing) return;
-                const mod = isMac()
-                  ? event.metaKey && !event.ctrlKey
-                  : event.ctrlKey && !event.metaKey;
-                if (!mod || event.altKey || event.shiftKey) return;
-                event.preventDefault();
-                send();
-              }}
               data-testid="decision-answer-text"
             />
           </Field>
         )}
       </div>
       <div className="flex items-center justify-end gap-3">
-        {verdict.hint !== null && (
+        {hint !== null && (
           <p id={hintId} className="text-xs text-text-secondary [text-wrap:pretty]">
-            {verdict.hint}
+            {hint}
           </p>
         )}
         <Button
           variant="contrast"
           aria-disabled={!ready || undefined}
           loading={record.preparing}
-          aria-describedby={verdict.hint !== null ? hintId : undefined}
+          aria-describedby={hint !== null ? hintId : undefined}
+          aria-keyshortcuts={shortcut}
           onClick={send}
           className="shrink-0"
           data-testid="decision-answer-send"
         >
           {shape.sendLabel}
+          {/* Named by aria-keyshortcuts on the field; the chips are for the eye, and
+              only once Send would go, since an unavailable button's ink washes them out. */}
+          {ready && (
+            <span aria-hidden="true" className="ml-1 flex">
+              <KbdChord shortcut="Cmd+Enter" density="compact" foreground="inverse" />
+            </span>
+          )}
         </Button>
       </div>
     </section>

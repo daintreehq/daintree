@@ -202,8 +202,17 @@ function rows() {
   return screen.queryAllByTestId("decisions-inbox-row");
 }
 
+/** A row's alias: its trailing id, or its line when the line couldn't be read and the alias names it. */
+function aliasOf(row: HTMLElement): string | null {
+  return (
+    row.querySelector('[data-testid="decisions-inbox-row-alias"]')?.textContent ??
+    row.querySelector('[data-testid="decisions-inbox-row-line"]')?.textContent ??
+    null
+  );
+}
+
 function rowNamed(alias: string) {
-  const row = rows().find((candidate) => candidate.textContent?.startsWith(alias));
+  const row = rows().find((candidate) => aliasOf(candidate) === alias);
   if (!row) throw new Error(`no row ${alias}`);
   return row;
 }
@@ -342,11 +351,11 @@ describe("DecisionsInboxDialog", () => {
     expect(own.textContent).not.toContain("Alpha (as asked)");
     expect(own.textContent).toContain("feature-x");
     expect(own.textContent).toContain("Waiting for an answer");
-    // The dots between agent, project and worktree are hidden from assistive technology.
+    // The agent is named by its mark; the dot between project and worktree is hidden from assistive technology.
     const dots = Array.from(own.querySelectorAll("span")).filter(
       (span) => span.textContent?.trim() === "·"
     );
-    expect(dots).toHaveLength(2);
+    expect(dots).toHaveLength(1);
     for (const dot of dots) expect(dot.getAttribute("aria-hidden")).toBe("true");
     // Another project's question keeps the name it was asked under, and its own agent.
     const other = rowNamed("q-3");
@@ -453,7 +462,7 @@ describe("DecisionsInboxDialog", () => {
     await waitFor(() =>
       expect(screen.getByTestId("decisions-inbox-group-history").textContent).toContain("q-3")
     );
-    expect(rows().map((row) => row.textContent?.slice(0, 3))).toEqual(["q-2", "q-3", "q-1"]);
+    expect(rows().map(aliasOf)).toEqual(["q-2", "q-3", "q-1"]);
     expect(rowNamed("q-3").getAttribute("aria-current")).toBe("true");
     expect(shownBody()).toContain("Body of question 3");
     expect(getQuestionSummariesByReference).toHaveBeenCalledOnce();
@@ -608,7 +617,9 @@ describe("DecisionsInboxDialog", () => {
     for (const references of asked) expect(references.length).toBeLessThanOrEqual(64);
     const ids = asked.flat().map((ref) => ref.questionId);
     expect(ids.slice().sort()).toEqual(many.map((entry) => entry.reference.questionId).sort());
-    expect(within(rowNamed("q-100")).getByTestId("decisions-inbox-row-line").textContent).toBe("");
+    expect(within(rowNamed("q-100")).getByTestId("decisions-inbox-row-line").textContent).toBe(
+      "q-100"
+    );
   });
 
   it("dismisses the question shown only after the confirmation naming it, at the revision read (#17239)", async () => {
