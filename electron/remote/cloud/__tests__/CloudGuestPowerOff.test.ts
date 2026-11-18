@@ -300,6 +300,43 @@ describe("CloudGuestPowerOff (#17362)", () => {
     );
   });
 
+  it("keeps saying a take-back didn't last until the host says it did, and ignores a replaced link's reply", async () => {
+    const env = setup();
+    await env.guest.arm(HOST, env.session);
+    env.check.mockResolvedValue({ eligible: false, target: TARGET, problem: "Not EBS." });
+    env.system.saveArm.mockRejectedValueOnce(new Error("EROFS"));
+    env.clock.now += 31 * MINUTE;
+    await env.guest.tick();
+    expect(env.guest.problemFor(BINDING)).toMatch(/couldn't remove/);
+    // The resend is lost: the warning stays.
+    env.call.mockImplementationOnce(async () => {
+      throw new Error("timed out");
+    });
+    env.clock.now += 6 * MINUTE;
+    await env.guest.tick();
+    expect(env.guest.problemFor(BINDING)).toMatch(/couldn't remove/);
+    // A reply on a link since replaced settles nothing.
+    let answer: ((value: unknown) => void) | null = null;
+    env.call.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        })
+    );
+    env.clock.now += 6 * MINUTE;
+    const ticking = env.guest.tick();
+    await vi.waitFor(() => expect(answer).not.toBeNull());
+    env.newSession();
+    answer!({ armed: false, problem: null });
+    await ticking;
+    expect(env.guest.problemFor(BINDING)).toMatch(/couldn't remove/);
+    // The new link opening asks again, and its host says it's gone.
+    await env.guest.arm(HOST, env.session);
+    expect(env.guest.problemFor(BINDING)).toBe(
+      "This machine can't stop itself when idle: Not EBS."
+    );
+  });
+
   it("never shows a replaced link's late refusal", async () => {
     const env = setup();
     const first = env.session;

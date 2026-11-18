@@ -260,8 +260,13 @@ describe("createMetadataFetch", () => {
   it("gives up on a server that trickles its answer past the deadline", async () => {
     const server = await serve((_req, res) => {
       res.writeHead(200);
+      // Never quiet long enough for a socket timeout, and done only well after the deadline.
       const timer = setInterval(() => res.write("x"), 50);
-      res.on("close", () => clearInterval(timer));
+      const done = setTimeout(() => res.end(), 1_000);
+      res.on("close", () => {
+        clearInterval(timer);
+        clearTimeout(done);
+      });
     });
     try {
       const started = Date.now();

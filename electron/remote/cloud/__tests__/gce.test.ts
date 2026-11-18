@@ -1506,12 +1506,10 @@ describe("a Compute Engine VM stopping itself once idle (#17362)", () => {
   it("never lets a VM a managed instance group may replace power itself off", async () => {
     const google = fakeGoogle();
     const resource = await google.provider.create(google.credentials(), NO_LIMIT);
-    google.instances
-      .get(BIG_ID)!
-      .body.metadata.items.push({
-        key: "created-by",
-        value: "projects/1/zones/z/instanceGroupManagers/g",
-      });
+    google.instances.get(BIG_ID)!.body.metadata.items.push({
+      key: "created-by",
+      value: "projects/1/zones/z/instanceGroupManagers/g",
+    });
     await expect(
       google.provider.checkGuestPowerOff(google.credentials(), resource.resourceId)
     ).resolves.toEqual({

@@ -52,6 +52,8 @@ export class CloudGuestPowerOff {
   private readonly problems = new Map<string, string>();
   private readonly checkedAt = new Map<string, number>();
   private readonly retryAt = new Map<string, number>();
+  /** A host's word that a take-back didn't last yet, kept until a reply on the current link says it did. */
+  private readonly unconfirmed = new Map<string, string>();
   private disposed = false;
 
   constructor(private readonly deps: CloudGuestPowerOffDeps) {}
@@ -75,7 +77,7 @@ export class CloudGuestPowerOff {
     if (this.disposed) return;
     const bindings = this.deps.store.bindings();
     const live = new Set(bindings.map((binding) => binding.id));
-    for (const map of [this.problems, this.checkedAt, this.retryAt]) {
+    for (const map of [this.problems, this.checkedAt, this.retryAt, this.unconfirmed]) {
       for (const id of map.keys()) if (!live.has(id)) map.delete(id);
     }
     const now = this.now();
@@ -178,19 +180,29 @@ export class CloudGuestPowerOff {
     if (!this.reaches(hostId, bindingId, resourceId, session)) return;
     this.checkedAt.set(bindingId, this.now());
     if (!check.eligible) {
-      this.setProblem(bindingId, `${CANT} ${check.problem}`);
+      const said = () => {
+        const unconfirmed = this.unconfirmed.get(bindingId);
+        return `${CANT} ${check.problem}${unconfirmed ? ` ${unconfirmed}` : ""}`;
+      };
+      this.setProblem(bindingId, said());
       // Given before, perhaps by another device: no longer safe, so taken back. A take-back that
-      // may not have arrived, or that the host couldn't make last, is sent again soon.
+      // may not have arrived, or that the host couldn't make last, is sent again soon, and the
+      // host's warning stays until a reply on the current link says it's gone.
       if (check.target) {
         try {
           const reply = await this.send(session, check.target, false);
-          if (reply.problem !== null && this.reaches(hostId, bindingId, resourceId, session)) {
-            this.setProblem(bindingId, `${CANT} ${check.problem} ${reply.problem}`);
+          if (!this.reaches(hostId, bindingId, resourceId, session)) return;
+          if (reply.problem !== null) {
+            this.unconfirmed.set(bindingId, reply.problem);
+            this.retryAt.set(bindingId, this.now() + RETRY_MS);
+          } else {
+            this.unconfirmed.delete(bindingId);
+          }
+          this.setProblem(bindingId, said());
+        } catch (error) {
+          if (errorCode(error) !== "UNSUPPORTED") {
             this.retryAt.set(bindingId, this.now() + RETRY_MS);
           }
-        } catch (error) {
-          if (errorCode(error) !== "UNSUPPORTED")
-            this.retryAt.set(bindingId, this.now() + RETRY_MS);
         }
       }
       return;
@@ -210,6 +222,7 @@ export class CloudGuestPowerOff {
       throw error;
     }
     if (!this.reaches(hostId, bindingId, resourceId, session)) return;
+    if (status.armed) this.unconfirmed.delete(bindingId);
     if (status.armed && status.problem === null) {
       this.clearProblem(bindingId);
       return;

@@ -383,6 +383,68 @@ describe("GuestPowerOffKeeper (#17362)", () => {
     expect(h.stored()).toEqual({ bootId: BOOT, target: TARGET });
   });
 
+  it("finishes a take-back that arrived while a repeat grant was saving, even when shutting down", async () => {
+    const h = make();
+    await h.keeper.set({ target: TARGET, enabled: true });
+    const saving = gate();
+    const save = h.system.saveArm.getMockImplementation()!;
+    h.system.saveArm.mockImplementationOnce(async (arm) => {
+      await saving.promise;
+      return save(arm);
+    });
+    const regrant = h.keeper.set({ target: TARGET, enabled: true });
+    await vi.waitFor(() => expect(h.system.saveArm).toHaveBeenCalledTimes(2));
+    const revoke = h.keeper.set({ target: TARGET, enabled: false });
+    h.keeper.dispose();
+    saving.release();
+    await regrant;
+    await revoke;
+    expect(h.stored()).toBeNull();
+  });
+
+  it("checks a restore against take-backs from when it was asked for, not when its turn came", async () => {
+    const h = make({ stored: { bootId: BOOT, target: TARGET } });
+    // A grant holds the queue; the restore is asked for, then the take-back arrives.
+    const verify = gate();
+    h.identity.hold = verify.promise;
+    const granting = h.keeper.set({ target: OTHER, enabled: true });
+    await vi.waitFor(() => expect(h.system.verifyIdentity).toHaveBeenCalledTimes(1));
+    const restoring = h.keeper.restore();
+    const revoke = h.keeper.set({ target: TARGET, enabled: false });
+    h.identity.hold = null;
+    h.identity.result = { ok: false, definite: true, problem: "another machine" };
+    verify.release();
+    await granting;
+    await restoring;
+    await revoke;
+    expect(h.keeper.status().armed).toBe(false);
+    expect(h.stored()).toBeNull();
+    expect(h.system.verifyIdentity).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a deferred restore through another machine's take-back, and drops it for its own", async () => {
+    const boot = { id: null as string | null };
+    const h = make({ stored: { bootId: BOOT, target: TARGET } });
+    h.system.bootId.mockImplementation(async () => boot.id);
+    await h.keeper.restore();
+    await h.keeper.set({ target: OTHER, enabled: false });
+    expect(h.stored()).not.toBeNull();
+    boot.id = BOOT;
+    await h.pass(3 * MINUTE);
+    expect(h.keeper.status()).toEqual({ armed: true, problem: null });
+
+    const again = make({ stored: { bootId: BOOT, target: TARGET } });
+    again.system.bootId.mockImplementation(async () => null);
+    await again.keeper.restore();
+    await again.keeper.set({ target: TARGET, enabled: false });
+    expect(again.stored()).toBeNull();
+    again.system.bootId.mockImplementation(async () => BOOT);
+    await again.pass(3 * MINUTE);
+    expect(again.keeper.status().armed).toBe(false);
+    h.keeper.dispose();
+    h.tracker.dispose();
+  });
+
   it("takes back up a permission from this boot after a restart, checked against the machine again", async () => {
     const h = make({ stored: { bootId: BOOT, target: TARGET } });
     await h.keeper.restore();
@@ -409,7 +471,10 @@ describe("GuestPowerOffKeeper (#17362)", () => {
     await h.keeper.restore();
     expect(h.stored()).not.toBeNull();
     expect(h.keeper.status().armed).toBe(false);
+    expect(h.system.bootId).toHaveBeenCalledTimes(1);
+    // Not looked at again until its pause is over.
     await h.pass(30_000);
+    expect(h.system.bootId).toHaveBeenCalledTimes(1);
     expect(h.system.verifyIdentity).not.toHaveBeenCalled();
     boot.id = BOOT;
     await h.pass(3 * MINUTE);
