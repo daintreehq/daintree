@@ -757,8 +757,10 @@ describe("FileSearchService", () => {
         "Client",
         "us",
         "Set",
-        // Match the first and the thirty-sixth distinct filler token below.
+        // Match the first, the thirty-second (a mask's sign bit) and the
+        // thirty-sixth distinct filler token below.
         "Qaa",
+        "Qfb",
         "Qjb",
       ];
       // Thirty-six distinct three-letter tokens, so a long description holds
