@@ -315,19 +315,17 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
           sizeScanOwners.watch(ctx, owner);
           // Before the first await, so a cancel sent right behind this request
           // (or a newer opening) finds the session it belongs to.
+          // The session stays open after this answers: the renderer's cancel,
+          // the next opening, or the view going away closes it.
           const signal = scans.begin(owner, sessionId);
-          try {
-            const svc = await getSessionService();
-            return await svc.getDestructivePreviewSizes(request, {
-              signal,
-              measure: async (dirPath) => {
-                const result = await scans.measure(signal, dirPath, []);
-                return result.status === "measured" ? result.bytes : null;
-              },
-            });
-          } finally {
-            scans.cancel(owner, sessionId);
-          }
+          const svc = await getSessionService();
+          return svc.getDestructivePreviewSizes(request, {
+            signal,
+            measure: async (dirPath) => {
+              const result = await scans.measure(signal, dirPath, []);
+              return result.status === "measured" ? result.bytes : null;
+            },
+          });
         },
         { withContext: true }
       ),
