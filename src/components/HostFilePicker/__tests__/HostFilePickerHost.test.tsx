@@ -80,16 +80,19 @@ const listings: Record<string, HostDirectoryListing> = {
 
 let eventListener: ((event: FileTransferEvent) => void) | null = null;
 // The host answers the home token with its home folder's own path.
-const listDirectory = vi.fn(async ({ path }: { path: string }) => {
+const listFolder = async ({ path }: { path: string }) => {
   const listing = listings[path === "~" ? "/home/greg" : path];
   if (!listing) throw new Error("That folder doesn't exist.");
   return listing;
-});
+};
+const listDirectory = vi.fn(listFolder);
 const answerHostPick = vi.fn(async () => {});
 
 beforeEach(() => {
   eventListener = null;
-  listDirectory.mockClear();
+  // A reset, not a clear: a queued answer a failed test never reached must not
+  // become the next test's first.
+  listDirectory.mockReset().mockImplementation(listFolder);
   answerHostPick.mockClear();
   Object.assign(window, {
     electron: {
@@ -660,6 +663,7 @@ describe("HostFilePickerHost start folder", () => {
     render(<HostFilePickerHost />);
     const picked = openPick({ mode: "file", title: "Choose file" });
     await findRow("notes.md");
+    expect(listDirectory).toHaveBeenCalledWith({ path: "~", showHidden: false });
     expect(roots.getPickerRoots).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: "Projects" })).toBeNull();
     expect(screen.getByRole("button", { name: "Parent folder" }).hasAttribute("disabled")).toBe(
@@ -683,13 +687,30 @@ describe("HostFilePickerHost start folder", () => {
     render(<HostFilePickerHost />);
     const picked = openPick({ mode: "file", title: "Choose file" });
     await findRow("notes.md");
-    expect((screen.getByLabelText("Folder path") as HTMLInputElement).value).toBe("/home/greg");
+    const field = screen.getByLabelText("Folder path") as HTMLInputElement;
+    expect(field.value).toBe("/home/greg");
+    await waitFor(() => expect(document.activeElement).toBe(field));
+    press(screen.getByRole("listbox"));
     fireEvent.click(getRow("notes.md"));
+    const crumbs = screen.getByRole("navigation", { name: "Folder path" });
+    expect(crumbs.querySelector('[aria-current="location"]')?.textContent).toBe("greg");
 
+    let finish!: () => void;
+    listDirectory.mockImplementationOnce(
+      (payload) =>
+        new Promise((resolve) => {
+          finish = () => resolve(listFolder(payload));
+        })
+    );
     fireEvent.click(screen.getByLabelText("Show hidden files"));
     await waitFor(() =>
       expect(listDirectory).toHaveBeenLastCalledWith({ path: "~", showHidden: true })
     );
+    // The folder is still known while it refreshes: its parent stays a step away.
+    expect(screen.getByRole("button", { name: "Parent folder" }).hasAttribute("disabled")).toBe(
+      false
+    );
+    await act(async () => finish());
     await waitFor(() =>
       expect(confirmButton("Select file").getAttribute("aria-disabled")).toBeNull()
     );
@@ -717,6 +738,7 @@ describe("HostFilePickerHost start folder", () => {
     render(<HostFilePickerHost />);
     void openPick({ mode: "file", title: "Choose file" });
     await screen.findByText(/don't have permission/);
+    expect((screen.getByLabelText("Folder path") as HTMLInputElement).value).toBe("");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await findRow("notes.md");
     expect(listDirectory).toHaveBeenLastCalledWith({ path: "~", showHidden: false });
@@ -731,6 +753,9 @@ describe("HostFilePickerHost start folder", () => {
     await act(async () => {});
     expect(screen.queryByText(/must be absolute/)).toBeNull();
     expect(listDirectory).toHaveBeenCalledTimes(1);
+    // Still opening the home folder, not done with nothing to show.
+    expect(screen.getByRole("listbox").getAttribute("aria-busy")).toBe("true");
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     await roots.finish(places);
     await findRow("notes.md");
     expect(listDirectory).toHaveBeenLastCalledWith({ path: "/home/greg", showHidden: false });
@@ -751,7 +776,10 @@ describe("HostFilePickerHost start folder", () => {
     expect(screen.queryByText(/must be absolute/)).toBeNull();
   });
 
-  it("starts an older host at its root when its places can't be had either", async () => {
+  it.each([
+    ["can't be had either", new Error("The host isn't connected.")],
+    ["name no usable home", { home: "~", projectsDir: null, roots: [] }],
+  ])("starts an older host at its root when its places %s", async (_, answer) => {
     const roots = holdRoots();
     refuseHomeToken();
     listDirectory.mockImplementationOnce(async ({ path }) => ({
@@ -763,7 +791,7 @@ describe("HostFilePickerHost start folder", () => {
     render(<HostFilePickerHost />);
     void openPick({ mode: "directory", title: "Open folder" });
     await waitFor(() => expect(listDirectory).toHaveBeenCalledTimes(1));
-    await roots.finish(new Error("The host isn't connected."));
+    await roots.finish(answer);
     await findRow("home");
     expect(listDirectory).toHaveBeenLastCalledWith({ path: "/", showHidden: false });
   });
@@ -811,5 +839,48 @@ describe("HostFilePickerHost start folder", () => {
     expect(otherList).toHaveBeenCalledTimes(1);
     expect(otherList).toHaveBeenCalledWith({ toHostId: "studio-01", path: "~", showHidden: false });
     expect(getRow("srv-repo")).toBeTruthy();
+  });
+
+  function holdHomeListing(): () => Promise<void> {
+    let finish!: () => void;
+    listDirectory.mockImplementationOnce(
+      (payload) =>
+        new Promise((resolve) => {
+          finish = () => resolve(listFolder(payload));
+        })
+    );
+    return () => act(async () => finish());
+  }
+
+  it("keeps a path typed while the home folder opens, and the primary goes there", async () => {
+    holdRoots();
+    const finish = holdHomeListing();
+    render(<HostFilePickerHost />);
+    const picked = openPick({ mode: "directory", title: "Open folder", buttonLabel: "Open" });
+    const field = screen.getByLabelText("Folder path") as HTMLInputElement;
+    typePath(field, "/home/greg/work");
+    await finish();
+    await findRow("work");
+    expect(field.value).toBe("/home/greg/work");
+    press(confirmButton("Open"));
+    await expect(picked).resolves.toEqual(["/home/greg/work"]);
+  });
+
+  it("validates an emptied path on the primary while the home folder opens", async () => {
+    holdRoots();
+    holdHomeListing();
+    render(<HostFilePickerHost />);
+    let done = false;
+    void openPick({ mode: "directory", title: "Open folder", buttonLabel: "Open" }).then(() => {
+      done = true;
+    });
+    const field = screen.getByLabelText("Folder path") as HTMLInputElement;
+    await waitFor(() => expect(document.activeElement).toBe(field));
+    typePath(field, "/tmp");
+    typePath(field, "");
+    press(confirmButton("Open"));
+    expect(screen.getByRole("alert").textContent).toMatch(/absolute path/);
+    await act(async () => {});
+    expect(done).toBe(false);
   });
 });

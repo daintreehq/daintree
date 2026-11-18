@@ -80,9 +80,11 @@ describe("listHostDirectory", () => {
     expect(listing.path).toBe(home);
     expect(listing.parent).toBe(dir);
     expect(listing.entries.map((entry) => entry.name)).toEqual(["notes.md"]);
-    await expect(listHostDirectory({ path: "~/notes" })).rejects.toMatchObject({
-      code: "INVALID_PATH",
-    });
+    for (const near of ["~/notes", "~ ", " ~"]) {
+      await expect(listHostDirectory({ path: near })).rejects.toMatchObject({
+        code: "INVALID_PATH",
+      });
+    }
   });
 
   it("refuses relative, empty and NUL paths", async () => {
@@ -150,12 +152,16 @@ describe("getHostPickerRoots", () => {
       return realStat(target, ...rest);
     });
 
-    const roots = getHostPickerRoots();
+    let rootsSettled = false;
+    const roots = getHostPickerRoots().finally(() => {
+      rootsSettled = true;
+    });
     try {
       await reached;
       const listing = await listHostDirectory({ path: "~" });
       expect(listing.path).toBe(home);
       expect(listing.entries.map((entry) => entry.name)).toEqual(["notes.md"]);
+      expect(rootsSettled).toBe(false);
     } finally {
       release();
     }

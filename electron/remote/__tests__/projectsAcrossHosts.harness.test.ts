@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -245,6 +246,21 @@ describe("projects across hosts (integration harness)", () => {
         })
       );
       expect(listing.entries.map((entry) => entry.name).sort()).toEqual(["deep", "web"]);
+
+      // The home token crosses the link as it is, and the host names its own home.
+      const home = vi.spyOn(os, "homedir").mockReturnValue(path.join(root, "hs-far"));
+      try {
+        const fromHome = data<HostDirectoryListing>(
+          await harness.invoke(CHANNELS.HOST_SWITCH_LIST_DIRECTORY, localView, {
+            toHostId: HOST_ID,
+            path: "~",
+          })
+        );
+        expect(fromHome.path).toBe(path.join(root, "hs-far"));
+        expect(fromHome.entries.map((entry) => entry.name).sort()).toEqual(["deep", "web"]);
+      } finally {
+        home.mockRestore();
+      }
 
       const opened = data<HostSwitchExecuteResult>(
         await harness.invoke(CHANNELS.HOST_SWITCH_EXECUTE, localView, {
