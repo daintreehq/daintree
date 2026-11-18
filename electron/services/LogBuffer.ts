@@ -22,7 +22,10 @@ export interface FilterOptions {
 let instance: LogBuffer | null = null;
 
 export class LogBuffer {
+  // Grows to maxSize, then `head` marks the oldest slot and every append overwrites it, so a
+  // saturated process does constant work per entry instead of copying the retained history.
   private buffer: LogEntry[] = [];
+  private head = 0;
   private maxSize: number;
 
   constructor(maxSize = 500) {
@@ -54,21 +57,27 @@ export class LogBuffer {
       id: crypto.randomUUID(),
     };
 
-    this.buffer.push(fullEntry);
-
-    if (this.buffer.length > this.maxSize) {
-      this.buffer = this.buffer.slice(-this.maxSize);
+    if (this.buffer.length < this.maxSize) {
+      this.buffer.push(fullEntry);
+    } else {
+      this.buffer[this.head] = fullEntry;
+      this.head = (this.head + 1) % this.maxSize;
     }
 
     return fullEntry;
   }
 
   getAll(): LogEntry[] {
-    return [...this.buffer];
+    return this.toChronological();
+  }
+
+  private toChronological(): LogEntry[] {
+    if (this.head === 0) return this.buffer.slice();
+    return this.buffer.slice(this.head).concat(this.buffer.slice(0, this.head));
   }
 
   getFiltered(options: FilterOptions): LogEntry[] {
-    let entries = this.buffer;
+    let entries = this.toChronological();
 
     if (options.levels && options.levels.length > 0) {
       entries = entries.filter((e) => options.levels!.includes(e.level));
@@ -118,6 +127,7 @@ export class LogBuffer {
 
   clear(): void {
     this.buffer = [];
+    this.head = 0;
   }
 
   onProjectSwitch(): void {
