@@ -121,7 +121,7 @@ describe("partitionProjectKey", () => {
     expect(remote).not.toBe(local);
     expect(isBrowserPartition(remote)).toBe(true);
     const preview = buildDevPreviewPartition(partitionProjectKey("proj-1", "studio"), "main", "p1");
-    expect(isDevPreviewPartition(preview)).toBe(true);
+    expect(preview).toMatch(/^persist:dev-preview-[a-z0-9_-]+-[a-z0-9_-]+-[a-z0-9_-]+$/);
     expect(preview).not.toBe(buildDevPreviewPartition("proj-1", "main", "p1"));
   });
 

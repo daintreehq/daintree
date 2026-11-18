@@ -64,7 +64,6 @@ Main Process (electron/)     Renderer (src/)
 | `GitService` | Git operations via simple-git |
 | `workspace-host/WorkspaceService` | Worktree polling and status (per-worktree tracking via `WorktreeMonitor`) |
 | `CopyTreeService` | Context generation for agents |
-| `PortalManager` | Localhost browser, log viewer |
 | `ProjectStore` | Multi-project persistence |
 | `HibernationService` | Evicts a sleeping project's cached renderer for `sleepProject` |
 
@@ -92,7 +91,6 @@ Main Process (electron/)     Renderer (src/)
 | `worktreeStore`       | Active worktree, selection                                            |
 | `createWorktreeStore` | Per-view worktree list + git status (factory, backed by MessagePorts) |
 | `projectStore`        | Current project, project list                                         |
-| `portalStore`         | Portal tabs, visibility                                               |
 
 ### Shared Types (`shared/types/ipc/`)
 

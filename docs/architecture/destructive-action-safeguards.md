@@ -301,7 +301,7 @@ These open URLs, files, or processes outside the app. The blast radius isn't app
 | `electron/ipc/handlers/forge.ts` open issues / prs / commits / issue / PR | `openExternalUrl` | `ForgeProvider.build*Url()` (git-derived; typed `string`); renderer supplies numbers/ids, free-text filters (`query`/`state`), or a `branch` ref — all URL-encoded into the provider-built URL, never a URL itself — `handleForgeOpenPR` validates `prNumber` as a positive integer, all handlers rate-limited | protocol allowlist | D1 |
 | `electron/ipc/handlers/voiceInput.ts` `openMicSettings` | `openExternalUrl` | hardcoded `x-apple.systempreferences:` (darwin) / `ms-settings:` (win32) | platform-conditional allowlist; rejection logged via `logDebug` | D0 |
 | `electron/menu.ts` "Learn More" | `openExternalUrl` | hardcoded `https://daintree.org` | protocol allowlist | D0 |
-| `electron/setup/protocols.ts`, `electron/window/createWindow.ts`, `electron/window/ProjectViewManager.ts`, `electron/services/PortalManager.ts`, `electron/ipc/handlers/systemShell.ts` | `openExternalUrl` | navigation / link intercepts | protocol allowlist (already funneled pre-#9155) | D1 |
+| `electron/setup/protocols.ts`, `electron/window/createWindow.ts`, `electron/window/ProjectViewManager.ts`, `electron/ipc/handlers/systemShell.ts` | `openExternalUrl` | navigation / link intercepts | protocol allowlist (already funneled pre-#9155) | D1 |
 | `electron/ipc/handlers/logs.ts`, `electron/ipc/errorHandlers.ts`, `electron/ipc/handlers/recovery.ts` | `shell.openPath` | app log file/dir paths | app-derived path (no URL surface) | D0 |
 | `electron/ipc/handlers/systemShell.ts`, `electron/services/EditorService.ts` | `shell.openPath` | validated absolute path | absolute-path check before call | D0 |
 
