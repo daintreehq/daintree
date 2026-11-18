@@ -232,8 +232,9 @@ describe("ConnectCloudAccountDialog", () => {
     expect(row(screen.getByRole("radio", { name: /Acme Org/ }))).toContain(
       "An organization you belong to"
     );
-    fireEvent.click(project);
     expect(screen.getByPlaceholderText("Acme Build")).toBeTruthy();
+    fireEvent.click(screen.getByRole("radio", { name: /Acme Org/ }));
+    expect(screen.getByPlaceholderText("Acme Org")).toBeTruthy();
   });
 
   it("drops the file it held when the next one can't be used", async () => {

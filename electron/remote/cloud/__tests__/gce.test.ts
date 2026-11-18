@@ -59,6 +59,17 @@ interface FakeInstance {
   body: Record<string, unknown>;
 }
 
+/** The parts of an insert body the fake and the tests read. */
+interface InsertBody {
+  name: string;
+  machineType: string;
+  labels?: Record<string, string>;
+  scheduling?: Record<string, unknown>;
+  metadata: { items: { key: string; value: string }[] };
+  disks: { initializeParams: { sourceImage: string } }[];
+  networkInterfaces: { subnetwork: string; accessConfigs?: unknown[] }[];
+}
+
 interface FakeRequest {
   method: string;
   path: string;
@@ -86,6 +97,8 @@ function fakeGoogle() {
     guestReads: 0,
     failWaitWith: null as Error | null,
     nextId: 0n,
+    /** Inserts answer with an operation that's already done. */
+    insertDone: false,
     /** Answers taken in order by the next requests whose path matches, before the fake's own. */
     script: [] as { path: RegExp; status: number; reason?: string; error?: Error }[],
   };
@@ -150,7 +163,7 @@ function fakeGoogle() {
   const fetch = vi.fn(async (input: URL | string, init?: RequestInit) => {
     const url = new URL(String(input));
     const body = typeof init?.body === "string" ? init.body : undefined;
-    let parsedBody: unknown = body;
+    let parsedBody: unknown;
     try {
       parsedBody = body && !body.startsWith("grant_type") ? JSON.parse(body) : body;
     } catch {
@@ -307,7 +320,7 @@ function fakeGoogle() {
       const requestId = url.searchParams.get("requestId") ?? "";
       const replay = byRequestId.get(requestId);
       if (replay) return json(200, opView(replay));
-      const sent = parsedBody as Record<string, any>;
+      const sent = parsedBody as InsertBody;
       const failure = state.insertFailure;
       const id = (BigInt(BIG_ID) + state.nextId++).toString();
       if (!failure) {
@@ -338,6 +351,7 @@ function fakeGoogle() {
           : {}
       );
       byRequestId.set(requestId, op);
+      if (state.insertDone) op.status = "DONE";
       return json(200, opView(op));
     }
     const instanceMatch = /^\/instances\/(\d+)(\/[A-Za-z]+)?$/.exec(zoneRest!);
@@ -514,6 +528,22 @@ describe("service-account keys", () => {
     expect(google.fetch).toHaveBeenCalledTimes(1);
   });
 
+  it("cancels an exchange under way when it's disposed", async () => {
+    let seen: AbortSignal | undefined;
+    const source = new GceTokenSource(TOKEN_URL, {
+      fetch: ((_url: URL | string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          seen = init?.signal ?? undefined;
+          seen?.addEventListener("abort", () => reject(new Error("aborted")));
+        })) as typeof globalThis.fetch,
+    });
+    const pending = source.token(parseGceServiceAccountKey(keyFile())).catch((e: unknown) => e);
+    await vi.waitFor(() => expect(seen).toBeDefined());
+    source.dispose();
+    expect(seen!.aborted).toBe(true);
+    expect(await pending).toMatchObject({ kind: "cancelled" });
+  });
+
   it("keeps a refused exchange's assertion out of the error", async () => {
     const google = fakeGoogle();
     google.state.tokenError = { status: 400, error: "invalid_grant" };
@@ -636,7 +666,7 @@ describe("GceProvider", () => {
     )!;
     expect(insert.path).toBe(`/compute/v1/projects/${PROJECT}/zones/us-central1-a/instances`);
     expect(insert.query.get("requestId")).toBe(CREATE.idempotencyKey);
-    const body = insert.body as Record<string, any>;
+    const body = insert.body as InsertBody;
     expect(body.name).toBe(gceInstanceName("Build host", CREATE.idempotencyKey));
     expect(body.name).toMatch(/^[a-z](?:[-a-z0-9]{0,61}[a-z0-9])?$/);
     expect(body.machineType).toBe("zones/us-central1-a/machineTypes/e2-standard-4");
@@ -649,12 +679,12 @@ describe("GceProvider", () => {
       maxRunDuration: { seconds: "7200" },
       instanceTerminationAction: "STOP",
     });
-    expect(body.networkInterfaces[0].subnetwork).toBe("regions/us-central1/subnetworks/default");
+    expect(body.networkInterfaces[0]!.subnetwork).toBe("regions/us-central1/subnetworks/default");
     // Direct SSH needs an external address, asked for with the create.
-    expect(body.networkInterfaces[0].accessConfigs).toEqual([
+    expect(body.networkInterfaces[0]!.accessConfigs).toEqual([
       expect.objectContaining({ type: "ONE_TO_ONE_NAT" }),
     ]);
-    expect(body.disks[0].initializeParams.sourceImage).toBe(CREATE.provisioning.image);
+    expect(body.disks[0]!.initializeParams.sourceImage).toBe(CREATE.provisioning.image);
     expect(body.labels).toEqual(CREATE.labels);
     expect(JSON.stringify(body)).not.toContain("PRIVATE KEY");
     expect(resource.resourceId).toBe(`projects/${PROJECT}/zones/us-central1-a/instances/${BIG_ID}`);
@@ -691,18 +721,17 @@ describe("GceProvider", () => {
     expect(google.fetch).not.toHaveBeenCalled();
   });
 
-  it("reports a zone out of capacity as a refusal, which made nothing", async () => {
-    const google = fakeGoogle();
-    google.state.insertFailure = {
-      code: "ZONE_RESOURCE_POOL_EXHAUSTED",
-      message: "The zone does not have enough resources available",
-      status: 503,
-    };
-    const error = await google.provider
-      .create(google.credentials(), CREATE)
-      .catch((e: unknown) => e);
-    expect(google.provider.describeError(error).code).toBe("capacity");
-  });
+  it.each(["ZONE_RESOURCE_POOL_EXHAUSTED", "POOL_CAPACITY_INSUFFICIENT"])(
+    "reports %s as a refusal for capacity, which made nothing",
+    async (code) => {
+      const google = fakeGoogle();
+      google.state.insertFailure = { code, message: "Not enough resources", status: 503 };
+      const error = await google.provider
+        .create(google.credentials(), CREATE)
+        .catch((e: unknown) => e);
+      expect(google.provider.describeError(error).code).toBe("capacity");
+    }
+  );
 
   it("reports quota as a refusal", async () => {
     const google = fakeGoogle();
@@ -743,6 +772,33 @@ describe("GceProvider", () => {
     const sent = google.requests.filter((request) => request.path.endsWith("/instances"));
     expect(sent).toHaveLength(2);
     expect(new Set(sent.map((request) => request.query.get("requestId"))).size).toBe(1);
+  });
+
+  it("takes an insert answered as already done without waiting on it", async () => {
+    const google = fakeGoogle();
+    google.state.insertDone = true;
+    const resource = await google.provider.create(google.credentials(), CREATE);
+    expect(resource.machine).toBe("running");
+    expect(google.requests.some((request) => request.path.endsWith("/wait"))).toBe(false);
+  });
+
+  it("never counts a token that couldn't be had as a sent create", async () => {
+    const google = fakeGoogle();
+    google.state.script.push({ path: /^\/token$/, status: 503 });
+    google.state.tokenError = null;
+    const tokenOnce = google.fetch.getMockImplementation()!;
+    let exchanges = 0;
+    google.fetch.mockImplementation(async (input, init) => {
+      if (String(input) === TOKEN_URL && exchanges++ > 0) {
+        return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
+      }
+      return tokenOnce(input, init);
+    });
+    const error = await google.provider
+      .create(google.credentials(), CREATE)
+      .catch((e: unknown) => e);
+    expect(google.provider.describeError(error).code).toBe("credential-invalid");
+    expect(google.requests.some((request) => request.path.endsWith("/instances"))).toBe(false);
   });
 
   it("calls a create Google took but couldn't be followed up an unknown outcome", async () => {
@@ -839,6 +895,21 @@ describe("GceProvider", () => {
     expect(vm.status).toBe("RUNNING");
   });
 
+  it("replaces a limit set elsewhere with a fraction of a second on it", async () => {
+    const google = fakeGoogle();
+    const created = await google.provider.create(google.credentials(), CREATE);
+    const vm = google.instances.get(BIG_ID)!;
+    vm.status = "TERMINATED";
+    vm.scheduling = {
+      maxRunDuration: { seconds: "7200", nanos: 5 },
+      instanceTerminationAction: "STOP",
+    };
+    await google.provider.start(google.credentials(), created.resourceId, {
+      lifetimeSeconds: 7200,
+    });
+    expect(google.requests.some((request) => request.path.endsWith("/setScheduling"))).toBe(true);
+  });
+
   it("starts without touching the limit when it is unchanged or not given", async () => {
     const google = fakeGoogle();
     const created = await google.provider.create(google.credentials(), CREATE);
@@ -861,6 +932,60 @@ describe("GceProvider", () => {
     const stopped = await google.provider.stop(google.credentials(), created.resourceId);
     expect(stopped?.machine).toBe("stopped");
     expect(google.requests.find((request) => request.path.endsWith("/stop"))!.sentBody).toBe(false);
+  });
+
+  it("leaves a stop's progress to the VM when its operation can't be read", async () => {
+    const google = fakeGoogle();
+    const created = await google.provider.create(google.credentials(), CREATE);
+    google.state.script.push({
+      path: /\/operations\/operation-2\/wait$/,
+      status: 403,
+      reason: "forbidden",
+    });
+    const stopped = await google.provider.stop(google.credentials(), created.resourceId);
+    expect(stopped?.machine).toBe("stopping");
+  });
+
+  it("reads a delete answered 404 as done once the VM is confirmed gone", async () => {
+    const google = fakeGoogle();
+    const created = await google.provider.create(google.credentials(), CREATE);
+    google.instances.delete(BIG_ID);
+    await expect(
+      google.provider.delete(google.credentials(), created.resourceId)
+    ).resolves.toBeUndefined();
+  });
+
+  it("keeps a host whose resent delete was refused while the VM's fate can't be read", async () => {
+    const google = fakeGoogle();
+    const created = await google.provider.create(google.credentials(), CREATE);
+    const instancePath = /\/instances\/\d+$/;
+    google.state.script.push(
+      { path: instancePath, status: 0, error: new TypeError("fetch failed") },
+      { path: instancePath, status: 404, reason: "notFound" },
+      { path: instancePath, status: 503 },
+      { path: instancePath, status: 503 },
+      { path: instancePath, status: 503 }
+    );
+    const error = await google.provider
+      .delete(google.credentials(), created.resourceId)
+      .catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(GceApiError);
+    expect(google.provider.describeError(error).code).toBe("provider-unreachable");
+  });
+
+  it("keeps a host whose resent delete was refused while the VM still exists", async () => {
+    const google = fakeGoogle();
+    const created = await google.provider.create(google.credentials(), CREATE);
+    const instancePath = /\/instances\/\d+$/;
+    google.state.script.push(
+      { path: instancePath, status: 0, error: new TypeError("fetch failed") },
+      { path: instancePath, status: 404, reason: "notFound" }
+    );
+    const error = await google.provider
+      .delete(google.credentials(), created.resourceId)
+      .catch((err: unknown) => err);
+    expect(google.provider.describeError(error).code).not.toBe("not-found");
+    expect(google.instances.size).toBe(1);
   });
 
   it("deletes only once Compute Engine has finished", async () => {

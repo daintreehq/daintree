@@ -188,6 +188,9 @@ describe("RemoveCloudHostDialog by what the provider declares (#17346)", () => {
       "Daintree can't add it back later, so manage it on Acme Compute."
     );
     expect(dialogText()).not.toContain("add it back from Add host");
+    cleanup();
+    open(status({ createdFor: null, machine: "unknown" }), atCreate);
+    expect(dialogText()).toContain("Daintree can't add it back later");
   });
 
   it("says a kept machine keeps billing until it's deleted when its provider bills it stopped", () => {

@@ -21,6 +21,9 @@ import {
   type GceSubnetwork,
 } from "./gceSchemas.js";
 
+/** Failures that happened before anything was sent to Compute Engine. */
+const UNSENT = new WeakSet<GceApiError>();
+
 /** The one Compute Engine origin a packaged build sends a token to. */
 export const GCE_PRODUCTION_API_URL = "https://compute.googleapis.com/compute/v1";
 
@@ -516,14 +519,16 @@ export class GceClient {
     let authRetried = false;
     let possiblyDelivered = false;
     for (let attempt = 0; attempt < MAX_ATTEMPTS;) {
-      if (attempt > 0 && !freshToken) {
-        const backoff = Math.min(500 * 2 ** (attempt - 1), 4_000) + Math.random() * 250;
-        await this.sleep(Math.max(backoff, lastError?.retryAfterMs ?? 0), ctx.signal);
-      }
       try {
+        if (attempt > 0 && !freshToken) {
+          const backoff = Math.min(500 * 2 ** (attempt - 1), 4_000) + Math.random() * 250;
+          await this.sleep(Math.max(backoff, lastError?.retryAfterMs ?? 0), ctx.signal);
+        }
         return await this.once(ctx, request, schema, freshToken);
       } catch (error) {
         if (!(error instanceof GceApiError)) throw error;
+        // Cancelled between attempts or before a send: whatever an earlier send did still stands.
+        if (error.kind === "cancelled") throw this.settled(error, request, possiblyDelivered);
         // A kept token Google has stopped honouring gets one fresh try of its own; a fresh one refused is final.
         if (error.kind === "unauthorized" && error.status === 401 && !authRetried) {
           authRetried = true;
@@ -537,7 +542,8 @@ export class GceClient {
         attempt += 1;
         const unanswered =
           error.kind === "network" || error.kind === "timeout" || error.kind === "server";
-        if (unanswered) possiblyDelivered = true;
+        // Only a request that left for Compute Engine can have done anything; a token that couldn't be had sent nothing.
+        if (unanswered && !UNSENT.has(error)) possiblyDelivered = true;
         const retriable = unanswered || error.kind === "rate-limited";
         if (!retriable || ctx.signal?.aborted) {
           throw this.settled(error, request, possiblyDelivered);
@@ -577,7 +583,13 @@ export class GceClient {
   ): Promise<z.infer<S>> {
     // Already cancelled (while the key was read from the keychain, say): nothing is sent.
     if (ctx.signal?.aborted) throw new GceApiError("cancelled", "Cancelled", null, null);
-    const token = await ctx.authorize(freshToken);
+    let token: string;
+    try {
+      token = await ctx.authorize(freshToken);
+    } catch (error) {
+      if (error instanceof GceApiError) UNSENT.add(error);
+      throw error;
+    }
     // Cancelled while the token was fetched: nothing is sent.
     if (ctx.signal?.aborted) throw new GceApiError("cancelled", "Cancelled", null, null);
     const url = new URL(`${this.options.baseUrl}${request.path}`);

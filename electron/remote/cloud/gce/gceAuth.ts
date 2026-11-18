@@ -247,7 +247,7 @@ export class GceTokenSource {
     } finally {
       clearTimeout(timer);
     }
-    let json: unknown = null;
+    let json: unknown;
     try {
       json = text.length > 0 ? JSON.parse(text) : null;
     } catch {

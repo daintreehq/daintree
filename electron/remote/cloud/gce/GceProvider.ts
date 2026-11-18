@@ -212,11 +212,17 @@ function lifetimeScheduling(lifetimeSeconds: number | null): Record<string, unkn
 function policyIs(instance: GceInstance, lifetimeSeconds: number | null): boolean {
   const scheduling = instance.scheduling;
   if (scheduling?.terminationTime) return false;
-  const seconds = scheduling?.maxRunDuration?.seconds;
+  const duration = scheduling?.maxRunDuration;
   const action = scheduling?.instanceTerminationAction;
-  if (lifetimeSeconds === null)
-    return seconds === undefined && (action === undefined || action === "STOP");
-  return action === "STOP" && seconds !== undefined && Number(seconds) === lifetimeSeconds;
+  if (lifetimeSeconds === null) {
+    return duration === undefined && (action === undefined || action === "STOP");
+  }
+  return (
+    action === "STOP" &&
+    duration?.seconds !== undefined &&
+    Number(duration.seconds) === lifetimeSeconds &&
+    !duration.nanos
+  );
 }
 
 function ipv4NatAddress(instance: GceInstance): string | null {
@@ -686,8 +692,24 @@ export class GceProvider implements CloudProvider {
     const { zone, instance } = parseResourceId(resourceId, project);
     const ctx = this.ctx(credentials);
     const client = this.client(credentials);
+    const operation = await client.stopInstance(ctx, zone, instance);
     // Followed to its end, so a stop Google gives up on is said, not read as one still under way.
-    await this.finish(client, ctx, zone, await client.stopInstance(ctx, zone, instance));
+    let done = operation;
+    try {
+      if (operation.status !== "DONE") {
+        done = await client.waitOperation(
+          ctx,
+          zone,
+          operation.name,
+          Date.now() + OPERATION_DEADLINE_MS
+        );
+      }
+    } catch (error) {
+      // An operation this account can't read (a role without zoneOperations.get) leaves the VM's own state to say.
+      if (error instanceof GceApiError && error.kind === "cancelled") throw error;
+    }
+    const refused = operationError(done);
+    if (refused) throw refused;
     return gceResource(await client.getInstance(ctx, zone, instance), project);
   }
 
@@ -717,25 +739,43 @@ export class GceProvider implements CloudProvider {
     const ctx = this.ctx(credentials);
     const client = this.client(credentials);
     // Resolved only once the VM is gone: the host is forgotten as soon as this returns.
-    const operation = await client.deleteInstance(ctx, zone, instance);
     let done: GceOperation;
     try {
-      done = await this.finish(client, ctx, zone, operation);
+      done = await this.finish(client, ctx, zone, await client.deleteInstance(ctx, zone, instance));
     } catch (error) {
-      // An operation that can't be found says nothing about the VM: only the VM itself can.
-      if (!(error instanceof GceApiError) || error.kind !== "not-found") throw error;
-      const gone = await client.getInstance(ctx, zone, instance).then(
-        () => false,
-        (lookup: unknown) => {
-          if (lookup instanceof GceApiError && lookup.kind === "not-found") return true;
-          throw lookup;
-        }
+      // A lost answer, or an operation that can't be found, says nothing about the VM: only the VM itself can.
+      if (
+        !(error instanceof GceApiError) ||
+        (error.kind !== "not-found" && error.kind !== "outcome-unknown")
+      ) {
+        throw error;
+      }
+      if (await this.isGone(client, ctx, zone, instance)) return;
+      throw new GceApiError(
+        "server",
+        "Compute Engine hasn't finished deleting the machine",
+        null,
+        null
       );
-      if (gone) return;
-      throw new GceApiError("server", "Compute Engine lost track of the delete", null, null);
     }
     if (done.status !== "DONE") {
       throw new GceApiError("server", "Compute Engine is still deleting the machine", null, null);
+    }
+  }
+
+  /** Whether Compute Engine says the VM no longer exists; a failed lookup is no answer. */
+  private async isGone(
+    client: GceClient,
+    ctx: GceRequestContext,
+    zone: string,
+    instance: string
+  ): Promise<boolean> {
+    try {
+      await client.getInstance(ctx, zone, instance);
+      return false;
+    } catch (error) {
+      if (error instanceof GceApiError && error.kind === "not-found") return true;
+      throw error;
     }
   }
 
@@ -934,6 +974,6 @@ function rank(key: string): number {
 /** A failure after Google accepted a create: whether a machine exists is unknown. */
 function unconfirmed(error: unknown): GceApiError {
   if (error instanceof GceApiError && error.kind === "cancelled") return error;
-  const said = error instanceof Error ? error.message : "the answer was lost";
+  const said = formatErrorMessage(error, "the answer was lost");
   return new GceApiError("outcome-unknown", redactGceText(said), null, null);
 }
