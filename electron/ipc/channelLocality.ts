@@ -289,6 +289,9 @@ export const CHANNEL_LOCALITY = {
   // a Remote Host's own key never signs one, so a Host window's answer never crosses the link.
   "decisions:answer-question": "shell",
   "decisions:get-answer-result": "shell",
+  // The person's decline, like their answer: this computer's owner key signs it (#17239).
+  "decisions:decline-question": "shell",
+  "decisions:get-decline-result": "shell",
   "decisions:get-policy": "shell",
   "decisions:report-composer-drafts": "host",
   "decisions:get-setup-check": "shell",

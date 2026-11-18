@@ -499,6 +499,9 @@ export interface GeneratedElectronAPI {
     declinePairing(
       ...args: IpcInvokeMap["decisions:decline-pairing"]["args"]
     ): Promise<IpcInvokeMap["decisions:decline-pairing"]["result"]>;
+    declineQuestion(
+      ...args: IpcInvokeMap["decisions:decline-question"]["args"]
+    ): Promise<IpcInvokeMap["decisions:decline-question"]["result"]>;
     deleteLocalData(
       ...args: IpcInvokeMap["decisions:delete-local-data"]["args"]
     ): Promise<IpcInvokeMap["decisions:delete-local-data"]["result"]>;
@@ -520,6 +523,9 @@ export interface GeneratedElectronAPI {
     getAnswerResult(
       ...args: IpcInvokeMap["decisions:get-answer-result"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-answer-result"]["result"]>;
+    getDeclineResult(
+      ...args: IpcInvokeMap["decisions:get-decline-result"]["args"]
+    ): Promise<IpcInvokeMap["decisions:get-decline-result"]["result"]>;
     getModel(
       ...args: IpcInvokeMap["decisions:get-model"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-model"]["result"]>;

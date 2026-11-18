@@ -520,3 +520,66 @@ export type DecisionAnswerResultRead =
   | { result: "not-found" }
   | { result: "off" }
   | { result: "not-running" };
+
+/**
+ * The person declining a question in Daintree's own view on the owner
+ * computer, which signs it as their decline, as a phone's Dismiss would be
+ * (#17239). Named and minted as an answer is: the reference its content was
+ * read with, the revision the person read, and an id that makes a retry the
+ * same decline.
+ */
+export interface DeclineDecisionQuestionPayload {
+  reference: DecisionQuestionReference;
+  declineId: string;
+  expectedRevision: number;
+}
+
+/**
+ * Where a person's decline stands, as the Decisions library reports it:
+ * `queued` (committed here and still being sent), `declined` (the relay took
+ * it: the asking computer tells a listening agent, and phones show it
+ * declined on this computer), and otherwise as for an answer. `unsupported`:
+ * the relay, or the computer that asked, doesn't take a decline made on a
+ * computer yet, and the question can only be withdrawn.
+ */
+export type DecisionDeclineOutcome =
+  | { status: "queued" }
+  | { status: "declined" }
+  | { status: "already-answered" }
+  | { status: "changed" }
+  | { status: "closed"; reason: "expired" | "cancelled" | "not-found" }
+  | { status: "unsupported"; by: "relay" | "asking-desktop" }
+  | { status: "rejected"; code: string };
+
+/**
+ * Why a decline wasn't taken here at all, before anything was signed:
+ * `not-found` and `not-owner` as for an answer; `invalid`, the decline id was
+ * already used for another question or revision, as `detail` says.
+ */
+export type DecisionDeclineRefusal =
+  | { result: "refused"; reason: "not-found" | "not-owner" }
+  | { result: "refused"; reason: "invalid"; detail: string };
+
+/** A person's decline, submitted. `off` and `not-running` as for an answer. */
+export type DecisionQuestionDeclineResult =
+  | { result: "submitted"; declineId: string; outcome: DecisionDeclineOutcome }
+  | DecisionDeclineRefusal
+  | { result: "off" }
+  | { result: "not-running" };
+
+/** Where a submitted decline stands, by the id it was submitted with. */
+export interface GetDecisionDeclineResultPayload {
+  declineId: string;
+}
+
+/** A submitted decline's standing; `not-found` as for an answer's. */
+export type DecisionDeclineResultRead =
+  | {
+      result: "read";
+      questionId: string;
+      expectedRevision: number;
+      outcome: DecisionDeclineOutcome;
+    }
+  | { result: "not-found" }
+  | { result: "off" }
+  | { result: "not-running" };

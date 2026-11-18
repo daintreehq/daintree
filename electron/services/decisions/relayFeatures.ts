@@ -15,13 +15,15 @@ import type { EventsPage, ProtocolFeature } from "@daintreehq/decisions-protocol
  * relay commits to a question only once the desktop that asked it declared
  * it, the owner's own and a Remote Host's alike. A person's decline from a
  * phone (#17234) joins with its typing as a declined notice and its showing
- * as declined, so a phone offers Dismiss on Daintree's questions. From 0.8.0
- * the library also asks for `owner-desktop-messages-v1` with follow-ups and
- * `owner-desktop-declines-v1` always: each stays cut here until the person's
- * follow-ups (#17238) and declines (#17239) from this computer, and
- * `presence-v1` until presence (#17240). Setting the involvement preference
- * from this computer (#17237) has no token of its own: it rides
- * `involvement-v1`.
+ * as declined, so a phone offers Dismiss on Daintree's questions, and the
+ * person's decline the owner desktop signs (#17239) joins with the view that
+ * signs it, filed and typed the same way: declared here, it lets the owner
+ * decline this computer's questions, and each Remote Host's once that Host
+ * runs this Daintree. From 0.8.0 the library also asks for
+ * `owner-desktop-messages-v1` with follow-ups: it stays cut here until the
+ * person's follow-ups from this computer (#17238), and `presence-v1` until
+ * presence (#17240). Setting the involvement preference from this computer
+ * (#17237) has no token of its own: it rides `involvement-v1`.
  */
 export const DAINTREE_PROTOCOL_FEATURES: readonly ProtocolFeature[] = [
   "thread-messages-v1",
@@ -30,6 +32,7 @@ export const DAINTREE_PROTOCOL_FEATURES: readonly ProtocolFeature[] = [
   "involvement-v1",
   "owner-desktop-answers-v1",
   "person-declines-v1",
+  "owner-desktop-declines-v1",
 ];
 
 function declared(features: readonly ProtocolFeature[]): ProtocolFeature[] {

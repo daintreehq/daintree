@@ -312,6 +312,9 @@ describe("invokeForEndpoint", () => {
     // A Host can never have its owner sign the person's answer (#17101).
     "decisions:answer-question",
     "decisions:get-answer-result",
+    // Nor their decline (#17239).
+    "decisions:decline-question",
+    "decisions:get-decline-result",
   ])("refuses %s over a link even with a context handler", async (channel) => {
     const handler = vi.fn(() => "ran");
     getIpcDispatcher().registerInvoke(channel, handler);
@@ -461,6 +464,8 @@ describe("remote router", () => {
     "user-prompt-templates:open-folder",
     "decisions:answer-question",
     "decisions:get-answer-result",
+    "decisions:decline-question",
+    "decisions:get-decline-result",
   ])("answers %s from this machine for a window driving a host", async (channel) => {
     const router = installRouter();
     const handler = vi.fn(() => "from-this-machine");

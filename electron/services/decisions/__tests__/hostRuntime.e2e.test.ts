@@ -305,6 +305,77 @@ class FakeRelay {
         event_seq: event.seq,
       });
     }
+    // The owner desktop's decline for the person (#17239): a cancel carrying the signed `decline`
+    // flag, from the owner only, and only to a question whose asking desktop declared it takes one.
+    const cancelled = /^\/api\/v1\/questions\/([^/]+)\/cancel$/.exec(pathname);
+    if (method === "POST" && cancelled !== null) {
+      const questionId = cancelled[1]!;
+      const { action } = body as {
+        action: { record: Record<string, unknown>; envelope?: Record<string, unknown> };
+      };
+      const question = this.questions.get(questionId);
+      if (question === undefined) return json(404, { code: "not_found", message: "no question" });
+      const signer = this.devices.find((d) => d.device_id === action.record.signer_device_id);
+      if (action.record.decline !== true || signer?.role !== "owner-desktop") {
+        return json(403, { code: "forbidden", message: "not the owner desktop's decline" });
+      }
+      const creator = this.declared.get(question.signer_device_id) ?? [];
+      if (!creator.includes("owner-desktop-declines-v1")) {
+        return json(409, {
+          code: "invalid_state",
+          message: "the asking desktop doesn't take declines made on the computer",
+          details: { reason: CREATOR_MISSING_FEATURE },
+        });
+      }
+      const revision = Number(action.record.expected_revision);
+      const event = this.append({
+        event_type: "decision.cancelled",
+        question_id: questionId,
+        question_revision: revision,
+        origin_device_id: String(action.record.signer_device_id),
+        data: EventData.action.parse({
+          action: "cancel",
+          record: action.record,
+          envelope: action.envelope,
+          provenance: null,
+          status: "cancelled",
+          revision,
+          target_host_id: question.target_host_id,
+          deliverable: false,
+        }) as Record<string, unknown>,
+      });
+      return json(201, {
+        question_id: questionId,
+        revision,
+        status: "cancelled",
+        event_seq: event.seq,
+      });
+    }
+    // A question's detail as the relay holds it: its state and the actions it took, which a
+    // decline is confirmed from.
+    const detail = /^\/api\/v1\/questions\/([^/]+)$/.exec(pathname);
+    if (method === "GET" && detail !== null) {
+      const questionId = detail[1]!;
+      if (!this.questions.has(questionId)) {
+        return json(404, { code: "not_found", message: "no question" });
+      }
+      const ledger = this.events.filter((e) => e.question_id === questionId);
+      const actions = ledger
+        .filter((e) => e.event_type !== "decision.created")
+        .map((e) => (e.data as { record: { action_id: string; signature: string } }).record);
+      const last = ledger.at(-1)!;
+      const status =
+        last.event_type === "decision.cancelled"
+          ? "cancelled"
+          : last.event_type === "decision.answer.committed"
+            ? "human-answered"
+            : "open";
+      return json(200, {
+        status,
+        revision: last.question_revision,
+        actions: actions.map((record) => ({ action_id: record.action_id, record })),
+      });
+    }
     const thread = /^\/api\/v1\/questions\/([^/]+)\/messages$/.exec(pathname);
     if (method === "POST" && thread !== null) {
       const { message } = body as {
@@ -1225,6 +1296,7 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
       expect(ticket.body).toHaveProperty("features", [
         "involvement-v1",
         "owner-desktop-answers-v1",
+        "owner-desktop-declines-v1",
         "person-declines-v1",
         "phone-images-v1",
         "thread-messages-v1",
@@ -1621,6 +1693,125 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
         host.keys.signing.publicKey
       )
     ).toBe(false);
+  }, 60_000);
+
+  it("types the person's decline made on the owner computer into the Host pane still listening, signed by the owner and never the Host (#17239)", async () => {
+    const { owner, relay, host, terminals, listener, service } = await startHost();
+    relay.features = ["thread-messages-v1", "owner-desktop-declines-v1"];
+    const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
+    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    // The Host told the relay it takes declines made on the computer.
+    expect(relay.declared.get(host.config.deviceId)).toContain("owner-desktop-declines-v1");
+
+    const question = await readOnHost(service, "pane-1", asked);
+    const decline = {
+      reference: question.reference,
+      declineId: "0190f0aa-1111-4222-8333-44445555aaaa",
+      expectedRevision: question.revision,
+    };
+
+    // The Host's own Decisions never signs the person's decline.
+    await expect(service.declineQuestion(decline)).resolves.toEqual({
+      result: "refused",
+      reason: "not-owner",
+    });
+
+    // The owner computer signs it, and the relay commits it.
+    const owners = ownerAnswerPath(owner, relay);
+    await expect(owners.declineForPerson(decline, "host_owner_mac")).resolves.toEqual({
+      result: "submitted",
+      declineId: decline.declineId,
+      outcome: { status: "declined" },
+    });
+    await expect(owners.declineResultForPerson(decline.declineId)).resolves.toMatchObject({
+      result: "read",
+      questionId: asked,
+      outcome: { status: "declined" },
+    });
+
+    // The Host tells the agent still listening that the person declined, as it would a phone's Dismiss.
+    await vi.waitFor(() => expect(terminals.submitted).toHaveLength(1), { timeout: 15_000 });
+    const typed = terminals.submitted[0]!;
+    expect(typed.id).toBe("pane-1");
+    expect(typed.text).toContain("source: human\nstatus: declined\nauthorised: no\nnote: ");
+    expect(typedChoices(typed.text)).toEqual([]);
+    const decision = await callTool(listener.port, "token-pane-1", "get_decision", {
+      question_id: asked,
+    });
+    expect(decision.structuredContent).toMatchObject({
+      question_id: asked,
+      status: "cancelled",
+      closed_reason: "declined",
+      choice: null,
+    });
+    expect(await readOnHost(service, "pane-1", asked)).toMatchObject({
+      status: "cancelled",
+      closedReason: "declined",
+    });
+
+    // The relay was sent it by the owner's device, under the owner's key and not the Host's.
+    const sent = relay.requests.filter((r) => r.path === `/api/v1/questions/${asked}/cancel`);
+    expect(sent.map((r) => r.deviceId)).toEqual([owner.deviceId]);
+    const { action } = sent[0]!.body as { action: { record: Record<string, unknown> } };
+    expect(action.record).toMatchObject({ action: "cancel", decline: true });
+  }, 60_000);
+
+  it("reports a relay too old for declines made on the computer, sending it nothing and typing nothing (#17239)", async () => {
+    const { owner, relay, terminals, listener, service } = await startHost();
+    const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
+    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    const question = await readOnHost(service, "pane-1", asked);
+    const owners = ownerAnswerPath(owner, relay);
+    const decline = {
+      reference: question.reference,
+      declineId: "0190f0aa-1111-4222-8333-44445555bbbb",
+      expectedRevision: question.revision,
+    };
+
+    await expect(owners.declineForPerson(decline, "host_owner_mac")).resolves.toEqual({
+      result: "submitted",
+      declineId: decline.declineId,
+      outcome: { status: "unsupported", by: "relay" },
+    });
+    // The outcome stays, for a view that asks again.
+    await expect(owners.declineResultForPerson(decline.declineId)).resolves.toMatchObject({
+      result: "read",
+      outcome: { status: "unsupported", by: "relay" },
+    });
+    expect(relay.requests.some((r) => r.path.endsWith("/cancel"))).toBe(false);
+    expect(relay.events.filter((e) => e.question_id === asked).map((e) => e.event_type)).toEqual([
+      "decision.created",
+    ]);
+    expect(terminals.submitted).toHaveLength(0);
+  }, 60_000);
+
+  it("reports a Host too old for declines made on the computer, as the relay refuses it (#17239)", async () => {
+    const { owner, relay, host, terminals, listener, service } = await startHost();
+    relay.features = ["thread-messages-v1", "owner-desktop-declines-v1"];
+    const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
+    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    const question = await readOnHost(service, "pane-1", asked);
+    // As a Host from before #17239 would have declared.
+    relay.declared.set(
+      host.config.deviceId,
+      relay.declared.get(host.config.deviceId)!.filter((f) => f !== "owner-desktop-declines-v1")
+    );
+
+    await expect(
+      ownerAnswerPath(owner, relay).declineForPerson(
+        {
+          reference: question.reference,
+          declineId: "0190f0aa-1111-4222-8333-44445555cccc",
+          expectedRevision: question.revision,
+        },
+        "host_owner_mac"
+      )
+    ).resolves.toMatchObject({ outcome: { status: "unsupported", by: "asking-desktop" } });
+    expect(relay.events.filter((e) => e.question_id === asked).map((e) => e.event_type)).toEqual([
+      "decision.created",
+    ]);
+    expect(terminals.submitted).toHaveLength(0);
+    await expect(readOnHost(service, "pane-1", asked)).resolves.toMatchObject({ status: "open" });
   }, 60_000);
 
   it("reports a relay too old for answers made on the computer, sending it nothing and typing nothing (#17101)", async () => {
