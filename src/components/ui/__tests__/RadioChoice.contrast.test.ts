@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { APP_THEME_POLARITY_VARIABLES, BUILT_IN_APP_SCHEMES } from "@shared/theme/themes";
 import { blendOverBackground, contrastRatio, parseRgba } from "@shared/theme/contrast";
+import { cn } from "@/lib/utils";
 import { CHOICE_SELECTED, CHOICE_SHELL, CHOICE_UNSELECTED } from "../RadioChoice";
 
 /**
@@ -60,10 +61,13 @@ function paints(classes: string): { edges: Paint[]; fills: Paint[] } {
   const edges: Paint[] = [];
   const fills: Paint[] = [];
   for (const utility of classes.split(/\s+/)) {
-    const { variant, base } = splitVariant(utility);
-    // A removed or recoloured-by-property edge is no edge to measure.
-    expect(utility, "an edge cannot be removed or set by arbitrary property").not.toMatch(
-      /^(?:[a-z-]+:)*(?:border-(?:0|hidden|none)|\[)/
+    const split = splitVariant(utility);
+    const { variant } = split;
+    // `!border-0` and `border-0!` are the same utility, forced.
+    const base = split.base.replace(/^!|!$/g, "");
+    // A removed (whole or one side) or property-set edge is no edge to measure.
+    expect(base, `${utility}: an edge cannot be removed or set by arbitrary property`).not.toMatch(
+      /^(?:border(?:-[xyselrtb])?-(?:0|hidden|none)|\[)/
     );
     const edge = base.match(/^border-(.+)$/);
     if (edge && !NON_COLOUR_EDGE.test(edge[1]!)) {
@@ -99,10 +103,11 @@ const over = (value: string, backdrop: string) => {
 const SURFACES = ["surface-panel", "surface-panel-elevated"] as const;
 
 // The planes a card is hosted on: the dialog surface of the theme's polarity
-// and the panel pages sit on. A dark theme's elevated plane is its popover
-// plane, so the wash inside the edge is only measured where a card lives: on
-// it the hover wash lands the inside at 2.8-2.9:1, and a colour change between
-// states of one component is not held to 3:1 by WCAG 1.4.11.
+// and the panel pages sit on. A dark theme's elevated plane is a drawer or
+// popover plane, where a card can still land (a plugin radio group in an overlay
+// drawer). The edge is held there against the outside plane in every state and
+// against the selected fill inside; only the transient hover wash is spared its
+// inside seam there, where it lands at 2.8-2.9:1 on the dark themes.
 function hostPlanes(scheme: (typeof BUILT_IN_APP_SCHEMES)[number]): string[] {
   const ref = APP_THEME_POLARITY_VARIABLES[scheme.type]["--theme-surface-dialog"];
   const dialog = ref?.match(/^var\(--theme-([a-z-]+)\)$/)?.[1];
@@ -115,9 +120,11 @@ const EDGE_MIN_CONTRAST = 3;
 // `prefers-contrast: more` rebinds theme tokens app-wide (`border-input` to
 // `text-secondary`), so the edge it paints is read from the stylesheet.
 const INCREASED_CONTRAST_REBINDS = new Map(
-  [...PREFERS_CONTRAST_CSS.matchAll(/--theme-([a-z-]+):\s*var\(--theme-([a-z-]+)\)/g)].map(
-    (m) => [m[1]!, m[2]!] as const
-  )
+  [
+    ...PREFERS_CONTRAST_CSS.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(
+      /--theme-([a-z-]+)\s*:\s*var\(\s*--theme-([a-z-]+)\s*\)/g
+    ),
+  ].map((m) => [m[1]!, m[2]!] as const)
 );
 
 const unselected = paints(CHOICE_UNSELECTED);
@@ -131,25 +138,38 @@ interface State {
   edge: string;
   /** The theme token filling the card under the edge, or null for an open card. */
   fill: string | null;
+  /**
+   * Whether the inside of the edge is measured on every plane. Hover is a
+   * transient pointer state, so only the planes a card is hosted on carry it.
+   */
+  insideOnEveryPlane: boolean;
 }
 
 const restEdge = only(unselected.edges, "")[0]!;
+const restFill = only(unselected.fills, "")[0]?.token ?? null;
+const hoverEdge = only(unselected.edges, "hover:")[0]?.token;
+const hoverFill = only(unselected.fills, "hover:")[0]?.token;
 const selectedEdge = only(selected.edges, "")[0]!;
-const hoverFill = only(unselected.fills, "hover:")[0];
 const STATES: State[] = [
-  { name: "resting", edge: restEdge.token, fill: null },
-  // Fill-only hover keeps the resting edge, over its wash; a hover edge of its
-  // own replaces it.
-  ...(hoverFill
+  { name: "resting", edge: restEdge.token, fill: restFill, insideOnEveryPlane: true },
+  // Hover repaints the edge, the fill, or both; what it leaves alone is the
+  // resting paint. A fill-only hover keeps the resting edge over its wash.
+  ...(hoverEdge || hoverFill
     ? [
         {
           name: "hover",
-          edge: only(unselected.edges, "hover:")[0]?.token ?? restEdge.token,
-          fill: hoverFill.token,
+          edge: hoverEdge ?? restEdge.token,
+          fill: hoverFill ?? restFill,
+          insideOnEveryPlane: false,
         },
       ]
     : []),
-  { name: "selected", edge: selectedEdge.token, fill: only(selected.fills, "")[0]!.token },
+  {
+    name: "selected",
+    edge: selectedEdge.token,
+    fill: only(selected.fills, "")[0]!.token,
+    insideOnEveryPlane: true,
+  },
 ];
 
 describe("RadioChoice card edges", () => {
@@ -157,6 +177,12 @@ describe("RadioChoice card edges", () => {
     expect(only(unselected.edges, "")).toHaveLength(1);
     expect(only(selected.edges, "")).toHaveLength(1);
     expect(only(selected.fills, "")).toHaveLength(1);
+    // Two utilities for one property in one state leave the later one to win in
+    // `cn()`, and this reads the first.
+    for (const list of [unselected.edges, unselected.fills, selected.edges, selected.fills]) {
+      const variants = list.map((p) => p.variant);
+      expect(new Set(variants).size).toBe(variants.length);
+    }
     for (const { token } of [...unselected.edges, ...selected.edges]) {
       expect(token).toMatch(NEUTRAL_INK);
     }
@@ -172,8 +198,13 @@ describe("RadioChoice card edges", () => {
     for (const { variant } of selected.fills) expect(variant).toBe("");
   });
 
-  it("keeps a 1px border box for the edge to be painted in", () => {
-    expect(CHOICE_SHELL.split(/\s+/)).toContain("border");
+  // Composed the way the row does, so a width utility that `cn()` resolves away
+  // (a later `border-0`) cannot leave the edge with nothing to paint in.
+  it.each([
+    ["unselected", CHOICE_UNSELECTED],
+    ["selected", CHOICE_SELECTED],
+  ])("keeps a bordered box on a %s card for the edge to be painted in", (_state, classes) => {
+    expect(cn(CHOICE_SHELL, classes).split(/\s+/)).toContain("border");
   });
 
   for (const state of STATES) {
@@ -191,7 +222,7 @@ describe("RadioChoice card edges", () => {
           const fill = state.fill ? over(tokens[state.fill]!, plane) : plane;
           const edge = over(tokens[state.edge]!, fill);
           const against: Array<[string, string]> = [[surface, plane]];
-          if (state.fill && hostPlanes(scheme).includes(surface)) {
+          if (state.fill && (state.insideOnEveryPlane || hostPlanes(scheme).includes(surface))) {
             against.push([state.fill, fill]);
           }
           for (const [what, backdrop] of against) {
@@ -225,6 +256,12 @@ describe("RadioChoice card edges", () => {
           chosen,
           `${scheme.id} on ${surface}: chosen edge ${chosen.toFixed(2)}:1 vs resting ${rest.toFixed(2)}:1`
         ).toBeGreaterThan(rest);
+        // A rebind that moved the resting edge somewhere weaker would pass the
+        // ordering on its own.
+        expect(
+          rest,
+          `${scheme.id} on ${surface}: resting edge ${rest.toFixed(2)}:1`
+        ).toBeGreaterThanOrEqual(EDGE_MIN_CONTRAST);
       }
     }
   );
