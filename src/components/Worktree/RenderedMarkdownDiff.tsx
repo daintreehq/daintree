@@ -89,13 +89,15 @@ export interface RenderedMarkdownDiffProps {
    * How many discrete changes the document holds, so the host can offer a
    * counter and a stepper. A modified pair is ONE change, not two. Stamped with
    * the attempt it counts and never reported while a comparison is pending, so
-   * the host can't step through the previous document's changes.
+   * the host can't step through the previous document's changes. Withdrawn
+   * with `null`, never `0`: zero is a finished comparison with no changes, a
+   * verdict a host acts on, while a withdrawn count is no verdict at all.
    *
    * Reported rather than derived by the host because the host has a patch and
    * this component has the model — and the two disagree by design: a patch hunk
    * is a run of lines, a change here is a block the reader can point at.
    */
-  onChangeCount?: (count: number, forAttempt: string) => void;
+  onChangeCount?: (count: number | null, forAttempt: string) => void;
 }
 
 /**
@@ -585,7 +587,7 @@ export function RenderedMarkdownDiff({
     // as the next comparison starts. The host keys counts by attempt, and a
     // refresh or a layout switch can remount this view on the very same attempt
     // while its build is still pending; the old count must not come back with it.
-    return () => onChangeCount?.(0, attemptKey);
+    return () => onChangeCount?.(null, attemptKey);
   }, [onChangeCount, counted, changeCount, attemptKey]);
 
   // Which folded runs the reader has opened. Keyed by run id rather than index

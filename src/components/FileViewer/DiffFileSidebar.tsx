@@ -22,6 +22,7 @@ import {
 } from "@/hooks/useFileRowMenuItems";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
 import { useRovingRows, type UseRovingRowsResult } from "@/hooks/useRovingRows";
+import { useAriaKeyshortcuts } from "@/hooks/useKeybinding";
 import { LIST_DETAIL_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import {
   DIFF_STATUS_CONFIG,
@@ -66,6 +67,8 @@ interface ShelfRowContext {
   statusIsLocal: boolean;
   onSelect: (index: number) => void;
   toggleViewed: (worktreePath: string, viewedKey: string) => void;
+  /** The Viewed shortcut for `aria-keyshortcuts`; undefined while it is unbound. */
+  viewedShortcut: string | undefined;
   renderFileRowMenuItems: ReturnType<typeof useFileRowMenuItems>["renderItems"];
   tabStopKey: string | null;
   onRowFocus: UseRovingRowsResult["onRowFocus"];
@@ -121,22 +124,14 @@ function DiffShelfRow({ file, ctx }: { file: IndexedDiffEntry; ctx: ShelfRowCont
         ref={ctx.rowRef(rowKey)}
         // One tab stop for the whole shelf; the arrow keys move it.
         tabIndex={isTabStop ? 0 : -1}
-        aria-keyshortcuts="V"
+        // The viewed box is out of the tab order with every other control in the
+        // row, so its key is advertised here. The key itself is the diff
+        // viewer's Viewed action, which marks the row holding focus (found by
+        // its `data-file-index`) rather than the open file.
+        aria-keyshortcuts={ctx.viewedShortcut}
         // The viewed box is out of the tab order, so its state rides here.
         aria-description={viewed ? "Viewed" : undefined}
         onKeyDown={(event) => {
-          // The viewed box is out of the tab order with every other control in
-          // the row, so its key lives on the row's own button.
-          if (
-            event.key.toLowerCase() === "v" &&
-            !event.metaKey &&
-            !event.ctrlKey &&
-            !event.altKey
-          ) {
-            event.preventDefault();
-            ctx.toggleViewed(ctx.worktreePath, file.viewedKey);
-            return;
-          }
           if (!ctx.hasRowMenu || !isFileRowMenuKey(event)) return;
           // Anchored to the whole row, not this button: the menu
           // targets the file, and the row is what lifts to show
@@ -286,6 +281,7 @@ export function DiffFileSidebar({
     useCallback((state) => selectViewedSet(state, worktreePath), [worktreePath])
   );
   const toggleViewed = useDiffViewedStore((state) => state.toggleViewed);
+  const viewedShortcut = useAriaKeyshortcuts("diff.toggleViewed");
 
   const summary = useMemo(() => summarizeChangeSet(files), [files]);
   const viewedCount = useMemo(
@@ -369,6 +365,7 @@ export function DiffFileSidebar({
       statusIsLocal,
       onSelect,
       toggleViewed,
+      viewedShortcut,
       renderFileRowMenuItems,
       tabStopKey,
       onRowFocus,
@@ -383,6 +380,7 @@ export function DiffFileSidebar({
       statusIsLocal,
       onSelect,
       toggleViewed,
+      viewedShortcut,
       renderFileRowMenuItems,
       tabStopKey,
       onRowFocus,

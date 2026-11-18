@@ -5,6 +5,7 @@ export const SCOPE_NOTES: Record<KeyScope, string> = {
   global: "Across the app",
   worktreeGrid: "In an expanded worktree card",
   "dev-preview": "In dev preview",
+  diff: "In a diff viewer",
 };
 
 /** A registration as the settings list reads it: its own config plus the keys that trigger it now. */

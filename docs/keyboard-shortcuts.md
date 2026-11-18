@@ -177,6 +177,11 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 
 | Action | macOS | Windows/Linux |
 | --- | --- | --- |
+| Next hunk in the diff, on into the next file | `N` | `N` |
+| Previous hunk in the diff, back into the previous file | `P` | `P` |
+| Next file in the diff | `]` | `]` |
+| Previous file in the diff | `[` | `[` |
+| Mark the diff's file viewed, or the focused file in its list | `V` | `V` |
 | Stage all changes | `⌘+K ⌘+G` | `Ctrl+K Ctrl+G` |
 | Commit staged changes | `⌘+K ⌘+C` | `Ctrl+K Ctrl+C` |
 | Push to remote | `⌘+K ⌘+P` | `Ctrl+K Ctrl+P` |

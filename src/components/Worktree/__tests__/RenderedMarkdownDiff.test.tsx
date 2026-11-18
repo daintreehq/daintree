@@ -190,8 +190,12 @@ describe("RenderedMarkdownDiff", () => {
     // The number the stepper shows is a count of things the reader accepts or
     // rejects. A substitution is one of those; reporting its two halves
     // separately claims twice as many changes as the document has.
-    const counts: number[] = [];
-    renderDiff(EDITED_DIFF, EDITED_SOURCE, { onChangeCount: (n: number) => counts.push(n) });
+    const counts: (number | null)[] = [];
+    renderDiff(EDITED_DIFF, EDITED_SOURCE, {
+      onChangeCount: (n: number | null) => {
+        counts.push(n);
+      },
+    });
 
     expect(counts.at(-1)).toBe(1);
   });
@@ -891,7 +895,7 @@ describe("RenderedMarkdownDiff off the main thread", () => {
     // Its count is withdrawn, and nothing is reported for the attempt in flight.
     expect(onChangeCount.mock.calls).toEqual([
       [1, "attempt-1"],
-      [0, "attempt-1"],
+      [null, "attempt-1"],
     ]);
 
     await act(async () => builds[1]!.resolve(engineResult(builds[1])));
@@ -911,7 +915,7 @@ describe("RenderedMarkdownDiff off the main thread", () => {
 
     expect(onChangeCount.mock.calls).toEqual([
       [1, "attempt-3"],
-      [0, "attempt-3"],
+      [null, "attempt-3"],
     ]);
   });
 

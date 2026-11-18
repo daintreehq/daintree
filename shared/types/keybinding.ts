@@ -1,14 +1,14 @@
 import type { BuiltInActionId } from "./actions.js";
 
 // Only scopes with a production setScope/useKeybindingScope caller belong
-// here. "portal" went with the Portal dock (#17256); plugin manifests keep it
+// here ("diff" is pushed by DiffPane while focus is inside it). "portal" went with the Portal dock (#17256); plugin manifests keep it
 // as a retired scope (`pluginKeybindingScopes.ts`). "terminal", "modal", and
 // "worktreeList" were removed (never pushed):
 // terminal handling lives in the capture-handler bailouts + XtermAdapter,
 // modal Escape in the escape stack, and worktree-list navigation in
 // useWorktreeSidebarKeyboard. Declaring a scope nothing activates produces
 // bindings that render in the settings/reference UI but can never fire.
-export type KeyScope = "global" | "worktreeGrid" | "dev-preview";
+export type KeyScope = "global" | "worktreeGrid" | "dev-preview" | "diff";
 
 export interface KeybindingConfig {
   actionId: BuiltInActionId;

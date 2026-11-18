@@ -398,6 +398,14 @@ describe("DiffViewer moved-line styling", () => {
     clearCapturedDiffProps();
   });
 
+  function classesOf(generate: GenerateLineClassName, change: ChangeData): string[] {
+    return generate({ changes: [change], defaultGenerate: () => "diff-line" }).split(" ");
+  }
+
+  function movedClasses(generate: GenerateLineClassName, change: ChangeData): string[] {
+    return classesOf(generate, change).filter((name) => name.startsWith("diff-line-moved"));
+  }
+
   it("tags relocated rows with side-specific moved classes", () => {
     render(wrap(<DiffViewer diff={MOVED_DIFF} viewType="split" />));
 
@@ -407,13 +415,9 @@ describe("DiffViewer moved-line styling", () => {
     const ins = hunks[1]!.changes.find((c) => c.type === "insert")!;
     const ctx = hunks[0]!.changes.find((c) => c.type === "normal")!;
 
-    expect(generate({ changes: [del], defaultGenerate: () => "diff-line" })).toBe(
-      "diff-line diff-line-moved-old"
-    );
-    expect(generate({ changes: [ins], defaultGenerate: () => "diff-line" })).toBe(
-      "diff-line diff-line-moved-new"
-    );
-    expect(generate({ changes: [ctx], defaultGenerate: () => "diff-line" })).toBe("diff-line");
+    expect(movedClasses(generate, del)).toEqual(["diff-line-moved-old"]);
+    expect(movedClasses(generate, ins)).toEqual(["diff-line-moved-new"]);
+    expect(classesOf(generate, ctx)).toEqual(["diff-line"]);
   });
 
   it("leaves rows untouched when nothing moved", () => {
@@ -423,7 +427,30 @@ describe("DiffViewer moved-line styling", () => {
     const hunks = capturedDiffProps.hunks as HunkData[];
     const ins = hunks[0]!.changes.find((c) => c.type === "insert")!;
 
-    expect(generate({ changes: [ins], defaultGenerate: () => "diff-line" })).toBe("diff-line");
+    expect(movedClasses(generate, ins)).toEqual([]);
+    // Still the hunk's first change, so still where a step lands, in either
+    // column of a split row.
+    expect(classesOf(generate, ins)).toContain("diff-hunk-anchor");
+    expect(
+      generate({
+        changes: [undefined as unknown as ChangeData, ins],
+        defaultGenerate: () => "diff-line",
+      }).split(" ")
+    ).toContain("diff-hunk-anchor");
+  });
+
+  // The hunk stepper's landing rows (#17326): each hunk's first change only.
+  it("marks each hunk's first changed row as its anchor and no other row", () => {
+    render(wrap(<DiffViewer diff={MOVED_DIFF} viewType="split" />));
+
+    const generate = capturedDiffProps.generateLineClassName as GenerateLineClassName;
+    const hunks = capturedDiffProps.hunks as HunkData[];
+    for (const hunk of hunks) {
+      const first = hunk.changes.findIndex((c) => c.type !== "normal");
+      hunk.changes.forEach((change, index) => {
+        expect(classesOf(generate, change).includes("diff-hunk-anchor")).toBe(index === first);
+      });
+    }
   });
 });
 

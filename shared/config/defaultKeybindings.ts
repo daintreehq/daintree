@@ -753,6 +753,55 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     description: "Reload dev preview",
     category: "Dev preview",
   },
+  // Bare keys, live only while focus is inside a diff viewer (DiffPane pushes
+  // the scope), so they never reach another panel. The `when` keeps a rebind
+  // to a modified key out of the viewer's own text fields too: the global
+  // layer lets modified keys through from those, and bare ones it never does.
+  {
+    actionId: "diff.nextChange",
+    combo: "N",
+    scope: "diff",
+    priority: 5,
+    description: "Next hunk in the diff, on into the next file",
+    category: "Git",
+    when: "!textInputFocused && !terminalFocused",
+  },
+  {
+    actionId: "diff.previousChange",
+    combo: "P",
+    scope: "diff",
+    priority: 5,
+    description: "Previous hunk in the diff, back into the previous file",
+    category: "Git",
+    when: "!textInputFocused && !terminalFocused",
+  },
+  {
+    actionId: "diff.nextFile",
+    combo: "]",
+    scope: "diff",
+    priority: 5,
+    description: "Next file in the diff",
+    category: "Git",
+    when: "!textInputFocused && !terminalFocused",
+  },
+  {
+    actionId: "diff.previousFile",
+    combo: "[",
+    scope: "diff",
+    priority: 5,
+    description: "Previous file in the diff",
+    category: "Git",
+    when: "!textInputFocused && !terminalFocused",
+  },
+  {
+    actionId: "diff.toggleViewed",
+    combo: "V",
+    scope: "diff",
+    priority: 5,
+    description: "Mark the diff's file viewed, or the focused file in its list",
+    category: "Git",
+    when: "!textInputFocused && !terminalFocused",
+  },
   {
     actionId: "nav.toggleSidebar",
     combo: "Cmd+B",

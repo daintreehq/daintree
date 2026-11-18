@@ -179,6 +179,13 @@ export type BuiltInKeyAction =
   // Dev preview actions
   | "devPreview.reloadPreview"
 
+  // Diff viewer actions
+  | "diff.nextChange"
+  | "diff.previousChange"
+  | "diff.nextFile"
+  | "diff.previousFile"
+  | "diff.toggleViewed"
+
   // Action palette
   | "action.palette"
   | "action.palette.open"
@@ -385,6 +392,11 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "panel.diagnosticsMessages",
   "notifications.toggle",
   "devPreview.reloadPreview",
+  "diff.nextChange",
+  "diff.previousChange",
+  "diff.nextFile",
+  "diff.previousFile",
+  "diff.toggleViewed",
   "action.palette",
   "action.palette.open",
   "action.repeatLast",
