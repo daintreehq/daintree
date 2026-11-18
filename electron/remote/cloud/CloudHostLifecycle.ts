@@ -168,11 +168,6 @@ const DEFINITE_REFUSALS = new Set<CloudHostError["code"]>([
   "refused",
 ]);
 const LABEL_BINDING = "daintree-binding";
-/**
- * The fingerprint of the account key a machine took with its create, for a
- * provider that takes it then: another device's key never reaches it later.
- */
-const LABEL_SSH_KEY = "daintree-ssh-key";
 
 export interface CloudHostLifecycleDeps {
   store: CloudHostStore;
@@ -914,7 +909,6 @@ export class CloudHostLifecycle {
         labels: {
           [LABEL_MARKER]: "1",
           [LABEL_BINDING]: bindingId,
-          ...(publicKey ? { [LABEL_SSH_KEY]: hostKeyFingerprint(publicKey) } : {}),
         },
         idempotencyKey: creation.idempotencyKey,
         publicKey,
@@ -1160,15 +1154,6 @@ export class CloudHostLifecycle {
       throw invalid(
         "That machine was created with snapshots off, so stopping it erases its disk. Daintree only adds machines whose disk survives a stop."
       );
-    }
-    // A machine that took its key at create holds only the key of the device that created it.
-    if (sshKeyTiming(provider) === "at-create") {
-      const key = await this.deps.files.publicKey(account.id);
-      if (resource.labels[LABEL_SSH_KEY] !== hostKeyFingerprint(key)) {
-        throw invalid(
-          "That machine was created with another device's SSH key, so this device can't sign in to it. Add it from the device that created it."
-        );
-      }
     }
     // Its own lifetime stays as it is; a start renews to it, where the provider takes one then.
     binding.resourceId = resource.resourceId;

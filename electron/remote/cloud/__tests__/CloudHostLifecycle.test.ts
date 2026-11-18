@@ -3290,45 +3290,6 @@ describe("CloudHostLifecycle SSH key at create", () => {
     expect(provider.sshAccess).not.toHaveBeenCalled();
   });
 
-  it("labels a create with its key's fingerprint, and imports only a machine holding this device's key", async () => {
-    const { lifecycle, provider, files, account, state } = await setup({}, { sshKey: "at-create" });
-    await lifecycle.create(request(account.id));
-    await vi.waitFor(() => expect(provider.create).toHaveBeenCalledTimes(1));
-    const accountKey = await files.publicKey(account.id);
-    const sentLabels = vi.mocked(provider.create).mock.calls[0]![1].labels;
-    expect(sentLabels["daintree-ssh-key"]).toBe(hostKeyFingerprint(accountKey));
-    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
-
-    const other = { resourceId: "bx_otherdev01", name: "Other" };
-    state.machine = resource({ ...other, labels: { "daintree-ssh-key": "SHA256:another-device" } });
-    await expect(
-      lifecycle.importMachine({
-        accountId: account.id,
-        resourceId: other.resourceId,
-        name: "other",
-      })
-    ).rejects.toThrow(/another device's SSH key/);
-    state.machine = resource({ ...other, labels: {} });
-    await expect(
-      lifecycle.importMachine({
-        accountId: account.id,
-        resourceId: other.resourceId,
-        name: "other",
-      })
-    ).rejects.toThrow(/another device's SSH key/);
-    state.machine = resource({
-      ...other,
-      labels: { "daintree-ssh-key": hostKeyFingerprint(accountKey) },
-    });
-    await expect(
-      lifecycle.importMachine({
-        accountId: account.id,
-        resourceId: other.resourceId,
-        name: "other",
-      })
-    ).resolves.toMatchObject({ hostId: expect.any(String) });
-  });
-
   it("takes a create the provider couldn't make as asked for a refusal, keeping its words", async () => {
     const { lifecycle, provider, account } = await setup({}, { sshKey: "at-create" });
     const refusal = new Error("no network there");

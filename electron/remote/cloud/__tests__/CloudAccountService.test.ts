@@ -132,8 +132,8 @@ describe("CloudAccountService", () => {
     expect(vault.sets.get(summary.id)).toEqual({ apiKey: "boat_live_0123456789abcd" });
   });
 
-  it("names a project account for its project and a workspace one for its sign-in by default", async () => {
-    const scoped = (kind: "project" | "workspace") =>
+  it("names a project or provider account for itself and a workspace one for its sign-in by default", async () => {
+    const scoped = (kind: "project" | "workspace" | "account") =>
       fakeProvider({
         checkCredentials: vi.fn(async () => ({
           identity: "daintree@acme-build.iam.gserviceaccount.com",
@@ -143,6 +143,7 @@ describe("CloudAccountService", () => {
     for (const [kind, expected] of [
       ["project", "Acme Build"],
       ["workspace", "daintree@acme-build.iam.gserviceaccount.com"],
+      ["account", "Acme Build"],
     ] as const) {
       const { accounts } = service({ provider: scoped(kind) });
       const summary = await accounts.addAccount({

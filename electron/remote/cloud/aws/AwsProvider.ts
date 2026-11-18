@@ -452,7 +452,6 @@ export class AwsProvider implements CloudProvider {
     const launchTags = {
       ...marker,
       "daintree-binding": "permission-check",
-      "daintree-ssh-key": "SHA256:permission-check",
       Name: "daintree-permission-check",
     };
     await Promise.all([

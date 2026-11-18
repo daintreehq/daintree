@@ -906,9 +906,7 @@ describe("AwsProvider", () => {
     const keys = [...probe("RunInstances").entries()]
       .filter(([key]) => /^TagSpecification\.1\.Tag\.\d+\.Key$/.test(key))
       .map(([, value]) => value);
-    expect(keys).toEqual(
-      expect.arrayContaining(["daintree", "daintree-binding", "daintree-ssh-key"])
-    );
+    expect(keys).toEqual(expect.arrayContaining(["daintree", "daintree-binding"]));
   });
 
   it("fails the check when AWS can't be asked, rather than passing it unverified", async () => {

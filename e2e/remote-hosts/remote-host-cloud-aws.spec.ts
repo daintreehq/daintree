@@ -291,7 +291,7 @@ test.describe.serial("Cloud hosts: an AWS EC2 instance as a Remote Host", () => 
     await dialog.getByRole("radio", { name: /^t3\.medium/ }).check();
     const review = dialog.getByTestId("add-cloud-host-review");
     await expect(review).toContainText(`AWS account ${FAKE_AWS_ACCOUNT}`);
-    await expect(review).toContainText("still billed for storage");
+    await expect(review).toContainText("AWS bills only for its disk while it's stopped.");
     await shoot(page, "add-aws-host-form");
     expect(run.ec2.calls("RunInstances")).toHaveLength(0);
 
@@ -343,7 +343,7 @@ test.describe.serial("Cloud hosts: an AWS EC2 instance as a Remote Host", () => 
     await shoot(page, "aws-host-connected");
   });
 
-  test("3. the host menu stops the instance, saying only compute billing ends", async () => {
+  test("3. the host menu stops the instance, saying it then bills only for its disk", async () => {
     const page = run.b.window;
     await closeSettings(page);
     await page.locator(SEL.remoteHosts.hostChip).click();
@@ -352,8 +352,8 @@ test.describe.serial("Cloud hosts: an AWS EC2 instance as a Remote Host", () => 
     await expect(stopItem).toContainText(`Stop ${HOST_NAME}`);
     await stopItem.click();
     const confirm = confirmDialog(page, `Stop '${HOST_NAME}'?`);
-    await expect(confirm).toContainText("billing for its compute stops");
-    await expect(confirm).toContainText("The disk is still billed for storage while it's stopped.");
+    await expect(confirm).toContainText("AWS bills only for its disk while it's stopped.");
+    await expect(confirm).not.toContainText("billing for the machine stops");
     await shoot(page, "aws-stop-confirm");
     await confirm.getByRole("button", { name: "Stop machine" }).click();
     await expect
