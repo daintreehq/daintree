@@ -99,54 +99,68 @@ const StoredArmSchema = z
   })
   .strict();
 
-/** Direct HTTP to the metadata server: no proxy, no redirect followed, a short deadline and a bounded body. */
-export const metadataFetch: MetadataFetch = (request, signal) =>
-  new Promise((resolve, reject) => {
-    const req = http.request(
-      {
-        host: METADATA_HOST,
-        port: 80,
-        method: request.method,
-        path: request.path,
-        headers: request.headers,
-        timeout: METADATA_TIMEOUT_MS,
-        signal,
-        agent: false,
-      },
-      (res) => {
-        const chunks: Buffer[] = [];
-        let size = 0;
-        res.on("data", (chunk: Buffer) => {
-          size += chunk.length;
-          if (size > MAX_BODY_BYTES) {
-            req.destroy(new MetadataUnreadable("Metadata answer too large"));
-            return;
-          }
-          chunks.push(chunk);
-        });
-        res.on("end", () => {
-          clearTimeout(deadline);
-          resolve({
-            status: res.statusCode ?? 0,
-            headers: res.headers,
-            body: Buffer.concat(chunks).toString("utf8"),
+/**
+ * Direct HTTP to a metadata server: no proxy, no redirect followed, one
+ * deadline for the whole exchange and a bounded body. `host` and `port` are
+ * for tests; the real one is the link-local address both clouds use.
+ */
+export function createMetadataFetch(
+  options: { host?: string; port?: number; timeoutMs?: number } = {}
+): MetadataFetch {
+  const timeoutMs = options.timeoutMs ?? METADATA_TIMEOUT_MS;
+  return (request, signal) =>
+    new Promise((resolve, reject) => {
+      const req = http.request(
+        {
+          host: options.host ?? METADATA_HOST,
+          port: options.port ?? 80,
+          method: request.method,
+          path: request.path,
+          headers: request.headers,
+          timeout: timeoutMs,
+          signal,
+          agent: false,
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          let size = 0;
+          res.on("data", (chunk: Buffer) => {
+            size += chunk.length;
+            if (size > MAX_BODY_BYTES) {
+              req.destroy(new MetadataUnreadable("Metadata answer too large"));
+              return;
+            }
+            chunks.push(chunk);
           });
-        });
-        res.on("error", reject);
-      }
-    );
-    // The whole exchange, not just a quiet socket: a server trickling bytes can't hold the caller.
-    const deadline = setTimeout(
-      () => req.destroy(new MetadataUnreadable("Metadata server timed out")),
-      METADATA_TIMEOUT_MS
-    );
-    req.on("timeout", () => req.destroy(new MetadataUnreadable("Metadata server timed out")));
-    req.on("error", (error) => {
-      clearTimeout(deadline);
-      reject(error);
+          res.on("end", () => {
+            clearTimeout(deadline);
+            resolve({
+              status: res.statusCode ?? 0,
+              headers: res.headers,
+              body: Buffer.concat(chunks).toString("utf8"),
+            });
+          });
+          res.on("error", (error) => {
+            clearTimeout(deadline);
+            reject(error);
+          });
+        }
+      );
+      // The whole exchange, not just a quiet socket: a server trickling bytes can't hold the caller.
+      const deadline = setTimeout(
+        () => req.destroy(new MetadataUnreadable("Metadata server timed out")),
+        timeoutMs
+      );
+      req.on("timeout", () => req.destroy(new MetadataUnreadable("Metadata server timed out")));
+      req.on("error", (error) => {
+        clearTimeout(deadline);
+        reject(error);
+      });
+      req.end();
     });
-    req.end();
-  });
+}
+
+export const metadataFetch: MetadataFetch = createMetadataFetch();
 
 /** Runs a fixed program with no shell, no stdin and a minimal environment; resolves once it has exited. */
 export const runCommand: CommandRun = (file, args, signal) =>
@@ -164,19 +178,28 @@ export const runCommand: CommandRun = (file, args, signal) =>
       killSignal: "SIGKILL",
     });
     let stderr = "";
+    let settled = false;
+    const settle = (finish: () => void) => {
+      if (settled) return;
+      settled = true;
+      finish();
+    };
     child.stderr?.on("data", (chunk: Buffer) => {
       if (stderr.length < MAX_STDERR_BYTES) stderr += chunk.toString("utf8");
     });
-    child.once("error", (error) => {
+    // Kept for the child's whole life: a second failed kill must never go unheard and crash the host.
+    child.on("error", (error) => {
       // Once it was started, losing hold of it (a cancel, a kill that failed) says nothing of
       // whether it went ahead; only a program that never started is a refusal.
       if (child.pid !== undefined || (error as NodeJS.ErrnoException).code === "ABORT_ERR") {
-        resolve({ code: null, stderr });
+        settle(() => resolve({ code: null, stderr }));
       } else {
-        reject(error);
+        settle(() => reject(error));
       }
     });
-    child.once("close", (code) => resolve({ code, stderr: stderr.slice(0, MAX_STDERR_BYTES) }));
+    child.once("close", (code) =>
+      settle(() => resolve({ code, stderr: stderr.slice(0, MAX_STDERR_BYTES) }))
+    );
   });
 
 function header(response: MetadataResponse, name: string): string | null {

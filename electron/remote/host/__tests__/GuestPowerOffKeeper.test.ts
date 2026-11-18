@@ -207,7 +207,11 @@ describe("GuestPowerOffKeeper (#17362)", () => {
     const verify = gate();
     h.identity.hold = verify.promise;
     const regrant = h.keeper.set({ target: TARGET, enabled: true });
+    // Its check is under way before the take-back arrives.
+    await vi.waitFor(() => expect(h.system.verifyIdentity).toHaveBeenCalledTimes(2));
     const revoke = h.keeper.set({ target: TARGET, enabled: false });
+    // Another machine's take-back arriving later hides nothing.
+    void h.keeper.set({ target: OTHER, enabled: false });
     expect(h.keeper.status().armed).toBe(false);
     await h.keeper.tick();
     expect(h.launch).not.toHaveBeenCalled();
@@ -323,18 +327,60 @@ describe("GuestPowerOffKeeper (#17362)", () => {
     expect(h.launch).not.toHaveBeenCalled();
   });
 
-  it("keeps trying to remove a saved permission it couldn't, and says so meanwhile", async () => {
+  it("keeps trying to remove a saved permission it couldn't, on its own timer, and says so meanwhile", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const h = make();
+      await h.keeper.set({ target: TARGET, enabled: true });
+      h.saveFailures.push(new Error("EROFS"));
+      await expect(h.keeper.set({ target: TARGET, enabled: false })).resolves.toEqual({
+        armed: false,
+        problem: expect.stringContaining("couldn't remove"),
+      });
+      expect(h.stored()).not.toBeNull();
+      await vi.advanceTimersByTimeAsync(24 * 60 * MINUTE);
+      expect(h.stored()).toBeNull();
+      expect(h.keeper.status()).toEqual({ armed: false, problem: null });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never removes a permission saved after the one a pending removal was for", async () => {
     const h = make();
     await h.keeper.set({ target: TARGET, enabled: true });
     h.saveFailures.push(new Error("EROFS"));
-    await expect(h.keeper.set({ target: TARGET, enabled: false })).resolves.toEqual({
-      armed: false,
-      problem: expect.stringContaining("couldn't remove"),
+    await h.keeper.set({ target: TARGET, enabled: false });
+    // A new grant is being checked when the pass that retries the removal comes.
+    const verify = gate();
+    h.identity.hold = verify.promise;
+    const regrant = h.keeper.set({ target: TARGET, enabled: true });
+    await vi.waitFor(() => expect(h.system.verifyIdentity).toHaveBeenCalledTimes(2));
+    const ticking = h.keeper.tick();
+    h.identity.hold = null;
+    verify.release();
+    await regrant;
+    await ticking;
+    expect(h.stored()).toEqual({ bootId: BOOT, target: TARGET });
+    expect(h.keeper.status()).toEqual({ armed: true, problem: null });
+  });
+
+  it("keeps what it saved when it shuts down partway through a repeat grant", async () => {
+    const h = make();
+    await h.keeper.set({ target: TARGET, enabled: true });
+    const saving = gate();
+    const save = h.system.saveArm.getMockImplementation()!;
+    h.system.saveArm.mockImplementationOnce(async (arm) => {
+      await saving.promise;
+      return save(arm);
     });
-    expect(h.stored()).not.toBeNull();
-    await h.pass(MINUTE);
-    expect(h.stored()).toBeNull();
-    expect(h.keeper.status()).toEqual({ armed: false, problem: null });
+    const regrant = h.keeper.set({ target: TARGET, enabled: true });
+    await vi.waitFor(() => expect(h.system.saveArm).toHaveBeenCalledTimes(2));
+    h.keeper.dispose();
+    saving.release();
+    await regrant;
+    // Shutting down isn't a take-back: the next start in this boot finds it.
+    expect(h.stored()).toEqual({ bootId: BOOT, target: TARGET });
   });
 
   it("takes back up a permission from this boot after a restart, checked against the machine again", async () => {
@@ -356,11 +402,33 @@ describe("GuestPowerOffKeeper (#17362)", () => {
     expect(h.keeper.status().armed).toBe(false);
   });
 
-  it("keeps a saved permission it can't place in a boot, without acting on it", async () => {
-    const h = make({ stored: { bootId: BOOT, target: TARGET }, bootId: null });
+  it("keeps a saved permission it can't place in a boot yet, without acting on it, and looks again later", async () => {
+    const boot = { id: null as string | null };
+    const h = make({ stored: { bootId: BOOT, target: TARGET } });
+    h.system.bootId.mockImplementation(async () => boot.id);
     await h.keeper.restore();
     expect(h.stored()).not.toBeNull();
     expect(h.keeper.status().armed).toBe(false);
+    await h.pass(30_000);
+    expect(h.system.verifyIdentity).not.toHaveBeenCalled();
+    boot.id = BOOT;
+    await h.pass(3 * MINUTE);
+    expect(h.keeper.status()).toEqual({ armed: true, problem: null });
+  });
+
+  it("never takes back up a saved permission taken back while it was reading the boot", async () => {
+    const h = make({ stored: { bootId: BOOT, target: TARGET } });
+    const boot = gate<string | null>();
+    h.system.bootId.mockImplementationOnce(() => boot.promise);
+    const restoring = h.keeper.restore();
+    await vi.waitFor(() => expect(h.system.bootId).toHaveBeenCalled());
+    const revoke = h.keeper.set({ target: TARGET, enabled: false });
+    boot.release(BOOT);
+    await restoring;
+    await revoke;
+    expect(h.system.verifyIdentity).not.toHaveBeenCalled();
+    expect(h.keeper.status().armed).toBe(false);
+    expect(h.stored()).toBeNull();
     await h.idleOut();
     expect(h.launch).not.toHaveBeenCalled();
   });

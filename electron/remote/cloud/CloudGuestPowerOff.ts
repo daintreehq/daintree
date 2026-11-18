@@ -180,10 +180,14 @@ export class CloudGuestPowerOff {
     if (!check.eligible) {
       this.setProblem(bindingId, `${CANT} ${check.problem}`);
       // Given before, perhaps by another device: no longer safe, so taken back. A take-back that
-      // may not have arrived is sent again soon, not in half an hour.
+      // may not have arrived, or that the host couldn't make last, is sent again soon.
       if (check.target) {
         try {
-          await this.send(session, check.target, false);
+          const reply = await this.send(session, check.target, false);
+          if (reply.problem !== null && this.reaches(hostId, bindingId, resourceId, session)) {
+            this.setProblem(bindingId, `${CANT} ${check.problem} ${reply.problem}`);
+            this.retryAt.set(bindingId, this.now() + RETRY_MS);
+          }
         } catch (error) {
           if (errorCode(error) !== "UNSUPPORTED")
             this.retryAt.set(bindingId, this.now() + RETRY_MS);

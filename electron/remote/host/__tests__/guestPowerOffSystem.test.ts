@@ -1,11 +1,14 @@
 // @vitest-environment node
 import fs from "node:fs/promises";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { GuestPowerOffTarget } from "../../cloud/machineKeeperLink.js";
 import {
   createGuestPowerOffSystem,
+  createMetadataFetch,
   runCommand,
   verifyCloudIdentity,
   type CommandRun,
@@ -237,6 +240,60 @@ describe("createGuestPowerOffSystem (#17362)", () => {
     await expect(machine.loadArm()).resolves.toBeNull();
     await machine.saveArm(null);
     expect(files.has("/data/guest-power-off.json")).toBe(false);
+  });
+});
+
+describe("createMetadataFetch", () => {
+  async function serve(handler: http.RequestListener) {
+    const server = http.createServer(handler);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    return {
+      fetch: createMetadataFetch({ host: "127.0.0.1", port, timeoutMs: 300 }),
+      close: () => {
+        server.closeAllConnections();
+        server.close();
+      },
+    };
+  }
+
+  it("gives up on a server that trickles its answer past the deadline", async () => {
+    const server = await serve((_req, res) => {
+      res.writeHead(200);
+      const timer = setInterval(() => res.write("x"), 50);
+      res.on("close", () => clearInterval(timer));
+    });
+    try {
+      const started = Date.now();
+      await expect(server.fetch({ method: "GET", path: "/", headers: {} }, signal)).rejects.toThrow(
+        /timed out/
+      );
+      expect(Date.now() - started).toBeLessThan(2_000);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("follows no redirect, and refuses an answer past its size cap", async () => {
+    const server = await serve((req, res) => {
+      if (req.url === "/moved") {
+        res.writeHead(302, { location: "http://example.com/" });
+        res.end();
+        return;
+      }
+      res.writeHead(200);
+      res.end("x".repeat(70 * 1024));
+    });
+    try {
+      await expect(
+        server.fetch({ method: "GET", path: "/moved", headers: {} }, signal)
+      ).resolves.toMatchObject({ status: 302, body: "" });
+      await expect(
+        server.fetch({ method: "GET", path: "/big", headers: {} }, signal)
+      ).rejects.toThrow(/too large/);
+    } finally {
+      server.close();
+    }
   });
 });
 

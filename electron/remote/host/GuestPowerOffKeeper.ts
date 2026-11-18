@@ -59,7 +59,10 @@ export class GuestPowerOffKeeper {
   private removalPending = false;
   /** Requests in the order they arrived, so a grant checked after a later revoke can't land. */
   private received = 0;
-  private revoked: { target: GuestPowerOffTarget; seq: number } | null = null;
+  /** The latest revoke for each machine, by arrival. */
+  private readonly revoked = new Map<string, number>();
+  /** A saved permission that couldn't be placed in a boot yet: looked at again later. */
+  private restorePending = false;
   private retryAt = 0;
   private failures = 0;
   private generation = 0;
@@ -95,15 +98,26 @@ export class GuestPowerOffKeeper {
 
   /** Takes back up a permission given earlier in this boot, once the machine is checked again. */
   restore(): Promise<void> {
+    // Anything that arrives from here on is newer than what was saved.
+    const seq = this.received;
     return this.enqueue(async () => {
       if (this.disposed || this.deps.system.unsupported() !== null) return;
-      const seq = this.received;
       const stored = await this.deps.system.loadArm();
-      if (!stored || this.disposed || this.armed || this.restoring) return;
-      if (this.revokedSince(stored.target, seq)) return;
+      const stale = () =>
+        this.disposed ||
+        this.armed !== null ||
+        this.restoring !== null ||
+        (stored !== null && this.revokedSince(stored.target, seq));
+      if (!stored || stale()) return;
       const boot = await this.deps.system.bootId();
-      // Unreadable: kept for a later start that can read it, and not acted on now.
-      if (boot === null || this.disposed || this.armed) return;
+      if (stale()) return;
+      if (boot === null) {
+        // Can't be placed in a boot yet: kept, not acted on, and looked at again later.
+        this.restorePending = true;
+        this.ensureTimer();
+        this.backOff();
+        return;
+      }
       if (boot !== stored.bootId) {
         // From another boot: given for a machine that has since stopped, or for the disk's original.
         await this.removeSaved();
@@ -125,15 +139,16 @@ export class GuestPowerOffKeeper {
     const seq = ++this.received;
     if (!request.enabled) {
       const { target } = request;
-      this.revoked = { target, seq };
+      this.revoked.set(targetKey(target), seq);
       const holds = (held: GuestPowerOffTarget | null) =>
         held !== null && sameGuestPowerOffTarget(held, target);
       // Another machine's permission stays; one for this machine, or a file left behind, goes now.
       if (this.armed !== null && !holds(this.armed)) return Promise.resolve(this.status());
       if (this.restoring !== null && !holds(this.restoring)) return Promise.resolve(this.status());
       this.dropArm();
+      this.restorePending = false;
       return this.enqueue(async () => {
-        await this.removeSaved();
+        if (!this.disposed) await this.removeSaved();
         return this.status();
       });
     }
@@ -164,11 +179,7 @@ export class GuestPowerOffKeeper {
 
   /** A revoke for this machine arrived after the request numbered `seq`. */
   private revokedSince(target: GuestPowerOffTarget, seq: number): boolean {
-    return (
-      this.revoked !== null &&
-      this.revoked.seq > seq &&
-      sameGuestPowerOffTarget(this.revoked.target, target)
-    );
+    return (this.revoked.get(targetKey(target)) ?? 0) > seq;
   }
 
   private async grant(target: GuestPowerOffTarget, seq: number): Promise<GuestPowerOffStatus> {
@@ -192,6 +203,7 @@ export class GuestPowerOffKeeper {
         this.dropArm();
         await this.removeSaved();
       }
+      if (this.disposed) return this.status();
       this.armProblem = identity.problem;
       return this.status();
     }
@@ -215,7 +227,9 @@ export class GuestPowerOffKeeper {
       );
       if (saved) this.removalPending = false;
     }
-    if (this.disposed || this.revokedSince(target, seq)) {
+    // Shutting down keeps what was saved for the next start; a take-back that came meanwhile doesn't.
+    if (this.disposed) return this.status();
+    if (this.revokedSince(target, seq)) {
       await this.removeSaved();
       return this.status();
     }
@@ -241,14 +255,14 @@ export class GuestPowerOffKeeper {
     this.powerOffProblem = null;
     this.retryAt = 0;
     this.failures = 0;
-    if (!this.removalPending) this.stopTimer();
+    if (!this.removalPending && !this.restorePending) this.stopTimer();
   }
 
   private async removeSaved(): Promise<void> {
     try {
       await this.deps.system.saveArm(null);
       this.removalPending = false;
-      if (this.armed === null && this.restoring === null) this.stopTimer();
+      if (this.armed === null && this.restoring === null && !this.restorePending) this.stopTimer();
     } catch {
       // A file left behind would come back on a restart in this boot: tried again on every pass.
       this.removalPending = true;
@@ -291,7 +305,19 @@ export class GuestPowerOffKeeper {
 
   private async step(): Promise<void> {
     if (this.disposed) return;
-    if (this.removalPending) await this.enqueue(() => this.removeSaved());
+    // Still wanted when its turn comes: a grant saved meanwhile replaced the file it was for.
+    if (this.removalPending) {
+      await this.enqueue(async () => {
+        if (this.removalPending && !this.disposed) await this.removeSaved();
+      });
+    }
+    if (this.restorePending) {
+      if (this.now() >= this.retryAt) {
+        this.restorePending = false;
+        await this.restore();
+      }
+      return;
+    }
     if (this.restoring) {
       if (this.now() >= this.retryAt) await this.enqueue(() => this.restoreOnce());
       return;
@@ -355,4 +381,10 @@ export class GuestPowerOffKeeper {
     if (this.timer !== null) clearInterval(this.timer);
     this.timer = null;
   }
+}
+
+function targetKey(target: GuestPowerOffTarget): string {
+  return target.provider === "aws"
+    ? `aws/${target.accountId}/${target.region}/${target.instanceId}`
+    : `gce/${target.project}/${target.zone}/${target.instanceId}`;
 }

@@ -97,10 +97,10 @@ function setup(options: { guest?: boolean } = {}) {
     unsupported: () => null,
     verifyIdentity: vi.fn(async () => ({ ok: true as const })),
     probePowerOff: vi.fn(async () => null as string | null),
-    powerOff: vi.fn(async () => ({ kind: "accepted" as const })),
+    preparePowerOff: vi.fn(async () => async () => ({ kind: "accepted" as const })),
     bootId: async () => "boot-1",
     loadArm: async () => null,
-    saveArm: async () => {},
+    saveArm: vi.fn(async (_arm: unknown) => {}),
   } satisfies GuestPowerOffSystem;
   const keeper = new GuestPowerOffKeeper({
     idle: {
@@ -279,6 +279,25 @@ describe("CloudGuestPowerOff (#17362)", () => {
     await env.guest.tick();
     expect(env.sent.at(-1)).toEqual({ target: TARGET, enabled: false });
     expect(env.keeper.status().armed).toBe(false);
+  });
+
+  it("says when the host couldn't make a take-back last, and sends it again soon", async () => {
+    const env = setup();
+    await env.guest.arm(HOST, env.session);
+    env.check.mockResolvedValue({ eligible: false, target: TARGET, problem: "Not EBS." });
+    env.system.saveArm.mockRejectedValueOnce(new Error("EROFS"));
+    env.clock.now += 31 * MINUTE;
+    await env.guest.tick();
+    expect(env.keeper.status().armed).toBe(false);
+    expect(env.guest.problemFor(BINDING)).toMatch(/Not EBS\. .*couldn't remove/);
+    env.clock.now += 6 * MINUTE;
+    await env.guest.tick();
+    expect(
+      env.sent.filter((sent) => (sent as { enabled: boolean }).enabled === false)
+    ).toHaveLength(2);
+    expect(env.guest.problemFor(BINDING)).toBe(
+      "This machine can't stop itself when idle: Not EBS."
+    );
   });
 
   it("never shows a replaced link's late refusal", async () => {
