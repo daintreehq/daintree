@@ -16,26 +16,31 @@ export interface StoppedTerminal {
 const MAX_REQUEST_ENTRIES = 1_000;
 
 /**
- * What to record of each agent a quit or Sleep is stopping (#17886), read off
+ * What to record of each pane a quit or Sleep is stopping (#17886), read off
  * the host's inventory just before the kill. A renderer save can land after
  * the kill carrying the states the quit keys themselves caused, so the
  * renderer's last report is no record of what the agent was doing.
  *
  * An agent the user's Sleep request found working keeps that reading, unless
  * another run of an agent has taken the pane since: a Sleep that waited for it
- * to settle must not turn it into one that was idle all along. An agent with no
- * usable reading gets none; the restore that reads a record consumes it, so
- * there is no older one to correct.
+ * to settle must not turn it into one that was idle all along. A stopped pane
+ * with no usable reading maps to `null`: whatever an earlier stop left on it
+ * no longer describes it.
  */
 export function stopObservationsFor(
-  terminals: Iterable<StoppedTerminal>,
+  stoppedIds: Iterable<string>,
+  inventory: ReadonlyMap<string, StoppedTerminal>,
   workingAtRequest: readonly SleepRequestWorking[] = []
-): Map<string, TerminalAgentObservation> {
+): Map<string, TerminalAgentObservation | null> {
   const requested = new Map(workingAtRequest.map((entry) => [entry.terminalId, entry]));
-  const observations = new Map<string, TerminalAgentObservation>();
-  for (const terminal of terminals) {
-    if (!terminal.launchAgentId) continue;
-    const request = requested.get(terminal.id);
+  const observations = new Map<string, TerminalAgentObservation | null>();
+  for (const id of stoppedIds) {
+    const terminal = inventory.get(id);
+    if (!terminal?.launchAgentId) {
+      observations.set(id, null);
+      continue;
+    }
+    const request = requested.get(id);
     const sameRun =
       request !== undefined &&
       (request.agentIncarnation === undefined ||
@@ -43,27 +48,42 @@ export function stopObservationsFor(
     const observation = sameRun
       ? readLastSeen("working", request.at)
       : readLastSeen(terminal.agentState, terminal.lastStateChange);
-    if (observation) observations.set(terminal.id, observation);
+    observations.set(id, observation ?? null);
   }
   return observations;
 }
 
+/** Whether there is a reading to write, as opposed to only older records to drop. */
+export function hasStopReading(
+  observations: ReadonlyMap<string, TerminalAgentObservation | null>
+): boolean {
+  for (const observation of observations.values()) if (observation) return true;
+  return false;
+}
+
 /**
- * Write each observation onto the saved snapshot of the same pane, in place.
- * Returns whether any pane was found to write it on.
+ * Write each observation onto the saved snapshot of the same pane, in place,
+ * and drop an older one where there is none. Returns whether anything changed.
+ * Callers write only when there is a reading or a captured id to write: a drop
+ * alone never earns a write, which keeps a stop with nothing to say off disk.
  */
 export function applyStopObservations(
   snapshots: ReadonlyArray<{ id: string; stopObservation?: TerminalAgentObservation }>,
-  observations: ReadonlyMap<string, TerminalAgentObservation>
+  observations: ReadonlyMap<string, TerminalAgentObservation | null>
 ): boolean {
-  let written = false;
+  let changed = false;
   for (const snapshot of snapshots) {
+    if (!observations.has(snapshot.id)) continue;
     const observation = observations.get(snapshot.id);
-    if (!observation) continue;
-    snapshot.stopObservation = observation;
-    written = true;
+    if (observation) {
+      snapshot.stopObservation = observation;
+      changed = true;
+    } else if (snapshot.stopObservation !== undefined) {
+      delete snapshot.stopObservation;
+      changed = true;
+    }
   }
-  return written;
+  return changed;
 }
 
 /** Read the renderer's list of agents its Sleep request found working; untrusted. */

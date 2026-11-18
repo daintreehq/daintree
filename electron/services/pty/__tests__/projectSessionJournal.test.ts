@@ -701,6 +701,32 @@ describe("gracefulTeardownAndJournalProject", () => {
       ]);
     });
 
+    it("drops what an earlier stop left on a pane it stopped but couldn't read", async () => {
+      // A host shard missed the inventory read but answered the kill.
+      const { client } = makePtyClient({
+        terminals: [],
+        degraded: true,
+        outcome: { confirmed: true, sessions: [{ id: "t1", agentSessionId: "s1" }] },
+      });
+
+      await gracefulTeardownAndJournalProject("proj", client, undefined, {
+        writeBackSessionIds: true,
+      });
+
+      const [, updater] = projectStoreMock.enqueueProjectStateUpdate.mock.calls[0]!;
+      const state = {
+        terminals: [
+          { id: "t1", stopObservation: { agentState: "working", at: 10 } },
+          { id: "other", stopObservation: { agentState: "working", at: 10 } },
+        ],
+      };
+      updater(state);
+      expect(state.terminals).toEqual([
+        { id: "t1", agentSessionId: "s1" },
+        { id: "other", stopObservation: { agentState: "working", at: 10 } },
+      ]);
+    });
+
     it("keeps the working reading the Sleep request took for an agent that has settled since", async () => {
       const settled = (id: string, agentIncarnation: number) => ({
         id,

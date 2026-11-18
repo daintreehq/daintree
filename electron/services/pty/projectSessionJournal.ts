@@ -8,7 +8,7 @@ import { projectStore } from "../ProjectStore.js";
 import { createLogger } from "../../utils/logger.js";
 import { scheduledRunForRecord } from "../../../shared/utils/scheduledRunProvenance.js";
 import type { SleepRequestWorking } from "../../../shared/types/ipc/project.js";
-import { applyStopObservations, stopObservationsFor } from "./stopObservation.js";
+import { applyStopObservations, hasStopReading, stopObservationsFor } from "./stopObservation.js";
 
 const logger = createLogger("main:ProjectSessionJournal");
 
@@ -160,12 +160,12 @@ export async function gracefulTeardownAndJournalProject(
   // stopped agent was doing rides the same write (#17886), captured id or not.
   if (options.writeBackSessionIds) {
     const capturedIds = outcome.sessions.filter((r) => r.agentSessionId && !isAssistant(r.id));
-    const stopped = new Set(outcome.sessions.map((r) => r.id));
     const observations = stopObservationsFor(
-      [...infoById.values()].filter((t) => stopped.has(t.id) && !isAssistant(t.id)),
+      outcome.sessions.map((r) => r.id).filter((id) => !isAssistant(id)),
+      infoById,
       options.workingAtRequest
     );
-    if (capturedIds.length > 0 || observations.size > 0) {
+    if (capturedIds.length > 0 || hasStopReading(observations)) {
       try {
         await projectStore.enqueueProjectStateUpdate(scopeId, (state) => {
           if (!state?.terminals) return null;
