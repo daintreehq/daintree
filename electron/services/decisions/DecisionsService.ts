@@ -10,9 +10,12 @@ import type {
 import type {
   AnswerDecisionQuestionPayload,
   CancelDecisionQuestionPayload,
+  DeclineDecisionQuestionPayload,
   DecisionAnswerResultRead,
+  DecisionDeclineResultRead,
   DecisionQuestionAnswerResult,
   DecisionQuestionCancelResult,
+  DecisionQuestionDeclineResult,
   DecisionQuestionListItem,
   DecisionQuestionReference,
 } from "../../../shared/types/decisionsQuestion.js";
@@ -661,6 +664,29 @@ export class DecisionsService {
     }
     if (this.role !== "owner") return Promise.resolve({ result: "not-found" });
     return questions.answerResultForPerson(answerId);
+  }
+
+  /**
+   * The person's decline from Daintree's own view (#17239): signed with this
+   * computer's key when it is the owner's, as their answer is.
+   */
+  declineQuestion(payload: DeclineDecisionQuestionPayload): Promise<DecisionQuestionDeclineResult> {
+    const questions = this.questions;
+    if (this.disposed || this.state === "off" || questions === null) {
+      return Promise.resolve({ result: "not-running" });
+    }
+    if (this.role !== "owner") return Promise.resolve({ result: "refused", reason: "not-owner" });
+    return questions.declineForPerson(payload, this.settings?.hostId ?? null);
+  }
+
+  /** Where a person's decline stands, by the id it was submitted with (#17239). */
+  getDeclineResult(declineId: string): Promise<DecisionDeclineResultRead> {
+    const questions = this.questions;
+    if (this.disposed || this.state === "off" || questions === null) {
+      return Promise.resolve({ result: "not-running" });
+    }
+    if (this.role !== "owner") return Promise.resolve({ result: "not-found" });
+    return questions.declineResultForPerson(declineId);
   }
 
   /**

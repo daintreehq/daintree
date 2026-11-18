@@ -64,7 +64,7 @@ function StepButton({
  * reference (#17229), from this computer for any of its windows. Held in
  * memory only; it steps through the questions it was opened with without
  * closing, and a question still waiting can be answered (#17102) or
- * withdrawn from here.
+ * dismissed (#17239) from here.
  */
 export function DecisionQuestionDialog() {
   const isOpen = useDecisionsQuestionViewStore((state) => state.isOpen);
@@ -85,6 +85,7 @@ export function DecisionQuestionDialog() {
   useDecisionsReaderRetention(isOpen, close);
   const reader = useDecisionQuestionReader(target, isOpen);
   const cancel = useQuestionCancel(target, reader, isOpen);
+  const { dismissal } = cancel;
 
   // A follow-up's notification opens its question at that follow-up (#17235),
   // once per opening, so a read again stays put. A read already on screen as
@@ -224,19 +225,71 @@ export function DecisionQuestionDialog() {
           </div>
         </AppDialog.Body>
         {reader.cancellable && (
-          <AppDialog.Footer>
-            <Button
-              ref={cancelRef}
-              variant="ghost-danger"
-              onClick={cancel.ask}
-              data-testid="decision-question-cancel"
-            >
-              Cancel question
-            </Button>
+          <AppDialog.Footer
+            hint={
+              dismissal.progress !== null ? (
+                <span role="status" data-testid="decision-question-dismiss-status">
+                  {dismissal.progress}
+                </span>
+              ) : dismissal.fallback !== null ? (
+                <span
+                  className="[text-wrap:pretty]"
+                  data-testid="decision-question-dismiss-fallback"
+                >
+                  {dismissal.fallback}
+                </span>
+              ) : dismissal.outcome !== null ? (
+                <span
+                  role="status"
+                  className="[text-wrap:pretty]"
+                  data-testid="decision-question-dismiss-outcome"
+                >
+                  {dismissal.outcome}
+                </span>
+              ) : undefined
+            }
+          >
+            {dismissal.progress !== null ? (
+              dismissal.phase?.kind === "lost" && (
+                <Button
+                  ref={cancelRef}
+                  variant="outline"
+                  size="sm"
+                  onClick={dismissal.retry}
+                  data-testid="decision-question-dismiss-retry"
+                >
+                  Retry
+                </Button>
+              )
+            ) : dismissal.fallback !== null ? (
+              <Button
+                ref={cancelRef}
+                variant="ghost-danger"
+                onClick={cancel.askToWithdraw}
+                data-testid="decision-question-withdraw"
+              >
+                Withdraw question
+              </Button>
+            ) : (
+              <Button
+                ref={cancelRef}
+                variant="ghost-danger"
+                onClick={cancel.ask}
+                data-testid="decision-question-dismiss"
+              >
+                Dismiss question
+              </Button>
+            )}
           </AppDialog.Footer>
         )}
       </AppDialog>
-      <DecisionCancelDialog {...cancel.dialog} restoreFocusTo={() => cancelRef.current} />
+      <DecisionCancelDialog
+        {...cancel.dialog}
+        // The footer's button, or the view's own surface once the footer shows the dismissal's progress.
+        restoreFocusTo={() =>
+          cancelRef.current ?? document.querySelector<HTMLElement>(`${DIALOG} > [tabindex="-1"]`)
+        }
+      />
     </>
   );
 }

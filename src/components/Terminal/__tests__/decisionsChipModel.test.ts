@@ -270,8 +270,8 @@ describe("answering here (#17102)", () => {
   });
 });
 
-describe("a person's cancel", () => {
-  it("offers a cancel only on questions still waiting for an answer", () => {
+describe("a person's dismissal or withdrawal", () => {
+  it("offers Dismiss only on questions still waiting for an answer", () => {
     const items = decisionItems(
       pane({
         open: [open(1), open(2, "queued")],
@@ -304,31 +304,66 @@ describe("a person's cancel", () => {
     expect(deliveryNotes(decisionItems(pane({ open: [open(1)] })))).toHaveLength(1);
   });
 
+  it("shows a dismissal from here as dismissing, after the questions still waiting, with no Dismiss and no answer coming (#17239)", () => {
+    const state = pane({ open: [open(1), open(2, "queued"), open(3)] });
+    const items = decisionItems(state, "composer", new Set(["q3"]), new Set(["q1", "q3"]));
+
+    // A withdrawal wins over a dismissal of the same question: only the withdrawal was committed last.
+    expect(items.map((item) => [item.label, item.kind])).toEqual([
+      ["q-2", "queued"],
+      ["q-1", "dismissing"],
+      ["q-3", "cancelling"],
+    ]);
+    expect(items.filter(isCancellable).map((item) => item.label)).toEqual(["q-2"]);
+    expect(chipSummary(items)).toBe(
+      "3 Decisions questions: 1\u00a0queued to send; 1\u00a0dismissing; 1\u00a0cancelling"
+    );
+
+    const dismissed = decisionItems(
+      pane({ open: [open(1)] }),
+      "composer",
+      undefined,
+      new Set(["q1"])
+    );
+    expect(chipLabel(dismissed)).toEqual({ text: "q-1 dismissing", detail: null });
+    expect(itemSentence(dismissed[0]!)).toMatch(/^Question q-1 was dismissed here/);
+    expect(deliveryNotes(dismissed)).toEqual([]);
+    expect(cancelNote(dismissed)).toBeNull();
+    // A follow-up held on a question being dismissed lists it under attention too, but it isn't answered.
+    const held = decisionItems(
+      pane({ open: [open(1)], attention: [stopped(1)] }),
+      "composer",
+      undefined,
+      new Set(["q1"])
+    );
+    expect(cancelNote(held)).toBeNull();
+  });
+
   it("marks only questions the pane still lists as waiting", () => {
     // An answer that arrived for a withdrawn question is shown as the answer it is.
     const items = decisionItems(pane({ waiting: [waiting(1)] }), "composer", new Set(["q1"]));
     expect(items.map((item) => item.kind)).toEqual(["answer"]);
   });
 
-  it("says why answered and expired rows offer no cancel, and nothing when every row is waiting", () => {
+  it("says why answered and expired rows offer no Dismiss, and nothing when every row is waiting", () => {
     const note = (state: PaneDecisionState) => cancelNote(decisionItems(state));
     expect(note(pane({ open: [open(1), open(2, "queued")] }))).toBeNull();
     expect(note(pane({ open: [open(1)], waiting: [waiting(2)] }))).toBe(
-      "Answered questions can't be cancelled"
+      "Answered questions can't be dismissed"
     );
     expect(note(pane({ attention: [stopped(2, "delivery-uncertain")] }))).toBe(
-      "Answered questions can't be cancelled"
+      "Answered questions can't be dismissed"
     );
     expect(note(pane({ waiting: [waiting(2, "expired")] }))).toBe(
-      "Expired questions can't be cancelled"
+      "Expired questions can't be dismissed"
     );
     expect(note(pane({ waiting: [waiting(2, "expired")], attention: [stopped(3)] }))).toBe(
-      "Answered and expired questions can't be cancelled"
+      "Answered and expired questions can't be dismissed"
     );
     // A follow-up held on a question still waiting lists it under attention too, but it isn't answered.
     expect(note(pane({ open: [open(1)], attention: [stopped(1)] }))).toBeNull();
     expect(note(pane({ open: [open(1)], attention: [stopped(1), stopped(2)] }))).toBe(
-      "Answered questions can't be cancelled"
+      "Answered questions can't be dismissed"
     );
     const withdrawn = decisionItems(
       pane({ open: [open(1)], attention: [stopped(1)] }),

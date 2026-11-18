@@ -108,10 +108,13 @@ import type {
   AnswerDecisionQuestionPayload,
   CancelDecisionQuestionByReferencePayload,
   CancelDecisionQuestionPayload,
+  DeclineDecisionQuestionPayload,
   DecisionAnswerResultRead,
+  DecisionDeclineResultRead,
   DecisionQuestionAnswerResult,
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
+  DecisionQuestionDeclineResult,
   DecisionQuestionImagePartResult,
   DecisionQuestionListItem,
   DecisionQuestionReference,
@@ -124,6 +127,7 @@ import type {
   GetDecisionQuestionSummariesByReferencePayload,
   GetDecisionQuestionSummariesPayload,
   GetDecisionAnswerResultPayload,
+  GetDecisionDeclineResultPayload,
 } from "../../../shared/types/decisionsQuestion.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -1370,6 +1374,25 @@ export function getDecisionAnswerResult(
   payload: GetDecisionAnswerResultPayload
 ): Promise<DecisionAnswerResultRead> {
   return whileRunning((running) => running.getAnswerResult(payload.answerId));
+}
+
+/**
+ * The person's decline from Daintree's own view (#17239), signed by this
+ * computer when it is the owner's, as their answer is. Never makes or starts
+ * the service; a decline it committed stays committed, and the same decline
+ * id submitted again finds it.
+ */
+export function declineDecisionQuestion(
+  payload: DeclineDecisionQuestionPayload
+): Promise<DecisionQuestionDeclineResult> {
+  return whileRunning((running) => running.declineQuestion(payload));
+}
+
+/** Where a person's decline stands, by its id (#17239). Never makes or starts the service. */
+export function getDecisionDeclineResult(
+  payload: GetDecisionDeclineResultPayload
+): Promise<DecisionDeclineResultRead> {
+  return whileRunning((running) => running.getDeclineResult(payload.declineId));
 }
 
 async function whileRunning<T>(

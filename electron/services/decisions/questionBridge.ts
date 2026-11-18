@@ -4,8 +4,10 @@ import {
   paneIdentityOf,
   type DecisionView,
   type AnswerQuestionInput,
+  type DeclineQuestionInput,
   type InvolvementView,
   type OwnerAnswerResult,
+  type OwnerDeclineResult,
   type PaneIdentity,
   type PostMessageResult,
   type QuestionOrigin,
@@ -14,11 +16,16 @@ import {
 } from "@daintreehq/decisions-client";
 import type {
   AnswerDecisionQuestionPayload,
+  DeclineDecisionQuestionPayload,
   DecisionAnswerOutcome,
   DecisionAnswerResultRead,
+  DecisionDeclineOutcome,
+  DecisionDeclineResultRead,
   DecisionQuestionAnswerResult,
   DecisionQuestionCancelRefusal,
   DecisionQuestionCancelResult,
+  DecisionQuestionDeclineResult,
+  DecisionQuestionReference,
 } from "../../../shared/types/decisionsQuestion.js";
 import { inScope, type QuestionReadScope } from "./questionContent.js";
 import type { QuestionSource } from "./relayConnection.js";
@@ -54,6 +61,20 @@ function cancelRefusal(status: QuestionRow["local_status"]): DecisionQuestionCan
 
 /** The library's outcome, without the ids the result carries alongside it. */
 function answerOutcome(result: OwnerAnswerResult): DecisionAnswerOutcome {
+  switch (result.status) {
+    case "closed":
+      return { status: "closed", reason: result.reason };
+    case "unsupported":
+      return { status: "unsupported", by: result.by };
+    case "rejected":
+      return { status: "rejected", code: result.code };
+    default:
+      return { status: result.status };
+  }
+}
+
+/** The library's outcome of a decline, without the ids the result carries alongside it. */
+function declineOutcome(result: OwnerDeclineResult): DecisionDeclineOutcome {
   switch (result.status) {
     case "closed":
       return { status: "closed", reason: result.reason };
@@ -206,6 +227,17 @@ export class QuestionBridge extends DecisionsBridge {
     return Promise.reject(new BridgeError("forbidden", "an agent can't read the person's answers"));
   }
 
+  /** Never for an agent either: the person's decline goes through `declineForPerson` (#17239). */
+  override declineQuestion(_input: DeclineQuestionInput): Promise<OwnerDeclineResult> {
+    return Promise.reject(new BridgeError("forbidden", "an agent can't decline for the person"));
+  }
+
+  override getDeclineResult(_declineId: string): Promise<OwnerDeclineResult | null> {
+    return Promise.reject(
+      new BridgeError("forbidden", "an agent can't read the person's declines")
+    );
+  }
+
   /**
    * The person's answer from Daintree's own view on the owner computer
    * (#17101), never reachable from an agent, signed with this computer's key
@@ -223,19 +255,9 @@ export class QuestionBridge extends DecisionsBridge {
     payload: AnswerDecisionQuestionPayload,
     hostId: string | null
   ): Promise<DecisionQuestionAnswerResult> {
-    const identity = this.question.source.identity();
-    if (identity === null) return { result: "not-running" };
-    if (identity.role !== "owner-desktop") return { result: "refused", reason: "not-owner" };
+    const refusal = await this.personRefusal(payload.reference, hostId);
+    if (refusal !== null) return refusal;
     const { reference } = payload;
-    const row = await this.question.source.store.getQuestion(reference.questionId);
-    if (row !== null && !row.history_only) {
-      const scope = { hostId, projectId: reference.projectId, terminalId: reference.terminalId };
-      if (reference.hostId !== hostId || !inScope(row, scope)) {
-        return { result: "refused", reason: "not-found" };
-      }
-    } else if (hostId === null || reference.hostId === hostId) {
-      return { result: "refused", reason: "not-found" };
-    }
     const input: AnswerQuestionInput = {
       questionId: reference.questionId,
       expectedRevision: payload.expectedRevision,
@@ -265,6 +287,63 @@ export class QuestionBridge extends DecisionsBridge {
           throw error;
       }
     }
+  }
+
+  /**
+   * The person's decline from Daintree's own view on the owner computer
+   * (#17239), never reachable from an agent: a cancel signed with this
+   * computer's key as the person's decline, which the asking computer files
+   * as it would a phone's Dismiss and tells a listening agent about. The
+   * question is named and checked as an answer's is, so a Remote Host's
+   * question is declined by the content the Host served, without a local
+   * copy. On the live attempt when there is one; between attempts it is
+   * committed here and the next attempt sends it.
+   */
+  async declineForPerson(
+    payload: DeclineDecisionQuestionPayload,
+    hostId: string | null
+  ): Promise<DecisionQuestionDeclineResult> {
+    const refusal = await this.personRefusal(payload.reference, hostId);
+    if (refusal !== null) return refusal;
+    try {
+      const result = await this.declineOnce({
+        questionId: payload.reference.questionId,
+        expectedRevision: payload.expectedRevision,
+        declineId: payload.declineId,
+      });
+      return { result: "submitted", declineId: result.declineId, outcome: declineOutcome(result) };
+    } catch (error) {
+      if (!(error instanceof BridgeError)) throw error;
+      switch (error.code) {
+        case "validation_error":
+          return { result: "refused", reason: "invalid", detail: error.message };
+        // Revoked, or the connection ended, after the role was read.
+        case "forbidden":
+          return { result: "not-running" };
+        default:
+          throw error;
+      }
+    }
+  }
+
+  /** Where the person's decline stands, by the id it was submitted with (#17239). */
+  async declineResultForPerson(declineId: string): Promise<DecisionDeclineResultRead> {
+    let result: OwnerDeclineResult | null;
+    try {
+      result = await this.readDeclineOnce(declineId);
+    } catch (error) {
+      if (error instanceof BridgeError && error.code === "forbidden") {
+        return { result: "not-running" };
+      }
+      throw error;
+    }
+    if (result === null) return { result: "not-found" };
+    return {
+      result: "read",
+      questionId: result.questionId,
+      expectedRevision: result.expectedRevision,
+      outcome: declineOutcome(result),
+    };
   }
 
   /** Where the person's answer stands, by the id it was submitted with (#17101). */
@@ -312,6 +391,57 @@ export class QuestionBridge extends DecisionsBridge {
       if (!(error instanceof RetiredAttemptError)) throw error;
       return this.readForPerson(answerId);
     }
+  }
+
+  private async declineOnce(input: DeclineQuestionInput): Promise<OwnerDeclineResult> {
+    const live = this.connected();
+    if (live === null) return super.declineQuestion(input);
+    try {
+      return await live.declineQuestion(input);
+    } catch (error) {
+      if (!(error instanceof RetiredAttemptError)) throw error;
+      return this.declineOnce(input);
+    }
+  }
+
+  private async readDeclineOnce(declineId: string): Promise<OwnerDeclineResult | null> {
+    const live = this.connected();
+    if (live === null) return super.getDeclineResult(declineId);
+    try {
+      return await live.getDeclineResult(declineId);
+    } catch (error) {
+      if (!(error instanceof RetiredAttemptError)) throw error;
+      return this.readDeclineOnce(declineId);
+    }
+  }
+
+  /**
+   * Why the person's answer or decline naming `reference` can't be signed
+   * here, or null when it can: only the owner computer signs for the person.
+   * A question this computer holds must be the one the reference names:
+   * asked here, in that project and terminal. One it doesn't hold is a Remote
+   * Host's, named by the content the Host served the view; a reference naming
+   * this computer for a question it doesn't hold names nothing.
+   */
+  private async personRefusal(
+    reference: DecisionQuestionReference,
+    hostId: string | null
+  ): Promise<
+    { result: "not-running" } | { result: "refused"; reason: "not-found" | "not-owner" } | null
+  > {
+    const identity = this.question.source.identity();
+    if (identity === null) return { result: "not-running" };
+    if (identity.role !== "owner-desktop") return { result: "refused", reason: "not-owner" };
+    const row = await this.question.source.store.getQuestion(reference.questionId);
+    if (row !== null && !row.history_only) {
+      const scope = { hostId, projectId: reference.projectId, terminalId: reference.terminalId };
+      if (reference.hostId !== hostId || !inScope(row, scope)) {
+        return { result: "refused", reason: "not-found" };
+      }
+    } else if (hostId === null || reference.hostId === hostId) {
+      return { result: "refused", reason: "not-found" };
+    }
+    return null;
   }
 
   /**

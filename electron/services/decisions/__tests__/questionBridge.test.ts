@@ -98,6 +98,21 @@ function liveBridge() {
       expectedRevision: 0,
       status: "already-answered" as const,
     })),
+    declineQuestion: vi.fn(
+      async (input: { questionId: string; expectedRevision: number; declineId?: string }) => ({
+        declineId: input.declineId ?? "decline_live_0001",
+        questionId: input.questionId,
+        expectedRevision: input.expectedRevision,
+        status: "declined" as const,
+      })
+    ),
+    getDeclineResult: vi.fn(async (declineId: string) => ({
+      declineId,
+      questionId: "q_live",
+      expectedRevision: 0,
+      status: "unsupported" as const,
+      by: "asking-desktop" as const,
+    })),
     getInvolvement: vi.fn(async (): Promise<InvolvementView> => ({
       status: "available",
       mode: "recommend",
@@ -1311,6 +1326,246 @@ describe("QuestionBridge", () => {
       live = reading;
       await expect(b.answerResultForPerson(ANSWER_ID)).resolves.toMatchObject({ result: "read" });
       expect(next.getAnswerResult).toHaveBeenCalledExactlyOnceWith(ANSWER_ID);
+    });
+  });
+
+  describe("a person's dismissal (#17239)", () => {
+    const HOST = "host_a";
+    const DECLINE_ID = "0190f0aa-1111-4222-8333-44445555dddd";
+    const CHOICE = {
+      question: "Which cache?",
+      kind: "choice",
+      options: [{ id: "pg", label: "Postgres" }],
+    };
+
+    function payload(questionId: string, over: Record<string, unknown> = {}) {
+      return {
+        reference: { hostId: HOST, projectId: "p1", terminalId: "pane-1", questionId },
+        declineId: DECLINE_ID,
+        expectedRevision: 0,
+        ...over,
+      };
+    }
+
+    /** Nothing was signed for `questionId`, held here or not: no record of the id, and no outbox item. */
+    async function nothingSigned(questionId: string): Promise<void> {
+      expect(await store.getMeta(`owner-decline:${DECLINE_ID}`)).toBeNull();
+      expect(await store.outboxFor(questionId)).toEqual([]);
+    }
+
+    it("refuses an agent's decline on the bridge agents ask on, signing nothing", async () => {
+      const b = bridge();
+      live = liveBridge();
+      const asked = await b.registerQuestion({ origin: ORIGIN, input: CHOICE });
+
+      await expect(
+        b.declineQuestion({
+          questionId: asked.questionId,
+          expectedRevision: 0,
+          declineId: DECLINE_ID,
+        })
+      ).rejects.toMatchObject({ code: "forbidden" });
+      await expect(b.getDeclineResult(DECLINE_ID)).rejects.toMatchObject({ code: "forbidden" });
+
+      expect(live.declineQuestion).not.toHaveBeenCalled();
+      expect(live.getDeclineResult).not.toHaveBeenCalled();
+      await nothingSigned(asked.questionId);
+    });
+
+    it("declines this computer's own question on the live attempt at the revision read, even after the run that asked was relaunched", async () => {
+      const b = bridge();
+      const asked = await b.registerQuestion({ origin: ORIGIN, input: CHOICE });
+      current = false;
+      live = liveBridge();
+
+      await expect(
+        b.declineForPerson(payload(asked.questionId, { expectedRevision: 3 }), HOST)
+      ).resolves.toEqual({
+        result: "submitted",
+        declineId: DECLINE_ID,
+        outcome: { status: "declined" },
+      });
+      expect(live.declineQuestion).toHaveBeenCalledExactlyOnceWith({
+        questionId: asked.questionId,
+        expectedRevision: 3,
+        declineId: DECLINE_ID,
+      });
+      // A decline, never the desktop's withdrawal.
+      expect(live.cancelQuestion).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["another machine", { hostId: "host_b" }],
+      ["another project", { projectId: "p2" }],
+      ["another terminal", { terminalId: "pane-2" }],
+    ])("refuses a reference naming %s for a question this computer asked", async (_label, over) => {
+      const b = bridge();
+      const asked = await b.registerQuestion({ origin: ORIGIN, input: CHOICE });
+      live = liveBridge();
+      const request = payload(asked.questionId);
+
+      await expect(
+        b.declineForPerson({ ...request, reference: { ...request.reference, ...over } }, HOST)
+      ).resolves.toEqual({ result: "refused", reason: "not-found" });
+      expect(live.declineQuestion).not.toHaveBeenCalled();
+    });
+
+    it("refuses a reference naming this computer for a question it doesn't hold", async () => {
+      const b = bridge();
+      live = liveBridge();
+
+      await expect(b.declineForPerson(payload("q_unknown_1234"), HOST)).resolves.toEqual({
+        result: "refused",
+        reason: "not-found",
+      });
+      await expect(b.declineForPerson(payload("q_unknown_1234"), null)).resolves.toEqual({
+        result: "refused",
+        reason: "not-found",
+      });
+      expect(live.declineQuestion).not.toHaveBeenCalled();
+    });
+
+    it("signs a Remote Host's question with this computer's key between attempts, and the same decline id stays one decline", async () => {
+      const b = bridge();
+      const questionId = "q_remote_host_0001";
+      const request = payload(questionId, {
+        reference: { hostId: "host_studio", projectId: "p9", terminalId: "pane-9", questionId },
+        expectedRevision: 2,
+      });
+
+      await expect(b.declineForPerson(request, HOST)).resolves.toEqual({
+        result: "submitted",
+        declineId: DECLINE_ID,
+        outcome: { status: "queued" },
+      });
+      const outbox = await store.outboxFor(questionId);
+      expect(outbox.map((item) => item.kind)).toEqual(["owner-decline"]);
+      const signed = (outbox[0]!.payload as { signed: { record: Record<string, unknown> } }).signed;
+      expect(signed.record).toMatchObject({
+        action: "cancel",
+        decline: true,
+        expected_revision: 2,
+        action_id: DECLINE_ID,
+        signer_device_id: identity!.config.deviceId,
+      });
+
+      // The same id again is the same decline, never a second one.
+      await expect(b.declineForPerson(request, HOST)).resolves.toMatchObject({
+        outcome: { status: "queued" },
+      });
+      expect((await store.outboxFor(questionId)).map((item) => item.kind)).toEqual([
+        "owner-decline",
+      ]);
+      await expect(b.declineResultForPerson(DECLINE_ID)).resolves.toEqual({
+        result: "read",
+        questionId,
+        expectedRevision: 2,
+        outcome: { status: "queued" },
+      });
+      // Reused for another revision, it's refused before anything else is signed.
+      await expect(
+        b.declineForPerson({ ...request, expectedRevision: 3 }, HOST)
+      ).resolves.toMatchObject({ result: "refused", reason: "invalid" });
+    });
+
+    it("reads a decline's outcome from the live attempt, and nothing for an id never submitted", async () => {
+      const b = bridge();
+      await expect(b.declineResultForPerson(DECLINE_ID)).resolves.toEqual({ result: "not-found" });
+      live = liveBridge();
+      await expect(b.declineResultForPerson(DECLINE_ID)).resolves.toEqual({
+        result: "read",
+        questionId: "q_live",
+        expectedRevision: 0,
+        outcome: { status: "unsupported", by: "asking-desktop" },
+      });
+    });
+
+    it("never signs on a Remote Host's own lifetime", async () => {
+      const b = bridge();
+      const hostIdentity = { ...identity!, role: "desktop-host" } as Identity;
+      source.identity = () => hostIdentity;
+      live = liveBridge();
+      const questionId = "q_remote_host_0001";
+
+      await expect(
+        b.declineForPerson(
+          payload(questionId, {
+            reference: { hostId: "host_owner", projectId: "p1", terminalId: "pane-1", questionId },
+          }),
+          HOST
+        )
+      ).resolves.toEqual({ result: "refused", reason: "not-owner" });
+      expect(live.declineQuestion).not.toHaveBeenCalled();
+      await nothingSigned(questionId);
+    });
+
+    it("is not running once the connection ends under the signing, and lets anything else through", async () => {
+      const b = bridge();
+      live = liveBridge();
+      const questionId = "q_remote_host_0001";
+      const request = payload(questionId, {
+        reference: { hostId: "host_studio", projectId: "p9", terminalId: "pane-9", questionId },
+      });
+      // Revoked after the role was read: the library refuses before it signs.
+      live.declineQuestion.mockRejectedValueOnce(new BridgeError("forbidden", "revoked"));
+      await expect(b.declineForPerson(request, HOST)).resolves.toEqual({ result: "not-running" });
+      live.getDeclineResult.mockRejectedValueOnce(new BridgeError("forbidden", "revoked"));
+      await expect(b.declineResultForPerson(DECLINE_ID)).resolves.toEqual({
+        result: "not-running",
+      });
+
+      live.declineQuestion.mockRejectedValueOnce(new BridgeError("invalid_state", "unexpected"));
+      await expect(b.declineForPerson(request, HOST)).rejects.toMatchObject({
+        code: "invalid_state",
+      });
+      live.declineQuestion.mockRejectedValueOnce(new Error("store closed"));
+      await expect(b.declineForPerson(request, HOST)).rejects.toThrow("store closed");
+    });
+
+    it("is not running once the connection has ended", async () => {
+      const b = bridge();
+      identity = null;
+
+      await expect(b.declineForPerson(payload("q_remote_host_0001"), HOST)).resolves.toEqual({
+        result: "not-running",
+      });
+      await expect(b.declineResultForPerson(DECLINE_ID)).resolves.toEqual({
+        result: "not-running",
+      });
+    });
+
+    it("goes again to the attempt that answers now when the live one retires partway", async () => {
+      const b = bridge();
+      const retiring = liveBridge();
+      const next = liveBridge();
+      retiring.declineQuestion.mockImplementation(async () => {
+        live = next;
+        throw new RetiredAttemptError();
+      });
+      live = retiring;
+      const questionId = "q_remote_host_0001";
+      const request = payload(questionId, {
+        reference: { hostId: "host_studio", projectId: "p9", terminalId: "pane-9", questionId },
+        expectedRevision: 5,
+      });
+
+      await expect(b.declineForPerson(request, HOST)).resolves.toMatchObject({
+        result: "submitted",
+        outcome: { status: "declined" },
+      });
+      // The same decline, under the same id, on the attempt that answers now.
+      expect(next.declineQuestion).toHaveBeenCalledExactlyOnceWith(
+        retiring.declineQuestion.mock.calls[0]![0]
+      );
+
+      const reading = liveBridge();
+      reading.getDeclineResult.mockImplementation(async () => {
+        live = next;
+        throw new RetiredAttemptError();
+      });
+      live = reading;
+      await expect(b.declineResultForPerson(DECLINE_ID)).resolves.toMatchObject({ result: "read" });
+      expect(next.getDeclineResult).toHaveBeenCalledExactlyOnceWith(DECLINE_ID);
     });
   });
 });

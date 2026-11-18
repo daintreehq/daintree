@@ -31,9 +31,13 @@ import type {
 import type {
   AnswerDecisionQuestionPayload,
   CancelDecisionQuestionByReferencePayload,
+  DeclineDecisionQuestionPayload,
   DecisionAnswerResultRead,
+  DecisionDeclineResultRead,
   DecisionQuestionAnswerResult,
+  DecisionQuestionDeclineResult,
   GetDecisionAnswerResultPayload,
+  GetDecisionDeclineResultPayload,
   CancelDecisionQuestionPayload,
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
@@ -118,6 +122,18 @@ const decisionsEntry = vi.hoisted(() => ({
   ),
   getDecisionAnswerResult: vi.fn(
     async (_payload: GetDecisionAnswerResultPayload): Promise<DecisionAnswerResultRead> => ({
+      result: "not-found",
+    })
+  ),
+  declineDecisionQuestion: vi.fn(
+    async (_payload: DeclineDecisionQuestionPayload): Promise<DecisionQuestionDeclineResult> => ({
+      result: "submitted",
+      declineId: "0190f0aa-1111-4222-8333-44445555dddd",
+      outcome: { status: "declined" },
+    })
+  ),
+  getDecisionDeclineResult: vi.fn(
+    async (_payload: GetDecisionDeclineResultPayload): Promise<DecisionDeclineResultRead> => ({
       result: "not-found",
     })
   ),
@@ -290,6 +306,8 @@ vi.mock("../../../services/decisions/index.js", () => {
     cancelDecisionQuestionByReference: decisionsEntry.cancelDecisionQuestionByReference,
     answerDecisionQuestion: decisionsEntry.answerDecisionQuestion,
     getDecisionAnswerResult: decisionsEntry.getDecisionAnswerResult,
+    declineDecisionQuestion: decisionsEntry.declineDecisionQuestion,
+    getDecisionDeclineResult: decisionsEntry.getDecisionDeclineResult,
     setDecisionsEnabled: decisionsEntry.setDecisionsEnabled,
     checkRelay: decisionsEntry.checkRelay,
     claimRelay: decisionsEntry.claimRelay,
@@ -394,6 +412,12 @@ const answerQuestion = decisionsNamespace.ops.answerQuestion.handler as unknown 
 const getAnswerResult = decisionsNamespace.ops.getAnswerResult.handler as unknown as (
   payload: GetDecisionAnswerResultPayload
 ) => Promise<DecisionAnswerResultRead>;
+const declineQuestion = decisionsNamespace.ops.declineQuestion.handler as unknown as (
+  payload: DeclineDecisionQuestionPayload
+) => Promise<DecisionQuestionDeclineResult>;
+const getDeclineResult = decisionsNamespace.ops.getDeclineResult.handler as unknown as (
+  payload: GetDecisionDeclineResultPayload
+) => Promise<DecisionDeclineResultRead>;
 const setEnabled = decisionsNamespace.ops.setEnabled.handler as unknown as (
   payload: SetDecisionsEnabledPayload
 ) => Promise<DecisionsStatus>;
@@ -515,6 +539,13 @@ const ANSWER: AnswerDecisionQuestionPayload = {
   reviewedAttachmentDigests: ["a".repeat(64)],
 };
 
+/** A person's dismissal of the same question (#17239). */
+const DECLINE: DeclineDecisionQuestionPayload = {
+  reference: ANSWER.reference,
+  declineId: "0190f0aa-1111-4222-8333-44445555dddd",
+  expectedRevision: 0,
+};
+
 const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_GET_STATUS,
   CHANNELS.DECISIONS_GET_PANE_STATE,
@@ -528,6 +559,8 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_CANCEL_QUESTION_BY_REFERENCE,
   CHANNELS.DECISIONS_ANSWER_QUESTION,
   CHANNELS.DECISIONS_GET_ANSWER_RESULT,
+  CHANNELS.DECISIONS_DECLINE_QUESTION,
+  CHANNELS.DECISIONS_GET_DECLINE_RESULT,
   CHANNELS.DECISIONS_SET_ENABLED,
   CHANNELS.DECISIONS_CHECK_RELAY,
   CHANNELS.DECISIONS_CLAIM_RELAY,
@@ -576,6 +609,8 @@ describe("decisions IPC", () => {
     decisionsEntry.cancelDecisionQuestionByReference.mockClear();
     decisionsEntry.answerDecisionQuestion.mockClear();
     decisionsEntry.getDecisionAnswerResult.mockClear();
+    decisionsEntry.declineDecisionQuestion.mockClear();
+    decisionsEntry.getDecisionDeclineResult.mockClear();
     decisionsEntry.setDecisionsEnabled.mockClear();
     decisionsEntry.checkRelay.mockClear();
     decisionsEntry.claimRelay.mockClear();
@@ -813,6 +848,57 @@ describe("decisions IPC", () => {
       expect(decisionsEntry.libraries).toBe(0);
     }
   );
+
+  it.each([
+    ["absent", undefined],
+    ["off", { enabled: false }],
+  ])(
+    "signs and reads no person's dismissal with the setting %s, saying it's off, loading none of Decisions (#17239)",
+    async (_label, value) => {
+      saved.value = value;
+
+      await expect(declineQuestion(DECLINE)).resolves.toEqual({ result: "off" });
+      await expect(getDeclineResult({ declineId: DECLINE.declineId })).resolves.toEqual({
+        result: "off",
+      });
+
+      expect(decisionsEntry.evaluated).toBe(0);
+      expect(decisionsEntry.libraries).toBe(0);
+    }
+  );
+
+  it.each([
+    [
+      "serving its panes",
+      { deviceId: "dev_host_1", ownerOffAt: null, revokedAt: null },
+      "not-owner",
+    ],
+    ["turned off by its owner", { deviceId: "dev_host_1", ownerOffAt: 1, revokedAt: null }, "off"],
+    ["revoked", { deviceId: "dev_host_1", ownerOffAt: null, revokedAt: 1 }, "off"],
+  ] as const)(
+    "on an enrolled Remote Host %s, says its key never signs a dismissal, loading none of Decisions (#17239)",
+    async (_label, host, said) => {
+      saved.value = { enabled: false };
+      saved.host = host;
+
+      await expect(declineQuestion(DECLINE)).resolves.toEqual(
+        said === "not-owner" ? { result: "refused", reason: "not-owner" } : { result: "off" }
+      );
+      expect(decisionsEntry.evaluated).toBe(0);
+      expect(decisionsEntry.libraries).toBe(0);
+    }
+  );
+
+  it("signs no person's dismissal once quit has sealed the loader, without loading it (#17239)", async () => {
+    saved.value = { enabled: true };
+    sealDecisionsModule();
+
+    await expect(declineQuestion(DECLINE)).resolves.toEqual({ result: "not-running" });
+    await expect(getDeclineResult({ declineId: DECLINE.declineId })).resolves.toEqual({
+      result: "not-running",
+    });
+    expect(decisionsEntry.evaluated).toBe(0);
+  });
 
   it("signs no person's answer once quit has sealed the loader, without loading it (#17101)", async () => {
     saved.value = { enabled: true };
@@ -1459,6 +1545,66 @@ describe("decisions IPC", () => {
       }
       expect(result.safeParse({ answerId: ANSWER.answerId }).success).toBe(true);
       for (const bad of [{}, { answerId: "../x" }, { answerId: ANSWER.answerId, extra: 1 }]) {
+        expect(result.safeParse(bad).success).toBe(false);
+      }
+    });
+  });
+
+  describe("the person's dismissal (#17239)", () => {
+    it("passes the dismissal to Decisions once on, and hands back what it says", async () => {
+      saved.value = { enabled: true };
+      const refused: DecisionQuestionDeclineResult = { result: "refused", reason: "not-owner" };
+      const read: DecisionDeclineResultRead = {
+        result: "read",
+        questionId: QUESTION_ID,
+        expectedRevision: 0,
+        outcome: { status: "unsupported", by: "asking-desktop" },
+      };
+      decisionsEntry.declineDecisionQuestion.mockResolvedValueOnce(refused);
+      decisionsEntry.getDecisionDeclineResult.mockResolvedValueOnce(read);
+
+      await expect(declineQuestion(DECLINE)).resolves.toBe(refused);
+      await expect(getDeclineResult({ declineId: DECLINE.declineId })).resolves.toBe(read);
+
+      expect(decisionsEntry.declineDecisionQuestion).toHaveBeenCalledExactlyOnceWith(DECLINE);
+      expect(decisionsEntry.getDecisionDeclineResult).toHaveBeenCalledExactlyOnceWith({
+        declineId: DECLINE.declineId,
+      });
+    });
+
+    it("takes a whole reference, a decline id and a revision, and nothing else", () => {
+      const decline = decisionsNamespace.ops.declineQuestion.schema as SafeParse;
+      const result = decisionsNamespace.ops.getDeclineResult.schema as SafeParse;
+      expect(decline.safeParse(DECLINE).success).toBe(true);
+      expect(
+        decline.safeParse({
+          ...DECLINE,
+          declineId: "a".repeat(64),
+          expectedRevision: Number.MAX_SAFE_INTEGER,
+        }).success
+      ).toBe(true);
+      for (const bad of [
+        {},
+        { ...DECLINE, reference: undefined },
+        { ...DECLINE, reference: { ...DECLINE.reference, questionId: "../q" } },
+        { ...DECLINE, reference: { ...DECLINE.reference, hostId: "" } },
+        { ...DECLINE, declineId: undefined },
+        { ...DECLINE, declineId: "short" },
+        { ...DECLINE, declineId: "a".repeat(65) },
+        { ...DECLINE, declineId: "has spaces in it" },
+        { ...DECLINE, expectedRevision: undefined },
+        { ...DECLINE, expectedRevision: -1 },
+        { ...DECLINE, expectedRevision: 1.5 },
+        { ...DECLINE, expectedRevision: Number.MAX_SAFE_INTEGER + 1 },
+        // A decline carries no words and says nothing of who signs it.
+        { ...DECLINE, text: "not now" },
+        { ...DECLINE, decline: true },
+        { ...DECLINE, signerDeviceId: "dev_owner" },
+      ]) {
+        expect(decline.safeParse(bad).success, JSON.stringify(bad).slice(0, 120)).toBe(false);
+      }
+      expect(result.safeParse({ declineId: DECLINE.declineId }).success).toBe(true);
+      for (const bad of [{}, { declineId: "../x" }, { declineId: DECLINE.declineId, extra: 1 }]) {
         expect(result.safeParse(bad).success).toBe(false);
       }
     });

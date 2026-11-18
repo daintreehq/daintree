@@ -2,7 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { decisionsClient } from "@/clients/decisionsClient";
 import { useSkeletonGate } from "@/hooks/useDeferredLoading";
 import { useDecisionsSwitch } from "@/hooks/useDecisionsOn";
-import { useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
+import {
+  answerKey,
+  useAnswerRecord,
+  useDecisionsAnswerStore,
+  type DeclinePhase,
+} from "@/store/decisionsAnswerStore";
 import { useDecisionsImageReviewStore } from "@/store/decisionsImageReviewStore";
 import type {
   DecisionQuestionContent,
@@ -13,7 +18,14 @@ import {
   useAnswerInFlight,
   type AnswerComposerMode,
 } from "./DecisionAnswerComposer";
-import type { DecisionCancelTarget } from "./decisionCancelModel";
+import {
+  dismissFallback,
+  dismissOutcomeText,
+  dismissProgressText,
+  type DecisionCancelMode,
+  type DecisionCancelTarget,
+} from "./decisionCancelModel";
+import { followDecline } from "./decisionDeclineSend";
 import { aliasLabel } from "./decisionQuestionModel";
 import {
   readTargetContent,
@@ -63,7 +75,7 @@ function onQuestionMoved(target: DecisionQuestionTarget, moved: () => void): () 
   });
 }
 
-/** Whether the question still waits for an answer, and so can be withdrawn. */
+/** Whether the question still waits for an answer, and so can be dismissed or withdrawn. */
 export function isWaiting(status: DecisionQuestionContent["status"]): boolean {
   return status === "queued" || status === "open";
 }
@@ -105,7 +117,7 @@ export interface DecisionQuestionReader {
   alias: string | null;
   showSkeleton: boolean;
   answerMode: AnswerComposerMode;
-  /** Still waiting for an answer, and none from here on its way: it can be withdrawn. */
+  /** Still waiting for an answer, and none from here on its way: it can be dismissed or withdrawn. */
   cancellable: boolean;
   /**
    * Read the question shown again now, or once more after the read still out.
@@ -242,57 +254,137 @@ export function useDecisionQuestionReader(
   };
 }
 
+/** Where the shown question's dismissal from here stands, while it still waits (#17239). */
+export interface QuestionDismissal {
+  /** Its phase; null when none was asked for here, or the question no longer waits. */
+  phase: DeclinePhase | null;
+  /** How far it has got, while under way or taken and not yet closed here. */
+  progress: string | null;
+  /** Why it can't be taken where withdrawing still can: withdrawing is offered instead. */
+  fallback: string | null;
+  /** Why one that settled without being taken wasn't, once out of the confirmation. */
+  outcome: string | null;
+  /** Checks again, by its id, whether a dismissal whose reply was lost was taken. */
+  retry: () => void;
+}
+
 export interface QuestionCancel {
-  /** Asks about withdrawing the question shown now. */
+  dismissal: QuestionDismissal;
+  /** Asks about dismissing the question shown now. */
   ask: () => void;
+  /** Asks about withdrawing it instead, once its dismissal couldn't be taken. */
+  askToWithdraw: () => void;
   /** For the surface's `DecisionCancelDialog`, beside `restoreFocusTo`. */
   dialog: {
     target: DecisionCancelTarget | null;
     isOpen: boolean;
+    mode: DecisionCancelMode | undefined;
+    fallback: DeclinePhase | null | undefined;
     waiting: boolean;
     queued: boolean;
     onClose: () => void;
     onCancelling: () => void;
+    onDismissing: () => void;
   };
 }
 
 /**
- * The confirmation before a question shown in a reader is withdrawn. It
- * belongs to the question it was asked about: it ends with the surface, or
- * once the surface moves to another question, and neither brings it back.
+ * The confirmation before a question shown in a reader is dismissed, or
+ * withdrawn where a dismissal can't be taken, and where a dismissal from
+ * here stands meanwhile. The confirmation belongs to the question it was
+ * asked about: it ends with the surface, or once the surface moves to
+ * another question, and neither brings it back.
  */
 export function useQuestionCancel(
   target: DecisionQuestionTarget | null,
   reader: DecisionQuestionReader,
   isOpen: boolean
 ): QuestionCancel {
-  const [cancel, setCancel] = useState<{ target: DecisionCancelTarget; open: boolean } | null>(
-    null
-  );
+  // The dismissal or withdrawal asked about: its question, and what the confirmation asks first.
+  const [cancel, setCancel] = useState<{
+    target: DecisionCancelTarget;
+    open: boolean;
+    mode: DecisionCancelMode;
+    /** The dismissal that couldn't be taken, when it asks to withdraw instead. */
+    fallback: DeclinePhase | null;
+  } | null>(null);
+  const { question, alias, cancellable, reread, readAgain } = reader;
   const key = target !== null ? targetKey(target) : null;
-  // The withdrawal asked about, while this surface still shows that question.
+
+  const declineKey = question !== null ? answerKey(question.reference) : "";
+  const declinePhase = useAnswerRecord(declineKey).decline?.phase ?? null;
+  const shownDecline = cancellable ? declinePhase : null;
+  const progress = shownDecline !== null ? dismissProgressText(shownDecline) : null;
+  // A relay that didn't hold the question yet is no reason once it reads as sent.
+  const fallback =
+    shownDecline !== null && alias !== null && question !== null
+      ? dismissFallback(alias, shownDecline, question.status)
+      : null;
+  // One that settled without being taken, once out of the confirmation (read again on its own, or Retry).
+  const outcome =
+    shownDecline !== null && alias !== null && question !== null && target !== null
+      ? dismissOutcomeText(
+          { question: target, label: alias, line: null, revision: question.revision },
+          shownDecline
+        )
+      : null;
+  // Where the shown dismissal settled, other than queued: a queued one is read again on its own.
+  const declineSettled =
+    shownDecline?.kind === "settled" && shownDecline.outcome.status !== "queued"
+      ? shownDecline.outcome.status
+      : null;
+
+  // Settled: read again now rather than at the next change, so it shows
+  // declined once recorded, or the update a changed question brought.
+  useEffect(() => {
+    if (declineSettled !== null) reread();
+  }, [declineSettled, reread]);
+
+  const askFor = (mode: DecisionCancelMode, because: DeclinePhase | null) => {
+    if (question === null || target === null) return;
+    setCancel({
+      target: {
+        question: target,
+        label: aliasLabel(question.alias),
+        line: null,
+        revision: question.revision,
+      },
+      open: true,
+      mode,
+      fallback: because,
+    });
+  };
+
+  // The dismissal or withdrawal asked about, while this surface still shows that question.
   const cancelShown = cancel !== null && key === targetKey(cancel.target.question);
-  const status = cancelShown && reader.question !== null ? reader.question.status : null;
+  const status = cancelShown && question !== null ? question.status : null;
+  // A read that couldn't be made says nothing of whether it still waits: only one that found
+  // it gone or settled does, so a dismissal whose standing is unknown can still be tried again.
+  const waiting = status !== null ? isWaiting(status) : reader.current?.result !== "not-found";
   if (cancel !== null && cancel.open && (!isOpen || !cancelShown)) {
     setCancel({ ...cancel, open: false });
   }
-  const { question } = reader;
   return {
-    ask: () => {
-      if (question === null || target === null) return;
-      setCancel({
-        target: { question: target, label: aliasLabel(question.alias), line: null },
-        open: true,
-      });
+    dismissal: {
+      phase: shownDecline,
+      progress,
+      fallback,
+      outcome,
+      retry: () => void followDecline(declineKey, true),
     },
+    ask: () => askFor("dismiss", null),
+    askToWithdraw: () => askFor("withdraw", shownDecline),
     dialog: {
       target: cancel?.target ?? null,
       isOpen: isOpen && cancelShown && cancel.open,
-      waiting: status !== null && isWaiting(status),
+      mode: cancel?.mode,
+      fallback: cancel?.fallback,
+      waiting,
       queued: status === "queued",
       onClose: () => setCancel((asked) => (asked === null ? null : { ...asked, open: false })),
       // Read again now rather than at the next change: it shows withdrawn once the relay confirms.
-      onCancelling: () => reader.readAgain(cancel?.target.question ?? null),
+      onCancelling: () => readAgain(cancel?.target.question ?? null),
+      onDismissing: () => readAgain(cancel?.target.question ?? null),
     },
   };
 }

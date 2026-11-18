@@ -14,6 +14,8 @@ export const DECISIONS_METHOD_CHANNELS = {
   cancelQuestionByReference: "decisions:cancel-question-by-reference",
   answerQuestion: "decisions:answer-question",
   getAnswerResult: "decisions:get-answer-result",
+  declineQuestion: "decisions:decline-question",
+  getDeclineResult: "decisions:get-decline-result",
   setEnabled: "decisions:set-enabled",
   checkRelay: "decisions:check-relay",
   claimRelay: "decisions:claim-relay",

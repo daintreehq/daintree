@@ -4,7 +4,11 @@ import { z } from "zod";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op, opValidated } from "../define.js";
 import { store } from "../../store.js";
-import { decisionsServesPanes, loadDecisionsModule } from "../../window/serviceRefs.js";
+import {
+  decisionsHostServes,
+  decisionsServesPanes,
+  loadDecisionsModule,
+} from "../../window/serviceRefs.js";
 import {
   getDeviceAnswerService,
   peekDeviceAnswerService,
@@ -81,10 +85,13 @@ import type {
   AnswerDecisionQuestionPayload,
   CancelDecisionQuestionByReferencePayload,
   CancelDecisionQuestionPayload,
+  DeclineDecisionQuestionPayload,
   DecisionAnswerResultRead,
+  DecisionDeclineResultRead,
   DecisionQuestionAnswerResult,
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
+  DecisionQuestionDeclineResult,
   DecisionQuestionImagePartResult,
   DecisionQuestionList,
   DecisionQuestionSummariesResult,
@@ -95,6 +102,7 @@ import type {
   GetDecisionQuestionSummariesByReferencePayload,
   GetDecisionQuestionSummariesPayload,
   GetDecisionAnswerResultPayload,
+  GetDecisionDeclineResultPayload,
 } from "../../../shared/types/decisionsQuestion.js";
 import { AppError } from "../../utils/errorTypes.js";
 
@@ -363,6 +371,18 @@ const answerQuestionSchema = z
 
 const getAnswerResultSchema = z.object({ answerId: answerIdSchema }).strict();
 
+// The person's decline (#17239): the question as an answer names it, the
+// revision the person read, and an id the view mints, in the same shape.
+const declineQuestionSchema = z
+  .object({
+    reference: questionReferenceSchema,
+    declineId: answerIdSchema,
+    expectedRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  })
+  .strict();
+
+const getDeclineResultSchema = z.object({ declineId: answerIdSchema }).strict();
+
 // A pane holds at most ten open questions; the cap leaves room for the settled ones a list names.
 const getQuestionSummariesSchema = z
   .object({
@@ -589,6 +609,36 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) return { result: "not-running" };
         return decisions.getDecisionAnswerResult(payload);
+      }
+    ),
+    // The person's decline (#17239), from Daintree's own view: `shell` like
+    // their answer, so this computer signs it with its owner key whichever
+    // machine asked. No action, MCP tool or plugin surface reaches it. An
+    // enrolled Remote Host serves its panes with the owner's switch off here,
+    // and its key never signs for the person: it says so, without loading
+    // anything, so its view offers withdrawing instead. Never starts Decisions.
+    declineQuestion: opValidated(
+      CHANNELS.DECISIONS_DECLINE_QUESTION,
+      declineQuestionSchema,
+      async (payload: DeclineDecisionQuestionPayload): Promise<DecisionQuestionDeclineResult> => {
+        if (!decisionsOn()) {
+          return decisionsHostServes(store.get("decisionsHost"))
+            ? { result: "refused", reason: "not-owner" }
+            : { result: "off" };
+        }
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.declineDecisionQuestion(payload);
+      }
+    ),
+    getDeclineResult: opValidated(
+      CHANNELS.DECISIONS_GET_DECLINE_RESULT,
+      getDeclineResultSchema,
+      async (payload: GetDecisionDeclineResultPayload): Promise<DecisionDeclineResultRead> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.getDecisionDeclineResult(payload);
       }
     ),
     // Which terminals this view's hybrid input holds a draft for (#16282): an

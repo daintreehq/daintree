@@ -893,6 +893,10 @@ export interface GeneratedIpcInvokeMap {
     args: [pairingId: string];
     result: import("../decisions.js").DecisionsPairingDeclineResult;
   };
+  "decisions:decline-question": {
+    args: [payload: import("../decisionsQuestion.js").DeclineDecisionQuestionPayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionDeclineResult;
+  };
   "decisions:delete-local-data": {
     args: [];
     result: import("../decisions.js").DecisionsLocalDeleteResult;
@@ -920,6 +924,10 @@ export interface GeneratedIpcInvokeMap {
   "decisions:get-answer-result": {
     args: [payload: import("../decisionsQuestion.js").GetDecisionAnswerResultPayload];
     result: import("../decisionsQuestion.js").DecisionAnswerResultRead;
+  };
+  "decisions:get-decline-result": {
+    args: [payload: import("../decisionsQuestion.js").GetDecisionDeclineResultPayload];
+    result: import("../decisionsQuestion.js").DecisionDeclineResultRead;
   };
   "decisions:get-model": {
     args: [];

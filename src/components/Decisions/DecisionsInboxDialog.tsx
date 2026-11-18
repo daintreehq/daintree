@@ -467,7 +467,7 @@ function InboxList({
  * Every question this computer's Decisions holds (#17231), across its
  * projects and terminals, grouped by what it needs: the person, delivery, or
  * a decision about a stopped delivery, then history. Selecting one reads it
- * in full beside the list, with the question view's answer and cancel, and
+ * in full beside the list, with the question view's answer and dismissal, and
  * a way to the terminal that asked while it is still open. The words are
  * read on demand by reference and held in memory only while it is open.
  */
@@ -532,6 +532,16 @@ export function DecisionsInboxDialog() {
   const shownTarget = selectedKey !== null && target?.key === selectedKey ? target.target : null;
   const reader = useDecisionQuestionReader(shownTarget, active);
   const cancel = useQuestionCancel(shownTarget, reader, isOpen);
+  const { dismissal } = cancel;
+  // Where a dismissal from here stands, why it can't be taken (beside Withdraw), or why it wasn't.
+  const dismissNote =
+    dismissal.progress !== null
+      ? { text: dismissal.progress, live: true }
+      : dismissal.fallback !== null
+        ? { text: dismissal.fallback, live: false }
+        : dismissal.outcome !== null
+          ? { text: dismissal.outcome, live: true }
+          : null;
   const { reach, markGone } = useTerminalReach(selected, active);
 
   // Each look before going elsewhere belongs to the question shown when it
@@ -726,19 +736,51 @@ export function DecisionsInboxDialog() {
                         Go to terminal
                       </Button>
                     )}
-                    {reader.cancellable && (
-                      <Button
-                        ref={cancelRef}
-                        variant="ghost-danger"
-                        size="xs"
-                        onClick={cancel.ask}
-                        data-testid="decisions-inbox-cancel"
-                      >
-                        Cancel question
-                      </Button>
-                    )}
+                    {reader.cancellable &&
+                      (dismissal.progress !== null ? (
+                        dismissal.phase?.kind === "lost" && (
+                          <Button
+                            ref={cancelRef}
+                            variant="outline"
+                            size="xs"
+                            onClick={dismissal.retry}
+                            data-testid="decisions-inbox-dismiss-retry"
+                          >
+                            Retry
+                          </Button>
+                        )
+                      ) : dismissal.fallback !== null ? (
+                        <Button
+                          ref={cancelRef}
+                          variant="ghost-danger"
+                          size="xs"
+                          onClick={cancel.askToWithdraw}
+                          data-testid="decisions-inbox-withdraw"
+                        >
+                          Withdraw question
+                        </Button>
+                      ) : (
+                        <Button
+                          ref={cancelRef}
+                          variant="ghost-danger"
+                          size="xs"
+                          onClick={cancel.ask}
+                          data-testid="decisions-inbox-dismiss"
+                        >
+                          Dismiss question
+                        </Button>
+                      ))}
                   </div>
                 </div>
+                {reader.cancellable && dismissNote !== null && (
+                  <p
+                    role={dismissNote.live ? "status" : undefined}
+                    className="text-xs text-text-secondary [text-wrap:pretty]"
+                    data-testid="decisions-inbox-dismiss-status"
+                  >
+                    {dismissNote.text}
+                  </p>
+                )}
                 <DecisionQuestionReadView reader={reader} target={shownTarget} active={isOpen} />
               </div>
             )}
