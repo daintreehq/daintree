@@ -5,7 +5,10 @@ import path from "node:path";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync, existsSync } from "node:fs";
 import fsPromises from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DevPreviewSessionService, type DevPreviewDirSizeScan } from "../DevPreviewSessionService.js";
+import {
+  DevPreviewSessionService,
+  type DevPreviewDirSizeScan,
+} from "../DevPreviewSessionService.js";
 import { measureDirectorySize } from "../DirectoryDiskUsage.js";
 import type { PtyClient } from "../PtyClient.js";
 import type { DevPreviewSessionState } from "../../../shared/types/ipc/devPreview.js";
