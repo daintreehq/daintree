@@ -977,18 +977,23 @@ describe("checkForUpdate — catalog installs (#16781)", () => {
     }
   );
 
-  it("reads the catalog a background pass hands it, fetching once for every check (#17805)", async () => {
-    const service = new PluginService(pluginsRoot, "0.0.0");
-    const installedHash = await installFromCatalog(service);
-    const sharedFetch = catalogServes();
+  /** A catalog opened for one background pass, serving `document` to every fetch. */
+  function passCatalog(document: { entries: unknown[] }) {
     const passFetch = vi.fn(
       async () =>
-        new Response(JSON.stringify({ entries: [entry("0.1.0", installedHash)] }), {
+        new Response(JSON.stringify(document), {
           headers: { "content-type": "application/json" },
         })
     );
-    const catalog = new PluginCatalogService({ cachePath: null, fetchImpl: passFetch });
-    const batch = catalog.openUpdateBatch();
+    const batch = new PluginCatalogService({ cachePath: null, fetchImpl: passFetch });
+    return { batch: batch.openUpdateBatch(), passFetch };
+  }
+
+  it("reads the catalog a background pass hands it, one fetch across several checks (#17805)", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const installedHash = await installFromCatalog(service);
+    const sharedFetch = catalogServes();
+    const { batch, passFetch } = passCatalog({ entries: [entry("0.1.0", installedHash)] });
 
     const results = await Promise.all([
       service.checkForUpdate(ID, { catalog: batch }),
@@ -1007,23 +1012,44 @@ describe("checkForUpdate — catalog installs (#16781)", () => {
     service.dispose();
   });
 
-  it("still verifies the archive of an update a pass's catalog offers", async () => {
+  it("offers the update a pass's catalog lists once its archive checks out", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const installedHash = await installFromCatalog(service);
+    const next = await readArchiveBytes({
+      name: ID,
+      version: "0.1.1",
+      capabilities: ["mcp:expose"],
+    });
+    const sharedFetch = catalogServes();
+    const { batch } = passCatalog({
+      entries: [entry("0.1.0", installedHash), entry("0.1.1", sha(next))],
+    });
+    netMock.fetch.mockResolvedValueOnce(fakeResponse([new Uint8Array(next)]));
+
+    const result = await service.checkForUpdate(ID, { catalog: batch });
+
+    expect(result).toMatchObject({
+      status: "available",
+      version: "0.1.1",
+      capabilities: ["mcp:expose"],
+      archiveHash: sha(next),
+      catalog: { id: ID, version: "0.1.1", repo: REPO },
+    });
+    expect(netMock.fetch).toHaveBeenCalledTimes(1);
+    expect(netMock.fetch.mock.calls[0]?.[0]).toBe(releaseUrl("0.1.1"));
+    expect(sharedFetch).not.toHaveBeenCalled();
+    expect(await leftoverTempDirs()).toHaveLength(0);
+    service.dispose();
+  });
+
+  it("still refuses an archive that isn't the one a pass's catalog reviewed", async () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
     const installedHash = await installFromCatalog(service);
     const served = await readArchiveBytes({ name: ID, version: "0.1.1" });
-    const passFetch = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            entries: [entry("0.1.0", installedHash), entry("0.1.1", "f".repeat(64))],
-          }),
-          { headers: { "content-type": "application/json" } }
-        )
-    );
-    const batch = new PluginCatalogService({
-      cachePath: null,
-      fetchImpl: passFetch,
-    }).openUpdateBatch();
+    const sharedFetch = catalogServes();
+    const { batch } = passCatalog({
+      entries: [entry("0.1.0", installedHash), entry("0.1.1", "f".repeat(64))],
+    });
     netMock.fetch.mockResolvedValueOnce(fakeResponse([new Uint8Array(served)]));
 
     const result = await service.checkForUpdate(ID, { catalog: batch });
@@ -1032,6 +1058,8 @@ describe("checkForUpdate — catalog installs (#16781)", () => {
     expect(result.status === "fetch-failed" && result.message).toContain(
       "isn't the one the plugin catalog reviewed"
     );
+    expect(netMock.fetch.mock.calls[0]?.[0]).toBe(releaseUrl("0.1.1"));
+    expect(sharedFetch).not.toHaveBeenCalled();
     expect(await leftoverTempDirs()).toHaveLength(0);
     service.dispose();
   });
@@ -1040,11 +1068,8 @@ describe("checkForUpdate — catalog installs (#16781)", () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
     const manifest = { name: "acme.byurl", version: "1.0.0" };
     await installUrlPlugin(service, manifest);
-    const passFetch = vi.fn(async () => new Response(JSON.stringify({ entries: [] })));
-    const batch = new PluginCatalogService({
-      cachePath: null,
-      fetchImpl: passFetch,
-    }).openUpdateBatch();
+    const sharedFetch = catalogServes();
+    const { batch, passFetch } = passCatalog({ entries: [] });
     netMock.fetch.mockResolvedValueOnce(
       fakeResponse([new Uint8Array(await readArchiveBytes(manifest))])
     );
@@ -1052,7 +1077,9 @@ describe("checkForUpdate — catalog installs (#16781)", () => {
     expect(await service.checkForUpdate("acme.byurl", { catalog: batch })).toEqual({
       status: "up-to-date",
     });
+    expect(netMock.fetch.mock.calls[0]?.[0]).toBe("https://example.com/plugin.dntr");
     expect(passFetch).not.toHaveBeenCalled();
+    expect(sharedFetch).not.toHaveBeenCalled();
     service.dispose();
   });
 

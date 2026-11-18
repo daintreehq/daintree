@@ -902,11 +902,15 @@ describe("PluginCatalogService", () => {
       expect(fetchImpl).toHaveBeenCalledTimes(1);
     });
 
-    it("fetches nothing until its first lookup", async () => {
-      const fetchImpl = respondWith();
-      service(fetchImpl).openUpdateBatch();
-      await Promise.resolve();
-      expect(fetchImpl).not.toHaveBeenCalled();
+    it("reads nothing until its first lookup", async () => {
+      const svc = service(respondWith(ok(tenAt("1.0.0"))));
+      const read = vi.spyOn(svc, "getCatalog");
+      const batch = svc.openUpdateBatch();
+      expect(read).not.toHaveBeenCalled();
+
+      await batch.lookupUpdate(IDS[0], "1.0.0");
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(read).toHaveBeenCalledWith("install");
     });
 
     it("answers each plugin from its own releases, the way a single lookup does", async () => {
@@ -942,6 +946,32 @@ describe("PluginCatalogService", () => {
       const next = svc.openUpdateBatch();
       const answered = await inPairs(IDS, (id) => next.lookupUpdate(id, "1.0.0"));
       expect(answered).toEqual(IDS.map(() => ({ status: "current", fetchedAt: T0 })));
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    });
+
+    it("never carries a successful catalog into the next batch", async () => {
+      const fetchImpl = respondWith(
+        ok(tenAt("1.0.0")),
+        ok({ entries: [...tenAt("1.0.0").entries, release(IDS[4], "1.1.0")] })
+      );
+      const svc = service(fetchImpl);
+
+      const first = svc.openUpdateBatch();
+      expect(await inPairs(IDS, (id) => first.lookupUpdate(id, "1.0.0"))).toEqual(
+        IDS.map(() => ({ status: "current", fetchedAt: T0 }))
+      );
+
+      const second = svc.openUpdateBatch();
+      const answered = await inPairs(IDS, (id) => second.lookupUpdate(id, "1.0.0"));
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(answered.map((r) => r.status)).toEqual(
+        IDS.map((id) => (id === IDS[4] ? "update" : "current"))
+      );
+      // The first batch keeps the catalog it read.
+      expect(await first.lookupUpdate(IDS[4], "1.0.0")).toEqual({
+        status: "current",
+        fetchedAt: T0,
+      });
       expect(fetchImpl).toHaveBeenCalledTimes(2);
     });
 

@@ -39,7 +39,7 @@ const pluginServiceMock = vi.hoisted(() => ({
 
 // The catalog client is real, fed by a fake catalog fetch, so a pass reads the
 // catalog the way it does in the app (#17805).
-const catalogRef = vi.hoisted(() => ({ current: null as unknown }));
+const catalogRef = vi.hoisted(() => ({ current: null as unknown, accessed: 0 }));
 
 vi.mock("electron", () => ({ powerMonitor: powerMonitorMock }));
 vi.mock("../../ipc/utils.js", () => ({ broadcastToRenderer: broadcastMock }));
@@ -49,7 +49,13 @@ vi.mock("../SystemSleepService.js", () => ({ getSystemSleepService: () => system
 vi.mock("../PluginService.js", () => ({ pluginService: pluginServiceMock }));
 vi.mock("../plugin/PluginCatalogService.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugin/PluginCatalogService.js")>();
-  return { ...actual, getPluginCatalogService: () => catalogRef.current };
+  return {
+    ...actual,
+    getPluginCatalogService: () => {
+      catalogRef.accessed += 1;
+      return catalogRef.current;
+    },
+  };
 });
 vi.mock("../../utils/logger.js", () => ({
   logInfo: vi.fn(),
@@ -94,6 +100,7 @@ describe("PluginUpdateCheckService", () => {
     broadcastMock.mockClear();
     storeMock.set.mockClear();
     pluginServiceMock.checkForUpdate.mockClear();
+    catalogRef.accessed = 0;
     catalogRef.current = new PluginCatalogService({
       cachePath: null,
       fetchImpl: async () => {
@@ -712,60 +719,112 @@ describe("PluginUpdateCheckService", () => {
 
     /**
      * The catalog half of the installer's check: it reads the catalog the pass
-     * hands it, or the shared one when it is handed none.
+     * hands it, or the shared one when it is handed none. Returns what each
+     * install's last check answered.
      */
-    function checksAgainstCatalog(installedVersion = "1.0.0") {
+    function checksAgainstCatalog(installedVersionOf: (id: string) => string = () => "1.0.0") {
+      const answers = new Map<string, unknown>();
       pluginServiceMock.checkForUpdate.mockImplementation(async (id: string, options?: unknown) => {
         const handed = (options as { catalog?: PluginCatalogUpdateSource } | undefined)?.catalog;
         const source = handed ?? (catalogRef.current as PluginCatalogService);
+        const installedVersion = installedVersionOf(id);
         const lookup = await source.lookupUpdate(id, installedVersion);
+        let answer: Record<string, unknown>;
         switch (lookup.status) {
           case "stale":
           case "unavailable":
-            return {
+            answer = {
               status: "catalog-unavailable",
               catalog: lookup.status,
               failure: lookup.failure,
             };
+            break;
           case "current":
-            return { status: "up-to-date" };
+            answer = { status: "up-to-date" };
+            break;
           case "delisted":
-            return { status: "delisted", scope: lookup.scope, version: installedVersion };
+            answer = { status: "delisted", scope: lookup.scope, version: installedVersion };
+            break;
           case "update":
-            return available(id, lookup.entry.version);
+            answer = available(id, lookup.entry.version);
+            break;
         }
+        answers.set(id, answer);
+        return answer;
       });
+      return answers;
     }
 
     it("fetches the catalog once for ten up-to-date catalog installs", async () => {
       storeState.value = { enabled: true, lastCheckedAt: null };
       pluginServiceMock.listPlugins.mockReturnValue(TEN.map(catalogPlugin));
       const fetchImpl = catalogServes({ entries: TEN.map((id) => release(id, "1.0.0")) });
-      checksAgainstCatalog();
+      const answers = checksAgainstCatalog();
 
       const svc = new PluginUpdateCheckService();
       await svc._checkNowForTest();
 
       expect(pluginServiceMock.checkForUpdate).toHaveBeenCalledTimes(10);
       expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(catalogRef.accessed).toBe(1);
+      expect([...answers.keys()].sort()).toEqual(TEN);
+      expect([...answers.values()]).toEqual(TEN.map(() => ({ status: "up-to-date" })));
       expect(storeState.value.lastCheckedAt).not.toBeNull();
       expect(broadcastMock).not.toHaveBeenCalled();
     });
 
-    it("answers each install from the one catalog by its own id", async () => {
+    it("answers each install from the one catalog by its own id and version", async () => {
       storeState.value = { enabled: true, lastCheckedAt: null };
       pluginServiceMock.listPlugins.mockReturnValue(TEN.map(catalogPlugin));
-      const entries = TEN.map((id) => release(id, "1.0.0"));
-      // pub.p3 has a newer release; pub.p7 is gone.
-      entries.push(release("pub.p3", "1.1.0"));
-      const fetchImpl = catalogServes({ entries: entries.filter((e) => e.id !== "pub.p7") });
-      checksAgainstCatalog();
+      // pub.pN is installed at 1.N.0 and listed at it, except: pub.p3 also has
+      // 1.4.0, pub.p5 is listed only at an older 1.4.0, and pub.p7 is gone.
+      const installedVersionOf = (id: string) => `1.${id.slice("pub.p".length)}.0`;
+      const entries = TEN.filter((id) => id !== "pub.p5" && id !== "pub.p7").map((id) =>
+        release(id, installedVersionOf(id))
+      );
+      entries.push(release("pub.p3", "1.4.0"), release("pub.p5", "1.4.0"));
+      const fetchImpl = catalogServes({ entries });
+      const answers = checksAgainstCatalog(installedVersionOf);
 
       const svc = new PluginUpdateCheckService();
       await svc._checkNowForTest();
 
       expect(fetchImpl).toHaveBeenCalledTimes(1);
-      expect(svc.getLatest()).toMatchObject({ signature: "pub.p3@1.1.0" });
+      expect(Object.fromEntries(answers)).toEqual(
+        Object.fromEntries(
+          TEN.map((id) => [
+            id,
+            id === "pub.p3"
+              ? available("pub.p3", "1.4.0")
+              : id === "pub.p5"
+                ? { status: "delisted", scope: "release", version: "1.5.0" }
+                : id === "pub.p7"
+                  ? { status: "delisted", scope: "plugin", version: "1.7.0" }
+                  : { status: "up-to-date" },
+          ])
+        )
+      );
+      expect(svc.getLatest()).toMatchObject({ signature: "pub.p3@1.4.0" });
+    });
+
+    it("fetches afresh on every pass, so a release listed since the last one is offered", async () => {
+      storeState.value = { enabled: true, lastCheckedAt: null };
+      pluginServiceMock.listPlugins.mockReturnValue(TEN.map(catalogPlugin));
+      const current = TEN.map((id) => release(id, "1.0.0"));
+      const fetchImpl = catalogServes(
+        { entries: current },
+        { entries: [...current, release("pub.p2", "1.1.0")] }
+      );
+      checksAgainstCatalog();
+      const svc = new PluginUpdateCheckService();
+
+      await svc._checkNowForTest();
+      expect(svc.getLatest()).toBeNull();
+
+      await svc._checkNowForTest();
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(catalogRef.accessed).toBe(2);
+      expect(svc.getLatest()).toMatchObject({ signature: "pub.p2@1.1.0" });
     });
 
     it("fetches afresh on the next due pass after a failed one, and that pass counts", async () => {
@@ -808,6 +867,7 @@ describe("PluginUpdateCheckService", () => {
 
       expect(pluginServiceMock.checkForUpdate).toHaveBeenCalledTimes(2);
       expect(fetchImpl).not.toHaveBeenCalled();
+      expect(catalogRef.accessed).toBe(0);
     });
   });
 
