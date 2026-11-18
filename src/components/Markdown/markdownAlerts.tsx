@@ -32,7 +32,7 @@ function isMarkdownAlertType(value: unknown): value is MarkdownAlertType {
 }
 
 /** The marker, ending its line: GitHub takes no title or text after it. */
-const MARKER = /^\[!([a-z]+)\][ \t]*(\n|$)/i;
+const MARKER = /^\[!([a-z]+)\][ \t]*(\r?\n|$)/i;
 
 export interface MarkdownAlertOptions {
   /**
@@ -45,17 +45,17 @@ export interface MarkdownAlertOptions {
 
 /** A piece of the paragraph's leading run: a text node, or the `<br>` ending a line. */
 type Leaf =
-  | { kind: "text"; node: Text; parent: Element }
-  | { kind: "break"; node: Element; parent: Element };
+  { kind: "text"; node: Text; parent: Element } | { kind: "break"; node: Element; parent: Element };
 
 function isWhitespaceText(node: ElementContent): boolean {
   return node.type === "text" && !/\S/.test(node.value);
 }
 
 /**
- * The paragraph's text up to its first element that isn't a line break or a
- * revision mark. `blocked` says such an element ended it, rather than the
- * paragraph itself ending.
+ * The paragraph's text up to the first thing in it that isn't text, a line
+ * break or a revision mark: formatting, a link, an image, raw HTML or a
+ * comment. `blocked` says one of those ended it, rather than the paragraph
+ * itself ending. A paragraph that can't open with a marker ends it at once.
  */
 function leadingRun(
   paragraph: Element,
@@ -64,6 +64,7 @@ function leadingRun(
   const leaves: Leaf[] = [];
   let text = "";
   for (const child of paragraph.children) {
+    if (!"[!".startsWith(text.slice(0, 2))) return { leaves, text, blocked: true };
     if (child.type === "text") {
       leaves.push({ kind: "text", node: child, parent: paragraph });
       text += child.value;
@@ -76,7 +77,7 @@ function leadingRun(
         leaves.push({ kind: "text", node: inner, parent: child });
         text += inner.value;
       }
-    } else if (child.type === "element") {
+    } else {
       return { leaves, text, blocked: true };
     }
   }
@@ -142,20 +143,18 @@ export function rehypeMarkdownAlerts(options: MarkdownAlertOptions = {}) {
 
       // Something other than text right after the marker shares its line.
       if (match[2] === "" && run.blocked) continue;
+      // A marker that is the whole paragraph needs a body after it, and raw
+      // HTML there is none: `skipHtml` drops it.
       const isWholeParagraph = !run.blocked && !/\S/.test(run.text.slice(match[0].length));
-      if (
-        isWholeParagraph &&
-        !block.children.slice(contentIndex + 1).some((child) => !isWhitespaceText(child))
-      ) {
-        continue;
-      }
+      const body = block.children.slice(contentIndex + 1).find((child) => !isWhitespaceText(child));
+      if (isWholeParagraph && body?.type !== "element") continue;
 
       consume(run.leaves, match[0].length);
       // A hard break is followed by the line ending mdast-util-to-hast writes
       // after it, which would otherwise open the body.
       const first = paragraph.children[0];
       if (first?.type === "text") {
-        first.value = first.value.replace(/^\n/, "");
+        first.value = first.value.replace(/^\r?\n/, "");
         if (!first.value) paragraph.children.shift();
       }
       if (isRevisionMark) {

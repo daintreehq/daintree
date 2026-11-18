@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
+import type { Element, ElementContent, Root } from "hast";
 import { MarkdownDocument } from "../MarkdownDocument";
+import { rehypeMarkdownAlerts } from "../markdownAlerts";
 
 afterEach(cleanup);
 
@@ -127,9 +129,106 @@ describe("GitHub alerts in rendered Markdown (#17333)", () => {
     expect(container.textContent).toContain("[!TIP]");
   });
 
+  it("takes a marker ended by a CRLF line ending", () => {
+    const container = renderDocument("> [!TIP]\r\n> Windows line endings.\r\n");
+    const box = alerts(container)[0];
+    expect(box?.getAttribute("data-markdown-alert")).toBe("tip");
+    expect(words(box)).toBe("Tip Windows line endings.");
+  });
+
+  it("keeps a body that is only an image", () => {
+    const container = renderDocument("> [!NOTE]\n> ![diagram](https://example.com/d.png)");
+    const box = alerts(container)[0];
+    expect(box?.querySelector("img")?.getAttribute("alt")).toBe("diagram");
+  });
+
+  it("lets raw HTML on the marker's line end it, as any other markup does", () => {
+    const container = renderDocument("> [!NOTE]<!-- aside -->\n> Body.");
+    expect(alerts(container)).toHaveLength(0);
+    expect(container.querySelector("blockquote")?.textContent).toContain("[!NOTE]");
+  });
+
+  it("gives a marker no body made only of raw HTML, which never renders", () => {
+    const container = renderDocument("> [!NOTE]\n>\n> <div>dropped</div>");
+    expect(alerts(container)).toHaveLength(0);
+    expect(container.querySelector("blockquote")?.textContent).toContain("[!NOTE]");
+  });
+
   it("leaves an ordinary blockquote as a blockquote", () => {
     const container = renderDocument("> Just a quote.");
     expect(alerts(container)).toHaveLength(0);
     expect(container.querySelector("blockquote")?.textContent?.trim()).toBe("Just a quote.");
+  });
+});
+
+describe("rehypeMarkdownAlerts through the rendered diff's revision marks", () => {
+  const text = (value: string): ElementContent => ({ type: "text", value });
+  const element = (tagName: string, children: ElementContent[], className?: string[]): Element => ({
+    type: "element",
+    tagName,
+    properties: className ? { className } : {},
+    children,
+  });
+  /** Shaped as `inlineRangePlugin` builds one: a hidden label, then the changed text. */
+  const mark = (tagName: "ins" | "del", value: string) =>
+    element(
+      tagName,
+      [element("span", [text("Inserted: ")], ["sr-only"]), text(value)],
+      ["revision"]
+    );
+  const isRevisionMark = (node: Element) =>
+    Array.isArray(node.properties.className) && node.properties.className.includes("revision");
+
+  function quote(paragraph: ElementContent[]): { tree: Root; blockquote: Element } {
+    const blockquote = element("blockquote", [text("\n"), element("p", paragraph), text("\n")]);
+    return { tree: { type: "root", children: [blockquote] }, blockquote };
+  }
+
+  function paragraphOf(blockquote: Element): Element | undefined {
+    return blockquote.children.find(
+      (child): child is Element => child.type === "element" && child.tagName === "p"
+    );
+  }
+
+  it("reads a marker split across a mark, and takes the emptied mark out with it", () => {
+    const { tree, blockquote } = quote([
+      text("[!"),
+      mark("ins", "WARNING"),
+      text("]\nDrop the "),
+      mark("ins", "new"),
+      text(" table."),
+    ]);
+
+    rehypeMarkdownAlerts({ isRevisionMark })(tree);
+
+    expect(blockquote.properties.dataMarkdownAlert).toBe("warning");
+    const children = paragraphOf(blockquote)?.children ?? [];
+    expect(
+      children.map((child) => (child.type === "element" ? child.tagName : child.type))
+    ).toEqual(["text", "ins", "text"]);
+    expect(children[0]).toEqual(text("Drop the "));
+  });
+
+  it("keeps a mark that runs on into the body, with its label and its body text", () => {
+    const changed = mark("ins", "]\nNew");
+    const { tree, blockquote } = quote([text("[!NOTE"), changed, text(" body.")]);
+
+    rehypeMarkdownAlerts({ isRevisionMark })(tree);
+
+    expect(blockquote.properties.dataMarkdownAlert).toBe("note");
+    expect(paragraphOf(blockquote)?.children).toEqual([changed, text(" body.")]);
+    expect(changed.children).toEqual([
+      element("span", [text("Inserted: ")], ["sr-only"]),
+      text("New"),
+    ]);
+  });
+
+  it("treats the same mark as ordinary markup when it isn't named a revision mark", () => {
+    const { tree, blockquote } = quote([text("[!"), mark("ins", "WARNING"), text("]\nBody.")]);
+
+    rehypeMarkdownAlerts()(tree);
+
+    expect(blockquote.properties.dataMarkdownAlert).toBeUndefined();
+    expect(paragraphOf(blockquote)?.children).toHaveLength(3);
   });
 });
