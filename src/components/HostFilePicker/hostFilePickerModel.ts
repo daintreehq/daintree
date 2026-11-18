@@ -186,9 +186,23 @@ export function visibleRowRange(
   return { start: Math.max(0, first - overscan), end: Math.min(count, last + overscan) };
 }
 
+/** Whether any of a row shows in the viewport at a scroll offset. */
+export function rowInView(
+  index: number,
+  count: number,
+  scrollTop: number,
+  geometry: ListGeometry
+): boolean {
+  const { rowHeight, padding, viewport } = geometry;
+  const top = clampedScrollTop(count, scrollTop, geometry);
+  const rowTop = padding + index * rowHeight;
+  return rowTop < top + viewport && rowTop + rowHeight > top;
+}
+
 /**
  * The scroll offset that brings a row fully into view by the nearer edge, with
- * the list's padding showing beyond it; null when it is in view already.
+ * the list's padding showing beyond it; null when the offset can stay. A row
+ * already fully in view stays put, so the list never nudges under the cursor.
  */
 export function revealScrollTop(
   index: number,
@@ -199,11 +213,10 @@ export function revealScrollTop(
   const { rowHeight, padding, viewport } = geometry;
   const top = clampedScrollTop(count, scrollTop, geometry);
   const rowTop = padding + index * rowHeight;
+  const rowBottom = rowTop + rowHeight;
   let target = top;
-  if (rowTop - padding < top) target = rowTop - padding;
-  else if (rowTop + rowHeight + padding > top + viewport) {
-    target = rowTop + rowHeight + padding - viewport;
-  }
+  if (rowTop < top) target = rowTop - padding;
+  else if (rowBottom > top + viewport) target = rowBottom + padding - viewport;
   target = clampedScrollTop(count, target, geometry);
   return target === scrollTop ? null : target;
 }

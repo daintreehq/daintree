@@ -1,4 +1,12 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ArrowUp,
   Check,
@@ -55,6 +63,7 @@ import {
   joinHostPath,
   resolveChoice,
   revealScrollTop,
+  rowInView,
   splitFileName,
   visibleRowRange,
   type ListGeometry,
@@ -528,6 +537,7 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
   );
   // The active descendant only ever names an option that is in the DOM.
   const activeMounted = activeIndex >= windowStart && activeIndex < windowEnd;
+  const activeInView = rowInView(activeIndex, entries.length, scrollTop, geometry);
   // The home token stands for a folder only the host can name, so it reads as
   // its last listing, through a refresh or a failed one too.
   const homeListing =
@@ -627,10 +637,18 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
     const list = listRef.current;
     if (!list) return;
     const target = revealScrollTop(index, entries.length, list.scrollTop, geometry);
-    if (target === null) return;
-    list.scrollTop = target;
-    setScrollTop(target);
+    if (target !== null) list.scrollTop = target;
+    // Synced either way: a scroll whose event hasn't arrived yet still counts.
+    setScrollTop(target ?? list.scrollTop);
   };
+
+  // Keyboard focus arriving, or a listing landing under it, brings the active
+  // row into view: focus can return to a list scrolled away from that row, or
+  // during a refresh that moves it. A wheel scroll alone never pulls it back.
+  const revealActive = useEffectEvent(() => revealRow(activeIndex));
+  useLayoutEffect(() => {
+    if (ready && keyboardCursor) revealActive();
+  }, [ready, keyboardCursor, entries]);
 
   const moveTo = (index: number) => {
     setKeyboardCursor(true);
@@ -671,6 +689,7 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
       return;
     }
     if (!activeEntry) return;
+    if (event.key === "Enter" || event.key === " ") revealRow(activeIndex);
     if (event.key === "Enter") {
       event.preventDefault();
       // In a multi-select, Enter on a file confirms what is selected, as the
@@ -843,8 +862,9 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
         </div>
 
         {/* A fixed height: the dialog keeps its size from folder to folder,
-            so it never re-centres while browsing. */}
-        <div className="relative flex h-72 shrink-0 flex-col">
+            so it never re-centres while browsing. It gives way only to a
+            window too short for the whole dialog. */}
+        <div className="relative flex h-72 min-h-0 flex-col">
           <div
             ref={listRef}
             id={listId}
@@ -868,8 +888,6 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
               if (event.target === event.currentTarget && !listPointerRef.current) {
                 setKeyboardCursor(true);
                 setNameDismissed(false);
-                // The list may have been scrolled away from the active row.
-                if (ready) revealRow(activeIndex);
               }
               listPointerRef.current = false;
             }}
@@ -883,9 +901,9 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
               "group/list min-h-0 flex-1 overflow-auto rounded-[var(--radius-md)] border border-border-default bg-surface-canvas p-1 transition-opacity duration-150 ease-out [overflow-anchor:none]",
               // The rows still on screen belong to the folder being left.
               showProgress && "opacity-60",
-              // A mounted active row carries the focus ring; otherwise the
+              // An active row in view carries the focus ring; otherwise the
               // list rings itself.
-              ready && entries.length > 0 && activeMounted
+              ready && entries.length > 0 && activeInView
                 ? "focus-visible:outline-hidden"
                 : "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
             )}
@@ -931,7 +949,8 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
                   onDoubleClick={() => open(entry)}
                   className={cn(
                     LIST_DETAIL_ROW_CLASS,
-                    "flex cursor-default select-none items-center gap-2 rounded-[var(--radius-md)] px-3 py-1.5 text-sm",
+                    // Clipped: a name with line breaks in it stays in its row.
+                    "flex cursor-default select-none items-center gap-2 overflow-hidden rounded-[var(--radius-md)] px-3 py-1.5 text-sm",
                     ready &&
                       index === activeIndex &&
                       "group-focus-visible/list:outline-2 group-focus-visible/list:-outline-offset-2 group-focus-visible/list:outline-selection-outline group-focus-visible/list:outline-solid",

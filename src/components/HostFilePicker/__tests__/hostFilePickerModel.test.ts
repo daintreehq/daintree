@@ -6,6 +6,7 @@ import {
   matchesFilters,
   resolveChoice,
   revealScrollTop,
+  rowInView,
   visibleRowRange,
   type ListGeometry,
 } from "../hostFilePickerModel";
@@ -74,6 +75,8 @@ describe("hostFilePickerModel list window", () => {
     const top = geometry.padding + index * geometry.rowHeight;
     return { top, bottom: top + geometry.rowHeight };
   };
+  // Round numbers, so exact answers can be worked by hand.
+  const plain: ListGeometry = { rowHeight: 10, padding: 0, viewport: 30 };
 
   it("mounts every row in view and a bounded window around it, at any offset", () => {
     const overscan = 3;
@@ -85,17 +88,24 @@ describe("hostFilePickerModel list window", () => {
         const { top, bottom } = rowSpan(index);
         const inView = bottom > scrollTop && top < scrollTop + geometry.viewport;
         if (inView) expect(index >= start && index < end).toBe(true);
+        expect(rowInView(index, count, scrollTop, geometry)).toBe(inView);
       }
     }
   });
 
+  it("adds the overscan on both sides of the rows in view", () => {
+    // Rows 5, 6 and 7 are in view at 50.
+    expect(visibleRowRange(100, 50, plain, 2)).toEqual({ start: 3, end: 10 });
+    expect(visibleRowRange(100, 50, plain, 0)).toEqual({ start: 5, end: 8 });
+    expect(visibleRowRange(100, -20, plain, 2)).toEqual({ start: 0, end: 5 });
+  });
+
   it("shows a listing's end, not nothing, when it shrinks under an old offset", () => {
-    const { start, end } = visibleRowRange(5, maxTop, geometry, 3);
-    expect({ start, end }).toEqual({ start: 0, end: 5 });
-    const longer = visibleRowRange(100, maxTop, geometry, 0);
-    expect(longer.end).toBe(100);
-    expect(longer.start).toBeGreaterThan(0);
+    expect(visibleRowRange(5, maxTop, geometry, 3)).toEqual({ start: 0, end: 5 });
+    // 100 rows of 10 in a 30 viewport end at 970: rows 97 to 99.
+    expect(visibleRowRange(100, 5_000, plain, 1)).toEqual({ start: 96, end: 100 });
     expect(visibleRowRange(0, 500, geometry, 3)).toEqual({ start: 0, end: 0 });
+    expect(rowInView(99, 100, 5_000, plain)).toBe(true);
   });
 
   it("scrolls a row fully into view by the nearer edge, and not at all when it is", () => {
@@ -104,7 +114,7 @@ describe("hostFilePickerModel list window", () => {
       [count - 1, 0],
       [1_000, 0],
       [1_000, maxTop],
-      [500, 500 * 34 + 10],
+      [500, rowSpan(500).top + 6],
     ] as const) {
       const target = revealScrollTop(index, count, from, geometry);
       expect(target).not.toBeNull();
@@ -116,5 +126,15 @@ describe("hostFilePickerModel list window", () => {
     expect(revealScrollTop(0, count, maxTop, geometry)).toBe(0);
     expect(revealScrollTop(count - 1, count, 0, geometry)).toBe(maxTop);
     expect(revealScrollTop(3, count, 0, geometry)).toBeNull();
+  });
+
+  it("aligns a row below the view to the bottom and one above it to the top", () => {
+    expect(revealScrollTop(20, 100, 0, plain)).toBe(180);
+    expect(revealScrollTop(2, 100, 50, plain)).toBe(20);
+    // Fully in view, even flush against the edge: no nudge.
+    expect(revealScrollTop(7, 100, 50, plain)).toBeNull();
+    expect(revealScrollTop(5, 100, 50, plain)).toBeNull();
+    // In view only once the stale offset is clamped: the clamped one is the answer.
+    expect(revealScrollTop(4, 5, 500, plain)).toBe(20);
   });
 });
