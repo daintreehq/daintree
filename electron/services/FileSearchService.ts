@@ -1,10 +1,10 @@
 import * as fs from "fs/promises";
+import type { Dir, Dirent } from "fs";
 import * as path from "path";
 import { createStrictExitGit } from "../utils/hardenedGit.js";
 import { Cache } from "../utils/cache.js";
 import { logWarn } from "../utils/logger.js";
 import { isPathInside } from "../../shared/utils/path.js";
-import type { Dirent } from "fs";
 
 interface FileListCacheEntry {
   files: string[];
@@ -123,6 +123,12 @@ const MAX_RESULTS_DEFAULT = 50;
 const MAX_RESULTS_LIMIT = 100;
 const MAX_QUERY_LENGTH = 256;
 const MAX_FALLBACK_FILES = 20_000;
+// Raw entries a directory handle reads per call. The walker pulls them one at a
+// time and stops at the cap, so a directory far wider than the remaining budget
+// costs at most one batch of surplus reads rather than every entry it holds.
+// Kept small because a filesystem that reports no entry type has each batch
+// resolved with synchronous lstat calls on this thread.
+const FALLBACK_READ_BATCH = 32;
 
 // Names hard-skipped by the fallback walker only. Git mode honours .gitignore via
 // --exclude-standard, so these are unnecessary there. Includes a few well-known
@@ -387,31 +393,60 @@ async function loadFilesFromDisk(cwd: string): Promise<string[]> {
     const dir = queue.pop();
     if (!dir) break;
 
-    let entries: Array<Dirent>;
+    let handle: Dir;
     try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
+      handle = await fs.opendir(dir, { bufferSize: FALLBACK_READ_BATCH });
     } catch {
       continue;
     }
 
-    for (const entry of entries) {
-      if (FALLBACK_SKIP_NAMES.has(entry.name)) continue;
-      const absolute = path.join(dir, entry.name);
-      const relative = path.relative(cwd, absolute);
-      // APFS stores filenames as NFD on macOS; normalise to match the NFC paths
-      // git produces via core.precomposeunicode.
-      const relativePosix = toPosixPath(relative).normalize("NFC");
+    // The handle's iterator closes the handle when it finishes or is returned, so
+    // nothing here calls `close`. Entries are on disk order, not the name order
+    // `readdir` sorts into: only a capped walk can tell, and it keeps whichever
+    // entries the filesystem lists first.
+    const entries = handle[Symbol.asyncIterator]();
+    try {
+      while (true) {
+        let step: IteratorResult<Dirent>;
+        try {
+          step = await entries.next();
+        } catch {
+          // A read that fails part-way, whatever the error, keeps the entries
+          // already taken from it. Only the read is guarded: an error thrown by
+          // the body below is a bug here, and rejects instead of caching a
+          // silently partial index.
+          break;
+        }
+        if (step.done) break;
+        const entry = step.value;
 
-      if (entry.isDirectory()) {
-        results.push(`${relativePosix}/`);
-        queue.push(absolute);
+        if (FALLBACK_SKIP_NAMES.has(entry.name)) continue;
+        const absolute = path.join(dir, entry.name);
+        const relative = path.relative(cwd, absolute);
+        // APFS stores filenames as NFD on macOS; normalise to match the NFC paths
+        // git produces via core.precomposeunicode.
+        const relativePosix = toPosixPath(relative).normalize("NFC");
+
+        if (entry.isDirectory()) {
+          results.push(`${relativePosix}/`);
+          queue.push(absolute);
+          if (results.length >= MAX_FALLBACK_FILES) break;
+          continue;
+        }
+
+        if (!entry.isFile()) continue;
+        results.push(relativePosix);
         if (results.length >= MAX_FALLBACK_FILES) break;
-        continue;
       }
-
-      if (!entry.isFile()) continue;
-      results.push(relativePosix);
-      if (results.length >= MAX_FALLBACK_FILES) break;
+    } finally {
+      // Closes the handle on the cap break or a throwing body; after exhaustion
+      // or a failed read the iterator has already finished and this does nothing.
+      try {
+        await entries.return?.();
+      } catch {
+        // A close that fails leaves nothing to recover, and must not replace the
+        // error of the body that was already unwinding.
+      }
     }
   }
 
@@ -423,8 +458,11 @@ async function loadFilesFromDisk(cwd: string): Promise<string[]> {
     });
   }
 
+  // Disk order is not name order, so paths the collator calls equal (zero-width
+  // joiners, soft hyphens) are ordered by raw string rather than by where the
+  // filesystem happened to list them.
   const collator = getPathCollator();
-  return results.sort((a, b) => collator.compare(a, b));
+  return results.sort((a, b) => collator.compare(a, b) || (a < b ? -1 : a > b ? 1 : 0));
 }
 
 async function loadGitFiles(cwd: string): Promise<string[]> {
