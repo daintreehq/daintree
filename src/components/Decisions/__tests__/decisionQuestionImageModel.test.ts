@@ -75,6 +75,8 @@ describe("canRetryImage", () => {
     expect(canRetryImage("fetch-failed")).toBe(true);
     expect(canRetryImage("timed-out")).toBe(true);
     expect(canRetryImage("not-running")).toBe(true);
+    // A Remote Host's image comes back with its link (#17230).
+    expect(canRetryImage("host-not-connected")).toBe(true);
     expect(canRetryImage("failed")).toBe(true);
     for (const verdict of [
       "size-mismatch",

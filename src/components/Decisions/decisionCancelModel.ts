@@ -66,6 +66,13 @@ export function cancelProblem(
           "Decisions isn't running for this terminal right now, so nothing was cancelled. Try again once it's connected to its relay.",
         retry: true,
       };
+    case "host-not-connected":
+      return {
+        severity: "warning",
+        message:
+          "The Remote Host that asked this question isn't connected, so it may not have been cancelled. Try again once it's back.",
+        retry: true,
+      };
     case "refused":
       switch (outcome.reason) {
         case "answered":

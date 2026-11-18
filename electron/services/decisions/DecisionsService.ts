@@ -82,6 +82,12 @@ export type DecisionsStatusListener = (event: DecisionsStatusEvent) => void;
  */
 export type DecisionsRole = "owner" | "host";
 
+/** A Remote Host lifetime's own questions (#17230), named by the host id they carry. */
+export interface HostServedQuestions {
+  hostId: string;
+  questions: readonly DecisionQuestionListItem[];
+}
+
 /** What the service runs a relay connection with; tests hand in their own. */
 export interface DecisionsRelayConnection {
   start(): void;
@@ -155,10 +161,17 @@ export interface DecisionsServiceOptions {
   /** Tells the fleet which panes have answers needing a person (`runAnswerAttentionSource`). */
   publishAnswerAttention?: AnswerAttentionPublisher;
   /**
-   * Every question this computer asked, after each write (#17229); an empty
-   * list once the lifetime ends. Only an owner's lifetime lists any.
+   * Every question this computer asked, after each write (#17229), with
+   * `listing` true; an empty list with `listing` false once the lifetime ends
+   * or its store closes. Only an owner's lifetime lists any.
    */
-  publishQuestions?: (questions: readonly DecisionQuestionListItem[]) => void;
+  publishQuestions?: (questions: readonly DecisionQuestionListItem[], listing: boolean) => void;
+  /**
+   * A Remote Host lifetime's own questions, after each write (#17230), named
+   * by its host id, for its owner's Shell to list; null once the lifetime
+   * ends or its store closes.
+   */
+  publishHostQuestions?: (list: HostServedQuestions | null) => void;
   /**
    * Starts raising a desktop notification for each question asked (#17232),
    * reading and keeping what it has raised in `store`, once an owner's store
@@ -245,7 +258,11 @@ export class DecisionsService {
   /** Local data is being deleted (#16025): no key store or rotation is made until it finishes. */
   private erasing = false;
   private readonly panes: PaneDecisionStates;
-  private readonly publishQuestions: (questions: readonly DecisionQuestionListItem[]) => void;
+  private readonly publishQuestions: (
+    questions: readonly DecisionQuestionListItem[],
+    listing: boolean
+  ) => void;
+  private readonly publishHostQuestions: (list: HostServedQuestions | null) => void;
   private readonly notifyQuestions: ((store: MetaStore) => QuestionNotifications) | null;
   private readonly connect: DecisionsConnectionFactory;
   private readonly onRelayRevoked: (relay: RelayBinding, role: DecisionsRole) => void;
@@ -339,6 +356,7 @@ export class DecisionsService {
       options.publishAnswerAttention
     );
     this.publishQuestions = options.publishQuestions ?? (() => {});
+    this.publishHostQuestions = options.publishHostQuestions ?? (() => {});
     this.notifyQuestions = options.notifyQuestions ?? null;
     this.connect = options.connect ?? ((connection) => new RelayConnection(connection));
     this.onRelayRevoked = options.onRelayRevoked ?? (() => {});
@@ -658,20 +676,38 @@ export class DecisionsService {
 
   /**
    * Every question row, handled answers included, as this computer's list of
-   * questions (#17229). Only an owner's lifetime lists any: a Remote Host's
-   * questions are its owner's to show.
+   * questions (#17229). Only an owner's lifetime lists any here: a Remote
+   * Host's questions are its owner's to show, so its lifetime hands them to
+   * its owner's Shell instead (#17230).
    */
   private listQuestions(rows: readonly QuestionRow[], handled: HandledAnswers): void {
-    if (this.disposed || this.state === "off" || this.role !== "owner") return;
-    this.sendQuestions(projectDecisionQuestions(rows, handled, this.settings?.hostId ?? null));
+    if (this.disposed || this.state === "off") return;
+    const hostId = this.settings?.hostId ?? null;
+    const questions = projectDecisionQuestions(rows, handled, hostId);
+    if (this.role === "owner") this.sendQuestions(questions, true);
+    else this.sendHostQuestions(hostId === null ? null : { hostId, questions });
+  }
+
+  /** Nothing is listed while no store is read: the lifetime ended, or its store closed. */
+  private unlistQuestions(): void {
+    this.sendQuestions([], false);
+    this.sendHostQuestions(null);
   }
 
   /** The list is best effort, like pane chrome: a failed push must never unwind the write that caused it. */
-  private sendQuestions(questions: readonly DecisionQuestionListItem[]): void {
+  private sendQuestions(questions: readonly DecisionQuestionListItem[], listing: boolean): void {
     try {
-      this.publishQuestions(questions);
+      this.publishQuestions(questions, listing);
     } catch (err) {
       console.warn("[Decisions] A question list update failed:", err);
+    }
+  }
+
+  private sendHostQuestions(list: HostServedQuestions | null): void {
+    try {
+      this.publishHostQuestions(list);
+    } catch (err) {
+      console.warn("[Decisions] A Host question list update failed:", err);
     }
   }
 
@@ -751,7 +787,7 @@ export class DecisionsService {
       } catch (error) {
         this.storeFailed = true;
         // With no store there is nothing to list until the next start opens one.
-        this.sendQuestions([]);
+        this.unlistQuestions();
         logWarn("[Decisions] The local store didn't reopen after it stopped writing", {
           reason,
           error: error instanceof Error ? error.name : "error",
@@ -870,7 +906,7 @@ export class DecisionsService {
         // Every row is gone, so no pane has anything outstanding, and nothing is listed.
         if (outcome.result !== "failed") {
           this.panes.clear(true);
-          this.sendQuestions([]);
+          this.unlistQuestions();
         }
         if (outcome.result !== "incomplete" && !this.disposed && this.settings !== null) {
           try {
@@ -881,6 +917,8 @@ export class DecisionsService {
           } catch (err) {
             // The next start tries again; the deletion stands either way.
             this.storeFailed = true;
+            // With no store there is nothing to list until the next start opens one.
+            this.unlistQuestions();
             console.warn("[Decisions] The store didn't reopen after deleting data:", err);
           }
         }
@@ -989,7 +1027,7 @@ export class DecisionsService {
       await store?.close();
     } finally {
       this.panes.clear(clearViews && !this.disposed && this.state !== "off");
-      this.sendQuestions([]);
+      this.unlistQuestions();
       // A rotation that is saving its key finishes before the keys close.
       await rotations?.close();
       await keyStore?.close();

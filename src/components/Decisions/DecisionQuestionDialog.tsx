@@ -108,6 +108,8 @@ const UNAVAILABLE: Record<Exclude<Read["result"], "read">, string> = {
     "Decisions isn't connected to its relay right now, so the question can't be opened. Reconnect it in Settings → Decisions.",
   "not-found": "This question is no longer kept for this terminal.",
   unreadable: "This question couldn't be opened on this computer.",
+  "host-not-connected":
+    "The Remote Host that asked this question isn't connected, so the question can't be opened right now.",
   failed: "The question couldn't be read.",
 };
 
@@ -603,7 +605,9 @@ export function DecisionQuestionDialog() {
                 severity={current.result === "failed" ? "warning" : "neutral"}
                 size="compact"
                 action={
-                  current.result === "failed" || current.result === "not-running" ? (
+                  current.result === "failed" ||
+                  current.result === "not-running" ||
+                  current.result === "host-not-connected" ? (
                     <Button variant="outline" size="xs" onClick={() => readAgain(target)}>
                       Retry
                     </Button>
