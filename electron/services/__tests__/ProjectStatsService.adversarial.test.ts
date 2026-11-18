@@ -24,6 +24,7 @@ const projectStoreMock = vi.hoisted(() => ({
   getCompletionWatermarks: vi.fn<() => Array<{ id: string; lastCompletionSeenAt?: number | null }>>(
     () => []
   ),
+  getProjectSummaries: vi.fn<() => Array<{ id: string }>>(() => []),
 }));
 const scratchStoreMock = vi.hoisted(() => ({
   getCompletionWatermarks: vi.fn<() => Array<{ id: string; lastCompletionSeenAt?: number | null }>>(
@@ -130,6 +131,7 @@ beforeEach(() => {
   vi.setSystemTime(1_830_001);
   eventEmitter._reset();
   projectStoreMock.getCompletionWatermarks.mockReturnValue([]);
+  projectStoreMock.getProjectSummaries.mockReturnValue([]);
   scratchStoreMock.getCompletionWatermarks.mockReturnValue([]);
   availabilityMock.isHelpTerminal.mockReset();
   availabilityMock.isHelpTerminal.mockReturnValue(false);
@@ -1590,6 +1592,46 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
     expect(ptyClient.getProjectStats.mock.calls.map(([id]) => id)).toEqual(["p1", "p2"]);
     expect(payload().p1.processCount).toBe(4);
     expect(payload().p2.processCount).toBe(1);
+    svc.stop();
+  });
+
+  // The first query whose project the terminal's cwd matches claims it, so the
+  // order of the questions picks the owner when two registered projects match
+  // (a linked worktree and its main checkout). The id read is unordered, so the
+  // questions follow the ranked list the poll used to read (#17806).
+  it("asks the most used project first when an unowned terminal is waiting for an owner", async () => {
+    const SCRATCH_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+    const ptyClient = makePtyClient();
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([
+      { id: "legacy-worktree" },
+      { id: "main-checkout" },
+    ]);
+    scratchStoreMock.getCompletionWatermarks.mockReturnValue([{ id: SCRATCH_ID }]);
+    projectStoreMock.getProjectSummaries.mockReturnValue([
+      { id: "main-checkout" },
+      { id: "legacy-worktree" },
+    ]);
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([{ id: "owned", projectId: "main-checkout" }]);
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    // With every terminal owned, nothing asks the host and nothing is ranked.
+    expect(projectStoreMock.getProjectSummaries).not.toHaveBeenCalled();
+    expect(ptyClient.getProjectStats).not.toHaveBeenCalled();
+
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      { id: "unowned", kind: "terminal", cwd: "/repo/.worktrees/feature" },
+    ]);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    expect(ptyClient.getProjectStats.mock.calls.map(([id]) => id)).toEqual([
+      "main-checkout",
+      "legacy-worktree",
+      SCRATCH_ID,
+    ]);
     svc.stop();
   });
 

@@ -316,9 +316,17 @@ export class ProjectStatsService {
     }
     if (!hasLiveUnownedTerminal(terminals)) return tallied;
 
+    // The first query whose project the terminal's cwd matches claims it, and a
+    // linked worktree matches both its main checkout's project and a legacy one
+    // registered at the worktree. Asking the most used first leaves the claim
+    // where it went when this poll read the ranked list (#17806).
+    const rank = new Map(projectStore.getProjectSummaries().map((p, i) => [p.id, i]));
+    const ordered = [...projectIds].sort(
+      (a, b) => (rank.get(a) ?? rank.size) - (rank.get(b) ?? rank.size)
+    );
     const counts = new Map<string, number>();
     const results = await Promise.allSettled(
-      projectIds.map((id) => this.ptyClient!.getProjectStats(id).then((s) => [id, s] as const))
+      ordered.map((id) => this.ptyClient!.getProjectStats(id).then((s) => [id, s] as const))
     );
     for (const result of results) {
       if (result.status === "fulfilled") {
