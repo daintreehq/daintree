@@ -105,9 +105,62 @@ export function findInRenderedText(
 ): FindResult {
   const pattern = buildFindPattern(query, matchCase);
   if (!pattern) return EMPTY_RESULT;
-  const { text, nodes, starts } = indexText(root);
+  return matchIndex(indexText(root), root.ownerDocument, pattern, limit);
+}
+
+/**
+ * `root`'s text index, kept for an open find so each edit to the query matches
+ * against it rather than walking the document again. Any change that can move
+ * text, visibility or a block boundary drops it, the next search rebuilds it,
+ * and `onChange` hears of it. `dispose()` lets go of the document's text nodes.
+ */
+export function createRenderedTextIndex(root: Element, onChange?: () => void) {
+  let index: TextIndex | null = null;
+  let disposed = false;
+  const observer = new MutationObserver(() => {
+    index = null;
+    onChange?.();
+  });
+  // Tags never change in place, so of `SKIP_SELECTOR` and `BLOCK_SELECTOR`
+  // only these attributes can move text in or out of the search.
+  observer.observe(root, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+    attributes: true,
+    attributeFilter: ["hidden", "aria-hidden", "class"],
+  });
+  return {
+    root,
+    find(query: string, matchCase: boolean, limit = RENDERED_FIND_MATCH_LIMIT): FindResult {
+      const pattern = buildFindPattern(query, matchCase);
+      if (!pattern) return EMPTY_RESULT;
+      if (disposed) return matchIndex(indexText(root), root.ownerDocument, pattern, limit);
+      // Records not yet delivered are changes made earlier in this same task,
+      // such as a commit whose effect searches before the observer has run.
+      // Taking them here means `onChange` never hears of them: this search
+      // already reads the document as they left it.
+      if (observer.takeRecords().length > 0) index = null;
+      index ??= indexText(root);
+      return matchIndex(index, root.ownerDocument, pattern, limit);
+    },
+    dispose() {
+      disposed = true;
+      observer.disconnect();
+      index = null;
+    },
+  };
+}
+
+export type RenderedTextIndex = ReturnType<typeof createRenderedTextIndex>;
+
+function matchIndex(
+  { text, nodes, starts }: TextIndex,
+  doc: Document,
+  pattern: RegExp,
+  limit: number
+): FindResult {
   if (nodes.length === 0) return EMPTY_RESULT;
-  const doc = root.ownerDocument;
   const ranges: Range[] = [];
   let capped = false;
   for (const match of text.matchAll(pattern)) {

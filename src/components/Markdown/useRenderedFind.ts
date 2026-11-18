@@ -2,6 +2,7 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 import {
   FORCED_COLORS_QUERY,
   createFindPainter,
+  createRenderedTextIndex,
   findInRenderedText,
   firstVisibleMatch,
   matchAfter,
@@ -9,6 +10,7 @@ import {
   selectionSeed,
   type FindPainter,
   type FindResult,
+  type RenderedTextIndex,
 } from "./renderedFind";
 
 const NO_MATCHES: FindResult = { ranges: [], capped: false };
@@ -60,6 +62,8 @@ export function useRenderedFind(root: HTMLElement | null): RenderedFindState {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const isComposingRef = useRef(false);
   const painterRef = useRef<FindPainter | null>(null);
+  // The open bar's index of `root`; it goes with the bar or the document.
+  const textIndexRef = useRef<RenderedTextIndex | null>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
   // Bumped by every Cmd+F; the effect below focuses the field once the bar
   // that holds it has committed.
@@ -77,7 +81,11 @@ export function useRenderedFind(root: HTMLElement | null): RenderedFindState {
       setActiveIndex(-1);
       return;
     }
-    const next = findInRenderedText(root, nextQuery, nextMatchCase);
+    const textIndex = textIndexRef.current;
+    const next =
+      textIndex?.root === root
+        ? textIndex.find(nextQuery, nextMatchCase)
+        : findInRenderedText(root, nextQuery, nextMatchCase);
     let index = refresh ? matchAfter(result.ranges[activeIndex], next.ranges) : -1;
     if (index === -1) {
       index = firstVisibleMatch(next.ranges, root, FIND_BAR_CLEARANCE);
@@ -108,6 +116,8 @@ export function useRenderedFind(root: HTMLElement | null): RenderedFindState {
   const close = () => {
     const current = result.ranges[activeIndex];
     painterOf(painterRef).clear();
+    textIndexRef.current?.dispose();
+    textIndexRef.current = null;
     setIsOpen(false);
     setResult(NO_MATCHES);
     setActiveIndex(-1);
@@ -159,26 +169,33 @@ export function useRenderedFind(root: HTMLElement | null): RenderedFindState {
   }, [focusRequest]);
 
   // The document can arrive after the bar opened (its chunk is lazy), and a
-  // reopened bar searches again for the query it kept.
+  // reopened bar searches again for the query it kept. The document can also
+  // change under the open bar, and the matches follow it without moving the
+  // reader; a composition in progress waits for its commit to search.
   const searchOnArrival = useEffectEvent(() => search(query, matchCase, false));
+  const refresh = useEffectEvent(() => {
+    if (query.length > 0 && !isComposingRef.current) search(query, matchCase, true);
+  });
   useEffect(() => {
-    if (isOpen && root) searchOnArrival();
-  }, [isOpen, root]);
-
-  const refresh = useEffectEvent(() => search(query, matchCase, true));
-  useEffect(() => {
-    if (!isOpen || !root || query.length === 0) return;
+    if (!isOpen) return;
+    if (!root) {
+      // Source mode took the document away: drop the matches into it.
+      searchOnArrival();
+      return;
+    }
     let frame = 0;
-    const observer = new MutationObserver(() => {
+    const index = createRenderedTextIndex(root, () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => refresh());
     });
-    observer.observe(root, { childList: true, subtree: true, characterData: true });
+    textIndexRef.current = index;
+    searchOnArrival();
     return () => {
-      observer.disconnect();
       cancelAnimationFrame(frame);
+      index.dispose();
+      if (textIndexRef.current === index) textIndexRef.current = null;
     };
-  }, [isOpen, root, query]);
+  }, [isOpen, root]);
 
   // `close()` clears at once, but a refresh committed just before it can still
   // flush its paint afterwards; the closed render clears that too.
