@@ -245,14 +245,27 @@ describe("startSleepWait", () => {
     expect(sleepProjectMock).not.toHaveBeenCalled();
   });
 
-  it("sleeps a project whose only process is one the terminal list never shows", async () => {
-    // A dev preview counts as a process but isn't a terminal.
+  it("holds a project its counts show running but the read shows empty until the user chooses", async () => {
+    // A failed shard and a dev preview, which the list never shows, look alike here.
     useProjectStatsStore.setState({ stats: { a: stats({ processCount: 1 }) } });
     terminals = [];
     await startSleepWait(["a"], { pauseNote: false });
-    await advance(SLEEP_WAIT_DWELL_MS + 2 * SLEEP_WAIT_POLL_MS);
+    await advance(SLEEP_WAIT_DWELL_MS * 3);
+    expect(statusOf("a")).toBe("unavailable");
+    expect(sleepProjectMock).not.toHaveBeenCalled();
 
+    await sleepWaitingNow();
     expect(sleepProjectMock).toHaveBeenCalledWith("a");
+  });
+
+  it("reads an empty project with an unread approval tallied as finished as unavailable", async () => {
+    useProjectStatsStore.setState({ stats: { a: stats({ completedAgentCount: 1 }) } });
+    terminals = [];
+    await startSleepWait(["a"], { pauseNote: false });
+    await advance(SLEEP_WAIT_DWELL_MS * 3);
+
+    expect(statusOf("a")).toBe("unavailable");
+    expect(sleepProjectMock).not.toHaveBeenCalled();
   });
 
   it("reads a project with agents by its counts but none in the read as unavailable", async () => {
@@ -431,6 +444,18 @@ describe("startSleepWait", () => {
     terminals = [agent("a1", "a", { lastStateChange: 120_000 })];
     await advance(SLEEP_WAIT_DWELL_MS + 2 * SLEEP_WAIT_POLL_MS);
     expect(sleepProjectMock.mock.calls.map(([id]) => id)).toEqual(["a", "b", "a"]);
+  });
+
+  it("retries a failed Sleep now at once, without waiting on the agents", async () => {
+    terminals = [agent("a1", "a", { agentState: "working" })];
+    sleepProjectMock.mockRejectedValueOnce(new Error("boom"));
+    await startSleepWait(["a"], { pauseNote: false });
+    await sleepWaitingNow();
+
+    const call = notifyMock.mock.calls.find(([n]) => n.title === "Couldn't sleep project");
+    await call![0].actions[0].onClick();
+    expect(run()).toBeNull();
+    expect(sleepProjectMock.mock.calls.map(([id]) => id)).toEqual(["a", "a"]);
   });
 
   it("drops a project slept elsewhere from the run", async () => {

@@ -188,13 +188,16 @@ function observeProject(
     .sort()
     .join("|");
   // A host shard that didn't answer reads as no terminals, which must not pass
-  // for a quiet project when the counts know of agents there. Agents, not
-  // processes: a dev preview counts as a process but is never in the list.
-  const countedAgents =
+  // for a quiet project when the counts know of anything running there. That
+  // holds a project whose only process is a dev preview, which the list never
+  // shows, until the user chooses; the row says what was seen.
+  const counted =
+    (stats?.processCount ?? 0) +
     (stats?.activeAgentCount ?? 0) +
     (stats?.waitingAgentCount ?? 0) +
-    (stats?.blockedAgentCount ?? 0);
-  if ((countedAgents > 0 || assistantLive) && own.length === 0) {
+    (stats?.blockedAgentCount ?? 0) +
+    (stats?.completedAgentCount ?? 0);
+  if ((counted > 0 || assistantLive) && own.length === 0) {
     return { status: "unavailable", agents, settled: false, signature };
   }
   const settled =
@@ -249,7 +252,7 @@ async function tick(run: ActiveRun): Promise<void> {
 
   const remaining = projects.filter((p) => isPendingStatus(p.status));
   if (remaining.length === 0) {
-    finish(run);
+    finish(run, false);
     return;
   }
   if (phase === "waiting" && remaining.every((p) => p.status === "ready")) {
@@ -328,10 +331,11 @@ async function commit(run: ActiveRun, force: boolean): Promise<void> {
       setProjectStatus(run, id, "failed");
     }
   }
-  finish(run);
+  finish(run, force);
 }
 
-function finish(run: ActiveRun): void {
+/** `forced`: the user chose Sleep now, so a retry of what failed doesn't wait either. */
+function finish(run: ActiveRun, forced: boolean): void {
   const view = viewOf(run);
   clearTimer(run);
   if (active === run) active = null;
@@ -341,9 +345,12 @@ function finish(run: ActiveRun): void {
   if (!view) return;
   const leftOpen = view.projects.filter((p) => p.status === "left-open");
   const failed = view.projects.filter((p) => p.status === "failed");
-  // A retry waits again: the user chose to sleep these only once their agents settle.
+  // A retry keeps the user's last word: after a wait it waits again, after Sleep now it doesn't.
   if (failed.length > 0) {
-    notifySleepFailed(failed, (ids) => startSleepWait(ids, { pauseNote: false }));
+    notifySleepFailed(
+      failed,
+      forced ? sleepProjectsInOrder : (ids) => startSleepWait(ids, { pauseNote: false })
+    );
   }
   if (leftOpen.length > 0) {
     notify({
