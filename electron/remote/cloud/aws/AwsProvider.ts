@@ -894,7 +894,9 @@ export class AwsProvider implements CloudProvider {
       let resource: ProviderResource;
       try {
         resource = await this.inspect(credentials, resourceId);
-      } catch {
+      } catch (readError) {
+        // A cancel (a Stop superseding this Start) is the answer; any other failed read isn't.
+        if (readError instanceof AwsApiError && readError.kind === "cancelled") throw readError;
         throw error;
       }
       if (joining.includes(resource.machine)) return resource;

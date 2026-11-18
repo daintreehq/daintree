@@ -1361,9 +1361,11 @@ describe("AwsProvider", () => {
   it("gives up on a console that never answers at the deadline, but not on a cancelled caller", async () => {
     const fake = fakeAws({ console: () => null });
     let enteredConsole: (() => void) | null = null;
+    let consoleSignal: AbortSignal | null = null;
     const stalling = (async (input: URL | string, init?: RequestInit) => {
       const action = new URLSearchParams(String(init?.body ?? "")).get("Action");
       if (action !== "GetConsoleOutput") return fake.fetch(input, init);
+      consoleSignal = init?.signal ?? null;
       enteredConsole?.();
       return new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener("abort", () =>
@@ -1388,6 +1390,8 @@ describe("AwsProvider", () => {
     const pending = provider.sshAccess({ ...credentials, signal: caller.signal }, resourceId);
     await reading;
     caller.abort();
+    // The cancel reaches the request itself, well before the deadline would.
+    expect((consoleSignal as AbortSignal | null)?.aborted).toBe(true);
     await expect(pending).rejects.toMatchObject({ kind: "cancelled" });
   });
 
