@@ -309,9 +309,11 @@ describe("invokeForEndpoint", () => {
     UNCLASSIFIED_CHANNEL,
     "user-prompt-templates:list",
     "user-prompt-templates:open-folder",
-    // A Host can never have its owner sign the person's answer (#17101).
+    // A Host can never have its owner sign the person's answer (#17101) or follow-up (#17238).
     "decisions:answer-question",
     "decisions:get-answer-result",
+    "decisions:send-follow-up",
+    "decisions:get-follow-up-result",
     // Nor their decline (#17239).
     "decisions:decline-question",
     "decisions:get-decline-result",
@@ -457,8 +459,9 @@ describe("remote router", () => {
 
   // A person's prompt templates are this machine's, even in a window on a host
   // (#16398), while the plugin templates beside them come from that host. The
-  // person's Decisions answer is signed by this computer's owner key, even for
-  // a question a Host asked, whose own key never signs one (#17101).
+  // person's Decisions answer, decline and follow-up are signed by this
+  // computer's owner key, even for a question a Host asked, whose own key never
+  // signs one (#17101, #17239, #17238).
   it.each([
     "user-prompt-templates:list",
     "user-prompt-templates:open-folder",
@@ -466,6 +469,8 @@ describe("remote router", () => {
     "decisions:get-answer-result",
     "decisions:decline-question",
     "decisions:get-decline-result",
+    "decisions:send-follow-up",
+    "decisions:get-follow-up-result",
   ])("answers %s from this machine for a window driving a host", async (channel) => {
     const router = installRouter();
     const handler = vi.fn(() => "from-this-machine");

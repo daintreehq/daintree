@@ -2001,6 +2001,7 @@ describe("AnswerDelivery follow-ups (#16231)", () => {
       followUps: [
         {
           messageId: M1,
+          onComputer: false,
           status: "needs-attention",
           reason: "pane_gone",
           text: "Use the staging bucket.",

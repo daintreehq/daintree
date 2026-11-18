@@ -19,6 +19,7 @@ import {
 import {
   DECISION_BLOCK_END,
   DECISION_BLOCK_START,
+  DECISION_COMPUTER_THREAD_PREFACE,
   DECISION_FOLLOWUP_END,
   DECISION_FOLLOWUP_START,
   DECISION_PREFACE,
@@ -744,6 +745,7 @@ describe("parseDecisionNotice, follow-ups (#16231)", () => {
       injectionId: I2,
       question: "Which sidebar should ship? Compact or classic.",
       answered: true,
+      onComputer: false,
       text: "Keep the old icons.\nBut make them smaller.",
       images: [],
     });
@@ -761,6 +763,7 @@ describe("parseDecisionNotice, follow-ups (#16231)", () => {
       injectionId: I2,
       question: null,
       answered: false,
+      onComputer: false,
       text: null,
       images: [],
     });
@@ -825,13 +828,10 @@ describe("parseDecisionNotice, follow-ups (#16231)", () => {
     expect(parse(text)).toBeNull();
   });
 
-  // Daintree types every follow-up as sent from the phone, so one from the computer is refused whole until #17238.
-  it("refuses a follow-up the person sent from their computer rather than type it as a phone's", () => {
+  it("reads a follow-up the person sent from their computer, and one from their phone (#17238)", () => {
     const fromComputer = noticeChunk([answer(), followUp({ onComputer: true })]);
     expect(fromComputer).toContain("source: human\nsent_from: computer\n");
-    expect(parseDecisionNotice(fromComputer)).toBeNull();
-    const [, fromPhone] = thread(noticeChunk([answer(), followUp({ onComputer: false })]));
-    expect(fromPhone).toEqual({
+    const expected = {
       kind: "followup",
       questionId: Q1,
       alias: 4,
@@ -841,7 +841,25 @@ describe("parseDecisionNotice, follow-ups (#16231)", () => {
       answered: true,
       text: "Keep the old icons, though.",
       images: [],
-    });
+    };
+    expect(thread(fromComputer)[1]).toEqual({ ...expected, onComputer: true });
+    const [, fromPhone] = thread(noticeChunk([answer(), followUp({ onComputer: false })]));
+    expect(fromPhone).toEqual({ ...expected, onComputer: false });
+  });
+
+  it.each([
+    ["the line after the note", ["source: human", FOLLOWUP_NOTE_ANSWERED, "sent_from: computer"]],
+    ["a phone named on the line", ["source: human", "sent_from: phone", FOLLOWUP_NOTE_ANSWERED]],
+    [
+      "the line twice",
+      ["source: human", "sent_from: computer", "sent_from: computer", FOLLOWUP_NOTE_ANSWERED],
+    ],
+    [
+      "the line before the source",
+      ["sent_from: computer", "source: human", FOLLOWUP_NOTE_ANSWERED],
+    ],
+  ])("refuses a follow-up with %s", (_label, fields) => {
+    expect(parseDecisionNotice(rawFollowUp(fields))).toBeNull();
   });
 
   it("takes two messages of one question, and follow-ups to different questions", () => {
@@ -906,6 +924,47 @@ describe("renderDecisionSection, follow-ups (#16231)", () => {
     ]);
     expect(section).not.toContain(FOLLOWUP_NOTE_UNANSWERED);
     expect(section).not.toContain("question:");
+  });
+
+  it("types a follow-up from the computer as the person's, sent from their computer (#17238)", () => {
+    for (const answered of [true, false]) {
+      const section = renderDecisionSection(
+        thread(noticeChunk([followUp({ answered, onComputer: true, question: undefined })]))
+      );
+      const lines = section.split("\n");
+      expect(lines[0]).toBe(DECISION_COMPUTER_THREAD_PREFACE);
+      expect(lines.slice(6)).toEqual([
+        "source: human",
+        "sent_from: computer",
+        answered
+          ? "note: The person sent this from their computer about a decision already made. It is not a new answer, a correction or an approval: the answer stands."
+          : "note: The person sent this from their computer before answering. It is not an answer or an approval: you are not authorised to continue a gated step on it.",
+        "text: Keep the old icons, though.",
+        DECISION_FOLLOWUP_END,
+      ]);
+      expect(section).not.toContain("phone\n");
+    }
+  });
+
+  it("names both senders in the preface once any follow-up came from the computer", () => {
+    const phoneOnly = renderDecisionSection(thread(noticeChunk([answer(), followUp()])));
+    expect(phoneOnly.split("\n")[0]).toBe(DECISION_THREAD_PREFACE);
+    const mixed = renderDecisionSection(
+      thread(
+        noticeChunk([followUp(), followUp({ messageId: M2, injectionId: I1, onComputer: true })])
+      )
+    );
+    const preface = mixed.split("\n")[0]!;
+    expect(preface).toBe(DECISION_COMPUTER_THREAD_PREFACE);
+    // It names both senders, and the line that says which one each block came from.
+    expect(preface).toMatch(/phone/);
+    expect(preface).toMatch(/computer/);
+    expect(preface).toContain("sent_from");
+    expect(mixed).toContain("sent_from: phone\n");
+    expect(mixed).toContain("sent_from: computer\n");
+    expect(renderCopiedAnswer(thread(noticeChunk([followUp({ onComputer: true })])))).toContain(
+      "sent_from: computer\n"
+    );
   });
 
   it("keeps the answers' preface for a section of answers alone", () => {

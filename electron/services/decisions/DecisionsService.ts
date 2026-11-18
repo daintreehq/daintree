@@ -13,11 +13,14 @@ import type {
   DeclineDecisionQuestionPayload,
   DecisionAnswerResultRead,
   DecisionDeclineResultRead,
+  DecisionFollowUpResultRead,
   DecisionQuestionAnswerResult,
   DecisionQuestionCancelResult,
   DecisionQuestionDeclineResult,
+  DecisionQuestionFollowUpResult,
   DecisionQuestionListItem,
   DecisionQuestionReference,
+  SendDecisionFollowUpPayload,
 } from "../../../shared/types/decisionsQuestion.js";
 import type { AnswerDelivery, AnswerDeliveryDeps } from "./answerDelivery.js";
 import { createWorktreeAttachmentResolver } from "./attachmentResolver.js";
@@ -700,6 +703,30 @@ export class DecisionsService {
     }
     if (this.role !== "owner") return Promise.resolve({ result: "not-found" });
     return questions.declineResultForPerson(declineId);
+  }
+
+  /**
+   * The person's follow-up from Daintree's own view (#17238): signed with
+   * this computer's key when it is the owner's, never a Remote Host's, as
+   * their answer is; not running while no route serves questions.
+   */
+  sendFollowUp(payload: SendDecisionFollowUpPayload): Promise<DecisionQuestionFollowUpResult> {
+    const questions = this.questions;
+    if (this.disposed || this.state === "off" || questions === null) {
+      return Promise.resolve({ result: "not-running" });
+    }
+    if (this.role !== "owner") return Promise.resolve({ result: "refused", reason: "not-owner" });
+    return questions.followUpForPerson(payload, this.settings?.hostId ?? null);
+  }
+
+  /** Where a person's follow-up stands, by the id it was submitted with (#17238). */
+  getFollowUpResult(messageId: string): Promise<DecisionFollowUpResultRead> {
+    const questions = this.questions;
+    if (this.disposed || this.state === "off" || questions === null) {
+      return Promise.resolve({ result: "not-running" });
+    }
+    if (this.role !== "owner") return Promise.resolve({ result: "not-found" });
+    return questions.followUpResultForPerson(messageId);
   }
 
   /**

@@ -8,11 +8,13 @@ import {
   type InvolvementView,
   type OwnerAnswerResult,
   type OwnerDeclineResult,
+  type OwnerFollowUpResult,
   type PaneIdentity,
   type PostMessageResult,
   type QuestionOrigin,
   type QuestionRow,
   type RegisterResult,
+  type SendFollowUpInput,
 } from "@daintreehq/decisions-client";
 import type {
   AnswerDecisionQuestionPayload,
@@ -21,11 +23,15 @@ import type {
   DecisionAnswerResultRead,
   DecisionDeclineOutcome,
   DecisionDeclineResultRead,
+  DecisionFollowUpOutcome,
+  DecisionFollowUpResultRead,
   DecisionQuestionAnswerResult,
   DecisionQuestionCancelRefusal,
   DecisionQuestionCancelResult,
   DecisionQuestionDeclineResult,
+  DecisionQuestionFollowUpResult,
   DecisionQuestionReference,
+  SendDecisionFollowUpPayload,
 } from "../../../shared/types/decisionsQuestion.js";
 import { inScope, type QuestionReadScope } from "./questionContent.js";
 import type { QuestionSource } from "./relayConnection.js";
@@ -75,6 +81,20 @@ function answerOutcome(result: OwnerAnswerResult): DecisionAnswerOutcome {
 
 /** The library's outcome of a decline, without the ids the result carries alongside it. */
 function declineOutcome(result: OwnerDeclineResult): DecisionDeclineOutcome {
+  switch (result.status) {
+    case "closed":
+      return { status: "closed", reason: result.reason };
+    case "unsupported":
+      return { status: "unsupported", by: result.by };
+    case "rejected":
+      return { status: "rejected", code: result.code };
+    default:
+      return { status: result.status };
+  }
+}
+
+/** The library's outcome for a follow-up, without the ids the result carries alongside it. */
+function followUpOutcome(result: OwnerFollowUpResult): DecisionFollowUpOutcome {
   switch (result.status) {
     case "closed":
       return { status: "closed", reason: result.reason };
@@ -367,6 +387,104 @@ export class QuestionBridge extends DecisionsBridge {
   }
 
   /**
+   * Never for an agent: the bridge agents ask on can't sign the person's
+   * follow-up. An agent posts its own with `postMessage`; the person's goes
+   * through `followUpForPerson`, from Daintree's view (#17238).
+   */
+  override sendFollowUp(_input: SendFollowUpInput): Promise<OwnerFollowUpResult> {
+    return Promise.reject(
+      new BridgeError("forbidden", "an agent can't send a follow-up for the person")
+    );
+  }
+
+  override getFollowUpResult(_messageId: string): Promise<OwnerFollowUpResult | null> {
+    return Promise.reject(
+      new BridgeError("forbidden", "an agent can't read the person's follow-ups")
+    );
+  }
+
+  /**
+   * The person's follow-up from Daintree's own view on the owner computer
+   * (#17238), never reachable from an agent, signed with this computer's key
+   * as the person's message and published through the outbox, in turn with
+   * their answers on the same question. The question is named as an answer
+   * names it: one this computer holds by its machine, project and terminal,
+   * a Remote Host's by the content the Host served, with no local copy. A
+   * follow-up never answers or changes an answer; whether the question still
+   * takes one is the relay's to say.
+   */
+  async followUpForPerson(
+    payload: SendDecisionFollowUpPayload,
+    hostId: string | null
+  ): Promise<DecisionQuestionFollowUpResult> {
+    const refusal = await this.personRefusal(payload.reference, hostId);
+    if (refusal !== null) return refusal;
+    const { reference } = payload;
+    const input: SendFollowUpInput = {
+      questionId: reference.questionId,
+      text: payload.text,
+      messageId: payload.messageId,
+    };
+    try {
+      const result = await this.sendForPerson(input);
+      return {
+        result: "submitted",
+        messageId: result.messageId,
+        outcome: followUpOutcome(result),
+      };
+    } catch (error) {
+      if (!(error instanceof BridgeError)) throw error;
+      switch (error.code) {
+        case "validation_error":
+          return { result: "refused", reason: "invalid", detail: error.message };
+        // Revoked, or the connection ended, after the role was read.
+        case "forbidden":
+          return { result: "not-running" };
+        default:
+          throw error;
+      }
+    }
+  }
+
+  /** Where the person's follow-up stands, by the id it was submitted with (#17238). */
+  async followUpResultForPerson(messageId: string): Promise<DecisionFollowUpResultRead> {
+    let result: OwnerFollowUpResult | null;
+    try {
+      result = await this.readFollowUpForPerson(messageId);
+    } catch (error) {
+      if (error instanceof BridgeError && error.code === "forbidden") {
+        return { result: "not-running" };
+      }
+      throw error;
+    }
+    if (result === null) return { result: "not-found" };
+    return { result: "read", questionId: result.questionId, outcome: followUpOutcome(result) };
+  }
+
+  /** As `signForPerson`, for a follow-up: its id makes a second try the same message. */
+  private async sendForPerson(input: SendFollowUpInput): Promise<OwnerFollowUpResult> {
+    const live = this.connected();
+    if (live === null) return super.sendFollowUp(input);
+    try {
+      return await live.sendFollowUp(input);
+    } catch (error) {
+      if (!(error instanceof RetiredAttemptError)) throw error;
+      return this.sendForPerson(input);
+    }
+  }
+
+  private async readFollowUpForPerson(messageId: string): Promise<OwnerFollowUpResult | null> {
+    const live = this.connected();
+    if (live === null) return super.getFollowUpResult(messageId);
+    try {
+      return await live.getFollowUpResult(messageId);
+    } catch (error) {
+      if (!(error instanceof RetiredAttemptError)) throw error;
+      return this.readFollowUpForPerson(messageId);
+    }
+  }
+
+  /**
    * On the live attempt, or committed here between attempts. The answer id
    * makes a second try the same answer, so one an attempt retired partway
    * through goes again to whichever bridge answers now.
@@ -416,12 +534,12 @@ export class QuestionBridge extends DecisionsBridge {
   }
 
   /**
-   * Why the person's answer or decline naming `reference` can't be signed
-   * here, or null when it can: only the owner computer signs for the person.
-   * A question this computer holds must be the one the reference names:
-   * asked here, in that project and terminal. One it doesn't hold is a Remote
-   * Host's, named by the content the Host served the view; a reference naming
-   * this computer for a question it doesn't hold names nothing.
+   * Why the person's answer, decline or follow-up naming `reference` can't
+   * be signed here, or null when it can: only the owner computer signs for
+   * the person. A question this computer holds must be the one the reference
+   * names: asked here, in that project and terminal. One it doesn't hold is a
+   * Remote Host's, named by the content the Host served the view; a reference
+   * naming this computer for a question it doesn't hold names nothing.
    */
   private async personRefusal(
     reference: DecisionQuestionReference,

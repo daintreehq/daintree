@@ -1629,6 +1629,8 @@ export const CHANNELS = {
   // The person's decline, signed by this computer's owner key (#17239).
   DECISIONS_DECLINE_QUESTION: "decisions:decline-question",
   DECISIONS_GET_DECLINE_RESULT: "decisions:get-decline-result",
+  DECISIONS_SEND_FOLLOW_UP: "decisions:send-follow-up",
+  DECISIONS_GET_FOLLOW_UP_RESULT: "decisions:get-follow-up-result",
   DECISIONS_SET_ENABLED: "decisions:set-enabled",
   // A relay URL's unsigned health and protocol check (#16005), from main.
   DECISIONS_CHECK_RELAY: "decisions:check-relay",

@@ -1,6 +1,7 @@
 import {
   RelayError,
   answeredOn,
+  messageSentOn,
   openAnswerContent,
   openMessageContent,
   openQuestionContent,
@@ -333,9 +334,11 @@ async function readThread(ctx: SealContext, row: QuestionRow): Promise<DecisionT
         text: nonEmpty(opened?.text),
         images: (opened?.images ?? []).map(threadImage),
         expectsReply: message.expects_reply,
+        onComputer: messageSentOn(message) === "computer",
         sentAt: message.created_at,
         deliveryStatus: (message.delivery?.status ??
           null) as DecisionThreadMessage["deliveryStatus"],
+        deliveryStopped: message.delivery !== null && !message.delivery.deliver,
         unreadable: opened === null,
       },
     });

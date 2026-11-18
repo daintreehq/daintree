@@ -188,7 +188,7 @@ function AnswerPreview({ item }: { item: DecisionsAttentionItem }) {
 }
 
 /**
- * A follow-up the person sent from their phone (#16231), as it would be
+ * A follow-up the person sent from their phone or computer (#16231), as it would be
  * typed in. It never changes the answer, so it shows apart from it.
  */
 function FollowUpPreview({
@@ -212,7 +212,9 @@ function FollowUpPreview({
   return (
     <figure className="flex flex-col gap-1 rounded-[var(--radius-md)] bg-overlay-subtle px-3 py-2">
       <figcaption className="text-2xs text-text-secondary">
-        Your follow-up from your phone
+        {followUp.onComputer
+          ? "Your follow-up from your computer"
+          : "Your follow-up from your phone"}
         {followUp.status === "delivery-uncertain" && ", may or may not have been delivered"}{" "}
         <FactSeparator /> <TimeAgo timestamp={followUp.sentAt} />
       </figcaption>

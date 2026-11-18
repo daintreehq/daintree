@@ -2,6 +2,7 @@ import {
   answeredOn,
   formatAnswerNotice,
   formatFollowupNotice,
+  messageSentOn,
   noticeChunk,
   parseAnswers,
   parseMessages,
@@ -240,6 +241,7 @@ export function copiedAnswerText(
       text,
       // As the delivery engine tells it: an answer came before it in the thread.
       answered: given.some((entry) => seqOf(entry) < message.event_seq),
+      ...(messageSentOn(message) === "computer" ? { onComputer: true } : {}),
       ...(images.has(message.message_id) ? { images: images.get(message.message_id) } : {}),
       injectionId: copyId(opened.length + index),
     }),

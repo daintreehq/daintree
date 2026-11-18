@@ -88,10 +88,12 @@ import type {
   DeclineDecisionQuestionPayload,
   DecisionAnswerResultRead,
   DecisionDeclineResultRead,
+  DecisionFollowUpResultRead,
   DecisionQuestionAnswerResult,
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
   DecisionQuestionDeclineResult,
+  DecisionQuestionFollowUpResult,
   DecisionQuestionImagePartResult,
   DecisionQuestionList,
   DecisionQuestionSummariesResult,
@@ -103,6 +105,8 @@ import type {
   GetDecisionQuestionSummariesPayload,
   GetDecisionAnswerResultPayload,
   GetDecisionDeclineResultPayload,
+  GetDecisionFollowUpResultPayload,
+  SendDecisionFollowUpPayload,
 } from "../../../shared/types/decisionsQuestion.js";
 import { AppError } from "../../utils/errorTypes.js";
 
@@ -383,6 +387,21 @@ const declineQuestionSchema = z
 
 const getDeclineResultSchema = z.object({ declineId: answerIdSchema }).strict();
 
+// The person's follow-up (#17238): words only, as from a phone, within the
+// protocol's message bound, which the library checks again in UTF-8 bytes.
+const sendFollowUpSchema = z
+  .object({
+    reference: questionReferenceSchema,
+    messageId: answerIdSchema,
+    text: z
+      .string()
+      .max(16 * 1024)
+      .refine((text) => text.trim() !== ""),
+  })
+  .strict();
+
+const getFollowUpResultSchema = z.object({ messageId: answerIdSchema }).strict();
+
 // A pane holds at most ten open questions; the cap leaves room for the settled ones a list names.
 const getQuestionSummariesSchema = z
   .object({
@@ -639,6 +658,30 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) return { result: "not-running" };
         return decisions.getDecisionDeclineResult(payload);
+      }
+    ),
+    // The person's follow-up on a question's thread (#17238), from Daintree's
+    // own view: `shell`, signed by this computer's owner key as their answer
+    // is, whichever machine asked. No action, MCP tool or plugin surface.
+    // Never starts Decisions.
+    sendFollowUp: opValidated(
+      CHANNELS.DECISIONS_SEND_FOLLOW_UP,
+      sendFollowUpSchema,
+      async (payload: SendDecisionFollowUpPayload): Promise<DecisionQuestionFollowUpResult> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.sendDecisionFollowUp(payload);
+      }
+    ),
+    getFollowUpResult: opValidated(
+      CHANNELS.DECISIONS_GET_FOLLOW_UP_RESULT,
+      getFollowUpResultSchema,
+      async (payload: GetDecisionFollowUpResultPayload): Promise<DecisionFollowUpResultRead> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.getDecisionFollowUpResult(payload);
       }
     ),
     // Which terminals this view's hybrid input holds a draft for (#16282): an

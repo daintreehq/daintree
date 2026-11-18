@@ -227,6 +227,30 @@ describe("standingOf", () => {
     ).toMatchObject({ kind: "settled", outcome: "answered" });
   });
 
+  // A reply from the computer is the person's like a phone's, so it takes the question out of Needs you (#17238).
+  it("counts the person's follow-up from the owner computer as their reply", () => {
+    const reply = (status: "received" | "terminal-delivered") =>
+      standing(
+        row(1, {
+          ...delivered,
+          answers_json: answers({ delivered: true, event_seq: 5 }),
+          messages_json: messages(
+            { side: "agent", expects_reply: true, event_seq: 6, delivery: null },
+            {
+              message_id: "message-2",
+              event_seq: 7,
+              signer_device_id: "owner-1",
+              signer_role: "owner-desktop",
+              delivery: { status },
+            }
+          ),
+        })
+      );
+    // Taken off the wait at once; typed in, it is settled.
+    expect(reply("received")).toEqual({ kind: "to-type" });
+    expect(reply("terminal-delivered")).toMatchObject({ kind: "settled", outcome: "answered" });
+  });
+
   it("never counts the model's own answer as the person replying", () => {
     expect(
       standing(

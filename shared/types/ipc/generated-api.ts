@@ -526,6 +526,9 @@ export interface GeneratedElectronAPI {
     getDeclineResult(
       ...args: IpcInvokeMap["decisions:get-decline-result"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-decline-result"]["result"]>;
+    getFollowUpResult(
+      ...args: IpcInvokeMap["decisions:get-follow-up-result"]["args"]
+    ): Promise<IpcInvokeMap["decisions:get-follow-up-result"]["result"]>;
     getModel(
       ...args: IpcInvokeMap["decisions:get-model"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-model"]["result"]>;
@@ -601,6 +604,9 @@ export interface GeneratedElectronAPI {
     rotateKeys(
       ...args: IpcInvokeMap["decisions:rotate-keys"]["args"]
     ): Promise<IpcInvokeMap["decisions:rotate-keys"]["result"]>;
+    sendFollowUp(
+      ...args: IpcInvokeMap["decisions:send-follow-up"]["args"]
+    ): Promise<IpcInvokeMap["decisions:send-follow-up"]["result"]>;
     setAgentAskHuman(
       ...args: IpcInvokeMap["decisions:set-agent-ask-human"]["args"]
     ): Promise<IpcInvokeMap["decisions:set-agent-ask-human"]["result"]>;

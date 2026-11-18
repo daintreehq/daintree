@@ -56,7 +56,15 @@ export function threadEntryHeading(entry: DecisionThreadEntry): string {
     case "declined":
       return "Declined by you";
     case "message":
-      return entry.from === "person" ? "Follow-up from your phone" : "Follow-up from the agent";
+      if (entry.from === "agent") {
+        return entry.expectsReply
+          ? "Follow-up from the agent, asking for a reply"
+          : "Follow-up from the agent";
+      }
+      // A Remote Host from before #17238 doesn't say: its messages are all a phone's.
+      return entry.onComputer === true
+        ? "Follow-up from your computer"
+        : "Follow-up from your phone";
     case "answer":
       if (entry.from === "model") return "Decision model's answer";
       if (entry.confirmsModel) return "Confirmed the decision model's answer";

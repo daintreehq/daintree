@@ -6,6 +6,7 @@ import { TimeAgo } from "@/components/ui/TimeAgo";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import type { DecisionQuestionContent, DecisionThreadEntry } from "@shared/types/decisionsQuestion";
 import { DecisionAnswerComposer, type AnswerComposerMode } from "./DecisionAnswerComposer";
+import { DecisionFollowUpComposer } from "./DecisionFollowUpComposer";
 import { DecisionMarkdown } from "./DecisionMarkdown";
 import { DecisionQuestionImages } from "./DecisionQuestionImages";
 import type { DecisionQuestionTarget } from "./decisionQuestionTarget";
@@ -80,12 +81,14 @@ function QuestionBody({
   target,
   active,
   answerMode,
+  followUps,
   onMoved,
 }: {
   question: DecisionQuestionContent;
   target: DecisionQuestionTarget;
   active: boolean;
   answerMode: AnswerComposerMode;
+  followUps: boolean;
   onMoved: () => void;
 }) {
   return (
@@ -170,6 +173,15 @@ function QuestionBody({
           </ul>
         )}
       </section>
+      {/* After the thread, which it adds to. */}
+      {followUps && (
+        <DecisionFollowUpComposer
+          question={question}
+          target={target}
+          primary={answerMode !== "form"}
+          onMoved={onMoved}
+        />
+      )}
     </div>
   );
 }
@@ -196,11 +208,14 @@ export function DecisionQuestionReadView({
   reader,
   target,
   active,
+  followUps = false,
 }: {
   reader: DecisionQuestionReader;
   target: DecisionQuestionTarget | null;
   /** Whether the surface is open; its closing closes the image viewer too. */
   active: boolean;
+  /** Whether the person can add to the question's thread from here (#17238). */
+  followUps?: boolean;
 }) {
   const { current } = reader;
   return (
@@ -212,6 +227,7 @@ export function DecisionQuestionReadView({
           target={target}
           active={active}
           answerMode={reader.answerMode}
+          followUps={followUps}
           onMoved={reader.reread}
         />
       )}

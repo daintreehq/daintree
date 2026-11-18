@@ -36,9 +36,11 @@ export interface DecisionsAnswerPreview {
   answeredAt: string;
 }
 
-/** A follow-up the person sent from their phone (#16231) that Daintree won't type in on its own, opened. */
+/** A follow-up the person sent (#16231) that Daintree won't type in on its own, opened. */
 export interface DecisionsFollowUpPreview {
   messageId: string;
+  /** Written on their computer (#17238) rather than a phone. */
+  onComputer: boolean;
   /** `delivery-uncertain`: it may or may not have been typed in already. */
   status: "needs-attention" | "delivery-uncertain";
   /** The library's code for why; `unspecified` when none was recorded. */

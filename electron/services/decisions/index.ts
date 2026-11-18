@@ -112,10 +112,12 @@ import type {
   DeclineDecisionQuestionPayload,
   DecisionAnswerResultRead,
   DecisionDeclineResultRead,
+  DecisionFollowUpResultRead,
   DecisionQuestionAnswerResult,
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
   DecisionQuestionDeclineResult,
+  DecisionQuestionFollowUpResult,
   DecisionQuestionImagePartResult,
   DecisionQuestionListItem,
   DecisionQuestionReference,
@@ -129,6 +131,8 @@ import type {
   GetDecisionQuestionSummariesPayload,
   GetDecisionAnswerResultPayload,
   GetDecisionDeclineResultPayload,
+  GetDecisionFollowUpResultPayload,
+  SendDecisionFollowUpPayload,
 } from "../../../shared/types/decisionsQuestion.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -1433,6 +1437,25 @@ export function getDecisionDeclineResult(
   payload: GetDecisionDeclineResultPayload
 ): Promise<DecisionDeclineResultRead> {
   return whileRunning((running) => running.getDeclineResult(payload.declineId));
+}
+
+/**
+ * The person's follow-up from Daintree's own view (#17238), signed by this
+ * computer when it is the owner's. Never makes or starts the service; a
+ * follow-up committed before its connection ended stays committed, and the
+ * same message id submitted again finds it.
+ */
+export function sendDecisionFollowUp(
+  payload: SendDecisionFollowUpPayload
+): Promise<DecisionQuestionFollowUpResult> {
+  return whileRunning((running) => running.sendFollowUp(payload));
+}
+
+/** Where a person's follow-up stands, by its id (#17238). Never makes or starts the service. */
+export function getDecisionFollowUpResult(
+  payload: GetDecisionFollowUpResultPayload
+): Promise<DecisionFollowUpResultRead> {
+  return whileRunning((running) => running.getFollowUpResult(payload.messageId));
 }
 
 async function whileRunning<T>(

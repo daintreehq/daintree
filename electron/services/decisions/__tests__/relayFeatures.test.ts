@@ -68,13 +68,14 @@ describe("DaintreeRelayClient (#16229)", () => {
   });
 
   // Daintree declares a feature only once it handles it; each joins with its own work, and changes this test.
-  it("declares follow-ups, pane snapshots, phone images, involvement hints, owner-desktop answers, person declines and owner-desktop declines on event pages and socket tickets (#16231, #16230, #16233, #17228, #17101, #17234, #17239)", async () => {
+  it("declares follow-ups, pane snapshots, phone images, involvement hints, owner-desktop answers and follow-ups, person declines and owner-desktop declines on event pages and socket tickets (#16231, #16230, #16233, #17228, #17101, #17238, #17234, #17239)", async () => {
     const { sent, stock, daintree } = await clients();
     expect(BRIDGE_FEATURES).toContain("phone-images-v1");
     expect(BRIDGE_FEATURES).toContain("involvement-v1");
     expect(BRIDGE_FEATURES).toContain("owner-desktop-answers-v1");
     expect(BRIDGE_FEATURES).toContain("person-declines-v1");
     expect(BRIDGE_FEATURES).toContain("owner-desktop-declines-v1");
+    expect(asked).toContain("owner-desktop-messages-v1");
     expect(asked).toContain("pane-snapshots-v1");
 
     await stock.events(5, 10, asked);
@@ -85,7 +86,7 @@ describe("DaintreeRelayClient (#16229)", () => {
     await daintree.socketTicket(asked);
     const [page, ticket] = sent.slice(2);
     expect(page!.url.searchParams.get("features")).toBe(
-      "involvement-v1,owner-desktop-answers-v1,owner-desktop-declines-v1,pane-snapshots-v1,person-declines-v1,phone-images-v1,thread-messages-v1"
+      "involvement-v1,owner-desktop-answers-v1,owner-desktop-declines-v1,owner-desktop-messages-v1,pane-snapshots-v1,person-declines-v1,phone-images-v1,thread-messages-v1"
     );
     expect(page!.url.searchParams.get("after")).toBe("5");
     expect(page!.url.searchParams.get("limit")).toBe("10");
@@ -93,6 +94,7 @@ describe("DaintreeRelayClient (#16229)", () => {
       "involvement-v1",
       "owner-desktop-answers-v1",
       "owner-desktop-declines-v1",
+      "owner-desktop-messages-v1",
       "pane-snapshots-v1",
       "person-declines-v1",
       "phone-images-v1",
@@ -100,11 +102,14 @@ describe("DaintreeRelayClient (#16229)", () => {
     ]);
   });
 
-  it("declares every feature the 0.8.0 release's bridge asks for but the owner desktop's follow-ups, so a phone and this computer can decline its questions (#17234, #17238, #17239)", async () => {
+  it("declares every feature the 0.8.0 release's bridge asks for, so a phone and this computer can decline its questions and this computer can follow up on them (#17234, #17238, #17239)", async () => {
     const { sent, daintree } = await clients();
-    const unhandled: readonly ProtocolFeature[] = ["owner-desktop-messages-v1"];
-    for (const feature of unhandled) expect(asked).toContain(feature);
-    const handled = asked.filter((feature) => !unhandled.includes(feature));
+    const lastJoined: readonly ProtocolFeature[] = [
+      "owner-desktop-messages-v1",
+      "person-declines-v1",
+      "owner-desktop-declines-v1",
+    ];
+    for (const feature of lastJoined) expect(asked).toContain(feature);
 
     await daintree.events(5, 10, asked);
     await daintree.socketTicket(asked);
@@ -113,7 +118,7 @@ describe("DaintreeRelayClient (#16229)", () => {
       sent[0]!.url.searchParams.get("features")!.split(","),
       (sent[1]!.body as { features: string[] }).features,
     ];
-    for (const features of declared) expect([...features].sort()).toEqual([...handled].sort());
+    for (const features of declared) expect([...features].sort()).toEqual([...asked].sort());
   });
 
   it("declares nothing for a feature a later bridge asks for that Daintree doesn't handle", async () => {
@@ -137,6 +142,7 @@ describe("DaintreeRelayClient (#16229)", () => {
       "involvement-v1",
       "owner-desktop-answers-v1",
       "owner-desktop-declines-v1",
+      "owner-desktop-messages-v1",
       "person-declines-v1",
       "phone-images-v1",
       "thread-messages-v1",
