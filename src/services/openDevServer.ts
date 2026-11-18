@@ -10,6 +10,7 @@ import {
   parseLoopbackLink,
   remoteHostOfView,
   resolveExternalPageForView,
+  resolveTerminalLinkForHost,
 } from "@/services/terminal/remoteLoopbackLinks";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -116,14 +117,21 @@ export async function openDevServerExternally(url: string): Promise<void> {
   // The forward reaches the host's own localhost and nothing else, so any
   // other spelling of the host itself (127.0.0.2, app.localhost) has no
   // forward that reaches it, and opened as it is would reach this machine.
-  if (parseLoopbackLink(address) === null && namesTheHost(parsed.hostname)) {
+  const loopback = parseLoopbackLink(address) !== null;
+  if (!loopback && namesTheHost(parsed.hostname)) {
     devServerRefused(
       `${parsed.hostname} on the host can't be forwarded to this machine. Open it from the dev preview instead.`
     );
     return;
   }
   try {
-    openUrlExternally(await resolveExternalPageForView(address, "Dev server"), LOG_PREFIX);
+    // Any other address is the host's network's, opened as it is, apart from
+    // a sign-in callback to the host's localhost, forwarded as a terminal
+    // link's is.
+    const target = loopback
+      ? await resolveExternalPageForView(address, "Dev server")
+      : await resolveTerminalLinkForHost(address, hostId);
+    openUrlExternally(target, LOG_PREFIX);
   } catch (error) {
     logError(`${LOG_PREFIX} Failed to forward the dev server's port`, error);
     devServerRefused(hostForwardFailure(address, error));

@@ -27,6 +27,10 @@ const remote = vi.hoisted(() => ({
   hostId: null as string | null,
   /** The same-port forward: the address back once the host's port is held here. */
   resolve: vi.fn<(url: string, label: string) => Promise<string>>((url) => Promise.resolve(url)),
+  /** The terminal-link resolver: an outside address, with any loopback sign-in callback forwarded. */
+  resolveLink: vi.fn<(url: string, hostId: string | null) => Promise<string>>((url) =>
+    Promise.resolve(url)
+  ),
 }));
 
 vi.mock("@/clients", () => ({ systemClient: { openExternal: vi.fn() } }));
@@ -48,6 +52,8 @@ vi.mock("@/services/terminal/remoteLoopbackLinks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/services/terminal/remoteLoopbackLinks")>()),
   remoteHostOfView: () => remote.hostId,
   resolveExternalPageForView: (url: string, label: string) => remote.resolve(url, label),
+  resolveTerminalLinkForHost: (url: string, hostId: string | null) =>
+    remote.resolveLink(url, hostId),
   hostForwardFailure: () => "Port 5824 on the host couldn't be forwarded to this machine.",
 }));
 vi.mock("@/store/panelStore", () => ({
@@ -102,6 +108,7 @@ beforeEach(() => {
   view.worktreeIds = new Set(["w1", "w2"]);
   remote.hostId = null;
   remote.resolve.mockReset().mockImplementation((url) => Promise.resolve(url));
+  remote.resolveLink.mockReset().mockImplementation((url) => Promise.resolve(url));
   withPanels();
 });
 
@@ -280,11 +287,20 @@ describe("openDevServerExternally", () => {
     );
   });
 
-  it("passes a host's private-network address through the host's resolver", async () => {
+  it("opens a host's private-network address as a terminal link's, callbacks forwarded", async () => {
     remote.hostId = "host-1";
-    remote.resolve.mockImplementation((url) => Promise.resolve(`${url}#resolved`));
-    await openDevServerExternally("http://10.0.0.5:5824");
-    expect(remote.resolve).toHaveBeenCalledWith("http://10.0.0.5:5824/", "Dev server");
-    expect(openedExternally()).toEqual(["http://10.0.0.5:5824/#resolved"]);
+    remote.resolveLink.mockImplementation((url) => Promise.resolve(`${url}#resolved`));
+    const address = "http://10.0.0.5:5824/?redirect_uri=http%3A%2F%2Flocalhost%3A8080%2Fcb";
+    await openDevServerExternally(address);
+    expect(remote.resolveLink).toHaveBeenCalledWith(address, "host-1");
+    expect(remote.resolve).not.toHaveBeenCalled();
+    expect(openedExternally()).toEqual([`${address}#resolved`]);
+  });
+
+  it("never sends a loopback address down the terminal resolver's other-port forward", async () => {
+    remote.hostId = "host-1";
+    await openDevServerExternally("http://127.0.0.1:5824");
+    expect(remote.resolveLink).not.toHaveBeenCalled();
+    expect(remote.resolve).toHaveBeenCalledWith("http://127.0.0.1:5824/", "Dev server");
   });
 });
