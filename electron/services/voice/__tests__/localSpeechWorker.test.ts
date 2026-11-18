@@ -33,7 +33,7 @@ vi.mock("avr-vad", () => ({
         destroy: async () => {},
         processAudio: async (samples: Float32Array) => {
           // avr-vad works in 32 ms frames at 16 kHz: about three a packet.
-          const frames = Math.round((samples.length / 24_000) * 1000 / 32);
+          const frames = Math.round(((samples.length / 24_000) * 1000) / 32);
           const events = script.vad[packet++] ?? [];
           for (let f = 0; f < frames; f++) {
             options.onFrameProcessed();
@@ -95,7 +95,9 @@ async function bootWorker() {
   vi.resetModules();
   await import("../localSpeechWorker.js");
   send({ type: "load", dir: "/model", threads: 2 });
-  await vi.waitFor(() => expect(posted).toContainEqual({ type: "ready", loadMs: expect.any(Number) }));
+  await vi.waitFor(() =>
+    expect(posted).toContainEqual({ type: "ready", loadMs: expect.any(Number) })
+  );
 }
 
 function send(message: LocalSpeechWorkerInbound) {
@@ -131,7 +133,15 @@ describe("localSpeechWorker", () => {
     await start();
     // "send it" in the first chunk; the VAD hears speech end in packet 12
     // (its speech ended ~770 ms earlier, inside the first chunk's audio).
-    script.tokens = [[[0, 1], [1, 3]], [], [], []];
+    script.tokens = [
+      [
+        [0, 1],
+        [1, 3],
+      ],
+      [],
+      [],
+      [],
+    ];
     script.vad[0] = ["start"];
     script.vad[11] = ["end"];
     packets(14);
@@ -145,7 +155,15 @@ describe("localSpeechWorker", () => {
 
   it("never marks end of speech when the speaker resumes in the packet the pause closes in", async () => {
     await start();
-    script.tokens = [[[0, 1], [1, 3]], [], [], []];
+    script.tokens = [
+      [
+        [0, 1],
+        [1, 3],
+      ],
+      [],
+      [],
+      [],
+    ];
     script.vad[0] = ["start"];
     // The holdover runs out and speech starts again inside one packet.
     script.vad[11] = ["end", "start"];
@@ -159,7 +177,18 @@ describe("localSpeechWorker", () => {
   it("puts words decoded after the pause point in the next passage", async () => {
     await start();
     // Chunk 2 (1120-1680 ms) brings "to the tests", after the pause closed at ~730 ms.
-    script.tokens = [[[0, 1], [1, 3]], [], [[2, 1], [3, 2], [4, 4]]];
+    script.tokens = [
+      [
+        [0, 1],
+        [1, 3],
+      ],
+      [],
+      [
+        [2, 1],
+        [3, 2],
+        [4, 4],
+      ],
+    ];
     script.vad[0] = ["start"];
     script.vad[11] = ["end", "start"];
     packets(18);

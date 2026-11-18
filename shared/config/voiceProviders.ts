@@ -22,8 +22,7 @@ interface VoiceProviderInfo<Field extends VoiceApiKeyField> {
  * on-device model, which needs no key and is ready once its model is installed.
  */
 export type VoiceTranscriptionProviderInfo =
-  | ({ kind: "key" } & VoiceProviderInfo<TranscriptionKeyField>)
-  | { kind: "device"; name: string };
+  ({ kind: "key" } & VoiceProviderInfo<TranscriptionKeyField>) | { kind: "device"; name: string };
 
 /**
  * One entry per transcription provider, naming the settings field that holds the key it

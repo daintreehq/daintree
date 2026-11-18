@@ -39,14 +39,20 @@ function hzToMel(hz: number): number {
 }
 
 function melToHz(mel: number): number {
-  return mel < MIN_LOG_MEL ? mel * LIN_SCALE : MIN_LOG_HZ * Math.exp((mel - MIN_LOG_MEL) * LOG_STEP);
+  return mel < MIN_LOG_MEL
+    ? mel * LIN_SCALE
+    : MIN_LOG_HZ * Math.exp((mel - MIN_LOG_MEL) * LOG_STEP);
 }
 
 /**
  * Slaney-scale, area-normalised triangular filters from 0 Hz to Nyquist (librosa
  * `htk=False, norm='slaney'`), row-major `[numMels, fftSize / 2 + 1]`.
  */
-export function createMelFilterbank(numMels: number, fftSize: number, sampleRate: number): Float32Array {
+export function createMelFilterbank(
+  numMels: number,
+  fftSize: number,
+  sampleRate: number
+): Float32Array {
   const bins = fftSize / 2 + 1;
   const low = hzToMel(0);
   const high = hzToMel(sampleRate / 2);

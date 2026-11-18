@@ -4,7 +4,10 @@
  * pinned to one revision. Every file it loads is pinned by size and SHA-256;
  * nothing else is ever read from its folder.
  */
-import { normalizeVoiceLanguage, VOICE_LANGUAGE_AUTO } from "../../../shared/config/voiceLanguages.js";
+import {
+  normalizeVoiceLanguage,
+  VOICE_LANGUAGE_AUTO,
+} from "../../../shared/config/voiceLanguages.js";
 
 export interface LocalSpeechFileSpec {
   name: string;

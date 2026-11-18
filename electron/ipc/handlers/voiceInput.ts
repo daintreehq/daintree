@@ -1865,24 +1865,24 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       transcribesOnDevice(settings.transcriptionProvider)
         ? Promise.resolve([])
         : hostContext
-        ? hostContext.then((read) =>
-            assembleTaggedKeyterms({
+          ? hostContext.then((read) =>
+              assembleTaggedKeyterms({
+                customDictionary,
+                projectDictionary,
+                projectName: read?.projectName ?? undefined,
+                names,
+                commandTerms,
+                paneReads: read?.keyterms ?? NO_PANE_KEYTERM_READS,
+              })
+            )
+          : assembleTaggedKeyterms({
               customDictionary,
               projectDictionary,
-              projectName: read?.projectName ?? undefined,
+              projectName: keytermTarget.projectName,
               names,
               commandTerms,
-              paneReads: read?.keyterms ?? NO_PANE_KEYTERM_READS,
+              paneReads: paneReads ?? NO_PANE_KEYTERM_READS,
             })
-          )
-        : assembleTaggedKeyterms({
-            customDictionary,
-            projectDictionary,
-            projectName: keytermTarget.projectName,
-            names,
-            commandTerms,
-            paneReads: paneReads ?? NO_PANE_KEYTERM_READS,
-          })
     ).catch((err: unknown): VoiceSentTerm[] => {
       logDebug("[VoiceInput] Keyterm assembly failed, starting without keyterms", {
         ...voiceErrorLogFields(err),

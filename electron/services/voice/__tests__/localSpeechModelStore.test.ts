@@ -97,7 +97,10 @@ describe("LocalSpeechModelStore", () => {
     const { fetch } = fakeFetch();
     const models = store(fetch);
     await models.download();
-    expect(models.status()).toMatchObject({ state: "ready", receivedBytes: models.status().totalBytes });
+    expect(models.status()).toMatchObject({
+      state: "ready",
+      receivedBytes: models.status().totalBytes,
+    });
     expect(await models.readyDir()).toBe(path.join(root, REVISION));
     for (const [name, data] of Object.entries(CONTENT)) {
       expect(await readFile(path.join(root, REVISION, name))).toEqual(data);
@@ -130,7 +133,10 @@ describe("LocalSpeechModelStore", () => {
     expect(await models.readyDir()).toBeNull();
     await models.download();
     expect(models.status().state).toBe("ready");
-    expect(requests.filter((r) => r.name === "vocab.txt").map((r) => r.range)).toEqual([null, null]);
+    expect(requests.filter((r) => r.name === "vocab.txt").map((r) => r.range)).toEqual([
+      null,
+      null,
+    ]);
   });
 
   it("reports a refused request as a failure to retry", async () => {

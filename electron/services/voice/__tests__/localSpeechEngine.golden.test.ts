@@ -51,7 +51,8 @@ async function transcribe(engine: LocalSpeechEngine, pcm: ArrayBuffer, language:
       ids.push(...(await engine.decodeChunk(chunk)).map((token) => token.id));
     }
   };
-  for (let i = 0; i < capture.length; i += 2_400) await feed(resampler.push(capture.subarray(i, i + 2_400)));
+  for (let i = 0; i < capture.length; i += 2_400)
+    await feed(resampler.push(capture.subarray(i, i + 2_400)));
   await feed(resampler.flush(), true);
   return engine.vocabulary.decode(ids).replace(/\s+/g, " ").trim().toLowerCase();
 }

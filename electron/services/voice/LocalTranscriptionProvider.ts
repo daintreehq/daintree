@@ -203,7 +203,8 @@ export class LocalTranscriptionProvider implements TranscriptionProvider {
     this.emit({ type: "terms_sent", terms: [] });
     this.emit({ type: "status", status: this.intakeClosed ? "finishing" : "recording" });
     for (const item of this.queued) {
-      if (item.type === "audio") lease.post({ type: "audio", session: lease.session, pcm: item.pcm });
+      if (item.type === "audio")
+        lease.post({ type: "audio", session: lease.session, pcm: item.pcm });
       else lease.post({ type: "cut", session: lease.session });
     }
     this.queued = [];
@@ -332,7 +333,12 @@ export class LocalTranscriptionProvider implements TranscriptionProvider {
   }
 
   getSessionStats(): ProviderSessionStats {
-    return { delayTier: "none", droppedConnect: this.droppedConnect, droppedReplay: 0, reconnects: 0 };
+    return {
+      delayTier: "none",
+      droppedConnect: this.droppedConnect,
+      droppedReplay: 0,
+      reconnects: 0,
+    };
   }
 
   stop(): void {

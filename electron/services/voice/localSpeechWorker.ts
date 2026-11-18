@@ -319,7 +319,10 @@ port.on("message", ({ data: message }) => {
           exitSoon(0);
         },
         (err: unknown) => {
-          post({ type: "error", message: formatErrorMessage(err, "Speech process cleanup failed") });
+          post({
+            type: "error",
+            message: formatErrorMessage(err, "Speech process cleanup failed"),
+          });
           exitSoon(1);
         }
       );

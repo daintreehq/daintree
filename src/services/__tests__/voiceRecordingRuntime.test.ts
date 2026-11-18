@@ -345,7 +345,8 @@ describe("startVoiceRecordingRuntime with on-device transcription (#17338)", () 
 
   function stubLocalModel(state: "absent" | "ready") {
     const stub = stubVoiceInput(LOCAL as unknown as StoredSettings);
-    let push: ((status: { state: string; totalBytes: number; receivedBytes: number }) => void) | null =
+    let push:
+      ((status: { state: string; totalBytes: number; receivedBytes: number }) => void) | null =
       null;
     const voiceInput = stub.voiceInput as unknown as Record<string, unknown>;
     // Main's status: what a read answers, and what a push announces.
@@ -390,9 +391,9 @@ describe("startVoiceRecordingRuntime with on-device transcription (#17338)", () 
     const runtime = await loadRuntime();
     const keyless = { ...ON, openaiApiKey: "" } as VoiceInputSettings;
     expect(runtime.isVoiceInputConfigured(keyless, true)).toBe(false);
-    expect(runtime.isVoiceInputConfigured({ ...keyless, transcriptionProvider: "local" }, true)).toBe(
-      true
-    );
+    expect(
+      runtime.isVoiceInputConfigured({ ...keyless, transcriptionProvider: "local" }, true)
+    ).toBe(true);
     expect(
       runtime.isVoiceInputConfigured({ ...keyless, transcriptionProvider: "local" }, false)
     ).toBe(false);

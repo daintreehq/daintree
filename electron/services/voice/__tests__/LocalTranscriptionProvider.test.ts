@@ -153,8 +153,24 @@ describe("LocalTranscriptionProvider", () => {
       reason: "cut",
       endOfSpeech: false,
     });
-    h.deliver({ type: "segment", session, segment: 3, text: "", shown: true, reason: "finish", endOfSpeech: false });
-    h.deliver({ type: "segment", session, segment: 4, text: "", shown: false, reason: "finish", endOfSpeech: false });
+    h.deliver({
+      type: "segment",
+      session,
+      segment: 3,
+      text: "",
+      shown: true,
+      reason: "finish",
+      endOfSpeech: false,
+    });
+    h.deliver({
+      type: "segment",
+      session,
+      segment: 4,
+      text: "",
+      shown: false,
+      reason: "finish",
+      endOfSpeech: false,
+    });
     expect(h.events).toEqual([
       { type: "delta", text: "send it", itemId: `local-${session}-0`, replace: true },
       { type: "speech_started" },
@@ -167,7 +183,13 @@ describe("LocalTranscriptionProvider", () => {
         endOfSpeech: true,
       },
       // The speaker went on before the pause closed: no send.
-      { type: "complete", text: "and more", itemId: `local-${session}-1`, endsAtPause: true, paused: true },
+      {
+        type: "complete",
+        text: "and more",
+        itemId: `local-${session}-1`,
+        endsAtPause: true,
+        paused: true,
+      },
       { type: "complete", text: "cut here", itemId: `local-${session}-2` },
       // A preview with nothing final retires; a passage never shown is skipped.
       { type: "complete", text: "", itemId: `local-${session}-3` },
@@ -181,7 +203,15 @@ describe("LocalTranscriptionProvider", () => {
     expect(h.posted.at(-1)).toEqual({ type: "finish", session });
     h.provider.sendAudioChunk(pcm(4));
     expect(h.posted.at(-1)).toEqual({ type: "finish", session });
-    h.deliver({ type: "segment", session, segment: 0, text: "last words", shown: true, reason: "finish", endOfSpeech: false });
+    h.deliver({
+      type: "segment",
+      session,
+      segment: 0,
+      text: "last words",
+      shown: true,
+      reason: "finish",
+      endOfSpeech: false,
+    });
     h.deliver({ type: "finished", session });
     await stopped;
     const tail = h.events.slice(-3);

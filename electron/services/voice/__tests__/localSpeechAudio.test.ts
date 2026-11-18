@@ -45,7 +45,8 @@ describe("Resampler24kTo16k", () => {
     const once = concat([whole.push(input), whole.flush()]);
     const split = new Resampler24kTo16k();
     const parts: Float32Array[] = [];
-    for (let i = 0; i < input.length; i += 2_400) parts.push(split.push(input.subarray(i, i + 2_400)));
+    for (let i = 0; i < input.length; i += 2_400)
+      parts.push(split.push(input.subarray(i, i + 2_400)));
     parts.push(split.flush());
     const packets = concat(parts);
     expect(packets.length).toBe(once.length);

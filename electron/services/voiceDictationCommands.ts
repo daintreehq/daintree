@@ -123,8 +123,7 @@ export function pendingCommandStart(text: string): number {
   return -1;
 }
 
-const SEND_COMMAND_RE =
-  /(?:^|[\s.,;:!?。．、，！？；：]+)\bsend\s+it[\s.,;:!?。．、，！？；：]*$/i;
+const SEND_COMMAND_RE = /(?:^|[\s.,;:!?。．、，！？；：]+)\bsend\s+it[\s.,;:!?。．、，！？；：]*$/i;
 
 const CLAUSE_BREAK_RE = /[.,;:!?。．、，！？；：\u2014\u2013]/;
 

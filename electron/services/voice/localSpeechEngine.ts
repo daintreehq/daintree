@@ -37,11 +37,11 @@ class OrtStepModel implements RnntStepModel {
   }
 
   private zeroState(): Ort.Tensor {
-    return new this.ort.Tensor(
-      "float32",
-      new Float32Array(G.decoderLayers * G.decoderHidden),
-      [G.decoderLayers, 1, G.decoderHidden]
-    );
+    return new this.ort.Tensor("float32", new Float32Array(G.decoderLayers * G.decoderHidden), [
+      G.decoderLayers,
+      1,
+      G.decoderHidden,
+    ]);
   }
 
   async predict(token: number): Promise<void> {
@@ -178,6 +178,10 @@ export class LocalSpeechEngine {
   }
 
   async release(): Promise<void> {
-    await Promise.allSettled([this.encoder.release(), this.predictor.release(), this.joint.release()]);
+    await Promise.allSettled([
+      this.encoder.release(),
+      this.predictor.release(),
+      this.joint.release(),
+    ]);
   }
 }
