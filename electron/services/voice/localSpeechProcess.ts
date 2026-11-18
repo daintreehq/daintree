@@ -79,12 +79,12 @@ class SpeechProcess {
       logInfo(`${P} Speech process spawned`, { pid: this.child.pid });
       if (this.killDue) this.killUndrained();
     });
-    this.child.on("message", (message: LocalSpeechWorkerOutbound) => {
-      switch (message.type) {
+    this.child.on("message", (reply: LocalSpeechWorkerOutbound) => {
+      switch (reply.type) {
         case "ready":
           clearTimeout(loadTimer);
           logInfo(`${P} Model loaded`, {
-            loadMs: message.loadMs,
+            loadMs: reply.loadMs,
             msSinceFork: Math.round(performance.now() - this.forkedAt),
           });
           readyResolve();
@@ -92,14 +92,14 @@ class SpeechProcess {
         case "load-failed":
         case "error":
           clearTimeout(loadTimer);
-          logWarn(`${P} Speech process reported an error`, { type: message.type });
+          logWarn(`${P} Speech process reported an error`, { type: reply.type });
           readyReject(new Error("The on-device model couldn't be loaded."));
           this.retire();
           return;
         case "drained":
           return;
         default:
-          if (this.retiredAt === null) this.onSessionMessage(message);
+          if (this.retiredAt === null) this.onSessionMessage(reply);
       }
     });
     this.child.on("error", (type, location) => {

@@ -15,6 +15,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { LocalSpeechModelStatus } from "../../../shared/types/voice.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { voiceErrorLogFields } from "../../../shared/utils/voiceLogFields.js";
 import {
   LOCAL_SPEECH_MODEL,
   LOCAL_SPEECH_MODEL_BYTES,
@@ -231,7 +232,7 @@ export class LocalSpeechModelStore {
           this.set({ state: "absent", receivedBytes });
           return;
         }
-        console.warn("[LocalSpeech] Model download failed:", formatErrorMessage(error, "failed"));
+        console.warn("[LocalSpeech] Model download failed", voiceErrorLogFields(error));
         this.set({ state: "failed", receivedBytes, error: describeFailure(error) });
       })
       .finally(() => {
