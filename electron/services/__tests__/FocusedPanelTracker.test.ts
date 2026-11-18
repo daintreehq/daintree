@@ -43,20 +43,6 @@ describe("FocusedPanelTracker", () => {
     expect(kindOf(tracker)).toBe("browser");
   });
 
-  it("lets Portal focus override the view's panel until it blurs", () => {
-    const tracker = new FocusedPanelTracker();
-    tracker.setFocusedWindow(W1);
-    tracker.report(10, W1, "p1", { kind: "terminal", worktreeId: "w" });
-
-    tracker.setPortalFocused(W1, true);
-    expect(tracker.getCurrent()).toEqual({
-      panel: { kind: "portal", agent: false, worktreeId: null },
-      workspaceId: null,
-    });
-    tracker.setPortalFocused(W1, false);
-    expect(kindOf(tracker)).toBe("terminal");
-  });
-
   it("follows the view holding native focus, not the newest report", () => {
     let focused = 11;
     const tracker = new FocusedPanelTracker({ isFocused: (id) => id === focused });
@@ -121,7 +107,6 @@ describe("FocusedPanelTracker", () => {
     expect(kindOf(tracker)).toBeNull();
 
     tracker.report(10, W1, "p1", { kind: "file" });
-    tracker.setPortalFocused(W1, true);
     tracker.removeWindow(W1);
     tracker.setFocusedWindow(W1);
     expect(kindOf(tracker)).toBeNull();
@@ -174,14 +159,6 @@ describe("FocusedPanelTracker", () => {
       tracker.reportRemote(-1, "pa", { kind: "terminal" }, true);
       tracker.removeRemote(-1);
       expect(kindOf(tracker)).toBe("diff");
-    });
-
-    it("treats this machine's Portal gaining focus as its newest activity", () => {
-      const tracker = new FocusedPanelTracker();
-      tracker.setFocusedWindow(W1);
-      tracker.reportRemote(-1, "pa", { kind: "terminal" }, true);
-      tracker.setPortalFocused(W1, true);
-      expect(kindOf(tracker)).toBe("portal");
     });
   });
 });

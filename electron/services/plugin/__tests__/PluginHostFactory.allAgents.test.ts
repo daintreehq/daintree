@@ -647,7 +647,7 @@ describe("focused panel", () => {
       const seen: PluginFocusedPanel[] = [];
       await host.onDidChangeFocusedPanel((focus) => seen.push(focus), { debounceMs: 0 });
       tracker.report(VIEW, WINDOW, PROJECT_ID, { kind: "terminal", worktreeId: "w" });
-      tracker.setPortalFocused(WINDOW, true);
+      tracker.report(VIEW, WINDOW, PROJECT_ID, { kind: "portal", worktreeId: "w" });
 
       expect(seen.at(-1)).toEqual({ kind: "portal", agent: false, worktreeId: null });
     });
@@ -661,7 +661,7 @@ describe("focused panel", () => {
       tracker.report(VIEW, WINDOW, PROJECT_ID, { kind: "file", worktreeId: "w" });
       tracker.report(VIEW + 1, WINDOW, OTHER_PROJECT_ID, { kind: "diff", worktreeId: "x" });
       tracker.removeSender(VIEW + 1);
-      tracker.setPortalFocused(WINDOW, true);
+      tracker.report(VIEW, WINDOW, PROJECT_ID, { kind: "portal" });
 
       expect(seen.map((f) => f.kind)).toEqual([null, "file", null, "file", null]);
     });

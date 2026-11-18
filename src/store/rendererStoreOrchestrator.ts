@@ -766,7 +766,7 @@ export function initStoreOrchestrator(): () => void {
   if (isViewUnobservable()) void flushMru();
 
   // Focused panel kind for `host.onDidChangeFocusedPanel` (#13221). Main
-  // combines it with window and Portal focus, which it observes itself.
+  // combines it with window focus, which it observes itself.
   disposables.add(toDisposable(subscribeFocusedPanelReporter()));
 
   // The host's assistant agent and default terminal agent (#13345).

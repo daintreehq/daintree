@@ -849,30 +849,19 @@ export async function initGlobalServices(
           );
       setStopAppMetricsMonitor(
         startAppMetricsMonitor({
-          destroyHiddenWebviews: async (tier) => {
-            let tabsEvicted = 0;
-            if (windowRegistry) {
-              for (const wCtx of windowRegistry.all()) {
-                if (wCtx.browserWindow.isDestroyed()) continue;
-                try {
-                  if (wCtx.services.portalManager) {
-                    const evictedTabIds = await wCtx.services.portalManager.destroyHiddenTabs();
-                    tabsEvicted += evictedTabIds.length;
-                  }
-                } catch {
-                  /* non-critical */
-                }
-                try {
-                  sendToRenderer(wCtx.browserWindow, CHANNELS.EVENTS_PUSH, {
-                    name: "window:destroy-hidden-webviews",
-                    payload: { tier },
-                  });
-                } catch {
-                  /* non-critical */
-                }
+          destroyHiddenWebviews: (tier) => {
+            if (!windowRegistry) return;
+            for (const wCtx of windowRegistry.all()) {
+              if (wCtx.browserWindow.isDestroyed()) continue;
+              try {
+                sendToRenderer(wCtx.browserWindow, CHANNELS.EVENTS_PUSH, {
+                  name: "window:destroy-hidden-webviews",
+                  payload: { tier },
+                });
+              } catch {
+                /* non-critical */
               }
             }
-            return tabsEvicted;
           },
           hibernateIdleProjects: async () =>
             (await idleSleepService?.sleepUnderMemoryPressure()) ?? 0,

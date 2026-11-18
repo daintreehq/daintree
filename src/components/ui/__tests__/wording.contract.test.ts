@@ -104,11 +104,7 @@ const THREE_DOT_ALLOWED = new Set([
 // Any casing, and the link/page rows of a native page menu.
 const AMBIGUOUS_BROWSER = /\bopen (?:link |page )?in browser\b/i;
 const IN_APP_BROWSER_FILES = /^src\/components\/(Browser|DevPreview)\//;
-const IN_APP_BROWSER_MENUS = new Set([
-  "src/components/Terminal/TerminalContextMenu.tsx",
-  // The portal page's native right-click menu.
-  "electron/services/PortalManager.ts",
-]);
+const IN_APP_BROWSER_MENUS = new Set(["src/components/Terminal/TerminalContextMenu.tsx"]);
 
 describe("wording", () => {
   const ellipses: string[] = [];
@@ -223,7 +219,7 @@ describe("wording", () => {
     expect(titleCaseHeadings).toEqual([]);
   });
 
-  it('says "Open in external browser" inside the in-app browser, dev preview and portal', () => {
+  it('says "Open in external browser" inside the in-app browser and dev preview', () => {
     expect(ambiguousBrowser).toEqual([]);
   });
 });

@@ -49,7 +49,7 @@ export const topLevelNamespace = defineIpcNamespace({
 });
 
 export function registerInsideFn() {
-  // Mirrors portal.ts / scratch/index.ts where defineIpcNamespace is called
+  // Mirrors scratch/index.ts where defineIpcNamespace is called
   // inside a function body, often with inline arrow handlers.
   return defineIpcNamespace({
     name: "fixture-fn",
