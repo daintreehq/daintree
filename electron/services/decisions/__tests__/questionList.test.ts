@@ -136,8 +136,10 @@ describe("projectDecisionQuestions", () => {
         "expiresAt",
         "projectLabel",
         "reference",
+        "replyRequest",
         "requirement",
         "settledAt",
+        "stall",
         "standing",
         "worktreeId",
         "worktreeRoot",
@@ -556,5 +558,136 @@ describe("standingOf", () => {
         })
       )
     ).toEqual({ kind: "settled", outcome: "expired" });
+  });
+});
+
+describe("follow-up and stall events (#17235)", () => {
+  const project = (r: QuestionRow, handled: ReadonlyMap<string, number> = new Map()) =>
+    projectDecisionQuestions([r], handled, HOST)[0]!;
+  const request = (id: string, seq: number) => ({
+    message_id: id,
+    side: "agent" as const,
+    expects_reply: true,
+    event_seq: seq,
+    delivery: null,
+  });
+  const answered = (messagesJson: string) =>
+    row(1, {
+      ...delivered,
+      answers_json: answers({ delivered: true, event_seq: 5 }),
+      messages_json: messagesJson,
+    });
+
+  it("names the agent's follow-up asking for a reply, by id, until the person replies", () => {
+    expect(project(answered(messages(request("ask-1", 6)))).replyRequest).toBe("ask-1");
+    // A second request is a new one, named by its own id.
+    expect(
+      project(
+        answered(
+          messages(
+            request("ask-1", 6),
+            { message_id: "reply-1", event_seq: 7 },
+            request("ask-2", 8)
+          )
+        )
+      ).replyRequest
+    ).toBe("ask-2");
+    // The latest by the ledger's order, however the thread is stored.
+    expect(
+      project(
+        answered(
+          messages(
+            request("ask-2", 8),
+            { message_id: "reply-1", event_seq: 7 },
+            request("ask-1", 6)
+          )
+        )
+      ).replyRequest
+    ).toBe("ask-2");
+    // Replied to, or superseded by a follow-up asking nothing: none.
+    expect(
+      project(answered(messages(request("ask-1", 6), { message_id: "reply-1", event_seq: 7 })))
+        .replyRequest
+    ).toBeNull();
+    expect(
+      project(
+        answered(
+          messages(request("ask-1", 6), {
+            message_id: "note-1",
+            side: "agent",
+            expects_reply: false,
+            event_seq: 7,
+            delivery: null,
+          })
+        )
+      ).replyRequest
+    ).toBeNull();
+    // A question still open waits for its answer, not a reply.
+    expect(project(row(1, { messages_json: messages(request("ask-1", 6)) })).replyRequest).toBe(
+      null
+    );
+  });
+
+  it("names a reply request even while the question's standing shows its answer needing attention", () => {
+    const item = project(
+      row(1, {
+        local_status: "human-answered",
+        delivery_status: "needs-attention",
+        error_code: "pane_gone",
+        answers_json: answers({ event_seq: 5 }),
+        messages_json: messages(request("ask-1", 6)),
+      })
+    );
+    expect(item.standing.kind).toBe("needs-attention");
+    expect(item.replyRequest).toBe("ask-1");
+  });
+
+  it("names what delivery stopped on, by id, with the library's code for why", () => {
+    expect(project(answered("[]")).stall).toBeNull();
+    expect(
+      project(
+        row(1, {
+          local_status: "human-answered",
+          delivery_status: "needs-attention",
+          error_code: "pane_gone",
+          answers_json: answers({ revision: 2 }),
+          messages_json: messages({
+            message_id: "held-1",
+            delivery: { status: "needs-attention", error_code: "inject_rejected" },
+          }),
+        })
+      ).stall
+    ).toEqual({ answerRevision: 2, followUpIds: ["held-1"], reason: "pane_gone" });
+    // With the answer handled, only the follow-ups are held, for their own reason.
+    const handledAnswer = row(1, {
+      local_status: "human-answered",
+      delivery_status: "needs-attention",
+      error_code: "pane_gone",
+      answers_json: answers({ revision: 2 }),
+      messages_json: messages(
+        {
+          message_id: "held-1",
+          event_seq: 10,
+          delivery: { status: "delivery-uncertain", error_code: "inject_ambiguous" },
+        },
+        { message_id: "held-2", event_seq: 11, delivery: { status: "needs-attention" } }
+      ),
+    });
+    expect(project(handledAnswer, new Map([[qid(1), 2]])).stall).toEqual({
+      answerRevision: null,
+      followUpIds: ["held-1", "held-2"],
+      reason: "inject_ambiguous",
+    });
+    // Free text never passes for a code.
+    expect(
+      project(
+        row(1, {
+          local_status: "human-answered",
+          delivery_status: "needs-attention",
+          error_code: `free text ${SECRET}`,
+          answers_json: answers({}),
+        })
+      ).stall?.reason
+    ).toBe("unspecified");
   });
 });

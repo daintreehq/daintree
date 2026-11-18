@@ -11,7 +11,8 @@ const LazyDecisionQuestionDialog = lazy(() =>
 interface DecisionQuestionHostProps {
   /**
    * Opens the questions main sends this view, from a click on a question's
-   * desktop notification (#17232). Only the app's views take them.
+   * desktop notification (#17232) or a follow-up's (#17235). Only the app's
+   * views take them.
    */
   followsOpenRequests?: boolean;
 }
@@ -26,8 +27,8 @@ export function DecisionQuestionHost({ followsOpenRequests = false }: DecisionQu
   const shouldMount = useKeepMounted(isOpen);
   useEffect(() => {
     if (!followsOpenRequests) return;
-    return decisionsClient.onOpenQuestion((reference) =>
-      useDecisionsQuestionViewStore.getState().openReference([reference], reference)
+    return decisionsClient.onOpenQuestion((reference, messageId) =>
+      useDecisionsQuestionViewStore.getState().openReference([reference], reference, messageId)
     );
   }, [followsOpenRequests]);
   return (

@@ -736,6 +736,8 @@ describe("decisions IPC", () => {
           expiresAt: null,
           settledAt: null,
           standing: { kind: "waiting", reason: "open" },
+          replyRequest: null,
+          stall: null,
         },
       ]);
       // Whatever the switch reads now: the list is what Decisions last installed.

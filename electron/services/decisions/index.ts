@@ -27,6 +27,7 @@ import {
   setDecisionQuestions,
 } from "../decisionsQuestionList.js";
 import { QuestionNotifier, type QuestionNotifications } from "./questionNotifications.js";
+import { ThreadNotifier } from "./threadNotifications.js";
 import type { MetaStore } from "./attentionList.js";
 import type { agentNotificationService } from "../AgentNotificationService.js";
 import {
@@ -374,33 +375,57 @@ function publishQuestions(questions: readonly DecisionQuestionListItem[]): void 
 }
 
 /**
- * Desktop notifications for the questions agents ask (#17232), from the list
- * every window here reads, so a Remote Host's questions notify once they are
- * listed too. Raised by the agent notification service, which owns this
- * computer's notification settings and sounds: loaded on demand, since
- * Decisions can start before the startup task that loads it has run.
+ * Desktop notifications for the questions agents ask (#17232), and for the
+ * follow-ups that want a reply and the answers delivery stops on (#17235),
+ * from the list every window here reads, so a Remote Host's questions notify
+ * once they are listed too. Raised by the agent notification service, which
+ * owns this computer's notification settings and sounds: loaded on demand,
+ * since Decisions can start before the startup task that loads it has run.
  */
 function notifyQuestions(store: MetaStore): QuestionNotifications {
   let presenter: typeof agentNotificationService | null = null;
-  const notifier = new QuestionNotifier({
+  const questions = { get: getDecisionQuestionList, onChange: onDecisionQuestionsChanged };
+  const readOpeningLine = async (reference: DecisionQuestionReference) => {
+    const read = await getDecisionQuestionSummariesByReference({ references: [reference] });
+    const summary = read.result === "read" ? read.summaries[0] : undefined;
+    return summary?.result === "read" ? summary.line : null;
+  };
+  const prepare = async (reference: DecisionQuestionReference) => {
+    presenter ??= (await import("../AgentNotificationService.js")).agentNotificationService;
+    await presenter.prepareDecisionQuestion(reference.projectId);
+  };
+  const notificationsOn = (projectId: string) =>
+    presenter?.decisionQuestionNotificationsOn(projectId) ?? false;
+  const close = (key: string) => presenter?.closeDecisionQuestion(key);
+  const asked = new QuestionNotifier({
     store,
-    questions: { get: getDecisionQuestionList, onChange: onDecisionQuestionsChanged },
-    readOpeningLine: async (reference) => {
-      const read = await getDecisionQuestionSummariesByReference({ references: [reference] });
-      const summary = read.result === "read" ? read.summaries[0] : undefined;
-      return summary?.result === "read" ? summary.line : null;
-    },
-    prepare: async (reference) => {
-      presenter ??= (await import("../AgentNotificationService.js")).agentNotificationService;
-      await presenter.prepareDecisionQuestion(reference.projectId);
-    },
-    notificationsOn: (projectId) => presenter?.decisionQuestionNotificationsOn(projectId) ?? false,
+    questions,
+    readOpeningLine,
+    prepare,
+    notificationsOn,
     show: (question, openingLine, key) =>
       presenter?.notifyDecisionQuestion(question, openingLine, key),
-    close: (key) => presenter?.closeDecisionQuestion(key),
+    close,
   });
-  void notifier.start();
-  return notifier;
+  const thread = new ThreadNotifier({
+    store,
+    questions,
+    readOpeningLine,
+    prepare,
+    notificationsOn,
+    showReply: (question, openingLine, key) =>
+      presenter?.notifyDecisionReply(question, openingLine, key),
+    showStall: (question, key) => presenter?.notifyDecisionStall(question, key),
+    close,
+  });
+  void asked.start();
+  void thread.start();
+  return {
+    stop: () => {
+      asked.stop();
+      thread.stop();
+    },
+  };
 }
 
 /**

@@ -38,6 +38,10 @@ import type {
   DecisionQuestionList,
   DecisionQuestionListItem,
 } from "../../shared/types/decisionsQuestion.js";
+import {
+  deliveryReasonText,
+  deliverySubject,
+} from "../../shared/utils/decisionsDeliveryReasons.js";
 
 /** A view on a remote Shell owns it: that Shell presents it, sound included. */
 function isRemoteNotificationOwner(
@@ -48,6 +52,23 @@ function isRemoteNotificationOwner(
 
 function decisionQuestionReplaceKey(key: string): string {
   return `decisions-question:${key}`;
+}
+
+/** Who asked a Decisions question, and where, as its notifications name them. */
+function decisionQuestionSource(question: DecisionQuestionListItem): {
+  agent: string | undefined;
+  project: string | undefined;
+} {
+  const registry = getEffectiveRegistry();
+  return {
+    // The kind is the store's, so `constructor` must not reach Object's.
+    agent: Object.hasOwn(registry, question.agentKind)
+      ? registry[question.agentKind]?.name?.trim() || undefined
+      : undefined,
+    project:
+      question.projectLabel ??
+      projectStore.getProjectById(question.reference.projectId)?.name?.trim(),
+  };
 }
 
 const COMPLETION_DEBOUNCE_MS = 2000;
@@ -1386,9 +1407,9 @@ class AgentNotificationService {
     const settings = projectStore.getEffectiveNotificationSettings(reference.projectId);
     if (settings.enabled === false) return;
     this.playNotificationSound(settings.soundEnabled, settings.waitingSoundFile);
-    const agent = getEffectiveRegistry()[question.agentKind]?.name?.trim() || "An agent";
-    const project =
-      question.projectLabel ?? projectStore.getProjectById(reference.projectId)?.name?.trim();
+    const source = decisionQuestionSource(question);
+    const agent = source.agent ?? "An agent";
+    const { project } = source;
     notificationService.showNativeNotification(
       project ? `Question from ${agent} in ${project}` : `Question from ${agent}`,
       openingLine ?? "Open it to read what was asked.",
@@ -1401,7 +1422,74 @@ class AgentNotificationService {
     );
   }
 
-  /** Takes down a question's notification once it no longer waits for the person. */
+  /**
+   * An agent's follow-up on an answered Decisions question asks the person
+   * for a reply (#17235): one native notification naming the agent and the
+   * question's opening line, under the same settings as a question's own. A
+   * click opens the question at that follow-up.
+   */
+  notifyDecisionReply(
+    question: DecisionQuestionListItem,
+    openingLine: string | null,
+    key: string
+  ): void {
+    const { reference, replyRequest } = question;
+    if (replyRequest === null) return;
+    const settings = projectStore.getEffectiveNotificationSettings(reference.projectId);
+    if (settings.enabled === false) return;
+    this.playNotificationSound(settings.soundEnabled, settings.waitingSoundFile);
+    const source = decisionQuestionSource(question);
+    const agent = source.agent ?? "An agent";
+    const { project } = source;
+    notificationService.showNativeNotification(
+      project ? `${agent} in ${project} wants a reply` : `${agent} wants a reply`,
+      openingLine ?? "Open the question to read the follow-up.",
+      {
+        silent: true,
+        category: "waiting",
+        replaceKey: decisionQuestionReplaceKey(key),
+        onClick: () => notificationService.openDecisionQuestion(reference, replyRequest),
+      }
+    );
+  }
+
+  /**
+   * Delivery stopped on a Decisions answer, or a follow-up after it, and a
+   * person decides what happens to it (#17235): one native notification
+   * giving the reason in the words the list of answers needing attention
+   * uses, under the same settings as a question's own. A click opens that list.
+   */
+  notifyDecisionStall(question: DecisionQuestionListItem, key: string): void {
+    const { reference, stall, standing } = question;
+    if (stall === null) return;
+    const settings = projectStore.getEffectiveNotificationSettings(reference.projectId);
+    if (settings.enabled === false) return;
+    this.playNotificationSound(settings.soundEnabled, settings.waitingSoundFile);
+    const { agent, project } = decisionQuestionSource(question);
+    const subject = deliverySubject(stall.answerRevision !== null, stall.followUpIds.length);
+    const plural = subject !== "answer" && subject !== "follow-up";
+    const uncertain =
+      standing.kind === "needs-attention" && standing.deliveryStatus === "delivery-uncertain";
+    const what =
+      `${subject.charAt(0).toUpperCase()}${subject.slice(1)}` +
+      (agent ? ` to ${agent}` : "") +
+      (project ? ` in ${project}` : "");
+    notificationService.showNativeNotification(
+      uncertain
+        ? `${what} may or may not have been delivered`
+        : `${what} ${plural ? "need" : "needs"} attention`,
+      deliveryReasonText(stall.reason, subject) ??
+        `Daintree won't type ${plural ? "them" : "it"} in on its own.`,
+      {
+        silent: true,
+        category: "waiting",
+        replaceKey: decisionQuestionReplaceKey(key),
+        onClick: () => notificationService.openDecisionAttention(reference),
+      }
+    );
+  }
+
+  /** Takes down a Decisions notification once what it said no longer holds. */
   closeDecisionQuestion(key: string): void {
     notificationService.closeNotificationByKey(decisionQuestionReplaceKey(key));
   }

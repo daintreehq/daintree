@@ -71,6 +71,25 @@ describe("decisionsQuestionViewStore", () => {
     expect(store.getState().request?.index).toBe(2);
   });
 
+  it("opens at a follow-up in the chosen question's thread, and drops it on a step (#17235)", () => {
+    const store = useDecisionsQuestionViewStore;
+    store.getState().openReference([ref("a"), ref("b")], ref("a"), "ask-1");
+    expect(store.getState().request?.threadMessageId).toBe("ask-1");
+
+    store.getState().step(1);
+    expect(store.getState().request).toEqual({
+      questions: [
+        { scope: "reference", reference: ref("a") },
+        { scope: "reference", reference: ref("b") },
+      ],
+      index: 1,
+    });
+
+    // An ordinary open names none.
+    store.getState().openReference([ref("a")], ref("a"));
+    expect(store.getState().request).not.toHaveProperty("threadMessageId");
+  });
+
   it("matches a reference by everything it names, not its question id alone", () => {
     const store = useDecisionsQuestionViewStore;
     const listed = ref("a");
