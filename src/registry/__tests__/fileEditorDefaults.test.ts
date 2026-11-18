@@ -269,8 +269,13 @@ describe("currentFileViewerClaim (#17336)", () => {
 
   function viewer(pluginId: string, claim: { extensions?: string[]; paths?: string[] }) {
     const view = editorView(pluginId, [{ id: "table", paths: claim.paths ?? [], mode: "view" }]);
-    view.fileEditors![0]!.extensions.push(...(claim.extensions ?? []));
-    return view;
+    return {
+      ...view,
+      fileEditors: view.fileEditors!.map((editor) => ({
+        ...editor,
+        extensions: claim.extensions ?? [],
+      })),
+    };
   }
 
   it("says nothing until the hosted views have loaded", () => {
