@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useLayoutEffect } from "react";
 import { renderHook, act } from "@testing-library/react";
 import { beforeEach, afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { useFindInPage } from "../useFindInPage";
@@ -36,6 +37,12 @@ afterEach(() => {
   setFindOpenMock.mockClear();
   focusWebviewPageMock.mockClear();
 });
+
+function isShortcutListener(
+  value: unknown
+): value is (payload: { panelId: string; shortcut: string }) => void {
+  return typeof value === "function";
+}
 
 interface MockWebview {
   findInPage: Mock;
@@ -377,6 +384,7 @@ describe("useFindInPage", () => {
 
     expect(result.current.activeMatch).toBe(0);
     expect(result.current.matchCount).toBe(0);
+    expect(result.current.isPending).toBe(true);
   });
 
   it("restarts find on did-navigate-in-page when find bar is open", () => {
@@ -404,6 +412,11 @@ describe("useFindInPage", () => {
 
     act(() => result.current.open());
     act(() => result.current.setQuery("test"));
+    act(() => {
+      webview._emit("found-in-page", {
+        result: { requestId: 1, activeMatchOrdinal: 1, matches: 4, finalUpdate: true },
+      });
+    });
     webview.findInPage.mockClear();
 
     act(() => {
@@ -414,6 +427,8 @@ describe("useFindInPage", () => {
     });
 
     expect(webview.findInPage).not.toHaveBeenCalled();
+    expect(result.current.matchCount).toBe(4);
+    expect(result.current.isPending).toBe(false);
   });
 
   it("handles IPC next and prev shortcuts", () => {
@@ -922,6 +937,7 @@ describe("useFindInPage", () => {
 
     rerender({ ready: false });
     expect(result.current.matchCount).toBe(0);
+    expect(result.current.isPending).toBe(true);
     act(() => {
       webview._emit("found-in-page", {
         result: { requestId: 1, activeMatchOrdinal: 1, matches: 3, finalUpdate: true },
@@ -937,6 +953,7 @@ describe("useFindInPage", () => {
       });
     });
     expect(result.current.matchCount).toBe(5);
+    expect(result.current.isPending).toBe(false);
   });
 });
 
@@ -1037,5 +1054,295 @@ describe("useFindInPage against Electron's find sessions", () => {
     });
     expect(result.current.activeMatch).toBe(1);
     expect(result.current.matchCount).toBe(4);
+  });
+
+  it("holds a query's count back until the page has answered that query", () => {
+    const { webview, flush } = createSessionWebview((text) => (text === "FIND" ? 3 : 0));
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("FIND"));
+    // Asked but not answered: neither a miss nor a count yet.
+    expect(result.current.matchCount).toBe(0);
+    expect(result.current.isPending).toBe(true);
+    flush();
+    expect(result.current.isPending).toBe(false);
+    expect(result.current.matchCount).toBe(3);
+
+    act(() => result.current.setQuery("OTHER"));
+    expect(webview.findInPage).toHaveBeenLastCalledWith("OTHER", {
+      findNext: true,
+      matchCase: false,
+    });
+    // The last query's count says nothing about this one.
+    expect(result.current.matchCount).toBe(0);
+    expect(result.current.activeMatch).toBe(0);
+    expect(result.current.isPending).toBe(true);
+    flush();
+    expect(result.current.isPending).toBe(false);
+    expect(result.current.matchCount).toBe(0);
+  });
+
+  it("holds the count back after a reopen until the page answers again", () => {
+    const { webview, flush } = createSessionWebview(() => 3);
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("FIND"));
+    flush();
+    act(() => result.current.close());
+    act(() => result.current.open());
+
+    expect(result.current.matchCount).toBe(0);
+    expect(result.current.isPending).toBe(true);
+    flush();
+    expect(result.current.isPending).toBe(false);
+    expect(result.current.matchCount).toBe(3);
+  });
+
+  it("holds the count back after a match case toggle until the page answers it", () => {
+    const { webview, flush } = createSessionWebview((_text, matchCase) => (matchCase ? 1 : 4));
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("Find"));
+    flush();
+    expect(result.current.matchCount).toBe(4);
+
+    act(() => result.current.toggleMatchCase());
+    expect(result.current.matchCount).toBe(0);
+    expect(result.current.isPending).toBe(true);
+    flush();
+    expect(result.current.isPending).toBe(false);
+    expect(result.current.matchCount).toBe(1);
+  });
+
+  it("holds the count back while an IME composition edits the query", () => {
+    const { webview, flush } = createSessionWebview(() => 3);
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("FIND"));
+    flush();
+    webview.findInPage.mockClear();
+
+    result.current.isComposingRef.current = true;
+    act(() => result.current.setQuery("FINDか"));
+
+    expect(webview.findInPage).not.toHaveBeenCalled();
+    expect(result.current.matchCount).toBe(0);
+    expect(result.current.isPending).toBe(true);
+  });
+
+  it("drops a late reply to the last query when the page could not be asked the new one", () => {
+    const { webview, flush } = createSessionWebview(() => 3);
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("FIND"));
+    webview.findInPage.mockImplementationOnce(() => {
+      throw new Error("webview detached");
+    });
+    act(() => result.current.setQuery("OTHER"));
+    flush();
+
+    expect(result.current.matchCount).toBe(0);
+    expect(result.current.isPending).toBe(true);
+  });
+
+  it("holds the count back after an in-page navigation until the page answers again", () => {
+    const { webview, flush } = createSessionWebview(() => 3);
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("FIND"));
+    flush();
+    expect(result.current.matchCount).toBe(3);
+
+    act(() => {
+      webview._emit("did-navigate-in-page", { isMainFrame: true });
+    });
+    // The document may have changed under the same query.
+    expect(result.current.matchCount).toBe(0);
+    expect(result.current.isPending).toBe(true);
+    flush();
+    expect(result.current.isPending).toBe(false);
+    expect(result.current.matchCount).toBe(3);
+  });
+
+  it("searches again when a new document loads under an open query", () => {
+    // Also how a DOM move of the <webview> shows: a new guest under the same
+    // element, which stays ready throughout.
+    let matches = 3;
+    const { webview, flush } = createSessionWebview(() => matches);
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("FIND"));
+    flush();
+    expect(result.current.matchCount).toBe(3);
+
+    matches = 5;
+    act(() => webview._emit("dom-ready", {}));
+    expect(webview.findInPage).toHaveBeenLastCalledWith("FIND", {
+      findNext: true,
+      matchCase: false,
+    });
+    expect(result.current.matchCount).toBe(0);
+    expect(result.current.isPending).toBe(true);
+    flush();
+    expect(result.current.matchCount).toBe(5);
+  });
+
+  it("drops a replaced webview's count from the first render and ignores its late replies", () => {
+    const a = createSessionWebview(() => 4);
+    const b = createSessionWebview(() => 2);
+    const renders: Array<{ webview: Electron.WebviewTag; snapshot: Record<string, unknown> }> = [];
+    const { result, rerender } = renderHook(
+      ({ webview }) => {
+        const state = useFindInPage("panel-1", webview, true, true);
+        const { activeMatch, matchCount, isPending } = state;
+        renders.push({ webview, snapshot: { activeMatch, matchCount, isPending } });
+        return state;
+      },
+      { initialProps: { webview: a.webview as Electron.WebviewTag } }
+    );
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("FIND"));
+    a.flush();
+    expect(result.current.matchCount).toBe(4);
+
+    rerender({ webview: b.webview });
+    const firstOnB = renders.find((r) => r.webview === b.webview);
+    expect(firstOnB?.snapshot).toEqual({ activeMatch: 0, matchCount: 0, isPending: true });
+
+    // Under the very id B's search holds, so only a detached listener keeps it out.
+    act(() => {
+      a.webview._emit("found-in-page", {
+        result: { requestId: 1, activeMatchOrdinal: 1, matches: 9, finalUpdate: true },
+      });
+    });
+    expect(result.current.matchCount).toBe(0);
+    expect(result.current.isPending).toBe(true);
+    b.flush();
+    expect(result.current.matchCount).toBe(2);
+  });
+
+  it("drops the count from the first render once the webview stops being ready", () => {
+    const { webview, flush } = createSessionWebview(() => 3);
+    const renders: Array<{ ready: boolean; matchCount: number }> = [];
+    const { result, rerender } = renderHook(
+      ({ ready }) => {
+        const state = useFindInPage("panel-1", webview, ready, true);
+        renders.push({ ready, matchCount: state.matchCount });
+        return state;
+      },
+      { initialProps: { ready: true } }
+    );
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("FIND"));
+    flush();
+    expect(result.current.matchCount).toBe(3);
+
+    rerender({ ready: false });
+    expect(renders.find((r) => !r.ready)?.matchCount).toBe(0);
+  });
+
+  it("starts a search when Next or Previous lands before the page was asked anything", () => {
+    const { webview, flush } = createSessionWebview(() => 3);
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    result.current.isComposingRef.current = true;
+    act(() => result.current.setQuery("FIND"));
+    expect(webview.findInPage).not.toHaveBeenCalled();
+
+    // Forwarded from the guest. A step with no session open is never answered.
+    act(() => result.current.goPrev());
+    expect(webview.findInPage).toHaveBeenCalledTimes(1);
+    expect(webview.findInPage).toHaveBeenLastCalledWith("FIND", {
+      forward: false,
+      findNext: true,
+      matchCase: false,
+    });
+    flush();
+    expect(result.current.matchCount).toBe(3);
+    expect(result.current.isPending).toBe(false);
+  });
+
+  it("lets typing that overtakes the ready resume keep its own search", () => {
+    const { webview, flush } = createSessionWebview((text) => (text === "foo" ? 3 : 1));
+    const { result, rerender } = renderHook(
+      ({ ready }) => {
+        const state = useFindInPage("panel-1", webview, ready, true);
+        const { setQuery } = state;
+        // A keystroke landing after the ready commit, before its resume effect,
+        // whose render still holds the older "foo".
+        useLayoutEffect(() => {
+          if (ready) setQuery("food");
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [ready]);
+        return state;
+      },
+      { initialProps: { ready: false } }
+    );
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("foo"));
+    rerender({ ready: true });
+
+    expect(webview.findInPage.mock.calls.map(([text]) => text)).toEqual(["food"]);
+    flush();
+    expect(result.current.query).toBe("food");
+    expect(result.current.matchCount).toBe(1);
+    expect(result.current.isPending).toBe(false);
+  });
+
+  it("searches on reopen after a guest step slipped in as the bar closed", () => {
+    const { webview, flush } = createSessionWebview(() => 3);
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+    act(() => result.current.open());
+    act(() => result.current.setQuery("FIND"));
+    flush();
+    const openBarShortcut = onFindShortcutMock.mock.calls.at(-1)?.[0];
+    if (!isShortcutListener(openBarShortcut)) throw new Error("no shortcut listener");
+
+    act(() => {
+      result.current.close();
+      openBarShortcut({ panelId: "panel-1", shortcut: "next" });
+    });
+    flush();
+    expect(webview.stopFindInPage).toHaveBeenCalledTimes(2);
+
+    act(() => result.current.open());
+    flush();
+    expect(result.current.matchCount).toBe(3);
+  });
+
+  it("is not pending once the query is emptied, and drops replies still in flight", () => {
+    const { webview, flush } = createSessionWebview(() => 3);
+    let renders = 0;
+    const { result } = renderHook(() => {
+      renders++;
+      return useFindInPage("panel-1", webview, true, true);
+    });
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("FIND"));
+    flush();
+    act(() => result.current.goNext());
+
+    act(() => result.current.setQuery(""));
+    expect(result.current.isPending).toBe(false);
+    expect(result.current.matchCount).toBe(0);
+    const rendersBeforeReply = renders;
+    flush();
+    // Taken into state, the reply would re-render even with nothing to show.
+    expect(renders).toBe(rendersBeforeReply);
+    expect(result.current.isPending).toBe(false);
+    expect(result.current.matchCount).toBe(0);
+    expect(result.current.activeMatch).toBe(0);
   });
 });

@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useEffect, useId } from "react";
 import { ChevronUp, ChevronDown, X } from "lucide-react";
 import {
   FIND_BAR_CLASS,
@@ -21,6 +21,7 @@ export function FindBar({ find }: FindBarProps) {
     query,
     activeMatch,
     matchCount,
+    isPending,
     matchCase,
     inputRef,
     isComposingRef,
@@ -31,6 +32,15 @@ export function FindBar({ find }: FindBarProps) {
     toggleMatchCase,
   } = find;
   const counterId = useId();
+
+  // A composition ends with its field. Unmounted mid-composition (a dev preview
+  // swapping in its empty state keeps Find open), the field never sees
+  // compositionend, and the flag would keep every later keystroke from searching.
+  useEffect(() => {
+    return () => {
+      isComposingRef.current = false;
+    };
+  }, [isComposingRef]);
 
   // Enter and Cmd/Ctrl+G belong to the field; Escape closes from anywhere in the
   // bar, as in the terminal's find bar.
@@ -56,12 +66,11 @@ export function FindBar({ find }: FindBarProps) {
   };
 
   const hasQuery = query.length > 0;
-  const noResults = hasQuery && matchCount === 0;
-  const countText = !hasQuery
-    ? ""
-    : matchCount > 0
-      ? `${activeMatch} of ${matchCount}`
-      : "No matches";
+  // Until the page answers this query there is nothing to report: a count
+  // would be another search's, and "No matches" a guess.
+  const noResults = hasQuery && !isPending && matchCount === 0;
+  const countText =
+    !hasQuery || isPending ? "" : matchCount > 0 ? `${activeMatch} of ${matchCount}` : "No matches";
 
   return (
     // `z-40`: above a dev preview tool drawer floating over the page (`z-30`),
