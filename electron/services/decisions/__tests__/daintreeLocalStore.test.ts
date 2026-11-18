@@ -295,28 +295,30 @@ describe("DaintreeLocalStore", () => {
     const store = new DaintreeLocalStore(sqlite);
     const unlinked = (over: Partial<QuestionOrigin>) =>
       origin({ agent_kind: "codex", agent_session_id: null, ...over });
-    await store.commitNewQuestion(row("linked", 1), item("o1", "linked"));
-    await store.commitNewQuestion(row("open", 2, { origin: unlinked({}) }), item("o2", "open"));
+    await store.commitNewQuestion(
+      row("open", 1, { origin: unlinked({}), local_status: "open" }),
+      item("o1", "open")
+    );
     // A delivered question still counts: a correction can reopen it after its pane is gone.
     await store.commitNewQuestion(
-      row("delivered", 3, {
+      row("delivered", 2, {
         origin: unlinked({ agent_kind: "claude" }),
-        local_status: "answered",
+        local_status: "human-answered",
         delivery_status: "terminal-delivered",
       }),
-      item("o3", "delivered")
+      item("o2", "delivered")
     );
     await store.commitNewQuestion(
-      row("empty", 4, { origin: unlinked({ agent_session_id: "" }) }),
-      item("o4", "empty")
+      row("empty", 3, { origin: unlinked({ agent_session_id: "" }) }),
+      item("o3", "empty")
     );
     await store.commitNewQuestion(
-      row("remote", 5, { origin: unlinked({ host_id: "host-remote" }) }),
-      item("o5", "remote")
+      row("remote", 4, { origin: unlinked({ host_id: "host-remote" }) }),
+      item("o4", "remote")
     );
     await store.commitNewQuestion(
-      row("gemini", 6, { origin: unlinked({ agent_kind: "gemini" }) }),
-      item("o6", "gemini")
+      row("gemini", 5, { origin: unlinked({ agent_kind: "gemini" }) }),
+      item("o5", "gemini")
     );
     const columns = (
       sqlite.prepare("SELECT name FROM pragma_table_info('decisions_questions')").all() as {
@@ -325,18 +327,22 @@ describe("DaintreeLocalStore", () => {
     )
       .map((c) => c.name)
       .filter((name) => name !== "question_id" && name !== "alias");
-    // Ten thousand linked questions that wouldn't even decode: reading one would throw.
     sqlite
       .prepare(
         `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10000)
          INSERT INTO decisions_questions (question_id, alias, ${columns.join(", ")})
          SELECT 'history-' || i, 100 + i, ${columns.join(", ")} FROM n, decisions_questions
-         WHERE question_id = 'linked'`
+         WHERE question_id = 'open'`
       )
       .run();
+    // Statistics taken while all of them still waited for a session, so they
+    // overstate the index by ten thousand rows once those are linked.
+    sqlite.exec("ANALYZE");
+    // Linked, and unable even to decode: reading one would throw.
     sqlite
       .prepare(
-        "UPDATE decisions_questions SET attachment_digests = 'not json' WHERE question_id LIKE 'history-%'"
+        `UPDATE decisions_questions SET agent_session_id = 'session-' || alias,
+           attachment_digests = 'not json' WHERE question_id LIKE 'history-%'`
       )
       .run();
 
@@ -356,20 +362,33 @@ describe("DaintreeLocalStore", () => {
       return statement;
     }) as typeof sqlite.prepare);
 
-    const found = await store.listSessionlessQuestions("host-local", ["claude", "codex"]);
-    expect(found.map((q) => q.question_id)).toEqual(["open", "delivered", "empty"]);
+    const ids = async (hostId: string, kinds: string[]) =>
+      (await store.listSessionlessQuestions(hostId, kinds)).map((q) => q.question_id);
+    expect(await ids("host-local", ["claude", "codex"])).toEqual(["open", "delivered", "empty"]);
     expect(materialized).toBe(3);
-    expect(await store.listSessionlessQuestions("host-local", [])).toEqual([]);
-
+    expect(await ids("host-local", [])).toEqual([]);
     expect(prepared).toHaveLength(1);
     const plan = (
-      prepare(`EXPLAIN QUERY PLAN ${prepared[0]}`).all("host-local", "claude", "codex") as {
+      prepare(`EXPLAIN QUERY PLAN ${prepared[0]}`).all("host-local") as {
         detail: string;
       }[]
     )
       .map((step) => step.detail)
       .join("\n");
-    expect(plan).toContain("USING INDEX decisions_questions_missing_session_idx");
+    expect(plan).toContain(
+      "USING INDEX decisions_questions_missing_session_idx (origin_host_id=?)"
+    );
+    expect(plan).not.toContain("TEMP B-TREE");
+
+    expect(await ids("host-local", ["codex", "claude", "codex"])).toEqual([
+      "open",
+      "delivered",
+      "empty",
+    ]);
+    expect(prepared).toHaveLength(1);
+    expect(await ids("host-remote", ["codex"])).toEqual(["remote"]);
+    expect(await ids("host-local", ["gemini"])).toEqual(["gemini"]);
+    expect(await ids("host-local", ["it's"])).toEqual([]);
   });
 
   it("has a question on disk, visible to another connection, by the time its commit resolves", async () => {

@@ -1423,10 +1423,12 @@ describe("AnswerDelivery", () => {
         delivered_revision: 1,
       });
       let materialized = 0;
+      const lookups: string[] = [];
       const prepare = sqlite.prepare.bind(sqlite);
       vi.spyOn(sqlite, "prepare").mockImplementation(((source: string) => {
         const statement = prepare(source);
         if (!/FROM decisions_questions/.test(source)) return statement;
+        if (source.includes("agent_session_id IS NULL")) lookups.push(source);
         const all = statement.all.bind(statement);
         statement.all = ((...args: unknown[]) => {
           const rows = all(...args) as unknown[];
@@ -1451,6 +1453,12 @@ describe("AnswerDelivery", () => {
       );
       expect(materialized).toBe(1);
       expect(lists).not.toHaveBeenCalled();
+      // The agents delivery resumes are the ones the index holds: a roster change needs a migration.
+      expect(lookups).toHaveLength(1);
+      const plan = (prepare(`EXPLAIN QUERY PLAN ${lookups[0]}`).all(HOST) as { detail: string }[])
+        .map((step) => step.detail)
+        .join("\n");
+      expect(plan).toContain("USING INDEX decisions_questions_missing_session_idx");
       await stopped(h.delivery);
     });
 
