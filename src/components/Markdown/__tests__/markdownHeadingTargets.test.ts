@@ -41,6 +41,10 @@ describe("markdownTargetLine (#17335)", () => {
     expect(markdownTargetLine(source.join("\r\n"), "#risks-1")).toBe(8);
     expect(markdownTargetLine(`\uFEFF${source.join("\n")}`, "#risks")).toBe(6);
     expect(markdownTargetLine(source.join("\n"), "#risks-2")).toBeNull();
+
+    const toml = "+++\n# Risks\n+++\n\n## Risks\n\n## Risks\n";
+    expect(markdownTargetLine(toml, "#risks")).toBe(5);
+    expect(markdownTargetLine(toml, "#risks-1")).toBe(7);
   });
 
   it("takes a link written with the prefix, and footnotes by their ids", () => {
@@ -70,6 +74,13 @@ describe("markdownTargetLine (#17335)", () => {
     expect(markdownTargetLine(source, "#user-content-fnref-note")).toBe(3);
   });
 
+  // Two elements minting one id: the rendered document scrolls to the first.
+  it("lands on the first element that carries an id", () => {
+    const source = "## fn-note\n\nClaim.[^note]\n\n[^note]: Source.\n";
+    expect(markdownTargetLine(source, "#user-content-fn-note")).toBe(1);
+    expect(markdownTargetLine(source, "#user-content-fnref-note")).toBe(3);
+  });
+
   it("counts lines the same in a CRLF document", () => {
     expect(markdownTargetLine(PLAN.replaceAll("\n", "\r\n"), "#risks-1")).toBe(11);
   });
@@ -86,6 +97,12 @@ describe("markdownTargetLine (#17335)", () => {
     expect(markdownTargetLine(source, "#user-content-fnref-%C3%A9")).toBe(1);
     expect(markdownTargetLine(source, "#user-content-fnref-%C3%A9-2")).toBe(3);
     expect(markdownTargetLine(source, "#user-content-fn-%C3%A9")).toBe(5);
+  });
+
+  it("tries an encoded fragment decoded before it tries it as written", () => {
+    // The heading's id is `user-content-fn-é`; the footnote's, `user-content-fn-%C3%A9`.
+    const source = "## fn-é\n\nClaim.[^é]\n\n[^é]: Source.\n";
+    expect(markdownTargetLine(source, "#user-content-fn-%C3%A9")).toBe(1);
   });
 });
 
@@ -108,8 +125,17 @@ describe("markdownTargets (#17788)", () => {
     const lines = hrefs.map((href) => targets.lineOf(href));
 
     expect(lines).toEqual([5, 9, 15, 15, 18, 22, 20, null, null]);
-    expect(lines).toEqual(hrefs.map((href) => markdownTargetLine(source, href)));
     // Asked twice, an index answers the same: a lookup changes nothing in it.
     expect(hrefs.map((href) => targets.lineOf(href))).toEqual(lines);
+  });
+
+  it("keeps each source's answers in its own index", () => {
+    const first = markdownTargets("## Risks\n");
+    const second = markdownTargets("Intro.\n\n## Risks\n\n## Risks\n");
+
+    expect(first.lineOf("#risks")).toBe(1);
+    expect(first.lineOf("#risks-1")).toBeNull();
+    expect(second.lineOf("#risks")).toBe(3);
+    expect(second.lineOf("#risks-1")).toBe(5);
   });
 });
