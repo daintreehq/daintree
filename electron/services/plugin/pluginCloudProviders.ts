@@ -26,7 +26,7 @@ import { pluginCloudConsentFingerprint } from "./pluginCloudProviderConsent.js";
 
 export interface PluginCloudProviderDeclaration {
   readonly pluginId: string;
-  /** What the person knows the plugin as: its display name, or its id when it has none. */
+  /** What the person knows the plugin as (its display name, or its id when it has none), and what its accounts keep calling it once it's gone. */
   readonly pluginName: string;
   readonly providerId: CloudProviderId;
   readonly contribution: CloudProviderContribution;

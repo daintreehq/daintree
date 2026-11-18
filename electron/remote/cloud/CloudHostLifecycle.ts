@@ -627,6 +627,7 @@ export class CloudHostLifecycle {
           hostId: binding.hostId,
           providerId: binding.providerId,
           providerUnavailable: this.deps.accounts.providerUnavailable(binding.providerId),
+          pluginProvider: account?.pluginProvider ?? null,
           accountId: binding.accountId,
           accountName: account?.displayName ?? "Disconnected account",
           resourceId: binding.resourceId,
@@ -2022,7 +2023,9 @@ export class CloudHostLifecycle {
     options: { fresh?: boolean } = {}
   ): Promise<CloudSshRoute> {
     // A person's Retry asks again from scratch: the last observation and access may be stale.
-    if (options.fresh) {
+    // Without its provider nothing can ask again, and when it was last seen is all there is to go on.
+    const asked = options.fresh ? this.deps.store.binding(bindingId) : null;
+    if (asked && this.deps.accounts.providerUnavailable(asked.providerId) === null) {
       this.deps.store.updateBinding(bindingId, (current) => ({
         ...current,
         access: null,
@@ -2923,13 +2926,39 @@ export class CloudHostLifecycle {
         !binding.creation?.sentAt &&
         this.now() - binding.createdAt > 60_000;
       if (!stranded && (binding.hostId === null || listed.has(binding.hostId))) continue;
-      this.operations.get(binding.id)?.controller.abort();
-      // Its machine's own key goes with it, at the provider (#17361).
-      this.deps.store.removeBinding(binding.id);
-      this.renewals.delete(binding.id);
-      this.observedTicket.delete(binding.id);
-      void this.deps.machineKeys?.revokePending();
-      await this.deps.files.forget(this.deps.clientDir, binding.id).catch(() => {});
+      await this.dropBinding(binding.id);
+    }
+  }
+
+  private async dropBinding(bindingId: string): Promise<void> {
+    this.operations.get(bindingId)?.controller.abort();
+    // Its machine's own key goes with it, at the provider (#17361).
+    this.deps.store.removeBinding(bindingId);
+    this.renewals.delete(bindingId);
+    this.observedTicket.delete(bindingId);
+    void this.deps.machineKeys?.revokePending();
+    await this.deps.files.forget(this.deps.clientDir, bindingId).catch(() => {});
+  }
+
+  /** The host's name in the list, or null when it isn't listed. */
+  hostName(hostId: HostId): string | null {
+    return this.deps.hosts.get(hostId)?.name ?? null;
+  }
+
+  /**
+   * Removes every host bound to the account from this device, as Settings →
+   * Remove host does, and the bindings with them, including one whose host was
+   * never added (#17353). Their machines are untouched: whatever runs keeps
+   * running in the provider's account. Resolves once nothing here is bound to
+   * the account, so it can be removed.
+   */
+  async forgetAccountHosts(accountId: string): Promise<void> {
+    for (const binding of this.deps.store.bindings()) {
+      if (binding.accountId !== accountId) continue;
+      if (binding.hostId !== null && this.deps.hosts.get(binding.hostId)) {
+        await this.deps.hosts.forget(binding.hostId);
+      }
+      await this.dropBinding(binding.id);
     }
   }
 }

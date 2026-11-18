@@ -111,13 +111,19 @@ export function initCloudHosts(params: {
     pluginConsent: (providerId) => pluginProviders.consentSubject(providerId),
     // Allowed again: work waiting on its accounts resumes as if the provider came back.
     onConsentGranted: () => cloudHosts.providersChanged(),
+    pluginProviderLabel: (providerId) => pluginProviders.label(providerId),
   });
   const cloudHosts = new CloudHosts({
     accounts,
     store,
     emit: (snapshot) => params.emit({ type: "cloud-changed", snapshot }),
   });
-  const stopWatchingProviders = providers.onChange(() => cloudHosts.providersChanged());
+  // What a plugin's provider is called is kept with its accounts while it's registered, for when it isn't.
+  const stopWatchingProviders = providers.onChange(() => {
+    accounts.rememberPluginProviders();
+    cloudHosts.providersChanged();
+  });
+  accounts.rememberPluginProviders();
   // A plugin that failed to load, or finished loading, rewords its accounts' reasons;
   // with no plugin account there is nothing to reword.
   pluginStatusChanged = () => {

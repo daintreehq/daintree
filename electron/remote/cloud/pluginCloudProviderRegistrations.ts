@@ -1,4 +1,7 @@
-import type { CloudProviderId } from "../../../shared/types/cloudHosts.js";
+import type {
+  CloudPluginProviderLabel,
+  CloudProviderId,
+} from "../../../shared/types/cloudHosts.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   getPluginCloudProviderRuntime,
@@ -18,6 +21,8 @@ export interface PluginCloudProviderRegistrations {
   unavailableReason(providerId: CloudProviderId): string | null;
   /** What the person agrees to before a registered plugin provider gets credentials; null when it isn't registered. */
   consentSubject(providerId: CloudProviderId): PluginConsentSubject | null;
+  /** What a registered plugin provider is called and where its console is; null when it isn't registered. */
+  label(providerId: CloudProviderId): CloudPluginProviderLabel | null;
   dispose(): void;
 }
 
@@ -128,6 +133,16 @@ export function watchPluginCloudProviders(params: {
               entry.consentFingerprint === declaration.consentFingerprint
           )
           .map((entry) => entry.contribution.name),
+      };
+    },
+    label(providerId) {
+      const entry = registered.get(providerId);
+      if (!entry) return null;
+      const { pluginName, contribution } = entry.declaration;
+      return {
+        pluginName,
+        providerName: contribution.name,
+        dashboardUrl: contribution.dashboardUrl,
       };
     },
     dispose() {

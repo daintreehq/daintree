@@ -20,6 +20,17 @@ export function cloudProviderFor<P extends { id: string }>(
   return providers.find((provider) => provider.id === status.providerId) ?? null;
 }
 
+/**
+ * What a provider is called: the registered one's own name, else what its
+ * plugin's provider was last known as (#17353), else its id.
+ */
+export function cloudProviderName(
+  provider: Pick<CloudProviderInfo, "name"> | null,
+  subject: Pick<CloudHostStatus, "providerId" | "pluginProvider">
+): string {
+  return provider?.name ?? subject.pluginProvider?.providerName ?? subject.providerId;
+}
+
 /** Whether a stopped machine on this provider still bills for compute; false when it isn't known. */
 export function billsWhileStopped(provider: CloudProviderTerms | null): boolean {
   return provider?.capabilities.persistence.stoppedComputeBilled === true;
