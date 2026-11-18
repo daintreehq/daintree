@@ -322,6 +322,10 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       broker.resolve(event.requestId, event.terminal ?? null);
       return true;
 
+    case "terminal-status-fields":
+      broker.resolve(event.requestId, event.terminals ?? []);
+      return true;
+
     case "replay-history-result":
       broker.resolve(event.requestId, event.replayed ?? 0);
       return true;

@@ -124,6 +124,7 @@ import type {
   PtyHostDriveLease,
   FirstPromptCandidate,
   OwnedTypedInput,
+  PtyHostTerminalStatusFields,
 } from "../../shared/types/pty-host.js";
 import type {
   ClosedProcessKillResult,
@@ -2782,6 +2783,45 @@ export class PtyClient extends EventEmitter {
       }
       return null;
     });
+  }
+
+  /**
+   * The status fields a bulk status read needs, for many terminals at once
+   * (#17809): one request per owning shard rather than one full record read per
+   * id, and no native grid read on the host. Passing `submissionToken` also
+   * resolves that submission's record per terminal.
+   *
+   * An id missing from the map was not observed — its shard holds no record for
+   * it, or failed to answer in time — so a caller must not read its absence as
+   * "nothing to report". Never rejects.
+   */
+  async getTerminalStatusFieldsAsync(
+    ids: readonly string[],
+    submissionToken?: string
+  ): Promise<Map<string, PtyHostTerminalStatusFields>> {
+    const fields = new Map<string, PtyHostTerminalStatusFields>();
+    const unique = [...new Set(ids.filter((id) => typeof id === "string" && id !== ""))];
+    if (unique.length === 0) return fields;
+    await Promise.all(
+      [...this.groupByOwnerShard(unique)].map(async ([shard, shardIds]) => {
+        const terminals = await sendPtyHostRpc<PtyHostTerminalStatusFields[]>(
+          shard,
+          "terminal-status-fields",
+          (requestId) => ({
+            type: "get-terminal-status-fields",
+            ids: shardIds,
+            requestId,
+            ...(submissionToken !== undefined ? { submissionToken } : {}),
+          })
+        ).catch(() => [] as PtyHostTerminalStatusFields[]);
+        // Only what this shard was asked about counts as its answer.
+        const asked = new Set(shardIds);
+        for (const terminal of terminals) {
+          if (asked.has(terminal.id)) fields.set(terminal.id, terminal);
+        }
+      })
+    );
+    return fields;
   }
 
   /** Get available terminals (idle or waiting for user input), across all shards */

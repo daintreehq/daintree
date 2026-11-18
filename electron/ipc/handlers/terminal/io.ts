@@ -716,22 +716,20 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       });
     }
     const { uniqueIds, owned } = await resolveOwnedLookupIds(ctx, terminalIds);
-    const records = await Promise.all(
-      owned.map((id) => ptyClient.getTerminalAsync(id, submissionToken))
-    );
+    const records = await ptyClient.getTerminalStatusFieldsAsync(owned, submissionToken);
     const out: Record<string, TerminalSubmissionLookup> = {};
     // Unowned ids stay `unreadable` — true, and identical to what an id this
     // host never heard of gets.
     for (const id of uniqueIds) out[id] = { status: "unreadable" };
-    owned.forEach((id, index) => {
-      const info = records[index];
-      // `getTerminalAsync` folds an RPC failure into `null`, so a null record
-      // is genuinely "not observed" and must not become `absent`.
-      if (!info) return;
-      if (!isRecordOwnedBy(info, ctx)) return;
+    for (const id of owned) {
+      const info = records.get(id);
+      // A missing entry covers both a failed shard read and a terminal its
+      // shard no longer holds: genuinely "not observed", never `absent`.
+      if (!info) continue;
+      if (!isRecordOwnedBy(info, ctx)) continue;
       const record = info.submission;
       out[id] = record === undefined ? { status: "absent" } : { status: "found", record };
-    });
+    }
     return out;
   };
 
@@ -750,14 +748,14 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     terminalIds: string[]
   ): Promise<Record<string, TerminalOutputActivityLookup>> => {
     const { uniqueIds, owned } = await resolveOwnedLookupIds(ctx, terminalIds);
-    const records = await Promise.all(owned.map((id) => ptyClient.getTerminalAsync(id)));
+    const records = await ptyClient.getTerminalStatusFieldsAsync(owned);
     const out: Record<string, TerminalOutputActivityLookup> = {};
     for (const id of uniqueIds) out[id] = { status: "unreadable" };
-    owned.forEach((id, index) => {
-      const info = records[index];
-      // `getTerminalAsync` folds an RPC failure into `null`.
-      if (!info) return;
-      if (!isRecordOwnedBy(info, ctx)) return;
+    for (const id of owned) {
+      const info = records.get(id);
+      // A missing entry is a failed shard read or a terminal that is gone.
+      if (!info) continue;
+      if (!isRecordOwnedBy(info, ctx)) continue;
       // Projected independently: an input write with no screen change yet
       // must not hide behind an absent output timestamp.
       const lookup: TerminalOutputActivityLookup = { status: "read" };
@@ -766,7 +764,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       }
       if (info.lastTypedInputAt !== undefined) lookup.lastTypedInputAt = info.lastTypedInputAt;
       out[id] = lookup;
-    });
+    }
     return out;
   };
 
