@@ -54,11 +54,16 @@ import {
  */
 export interface HostUploadClient {
   uploadLocalFile(webContentsId: number, payload: UploadLocalFilePayload): Promise<UploadResult>;
+  /**
+   * The bytes are hashed once and that digest is sent on every attempt, so the
+   * caller hands them over: changing them afterwards fails the host's check.
+   */
   uploadBytes(webContentsId: number, payload: UploadBytesPayload): Promise<UploadResult>;
   /**
    * A pasted image, captured on this machine, into the host inbox's clipboard
    * folder. With the view's operation id it reports progress and can be
-   * cancelled like any other upload.
+   * cancelled like any other upload. Like {@link uploadBytes}, it takes
+   * ownership of `png`.
    */
   uploadClipboardImage(
     webContentsId: number,
@@ -731,17 +736,16 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
       if (payload.bytes.byteLength > Math.min(maxBytes, MAX_BYTES_PAYLOAD)) {
         throw tooLarge(payload.name, payload.hostId);
       }
-      const bytes = payload.bytes;
-      const digest = crypto.createHash("sha256").update(bytes).digest("hex");
-      const source = `bytes:${payload.name}:${digest}`;
+      // One digest serves the operation fingerprint and every attempt.
+      const transferSource = bytesTransferSource(payload.bytes);
       return run(
         webContentsId,
         payload.hostId,
         payload.opId,
-        source,
+        `bytes:${payload.name}:${transferSource.sha256}`,
         payload.name,
         destination,
-        async () => bytesTransferSource(bytes)
+        async () => transferSource
       );
     },
 
@@ -749,15 +753,15 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
       const operation = opId ?? `clipboard-${crypto.randomUUID()}`;
       validateCommon({ hostId, opId: operation, destination: CLIPBOARD_DESTINATION });
       requireBoundHost(webContentsId, hostId);
-      const digest = crypto.createHash("sha256").update(png).digest("hex");
+      const transferSource = bytesTransferSource(png);
       const result = await run(
         webContentsId,
         hostId,
         operation,
-        `clipboard:${digest}`,
+        `clipboard:${transferSource.sha256}`,
         "clipboard.png",
         CLIPBOARD_DESTINATION,
-        async () => bytesTransferSource(png)
+        async () => transferSource
       );
       return result.hostPath;
     },
