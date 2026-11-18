@@ -307,6 +307,29 @@ describe("CloudProvidersSection", () => {
     expect(screen.queryByRole("button", { name: /console/ })).toBeNull();
   });
 
+  it("treats an account paused for review as its provider still there, not gone", () => {
+    cloud.snapshot = {
+      providers: [pluginProvider(false, "fp-2")],
+      accounts: [
+        account({
+          providerUnavailable: "Paused",
+          pluginProvider: {
+            pluginName: "Acme Droplets",
+            providerName: "Droplets",
+            dashboardUrl: "https://cloud.example.com/droplets",
+          },
+          hostCount: 1,
+        }),
+      ],
+      hosts: [{ hostId: "host-1", accountId: "ca_0123456789" } as CloudHostStatus],
+    };
+    render(<CloudProvidersSection />);
+    expect(screen.getByRole("button", { name: "Review access for Team droplets" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Check Team droplets" })).toBeTruthy();
+    expect(screen.queryByRole("list", { name: "Machines on Team droplets" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /console/ })).toBeNull();
+  });
+
   it("lists no machines and links no console while the provider is there", () => {
     cloud.snapshot = {
       providers: [PLUGIN],

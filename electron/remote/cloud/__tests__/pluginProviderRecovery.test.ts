@@ -27,6 +27,8 @@ const { CloudHostStore } = await import("../CloudHostStore.js");
 const { CloudProviderRegistry } = await import("../CloudProviderRegistry.js");
 const { CloudSshFiles } = await import("../CloudSshFiles.js");
 const { watchPluginCloudProviders } = await import("../pluginCloudProviderRegistrations.js");
+const { pluginCloudConsentFingerprint } =
+  await import("../../../services/plugin/pluginCloudProviderConsent.js");
 
 const PLUGIN = "acme.clouds";
 const PROVIDER = "acme.clouds.ec2";
@@ -70,6 +72,17 @@ function contribution(): CloudProviderContribution {
       provisioning: { location: "none", image: "none", network: "none", sshKey: "at-create" },
       deletion: true,
     },
+  };
+}
+
+/** The consent connect keeps with a plugin's account (#17352), for the plugin as declared here. */
+function consent() {
+  return {
+    pluginId: PLUGIN,
+    fingerprint: pluginCloudConsentFingerprint([
+      { providerId: PROVIDER, contribution: contribution() },
+    ]),
+    approvedAt: NOW,
   };
 }
 
@@ -187,6 +200,8 @@ function runtime(options: { backend?: { value: unknown }; hosts?: HostDescriptor
     platform: "darwin",
     now: () => NOW,
     unavailableReason: (id) => watch.unavailableReason(id),
+    pluginConsent: (id) => watch.consentSubject(id),
+    onConsentGranted: () => cloudHosts?.providersChanged(),
     pluginProviderLabel: (id) => watch.label(id),
   });
   // The host list lives in its own store, so a restart finds the hosts it had.
@@ -237,6 +252,8 @@ function runtime(options: { backend?: { value: unknown }; hosts?: HostDescriptor
       bindPluginCloudProvider(PLUGIN, "ec2", impl as unknown as CloudProviderImpl);
     } else {
       withdrawPluginCloudProviders(PLUGIN);
+      // The installer purges the plugin's cloud consent on uninstall only (#17352).
+      if (state === "uninstalled") accounts.forgetPluginConsent(PLUGIN);
     }
   };
 
@@ -267,20 +284,23 @@ function runtime(options: { backend?: { value: unknown }; hosts?: HostDescriptor
  * on the account.
  */
 async function connectedWithHost(env: ReturnType<typeof runtime>) {
-  env.store.putAccount({
-    id: ACCOUNT,
-    providerId: PROVIDER,
-    displayName: "Work",
-    identity: "octocat",
-    scope: { kind: "personal", id: "personal", name: "Personal" },
-    apiUrl: "https://ec2.example.com",
-    keyHint: "0001",
-    credentialRevision: "rev-1",
-    addedAt: NOW,
-    validation: { status: "valid", checkedAt: NOW },
-    lastProvisioning: null,
-    pluginProvider: null,
-  });
+  env.store.putAccount(
+    {
+      id: ACCOUNT,
+      providerId: PROVIDER,
+      displayName: "Work",
+      identity: "octocat",
+      scope: { kind: "personal", id: "personal", name: "Personal" },
+      apiUrl: "https://ec2.example.com",
+      keyHint: "0001",
+      credentialRevision: "rev-1",
+      addedAt: NOW,
+      validation: { status: "valid", checkedAt: NOW },
+      lastProvisioning: null,
+      pluginProvider: null,
+    },
+    consent()
+  );
   await env.vault.put(ACCOUNT, CREDENTIALS);
   env.set("enabled");
   const { hostId } = await env.lifecycle.importMachine({
@@ -298,20 +318,23 @@ async function anotherAccount(
   displayName: string,
   providerId: string = PROVIDER
 ) {
-  env.store.putAccount({
-    id,
-    providerId,
-    displayName,
-    identity: null,
-    scope: { kind: "personal", id: "personal", name: "Personal" },
-    apiUrl: "https://ec2.example.com",
-    keyHint: null,
-    credentialRevision: "rev-1",
-    addedAt: NOW,
-    validation: { status: "valid", checkedAt: NOW },
-    lastProvisioning: null,
-    pluginProvider: null,
-  });
+  env.store.putAccount(
+    {
+      id,
+      providerId,
+      displayName,
+      identity: null,
+      scope: { kind: "personal", id: "personal", name: "Personal" },
+      apiUrl: "https://ec2.example.com",
+      keyHint: null,
+      credentialRevision: "rev-1",
+      addedAt: NOW,
+      validation: { status: "valid", checkedAt: NOW },
+      lastProvisioning: null,
+      pluginProvider: null,
+    },
+    consent()
+  );
   await env.vault.put(id, CREDENTIALS);
 }
 
@@ -417,6 +440,12 @@ describe("a plugin's cloud accounts and machines when the plugin goes", () => {
     // Kept: everything stays, credentials sealed, and a reinstall picks it all up.
     expect(await env.vault.get(ACCOUNT)).toEqual(CREDENTIALS);
     env.set("enabled");
+    // The uninstall forgot the consent (#17352): the reinstall asks again before it gets the credentials.
+    expect(env.accounts.summaries()[0]).toMatchObject({
+      id: ACCOUNT,
+      providerUnavailable: expect.stringContaining("Review its access"),
+    });
+    env.accounts.allowAccountProvider(ACCOUNT, consent().fingerprint);
     expect(env.accounts.summaries()[0]).toMatchObject({ id: ACCOUNT, providerUnavailable: null });
     expect(env.lifecycle.statuses()[0]).toMatchObject({ hostId, providerUnavailable: null });
     env.dispose();

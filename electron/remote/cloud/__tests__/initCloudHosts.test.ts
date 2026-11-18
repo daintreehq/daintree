@@ -12,6 +12,7 @@ import {
   publishPluginCloudProviders,
   withdrawPluginCloudProviders,
 } from "../../../services/plugin/pluginCloudProviders.js";
+import { pluginCloudConsentFingerprint } from "../../../services/plugin/pluginCloudProviderConsent.js";
 import type { CloudProviderContribution } from "../../../../shared/types/pluginCloudProvider.js";
 
 afterEach(() => clearPluginCloudProviders());
@@ -130,7 +131,21 @@ describe("initCloudHosts", () => {
   });
 
   it("starts with a plugin's provider already loaded even when its label can't be written", () => {
-    const stored = { version: 1, accounts: [pluginAccount()], bindings: [] };
+    // Kept with the consent connect stores beside it (#17352).
+    const stored = {
+      version: 1,
+      accounts: [pluginAccount()],
+      bindings: [],
+      providerConsents: [
+        {
+          pluginId: "acme.clouds",
+          fingerprint: pluginCloudConsentFingerprint([
+            { providerId: "acme.clouds.ec2", contribution: ec2() },
+          ]),
+          approvedAt: 1,
+        },
+      ],
+    };
     publishPluginCloudProviders("acme.clouds", [ec2()], "Acme Clouds");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const runtime = initCloudHosts({
