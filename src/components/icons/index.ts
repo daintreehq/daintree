@@ -65,18 +65,21 @@ export {
   HardDriveDownload, // a backup branch (backup/) — a stored snapshot, kept apart from archiving a project
   History, // resume closed session / session history
   Hourglass, // an environment reporting it is still coming up (starting, provisioning) — a shape beside the neutral status word, so the word keeps its contrast
+  Info, // a NOTE alert in rendered Markdown — GitHub's info glyph, the same shape the info severity wears through SEVERITY_GLYPH
   KeyRound, // forge credentials that stopped working — a key names what has to be fixed, and it shares a silhouette with nothing else here, so it survives forced colors
   Layers, // worktree overview (multiple worktrees, stacked)
   LayoutPanelTop, // workspace plugin category (panels, notes)
+  Lightbulb, // a TIP alert in rendered Markdown — GitHub's light bulb, kept apart from the success check mark, since a tip says nothing finished
   Link, // the toolbar's links launcher — the addresses saved with this project and the person's own
   Link2Off, // detach the issue linked to a worktree
   ListChecks, // bulk selection of forge rows — the preset picker that selects many issues or PRs at once — and a pull request's CI checks, the links launcher's `…` row that opens them
   MemoryStick, // a terminal host's own memory budget — the governor's app-wide output pause
   Menu, // the application menu, surfaced in-app where the native menu bar can't render
+  MessageSquareExclamationPoint, // an IMPORTANT alert in rendered Markdown — the nearest match to GitHub's report glyph
   Moon, // sleep a project — shut it down the way quitting does, restored on reopen
   Network, // Subagent tree — a parent session's spawned child sessions
   NotebookPen, // a terminal's Scratchpad — throwaway notes kept beside that one pane
-  OctagonAlert, // a severe caution that has not failed: a pane's CPU or memory in its red band, a Why slow? alert, a dangerous plugin capability, a destructive consequence — never a failure (that is XCircle), so the band survives forced colors as its own shape
+  OctagonAlert, // a severe caution that has not failed: a pane's CPU or memory in its red band, a Why slow? alert, a dangerous plugin capability, a destructive consequence — never a failure (that is XCircle), so the band survives forced colors as its own shape; also a CAUTION alert in rendered Markdown
   Package, // plugin (a packaged extension) — plugin tray, unresolved plugin glyphs
   PanelTop, // the app toolbar — the strip along the top of the window
   Paperclip, // attach files to a composer draft — the same references a drop or a paste inserts
@@ -103,7 +106,7 @@ export {
   Tag, // a worktree's colour label — the identity a user pins to a card, kept apart from Pin, which is its position
   Telescope, // Canopy: the long view out over every agent, read off its screen and laid out by what it needs from you — binoculars read clumsy at 16px, and both trees read as the notifications bell beside it
   Timer, // a scheduled run still open, timed since its terminal started — which says nothing about whether the agent is working
-  TriangleAlert, // a setting failing validation, a pane's CPU or memory in its amber band, or a request the app refused (a file reference with no agent to take it) — a shape, not a hue, so it survives forced colors
+  TriangleAlert, // a setting failing validation, a pane's CPU or memory in its amber band, or a request the app refused (a file reference with no agent to take it) — a shape, not a hue, so it survives forced colors; also a WARNING alert in rendered Markdown
   Unplug, // taking a link back — a terminal from an agent pane, or this device's link to a host, which stops nothing there; also detaching a project attachment (Cable) from the worktree holding it
   UserRound, // an agent's account — who it signs in as, chosen apart from its preset (#16040)
   Workflow, // terminal recipe / scripted command sequence

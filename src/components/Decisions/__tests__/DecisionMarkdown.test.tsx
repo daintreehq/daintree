@@ -84,3 +84,21 @@ describe("DecisionMarkdown", () => {
     expect(root.textContent).toContain("<img src=x onerror=alert(1)>");
   });
 });
+
+describe("DecisionMarkdown GitHub alerts (#17333)", () => {
+  it("draws an agent's alert as GitHub's titled box, without the marker", () => {
+    const root = rendered("> [!WARNING]\n> This drops the **old** table.\n\nProceed?");
+    const box = root.querySelector(".markdown-alert");
+    expect(box?.getAttribute("data-markdown-alert")).toBe("warning");
+    expect(box?.querySelector(".markdown-alert-title")?.textContent).toBe("Warning");
+    expect(box?.querySelector("strong")?.textContent).toBe("old");
+    expect(root.textContent).not.toContain("[!WARNING]");
+  });
+
+  it("keeps a link inside an alert as words with nothing to follow", () => {
+    const root = rendered("> [!NOTE]\n> See [the docs](https://example.com).");
+    expect(root.querySelector(".markdown-alert")).not.toBeNull();
+    expect(root.querySelector("a, [href]")).toBeNull();
+    expect(root.textContent).toContain("the docs");
+  });
+});

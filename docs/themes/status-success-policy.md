@@ -32,7 +32,7 @@ Two corollaries that are easy to get wrong:
 | Membership, category, decoration | Green means staged, attached, selected, or section identity | Demote |
 | Settled completion | Work has finished and is no longer asking for anything | Demote |
 
-Git additions, insertion counts, ahead arrows and patch lines are domain notation, not success chrome. They stay, and they are not part of the count.
+Git additions, insertion counts, ahead arrows and patch lines are domain notation, not success chrome. They stay, and they are not part of the count. So does the green of a TIP alert in rendered Markdown: its colour is the author's markup, drawn the way GitHub draws it, not a result Daintree reports.
 
 ### Transient confirmations
 

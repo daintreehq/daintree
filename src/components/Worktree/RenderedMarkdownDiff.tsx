@@ -10,7 +10,7 @@ import {
 } from "react";
 import ReactMarkdown from "react-markdown";
 import type { PluggableList } from "unified";
-import type { Nodes as HastNodes, RootContent as HastContent } from "hast";
+import type { Element as HastElement, Nodes as HastNodes, RootContent as HastContent } from "hast";
 import type { GitStatus } from "@shared/types/git";
 import {
   MarkdownImageCacheBust,
@@ -22,6 +22,7 @@ import {
   MARKDOWN_REMARK_PLUGINS,
 } from "@/components/Markdown/markdownRemarkPlugins";
 import { MarkdownTableLabelPrefix } from "@/components/Markdown/MarkdownTable";
+import { rehypeMarkdownAlerts } from "@/components/Markdown/markdownAlerts";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useScopedSelectAll } from "@/hooks/useScopedSelectAll";
 import { cn } from "@/lib/utils";
@@ -269,6 +270,25 @@ const RANGE_LABEL: Record<"added" | "removed", string> = {
   removed: "Deleted: ",
 };
 
+const INLINE_MARK_CLASS = "rendered-markdown-diff__inline";
+
+/** A revision mark `inlineRangePlugin` wrapped a changed range in. */
+function isRevisionMark(element: HastElement): boolean {
+  const className = element.properties.className;
+  return (
+    (element.tagName === "ins" || element.tagName === "del") &&
+    Array.isArray(className) &&
+    className.includes(INLINE_MARK_CLASS)
+  );
+}
+
+/**
+ * After the inline marks, never before: they go in only when the rendered text
+ * matches the engine's flattening, which keeps an alert's marker, so taking the
+ * marker out first would cost every edited alert its word marks.
+ */
+const ALERTS_PLUGIN: PluggableList[number] = [rehypeMarkdownAlerts, { isRevisionMark }];
+
 /**
  * Flatten a hast tree the way the engine flattens mdast, and hand back the text
  * nodes that may carry inline marks.
@@ -333,7 +353,7 @@ function inlineRangePlugin(ranges: readonly TextRange[], expectedText: string, k
     const { text, entries } = collectTextNodes(tree);
     if (text !== expectedText) return;
     // hast models a class attribute as a list, not the joined string.
-    const className = ["rendered-markdown-diff__inline", `rendered-markdown-diff__inline--${kind}`];
+    const className = [INLINE_MARK_CLASS, `${INLINE_MARK_CLASS}--${kind}`];
     // Native revision elements rather than styled spans: `<ins>` and `<del>`
     // are what an assistive technology reads as a revision, and a `<span>` with
     // a background is not a revision to anything but a sighted reader.
@@ -438,7 +458,10 @@ function DiffBlock({
   const body = isFrontmatterType(blockType) ? source : `\n${source}`;
   const content = definitions ? `${body}\n\n${definitions}` : body;
   const rehypePlugins = useMemo<PluggableList>(
-    () => (ranges.length ? [inlineRangePlugin(ranges, expectedText, kind)] : []),
+    () =>
+      ranges.length
+        ? [inlineRangePlugin(ranges, expectedText, kind), ALERTS_PLUGIN]
+        : [ALERTS_PLUGIN],
     [ranges, expectedText, kind]
   );
 
