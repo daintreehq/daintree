@@ -565,7 +565,10 @@ describe("TerminalDestructiveActionConfirmDialog — reset terminal modes (#1732
     terminalTitle: "Build agent",
   };
 
-  const announced = () => useAnnouncerStore.getState().polite?.msg ?? null;
+  const announced = () => {
+    const { polite, assertive } = useAnnouncerStore.getState();
+    return polite?.msg ?? assertive?.msg ?? null;
+  };
 
   beforeEach(() => {
     useAnnouncerStore.setState({ polite: null, assertive: null });
