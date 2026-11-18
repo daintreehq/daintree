@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import concurrently from "concurrently";
+import { BUILD_READY_FILE, removeBuildReadyMarker } from "./lib/build-ready-gate.mjs";
 
 const DEFAULT_PORT = 5173;
 const DEFAULT_HOST = "127.0.0.1";
@@ -78,6 +79,10 @@ async function main() {
     console.log(`[dev] Using fresh Electron userData ${freshUserDataDir}`);
   }
 
+  // A marker left by the last session would let wait-on start Electron on old
+  // output before the watcher's own startup gets to remove it.
+  removeBuildReadyMarker(path.resolve(BUILD_READY_FILE));
+
   const { result } = concurrently(
     [
       {
@@ -91,7 +96,7 @@ async function main() {
         name: "vite",
       },
       {
-        command: `wait-on dist-electron/.build-ready.js tcp:${host}:${port} && npm run dev:electron`,
+        command: `wait-on ${BUILD_READY_FILE} tcp:${host}:${port} && npm run dev:electron`,
         env: sharedEnv,
         name: "electron",
       },
