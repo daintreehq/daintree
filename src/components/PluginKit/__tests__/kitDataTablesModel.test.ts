@@ -256,6 +256,16 @@ describe("tree model", () => {
       index: 1,
     });
     expect(resolveKeyMove(rows, "api", "ArrowLeft", count)).toBeNull();
+    // Inside a parent: right goes into the sibling at the slot above, never past the first.
+    expect(resolveKeyMove(rows, "billing", "ArrowRight", count)).toMatchObject({
+      parentId: "auth",
+      index: 0,
+    });
+    expect(resolveKeyMove(rows, "auth", "ArrowRight", count)).toBeNull();
+    expect(resolveKeyMove(rows, "auth", "ArrowDown", count)).toMatchObject({
+      parentId: "api",
+      index: 1,
+    });
   });
 
   it("indexes the drawn rows by id, path and parent, in sibling order", () => {
@@ -307,6 +317,33 @@ describe("tree model", () => {
       expect(resolveDrop(tree, "web", "edge", position, 0)).toBeNull();
     }
     expect(resolveDrop(tree, "api", "missing", "before", 0)).toBeNull();
+    // Two levels down is still its own subtree.
+    const deep: Node[] = [
+      {
+        id: "root",
+        label: "root",
+        children: [{ id: "mid", label: "mid", children: [{ id: "leaf", label: "leaf" }] }],
+      },
+      { id: "other", label: "other" },
+    ];
+    const nested = indexTreeRows(
+      buildTreeRows({
+        nodes: deep,
+        idOf,
+        labelOf: (node) => nodeOf(node).label,
+        childrenOf,
+        expanded: new Set(["root", "mid"]),
+      })
+    );
+    expect(isWithin(nested, "leaf", "root")).toBe(true);
+    expect(isWithin(nested, "other", "root")).toBe(false);
+    for (const position of ["before", "inside", "after"] as const) {
+      expect(resolveDrop(nested, "root", "leaf", position, 0)).toBeNull();
+    }
+    expect(resolveDrop(nested, "leaf", "other", "after", 0)).toMatchObject({
+      parentId: null,
+      index: 2,
+    });
   });
 
   it("counts same-parent offsets with the dragged node taken out", () => {
@@ -361,8 +398,9 @@ describe("tree model", () => {
     for (let at = 1; at <= 100; at += 1) {
       expect(resolveDrop(tree, "n0", `n${at}`, "after", 0)).toMatchObject({ index: at });
     }
-    // The dragged row, the target, and the target's one-step ancestry walk.
-    expect(reads).toBe(300);
+    // At most the dragged row, the target, and one lookup per ancestry step:
+    // flat rows have one step, whatever their count.
+    expect(reads).toBeLessThanOrEqual(300);
   });
 });
 

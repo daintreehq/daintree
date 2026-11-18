@@ -1,6 +1,7 @@
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
@@ -644,15 +645,18 @@ function KitTreeView(props: PluginTreeViewProps) {
   const [dragPath, setDragPath] = useState<string | null>(null);
   const [drop, setDrop] = useState<DropTarget | null>(null);
   const dragRow = dragPath === null ? undefined : byPath.get(dragPath);
-  // The row and band under the pointer at its last move. A release resolves
-  // it again against the rows as they are then, since a lazy load or a new
-  // row model can land while the pointer holds still.
-  const lastHit = useRef<{ path: string; position: DropPosition } | null>(null);
+  const showsEmpty = rows.length === 0 && hasContent(empty);
+  const dragSurface = draggable && !showsEmpty;
+  // The row and band under the pointer at its last move, and whether it drew
+  // a mark. A release lands only there, resolved again against the rows as
+  // they are then, since a lazy load or a new row model can land while the
+  // pointer holds still.
+  const lastHit = useRef<{ path: string; position: DropPosition; allowed: boolean } | null>(null);
   // Where the pointer really is: dnd-kit's delta folds in the scroll of the
   // ancestors, which would aim the hit test above or below it.
   const pointer = useRef<{ x: number; y: number } | null>(null);
-  useEffect(() => {
-    if (dragPath === null) return;
+  useLayoutEffect(() => {
+    if (dragPath === null || !dragSurface) return;
     const track = (event: PointerEvent) => {
       pointer.current = { x: event.clientX, y: event.clientY };
     };
@@ -661,9 +665,13 @@ function KitTreeView(props: PluginTreeViewProps) {
     return () => {
       window.removeEventListener("pointermove", track, true);
       pointer.current = null;
+      // dnd-kit's sensor outlives its context, so a press still held when
+      // onMove goes away or the empty view takes over releases into the last
+      // render's endDrag. With the hit forgotten, that release drops nothing.
+      lastHit.current = null;
     };
-  }, [dragPath]);
-  const pointerOf = (event: DragMoveEvent): { x: number; y: number } | null => {
+  }, [dragPath, dragSurface]);
+  const pointerOf = (event: DragMoveEvent | DragEndEvent): { x: number; y: number } | null => {
     if (pointer.current) return pointer.current;
     const start = event.activatorEvent;
     if (start instanceof globalThis.MouseEvent) {
@@ -677,8 +685,8 @@ function KitTreeView(props: PluginTreeViewProps) {
   };
   const resolveHit = (dragged: TreeRow, target: TreeRow, position: DropPosition) =>
     resolveDrop(treeIndex, dragged.id, target.id, position, childCount(target.id));
-  const onDragMove = (event: DragMoveEvent) => {
-    if (dragRow?.kind !== "node") return;
+  // The node row under the pointer, and the band of it the pointer is in.
+  const hitAt = (event: DragMoveEvent | DragEndEvent) => {
     const point = pointerOf(event);
     const element =
       point === null
@@ -691,27 +699,37 @@ function KitTreeView(props: PluginTreeViewProps) {
             )
             ?.closest<HTMLElement>("[data-tree-path]");
     const path = element?.getAttribute("data-tree-path") ?? null;
-    const targetRow = path === null ? undefined : byPath.get(path);
-    if (!element || !point || path === null || targetRow?.kind !== "node") {
+    const target = path === null ? undefined : byPath.get(path);
+    if (!element || !point || path === null || target?.kind !== "node") return null;
+    const rect = element.getBoundingClientRect();
+    return { path, target, position: dropPositionAt(point.y - rect.top, rect.height, true) };
+  };
+  const onDragMove = (event: DragMoveEvent) => {
+    if (dragRow?.kind !== "node") return;
+    const hit = hitAt(event);
+    if (!hit) {
       lastHit.current = null;
       if (drop !== null) setDrop(null);
       return;
     }
-    const rect = element.getBoundingClientRect();
-    const position = dropPositionAt(point.y - rect.top, rect.height, true);
-    lastHit.current = { path, position };
-    const allowed = allowMove(resolveHit(dragRow, targetRow, position)) !== null;
+    const { path, position } = hit;
+    const allowed = allowMove(resolveHit(dragRow, hit.target, position)) !== null;
+    lastHit.current = { path, position, allowed };
     if (drop?.path === path && drop.position === position && drop.allowed === allowed) return;
     setDrop({ path, position, allowed });
   };
   const endDrag = (event: DragEndEvent | null) => {
-    const hit = lastHit.current;
+    const last = lastHit.current;
     lastHit.current = null;
     setDragPath(null);
     setDrop(null);
-    const target = hit === null ? undefined : byPath.get(hit.path);
-    if (!event || !hit || dragRow?.kind !== "node" || target?.kind !== "node") return;
-    commitMove(resolveHit(dragRow, target, hit.position));
+    if (!event || !last?.allowed || dragRow?.kind !== "node") return;
+    // Only onto the row and band that drew the mark, and only while the
+    // pointer is still over them: rows that moved under a still pointer
+    // would otherwise drop somewhere it isn't.
+    const hit = hitAt(event);
+    if (hit?.path !== last.path || hit.position !== last.position) return;
+    commitMove(resolveHit(dragRow, hit.target, hit.position));
   };
 
   const content = fn(renderNode);
@@ -736,7 +754,7 @@ function KitTreeView(props: PluginTreeViewProps) {
   };
 
   const label = str(ariaLabel) ?? "";
-  if (rows.length === 0 && hasContent(empty)) {
+  if (showsEmpty) {
     return (
       <div {...pickRootProps(props)} className={cn("h-full", str(className))}>
         {node(empty)}
