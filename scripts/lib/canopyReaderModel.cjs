@@ -2,7 +2,8 @@
  * Canopy's reader model ships inside the app (#16415). The pinned revision and
  * every file's size and hash live in the tracked manifest; the files themselves
  * are fetched from Hugging Face once per checkout at build time, into a
- * gitignored folder that electron-builder copies into the app's resources.
+ * gitignored folder per revision that electron-builder copies into the app's
+ * resources.
  *
  * CommonJS so both the build scripts (ESM) and afterPack.cjs can load it.
  */
@@ -12,10 +13,11 @@ const path = require("path");
 
 const ROOT = path.join(__dirname, "..", "..");
 const MANIFEST_PATH = path.join(ROOT, "electron/services/canopy/canopy-reader-manifest.json");
-/** Where the build puts the model for an unpackaged run, and where packaging copies it from. */
-const MODEL_DIR = path.join(ROOT, "electron/resources/canopy-reader");
+/** Where the build keeps the model for unpackaged runs, one folder per revision. */
+const MODELS_ROOT = path.join(ROOT, "electron/resources/canopy-reader");
 /** What the model folder is called inside the app's resources. */
 const RESOURCES_NAME = "canopy-reader";
+const REVISION = /^[0-9a-f]{40}$/;
 
 const HF = "https://huggingface.co";
 const USER_AGENT = "Daintree-Build/1.0";
@@ -24,6 +26,22 @@ const FILE_TIMEOUT_MS = 120_000;
 function readManifest(file = MANIFEST_PATH) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
+
+/**
+ * A revision's folder: what an unpackaged run reads and packaging copies from.
+ * Each holds only its own revision's pinned bytes, so a fetch for another pin
+ * (a dev watch's, still out across a branch switch) never rewrites a file an
+ * app built from this one has already checked (#17818).
+ */
+function modelDir(manifest = readManifest(), root = MODELS_ROOT) {
+  if (!REVISION.test(manifest.revision)) {
+    throw new Error(`The manifest's revision isn't a commit: ${manifest.revision}`);
+  }
+  return path.join(root, manifest.revision);
+}
+
+/** The checkout's own revision's folder. */
+const MODEL_DIR = modelDir();
 
 /** Git's blob id: SHA-1 over `blob <size>\0` and the content. */
 function gitBlobId(content) {
@@ -57,38 +75,42 @@ function invalidFiles(dir, manifest = readManifest()) {
 /**
  * Fetches every file `dir` lacks or holds wrong from the pinned revision, each
  * checked before it replaces anything. A folder already right asks nothing of
- * Hugging Face, so a cached build counts no download.
- *
- * Pinned by `manifestFile` unless handed a `manifest`, and that file is read
- * again before each file goes in place: a dev watch's fetch can still be out
- * when a branch switch moves the checkout's pin (#17818), and a file the
- * checkout no longer pins must never replace one a running app may be reading.
+ * Hugging Face, so a cached build counts no download. Unless handed a `dir`,
+ * it is the revision's folder under `root`, and a file the checkout kept flat
+ * in `root` before each revision had its own folder is taken from there when
+ * it matches its pin, so a warm checkout or cache never fetches it again.
  */
 async function prepareModel({
-  dir = MODEL_DIR,
-  manifestFile = MANIFEST_PATH,
-  manifest,
+  manifest = readManifest(),
+  root = MODELS_ROOT,
+  dir,
   fetchImpl = globalThis.fetch,
   log = console.log,
 } = {}) {
-  const pinned = manifest ?? readManifest(manifestFile);
-  const stillPinned = manifest
-    ? () => true
-    : () => {
-        try {
-          return readManifest(manifestFile).revision === pinned.revision;
-        } catch {
-          return false;
-        }
-      };
-  const missing = invalidFiles(dir, pinned);
+  const target = dir ?? modelDir(manifest, root);
+  let missing = invalidFiles(target, manifest);
   if (missing.length === 0) return { fetched: [] };
-  await checkPublished(pinned, fetchImpl);
-  fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(target, { recursive: true });
+  if (dir === undefined) missing = missing.filter((spec) => !adoptFlat(root, target, spec));
+  if (missing.length === 0) return { fetched: [] };
+  await checkPublished(manifest, fetchImpl);
   for (const spec of missing) {
-    await fetchFile(dir, pinned, spec, fetchImpl, log, stillPinned);
+    await fetchFile(target, manifest, spec, fetchImpl, log);
   }
   return { fetched: missing.map((spec) => spec.name) };
+}
+
+/** Puts `root`'s flat copy of `spec` in `dir` when it matches its pin; whether it did. */
+function adoptFlat(root, dir, spec) {
+  let content;
+  try {
+    content = fs.readFileSync(path.join(root, spec.name));
+  } catch {
+    return false;
+  }
+  if (!contentMatches(content, spec)) return false;
+  place(dir, spec, content);
+  return true;
 }
 
 /**
@@ -119,13 +141,8 @@ async function checkPublished(manifest, fetchImpl) {
   }
 }
 
-/**
- * One pinned file into place: checked before it is written, staged beside it,
- * then renamed over it. Each writer stages under a name of its own, since a
- * dev watch prepares the model while the app runs and `npm run
- * fetch:canopy-model` may run beside it (#17818).
- */
-async function fetchFile(dir, manifest, spec, fetchImpl, log, stillPinned) {
+/** One pinned file into place: checked before it is written, then staged and renamed over it. */
+async function fetchFile(dir, manifest, spec, fetchImpl, log) {
   const url = `${HF}/${manifest.id}/resolve/${manifest.revision}/${spec.name}`;
   log(
     `[canopy-reader] Fetching ${spec.name} (${spec.size} bytes) at ${manifest.revision.slice(0, 12)}`
@@ -141,15 +158,19 @@ async function fetchFile(dir, manifest, spec, fetchImpl, log, stillPinned) {
       `${spec.name} doesn't match the hash pinned in ${path.relative(ROOT, MANIFEST_PATH)}`
     );
   }
+  place(dir, spec, content);
+}
+
+/**
+ * Bytes already checked against `spec`, staged beside their place and renamed
+ * over it. Each writer stages under a name of its own: a dev watch prepares the
+ * model while the app runs, and `npm run fetch:canopy-model` may run beside it.
+ */
+function place(dir, spec, content) {
   const target = path.join(dir, spec.name);
   const part = `${target}.${process.pid}-${crypto.randomBytes(6).toString("hex")}.part`;
   try {
     fs.writeFileSync(part, content, { flag: "wx" });
-    if (!stillPinned()) {
-      throw new Error(
-        `The manifest no longer pins ${manifest.revision.slice(0, 12)}: ${spec.name} wasn't put in place`
-      );
-    }
     fs.renameSync(part, target);
   } finally {
     fs.rmSync(part, { force: true });
@@ -158,9 +179,11 @@ async function fetchFile(dir, manifest, spec, fetchImpl, log, stillPinned) {
 
 module.exports = {
   MANIFEST_PATH,
+  MODELS_ROOT,
   MODEL_DIR,
   RESOURCES_NAME,
   readManifest,
+  modelDir,
   gitBlobId,
   contentMatches,
   invalidFiles,

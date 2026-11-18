@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -64,13 +64,15 @@ const revisionAnswer = () =>
   Response.json({ sha: manifest.revision, lastModified: manifest.published });
 
 let checkout;
+let modelsRoot;
 let modelDir;
 let readyFile;
 
 beforeEach(() => {
   // A clean checkout: no model fetched, nothing built.
   checkout = mkdtempSync(path.join(tmpdir(), "canopy-dev-start-"));
-  modelDir = path.join(checkout, "electron", "resources", "canopy-reader");
+  modelsRoot = path.join(checkout, "electron", "resources", "canopy-reader");
+  modelDir = path.join(modelsRoot, manifest.revision);
   readyFile = path.join(checkout, "dist-electron", ".build-ready.js");
 });
 
@@ -91,7 +93,7 @@ describe("a dev watch in a clean checkout whose model fetch is held (#17818)", (
 
     const { model } = await runWithCanopyModel({
       watch: true,
-      prepare: () => prepareModel({ dir: modelDir, manifest, fetchImpl, log: () => {} }),
+      prepare: () => prepareModel({ manifest, root: modelsRoot, fetchImpl, log: () => {} }),
       startBuild,
       warn,
     });
@@ -121,7 +123,7 @@ describe("a dev watch in a clean checkout whose model fetch is held (#17818)", (
     const warn = vi.fn();
     const { model } = await runWithCanopyModel({
       watch: true,
-      prepare: () => prepareModel({ dir: modelDir, manifest, fetchImpl, log: () => {} }),
+      prepare: () => prepareModel({ manifest, root: modelsRoot, fetchImpl, log: () => {} }),
       startBuild: async () => {},
       warn,
     });
@@ -166,29 +168,86 @@ describe("a dev watch in a clean checkout whose model fetch is held (#17818)", (
         ? revisionAnswer()
         : new Response(url.endsWith("config.json") ? CONFIG : WEIGHTS)
     );
-    await prepareModel({ dir: modelDir, manifest, fetchImpl: served, log: () => {} });
+    await prepareModel({ manifest, root: modelsRoot, fetchImpl: served, log: () => {} });
     await lookOnce();
     expect(models.currentDir()).toBe(modelDir);
     expect(models.state()).toMatchObject({ status: "ready", revision: manifest.revision });
     expect(changes).toHaveBeenCalledTimes(2);
     models.dispose();
   });
+
+  it("never rewrites the folder a running app checked, whatever pin a held fetch was for", async () => {
+    // An app built from another branch, its pin's copy checked and in use.
+    const otherWeights = Buffer.from("the other pin's weights");
+    const other = {
+      revision: "b".repeat(40),
+      published: Date.parse(manifest.published),
+      files: [
+        manifest.files[0],
+        { name: "model.int8.onnx", size: otherWeights.length, sha256: sha256(otherWeights) },
+      ],
+    };
+    const otherDir = path.join(modelsRoot, other.revision);
+    mkdirSync(otherDir, { recursive: true });
+    writeFileSync(path.join(otherDir, "config.json"), CONFIG);
+    writeFileSync(path.join(otherDir, "model.int8.onnx"), otherWeights);
+    const models = new CanopyModels(otherDir, () => {}, { shipped: other, awaitBundled: true });
+    await models.ensure();
+    expect(models.currentDir()).toBe(otherDir);
+
+    // This checkout's watch was still fetching its own pin when that app checked its copy.
+    const { fetchImpl, answer } = holding();
+    const { model } = await runWithCanopyModel({
+      watch: true,
+      prepare: () => prepareModel({ manifest, root: modelsRoot, fetchImpl, log: () => {} }),
+      startBuild: async () => {},
+      warn: vi.fn(),
+    });
+    await answer(REVISION_URL, revisionAnswer());
+    await answer(fileUrl("config.json"), new Response(CONFIG));
+    await answer(fileUrl("model.int8.onnx"), new Response(WEIGHTS));
+    await model;
+
+    expect(invalidFiles(modelDir, manifest)).toEqual([]);
+    expect(invalidFiles(otherDir, other)).toEqual([]);
+    expect(readFileSync(path.join(otherDir, "model.int8.onnx")).equals(otherWeights)).toBe(true);
+    models.dispose();
+  });
+});
+
+describe("the build script", () => {
+  it("hands the model to runWithCanopyModel, waiting on it nowhere else", () => {
+    const source = readFileSync(new URL("../build-main.mjs", import.meta.url), "utf8");
+    const run = source.slice(source.indexOf("async function run()"));
+    expect(run).toMatch(
+      /await runWithCanopyModel\(\{\s*watch: isWatch,\s*prepare: prepareCanopyReaderModel,/
+    );
+    expect(run.match(/prepareCanopyReaderModel/g)).toEqual(["prepareCanopyReaderModel"]);
+  });
 });
 
 describe("a build outside watch", () => {
-  it("builds nothing until the model is in place", async () => {
+  it("builds nothing until the model is in place, and finishes with the build", async () => {
     let release;
     const prepare = vi.fn(() => new Promise((resolve) => (release = resolve)));
-    const startBuild = vi.fn(async () => {});
+    let built;
+    const startBuild = vi.fn(() => new Promise((resolve) => (built = resolve)));
 
-    const run = runWithCanopyModel({ watch: false, prepare, startBuild });
+    let finished = false;
+    const run = runWithCanopyModel({ watch: false, prepare, startBuild }).then(
+      () => (finished = true)
+    );
     await vi.waitFor(() => expect(prepare).toHaveBeenCalled());
     await new Promise((resolve) => setImmediate(resolve));
     expect(startBuild).not.toHaveBeenCalled();
 
     release();
+    await vi.waitFor(() => expect(startBuild).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(finished).toBe(false);
+    built();
     await run;
-    expect(startBuild).toHaveBeenCalledTimes(1);
+    expect(finished).toBe(true);
   });
 
   it("fails without the model, building nothing", async () => {

@@ -180,48 +180,66 @@ describe("prepareModel", () => {
     expect(existsSync(path.join(dir, "model.int8.onnx", "keep"))).toBe(true);
   });
 
-  it("pins by the manifest file it is pointed at", async () => {
-    const manifestFile = `${dir}.manifest.json`;
-    writeFileSync(manifestFile, JSON.stringify(manifest));
-    try {
-      const { fetched } = await prepareModel({
-        dir,
-        manifestFile,
-        fetchImpl: serving(),
-        log: () => {},
-      });
-      expect(fetched).toEqual(["config.json", "model.int8.onnx"]);
-      expect(invalidFiles(dir, manifest)).toEqual([]);
-    } finally {
-      rmSync(manifestFile, { force: true });
-    }
+  it("keeps each revision in a folder of its own, leaving another pin's alone", async () => {
+    // Another branch's copy, which an app built from that branch may be reading.
+    const other = { ...manifest, revision: "f".repeat(40) };
+    const otherDir = path.join(dir, other.revision);
+    mkdirSync(otherDir);
+    writeFileSync(path.join(otherDir, "config.json"), CONFIG);
+    writeFileSync(path.join(otherDir, "model.int8.onnx"), Buffer.from("the other pin's weights"));
+
+    const { fetched } = await prepareModel({
+      manifest,
+      root: dir,
+      fetchImpl: serving(),
+      log: () => {},
+    });
+
+    expect(fetched).toEqual(["config.json", "model.int8.onnx"]);
+    expect(invalidFiles(path.join(dir, manifest.revision), manifest)).toEqual([]);
+    expect(readFileSync(path.join(otherDir, "model.int8.onnx"), "utf8")).toBe(
+      "the other pin's weights"
+    );
   });
 
-  it("puts nothing in place for a pin the checkout moved off while the fetch was out", async () => {
-    // Another branch's copy, which an app built from that branch may be reading.
+  it("takes the files a checkout kept flat before each revision had a folder, fetching nothing", async () => {
     writeFileSync(path.join(dir, "config.json"), CONFIG);
-    writeFileSync(path.join(dir, "model.int8.onnx"), Buffer.from("the other pin's weights"));
-    const manifestFile = `${dir}.manifest.json`;
-    writeFileSync(manifestFile, JSON.stringify(manifest));
-    const serve = serving();
-    // Switched back to that branch while the weights were on their way.
-    const fetchImpl = vi.fn(async (url, init) => {
-      if (url.endsWith("/model.int8.onnx")) {
-        writeFileSync(manifestFile, JSON.stringify({ ...manifest, revision: "f".repeat(40) }));
-      }
-      return serve(url, init);
-    });
-    try {
-      await expect(prepareModel({ dir, manifestFile, fetchImpl, log: () => {} })).rejects.toThrow(
-        /no longer pins 0123456789ab/
-      );
-      expect(readFileSync(path.join(dir, "model.int8.onnx"), "utf8")).toBe(
-        "the other pin's weights"
-      );
-      expect(readdirSync(dir).sort()).toEqual(["config.json", "model.int8.onnx"]);
-    } finally {
-      rmSync(manifestFile, { force: true });
-    }
+    writeFileSync(path.join(dir, "model.int8.onnx"), WEIGHTS);
+    const fetchImpl = serving();
+
+    const { fetched } = await prepareModel({ manifest, root: dir, fetchImpl, log: () => {} });
+
+    expect(fetched).toEqual([]);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(invalidFiles(path.join(dir, manifest.revision), manifest)).toEqual([]);
+  });
+
+  it("fetches only what the flat copy holds wrong", async () => {
+    writeFileSync(path.join(dir, "config.json"), CONFIG);
+    // Another pin's weights, the same size: only the hash tells them apart.
+    writeFileSync(path.join(dir, "model.int8.onnx"), Buffer.alloc(WEIGHTS.length, 0x61));
+    const fetchImpl = serving();
+
+    const { fetched } = await prepareModel({ manifest, root: dir, fetchImpl, log: () => {} });
+
+    expect(fetched).toEqual(["model.int8.onnx"]);
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+      REVISION_URL,
+      `https://huggingface.co/${manifest.id}/resolve/${manifest.revision}/model.int8.onnx`,
+    ]);
+    expect(invalidFiles(path.join(dir, manifest.revision), manifest)).toEqual([]);
+  });
+
+  it("refuses a manifest whose revision isn't a commit, writing nothing", async () => {
+    await expect(
+      prepareModel({
+        manifest: { ...manifest, revision: "../escape" },
+        root: dir,
+        fetchImpl: serving(),
+        log: () => {},
+      })
+    ).rejects.toThrow(/isn't a commit/);
+    expect(readdirSync(dir)).toEqual([]);
   });
 
   it("refuses a manifest whose published date isn't the pinned revision's, fetching nothing", async () => {

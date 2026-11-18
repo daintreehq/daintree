@@ -207,6 +207,16 @@ describe("CanopyModels, a dev build's copy still on its way (#17818)", () => {
     expect(changes).toHaveBeenCalledTimes(2);
   });
 
+  it("arms nothing when turned off while the launch's check is still running", async () => {
+    const models = new CanopyModels(dir, () => {}, { shipped: SHIPPED, awaitBundled: true });
+
+    const checked = models.ensure();
+    models.cancel();
+    await checked;
+    expect(models.state()?.status).toBe("missing");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("stops looking once let go", async () => {
     const changes = vi.fn();
     const models = new CanopyModels(dir, changes, { shipped: SHIPPED, awaitBundled: true });

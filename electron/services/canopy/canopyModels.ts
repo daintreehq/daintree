@@ -70,6 +70,9 @@ const SHIPPED: CanopyModelRevision = {
   files: manifest.files,
 };
 
+/** Names the folder an unpackaged run finds the shipped copy in: the build keeps one per revision. */
+export const CANOPY_SHIPPED_REVISION: string = SHIPPED.revision;
+
 /** Every file the reader opens. An update must carry each, with a hash the Hub publishes. */
 const READER_FILES = ["config.json", "tokenizer.json", "tokenizer_config.json"] as const;
 
@@ -424,10 +427,13 @@ export class CanopyModels {
   ensure(): Promise<void> {
     const local = this.checkLocal();
     if (this.awaitBundled) {
-      void local.then(
-        () => this.lookAtBundledSoon(),
-        () => {}
-      );
+      // Turned off while this launch's check was still running: nothing to arm.
+      const epoch = this.bundledEpoch;
+      void local
+        .then(() => {
+          if (epoch === this.bundledEpoch) this.lookAtBundledSoon();
+        })
+        .catch(() => {});
     }
     if (this.updates === null || this.disposed) return local;
     const current = this.operation;
@@ -767,7 +773,11 @@ export class CanopyModels {
     const epoch = this.bundledEpoch;
     const delay = this.bundledDelay;
     this.bundledDelay = Math.min(delay * 2, BUNDLED_RETRY_MAX_MS);
-    this.bundledTimer = setTimeout(() => void this.lookAtBundled(epoch), delay);
+    this.bundledTimer = setTimeout(() => {
+      this.lookAtBundled(epoch).catch((error: unknown) =>
+        console.error("[Canopy] Model check failed:", error)
+      );
+    }, delay);
     this.bundledTimer.unref?.();
   }
 
