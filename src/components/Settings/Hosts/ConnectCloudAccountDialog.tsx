@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { AppDialog, type DialogAction } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
@@ -178,6 +178,14 @@ function ConnectCloudAccountForm({
   // Every edit moves this on, so a check of an earlier set is never taken for this one.
   const [edits, setEdits] = useState(0);
   const editsRef = useRef(0);
+  // An answer for a form that's gone (its provider left) never closes or picks for what came after it.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const fileReads = useRef(new Map<string, number>());
   const [checked, setChecked] = useState<CloudAccountCheckResult | null>(null);
   const [checkedEdits, setCheckedEdits] = useState<number | null>(null);
@@ -298,6 +306,7 @@ function ConnectCloudAccountForm({
   };
 
   const finish = (account: CloudAccountSummary) => {
+    if (!mounted.current) return;
     setBusy(null);
     setValues({});
     onConnected?.(account);

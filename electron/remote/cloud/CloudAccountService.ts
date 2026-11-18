@@ -360,8 +360,6 @@ export class CloudAccountService {
    * declarations it replaced are dropped, and whatever waited on it can go on.
    */
   private consentKept(agreed: Agreement | undefined, before: boolean): void {
-    // Written over whatever an uninstall couldn't remove.
-    if (agreed) this.unforgotten.delete(agreed.record.pluginId);
     if (!agreed || before) return;
     const { pluginId } = agreed.record;
     for (const account of this.deps.store.accounts()) {
@@ -386,6 +384,11 @@ export class CloudAccountService {
       this.unforgotten.add(pluginId);
       throw error;
     }
+  }
+
+  /** A consent just written over whatever an uninstall couldn't remove: it answers again, at once. */
+  private consentWritten(agreed: Agreement | undefined): void {
+    if (agreed) this.unforgotten.delete(agreed.record.pluginId);
   }
 
   private storedConsent(pluginId: string): StoredProviderConsent | null {
@@ -587,6 +590,7 @@ export class CloudAccountService {
       wasGranted = this.consentFor(request.providerId)?.granted ?? false;
       // The consent is kept with the account it was given for, in one write: declining keeps neither.
       this.deps.store.putAccount(account, agreed?.record);
+      this.consentWritten(agreed);
     } catch (error) {
       // No account will ever name this set: it isn't left sealed with nothing able to remove it.
       await this.deps.vault.delete(id).catch(() => {});
@@ -675,6 +679,7 @@ export class CloudAccountService {
           },
           agreed?.record
         );
+        this.consentWritten(agreed);
       } catch (error) {
         // The account still names the set it had (a remove waits its turn), so the vault goes back to it.
         await (
@@ -701,7 +706,10 @@ export class CloudAccountService {
     const agreed = this.requireConsent(account.providerId, consent);
     if (!agreed) throw invalid("That account's cloud provider is part of Daintree.");
     const wasGranted = this.consentFor(account.providerId)?.granted ?? false;
-    if (!wasGranted) this.deps.store.putProviderConsent(agreed.record);
+    if (!wasGranted) {
+      this.deps.store.putProviderConsent(agreed.record);
+      this.consentWritten(agreed);
+    }
     this.consentKept(agreed, wasGranted);
     return this.requireSummary(account.id);
   }

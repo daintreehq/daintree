@@ -60,7 +60,14 @@ export function CloudProvidersSection() {
   const [reviewing, setReviewing] = useState<CloudAccountSummary | null>(null);
   /** The account an Allow is out for, and what the last one said, so a late answer never reaches another review. */
   const [allowing, setAllowing] = useState<string | null>(null);
-  const [allowError, setAllowError] = useState<{ accountId: string; message: string } | null>(null);
+  const [allowErrors, setAllowErrors] = useState<Record<string, string>>({});
+  const setAllowError = (accountId: string, message: string | null) =>
+    setAllowErrors((current) => {
+      const next = { ...current };
+      if (message) next[accountId] = message;
+      else delete next[accountId];
+      return next;
+    });
 
   const providers = snapshot.providers;
   const usable = providers.filter((provider) => provider.unsupportedReason === null);
@@ -124,7 +131,7 @@ export function CloudProvidersSection() {
     if (!reviewingAccount || !reviewingPlugin) return;
     const accountId = reviewingAccount.id;
     setAllowing(accountId);
-    setAllowError(null);
+    setAllowError(accountId, null);
     cloudHostsClient.allowAccountProvider(accountId, reviewingPlugin.fingerprint).then(
       (account) => {
         setAllowing((current) => (current === accountId ? null : current));
@@ -133,7 +140,7 @@ export function CloudProvidersSection() {
       },
       (err: unknown) => {
         setAllowing((current) => (current === accountId ? null : current));
-        setAllowError({ accountId, message: errorText(err, "Couldn't allow the plugin") });
+        setAllowError(accountId, errorText(err, "Couldn't allow the plugin"));
       }
     );
   };
@@ -276,7 +283,7 @@ export function CloudProvidersSection() {
                         size="sm"
                         aria-label={`Review access for ${account.displayName}`}
                         onClick={() => {
-                          setAllowError(null);
+                          setAllowError(account.id, null);
                           setReviewing(account);
                         }}
                       >
@@ -343,7 +350,7 @@ export function CloudProvidersSection() {
           purpose="review"
           onAllow={allowReviewed}
           busy={allowing === reviewingAccount.id}
-          error={allowError?.accountId === reviewingAccount.id ? allowError.message : null}
+          error={allowErrors[reviewingAccount.id] ?? null}
         />
       )}
       <ConfirmDialog

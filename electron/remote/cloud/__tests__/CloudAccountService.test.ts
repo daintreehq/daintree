@@ -844,6 +844,18 @@ describe("CloudAccountService and a plugin's provider", () => {
     expect(accounts.providerInfos()[0]!.plugin?.granted).toBe(true);
   });
 
+  it("answers a replace that gives the consent again as usable at once", async () => {
+    const { accounts, store } = pluginService();
+    const summary = await accounts.addAccount({ ...PLUGIN_ACCOUNT, consent: "fp-1" });
+    vi.spyOn(store, "removeProviderConsent").mockImplementationOnce(() => {
+      throw new Error("disk full");
+    });
+    expect(() => accounts.forgetPluginConsent("acme.clouds")).toThrow("disk full");
+    await expect(
+      accounts.replaceCredentials(summary.id, PLUGIN_ACCOUNT.credentials, "fp-1")
+    ).resolves.toMatchObject({ id: summary.id, providerUnavailable: null });
+  });
+
   it("offers no scopes a check read while the plugin changed", async () => {
     let declared: { fingerprint: string } = { fingerprint: "" };
     const env = pluginService({

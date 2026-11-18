@@ -153,6 +153,8 @@ describe("ConnectCloudAccountDialog for a plugin's provider", () => {
     ].map((item) => item.textContent);
     expect(terms).toHaveLength(3);
     expect(terms[0]).toMatch(/credentials you enter/);
+    // Connecting also resumes any of its accounts already saved here.
+    expect(terms[0]).toMatch(/saved for any of its accounts/);
     expect(terms[1]).toMatch(/machines Daintree connects to.*vouches for their identity/);
     expect(terms[2]).toMatch(/bill your own account/);
     // The plugin's other providers are named as covered too.
