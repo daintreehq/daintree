@@ -6,11 +6,11 @@
 
 **Daintree: a meta-harness and IDE that runs your own agent CLIs as a hierarchy of agents, across multiple hosts. Always without vendor lock-in.**
 
-Claude Code, Codex, Antigravity, OpenCode and [13&nbsp;more](#agent-clis) run as they are, with your existing config and login. A global Assistant sits above every project and host, each project has assistants of its own, and they hand tasks to agents working in their own git worktrees, on this machine or on another one you reach over ssh. The calls only you can make come to you, at your desk or on your phone. macOS, Windows and Linux. Apache 2.0, no account, telemetry off by default.
+Claude Code, Codex, Antigravity, OpenCode and [13&nbsp;more](#agent-clis) run as they are, with your existing config and login. A global Assistant sits above your projects and hosts, each project has assistants of its own, and they hand tasks to agents working in their own git worktrees, on this machine or on another one you reach over ssh. The calls only you can make wait for you in Daintree, or reach your phone. macOS, Windows and Linux. Apache 2.0, no account, telemetry off by default.
 
 [![Release](https://img.shields.io/github/v/release/daintreehq/daintree?label=release&color=0f7a4a)](https://daintree.org/changelog) [![Build](https://img.shields.io/github/actions/workflow/status/daintreehq/daintree/nightly-publish.yml?branch=develop&label=nightly%20build)](https://github.com/daintreehq/daintree/actions/workflows/nightly-publish.yml) [![License](https://img.shields.io/badge/license-Apache%202.0-0f7a4a)](LICENSE)
 
-[Download](#download) · [How&nbsp;it&nbsp;works](#how-it-works) · [Assistant](#daintree-assistant) · [Decisions](#daintree-decisions) · [Remote&nbsp;hosts](#remote-hosts) · [Plugins](#plugins) · [Review](#review-before-you-merge) · [Agent&nbsp;CLIs](#agent-clis) · [MCP&nbsp;server](#mcp-server) · [Build&nbsp;from&nbsp;source](#build-from-source) · [Docs](#documentation)
+[Download](#download) · [How&nbsp;it&nbsp;works](#how-it-works) · [Assistant](#daintree-assistant) · [Decisions](#daintree-decisions) · [Remote&nbsp;hosts](#remote-hosts) · [Plugins](#plugins) · [Review](#review-before-you-merge) · [Agent&nbsp;CLIs](#agent-clis) · [MCP&nbsp;server](#mcp-server) · [Canopy](#canopy-inbox) · [Build&nbsp;from&nbsp;source](#build-from-source) · [Docs](#documentation)
 
 <picture>
   <source media="(prefers-color-scheme: dark) and (max-width: 600px)" srcset="https://cdn.daintree.org/readme/v2/shot-hero-daintree--narrow.webp">
@@ -44,11 +44,11 @@ Daintree updates itself, and Homebrew never reinstalls over a copy that already 
 
 Daintree runs your agent CLIs as a standing hierarchy rather than one run at a time:
 
-- **The global Assistant** sits above every project and every host you've connected. It reads every agent's state in one call, hears when one starts waiting, and steers work wherever it runs.
+- **The global Assistant** sits above every project on this machine and on the hosts you've let it control. It reads every agent's state in one call, hears when one starts waiting, and steers work wherever it runs.
 - **Project assistants** are long-lived seats in one project. They plan the work, open worktrees, launch agents into them and watch their terminals.
 - **Worker agents** each take one task in their own git worktree, starting from a clean context, and go with the worktree once the work has landed.
 
-An assistant can answer a worker's approval or question inside the authority you've already given it, and brings you the rest. A question that needs you waits in Canopy, or reaches your phone through Decisions, and the agent carries on once you've answered.
+An assistant can reply in a worker's terminal, or pick a permission option there, inside the authority you've already given it, and brings you the rest. Canopy ranks every agent waiting on you, and with Decisions on, an agent can send you a question to answer on your computer or your phone.
 
 ## Daintree Assistant
 
@@ -66,7 +66,7 @@ The Assistant is Claude Code, Codex or Antigravity, signed in the way you alread
 
 ### The global Assistant
 
-One assistant above every project and every host, with no project of its own. Pick it with the Project / Global switch in the Assistant panel. It outlives the window it started in, shows the same session in every window, and reaches projects on this machine and on your remote hosts. It reads the state of agents across all of them in one call, gets a notice when any of them starts waiting instead of polling, prompts, presses keys in and interrupts agents it didn't launch, brings agents back after a restart, and tries to bring back a host whose link went down.
+One assistant above every project and every host, with no project of its own. Pick it with the Project / Global switch in the Assistant panel. It outlives the window it started in, shows the same session in every window, and reaches projects on this machine and on every remote host with Assistant control on. It reads the state of agents across all of them in one call, gets a notice when any of them starts waiting instead of polling, prompts, presses keys in and interrupts agents it didn't launch, brings agents back after a restart, and tries to bring back a host whose link went down.
 
 ### Project assistants
 
@@ -76,9 +76,9 @@ Each project keeps its own assistant, with up to six sessions, each on the agent
 
 Some authority always stays with you, which is what makes it reasonable to hand the rest to an assistant and leave it running:
 
-- **Confirmations are yours.** A confirm-gated action waits for your answer on the machine where it runs. The global Assistant has no setting that skips that, and a confirmation nobody answered never counts as a yes.
-- **Ownership.** An assistant closes only the terminals it launched. A prompt or keys sent to an agent it didn't launch are refused if that run has restarted or someone is typing there.
-- **Tool-set tiers.** Each machine sets which of Daintree's tools its assistants get (**Settings → Daintree Assistant → Security → Tool set**), and an action above that tier is refused, never worked around.
+- **Confirmations are yours.** A confirm-gated action waits for a person's answer. The global Assistant has no setting that skips that, a project assistant skips only the confirmations you've told it to, and a confirmation nobody answered never counts as a yes.
+- **Ownership.** The global Assistant closes only the terminals it launched, and its prompts and keys to an agent it didn't launch are refused if that run has restarted or someone is typing there. A project assistant asks you before closing a terminal it didn't launch or one whose agent is still mid-task.
+- **Tool-set tiers.** Each machine sets which of Daintree's tools its assistants get (**Settings → Daintree Assistant → Security → Tool set**), and an action above that tier is refused.
 - **Reports are claims.** A worker's handback proves the agent printed its marker, not that the work is finished or correct, and its summary is untrusted text to check, never an instruction.
 
 ## Daintree Decisions
@@ -101,17 +101,17 @@ Questions travel through a relay you deploy into your own Cloudflare account, en
 
 Put agents on whichever machine has the capacity. From macOS or Linux, a Daintree window drives Daintree on another Mac or Linux machine over your own `ssh`: the agents, terminals, worktrees, git, files, plugins and MCP server all run on the host, and the window is its screen and keyboard. Agents on an always-on host keep running while your laptop sleeps. From Windows, drive Linux hosts in WSL.
 
-The global Assistant reaches every host you've connected: it lists each host's projects and agents, reads their state across hosts in one call, and can bring back a host whose link went down, waking it over your LAN where you've set that up and starting Daintree there when its Host mode is on. Nothing dials or listens until you add a host or turn Host mode on. [Remote&nbsp;hosts&nbsp;docs&nbsp;→](https://daintree.org/docs/remote-hosts)
+One window drives a host's project at a time, and every other window attached to it watches its terminals live. The global Assistant reaches every host with Assistant control on: it lists each host's projects and agents, reads their state across hosts in one call, and can bring back a host whose link went down, waking it over your LAN where you've set that up and starting Daintree there when its Host mode is on. Nothing dials or listens until you add a host or turn Host mode on. [Remote&nbsp;hosts&nbsp;docs&nbsp;→](https://daintree.org/docs/remote-hosts)
 
 ## Plugins
 
-A project can build its own tools where its agents run. A project plugin, committed to the repository under `.daintree/plugins/`, can be a whole application, such as a CRM, a ledger or a board: its data lives in the repository, a panel renders it, and the project's agents work on the same data through the plugin's own MCP tools.
+A project can build its own tools where its agents run. A project plugin, committed to the repository under `.daintree/plugins/`, can be a whole application, such as a CRM, a ledger or a board: its data lives in the repository, a panel renders it, and once you give them access, the project's agents work on the same data through the plugin's own MCP tools.
 
-Plugins also add panels, actions, settings, agents, forge providers, themes, recipes and tours. GitHub and GitLab support and the Markdown editor ship as built-in plugins. Installing one from a URL or from the reviewed community catalog shows every capability it asks for before anything lands on disk. [Plugin&nbsp;docs&nbsp;→](docs/plugins/README.md)
+Plugins also add panels, actions, settings, agents, forge providers, themes, recipes and tours. GitHub and GitLab support and the Markdown editor ship as built-in plugins. Installing one from a URL or from the reviewed community catalog shows every capability it asks for before it's installed. [Plugin&nbsp;docs&nbsp;→](docs/plugins/README.md)
 
 ## Worktrees and review
 
-Under the assistants, every task gets a git worktree and an agent terminal. Daintree sorts the runs by what they need from you, and each worktree's work is checked before it merges: by a reviewing agent, by your tests and CI, or by you.
+Under the assistants, every task gets a git worktree and an agent terminal. Daintree sorts the runs by what they need from you, and you choose how each worktree's work is checked before it merges: a reviewing agent, your tests and CI, or your own read in Review Hub.
 
 <p align="center">
   <picture>
@@ -214,7 +214,7 @@ One list of every agent across every open project, ranked by what it needs from 
   <br><sub>Canopy, in the <a href="#themes">Redwoods</a> theme</sub>
 </p>
 
-Canopy reads each agent's screen with a small open model that runs on your computer, downloaded from Hugging Face the first time. Nothing it reads leaves the machine. It's off until you turn it on under **Settings → Integrations → Canopy**, then opens with <kbd>⌘</kbd>&nbsp;<kbd>E</kbd> (<kbd>Ctrl</kbd>&nbsp;<kbd>Shift</kbd>&nbsp;<kbd>O</kbd> on Windows and Linux).
+Canopy reads each agent's screen with a small open model that ships inside the app and runs on your computer. Nothing it reads leaves the machine. It's on by default, **Settings → Integrations → Canopy** turns its reading off or hides it, and it opens with <kbd>⌘</kbd>&nbsp;<kbd>E</kbd> (<kbd>Ctrl</kbd>&nbsp;<kbd>Shift</kbd>&nbsp;<kbd>O</kbd> on Windows and Linux).
 
 ## Also in Daintree
 

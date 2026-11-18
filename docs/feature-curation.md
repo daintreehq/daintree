@@ -28,7 +28,7 @@ Meanwhile the agent CLIs themselves now ship worktrees, subagents, session resum
 ## Core Pillars
 
 1. **Panel Grid** — Agents in real terminals, alongside browser, dev preview, review, file, file-browser and diff panels. Layout is automatic and size-driven with dock and maximize, not freeform (#4768).
-2. **Agent State & Attention** — Attention-first: the person's attention is the scarce resource, and review is one of the things competing for it. Observed agent state, attention bands (blocked, needs you, review, done…), Pilot across every project, park, snooze and read marks, and notifications that reach you only when an agent needs you, on your desk or, through Decisions, on your phone. A feature that spends the person's attention has to save more of it than it takes.
+2. **Agent State & Attention** — Attention-first: the person's attention is the scarce resource, and review is one of the things competing for it. Observed agent state, attention bands (blocked, needs you, review, done…), Pilot across every project, park, snooze and read marks, and notifications that reach you only when an agent needs you, on your desk or, with Decisions on, on your phone. A feature that spends the person's attention has to save more of it than it takes.
 3. **Fleet & Automation** — Arm several agents and type once, saved fleets, terminal recipes, and actions that take an issue to a worktree to a running agent.
 4. **Worktree Orchestration** — Worktree lifecycle, scratch workspaces and plain folders, per-worktree dev servers with embedded preview, and status across all of them.
 5. **Context In, Review Out** — Getting the right files, diffs, errors, screenshots and notes into an agent (CopyTree, `@` mentions, drag and drop, send-to-agent, diff notes), and getting its output reviewed and landed (Review Hub, cross-worktree diff, PR and CI signals, the bounded Git operations below).
@@ -42,7 +42,7 @@ Meanwhile the agent CLIs themselves now ship worktrees, subagents, session resum
 
 **Strategic Features** (significant, but not pillars):
 
-- **Daintree Assistant** — The user's own Claude Code or Codex, running in a terminal in the help panel, wired to Daintree's MCP tools, docs and runbooks. Orchestration context without a bespoke chat UI.
+- **Daintree Assistant** — The user's own Claude Code, Codex or Antigravity, running in a terminal in the Assistant panel, wired to Daintree's MCP tools, docs and runbooks: a global Assistant above every project and host, and each project's own assistants below it. Orchestration context without a bespoke chat UI.
 - **Canopy** — A reader that ranks every agent by what it needs from you, quoting each screen as its evidence. On by default, and turned off or hidden from Settings. Reads on the user's own machine with a small open model that ships inside the app (#14448, #16415).
 - **Voice Input** — Hands-free delegation while monitoring other agents.
 
