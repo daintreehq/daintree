@@ -942,6 +942,8 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
       expiresAt: null,
       settledAt: null,
       standing,
+      replyRequest: null,
+      stall: null,
     };
   }
 
@@ -961,6 +963,7 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
       askedAt: "2026-11-02T10:01:00.000Z",
       expiresAt: null,
       status: "open",
+      closedReason: null,
       deliveryStatus: "not-sent",
       attachments: [],
       thread: [],
@@ -1384,6 +1387,51 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
     expect(read?.ok && read.value.result === "read" ? read.value.question.thread : null).toEqual(
       thread
     );
+  });
+
+  it("carries a Host's reply requests, stalls and declines across the link", async () => {
+    const { host, client } = await pair();
+    const decisions = questionHost();
+    const replying: Item = {
+      ...item(1, { kind: "settled", outcome: "answered", handled: false }),
+      replyRequest: "msg_agent_0001",
+    };
+    const stalled: Item = {
+      ...item(2, { kind: "needs-attention", deliveryStatus: "needs-attention" }),
+      stall: { answerRevision: 2, followUpIds: ["msg_person_0001"], reason: "pane_gone" },
+    };
+    const declined = item(3, { kind: "settled", outcome: "declined" });
+    decisions.set({ hostId: QHOST, questions: [replying, stalled, declined] });
+    const thread = [
+      { type: "declined" as const, entryId: "entry_decline", sentAt: "2026-11-02T10:04:00.000Z" },
+    ];
+    decisions.answerWith((read) =>
+      read.read === "content"
+        ? {
+            result: "read",
+            question: {
+              ...content(read.reference),
+              status: "cancelled",
+              closedReason: "declined",
+              thread,
+            },
+          }
+        : null
+    );
+    serveQuestions(host, decisions);
+    const shell = shellOf([STUDIO]);
+    shell.open(HOST, client);
+
+    await vi.waitFor(() =>
+      expect(shell.client.hostQuestions()[0]?.questions).toEqual([replying, stalled, declined])
+    );
+    const read = await shell.client.readHostQuestion(QHOST, {
+      read: "content",
+      reference: declined.reference,
+    });
+    const question = read?.ok && read.value.result === "read" ? read.value.question : null;
+    expect(question?.closedReason).toBe("declined");
+    expect(question?.thread).toEqual(thread);
   });
 
   it("keeps only what names the Host's own id, and lists neither of two Hosts naming the same one", async () => {

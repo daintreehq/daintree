@@ -717,6 +717,8 @@ describe("Decisions entry", () => {
       expiresAt: null,
       settledAt: null,
       standing: { kind: "waiting", reason: "open" },
+      replyRequest: null,
+      stall: null,
     });
     const own = item(RELAY.hostId, "q_own_000001", "2026-11-02T10:05:00.000Z");
     const theirs = item("qhost_studio_0001", "q_host_00001", "2026-11-02T10:01:00.000Z");

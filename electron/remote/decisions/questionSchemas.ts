@@ -69,6 +69,17 @@ const StandingSchema = z.union([
     .strict(),
 ]);
 
+/** A stall's reason: the library's code, or `unspecified`, as the Host's own list reads it. */
+const StallReason = z.string().regex(/^[a-z0-9_.-]{1,48}$/);
+
+const StallSchema = z
+  .object({
+    answerRevision: Count.nullable(),
+    followUpIds: z.array(Id).max(100_000),
+    reason: StallReason,
+  })
+  .strict();
+
 /** A list item as a Host sends it: never with `remoteHost`, which only the Shell adds. */
 export const HostQuestionItemSchema = z
   .object({
@@ -84,6 +95,8 @@ export const HostQuestionItemSchema = z
     expiresAt: Time.nullable(),
     settledAt: Time.nullable(),
     standing: StandingSchema,
+    replyRequest: Id.nullable(),
+    stall: StallSchema.nullable(),
   })
   .strict() satisfies z.ZodType<Omit<DecisionQuestionListItem, "remoteHost">>;
 
@@ -176,6 +189,7 @@ const ThreadEntrySchema = z.discriminatedUnion("type", [
     })
     .strict(),
   z.object({ type: z.literal("expired"), entryId: Id, sentAt: Time }).strict(),
+  z.object({ type: z.literal("declined"), entryId: Id, sentAt: Time }).strict(),
   z
     .object({
       type: z.literal("message"),
@@ -219,6 +233,7 @@ const QuestionContentSchema = z
       "expired",
       "publish-failed",
     ]),
+    closedReason: z.enum(["declined", "withdrawn", "expired"]).nullable(),
     deliveryStatus: z.enum([
       "not-sent",
       "relay-queued",
