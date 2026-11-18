@@ -338,8 +338,10 @@ describe("readQuestionContent", () => {
       text: "Is Redis allowed here?",
       images: [],
       expectsReply: true,
+      onComputer: false,
       sentAt: fromAgent.created_at,
       deliveryStatus: null,
+      deliveryStopped: false,
       unreadable: false,
     });
     expect(thread[3]).toMatchObject({ type: "answer", from: "person", confirmsModel: true });
@@ -459,6 +461,49 @@ describe("readQuestionContent", () => {
     expect((await read({ local_status: "cancelled" })).closedReason).toBe("withdrawn");
     expect((await read({ local_status: "expired" })).closedReason).toBe("expired");
     expect((await read({ local_status: "open" })).closedReason).toBeNull();
+  });
+
+  it("tells a person's follow-up written on the computer from a phone's and the agent's (#17238)", async () => {
+    const fromAgent = await message("msg_agent_01", "agent", "Which region?", 2);
+    const fromPhone = { ...(await message("msg_human_01", "human", "From the phone.", 4)) };
+    const fromComputer = {
+      ...(await message("msg_human_02", "human", "From the desk.", 6)),
+      signer_device_id: "dev_owner_1",
+      signer_role: "owner-desktop" as const,
+    };
+    // Withdrawn with its question after it arrived: kept in the thread, never typed.
+    fromComputer.delivery = { ...fromComputer.delivery!, status: "received", deliver: false };
+    // Stored before the signer's role was kept: a person's message then was always a phone's.
+    const legacy = { ...(await message("msg_human_03", "human", "Older.", 8)) };
+    delete (legacy as { signer_role?: unknown }).signer_role;
+    fromPhone.signer_role = "phone";
+    const row = await question(CONTENT, {
+      messages_json: serializeMessages([fromAgent, fromPhone, fromComputer, legacy]),
+    });
+
+    const read = await readQuestionContent(ctx(), row);
+    if (read.result !== "read") throw new Error(read.result);
+
+    expect(
+      read.question.thread.map((entry) =>
+        entry.type === "message" ? [entry.from, entry.onComputer, entry.text] : null
+      )
+    ).toEqual([
+      ["agent", false, "Which region?"],
+      ["person", false, "From the phone."],
+      ["person", true, "From the desk."],
+      ["person", false, "Older."],
+    ]);
+    expect(
+      read.question.thread.map((entry) =>
+        entry.type === "message" ? [entry.deliveryStatus, entry.deliveryStopped] : null
+      )
+    ).toEqual([
+      [null, false],
+      ["terminal-delivered", false],
+      ["received", true],
+      ["terminal-delivered", false],
+    ]);
   });
 
   it("keeps the rest of the thread when one entry can't be opened", async () => {

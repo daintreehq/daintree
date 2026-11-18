@@ -38,8 +38,10 @@ import {
 import { execFileSync } from "node:child_process";
 import {
   CREATOR_MISSING_FEATURE,
+  ERROR_STATUS,
   EventData,
   MESSAGE_RECORD_TYPE,
+  MessageReceipt,
   type DeviceCert,
   type InvolvementRecord,
   type PhoneImageReference,
@@ -77,6 +79,7 @@ import { QuestionBridge } from "../questionBridge.js";
 import { RelayConnection } from "../relayConnection.js";
 import { DaintreeRelayClient } from "../relayFeatures.js";
 import { holdingTerminalSink } from "../relayTransport.js";
+import { standingOf } from "../questionList.js";
 import { makeOwner } from "../../../remote/decisions/__tests__/ownerFixture.js";
 
 /**
@@ -219,6 +222,8 @@ class FakeRelay {
   features: string[] = ["thread-messages-v1"];
   /** What each device declared on its socket tickets, by device id. */
   readonly declared = new Map<string, string[]>();
+  /** Questions past their expiry: the relay refuses a message on one with `expired`. */
+  readonly expired = new Set<string>();
 
   constructor(readonly devices: FakeDevice[]) {}
 
@@ -238,6 +243,86 @@ class FakeRelay {
     this.events.push(full);
     for (const socket of this.sockets) if (socket.live) socket.push(full);
     return full;
+  }
+
+  /** The next message's place in its question's thread, from 1, whichever side posted it. */
+  private messageSeq(questionId: string): number {
+    return (
+      this.events.filter(
+        (e) => e.event_type === "decision.message.posted" && e.question_id === questionId
+      ).length + 1
+    );
+  }
+
+  private commitOwnerMessage(
+    questionId: string,
+    question: { target_host_id: string; signer_device_id: string },
+    message: { record: Record<string, unknown>; envelope: Record<string, unknown> }
+  ): Response {
+    const messageId = String(message.record.message_id);
+    const prior = this.events.find(
+      (e) =>
+        e.event_type === "decision.message.posted" &&
+        (e.data.record as { message_id?: unknown }).message_id === messageId
+    );
+    if (prior !== undefined) {
+      // The same message id is the same message: replayed only with the same signed body, on its question.
+      if (
+        prior.question_id !== questionId ||
+        JSON.stringify(prior.data.record) !== JSON.stringify(message.record)
+      ) {
+        return json(ERROR_STATUS.idempotency_collision, {
+          code: "idempotency_collision",
+          message: "that message id was used for another message",
+        });
+      }
+      return json(
+        200,
+        MessageReceipt.parse({
+          question_id: questionId,
+          message_id: messageId,
+          message_seq: prior.data.message_seq,
+          event_seq: prior.seq,
+          committed_at: prior.data.committed_at,
+        })
+      );
+    }
+    if (this.expired.has(questionId)) {
+      return json(ERROR_STATUS.expired, { code: "expired", message: "the question expired" });
+    }
+    const creator = this.declared.get(question.signer_device_id) ?? [];
+    if (!creator.includes("owner-desktop-messages-v1")) {
+      return json(ERROR_STATUS.invalid_state, {
+        code: "invalid_state",
+        message: "the asking desktop doesn't take follow-ups sent from the computer",
+        details: { reason: CREATOR_MISSING_FEATURE },
+      });
+    }
+    const messageSeq = this.messageSeq(questionId);
+    const committedAt = new Date().toISOString();
+    const event = this.append({
+      event_type: "decision.message.posted",
+      question_id: questionId,
+      question_revision: null,
+      origin_device_id: String(message.record.signer_device_id),
+      data: EventData.messagePosted.parse({
+        message_seq: messageSeq,
+        committed_at: committedAt,
+        record: message.record,
+        envelope: message.envelope,
+        target_host_id: question.target_host_id,
+      }) as Record<string, unknown>,
+    });
+    return json(
+      201,
+      MessageReceipt.parse({
+        question_id: questionId,
+        message_id: messageId,
+        message_seq: messageSeq,
+        event_seq: event.seq,
+        committed_at: committedAt,
+      })
+    );
   }
 
   liveSocket(): FakeSocket | null {
@@ -398,8 +483,15 @@ class FakeRelay {
       const { message } = body as {
         message: { record: Record<string, unknown>; envelope: Record<string, unknown> };
       };
-      if (!this.questions.has(thread[1]!)) {
+      const question = this.questions.get(thread[1]!);
+      if (question === undefined) {
         return json(404, { code: "not_found", message: "unknown question" });
+      }
+      const signer = this.devices.find((d) => d.device_id === message.record.signer_device_id);
+      // The person's follow-up from the owner desktop (#17238), committed to the thread as the relay
+      // does: only on a question still taking messages whose asking desktop declared it takes one.
+      if (message.record.side === "human" && signer?.role === "owner-desktop") {
+        return this.commitOwnerMessage(thread[1]!, question, message);
       }
       this.messages.push({
         questionId: thread[1]!,
@@ -407,12 +499,32 @@ class FakeRelay {
         record: message.record,
         envelope: message.envelope,
       });
-      return json(201, {
-        question_id: thread[1],
-        message_id: message.record.message_id,
-        message_seq: this.messages.filter((m) => m.questionId === thread[1]).length,
-        event_seq: this.highWater(),
+      // Committed to the question's thread in the one ledger, as the relay does for both sides.
+      const messageSeq = this.messageSeq(thread[1]!);
+      const committedAt = new Date().toISOString();
+      const event = this.append({
+        event_type: "decision.message.posted",
+        question_id: thread[1]!,
+        question_revision: null,
+        origin_device_id: String(message.record.signer_device_id),
+        data: EventData.messagePosted.parse({
+          message_seq: messageSeq,
+          committed_at: committedAt,
+          record: message.record,
+          envelope: message.envelope,
+          target_host_id: question.target_host_id,
+        }) as Record<string, unknown>,
       });
+      return json(
+        201,
+        MessageReceipt.parse({
+          question_id: thread[1],
+          message_id: message.record.message_id,
+          message_seq: messageSeq,
+          event_seq: event.seq,
+          committed_at: committedAt,
+        })
+      );
     }
     if (method === "POST" && pathname === "/api/v1/socket-ticket") {
       const declared = (body as { features?: string[] } | null)?.features ?? [];
@@ -1035,7 +1147,7 @@ async function startOwner() {
   const relay = new FakeRelay(owner.devices);
   relay.hostDeviceId = owner.deviceId;
   relay.helloRole = "owner-desktop";
-  relay.features = ["thread-messages-v1", "owner-desktop-answers-v1"];
+  relay.features = ["thread-messages-v1", "owner-desktop-answers-v1", "owner-desktop-messages-v1"];
   const keys = new MemoryKeyStore();
   await keys.save(owner.stored);
   const settings: DecisionsSettings = {
@@ -1194,6 +1306,299 @@ describe("Answers the person makes on the owner computer (#17101)", () => {
     ).resolves.toMatchObject({ outcome: { status: "closed", reason: "cancelled" } });
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(terminals.submitted).toHaveLength(1);
+  }, 60_000);
+});
+
+describe("Follow-ups the person sends from the owner computer (#17238)", () => {
+  it("types the person's follow-up into the pane that asked, before its answer and after it, and never changes the answer", async () => {
+    const { owner, relay, terminals, listener, service, turnEnds } = await startOwner();
+    const asked = await askHuman(listener.port, "token-pane-2", "Which way for the lexer?");
+    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    expect(relay.declared.get(owner.deviceId)).toContain("owner-desktop-messages-v1");
+    const store = new DaintreeLocalStore(sqlite);
+    const question = await readOnHost(service, "pane-2", asked);
+    const before = {
+      reference: question.reference,
+      messageId: "0190f0aa-2222-4222-8333-444455550001",
+      text: "Before you pick: the old lexer has to keep working.",
+    };
+
+    // A reference naming another of this computer's panes names nothing, and nothing is signed.
+    await expect(
+      service.sendFollowUp({ ...before, reference: { ...before.reference, terminalId: "pane-1" } })
+    ).resolves.toEqual({ result: "refused", reason: "not-found" });
+
+    await expect(service.sendFollowUp(before)).resolves.toEqual({
+      result: "submitted",
+      messageId: before.messageId,
+      outcome: { status: "sent" },
+    });
+    await vi.waitFor(() => expect(terminals.submitted).toHaveLength(1), { timeout: 15_000 });
+    const first = terminals.submitted[0]!;
+    expect(first.id).toBe("pane-2");
+    expect(first.text).toContain(`${DECISION_FOLLOWUP_START}\nquestion_id: ${asked} (q-1)\n`);
+    expect(first.text).toContain(
+      "source: human\nsent_from: computer\nnote: The person sent this from their computer before answering."
+    );
+    expect(first.text).toContain("text: Before you pick: the old lexer has to keep working.\n");
+    expect(typedChoices(first.text)).toEqual([]);
+    // Still waiting for its answer: a follow-up never answers it.
+    expect(await store.getQuestion(asked)).toMatchObject({ local_status: "open" });
+    await vi.waitFor(
+      async () =>
+        expect(parseMessages((await store.getQuestion(asked))!.messages_json)).toMatchObject([
+          { message_id: before.messageId, delivery: { status: "terminal-delivered" } },
+        ]),
+      { timeout: 15_000 }
+    );
+    turnEnds("pane-2");
+
+    // Answered from the computer, then followed up after.
+    await expect(
+      service.answerQuestion({
+        reference: question.reference,
+        answerId: "0190f0aa-2222-4222-8333-444455550002",
+        expectedRevision: question.revision,
+        selectedOptionIds: ["a"],
+        reviewedAttachmentDigests: [],
+      })
+    ).resolves.toMatchObject({ result: "submitted", outcome: { status: "sent" } });
+    await vi.waitFor(() => expect(terminals.submitted).toHaveLength(2), { timeout: 15_000 });
+    expect(typedChoices(terminals.submitted[1]!.text)).toEqual(["a"]);
+    await vi.waitFor(
+      async () =>
+        expect((await store.getQuestion(asked))?.delivery_status).toBe("terminal-delivered"),
+      { timeout: 15_000 }
+    );
+    const answered = (await store.getQuestion(asked))!;
+    turnEnds("pane-2");
+
+    // The agent asks for a reply, which brings the answered question back to Needs you.
+    const asking = await callTool(listener.port, "token-pane-2", "send_followup", {
+      question_id: asked,
+      text: "Should the old lexer stay behind a flag?",
+      expects_reply: true,
+    });
+    expect(asking.isError).toBeFalsy();
+    await vi.waitFor(
+      async () =>
+        expect(parseMessages((await store.getQuestion(asked))!.messages_json)).toHaveLength(2),
+      { timeout: 15_000 }
+    );
+    await vi.waitFor(
+      async () =>
+        expect(standingOf((await store.getQuestion(asked))!, new Map())).toEqual({
+          kind: "waiting",
+          reason: "reply",
+        }),
+      { timeout: 15_000 }
+    );
+
+    const after = {
+      reference: question.reference,
+      messageId: "0190f0aa-2222-4222-8333-444455550003",
+      text: "Thanks. Keep the old one behind a flag.",
+    };
+    await expect(service.sendFollowUp(after)).resolves.toMatchObject({
+      result: "submitted",
+      outcome: { status: "sent" },
+    });
+    await vi.waitFor(() => expect(terminals.submitted).toHaveLength(3), { timeout: 15_000 });
+    // The person's reply from the computer answers the agent's request, as a phone's does.
+    expect(standingOf((await store.getQuestion(asked))!, new Map())).not.toMatchObject({
+      kind: "waiting",
+    });
+    const third = terminals.submitted[2]!;
+    expect(third.text).toContain(
+      "source: human\nsent_from: computer\nnote: The person sent this from their computer about a decision already made."
+    );
+    expect(typedChoices(third.text)).toEqual([]);
+    await vi.waitFor(async () => expect(await store.hasPendingDelivery()).toBe(false), {
+      timeout: 15_000,
+    });
+    // The answer exactly as it was.
+    expect(await store.getQuestion(asked)).toMatchObject({
+      local_status: answered.local_status,
+      question_revision: answered.question_revision,
+      answers_json: answered.answers_json,
+      delivered_revision: answered.delivered_revision,
+    });
+
+    // The same follow-up again is the same message: read back, never posted twice.
+    await expect(service.sendFollowUp(after)).resolves.toMatchObject({
+      outcome: { status: "sent" },
+    });
+    await expect(service.getFollowUpResult(after.messageId)).resolves.toEqual({
+      result: "read",
+      questionId: asked,
+      outcome: { status: "sent" },
+    });
+    const posted = relay.requests.filter(
+      (r) =>
+        r.path === `/api/v1/questions/${asked}/messages` &&
+        (r.body as { message: { record: { side: string } } }).message.record.side === "human"
+    );
+    expect(posted.map((r) => r.deviceId)).toEqual([owner.deviceId, owner.deviceId]);
+    // Reusing an id for other words is refused before anything is signed.
+    await expect(
+      service.sendFollowUp({ ...after, text: "Something else." })
+    ).resolves.toMatchObject({ result: "refused", reason: "invalid" });
+
+    // The view's thread, and the agent's get_decision, show both as the person's, from the computer.
+    const shown = await readOnHost(service, "pane-2", asked);
+    expect(shown.thread.filter((entry) => entry.type === "message")).toMatchObject([
+      { messageId: before.messageId, from: "person", onComputer: true },
+      { from: "agent", expectsReply: true, onComputer: false },
+      { messageId: after.messageId, from: "person", onComputer: true },
+    ]);
+    const decision = await callTool(listener.port, "token-pane-2", "get_decision", {
+      question_id: asked,
+    });
+    expect(
+      (decision.structuredContent.thread as Array<Record<string, unknown>>)
+        .filter((entry) => entry.kind === "message")
+        .map((entry) => [entry.side, entry.sent_from, entry.text])
+    ).toEqual([
+      ["human", "computer", before.text],
+      ["agent", null, "Should the old lexer stay behind a flag?"],
+      ["human", "computer", after.text],
+    ]);
+    expect(terminals.submitted).toHaveLength(3);
+  }, 60_000);
+
+  it("says a question past its expiry closed, and types nothing", async () => {
+    const { relay, terminals, listener, service } = await startOwner();
+    const asked = await askHuman(listener.port, "token-pane-2", "Which way for the lexer?");
+    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    const question = await readOnHost(service, "pane-2", asked);
+    relay.expired.add(asked);
+
+    await expect(
+      service.sendFollowUp({
+        reference: question.reference,
+        messageId: "0190f0aa-2222-4222-8333-444455550004",
+        text: "Still there?",
+      })
+    ).resolves.toMatchObject({ outcome: { status: "closed", reason: "expired" } });
+    expect(relay.events.filter((e) => e.event_type === "decision.message.posted")).toHaveLength(0);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(terminals.submitted).toHaveLength(0);
+  }, 60_000);
+});
+
+describe("Follow-ups the person sends from the owner computer to a Remote Host's question (#17238)", () => {
+  it("types the follow-up into the Host pane that asked, signed by the owner and never the Host", async () => {
+    const { owner, relay, host, terminals, listener, service } = await startHost();
+    relay.features = ["thread-messages-v1", "owner-desktop-messages-v1"];
+    const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
+    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    // The Host told the relay it takes follow-ups sent from the computer.
+    expect(relay.declared.get(host.config.deviceId)).toContain("owner-desktop-messages-v1");
+    const question = await readOnHost(service, "pane-1", asked);
+    const followUp = {
+      reference: question.reference,
+      messageId: "0190f0aa-2222-4222-8333-444455550005",
+      text: "Prefer the one with fewer dependencies.",
+    };
+
+    // The Host's own Decisions never signs the person's follow-up.
+    await expect(service.sendFollowUp(followUp)).resolves.toEqual({
+      result: "refused",
+      reason: "not-owner",
+    });
+    await expect(
+      ownerAnswerPath(owner, relay).followUpForPerson(followUp, "host_owner_mac")
+    ).resolves.toEqual({
+      result: "submitted",
+      messageId: followUp.messageId,
+      outcome: { status: "sent" },
+    });
+
+    await vi.waitFor(() => expect(terminals.submitted).toHaveLength(1), { timeout: 15_000 });
+    const typed = terminals.submitted[0]!;
+    expect(typed.id).toBe("pane-1");
+    expect(typed.text).toContain("source: human\nsent_from: computer\n");
+    expect(typed.text).toContain("text: Prefer the one with fewer dependencies.\n");
+    const shown = await readOnHost(service, "pane-1", asked);
+    expect(shown.thread).toMatchObject([{ type: "message", from: "person", onComputer: true }]);
+    expect(shown.status).toBe("open");
+
+    const sent = relay.requests.filter((r) => r.path === `/api/v1/questions/${asked}/messages`);
+    expect(sent.map((r) => r.deviceId)).toEqual([owner.deviceId]);
+    const { message } = sent[0]!.body as {
+      message: { record: Record<string, unknown>; envelope: Record<string, unknown> };
+    };
+    expect(
+      await verifyRecordAndEnvelope(
+        message.record,
+        message.envelope as never,
+        owner.identity.keys.signing.publicKey
+      )
+    ).toBe(true);
+    expect(
+      await verifyRecordAndEnvelope(
+        message.record,
+        message.envelope as never,
+        host.keys.signing.publicKey
+      )
+    ).toBe(false);
+  }, 60_000);
+
+  it("reports a relay too old for follow-ups from the computer, posting it nothing and typing nothing", async () => {
+    const { owner, relay, terminals, listener, service } = await startHost();
+    const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
+    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    const question = await readOnHost(service, "pane-1", asked);
+    const owners = ownerAnswerPath(owner, relay);
+    const messageId = "0190f0aa-2222-4222-8333-444455550006";
+
+    await expect(
+      owners.followUpForPerson(
+        { reference: question.reference, messageId, text: "Still deciding?" },
+        "host_owner_mac"
+      )
+    ).resolves.toEqual({
+      result: "submitted",
+      messageId,
+      outcome: { status: "unsupported", by: "relay" },
+    });
+    await expect(owners.followUpResultForPerson(messageId)).resolves.toMatchObject({
+      result: "read",
+      outcome: { status: "unsupported", by: "relay" },
+    });
+    expect(relay.requests.some((r) => r.path.endsWith("/messages"))).toBe(false);
+    expect(relay.events.filter((e) => e.question_id === asked).map((e) => e.event_type)).toEqual([
+      "decision.created",
+    ]);
+    expect(terminals.submitted).toHaveLength(0);
+  }, 60_000);
+
+  it("reports a Host too old for follow-ups from the computer, as the relay refuses it", async () => {
+    const { owner, relay, host, terminals, listener, service } = await startHost();
+    relay.features = ["thread-messages-v1", "owner-desktop-messages-v1"];
+    const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
+    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    const question = await readOnHost(service, "pane-1", asked);
+    // As a Host from before #17238 would have declared.
+    relay.declared.set(
+      host.config.deviceId,
+      relay.declared.get(host.config.deviceId)!.filter((f) => f !== "owner-desktop-messages-v1")
+    );
+
+    await expect(
+      ownerAnswerPath(owner, relay).followUpForPerson(
+        {
+          reference: question.reference,
+          messageId: "0190f0aa-2222-4222-8333-444455550007",
+          text: "Still deciding?",
+        },
+        "host_owner_mac"
+      )
+    ).resolves.toMatchObject({ outcome: { status: "unsupported", by: "asking-desktop" } });
+    expect(relay.events.filter((e) => e.question_id === asked).map((e) => e.event_type)).toEqual([
+      "decision.created",
+    ]);
+    expect(terminals.submitted).toHaveLength(0);
   }, 60_000);
 });
 
@@ -1393,6 +1798,7 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
         "involvement-v1",
         "owner-desktop-answers-v1",
         "owner-desktop-declines-v1",
+        "owner-desktop-messages-v1",
         "person-declines-v1",
         "phone-images-v1",
         "thread-messages-v1",

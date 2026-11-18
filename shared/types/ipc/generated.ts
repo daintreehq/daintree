@@ -929,6 +929,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisionsQuestion.js").GetDecisionDeclineResultPayload];
     result: import("../decisionsQuestion.js").DecisionDeclineResultRead;
   };
+  "decisions:get-follow-up-result": {
+    args: [payload: import("../decisionsQuestion.js").GetDecisionFollowUpResultPayload];
+    result: import("../decisionsQuestion.js").DecisionFollowUpResultRead;
+  };
   "decisions:get-model": {
     args: [];
     result: import("../decisionsModel.js").DecisionsModelState;
@@ -1030,6 +1034,10 @@ export interface GeneratedIpcInvokeMap {
   "decisions:rotate-keys": {
     args: [];
     result: import("../decisions.js").DecisionsRotateKeysResult;
+  };
+  "decisions:send-follow-up": {
+    args: [payload: import("../decisionsQuestion.js").SendDecisionFollowUpPayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionFollowUpResult;
   };
   "decisions:set-agent-ask-human": {
     args: [payload: import("../decisions.js").SetDecisionsAgentAskHumanPayload];

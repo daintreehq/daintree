@@ -2019,9 +2019,10 @@ describe("get_involvement over a connection (#17228)", () => {
     await vi.waitFor(() => expect(h.relay.questions).toHaveLength(1));
     expect(h.statuses.at(-1)?.state).toBe("connected");
     expect(relay.declared.length).toBeGreaterThan(0);
-    // Only the owner desktop's decline is declared beyond 0.7.0's (#17239): a relay ignores a
-    // token it doesn't know, and nothing is declined unless the person dismisses a question here.
-    const declarable = [...releasedBy070, "owner-desktop-declines-v1"];
+    // Only the owner desktop's decline (#17239) and follow-ups (#17238) are declared beyond 0.7.0's:
+    // a relay ignores a token it doesn't know, and nothing is declined or followed up unless the
+    // person dismisses a question or writes on one here.
+    const declarable = [...releasedBy070, "owner-desktop-declines-v1", "owner-desktop-messages-v1"];
     for (const features of relay.declared) {
       for (const feature of (features as string[] | undefined) ?? []) {
         expect(declarable).toContain(feature);

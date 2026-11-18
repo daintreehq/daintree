@@ -64,7 +64,8 @@ function StepButton({
  * reference (#17229), from this computer for any of its windows. Held in
  * memory only; it steps through the questions it was opened with without
  * closing, and a question still waiting can be answered (#17102) or
- * dismissed (#17239) from here.
+ * dismissed (#17239) from here. The person can add to its thread before or
+ * after its answer (#17238).
  */
 export function DecisionQuestionDialog() {
   const isOpen = useDecisionsQuestionViewStore((state) => state.isOpen);
@@ -221,7 +222,7 @@ export function DecisionQuestionDialog() {
         </AppDialog.Header>
         <AppDialog.Body resetScrollKey={key ?? undefined}>
           <div ref={bodyRef} data-testid="decision-question-body">
-            <DecisionQuestionReadView reader={reader} target={target} active={isOpen} />
+            <DecisionQuestionReadView reader={reader} target={target} active={isOpen} followUps />
           </div>
         </AppDialog.Body>
         {reader.cancellable && (

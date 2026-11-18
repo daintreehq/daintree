@@ -207,9 +207,29 @@ describe("follow-ups that need a person (#16231)", () => {
     // Each follow-up says whether the answer came before it.
     expect(text).toContain("before answering");
     expect(text).toContain("about a decision already made");
+    // Both from the phone.
+    expect(text.match(/^sent_from: phone$/gm)).toHaveLength(2);
+    expect(text).not.toContain("sent_from: computer");
     expect(text.split(FOLLOWUP_BLOCK_END)).toHaveLength(3);
     expect(text).not.toContain("decision-injection");
     expect(text).not.toContain("injection_id");
+  });
+
+  it("copies a follow-up written on the computer as sent from it (#17238)", () => {
+    const fromComputer = message({
+      message_id: "0193f1a2b3c4d5e6aaaa000000000003",
+      event_seq: 10,
+      signer_device_id: "dev_owner_1",
+      signer_role: "owner-desktop",
+    });
+    const text = copiedAnswerText(
+      row(41),
+      [],
+      [{ message: fromComputer, text: "From the desk." }]
+    )!;
+    expect(text).toContain("source: human\nsent_from: computer\n");
+    expect(text).toContain("The person sent this from their computer before answering.");
+    expect(text).not.toContain("sent_from: phone");
   });
 
   it("copies a thread longer than one typed chunk could hold", () => {

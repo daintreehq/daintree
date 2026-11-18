@@ -116,6 +116,19 @@ describe("decisionQuestionModel", () => {
     expect(others).not.toContain(declined);
   });
 
+  it("names a follow-up sent from the computer, and the agent's request for a reply (#17238)", () => {
+    const computer = threadEntryHeading(message({ from: "person", onComputer: true }));
+    expect(computer).not.toBe(threadEntryHeading(message({ from: "person" })));
+    expect(computer).toMatch(/computer/);
+    // A Remote Host from before it doesn't say: its person's messages are a phone's.
+    expect(threadEntryHeading(message({ from: "person", onComputer: undefined }))).toBe(
+      threadEntryHeading(message({ from: "person", onComputer: false }))
+    );
+    const asking = threadEntryHeading(message({ from: "agent", expectsReply: true }));
+    expect(asking).not.toBe(threadEntryHeading(message({ from: "agent" })));
+    expect(asking).toMatch(/reply/);
+  });
+
   it("says why an entry has nothing to read, and nothing when it does", () => {
     // A notice carries nothing to read, and isn't missing anything.
     expect(

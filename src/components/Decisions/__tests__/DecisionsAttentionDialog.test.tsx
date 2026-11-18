@@ -262,6 +262,32 @@ describe("DecisionsAttentionDialog: Mark handled (#16638)", () => {
     );
   });
 
+  it("names where each held follow-up was sent from (#17238)", async () => {
+    const held = {
+      status: "needs-attention" as const,
+      reason: "pane_gone",
+      unreadable: false,
+      sentAt: "2026-11-01T10:00:00.000Z",
+    };
+    listed = [
+      makeItem(5, {
+        answer: null,
+        followUps: [
+          { ...held, messageId: "m-phone", onComputer: false, text: "From the phone." },
+          { ...held, messageId: "m-desk", onComputer: true, text: "From the desk." },
+        ],
+      }),
+    ];
+    render(tree(true));
+    await listedRows(1);
+
+    const captions = [...document.querySelectorAll("figcaption")].map((el) => el.textContent ?? "");
+    expect(captions.filter((text) => text.startsWith("Your follow-up from"))).toEqual([
+      expect.stringContaining("from your phone"),
+      expect.stringContaining("from your computer"),
+    ]);
+  });
+
   it("drops a confirmation with the list that asked it, so a reopening shows none", async () => {
     listed = [makeItem(3), makeItem(4)];
     const { rerender } = render(tree(true));

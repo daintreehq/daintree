@@ -33,6 +33,7 @@ import type {
   DeclineDecisionQuestionPayload,
   DecisionQuestionCancelResult,
   DecisionQuestionListItem,
+  SendDecisionFollowUpPayload,
 } from "../../../../shared/types/decisionsQuestion.js";
 import { HANDLED_ANSWERS_META_KEY } from "../attentionList.js";
 import type { LearnedDecision, QuestionRow } from "@daintreehq/decisions-client";
@@ -1272,6 +1273,8 @@ describe("DecisionsService relay connection", () => {
     const results: Array<{ route: number; answerId: string }> = [];
     const declines: Array<{ route: number; payload: unknown; hostId: string | null }> = [];
     const declineReads: Array<{ route: number; declineId: string }> = [];
+    const followUps: Array<{ route: number; payload: unknown; hostId: string | null }> = [];
+    const followUpReads: Array<{ route: number; messageId: string }> = [];
     const openQuestions = (source: QuestionSource, previous: Promise<void>) => {
       let release!: () => void;
       const released = new Promise<void>((resolve) => {
@@ -1319,6 +1322,18 @@ describe("DecisionsService relay connection", () => {
           declineReads.push({ route: opened.indexOf(record) + 1, declineId });
           return { result: "not-found" as const };
         },
+        followUpForPerson: async (payload: SendDecisionFollowUpPayload, hostId: string | null) => {
+          followUps.push({ route: opened.indexOf(record) + 1, payload, hostId });
+          return {
+            result: "submitted" as const,
+            messageId: payload.messageId,
+            outcome: { status: "queued" as const },
+          };
+        },
+        followUpResultForPerson: async (messageId: string) => {
+          followUpReads.push({ route: opened.indexOf(record) + 1, messageId });
+          return { result: "not-found" as const };
+        },
         close: () => {
           record.closed += 1;
           events.push(`questions closed ${opened.indexOf(record) + 1}`);
@@ -1328,7 +1343,17 @@ describe("DecisionsService relay connection", () => {
         },
       };
     };
-    return { opened, openQuestions, cancels, answers, results, declines, declineReads };
+    return {
+      opened,
+      openQuestions,
+      cancels,
+      answers,
+      results,
+      declines,
+      declineReads,
+      followUps,
+      followUpReads,
+    };
   }
 
   const SOURCE: QuestionSource = {
@@ -1519,6 +1544,43 @@ describe("DecisionsService relay connection", () => {
     expect(routes.declineReads).toHaveLength(1);
     for (const route of routes.opened) route.release();
     await service.stop();
+  });
+
+  it("hands the person's follow-up to the current route with this computer's host id (#17238)", async () => {
+    const routes = questionRoutes();
+    const { service, made } = connected(undefined, routes.openQuestions);
+    const payload: SendDecisionFollowUpPayload = {
+      reference: {
+        hostId: "host_studio",
+        projectId: "project-b",
+        terminalId: "pane-1",
+        questionId: "q_0123456789",
+      },
+      messageId: "0190f0aa-2222-4222-8333-444455550001",
+      text: "Prefer the one already deployed.",
+    };
+    await service.start(on({ ...RELAY, hostId: "host_aaaaaaaa" }));
+    await expect(service.sendFollowUp(payload)).resolves.toEqual({ result: "not-running" });
+    await expect(service.getFollowUpResult(payload.messageId)).resolves.toEqual({
+      result: "not-running",
+    });
+
+    made[0]!.options.onQuestionsReady!(SOURCE);
+    await expect(service.sendFollowUp(payload)).resolves.toEqual({
+      result: "submitted",
+      messageId: payload.messageId,
+      outcome: { status: "queued" },
+    });
+    await expect(service.getFollowUpResult(payload.messageId)).resolves.toEqual({
+      result: "not-found",
+    });
+    expect(routes.followUps).toEqual([{ route: 1, payload, hostId: "host_aaaaaaaa" }]);
+    expect(routes.followUpReads).toEqual([{ route: 1, messageId: payload.messageId }]);
+
+    for (const route of routes.opened) route.release();
+    await service.stop();
+    await expect(service.sendFollowUp(payload)).resolves.toEqual({ result: "not-running" });
+    expect(routes.followUps).toHaveLength(1);
   });
 
   it("hands a launch the route's port once the connection opens it, waiting while its identity loads", async () => {

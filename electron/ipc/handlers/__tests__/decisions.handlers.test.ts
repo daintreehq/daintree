@@ -34,10 +34,14 @@ import type {
   DeclineDecisionQuestionPayload,
   DecisionAnswerResultRead,
   DecisionDeclineResultRead,
+  DecisionFollowUpResultRead,
   DecisionQuestionAnswerResult,
   DecisionQuestionDeclineResult,
+  DecisionQuestionFollowUpResult,
   GetDecisionAnswerResultPayload,
   GetDecisionDeclineResultPayload,
+  GetDecisionFollowUpResultPayload,
+  SendDecisionFollowUpPayload,
   CancelDecisionQuestionPayload,
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
@@ -134,6 +138,18 @@ const decisionsEntry = vi.hoisted(() => ({
   ),
   getDecisionDeclineResult: vi.fn(
     async (_payload: GetDecisionDeclineResultPayload): Promise<DecisionDeclineResultRead> => ({
+      result: "not-found",
+    })
+  ),
+  sendDecisionFollowUp: vi.fn(
+    async (_payload: SendDecisionFollowUpPayload): Promise<DecisionQuestionFollowUpResult> => ({
+      result: "submitted",
+      messageId: "0190f0aa-2222-4222-8333-444455550001",
+      outcome: { status: "sent" },
+    })
+  ),
+  getDecisionFollowUpResult: vi.fn(
+    async (_payload: GetDecisionFollowUpResultPayload): Promise<DecisionFollowUpResultRead> => ({
       result: "not-found",
     })
   ),
@@ -313,6 +329,8 @@ vi.mock("../../../services/decisions/index.js", () => {
     getDecisionAnswerResult: decisionsEntry.getDecisionAnswerResult,
     declineDecisionQuestion: decisionsEntry.declineDecisionQuestion,
     getDecisionDeclineResult: decisionsEntry.getDecisionDeclineResult,
+    sendDecisionFollowUp: decisionsEntry.sendDecisionFollowUp,
+    getDecisionFollowUpResult: decisionsEntry.getDecisionFollowUpResult,
     setDecisionsEnabled: decisionsEntry.setDecisionsEnabled,
     checkRelay: decisionsEntry.checkRelay,
     claimRelay: decisionsEntry.claimRelay,
@@ -424,6 +442,12 @@ const declineQuestion = decisionsNamespace.ops.declineQuestion.handler as unknow
 const getDeclineResult = decisionsNamespace.ops.getDeclineResult.handler as unknown as (
   payload: GetDecisionDeclineResultPayload
 ) => Promise<DecisionDeclineResultRead>;
+const sendFollowUp = decisionsNamespace.ops.sendFollowUp.handler as unknown as (
+  payload: SendDecisionFollowUpPayload
+) => Promise<DecisionQuestionFollowUpResult>;
+const getFollowUpResult = decisionsNamespace.ops.getFollowUpResult.handler as unknown as (
+  payload: GetDecisionFollowUpResultPayload
+) => Promise<DecisionFollowUpResultRead>;
 const setEnabled = decisionsNamespace.ops.setEnabled.handler as unknown as (
   payload: SetDecisionsEnabledPayload
 ) => Promise<DecisionsStatus>;
@@ -555,6 +579,13 @@ const DECLINE: DeclineDecisionQuestionPayload = {
   expectedRevision: 0,
 };
 
+/** A person's follow-up on a Remote Host's question, as the view submits it (#17238). */
+const FOLLOW_UP: SendDecisionFollowUpPayload = {
+  reference: ANSWER.reference,
+  messageId: "0190f0aa-2222-4222-8333-444455550001",
+  text: "Prefer the one already deployed.",
+};
+
 const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_GET_STATUS,
   CHANNELS.DECISIONS_GET_PANE_STATE,
@@ -570,6 +601,8 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_GET_ANSWER_RESULT,
   CHANNELS.DECISIONS_DECLINE_QUESTION,
   CHANNELS.DECISIONS_GET_DECLINE_RESULT,
+  CHANNELS.DECISIONS_SEND_FOLLOW_UP,
+  CHANNELS.DECISIONS_GET_FOLLOW_UP_RESULT,
   CHANNELS.DECISIONS_SET_ENABLED,
   CHANNELS.DECISIONS_CHECK_RELAY,
   CHANNELS.DECISIONS_CLAIM_RELAY,
@@ -621,6 +654,8 @@ describe("decisions IPC", () => {
     decisionsEntry.getDecisionAnswerResult.mockClear();
     decisionsEntry.declineDecisionQuestion.mockClear();
     decisionsEntry.getDecisionDeclineResult.mockClear();
+    decisionsEntry.sendDecisionFollowUp.mockClear();
+    decisionsEntry.getDecisionFollowUpResult.mockClear();
     decisionsEntry.setDecisionsEnabled.mockClear();
     decisionsEntry.checkRelay.mockClear();
     decisionsEntry.claimRelay.mockClear();
@@ -854,6 +889,10 @@ describe("decisions IPC", () => {
       await expect(getAnswerResult({ answerId: ANSWER.answerId })).resolves.toEqual({
         result: "off",
       });
+      await expect(sendFollowUp(FOLLOW_UP)).resolves.toEqual({ result: "off" });
+      await expect(getFollowUpResult({ messageId: FOLLOW_UP.messageId })).resolves.toEqual({
+        result: "off",
+      });
 
       expect(decisionsEntry.evaluated).toBe(0);
       expect(decisionsEntry.libraries).toBe(0);
@@ -917,6 +956,10 @@ describe("decisions IPC", () => {
 
     await expect(answerQuestion(ANSWER)).resolves.toEqual({ result: "not-running" });
     await expect(getAnswerResult({ answerId: ANSWER.answerId })).resolves.toEqual({
+      result: "not-running",
+    });
+    await expect(sendFollowUp(FOLLOW_UP)).resolves.toEqual({ result: "not-running" });
+    await expect(getFollowUpResult({ messageId: FOLLOW_UP.messageId })).resolves.toEqual({
       result: "not-running",
     });
     expect(decisionsEntry.evaluated).toBe(0);
@@ -1617,6 +1660,60 @@ describe("decisions IPC", () => {
       }
       expect(result.safeParse({ declineId: DECLINE.declineId }).success).toBe(true);
       for (const bad of [{}, { declineId: "../x" }, { declineId: DECLINE.declineId, extra: 1 }]) {
+        expect(result.safeParse(bad).success).toBe(false);
+      }
+    });
+  });
+
+  describe("the person's follow-up (#17238)", () => {
+    it("passes the follow-up to Decisions once on, and hands back what it says", async () => {
+      saved.value = { enabled: true };
+      const refused: DecisionQuestionFollowUpResult = { result: "refused", reason: "not-owner" };
+      const read: DecisionFollowUpResultRead = {
+        result: "read",
+        questionId: QUESTION_ID,
+        outcome: { status: "unsupported", by: "asking-desktop" },
+      };
+      decisionsEntry.sendDecisionFollowUp.mockResolvedValueOnce(refused);
+      decisionsEntry.getDecisionFollowUpResult.mockResolvedValueOnce(read);
+
+      await expect(sendFollowUp(FOLLOW_UP)).resolves.toBe(refused);
+      await expect(getFollowUpResult({ messageId: FOLLOW_UP.messageId })).resolves.toBe(read);
+
+      expect(decisionsEntry.sendDecisionFollowUp).toHaveBeenCalledExactlyOnceWith(FOLLOW_UP);
+      expect(decisionsEntry.getDecisionFollowUpResult).toHaveBeenCalledExactlyOnceWith({
+        messageId: FOLLOW_UP.messageId,
+      });
+    });
+
+    it("takes a whole reference, a message id and words within the protocol's bound, and nothing else", () => {
+      const send = decisionsNamespace.ops.sendFollowUp.schema as SafeParse;
+      const result = decisionsNamespace.ops.getFollowUpResult.schema as SafeParse;
+      expect(send.safeParse(FOLLOW_UP).success).toBe(true);
+      expect(
+        send.safeParse({ ...FOLLOW_UP, messageId: "a".repeat(64), text: "x".repeat(16 * 1024) })
+          .success
+      ).toBe(true);
+      for (const bad of [
+        {},
+        { ...FOLLOW_UP, reference: undefined },
+        { ...FOLLOW_UP, reference: { ...FOLLOW_UP.reference, questionId: "../q" } },
+        { ...FOLLOW_UP, messageId: undefined },
+        { ...FOLLOW_UP, messageId: "short" },
+        { ...FOLLOW_UP, messageId: "has spaces in it" },
+        { ...FOLLOW_UP, text: undefined },
+        { ...FOLLOW_UP, text: "" },
+        { ...FOLLOW_UP, text: " \n\t" },
+        { ...FOLLOW_UP, text: "x".repeat(16 * 1024 + 1) },
+        // Only words: never a reply request, images or a signer of its own.
+        { ...FOLLOW_UP, expectsReply: true },
+        { ...FOLLOW_UP, images: [] },
+        { ...FOLLOW_UP, signerDeviceId: "dev_phone_1" },
+      ]) {
+        expect(send.safeParse(bad).success, JSON.stringify(bad).slice(0, 120)).toBe(false);
+      }
+      expect(result.safeParse({ messageId: FOLLOW_UP.messageId }).success).toBe(true);
+      for (const bad of [{}, { messageId: "../x" }, { messageId: FOLLOW_UP.messageId, extra: 1 }]) {
         expect(result.safeParse(bad).success).toBe(false);
       }
     });

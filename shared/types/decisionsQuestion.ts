@@ -146,9 +146,21 @@ export interface DecisionThreadMessage {
   text: string | null;
   images: DecisionThreadImage[];
   expectsReply: boolean;
+  /**
+   * A person's message written on their computer (#17238), signed by the
+   * owner desktop; false for a phone's or tablet's, and for the agent's own.
+   * Absent from a Remote Host from before it, which reads as a phone's.
+   */
+  onComputer?: boolean;
   sentAt: string;
   deliveryStatus:
     "received" | "terminal-delivered" | "needs-attention" | "delivery-uncertain" | null;
+  /**
+   * A person's message that will never be typed in: its question was
+   * withdrawn, or the person handled it, so it stays in the thread only.
+   * Absent from a Remote Host from before #17238.
+   */
+  deliveryStopped?: boolean;
   unreadable: boolean;
 }
 
@@ -509,6 +521,80 @@ export type DecisionQuestionAnswerResult =
 export interface GetDecisionAnswerResultPayload {
   answerId: string;
 }
+
+/**
+ * The person's follow-up on a question's thread, written in Daintree's own
+ * view on the owner computer, which signs it (#17238). The question is named
+ * by the reference its content was read with; a follow-up goes to an open or
+ * answered question alike and never answers it or changes its answer.
+ * `messageId` is minted by the view for this message, and sent again with the
+ * same text when a submission's result is lost, so a retry is the same
+ * message and never a second one.
+ */
+export interface SendDecisionFollowUpPayload {
+  reference: DecisionQuestionReference;
+  messageId: string;
+  text: string;
+}
+
+/**
+ * Where a person's follow-up stands, as the Decisions library reports it:
+ * - `queued`: committed here and not settled yet (the relay is out of reach,
+ *   or it waits its turn behind the question's unsent create or the person's
+ *   earlier answer or follow-up); it keeps being sent, and
+ *   `getFollowUpResult` reads its outcome;
+ * - `sent`: the relay took it, and it is typed into the asking terminal as
+ *   a phone's follow-up would be, marked as sent from the computer;
+ * - `closed`: the question expired, was cancelled or declined, or the relay
+ *   holds no such question;
+ * - `unsupported`: the relay, or the computer that asked (a Remote Host),
+ *   doesn't take follow-ups sent from a computer yet and needs updating;
+ * - `rejected`: any other refusal, with the relay's code (`invalid_state`
+ *   for a thread at its message limit).
+ */
+export type DecisionFollowUpOutcome =
+  | { status: "queued" }
+  | { status: "sent" }
+  | { status: "closed"; reason: "expired" | "cancelled" | "not-found" }
+  | { status: "unsupported"; by: "relay" | "asking-desktop" }
+  | { status: "rejected"; code: string };
+
+/**
+ * Why a follow-up wasn't taken here at all, before anything was signed:
+ * `not-found`, the reference names no question this computer can follow up;
+ * `not-owner`, this computer is a Remote Host, whose key never signs the
+ * person's message; `invalid`, the text breaks the protocol's bounds or the
+ * message id was used for another message, as `detail` says.
+ */
+export type DecisionFollowUpRefusal =
+  | { result: "refused"; reason: "not-found" | "not-owner" }
+  | { result: "refused"; reason: "invalid"; detail: string };
+
+/**
+ * A person's follow-up, submitted. `off` and `not-running` as for a read: off
+ * here, or no relay connection runs to sign with.
+ */
+export type DecisionQuestionFollowUpResult =
+  | { result: "submitted"; messageId: string; outcome: DecisionFollowUpOutcome }
+  | DecisionFollowUpRefusal
+  | { result: "off" }
+  | { result: "not-running" };
+
+/** Where a submitted follow-up stands, by the id it was submitted with. */
+export interface GetDecisionFollowUpResultPayload {
+  messageId: string;
+}
+
+/**
+ * A submitted follow-up's standing. `not-found`: no follow-up was ever
+ * committed here under that id, or a crash kept it from being queued: submit
+ * it again with the same id.
+ */
+export type DecisionFollowUpResultRead =
+  | { result: "read"; questionId: string; outcome: DecisionFollowUpOutcome }
+  | { result: "not-found" }
+  | { result: "off" }
+  | { result: "not-running" };
 
 /**
  * A submitted answer's standing. `not-found`: no answer was ever committed

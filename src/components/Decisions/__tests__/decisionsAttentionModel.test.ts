@@ -19,6 +19,7 @@ import {
 function followUp(over: Partial<DecisionsFollowUpPreview> = {}): DecisionsFollowUpPreview {
   return {
     messageId: "message-1",
+    onComputer: false,
     status: "needs-attention",
     reason: "pane_gone",
     text: "Keep the old icons.",

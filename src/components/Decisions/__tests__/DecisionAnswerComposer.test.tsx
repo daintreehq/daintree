@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { PaneDecisionState } from "@shared/types/decisions";
 import type {
   AnswerDecisionQuestionPayload,
@@ -191,7 +191,10 @@ afterEach(() => {
 describe("answering a question from the view (#17102)", () => {
   it("offers a choice question's options, and sends the chosen one after reading it again", async () => {
     await openOn("q1");
-    expect(screen.queryByRole("textbox")).toBeNull();
+    // A choice question's answer takes no words; the box below the thread is a follow-up's (#17238).
+    expect(
+      within(screen.getByTestId("decision-answer-composer")).queryByRole("textbox")
+    ).toBeNull();
     // The options are offered in the composer, not listed a second time.
     expect(screen.getAllByText("Ship it")).toHaveLength(1);
     expect(send().getAttribute("aria-disabled")).toBe("true");

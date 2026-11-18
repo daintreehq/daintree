@@ -9,16 +9,19 @@ import type {
   DeclineDecisionQuestionPayload,
   DecisionAnswerResultRead,
   DecisionDeclineResultRead,
+  DecisionFollowUpResultRead,
   DecisionQuestionAnswerResult,
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
   DecisionQuestionDeclineResult,
+  DecisionQuestionFollowUpResult,
   DecisionQuestionImagePart,
   DecisionQuestionImagePartResult,
   DecisionQuestionImageResult,
   DecisionQuestionList,
   DecisionQuestionReference,
   DecisionQuestionSummariesResult,
+  SendDecisionFollowUpPayload,
 } from "@shared/types/decisionsQuestion";
 
 /** The protocol's largest image: a part claiming more is refused before anything is allocated. */
@@ -319,6 +322,18 @@ export const decisionsClient = {
   /** Where a decline stands, by the id it was submitted with: a queued one settles later. */
   getDeclineResult: (declineId: string): Promise<DecisionDeclineResultRead> =>
     window.electron.decisions.getDeclineResult({ declineId }),
+
+  /**
+   * The person's follow-up on a question's thread (#17238), signed by this
+   * computer, named by the reference its content was read with. Send the
+   * same `messageId` again with the same text when a result is lost.
+   */
+  sendFollowUp: (payload: SendDecisionFollowUpPayload): Promise<DecisionQuestionFollowUpResult> =>
+    window.electron.decisions.sendFollowUp(payload),
+
+  /** Where a follow-up stands, by the id it was submitted with: a queued one settles later. */
+  getFollowUpResult: (messageId: string): Promise<DecisionFollowUpResultRead> =>
+    window.electron.decisions.getFollowUpResult({ messageId }),
 
   /** Every pane's state changes for this project. Callers filter by `terminalId`. */
   onPaneState: (callback: (state: PaneDecisionState) => void): (() => void) =>

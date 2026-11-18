@@ -16,6 +16,8 @@ export const DECISIONS_METHOD_CHANNELS = {
   getAnswerResult: "decisions:get-answer-result",
   declineQuestion: "decisions:decline-question",
   getDeclineResult: "decisions:get-decline-result",
+  sendFollowUp: "decisions:send-follow-up",
+  getFollowUpResult: "decisions:get-follow-up-result",
   setEnabled: "decisions:set-enabled",
   checkRelay: "decisions:check-relay",
   claimRelay: "decisions:claim-relay",

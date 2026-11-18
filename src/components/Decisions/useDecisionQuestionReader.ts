@@ -8,6 +8,7 @@ import {
   useDecisionsAnswerStore,
   type DeclinePhase,
 } from "@/store/decisionsAnswerStore";
+import { useDecisionsFollowUpStore } from "@/store/decisionsFollowUpStore";
 import { useDecisionsImageReviewStore } from "@/store/decisionsImageReviewStore";
 import type {
   DecisionQuestionContent,
@@ -83,14 +84,16 @@ export function isWaiting(status: DecisionQuestionContent["status"]): boolean {
 /**
  * What a surface showing Decisions questions owes the switch: closed at once
  * when Decisions turns off, a record of which images were seen dropped
- * whenever it isn't known to be on, and drafts and answers dropped only once
- * it is known to be off, so one being followed isn't forgotten while main is
- * still saying whether it is on. Opened before main has answered, it waits.
+ * whenever it isn't known to be on, and drafts, answers and follow-ups
+ * dropped only once it is known to be off, so one being followed isn't
+ * forgotten while main is still saying whether it is on. Opened before main
+ * has answered, it waits.
  */
 export function useDecisionsReaderRetention(isOpen: boolean, close: () => void): void {
   const decisionsSwitch = useDecisionsSwitch();
   const clearReviews = useDecisionsImageReviewStore((state) => state.clear);
   const clearAnswers = useDecisionsAnswerStore((state) => state.clear);
+  const clearFollowUps = useDecisionsFollowUpStore((state) => state.clear);
   const on = decisionsSwitch === "on";
 
   useEffect(() => {
@@ -102,8 +105,11 @@ export function useDecisionsReaderRetention(isOpen: boolean, close: () => void):
   }, [on, clearReviews]);
 
   useEffect(() => {
-    if (decisionsSwitch === "off") clearAnswers();
-  }, [decisionsSwitch, clearAnswers]);
+    if (decisionsSwitch === "off") {
+      clearAnswers();
+      clearFollowUps();
+    }
+  }, [decisionsSwitch, clearAnswers, clearFollowUps]);
 }
 
 export interface DecisionQuestionReader {
