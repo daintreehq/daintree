@@ -907,6 +907,12 @@ export interface GeneratedElectronAPI {
     previewFileMutation(
       ...args: IpcInvokeMap["git:preview-file-mutation"]["args"]
     ): Promise<IpcInvokeMap["git:preview-file-mutation"]["result"]>;
+    stageHunks(
+      ...args: IpcInvokeMap["git:stage-hunks"]["args"]
+    ): Promise<IpcInvokeMap["git:stage-hunks"]["result"]>;
+    unstageHunks(
+      ...args: IpcInvokeMap["git:unstage-hunks"]["args"]
+    ): Promise<IpcInvokeMap["git:unstage-hunks"]["result"]>;
   };
   help: {
     adoptDetachedSession(
