@@ -51,9 +51,7 @@ describe("diff actions", () => {
     focus.id = "diff-1";
 
     expect(await run("diff.nextChange")).toEqual([{ id: "diff-1", command: "nextChange" }]);
-    expect(await run("diff.previousChange")).toEqual([
-      { id: "diff-1", command: "previousChange" },
-    ]);
+    expect(await run("diff.previousChange")).toEqual([{ id: "diff-1", command: "previousChange" }]);
     expect(await run("diff.nextFile")).toEqual([{ id: "diff-1", command: "nextFile" }]);
     expect(await run("diff.previousFile")).toEqual([{ id: "diff-1", command: "previousFile" }]);
     expect(await run("diff.toggleViewed")).toEqual([{ id: "diff-1", command: "toggleViewed" }]);

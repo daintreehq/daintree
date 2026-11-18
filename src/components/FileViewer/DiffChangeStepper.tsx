@@ -52,8 +52,7 @@ export function DiffChangeStepper({
   forwardShortcut,
 }: DiffChangeStepperProps) {
   const known = count ?? 0;
-  const position =
-    known > 1 ? `${index + 1} of ${known}` : known === 1 ? pluralize(1, unit) : null;
+  const position = known > 1 ? `${index + 1} of ${known}` : known === 1 ? pluralize(1, unit) : null;
   // Arrows that both lead nowhere are a control that does nothing, which is
   // worse than an absent one — but a lone count still answers "is there more
   // below?", so it stays.

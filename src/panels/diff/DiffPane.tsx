@@ -1096,9 +1096,7 @@ export function DiffPane({
   // The source layouts' inventory: hunks as git wrote them, counted by the
   // viewer from the patch it parsed and stamped with that patch, so a count
   // from the previous file or revision never drives this one's stepper.
-  const [hunkInventory, setHunkInventory] = useState<{ diff: string; count: number } | null>(
-    null
-  );
+  const [hunkInventory, setHunkInventory] = useState<{ diff: string; count: number } | null>(null);
   const handleHunkCount = useCallback((count: number, forDiff: string) => {
     setHunkInventory((current) =>
       current?.diff === forDiff && current.count === count ? current : { diff: forDiff, count }
