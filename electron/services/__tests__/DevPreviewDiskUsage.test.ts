@@ -95,7 +95,9 @@ describe("computeDirSize on the Windows walk", () => {
   });
 
   it("answers unknown, not the partial sum, when a file can't be read", async () => {
-    const spies = injectFailures({ lstat: (target) => (target === nestedFile ? vanished() : null) });
+    const spies = injectFailures({
+      lstat: (target) => (target === nestedFile ? vanished() : null),
+    });
     expect(await computeDirSize(root, "win32")).toBe(null);
     expect(spies.lstat.mock.calls.filter(([arg]) => String(arg) === nestedFile)).toHaveLength(2);
   });
